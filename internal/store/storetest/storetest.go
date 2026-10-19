@@ -18,6 +18,20 @@
 // Those copy a migrated estate built once per test binary rather than
 // migrating every file from nothing — image.go says why that is safe, and
 // what stays fresh because migrating is its subject.
+//
+// # The plan gates' vocabulary
+//
+// A domain that holds its tables to their indexes (internal/worklet's
+// TestEveryIndexServesARegisteredQuery, internal/doclet' own) asks the planner
+// rather than reading the DDL, because an index's trailing comment naming a
+// reader is a CLAIM and only the plan says whether that reader reaches it.
+// What every such gate reads is here, once: a statement's plan ([PlanTree],
+// [Plan]), what a plan line says about an index ([IndexesIn], [Seeks],
+// [Walks], [Sorts], [ScansHeap], [Decorrelated]), what the schema declares
+// ([IndexesOn]), and every statement the module's source spells against a
+// table ([StatementLiterals]), which is what holds a gate's registered set
+// COMPLETE. Two gates with a copy each of a plan's spelling are two gates a
+// driver bump can blind one at a time.
 package storetest
 
 import (

@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // WHERE ONE TASK SITS IS ASKED OF THAT TASK, BY ITS KEY.
@@ -54,7 +56,7 @@ func TestWhereATaskSitsIsAskedByItsKey(t *testing.T) {
 				t.Fatalf("compile: %v", err)
 			}
 			statement, args := segmentHoldsStatement(segment{}, set, "t-00001")
-			plan := explain(t, db, statement, args)
+			plan := storetest.Plan(t, db, statement, args)
 			shown := strings.Join(plan, "\n")
 			others, _ := tasksReadOtherwise(plan, c.index)
 			keyed := slices.IndexFunc(others, byKey.MatchString)
@@ -108,13 +110,13 @@ func TestAnAroundTasksNeighboursSeekTheOrder(t *testing.T) {
 			{runFirst, []string{nextRow, rowsAhead}},
 			{runLast, []string{previousRow}},
 		} {
-			twin := explainTree(t, db, statements[side.twin].sql,
+			twin := storetest.PlanTree(t, db, statements[side.twin].sql,
 				statements[side.twin].args)
 			top, read := topTaskRead(twin)
 			if !read || sortsAtTop(twin) {
 				continue
 			}
-			indexes := indexesIn([]string{top.detail})
+			indexes := storetest.IndexesIn([]string{top.Detail})
 			if len(indexes) != 1 {
 				continue
 			}
@@ -131,15 +133,15 @@ func TestAnAroundTasksNeighboursSeekTheOrder(t *testing.T) {
 							break
 						}
 						what := aroundArm(arms, i)
-						tree := explainTree(t, db, arm.sql, arm.args)
-						shown := strings.Join(planDetails(tree), "\n")
+						tree := storetest.PlanTree(t, db, arm.sql, arm.args)
+						shown := strings.Join(storetest.Details(tree), "\n")
 						line, read := taskReadOf(tree)
 						switch {
 						case !read:
 							t.Errorf("%s reads no task at all:\n%s", what, shown)
-						case !strings.HasPrefix(line.detail, "SEARCH ") ||
-							!slices.Contains(indexesIn([]string{line.detail}), index) ||
-							!bound.MatchString(line.detail):
+						case !strings.HasPrefix(line.Detail, "SEARCH ") ||
+							!slices.Contains(storetest.IndexesIn([]string{line.Detail}), index) ||
+							!bound.MatchString(line.Detail):
 							t.Errorf("%s does not SEEK %s on %s, the index and "+
 								"the column %s walks — so it walks the run to "+
 								"the task:\n%s", what, index, leading, side.twin,
@@ -173,15 +175,15 @@ func TestAnAroundTasksNeighboursSeekTheOrder(t *testing.T) {
 // plan: the statement's own, or — for a count, which reads its rows inside a
 // subquery it then counts — the first line that reads the task table under
 // the row's alias.
-func taskReadOf(tree []planLine) (planLine, bool) {
+func taskReadOf(tree []storetest.PlanLine) (storetest.PlanLine, bool) {
 	if line, ok := topTaskRead(tree); ok {
 		return line, true
 	}
 	for _, line := range tree {
-		if strings.HasPrefix(line.detail, "SCAN tracker_tasks AS "+string(rowAlias)+" ") ||
-			strings.HasPrefix(line.detail, "SEARCH "+string(rowAlias)+" ") {
+		if strings.HasPrefix(line.Detail, "SCAN tracker_tasks AS "+string(rowAlias)+" ") ||
+			strings.HasPrefix(line.Detail, "SEARCH "+string(rowAlias)+" ") {
 			return line, true
 		}
 	}
-	return planLine{}, false
+	return storetest.PlanLine{}, false
 }

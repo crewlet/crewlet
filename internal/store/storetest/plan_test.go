@@ -1,7 +1,6 @@
 package storetest_test
 
 import (
-	"database/sql"
 	"path/filepath"
 	"testing"
 
@@ -64,7 +63,7 @@ func TestTheDecorrelationCheckSeesTheDriverUnnest(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			plan := explainPlan(t, estate, c.statement, c.args)
+			plan := storetest.Plan(t, estate, c.statement, c.args)
 			line, decorrelated := storetest.Decorrelated(plan)
 			switch {
 			case c.decorrelated && !decorrelated:
@@ -78,32 +77,4 @@ func TestTheDecorrelationCheckSeesTheDriverUnnest(t *testing.T) {
 			}
 		})
 	}
-}
-
-// explainPlan is the planner's account of one statement, a line per step.
-func explainPlan(t *testing.T, estate store.ReplicatedHandle, statement string,
-	args []any) []string {
-
-	t.Helper()
-	var plan []string
-	if err := estate.Reader().Read(t.Context(), func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+statement,
-			args...)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = rows.Close() }()
-		for rows.Next() {
-			var id, parent, notUsed int
-			var detail string
-			if err := rows.Scan(&id, &parent, &notUsed, &detail); err != nil {
-				return err
-			}
-			plan = append(plan, detail)
-		}
-		return rows.Err()
-	}); err != nil {
-		t.Fatalf("EXPLAIN QUERY PLAN:\n%s\n%v", statement, err)
-	}
-	return plan
 }

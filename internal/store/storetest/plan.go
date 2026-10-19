@@ -1,6 +1,375 @@
 package storetest
 
-import "strings"
+import (
+	"database/sql"
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/crewlet/crewlet/internal/sourcetree"
+	"github.com/crewlet/crewlet/internal/store"
+)
+
+// PlanLine is one line of a statement's plan: its id, the line it sits under —
+// 0 for the statement's own top level, which is what tells a sort of the whole
+// statement from a sort inside one of its subqueries — and what it says.
+type PlanLine struct {
+	ID, Parent int
+	Detail     string
+}
+
+// PlanTree is the planner's account of one statement, a line per step with
+// each line's place in the plan's tree.
+//
+// PLANNED AS A DEPLOYMENT PLANS IT: nothing in the engine runs ANALYZE, so a
+// plan is taken over the fallback row estimates whatever the fixture holds. A
+// WRITE IS PLANNED IN A WRITE TRANSACTION, because the read path runs
+// query_only, which refuses even the EXPLAIN of one. Nothing is executed either
+// way.
+func PlanTree(t testing.TB, db store.ReplicatedHandle, statement string,
+	args []any) []PlanLine {
+
+	t.Helper()
+	in := db.Read
+	if words := strings.Fields(statement); len(words) > 0 &&
+		(strings.EqualFold(words[0], "UPDATE") || strings.EqualFold(words[0], "DELETE") ||
+			strings.EqualFold(words[0], "INSERT")) {
+		in = db.Tx
+	}
+	var plan []PlanLine
+	if err := in(t.Context(), func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+statement, args...)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var line PlanLine
+			var notUsed int
+			if err := rows.Scan(&line.ID, &line.Parent, &notUsed, &line.Detail); err != nil {
+				return err
+			}
+			plan = append(plan, line)
+		}
+		return rows.Err()
+	}); err != nil {
+		t.Fatalf("EXPLAIN QUERY PLAN:\n%s\n%v", statement, err)
+	}
+	if len(plan) == 0 {
+		t.Fatalf("the planner said nothing about:\n%s", statement)
+	}
+	return plan
+}
+
+// Plan is [PlanTree]'s lines alone.
+func Plan(t testing.TB, db store.ReplicatedHandle, statement string, args []any) []string {
+	t.Helper()
+	return Details(PlanTree(t, db, statement, args))
+}
+
+// Details is what each line of a plan says, in order.
+func Details(tree []PlanLine) []string {
+	details := make([]string, len(tree))
+	for i, line := range tree {
+		details[i] = line.Detail
+	}
+	return details
+}
+
+// IndexesIn reads the index names out of a plan.
+//
+// AN INTERSECTION NAMES SEVERAL: this engine plans two equality terms on two
+// indexes as `MULTI-INDEX AND h (a, b)`, a seek on each and the row ids they
+// share, so both are read — and a disjunction of two as `MULTI-INDEX OR`, a
+// seek on each and the row ids of either.
+func IndexesIn(plan []string) []string {
+	var found []string
+	for _, line := range plan {
+		_, tail, ok := strings.Cut(line, "MULTI-INDEX AND ")
+		if !ok {
+			_, tail, ok = strings.Cut(line, "MULTI-INDEX OR ")
+		}
+		if ok {
+			_, list, _ := strings.Cut(tail, "(")
+			list, _, _ = strings.Cut(list, ")")
+			for _, name := range strings.Split(list, ",") {
+				found = append(found, strings.TrimSpace(name))
+			}
+			continue
+		}
+		_, tail, ok = strings.Cut(line, "USING INDEX ")
+		if !ok {
+			_, tail, ok = strings.Cut(line, "USING COVERING INDEX ")
+		}
+		if !ok {
+			continue
+		}
+		name, _, _ := strings.Cut(tail, " ")
+		found = append(found, strings.TrimSpace(name))
+	}
+	return found
+}
+
+// Seeks reports a plan that SEEKS index — `SEARCH … USING INDEX`, or one leg
+// of an intersection or a union — rather than walking it.
+func Seeks(plan []string, index string) bool {
+	for _, line := range plan {
+		if (strings.HasPrefix(line, "SEARCH ") || strings.HasPrefix(line, "MULTI-INDEX AND ") ||
+			strings.HasPrefix(line, "MULTI-INDEX OR ")) &&
+			slices.Contains(IndexesIn([]string{line}), index) {
+			return true
+		}
+	}
+	return false
+}
+
+// Walks reports a plan that reads through index in the index's own order —
+// `SCAN … USING INDEX` — with no term on its leading columns to seek.
+func Walks(plan []string, index string) bool {
+	for _, line := range plan {
+		if strings.HasPrefix(line, "SCAN ") &&
+			slices.Contains(IndexesIn([]string{line}), index) {
+			return true
+		}
+	}
+	return false
+}
+
+// Sorts reports a plan that sorts the rows it read before it returns any.
+//
+// MATCHED ON `FOR ORDER BY`, the part of the line both spellings share — this
+// engine's `USE SORTER FOR ORDER BY` and SQLite's `USE TEMP B-TREE FOR ORDER
+// BY` — because the word for the structure is the engine's and the step is
+// the same: every row the read selected, buffered and sorted before the first
+// is returned.
+func Sorts(plan []string) bool {
+	return slices.ContainsFunc(plan, func(line string) bool {
+		return strings.Contains(line, "FOR ORDER BY")
+	})
+}
+
+// ScansHeap reports a plan line that reads a whole table with no index.
+//
+// AN INDEX SCAN IS NOT THIS. "SCAN t USING INDEX x" walks an index in its own
+// order and a LIMIT stops it early, which is the right plan for a query whose
+// point is the order; "SCAN t" reads the table itself, every row through the
+// row heap.
+func ScansHeap(plan []string, table string) bool {
+	for _, line := range plan {
+		if strings.HasPrefix(line, "SCAN "+table) && !strings.Contains(line, "INDEX") {
+			return true
+		}
+	}
+	return false
+}
+
+// IndexesOn is every index the schema declares on these tables — its
+// autoindexes, which no DDL names, left out.
+func IndexesOn(t testing.TB, db store.ReplicatedHandle, tables []string) []string {
+	t.Helper()
+	var found []string
+	if err := db.Read(t.Context(), func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(t.Context(),
+			`SELECT name, tbl_name FROM sqlite_master WHERE type = 'index'
+			 AND sql IS NOT NULL ORDER BY name`)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var name, table string
+			if err := rows.Scan(&name, &table); err != nil {
+				return err
+			}
+			if slices.Contains(tables, table) {
+				found = append(found, name)
+			}
+		}
+		return rows.Err()
+	}); err != nil {
+		t.Fatalf("read the indexes: %v", err)
+	}
+	if len(found) == 0 {
+		t.Fatalf("the schema declares no index on %v, so this test is measuring "+
+			"its own reader", tables)
+	}
+	return found
+}
+
+// SourceLiteral is one fragment [StatementLiterals] found, and the file it is
+// in, relative to the module's root.
+type SourceLiteral struct {
+	File, Text string
+}
+
+// StatementLiterals is every fragment of the module's non-test Go source that
+// reads one of tables — names it after FROM, JOIN or UPDATE — so a gate can
+// hold its registered statements COMPLETE: a reader it does not plan is a
+// reader whose index, or whose heap scan, nobody checked. own is the package
+// the gate belongs to, relative to the module's root; the walk fails rather
+// than passes when it read no file outside it, because then it holds that
+// package's readers alone. It reads this tree through [sourcetree.Walk], so a
+// nested checkout's copy of a file is never read as this tree's.
+//
+// A FRAGMENT IS A RUN OF ADJACENT LITERALS, folded: `"… FROM " +
+// "pages_heads p …"` is one fragment, because a statement written across two
+// literals reads the table exactly as one written in one does, and matched
+// literal by literal neither half names it. A run ends wherever the expression
+// stops being literal (a placeholder list, a compiled clause, a named
+// constant), and a gate matches the fragment WHOLE against its registered
+// statements, so a statement assembled from several runs is held by each of
+// them. A table name spelled in no literal — a statement over a table the code
+// chooses at run time — is invisible here, which is why every such builder is
+// registered by hand. An INSERT finds no rows, which is why it is no reader.
+func StatementLiterals(t testing.TB, own string, tables ...string) []SourceLiteral {
+	t.Helper()
+	names := make([]string, len(tables))
+	for i, table := range tables {
+		names[i] = regexp.QuoteMeta(table)
+	}
+	reads := regexp.MustCompile(`(?i)\b(FROM|JOIN|UPDATE)\s+(` +
+		strings.Join(names, "|") + `)\b`)
+	tree, err := moduleLiterals()
+	if err != nil {
+		t.Fatalf("read the module's source: %v", err)
+	}
+	own = filepath.Clean(own)
+	if !slices.ContainsFunc(tree.files, func(file string) bool {
+		return filepath.Dir(file) != own
+	}) {
+		t.Fatalf("the walk read no Go file outside %s, so it holds only that "+
+			"package's readers of %v", own, tables)
+	}
+	var out []SourceLiteral
+	for _, literal := range tree.literals {
+		if reads.MatchString(literal.Text) {
+			out = append(out, literal)
+		}
+	}
+	if len(out) == 0 {
+		t.Fatalf("no literal of the module reads %v, so this walk is reading "+
+			"nothing", tables)
+	}
+	return out
+}
+
+// moduleLiterals is every literal run of the module's non-test Go source and
+// every file it read, relative to the module's root — read once for the test
+// binary, since every walk asks the same tree.
+var moduleLiterals = sync.OnceValues(func() (moduleSource, error) {
+	root, err := sourcetree.ModuleRoot()
+	if err != nil {
+		return moduleSource{}, err
+	}
+	fset := token.NewFileSet()
+	var out moduleSource
+	err = sourcetree.Walk(root, func(path string, d fs.DirEntry, err error) error {
+		switch {
+		case err != nil:
+			return err
+		case d.IsDir() && d.Name() == "testdata":
+			// NOT THE MODULE'S CODE: nothing compiles it.
+			return fs.SkipDir
+		case d.IsDir() || !strings.HasSuffix(path, ".go") ||
+			strings.HasSuffix(path, "_test.go"):
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+		if err != nil {
+			return fmt.Errorf("parse %s: %w", rel, err)
+		}
+		out.files = append(out.files, rel)
+		for _, run := range literalRuns(file) {
+			out.literals = append(out.literals, SourceLiteral{rel, run})
+		}
+		return nil
+	})
+	return out, err
+})
+
+// moduleSource is what [moduleLiterals] read.
+type moduleSource struct {
+	literals []SourceLiteral
+	files    []string
+}
+
+// literalRuns is every maximal run of adjacent string literals in a file's
+// concatenations, each folded into the one string it spells.
+func literalRuns(file *ast.File) []string {
+	var out []string
+	var visit func(ast.Node) bool
+	visit = func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.BinaryExpr:
+			if x.Op != token.ADD {
+				return true
+			}
+		case *ast.BasicLit:
+			if x.Kind != token.STRING {
+				return true
+			}
+		default:
+			return true
+		}
+		// A CONCATENATION, flattened left to right: each run of literals
+		// is one fragment, and every other operand is visited on its own,
+		// because a call inside a concatenation can hold a statement too.
+		var operands []ast.Expr
+		var flatten func(ast.Expr)
+		flatten = func(e ast.Expr) {
+			switch y := e.(type) {
+			case *ast.BinaryExpr:
+				if y.Op == token.ADD {
+					flatten(y.X)
+					flatten(y.Y)
+					return
+				}
+			case *ast.ParenExpr:
+				flatten(y.X)
+				return
+			}
+			operands = append(operands, e)
+		}
+		flatten(n.(ast.Expr))
+		var run strings.Builder
+		held := false
+		end := func() {
+			if held {
+				out = append(out, run.String())
+			}
+			run.Reset()
+			held = false
+		}
+		for _, operand := range operands {
+			if lit, ok := operand.(*ast.BasicLit); ok && lit.Kind == token.STRING {
+				if value, err := strconv.Unquote(lit.Value); err == nil {
+					run.WriteString(value)
+					held = true
+				}
+				continue
+			}
+			end()
+			ast.Inspect(operand, visit)
+		}
+		end()
+		return false
+	}
+	ast.Inspect(file, visit)
+	return out
+}
 
 // Decorrelated reports the first line of a plan at which this engine's planner
 // has UNNESTED a correlated scalar subquery — turned a per-row aggregate into
