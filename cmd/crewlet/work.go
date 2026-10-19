@@ -158,18 +158,17 @@ func reportDestruction(stdout io.Writer, what, outcome, position, operation stri
 		// The record is on the log and every data node applies it as it
 		// reaches it; running the gesture again would append a second
 		// destruction of rows the first one already destroyed.
-		fmt.Fprintln(stdout, "  The record is durable and this node has not "+
-			"applied it yet: the rows go as each data node reaches it. Do not "+
-			"run this again.")
+		fmt.Fprintln(stdout, "  Saved, but not on this node yet. It's deleted on "+
+			"each node as that node catches up. Don't run this again.")
 	}
 	// WHAT A DESTRUCTION DOES NOT REACH, every time rather than in the docs
 	// alone. An offline or evicted disk keeps its copy until replay,
 	// adoption, replacement or destruction, and there is no duration to
 	// state — so an operator acting on an erasure request has to be told
 	// here, where they are running the gesture.
-	fmt.Fprintln(stdout, "  A node that is offline or evicted keeps its copy "+
-		"until it replays, adopts a snapshot, is replaced or is destroyed. "+
-		"`crewlet retention status` names which nodes those are.")
+	fmt.Fprintln(stdout, "  A node that's offline or evicted keeps its copy "+
+		"until it catches up, is replaced or is destroyed. "+
+		"`crewlet retention status` lists those nodes.")
 }
 
 // logWriteTimeout is how long a command waits for the node's answer to a write
