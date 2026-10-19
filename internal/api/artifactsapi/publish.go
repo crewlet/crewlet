@@ -266,14 +266,20 @@ type createBody struct {
 
 // publishedAnswer is a version a create or a publish landed.
 type publishedAnswer struct {
-	Artifact  artifacts.ID      `json:"artifact"`
-	Label     artifacts.Label   `json:"label"`
-	Number    int               `json:"number"`
-	VersionID string            `json:"version_id"`
-	Warnings  []lint.Finding    `json:"warnings,omitempty"`
-	OpID      string            `json:"op_id"`
-	Outcome   statelog.Outcome  `json:"outcome"`
-	Position  statelog.Position `json:"position"`
+	Artifact  artifacts.ID    `json:"artifact"`
+	Label     artifacts.Label `json:"label"`
+	Number    int             `json:"number"`
+	VersionID string          `json:"version_id"`
+	Warnings  []lint.Finding  `json:"warnings,omitempty"`
+
+	// Files counts the version's files by where their bytes came from, which
+	// only the manifest that landed can say: a file the upload sent may
+	// still be one the artifact held ([artifactupload.FileCounts]).
+	Files *artifactupload.FileCounts `json:"files,omitempty"`
+
+	OpID     string            `json:"op_id"`
+	Outcome  statelog.Outcome  `json:"outcome"`
+	Position statelog.Position `json:"position"`
 }
 
 // published answers a version that landed: 201 for a create applied here, 200
@@ -284,7 +290,7 @@ func published(w http.ResponseWriter, key string, out artifactsdomain.Published,
 
 	answer := publishedAnswer{Artifact: out.Artifact, Label: out.Artifact.Label(), Number: out.Number,
 		VersionID: out.VersionID.String(), OpID: key, Outcome: out.Result.Outcome,
-		Position: out.Result.Position, Warnings: report.Warnings}
+		Position: out.Result.Position, Warnings: report.Warnings, Files: report.Files}
 	switch out.Result.Outcome {
 	case statelog.OutcomeUnknown:
 		written(w, key, out.Result, httpjson.Detail{"artifact": out.Artifact.String()})

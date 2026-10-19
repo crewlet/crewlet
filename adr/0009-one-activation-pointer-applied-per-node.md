@@ -1,4 +1,4 @@
-# ADR-0009 — Which revision is current is fleet-wide; applying it is per node
+# ADR-0009: Which revision is current is fleet-wide; applying it is per node
 
 - **Status:** accepted
 - **Authority:** `internal/configplane`

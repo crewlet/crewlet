@@ -8,13 +8,13 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { RestError, type DataDoc, type DataDocPage, type LiveSocket } from "~/protocol/index.ts";
 import type { KeyedAnswer, KeyedRequest } from "../keyedWrite.ts";
-import { ArtifactDataStore, packedPosition, resultOf } from "./datastore.ts";
+import { ArtifactDataStore, packedPosition, resultOf, stepRefusal } from "./datastore.ts";
 
 afterEach(() => {
   vi.useRealTimers();
 });
 
-const actor = { Name: "maya", Kind: "human" };
+const actor = { name: "maya", kind: "human" };
 
 function doc(
   id: string,
@@ -73,7 +73,7 @@ function store(
 const applied = (seq: number, position: number): KeyedAnswer => ({
   kind: "done",
   pending: false,
-  body: { outcome: "applied", seq, position: { generation: 0, seq: position } },
+  body: { verdict: "applied", seq, position: { generation: 0, seq: position } },
 });
 
 const fieldsOf = (s: ArtifactDataStore, id: string) =>
@@ -266,6 +266,14 @@ describe("a keyed answer", () => {
     expect(
       resultOf({ kind: "done", pending: true, body: { position: { generation: 0, seq: 9 } } }),
     ).toEqual({ verdict: "pending", position: 9 });
+    // THE BODY SAYS PENDING TOO, in the one field that says how a write ended.
+    expect(
+      resultOf({
+        kind: "done",
+        pending: false,
+        body: { verdict: "pending", position: { generation: 0, seq: 9 } },
+      }),
+    ).toEqual({ verdict: "pending", position: 9 });
     expect(
       resultOf({
         kind: "refused",
@@ -274,8 +282,7 @@ describe("a keyed answer", () => {
         error: new RestError(429, { error: "write_budget" }, 2),
       }),
     ).toEqual({
-      verdict: "refused",
-      code: "write_budget",
+      verdict: "rate_limited",
       reason: "Too many changes at once. Wait a moment, then try again.",
       retryAfterMs: 2000,
     });
@@ -291,5 +298,75 @@ describe("a keyed answer", () => {
         }),
       }),
     ).toMatchObject({ verdict: "conflict", reason: "Moved on", conflict: [{ id: "r1" }] });
+  });
+
+  test("is the verdict a refusal before the log means, as the applier would say it", () => {
+    const refused = (status: number, body: Record<string, unknown>) =>
+      resultOf({
+        kind: "refused",
+        text: "Refused.",
+        stale: false,
+        error: new RestError(status, body),
+      });
+    expect(refused(422, { error: "invalid", detail: "score is a number" })).toEqual({
+      verdict: "invalid",
+      reason: "Refused.",
+    });
+    expect(refused(403, { error: "forbidden" })).toEqual({
+      verdict: "forbidden",
+      reason: "You can view this but not change it.",
+    });
+    expect(refused(410, { error: "data_gone" })).toEqual({
+      verdict: "gone",
+      reason: "This artifact is in the trash, so nothing can be changed.",
+    });
+    expect(refused(413, { error: "data_quota" })).toMatchObject({ verdict: "quota" });
+    expect(refused(409, { error: "not_undoable" })).toMatchObject({ verdict: "invalid" });
+    expect(refused(422, { error: "invalid", verdict: "invalid", detail: "Only numbers." })).toEqual(
+      {
+        verdict: "invalid",
+        reason: "Only numbers.",
+      },
+    );
+  });
+});
+
+describe("an undo", () => {
+  test("the engine decided nothing about is the reader's to take again", async () => {
+    const answers: KeyedAnswer[] = [
+      applied(4, 4),
+      {
+        kind: "refused",
+        text: "Slow down",
+        stale: false,
+        error: new RestError(429, { error: "write_budget" }, 1),
+      },
+      applied(5, 5),
+    ];
+    const { s, sent } = store(
+      async () => page([], 0),
+      async () => answers.shift() ?? applied(9, 9),
+    );
+    await s.load("rows");
+    await s.write([{ op: "merge", collection: "rows", doc: "r1", fields: { name: "New" } }]);
+    expect(await s.undo()).toMatchObject({ verdict: "rate_limited" });
+    // THE SAME STEP AGAIN, naming the same write: nothing was decided.
+    expect(await s.undo()).toMatchObject({ verdict: "applied", seq: 5 });
+    expect(sent.slice(1).map((r) => (r.body as { seq: number }).seq)).toEqual([4, 4]);
+    expect(await s.undo()).toBeNull();
+    s.stop();
+  });
+
+  test("says a collaborator overtook it only for a conflict", () => {
+    expect(stepRefusal({ verdict: "applied", seq: 1, position: 1 }, "undone")).toBeNull();
+    expect(stepRefusal({ verdict: "conflict", reason: "moved" }, "undone")).toBe(
+      "That change was overtaken by another and cannot be undone.",
+    );
+    expect(stepRefusal({ verdict: "rate_limited", reason: "Wait a moment." }, "redone")).toBe(
+      "Wait a moment.",
+    );
+    expect(stepRefusal({ verdict: "invalid", reason: "No longer in the history." }, "undone")).toBe(
+      "No longer in the history.",
+    );
   });
 });

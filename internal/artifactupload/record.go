@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
-	"github.com/crewlet/crewlet/internal/artifactupload/lint"
 	"github.com/crewlet/crewlet/internal/objstore"
 )
 
@@ -116,7 +115,7 @@ func (f file) held() bool { return f.State != fileNamed && f.State != fileDelete
 // that publish is answered with.
 type outcome struct {
 	Published artifactsdomain.Published `json:"published"`
-	Warnings  []lint.Finding            `json:"warnings,omitempty"`
+	Report
 }
 
 // record is one upload.

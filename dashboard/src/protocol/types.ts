@@ -5015,14 +5015,14 @@ export type DataOpKind = (typeof DATA_OP_KINDS)[number];
 export type DataVerdict = (typeof DATA_VERDICTS)[number];
 
 /**
- * Who did something, as `iam.Actor` encodes itself: a struct with NO JSON
- * TAGS, so its keys are the Go field names. `Kind` is `agent`, `human`,
- * `operator` or `system`.
+ * Who did something (`iam.Actor`). `kind` is `agent`, `human`, `operator` or
+ * `system`; `operator_id` is the credential the author acted through, absent
+ * where the row records none.
  */
 export interface ArtifactActor {
-  Name: string;
-  Kind: string;
-  OperatorID?: string;
+  name: string;
+  kind: string;
+  operator_id?: string;
 }
 
 /** A state-log position (`statelog.Position`). */
@@ -5063,7 +5063,8 @@ export interface ArtifactHead {
   source_key?: string;
   head_number: number;
   contract?: string;
-  capabilities?: ArtifactCapability[];
+  /** What the head version declares; empty, never absent, for none. */
+  capabilities: ArtifactCapability[];
   status: ArtifactStatus;
   trashed_by: ArtifactActor;
   trashed_at: string;
@@ -5157,7 +5158,8 @@ export interface ArtifactVersionSummary {
   label?: string;
   entry?: string;
   contract?: string;
-  capabilities?: ArtifactCapability[];
+  /** What the version declares; empty, never absent, for none. */
+  capabilities: ArtifactCapability[];
   files: number;
   bytes: number;
   author: ArtifactActor;
@@ -5422,6 +5424,8 @@ export interface ArtifactPublished {
   number: number;
   version_id: string;
   warnings?: ArtifactLintFinding[];
+  /** The version's files by where their bytes came from (`artifactupload.FileCounts`). */
+  files?: { stored: number; carried: number };
   op_id: string;
   outcome: "applied" | "pending" | "unknown";
   position: LogPosition;
@@ -5623,10 +5627,9 @@ export interface DataOp {
 /** A datastore write's answer, success or the applier's refusal (`artifactdataapi.answer`). */
 export interface DataWriteAnswer {
   op_id: string;
-  outcome: "applied" | "pending" | "unknown";
   position?: LogPosition;
-  /** The applier's verdict; absent while `pending`. */
-  verdict?: DataVerdict;
+  /** How the write ended: the applier's verdict, or `pending` while the node that took it has not applied it. */
+  verdict: DataVerdict | "pending";
   /** The write's place in the store's history: what an undo names. */
   seq?: number;
   detail?: string;

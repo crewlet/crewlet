@@ -70,14 +70,19 @@ export type WriteResult =
   | { verdict: "applied"; seq: number; position: number }
   /** Durable, and not yet applied on the node that answered: the verdict follows the push. */
   | { verdict: "pending"; position: number }
-  /** The applier decided against it, in the engine's words. */
+  /**
+   * The engine decided against it, in its words: whether the applier
+   * decided it on the log or the node refused it before appending (a value
+   * the grammar refuses, a share that writes nothing, a purged store) is
+   * the engine's business, and the verdict is the same either way.
+   */
   | {
       verdict: "conflict" | "invalid" | "forbidden" | "quota" | "gone";
       reason: string;
       conflict?: DataDoc[];
     }
-  /** Refused before it reached the log (a rate limit, a refused capability, a share that writes nothing). */
-  | { verdict: "refused"; code: string; reason: string; retryAfterMs?: number }
+  /** Nothing was decided: this node's write budget is spent, and the same write may be sent again after the wait. */
+  | { verdict: "rate_limited"; reason: string; retryAfterMs?: number }
   /** Nobody could establish whether it landed; Retry sends exactly it again. */
   | { verdict: "unknown"; reason: string };
 
@@ -247,9 +252,9 @@ export class ArtifactDataStore {
           id,
           fields,
           version: 0,
-          created_by: { Name: "", Kind: "" },
+          created_by: { name: "", kind: "" },
           created_at: "",
-          updated_by: { Name: "", Kind: "" },
+          updated_by: { name: "", kind: "" },
           updated_at: "",
         },
         fields,
@@ -428,7 +433,7 @@ export class ArtifactDataStore {
         ...(delta.body ? { fields: delta.body } : {}),
         ...(delta.deleted ? { deleted: true } : {}),
         version: delta.version,
-        created_by: c.docs.get(delta.doc)?.created_by ?? { Name: delta.created_by, Kind: "" },
+        created_by: c.docs.get(delta.doc)?.created_by ?? { name: delta.created_by, kind: "" },
         created_at: c.docs.get(delta.doc)?.created_at ?? delta.updated_at,
         updated_by: delta.updated_by,
         updated_at: delta.updated_at,
@@ -708,6 +713,8 @@ export class ArtifactDataStore {
       }),
     );
     if (result.verdict === "applied") this.redoable.push(result.seq);
+    // NOTHING WAS DECIDED, so the step is the reader's to take again.
+    else if (undecided(result)) this.undoable.push(seq);
     this.refreshAll();
     return result;
   }
@@ -723,6 +730,7 @@ export class ArtifactDataStore {
       }),
     );
     if (result.verdict === "applied") this.undoable.push(result.seq);
+    else if (undecided(result)) this.redoable.push(seq);
     this.refreshAll();
     return result;
   }
@@ -747,6 +755,11 @@ export class ArtifactDataStore {
   private emit(): void {
     for (const listener of [...this.listeners]) listener();
   }
+}
+
+/** A write the engine decided nothing about: a spent budget, or an answer nobody could establish. */
+function undecided(result: WriteResult): boolean {
+  return result.verdict === "rate_limited" || result.verdict === "unknown";
 }
 
 /** How long a confirmed write waits for its push before reading what it wrote. */
@@ -779,37 +792,77 @@ export function resultOf(answer: KeyedAnswer): WriteResult {
   if (answer.kind === "done") {
     const body = answer.body as Partial<DataWriteAnswer>;
     const position = packedPosition(body.position);
-    if (answer.pending || body.outcome === "pending") return { verdict: "pending", position };
+    if (answer.pending || body.verdict === "pending") return { verdict: "pending", position };
     return { verdict: "applied", seq: body.seq ?? 0, position };
   }
   if (answer.kind === "unknown") return { verdict: "unknown", reason: answer.text };
   const err = answer.error;
-  if (err) {
-    const verdict = typeof err.body.verdict === "string" ? err.body.verdict : "";
-    const reason =
-      typeof err.body.detail === "string" && err.body.detail ? err.body.detail : answer.text;
-    if (
-      verdict === "conflict" ||
-      verdict === "invalid" ||
-      verdict === "forbidden" ||
-      verdict === "quota" ||
-      verdict === "gone"
-    ) {
-      const conflict = Array.isArray(err.body.conflict)
-        ? (err.body.conflict as DataDoc[])
-        : undefined;
-      return { verdict, reason, ...(conflict ? { conflict } : {}) };
-    }
+  if (!err) return { verdict: "invalid", reason: answer.text };
+  if (err.status === 429) {
     return {
-      verdict: "refused",
-      code: err.code || "refused",
+      verdict: "rate_limited",
       reason: refusedReason(err, answer.text),
-      ...(err.status === 429 && err.retryAfterSeconds !== null
-        ? { retryAfterMs: err.retryAfterSeconds * 1000 }
-        : {}),
+      ...(err.retryAfterSeconds !== null ? { retryAfterMs: err.retryAfterSeconds * 1000 } : {}),
     };
   }
-  return { verdict: "refused", code: "refused", reason: answer.text };
+  // THE APPLIER'S OWN DETAIL where it decided, which names the rule; the
+  // node's refusal before the log is said in the sheet's words.
+  const detail = typeof err.body.detail === "string" ? err.body.detail : "";
+  const reason =
+    err.body.verdict !== undefined && detail ? detail : refusedReason(err, answer.text);
+  const conflict = Array.isArray(err.body.conflict) ? (err.body.conflict as DataDoc[]) : undefined;
+  return { verdict: decidedVerdict(err), reason, ...(conflict ? { conflict } : {}) };
+}
+
+/** The decided verdicts, as the applier writes them. */
+const DECIDED = ["conflict", "invalid", "forbidden", "quota", "gone"] as const;
+type Decided = (typeof DECIDED)[number];
+
+/**
+ * The verdict a refusal is: the applier's own where the answer carries it,
+ * else what the node's refusal before the log means. ONE ANSWER PER MEANING,
+ * whichever side of the log decided it: a value the grammar refuses at the
+ * edge and one the applier refuses are both `invalid`, so neither a page nor
+ * the sheet handles the same refusal two ways. A refusal this build cannot
+ * place is `invalid` with the engine's own words, which is how the contract
+ * asks an unknown code to be taken.
+ */
+function decidedVerdict(err: RestError): Decided {
+  const said = err.body.verdict;
+  if (typeof said === "string" && (DECIDED as readonly string[]).includes(said))
+    return said as Decided;
+  switch (err.status) {
+    case 401:
+    case 403:
+      return "forbidden";
+    case 409:
+      return err.code === "not_undoable" ? "invalid" : "conflict";
+    case 410:
+      return "gone";
+    case 413:
+      return "quota";
+    default:
+      return "invalid";
+  }
+}
+
+/**
+ * What an undo or a redo the engine did not take says, or null for one it
+ * took. Only a CONFLICT is somebody else's change overtaking it; every other
+ * refusal (a spent budget, a write the history no longer holds, an answer
+ * nobody could establish) says its own reason rather than blaming a
+ * collaborator.
+ */
+export function stepRefusal(result: WriteResult, done: "undone" | "redone"): string | null {
+  switch (result.verdict) {
+    case "applied":
+    case "pending":
+      return null;
+    case "conflict":
+      return `That change was overtaken by another and cannot be ${done}.`;
+    default:
+      return result.reason;
+  }
 }
 
 /** What a write refused before the log says on the cell. */

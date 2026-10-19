@@ -191,7 +191,7 @@ function Details({ detail, onChanged }: { detail: ArtifactDetail; onChanged: () 
 
 /** What the latest version declared its page may do, in words. */
 function Capabilities({ detail }: { detail: ArtifactDetail }) {
-  const declared = detail.capabilities ?? [];
+  const declared = detail.capabilities;
   return (
     <Section
       title="What it can do"

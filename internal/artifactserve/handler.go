@@ -34,7 +34,7 @@ var Routes = []string{
 	"GET /t/{ticket}/{path...}",
 	"GET /t/{ticket}/_assets/{asset}",
 	"GET /_crewlet/runtime/{contract}/{file...}",
-	"GET /_crewlet/kit/{version}/{file...}",
+	"GET " + artifacts.KitPrefix + "{version}/{file...}",
 }
 
 // Artifacts is the artifacts estate as the origin reads it: through the estate
@@ -237,11 +237,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) route(w http.ResponseWriter, r *http.Request) string {
 	p := r.URL.Path
 	dest := destSubresource
+	public := ""
 	switch {
 	case strings.HasPrefix(p, runtimePrefix):
-		dest = destRuntime
+		dest, public = destRuntime, strings.TrimPrefix(p, runtimePrefix)
 	case strings.HasPrefix(p, kitPrefix):
-		dest = destKit
+		dest, public = destKit, strings.TrimPrefix(p, kitPrefix)
 	case fetchDest(r) == "iframe" || fetchDest(r) == "document":
 		dest = destDocument
 	}
@@ -251,8 +252,7 @@ func (h *Handler) route(w http.ResponseWriter, r *http.Request) string {
 		return dest
 	}
 	if dest == destRuntime || dest == destKit {
-		if !h.public.serve(w, r, dest, strings.TrimPrefix(p, "/_crewlet/"+dest+"/"),
-			h.origins.Secure()) {
+		if !h.public.serve(w, r, dest, public, h.origins.Secure()) {
 			h.refuse(w, http.StatusNotFound, 0)
 		}
 		return dest
@@ -270,10 +270,11 @@ func (h *Handler) route(w http.ResponseWriter, r *http.Request) string {
 }
 
 // The prefixes of the embedded trees the origin serves beside its tickets: the
-// runtime and the kit of [Routes].
+// runtime and the kit of [Routes]. The kit's is the one the publish linter
+// reads a page's links against, so it is the artifacts package's.
 const (
 	runtimePrefix = "/_crewlet/" + destRuntime + "/"
-	kitPrefix     = "/_crewlet/" + destKit + "/"
+	kitPrefix     = artifacts.KitPrefix
 )
 
 // servedMethod reports whether r asks with a method the origin answers: GET,

@@ -64,12 +64,10 @@ type Page struct {
 	// Policy is what the serving origin builds the page's script policy from.
 	Policy artifacts.ScriptPolicy
 
-	// Warnings are what is legal and almost certainly not meant.
+	// Warnings are what is legal and almost certainly not meant. Whether
+	// the page follows its reader's appearance is not among them: the
+	// publish pipeline answers that for the whole version ([ThemeOf]).
 	Warnings []Finding
-
-	// DarkMode reports that the page itself carries dark-mode rules; the
-	// publish pipeline asks the version's stylesheets too before it warns.
-	DarkMode bool
 }
 
 // maxWarnings bounds how many warnings of one code one file reports: past it
@@ -133,10 +131,7 @@ func HTML(path string, src []byte, opts Options) (Page, error) {
 		l.policy.HandlerHashes = append(l.policy.HandlerHashes, h)
 	}
 	slices.Sort(l.policy.HandlerHashes)
-	return Page{
-		Text: out, Policy: l.policy, Warnings: l.fs.warnings,
-		DarkMode: MentionsDarkMode(src),
-	}, nil
+	return Page{Text: out, Policy: l.policy, Warnings: l.fs.warnings}, nil
 }
 
 // linter is one HTML file's lint in progress.
@@ -582,11 +577,6 @@ func transformPath(p string) bool {
 		return true
 	}
 	return false
-}
-
-// MentionsDarkMode reports text carrying a dark-mode rule.
-func MentionsDarkMode(text []byte) bool {
-	return bytes.Contains(bytes.ToLower(text), []byte("prefers-color-scheme"))
 }
 
 // lineAt is the line byte i of text is on.

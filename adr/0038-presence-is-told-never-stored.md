@@ -1,4 +1,4 @@
-# ADR-0038 — Presence is told, never stored
+# ADR-0038: Presence is told, never stored
 
 - **Status:** accepted
 - **Authority:** `internal/presence`

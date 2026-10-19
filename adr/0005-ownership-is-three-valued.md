@@ -1,4 +1,4 @@
-# ADR-0005 — "Do I hold this?" has three answers, never two
+# ADR-0005: "Do I hold this?" has three answers, never two
 
 - **Status:** accepted
 - **Authority:** `internal/coord`

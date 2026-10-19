@@ -75,9 +75,14 @@ const (
 	// on an opaque origin: shared state belongs in the datastore.
 	CodeBrowserStorage Code = "browser_storage"
 
-	// CodeNoDarkMode is a page with no dark-mode rules: it ignores the
-	// reader's theme.
+	// CodeNoDarkMode is a version that ignores its reader's appearance: no
+	// page or stylesheet carries a dark-mode rule, and no page links both the
+	// kit's stylesheet and its theme bootstrap.
 	CodeNoDarkMode Code = "no_dark_mode"
+
+	// CodeKitUnserved is a link to a kit release this build does not serve:
+	// the origin answers it with a 404, so the page loads no kit at all.
+	CodeKitUnserved Code = "kit_unserved"
 
 	// CodeNoViewport is a page with no viewport meta: it renders at desktop
 	// width on a phone.

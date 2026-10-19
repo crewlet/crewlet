@@ -14,6 +14,7 @@ import {
   readDoc,
   readEvent,
   readInit,
+  readPerson,
   readResult,
   readViewer,
 } from "./bridge.ts";
@@ -89,6 +90,18 @@ describe("a viewer", () => {
   });
 });
 
+describe("a person", () => {
+  test("carries an agent's face, and a malformed one is left off rather than refusing them", () => {
+    const ada = { seat: "ada", kind: "agent", displayName: "Ada" };
+    expect(readPerson({ ...ada, avatar: { character: "otter", hue: "cyan", url: "x" } })).toEqual({
+      ...ada,
+      avatar: { character: "otter", hue: "cyan" },
+    });
+    expect(readPerson({ ...ada, avatar: { character: 3 } })).toEqual(ada);
+    expect(readPerson({ ...ada, displayName: undefined })).toBeNull();
+  });
+});
+
 describe("a result", () => {
   test("is read as an answer or a refusal", () => {
     expect(readResult({ type: BRIDGE_MESSAGE.result, id: 3, ok: true, value: 7 })).toEqual({
@@ -150,6 +163,7 @@ describe("an event", () => {
             session: "s1",
             seat: "maya",
             kind: "human",
+            displayName: "Maya Ortiz",
             activity: "editing",
             at: "2026-10-18T10:00:00Z",
             focus: { version: 2, doc: "r1", field: "name", cookie: "x" },
@@ -162,7 +176,7 @@ describe("an event", () => {
     expect(event).toMatchObject({
       topic: "presence",
       roster: {
-        members: [{ focus: { version: 2, doc: "r1", field: "name" } }],
+        members: [{ displayName: "Maya Ortiz", focus: { version: 2, doc: "r1", field: "name" } }],
         counts: { human: 1, agent: 0 },
       },
     });
@@ -184,5 +198,8 @@ describe("every method", () => {
     expect(free).toEqual(["openLink"]);
     expect(capabilityOf("data.write")).toBe("db");
     expect(capabilityOf("state.set")).toBe("state");
+    expect(capabilityOf("data.undo")).toBe("db");
+    expect(capabilityOf("data.redo")).toBe("db");
+    expect(capabilityOf("identity.people")).toBe("identity");
   });
 });

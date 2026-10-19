@@ -110,8 +110,8 @@ func TestAPageWithNothingToRewriteIsUnchanged(t *testing.T) {
 	if string(page.Text) != src {
 		t.Fatalf("an untouched page was rewritten:\n%s", page.Text)
 	}
-	if !page.DarkMode || warned(page, lint.CodeNoViewport) {
-		t.Fatalf("dark mode %v, viewport warning %v", page.DarkMode, warned(page, lint.CodeNoViewport))
+	if warned(page, lint.CodeNoViewport) {
+		t.Fatal("a page with a viewport meta was warned for having none")
 	}
 }
 
