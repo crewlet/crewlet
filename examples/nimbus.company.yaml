@@ -1134,7 +1134,7 @@ units:
                 # tool the listed servers expose (there is no per-tool allowlist:
                 # OpenCode has none, and claude-code runs bypassPermissions).
               env:
-                GITLAB_TOKEN: "${GITLAB_TOKEN_FE}"   # this seat's own PAT (git-auth step + glab)
+                GITLAB_TOKEN: "${GITLAB_TOKEN_FE}"   # this seat's own PAT, for the git-auth step and the coding agent
               setup:
                 - name: node
                   # console / website are Node repos (React + Vite + TS).
@@ -1221,7 +1221,7 @@ units:
                 # tool the listed servers expose (there is no per-tool allowlist:
                 # OpenCode has none, and claude-code runs bypassPermissions).
               env:
-                GITLAB_TOKEN: "${GITLAB_TOKEN_AI}"   # this seat's own PAT (git-auth step + glab)
+                GITLAB_TOKEN: "${GITLAB_TOKEN_AI}"   # this seat's own PAT, for the git-auth step and the coding agent
               setup:
                 - name: python
                   # The Phase-2 framework repo is Python-first; uv gives the
