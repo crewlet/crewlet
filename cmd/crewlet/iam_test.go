@@ -3,10 +3,14 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -518,6 +522,132 @@ func TestAMachineCreateNamesItsGrants(t *testing.T) {
 		t.Errorf("a service account's create naming -grants none answered %v, "+
 			"want it to get as far as reading the config", err)
 	}
+}
+
+// THE COMMAND NEVER SPELLS THE PERMISSION LIST BY HAND.
+//
+// The help, the -grants flag's own line and the refusals that tell an
+// operator what to type all list the permissions, and four of them had the
+// list typed out while [iamGrantWords] — written so that list would follow
+// [iam.AllGrants] — was used by two. A typed copy is right on the day it is
+// written and goes on naming three permissions after a fourth exists, which
+// no behavioural case can see while the copy still matches. So this reads
+// every string this package's source builds, a constant concatenation folded
+// into one sentence, and refuses one that names every permission, or every
+// app, as a list.
+//
+// Mutation: type "admin, worklet and doclet" back into the grant refusal, or
+// "(worklet, doclet)" back into the help, and this fails naming the line.
+func TestTheCLINeverSpellsTheGrantListByHand(t *testing.T) {
+	t.Parallel()
+	// ANY LIST OF THE VOCABULARY'S WORDS, and not only the whole of it: a
+	// list typed when the vocabulary was smaller names fewer words than it
+	// holds now, and a pattern built from today's vocabulary alone passes
+	// exactly that copy -- the defaults, "worklet and doclet", went on
+	// standing in the help after the artifacts app arrived.
+	if len(iam.AllGrants) < 2 {
+		t.Fatal("the permissions are not two words long, so there is no list " +
+			"to spell and this guard asserts nothing")
+	}
+	words := make([]string, 0, len(iam.AllGrants))
+	for _, g := range iam.AllGrants {
+		words = append(words, regexp.QuoteMeta(string(g)))
+	}
+	word := `(?:` + strings.Join(words, "|") + `)`
+	list := regexp.MustCompile(`(?i)\b` + word + `(?:(?:,? (?:and|or) |, )` + word + `)+\b`)
+	vocabulary := regexp.MustCompile(`(?i)\b` + word + `\b`)
+
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := 0
+	for _, file := range files {
+		if strings.HasSuffix(file, "_test.go") {
+			continue
+		}
+		fset := token.NewFileSet()
+		parsed, err := parser.ParseFile(fset, file, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", file, err)
+		}
+		read++
+		for _, built := range stringsBuilt(parsed) {
+			text := strings.Join(strings.Fields(built.text), " ")
+			for _, at := range list.FindAllStringIndex(text, -1) {
+				spelled := text[at[0]:at[1]]
+				distinct := map[string]bool{}
+				for _, w := range vocabulary.FindAllString(spelled, -1) {
+					distinct[strings.ToLower(w)] = true
+				}
+				if len(distinct) < 2 {
+					continue
+				}
+				t.Errorf("%s spells the list %q by hand: build it from "+
+					"iamGrantWords or iamAppWords, which follow the "+
+					"engine's own, so a permission a later build adds is "+
+					"named there too", fset.Position(built.pos), spelled)
+			}
+		}
+	}
+	if read == 0 {
+		t.Fatal("no source file was read, so this guard asserts nothing")
+	}
+}
+
+// builtString is one string a source file builds out of literals: a lone
+// literal, or a `+` chain of them folded into one, with a NUL where an operand
+// that is not a literal sits — so a sentence wrapped across lines is read as
+// the sentence it prints, and a word supplied by a call never joins the words
+// either side of it.
+type builtString struct {
+	pos  token.Pos
+	text string
+}
+
+func stringsBuilt(file *ast.File) []builtString {
+	var built []builtString
+	var visit func(ast.Node) bool
+	visit = func(n ast.Node) bool {
+		switch e := n.(type) {
+		case *ast.BasicLit:
+			if s, ok := stringLiteral(e); ok {
+				built = append(built, builtString{e.Pos(), s})
+			}
+			return false
+		case *ast.BinaryExpr:
+			if e.Op != token.ADD {
+				return true
+			}
+			var b strings.Builder
+			literal := false
+			var operand func(ast.Expr)
+			operand = func(x ast.Expr) {
+				x = ast.Unparen(x)
+				if chain, ok := x.(*ast.BinaryExpr); ok && chain.Op == token.ADD {
+					operand(chain.X)
+					operand(chain.Y)
+					return
+				}
+				if s, ok := stringLiteral(x); ok {
+					b.WriteString(s)
+					literal = true
+					return
+				}
+				b.WriteByte(0)
+				ast.Inspect(x, visit)
+			}
+			operand(e.X)
+			operand(e.Y)
+			if literal {
+				built = append(built, builtString{e.Pos(), b.String()})
+			}
+			return false
+		}
+		return true
+	}
+	ast.Inspect(file, visit)
+	return built
 }
 
 // A DIRECTORY NOBODY COULD CHECK IS NOT A CLEAN ONE.

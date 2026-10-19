@@ -99,17 +99,17 @@ Usage:
                     [-before POSITION]                 Show the identity audit trail
 
 Flags:
-  -config PATH   The node config file naming the node to reach (default %q)
+  -config PATH   The node config file naming the node to reach (default %[1]q)
   -api URL       The running node's API; default is its own api.host:port
   -json          Print the raw answer rather than a table
   -reason TEXT   Saved with the change for the audit trail
   -idempotency-key OP
                  Retry a write whose outcome was unknown, as the same operation
-  -grants G,...  On invite, create, grant and token: admin, worklet, doclet
-                 or artifacts, comma-separated, or none (overview only).
-                 admin includes every app. Defaults: worklet and doclet for
-                 people, the owner's permissions for a token. Required for a
-                 service account
+  -grants G,...  On invite, create, grant and token:
+                 %[2]s, comma-separated, or none
+                 (overview only). admin includes every app. Defaults:
+                 %[3]s for people, the owner's
+                 permissions for a token. Required for a service account
   -seat SEAT     On invite and create: the vacant human seat they'll hold
                  ("iam seats -unheld" lists them). Required for people,
                  optional for service accounts
@@ -157,7 +157,7 @@ accounts only. Changes made with a token are recorded as its owner's.
 func runIAM(environ config.Source, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	sub, rest := splitSubject(args)
 	if sub == "" || sub == "help" {
-		fmt.Fprintf(stdout, iamUsage, defaultBootstrapPath)
+		fmt.Fprint(stdout, iamHelp())
 		return flag.ErrHelp
 	}
 	// THE SUBJECT COMES OFF BEFORE THE FLAGS, for `crewlet secrets`'
@@ -177,8 +177,8 @@ func runIAM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 	asJSON := fs.Bool("json", false, "print the raw answer")
 	reason := fs.String("reason", "", "recorded on the change")
 	grants := fs.String("grants", "",
-		iamGrantWords()+", comma-separated, or `none`. admin "+
-			"includes every app. If left out: every app on invite and a "+
+		iamGrantWords()+", comma-separated, or `none`. admin includes "+
+			"every app. If left out: every app on invite and a "+
 			"person's create, the owner's permissions on token. Required on a "+
 			"service account's create")
 	stage := fs.String("stage", "", "only people at this stage")
@@ -408,8 +408,8 @@ func runIAM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 	case "grant":
 		body := granted.body()
 		if len(body) == 0 {
-			return errors.New("say what to give with -grants: admin, worklet, " +
-				"doclet or artifacts, comma-separated, or none")
+			return fmt.Errorf("say what to give with -grants: %s, "+
+				"comma-separated, or none", iamGrantWords())
 		}
 		body["reason"] = *reason
 		return out.written(client.patch(ctx, "/iam/people/"+subject, body))
@@ -468,7 +468,7 @@ func runIAM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 		answer, err := client.get(ctx, "/iam/audit", query)
 		return out.audit(query, answer, err)
 	}
-	fmt.Fprintf(stdout, iamUsage, defaultBootstrapPath)
+	fmt.Fprint(stdout, iamHelp())
 	return fmt.Errorf("unknown subcommand %q", sub)
 }
 
@@ -725,15 +725,33 @@ func iamGrants(flagged string) (iamGrantList, error) {
 	return iamGrantList{grants: out, given: true}, nil
 }
 
-// iamGrantWords is the vocabulary a refusal names, read off [iam.AllGrants]
-// so a permission a later build adds is named here without anybody
-// remembering this sentence exists.
-func iamGrantWords() string {
-	words := make([]string, 0, len(iam.AllGrants))
-	for _, g := range iam.AllGrants {
+// iamGrantWords is the vocabulary the help and every refusal name, read off
+// [iam.AllGrants] so a permission a later build adds is named here without
+// anybody remembering these sentences exist. EVERY sentence this command
+// prints that lists the permissions takes it — the usage, the flag's own help
+// and each refusal — because a list typed into one of them is the copy that
+// goes on naming three permissions after there are four;
+// TestTheCLINeverSpellsTheGrantListByHand reads the source for one.
+func iamGrantWords() string { return iamWords(iam.AllGrants) }
+
+// iamAppWords is the APPS among them ([iam.Apps]), which is what a person's
+// invitation or create carries when -grants is left out — read off the same
+// list, for the same reason.
+func iamAppWords() string { return iamWords(iam.Apps) }
+
+func iamWords(set []iam.Grant) string {
+	words := make([]string, 0, len(set))
+	for _, g := range set {
 		words = append(words, string(g))
 	}
 	return strings.Join(words, ", ")
+}
+
+// iamHelp is [iamUsage] with its blanks filled: the default config path, and
+// the permission and app vocabularies, which are the engine's own lists rather
+// than words typed into the text.
+func iamHelp() string {
+	return fmt.Sprintf(iamUsage, defaultBootstrapPath, iamGrantWords(), iamAppWords())
 }
 
 // iamTokenBody is a mint's request: what the token carries, what it is called
