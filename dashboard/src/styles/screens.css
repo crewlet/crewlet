@@ -10730,6 +10730,18 @@ a.live-row:focus-visible {
   gap: var(--spacing-3);
   min-width: 0;
 }
+/* THE SHEET TAKES THE ROOM IT IS GIVEN: the view is a column item of the
+   artifact body, and the Data panel's rows one of the panel body (uilet's
+   ArtifactPanel), so each may shrink and its grid gives way (uilet's
+   fit="content") until Add row sits on the edge. The other Data views are
+   forms and lists that keep their height and scroll the panel. */
+.artifact-sheet {
+  min-height: 0;
+}
+.artifact-data--rows,
+.artifact-panel-body:has(> .artifact-data--rows) {
+  min-height: 0;
+}
 .artifact-sheet-bar,
 .artifact-data-bar {
   display: flex;
@@ -10741,12 +10753,13 @@ a.live-row:focus-visible {
 .artifact-data-bar-end {
   margin-inline-start: auto;
 }
-/* A GRID IS AS TALL AS ITS ROWS (fit="content") up to what the view holds
-   below its own bar (in the Data panel, below the panel's head and the
-   data bar), so twelve rows draw no empty slab under them and Add row sits
-   under the last row on a phone too. */
+/* A GRID IS AS TALL AS ITS ROWS (fit="content") up to the room its column
+   leaves it (above), so twelve rows draw no empty slab under them and Add row
+   sits on the view's edge under two thousand. Never shorter than 16rem of
+   rows, where it has that many: a short window scrolls the view instead. */
 .artifact-grid {
-  --crewlet-sheet-max-height: max(16rem, calc(var(--artifact-view, 100cqb - 8rem) - 3rem));
+  --crewlet-sheet-max-height: none;
+  --crewlet-sheet-min-height: 16rem;
 }
 
 /* A HISTORY IS ONE LINE PER CHANGE: who, what, when, and its one action. */
