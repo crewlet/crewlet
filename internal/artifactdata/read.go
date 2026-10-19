@@ -472,7 +472,10 @@ func scanDocs(ctx context.Context, tx *sql.Tx, c *collState, q string, args ...a
 		return nil, fmt.Errorf("artifactdata: read %s: %w", c.spec.Name, err)
 	}
 	defer func() { _ = rows.Close() }()
-	var out []Doc
+	// AN EMPTY LIST, NEVER NIL: a page with no documents is `"docs": []` on
+	// the wire, and a client reading the list it was promised does not have
+	// to tell an empty collection from a broken answer.
+	out := []Doc{}
 	for rows.Next() {
 		var d docRow
 		if err := rows.Scan(&d.id, &d.body, &d.createdBy, &d.createdKind, &d.createdAt,
