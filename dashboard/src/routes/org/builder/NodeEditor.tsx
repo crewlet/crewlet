@@ -24,8 +24,8 @@
  * every key it does not model.
  *
  * A FIELD FOR A TOOL IS DRAWN ONLY WHERE THE TOOL IS. A seat's GitHub tier,
- * Slack channel, Mattermost channel and GitLab access level mean something
- * only when the company has connected that tool, so each says "<Tool> is not
+ * Mattermost channel and GitLab access level mean something only when the
+ * company has connected that tool, so each says "<Tool> is not
  * connected" instead of offering a setting that does nothing. A project and a
  * space are NOT a tool's: they are the seat's or unit's own `project` and
  * `space`, naming a container on whichever tracker and knowledge base the
@@ -810,7 +810,6 @@ function UnitEditor({
 
 const GITHUB_TIER: Segment[] = ["integrations", "github", "tier"];
 const GITHUB_REPOS: Segment[] = ["integrations", "github", "repos"];
-const SLACK_CHANNEL: Segment[] = ["integrations", "slack", "channel"];
 const MATTERMOST_CHANNEL: Segment[] = ["integrations", "mattermost", "channel"];
 const MATTERMOST_USERNAME: Segment[] = ["integrations", "mattermost", "username"];
 
@@ -843,7 +842,6 @@ function seatFieldPaths(
           ...BUDGET_WINDOWS.map(({ period }) => ["token_budget", period] as Segment[]),
           ...(schedulesOf(data).length > 0 ? [["schedules"] as Segment[]] : []),
           ...(isConnected(company, "github") ? [GITHUB_TIER, GITHUB_REPOS] : []),
-          ...(seatBlock("slack") ? [SLACK_CHANNEL] : []),
           ...(seatBlock("mattermost") ? [MATTERMOST_CHANNEL, MATTERMOST_USERNAME] : []),
           ...ownsFieldPaths(company),
         ]),
@@ -1401,19 +1399,13 @@ function IntegrationsSection({
         {!isConnected(company, "slack") ? (
           <NotConnected tool="slack" />
         ) : isRecord(slack) ? (
-          <ConfigField
-            label="Slack channel ID"
-            kind="id"
-            value={form.slackChannel}
-            onChange={(slackChannel) => set({ slackChannel })}
-            required={false}
-            disabled={disabled}
-            help="The ID of this seat's default channel, such as C0123ABCD, not its name."
-            error={errorFor(SLACK_CHANNEL)}
-          />
+          <p className="builder-note muted">
+            This seat speaks as its own Slack app, in its unit's channel.{" "}
+            <ScreenLink to="integrations">Open Integrations</ScreenLink>
+          </p>
         ) : (
           <p className="builder-note muted">
-            This seat has no Slack app of its own, so it has no channel to set.{" "}
+            This seat has no Slack app of its own.{" "}
             <ScreenLink to="integrations">Open Integrations</ScreenLink>
           </p>
         )}

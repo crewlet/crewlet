@@ -732,7 +732,7 @@ describe("changing kind", () => {
       space: "DOCS",
       integrations: {
         github: { tier: "review" },
-        slack: { channel: "C1" },
+        slack: { bot_token: "${DEV_SLACK_BOT}" },
       },
       goal: "Build",
     };

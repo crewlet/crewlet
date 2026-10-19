@@ -96,7 +96,6 @@ export interface SeatForm {
   readonly schedules: Readonly<Record<string, boolean>>;
   readonly githubTier: string;
   readonly githubRepos: readonly string[];
-  readonly slackChannel: string;
   readonly mattermostChannel: string;
   readonly mattermostUsername: string;
   /** The seat's own GitLab access level override; "" for the company default. */
@@ -205,7 +204,6 @@ export function seatForm(data: ConfigRole, accessLevel: string): SeatForm {
     schedules: scheduleToggles(data),
     githubTier: text(getPath(data, ["integrations", "github", "tier"])),
     githubRepos: strings(getPath(data, ["integrations", "github", "repos"])),
-    slackChannel: text(getPath(data, ["integrations", "slack", "channel"])),
     mattermostChannel: text(getPath(data, ["integrations", "mattermost", "channel"])),
     mattermostUsername: text(getPath(data, ["integrations", "mattermost", "username"])),
     accessLevel,
@@ -398,12 +396,6 @@ export function seatParts(
       ["integrations", "github", "repos"],
       listValue(initial.githubRepos),
       listValue(form.githubRepos),
-    ),
-    ...textPart(
-      ["integrations", "slack", "channel"],
-      initial.slackChannel,
-      form.slackChannel,
-      line,
     ),
     ...textPart(
       ["integrations", "mattermost", "channel"],

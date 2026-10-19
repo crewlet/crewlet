@@ -1005,7 +1005,7 @@ export interface ConfigRoleIntegrations {
     webhook_secret?: string;
     [key: string]: unknown;
   };
-  slack?: { bot_token?: string; signing_secret?: string; channel?: string; [key: string]: unknown };
+  slack?: { bot_token?: string; signing_secret?: string; [key: string]: unknown };
   mattermost?: { bot_token?: string; username?: string; channel?: string; [key: string]: unknown };
   [key: string]: unknown;
 }
