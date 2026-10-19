@@ -1225,6 +1225,10 @@
   gap: 4px;
   padding: var(--spacing-2) var(--spacing-3);
   font-size: var(--font-size-2xs);
+  /* THE LIST TABLE'S HEAD, 11/500 uppercase as every other list table draws
+     it (the kit's DataTable): at 400 the tracked capitals read lighter than
+     the cells under them. */
+  font-weight: var(--font-weight-medium);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--color-text-tertiary);
