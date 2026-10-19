@@ -629,11 +629,19 @@ export const WORKSPACES: WorkspaceRow[] = [
         // AN ADDRESS AND A BUTTON, not a tab: the gallery's New starts it, and
         // a reader arrives at Artifacts to look.
         key: "new",
-        label: "New sheet",
-        icon: "table",
+        label: "New artifact",
+        icon: "plus",
         path: ["artifacts", "new"],
-        hint: "Start a sheet: blank, or from the Review sheet template",
-        keywords: ["new sheet", "review sheet", "template", "spreadsheet"],
+        hint: "Start a sheet, blank or from the Review sheet template, or a slide deck",
+        keywords: [
+          "new sheet",
+          "review sheet",
+          "template",
+          "spreadsheet",
+          "new deck",
+          "slides",
+          "presentation",
+        ],
         tab: false,
         grants: ["artifacts"],
       },

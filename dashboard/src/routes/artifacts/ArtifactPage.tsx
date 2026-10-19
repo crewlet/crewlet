@@ -86,7 +86,7 @@ import { HistoryTab } from "./HistoryTab.tsx";
 import { DataTab } from "./DataTab.tsx";
 import { PurgeControl, SettingsTab } from "./SettingsTab.tsx";
 import { useArtifactPresence } from "./presence.ts";
-import { followMoves, followTarget, moves } from "~/lib/artifacts/follow.ts";
+import { followMoves, followTarget, moves, slideOfRegion } from "~/lib/artifacts/follow.ts";
 import { useViewer } from "~/lib/viewer.ts";
 
 /** The head is pushed (`artifact_changed`); this read is the floor under a push the socket missed. */
@@ -262,6 +262,7 @@ function Loaded({
   const peopleOpen = rail === "people";
   const [follow, setFollow] = useParam("follow", "");
   const [sheetParam] = useParam("sheet", "");
+  const [slideParam] = useParam("slide", "");
   // WHO IS FOLLOWED is somebody else in the room: following oneself moves
   // nothing, and a seat that left is said once and then let go.
   const followed = follow && follow !== viewer.handle ? follow : "";
@@ -290,6 +291,7 @@ function Loaded({
       showing,
       tab,
       sheet: sheetParam,
+      slide: slideParam,
     });
     if (!moves(move)) return;
     // ONE REPLACE FOR THE WHOLE MOVE: following is not a place the reader
@@ -297,6 +299,7 @@ function Loaded({
     nav.filter({
       ...(move.version !== undefined ? { version: move.version || null } : {}),
       ...(move.sheet !== undefined ? { sheet: move.sheet } : {}),
+      ...(move.slide !== undefined ? { slide: move.slide } : {}),
       ...(move.tab !== undefined ? { tab: null } : {}),
     });
   }, [
@@ -308,6 +311,7 @@ function Loaded({
     showing,
     tab,
     sheetParam,
+    slideParam,
     nav,
     setFollow,
   ]);
@@ -505,7 +509,9 @@ function Loaded({
           onStop={stopFollowing}
           labels={{
             following: (name) => {
-              const where = target.focus.region ? ` They are in ${target.focus.region}.` : "";
+              // A SLIDE IS MOVED TO, not said: the view is already on it.
+              const region = target.focus.region;
+              const where = region && !slideOfRegion(region) ? ` They are in ${region}.` : "";
               return `Following ${name}.${where} Press Esc or scroll to stop.`;
             },
           }}
@@ -559,6 +565,11 @@ function Loaded({
               presence={presence}
               drawn={drawn}
               bridgeStores={bridgeStores}
+              onPublished={(n: number) => {
+                refetch();
+                setVersion("");
+                setShownHead(n);
+              }}
             />
           )}
           {tab === "data" && store && <DataTab detail={detail} store={store} />}

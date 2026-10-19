@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/artifacts/mediatype"
+	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/artifactupload/edits"
 	"github.com/crewlet/crewlet/internal/artifactupload/lint"
@@ -61,6 +62,10 @@ type run struct {
 	// read are the version's pages and stylesheets as this run read them,
 	// for the dark-mode warning.
 	read [][]byte
+
+	// deck is the version's deck where the kind's format is the slide
+	// format, read whole by [run.checkFormat].
+	deck *slideformat.Deck
 
 	warnings []lint.Finding
 }
@@ -228,11 +233,16 @@ func (r *run) compose(ctx context.Context, mode manifest.Mode, specs []FileSpec,
 	if err := r.checkNewText(); err != nil {
 		return artifactsdomain.PublishInput{}, err
 	}
-	if err := r.lintFiles(ctx); err != nil {
-		return artifactsdomain.PublishInput{}, err
-	}
-	if err := r.carryVendored(ctx); err != nil {
-		return artifactsdomain.PublishInput{}, err
+	// ONLY A FRAMED KIND'S FILES ARE PAGES: a native kind serves no document
+	// on the artifact origin, so its HTML (a deck's slides) is its format's
+	// to judge, never linted, nonce-marked or given CDN copies as a page.
+	if r.kind.Framed() {
+		if err := r.lintFiles(ctx); err != nil {
+			return artifactsdomain.PublishInput{}, err
+		}
+		if err := r.carryVendored(ctx); err != nil {
+			return artifactsdomain.PublishInput{}, err
+		}
 	}
 	resolved, err := r.s.resolveContract(r.kind, contract, r.headContract, caps)
 	if err != nil {
@@ -243,6 +253,9 @@ func (r *run) compose(ctx context.Context, mode manifest.Mode, specs []FileSpec,
 	}
 	m, uploaded, err := r.manifest(mode, entry)
 	if err != nil {
+		return artifactsdomain.PublishInput{}, err
+	}
+	if err := r.checkFormat(ctx, m); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 		return artifactsdomain.PublishInput{}, err
 	}
 	search, err := r.searchText(ctx, m)

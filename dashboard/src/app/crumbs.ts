@@ -354,7 +354,7 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
       // names the id, which is still an address a reader can act on.
       return [root(row, true), named(labels, where.id)];
     case "new-artifact":
-      return [root(row, true), { label: section("new")?.label ?? "New sheet" }];
+      return [root(row, true), { label: section("new")?.label ?? "New artifact" }];
     case "budgets":
       return sectionPage("budgets");
     case "spend-tasks":

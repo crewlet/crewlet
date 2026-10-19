@@ -69,7 +69,14 @@ import (
 //     not subject to style-src.
 //   - img-src adds data: because Vite inlines an imported image below its
 //     assetsInlineLimit as a data: URI, so a small icon added to the source
-//     arrives in the bundle in that form rather than as a file.
+//     arrives in the bundle in that form rather than as a file. It adds blob:
+//     because a native artifact's image (a deck's picture) is a file of its
+//     version the API serves only as an attachment typed text/plain where a
+//     browser could run it: the dashboard fetches the bytes with the reader's
+//     own credential, types them from the version's manifest, and shows them
+//     through an object URL of its own making. A blob: URL is minted by script
+//     already running on this origin, so it widens nothing an injected
+//     element could reach on its own.
 //   - object-src and base-uri are 'none': the dashboard embeds no plugin and
 //     sets no base, and a base tag injected into the shell would otherwise
 //     re-point every relative URL.
@@ -95,7 +102,7 @@ import (
 // script that did get onto this origin finds no markup sink to widen its
 // reach through.
 const Dashboard = "default-src 'self'; script-src 'self'; style-src 'self'; " +
-	"img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; " +
+	"img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; " +
 	"base-uri 'none'; frame-ancestors 'none'; form-action 'self' https:; " +
 	"require-trusted-types-for 'script'; trusted-types 'none'"
 

@@ -155,6 +155,10 @@ func checkEntry(kind artifacts.Kind, m artifacts.Manifest) error {
 		return fmt.Errorf("%w: a %s artifact's entry is %s, and %q is %s", ErrInvalid, kind,
 			strings.Join(spec.Entry.Essences, " or "), e.Path, typ.Essence())
 	}
+	if !spec.Entry.AdmitsAt(e.Path, typ.Essence()) {
+		return fmt.Errorf("%w: a %s artifact's entry is %s, and the version names %q", ErrInvalid,
+			kind, strings.Join(spec.Entry.Defaults, " or "), e.Path)
+	}
 	return nil
 }
 
