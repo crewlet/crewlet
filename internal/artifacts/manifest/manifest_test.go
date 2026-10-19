@@ -122,7 +122,7 @@ func TestAManifestIsValidatedAgainstItsKind(t *testing.T) {
 		"css entry":      {artifacts.KindHTML, artifacts.Manifest{Entry: "site.css", Files: []artifacts.Entry{page, css}}},
 		"client type":    {artifacts.KindHTML, artifacts.Manifest{Entry: "index.html", Files: []artifacts.Entry{withType(page, "text/plain")}}},
 		"script on css":  {artifacts.KindHTML, artifacts.Manifest{Entry: "index.html", Files: []artifacts.Entry{page, withScript(css)}}},
-		"unknown kind":   {"canvas", good},
+		"unknown kind":   {"whiteboard", good},
 		"too many files": {artifacts.KindHTML, manyFiles(t, artifacts.MaxFilesPerVersion+1)},
 	}
 	for name, c := range cases {

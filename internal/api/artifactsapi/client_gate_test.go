@@ -6,7 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/datasetsapi"
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/dashspec"
 	"github.com/crewlet/crewlet/internal/artifacts/docindex"
 	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
@@ -169,6 +171,44 @@ func TestTheRendererDrawsTheSlideSubset(t *testing.T) {
 	for name, want := range map[string]int{"SLIDE_STAGE_WIDTH": slideformat.StageWidth,
 		"SLIDE_STAGE_HEIGHT":       slideformat.StageHeight,
 		"SLIDE_ICON_GLYPH_PERCENT": slideformat.IconGlyphPercent} {
+		got, err := clientsource.Scalar(tree, name)
+		if err != nil || got != strconv.Itoa(want) {
+			t.Errorf("%s is %q (%v), want %d", name, got, err, want)
+		}
+	}
+}
+
+// THE DASHBOARD DRAWS THE BOARD FORMAT THE ENGINE VALIDATES: every widget type
+// a publish admits has a figure, every source kind and refresh mode a rail
+// describes, every dataset status an answer carries, every fold and number
+// format a stat writes, every column type a cell renders, the grid a board
+// lays out on and the shortest interval a dataset refreshes at. A value the
+// engine admits that the dashboard lacks is a board that publishes and draws
+// nothing; one the dashboard keeps that the engine dropped is dead code.
+func TestTheDashboardDrawsTheBoardFormat(t *testing.T) {
+	t.Parallel()
+	tree := clientsource.Tree(t)
+	for name, engine := range map[string][]string{
+		"DASHBOARD_WIDGET_TYPES": names(dashspec.WidgetTypes),
+		"DASHBOARD_SOURCE_KINDS": names(dashspec.SourceKinds),
+		"DASHBOARD_REFRESH_MODES": names([]dashspec.RefreshMode{dashspec.RefreshLive, dashspec.RefreshSignal,
+			dashspec.RefreshInterval, dashspec.RefreshManual, dashspec.RefreshFixed, dashspec.RefreshDerived}),
+		"DASHBOARD_DATASET_STATUSES": {datasetsapi.StatusReady, datasetsapi.StatusRefused, datasetsapi.StatusUnanswered},
+		"DASHBOARD_AGGS":             names(dashspec.Aggs),
+		"DASHBOARD_NUMBER_FORMATS":   names(dashspec.Formats),
+		"DASHBOARD_COLUMN_TYPES":     names(dashspec.ColumnTypes),
+	} {
+		body, err := clientsource.Literal(tree, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if client := clientsource.Strings(body); !slices.Equal(client, engine) {
+			t.Errorf("the dashboard's %s is %q and the engine's is %q: change contract/artifacts.ts "+
+				"to the engine's", name, client, engine)
+		}
+	}
+	for name, want := range map[string]int{"DASHBOARD_COLUMNS": artifacts.DashboardColumns,
+		"DASHBOARD_MIN_REFRESH_SECONDS": artifacts.MinRefreshSeconds} {
 		got, err := clientsource.Scalar(tree, name)
 		if err != nil || got != strconv.Itoa(want) {
 			t.Errorf("%s is %q (%v), want %d", name, got, err, want)

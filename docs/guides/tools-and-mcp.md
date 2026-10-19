@@ -178,16 +178,17 @@ the engine mirrors no state it would have to keep in step. See
 
 Twelve more, registered on every node that takes artifact uploads (one with an
 object store, a coordination store and a data node to reach), whatever tracker
-or knowledge base the company runs: eight for the artifact and four for its
+or knowledge base the company runs: nine for the artifact and four for its
 datastore. Each tool is named for its authority row, and the operator catalogue
-serves the same twelve, so an operator's own assistant publishes and writes
+serves the same thirteen, so an operator's own assistant publishes and writes
 rows exactly as a seat does.
 
 | Tool | Description |
 |------|-------------|
 | `list_artifacts` | The artifacts the caller can open, by `scope` (`mine`, `shared`, `company`, `agents`, `all`), `kind` and `query`, a page at a time |
 | `get_artifact` | One artifact: its head, its newest versions, its files and a page of one file's source. The answer says the caller's `role` and whether they may publish (`writer`) |
-| `create_artifact` | A new `html`, `doc` or `sheet` artifact, from inline `content` and `files`, a project file, or a build in the turn's coding run (`source.sandbox`). When a person asked for it, they are made its editor |
+| `list_dashboard_sources` | The engine sources a dashboard's `engine` datasets may read: each one's parameters, columns, who may read it and how it refreshes. Holds no row; a source is answered as each board's viewer |
+| `create_artifact` | A new artifact of any kind (`html`, `doc`, `slides`, `dashboard`, `sheet`), from inline `content` and `files`, a project file, or a build in the turn's coding run (`source.sandbox`). When a person asked for it, they are made its editor |
 | `publish_artifact` | A new version on a stated `base_version`: `edits` (exact `old_str` and `new_str` pairs), `content`, `files` (null removes one), a build's whole `source`, or `restore_version` |
 | `update_artifact` | The title, description, icon or one version's label |
 | `share_artifact` / `unshare_artifact` | Grant a seat, a unit (`unit:<key>`) or the company (`company`) one role up to editor, or withdraw it. The owner's |

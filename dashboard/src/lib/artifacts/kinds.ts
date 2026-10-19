@@ -17,15 +17,23 @@ export function contentIsData(kind: ArtifactKind): boolean {
   return ARTIFACT_KIND_SPECS[kind].store === "content";
 }
 
-/** Whether a page's data is live beside its versions: a store a version declared, not versioned with it. */
+/**
+ * Whether an artifact's data is live beside its versions, never versioned with
+ * them: a store a page declared, or a native kind's own (a dashboard's).
+ */
 export function dataBesideVersions(kind: ArtifactKind): boolean {
-  return ARTIFACT_KIND_SPECS[kind].store === "declared";
+  const store = ARTIFACT_KIND_SPECS[kind].store;
+  return store === "declared" || store === "implied";
 }
 
-/** Whether an artifact keeps a datastore a person can open: one that is its content, or one its page declared. */
+/**
+ * Whether an artifact keeps a datastore a person can open: one that is its
+ * content, one a native kind keeps beside its files, or one its page declared.
+ */
 export function keepsData(detail: Pick<ArtifactDetail, "kind" | "capabilities">): boolean {
   switch (ARTIFACT_KIND_SPECS[detail.kind].store) {
     case "content":
+    case "implied":
       return true;
     case "declared":
       return (detail.capabilities ?? []).includes("db");

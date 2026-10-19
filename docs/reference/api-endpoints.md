@@ -6306,18 +6306,27 @@ as every read route does.
 
 The API origin **never renders an artifact**:
 
-- `POST /artifacts/{id}/tickets` (`{"version": n}`, the head by default) mints
-  the frame the dashboard embeds a page in: `frame_url` on the artifact
+- `POST /artifacts/{id}/tickets` (`{"version": n, "document": "path"}`, the
+  head by default) mints the frame the dashboard embeds a page in, or one
+  artboard of a design: `frame_url` on the artifact
   origin under a one-hour view ticket bound to the caller's own sign-in or
   token, the `origin` its bridge must hear from, and the `sandbox` and `allow`
   attributes the dashboard sets verbatim. The page is re-authorized on every
   document request there, so a withdrawn share, a sign-out or the trash closes
-  it at once. A doc, a deck or a sheet is `409 artifact_not_framed`, and
+  it at once. `document` names the page the frame opens: left out for a
+  page's entry, and always one artboard's path for a design, whose ticket
+  then opens that page and no other as a document. A `document` that is not
+  an HTML page of the version (a design's `canvas.json`, a stylesheet, a path
+  the version does not hold, or none for a design) is `422 invalid`. A
+  doc, a deck or a sheet is `409 artifact_not_framed`, and
   a deployment with no `api.artifacts.external_url` is
   `409 artifact_origin_unset`. Minting a frame records that the caller opened
   the artifact, at most once in fifteen minutes.
 - `GET /artifacts/{id}/versions/{n}/source` answers a version's entry as JSON
-  (`text`, `content_type`, `size`), read back and checked against its digest.
+  (`text`, `content_type`, `size`), read back and checked against its digest:
+  how the dashboard reads a design's `canvas.json`, which it draws natively.
+  Reading a design's source records that the caller opened it (its canvas is
+  drawn whether or not any artboard is framed).
 - `GET /artifacts/{id}/versions/{n}/deck` answers a deck's version (a
   `slides` artifact) as its **canonical tree**: the title, the cover, the
   outline's sections, the typefaces and every slide in order, each its id,
@@ -6340,11 +6349,50 @@ The API origin **never renders an artifact**:
   without every file: for a deck, its title, slide count, cover, sections and
   each slide's id, title and hidden flag, plus the cover slide's tree; for a
   doc, each tab's `path`, `title` and size in `bytes`, plus the `cover`: the
-  first tab's opening as Markdown, cut at a line boundary within 1 KiB. The
-  gallery draws either as the card's cover. Any other kind answers its kind
-  alone. A cover is not an open, so none is recorded. A node keeps the decks
-  and docs it has read by version (16 MiB of their files at most for each),
-  since a version never changes.
+  first tab's opening as Markdown, cut at a line boundary within 1 KiB; for a
+  dashboard, its title, every widget's id, type, title, width and dataset, and
+  its first three stats' labels with their datasets' titles (never a value,
+  which is each viewer's); for a design (`design`), its title, board count,
+  cover board, the `bounds` every board and note fits in, each board's `path`,
+  `title`, `x`, `y`, `w` and `h` in the canvas's order and the number of
+  `notes`, read from `canvas.json` alone. The gallery draws each as the card's
+  cover (a design's as a schematic). Any other kind answers its kind alone. A
+  cover is not an open, so none is recorded. A node keeps the decks, docs and
+  canvases it has read by version (16 MiB of their files at most for each),
+  and the boards (64 MiB of their spec and file datasets), since a version
+  never changes.
+- `GET /artifacts/{id}/versions/{n}/dashboard` answers a dashboard's version
+  (a `dashboard` artifact) as its **board**: the spec held to the
+  [dashboard spec](dashboard-spec.md) format again on read, and every dataset's
+  shape (its columns and key), how it is kept current (`live`, `signal`,
+  `interval`, `manual`, `fixed` or `derived`, with the collection, the push or
+  the interval it follows) and, for an engine dataset, the catalogue's words
+  for what it reads and who may read it. It carries **no row**: every reader is
+  answered the same board. Reading it records that the caller opened the
+  dashboard. Any other kind is `409 content_refused`.
+- `GET /artifacts/{id}/versions/{n}/sources/{dataset}` answers one dataset of
+  a dashboard **as its viewer** ([ADR-0043](../../adr/0043-a-dashboards-live-data-is-read-as-its-viewer.md)):
+  the query string is the board's filters, each refused unless the board offers
+  it and the value is one of its choices (`400 bad_params`). An `engine`
+  dataset is answered by the same question the dashboard's own screens ask, on
+  the caller's own request, so a viewer without the tracker is never handed a
+  task; a `store` dataset is read under the collection's read rule; a `calc`
+  dataset is computed from its inputs read the same way. The answer is
+  `{artifact, version, dataset, status}` and: for `ready`, `table` (`columns`,
+  `key`, `rows`, `truncated`) and `as_of`, when the rows were true; for
+  `refused`, `refusal` (the `dataset` whose source refused, which for a
+  calculation may be an input, the rule's `reason` and the `grants` that
+  would admit the caller) and a `detail` sentence; for `unanswered`, a
+  `detail` saying why this node cannot answer it for this caller (a domain it
+  does not run, a personal scope for a credential that names no person). An
+  engine answer is kept for 30 seconds per principal and arguments; a node
+  answers at most two live reads a second per viewer on one artifact (a burst
+  of 64) and twenty a second for everybody on it (a burst of 320), past which
+  it is `429 read_budget` with a `Retry-After`.
+- `GET /artifacts/sources` answers the **engine source catalogue** a
+  dashboard's `engine` datasets may read: each source's name, domain, purpose,
+  who may read it, its typed parameters, its columns and key, the push that
+  announces a change and the most rows it answers. Any resolved caller.
 - `GET /artifacts/{id}/versions/{n}/files/{path}` streams one file as an
   **attachment**, any text and anything a browser could run (HTML, SVG, a
   script) as `text/plain`, under the API's own `default-src 'none'` policy and

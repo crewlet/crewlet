@@ -15,6 +15,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/dashspec"
 	"github.com/crewlet/crewlet/internal/artifactupload"
 )
 
@@ -107,6 +108,9 @@ func newFakeArtifactsNode(t *testing.T) *fakeArtifactsNode {
 	})
 	mux.HandleFunc("GET /artifacts/{id}/versions", func(w http.ResponseWriter, r *http.Request) {
 		answer(w, http.StatusOK, map[string]any{"versions": n.versions})
+	})
+	mux.HandleFunc("GET /artifacts/sources", func(w http.ResponseWriter, _ *http.Request) {
+		answer(w, http.StatusOK, map[string]any{"sources": dashspec.Catalogue()})
 	})
 	mux.HandleFunc("POST /artifacts/{id}/purge", func(w http.ResponseWriter, r *http.Request) {
 		n.mu.Lock()
@@ -668,5 +672,32 @@ func TestArtifactsPublishRefusesTwoCandidateEntries(t *testing.T) {
 	}
 	if create := node.creates[0]; create["kind"] != "doc" || create["entry"] != "index.md" {
 		t.Errorf("created %v", create)
+	}
+}
+
+// THE CATALOGUE PRINTS FROM THE NODE, whole or one source, and the optional
+// name never reads as the optional config path.
+func TestArtifactsSourcesPrintsTheCatalogue(t *testing.T) {
+	t.Parallel()
+	node := newFakeArtifactsNode(t)
+	cfg := bootstrapForURL(t, node.server.URL)
+	out, stderr, err := cli(t, "artifacts", "sources", cfg)
+	if err != nil {
+		t.Fatalf("sources: %v\n%s", err, stderr)
+	}
+	for _, src := range dashspec.Catalogue() {
+		if !strings.Contains(out, src.Name+"  ("+string(src.Domain)+")") {
+			t.Errorf("the catalogue's print lacks %s:\n%s", src.Name, out)
+		}
+	}
+	out, stderr, err = cli(t, "artifacts", "sources", "spend.daily", cfg)
+	if err != nil {
+		t.Fatalf("sources spend.daily: %v\n%s", err, stderr)
+	}
+	if !strings.Contains(out, "param group: seat|phase") || strings.Contains(out, "tracker.items") {
+		t.Errorf("one source printed:\n%s", out)
+	}
+	if _, _, err := cli(t, "artifacts", "sources", "crm.deals", cfg); err == nil {
+		t.Error("an unknown source printed nothing and succeeded")
 	}
 }

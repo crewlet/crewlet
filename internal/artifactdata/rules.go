@@ -39,13 +39,10 @@ import (
 // writer's alone at every role: per-viewer state is private even from the
 // artifact's owner.
 
-// collectionPattern and docIDPattern are the collection and document grammars.
-// A leading underscore is reserved for the engine and refused by the first
-// character of the collection grammar.
-var (
-	collectionPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
-	docIDPattern      = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
-)
+// docIDPattern is the document grammar. The collection grammar is
+// [artifacts.ValidCollectionName]'s, the vocabulary every surface that names a
+// collection shares (a dashboard spec's store dataset included).
+var docIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 // StateCollection is the engine's per-viewer state collection (D15): implicit
 // in every store, schemaless and `private`, keyed per viewer. A page whose
@@ -54,20 +51,9 @@ var (
 // origin on which local storage throws.
 const StateCollection = "_state"
 
-// reservedCollections are names the HTTP surface's own path segments take
-// under `/artifacts/{id}/data/`, so a collection of that name could never be
-// read by its own route.
-var reservedCollections = []string{"schema", "history", "state", "writes", "undo", "export"}
-
 // reservedDocIDs are document ids the surface's path segments take under a
 // collection's route.
 var reservedDocIDs = []string{"query"}
-
-// ValidCollectionName reports whether name is a collection a store may hold.
-func ValidCollectionName(name string) bool {
-	return len(name) <= artifacts.MaxCollectionNameBytes && collectionPattern.MatchString(name) &&
-		!slices.Contains(reservedCollections, name)
-}
 
 // ValidDocID reports whether id is a document id a collection may hold.
 func ValidDocID(id string) bool {
@@ -186,10 +172,10 @@ func ValidateCollection(c artifacts.Collection) error {
 		return fmt.Errorf("%w: collection %q: %s", ErrInvalid, c.Name, fmt.Sprintf(format, args...))
 	}
 	switch {
-	case !ValidCollectionName(c.Name):
+	case !artifacts.ValidCollectionName(c.Name):
 		return fail("a collection name is a lowercase letter, then lowercase letters, digits "+
 			"and `_`, at most %d bytes, and not one of %v", artifacts.MaxCollectionNameBytes,
-			reservedCollections)
+			artifacts.ReservedCollections)
 	case len(c.Title) > MaxLabelBytes:
 		return fail("the title is %d bytes and the maximum is %d", len(c.Title), MaxLabelBytes)
 	case c.Preset != "" && !c.Preset.Valid():

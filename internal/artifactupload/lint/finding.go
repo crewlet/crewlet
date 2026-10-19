@@ -69,6 +69,20 @@ const (
 	// naming a file the version does not hold or one that is not Markdown,
 	// or a bound passed. The message names the rule broken.
 	CodeDocFormat Code = "doc_format"
+
+	// CodeDashboardFormat is a board outside the board format
+	// (internal/artifacts/dashspec): a field the format does not have, a
+	// widget over a column its dataset does not hold, an engine source or
+	// parameter the catalogue does not take, a calculation step outside the
+	// closed set, or a file dataset whose rows break its declared columns.
+	// The message names the field.
+	CodeDashboardFormat Code = "dashboard_format"
+
+	// CodeDesignFormat is a design's canvas outside its format
+	// (internal/artifacts/canvasformat): a board no page backs, a page no
+	// board frames, a bound passed or a field the format does not have. The
+	// message names the place in canvas.json.
+	CodeDesignFormat Code = "design_format"
 )
 
 // The warnings: legal, and almost certainly not what the author meant.
@@ -109,6 +123,7 @@ func (c Code) Refusing() bool {
 		CodeRemoteScript, CodeRemoteStylesheet, CodeUnpinned, CodeRemoteImport,
 		CodeFormOffOrigin, CodeRefreshOffOrigin, CodeJavaScriptURL, CodePlaceholder,
 		CodeVendorOff, CodeVendorFailed, CodeUnparseable, CodeSlideFormat, CodeDocFormat,
+		CodeDashboardFormat, CodeDesignFormat,
 	}, c)
 }
 

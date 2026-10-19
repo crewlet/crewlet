@@ -16,6 +16,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -23,6 +24,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/dashspec"
 	"github.com/crewlet/crewlet/internal/artifacts/mediatype"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/httpx"
@@ -53,14 +55,16 @@ import (
 // prints it, and `-op-id` sends it again, so a retry is the first attempt's
 // operation rather than a second one.
 
-// artifactsUsage is the command's usage.
-const artifactsUsage = `usage: crewlet artifacts <command> [arguments] [<config.yaml>] [-url URL]
+// artifactsUsage is the command's usage. THE KINDS ARE THE TABLE'S, never a
+// list typed here: a typed list went stale the day a kind was added, and
+// offered `-kind` values the node refuses beside omitting ones it serves.
+var artifactsUsage = `usage: crewlet artifacts <command> [arguments] [<config.yaml>] [-url URL]
 
-  list [-scope mine|shared|company|agents|all] [-kind html|doc|slides|sheet]
+  list [-scope mine|shared|company|agents|all] [-kind ` + kindChoices() + `]
        [-q TEXT] [-status live|trashed] [-work-item KEY] [-limit N]
   get <id>
   publish <dir|file> [-artifact ID] [-title TEXT] [-description TEXT] [-icon NAME]
-       [-kind html|doc|slides|sheet] [-entry PATH] [-exclude PATTERN]... [-label TEXT]
+       [-kind ` + kindChoices() + `] [-entry PATH] [-exclude PATTERN]... [-label TEXT]
        [-contract VERSION] [-capabilities a,b] [-work-item KEY] [-force] [-op-id ID]
   update <id> [-title TEXT] [-description TEXT] [-icon NAME] [-op-id ID]
   versions <id>
@@ -72,9 +76,13 @@ const artifactsUsage = `usage: crewlet artifacts <command> [arguments] [<config.
   untrash <id> [-op-id ID]
   purge <id> -confirm <id> [-op-id ID]
   assets <id>
+  sources [<name>]
   usage
 
 The credential is ` + apiTokenEnv + `.`
+
+// kindChoices is every kind this build serves, as a usage line spells a choice.
+func kindChoices() string { return kindList("|") }
 
 // runArtifacts dispatches `crewlet artifacts`.
 func runArtifacts(environ config.Source, args []string, stdout, stderr io.Writer) error {
@@ -84,7 +92,7 @@ func runArtifacts(environ config.Source, args []string, stdout, stderr io.Writer
 		"update": artifactsUpdate, "versions": artifactsVersions, "restore": artifactsRestore, "label": artifactsLabel,
 		"share": artifactsShare, "unshare": artifactsUnshare, "trash": artifactsTrash,
 		"untrash": artifactsUntrash, "purge": artifactsPurge, "assets": artifactsAssets,
-		"usage": artifactsUsageCmd,
+		"usage": artifactsUsageCmd, "sources": artifactsSources,
 	}[sub]
 	switch {
 	case sub == "" || sub == "help":
@@ -456,6 +464,63 @@ func artifactsUsageCmd(environ config.Source, args []string, stdout, stderr io.W
 	u, l := answer.Usage, answer.Limits
 	fmt.Fprintf(stdout, "artifacts  %d of %d\nbytes      %d of %d\nversions   %d\nassets     %d\n",
 		u.Artifacts, l.Artifacts, u.Bytes, l.CompanyBytes, u.Versions, u.Assets)
+	return nil
+}
+
+// sourceName is the grammar of a catalogue source's name.
+var sourceName = regexp.MustCompile(`^[a-z]+\.[a-z_]+$`)
+
+// artifactsSources prints the engine source catalogue a dashboard's `engine`
+// datasets may read: each source, who may read it, its parameters and its
+// columns, or one source whole when named.
+func artifactsSources(environ config.Source, args []string, stdout, stderr io.Writer) error {
+	// A SOURCE IS NAMED `<domain>.<read>`, which no config file's path is,
+	// so the optional name and the optional config path never read as each
+	// other.
+	name := ""
+	if next, rest := splitSubject(args); sourceName.MatchString(next) {
+		name, args = next, rest
+	}
+	client, err := nodeClientFor(environ, args, "artifacts sources", stderr, nil)
+	if err != nil {
+		return err
+	}
+	var answer struct {
+		Sources []dashspec.EngineSource `json:"sources"`
+	}
+	if err := client.get(context.Background(), "/artifacts/sources", &answer); err != nil {
+		return err
+	}
+	shown := 0
+	for _, src := range answer.Sources {
+		if name != "" && src.Name != name {
+			continue
+		}
+		shown++
+		fmt.Fprintf(stdout, "%s  (%s)\n  %s\n  access: %s\n", src.Name, src.Domain, src.Summary, src.Access)
+		for _, p := range src.Params {
+			choice := string(p.Type)
+			if len(p.Enum) > 0 {
+				choice = strings.Join(p.Enum, "|")
+			}
+			def := ""
+			if p.Default != "" {
+				def = ", default " + p.Default
+			}
+			fmt.Fprintf(stdout, "  param %s: %s%s. %s\n", p.Key, choice, def, p.Summary)
+		}
+		cols := make([]string, len(src.Columns))
+		for i, c := range src.Columns {
+			cols[i] = c.Key + ":" + string(c.Type)
+		}
+		fmt.Fprintf(stdout, "  columns: %s\n", strings.Join(cols, ", "))
+		if src.Signal != "" {
+			fmt.Fprintf(stdout, "  refreshes on: %s\n", src.Signal)
+		}
+	}
+	if name != "" && shown == 0 {
+		return fmt.Errorf("the node answers no dashboard source %q", name)
+	}
 	return nil
 }
 
@@ -862,7 +927,8 @@ func entryFor(files []localFile, asked string, kind artifacts.Kind) (string, err
 }
 
 // kindFor is the kind a new artifact is created as: the one -kind names, else
-// the kind whose entry the entry's type may be, from the kind table.
+// the kind the kind table infers from the entry (its default path, else the one
+// kind its type may be).
 func kindFor(asked artifacts.Kind, entry string) (artifacts.Kind, error) {
 	if asked != "" {
 		return asked, nil
@@ -877,12 +943,15 @@ func kindFor(asked artifacts.Kind, entry string) (artifacts.Kind, error) {
 }
 
 // kindNames lists every kind this build serves, for the flags' help.
-func kindNames() string {
+func kindNames() string { return kindList(", ") }
+
+// kindList is every kind this build serves, in the table's order, joined by sep.
+func kindList(sep string) string {
 	names := make([]string, len(artifacts.Kinds))
 	for i, k := range artifacts.Kinds {
 		names[i] = string(k)
 	}
-	return strings.Join(names, ", ")
+	return strings.Join(names, sep)
 }
 
 // fileSpec is one file of a publish as the surface takes it.

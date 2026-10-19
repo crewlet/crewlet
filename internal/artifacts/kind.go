@@ -61,13 +61,20 @@ const (
 	// files at create.
 	StoreContent Store = "content"
 
+	// StoreImplied is a native kind's own datastore beside its files: a
+	// dashboard's store datasets, which agents and people write and every
+	// open board reads live. It declares nothing, since a native kind has
+	// no page to grant a capability to, and it is never versioned with the
+	// files.
+	StoreImplied Store = "implied"
+
 	// StoreNone is a kind whose content is its files alone, which keeps no
 	// datastore.
 	StoreNone Store = "none"
 )
 
 // Stores are every relation a kind has to its datastore.
-var Stores = []Store{StoreDeclared, StoreContent, StoreNone}
+var Stores = []Store{StoreDeclared, StoreContent, StoreImplied, StoreNone}
 
 // Valid reports whether s is a store relation this build knows.
 func (s Store) Valid() bool { return slices.Contains(Stores, s) }
@@ -82,7 +89,8 @@ const (
 
 	// SearchFormat indexes the readable text the kind's own format extracts
 	// from every file it holds (a deck's slides and their speaker notes, a
-	// doc's tabs), not the entry alone, which may be only the index.
+	// doc's tabs, a board's titles and notes, never a figure), not the entry
+	// alone, which may be only the index.
 	SearchFormat Search = "format"
 )
 
@@ -112,13 +120,59 @@ const (
 	// tab, every tab read whole and refused at publish when the index does
 	// not resolve.
 	FormatDoc Format = "doc"
+
+	// FormatDashboard is the board format (internal/artifacts/dashspec):
+	// the spec's filters, datasets and widgets held to their closed sets,
+	// every file dataset read against its declared columns, refused at
+	// publish with every finding.
+	FormatDashboard Format = "dashboard"
+
+	// FormatDesign is a design's canvas (internal/artifacts/canvasformat):
+	// `canvas.json` laying out one board per HTML page of the version, and
+	// the notes beside them, refused at publish when outside its schema or
+	// out of step with the version's pages.
+	FormatDesign Format = "design"
 )
 
 // Formats are every format this build validates.
-var Formats = []Format{FormatNone, FormatSlides, FormatDoc}
+var Formats = []Format{FormatNone, FormatSlides, FormatDoc, FormatDashboard, FormatDesign}
 
 // Valid reports whether f is a format this build validates.
 func (f Format) Valid() bool { return slices.Contains(Formats, f) }
+
+// Documents is which of a version's files the artifact origin serves as a
+// document, and how many of them one ticket opens.
+//
+// WHY IT IS A FACET AND NOT "EVERY HTML PAGE". A ticket names a principal and
+// one immutable version, and every document request is decided again; what a
+// kind adds is how many frames a viewer holds of one version and what each may
+// load as a page. A page is one frame that may move between its own pages, the
+// way a site does. A design is many frames at once, each its own artboard, so
+// each ticket opens the one artboard it was minted for and nothing else: a
+// board cannot become another board, and the frames a viewer holds are exactly
+// the tickets the dashboard minted (adr/0035, "One document per ticket").
+type Documents string
+
+const (
+	// DocumentsNone serves nothing on the artifact origin: a native kind,
+	// which carries no author code.
+	DocumentsNone Documents = "none"
+
+	// DocumentsSite opens the version's entry in one frame, and the frame
+	// may load any HTML page of the version under the same ticket, as a
+	// multi-page site navigates.
+	DocumentsSite Documents = "site"
+
+	// DocumentsEach frames every HTML page of the version on its own, and a
+	// ticket opens exactly the page it was minted for.
+	DocumentsEach Documents = "each"
+)
+
+// DocumentRules are every way a kind's documents are served.
+var DocumentRules = []Documents{DocumentsNone, DocumentsSite, DocumentsEach}
+
+// Valid reports whether d is a document rule this build serves by.
+func (d Documents) Valid() bool { return slices.Contains(DocumentRules, d) }
 
 // EntryRule is what a kind's entry, the file a version opens on, may be.
 type EntryRule struct {
@@ -198,12 +252,22 @@ type KindSpec struct {
 
 	// Search is what a version contributes to the gallery's search text.
 	Search Search
+
+	// Documents is which files the artifact origin serves as a document,
+	// and how many one ticket opens.
+	Documents Documents
 }
 
 // Framed reports the kind runs author code on the artifact origin: the only
 // kind a view ticket is minted for, a version may declare capabilities and pin
 // a runtime contract on, and the linter's page warnings apply to.
 func (s KindSpec) Framed() bool { return s.Render == RenderFramed }
+
+// OpensEntry reports a frame of the kind opens on the version's entry, so a
+// ticket that names no document is minted for the entry; a design's entry is
+// its canvas, which the dashboard draws, and every frame of it names its
+// artboard.
+func (s KindSpec) OpensEntry() bool { return s.Documents == DocumentsSite }
 
 // Capabilities are the runtime capabilities a version of the kind may
 // declare: every one this build serves for a framed kind, and none for a
@@ -225,6 +289,8 @@ var kindSpecs = []KindSpec{
 		Store:   StoreDeclared,
 		Format:  FormatNone,
 		Search:  SearchEntry,
+
+		Documents: DocumentsSite,
 	},
 	{
 		Kind:    KindDoc,
@@ -236,6 +302,8 @@ var kindSpecs = []KindSpec{
 		Store:  StoreNone,
 		Format: FormatDoc,
 		Search: SearchFormat,
+
+		Documents: DocumentsNone,
 	},
 	{
 		Kind:    KindSlides,
@@ -246,6 +314,20 @@ var kindSpecs = []KindSpec{
 		Store:  StoreNone,
 		Format: FormatSlides,
 		Search: SearchFormat,
+
+		Documents: DocumentsNone,
+	},
+	{
+		Kind:    KindDashboard,
+		Summary: "is a board of figures over live data the dashboard draws, each answered as its viewer",
+		Render:  RenderNative,
+		Entry: EntryRule{Indexes: []EntryIndex{{Path: "dashboard.json", Essence: "application/json"}},
+			Defaults: []string{"dashboard.json"}},
+		Store:  StoreImplied,
+		Format: FormatDashboard,
+		Search: SearchFormat,
+
+		Documents: DocumentsNone,
 	},
 	{
 		Kind:    KindSheet,
@@ -255,6 +337,20 @@ var kindSpecs = []KindSpec{
 		Store:   StoreContent,
 		Format:  FormatNone,
 		Search:  SearchEntry,
+
+		Documents: DocumentsNone,
+	},
+	{
+		Kind:    KindDesign,
+		Summary: "is a canvas of artboards, each an HTML page run in a sandbox",
+		Render:  RenderFramed,
+		Entry: EntryRule{Indexes: []EntryIndex{{Path: "canvas.json", Essence: "application/json"}},
+			Defaults: []string{"canvas.json"}},
+		Store:  StoreDeclared,
+		Format: FormatDesign,
+		Search: SearchFormat,
+
+		Documents: DocumentsEach,
 	},
 }
 

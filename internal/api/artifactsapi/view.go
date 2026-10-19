@@ -22,20 +22,23 @@ import (
 )
 
 // HOW A VERSION IS VIEWED FROM THE API ORIGIN, which never renders one: a frame
-// minted for the artifact origin (an HTML artifact runs there, sandboxed, and
-// nowhere else), a doc's source as JSON for the dashboard to
-// render itself (it runs no author code), and a file's raw bytes as an
-// attachment, text as plain text, under the API's own policy.
+// minted for the artifact origin (an HTML page or a design's artboard runs
+// there, sandboxed, and nowhere else), a doc's source or a design's canvas as
+// JSON for the dashboard to draw itself (it runs no author code), and a file's
+// raw bytes as an attachment, text as plain text, under the API's own policy.
 
-// ticketBody names the version a frame opens; zero is the head.
+// ticketBody names the version a frame opens (zero is the head) and the page
+// it opens: empty for a page's entry, one artboard's path for a design.
 type ticketBody struct {
-	Version int `json:"version,omitempty"`
+	Version  int    `json:"version,omitempty"`
+	Document string `json:"document,omitempty"`
 }
 
 // ticket mints the frame the dashboard embeds a version in (`POST
 // /artifacts/{id}/tickets`), decided by `get_artifact`: a view ticket bound to
-// the caller's credential, the artifact origin's URL under it, and the sandbox
-// and allow attributes the dashboard sets verbatim. It records that the caller
+// the caller's credential and to the one page it opens (a design's artboard is
+// a frame of its own, with a ticket of its own), the artifact origin's URL
+// under it, and the sandbox and allow attributes the dashboard sets verbatim. It records that the caller
 // opened the artifact and, for a read only the admin path admitted, the
 // elevated read, before the frame is handed over.
 func (s *Service) ticket(w http.ResponseWriter, r *http.Request) {
@@ -85,7 +88,7 @@ func (s *Service) ticket(w http.ResponseWriter, r *http.Request) {
 	until, _ := auth.Lifetime(r.Context())
 	frame, err := s.frames.For(artifactserve.FrameRequest{
 		Principal: a.Principal, Lineage: lineage, Until: until, Head: a.Head,
-		Version: v.VersionSummary, Granted: v.Capabilities,
+		Version: v, Document: body.Document, Granted: v.Capabilities,
 	})
 	switch {
 	case errors.Is(err, artifactserve.ErrCredentialEnding):
@@ -95,6 +98,9 @@ func (s *Service) ticket(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, artifactserve.ErrNoLineage):
 		httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeForbidden,
 			map[string]string{"detail": say(err)})
+		return
+	case errors.Is(err, artifactserve.ErrNoDocument):
+		invalid(w, say(err))
 		return
 	case errors.Is(err, artifactserve.ErrNotServed):
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeArtifactNotFramed,
@@ -284,9 +290,11 @@ func (s *Service) source(w http.ResponseWriter, r *http.Request) {
 		contentFailed(w, r, a.Head.ID, entry.Path, err)
 		return
 	}
-	// A NATIVE KIND IS OPENED BY READING IT, since no ticket is minted for
-	// it: the open is recorded here, as a frame's ticket records a page's.
-	if !a.Head.Kind.Framed() {
+	// AN ENTRY THE DASHBOARD DRAWS IS OPENED BY READING IT: a native kind,
+	// for which no ticket is minted, and a design's canvas, which may be
+	// read with no artboard in view and so no ticket minted. The open is
+	// recorded here, as a frame's ticket records a page's.
+	if spec, _ := a.Head.Kind.Spec(); !spec.OpensEntry() {
 		s.gate.markOpened(r.Context(), a)
 	}
 	httpjson.Write(w, http.StatusOK, Source{

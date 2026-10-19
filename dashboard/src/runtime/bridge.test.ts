@@ -191,11 +191,11 @@ describe("an event", () => {
 });
 
 describe("every method", () => {
-  test("needs the capability the contract gives it, and only openLink needs none", () => {
+  test("needs the capability the contract gives it, and only openLink and print need none", () => {
     const free = (Object.keys(BRIDGE_METHODS) as (keyof typeof BRIDGE_METHODS)[]).filter(
       (m) => capabilityOf(m) === null,
     );
-    expect(free).toEqual(["openLink"]);
+    expect(free).toEqual(["openLink", "print"]);
     expect(capabilityOf("data.write")).toBe("db");
     expect(capabilityOf("state.set")).toBe("state");
     expect(capabilityOf("data.undo")).toBe("db");

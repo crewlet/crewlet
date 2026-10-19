@@ -277,6 +277,10 @@ const (
 	// for either.
 	ActionArtifactList Action = "list_artifacts"
 	ActionArtifactRead Action = "get_artifact"
+	// THE DASHBOARD SOURCE CATALOGUE is the engine's own vocabulary, read
+	// before a board exists, so it is everybody's: what a source ANSWERS is
+	// decided as each board's viewer, never by who listed it.
+	ActionDashboardSources Action = "list_dashboard_sources"
 	// AUTHORING, each asking the `artifacts` app beside the role.
 	ActionArtifactCreate  Action = "create_artifact"
 	ActionArtifactPublish Action = "publish_artifact"
@@ -817,6 +821,9 @@ var rules = map[Action]rule{
 	// admits ([Visible]): a caller is shown the artifacts they may open and
 	// told nothing about the rest.
 	ActionArtifactList: {class: ClassEverybody, recency: iam.RecencyAny},
+	// THE CATALOGUE IS EVERYBODY'S: it names reads and who may make them,
+	// and holds no row of any domain.
+	ActionDashboardSources: {class: ClassEverybody, recency: iam.RecencyAny},
 	ActionArtifactRead: {class: ClassShared, minRole: artifacts.RoleViewer,
 		recency: iam.RecencyAny},
 	// CREATING IS THE APP AND NOTHING ELSE: there is no artifact yet to hold

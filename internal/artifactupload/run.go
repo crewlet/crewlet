@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/canvasformat"
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/artifacts/mediatype"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
@@ -66,6 +67,10 @@ type run struct {
 	// [run.checkFormat] (a deck, a doc), and nil for a kind with no format:
 	// what the gallery's search text is extracted from.
 	formatted formatText
+
+	// canvas is the version's canvas where the kind's format is a design's,
+	// read by [run.checkFormat]: what its search text is drawn from.
+	canvas *canvasformat.Canvas
 
 	warnings []lint.Finding
 

@@ -2,6 +2,7 @@ package artifacts
 
 import (
 	"encoding/json"
+	"regexp"
 	"slices"
 )
 
@@ -268,4 +269,21 @@ type Collection struct {
 
 	// Indexed are dotted paths indexed beside the top-level scalar fields.
 	Indexed []string `json:"indexed,omitempty"`
+}
+
+// collectionPattern is the collection grammar. A leading underscore is
+// reserved for the engine and refused by its first character.
+var collectionPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+
+// ReservedCollections are names the HTTP surface's own path segments take
+// under `/artifacts/{id}/data/`, so a collection of that name could never be
+// read by its own route.
+var ReservedCollections = []string{"schema", "history", "state", "writes", "undo", "export"}
+
+// ValidCollectionName reports whether name is a collection a store may hold:
+// the one grammar the datastore's schema, its writes and a dashboard spec's
+// store dataset are each held to.
+func ValidCollectionName(name string) bool {
+	return len(name) <= MaxCollectionNameBytes && collectionPattern.MatchString(name) &&
+		!slices.Contains(ReservedCollections, name)
 }

@@ -488,6 +488,13 @@ type Options struct {
 	// none.
 	ArtifactData guardedMounter
 
+	// Datasets is what a dashboard artifact's datasets are read from: the
+	// artifacts surface's board reads and the datastore. The surface itself
+	// (internal/api/datasetsapi) is built here, because an engine dataset
+	// is answered by THIS app's question registry and its agents overview,
+	// on the viewer's own request (adr/0043). Nil serves none.
+	Datasets *DatasetsSource
+
 	// Rooms decides and feeds the socket's artifact rooms: who may join one
 	// (the datastore's own admission, asked with the read verb), where an
 	// artifact's datastore stands, this node's presence hub, and what its
@@ -885,6 +892,11 @@ func New(opts Options) (*App, error) {
 	if opts.ArtifactData != nil {
 		if err := opts.ArtifactData.Routes(mux); err != nil {
 			return nil, fmt.Errorf("api: mount the artifact datastore surface: %w", err)
+		}
+	}
+	if opts.Datasets != nil {
+		if err := a.mountDatasets(mux, opts.Datasets, opts.Sources.Chart); err != nil {
+			return nil, fmt.Errorf("api: mount the dashboard datasets surface: %w", err)
 		}
 	}
 	// THE BROWSER POSTURE WRAPS THE CREDENTIAL ONE, because a preflight

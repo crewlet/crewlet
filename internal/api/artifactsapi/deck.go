@@ -5,6 +5,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/canvasformat"
+	"github.com/crewlet/crewlet/internal/artifacts/dashspec"
 	"github.com/crewlet/crewlet/internal/artifacts/docindex"
 	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
 )
@@ -33,6 +35,14 @@ type OutlineAnswer struct {
 
 	// Slides is a deck's outline and its cover slide, drawn at card size.
 	Slides *SlidesOutline `json:"slides,omitempty"`
+
+	// Dashboard is a board's outline: its widgets and its first stats'
+	// labels with their datasets' titles, and never a value, which is each
+	// viewer's (D64).
+	Dashboard *dashspec.Outline `json:"dashboard,omitempty"`
+
+	// Design is a design's boards and their frames, drawn as a schematic.
+	Design *canvasformat.Outline `json:"design,omitempty"`
 
 	// Doc is a doc's tabs and the opening of its first, drawn at card size.
 	Doc *docindex.Outline `json:"doc,omitempty"`
@@ -114,6 +124,20 @@ func (s *Service) outline(w http.ResponseWriter, r *http.Request) {
 		}
 		o := doc.Outline()
 		out.Doc = &o
+	case artifacts.FormatDashboard:
+		b, ok := s.boards.read(w, r, a, v)
+		if !ok {
+			return
+		}
+		o := b.Spec.Outline()
+		out.Dashboard = &o
+	case artifacts.FormatDesign:
+		canvas, ok := s.canvases.read(w, r, a, v)
+		if !ok {
+			return
+		}
+		o := canvas.Outline()
+		out.Design = &o
 	case artifacts.FormatNone:
 	}
 	httpjson.Write(w, http.StatusOK, out)

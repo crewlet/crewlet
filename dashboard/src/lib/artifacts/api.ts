@@ -17,7 +17,11 @@ import type {
   ArtifactDeckAnswer,
   ArtifactDocAnswer,
   ArtifactFrame,
+  ArtifactSource,
   ArtifactOutline,
+  DashboardBoardAnswer,
+  DashboardCatalogueAnswer,
+  DashboardDatasetAnswer,
   ArtifactUploadIntent,
   DataCollection,
   DataOp,
@@ -241,13 +245,19 @@ export function versionFile(
  * Mint the frame a version is embedded in (`POST /artifacts/{id}/tickets`):
  * a view ticket bound to this browser's sign-in, the artifact origin's URL
  * under it, and the sandbox and allow attributes set verbatim. Zero is the
- * head. Not keyed: a ticket is a read, and the engine records the open itself.
+ * head. `document` names the page the frame opens: left out for a page's
+ * entry, one artboard's path for a design, whose every board is a frame of its
+ * own. Not keyed: a ticket is a read, and the engine records the open itself.
  */
-export async function mintFrame(id: string, version: number): Promise<ArtifactFrame> {
-  return (await rest.post(
-    `/artifacts/${encodeURIComponent(id)}/tickets`,
-    version > 0 ? { version } : {},
-  )) as ArtifactFrame;
+export async function mintFrame(
+  id: string,
+  version: number,
+  document?: string,
+): Promise<ArtifactFrame> {
+  return (await rest.post(`/artifacts/${encodeURIComponent(id)}/tickets`, {
+    ...(version > 0 ? { version } : {}),
+    ...(document ? { document } : {}),
+  })) as ArtifactFrame;
 }
 
 /** One text file of a version, read as text: a slide's source an edit replaces whole. */
@@ -282,6 +292,42 @@ export async function readOutline(
     `/artifacts/${encodeURIComponent(id)}/versions/${version}/outline`,
     signal,
   )) as ArtifactOutline;
+}
+
+/** A dashboard's version as its board (`GET …/versions/{n}/dashboard`): the spec and every dataset's shape, no row. */
+export async function readBoard(
+  id: string,
+  version: number,
+  signal: AbortSignal,
+): Promise<DashboardBoardAnswer> {
+  return (await rest.get(
+    `/artifacts/${encodeURIComponent(id)}/versions/${version}/dashboard`,
+    signal,
+  )) as DashboardBoardAnswer;
+}
+
+/**
+ * One dataset of a dashboard as this reader may read it (`GET
+ * …/versions/{n}/sources/{dataset}`), with the board's filters as the query.
+ */
+export async function readDataset(
+  id: string,
+  version: number,
+  dataset: string,
+  params: Readonly<Record<string, string>>,
+  signal: AbortSignal,
+): Promise<DashboardDatasetAnswer> {
+  const res = await rest.request(
+    "GET",
+    `/artifacts/${encodeURIComponent(id)}/versions/${version}/sources/${encodeURIComponent(dataset)}`,
+    { query: { ...params }, signal },
+  );
+  return res.body as DashboardDatasetAnswer;
+}
+
+/** The engine source catalogue a dashboard's engine datasets read (`GET /artifacts/sources`). */
+export async function readCatalogue(signal: AbortSignal): Promise<DashboardCatalogueAnswer> {
+  return (await rest.get("/artifacts/sources", signal)) as DashboardCatalogueAnswer;
 }
 
 /**
@@ -372,6 +418,18 @@ export async function readDoc(
     `/artifacts/${encodeURIComponent(id)}/versions/${version}/doc`,
     signal,
   )) as ArtifactDocAnswer;
+}
+
+/** A version's entry as text (`GET …/versions/{n}/source`): a design's canvas, which the dashboard draws itself. */
+export async function readSource(
+  id: string,
+  version: number,
+  signal: AbortSignal,
+): Promise<ArtifactSource> {
+  return (await rest.get(
+    `/artifacts/${encodeURIComponent(id)}/versions/${version}/source`,
+    signal,
+  )) as ArtifactSource;
 }
 
 /**

@@ -11213,6 +11213,114 @@ a.live-row:focus-visible {
   }
 }
 
+/* A DESIGN: the canvas fills the view beside its list of boards. */
+.design-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+.design-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+.design-bar-count {
+  margin-right: auto;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-compact);
+}
+.design-body {
+  display: grid;
+  grid-template-columns: minmax(10rem, 14rem) minmax(0, 1fr);
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+.design-boards ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.design-board-link {
+  width: 100%;
+  padding: var(--spacing-1) var(--spacing-2);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: var(--font-size-compact);
+  text-align: left;
+  cursor: pointer;
+}
+.design-board-link:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
+}
+.design-board-link:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: var(--size-focus-ring-inset-offset);
+}
+.design-canvas,
+.design-skeleton {
+  height: max(28rem, calc(100cqb - var(--sticky-top) - 14rem));
+  min-width: 0;
+}
+@media (width < 640px) {
+  .design-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .design-boards {
+    display: none;
+  }
+}
+
+/* An artboard's frame fills its board exactly; the board says its own state. */
+.design-board-frame,
+.design-opened-frame,
+.design-print-frame {
+  gap: 0;
+  height: 100%;
+}
+:is(.design-board-frame, .design-opened-frame, .design-print-frame)
+  :is(.artifact-frame, .artifact-frame-skeleton) {
+  height: 100%;
+}
+:is(.design-board-frame, .design-opened-frame, .design-print-frame) .artifact-note {
+  display: none;
+}
+/* The dialog's own body bounds the height; a board wider than the dialog
+   scrolls sideways inside it. */
+.design-opened {
+  overflow-x: auto;
+}
+
+/* PRINT: one board over the whole window, at its corner and its own size,
+   and in print nothing else of the dashboard. On screen too, since a
+   cross-origin frame prints as it is drawn. */
+.design-print-view {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-index-layer-max);
+  overflow: hidden;
+  background: var(--color-surface-background);
+}
+@media print {
+  body:has(> .design-print-view) > :not(.design-print-view) {
+    visibility: hidden;
+  }
+}
+
+/* A DESIGN'S GALLERY COVER: its boards as a schematic, at card size. */
+.design-cover {
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: var(--spacing-2);
+  box-sizing: border-box;
+}
+
 /* A DECK'S GALLERY COVER: its cover slide at card size, and how many slides. */
 .slides-cover {
   position: relative;
@@ -11228,4 +11336,57 @@ a.live-row:focus-visible {
   background: var(--color-surface-elevated);
   color: var(--color-text-secondary);
   font-size: var(--font-size-2xs);
+}
+
+/* A DASHBOARD: its filters, its board of widgets and the Sources rail beside
+   it. The board is the Home board's grid; the rail folds under the board on a
+   narrow page, so every figure keeps the width it was laid out at. */
+.dashboard-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+.dashboard-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--spacing-2) var(--spacing-3);
+}
+.dashboard-filter {
+  min-width: 12rem;
+}
+.dashboard-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(16rem, 20rem);
+  align-items: start;
+  gap: var(--spacing-4);
+}
+@container (max-width: 60rem) {
+  .dashboard-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.dashboard-board {
+  min-width: 0;
+}
+.dashboard-cell {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.dashboard-figure {
+  min-width: 0;
+}
+.dashboard-sources {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+.dashboard-sources-title {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
 }

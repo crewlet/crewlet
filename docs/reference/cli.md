@@ -1267,11 +1267,11 @@ to decide whether it can still vouch for a retry.
 ## `crewlet artifacts`
 
 ```
-crewlet artifacts list [-scope mine|shared|company|agents|all] [-kind html|doc|slides|sheet]
+crewlet artifacts list [-scope mine|shared|company|agents|all] [-kind html|doc|slides|dashboard|sheet|design]
     [-q TEXT] [-status live|trashed] [-work-item KEY] [-limit N]
 crewlet artifacts get <id>
 crewlet artifacts publish <dir|file> [-artifact ID] [-title TEXT] [-description TEXT]
-    [-icon NAME] [-kind html|doc|slides|sheet] [-entry PATH] [-exclude PATTERN]...
+    [-icon NAME] [-kind html|doc|slides|dashboard|sheet|design] [-entry PATH] [-exclude PATTERN]...
     [-label TEXT] [-contract VERSION] [-capabilities a,b] [-work-item KEY] [-force]
     [-op-id ID]
 crewlet artifacts update <id> [-title TEXT] [-description TEXT] [-icon NAME] [-op-id ID]
@@ -1284,6 +1284,7 @@ crewlet artifacts trash <id> [-op-id ID]
 crewlet artifacts untrash <id> [-op-id ID]
 crewlet artifacts purge <id> -confirm <id> [-op-id ID]
 crewlet artifacts assets <id>
+crewlet artifacts sources [<name>]
 crewlet artifacts usage
     ... [<config.yaml>] [-url URL]
 ```
@@ -1317,12 +1318,13 @@ reaching outside the directory, or `-exclude` beside a single file is refused
 before anything is sent. Quote a pattern so the shell does not expand it.
 
 A new artifact opens on the one default entry it holds, `index.html`,
-`index.md`, `doc.json` or `deck.json`, else the only file, unless `-entry`
+`index.md`, `doc.json`, `deck.json`, `dashboard.json` or `canvas.json`, else the only file, unless `-entry`
 names another; a directory holding two default entries is refused until
 `-entry` or `-kind` settles which it is. Its kind is the one whose entry that
 file is: `html` for a page, `doc` for a `.md` file or a tabbed doc's
-`doc.json`, `slides` for `deck.json` (an index is told by its path, never by
-JSON alone), and `-kind` names it outright. Its title defaults to the entry's
+`doc.json`, `slides` for `deck.json`, `dashboard` for `dashboard.json`,
+`design` for `canvas.json` (an index is told by its path, never by JSON
+alone), and `-kind` names it outright. Its title defaults to the entry's
 name, and `-description` and `-icon` set the gallery card's subtitle and the
 tab's icon word. Those four describe a new artifact only: naming `-title`,
 `-description`, `-icon` or `-kind` beside `-artifact` is refused before any
@@ -1359,6 +1361,13 @@ mints one. An `unknown` outcome, or no answer at all, prints it; send it again
 with `-op-id` so the retry is the same operation rather than a second one. A
 publish keys its upload intent with the id and its version with a step of it,
 so a retried publish reuses the upload and lands one version.
+
+**`sources` lists the dashboard source catalogue** the node answers: each
+engine source a `dashboard`'s datasets may read, what it reads, who may read
+it, its parameters (with their choices and defaults), its columns and the push
+it refreshes on, or one source whole when named. A source is answered as each
+board's viewer, so the list holds no row; see the
+[Dashboard Spec](dashboard-spec.md#the-engine-source-catalogue).
 
 ## `crewlet retention`
 

@@ -119,6 +119,17 @@ export interface DataStoreOptions {
 const cellKey = (collection: string, doc: string, field: string) =>
   `${collection}\u0000${doc}\u0000${field}`;
 
+/**
+ * What one push moved: the collections it named, or every collection (a
+ * resync, a schema change, a store gone). What a reader that keeps no copy of
+ * the rows (a dashboard's store datasets, read through the datasets route)
+ * reads again on.
+ */
+export interface DataTouch {
+  collections: ReadonlySet<string>;
+  all: boolean;
+}
+
 export class ArtifactDataStore {
   readonly artifact: string;
   readonly pending = new SheetPendingEdits();
@@ -155,6 +166,7 @@ export class ArtifactDataStore {
   /** The undos of those, newest last: what Mod+Shift+Z undoes again. */
   private readonly redoable: number[] = [];
   private readonly listeners = new Set<() => void>();
+  private readonly touchListeners = new Set<(touch: DataTouch) => void>();
   private gone = false;
   private stopped = false;
 
@@ -408,6 +420,7 @@ export class ArtifactDataStore {
 
   /** One `artifact_data` push, as this reader may see it. */
   applyPush(push: ArtifactDataPush): void {
+    this.touched(push);
     if (push.gone) {
       this.gone = true;
       this.emit();
@@ -763,10 +776,34 @@ export class ArtifactDataStore {
     return () => void this.listeners.delete(listener);
   }
 
+  /**
+   * Every push's [DataTouch], whether or not this store holds the
+   * collections it names: a dashboard reads its store datasets through the
+   * engine, as its viewer, and only needs to know when to read them again.
+   */
+  onTouch(listener: (touch: DataTouch) => void): () => void {
+    this.touchListeners.add(listener);
+    return () => void this.touchListeners.delete(listener);
+  }
+
+  private touched(push: ArtifactDataPush): void {
+    if (this.touchListeners.size === 0) return;
+    const collections = new Set<string>();
+    for (const d of push.deltas ?? []) collections.add(d.collection);
+    for (const k of push.keys ?? []) collections.add(k.collection);
+    const touch: DataTouch = {
+      collections,
+      all: push.gone === true || push.resync === true || push.schema === true,
+    };
+    if (!touch.all && collections.size === 0) return;
+    for (const listener of [...this.touchListeners]) listener(touch);
+  }
+
   /** Stop: nothing read or written after this changes anything. */
   stop(): void {
     this.stopped = true;
     this.listeners.clear();
+    this.touchListeners.clear();
   }
 
   private emit(): void {
