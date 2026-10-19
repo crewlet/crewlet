@@ -58,6 +58,11 @@ type Releases interface {
 
 	// Serves reports whether an exact version is one this build serves.
 	Serves(version string) bool
+
+	// Ships reports whether a version this build serves ships file, a path
+	// inside the version's directory, so a link to a file the release never
+	// had is told apart from a working one.
+	Ships(version, file string) bool
 }
 
 // Meter is where the pipeline's measurements go: the node's metrics recorder.

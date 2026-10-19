@@ -110,7 +110,10 @@ when a page or stylesheet of its own carries a `prefers-color-scheme` rule.
 `kit.css` alone is warned (it follows the device, not the reader's chosen
 mode), as is `theme.js` alone (it applies a mode nothing styles). A link to a
 kit release the engine does not serve is warned too, naming the newest one it
-does: the origin answers it with a 404, so the page loads no kit at all.
+does: the origin answers it with a 404, so the page loads no kit at all. So is
+a link to a file the named release does not ship, such as `content.css` at a
+release older than it: that one link is a 404, and the warning names the
+same file at the newest release when that release ships it.
 
 ---
 

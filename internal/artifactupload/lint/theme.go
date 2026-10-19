@@ -19,34 +19,62 @@ type Theme struct {
 	// Rules reports a prefers-color-scheme rule in the file's own text.
 	Rules bool
 
-	// Kit is every link the file makes to a theming file of the embedded
-	// artifact kit ([artifacts.KitStylesheet] and [artifacts.KitTheme] under
-	// [artifacts.KitPrefix]), in the order written. Whether the version it
-	// names is one the build serves is the pipeline's question, not the
-	// linter's.
+	// Kit is every link the file makes to a file of the embedded artifact
+	// kit (under [artifacts.KitPrefix]) that a browser loads, in the order
+	// written. Whether the release it names is one the build serves, and
+	// whether that release ships the file, is the pipeline's question, not
+	// the linter's.
 	Kit []KitLink
 }
 
-// KitLink is one link to a theming file of the artifact kit.
+// KitLink is one link to a file of the artifact kit.
 type KitLink struct {
 	// Version is the kit release the link names.
 	Version string
 
-	// File is [artifacts.KitStylesheet] or [artifacts.KitTheme].
+	// File is the path inside the release the link names: `kit.css`,
+	// `content.css`, `theme.js`, `kit.js`.
 	File string
+
+	// As is how the browser loads it.
+	As KitLoad
 
 	// Line is where the link is written.
 	Line int
 }
 
+// KitLoad is how a page loads a kit file.
+type KitLoad string
+
+const (
+	// KitAsStylesheet is a `<link rel="stylesheet">` or an `@import`.
+	KitAsStylesheet KitLoad = "stylesheet"
+
+	// KitAsScript is a `<script src>`.
+	KitAsScript KitLoad = "script"
+)
+
+// ThemesStylesheet reports whether the link loads the kit's palettes: its
+// stylesheet, loaded as one.
+func (k KitLink) ThemesStylesheet() bool {
+	return k.File == artifacts.KitStylesheet && k.As == KitAsStylesheet
+}
+
+// ThemesBootstrap reports whether the link loads the kit's theme bootstrap:
+// its script, loaded as one.
+func (k KitLink) ThemesBootstrap() bool {
+	return k.File == artifacts.KitTheme && k.As == KitAsScript
+}
+
 // ThemeOf reads what a page (isHTML) or a stylesheet does about its reader's
 // appearance.
 //
-// A KIT FILE COUNTS ONLY WHERE A BROWSER LOADS IT AS WHAT IT IS: the
-// stylesheet from a `<link rel="stylesheet">` or an `@import` (in a page's
-// `<style>` or in a stylesheet), the theme bootstrap from a `<script src>`.
-// A stylesheet named by a script, or the bootstrap by a link, loads nothing
-// that themes the page, and is no reason to stay quiet.
+// A KIT FILE COUNTS WHERE A BROWSER LOADS IT: from a `<link rel="stylesheet">`
+// or an `@import` (in a page's `<style>` or in a stylesheet), or from a
+// `<script src>`, each recorded with how it is loaded. Only the stylesheet
+// loaded as one and the bootstrap loaded as a script theme the page
+// ([KitLink.ThemesStylesheet], [KitLink.ThemesBootstrap]); every link is
+// still one the release must ship.
 func ThemeOf(text []byte, isHTML bool) Theme {
 	t := Theme{Rules: bytes.Contains(bytes.ToLower(text), []byte("prefers-color-scheme"))}
 	if !isHTML {
@@ -96,34 +124,35 @@ func tagKitLink(name string, attrs []html.Attribute, line int) (KitLink, bool) {
 		if !slices.Contains(strings.Fields(strings.ToLower(get("rel"))), "stylesheet") {
 			return KitLink{}, false
 		}
-		return kitLink(get("href"), artifacts.KitStylesheet, line)
+		return kitLink(get("href"), KitAsStylesheet, line)
 	case "script":
-		return kitLink(get("src"), artifacts.KitTheme, line)
+		return kitLink(get("src"), KitAsScript, line)
 	}
 	return KitLink{}, false
 }
 
-// cssKitLinks is every @import of the kit's stylesheet in a stylesheet, its
-// lines offset by base (the line a page's <style> text starts on, less one).
+// cssKitLinks is every @import of a kit file in a stylesheet, its lines
+// offset by base (the line a page's <style> text starts on, less one).
 func cssKitLinks(text []byte, base int) []KitLink {
 	var out []KitLink
 	for _, r := range scanCSS(text) {
 		if r.kind != RefStylesheet {
 			continue
 		}
-		if link, ok := kitLink(r.url, artifacts.KitStylesheet, base+r.line); ok {
+		if link, ok := kitLink(r.url, KitAsStylesheet, base+r.line); ok {
 			out = append(out, link)
 		}
 	}
 	return out
 }
 
-// kitLink reads ref as a link to the kit file want: a path on the artifact's
-// own origin, `<prefix><version>/<want>`, with any query or fragment ignored
-// (the origin serves the file whatever follows it). An absolute URL is not
-// one: the kit is served on every artifact host and a page names it by path,
-// while a URL naming a host is held to the CDN allowlist like any other.
-func kitLink(ref, want string, line int) (KitLink, bool) {
+// kitLink reads ref as a link to a kit file, loaded as as: a path on the
+// artifact's own origin, `<prefix><version>/<file>`, with any query or
+// fragment ignored (the origin serves the file whatever follows it). An
+// absolute URL is not one: the kit is served on every artifact host and a page
+// names it by path, while a URL naming a host is held to the CDN allowlist
+// like any other.
+func kitLink(ref string, as KitLoad, line int) (KitLink, bool) {
 	n := normalizeRef(ref)
 	n, _, _ = strings.Cut(n, "#")
 	n, _, _ = strings.Cut(n, "?")
@@ -135,8 +164,8 @@ func kitLink(ref, want string, line int) (KitLink, bool) {
 		return KitLink{}, false
 	}
 	version, file, ok := strings.Cut(rest, "/")
-	if !ok || version == "" || file != want {
+	if !ok || version == "" || file == "" || strings.HasSuffix(file, "/") {
 		return KitLink{}, false
 	}
-	return KitLink{Version: version, File: file, Line: line}, true
+	return KitLink{Version: version, File: file, As: as, Line: line}, true
 }
