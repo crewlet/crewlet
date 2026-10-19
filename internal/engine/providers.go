@@ -18,6 +18,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -280,7 +281,11 @@ var log = logging.Get("engine")
 //
 // A failed restore is WARNED and never refuses the epoch: a node with a broken
 // bundle can still be logged in by hand, and refusing a whole revision over one
-// blob is the worse outcome.
+// blob is the worse outcome. An entry `crewlet llm logout` emptied restores
+// nothing either ([cliagent.ErrLoggedOut]) — the logout is the operator's
+// decision and outlives every apply until a login is written again — and that
+// is warned as what it is, `cli_agent_bundle_withheld`, naming the logout and
+// how to sign in again, rather than as a bundle that failed.
 func (c *Company) restoreBundles(ctx context.Context) {
 	if c == nil || c.Models == nil {
 		return
@@ -290,7 +295,12 @@ func (c *Company) restoreBundles(ctx context.Context) {
 		if !ok {
 			continue
 		}
-		if err := cli.RestoreConfiguredBundle(ctx); err != nil {
+		err := cli.RestoreConfiguredBundle(ctx)
+		switch {
+		case err == nil:
+		case errors.Is(err, cliagent.ErrLoggedOut):
+			log.WarnContext(ctx, "cli_agent_bundle_withheld", "provider", key, "detail", err.Error())
+		default:
 			log.WarnContext(ctx, "cli_agent_bundle_restore_failed", "provider", key, "error", err)
 		}
 	}
@@ -362,22 +372,24 @@ func buildCLIAgent(key string, spec config.LLMProvider, r *config.Resolver, apiK
 	auth.Token = resolveOrConvention(r, cli.Auth.Token, profile.TokenEnv)
 	auth.TokenConfigured = cli.Auth.Token != ""
 	bundle := resolveOrConvention(r, cli.Auth.CredentialBundle, cliagent.BundleVarName(key))
+	bundleConfigured := cli.Auth.CredentialBundle != ""
 
 	return cliagent.New(cliagent.Config{
 		Key: key,
 		// Resolved for the same reason cli.env is: a model written as a
 		// reference would reach the CLI's --model flag as the literal
 		// "${VAR}", and the CLI would reject a model by that name.
-		Model:            r.Value(spec.Model),
-		Agent:            cli.Name(),
-		AgentMode:        cli.AgentMode(),
-		StateDir:         stateDir,
-		Overrides:        cli.Overrides,
-		Timeout:          time.Duration(cli.Timeout() * float64(time.Second)),
-		MaxConcurrent:    cli.Concurrency(),
-		Env:              env,
-		Auth:             auth,
-		CredentialBundle: bundle,
+		Model:                      r.Value(spec.Model),
+		Agent:                      cli.Name(),
+		AgentMode:                  cli.AgentMode(),
+		StateDir:                   stateDir,
+		Overrides:                  cli.Overrides,
+		Timeout:                    time.Duration(cli.Timeout() * float64(time.Second)),
+		MaxConcurrent:              cli.Concurrency(),
+		Env:                        env,
+		Auth:                       auth,
+		CredentialBundle:           bundle,
+		CredentialBundleConfigured: bundleConfigured,
 	})
 }
 

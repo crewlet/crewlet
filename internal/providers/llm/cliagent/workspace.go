@@ -161,6 +161,9 @@ const (
 	// loginEpochFile is the shared login's OPERATOR EPOCH, in the state
 	// directory — see [Workspace.bumpLoginEpoch].
 	loginEpochFile = "login-epoch"
+	// loggedOutFile records that `crewlet llm logout` removed the shared
+	// login, in the state directory — see [Workspace.markLoggedOut].
+	loggedOutFile = "logged-out"
 )
 
 // sharedLock is the shared login's lock file ([Workspace.lockShared]): the
@@ -1133,6 +1136,14 @@ func (w *Workspace) syncCredentialsOut(
 			return holds, err
 		}
 	}
+	if gen.Mode == syncLogin {
+		// A LOGIN OF RECORD, written: a logout before it is over, and a
+		// configured bundle restores again into a directory left empty later
+		// ([Workspace.markLoggedOut]). Under the lock, with the write.
+		if err := w.clearLoggedOut(); err != nil {
+			return holds, err
+		}
+	}
 	return holds, nil
 }
 
@@ -1333,6 +1344,57 @@ func (w *Workspace) bumpLoginEpoch() error {
 		return fmt.Errorf("cli-agent: recording the login's epoch in %q: %w", path, err)
 	}
 	return nil
+}
+
+// markLoggedOut records that `crewlet llm logout` removed the login of record,
+// under the shared login's lock the caller holds, so that the AUTOMATIC restore
+// of a configured bundle ([Provider.RestoreBundle]) declines until a login is
+// written again ([Workspace.clearLoggedOut]).
+//
+// A RECORD, because the empty directory a logout leaves is exactly what a
+// bundle restores into: with nothing beside it, the engine's next boot or
+// apply, or the next `crewlet llm status`, put back the very login the operator
+// had just removed — revoking a compromised login lasted until the next
+// command. IN THE STATE DIRECTORY, beside the operator epoch and outside
+// credentials/, so no bundle and no coding box ever carries it — and so a
+// fresh state volume holds none, and its bundle restores there, which is what a
+// container rebuilt on every deploy is configured for.
+func (w *Workspace) markLoggedOut() error {
+	path := filepath.Join(w.root, loggedOutFile)
+	if err := hostbox.ReplaceFile(path, strings.NewReader(loggedOutNote)); err != nil {
+		return fmt.Errorf("cli-agent: recording the logout in %q: %w", path, err)
+	}
+	return nil
+}
+
+// loggedOutNote is what the logout's record says to an operator who finds it.
+// Nothing reads it back: the record is its existence.
+const loggedOutNote = "`crewlet llm logout` removed this state directory's login; a configured " +
+	"credential bundle is not restored into it until a login is written again\n"
+
+// clearLoggedOut removes the logout's record ([Workspace.markLoggedOut]), under
+// the shared login's lock the caller holds, as a login of record is written.
+func (w *Workspace) clearLoggedOut() error {
+	path := filepath.Join(w.root, loggedOutFile)
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("cli-agent: clearing the logout recorded in %q: %w", path, err)
+	}
+	return nil
+}
+
+// loggedOut reports whether the logout's record stands
+// ([Workspace.markLoggedOut]).
+func (w *Workspace) loggedOut() (bool, error) {
+	path := filepath.Join(w.root, loggedOutFile)
+	_, err := os.Lstat(path)
+	switch {
+	case err == nil:
+		return true, nil
+	case os.IsNotExist(err):
+		return false, nil
+	default:
+		return false, fmt.Errorf("cli-agent: reading the logout's record %q: %w", path, err)
+	}
 }
 
 // readShared reads one shared login file, reporting false where there is none.

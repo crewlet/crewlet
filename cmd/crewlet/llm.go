@@ -171,12 +171,7 @@ func runLLM(environ config.Source, args []string, stdout, stderr io.Writer) erro
 		if err != nil {
 			return err
 		}
-		if err := p.RestoreConfiguredBundle(ctx); err != nil {
-			// The engine warns and runs the entry signed out; status then
-			// says who the CLI is logged in as, which is nobody, and this
-			// line says why.
-			fmt.Fprintf(stderr, "crewlet: the entry's configured credential bundle did not restore: %v\n", err)
-		}
+		restoreConfiguredBundle(ctx, p, stderr)
 		return p.Status(ctx, stdout, stderr)
 	case "logout":
 		p, err := oneProvider(providers, key)
@@ -186,7 +181,10 @@ func runLLM(environ config.Source, args []string, stdout, stderr io.Writer) erro
 		if err := p.Logout(ctx, stdout, stderr); err != nil {
 			return err
 		}
-		fmt.Fprintf(stdout, "Logged %s out and removed its credentials.\n", key)
+		fmt.Fprintf(stdout, "Logged %s out and removed its credentials.\n", p.Key())
+		if notice := p.LogoutNotice(); notice != "" {
+			fmt.Fprintln(stdout, notice)
+		}
 		return nil
 	case "export":
 		return exportLLM(ctx, environ, providers, key, *secretStore, *bootstrapPath, stdout)
@@ -266,6 +264,25 @@ func oneProvider(providers []cliAgentProvider, key string) (*cliagent.Provider, 
 		key, strings.Join(providerKeys(providers), ", "))
 }
 
+// restoreConfiguredBundle makes the restore the engine makes before it runs an
+// entry ([cliagent.Provider.RestoreConfiguredBundle]), for a command that
+// answers about the login the engine would run with, and says on stderr why
+// it restored nothing where it did not: the engine warns and runs the entry
+// signed out, and the command then reports a login that is not there, which
+// this line explains — a bundle that failed, or a logout that keeps it out
+// until a login is written again.
+func restoreConfiguredBundle(ctx context.Context, p *cliagent.Provider, stderr io.Writer) {
+	err := p.RestoreConfiguredBundle(ctx)
+	switch {
+	case err == nil:
+	case errors.Is(err, cliagent.ErrLoggedOut):
+		fmt.Fprintf(stderr, "crewlet: %s: %v\n", p.Key(), err)
+	default:
+		fmt.Fprintf(stderr, "crewlet: %s: the entry's configured credential bundle did not restore: %v\n",
+			p.Key(), err)
+	}
+}
+
 func providerKeys(providers []cliAgentProvider) []string {
 	keys := make([]string, 0, len(providers))
 	for _, p := range providers {
@@ -330,7 +347,11 @@ func doctorEntries(company *config.Company, resolver *config.Resolver, companyPa
 				break
 			}
 			entry.diagnose = func(ctx context.Context, smoke bool) diagnosis {
-				if err := built.RestoreConfiguredBundle(ctx); err != nil {
+				// A logout that keeps the bundle out is no failure of the
+				// bundle: the diagnosis names it beside the missing sign-in,
+				// as it would for the entry the engine runs.
+				if err := built.RestoreConfiguredBundle(ctx); err != nil &&
+					!errors.Is(err, cliagent.ErrLoggedOut) {
 					return bundleFailure{key: key, err: err}
 				}
 				return built.Diagnose(ctx, cliagent.DiagnoseOptions{
@@ -595,7 +616,9 @@ func exportLLM(ctx context.Context, environ config.Source, providers []cliAgentP
 	if key == "" {
 		key = providers[0].key
 	}
-	if err = p.RestoreConfiguredBundle(ctx); err != nil {
+	if err = p.RestoreConfiguredBundle(ctx); errors.Is(err, cliagent.ErrLoggedOut) {
+		return fmt.Errorf("%s has no login to export: %w", key, err)
+	} else if err != nil {
 		return fmt.Errorf("the entry's configured credential bundle did not restore, so there is "+
 			"no login the engine would run with to export: %w", err)
 	}

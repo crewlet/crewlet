@@ -177,12 +177,26 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 	}
 
 	files := p.ws.LoginFiles()
+	loggedOut, loggedOutErr := p.ws.loggedOut()
 	switch {
 	case len(files) > 0:
 		d.Credentials = "present"
 	default:
 		d.Credentials = "none on disk"
+		if loggedOut {
+			// The doctor restored nothing for the same reason the engine
+			// would not: see [ErrLoggedOut].
+			d.Credentials += " — removed by `crewlet llm logout`"
+			if p.bundle != "" {
+				d.Credentials += ", so its configured credential bundle is not restored until a " +
+					"login is written again"
+			}
+		}
 		d.HostLogin = p.HostLogin(ctx, "")
+	}
+	if loggedOutErr != nil {
+		d.Problems = append(d.Problems, fmt.Sprintf("whether the entry was logged out cannot be "+
+			"read, so neither can whether its configured credential bundle restores: %v", loggedOutErr))
 	}
 
 	switch {
@@ -259,6 +273,10 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 func (p *Provider) noSignIn(hostLogin, unresolved []string) string {
 	problem := fmt.Sprintf("no sign-in for %q: no credential files in %s, and nothing "+
 		"in the environment the CLI is given authenticates it", p.key, p.ws.CredentialsDir())
+	if out, err := p.ws.loggedOut(); err == nil && out && p.bundle != "" {
+		problem += " — `crewlet llm logout` removed its login, and its configured credential " +
+			"bundle stays out until a login is written again"
+	}
 	if len(unresolved) > 0 {
 		problem += fmt.Sprintf(" — cli.env sets %s, but the ${VAR} it references "+
 			"resolved to nothing: export it, or store it with `crewlet secrets set`",

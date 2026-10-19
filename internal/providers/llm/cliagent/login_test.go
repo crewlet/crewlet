@@ -537,3 +537,116 @@ func TestAConfiguredBundleIsRestoredOnlyWhenAsked(t *testing.T) {
 		t.Errorf("a restore replaced the running login with the bundle: %q", kept)
 	}
 }
+
+// A LOGOUT IS NOT UNDONE BY THE CONFIGURED BUNDLE. The directory a logout
+// empties is exactly what a bundle restores into, so the next restore — the
+// one `crewlet llm status` makes before it asks, and the engine's at its next
+// boot or apply — put back the very login the operator had just removed, a
+// compromised one typically, and the logout lasted until the next command.
+// Now the restore declines, and says why in words an operator can act on.
+//
+// Mutation: drop the record from Logout, or the check from restoreBundle, and
+// the login comes back here.
+func TestALogoutIsNotUndoneByTheConfiguredBundle(t *testing.T) {
+	t.Parallel()
+	p := loginProvider(t)
+	p.bundle = bundleOf(t, "creds.json", `{"token":"k-bundled"}`)
+	if err := p.RestoreConfiguredBundle(t.Context()); err != nil {
+		t.Fatalf("the boot's restore: %v", err)
+	}
+	if !p.Workspace().HasLogin() {
+		t.Fatal("the premise: the bundle restored nothing")
+	}
+	if err := p.Logout(t.Context(), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("Logout: %v", err)
+	}
+
+	err := p.RestoreConfiguredBundle(t.Context())
+	if !errors.Is(err, ErrLoggedOut) {
+		t.Errorf("the restore after a logout = %v, want ErrLoggedOut", err)
+	}
+	if p.Workspace().HasLogin() {
+		t.Fatalf("the restore after a logout brought the login back: %v", p.Workspace().LoginFiles())
+	}
+	for _, want := range []string{"`crewlet llm login sub`", "-from-host", "`crewlet llm import sub`",
+		"fresh volume", "crewlet secrets unset " + BundleVarName("sub")} {
+		if err != nil && !strings.Contains(err.Error(), want) {
+			t.Errorf("the decline does not name %q: %v", want, err)
+		}
+	}
+	// Recorded in the state directory, where no bundle reaches it.
+	if _, statErr := os.Stat(filepath.Join(p.Workspace().Root(), loggedOutFile)); statErr != nil {
+		t.Errorf("the logout left no record in the state directory: %v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(p.Workspace().CredentialsDir(), loggedOutFile)); !os.IsNotExist(statErr) {
+		t.Errorf("the logout's record is in the credentials directory, where a bundle carries it (%v)", statErr)
+	}
+	// What the operator is told about the bundle, naming where it came
+	// from: the conventional secret here, the field where one is set.
+	for _, want := range []string{BundleVarName("sub"), "fresh volume", "`crewlet llm login sub`"} {
+		if !strings.Contains(p.LogoutNotice(), want) {
+			t.Errorf("the logout notice does not name %q: %s", want, p.LogoutNotice())
+		}
+	}
+	p.bundleConfigured = true
+	if notice := p.LogoutNotice(); !strings.Contains(notice, "providers.llm.sub.cli.auth.credential_bundle") {
+		t.Errorf("the notice for a bundle named in the document does not name the field: %s", notice)
+	}
+	p.bundle = ""
+	if notice := p.LogoutNotice(); notice != "" {
+		t.Errorf("an entry with no bundle was told about one: %s", notice)
+	}
+}
+
+// A LOGIN OF RECORD ENDS A LOGOUT. Whichever way the operator signs the entry
+// in again — the vendor's login, -from-host, an import — the logout is over,
+// and a directory left empty afterwards is restored from the bundle as it was
+// before the logout.
+//
+// Mutation: drop the clearing from any one of the three, and its case is red.
+func TestALoginOfRecordEndsALogout(t *testing.T) {
+	t.Parallel()
+	for name, login := range map[string]func(t *testing.T, p *Provider) error{
+		"login": func(t *testing.T, p *Provider) error {
+			return p.BrokerLogin(t.Context(), nil, &bytes.Buffer{}, &bytes.Buffer{})
+		},
+		"from host": func(t *testing.T, p *Provider) error {
+			home := t.TempDir()
+			writeHostLogin(t, home, `{"token":"k-host"}`)
+			_, err := p.AdoptHostLogin(t.Context(), home)
+			return err
+		},
+		"import": func(t *testing.T, p *Provider) error {
+			return p.ImportBundle(t.Context(), bundleOf(t, "creds.json", `{"token":"k-imported"}`))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			p := fileProvider(t, map[string]string{"FAKE_LOGIN_KEY": "k-login"})
+			p.bundle = bundleOf(t, "creds.json", `{"token":"k-bundled"}`)
+			writeCreds(t, p, `{"token":"k-old"}`)
+			if err := p.Logout(t.Context(), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+				t.Fatalf("Logout: %v", err)
+			}
+			if err := login(t, p); err != nil {
+				t.Fatalf("signing in again: %v", err)
+			}
+			if out, err := p.ws.loggedOut(); err != nil || out {
+				t.Fatalf("the logout still stands after a login of record (%v, %v)", out, err)
+			}
+			// The directory empties some other way — an operator clearing it
+			// by hand — and the bundle restores into it as it always did.
+			for _, path := range p.ws.LoginFiles() {
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := p.RestoreConfiguredBundle(t.Context()); err != nil {
+				t.Fatalf("the restore once the logout was over: %v", err)
+			}
+			if got := readCreds(t, p); got != `{"token":"k-bundled"}` {
+				t.Errorf("the restore once the logout was over left %q, want the bundle's login", got)
+			}
+		})
+	}
+}

@@ -248,6 +248,14 @@ func (p *Provider) CredentialLogin(ctx context.Context, username, password strin
 // it moves the operator epoch on ([Workspace.bumpLoginEpoch]), so a pending
 // login the discard could not reach — another command held the login home —
 // is never carried out over the logout later.
+//
+// AND IT IS DURABLE AGAINST THE CONFIGURED BUNDLE: under the same lock, before
+// anything is removed, it records the logout beside the operator epoch
+// ([Workspace.markLoggedOut]), and the automatic restore declines while that
+// record stands ([ErrLoggedOut]) — otherwise the engine's next boot or apply, or
+// the next `crewlet llm status`, restored the very login the operator had just
+// removed. A login of record written afterwards clears it. What the operator is
+// told about the bundle itself is [Provider.LogoutNotice].
 func (p *Provider) Logout(ctx context.Context, out, errOut io.Writer) error {
 	if err := p.discardLoginHome(ctx); err != nil {
 		return fmt.Errorf("cliagent: the login was NOT removed: %w", err)
@@ -261,7 +269,10 @@ func (p *Provider) Logout(ctx context.Context, out, errOut io.Writer) error {
 		return errors.Join(fmt.Errorf("cliagent: the login was NOT removed: %w", err), vendorErr)
 	}
 	defer unlock()
-	var removeErr error
+	// THE RECORD FIRST: a removal that stopped part way leaves a directory
+	// the record already keeps the bundle out of, and a record that cannot
+	// be written still removes the login, the half an operator relies on.
+	removeErr := p.ws.markLoggedOut()
 	for _, path := range p.ws.LoginFiles() {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			removeErr = errors.Join(removeErr, fmt.Errorf("cliagent: removing %q: %w", path, err))
@@ -309,7 +320,9 @@ func (p *Provider) discardLoginHome(ctx context.Context) error {
 // a home whose CLI changed nothing writes nothing, and one whose CLI did
 // refresh writes only over the login it was seeded from — so asking who the
 // entry is signed in as can neither revert a seat's refresh that landed while
-// it ran nor bring back a login `crewlet llm logout` removed.
+// it ran nor bring back a login `crewlet llm logout` removed. (The command's
+// restore of a configured bundle before it asks cannot either: it declines
+// after a logout, [ErrLoggedOut].)
 func (p *Provider) Status(ctx context.Context, out, errOut io.Writer) error {
 	if len(p.profile.StatusArgs) == 0 {
 		return fmt.Errorf("%w: the %q CLI has no status command — "+
@@ -341,7 +354,8 @@ func (p *Provider) Status(ctx context.Context, out, errOut io.Writer) error {
 // keeps this one ([syncRefresh]). And it moves the operator epoch on
 // ([Workspace.bumpLoginEpoch]), so a login an earlier `crewlet llm login` left
 // pending in the login home — its export failed — is never carried out over
-// this one by the next command.
+// this one by the next command. A login of record, so a logout before it is
+// over ([Workspace.clearLoggedOut]).
 func (p *Provider) AdoptHostLogin(ctx context.Context, home string) ([]string, error) {
 	if home == "" {
 		var err error
@@ -400,6 +414,9 @@ func (p *Provider) AdoptHostLogin(ctx context.Context, home string) ([]string, e
 	if len(taken) == 0 {
 		return nil, fmt.Errorf("cliagent: no %q login found under %q — log in with the "+
 			"vendor's CLI first, or name a different home with --home", p.agent, home)
+	}
+	if err := p.ws.clearLoggedOut(); err != nil {
+		return nil, err
 	}
 	if err := p.ws.bumpLoginEpoch(); err != nil {
 		return nil, err
@@ -518,6 +535,11 @@ func (p *Provider) ExportBundle() (string, error) {
 // epoch where it is ([Workspace.bumpLoginEpoch]) — and a login an operator made
 // on this node whose export failed, which is why the directory is empty, is
 // still carried out over it by the next command, being the newer of the two.
+//
+// And it DECLINES AFTER A LOGOUT, answering [ErrLoggedOut]: the directory a
+// logout empties is one an operator emptied, and refilling it from the
+// deployment's configuration undid the logout at the next boot, apply or
+// `status` ([Workspace.markLoggedOut]).
 func (p *Provider) RestoreBundle(ctx context.Context, blob string) error {
 	if err := p.restoreBundle(ctx, blob, false); err != nil && !errors.Is(err, ErrLoginPresent) {
 		return err
@@ -534,7 +556,9 @@ func (p *Provider) RestoreBundle(ctx context.Context, blob string) error {
 // and never by [New], whose callers include `crewlet validate`. A failure is the
 // caller's to report and never a refusal to build: a node with a broken bundle
 // can still be logged in by hand, and taking a company down over one blob is
-// the worse outcome.
+// the worse outcome. An entry `crewlet llm logout` emptied answers
+// [ErrLoggedOut], which is no failure of the bundle and is reported as what it
+// is: the logout, and how to sign in again.
 func (p *Provider) RestoreConfiguredBundle(ctx context.Context) error {
 	if p.bundle == "" {
 		return nil
@@ -545,6 +569,59 @@ func (p *Provider) RestoreConfiguredBundle(ctx context.Context) error {
 // ErrLoginPresent is a bundle import that found the entry already signed in,
 // and so restored nothing.
 var ErrLoginPresent = errors.New("cliagent: the entry already has a login, so the bundle was not restored")
+
+// ErrLoggedOut is an automatic restore that found the entry logged out by
+// `crewlet llm logout` since its last login, and so restored nothing: see
+// [Workspace.markLoggedOut]. The error that wraps it names the logout, how to
+// sign in again and what retires the bundle.
+var ErrLoggedOut = errors.New("cliagent: the entry was logged out, so its configured credential " +
+	"bundle was not restored")
+
+// loggedOutError is [ErrLoggedOut] for this entry.
+func (p *Provider) loggedOutError() error {
+	return fmt.Errorf("%w: `crewlet llm logout` removed the login in %s, and the bundle stays out "+
+		"until a login is written there again — sign in with `crewlet llm login %s`, "+
+		"`crewlet llm login %s -from-host` or `crewlet llm import %s`; a state directory with no "+
+		"record of the logout (a fresh volume) restores it, so to retire the bundle %s",
+		ErrLoggedOut, p.ws.CredentialsDir(), p.key, p.key, p.key, p.retireBundle())
+}
+
+// LogoutNotice is what `crewlet llm logout` tells the operator about the
+// entry's configured credential bundle once its login is removed, or "" for an
+// entry that configures none: that nothing restores the bundle onto this host
+// until a login is written again, that a state directory with no record of the
+// logout — a fresh volume — still does, and what retires it.
+func (p *Provider) LogoutNotice() string {
+	if p.bundle == "" {
+		return ""
+	}
+	return fmt.Sprintf("Its configured credential bundle (%s) is not restored onto this host until "+
+		"a login is written again (`crewlet llm login %s`, `-from-host` or `crewlet llm import %s`) — "+
+		"not at the engine's next boot or apply, and not by `crewlet llm status`, `export`, `doctor` "+
+		"or `list`. A state directory with no record of this logout, such as a fresh volume, still "+
+		"restores it; to retire the bundle, %s.",
+		p.bundleSource(), p.key, p.key, p.retireBundle())
+}
+
+// bundleSource names where the entry's configured bundle came from.
+func (p *Provider) bundleSource() string {
+	if p.bundleConfigured {
+		return fmt.Sprintf("providers.llm.%s.cli.auth.credential_bundle", p.key)
+	}
+	return BundleVarName(p.key)
+}
+
+// retireBundle says what removes the entry's configured bundle, which is what
+// a fresh state volume restores.
+func (p *Provider) retireBundle() string {
+	if p.bundleConfigured {
+		return fmt.Sprintf("remove providers.llm.%s.cli.auth.credential_bundle from the company "+
+			"document, or the secret it references", p.key)
+	}
+	name := BundleVarName(p.key)
+	return fmt.Sprintf("remove %s from the secret store (`crewlet secrets unset %s`) and from "+
+		"the engine's environment", name, name)
+}
 
 // ImportBundle is [Provider.RestoreBundle] for an operator who asked for it,
 // and so it answers [ErrLoginPresent] where a login is already in place rather
@@ -557,6 +634,9 @@ var ErrLoginPresent = errors.New("cliagent: the entry already has a login, so th
 // An operator's write of the login of record, so it moves the operator epoch
 // on ([Workspace.bumpLoginEpoch]): a login an earlier `crewlet llm login` left
 // pending in the login home is never carried out over the bundle afterwards.
+// And it is never declined after a logout, which it ends
+// ([Workspace.clearLoggedOut]): an import is how an operator replaces a login
+// they logged out.
 func (p *Provider) ImportBundle(ctx context.Context, blob string) error {
 	return p.restoreBundle(ctx, blob, true)
 }
@@ -568,6 +648,9 @@ func (p *Provider) restoreBundle(ctx context.Context, blob string, operator bool
 	dest := p.ws.CredentialsDir()
 	if p.ws.HasLogin() {
 		return ErrLoginPresent
+	}
+	if err := p.declineAfterLogout(operator); err != nil {
+		return err
 	}
 	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(blob))
 	if err != nil {
@@ -646,7 +729,8 @@ func (p *Provider) restoreBundle(ctx context.Context, blob string, operator bool
 	// THE EMPTINESS ASKED AGAIN UNDER THE SHARED LOGIN'S LOCK, with the
 	// writes: the check above is the cheap path for a node that already has
 	// a login, and a login that landed while the bundle was being validated
-	// is the fresher one.
+	// is the fresher one — as a logout that landed meanwhile is the newer
+	// decision.
 	unlock, lockErr := p.ws.lockShared(ctx)
 	if lockErr != nil {
 		return lockErr
@@ -655,13 +739,37 @@ func (p *Provider) restoreBundle(ctx context.Context, blob string, operator bool
 	if p.ws.HasLogin() {
 		return ErrLoginPresent
 	}
+	if err := p.declineAfterLogout(operator); err != nil {
+		return err
+	}
 	for name, data := range staged {
 		if err := hostbox.ReplaceFile(filepath.Join(dest, name), bytes.NewReader(data)); err != nil {
 			return fmt.Errorf("cliagent: writing %q: %w", name, err)
 		}
 	}
 	if operator {
+		// The operator's own login of record, so a logout before it is over.
+		if err := p.ws.clearLoggedOut(); err != nil {
+			return err
+		}
 		return p.ws.bumpLoginEpoch()
+	}
+	return nil
+}
+
+// declineAfterLogout answers [ErrLoggedOut] for an automatic restore while a
+// logout's record stands ([Workspace.markLoggedOut]). An operator's import is
+// never declined: it is the write that ends the logout.
+func (p *Provider) declineAfterLogout(operator bool) error {
+	if operator {
+		return nil
+	}
+	out, err := p.ws.loggedOut()
+	if err != nil {
+		return err
+	}
+	if out {
+		return p.loggedOutError()
 	}
 	return nil
 }

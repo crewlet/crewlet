@@ -1985,7 +1985,8 @@ directory (entries sharing a `cli.state_dir` share one login home): a second
 started while the first is running is refused, saying so. Only the commands
 that make a login create the shared one; `status` and a seat's call write back
 only a refresh of the very login they started from, so neither reverts a newer
-login nor brings back one `logout` removed. A login whose export failed after
+login nor brings back one `logout` removed — and the bundle restore `status`
+makes first declines after a `logout` (below). A login whose export failed after
 you signed in is kept and written by the next command — unless you replaced
 the login since with `-from-host`, `import` or `logout`; a `login` that cannot
 carry such a kept login out replaces it, saying so — see [token refresh across
@@ -2012,10 +2013,20 @@ running holds the fresher refresh token, and restoring a boot-time blob over
 it is how a fleet logs itself out. `crewlet llm logout <KEY>` first if you
 mean to replace it.
 
+**`logout`** removes the login (and revokes it with the vendor where the CLI
+has a logout of its own), and **records the logout** in the state directory,
+so the configured bundle below is not restored into the directory it emptied —
+not by the engine's next boot or apply, and not by `status`, `export` or
+`doctor`, which each say why instead — until a login is written again with
+`login`, `-from-host` or `import`. A fresh state directory holds no such record
+and restores the bundle as before, so `logout` names the field or secret that
+retires it when the entry has one.
+
 The engine also restores a bundle **itself**, at boot and at every apply, from
 `cli.auth.credential_bundle` or the conventional
 `CREWLET_LLM_CLI_<KEY>_CREDENTIALS` variable — and only into an empty
-credential directory, by the same rule. `status`, `export` and `doctor` make
+credential directory, by the same rule, and never after a `logout` until a
+login is written again. `status`, `export` and `doctor` make
 the same restore before they look, so they report the login the engine would
 run with; `validate` never writes one. That path authenticates a fresh
 container before its first turn rather than after an operator remembers a

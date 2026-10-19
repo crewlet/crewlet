@@ -92,6 +92,12 @@ type Config struct {
 	// [New]: [Provider.RestoreConfiguredBundle] is the restore, made by
 	// whoever builds the entry to run it.
 	CredentialBundle string
+	// CredentialBundleConfigured is whether CredentialBundle came from
+	// cli.auth.credential_bundle rather than the conventional
+	// CREWLET_LLM_CLI_<KEY>_CREDENTIALS ([BundleVarName]), for the lines that
+	// tell an operator what retires it ([Provider.LogoutNotice]) — the same
+	// split [Auth.TokenConfigured] makes for the token.
+	CredentialBundleConfigured bool
 }
 
 // Provider is a coding CLI behind the language-model contract.
@@ -113,8 +119,10 @@ type Provider struct {
 	termGrace time.Duration
 
 	// bundle is [Config.CredentialBundle], which
-	// [Provider.RestoreConfiguredBundle] restores.
-	bundle string
+	// [Provider.RestoreConfiguredBundle] restores, and bundleConfigured
+	// [Config.CredentialBundleConfigured].
+	bundle           string
+	bundleConfigured bool
 
 	// slots caps concurrent child processes. A buffered channel rather
 	// than a semaphore type because acquisition has to be selectable
@@ -159,18 +167,19 @@ func New(cfg Config) (*Provider, error) {
 		slots = 1
 	}
 	p := &Provider{
-		key:       cfg.Key,
-		bundle:    cfg.CredentialBundle,
-		model:     cfg.Model,
-		agent:     cfg.Agent,
-		agentMode: cfg.AgentMode,
-		profile:   profile,
-		ws:        ws,
-		env:       cfg.Env,
-		auth:      cfg.Auth,
-		timeout:   cfg.Timeout,
-		termGrace: termGrace,
-		slots:     make(chan struct{}, slots),
+		key:              cfg.Key,
+		bundle:           cfg.CredentialBundle,
+		bundleConfigured: cfg.CredentialBundleConfigured,
+		model:            cfg.Model,
+		agent:            cfg.Agent,
+		agentMode:        cfg.AgentMode,
+		profile:          profile,
+		ws:               ws,
+		env:              cfg.Env,
+		auth:             cfg.Auth,
+		timeout:          cfg.Timeout,
+		termGrace:        termGrace,
+		slots:            make(chan struct{}, slots),
 	}
 	if p.timeout <= 0 {
 		return nil, fmt.Errorf("cli-agent %q: timeout is zero — a CLI call with no "+
@@ -188,6 +197,9 @@ func New(cfg Config) (*Provider, error) {
 
 // Model is the configured model identity.
 func (p *Provider) Model() string { return p.model }
+
+// Key is the providers.llm key the entry was built under.
+func (p *Provider) Key() string { return p.key }
 
 // ModelArgument is the model exactly as this entry's text calls hand it to the
 // CLI ([cliprofile.Profile.ModelArgument]) — what a coding run of the same CLI
