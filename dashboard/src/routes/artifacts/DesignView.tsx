@@ -5,8 +5,8 @@
  * THE CANVAS IS DRAWN HERE from `canvas.json` (the version's entry, read as its
  * source), on the design system's `CanvasBoard`: pan, zoom, fit, and the
  * visibility budget, so only boards on screen and wide enough to read are
- * framed, at most twelve at once. A board opens full size in a sheet, still
- * framed and still ticketed.
+ * framed, at most twelve at once. A board opens at its own size in a dialog,
+ * still framed and still ticketed.
  *
  * PEOPLE REARRANGE IT (D69). An editor at the head moves and resizes boards and
  * adds, edits and deletes notes; Save publishes a version that changes
@@ -15,8 +15,11 @@
  * by item (lib/artifacts/canvas.ts) and saved again by the person.
  *
  * PRINT IS PER BOARD, and the host's (`crewlet.print()`, or Print on an opened
- * board): that board alone is framed again on a page of its own size and
- * handed to the browser's print, which saves it as a PDF.
+ * board): a print view covers the window with that board alone, framed afresh
+ * at its own size at the window's corner, and once its page has said hello
+ * the browser's print is handed a page of the board's size holding nothing
+ * else, which it saves as a PDF. The view is on screen, not only in print,
+ * because the browser prints a cross-origin frame as it is drawn on screen.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -222,6 +225,7 @@ function Design({
     canvasRef.current?.focusRegion({ x: b.x, y: b.y, width: b.w, height: b.h });
 
   const frameOf = (b: CanvasBoardItem, className: string, onReady?: () => void): ReactNode => (
+    // Keyed by board, so another board opened is a frame of its own.
     <FrameView
       detail={detail}
       version={version}
@@ -229,6 +233,7 @@ function Design({
       room={room}
       presence={presence}
       bridgeStores={bridgeStores}
+      key={b.id}
       document={b.id}
       title={`${detail.title}, ${b.title}`}
       print={() => print(b.id)}
@@ -334,16 +339,23 @@ function Design({
         title={openedBoard?.title}
         subtitle={openedBoard ? `${openedBoard.w} by ${openedBoard.h}` : undefined}
         size="xl"
-        variant="sheet"
         headerActions={
           openedBoard ? (
-            <Button size="small" variant="secondary" onClick={() => setPrinting(openedBoard.id)}>
+            <Button size="small" variant="secondary" onClick={() => void print(openedBoard.id)}>
               Print
             </Button>
           ) : undefined
         }
       >
-        {openedBoard && frameOf(openedBoard, "design-opened-frame")}
+        {openedBoard && (
+          // AT ITS OWN SIZE, scrolled where it is larger than the dialog: the
+          // page lays itself out for the width its board was drawn at.
+          <div className="design-opened">
+            <div style={{ width: openedBoard.w, height: openedBoard.h }}>
+              {frameOf(openedBoard, "design-opened-frame")}
+            </div>
+          </div>
+        )}
       </Modal>
       {printedBoard && (
         <BoardPrint
@@ -356,12 +368,17 @@ function Design({
   );
 }
 
+/** How long the print view stays after the browser says the print is over. */
+const PRINT_TEARDOWN_MS = 1500;
+
 /**
- * One board on a page of its own size, shown only in print: framed afresh
- * under its own ticket, and handed to the browser's print once its page has
- * said hello. The page size is a constructed stylesheet, since the
- * dashboard's policy admits no inline style element; it is removed, with the
- * frame, when the browser says the print is over.
+ * One board printed: a view over the whole window holding the board alone,
+ * framed afresh under its own ticket at the window's corner and at its own
+ * size, handed to the browser's print once its page has said hello and drawn.
+ * In print nothing else of the dashboard shows, on a page of the board's own
+ * size. The page size is a constructed stylesheet, since the dashboard's
+ * policy admits no inline style element; it and the view go shortly after the
+ * browser says the print is over.
  */
 function BoardPrint({
   board,
@@ -376,11 +393,22 @@ function BoardPrint({
   done.current = onDone;
   useEffect(() => {
     const sheet = new CSSStyleSheet();
-    sheet.replaceSync(`@page design-board { size: ${board.w}px ${board.h}px; margin: 0; }`);
+    sheet.replaceSync(`@media print {
+  html, body { height: ${board.h}px !important; overflow: hidden !important; }
+}
+@page { size: ${board.w}px ${board.h}px; margin: 0; }`);
     document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
-    const over = () => done.current();
+    // THE VIEW OUTLIVES `afterprint` BY A MOMENT: the event fires once the
+    // dashboard's own page is printed, while the browser is still taking the
+    // board's cross-origin frame into the print, and a frame removed then
+    // prints as a blank page.
+    let later: ReturnType<typeof setTimeout> | undefined;
+    const over = () => {
+      later = setTimeout(() => done.current(), PRINT_TEARDOWN_MS);
+    };
     window.addEventListener("afterprint", over);
     return () => {
+      clearTimeout(later);
       window.removeEventListener("afterprint", over);
       document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== sheet);
     };
@@ -389,11 +417,12 @@ function BoardPrint({
   const ready = () => {
     if (printed.current) return;
     printed.current = true;
-    window.print();
+    // TWO FRAMES LATER the page has drawn, so what prints is what is shown.
+    requestAnimationFrame(() => requestAnimationFrame(() => window.print()));
   };
   return createPortal(
-    <div className="design-print" data-board={board.id} style={{ width: board.w, height: board.h }}>
-      {frame(ready)}
+    <div className="design-print-view" data-board={board.id}>
+      <div style={{ width: board.w, height: board.h }}>{frame(ready)}</div>
     </div>,
     document.body,
   );

@@ -11181,39 +11181,36 @@ a.live-row:focus-visible {
 
 /* An artboard's frame fills its board exactly; the board says its own state. */
 .design-board-frame,
+.design-opened-frame,
 .design-print-frame {
   gap: 0;
   height: 100%;
 }
-.design-board-frame :is(.artifact-frame, .artifact-frame-skeleton),
-.design-print-frame :is(.artifact-frame, .artifact-frame-skeleton) {
+:is(.design-board-frame, .design-opened-frame, .design-print-frame)
+  :is(.artifact-frame, .artifact-frame-skeleton) {
   height: 100%;
 }
-.design-board-frame .artifact-note,
-.design-print-frame .artifact-note {
+:is(.design-board-frame, .design-opened-frame, .design-print-frame) .artifact-note {
   display: none;
 }
-.design-opened-frame .artifact-frame {
-  height: 75vh;
+.design-opened {
+  max-height: 75vh;
+  overflow: auto;
 }
 
-/* PRINT: one board on a page of its own size, nothing else of the dashboard.
-   Kept laid out but unseen on screen, so its frame loads before the print. */
-.design-print {
+/* PRINT: one board over the whole window, at its corner and its own size,
+   and in print nothing else of the dashboard. On screen too, since a
+   cross-origin frame prints as it is drawn. */
+.design-print-view {
   position: fixed;
-  top: 0;
-  left: 0;
-  visibility: hidden;
-  pointer-events: none;
+  inset: 0;
+  z-index: var(--z-index-layer-max);
+  overflow: hidden;
+  background: var(--color-surface-background);
 }
 @media print {
-  body:has(> .design-print) > :not(.design-print) {
-    display: none;
-  }
-  .design-print {
-    position: static;
-    visibility: visible;
-    page: design-board;
+  body:has(> .design-print-view) > :not(.design-print-view) {
+    visibility: hidden;
   }
 }
 

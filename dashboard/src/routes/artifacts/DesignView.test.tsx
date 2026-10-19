@@ -14,11 +14,34 @@ import { useKeyedGesture } from "~/lib/keyedWrite.ts";
 import type { ArtifactDetail } from "~/protocol/index.ts";
 import { DesignView } from "./DesignView.tsx";
 
-vi.mock("./FrameView.tsx", () => ({
-  FrameView: ({ document, title }: { document?: string; title?: string }) => (
-    <div data-board-frame={document}>{title}</div>
-  ),
-}));
+vi.mock("./FrameView.tsx", async () => {
+  const { useEffect } = await import("react");
+  return {
+    // A stand-in that names its board, says hello at once, and hands its
+    // print to the test.
+    FrameView: ({
+      document,
+      title,
+      print,
+      onReady,
+    }: {
+      document?: string;
+      title?: string;
+      print?: () => Promise<boolean>;
+      onReady?: () => void;
+    }) => {
+      useEffect(() => onReady?.(), [onReady]);
+      return (
+        <div data-board-frame={document}>
+          {title}
+          <button type="button" onClick={() => void print?.()}>
+            {`Page print ${document}`}
+          </button>
+        </div>
+      );
+    },
+  };
+});
 vi.mock("~/lib/artifacts/access.ts", () => ({
   useArtifactAccess: () => ({ can: true }),
 }));
@@ -182,4 +205,46 @@ test("a save refused because somebody published is merged onto their version and
   expect(second.headers["If-Match"]).toBe('"4"');
   expect(second.body.edits[0]!.old_str).toBe(SOURCES[4]);
   expect(second.body.edits[0]!.new_str).toBe(canvas(2000, 8));
+});
+
+test("a board's print shows that board alone at its own size, prints, and goes after the print", async () => {
+  const printed = vi.spyOn(window, "print").mockImplementation(() => {});
+  // jsdom constructs no stylesheet a document adopts: a stand-in that keeps
+  // the text the print view writes.
+  const written = new WeakMap<object, string>();
+  Object.defineProperty(document, "adoptedStyleSheets", {
+    value: [],
+    writable: true,
+    configurable: true,
+  });
+  const realSheet = globalThis.CSSStyleSheet;
+  globalThis.CSSStyleSheet = class {
+    replaceSync(text: string) {
+      written.set(this, text);
+    }
+  } as unknown as typeof CSSStyleSheet;
+  await mount();
+  fireEvent.click(screen.getAllByRole("button", { name: "Page print pricing.html" })[0]!);
+  const view = document.querySelector(".design-print-view") as HTMLElement;
+  expect(view?.dataset.board).toBe("pricing.html");
+  expect(view.querySelectorAll("[data-board-frame]")).toHaveLength(1);
+  expect((view.firstElementChild as HTMLElement).style.width).toBe("1440px");
+  await waitFor(() => expect(printed).toHaveBeenCalledTimes(1));
+  // THE PAGE SIZE IS THE BOARD'S, for as long as the print lasts.
+  const sizes = () =>
+    document.adoptedStyleSheets
+      .map((sheet) => written.get(sheet) ?? "")
+      .filter((t) => t.includes("@page"));
+  expect(sizes().join()).toContain("1440px 900px");
+  act(() => {
+    window.dispatchEvent(new Event("afterprint"));
+  });
+  // NOT AT ONCE: the browser is still taking the board's frame into the print.
+  expect(document.querySelector(".design-print-view")).not.toBeNull();
+  await waitFor(() => expect(document.querySelector(".design-print-view")).toBeNull(), {
+    timeout: 3000,
+  });
+  expect(sizes()).toEqual([]);
+  printed.mockRestore();
+  globalThis.CSSStyleSheet = realSheet;
 });
