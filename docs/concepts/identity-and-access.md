@@ -2698,8 +2698,13 @@ Answering a step-up is not a verb in the table — it is about nothing and asks
 no permission — so `POST /auth/step-up` refuses a token itself: nobody is there to
 confirm.
 
-And **no tool** asks for a proof — a seat has no keyboard, and the operator's
-assistant's surface is not a step-up surface — which the build checks too.
+And **no tool** asks for a proof or needs a person present, nor does any verb a
+tool asks from inside itself once it has read what a gesture is about —
+archiving a project, renaming a page, re-routing a task. A seat has no
+keyboard, and the operator's assistant connects through a machine token to a
+surface that is not a step-up surface, so either would refuse every call that
+reached it. The build checks both, reading which verbs the tools ask off their
+code rather than off a list.
 
 ### Every row says what the Dashboard Assistant may do with it
 

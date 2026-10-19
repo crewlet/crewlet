@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -187,21 +186,26 @@ func TestEndingSomebodyElsesSessionsAsksForTheAdministratorsProof(t *testing.T) 
 	}
 }
 
-// NO TOOL ASKS FOR A PROOF.
+// NO TOOL ASKS FOR A PROOF, NOR DOES ANY VERB A TOOL ASKS FROM INSIDE ITSELF.
 //
 // A verb a seat's tools are served under carries the tool's own name, with no
-// dot. A seat has no keyboard to prove anything at, and the operator's MCP
-// surface — the same tools, for a person's assistant — is not a step-up
-// surface: a tool row asking for a proof would refuse every seat that holds
-// the grant, with a sentence telling a model to sign in again.
+// dot, and a tool that must read a row before it knows what it is about asks
+// the same gate a dotted verb next — archiving a project, renaming a page,
+// re-routing a task ([toolVerbs]). A seat has no keyboard to prove anything
+// at, and the operator's MCP surface — the same tools, for a person's
+// assistant — is not a step-up surface: either kind of row asking for a proof
+// would refuse every seat that holds the grant, with a sentence telling a
+// model to sign in again. A self arm's own window ([proofAsked]) counts too:
+// it is the one a seat meets on its own record.
+//
+// Mutation: give `work.project.archive` a step-up, or `set_priorities`'s self
+// arm one, and this goes red naming the tool or internal/agent/builtin, where
+// the archive tool asks it.
 func TestNoToolAsksForAProof(t *testing.T) {
 	t.Parallel()
-	for _, a := range authz.Actions() {
-		if strings.Contains(string(a), ".") {
-			continue
-		}
-		if r, _ := authz.RecencyOf(a); r.Demands() {
-			t.Errorf("the tool %s asks for a %s proof, which no seat can give", a, r)
+	for _, v := range toolVerbs(t) {
+		if r, asks := proofAsked(v.verb); asks {
+			t.Errorf("%s asks for a %s proof, which no seat can give", v.how, r)
 		}
 	}
 }
