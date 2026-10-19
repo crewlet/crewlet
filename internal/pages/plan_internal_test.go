@@ -427,3 +427,26 @@ func TestAFilterIsReadFromItsOwnRows(t *testing.T) {
 			"test holds nothing")
 	}
 }
+
+// A PAGE'S REVISIONS ARE LISTED IN THEIR KEY'S ORDER.
+//
+// A page's detail lists its newest revisions, and `pages_revisions`' own key
+// (page_id, edit_version) holds them in exactly that order, newest last. So the
+// list is one walk of the key backwards from the page's newest revision that
+// its LIMIT stops; ordered by the log position instead, which no index holds,
+// it sought the page's revisions and sorted them all first.
+//
+// Mutation: order the list by the position column again, and it sorts.
+func TestAPagesRevisionsAreListedInTheirKeysOrder(t *testing.T) {
+	t.Parallel()
+	db := pagePlanStore(t)
+	plan := storetest.Plan(t, db, revisionListStatement, []any{"p-0001", RevisionsKept})
+	shown := strings.Join(plan, "\n")
+	if !storetest.Seeks(plan, "sqlite_autoindex_pages_revisions_1") {
+		t.Errorf("the revision list does not seek the revisions' key:\n%s", shown)
+	}
+	if storetest.Sorts(plan) {
+		t.Errorf("the revision list sorts a page's revisions, where their key "+
+			"holds them in order:\n%s", shown)
+	}
+}
