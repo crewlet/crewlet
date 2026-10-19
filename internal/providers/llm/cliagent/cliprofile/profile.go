@@ -1308,6 +1308,7 @@ func (p *Profile) Validate(name string) error {
 			}
 		}
 	}
+	p.validateHomePaths(add)
 	if p.LocalTools != "" && !p.LocalTools.Valid() {
 		add("local_tools %q (want denied or vendor-default)", p.LocalTools)
 	}
@@ -1355,6 +1356,64 @@ func (p *Profile) Validate(name string) error {
 		return nil
 	}
 	return fmt.Errorf("cli-agent profile %q: %s", name, strings.Join(bad, "; "))
+}
+
+// validateHomePaths holds the paths a login and a prune are made of —
+// [Profile.CredentialPaths], [Profile.HostCredentialPaths] and
+// [Profile.VolatilePaths] — to the shape in which each names what it says,
+// asked at load as a seed path is.
+//
+// Every one of them is operator-overridable and joined onto a directory only
+// at run time, where [UnderRoot] alone checks it — and refuses one climbing out
+// of the home on EVERY call, so `credential_paths: [../auth.json]` loaded, was
+// admitted by every write path, and failed each call's seed, and a volatile
+// path like it each call's prune. A login path is a FILE besides: each is read,
+// written and carried by its base name, so `.` and `x/..` — a directory, under
+// a base name of `.` or `..` — fail with EISDIR wherever a seed or a write-back
+// reads them, `.vendor/` writes a file where its operator wrote a directory,
+// and in a human's home, where `-from-host` takes regular files only, each of
+// them is a login nothing ever finds. And two credential paths sharing a base
+// name are ONE file in the shared directory and in every bundle, so the second
+// overwrote the first there, and every seat was seeded with one login in both
+// places.
+//
+// A volatile path may name a directory — most do — so it is held only to
+// staying inside the home.
+func (p *Profile) validateHomePaths(add func(string, ...any)) {
+	for _, list := range []struct {
+		field, home string
+		paths       []string
+	}{
+		{"credential_paths", "seat home", p.CredentialPaths},
+		{"host_credential_paths", "person's home", p.HostCredentialPaths},
+	} {
+		for i, rel := range list.paths {
+			switch {
+			case !staysInside(rel):
+				add("%s[%d] %q must be relative and stay inside the %s", list.field, i, rel, list.home)
+			case !namesAFile(rel):
+				add("%s[%d] %q must name a login FILE inside the %s — not the directory "+
+					"itself, not a path ending in a separator, and not one whose last "+
+					"element is . or ..", list.field, i, rel, list.home)
+			}
+		}
+	}
+	byName := map[string]string{}
+	for _, rel := range p.CredentialPaths {
+		name := filepath.Base(rel)
+		if first, taken := byName[name]; taken {
+			add("credential_paths names %q and %q, which share the file name %s — the "+
+				"shared directory and every bundle keep a login file under its file name, "+
+				"so one would overwrite the other", first, rel, name)
+			continue
+		}
+		byName[name] = rel
+	}
+	for i, rel := range p.VolatilePaths {
+		if !staysInside(rel) {
+			add("volatile_paths[%d] %q must be relative and stay inside the seat home", i, rel)
+		}
+	}
 }
 
 // validateRelocations holds [Profile.ConfigEnv] and [Profile.WorkConfigEnv] to

@@ -141,6 +141,74 @@ func TestASeedPathThatClimbsOutAndBackInIsRefusedAtLoad(t *testing.T) {
 	}}}, "must be relative and stay inside")
 }
 
+// A LOGIN OR VOLATILE PATH IS CHECKED AT LOAD, AS A SEED PATH IS. Each is
+// joined onto a home only at run time, where UnderRoot refuses one that climbs
+// out on every call — so an override like `credential_paths: [../auth.json]`
+// loaded, was admitted by every write path, and failed every call's seed. A
+// login path names a FILE besides, read and carried by its base name, and two
+// sharing a base name are one file in the shared directory and every bundle.
+func TestALoginOrVolatilePathIsCheckedAtLoad(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		extra map[string]any
+		want  string
+	}{
+		"a credential path climbing out": {
+			map[string]any{"credential_paths": []any{"../auth.json"}},
+			`credential_paths[0] "../auth.json" must be relative and stay inside the seat home`,
+		},
+		"an absolute credential path": {
+			map[string]any{"credential_paths": []any{"/etc/auth.json"}},
+			`credential_paths[0] "/etc/auth.json" must be relative`,
+		},
+		"a credential path naming the home": {
+			map[string]any{"credential_paths": []any{"."}},
+			`credential_paths[0] "." must name a login FILE inside the seat home`,
+		},
+		"a credential path climbing back to a directory": {
+			map[string]any{"credential_paths": []any{".vendor/auth.json", "x/.."}},
+			`credential_paths[1] "x/.." must name a login FILE`,
+		},
+		"a credential path spelled as a directory": {
+			map[string]any{"credential_paths": []any{".vendor/"}},
+			`credential_paths[0] ".vendor/" must name a login FILE`,
+		},
+		"two credential paths with one file name": {
+			map[string]any{"credential_paths": []any{".a/auth.json", ".b/auth.json"}},
+			`credential_paths names ".a/auth.json" and ".b/auth.json", which share the file name auth.json`,
+		},
+		"a host credential path climbing out": {
+			map[string]any{"host_credential_paths": []any{"../.ssh/id_ed25519"}},
+			`host_credential_paths[0] "../.ssh/id_ed25519" must be relative and stay inside the person's home`,
+		},
+		"a host credential path naming the home": {
+			map[string]any{"host_credential_paths": []any{"./"}},
+			`host_credential_paths[0] "./" must name a login FILE inside the person's home`,
+		},
+		"a volatile path climbing out": {
+			map[string]any{"volatile_paths": []any{".vendor/sessions", "../sessions"}},
+			`volatile_paths[1] "../sessions" must be relative and stay inside the seat home`,
+		},
+		"an absolute volatile path": {
+			map[string]any{"volatile_paths": []any{"/tmp"}},
+			`volatile_paths[0] "/tmp" must be relative`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			refused(t, tc.extra, tc.want)
+		})
+	}
+	if _, err := loadCustom(map[string]any{
+		"credential_paths":      []any{".vendor/auth.json", ".vendor/a/../token.json"},
+		"host_credential_paths": []any{".vendor/auth.json", ".config/vendor/hosts.yml"},
+		// A volatile path names a directory as often as a file.
+		"volatile_paths": []any{".vendor/sessions/", ".vendor/history.jsonl"},
+	}); err != nil {
+		t.Errorf("login and volatile paths inside their homes were refused: %v", err)
+	}
+}
+
 // A SEED PATH NAMES A FILE, OR EVERY CALL FAILS. Seeding writes the content to
 // exactly the path, and staying inside the scope is not enough: `.` and `x/..`
 // clean to the scope directory itself, a write onto which is EISDIR, and
