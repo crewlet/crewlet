@@ -1,0 +1,22 @@
+-- A page's history is read in the order of the log that wrote it.
+--
+-- # pages_history_page_idx
+--
+-- Two reads ask for one page's history newest first and stop early: the last
+-- save every listing row carries (`summarySaved` in internal/doclet/read.go),
+-- one row per listed page, and one page's own change feed (`PageActivityQuery`
+-- with a page, in internal/doclet/activityread.go), a page of rows at a time.
+-- The index was (page_id, created_at DESC). The feed orders by the log
+-- position, which the index does not hold, and the last save broke ties on
+-- the row's id, which it does not hold either, so measured on the pages plan
+-- fixture both sought the page and then sorted its whole history — for the
+-- last save, once per row of every listing window, on a page that may have
+-- been saved thousands of times.
+--
+-- (page_id, version DESC) is the order both read. The log position is unique
+-- among one page's rows — every record writes at most one history row, keyed
+-- by its operation — so it needs no tie-break, and it is the order the rows
+-- were applied in, which the broker instant in `created_at` only shadows. A
+-- purge's delete of a page's rows seeks its leading column as before.
+DROP INDEX pages_history_page_idx;
+CREATE INDEX pages_history_page_idx ON pages_history (page_id, version DESC);         -- one page's history, newest first

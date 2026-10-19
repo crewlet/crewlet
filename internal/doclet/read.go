@@ -166,10 +166,17 @@ const savedKinds = `'created', 'saved', 'renamed'`
 // one statement for the whole page of rows. FROM THE HISTORY because the head
 // keeps who CREATED the page and when anything last moved it, and neither is
 // who last changed what it says.
+//
+// THE LAST IN LOG ORDER, which `pages_history_page_idx` (page_id, version
+// DESC) holds, so the subquery seeks the page and stops at its newest save.
+// Ordered by the broker instant and the row's id instead, it sorted the page's
+// whole history once per listed row (measured, replicated 0063). And `ORDER
+// BY … LIMIT 1` rather than an aggregate, because no planner rule unnests it
+// (`storetest.Decorrelated`, in internal/store/storetest).
 const summarySaved = `
 		       (SELECT h.id FROM pages_history h
 		         WHERE h.page_id = p.id AND h.kind IN (` + savedKinds + `)
-		         ORDER BY h.created_at DESC, h.id DESC LIMIT 1)`
+		         ORDER BY h.version DESC LIMIT 1)`
 
 // Listing is a page listing and what it is true as of.
 //
