@@ -71,6 +71,40 @@ func TestPriorToolCallsRenderInTheContractShape(t *testing.T) {
 	}
 }
 
+// A PRIOR CALL IS SHOWN TO THE MODEL AS IT WROTE IT. The transcript is text
+// the model reads as written, not through a JSON decoder, and it replies in
+// the format it was shown: an HTML-safe encoder would hand back the call it
+// made with `\u003c` and `\u0026` in place of what it typed. Mutation: put
+// json.MarshalIndent back in renderPriorCalls and the escapes appear.
+func TestAPriorCallIsShownToTheModelAsItWroteIt(t *testing.T) {
+	t.Parallel()
+	const code = "if a < b && c > d"
+	const url = "https://example.com/?a=1&b=2"
+	got, err := RenderPrompt(llm.Request{Messages: []llm.Message{
+		{Role: llm.RoleAssistant, Content: "checking", ToolCalls: []llm.ToolCall{
+			{ID: "cli_0", Name: "run", Arguments: map[string]any{"code": code, "url": url}},
+		}},
+	}})
+	if err != nil {
+		t.Fatalf("RenderPrompt: %v", err)
+	}
+	for _, verbatim := range []string{code, url} {
+		if !strings.Contains(got, verbatim) {
+			t.Errorf("the prior call does not carry %q as written:\n%s", verbatim, got)
+		}
+	}
+	for _, escape := range []string{`\u003c`, `\u003e`, `\u0026`} {
+		if strings.Contains(got, escape) {
+			t.Errorf("the prior call carries %s, an escape the model never wrote:\n%s", escape, got)
+		}
+	}
+	// And it is still the contract's envelope, read back as the call it was.
+	env := ParseEnvelope(got)
+	if !env.Parsed || len(env.ToolCalls) != 1 || env.ToolCalls[0].Arguments["code"] != code {
+		t.Errorf("the rendered call does not parse back as written: %+v", env)
+	}
+}
+
 // Thinking blocks are one provider's opaque structures, valid only when
 // handed back to that provider on its own wire. Pasting them into a prompt
 // for a different model is prose that looks like data.
@@ -122,6 +156,46 @@ func TestTheToolCatalogueCarriesTheSchema(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q:\n%s", want, got)
 		}
+	}
+}
+
+// THE CATALOGUE CARRIES MARKUP AS WRITTEN. It is the one place a text-mode
+// model learns a tool's grammar, and it reads the catalogue as text: a
+// description saying `f.<slug>` or `>3` reached it as `\u003c` and `\u003e`
+// escapes, a grammar nobody wrote. The block stays the indented catalogue it
+// was. Mutation: put json.MarshalIndent back in renderTools and the escapes
+// appear; pass it no indent and the layout assertion fails.
+func TestTheToolCatalogueCarriesMarkupAsWritten(t *testing.T) {
+	t.Parallel()
+	const description = "Sort by `f.<slug>`; `>3` on a number & co."
+	const property = "a field's `f.<slug>`"
+	got, err := RenderPrompt(llm.Request{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: "go"}},
+		Tools: []llm.ToolDef{{
+			Name: "list_work", Description: description,
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"sort": map[string]any{"type": "string", "description": property},
+				},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("RenderPrompt: %v", err)
+	}
+	for _, verbatim := range []string{description, property} {
+		if !strings.Contains(got, verbatim) {
+			t.Errorf("the catalogue does not carry %q as written:\n%s", verbatim, got)
+		}
+	}
+	for _, escape := range []string{`\u003c`, `\u003e`, `\u0026`} {
+		if strings.Contains(got, escape) {
+			t.Errorf("the catalogue carries %s, an escape nobody wrote:\n%s", escape, got)
+		}
+	}
+	if !strings.Contains(got, "[\n  {\n    \"name\": \"list_work\"") {
+		t.Errorf("the catalogue is no longer the indented list it was:\n%s", got)
 	}
 }
 
