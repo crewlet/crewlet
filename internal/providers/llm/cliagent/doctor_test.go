@@ -1,6 +1,7 @@
 package cliagent
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -273,5 +274,33 @@ func TestTheReportCarriesEveryLineTheDocsPromise(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "problems      : none") {
 		t.Errorf("a healthy report does not say so:\n%s", out.String())
+	}
+}
+
+// A LOGGED-OUT ENTRY'S DOCTOR SAYS WHY ITS BUNDLE DID NOT RESTORE. `crewlet llm
+// doctor` restores the configured bundle first, as the engine would, and after
+// a logout that restore declines ([ErrLoggedOut]); the report has to say so,
+// or "no credential files" on an entry configured with a bundle reads as a
+// bundle that is broken.
+//
+// Mutation: drop the logout from the credentials line or the no-sign-in
+// problem, and this is red.
+func TestDoctorNamesTheLogoutThatKeepsABundleOut(t *testing.T) {
+	t.Parallel()
+	p := loginProvider(t)
+	p.bundle = bundleOf(t, "creds.json", `{"token":"k-bundled"}`)
+	if err := p.RestoreConfiguredBundle(t.Context()); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if err := p.Logout(t.Context(), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("Logout: %v", err)
+	}
+	d := p.Diagnose(t.Context(), DiagnoseOptions{})
+	if !strings.Contains(d.Credentials, "`crewlet llm logout`") || !strings.Contains(d.Credentials, "bundle") {
+		t.Errorf("credentials = %q, want the logout that keeps the bundle out named", d.Credentials)
+	}
+	joined := strings.Join(d.Problems, "\n")
+	if !strings.Contains(joined, "removed its login") || !strings.Contains(joined, "`crewlet llm login sub`") {
+		t.Errorf("the no-sign-in problem names neither the logout nor the way back:\n%s", joined)
 	}
 }

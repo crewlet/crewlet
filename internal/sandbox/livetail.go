@@ -112,9 +112,8 @@ type Output struct {
 	Cut bool `json:"cut"`
 	// AsOf is when the box was read, on the owning node's clock.
 	AsOf time.Time `json:"as_of"`
-	// Finished is whether the job has written its done marker (or a
-	// terminal event): it is over and waiting to be collected, so this
-	// output will not grow again.
+	// Finished is whether the job has written its done marker: it is over
+	// and waiting to be collected, so this output will not grow again.
 	Finished bool `json:"finished"`
 
 	// Epoch names the reading the offsets count in; a cursor naming

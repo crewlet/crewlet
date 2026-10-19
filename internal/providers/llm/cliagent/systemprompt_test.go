@@ -116,14 +116,21 @@ func TestTheClaudeProfileKeepsTheSystemPromptOffArgv(t *testing.T) {
 // `--help` never shows.
 const envChannel = "{env}"
 
+// discoveredChannel marks a CLI that FINDS its system prompt in a file at a
+// place of its own choosing in the working directory, and is told on argv
+// only which of what it found to use — a fourth channel, and one with no
+// placeholder at all.
+const discoveredChannel = "{discovered}"
+
 func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing.T) {
 	t.Parallel()
 	// Checked against each CLI's own --help — or, where the vendor
 	// documents its flags rather than printing them all, against that — at
 	// the version named in docs/concepts/subscription-llm-backends.md.
-	// Eight of the twelve have no such flag at all — two of those read a
-	// file named by an environment variable instead — and an empty entry
-	// here is that fact rather than an omission.
+	// Seven of the twelve have no such flag at all — two of those read a
+	// file named by an environment variable instead, and one discovers an
+	// agent file the working directory holds — and an empty entry here is
+	// that fact rather than an omission.
 	want := map[string]string{
 		"claude-code": "{file}", // 2.1.263: --system-prompt-file
 		// 1.0.13, xAI's OWN CLI from x.ai/cli:
@@ -140,9 +147,13 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 		"qwen-code":  envChannel,
 		// No channel of any kind, on any of the three.
 		"codex":        "", // 0.153.4, on `codex` and `codex exec` alike
-		"opencode":     "", // 1.18.29 (`--agent` names a config persona)
 		"copilot":      "", // 1.0.83
 		"cursor-agent": "", // 2026.09.02
+		// 2.0.32: no flag and no variable, but a DISCOVERED AGENT —
+		// `agents/<name>.md` in its configuration directory, which the
+		// profile points inside the per-call directory, its body replacing
+		// the CLI's own prompt — which `--agent` selects.
+		"opencode": discoveredChannel,
 		// 1.0.3: the flag set is model, reasoning effort, the
 		// permission levers, workspace and session logging, plus --json,
 		// --prompt-file and --max-model-steps for `exec`. Instructions
@@ -202,6 +213,19 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 			if joined != "" {
 				t.Errorf("%s puts the prompt on argv although its CLI reads a file: %v",
 					name, profile.SystemPromptArgs)
+			}
+			continue
+		}
+		if placeholder == discoveredChannel {
+			spec := profile.SystemPromptFile
+			if spec == nil || !spec.Discovered || spec.Name == "" {
+				t.Errorf("%s discovers an agent file, but its system_prompt_file is not "+
+					"a discovered one with a name: %+v", name, spec)
+				continue
+			}
+			if joined == "" || strings.Contains(joined, "{file}") || strings.Contains(joined, "{system}") {
+				t.Errorf("%s system_prompt_args = %v, want the argv that selects the "+
+					"discovered file and nothing that carries it", name, profile.SystemPromptArgs)
 			}
 			continue
 		}

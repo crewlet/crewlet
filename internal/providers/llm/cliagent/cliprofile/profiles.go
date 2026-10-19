@@ -64,6 +64,8 @@ func (p Profile) Clone() Profile {
 	out.SystemPromptArgs = append([]string(nil), p.SystemPromptArgs...)
 	out.PromptArgs = append([]string(nil), p.PromptArgs...)
 	out.UsageFileArgs = append([]string(nil), p.UsageFileArgs...)
+	out.SessionArgs = append([]string(nil), p.SessionArgs...)
+	out.UsageArgs = append([]string(nil), p.UsageArgs...)
 	out.LoginArgs = append([]string(nil), p.LoginArgs...)
 	out.CaptureTokenArgs = append([]string(nil), p.CaptureTokenArgs...)
 	out.StatusArgs = append([]string(nil), p.StatusArgs...)
@@ -79,13 +81,18 @@ func (p Profile) Clone() Profile {
 		Output:     clonePaths(p.Usage.Output),
 		CacheRead:  clonePaths(p.Usage.CacheRead),
 		CacheWrite: clonePaths(p.Usage.CacheWrite),
+		Reasoning:  clonePaths(p.Usage.Reasoning),
 	}
 	out.EventTypePath = append(Path(nil), p.EventTypePath...)
 	out.TextEvents = append([]string(nil), p.TextEvents...)
 	out.LimitMarkers = append([]LimitMarker(nil), p.LimitMarkers...)
 	out.AuthMarkers = append([]AuthMarker(nil), p.AuthMarkers...)
+	out.MarkerEvents = append([]string(nil), p.MarkerEvents...)
+	out.MarkerPath = append(Path(nil), p.MarkerPath...)
 	out.SeedFiles = append([]SeedFile(nil), p.SeedFiles...)
 	out.ConfigEnv = cloneMap(p.ConfigEnv)
+	out.WorkConfigEnv = cloneMap(p.WorkConfigEnv)
+	out.IsolationEnv = cloneMap(p.IsolationEnv)
 	out.Env = cloneMap(p.Env)
 	if p.SystemPromptFile != nil {
 		spec := *p.SystemPromptFile
@@ -95,6 +102,12 @@ func (p Profile) Clone() Profile {
 		login := *p.StdinLogin
 		login.Args = append([]string(nil), p.StdinLogin.Args...)
 		out.StdinLogin = &login
+	}
+	if p.CredentialStore != nil {
+		out.CredentialStore = &CredentialStore{
+			ExportArgs: append([]string(nil), p.CredentialStore.ExportArgs...),
+			ImportArgs: append([]string(nil), p.CredentialStore.ImportArgs...),
+		}
 	}
 	return out
 }
@@ -135,23 +148,31 @@ var ErrOverrides = errors.New("cli.overrides does not decode into a profile")
 // `crewlet validate` instead of a field silently ignored until an agent's
 // first turn: the re-decode runs with KnownFields, so `complete_arg` is an
 // error naming itself.
+//
+// Validated as [Profile.Validate] validates any profile, and against the
+// built-in it was merged into besides: an override that moves a relocation
+// directory must move what the built-in keeps under it ([Profile.strandedBy]),
+// which only the pair can show.
 func Load(name string, overrides map[string]any) (Profile, error) {
-	base, ok := Builtin(name)
+	builtin, ok := Builtin(name)
 	if !ok {
 		return Profile{}, fmt.Errorf("cli-agent: unknown agent %q (want %s)",
 			name, strings.Join(BuiltinNames(), ", "))
 	}
-	if len(overrides) > 0 {
-		merged, err := applyOverrides(base, overrides)
-		if err != nil {
-			return Profile{}, fmt.Errorf("cli-agent %q: %w: %w", name, ErrOverrides, err)
+	if len(overrides) == 0 {
+		if err := builtin.Validate(name); err != nil {
+			return Profile{}, err
 		}
-		base = merged
+		return builtin, nil
 	}
-	if err := base.Validate(name); err != nil {
+	merged, err := applyOverrides(builtin, overrides)
+	if err != nil {
+		return Profile{}, fmt.Errorf("cli-agent %q: %w: %w", name, ErrOverrides, err)
+	}
+	if err := profileError(name, append(merged.problems(), merged.strandedBy(&builtin)...)); err != nil {
 		return Profile{}, err
 	}
-	return base, nil
+	return merged, nil
 }
 
 // applyOverrides merges an operator's override map into a profile.

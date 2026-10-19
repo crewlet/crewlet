@@ -18,7 +18,7 @@ import (
 // its stderr is whatever it and everything it ran printed. Both used to be
 // read WHOLE, and refused past [sandbox.MaxFileBytes] — so a long run was
 // refused for the size of its own log: the poll returned before its liveness
-// probe and kept a finished-but-hung or dead job's seat busy for good, and a
+// probe and kept a dead job's seat busy for good, and a
 // collection lost a result its report file held. What the engine keeps of
 // either is bounded anyway (a transcript, a failure read from the end), so
 // nothing here needs the whole of one in memory, and nothing is refused for

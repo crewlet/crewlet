@@ -309,16 +309,27 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	applied = append(applied, "tools")
 	// The learning workers are rebuilt for the new epoch — they hold its
 	// org and its model registry — while the dispatcher, its subscription
-	// and its redelivery ring stay put. A failure leaves the previous
+	// and its redelivery ring stay put. BUILT here and SWAPPED IN below,
+	// with the bundles: the dispatcher's live workers serve the running
+	// seats' reflections the moment they are swapped, so a swap here ran
+	// the revision's models before its bundles were restored, and ahead of
+	// stages that can still refuse it. A failed swap leaves the previous
 	// epoch's workers serving rather than failing the apply: reflecting
 	// against a stale org is a far smaller wrong than not reflecting. The
 	// one refusal is a node's FIRST company, whose dispatcher is attached
-	// here and would otherwise not exist at all.
-	if err := e.reconfigureReflection(ctx, next); err != nil {
-		log.WarnContext(ctx, "config_apply_failed", "error", err,
+	// here and would otherwise not exist at all. See
+	// [Engine.prepareReflection].
+	//
+	// NAMED here, where it is built, and not at the swap: the trail says how
+	// far an apply got before a refusal, and the swap below cannot fail, so
+	// it is part of publishing rather than a stage a refusal can stop short
+	// of.
+	installReflection, attachErr := e.prepareReflection(ctx, next)
+	if attachErr != nil {
+		log.WarnContext(ctx, "config_apply_failed", "error", attachErr,
 			"detail", "the reflect dispatcher could not be attached for this "+
 				"node's first company; the revision is not served here yet")
-		return configplane.StatusError, applied, fmt.Errorf("engine: apply: %w", err)
+		return configplane.StatusError, applied, fmt.Errorf("engine: apply: %w", attachErr)
 	}
 	applied = append(applied, "learning")
 	// The sandbox MANAGER is swapped, and only the manager: the coordinator
@@ -400,6 +411,20 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	e.reconcileSkills(next)
 	applied = append(applied, "integrations")
 
+	// THE CONFIGURED CREDENTIAL BUNDLES, written HERE and nowhere earlier:
+	// every stage that can refuse the revision has run, so only a revision
+	// about to be published writes its bundle. A workspace is one per state
+	// directory and shared with the running epoch's seats, so a bundle a
+	// refused revision wrote would sign those seats in as an account no
+	// published revision names, and outlive every retry: the next revision's
+	// restore finds a login present and keeps it. See [Company.restoreBundles].
+	//
+	// AND BEFORE ANYTHING RUNS THE REVISION'S MODELS: its reflection workers
+	// go live only after it (built above, swapped in here), and its seats'
+	// turns only once the epoch is current — so the revision's first call,
+	// a turn's or a reflection pass's, finds the login.
+	next.restoreBundles(ctx)
+	installReflection()
 	previous := e.Company()
 	e.installEpoch(ctx, next)
 	applied = append(applied, "epoch")

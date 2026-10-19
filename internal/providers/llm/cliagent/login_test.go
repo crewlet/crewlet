@@ -60,7 +60,7 @@ func TestAdoptingAHostLoginCopiesRatherThanMoves(t *testing.T) {
 	home := t.TempDir()
 	writeHostLogin(t, home, `{"token":"personal"}`)
 
-	taken, err := p.AdoptHostLogin(home)
+	taken, err := p.AdoptHostLogin(t.Context(), home)
 	if err != nil {
 		t.Fatalf("AdoptHostLogin: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestAdoptingWithNoHostLoginSaysWhereItLooked(t *testing.T) {
 	t.Parallel()
 	p := loginProvider(t)
 	home := t.TempDir()
-	_, err := p.AdoptHostLogin(home)
+	_, err := p.AdoptHostLogin(t.Context(), home)
 	if err == nil {
 		t.Fatal("adopting a login that does not exist succeeded")
 	}
@@ -101,7 +101,7 @@ func TestACredentialBundleRoundTrips(t *testing.T) {
 	source := loginProvider(t)
 	home := t.TempDir()
 	writeHostLogin(t, home, `{"token":"exported","refresh":"r1"}`)
-	if _, err := source.AdoptHostLogin(home); err != nil {
+	if _, err := source.AdoptHostLogin(t.Context(), home); err != nil {
 		t.Fatalf("AdoptHostLogin: %v", err)
 	}
 
@@ -111,7 +111,7 @@ func TestACredentialBundleRoundTrips(t *testing.T) {
 	}
 
 	target := loginProvider(t)
-	if err := target.RestoreBundle(blob); err != nil {
+	if err := target.RestoreBundle(t.Context(), blob); err != nil {
 		t.Fatalf("RestoreBundle: %v", err)
 	}
 	restored, err := os.ReadFile(filepath.Join(target.Workspace().CredentialsDir(), "creds.json"))
@@ -134,7 +134,7 @@ func TestARestoredBundleCannotEscapeTheCredentialDirectory(t *testing.T) {
 		"nested/creds.json",
 		"unexpected.json",
 	} {
-		err := p.RestoreBundle(bundleOf(t, name, "pwned"))
+		err := p.RestoreBundle(t.Context(), bundleOf(t, name, "pwned"))
 		if err == nil {
 			t.Errorf("RestoreBundle accepted %q", name)
 			continue
@@ -156,7 +156,7 @@ func TestARestoredBundleCannotEscapeTheCredentialDirectory(t *testing.T) {
 func TestAnOversizedBundleIsRefusedRatherThanPartlyRestored(t *testing.T) {
 	t.Parallel()
 	p := loginProvider(t)
-	err := p.RestoreBundle(bundleOf(t, "creds.json", strings.Repeat("x", maxBundle+1)))
+	err := p.RestoreBundle(t.Context(), bundleOf(t, "creds.json", strings.Repeat("x", maxBundle+1)))
 	if err == nil {
 		t.Fatal("an oversized bundle was accepted")
 	}
@@ -198,7 +198,7 @@ func TestARejectedBundleLeavesNothingBehind(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := p.RestoreBundle(base64.StdEncoding.EncodeToString(raw.Bytes())); err == nil {
+	if err := p.RestoreBundle(t.Context(), base64.StdEncoding.EncodeToString(raw.Bytes())); err == nil {
 		t.Fatal("a bundle holding a path traversal was accepted")
 	}
 	if p.Workspace().HasLogin() {
@@ -213,10 +213,10 @@ func TestABundleDoesNotOverwriteALiveLogin(t *testing.T) {
 	p := loginProvider(t)
 	home := t.TempDir()
 	writeHostLogin(t, home, `{"token":"current"}`)
-	if _, err := p.AdoptHostLogin(home); err != nil {
+	if _, err := p.AdoptHostLogin(t.Context(), home); err != nil {
 		t.Fatalf("AdoptHostLogin: %v", err)
 	}
-	if err := p.RestoreBundle(bundleOf(t, "creds.json", `{"token":"stale"}`)); err != nil {
+	if err := p.RestoreBundle(t.Context(), bundleOf(t, "creds.json", `{"token":"stale"}`)); err != nil {
 		t.Fatalf("RestoreBundle: %v", err)
 	}
 	got, err := os.ReadFile(filepath.Join(p.Workspace().CredentialsDir(), "creds.json"))
@@ -225,6 +225,11 @@ func TestABundleDoesNotOverwriteALiveLogin(t *testing.T) {
 	}
 	if string(got) != `{"token":"current"}` {
 		t.Errorf("a boot-time bundle overwrote the running node's login: %q", got)
+	}
+	// The operator's form of the same restore SAYS it restored nothing,
+	// rather than leaving `crewlet llm import` to print "Restored".
+	if err := p.ImportBundle(t.Context(), bundleOf(t, "creds.json", `{"token":"stale"}`)); !errors.Is(err, ErrLoginPresent) {
+		t.Errorf("ImportBundle over a live login = %v, want ErrLoginPresent", err)
 	}
 }
 
@@ -249,7 +254,7 @@ func TestLogoutRemovesTheCredentialEvenIfTheVendorCommandFails(t *testing.T) {
 	p := loginProvider(t)
 	home := t.TempDir()
 	writeHostLogin(t, home, `{"token":"x"}`)
-	if _, err := p.AdoptHostLogin(home); err != nil {
+	if _, err := p.AdoptHostLogin(t.Context(), home); err != nil {
 		t.Fatalf("AdoptHostLogin: %v", err)
 	}
 	// A logout command that cannot possibly succeed.
@@ -282,11 +287,12 @@ func TestACLIWithNoCredentialLoginExplainsItself(t *testing.T) {
 	}
 }
 
-// The built-in opencode profile is the one with a credential login, and the
-// three browser-OAuth profiles deliberately leave it unset. A profile that
-// gained one by accident would send operators down a path their CLI cannot
-// serve.
-func TestOnlyOpencodeShipsACredentialLogin(t *testing.T) {
+// NO BUILT-IN PROFILE SHIPS A CREDENTIAL LOGIN, because no shipped CLI has
+// one. opencode's did — `auth login --username`, a flag no release of either
+// OpenCode major accepts, which printed usage and exited 1 — and a declared
+// login a CLI cannot serve sends operators down a path that only fails. The
+// mechanism stays for an operator whose build does accept one.
+func TestNoBuiltinProfileShipsACredentialLogin(t *testing.T) {
 	t.Parallel()
 	for _, name := range cliprofile.BuiltinNames() {
 		if name == "custom" {
@@ -296,9 +302,8 @@ func TestOnlyOpencodeShipsACredentialLogin(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Load(%q): %v", name, err)
 		}
-		hasLogin := p.StdinLogin != nil
-		if want := name == "opencode"; hasLogin != want {
-			t.Errorf("%s: stdin_login present = %v, want %v", name, hasLogin, want)
+		if p.StdinLogin != nil {
+			t.Errorf("%s: ships a stdin_login (%v) its CLI cannot serve", name, p.StdinLogin.Args)
 		}
 	}
 }
@@ -477,5 +482,332 @@ func TestTheClaudeProfilesMarkersAreStringsTheCLIStillEmits(t *testing.T) {
 		if !slices.ContainsFunc(p.AuthMarkers, func(m cliprofile.AuthMarker) bool { return m.Sentinel == want }) {
 			t.Errorf("auth_markers lacks %q: %+v", want, p.AuthMarkers)
 		}
+	}
+}
+
+// BUILDING AN ENTRY WRITES NOTHING. [New] is what `crewlet validate` reaches,
+// and it used to restore a configured bundle into the state directory — under
+// the shared login's lock — so validating a document wrote a login onto the
+// host. The restore is [Provider.RestoreConfiguredBundle], made by whoever runs
+// the entry, and an entry with no bundle configured restores nothing.
+func TestAConfiguredBundleIsRestoredOnlyWhenAsked(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	t.Cleanup(func() { forgetWorkspace(dir) })
+	build := func(bundle string) *Provider {
+		p, err := New(Config{
+			Key: "sub", Agent: "custom", StateDir: dir,
+			Timeout: time.Second, MaxConcurrent: 1, CredentialBundle: bundle,
+			Overrides: map[string]any{
+				"binary": os.Args[0], "complete_args": []any{"-test.run=TestCLIAgentFakeCLI"},
+				"model_args": []any{}, "output": "text",
+				"credential_paths": []any{".fake/creds.json"},
+			},
+		})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		return p
+	}
+
+	if err := build("").RestoreConfiguredBundle(t.Context()); err != nil {
+		t.Fatalf("an entry with no bundle: %v", err)
+	}
+	p := build(bundleOf(t, "creds.json", `{"token":"configured"}`))
+	if p.Workspace().HasLogin() {
+		t.Fatal("building the entry restored its bundle — `crewlet validate` would write a login onto the host")
+	}
+	if err := p.RestoreConfiguredBundle(t.Context()); err != nil {
+		t.Fatalf("RestoreConfiguredBundle: %v", err)
+	}
+	restored, err := os.ReadFile(filepath.Join(p.Workspace().CredentialsDir(), "creds.json"))
+	if err != nil || string(restored) != `{"token":"configured"}` {
+		t.Fatalf("restored %q (%v), want the configured bundle's login", restored, err)
+	}
+	// A login already in place is the running node's, and fresher: a second
+	// restore leaves it and is no error.
+	if err := os.WriteFile(filepath.Join(p.Workspace().CredentialsDir(), "creds.json"),
+		[]byte(`{"token":"refreshed"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.RestoreConfiguredBundle(t.Context()); err != nil {
+		t.Fatalf("a restore over a login: %v", err)
+	}
+	if kept, _ := os.ReadFile(filepath.Join(p.Workspace().CredentialsDir(), "creds.json")); string(kept) != `{"token":"refreshed"}` {
+		t.Errorf("a restore replaced the running login with the bundle: %q", kept)
+	}
+}
+
+// A LOGOUT IS NOT UNDONE BY THE CONFIGURED BUNDLE. The directory a logout
+// empties is exactly what a bundle restores into, so the next restore — the
+// one `crewlet llm status` makes before it asks, and the engine's at its next
+// boot or apply — put back the very login the operator had just removed, a
+// compromised one typically, and the logout lasted until the next command.
+// Now the restore declines, and says why in words an operator can act on.
+//
+// Mutation: drop the record from Logout, or the check from restoreBundle, and
+// the login comes back here.
+func TestALogoutIsNotUndoneByTheConfiguredBundle(t *testing.T) {
+	t.Parallel()
+	p := loginProvider(t)
+	p.bundle = bundleOf(t, "creds.json", `{"token":"k-bundled"}`)
+	if err := p.RestoreConfiguredBundle(t.Context()); err != nil {
+		t.Fatalf("the boot's restore: %v", err)
+	}
+	if !p.Workspace().HasLogin() {
+		t.Fatal("the premise: the bundle restored nothing")
+	}
+	if err := p.Logout(t.Context(), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("Logout: %v", err)
+	}
+
+	err := p.RestoreConfiguredBundle(t.Context())
+	if !errors.Is(err, ErrLoggedOut) {
+		t.Errorf("the restore after a logout = %v, want ErrLoggedOut", err)
+	}
+	if p.Workspace().HasLogin() {
+		t.Fatalf("the restore after a logout brought the login back: %v", p.Workspace().LoginFiles())
+	}
+	for _, want := range []string{"`crewlet llm login sub -from-host`", "`crewlet llm import sub`",
+		"a headless token signs the entry in without ending the logout",
+		"fresh volume", "crewlet secrets unset " + BundleVarName("sub")} {
+		if err != nil && !strings.Contains(err.Error(), want) {
+			t.Errorf("the decline does not name %q: %v", want, err)
+		}
+	}
+	// This profile declares no login subcommand, so the decline does not send
+	// the operator to one: `crewlet llm login sub` would only refuse.
+	if err != nil && strings.Contains(err.Error(), "`crewlet llm login sub`") {
+		t.Errorf("the decline names a brokered login the profile does not have: %v", err)
+	}
+	// Recorded in the state directory, where no bundle reaches it.
+	if _, statErr := os.Stat(filepath.Join(p.Workspace().Root(), loggedOutFile)); statErr != nil {
+		t.Errorf("the logout left no record in the state directory: %v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(p.Workspace().CredentialsDir(), loggedOutFile)); !os.IsNotExist(statErr) {
+		t.Errorf("the logout's record is in the credentials directory, where a bundle carries it (%v)", statErr)
+	}
+	// What the operator is told about the bundle, naming where it came
+	// from: the conventional secret here, the field where one is set — and
+	// that a headless token, which writes no login there, does not end it.
+	notice := logoutNotice(t, p)
+	for _, want := range []string{BundleVarName("sub"), "fresh volume", "`crewlet llm login sub -from-host`",
+		"`-token-stdin` signs it in without ending this"} {
+		if !strings.Contains(notice, want) {
+			t.Errorf("the logout notice does not name %q: %s", want, notice)
+		}
+	}
+	if strings.Contains(notice, "`crewlet llm login sub`") {
+		t.Errorf("the notice names a brokered login the profile does not have: %s", notice)
+	}
+	p.bundleConfigured = true
+	if notice := logoutNotice(t, p); !strings.Contains(notice, "providers.llm.sub.cli.auth.credential_bundle") {
+		t.Errorf("the notice for a bundle named in the document does not name the field: %s", notice)
+	}
+	p.bundle = ""
+	if notice := logoutNotice(t, p); notice != "" {
+		t.Errorf("an entry with no bundle was told about one: %s", notice)
+	}
+}
+
+// THE WAY BACK FROM A LOGOUT IS WHAT THE PROFILE OFFERS. The decline and the
+// notice once named `crewlet llm login <key>` to every entry, including ones
+// whose CLI declares no login subcommand (qwen-code, grok, gemini-cli), so the
+// first remedy an operator tried refused. Each route is named exactly when the
+// profile has what it needs, and an import, which needs nothing, always is.
+//
+// Mutation: name any route unconditionally, and its "absent" case is red.
+func TestALogoutsRemedyNamesOnlyTheLoginsTheProfileHas(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		edit        func(p *cliprofile.Profile)
+		want, never []string
+	}{
+		"a login subcommand": {
+			edit: func(p *cliprofile.Profile) { p.LoginArgs = []string{"login"} },
+			want: []string{"`crewlet llm login sub`", "`crewlet llm login sub -from-host`", "`crewlet llm import sub`"},
+		},
+		"a credential login": {
+			edit:  func(p *cliprofile.Profile) { p.StdinLogin = &cliprofile.StdinLogin{Args: []string{"login"}} },
+			want:  []string{"`crewlet llm login sub -username <name> -password-stdin`", "`crewlet llm import sub`"},
+			never: []string{"`crewlet llm login sub`"},
+		},
+		"nothing a person's home holds": {
+			edit: func(p *cliprofile.Profile) {
+				p.HostCredentialPaths, p.CredentialPaths = nil, nil
+			},
+			want:  []string{"`crewlet llm import sub`"},
+			never: []string{"`crewlet llm login sub`", "-from-host"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			p := loginProvider(t)
+			tc.edit(&p.profile)
+			routes := p.loginRoutes()
+			for _, want := range tc.want {
+				if !strings.Contains(routes, want) {
+					t.Errorf("the routes %q do not name %q", routes, want)
+				}
+			}
+			for _, never := range tc.never {
+				if strings.Contains(routes, never) {
+					t.Errorf("the routes %q name %q, which this profile does not offer", routes, never)
+				}
+			}
+		})
+	}
+}
+
+// THE LOGOUT NOTICE SPEAKS FOR THE RECORD, never for whether Logout succeeded:
+// a vendor logout that fails after the login is removed fails the command with
+// the record written, and the operator was then told nothing about the bundle
+// it now holds back — while a directory with no record is one the next restore
+// refills, about which the notice would be false.
+//
+// Mutation: answer the notice for any entry with a bundle, without reading the
+// record, and the case before the logout is red; drop the record from Logout,
+// and the case after a failed vendor logout is.
+func TestTheLogoutNoticeSpeaksForTheRecord(t *testing.T) {
+	t.Parallel()
+	p := loginProvider(t)
+	p.bundle = bundleOf(t, "creds.json", `{"token":"k-bundled"}`)
+	if notice := logoutNotice(t, p); notice != "" {
+		t.Errorf("an entry nobody logged out was told its bundle is held back: %s", notice)
+	}
+	if err := p.RestoreConfiguredBundle(t.Context()); err != nil {
+		t.Fatalf("the boot's restore: %v", err)
+	}
+	// The vendor's own logout fails, after which the login is removed and the
+	// logout recorded all the same.
+	p.profile.Binary = "sh"
+	p.profile.LogoutArgs = []string{"-c", "exit 3"}
+	err := p.Logout(t.Context(), &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "did not finish") {
+		t.Fatalf("the premise: Logout = %v, want the vendor's logout reported unfinished", err)
+	}
+	if p.Workspace().HasLogin() {
+		t.Fatalf("the premise: a failed vendor logout left the login: %v", p.Workspace().LoginFiles())
+	}
+	if notice := logoutNotice(t, p); !strings.Contains(notice, BundleVarName("sub")) {
+		t.Errorf("after a logout whose vendor half failed, the notice says nothing of the bundle "+
+			"it holds back: %q", notice)
+	}
+}
+
+// A HEADLESS TOKEN DOES NOT END A LOGOUT; A LOGIN THE CAPTURE LEFT DOES. What
+// ends a logout is a login written into the credential directory, and a token
+// is not one: it signs the entry in through its environment. So a
+// `-capture-token` that only printed a token leaves the logout standing and the
+// bundle out — as the docs, the decline and the logout's notice all say — while
+// one whose sign-in also left a login file has written the login of record and
+// ended it like any other login.
+//
+// Mutation: clear the record on every carry of a login command, whether or not
+// it wrote anything, and the first half is red; drop the clear from the carry,
+// and the second is.
+func TestAHeadlessTokenDoesNotEndALogout(t *testing.T) {
+	t.Parallel()
+	p := loginProvider(t)
+	p.bundle = bundleOf(t, "creds.json", `{"token":"k-bundled"}`)
+	if err := p.RestoreConfiguredBundle(t.Context()); err != nil {
+		t.Fatalf("the boot's restore: %v", err)
+	}
+	if err := p.Logout(t.Context(), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("Logout: %v", err)
+	}
+	p.profile.Binary = "sh"
+
+	p.profile.CaptureTokenArgs = []string{"-c", "echo sk-ant-oat01-PRINTED"}
+	if token, err := p.CaptureToken(t.Context(), nil, &bytes.Buffer{}); err != nil || token != "sk-ant-oat01-PRINTED" {
+		t.Fatalf("CaptureToken = %q, %v", token, err)
+	}
+	if err := p.RestoreConfiguredBundle(t.Context()); !errors.Is(err, ErrLoggedOut) {
+		t.Errorf("a token-only capture ended the logout: the restore = %v, want ErrLoggedOut", err)
+	}
+	if p.Workspace().HasLogin() {
+		t.Fatalf("a token-only capture brought the bundle back: %v", p.Workspace().LoginFiles())
+	}
+
+	p.profile.CaptureTokenArgs = []string{"-c",
+		`mkdir -p .fake && printf '{"token":"captured"}' > .fake/creds.json && echo sk-ant-oat01-FILED`}
+	if token, err := p.CaptureToken(t.Context(), nil, &bytes.Buffer{}); err != nil || token != "sk-ant-oat01-FILED" {
+		t.Fatalf("CaptureToken = %q, %v", token, err)
+	}
+	if got, err := os.ReadFile(filepath.Join(p.Workspace().CredentialsDir(), "creds.json")); err != nil ||
+		string(got) != `{"token":"captured"}` {
+		t.Fatalf("the premise: the capture's login file was not carried out (%q, %v)", got, err)
+	}
+	// The login of record is the capture's now; emptied later, the directory
+	// is one the bundle restores into again.
+	if err := os.Remove(filepath.Join(p.Workspace().CredentialsDir(), "creds.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.RestoreConfiguredBundle(t.Context()); err != nil {
+		t.Errorf("after a capture that left a login, the restore = %v, want the logout over", err)
+	}
+}
+
+// logoutNotice is p's logout notice, failing the test on a record it cannot
+// read.
+func logoutNotice(t *testing.T, p *Provider) string {
+	t.Helper()
+	notice, err := p.LogoutNotice()
+	if err != nil {
+		t.Fatalf("LogoutNotice: %v", err)
+	}
+	return notice
+}
+
+// A LOGIN OF RECORD ENDS A LOGOUT. Whichever way the operator signs the entry
+// in again — the vendor's login, -from-host, an import — the logout is over,
+// and a directory left empty afterwards is restored from the bundle as it was
+// before the logout.
+//
+// Mutation: drop the clearing from any one of the three, and its case is red.
+func TestALoginOfRecordEndsALogout(t *testing.T) {
+	t.Parallel()
+	for name, login := range map[string]func(t *testing.T, p *Provider) error{
+		"login": func(t *testing.T, p *Provider) error {
+			return p.BrokerLogin(t.Context(), nil, &bytes.Buffer{}, &bytes.Buffer{})
+		},
+		"from host": func(t *testing.T, p *Provider) error {
+			home := t.TempDir()
+			writeHostLogin(t, home, `{"token":"k-host"}`)
+			_, err := p.AdoptHostLogin(t.Context(), home)
+			return err
+		},
+		"import": func(t *testing.T, p *Provider) error {
+			return p.ImportBundle(t.Context(), bundleOf(t, "creds.json", `{"token":"k-imported"}`))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			p := fileProvider(t, map[string]string{"FAKE_LOGIN_KEY": "k-login"})
+			p.bundle = bundleOf(t, "creds.json", `{"token":"k-bundled"}`)
+			writeCreds(t, p, `{"token":"k-old"}`)
+			if err := p.Logout(t.Context(), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+				t.Fatalf("Logout: %v", err)
+			}
+			if err := login(t, p); err != nil {
+				t.Fatalf("signing in again: %v", err)
+			}
+			if out, err := p.ws.loggedOut(); err != nil || out {
+				t.Fatalf("the logout still stands after a login of record (%v, %v)", out, err)
+			}
+			// The directory empties some other way — an operator clearing it
+			// by hand — and the bundle restores into it as it always did.
+			for _, path := range p.ws.LoginFiles() {
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := p.RestoreConfiguredBundle(t.Context()); err != nil {
+				t.Fatalf("the restore once the logout was over: %v", err)
+			}
+			if got := readCreds(t, p); got != `{"token":"k-bundled"}` {
+				t.Errorf("the restore once the logout was over left %q, want the bundle's login", got)
+			}
+		})
 	}
 }

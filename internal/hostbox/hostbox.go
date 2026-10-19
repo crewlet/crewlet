@@ -348,22 +348,37 @@ func resolve(path string) (string, error) {
 // A missing src is not an error — it is the ordinary case of a profile naming
 // a credential file this vendor does not use — and reports false.
 func CopyFileAtomic(src, dst string) (bool, error) {
+	_, copied, err := CopyFileAtomicDigest(src, dst)
+	return copied, err
+}
+
+// CopyFileAtomicDigest is [CopyFileAtomic], reporting as well the SHA-256 of
+// what it copied, in [Digest]'s form — "" where it copied nothing.
+//
+// THE DIGEST IS OF THE VERY BYTES WRITTEN, taken as they are copied from the
+// one descriptor: a digest read separately, before or after, may describe a
+// newer file than the one dst was given. A caller that judges a later write
+// against what it seeded — a local sandbox's teardown, writing back a login
+// only over the one its box was given — would then excuse a write it should
+// have refused.
+func CopyFileAtomicDigest(src, dst string) (string, bool, error) {
 	info, err := os.Stat(src)
 	if err != nil || !info.Mode().IsRegular() {
-		return false, nil
+		return "", false, nil
 	}
 	if err = os.MkdirAll(filepath.Dir(dst), DirMode); err != nil {
-		return false, err
+		return "", false, err
 	}
 	in, err := os.Open(src)
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
 	defer func() { _ = in.Close() }()
-	if err := ReplaceFile(dst, in); err != nil {
-		return false, err
+	sum := sha256.New()
+	if err := ReplaceFile(dst, io.TeeReader(in, sum)); err != nil {
+		return "", false, err
 	}
-	return true, nil
+	return hex.EncodeToString(sum.Sum(nil)), true, nil
 }
 
 // ReplaceFile puts what content yields at dst, through a temp file in dst's
@@ -405,26 +420,49 @@ func ReplaceFile(dst string, content io.Reader) error {
 	return os.Rename(tmpName, dst)
 }
 
-// FileDigest is the SHA-256 of a file's contents, or "" if it cannot be read.
+// FileDigest is the SHA-256 of the regular file at path, in [Digest]'s form,
+// and false where there is nothing there.
 //
-// Used to decide whether a credential actually CHANGED before writing it back
-// over the shared store. Comparing mtimes would not do: a coding agent
-// rewrites its credential file on every run whether or not the token rotated,
-// so an mtime test would write back constantly and race a concurrent seat.
-func FileDigest(path string) string {
-	f, err := os.Open(path)
+// Used to decide whether a credential actually CHANGED before writing over
+// it. Comparing mtimes would not do: a coding agent rewrites its credential
+// file on every run whether or not the token rotated, so an mtime test would
+// write back constantly and race a concurrent seat.
+//
+// THREE ANSWERS, because a compare-and-swap reads them differently: a digest;
+// no file, which is a login that has been removed; and a file that could not
+// be read, or is not a regular file, which is an ERROR rather than either — it
+// read as "" once, so an unreadable login compared as different from every
+// digest and a write went ahead over it.
+func FileDigest(path string) (string, bool, error) {
+	info, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", false, nil
+	}
 	if err != nil {
-		return ""
+		return "", false, fmt.Errorf("hostbox: reading %s: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", false, fmt.Errorf("hostbox: %s is not a regular file", path)
+	}
+	f, err := os.Open(path) //nolint:gosec // the caller's own file
+	if errors.Is(err, os.ErrNotExist) {
+		// Removed between the two reads, which is what it would have
+		// read a moment later.
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("hostbox: reading %s: %w", path, err)
 	}
 	defer func() { _ = f.Close() }()
 	digest, err := Digest(f)
 	if err != nil {
-		return ""
+		return "", false, fmt.Errorf("hostbox: reading %s: %w", path, err)
 	}
-	return digest
+	return digest, true, nil
 }
 
-// Digest is the SHA-256 of what r yields, in [FileDigest]'s form — for a
+// Digest is the SHA-256 of what r yields, in lowercase hexadecimal — the form
+// every digest here takes ([FileDigest], [CopyFileAtomicDigest]) — for a
 // caller that has the file open already, and compares the same descriptor it
 // then copies from ([ReplaceFile]).
 func Digest(r io.Reader) (string, error) {
