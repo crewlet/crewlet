@@ -400,7 +400,8 @@ func TestTheCLIStoresEveryAppWithAdmin(t *testing.T) {
 // every app, which is what a teammate needs to be sent work and to read what
 // the company wrote down. Admin is never a default. A token left without
 // -grants is the opposite case: it sends no field at all, which the node reads
-// as everything the owner holds — the default the help states for each.
+// as everything the owner holds that the minting session may confer — the
+// default the help states for each.
 //
 // Mutation: send no grants on a person's invitation or create and the first
 // two rows fail; send the apps on a mint and the third does.
@@ -443,7 +444,8 @@ func TestAPersonsInviteDefaultsToEveryApp(t *testing.T) {
 	}
 	if grants, sent := bodies[2]["grants"]; sent {
 		t.Errorf("a mint naming no -grants sent %v, want no field — the node "+
-			"reads its absence as everything the owner holds", grants)
+			"reads its absence as everything the owner holds that the minting "+
+			"session may confer", grants)
 	}
 
 	// AND A GRANT NAMING NOTHING IS REFUSED rather than sent: it is the one
