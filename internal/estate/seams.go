@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/caveat"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/knowledge"
@@ -543,6 +544,89 @@ func (p Pages) RemoveComment(ctx context.Context, actor doclet.Actor, pageID, co
 	})
 	p.r.Observe(out.Outcome.Position)
 	return out, err
+}
+
+// Chat is the engine's own chat, read: every read answered for the one viewer
+// it names, by a data node whose copy serves.
+type Chat struct{ r *Router }
+
+// Chat answers the engine's own chat.
+func (r *Router) Chat() Chat { return Chat{r: r} }
+
+var _ chatlet.ThreadSource = Chat{}
+
+// Channels answers the rooms a viewer is in.
+func (c Chat) Channels(ctx context.Context, viewer string, q chatlet.ChannelsQuery,
+	fresh statelog.Freshness) (chatlet.ChannelListing, error) {
+	return call(ctx, c.r, opChatChannels, nil, chatChannelsArgs{Viewer: viewer, Query: q, Fresh: fresh})
+}
+
+// Channel answers one room, for a viewer who may read it.
+func (c Chat) Channel(ctx context.Context, viewer, channelID string,
+	fresh statelog.Freshness) (chatlet.ChannelDetail, error) {
+	return call(ctx, c.r, opChatChannel, nil,
+		chatChannelArgs{Viewer: viewer, ChannelID: channelID, Fresh: fresh})
+}
+
+// ChannelHere is [Chat.Channel] asked of THIS node's own copy first, even
+// while that copy lags its log — see [callHere].
+//
+// FOR THE LIVE CHANNEL'S DECISION ABOUT A RECORD THIS NODE'S APPLIER HAS JUST
+// COMMITTED: whether one viewer may be shown it. That copy holds the record by
+// construction, while the ordinary walk would ask a peer first whenever the
+// copy lags — during the very burst that makes it lag — turning every
+// decision into a round trip to a node that may not have applied the record
+// yet. A copy out of service is passed over as ever, and the caller's floor
+// ([statelog.Freshness.MinPosition]) holds whichever copy answers to the
+// record being announced.
+func (c Chat) ChannelHere(ctx context.Context, viewer, channelID string,
+	fresh statelog.Freshness) (chatlet.ChannelDetail, error) {
+	return callHere(ctx, c.r, opChatChannel, nil,
+		chatChannelArgs{Viewer: viewer, ChannelID: channelID, Fresh: fresh})
+}
+
+// ChannelNamed answers the room a name addresses, for a viewer who may read it.
+func (c Chat) ChannelNamed(ctx context.Context, viewer, name string,
+	fresh statelog.Freshness) (chatlet.ChannelDetail, error) {
+	return call(ctx, c.r, opChatChannelNamed, nil,
+		chatChannelNamedArgs{Viewer: viewer, Name: name, Fresh: fresh})
+}
+
+// Messages answers a page of one room's transcript.
+func (c Chat) Messages(ctx context.Context, viewer string, q chatlet.TranscriptQuery,
+	fresh statelog.Freshness) (chatlet.Transcript, error) {
+	return call(ctx, c.r, opChatMessages, nil, chatMessagesArgs{Viewer: viewer, Query: q, Fresh: fresh})
+}
+
+// Thread answers one thread, its root and its replies.
+func (c Chat) Thread(ctx context.Context, viewer string, q chatlet.ThreadQuery,
+	fresh statelog.Freshness) (chatlet.Thread, error) {
+	return call(ctx, c.r, opChatThread, nil, chatThreadArgs{Viewer: viewer, Query: q, Fresh: fresh})
+}
+
+// Mentions answers a page of the messages that named a viewer.
+func (c Chat) Mentions(ctx context.Context, viewer string, q chatlet.MentionQuery,
+	fresh statelog.Freshness) (chatlet.MentionFeed, error) {
+	return call(ctx, c.r, opChatMentions, nil, chatMentionsArgs{Viewer: viewer, Query: q, Fresh: fresh})
+}
+
+// ChatSearch is the chat keyword search, answered for one viewer by a data
+// node that holds both the rooms the viewer may read and the index.
+type ChatSearch struct{ r *Router }
+
+// ChatSearch answers the chat keyword search.
+func (r *Router) ChatSearch() ChatSearch { return ChatSearch{r: r} }
+
+// Search ranks the company's chat for one viewer, over the rooms that viewer
+// may read.
+//
+// AN ERROR, NEVER AN EMPTY ANSWER, where no data node could run it — unlike the
+// knowledge search, which is best effort by its seam's own contract. Nothing
+// here is best effort: a seat told "nobody said that" acts on it, and a person
+// searching a screen is shown the refusal rather than an empty list. An index
+// still catching up says so on the answer ([ChatSearchAnswer.Building]).
+func (s ChatSearch) Search(ctx context.Context, q ChatQuery) (ChatSearchAnswer, error) {
+	return call(ctx, s.r, opChatSearch, nil, q)
 }
 
 // Identity is the identity directory's read side, answered by a data node:

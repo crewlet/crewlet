@@ -4,18 +4,21 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/caveat"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/period"
+	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -29,7 +32,8 @@ import (
 // of service answers its operator from a peer's copy rather than its own, and a
 // node holding no data serves them at all. And the identity directory's two
 // reads, which a node holding no data asks for its seats and its party
-// registry.
+// registry; and the engine's own chat, whose every read is answered FOR a
+// viewer it names.
 
 // TrackerReader is the tracker's read side the surfaces ask of.
 type TrackerReader interface {
@@ -199,6 +203,53 @@ type IdentityReader interface {
 	SeatHolders(ctx context.Context) ([]iamdomain.SeatHolder, error)
 }
 
+// ChatReader is the engine's own chat's read side.
+//
+// THE VIEWER IS AN ARGUMENT OF EVERY READ, which is the domain's own shape
+// rather than a choice made here: a room's contents are not a fact about the
+// company the way a page is, so every read is answered for one seat and answers
+// a room that seat may not read exactly as one nobody holds — on whichever data
+// node answers it, because the rule is the reader's own ([chatlet.Visible]),
+// judged against the membership rows in the read's own snapshot there. The
+// viewer is the SEAT the asking node resolved its caller to; the serving reader
+// refuses an empty one rather than reading it as anybody.
+type ChatReader interface {
+	Channels(ctx context.Context, viewer string, q chatlet.ChannelsQuery,
+		fresh statelog.Freshness) (chatlet.ChannelListing, error)
+	Channel(ctx context.Context, viewer, channelID string,
+		fresh statelog.Freshness) (chatlet.ChannelDetail, error)
+	ChannelNamed(ctx context.Context, viewer, name string,
+		fresh statelog.Freshness) (chatlet.ChannelDetail, error)
+	Messages(ctx context.Context, viewer string, q chatlet.TranscriptQuery,
+		fresh statelog.Freshness) (chatlet.Transcript, error)
+	Thread(ctx context.Context, viewer string, q chatlet.ThreadQuery,
+		fresh statelog.Freshness) (chatlet.Thread, error)
+	Mentions(ctx context.Context, viewer string, q chatlet.MentionQuery,
+		fresh statelog.Freshness) (chatlet.MentionFeed, error)
+
+	// Readable is every room the viewer may READ, which is wider than the
+	// rooms it is in. It is no operation of its own: it is the
+	// authorization half of a search ([opChatSearch]), resolved on the node
+	// that holds the index the search reads, so the set and the hits are
+	// one copy's answer.
+	Readable(ctx context.Context, viewer string, fresh statelog.Freshness) ([]string, error)
+
+	// At is this copy's applied position on the chat log.
+	At() statelog.Position
+}
+
+// ChatSearcher is the chat keyword index over this node's corpus.
+//
+// THE INDEX, NOT A SEARCH FOR A VIEWER: it takes the visible rooms on the
+// query and refuses a query naming none ([search.ErrNoViewer]). Which rooms
+// those are is resolved from the viewer by [opChatSearch], beside it, on the
+// same node — and so is whether the index has caught up with the transcript
+// ([search.ChatIndexer.Ready]), which is a fact about that node's walk.
+type ChatSearcher interface {
+	SearchMessages(ctx context.Context, q search.ChatQuery) ([]search.ChatHit, error)
+	Ready() bool
+}
+
 // Backend is one data node's answer to every operation, over its copy of the
 // estate, resolved PER REQUEST: a node that booted with no company brings its
 // native runtime up at its first apply, and a request that arrives before then
@@ -213,6 +264,8 @@ type Backend struct {
 	Pages      PageReader
 	PageWriter PageWriter
 	Knowledge  KnowledgeSearcher
+	Chat       ChatReader
+	ChatSearch ChatSearcher
 
 	// Identity is the identity directory, which every data node holds from
 	// boot whatever its company keeps — nil only where the node's core
@@ -283,12 +336,22 @@ var errNotAdmitting = errors.New("estate: this copy admits no seat yet")
 // The domains an operation's floor may be on, and each one's stream, from the
 // domain's own declaration. An operation's floor is on its OWN domain's log and
 // no other: see [ready].
+//
+// THE SIX DOMAINS AN OPERATION READS OR WRITES, and not the other three the
+// estate carries: the vectors and the usage days are written by a fleet duty
+// and by each data node's own publisher, never through an operation, and no
+// operation reads their rows at a position — the searches that rank by the
+// vectors read them as an index, which carries no floor at all — and the
+// Dashboard Assistant's conversations are read and written only where the API
+// runs, on a data node, from that node's own copy, so no request carries them
+// across the router.
 var (
 	trackerDomain      = worklet.Domain{}.Name()
 	pagesDomain        = doclet.Domain{}.Name()
 	identityDomain     = iamdomain.Domain{}.Name()
 	artifactsDomain    = artifactsdomain.Domain{}.Name()
 	artifactDataDomain = artifactdata.Domain{}.Name()
+	chatDomain         = chatlet.Domain{}.Name()
 
 	floorStreams = map[string]string{
 		trackerDomain:      worklet.Domain{}.Stream().Name,
@@ -296,6 +359,7 @@ var (
 		identityDomain:     iamdomain.Domain{}.Stream().Name,
 		artifactsDomain:    artifactsdomain.Domain{}.Stream().Name,
 		artifactDataDomain: artifactdata.Domain{}.Stream().Name,
+		chatDomain:         chatlet.Domain{}.Stream().Name,
 	}
 )
 
@@ -1549,10 +1613,238 @@ var opSeatHolders = define("identity.seat_holders", opRead, identityDomain, fals
 		return b.Identity.SeatHolders(ctx)
 	})
 
-// served is what a node runs, as a seat's admission asks it.
-type served struct {
+// ---- the engine's own chat ---------------------------------------------- //
+//
+// EVERY READ IS ANSWERED FOR ITS VIEWER, and the viewer is in the SIGNED body
+// ([Envelopes]): the serving reader decides which rooms that seat may read from
+// the membership rows in its own snapshot, so a request naming a viewer is a
+// request to be shown what that seat may see, and an unsigned one would have
+// been a private room read as anybody.
+//
+// AND EVERY ONE CARRIES THE CHAT LOG'S FLOOR, the search included: what a seat
+// may read is decided by membership ROWS, and a seat that has just joined a
+// room — through whichever data node took the join — must find it among the
+// rooms its next read and its next search cover.
+
+type chatChannelsArgs struct {
+	Viewer string
+	Query  chatlet.ChannelsQuery
+	Fresh  statelog.Freshness
+}
+
+var opChatChannels = define("chat.channels", opRead, chatDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a chatChannelsArgs) (chatlet.ChannelListing, error) {
+		if b.Chat == nil {
+			return chatlet.ChannelListing{}, errNoHalf
+		}
+		return b.Chat.Channels(ctx, a.Viewer, a.Query, a.Fresh)
+	})
+
+type chatChannelArgs struct {
+	Viewer    string
+	ChannelID string
+	Fresh     statelog.Freshness
+}
+
+var opChatChannel = define("chat.channel", opRead, chatDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a chatChannelArgs) (chatlet.ChannelDetail, error) {
+		if b.Chat == nil {
+			return chatlet.ChannelDetail{}, errNoHalf
+		}
+		return b.Chat.Channel(ctx, a.Viewer, a.ChannelID, a.Fresh)
+	})
+
+type chatChannelNamedArgs struct {
+	Viewer string
+	Name   string
+	Fresh  statelog.Freshness
+}
+
+// A ROOM BY ITS ADDRESS, answered for a room the viewer may not read exactly
+// as for a name nobody holds — the reader's rule, kept on whichever node
+// answers.
+var opChatChannelNamed = define("chat.channel_named", opRead, chatDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a chatChannelNamedArgs) (chatlet.ChannelDetail, error) {
+		if b.Chat == nil {
+			return chatlet.ChannelDetail{}, errNoHalf
+		}
+		return b.Chat.ChannelNamed(ctx, a.Viewer, a.Name, a.Fresh)
+	})
+
+type chatMessagesArgs struct {
+	Viewer string
+	Query  chatlet.TranscriptQuery
+	Fresh  statelog.Freshness
+}
+
+var opChatMessages = define("chat.messages", opRead, chatDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a chatMessagesArgs) (chatlet.Transcript, error) {
+		if b.Chat == nil {
+			return chatlet.Transcript{}, errNoHalf
+		}
+		return b.Chat.Messages(ctx, a.Viewer, a.Query, a.Fresh)
+	})
+
+type chatThreadArgs struct {
+	Viewer string
+	Query  chatlet.ThreadQuery
+	Fresh  statelog.Freshness
+}
+
+var opChatThread = define("chat.thread", opRead, chatDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a chatThreadArgs) (chatlet.Thread, error) {
+		if b.Chat == nil {
+			return chatlet.Thread{}, errNoHalf
+		}
+		return b.Chat.Thread(ctx, a.Viewer, a.Query, a.Fresh)
+	})
+
+type chatMentionsArgs struct {
+	Viewer string
+	Query  chatlet.MentionQuery
+	Fresh  statelog.Freshness
+}
+
+var opChatMentions = define("chat.mentions", opRead, chatDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a chatMentionsArgs) (chatlet.MentionFeed, error) {
+		if b.Chat == nil {
+			return chatlet.MentionFeed{}, errNoHalf
+		}
+		return b.Chat.Mentions(ctx, a.Viewer, a.Query, a.Fresh)
+	})
+
+// ChatQuery is one ranked search of the company's chat, as it crosses: the
+// VIEWER whose rooms it searches, never the rooms.
+//
+// THE VISIBLE SET IS NOT A FIELD, which is the whole point of this type beside
+// [search.ChatQuery]: which rooms somebody may read is an authorization fact,
+// and a caller able to supply it is a caller able to supply the wrong one. The
+// serving node resolves it from the viewer, on the copy whose index it then
+// reads.
+type ChatQuery struct {
+	// Viewer is the seat the search is FOR. Required — the reader refuses a
+	// read for nobody.
+	Viewer string
+
+	// Text is what somebody typed.
+	Text string
+
+	// Channel narrows to one room, empty for every room the viewer may
+	// read. It is INTERSECTED with the visible set rather than trusted, so
+	// naming a room the viewer may not read answers nothing rather than
+	// refusing: a refusal confirms the room exists, and "there is no such
+	// room" and "you may not see it" must read identically from outside.
+	Channel string
+
+	// Author narrows to one speaker's handle, empty for anybody.
+	Author string
+
+	// Limit bounds the hits; zero takes the index's own default.
+	Limit int
+
+	// Fresh is the level the VISIBLE SET is read at. The index itself has
+	// none — each node maintains it behind its applier — so this is the
+	// level of the only half that can be behind and that also decides what
+	// may be seen.
+	Fresh statelog.Freshness
+}
+
+// ChatSearchAnswer is one search's hits, and what they were drawn from.
+type ChatSearchAnswer struct {
+	// Hits is what matched, best first. Never nil.
+	Hits []search.ChatHit
+
+	// Searched is how many rooms the search covered — zero for a viewer
+	// who may read none, which is an answer rather than a refusal.
+	Searched int
+
+	// Building says the answering node's index was not caught up with the
+	// transcript it holds for the whole of the search ([ChatSearcher.Ready]),
+	// so the hits may be drawn from the part of it the walk had reached, or
+	// from an index a rebuild is about to drop: "the index is still
+	// building", which a seat and a screen must not read as "nobody said
+	// that" — it would act on that by asking again, or by deciding nothing
+	// was ever agreed.
+	//
+	// ON THE ANSWER rather than an operation of its own beside it, unlike
+	// the knowledge base's ([opKnowledgeBuilding]): the readiness is the
+	// ANSWERING node's walk's, and a second call could be answered by
+	// another node, whose index says nothing about these hits.
+	Building bool
+
+	// Position is the answering copy's applied position on the chat log,
+	// read BEFORE the visible set was resolved, so it is at or below the
+	// read's own and never overstates what the answer saw.
+	Position statelog.Position
+}
+
+// THE VISIBLE SET AND THE HITS ARE ONE NODE'S, which is why this is one
+// operation rather than a read of the set followed by a search: two hops could
+// be answered by two copies, and a set resolved on one and handed to another
+// node's index would be an authorization fact crossing the wire — the very
+// thing [ChatQuery] has no field for.
+//
+// A VIEWER WHO MAY READ NOTHING IS ANSWERED, NOT REFUSED. The index's own
+// [search.ErrNoViewer] is for a caller that lost its viewer; handed an empty
+// set here, it would turn an ordinary state into an error a seat reports as a
+// broken tool. A viewer who is NOBODY is still refused — by the reader, whose
+// visible set is the first thing read.
+//
+// THE INDEX IS ASKED WHETHER IT IS READY ON BOTH SIDES OF THE SEARCH, and the
+// answer is building unless it was ready at both. Readiness moves in both
+// directions while a search runs: a rebuild asked for meanwhile — an adoption
+// replaced the estate — leaves hits drawn from the index of the copy it
+// replaced, which only the ask after the search can see, and a walk that
+// caught up meanwhile leaves hits drawn from the part it had reached, which
+// only the ask before can see. Either one alone answers "caught up" for a
+// list that was not.
+var opChatSearch = define("chat.search", opRead, chatDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, q ChatQuery) (ChatSearchAnswer, error) {
+		if b.Chat == nil || b.ChatSearch == nil {
+			return ChatSearchAnswer{}, errNoHalf
+		}
+		at := b.Chat.At()
+		ready := b.ChatSearch.Ready()
+		visible, err := b.Chat.Readable(ctx, q.Viewer, q.Fresh)
+		if err != nil {
+			return ChatSearchAnswer{}, err
+		}
+		if q.Channel != "" {
+			if slices.Contains(visible, q.Channel) {
+				visible = []string{q.Channel}
+			} else {
+				visible = nil
+			}
+		}
+		out := ChatSearchAnswer{Hits: []search.ChatHit{}, Searched: len(visible),
+			Building: !ready, Position: at}
+		if len(visible) == 0 {
+			return out, nil
+		}
+		hits, err := b.ChatSearch.SearchMessages(ctx, search.ChatQuery{
+			Text: q.Text, Channels: visible, Author: q.Author, Limit: q.Limit,
+		})
+		if err != nil {
+			return ChatSearchAnswer{}, err
+		}
+		out.Building = !ready || !b.ChatSearch.Ready()
+		if hits != nil {
+			out.Hits = hits
+		}
+		return out, nil
+	})
+
+// Served is which halves a data node's copy runs natively, as a seat's
+// admission asks it ([Router.Serves]).
+type Served struct {
 	Tracker bool
 	Pages   bool
+
+	// Chat is the engine's own chat. FALSE ON A COPY WHOSE COMPANY KEEPS NO
+	// CHATLET, which serves no chat operation either — so a seat whose
+	// company does waits for a copy that answers true rather than attaching
+	// to one whose every chat call would be answered "not here".
+	Chat bool
 }
 
 // opPing is ADMISSION's question, asked of a data node: whether its copy
@@ -1565,9 +1857,15 @@ type served struct {
 // reached this node's writes. And NO ARGUMENTS: the one estate is the only
 // thing it can be about.
 var opPing = define("estate.ping", opRead, "", false,
-	func(ctx context.Context, b Backend, _ *Actor, _ struct{}) (served, error) {
+	func(ctx context.Context, b Backend, _ *Actor, _ struct{}) (Served, error) {
 		if b.Admits != nil && !b.Admits(ctx) {
-			return served{}, errNotAdmitting
+			return Served{}, errNotAdmitting
 		}
-		return served{Tracker: b.Tracker != nil, Pages: b.Pages != nil}, nil
+		return b.served(), nil
 	}).ungated()
+
+// served is which halves this backend runs — one answer for a local admission
+// and a remote one, so the two cannot disagree about a half.
+func (b Backend) served() Served {
+	return Served{Tracker: b.Tracker != nil, Pages: b.Pages != nil, Chat: b.Chat != nil}
+}

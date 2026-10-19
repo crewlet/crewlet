@@ -84,6 +84,10 @@ type fakeNode struct {
 	// one: waited for until the asker's deadline, where a node that is
 	// simply gone is known to have answered nothing.
 	hang chan struct{}
+
+	// rooms is this node's chat, nil for a company whose chat is not the
+	// engine's own — see chat_test.go.
+	rooms *chatDesk
 }
 
 func (f *fakeNode) note(op string) {
@@ -181,6 +185,19 @@ func (f *fakeNode) Building(context.Context) bool { return false }
 
 // backend is this node as a [Backend] over its copy of the estate.
 func (f *fakeNode) backend() Backend {
+	b := f.halves()
+	f.mu.Lock()
+	rooms := f.rooms
+	f.mu.Unlock()
+	if rooms != nil {
+		b.Chat, b.ChatSearch = rooms, rooms
+	}
+	return b
+}
+
+// halves is this node's tracker, knowledge base and identity directory, and
+// the gates every operation passes.
+func (f *fakeNode) halves() Backend {
 	return Backend{
 		Tracker: f, PageWriter: f, Knowledge: f, Identity: f.directory,
 		Writer: func(a Actor) TrackerWriter {
@@ -1240,8 +1257,8 @@ func TestACopyThatAdmitsNoSeatStillServesRequests(t *testing.T) {
 			"question", local.asked)
 	}
 	// AND ADMISSION STILL REFUSES IT: the two gates disagree on purpose.
-	if trackerServed, _, err := r.Serves(t.Context()); err != nil || trackerServed {
-		t.Fatalf("a copy that admits no seat was admitted (%v, %v)", trackerServed, err)
+	if served, err := r.Serves(t.Context()); err != nil || served.Tracker {
+		t.Fatalf("a copy that admits no seat was admitted (%+v, %v)", served, err)
 	}
 }
 
@@ -1391,9 +1408,9 @@ func TestAdmissionAsksTheCopyThatWillServeTheSeat(t *testing.T) {
 	peer := f.nodes["data-a"]
 	local := &fakeNode{name: "data-self", units: chartOf("self"), notAdmitting: true}
 	r := f.router(t, "data-self", local)
-	trackerServed, _, err := r.Serves(t.Context())
-	if err != nil || trackerServed {
-		t.Fatalf("a node whose own copy admits no seat was admitted (%v, %v)", trackerServed, err)
+	served, err := r.Serves(t.Context())
+	if err != nil || served.Tracker {
+		t.Fatalf("a node whose own copy admits no seat was admitted (%+v, %v)", served, err)
 	}
 	if peer.askedFor("admits") {
 		t.Fatal("a peer was asked for a node whose own copy serves")
@@ -1401,15 +1418,15 @@ func TestAdmissionAsksTheCopyThatWillServeTheSeat(t *testing.T) {
 
 	// A COPY OUT OF SERVICE is asked of a data node whose copy serves.
 	local.set(func(n *fakeNode) { n.outOfService = true })
-	trackerServed, _, err = r.Serves(t.Context())
-	if err != nil || !trackerServed {
-		t.Fatalf("a node served by a peer was not admitted (%v, %v)", trackerServed, err)
+	served, err = r.Serves(t.Context())
+	if err != nil || !served.Tracker {
+		t.Fatalf("a node served by a peer was not admitted (%+v, %v)", served, err)
 	}
 
 	// AND A REMOTE NODE THAT ADMITS NO SEAT IS PASSED OVER, like a node
 	// that ran nothing.
 	peer.set(func(n *fakeNode) { n.notAdmitting = true })
-	if trackerServed, _, err = f.client.Serves(t.Context()); trackerServed {
+	if served, err = f.client.Serves(t.Context()); served.Tracker {
 		t.Fatalf("a node was admitted on a data node that admits no seat (%v)", err)
 	}
 }
@@ -1427,7 +1444,7 @@ func TestAdmissionsPingNeedsNoArguments(t *testing.T) {
 		"no arguments":    nil,
 	} {
 		rep := askSigned(t, f.start(t), "data-a", request{Op: "estate.ping", Args: args})
-		var answer served
+		var answer Served
 		if rep.Err != nil || rep.Unserved != "" || json.Unmarshal(rep.Result, &answer) != nil ||
 			!answer.Tracker {
 			t.Fatalf("%s: the ping was answered %+v, want the admission answer", name, rep)
@@ -1459,8 +1476,8 @@ func TestWedgedDataNodesCostAdmissionNoMoreThanItsBound(t *testing.T) {
 	begun := time.Now()
 	done := make(chan answer, 1)
 	go func() {
-		served, _, err := r.Serves(t.Context())
-		done <- answer{served, err}
+		served, err := r.Serves(t.Context())
+		done <- answer{served.Tracker, err}
 	}()
 	select {
 	case got := <-done:

@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts/mediatype"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/caveat"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
@@ -94,6 +95,16 @@ var sentinels = []sentinel{
 	{"doclet.ErrReserved", doclet.ErrReserved},
 	{"doclet.ErrStaleVersion", doclet.ErrStaleVersion},
 	{"doclet.ErrTitleTaken", doclet.ErrTitleTaken},
+
+	{"chatlet.ErrArchived", chatlet.ErrArchived},
+	{"chatlet.ErrConflict", chatlet.ErrConflict},
+	{"chatlet.ErrForbidden", chatlet.ErrForbidden},
+	{"chatlet.ErrInvalid", chatlet.ErrInvalid},
+	{"chatlet.ErrNameTaken", chatlet.ErrNameTaken},
+	{"chatlet.ErrNoActivation", chatlet.ErrNoActivation},
+	{"chatlet.ErrNotFound", chatlet.ErrNotFound},
+	{"chatlet.ErrRoomExists", chatlet.ErrRoomExists},
+	{"chatlet.ErrUnknownKind", chatlet.ErrUnknownKind},
 
 	{"statelog.ErrAdoptionUnrecorded", statelog.ErrAdoptionUnrecorded},
 	{"statelog.ErrAheadOfLog", statelog.ErrAheadOfLog},
@@ -234,6 +245,10 @@ var typedKinds = []typedKind{
 	{"doclet.ErrFutureVersion", reflect.TypeFor[*doclet.ErrFutureVersion]()},
 	{"doclet.ErrUnknownVersion", reflect.TypeFor[doclet.ErrUnknownVersion]()},
 	{"doclet.InvalidError", reflect.TypeFor[*doclet.InvalidError]()},
+
+	{"chatlet.ErrFutureVersion", reflect.TypeFor[*chatlet.ErrFutureVersion]()},
+	{"chatlet.ErrUnknownVersion", reflect.TypeFor[chatlet.ErrUnknownVersion]()},
+	{"chatlet.InvalidError", reflect.TypeFor[*chatlet.InvalidError]()},
 
 	{"statelog.CallerOpIDError", reflect.TypeFor[*statelog.CallerOpIDError]()},
 	{"statelog.ErrSkipped", reflect.TypeFor[*statelog.ErrSkipped]()},
