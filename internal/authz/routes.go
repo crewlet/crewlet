@@ -1,6 +1,7 @@
 package authz
 
 import (
+	"context"
 	"maps"
 	"net/http"
 	"path"
@@ -68,11 +69,50 @@ func ContextGuard(chart Chart) Guard {
 		if p.Object != nil {
 			object = p.Object(r)
 		}
-		// NOW, at the request: how recently the caller proved who they
-		// are is judged at the instant they ask, against the deadlines
-		// the guard composed for this very request.
-		return Decide(r.Context(), principal, p.Action, object, chart, time.Now())
+		// AT THE REQUEST'S INSTANT: how recently the caller proved who
+		// they are is judged when they asked, against the deadlines the
+		// guard composed for this very request — and every later check
+		// of the same request is judged at that same instant
+		// ([DecidedAt]).
+		return Decide(r.Context(), principal, p.Action, object, chart,
+			DecidedAt(r.Context()))
 	}
+}
+
+// decidedAtKey carries the instant a request's route was decided at.
+type decidedAtKey struct{}
+
+// DecidedAt is the instant a request is decided at: the one its route was
+// decided at, which every [Router] route stamps on the request before its
+// guard runs, or the current time for a context no route decided.
+//
+// ONE INSTANT FOR EVERY CHECK OF ONE REQUEST. A handler decides more than its
+// route did — a verb only the body names ([Admit]), every part of a
+// configuration write once the document is built — and each of those asked
+// for a recent proof at its own `time.Now()`. A proof the route accepted could
+// lapse while the body was read, and the handler then refused, as stale, the
+// request the route had just admitted on it: an administrator was told on
+// every part of their write that they needed admin. The request is one
+// gesture, so it is judged at one instant.
+//
+// FOR A DECISION ABOUT THE REQUEST ITSELF, never one made later on its
+// behalf: an open socket's watch is decided again whenever a credential moves,
+// at that moment, and is not a check of the handshake.
+func DecidedAt(ctx context.Context) time.Time {
+	if at, ok := ctx.Value(decidedAtKey{}).(time.Time); ok {
+		return at
+	}
+	return time.Now()
+}
+
+// decidedNow stamps r with the instant its route is decided at, keeping one an
+// outer route already stamped: a surface mounted behind another router is the
+// same request, decided at the first.
+func decidedNow(r *http.Request) *http.Request {
+	if _, stamped := r.Context().Value(decidedAtKey{}).(time.Time); stamped {
+		return r
+	}
+	return r.WithContext(context.WithValue(r.Context(), decidedAtKey{}, time.Now()))
 }
 
 // Admit decides one more verb from INSIDE a handler the router already
@@ -240,9 +280,11 @@ func (t *Router) PolicyFor(pattern string) (Policy, bool) {
 	return p, ok
 }
 
-// wrap is the guard around one route's handler.
+// wrap is the guard around one route's handler, stamping the request with the
+// instant it is decided at first ([DecidedAt]).
 func (t *Router) wrap(p Policy, h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r = decidedNow(r)
 		d := t.guard(r, p)
 		if d.Unknown() || !d.Allowed {
 			t.refuse(w, r, p, d)
