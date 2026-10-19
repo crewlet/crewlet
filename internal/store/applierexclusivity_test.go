@@ -638,6 +638,15 @@ var allowedReplicatedWriter = []allowance{
 			"reads `update %s` as an UPDATE whose table is computed. The file " +
 			"opens no database handle and writes no table of either estate.",
 	},
+	{
+		Prefix: "cmd/crewlet/artifacts.go", Kind: notReplicated,
+		Why: "Holds no SQL at all: it is the `crewlet artifacts` client, which " +
+			"reaches the engine over its HTTP API. Its publish refusal points " +
+			"at `crewlet artifacts update %s -%s ...`, the CLI's own command, " +
+			"and the case-insensitive verb matcher reads `update %s` as an " +
+			"UPDATE whose table is computed. The file opens no database " +
+			"handle and writes no table of either estate.",
+	},
 
 	// -----------------------------------------------------------------
 	// THE EXCEPTIONS. Two writes that are not a record, each because no
