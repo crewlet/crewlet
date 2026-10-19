@@ -560,8 +560,10 @@ func TestUploadPacksOwnDamageIsRepairedUnderTheRequest(t *testing.T) {
 // of the copy before upload-pack runs (cache.Missing's cat-file), and damage
 // that check meets is repaired under the fetch, IN PLACE — the SAME
 // incarnation answering — and the fetch served: an entry of a type git does
-// not know (G1, its pack named by the row naming a corrupt packed object, or
-// through "%s" from 2.56, confirmed against its row) and a pack index whose
+// not know (G1: cat-file names a pack's damage, "unknown object type 5 at
+// offset …", the request's in-place round finds every index file sound, and
+// the scrub that repair runs for the request finds the pack failing its
+// trailer — on the node pin and the node floor alike) and a pack index whose
 // every offset lies past its pack (M, found by the request's in-place round)
 // by fetching that one pack again over its files, and a multi-pack-index
 // missing a chunk it requires (F7, fatal for every reader) by dropping the
@@ -571,13 +573,21 @@ func TestUploadPacksOwnDamageIsRepairedUnderTheRequest(t *testing.T) {
 // neither derived file): the check's cat-file is asked about object ids
 // alone, which loads the index and never the commit-graph, so the report is
 // the index's — the repair drops the index alone, and keeps the graph every
-// walk of the repository goes by.
+// walk of the repository goes by. What the check's cat-file reports of a
+// pack's damage (G1, M) is the REQUEST'S (cache's report.go, HELD FOR THE
+// REQUEST): the check names the fetch's reader on its Cmd, so the report is
+// held for the repair the fetch asks and consumed by it
+// (reports{outcome=request}): the copy's scrub is never made due for it, and
+// no scrub but the one the fetch's own repair runs (G1's) reads a pack.
 //
 // Mutations: map no row for F7's format (`multi-pack-index required pack-name
 // chunk missing or corrupted`, and before 2.43 `multi-pack-index missing
 // required pack-name chunk`) and its arm answers git's failure; read the
 // check's chunk report as both files' (no gitproc.Damage.Narrow) and F6's
-// repair drops the graph with the index.
+// repair drops the graph with the index; run the check's cat-file naming no
+// reader (no `Repairer: s.Repairer` in cache.Missing) and G1's and M's
+// reports make the copy's scrub due as they arrive, counted `queued` rather
+// than `request`.
 func TestTheWantsCheckRepairsWhatItsCatFileNames(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -592,6 +602,11 @@ func TestTheWantsCheckRepairsWhatItsCatFileNames(t *testing.T) {
 		// dropped is what the in-place repair says it dropped
 		// (code_cache_derived_repaired's files), where the case states it.
 		dropped string
+		// held is the crewlet.code.cache.reports part the check's cat-file
+		// reports of a pack's damage, held for the fetch's own repair and
+		// consumed by it (outcome=request); empty for a derived file's
+		// damage, whose report is never held.
+		held string
 	}{
 		{"F6 a multi-pack-index's table of contents ending early", func(t *testing.T, c *codetest.Case, l *logs, _ string) string {
 			dir := maintainersBitmap(t, c, l)
@@ -603,14 +618,14 @@ func TestTheWantsCheckRepairsWhatItsCatFileNames(t *testing.T) {
 			overwriteFile(t, filepath.Join(dir, "objects", "pack", "multi-pack-index"),
 				gittest.ChunkRow(gittest.MidxHeader, 0), []byte{0, 0, 0, 0})
 			return dir
-		}, "derived", "derived", `"files":["multi-pack-index"]`},
+		}, "derived", "derived", `"files":["multi-pack-index"]`, ""},
 		{"G1 the tip's type", func(t *testing.T, c *codetest.Case, _ *logs, head string) string {
 			dir := incarnationDir(t, c)
 			pack, start, _ := entryOf(t, dir, head)
 			b := readAt(t, pack, start, 1)[0]
 			overwriteFile(t, pack, start, []byte{b&0x8f | 5<<4}) // type 5 is reserved
 			return dir
-		}, "corrupt", "stored", ""},
+		}, "corrupt", "stored", "", "pack"},
 		{"M every index offset past its pack", func(t *testing.T, c *codetest.Case, _ *logs, _ string) string {
 			dir := incarnationDir(t, c)
 			idx, err := filepath.Glob(filepath.Join(dir, "objects", "pack", "pack-*.idx"))
@@ -626,13 +641,13 @@ func TestTheWantsCheckRepairsWhatItsCatFileNames(t *testing.T) {
 				overwriteFile(t, path, 8+256*4+n*24, bytes.Repeat([]byte{0x00, 0x0f, 0xff, 0xff}, int(n)))
 			}
 			return dir
-		}, "corrupt", "stored", ""},
+		}, "corrupt", "stored", "", "pack"},
 		{"F7 a multi-pack-index's pack names missing", func(t *testing.T, c *codetest.Case, l *logs, _ string) string {
 			dir := maintainersBitmap(t, c, l)
 			gittest.RenameChunk(t, filepath.Join(dir, "objects", "pack", "multi-pack-index"), gittest.MidxHeader,
 				"PNAM", "XNAM")
 			return dir
-		}, "derived", "derived", ""},
+		}, "derived", "derived", "", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -661,6 +676,21 @@ func TestTheWantsCheckRepairsWhatItsCatFileNames(t *testing.T) {
 			if now := incarnationDir(t, c); now != dir {
 				t.Errorf("the repaired cache is %s, was %s: want it repaired in place", now, dir)
 			}
+			if tc.held != "" {
+				if got := cacheCount(c, metrics.CodeCacheReports, map[string]string{"part": tc.held,
+					"outcome": "request"}); got < 1 {
+					t.Errorf("%s{part=%s,outcome=request} = %d, want the check's report answered by its fetch's "+
+						"repair", metrics.CodeCacheReports, tc.held, got)
+				}
+				if got := cacheCount(c, metrics.CodeCacheReports, map[string]string{"outcome": "queued"}); got != 0 {
+					t.Errorf("%s{outcome=queued} = %d, want no report making the copy's scrub due beside the repair",
+						metrics.CodeCacheReports, got)
+				}
+				if got := cacheCount(c, metrics.CodeCacheChecks, map[string]string{"trigger": "report"}); got != 0 {
+					t.Errorf("%s{trigger=report} = %d, want no scrub for a report beside the fetch's own repair",
+						metrics.CodeCacheChecks, got)
+				}
+			}
 			if tc.dropped == "" {
 				return
 			}
@@ -682,17 +712,28 @@ func TestTheWantsCheckRepairsWhatItsCatFileNames(t *testing.T) {
 // (cache.Cache.ConfirmHint), and a pack that is not its row's is named to the
 // repair (cache.Failure.Packs): that one pack is fetched again over its files,
 // the same incarnation answering, and the fetch served — on every git a git
-// node runs, since the node floor is 2.55.
+// node runs, since the node floor is 2.55. What the failing upload-pack
+// reported is the REQUEST'S (cache's report.go, HELD FOR THE REQUEST): its
+// Cmd names the request's reader, so the report is held for the repair the
+// request asks and consumed by it (reports{outcome=request}), and the copy's
+// scrub is never made due to read the whole copy beside a one-pack repair —
+// which, raced against the request's own round, logged the reinstall
+// found=trailer in about one run in ninety on a loaded machine.
 //
 // And its control, on any git: a HEALTHY copy whose upload-pack — a stand-in
 // in front of the real git — dies naming one of the copy's own packs in that
 // very sentence. The pack is hashed, found sound, and nothing is repaired: a
-// message only nominates.
+// message only nominates. Its request asked no repair, so the report held
+// for it goes to the ordinary rules as the request lets the copy go: the
+// copy's scrub is due for it.
 //
 // Mutations: repair on a hint without hashing its pack (the control
 // repairs); drop the hint path from repair (S1 answers git's failure on
 // 2.56); hand the repair no pack (the in-place round finds nothing and the
-// scrub finds the pack: `found` is `trailer`, not `hint`).
+// scrub finds the pack: `found` is `trailer`, not `hint`); run upload-pack
+// with no Cmd.Repairer (the report makes the copy's scrub due as it arrives:
+// counted `queued`, not `request`); hand nothing on at a reader's release
+// (the control's report is never counted).
 func TestThePackGitNamesIsFetchedAgainInPlace(t *testing.T) {
 	t.Parallel()
 	t.Run("a pack whose object's size is wrong", func(t *testing.T) {
@@ -739,6 +780,22 @@ func TestThePackGitNamesIsFetchedAgainInPlace(t *testing.T) {
 		if now := incarnationDir(t, c); now != dir {
 			t.Errorf("the cache is %s, was %s: the pack a hint named is fetched again in place", now, dir)
 		}
+		// The failing upload-pack's report is the request's: consumed by
+		// its repair (pack and hint on 2.55, the hint alone from 2.56), and
+		// never handed to the copy's scrub.
+		if got := cacheCount(c, metrics.CodeCacheReports, map[string]string{"part": "hint",
+			"outcome": "request"}); got != 1 {
+			t.Errorf("%s{part=hint,outcome=request} = %d, want the failing run's hint answered by its request",
+				metrics.CodeCacheReports, got)
+		}
+		if got := cacheCount(c, metrics.CodeCacheReports, map[string]string{"outcome": "queued"}); got != 0 {
+			t.Errorf("%s{outcome=queued} = %d, want no report making the copy's scrub due beside the repair",
+				metrics.CodeCacheReports, got)
+		}
+		if got := cacheCount(c, metrics.CodeCacheChecks, map[string]string{"file": "pack"}); got != 0 {
+			t.Errorf("%s{file=pack} = %d, want no pack's body hashed: the repair was the one pack the hint named",
+				metrics.CodeCacheChecks, got)
+		}
 	})
 	t.Run("a stand-in naming a sound pack", func(t *testing.T) {
 		t.Parallel()
@@ -778,7 +835,163 @@ esac`)
 		if now := incarnationDir(t, c); now != dir {
 			t.Errorf("a hint naming a sound pack moved the incarnation from %s to %s", dir, now)
 		}
+		// Its request asked no repair: the report held for it is handed to
+		// the ordinary rules as the request lets the copy go.
+		eventually(t, "the unrepaired hint handed to the copy's scrub", func() bool {
+			return cacheCount(c, metrics.CodeCacheReports, map[string]string{"part": "hint", "outcome": "queued"}) == 1
+		})
+		if got := cacheCount(c, metrics.CodeCacheReports, map[string]string{"outcome": "request"}); got != 0 {
+			t.Errorf("%s{outcome=request} = %d, want none: the request repaired nothing", metrics.CodeCacheReports, got)
+		}
 	})
+}
+
+// A REPORT PAST THE FIRST BYTE GOES TO THE SCRUB AS ITS REQUEST ENDS. A
+// process the host runs over a cache names the request's reader on its Cmd
+// (cache.Synced.Repairer), so what it reports is held for that request's
+// repair (cache's report.go, HELD FOR THE REQUEST) — but one that fails past
+// its answer's first byte leaves the request nothing to retry with, and the
+// host repairs nothing: here an advertisement — a stand-in in front of the
+// real git — writes its first line and dies naming one of the copy's packs in
+// git's sentence for a corrupt packed object. The request ends without asking
+// a repair, and the release of its copy hands the report to the ordinary
+// rules: the copy's scrub is due for it, counted
+// reports{part=hint,outcome=queued}, exactly as a report no request repairs
+// always was. Its hint is never confirmed and nothing is run again. Its end
+// is the same whether or not the advertisement names its reader — a report
+// held for nobody goes to the scrub as it arrives — so that the advertisement
+// does name it is held by TestAnAdvertisementsReportIsHeldForItsRequestsRepair.
+//
+// Mutation: hand nothing on at a reader's release (the report is lost: never
+// counted, no scrub due).
+func TestAReportPastTheFirstByteGoesToTheScrubAsItsRequestEnds(t *testing.T) {
+	t.Parallel()
+	fake := gittest.Wrap(t, `case " $* " in
+*" upload-pack "*" --advertise-refs "*)
+	printf '000eversion 2\n'
+	set -- ./objects/pack/pack-*.pack
+	msg="packed object `+strings.Repeat("cd", 20)+` (stored in $1) is corrupt"
+	ev='{"event":"error","sid":"stand-in","thread":"main","msg":"'"$msg"'","fmt":"%s"}'
+	eval 'printf "%s\n" "$ev" >&'"$GIT_TRACE2_EVENT"
+	printf 'fatal: %s\n' "$msg" >&2
+	exit 128 ;;
+esac`)
+	var l logs
+	c := newCase(t, codetest.SoloOptions{GitPath: fake, Logger: l.logger()}, codetest.Settings())
+	p := codetest.NewPerson(t, c.Fleet, "ceo")
+	work := p.Init()
+	p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
+	c.MustPush(p, work, "main")
+
+	if _, _, err := p.TryClone(c.Ctx, c.URL(0)); err == nil {
+		t.Fatal("a clone whose advertisement dies past its first byte was served")
+	}
+	eventually(t, "the report handed to the copy's scrub as its request ended", func() bool {
+		return cacheCount(c, metrics.CodeCacheReports, map[string]string{"part": "hint", "outcome": "queued"}) == 1
+	})
+	if got := cacheCount(c, metrics.CodeCacheReports, map[string]string{"outcome": "request"}); got != 0 {
+		t.Errorf("%s{outcome=request} = %d, want none: a request past its first byte repairs nothing",
+			metrics.CodeCacheReports, got)
+	}
+	if got := cacheCount(c, metrics.CodeCacheHints, nil); got != 0 {
+		t.Errorf("%s = %d, want no hint confirmed past the first byte", metrics.CodeCacheHints, got)
+	}
+	if n := l.count("code_fetch_retried"); n != 0 {
+		t.Errorf("an advertisement that failed past its first byte was run again %d times", n)
+	}
+}
+
+// AN ADVERTISEMENT'S REPORT IS HELD FOR ITS REQUEST'S REPAIR. The
+// advertisement (`upload-pack --advertise-refs`, advertise.go) names the
+// request's reader on its Cmd like every process the host runs in the
+// incarnation, so what it reports before its first byte is held for the
+// repair its request asks (cache's report.go, HELD FOR THE REQUEST) and
+// consumed by it. Here the copy's tip has the wrong size in its entry header
+// (S1), and a stand-in in front of the real git has the first advertisement
+// after the push die before writing a byte, naming that pack in git's
+// sentence for a corrupt packed object: the host confirms the hint against
+// the pack's row, the repair fetches that one pack again in place, the
+// advertisement runs again — the real git now — and the clone is served, with
+// the report counted reports{part=hint,outcome=request}, nothing made the
+// copy's scrub due beside the repair, and no pack's body hashed.
+//
+// Mutation: run the advertisement naming no reader (no `Repairer: in.Repairer`
+// in advertise.go) — the report makes the copy's scrub due as it arrives,
+// counted `queued` rather than `request`.
+func TestAnAdvertisementsReportIsHeldForItsRequestsRepair(t *testing.T) {
+	t.Parallel()
+	// armed is a directory only the first advertisement after the push can
+	// remove (rmdir is atomic): that one dies, and every later one is git's.
+	armed := filepath.Join(t.TempDir(), "armed")
+	fake := gittest.Wrap(t, `case " $* " in
+*" upload-pack "*" --advertise-refs "*)
+	if rmdir '`+armed+`' 2>/dev/null; then
+		set -- ./objects/pack/pack-*.pack
+		msg="packed object `+strings.Repeat("ef", 20)+` (stored in $1) is corrupt"
+		ev='{"event":"error","sid":"stand-in","thread":"main","msg":"'"$msg"'","fmt":"%s"}'
+		eval 'printf "%s\n" "$ev" >&'"$GIT_TRACE2_EVENT"
+		printf 'fatal: %s\n' "$msg" >&2
+		exit 128
+	fi ;;
+esac`)
+	var l logs
+	c := newCase(t, codetest.SoloOptions{GitPath: fake, Logger: l.logger()}, codetest.Settings())
+	p := codetest.NewPerson(t, c.Fleet, "ceo")
+	work := p.Init()
+	head := p.Commit(work, map[string]string{"README.md": "one\n", "src/a.go": "package a\n"}, "one")
+	c.MustPush(p, work, "main")
+	dir := incarnationDir(t, c)
+	pack, start, _ := entryOf(t, dir, head)
+	b := readAt(t, pack, start, 1)[0]
+	if b&0x0f == 0x0f {
+		b-- // the size nibble is full: one less is as wrong
+	} else {
+		b++
+	}
+	overwriteFile(t, pack, start, []byte{b})
+	if err := os.Mkdir(armed, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	clone, stderr, err := p.TryClone(c.Ctx, c.URL(0))
+	if err != nil {
+		t.Fatalf("a clone whose advertisement met a damaged pack: %v\n%s", err, stderr)
+	}
+	if got := p.Head(clone); got != head {
+		t.Errorf("the clone after the repair is at %s, want %s", got, head)
+	}
+	if _, err := os.Stat(armed); !os.IsNotExist(err) {
+		t.Fatalf("the stand-in advertisement never ran (%v): the case tested nothing", err)
+	}
+	if got := cacheCount(c, metrics.CodeCacheHints, map[string]string{"outcome": "confirmed"}); got != 1 {
+		t.Errorf("%s{outcome=confirmed} = %d, want the advertisement's hint confirmed", metrics.CodeCacheHints, got)
+	}
+	if got := cacheCount(c, metrics.CodeCacheRebuilds, map[string]string{"reason": "stored"}); got != 1 {
+		t.Errorf("%s{reason=stored} = %d, want the one pack fetched again", metrics.CodeCacheRebuilds, got)
+	}
+	if got := cacheCount(c, metrics.CodeCacheRebuilds, map[string]string{"reason": "corrupt"}); got != 0 {
+		t.Errorf("%s{reason=corrupt} = %d, want no whole rebuild", metrics.CodeCacheRebuilds, got)
+	}
+	if n := l.count("code_fetch_retried", `"reason":"corrupt"`); n != 1 {
+		t.Errorf("code_fetch_retried reason=corrupt was logged %d times, want the advertisement run again once: %q",
+			n, l.lines("code_fetch_retried"))
+	}
+	if now := incarnationDir(t, c); now != dir {
+		t.Errorf("the cache is %s, was %s: the pack a hint named is fetched again in place", now, dir)
+	}
+	if got := cacheCount(c, metrics.CodeCacheReports, map[string]string{"part": "hint",
+		"outcome": "request"}); got != 1 {
+		t.Errorf("%s{part=hint,outcome=request} = %d, want the advertisement's hint answered by its request",
+			metrics.CodeCacheReports, got)
+	}
+	if got := cacheCount(c, metrics.CodeCacheReports, map[string]string{"outcome": "queued"}); got != 0 {
+		t.Errorf("%s{outcome=queued} = %d, want no report making the copy's scrub due beside the repair",
+			metrics.CodeCacheReports, got)
+	}
+	if got := cacheCount(c, metrics.CodeCacheChecks, map[string]string{"file": "pack"}); got != 0 {
+		t.Errorf("%s{file=pack} = %d, want no pack's body hashed: the repair was the one pack the hint named",
+			metrics.CodeCacheChecks, got)
+	}
 }
 
 // entryOf is the pack file under dir holding oid, where oid's entry begins in

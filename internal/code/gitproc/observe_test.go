@@ -89,13 +89,17 @@ func TestAProcessThatNeverStartedIsNotObserved(t *testing.T) {
 // over damage it reported (exit 0, the damage named), one that failed, one the
 // pool ended at its deadline, and one in a reservation's slot — and nothing of
 // a call refused before a process started: a directory the pool will not run
-// git in, or a lane with no slot. A second observer is refused while one is
-// installed, and accepted once the first is removed.
+// git in, or a lane with no slot. Each is observed with what its Cmd declared
+// of it — the files it loads, and the caller that repairs it. A second
+// observer is refused while one is installed, and accepted once the first is
+// removed.
 //
 // Mutations: observe only failed runs — the answered run is missed; observe in
 // Pool.Run alone — the reservation's run is missed; report a call Run refuses
 // (its prepare's or its admission's error) — the shape's or the busy lane's
-// call is seen; unobserve doing nothing — the second observer is refused.
+// call is seen; leave Cmd.Repairer off the Ran — the batch run is observed
+// repaired by nobody; unobserve doing nothing — the second observer is
+// refused.
 func TestEveryRunIsObserved(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
@@ -133,12 +137,12 @@ func TestEveryRunIsObserved(t *testing.T) {
 	if _, err := p.Run(t.Context(), read(dir, "rev-list", "no-such-revision")); err == nil {
 		t.Fatal("rev-list of a revision that is no object answered")
 	}
-	// Ended at its deadline: a batch reader whose input never comes, and
-	// named an alternate it ran beside.
+	// Ended at its deadline: a batch reader whose input never comes, run for
+	// a caller that repairs its failure.
 	batch, _ := f.bare(t)
 	blocked := &blockedReader{release: make(chan struct{})}
 	c := read(batch, "cat-file", "--batch")
-	c.Loads = gitproc.PartMultiPackIndex
+	c.Loads, c.Repairer = gitproc.PartMultiPackIndex, 7
 	c.Stdin, c.Deadline = blocked, 300*time.Millisecond
 	go func() { time.Sleep(2 * time.Second); close(blocked.release) }()
 	if _, err := p.Run(t.Context(), c); !errors.Is(err, gitproc.ErrDeadline) {
@@ -185,6 +189,10 @@ func TestEveryRunIsObserved(t *testing.T) {
 	}
 	if got[2].Loads != gitproc.PartMultiPackIndex || got[0].Loads != 0 {
 		t.Errorf("the runs were observed loading %v and %v, want what each Cmd declared", got[0].Loads, got[2].Loads)
+	}
+	if got[2].Repairer != 7 || got[0].Repairer != 0 {
+		t.Errorf("the runs were observed repaired by %d and %d, want what each Cmd named", got[0].Repairer,
+			got[2].Repairer)
 	}
 	for _, r := range got {
 		if r.Result.Began.IsZero() {

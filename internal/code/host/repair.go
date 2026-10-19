@@ -55,6 +55,20 @@ import (
 // scratch's own shape is a directory this request made, which the next makes
 // again.
 //
+// WHAT THE RUN REPORTS IS THIS REQUEST'S. A process run IN the incarnation
+// names the request's reader on its Cmd (gitproc.Cmd.Repairer, from
+// cache.Synced.Repairer), so the cache's observer holds what it reports for
+// this request rather than make the copy's scrub due at once (cache's
+// report.go): a pack's or an object's repair asked here consumes it, a
+// shape's or a derived file's carries it to the Synced it hands back — the
+// one the loop runs again over, as it releases the one that failed, so a
+// retry that escalates to the pack beneath a dropped index has that repair
+// answer it — and the release of the request's last Synced hands on what no
+// repair answered. A process in a scratch or a view names nobody, since only
+// its alternate's shape is repaired here.
+// Reported twice, the same damage was repaired twice, a whole copy's scrub
+// racing the one pack the request's round fetched again.
+//
 // Only a process that failed BEFORE ITS FIRST BYTE is run again: past it the
 // response has begun, and only git's own words, or a cut, can end it. A shape
 // refusal always is one: the pool refuses the directory before it starts git

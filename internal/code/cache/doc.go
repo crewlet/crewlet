@@ -585,6 +585,32 @@
 // since: a request that can provoke a report beside a busy repository is
 // bounded by that and nothing else.
 //
+// A FAILURE ITS REQUEST REPAIRS IS THAT REQUEST'S. Every reader a sync or a
+// repair hands a directory to is named ([Synced.Repairer]), and a process run
+// in that directory whose failure the reader repairs carries the name on its
+// Cmd (gitproc.Cmd.Repairer: the host's, over the incarnation, and the check
+// of a fetch's wants, [Cache.Missing]). What such a run reports that the scrub
+// would answer — a pack, an object, a hint, a crash — is HELD for the reader
+// and makes nothing due: the repair the reader asks ([Cache.Rebuild] — a forced
+// round in place, the scrub for its own callers, the rebuild) answers exactly
+// that, and consumes it (counted `request`), so a request's repair of one pack
+// is never paid for twice with a read of every byte of the copy beside it, nor
+// raced by one. A repair of a shape or a derived file in place reads no pack
+// and answers none of it, so it CARRIES what is held to the reader it hands
+// the repaired copy to — the same request, letting go of the pin it failed
+// over before it runs again — and the hold is the request's across its
+// repairs, never one pin's: a retry that meets a pack's damage beneath a
+// dropped graph has it consumed by that pack's repair. A reader that lets the
+// copy go with something still held — its request failed past its first
+// byte, failed in a way the host does not repair, never failed, left before
+// its repair answered, or was repaired for a shape or a derived file alone
+// and then succeeded — hands it to the ordinary rules as it does
+// ([Synced.Release]), as though it had just arrived: no timer and no grace,
+// because a request's lifetime always ends. A
+// derived file's report that a drop repairs is never held — the drop is the
+// repair's own first step and races nothing — and nor is one from a scratch
+// or a view.
+//
 // A dropped file is written again at once because the maintainer is woken
 // as the round lets the repository go — never from inside the round, since a
 // pass starts no run on a repository a round holds: woken from inside, it met

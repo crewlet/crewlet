@@ -30,12 +30,15 @@ import (
 // own; and only past both the whole rebuild, seeded with every pack the scrub
 // found whole.
 
-// failureOf is the failure a git run over dir meets, as the host reads it
-// (cache.DamageReason), failing t when the run succeeds or names no damage
-// the cache repairs.
-func failureOf(t *testing.T, w *syncWorld, dir string, args ...string) cache.Failure {
+// failureOf is the failure a git run over s's directory meets, as the host
+// reads it (cache.DamageReason), failing t when the run succeeds or names no
+// damage the cache repairs. The run names s's reader as the one that repairs
+// it (Synced.Repairer), as the host's does: the case is the request, and asks
+// the repair itself.
+func failureOf(t *testing.T, w *syncWorld, s cache.Synced, args ...string) cache.Failure {
 	t.Helper()
-	_, err := runGit(t, w.pool, dir, "", args...)
+	_, err := w.pool.Run(t.Context(), gitproc.Cmd{Dir: s.Dir, Args: args, Repairer: s.Repairer,
+		Class: gitproc.ClassRead, Deadline: time.Minute})
 	if err == nil {
 		t.Fatalf("git %v over the damaged copy succeeded: the case damaged nothing it reads", args)
 	}
@@ -125,7 +128,7 @@ func TestARequestsPackDamageIsRepairedInPlaceFirst(t *testing.T) {
 			c := w.open(t)
 			s := w.sync(t, c, h.repo)
 			tc.damage(t, s.Dir, h)
-			f := failureOf(t, w, s.Dir, append(tc.read, h.commits[3])...)
+			f := failureOf(t, w, s, append(tc.read, h.commits[3])...)
 			gets := w.objects.total()
 
 			r, err := c.Rebuild(t.Context(), s, f)
@@ -674,7 +677,7 @@ func TestAGuardedRequestWaitsForTheRoundStillRepairing(t *testing.T) {
 	defer s.Release()
 	gittest.Damage(t, s.Dir, gittest.IdxTruncated, h.commits[3])
 	early := time.Now()
-	f := failureOf(t, w, s.Dir, "rev-list", "--objects", h.commits[3])
+	f := failureOf(t, w, s, "rev-list", "--objects", h.commits[3])
 
 	// The first request's in-place round reinstalls the pack — a repair —
 	// and is held before it lets the repository go.

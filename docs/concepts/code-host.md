@@ -670,7 +670,9 @@ failing on one damaged copy cost one repair. How depends on the damage:
   after its first request when a previous run of the node left it (its packs,
   and nothing that request's own check had just read), then once a day while
   it is used, and at once when a git process reports a pack or an object of it
-  unreadable or dies of a crash. That is the one way two kinds of damage are
+  unreadable or dies of a crash — unless that process was a request's whose
+  failure the request repairs itself (its packs, below), whose repair is then
+  the answer. That is the one way two kinds of damage are
   ever found: a damaged pack is sent to clients byte for byte (git copies a
   stored object as it is stored — damaged bytes from any pack, and a damaged
   entry header from the bitmap's preferred pack, which it sends without
@@ -734,7 +736,20 @@ failing on one damaged copy cost one repair. How depends on the damage:
   more over the copy as it stands, once any repair still running on it has
   ended, and only damage it meets again is repaired. A pushed pack is no
   repair: it replaces nothing a failing request read, so a repository pushed
-  to all day has its damage repaired like any other.
+  to all day has its damage repaired like any other. What the failing git
+  reported belongs to that request: it is held for the request's own repair
+  rather than asking the copy's scrub as well, so a repair of one pack never
+  pays for a read of the whole copy beside it — 1.13 times its pack bytes,
+  some 24 GB for the largest repository the defaults admit — nor races one to
+  fetch the same pack again (`crewlet.code.cache.reports{outcome=request}`).
+  It stays the request's through a repair of the copy's shape or its derived
+  files, which reads no pack and answers none of it, so when the request's
+  next try meets a damaged pack beneath a dropped index, that pack's repair
+  answers it too. A request that repairs no pack — its git failed after its
+  answer began, or in a way the node does not repair, or never failed, or
+  was put right by a repair of the shape or the derived files alone — hands
+  what it held on as it ends, and the copy's scrub is due for it as for any
+  other report.
 - **Its derived files.** The multi-pack-index git builds over the packs (with
   its reverse index and its bitmap) and the commit-graph are DERIVED files,
   written on the node from the packs it already holds, so damage git names in
@@ -856,7 +871,8 @@ engine writing into the cache, and `damaged` under `file=pack` or
 `trigger=scrub` damage only the scrub could have found —
 `crewlet.code.cache.reports` by `part` and `outcome` — `queued` rising is a
 disk losing data under the cache, `again` one that keeps losing it, `crash` a
-git process dying on something in a copy — and `crewlet.code.cache.maintenance.refused`, above zero a
+git process dying on something in a copy, `request` requests failing on
+damage they then had repaired under them — and `crewlet.code.cache.maintenance.refused`, above zero a
 repository whose bitmap the node's memory cannot hold
 ([metrics reference](../reference/metrics.md)).
 

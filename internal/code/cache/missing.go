@@ -71,10 +71,13 @@ func (c *Cache) Missing(ctx context.Context, s Synced, wants iter.Seq2[string, e
 	// a thousand ids (gitproc's measured section), seconds at the hundred
 	// thousand wants a ref-heavy clone may ask about, all of it silence on
 	// the client's connection before upload-pack starts.
+	// FOR s's READER (Synced.Repairer): the damage the check meets is its
+	// answer to the caller, who repairs it, so what the run reports is held
+	// for that repair rather than made the copy's scrub beside it.
 	res, err := c.git.Run(ctx, gitproc.Cmd{
-		Dir: s.Dir, Args: []string{"cat-file", "--batch-check", "--buffer"}, Config: c.ServeConfig(),
-		Loads: gitproc.PartMultiPackIndex, Stdin: in, Stdout: lines, Class: gitproc.ClassRead,
-		Deadline: gitproc.PackWorkDeadline(max(inputBytes, 0)),
+		Dir: s.Dir, Repairer: s.Repairer, Args: []string{"cat-file", "--batch-check", "--buffer"},
+		Config: c.ServeConfig(), Loads: gitproc.PartMultiPackIndex, Stdin: in, Stdout: lines,
+		Class: gitproc.ClassRead, Deadline: gitproc.PackWorkDeadline(max(inputBytes, 0)),
 	})
 	// The check asks cat-file about object ids alone, which loads the
 	// multi-pack-index and never the commit-graph, so a chunk-format report

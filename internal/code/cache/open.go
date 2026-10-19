@@ -129,6 +129,10 @@ type Cache struct {
 	kicks, maintKicks, scrubKicks chan struct{}
 	// scrubs is the node's one scrub, given by evidence (scrub.go).
 	scrubs *scrubSlot
+	// repairers mints the name each reader is handed under (pin;
+	// Synced.Repairer): one counter for the cache, since the pool reports to
+	// one observer and a name must say which reader of which copy it is.
+	repairers atomic.Uint64
 
 	// mu guards entries. Lock order: Cache.mu, then entry.mu.
 	mu      sync.Mutex

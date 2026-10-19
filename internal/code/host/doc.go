@@ -176,7 +176,18 @@
 // its own to repair, never the client's to retry. A failure whose process
 // began before the cache last wrote a repair into the copy is answered from
 // the copy as it stands and run once more, and that answer is no repair: the
-// run after it is repaired as though first. DAMAGE IS READ FROM GIT'S FORMAT
+// run after it is repaired as though first. A FAILURE THE REQUEST REPAIRS IS
+// THE REQUEST'S: every process run IN the incarnation names the request's
+// reader of it on its Cmd (gitproc.Cmd.Repairer, cache.Synced.Repairer), so
+// what it reports — a pack, an object, a hint, a crash — is held for this
+// request's repair rather than making the copy's scrub due beside it (cache's
+// report.go): a pack's or an object's repair consumes it, a shape's or a
+// derived file's in place carries it to the copy the request runs again over
+// (so the pack repair a retry escalates to answers it), and the request's
+// release of the copy hands on whatever it did not repair (past its first
+// byte, never asked, or put right by an in-place repair alone).
+// Without it every one-pack repair raced a read of the whole copy, which also
+// decided which of the two repaired the pack. DAMAGE IS READ FROM GIT'S FORMAT
 // STRINGS, NEVER ITS WORDS: upload-pack copies its request's text into the
 // messages it dies with ("unexpected line: '<arg>'"), so the pool classifies a
 // run by the format of each trace2 report its process tree makes, which

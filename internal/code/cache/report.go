@@ -82,6 +82,40 @@ import (
 //     request that can provoke a crash beside a busy repository bounded by
 //     nothing — and within an hour of one whose findings still wait for
 //     their repair, the repair is the answer (`covered`).
+//   - HELD FOR THE REQUEST: a stored report, an object report, a hint or a
+//     crash — or a derived part no drop repairs — from a run IN the
+//     incarnation whose Cmd names one of its readers (gitproc.Cmd.Repairer,
+//     Synced.Repairer) is held for that reader (incarnation.held) and makes
+//     nothing due: the host names its reader on every process whose failure
+//     before its first byte it repairs, and that repair — a forced round in
+//     place, then the scrub for its own callers, then the rebuild
+//     (Cache.Rebuild) — is the answer to exactly what such a report names.
+//     Made due as well, the report's scrub ran beside the request's own
+//     repair of the same damage: a read of every byte of the copy, about
+//     1.13 times its pack bytes (some 24 GB for the largest repository the
+//     defaults admit), beside a repair of one pack, and a race between the
+//     two over which repaired it. The reader's repair of a pack's or an
+//     object's damage CONSUMES what is held for it (consume, counted
+//     `request`) once it has answered the reader. Its repair of a shape or a
+//     derived file IN PLACE reads no pack, so it answers none of a crash's
+//     or a stored part's and consumes nothing: it CARRIES what is held to
+//     the reader it hands the repaired copy to (carry) — the same request,
+//     which lets go of the pin it failed over before it runs again — so the
+//     hold is the request's across its repairs, never one pin's: handed on
+//     with that first pin, a crash beside a damaged graph went to the scrub
+//     while the request ran on, and on into a pack's repair when its retry
+//     met the pack beneath the graph, the escalation the host's repair limit
+//     is for. The reader's RELEASE hands what is left to the ordinary rules
+//     as though it had just arrived (handOn) — the report of a request that
+//     failed past its first byte, failed in a way the host does not repair,
+//     never failed at all, left before its repair answered, or was repaired
+//     for a shape or a derived file alone and then succeeded — so the bound
+//     on a hold is the request's own lifetime, which always ends, and no
+//     timer or grace stands beside it. A derived part a drop repairs is
+//     never held: its round drops it in place, races nothing and is the
+//     repair's own first step; nor is a report from a scratch or a view,
+//     whose process the host repairs only for its alternate's shape, which
+//     no process reports.
 
 // reportPart is what a report names: the `part` attribute of
 // crewlet.code.cache.reports.
@@ -130,7 +164,100 @@ const (
 	// ScrubCooldown of a scrub whose findings still wait for their repair:
 	// the repair is the answer, and no scrub is made due.
 	reportCovered reportOutcome = "covered"
+	// reportRequest: a report HELD FOR THE REQUEST whose own run made it,
+	// and answered by the repair that request asked (Cache.Rebuild): no
+	// scrub is made due beside it.
+	reportRequest reportOutcome = "request"
 )
+
+// heldReport is what one run reported that the copy's scrub answers — its
+// stored parts (a pack's, an object's), the derived parts whose every
+// declaration keeps its files on a report, a hint, a crash — as the observer
+// takes it; HELD (incarnation.held) while the request whose run it was may
+// still repair it.
+type heldReport struct {
+	stored, kept    gitproc.Part
+	hinted, crashed bool
+}
+
+// scrubs reports whether r names anything the copy's scrub answers.
+func (r heldReport) scrubs() bool { return r.stored|r.kept != 0 || r.hinted || r.crashed }
+
+// countHeld counts every part r names with outcome.
+func (c *Cache) countHeld(r heldReport, outcome reportOutcome) {
+	c.countReports(r.stored|r.kept, outcome)
+	if r.hinted {
+		c.countPart(reportHint, outcome)
+	}
+	if r.crashed {
+		c.countPart(reportCrash, outcome)
+	}
+}
+
+// toScrub hands r to inc's scrub (scrubAsked) and counts it with what became
+// of it — the ordinary rule for a report the scrub answers; e.mu is held.
+func (c *Cache) toScrub(inc *incarnation, r heldReport) {
+	c.countHeld(r, c.scrubAsked(inc))
+}
+
+// handOn takes every report held for reader by of inc and hands each to the
+// ordinary rules (toScrub) as though it had just arrived — while inc is still
+// the entry's copy in service and the cache runs; a report about a copy since
+// replaced is dropped, as one arriving about it would be. Called as the
+// reader lets inc go, so a request that ended without asking its repair — it
+// failed past its first byte, failed in a way the host does not repair, or
+// never failed — leaves nothing held. e.mu is held.
+func (c *Cache) handOn(e *entry, inc *incarnation, by gitproc.Repairer) {
+	held, ok := inc.held[by]
+	if !ok {
+		return
+	}
+	delete(inc.held, by)
+	if e.dead || e.current != inc || c.isStopped() {
+		return
+	}
+	for _, r := range held {
+		c.toScrub(inc, r)
+	}
+}
+
+// consume takes every report held for reader by of inc as answered by the
+// repair that reader asked, counting each `request`; the reader keeps its
+// pin, and what its later runs report is held again. e.mu is held.
+func (c *Cache) consume(inc *incarnation, by gitproc.Repairer) {
+	held, ok := inc.held[by]
+	if !ok || len(held) == 0 {
+		return
+	}
+	inc.held[by] = nil
+	for _, r := range held {
+		c.countHeld(r, reportRequest)
+	}
+}
+
+// carry moves every report held for from's reader onto to's: to is the copy
+// from's run failed over, repaired IN PLACE (a shape, a derived file;
+// Cache.Rebuild) and handed to the same request under a reader of its own.
+// The host lets go of from before it runs again over to (its repair loop), so
+// a report left under from would be handed on (handOn) while the request it
+// belongs to was still running — and still repairing, when its retry meets a
+// pack's damage beneath the derived file. Carried, it is consumed by that
+// pack's repair under to (awaitRequest) or handed on with to's release. A to
+// on another incarnation — the copy replaced by the round that answered — and
+// a to already let go take nothing: what from holds about a copy since
+// replaced is dropped with from's release, as handOn drops any. e.mu is held.
+func (c *Cache) carry(from, to Synced) {
+	inc := from.inc
+	if to.inc != inc {
+		return
+	}
+	held := inc.held[from.Repairer]
+	if _, live := inc.held[to.Repairer]; !live || len(held) == 0 {
+		return
+	}
+	inc.held[from.Repairer] = nil
+	inc.held[to.Repairer] = append(inc.held[to.Repairer], held...)
+}
 
 // dropAsk is one part's drop as asked: the latest Began of a run that asked
 // it (gitproc.Result.Began; zero when nothing says), and what asked
@@ -276,67 +403,69 @@ func packOfRel(rel string) (string, bool) {
 // git run with where it ran and how it ended, on the run's own goroutine. It
 // reads the parts the run's damage names, its hints and whether it crashed,
 // finds the incarnation they are about by the process's directory, records a
-// derived part a drop repairs on its repair mark and queues a round, and makes
-// its scrub due for the rest — under the entry's mu, never its write lock, and doing no I/O,
-// so it never holds its run.
+// derived part a drop repairs on its repair mark and queues a round, and
+// makes its scrub due for the rest — or HOLDS the rest for the reader the run
+// names (Ran.Repairer), whose own repair answers it (HELD FOR THE REQUEST) —
+// under the entry's mu, never its write lock, and doing no I/O, so it never
+// holds its run.
 func (c *Cache) observe(ran gitproc.Ran) {
 	if c.isStopped() {
 		return
 	}
 	var dmg *gitproc.Damage
-	var derived, stored gitproc.Part
+	var derived gitproc.Part
+	var r heldReport
 	if errors.As(ran.Result.Damage, &dmg) {
 		dmg = dmg.Narrow(ran.Loads)
 		derived = derivedOf(dmg)
-		stored = dmg.Parts & (gitproc.PartPack | gitproc.PartObject)
+		r.stored = dmg.Parts & (gitproc.PartPack | gitproc.PartObject)
 	}
-	hinted, crashed := len(ran.Result.Trace.Hints) > 0, ran.Result.Crashed
-	if derived == 0 && stored == 0 && !hinted && !crashed {
+	r.hinted, r.crashed = len(ran.Result.Trace.Hints) > 0, ran.Result.Crashed
+	if derived == 0 && !r.scrubs() {
 		return
 	}
 	e, inc := c.incarnationAt(ran.Dir)
-	if e == nil {
+	inIncarnation := e != nil
+	if !inIncarnation {
 		// A scratch or a view: only its alternate's derived parts and a
 		// crash are the cache's; its pack and object parts, and the packs
 		// its hints name, may be the client's.
 		if e, inc = c.incarnationAt(ran.Alternate); e == nil {
 			return
 		}
-		if stored != 0 {
-			c.countReports(stored, reportUnrouted)
+		if r.stored != 0 {
+			c.countReports(r.stored, reportUnrouted)
 		}
-		if hinted {
+		if r.hinted {
 			c.countPart(reportHint, reportUnrouted)
 		}
-		stored, hinted = 0, false
+		r.stored, r.hinted = 0, false
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.current != inc || e.dead {
 		return
 	}
-	if stored != 0 || hinted || crashed {
-		outcome := c.scrubAsked(inc)
-		c.countReports(stored, outcome)
-		if hinted {
-			c.countPart(reportHint, outcome)
-		}
-		if crashed {
-			c.countPart(reportCrash, outcome)
-		}
-	}
-	if derived == 0 {
-		return
-	}
-	named := c.image.reported(dmg.Drops())
-	drops := named & c.image.dropping(EventReported)
-	if kept := named &^ drops; kept != 0 {
+	var named, drops derivedSet
+	if derived != 0 {
+		named = c.image.reported(dmg.Drops())
+		drops = named & c.image.dropping(EventReported)
 		// A DERIVED PART NO DROP REPAIRS — every declaration it names keeps
 		// its files on a report (OnReported) — goes where all damage a drop
 		// does not end goes: the copy's scrub, whose bytes decide, bounded
 		// by its cooldown. Recorded as a drop it queued a full round that
 		// could move nothing, for every git process that reported it.
-		c.countReports(c.image.naming(derived, kept), c.scrubAsked(inc))
+		r.kept = c.image.naming(derived, named&^drops)
+	}
+	if r.scrubs() {
+		// Held for its reader only where the run was IN the incarnation:
+		// the host repairs nothing a process in a scratch or a view meets
+		// but the alternate's shape, which no process started to report.
+		if held, ok := inc.held[ran.Repairer]; ok && inIncarnation && ran.Repairer != noReader {
+			inc.held[ran.Repairer] = append(held, r)
+		} else {
+			c.toScrub(inc, r)
+		}
 	}
 	if drops == 0 {
 		return

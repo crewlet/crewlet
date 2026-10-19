@@ -89,7 +89,7 @@ func (s *Server) infoRefs(w http.ResponseWriter, r *http.Request) {
 	// (repairing).
 	err = s.repairing(ctx, r, adm.name, &synced, inIncarnation, out.Started, func(in cache.Synced) error {
 		_, gerr := s.runGit(ctx, gitproc.Cmd{
-			Dir:  in.Dir,
+			Dir: in.Dir, Repairer: in.Repairer,
 			Args: []string{"upload-pack", "--stateless-rpc", "--advertise-refs", in.Dir},
 			// THE CACHE'S ONE SERVE CONFIGURATION, so the advertisement
 			// offers exactly what the fetch after it honours.

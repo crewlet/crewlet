@@ -98,6 +98,14 @@ type Cmd struct {
 	// by it ([Damage.Narrow]), as the caller does. Zero says nothing.
 	Loads Part
 
+	// Repairer, when set, names the caller that repairs what this run fails
+	// with before its first byte — the code host, for a process it runs in
+	// a cache incarnation it holds pinned — and the pool hands it to its
+	// observer untouched (Ran.Repairer), so what the run reports is held
+	// for that caller's own repair rather than acted on beside it. Zero
+	// names nobody: the run's report is acted on as it arrives.
+	Repairer Repairer
+
 	// Args follow "git". Args[0] is a SUBCOMMAND (^[a-z][a-z0-9-]*$): a
 	// global option there (-c, --exec-path, --git-dir, --config-env) would
 	// change what the process is. The engine passes no argument a client

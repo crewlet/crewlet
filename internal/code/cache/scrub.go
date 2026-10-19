@@ -48,7 +48,10 @@ import (
 //     held to their checksums — and never for one nobody reads;
 //   - AT ONCE when a git process over it reports a pack or an object it could
 //     not read, names a pack in words, or crashes (report.go), bounded by
-//     ScrubCooldown after a scrub that found nothing.
+//     ScrubCooldown after a scrub that found nothing — unless the process was
+//     a request's whose failure that request repairs, which holds the report
+//     for the request's own repair: that repair is what scrubs, for it
+//     (scrubFor), if its in-place round finds nothing.
 //
 // ONE SCRUB ON THE NODE AT A TIME (scrubSlot), given BY EVIDENCE: a
 // REQUEST's (scrubFor: what a failed request's in-place round could not
@@ -422,7 +425,7 @@ func (c *Cache) firstScrub(inc *incarnation) {
 // WHOSE FINDINGS STILL WAIT, TOO (`covered`): a repair round held behind
 // another, or one whose download the object store refused (its pack held off,
 // install.go), leaves them on the mark, and every crash of a clone over the
-// damage they name would otherwise scrub the whole copy again — about 26 GB
+// damage they name would otherwise scrub the whole copy again — about 24 GB
 // for the largest repository the defaults admit — to find the same files.
 // The repair is the answer to those reports; past the cooldown a report scrubs
 // again, at most once a ScrubCooldown, so damage that landed elsewhere in the

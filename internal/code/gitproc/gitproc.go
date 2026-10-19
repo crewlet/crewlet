@@ -221,7 +221,10 @@
 // its Result, a reservation's included, and the cache that installed it
 // repairs what the run named. [Result.Began] says when the process started,
 // on the monotonic clock, so a report about a file the cache has rewritten
-// since is told from one about the file it holds now.
+// since is told from one about the file it holds now; and [Cmd.Repairer],
+// carried to the observer as it was given, says which caller repairs what the
+// run failed with itself, so the cache leaves that report to that caller's
+// repair rather than repair the same damage a second time beside it.
 //
 // A CRASH IS REPORTED TOO, and is no kind. A pack-objects reusing entries by
 // a damaged reverse index dies of SIGSEGV on every git, and its upload-pack
@@ -477,9 +480,24 @@ type Ran struct {
 	// Loads is the run's Cmd.Loads: the chunk-format files its process
 	// loads, which narrow what its damage names (Damage.Narrow).
 	Loads Part
+	// Repairer is the run's Cmd.Repairer: the caller that repairs what it
+	// failed with before its first byte, or zero for none.
+	Repairer Repairer
 	// Result is how it ended.
 	Result Result
 }
+
+// Repairer is an opaque name for the caller that repairs what a run fails
+// with before its first byte ([Cmd.Repairer]), minted by whoever observes the
+// pool — the code cache names each reader it hands a directory to — and
+// carried by the pool to its observer as it was given, never read. Zero names
+// nobody.
+//
+// The pool carries it rather than the observer guessing from the directory
+// because one directory has many readers at once: two requests over one
+// cache copy each repair their own failure, and what one of them reports is
+// that one's to repair.
+type Repairer uint64
 
 // Observe installs fn as the pool's OBSERVER: called with what every run ran
 // and how it ended — [Pool.Run] and [Reserved.Run] alike, success or failure,
@@ -512,7 +530,7 @@ func (p *Pool) report(c Cmd, res Result) {
 		return
 	}
 	if o := p.observing.Load(); o != nil {
-		o.fn(Ran{Dir: c.Dir, Alternate: c.Alternate, Loads: c.Loads, Result: res})
+		o.fn(Ran{Dir: c.Dir, Alternate: c.Alternate, Loads: c.Loads, Repairer: c.Repairer, Result: res})
 	}
 }
 

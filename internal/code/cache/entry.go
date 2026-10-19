@@ -53,6 +53,13 @@ type Synced struct {
 	Position statelog.Position
 	// Kind is what this hand-out cost.
 	Kind SyncKind
+	// Repairer names this reader to the cache's observer. A git process run
+	// in Dir whose failure this reader repairs names it on its Cmd
+	// (gitproc.Cmd.Repairer), and what that process reports is HELD for this
+	// reader rather than acted on beside its repair (report.go): the repair
+	// it asks ([Cache.Rebuild]) consumes it, and Release hands whatever it
+	// did not to the ordinary report rules.
+	Repairer gitproc.Repairer
 
 	// release unpins Dir, once: what [Synced.Release] calls.
 	release func()
@@ -315,6 +322,12 @@ type incarnation struct {
 	indexRepair bool
 	// repair is what reports asked its next full round to do (report.go).
 	repair repairMark
+	// held is what each of its readers' runs reported that the reader's own
+	// repair answers (report.go, HELD FOR THE REQUEST), by the reader's name
+	// (Synced.Repairer): a key for every reader pin hands it to, taken by
+	// that reader's release, so a report reaches a reader that is still
+	// there or the ordinary rules and never waits on one already gone.
+	held map[gitproc.Repairer][]heldReport
 	// written is when this process last changed each declaration's files —
 	// a write that moved a file's identity, the round's own index, or a drop
 	// — a time.Now() reading compared on the monotonic clock with a report's
@@ -479,32 +492,49 @@ func (c *Cache) used(inc *incarnation) {
 	inc.lastUsed = c.now()
 }
 
-// pin hands inc to a reader — a use (used); the entry's mu is held.
+// noReader is the name of a pin that is no reader's — a push's scratch or an
+// advertisement view holding the incarnation it leans on (scratch.go): no
+// report is held under it, since a process there is never one whose
+// incarnation's damage its caller repairs (report.go).
+const noReader gitproc.Repairer = 0
+
+// pin hands inc to a reader — a use (used) — under a name of its own
+// (Synced.Repairer), live on inc until the reader lets it go: what the
+// observer holds the reader's reports under (report.go). The entry's mu is
+// held.
 func (c *Cache) pin(e *entry, inc *incarnation, kind SyncKind) Synced {
 	inc.pins++
 	c.used(inc)
+	by := gitproc.Repairer(c.repairers.Add(1))
+	if inc.held == nil {
+		inc.held = map[gitproc.Repairer][]heldReport{}
+	}
+	inc.held[by] = nil
 	return Synced{
 		Dir:      inc.dir,
 		Repo:     inc.repo,
 		Position: inc.at,
 		Kind:     kind,
-		release:  sync.OnceFunc(func() { c.release(e, inc) }),
+		Repairer: by,
+		release:  sync.OnceFunc(func() { c.release(e, inc, by) }),
 		inc:      inc,
 		entry:    e,
 		owner:    c,
 	}
 }
 
-// release is a reader letting inc go — a use (used). The last release of a
+// release is reader by letting inc go — a use (used) — handing every report
+// held for it to the ordinary report rules (handOn). The last release of a
 // RETIRED incarnation moves its directory into trash/ and kicks the janitor;
 // the removal itself is the janitor's, so a request that lets go of a 20 GiB
 // directory returns at once. The last release of a current incarnation while
 // the cache is over its budget kicks the janitor too: a repository too large
 // to keep is served while a request holds it, and evicted as soon as none
 // does rather than at the next tick. Safe after Stop.
-func (c *Cache) release(e *entry, inc *incarnation) {
+func (c *Cache) release(e *entry, inc *incarnation, by gitproc.Repairer) {
 	e.mu.Lock()
 	c.used(inc)
+	c.handOn(e, inc, by)
 	gone := c.unpin(e, inc)
 	e.mu.Unlock()
 	c.trash(gone)

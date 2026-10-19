@@ -365,7 +365,13 @@ func ShapeReason(err error) (Failure, bool) {
 //     [RebuildCorrupt] on the retry (repair.go). It drops only the files of
 //     a declaration that drops on a report (OnReported): damage whose every
 //     declaration keeps its files is no derived file a drop ends, and is
-//     repaired as [RebuildCorrupt] is, at once.
+//     repaired as [RebuildCorrupt] is, at once. Neither in-place repair
+//     reads a pack, so what the failing process reported beside the shape or
+//     the derived file and was held for failed's reader ([Synced.Repairer],
+//     report.go) — a crash, a stored part, a hint — is no part it answers:
+//     it is CARRIED to the reader the repaired copy is answered to
+//     (awaitInPlace), the same request running again, for that request's
+//     next repair to consume or its release to hand on.
 //   - [RebuildCorrupt] and [RebuildMissing] are repaired IN PLACE FIRST, in
 //     the four steps above: a failure that predates a write into the copy is
 //     answered from it as it stands — the one answer of Kind SyncNone, since
@@ -375,7 +381,10 @@ func ShapeReason(err error) (Failure, bool) {
 //     replaced by the NEXT incarnation, read whole at the log's head and
 //     seeded with what the scrub found whole: one whose rebuild is queued or
 //     running joins it, and one a rebuild could not end the failure of is
-//     refused ([ErrRebuildRefused], see rebuildRefusal).
+//     refused ([ErrRebuildRefused], see rebuildRefusal). What the failing
+//     process reported was held for failed's reader ([Synced.Repairer],
+//     report.go) rather than made the copy's scrub, and this repair answers
+//     it: once the caller has its answer, it is consumed (awaitRequest).
 //
 // A failed that is no longer its repository's current incarnation — rebuilt
 // or purged since it was pinned — is answered by a linearizable [Cache.Sync]
@@ -450,7 +459,7 @@ func (c *Cache) repairRequest(ctx context.Context, failed Synced, f Failure) (Sy
 		w.escalate = ""
 		c.asItStands(e, inc, w)
 		e.mu.Unlock()
-		return c.await(ctx, e, w)
+		return c.awaitRequest(ctx, e, w, failed)
 	}
 	if len(f.Packs) == 0 && c.forcedLately(inc) {
 		// STEP 2 IS BOUNDED as step 3 is: a forced round of this copy
@@ -462,7 +471,7 @@ func (c *Cache) repairRequest(ctx context.Context, failed Synced, f Failure) (Sy
 		// rebuild's refusals answer it, at once where they stand.
 		e.mu.Unlock()
 		go c.escalate(e, inc, []*waiter{w})
-		return c.await(ctx, e, w)
+		return c.awaitRequest(ctx, e, w, failed)
 	}
 	c.markWhole(inc, Failure{Reason: RebuildStored}, dropRequest)
 	inc.repair.forces++
@@ -481,7 +490,45 @@ func (c *Cache) repairRequest(ctx context.Context, failed Synced, f Failure) (Sy
 	}
 	c.join(e, w)
 	e.mu.Unlock()
-	return c.await(ctx, e, w)
+	return c.awaitRequest(ctx, e, w, failed)
+}
+
+// awaitRequest is await for w, a request's repair of the pack or object damage
+// its run over failed met: and once that repair has answered the request —
+// whatever it answered, the copy repaired, as it stands, or a rebuild refused —
+// every report HELD for the request's reader (failed.Repairer) is that
+// repair's, and consumed (reports{outcome=request}): the forced round, the
+// scrub and the rebuild the repair is made of answer what a stored report, a
+// hint or a crash names, so none of them makes the copy's scrub due beside
+// it. A request that LEFT before its answer consumes nothing: a caller gone is
+// handed to no scrub (Cache.run), so its reports go to the ordinary rules
+// with its pin's release (handOn).
+func (c *Cache) awaitRequest(ctx context.Context, e *entry, w *waiter, failed Synced) (Synced, error) {
+	s, err := c.await(ctx, e, w)
+	e.mu.Lock()
+	if !w.gone {
+		c.consume(failed.inc, failed.Repairer)
+	}
+	e.mu.Unlock()
+	return s, err
+}
+
+// awaitInPlace is await for w, a request's IN-PLACE repair of a shape or a
+// derived file in the copy failed was handed out of: once it has answered the
+// request, every report held for failed's reader is CARRIED to the reader it
+// answers (carry, report.go), since that repair read no pack and so answers
+// none of them, and the request goes on over the copy it was handed while
+// letting failed go. An answer that failed, or a caller that left, carries
+// nothing: the request ends, and failed's release hands its reports on.
+func (c *Cache) awaitInPlace(ctx context.Context, e *entry, w *waiter, failed Synced) (Synced, error) {
+	s, err := c.await(ctx, e, w)
+	if err != nil {
+		return s, err
+	}
+	e.mu.Lock()
+	c.carry(failed, s)
+	e.mu.Unlock()
+	return s, nil
 }
 
 // forcedLately reports whether inc's last forced round repaired nothing within
@@ -562,11 +609,14 @@ func (c *Cache) settleRequested(e *entry, inc *incarnation, forces int, reinstal
 // THE GUARD IS ASKED AGAIN, before the scrub and before the rebuild: the
 // copy is written into while the repair runs — the in-place round installs a
 // push it had not yet read, and the scrubber's own repair of the same damage
-// (a report made it due as the request failed) installs the pack again
-// beside this scrub, which then finds every file whole — and a caller whose
-// failure began before such a write is answered from the copy as it stands
-// (staleAnswered), exactly as Rebuild answers one, rather than handed a
-// whole rebuild of a copy that may no longer be damaged.
+// (made due by ANOTHER reader's report — one past its first byte, or one
+// handed on as its request ended — or by a background run, the failing
+// request's own report being held for this repair: report.go, HELD FOR THE
+// REQUEST) installs the pack again beside this scrub, which then finds every
+// file whole — and a caller whose failure began before such a write is
+// answered from the copy as it stands (staleAnswered), exactly as Rebuild
+// answers one, rather than handed a whole rebuild of a copy that may no
+// longer be damaged.
 func (c *Cache) escalate(e *entry, inc *incarnation, ws []*waiter) {
 	if !c.enter() {
 		e.mu.Lock()
@@ -714,7 +764,7 @@ func (c *Cache) rebuild(ctx context.Context, failed Synced, f Failure, refuse bo
 		w := newWaiter(linearizable)
 		c.join(e, w)
 		e.mu.Unlock()
-		return c.await(ctx, e, w)
+		return c.awaitInPlace(ctx, e, w, failed)
 	}
 	r, rule := c.askRebuild(e, failed.inc, reason, refuse, whole, now)
 	if rule != "" {

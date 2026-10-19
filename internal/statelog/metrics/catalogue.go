@@ -794,7 +794,11 @@ func Catalogue() []Instrument {
 				"again what fails; `crash`, a git process dying of a signal " +
 				"the node did not send — what a damaged reverse index or " +
 				"bitmap does to a clone, naming nothing — which makes the " +
-				"scrub due the same way) and its `outcome`: `queued`, a " +
+				"scrub due the same way; any of these four named by the git " +
+				"a request ran, which repairs what that git fails with " +
+				"before its first byte, is held for that request until it " +
+				"asks its repair or lets the copy go, and counted then) and " +
+				"its `outcome`: `queued`, a " +
 				"repair asked — a round, or the scrub; `deferred`, asked " +
 				"while a check of the repository ran, repaired once it ends; " +
 				"`stale`, not dropped — the node wrote the file after the " +
@@ -812,10 +816,19 @@ func Catalogue() []Instrument {
 				"report or a crash within an hour of a scrub of the copy " +
 				"that found nothing, which makes no other; `covered`, one " +
 				"within an hour of a scrub whose findings still wait for " +
-				"their repair, which is its answer. `queued` rising is a disk " +
+				"their repair, which is its answer; `request`, one held for " +
+				"the request whose git named it and answered by the repair " +
+				"that request asked — its in-place round, its scrub and, " +
+				"past both, its rebuild — with no scrub of the copy made due " +
+				"beside it (one the request did not repair — it failed past " +
+				"its first byte, failed in a way the node does not repair, " +
+				"or never failed — is counted under the others as the " +
+				"request lets the copy go). `queued` rising is a disk " +
 				"losing data under the cache; `again`, a disk that keeps " +
 				"losing it; `cooldown` rising, a git process failing on " +
-				"something the copy's checksums do not show.",
+				"something the copy's checksums do not show; `request` " +
+				"rising, requests failing on damage they had repaired " +
+				"under them.",
 		},
 		{
 			Name: CodeCacheHints, Kind: KindCounter, Unit: UnitCount,
