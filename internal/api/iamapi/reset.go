@@ -67,16 +67,18 @@ func (e errNotResettable) Error() string {
 // factor first is a gesture of the same permission. So a link is held to
 // [iamdomain.Writer.MayConfer], judged in the record's own snapshot as though
 // the person's grants were being conferred from nothing: a target holding a
-// permission the issuer lacks is `403`, for the reason a machine token is
-// minted only for a service account and an invitation carries only what its
-// issuer holds — administering people must never be a way to act with a
-// permission one does not have. Issuing is admin's, and admin carries every
-// app (ADR-0033), so what reaches that `403` today is a name this build does
-// not know on the person's row: kept there and ignored, and never one an
-// issuer on this build can be shown to hold. And since the judgement is the
-// issue's, a grant the person GAINS while the link is outstanding revokes it,
-// in the record that adds the grant ([iamdomain.Writer.UpdatePerson]): that
-// grant was judged against nobody holding the link.
+// permission the issuer lacks is `403 unauthorized` naming it, for the reason a
+// machine token is minted only for a service account and an invitation
+// carries only what its issuer holds — administering people must never be a
+// way to act with a permission one does not have. Issuing is admin's, and
+// admin carries every app (ADR-0033), so what reaches that refusal today is a
+// name this build does not know on the person's row: kept there and ignored,
+// and never one an issuer on this build can be shown to hold — `403
+// forbidden`, since no permission would make it one. And since the judgement
+// is the issue's, a grant the person GAINS while the link is outstanding
+// revokes it, in the record that adds the grant
+// ([iamdomain.Writer.UpdatePerson]): that grant was judged against nobody
+// holding the link.
 //
 // What the issue does NOT follow is the ISSUER: an administrator demoted after
 // issuing a link still holds a link that opens, as an invitation they issued
