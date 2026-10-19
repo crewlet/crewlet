@@ -10,7 +10,10 @@ import {
   dataChangeWords,
   dataRefusalReason,
   dataRefusalText,
+  historyOpTag,
+  historyRefusalWords,
   historyWords,
+  KIND_LIST,
   purgeAt,
   purgeSentence,
   roleIncludes,
@@ -163,5 +166,24 @@ describe("the trash", () => {
   test("an unknown trash time says the retention rather than a wrong date", () => {
     expect(purgeAt("0001-01-01T00:00:00Z")).toBeNull();
     expect(purgeSentence(undefined)).toMatch(/30 days after it was trashed/);
+  });
+});
+
+describe("the words other screens say an artifact's facts in", () => {
+  test("the kind list names every kind the engine has, in its order", () => {
+    expect(KIND_LIST).toBe("pages, docs, slides, dashboards, sheets and designs");
+  });
+
+  test("an op is a word a reader knows, and an unknown one keeps its name", () => {
+    expect(historyOpTag("read_elevated")).toBe("admin read");
+    expect(historyOpTag("patch")).toBe("edit");
+    expect(historyOpTag("restore")).toBe("untrash");
+    expect(historyOpTag("some_new_op")).toBe("some new op");
+  });
+
+  test("a refusal reason is a clause, never the log's code", () => {
+    expect(historyRefusalWords("head_moved")).toBe("a newer version was published first");
+    expect(historyRefusalWords("quota_bytes")).toBe("the company has reached its storage limit");
+    expect(historyRefusalWords("some_new_reason")).toBe("some new reason");
   });
 });

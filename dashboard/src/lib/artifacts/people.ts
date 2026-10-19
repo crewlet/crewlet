@@ -123,6 +123,20 @@ export function useArtifactPeople(): ArtifactPeople {
   return useMemo(() => artifactPeople(org), [org]);
 }
 
+/**
+ * A share's audience as the engine spells it in a history row (`seat:pm`,
+ * `unit:ops`, `company`), named the way a reader knows it, for
+ * [historyWords]' `audience`.
+ */
+export function audienceName(raw: string, people: ArtifactPeople): string {
+  if (raw === "company") return `everyone in ${people.company}`;
+  // AT THE FIRST COLON ONLY: a seat handle may carry its own (`token:maya`).
+  const at = raw.indexOf(":");
+  const kind = raw.slice(0, at);
+  const id = raw.slice(at + 1);
+  return kind === "unit" ? people.unitName(id) : people.seatName(id);
+}
+
 /** A share's audience as a principal, for the share dialog's row. */
 export function audiencePrincipal(audience: ArtifactAudience, people: ArtifactPeople): Principal {
   switch (audience.kind) {

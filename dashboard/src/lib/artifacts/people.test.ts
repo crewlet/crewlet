@@ -7,6 +7,7 @@ import { expect, test } from "vitest";
 
 import {
   artifactPeople,
+  audienceName,
   memberTurn,
   presenceMembers,
   selfWords,
@@ -80,4 +81,16 @@ test("only an agent at work offers its turn", () => {
   const roster = new Map(room.map((m) => [m.session, m]));
   const { members } = presenceMembers(room, artifactPeople(null), new Map());
   expect(members.map((m) => memberTurn(roster, m))).toEqual(["", "run-7", ""]);
+});
+
+test("a share's audience is named by its seat, its team or the company, a handle's own colon kept", () => {
+  const people = {
+    ...artifactPeople(null),
+    company: "Acme",
+    seatName: (handle: string) => (handle === "token:maya" ? "Maya Ortiz" : handle),
+    unitName: (key: string) => (key === "ops" ? "Operations" : key),
+  };
+  expect(audienceName("seat:token:maya", people)).toBe("Maya Ortiz");
+  expect(audienceName("unit:ops", people)).toBe("Operations");
+  expect(audienceName("company", people)).toBe("everyone in Acme");
 });
