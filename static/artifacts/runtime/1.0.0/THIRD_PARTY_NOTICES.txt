@@ -2,7 +2,7 @@
 
 The app bundles dependencies which contain the following licenses:
 
-## @crewlethq/tokens - 0.2.0 (MIT AND OFL-1.1)
+## @crewlethq/tokens - 0.24.0 (MIT AND OFL-1.1)
 
 MIT License
 
