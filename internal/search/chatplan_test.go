@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/search"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // EVERY STATEMENT THE CHAT INDEX ISSUES IS PLANNED ONTO THE INDEX IT NAMES, AND
@@ -180,30 +181,16 @@ func TestEveryChatIndexServesARegisteredQuery(t *testing.T) {
 		registered["a rebuild's drop of "+table] = registration{statement: drop, walks: table}
 	}
 
-	// THE PLANS, the node estate's in a WRITE transaction because several of
-	// its statements are the index's own writes, which a read transaction
-	// refuses even to plan.
+	// THE PLANS, each on the estate its statement runs against. Several of
+	// the node estate's are the index's own writes, which a read transaction
+	// refuses even to plan; storetest.Plan plans a write in a write one.
 	plans := map[string][]string{}
-	plan := func(tx *sql.Tx, replicated bool) error {
-		for name, r := range registered {
-			if r.replicated != replicated {
-				continue
-			}
-			steps, err := explain(t, tx, r.statement, r.args...)
-			if err != nil {
-				return fmt.Errorf("%s: %w", name, err)
-			}
-			plans[name] = steps
+	for name, r := range registered {
+		var on storetest.Handle = db
+		if r.replicated {
+			on = db.Replicated()
 		}
-		return nil
-	}
-	if err := db.Tx(ctx, func(tx *sql.Tx) error { return plan(tx, false) }); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Replicated().Reader().Read(ctx, func(tx *sql.Tx) error {
-		return plan(tx, true)
-	}); err != nil {
-		t.Fatal(err)
+		plans[name] = storetest.Plan(t, on, r.statement, r.args)
 	}
 
 	for name, r := range registered {
