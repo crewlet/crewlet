@@ -42,6 +42,36 @@ func TestSchemaGenerates(t *testing.T) {
 	}
 }
 
+// THE SCHEMA SPELLS ITS TEXT AS WRITTEN. It is read by an editor showing a
+// field's description on hover, by a person reading the published file and by
+// a model authoring a document against it, and none of them embeds it in an
+// HTML page — the one place json.MarshalIndent's escaping protects anything —
+// so `token:<id>` was published as `token:\u003cid\u003e`. Each tier carries
+// descriptions with markup in them, read here as written. Mutation:
+// json.MarshalIndent back in Schema is red.
+func TestTheSchemaSpellsItsTextAsWritten(t *testing.T) {
+	t.Parallel()
+	for tier, says := range map[Tier][]string{
+		TierBootstrap: {"token:<id>", "<dir of path>", "stream.replicas > 1"},
+		TierCompany:   {"@webhook-<name>", "name -> value"},
+	} {
+		data, err := Schema(tier)
+		if err != nil {
+			t.Fatalf("%s: %v", tier, err)
+		}
+		for _, want := range says {
+			if !strings.Contains(string(data), want) {
+				t.Errorf("the %s schema does not carry %q as written", tier, want)
+			}
+		}
+		for _, escape := range []string{`\u003c`, `\u003e`, `\u0026`} {
+			if strings.Contains(string(data), escape) {
+				t.Errorf("the %s schema carries the escape %s", tier, escape)
+			}
+		}
+	}
+}
+
 // Generation must be deterministic: the schema is a committed artifact, and
 // a generator that reordered its own output would show a diff on every run
 // and teach reviewers to ignore it.

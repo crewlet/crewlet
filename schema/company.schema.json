@@ -434,7 +434,7 @@
           ]
         },
         "webhook_name": {
-          "description": "Name of the webhook the engine keeps at Datadog; monitors name it as @webhook-\u003cname\u003e (default crewlet).",
+          "description": "Name of the webhook the engine keeps at Datadog; monitors name it as @webhook-<name> (default crewlet).",
           "type": [
             "string",
             "number",
@@ -4031,7 +4031,7 @@
           "null"
         ]
       },
-      "description": "name -\u003e value facts substituted into tool-skill text. Keys must be identifiers.",
+      "description": "name -> value facts substituted into tool-skill text. Keys must be identifiers.",
       "type": [
         "object",
         "null"

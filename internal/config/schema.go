@@ -1,7 +1,6 @@
 package config
 
 import (
-	"encoding/json"
 	"fmt"
 	"reflect"
 	"strconv"
@@ -10,6 +9,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
@@ -168,7 +168,13 @@ func Schema(tier Tier) ([]byte, error) {
 		}
 		doc["$defs"] = defs
 	}
-	return json.MarshalIndent(doc, "", "  ")
+	// WITH ITS TEXT AS WRITTEN: a schema is read by an editor showing a
+	// field's description, by a person reading the published file and by a
+	// model authoring a document against it, and none of them embeds it in
+	// an HTML page, the one place json.MarshalIndent's escaping of `<`, `>`
+	// and `&` protects anything — so `token:<id>` was published as
+	// `token:\u003cid\u003e` and every hover in an editor showed the escape.
+	return plainjson.Marshal(doc, "  ")
 }
 
 // schemaGen walks the struct tree once, registering each named struct in
