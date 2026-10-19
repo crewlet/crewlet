@@ -11171,8 +11171,17 @@ a.live-row:focus-visible {
   scroll-margin-top: var(--sticky-top);
   scroll-margin-bottom: var(--spacing-4);
 }
+/* THE SHOW TAKES THE KEYS, and says so: a ring a little outside its edge,
+   in the page's padding, so a keyboard reader sees the arrows will move the
+   slides and the ring never draws over the slide itself. Full screen is the
+   room's screen, where the show is all there is: the ring is transparent
+   there, and forced colors still paints it. */
 .slides-show:focus-visible {
-  outline: none;
+  outline: 2px solid var(--color-focus);
+  outline-offset: var(--spacing-1);
+}
+.slides-show:fullscreen:focus-visible {
+  outline-color: transparent;
 }
 /* FULL SCREEN IS A PROJECTOR: the slide fills the screen on black, and its
    controls float over its foot, put away with the cursor while the pointer
