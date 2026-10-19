@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/plainjson"
 )
 
 // Envelope is what a reply parses into: the prose the operator sees, and the
@@ -361,13 +363,20 @@ func RenderContract() string {
 	return b.String()
 }
 
-// RenderTools is the tool catalogue a prompt carries in place of a native
+// renderTools is the tool catalogue a prompt carries in place of a native
 // tool-call channel.
-func RenderTools(tools []toolSpec) (string, error) {
+//
+// Through [plainjson.Marshal], not `json.MarshalIndent`: a provider's tool
+// channel is decoded by the provider before the model sees a word of it, but
+// this catalogue is text the model reads as it is written, so a description
+// saying "sort by `f.<slug>`" or "`>3` on a number" reached it as `\u003c`
+// and `\u003e` escapes — the one place it learns an argument's grammar,
+// showing it a grammar nobody wrote.
+func renderTools(tools []toolSpec) (string, error) {
 	if len(tools) == 0 {
 		return "", nil
 	}
-	encoded, err := json.MarshalIndent(tools, "", "  ")
+	encoded, err := plainjson.Marshal(tools, "  ")
 	if err != nil {
 		return "", fmt.Errorf("cli-agent: encoding the tool catalogue: %w", err)
 	}

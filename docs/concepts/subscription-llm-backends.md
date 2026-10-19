@@ -804,7 +804,8 @@ home is read by nothing, and the CLI would run on its vendor defaults.
 Instead the CLI is used strictly as a text model, and the tool channel
 rides in the prompt:
 
-1. The phase's messages flatten into a labelled transcript.
+1. The phase's messages flatten into a labelled transcript, an assistant
+   message's own earlier tool calls rendered back in the contract's shape.
 2. The request's tool definitions (`llm.Request.Tools`) render as a JSON catalogue (name, description,
    JSON Schema).
 3. A response contract asks for one fenced JSON block:
@@ -818,6 +819,13 @@ rides in the prompt:
 
 4. The reply is parsed back into `Completion.content` +
    `Completion.ToolCalls`.
+
+The catalogue and the earlier calls are JSON **the model reads as text**,
+not through a decoder, so they are written with `<`, `>` and `&` as
+themselves — never the `\u003c` escapes an HTML-safe encoder writes.
+A model shown the call it made in a different spelling replies in that
+spelling, and a catalogue whose description says `f.<slug>` is the only
+place a text-mode model learns that argument's grammar.
 
 The parser is deliberately forgiving — it accepts the last fenced block,
 a bare object, `arguments` as a JSON string, one call object written
