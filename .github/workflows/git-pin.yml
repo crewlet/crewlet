@@ -1,0 +1,215 @@
+name: git-pin
+
+# THE PINNED GITS, HELD TO UPSTREAM EVERY WEEK. scripts/git-pin.env names the git
+# the engine image builds and the two floors' builds the suite runs, each a
+# kernel.org release tarball by version and SHA-256 — and no Dependabot
+# ecosystem watches a source tarball, so without this the pin would be watched
+# by nothing, which looks exactly like a pin with nothing to update. A git
+# security release is an engine release (RELEASING.md): every git node runs the
+# image's git, and Debian's updates to its own git never reach it.
+#
+# scripts/git-pin-check.sh does the work and its own suite
+# (scripts/git-pin_test.sh, ci.yml's `build + vet`) holds it; this file decides
+# only what a person sees. Exit 1, a pin behind: ONE issue titled
+# `git pin behind upstream` — found by that exact title among the open issues,
+# opened with the `dependencies` label Dependabot's pull requests carry, and
+# rewritten in place (with a comment, so its watchers hear it) only when what it
+# says changes — whose body is the script's report: each stale pin's two new
+# lines, every SHA-256 that of a tarball whose signature verified against the
+# maintainer's pinned key, and the pull request that bumps it. Then the run
+# fails, every week, until the pin moves. Exit 2, the check could not tell (a
+# listing or download refused, a signature that does not verify): the run fails
+# and the issue is left as it was, since nothing new is known. Exit 0: an open
+# issue is closed, because it no longer says anything true.
+#
+# An issue rather than a pull request: a pull request opened with GITHUB_TOKEN
+# leaves its checks waiting for a click (CONTRIBUTING.md, "A dashboard bump
+# brings its own bundle"), and one whose checks run by themselves needs a
+# personal access token beside the two Dependabot's workflows already hold — a
+# new credential, which is not this file's to add. So this holds no secret and
+# writes nothing but issues.
+#
+# The release signing key is checked in band, by the last step, whether or
+# not a pin is behind: its signing subkeys expire, and once they do the check
+# above fails on every run. `git-pin-check.sh key` fails this run from 60 days
+# before that, eight weekly runs to refresh scripts/git-signing-key.asc.
+
+on:
+  schedule:
+    # Monday 06:17 UTC: early in a working week, and off the hour, where every
+    # repository's schedule queues at once.
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+# Two runs at once (a dispatch beside the schedule) would each find no issue and
+# open one apiece; the second waits for the first instead.
+concurrency:
+  group: git-pin
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: the pinned gits against upstream
+    runs-on: ubuntu-latest
+    # The check reads kernel.org's listing and, for each pin that is behind,
+    # one tarball of about 8 MB and its signature: measured from a development
+    # machine, 0.6 s with every pin current and 2.8 s with one release to
+    # download and verify. Each download gives up once it has received nothing
+    # for a minute or connected nowhere in 30 seconds, and is asked again three
+    # times (git-pin-check.sh's fetch), so a kernel.org that stops answering
+    # fails the run rather than holding a runner for GitHub's six hours. Ten
+    # minutes is two orders of magnitude over a run that works and room for a
+    # few stalled attempts; a run that meets more is ended here, which fails
+    # it as a run that could not tell does — the issue untouched, the next
+    # week's run asking again.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The scripts read no git, and the job's token can write issues: a
+          # credential left in .git/config is one nothing here needs.
+          persist-credentials: false
+
+      - name: compare every pin with upstream's newest release of its series
+        id: pins
+        run: |
+          status=0
+          scripts/git-pin-check.sh >"$RUNNER_TEMP/pins.txt" || status=$?
+          cat "$RUNNER_TEMP/pins.txt"
+          echo "status=$status" >>"$GITHUB_OUTPUT"
+          if [ "$status" -ne 0 ] && [ "$status" -ne 1 ]; then
+            echo "::error::scripts/git-pin-check.sh could not tell whether the pins are current (exit $status); its reason is above. The issue is left as it was."
+            exit "$status"
+          fi
+
+      - name: open or update the one issue, or close it once every pin is current
+        if: steps.pins.outputs.status == '0' || steps.pins.outputs.status == '1'
+        uses: actions/github-script@v9
+        env:
+          STATUS: ${{ steps.pins.outputs.status }}
+          REPORT: ${{ runner.temp }}/pins.txt
+        with:
+          # Three retries, with the retry plugin's own waits of 1, 4 and 9
+          # seconds between them, for the calls a retry cannot double: the
+          # listing and the two updates (a body, a closed state), each of which
+          # sets a value rather than adds one — so a server error GitHub
+          # answers one of them with does not fail a run that found nothing
+          # wrong, and fourteen seconds of waiting fits the job's ten minutes.
+          # The calls that ADD — an issue, a comment — are made once each
+          # (`request: { retries: 0 }`, which the plugin reads per request):
+          # it retries a POST answered with a server error as readily as a
+          # GET, and one GitHub had in fact served would leave a second issue
+          # that no later run updates, or a second comment notifying every
+          # watcher twice. A create that fails is asked again only once the
+          # listing says it did not land (openIssue, below); a comment that
+          # fails fails this run, and the next week's run makes it again.
+          retries: 3
+          script: |
+            const fs = require('fs');
+            const { owner, repo } = context.repo;
+            const TITLE = 'git pin behind upstream';
+            const run = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+            // A fresh request option for each call made once: the retry plugin
+            // writes its count of attempts into a call's request options, and
+            // one object shared by every call would carry one's count into the
+            // next.
+            const once = () => ({ retries: 0 });
+
+            // Every open issue, a page at a time, the one title matched exactly:
+            // a search is ranked and lags, and a title carrying the versions
+            // would change whenever upstream moved, so "the one issue" could
+            // never be found again.
+            const openIssues = async () => (await github.paginate(github.rest.issues.listForRepo, {
+              owner, repo, state: 'open', per_page: 100,
+            }))
+              .filter((issue) => !issue.pull_request && issue.title === TITLE)
+              .sort((a, b) => a.number - b.number);
+
+            // A create made safe to ask again: an attempt the server answered
+            // with an error (or never answered) may have landed, so before each
+            // further attempt the listing is read, after the plugin's own wait,
+            // and an issue found there is the one this run opened. An error the
+            // request itself caused (a 4xx other than a rate limit) is final.
+            const openIssue = async (body) => {
+              for (let attempt = 1; ; attempt++) {
+                try {
+                  const { data } = await github.rest.issues.create({
+                    owner, repo, title: TITLE, body, labels: ['dependencies'], request: once(),
+                  });
+                  return data.number;
+                } catch (error) {
+                  const status = error.status || 0;
+                  if (attempt > 3 || (status >= 400 && status < 500 && status !== 429)) throw error;
+                  core.warning(`creating the issue failed (${status || error.message}); reading the open issues before asking again`);
+                  await new Promise((resolve) => setTimeout(resolve, attempt * attempt * 1000));
+                  const landed = (await openIssues())[0];
+                  if (landed) return landed.number;
+                }
+              }
+            };
+
+            const open = await openIssues();
+
+            if (process.env.STATUS === '0') {
+              // The comment first and once: if it fails, the issue stays open
+              // and the next run with every pin current comments and closes it.
+              for (const issue of open) {
+                await github.rest.issues.createComment({
+                  owner, repo, issue_number: issue.number, request: once(),
+                  body: `Every pin in scripts/git-pin.env is the newest release of its series again ([run](${run})).`,
+                });
+                await github.rest.issues.update({
+                  owner, repo, issue_number: issue.number, state: 'closed', state_reason: 'completed',
+                });
+                core.info(`closed #${issue.number}`);
+              }
+              return;
+            }
+
+            // The body is the report alone, with no run link in it, so an
+            // unchanged report is an unchanged issue and a week that learns
+            // nothing new notifies nobody.
+            const report = fs.readFileSync(process.env.REPORT, 'utf8').trimEnd();
+            const body = [
+              'The weekly check, `.github/workflows/git-pin.yml`, found the pinned gits behind upstream:',
+              '',
+              '```',
+              report,
+              '```',
+            ].join('\n');
+            if (open.length === 0) {
+              core.info(`opened #${await openIssue(body)}`);
+              return;
+            }
+            const issue = open[0];
+            if ((issue.body || '').replace(/\r\n/g, '\n') === body) {
+              core.info(`#${issue.number} already says this`);
+              return;
+            }
+            // The comment before the rewrite: a comment that fails leaves the
+            // old body, so the next run finds the change again and makes both;
+            // made after, it would leave the new body and a next run that sees
+            // nothing to say, the watchers never told.
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: issue.number, request: once(),
+              body: `Upstream moved: this [run](${run}) rewrites the description with what it found.`,
+            });
+            await github.rest.issues.update({ owner, repo, issue_number: issue.number, body });
+            core.info(`updated #${issue.number}`);
+
+      - name: fail the run while a pin is behind
+        if: steps.pins.outputs.status == '1'
+        run: |
+          echo "::error::scripts/git-pin.env is behind upstream: the issue \"git pin behind upstream\" names the new lines and the pull request."
+          exit 1
+
+      # Whether or not a pin is behind, and whether or not the check could
+      # tell: a key about to expire is the one thing that would stop every
+      # later run from telling at all.
+      - name: the release signing key stays valid for more than 60 days
+        if: always()
+        run: scripts/git-pin-check.sh key

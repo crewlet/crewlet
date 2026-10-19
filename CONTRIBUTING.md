@@ -8,14 +8,21 @@ need to get a development environment running and land a change.
 Prerequisites: **Go 1.27+** and
 **[golangci-lint](https://golangci-lint.run/welcome/install/)**, which
 `make check` runs and CI's own job downloads for itself. **What building git
-takes** — a C compiler, `make`, `curl`, `xz`, and libcurl's and zlib's
-development files (Debian and Ubuntu: `build-essential curl xz-utils
-libcurl4-openssl-dev zlib1g-dev`, or `libcurl4-gnutls-dev` in place of
-`libcurl4-openssl-dev`, the flavour the image builds against — the recipe
-compiles nothing against OpenSSL itself, so libcurl's TLS is the only one it
-needs and OpenSSL's headers are not; macOS: the Xcode command line tools,
-which carry libcurl and zlib, and Homebrew's `xz`, which macOS does not ship) —
-because **the suite never runs the machine's own git**. The code host
+takes** — a C compiler, `make`, `curl`, `xz`, a SHA-256 tool to check each
+tarball against its pin (coreutils' `sha256sum`, which Debian and Ubuntu ship,
+or `shasum`, which macOS ships; `make git` and `make git-test` both need
+one), and libcurl's and zlib's development files (Debian and Ubuntu:
+`build-essential curl xz-utils libcurl4-openssl-dev zlib1g-dev`, or
+`libcurl4-gnutls-dev` in place of `libcurl4-openssl-dev`, the flavour the
+image builds against — the recipe compiles nothing against OpenSSL itself, so
+libcurl's TLS is the only one it needs and OpenSSL's headers are not; macOS:
+the Xcode command line tools, which carry libcurl and zlib, and Homebrew's
+`xz`, which macOS does not ship) — because **the suite never runs the
+machine's own git** — and **GnuPG**
+(Debian and Ubuntu: `gnupg`; macOS: Homebrew's `gnupg`), which `make check`'s
+`git-test` needs to make and check the signing keys of the pin check's own
+suite (see [The git pin is checked every
+week](#the-git-pin-is-checked-every-week)). The code host
 runs real git as a subprocess, and its suites drive real git both as the engine
 and as a client, so what a case asserts is that git's behaviour as much as the
 engine's: `make git` builds the gits
@@ -137,6 +144,7 @@ files="$(go run ./internal/sourcetree/gofiles)" && gofmt -l $files  # formatting
 go mod tidy -diff        # go.mod / go.sum are already what tidy would write
 scripts/check-signoff.sh # every commit the branch adds is signed off
 scripts/check-signoff_test.sh  # ... and that gate's own suite
+scripts/git-pin_test.sh        # the git recipe's and the pin check's own suite (git-test)
 go vet ./...
 golangci-lint run        # what CI's lint job runs
 go build ./...
@@ -676,16 +684,19 @@ that a value in it changes what the engine *does*, not merely that it parses.
 
 ## Dependency updates
 
-Dependabot watches every dependency surface this repository has, and opens a
-pull request when any of them has a newer release:
+Dependabot watches every dependency surface this repository has but one, and
+opens a pull request when any of them has a newer release. The one is the git
+pin, a source tarball no Dependabot ecosystem reads, and a workflow of this
+repository's own watches it instead:
 
-| Surface | Ecosystem | What it covers |
+| Surface | Watched by | What it covers |
 |---|---|---|
 | `.github/workflows/*.yml` | `github-actions` | the actions CI and releases run on |
 | `go.mod` | `gomod` | the engine's own Go dependencies |
 | `dashboard/package.json` | `npm` | the dashboard's build and runtime dependencies |
 | `Dockerfile` | `docker` | the base image a release ships |
 | `docker-compose.yml` | `docker-compose` | the images the local dev stack runs |
+| `scripts/git-pin.env` | [`.github/workflows/git-pin.yml`](.github/workflows/git-pin.yml) (not Dependabot) | the gits the engine image builds and the suite runs |
 
 Dependabot keeps a version moving once it is in the tree; **choosing one in
 the first place goes the same direction — take the newest release, and pin it
@@ -699,7 +710,7 @@ a comment at the pin, as the Compose stack's Postgres image already does.
 The configuration is [`.github/dependabot.yml`](.github/dependabot.yml): one
 entry per surface on a weekly schedule, plus the commit prefix that surface's
 bumps carry, plus three grouping rules on the npm entry. CI runs on each pull
-request, and — as below — CI is what decides whether it lands. Eight things are
+request, and — as below — CI is what decides whether it lands. Nine things are
 worth knowing:
 
 - **The React family is grouped.** `react`, `react-dom`, `@types/react` and
@@ -772,6 +783,12 @@ worth knowing:
   actions to a version tag or a full SHA. That matters most for the one
   handed an OIDC token: pinned, its updates arrive as reviewable pull
   requests instead of moving under the workflow unannounced.
+- **The git pin is the one surface Dependabot does not watch**, and a bump of
+  it arrives as an issue rather than a pull request: every Monday
+  [`git-pin.yml`](.github/workflows/git-pin.yml) asks kernel.org whether each
+  pin is still the newest release of its series and keeps ONE issue, `git pin
+  behind upstream`, naming what moved — see [The git pin is checked every
+  week](#the-git-pin-is-checked-every-week).
 
 Adding a new dependency surface — a second `package.json`, a second module — means
 adding its `updates:` entry in the same change. Nothing reports the omission:
@@ -976,6 +993,94 @@ Nothing checks any of this for you. Read which bumps it comments on, the command
 and marker it posts, the environment and the token's scope on any diff that
 touches
 [`.github/workflows/dependabot-recreate.yml`](.github/workflows/dependabot-recreate.yml).
+
+### The git pin is checked every week
+
+[`scripts/git-pin.env`](scripts/git-pin.env) pins three gits, each a kernel.org
+release tarball by version and SHA-256: the node pin, the newest release, which
+the engine image builds and every pool and client in the suite runs; and the
+newest patches of the two floors' series, which the floors' arm runs. Every git
+node runs the image's git, so a git security release reaches a deployment only
+through a bump of that pin — Debian's updates to its own git never do — and no
+Dependabot ecosystem reads a source tarball. So
+[`git-pin.yml`](.github/workflows/git-pin.yml) is the watcher. Every Monday at
+06:17 UTC (and on **Actions → git-pin → Run workflow**) it runs
+[`scripts/git-pin-check.sh`](scripts/git-pin-check.sh), which reads kernel.org's
+listing for the newest release of each pin's series — release candidates are no
+release — and, for every pin that is behind, downloads that release and its
+signature (`git-<version>.tar.sign`, over the decompressed tar) and verifies it
+against the git maintainer's key,
+[`scripts/git-signing-key.asc`](scripts/git-signing-key.asc), imported into a
+GnuPG home of its own and refused unless it holds exactly the key whose primary
+fingerprint the script pins. Then it prints the pin's two new lines — the
+SHA-256 is that of the very tarball whose signature verified, never one read
+from a listing — and the title of the pull request that moves it. Exit 1 opens
+or updates ONE issue, `git pin behind upstream` (labelled `dependencies`, found
+by that exact title), with that report as its body, and fails the run; exit 0
+closes it; exit 2 — the listing or a download refused, a signature that does not
+verify, or by a key other than the pinned one — fails the run and leaves the
+issue as it was, because nothing new is known. An issue rather than a pull
+request because a pull request opened with `GITHUB_TOKEN` leaves its checks
+waiting for a click (as under [A dashboard bump brings its own
+bundle](#a-dashboard-bump-brings-its-own-bundle)), and one whose checks run by
+themselves needs a token beside the two the Dependabot workflows hold — a new
+credential, which the workflow does not take. It holds `contents: read` and
+`issues: write` and no secret.
+
+**Making the bump** is a pull request of its own:
+
+1. Replace the pin's two lines in `scripts/git-pin.env` with the ones the issue
+   names (`scripts/git-pin-check.sh` prints them again by hand: exit 1 with the
+   report, 0 when every pin is current).
+2. `make git` — it builds the new git from the tarball the digest names, and a
+   digest that is not the tarball's refuses the build — then `make check`, the
+   suite on the new git.
+3. Title the pull request as the report does: `build(deps): bump git from <a>
+   to <b>` for the node pin, `build(deps): bump git's node floor from <a> to
+   <b>` or `… client floor …` for a floor.
+
+The pull request runs the snapshot job, which builds the engine image's git from
+the new pin on both platforms and holds it to the pin, and the suite builds the
+three gits again on CI (about four minutes) until `main` saves them. A diff to
+the pin, to [`scripts/git.sh`](scripts/git.sh) or to the key changes the git
+every git node runs, so it is read as release surface. A floor pin only ever
+moves to a newer patch of its own series; raising a floor itself is a change to
+`gitproc.NodeMinVersion` or `ClientMinVersion` and is argued in
+[ADR-0039](adr/0039-a-git-node-runs-git-2-55-from-one-pin.md). A git 3.x node
+pin changes the recipe too: git's own Makefile makes Rust mandatory from 3.0,
+which the report says when it names one.
+
+**The signing key is checked in the same run.** The maintainer's release-signing
+subkeys expire (the ones in the file on 2028-01-11), and once they have, no
+release can be verified and every run fails with exit 2. So the run's last step,
+`scripts/git-pin-check.sh key`, reads the latest expiry among the key's valid
+signing subkeys, bounded by the primary key's own, and fails the run from 60
+days before it — eight weekly runs to act — whether or not a pin is behind. To
+refresh it, export `keys/20D04E5A713660A7.asc` again from kernel.org's PGP
+keyring ([pgpkeys.git](https://git.kernel.org/pub/scm/docs/kernel/pgpkeys.git)),
+check that its primary fingerprint is still
+`96E07AF25771955980DAD10020D04E5A713660A7` (`gpg --show-keys
+scripts/git-signing-key.asc`), replace the file with it, and land it as
+`build(deps): refresh git's release signing key`. A file that is not that key,
+or that holds a second key beside it, is refused (exit 2) rather than trusted.
+So is a release signed by a signing subkey the file does not hold yet — one the
+maintainer added after the export, which the expiry check cannot see coming —
+and that refusal names the subkey and prints these steps, since only the
+maintainer's current export can tell it from another key's.
+
+[`scripts/git-pin_test.sh`](scripts/git-pin_test.sh) (`make git-test`, in `make
+check` and ci.yml's `build + vet`) is the own suite of the check and of the
+recipe: it runs both against a stand-in release listing, stand-in tarballs and
+signing keys it makes for itself, so it reads no network and builds no git,
+and every case it holds a mutation to — skip the fingerprint check, accept gpg's
+exit status without its `GOODSIG`, read the primary key's expiry alone — fails
+it. It reads nothing of the environment you run it in, and holds that by running
+itself a second time, by a relative path under a `CDPATH` naming another
+`scripts/`, in a hostile environment: every knob the scripts read pointed
+elsewhere, a GnuPG home of yours, and a curl configuration (`.curlrc`) refusing
+the `file://` downloads every case makes. Nothing holds the workflow file
+itself: read its `permissions:`, the issue title it matches and the step that
+runs the key check on any diff that touches it.
 
 ## Releasing
 

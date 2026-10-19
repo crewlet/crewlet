@@ -1123,7 +1123,11 @@ cache on its own disk. What such a node needs from its host:
   OpenSSL 3, Debian's `libssl3t64`, into the image and into every
   `git-remote-https`, as they do beside Debian's git), no PCRE
   (`git grep -P`, `git log -P`) and no Perl, Python or Tcl programs
-  (`git send-email`, `git p4`, `gitk`). It reads its
+  (`git send-email`, `git p4`, `gitk`). So a git security fix reaches a git
+  node only as an engine image built from a bumped pin — never as an update to
+  the base image's own packages — and the project checks the pin against
+  git's releases every week, verifying each release's signature, so the
+  engine release that carries a git fix is the one to take. It reads its
   system configuration from `/etc/gitconfig` and `/etc/gitattributes`, where
   Debian's git did, so an image you derive configures it there (`git var
   GIT_CONFIG_SYSTEM` prints the path); the code host's own processes read

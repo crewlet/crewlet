@@ -10,6 +10,12 @@
 # omission: a manifest with no entry never produces a pull request, which
 # looks exactly like a manifest with nothing to update.
 #
+# One surface has no entry because no ecosystem reads it: scripts/git-pin.env,
+# the gits the engine image builds and the suite runs, each a source tarball
+# named by version and SHA-256. .github/workflows/git-pin.yml watches it
+# instead, every week, and opens one issue rather than a pull request when a
+# pin is behind (CONTRIBUTING.md, "The git pin is checked every week").
+#
 # Security updates are separate — they come from published advisories, are
 # switched on in the repository settings rather than here, and are not held
 # back by this schedule.

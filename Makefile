@@ -224,7 +224,7 @@ COMPANY ?=
 
 .PHONY: help build crewlet install fmt tidy schema metrics-doc alarms-doc derived gate-answer objects-answer broker-answer \
         dashboard dashboard-check dashboard-dev dashboard-test dashboard-lint \
-        check fmt-check tidy-check signoff-check signoff-test vet lint test test-norace test-cross test-solo \
+        check fmt-check tidy-check signoff-check signoff-test git-test vet lint test test-norace test-cross test-solo \
         require-npm bench git test-gitproc \
         mattermost-up mattermost-down \
         gitlab-up gitlab-down \
@@ -417,7 +417,7 @@ test-gitproc: git ## build the pinned gits and run gitproc's own suite on them (
 # TestAFleetOfThree/EveryNodeMintsIntoOneKeySpace (then a test of its own)
 # with `ensure stream CREWLET_NOTIFICATIONS: context deadline exceeded`, and
 # passed alone.
-check: fmt-check tidy-check signoff-check signoff-test vet lint build test-cross dashboard-lint dashboard-check dashboard-test ## every gate CI runs on a PR
+check: fmt-check tidy-check signoff-check signoff-test git-test vet lint build test-cross dashboard-lint dashboard-check dashboard-test ## every gate CI runs on a PR
 	@$(MAKE) test
 	@$(MAKE) test-solo
 	@echo
@@ -474,6 +474,22 @@ signoff-check: ## fail if a commit on this branch is not signed off (ci: sign-of
 # why the suite exists and why it mutation-tests its own assertions.
 signoff-test: ## run the sign-off gate's own suite (ci: sign-off)
 	@scripts/check-signoff_test.sh
+
+# The OWN SUITE of the git recipe (scripts/git.sh) and of the weekly pin check
+# (scripts/git-pin-check.sh, which .github/workflows/git-pin.yml runs). Both are
+# shell no Go test reaches, and each fails silently in the direction that
+# matters: a recipe that installs over a git another checkout's suite is
+# running, a check that calls every pin current because it read nothing, or
+# that verifies a signature without asking whose it is. The suite runs the real
+# scripts against local stand-ins — a source tarball, a release listing,
+# signing keys of its own — so it builds no git and reads no network, and runs
+# itself once more, by a relative path, under a developer's most hostile
+# environment (the scripts' knobs, a GnuPG home, a curl configuration, a
+# CDPATH naming another scripts/) to hold that it reads none of it:
+# about twelve seconds, half of them that second run. It needs make, tar, xz,
+# curl, sha256sum (or shasum) and GnuPG.
+git-test: ## run the git recipe's and the pin check's own suite (ci: build + vet)
+	@scripts/git-pin_test.sh
 
 vet: ## run go vet (ci: build + vet)
 	$(GO) vet ./...

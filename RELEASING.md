@@ -120,6 +120,21 @@ checksummed.
    `.claude/worktrees/` as this tree — [CONTRIBUTING.md](CONTRIBUTING.md)
    spells out what `make check` runs and why.
 
+   Then ask whether the git the image will build is still upstream's newest
+   of its series — the one question `make check` cannot answer, because it
+   reads no network:
+
+   ```bash
+   scripts/git-pin-check.sh
+   ```
+
+   Exit 0 is current. Exit 1 prints the pins that are behind, each with the
+   two lines of the bump and its pull request's title, and is what the weekly
+   issue `git pin behind upstream` already says; a pin behind a security patch
+   of its series is a release to hold (see [What ships in a
+   release](#what-ships-in-a-release)). Exit 2 could not tell — kernel.org
+   unreachable, a signature that does not verify — and is never a pass.
+
 4. **Rehearse the release itself** if anything about the release surface
    changed (see below). This is cheap and offline — do it whenever you are
    unsure.
@@ -300,6 +315,18 @@ doing the thing, or starts doing more — so read the file when you touch it:
   ruleset keeps approvals across pushes, anything pushed onto an open Dependabot
   branch merges once CI is green, so the token's scope is the only limit on what
   it can land. Weakening any of these makes the workflow reach *more*, never fail.
+- **`.github/workflows/git-pin.yml` runs, on its schedule, with `contents: read`
+  and `issues: write` and no secret.** It is the only watcher of
+  `scripts/git-pin.env`; `scripts/git-pin_test.sh` holds the script it runs,
+  and nothing holds the workflow. It finds its issue by the exact title `git
+  pin behind upstream`, so renaming the title in one place opens a second
+  issue beside the first; and it reports a pin behind by that issue and a
+  failed run, and a key near its expiry by a failed run alone, whose
+  notification GitHub sends to whoever last edited the schedule. GitHub also
+  DISABLES a public repository's scheduled workflows after 60 days without
+  activity in it, and says so only by e-mail — after which a pin falls behind
+  with nothing red anywhere. Before a tag, `scripts/git-pin-check.sh` (step 3
+  above) asks the same question by hand.
 
 ---
 
@@ -373,7 +400,16 @@ A release cut while the pin is behind a security patch of its series is one to
 hold until the pin moves: a bump changes a version and its SHA-256 together in
 `scripts/git-pin.env`, the pull request runs the snapshot job (the image builds
 and checks the new git on both platforms) and the suite on it, and it lands
-before the tag.
+before the tag. Nothing has to remember to look:
+[`git-pin.yml`](.github/workflows/git-pin.yml) runs
+[`scripts/git-pin-check.sh`](scripts/git-pin-check.sh) every Monday, and while
+any pin is behind it keeps ONE issue open, `git pin behind upstream`, naming
+each stale pin's two new lines — the SHA-256 that of a tarball whose signature
+it verified against the git maintainer's key — and the pull request that
+moves it, and fails its run; it closes the issue once every pin is current. The
+same run fails 60 days before that key's signing subkeys expire, because once
+they have, no release can be verified and every later run fails instead
+(CONTRIBUTING.md, "The git pin is checked every week", says how to refresh it).
 
 ### Verifying a download
 

@@ -77,6 +77,11 @@
 # into; and a <version>-<recipe>.* directory the name does not point at, untouched for a day, is a crashed
 # builder's and is removed by the next build. So two `make test` runs on one machine — two worktrees — never delete
 # a git the other is running, which an `rm -rf` followed by an install into the shared path did.
+#
+# ITS OWN SUITE is scripts/git-pin_test.sh (`make git-test`, in `make check` and ci.yml's `build + vet`), beside the
+# pin check's: the refusals above, an intact build handed back with nothing downloaded, a tarball that is not the
+# pin's, two builders at once leaving one build, and what a prefix build carries — each against a stand-in tarball,
+# so no case builds git.
 set -eu
 
 usage() {

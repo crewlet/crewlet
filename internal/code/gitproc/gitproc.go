@@ -310,14 +310,19 @@
 // newest git release from the tarball scripts/git-pin.env pins
 // (scripts/git.sh, the recipe the suite's `make git` runs too), so a git CVE
 // is an engine CVE on a git node, and what reaches the image is a bump of that
-// pin — Debian's security updates to its own git never do. The suite runs
-// that pin; every case here whose subject is what git says or does in a pool
-// — the format table, what a request can reach, what the environment keeps
-// from git — runs on the node floor's own build as well; and one arm of the
-// code host's suite runs the node floor's build against the client floor's —
-// so each floor is a measured claim rather than a number, and a row or an
-// expectation only a git below the floor could meet is deleted rather than
-// kept where no run can say whether it is still right.
+// pin — Debian's security updates to its own git never do — which a weekly
+// check (.github/workflows/git-pin.yml) asks for within a week of upstream
+// releasing one, or at once when it is run by hand (the workflow's Run
+// workflow, or scripts/git-pin-check.sh), which is how a git security release
+// is taken; each release's signature is verified against the git maintainer's
+// key before its digest is named. The suite runs that pin; every case here
+// whose subject is what git says or does in a pool — the format table, what a
+// request can reach, what the environment keeps from git — runs on the node
+// floor's own build as well; and one arm of the code host's suite runs the
+// node floor's build against the client floor's — so each floor is a measured
+// claim rather than a number, and a row or an expectation only a git below the
+// floor could meet is deleted rather than kept where no run can say whether it
+// is still right.
 package gitproc
 
 import (
