@@ -104,6 +104,13 @@ func (s *stateLog) estateReplaced() {
 // deployment lived. The knowledge base's lexical index needs nothing: its walk
 // laps by id and repairs a drifted row where it finds one.
 //
+// THE NUDGE, NOT THE GUARANTEE: the request lives in this process, and the
+// adopter has already named the file it installed a new copy of the estate
+// ([statelog.EstateInstance]), which the index compares with the copy it was
+// built from on every sweep — so a process stopped before the index's next
+// sweep still has its index rebuilt. What this call adds is that a search
+// stops trusting the index from now rather than from that sweep.
+//
 // A NODE THAT HAS MET NO COMPANY, or one whose chat is not the engine's own,
 // holds no chat index and has nothing to rebuild.
 func (e *Engine) estateReplaced() {

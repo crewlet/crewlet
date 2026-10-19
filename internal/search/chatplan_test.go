@@ -158,10 +158,12 @@ func TestEveryChatIndexServesARegisteredQuery(t *testing.T) {
 		"the erasure watermark's advance": {
 			statement: search.ChatAdvanceErasedStatement, args: []any{1, 2},
 			reaches: []string{stateKey}},
-		"whether a rebuild is under way": {statement: search.ChatRebuildingStatement,
+		"the index's state": {statement: search.ChatStateStatement,
 			reaches: []string{stateKey}},
 		"a rebuild's mark": {statement: search.ChatBeginRebuildStatement,
 			args: []any{2}, reaches: []string{stateKey}},
+		"the copy a fresh index records": {statement: search.ChatRecordInstanceStatement,
+			args: []any{"instance", 2}, reaches: []string{stateKey}},
 		"a rebuild's next batch": {statement: search.ChatDropBatchStatement,
 			args: []any{search.ChatIndexBatch}, walks: "chat_docs"},
 		"a rebuild's end": {statement: search.ChatRebuiltStatement,

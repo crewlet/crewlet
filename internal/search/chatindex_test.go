@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/search"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -565,6 +566,112 @@ func TestARebuildIsDroppedInStepsAndARestartFinishesIt(t *testing.T) {
 		}
 	}
 	assertStatisticsCounted(ctx, t, db)
+}
+
+// A REPLACEMENT A RESTART HID FROM THE INDEX STILL REBUILDS IT.
+//
+// The engine asks for a rebuild when it replaces the estate under a running
+// node, and that request lives in memory: a process that stops between the
+// install and its next sweep loses it, and the walk resumes over the donor's
+// rows from a watermark it built over the old copy's. What survives is the
+// file's own name for itself — every copy of the estate carries an instance,
+// the empty one on a file the node created and a fresh one minted for each
+// copy an adoption installed — and the index records the one it was built
+// from. Here the restart is a second indexer over the same stores, asked for
+// nothing.
+func TestAReplacementARestartHidFromTheIndexStillRebuildsIt(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	ctx := t.Context()
+	indexer := search.NewChatIndexer(db, db.Replicated().Reader())
+	writeMessages(t, db, 0, 5, "c1", "the original copy")
+	sweepAll(ctx, t, indexer)
+	if got, want := builtFrom(t, db), estateInstance(t, db); got != want {
+		t.Fatalf("a fresh index records it was built from %q and the estate is "+
+			"%q — the first sweep records the copy it walks", got, want)
+	}
+
+	// THE DONOR'S ROWS: two messages it never had and other words for a
+	// third at the same position, which no forward walk reads.
+	execReplicated(t, db, `DELETE FROM chat_messages WHERE id IN ('m1', 'm2')`)
+	execReplicated(t, db, `UPDATE chat_messages SET body = ? WHERE id = ?`,
+		"what the donor says", "m3")
+	// The premise: with the same name on the estate, a restarted index has
+	// nothing to tell it the rows moved under it.
+	unaware := search.NewChatIndexer(db, db.Replicated().Reader())
+	sweepAll(ctx, t, unaware)
+	if hits := searchChat(ctx, t, unaware, "donor", "c1"); len(hits) != 0 {
+		t.Fatalf("the premise: an index whose estate kept its name re-read a row "+
+			"below its watermark (%d hits)", len(hits))
+	}
+
+	// THE ADOPTION'S NAME FOR THE COPY IT INSTALLED.
+	execReplicated(t, db, `UPDATE statelog_estate SET instance = ?`, "the-donors-copy")
+	restarted := search.NewChatIndexer(db, db.Replicated().Reader())
+	sweepAll(ctx, t, restarted)
+	if !restarted.Ready() {
+		t.Fatal("a rebuilt index that caught up says it is still behind")
+	}
+	assertIndexed(ctx, t, restarted, 3)
+	if hits := searchChat(ctx, t, restarted, "donor", "c1"); len(hits) != 1 {
+		t.Fatalf("the donor's words for m3 matched %d messages: the restarted "+
+			"index never saw the estate under it had been replaced", len(hits))
+	}
+	if got := builtFrom(t, db); got != "the-donors-copy" {
+		t.Errorf("the rebuilt index records it was built from %q, want the copy "+
+			"it walked — or the next sweep rebuilds it again", got)
+	}
+	assertStatisticsCounted(ctx, t, db)
+}
+
+// A FRESH INDEX ON AN ADOPTED ESTATE WALKS IT, AND REBUILDS NOTHING.
+//
+// A node whose own file is new — its index never built — beside an estate a
+// join installed is the commonest way the two names first differ, and there is
+// nothing to drop: an index that has indexed nothing holds nothing from another
+// copy. So it records the copy and walks it, and the walk's work is the
+// messages and nothing else.
+func TestAFreshIndexOnAnAdoptedEstateWalksItAndRebuildsNothing(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	ctx := t.Context()
+	execReplicated(t, db, `UPDATE statelog_estate SET instance = ?`, "an-adopted-copy")
+	writeMessages(t, db, 0, 7, "c1", "already here")
+
+	indexer := search.NewChatIndexer(db, db.Replicated().Reader())
+	if worked := sweepAll(ctx, t, indexer); worked != 7 {
+		t.Fatalf("a fresh index walked %d units over 7 messages — the extra is a "+
+			"rebuild of an index that held nothing", worked)
+	}
+	if got := builtFrom(t, db); got != "an-adopted-copy" {
+		t.Fatalf("the index records it was built from %q, want the copy it walked", got)
+	}
+	assertIndexed(ctx, t, indexer, 7)
+}
+
+// builtFrom is the estate instance the chat index records it was built from.
+func builtFrom(t *testing.T, db *store.DB) string {
+	t.Helper()
+	var instance string
+	if err := db.SQL().QueryRowContext(t.Context(),
+		`SELECT built_from FROM chat_index_state WHERE id = 1`).Scan(&instance); err != nil {
+		t.Fatalf("read the chat index's built_from: %v", err)
+	}
+	return instance
+}
+
+// estateInstance is the replicated estate's own name for itself.
+func estateInstance(t *testing.T, db *store.DB) string {
+	t.Helper()
+	var instance string
+	if err := db.Replicated().Reader().Read(t.Context(), func(tx *sql.Tx) error {
+		var err error
+		instance, err = statelog.EstateInstance(t.Context(), tx)
+		return err
+	}); err != nil {
+		t.Fatalf("read the estate's instance: %v", err)
+	}
+	return instance
 }
 
 // A STRETCH OF TOMBSTONES IS WALKED WITHOUT A PAUSE.

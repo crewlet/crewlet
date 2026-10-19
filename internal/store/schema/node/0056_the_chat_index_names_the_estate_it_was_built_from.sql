@@ -1,0 +1,30 @@
+-- chat_index_state.built_from — which COPY of the replicated estate the chat
+-- keyword index was built from: the `statelog_estate.instance` the estate held
+-- when the index last began from nothing.
+--
+-- WHO HAS TO AGREE ON IT: this node alone, as with every other column of this
+-- row — it is a fact about this node's own index and the file beside it.
+--
+-- # Why the index has to remember it
+--
+-- The index walks the transcript FORWARD from a durable watermark, so a row
+-- below the watermark being replaced — an adoption installing a donor's file —
+-- is a change it never reads. The engine asks for a rebuild when it replaces
+-- the estate under a running node, but that request is held in memory, and a
+-- process that stopped between the install and the next sweep lost it: the
+-- walk resumed over the donor's rows from the watermark it had built over the
+-- old copy's, and a message the old copy held and the donor's does not stayed
+-- searchable for as long as the deployment lived. Recorded here, and compared
+-- with the estate's own instance on every sweep, the replacement is seen
+-- whenever it happened.
+--
+-- EMPTY until recorded, which is also the name of an estate the node created
+-- itself — so an index and an estate that both began on this node agree
+-- without a word. Otherwise an index that has indexed nothing has nothing
+-- built from another copy, and its sweep records the estate's instance without
+-- a rebuild; an index that has, and names another instance, is dropped and
+-- walked again.
+--
+-- 0055 IS NOT EDITED: `schema_migrations` keys on the filename, so a database
+-- that applied it would never see the change.
+ALTER TABLE chat_index_state ADD COLUMN built_from TEXT NOT NULL DEFAULT '';
