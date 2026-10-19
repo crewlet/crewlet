@@ -31,7 +31,13 @@
 //     ([github.com/crewlet/crewlet/internal/providers/llm/httpapi.EncodeArgs])
 //     carries its arguments as a JSON STRING, which the host hands the model
 //     as the text it holds rather than decoding it, every later round of the
-//     turn.
+//     turn;
+//   - a COMMAND'S -json (`cmd/crewlet`: a validation's problems, a node's
+//     answer decoded and printed again) is read at a terminal, matched by a
+//     script and handed to the loop that fixes a document from
+//     `crewlet validate -json`, where `replicas \u003e 1` and
+//     `token:\u003cid\u003e` were escapes every one of them had to decode back
+//     into the setting it was being told about.
 //
 // # The text ends where its value does
 //
