@@ -77,13 +77,13 @@ has to finish it to see what it did.
 
 ### The room the stream's volume needs
 
-The engine keeps seven ordered logs on the stream: the tracker's mutation
+The engine keeps eight ordered logs on the stream: the tracker's mutation
 log, the vector changelog, the knowledge base's log, the identity estate's
-log, the usage log, the artifacts log and the artifact datastore's log. Each
-log's byte ceiling is **reserved** on the volume holding `stream.store_dir`
-when its stream is created: the embedded broker grants a ceiling in full, up
-front, or refuses to create the stream at all. Its limit is
-`stream.store_max_bytes` where you set one, and otherwise three quarters of
+log, the usage log, the artifacts log, the artifact datastore's log and the
+chat log. Each log's byte ceiling is **reserved** on the volume holding
+`stream.store_dir` when its stream is created: the embedded broker grants a
+ceiling in full, up front, or refuses to create the stream at all. Its limit
+is `stream.store_max_bytes` where you set one, and otherwise three quarters of
 that volume's free space.
 
 The node sizes the ceilings together to fit half of that limit. A log derived
@@ -102,16 +102,17 @@ With nothing set, a node starting on an empty stream directory reserves:
 | The knowledge base's log | 1 GiB | `stream.pages_log_max_bytes` |
 | The artifacts log | 1 GiB | `stream.artifacts_log_max_bytes` |
 | The artifact datastore's log | 1 GiB | `stream.artifact_data_log_max_bytes` |
+| The chat log | 1 GiB | `stream.chat_log_max_bytes` |
 | The usage log (a fixed default) | 1 GiB | `stream.usage_log_max_bytes` |
 | The identity estate's log (a fixed default) | 512 MiB | `stream.iam_log_max_bytes` |
-| **The seven logs together** | **6.50 GiB** | |
-| The object store's `nats` bucket, reserved before the logs | a quarter of the broker's limit, 2.17 GiB at the minimum | `store.objects.nats_max_bytes` |
+| **The eight logs together** | **7.50 GiB** | |
+| The object store's `nats` bucket, reserved before the logs | a quarter of the broker's limit, 2.50 GiB at the minimum | `store.objects.nats_max_bytes` |
 
-So the broker needs a limit of at least **8.67 GiB**, which an embedded
-broker sizing itself at three quarters of the volume reaches with **11.56 GiB
-free** on the volume holding `stream.store_dir` (about 12.4 GB). With the
+So the broker needs a limit of at least **10.00 GiB**, which an embedded
+broker sizing itself at three quarters of the volume reaches with **13.33 GiB
+free** on the volume holding `stream.store_dir` (about 14.3 GB). With the
 objects in S3 (`store.objects.backend: s3`) no bucket is reserved, and the
-logs' 6.50 GiB alone needs 8.67 GiB free. These are the least that **boots**:
+logs' 7.50 GiB alone needs 10.00 GiB free. These are the least that **boots**:
 the mailboxes, the coordination buckets and a joining node's snapshot reserve
 nothing and grow into whatever is left, so give a production host far more.
 
@@ -124,11 +125,11 @@ configuration reserves, split into the logs and the bucket.
 
 - `store.objects.nats_max_bytes` sets the bucket's reservation instead of a
   quarter of the broker's limit. At its smallest, 1 GiB, a fresh node needs a
-  limit of **7.50 GiB**, which three quarters of **10.00 GiB free** reaches.
+  limit of **8.50 GiB**, which three quarters of **11.33 GiB free** reaches.
   The bucket then holds at most 1 GiB of the company's files; see
   [Object store](../concepts/object-store.md#its-byte-reservation).
 - `stream.store_max_bytes` sets the broker's limit outright, rather than three
-  quarters of the free space at boot. It accepts values from 10 GiB, the least
+  quarters of the free space at boot. It accepts values from 12 GiB, the least
   a fresh node with nothing set boots in with a gibibyte left beside what it
   reserves for the mailboxes and the coordination buckets to grow into. A
   configuration that reserves more — a log's ceiling set higher, the bucket
@@ -137,7 +138,7 @@ configuration reserves, split into the logs and the bucket.
   broker is given less than the minimum for its configuration.
 
 The fixed-default logs' fields also go lower: `stream.iam_log_max_bytes` and
-`stream.usage_log_max_bytes` accept 64 MiB. The other five fields accept no
+`stream.usage_log_max_bytes` accept 64 MiB. The other six fields accept no
 less than 1 GiB, so setting them only moves the figure up.
 - **A floor is per log, not universal.** The identity estate's and the
   usage log's fields go down to 64 MiB, far below the others, because the
@@ -148,24 +149,30 @@ less than 1 GiB, so setting them only moves the figure up.
 - **More room buys longer logs, up to a point.** Unset, the mutation log and
   the vector changelog each ask for a quarter of the free space (4..64 GiB),
   the knowledge base's log, the artifacts log and the artifact datastore's
-  log each for a quarter of the mutation log's, the identity
-  estate's log for a flat 512 MiB and the usage log for a flat 1 GiB — neither
-  of the last two is derived from the disk at all, because the identity log
-  grows with headcount and the usage log's size is a count of node-days rather
-  than a rate, so more disk buys either nothing. They are scaled down together
-  whenever they ask for more than the pool they share — half of what the
-  broker's three quarters leave once the object bucket's quarter is reserved,
-  so nine thirty-seconds of the free space — which on a first boot is every
-  volume with less than about 632 GiB free (at their clamps the seven ask for
-  177.5 GiB, nine thirty-seconds of 632); from there up each log gets what it
-  asked for. With the objects in S3 no bucket is reserved and the pool is
-  three eighths of the free space, so from about 474 GiB free.
+  log each for a quarter of the mutation log's, the chat log for 8 GiB,
+  capped at a sixteenth of the free space (so the whole of it is asked from
+  128 GiB free), the identity estate's log for a flat 512 MiB and the usage
+  log for a flat 1 GiB — neither of the last two is derived from the disk at
+  all, because the identity log grows with headcount and the usage log's size
+  is a count of node-days rather than a rate, so more disk buys either
+  nothing. The chat log's ask does not follow the mutation log's as the
+  knowledge base's does, so if you set `stream.tracker_log_max_bytes` for a
+  long blocked trim, set `stream.chat_log_max_bytes` for the same horizon
+  (about 32 MB a day at the declared census) or the chat log fills first.
+  They are scaled down together whenever they ask for more than the pool they
+  share — half of what the broker's three quarters leave once the object
+  bucket's quarter is reserved, so nine thirty-seconds of the free space —
+  which on a first boot is every volume with less than about 660 GiB free (at
+  their clamps the eight ask for 185.5 GiB, nine thirty-seconds of 660); from
+  there up each log gets what it asked for. With the objects in S3 no bucket
+  is reserved and the pool is three eighths of the free space, so from about
+  495 GiB free.
 - **The ceilings are fixed when the streams are created.** Moving the node to
   a bigger volume, or setting `stream.tracker_log_max_bytes`,
   `stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes`,
   `stream.artifacts_log_max_bytes`, `stream.artifact_data_log_max_bytes`,
-  `stream.iam_log_max_bytes` or
-  `stream.usage_log_max_bytes` later, changes nothing about streams that
+  `stream.iam_log_max_bytes`, `stream.usage_log_max_bytes` or
+  `stream.chat_log_max_bytes` later, changes nothing about streams that
   already exist; `crewlet retention set-capacity` is what changes a running
   log's ceiling. A log derived from the disk that is created later — one a new
   version adds — is sized from what the existing logs' ceilings leave of that
@@ -601,10 +608,10 @@ node — the donor [dials again](retention.md) by itself.
 **The account needs more than publish and subscribe.** A node creates what it
 uses, on every start and idempotently: the seven engine streams
 (`CREWLET_AGENT`, `CREWLET_EVENTS`, `CREWLET_NOTIFICATIONS`,
-`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`, `CREWLET_CUSTODY`), the seven state-log
+`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`, `CREWLET_CUSTODY`), the eight state-log
 domain streams (`CREWLET_TRACKER_LOG`, `CREWLET_TRACKER_VECTORS`,
 `CREWLET_PAGES_LOG`, `CREWLET_IAM_LOG`, `CREWLET_USAGE_LOG`, `CREWLET_ARTIFACTS_LOG`,
-`CREWLET_ARTIFACT_DATA_LOG`), a stream per extra subject namespace a company
+`CREWLET_ARTIFACT_DATA_LOG`, `CREWLET_CHAT_LOG`), a stream per extra subject namespace a company
 publishes under, one durable consumer per seat mailbox (an ordinary API
 call, measured at 1.7 ms), the twenty-three `crewlet_*` KV buckets:
 three in the lease store, holding the seat and presence leases, the duty
@@ -719,8 +726,8 @@ metadata group, so a member stalled against a group that has not settled
 waits there, where nothing used to report it at all. The read of each state
 log's ceiling that sizes the logs before any of them is created is the same
 kind of lookup and says so the same way (`statelog_ceiling_read_slow`); the
-five are asked at once, so a broker that answers none of them costs one
-lookup ceiling rather than five in a row. The object store's
+eight are asked at once, so a broker that answers none of them costs one
+lookup ceiling rather than eight in a row. The object store's
 bucket is looked up and created as one step, and writes one line over the two
 (`natsobj_bucket_slow`). A probe that went unanswered is named as such
 (`jetstream_stream_lookup_unanswered`, `jetstream_consumer_lookup_unanswered`,
@@ -735,7 +742,7 @@ indistinguishable, which is the one question a reader has about a fleet that
 did not form. Lines carry `server=` from `stream.cluster.name`'s member
 identity; a solo broker has no name to carry and the attribute is empty.
 
-**And it needs room for the state logs.** The five state logs reserve their
+**And it needs room for the state logs.** The eight state logs reserve their
 byte ceilings against the account's JetStream storage limit when their streams
 are created, and the node sizes them to half of what that limit has left. An
 untiered limit counts every replica, so a `replicas: 3` fleet needs three

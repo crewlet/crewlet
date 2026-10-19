@@ -310,11 +310,11 @@ const (
 	// WHAT IT COSTS the chat log, stated: its horizon under a completely
 	// blocked trim on a small volume. Created at 1.4 GiB on that 64 GiB
 	// first boot, rather than 2.5 with the whole ask, it refuses ordinary
-	// writes after about 45 days of a fully blocked trim at the declared
-	// census rather than 83, and after about 18 at the supported 50 000
-	// messages a day rather than 33. The log_headroom alarm names the log a
-	// tenth of the way before either, and from 128 GiB free the cap no
-	// longer binds.
+	// writes after about 43 days of a fully blocked trim at the declared
+	// census rather than 79, and after about 18 at the supported 50 000
+	// messages a day rather than 33 — its read barriers counted in both.
+	// The log_headroom alarm names the log a tenth of the way before
+	// either, and from 128 GiB free the cap no longer binds.
 	DerivedChatLogDivisor = 4
 
 	// DerivedLogMaxBytesFraction is the share of a volume's free space an
@@ -331,20 +331,22 @@ const (
 	// StoreMaxBytesFloor and StoreMaxBytesCeiling bound the embedded
 	// broker's own declared store limit.
 	//
-	// THE FLOOR IS TEN GIBIBYTES, the smallest whole number of them a fresh
-	// node of the default document boots inside with a gibibyte left beside
-	// everything it reserves. Every data node reserves every state log's
-	// ceiling whatever it runs, and left unset the seven come to 6.5 GiB at
-	// their smallest: the tracker's, the vectors', the knowledge base's, the
-	// artifacts' and their datastore's at the gibibyte scaling stops at, the
-	// usage log's 1 GiB default and the identity log's 512 MiB one (neither
-	// scaled below what it asks). The object store's nats bucket is reserved
-	// before any of them, at a quarter of the limit: 2.5 GiB of ten. What is
-	// left, the gibibyte, is what the engine leaves the mailboxes, the event
-	// stream and every coordination bucket, which reserve nothing and grow
-	// against the same number. Below it a node provisions its way to a
-	// refusal on whichever stream happens to be last, or boots with nothing
-	// beside its reservations for any of those to grow into.
+	// THE FLOOR IS TWELVE GIBIBYTES, the smallest whole number of them a
+	// fresh node of the default document boots inside with a gibibyte left
+	// beside everything it reserves. Every data node reserves every state
+	// log's ceiling whatever it runs, and left unset the eight come to
+	// 7.5 GiB at their smallest: the tracker's, the vectors', the knowledge
+	// base's, the artifacts', their datastore's and the chat log's at the
+	// gibibyte scaling stops at, the usage log's 1 GiB default and the
+	// identity log's 512 MiB one (neither scaled below what it asks). The
+	// object store's nats bucket is reserved before any of them, at a
+	// quarter of the limit: 3 GiB of twelve. What is left, a gibibyte and a
+	// half, is for the mailboxes, the event stream and every coordination
+	// bucket, which reserve nothing and grow against the same number — never
+	// less than the gibibyte the engine leaves them. Below it a node
+	// provisions its way to a refusal on whichever stream happens to be
+	// last, or boots with nothing beside its reservations for any of those
+	// to grow into.
 	//
 	// IT IS DERIVED AND HELD, never sized by hand. The engine computes the
 	// same figure from its register and the bucket's own derivation, and
@@ -371,7 +373,7 @@ const (
 	// past it is a unit mistake rather than a deployment. The object
 	// bucket's own bound is this one, and its reservation has to fit inside
 	// whatever limit is set, beside the logs'.
-	StoreMaxBytesFloor   int64 = 10 << 30
+	StoreMaxBytesFloor   int64 = 12 << 30
 	StoreMaxBytesCeiling int64 = 64 << 40
 )
 
@@ -663,7 +665,7 @@ func (s Stream) VectorsMaxBytes(free int64) (int64, bool) {
 // wrote is one the shared-budget scaling may lower, and one an operator wrote
 // is not. It used to report whether the operator SET it — the inverse of
 // every other ceiling's second return, read by a register that asks the same
-// question of all five.
+// question of every log.
 func (s Stream) UsageMaxBytes() (int64, bool) {
 	if s.UsageLogMaxBytes > 0 {
 		return s.UsageLogMaxBytes, false

@@ -61,6 +61,14 @@
             "detail": "no verified backup of this log has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 18 record(s) older than its 24h replay window",
             "term": "backup_floor",
             "since": "2031-03-31T05:14:00Z"
+          },
+          {
+            "domains": [
+              "chat"
+            ],
+            "detail": "no verified backup of this log has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 9 record(s) older than its 24h replay window",
+            "term": "backup_floor",
+            "since": "2031-03-31T05:14:00Z"
           }
         ]
       }
@@ -118,6 +126,14 @@
             "detail": "no verified backup of this log has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 18 record(s) older than its 24h replay window",
             "term": "backup_floor",
             "since": "2031-03-31T05:14:00Z"
+          },
+          {
+            "domains": [
+              "chat"
+            ],
+            "detail": "no verified backup of this log has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 9 record(s) older than its 24h replay window",
+            "term": "backup_floor",
+            "since": "2031-03-31T05:14:00Z"
           }
         ]
       },
@@ -166,7 +182,8 @@
               "iam",
               "usage",
               "artifacts",
-              "artifactdata"
+              "artifactdata",
+              "chat"
             ],
             "detail": "no verified backup of this log has been recorded, and the policy asks for one every 24h"
           }
