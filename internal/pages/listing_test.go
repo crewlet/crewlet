@@ -759,3 +759,76 @@ func placement(rows []pages.Summary) []string {
 	}
 	return out
 }
+
+// A LISTING'S CHILD COUNT FOLLOWS ITS NARROWING, PARENT BY PARENT.
+//
+// Each row of a listing counts the pages directly under it that the SAME
+// listing would show: its status and skill narrowing applied to the children,
+// and nothing else. The count is read for a whole window of rows at once, so
+// it must also keep each parent's children apart. Here two parents and a leaf
+// share one window of the workspace, one parent holding a live child, a
+// trashed one and a tool skill, and the counts are read under no narrowing,
+// under a listing of the live pages, and under each skill narrowing.
+//
+// Mutation: drop the narrowing from the count, and the trashed child is
+// counted under the live listing and the skill under the ordinary one; count
+// by the child's own id rather than its parent's, and every count is zero.
+func TestAListingsChildCountFollowsItsNarrowing(t *testing.T) {
+	t.Parallel()
+	r, _ := hooked(t)
+	runbooks := r.write(author("jane"), pages.NewPage{Title: "Runbooks", Body: "index"})
+	r.write(author("jane"), pages.NewPage{
+		Title: "Provisioner", Body: "prose", ParentID: runbooks.Page.ID,
+	})
+	gone := r.write(author("jane"), pages.NewPage{
+		Title: "Retired", Body: "prose", ParentID: runbooks.Page.ID,
+	})
+	r.write(author("jane"), pages.NewPage{
+		Title: "Deploying", Body: skillBody, ParentID: runbooks.Page.ID,
+	})
+	if _, err := r.store.Trash(t.Context(), author("jane"), gone.Page.ID); err != nil {
+		t.Fatalf("Trash: %v", err)
+	}
+	handbook := r.write(author("jane"), pages.NewPage{Title: "Handbook", Body: "index"})
+	r.write(author("jane"), pages.NewPage{
+		Title: "Travel", Body: "prose", ParentID: handbook.Page.ID,
+	})
+	leaf := r.write(author("jane"), pages.NewPage{Title: "Glossary", Body: "prose"})
+	r.drain()
+
+	skills, ordinary := true, false
+	live := []pages.Status{pages.StatusPublished, pages.StatusDraft}
+	for name, c := range map[string]struct {
+		f    pages.Filter
+		want map[string]int
+	}{
+		"no narrowing": {pages.Filter{Roots: true},
+			map[string]int{runbooks.Page.ID: 3, handbook.Page.ID: 1, leaf.Page.ID: 0}},
+		"the live pages": {pages.Filter{Roots: true, Status: live},
+			map[string]int{runbooks.Page.ID: 2, handbook.Page.ID: 1, leaf.Page.ID: 0}},
+		"the ordinary pages": {pages.Filter{Roots: true, Skills: &ordinary},
+			map[string]int{runbooks.Page.ID: 2, handbook.Page.ID: 1, leaf.Page.ID: 0}},
+		"the tool skills": {pages.Filter{ParentID: runbooks.Page.ID, Skills: &skills},
+			map[string]int{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := map[string]int{}
+			for _, p := range r.list(c.f).Pages {
+				if _, ok := c.want[p.ID]; ok || p.Children != 0 {
+					got[p.ID] = p.Children
+				}
+			}
+			for id, n := range c.want {
+				if got[id] != n {
+					t.Errorf("%s counts %d children, want %d (every count %v)",
+						id, got[id], n, got)
+				}
+			}
+			for id, n := range got {
+				if _, ok := c.want[id]; !ok {
+					t.Errorf("%s, a page with no children, counts %d", id, n)
+				}
+			}
+		})
+	}
+}
