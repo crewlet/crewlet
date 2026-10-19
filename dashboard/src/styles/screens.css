@@ -708,11 +708,14 @@
 .tool-row.failed {
   border-color: color-mix(in srgb, var(--color-feedback-danger) 40%, transparent);
 }
-/* A task's artifacts, the design system's compact cards stacked in the rail. */
+/* A task's artifacts, the design system's compact cards stacked in the rail.
+   ONE TRACK AS WIDE AS THE RAIL: an `auto` track grows to a card's widest
+   content, and a long title cut on one line is as wide as its whole text. */
 .task-rail-artifacts {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--spacing-1);
-  margin: 0;
+  margin: 0 0 var(--spacing-1);
   padding: 0;
   list-style: none;
 }
@@ -10474,14 +10477,21 @@ a.live-row:focus-visible {
    frame for the window's height (`useFillScreen`) and takes the content
    column edge to edge, so the workspace (the body and the one panel beside
    it) runs from the bar to the sheet's bottom edge: the body scrolls inside
-   itself, and a panel beside it stays in view however far it is read. */
+   itself, and a panel beside it stays in view however far it is read.
+   THE KIT'S CONTENT PADDING IS TAKEN BACK for this one screen, as the org
+   chart and the task page take it, rather than cancelled by a margin of the
+   wide padding: under a laptop's width the kit pads less, and that margin
+   pushed the body past the window's edges and under the bar. */
+.app .crewlet-app-shell__content:has(> .artifact-page) {
+  padding: 0;
+  gap: 0;
+}
 .artifact-page {
   display: flex;
   flex-direction: column;
-  height: calc(100% + var(--spacing-5) * 2);
+  height: 100%;
   min-width: 0;
   min-height: 0;
-  margin: calc(-1 * var(--spacing-5));
 }
 .artifact-loading,
 .artifact-trashed {
@@ -10515,6 +10525,9 @@ a.live-row:focus-visible {
 }
 .artifact-workspace {
   flex: 1 1 auto;
+  /* THE BODY'S INSET, the shell's own step: the wide one, and on a phone the
+     narrow one the bar above it folds to as well (below). */
+  --artifact-inset: var(--spacing-5);
 }
 /* THE BODY IS THE SCROLLER, and so it is the size container its views
    measure the view by (`100cqb`), as the frame's own scroller is. A page's
@@ -10525,17 +10538,28 @@ a.live-row:focus-visible {
   --sticky-top: 0px;
   /* THE VIEW A KIND DRAWS IN: the body's height inside its padding. A view
      that fills the screen subtracts only its own bar from it, since nothing
-     of the page's stands above it any more. */
-  --artifact-view: calc(100cqb - 2 * var(--spacing-5));
+     of the page's stands above it any more. The unit is read where the
+     property is used, against this body as the nearest size container, and
+     a container unit measures the content box, so the padding is already
+     out of it: subtracting it here took it off twice. */
+  --artifact-view: 100cqb;
   display: flex;
   flex-direction: column;
   gap: var(--spacing-4);
-  padding: var(--spacing-5);
+  padding: var(--artifact-inset);
   scrollbar-gutter: stable;
+}
+@container crewlet-artifact-workspace (width < 640px) {
+  .artifact-body {
+    --artifact-inset: var(--spacing-3);
+  }
 }
 .artifact-body--html {
   padding: 0;
   gap: 0;
+  /* THE FRAME SCROLLS ITSELF and the body never does, so a reserved gutter
+     was a dead strip down the frame's end edge. */
+  scrollbar-gutter: auto;
 }
 .artifact-body--html > .artifact-frame-box {
   flex: 1 1 auto;
@@ -10563,6 +10587,11 @@ a.live-row:focus-visible {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-4);
+}
+/* THE LINK UNDER THE FACTS, at their start edge: it is the panel's one action
+   and reads with the facts above it, not as a form's submit at the end. */
+.artifact-details-actions {
+  display: flex;
 }
 .artifact-details-description {
   margin: 0;
@@ -10721,6 +10750,11 @@ a.live-row:focus-visible {
   border-bottom: 1px solid var(--color-border-default);
   font-size: var(--font-size-compact);
 }
+/* Rules run BETWEEN changes: the last one closes on the list's own edge (a
+   dialog's foot, a section's end) rather than drawing a second line there. */
+.artifact-history-row:last-child {
+  border-bottom: 0;
+}
 .artifact-history-who {
   color: var(--color-text-primary);
   font-weight: var(--font-weight-medium);
@@ -10753,14 +10787,24 @@ a.live-row:focus-visible {
 .artifact-history-reason {
   color: var(--color-text-tertiary);
 }
+/* NARROW (a phone, a side panel), WHO AND WHEN SHARE THE FIRST LINE and what
+   they did runs the width under it. Placed by line, not left to the flow: the
+   sentence spanning the row pushed the time onto a third line of its own. */
 @container page (width < 640px) {
   .artifact-history-row {
     grid-template-columns: minmax(0, 1fr) auto;
+    row-gap: var(--spacing-1);
   }
   .artifact-history-row--action {
     grid-template-columns: minmax(0, 1fr) auto 4.5rem;
   }
+  .artifact-history-who,
+  .artifact-history-when,
+  .artifact-history-action {
+    grid-row: 1;
+  }
   .artifact-history-what {
+    grid-row: 2;
     grid-column: 1 / -1;
   }
 }
@@ -10874,9 +10918,13 @@ a.live-row:focus-visible {
    with how many changes it will apply at the start of the band. */
 .artifact-schema-foot {
   position: sticky;
-  bottom: 0;
+  /* A sticky edge stops at the panel body's padding, which left a band under
+     the foot that the form scrolled through; it sits on the panel's own
+     bottom edge instead, padded by that inset above and below its buttons. */
+  bottom: calc(-1 * var(--crewlet-artifact-panel-inset, 0px));
   z-index: var(--z-index-sticky);
-  padding-block: var(--spacing-3);
+  padding-block: var(--crewlet-artifact-panel-inset, var(--spacing-3));
+  margin-block-end: calc(-1 * var(--crewlet-artifact-panel-inset, 0px));
   border-top: 1px solid var(--color-border-default);
   background: var(--color-surface-background);
 }
@@ -10947,8 +10995,42 @@ a.live-row:focus-visible {
   align-items: center;
   gap: var(--spacing-2) var(--spacing-3);
 }
+/* A NARROW FORM (a phone, the panel beside the sheet) keeps each column on
+   tracks too, rather than stacking seven full-width controls: the name with
+   its remove slot, the key under it, the type beside who writes it, and the
+   two flags on one line under those. */
 @container artifact-schema-form (width < 44rem) {
-  .artifact-column-head,
+  .artifact-column-head {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) var(--size-row-sm);
+    grid-template-areas:
+      "name name remove"
+      "key key key"
+      "type write write"
+      "required hidden hidden";
+    row-gap: var(--spacing-2);
+  }
+  .artifact-column-name {
+    grid-area: name;
+  }
+  .artifact-column-key {
+    grid-area: key;
+    margin-block-start: calc(-1 * var(--spacing-1));
+  }
+  .artifact-column-type {
+    grid-area: type;
+  }
+  .artifact-column-write {
+    grid-area: write;
+  }
+  .artifact-column-required {
+    grid-area: required;
+  }
+  .artifact-column-hidden {
+    grid-area: hidden;
+  }
+  .artifact-column-remove {
+    grid-area: remove;
+  }
   .artifact-option {
     display: flex;
     flex-wrap: wrap;

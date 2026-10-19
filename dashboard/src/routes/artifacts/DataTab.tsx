@@ -13,6 +13,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   Button,
+  EmptyState,
   SegmentedControl,
   SheetGrid,
   Select,
@@ -107,6 +108,7 @@ export function DataTab({ detail, store }: { detail: ArtifactDetail; store: Arti
           collections={collections}
           collection={collection}
           onCollection={setCollection}
+          onSchema={() => setView("schema")}
           role={role}
         />
       )}
@@ -178,12 +180,15 @@ function Rows({
   collections,
   collection,
   onCollection,
+  onSchema,
   role,
 }: {
   store: ArtifactDataStore;
   collections: DataCollection[];
   collection: DataCollection | undefined;
   onCollection: (name: string) => void;
+  /** Opens the Schema view, where a first collection is added. */
+  onSchema: () => void;
   role: ArtifactDetail["role"];
 }) {
   const people = useArtifactPeople();
@@ -211,7 +216,18 @@ function Rows({
     collection ? roleIncludes(role, collection.delete) : false,
   );
   if (!collection)
-    return <p className="artifact-note">No collections yet. Add one on the Schema view.</p>;
+    return (
+      <EmptyState
+        size="compact"
+        title="No collections yet"
+        description="A collection is one table of rows with its own columns. Add one on the Schema view."
+        action={
+          <Button size="small" variant="secondary" onClick={onSchema}>
+            Open Schema
+          </Button>
+        }
+      />
+    );
   return (
     <>
       {collections.length > 1 && (

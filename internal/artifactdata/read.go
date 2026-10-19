@@ -472,7 +472,10 @@ func scanDocs(ctx context.Context, tx *sql.Tx, c *collState, q string, args ...a
 		return nil, fmt.Errorf("artifactdata: read %s: %w", c.spec.Name, err)
 	}
 	defer func() { _ = rows.Close() }()
-	var out []Doc
+	// AN EMPTY PAGE IS AN EMPTY LIST, never null: a client reads `docs` as
+	// an array, and a collection with no rows yet (every new sheet's first
+	// state) answered `"docs":null`, which the dashboard could not iterate.
+	out := []Doc{}
 	for rows.Next() {
 		var d docRow
 		if err := rows.Scan(&d.id, &d.body, &d.createdBy, &d.createdKind, &d.createdAt,

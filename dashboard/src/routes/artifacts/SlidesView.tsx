@@ -88,7 +88,7 @@ import {
 import { useMediaQuery } from "~/lib/media.ts";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import type { PresenceReport } from "./presence.ts";
-import { useKindControls } from "~/lib/artifacts/kindControls.ts";
+import { useKindControls, useRegionNames } from "~/lib/artifacts/kindControls.ts";
 
 /** The views of a deck, as `mode=` names them; "" is the editor (or the reader's slides). */
 type DeckMode = "" | "grid" | "present" | "presenter";
@@ -175,6 +175,13 @@ function Deck({
   useEffect(() => {
     if (primary) at({ region: slideRegion(current.id) }, dirty);
   }, [at, primary, current.id, dirty]);
+  // AND WHAT THOSE REGIONS ARE CALLED, so the room says "Viewing slide 3"
+  // rather than the slide's id.
+  useRegionNames(
+    primary
+      ? Object.fromEntries(slides.map((s, i) => [slideRegion(s.id), `slide ${i + 1}`]))
+      : null,
+  );
 
   const go = useCallback(
     (id: string) => setSlide(id === slides[0]?.id ? "" : id),

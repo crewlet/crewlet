@@ -93,6 +93,7 @@ import { patchArtifact, untrashArtifact } from "~/lib/artifacts/api.ts";
 import { usePinToggle, usePins } from "~/lib/artifacts/pins.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import {
+  isViewRegion,
   memberTurn,
   presenceMembers,
   selfWords,
@@ -119,10 +120,15 @@ import { HistoryTab } from "./HistoryTab.tsx";
 import { DataTab } from "./DataTab.tsx";
 import { DetailsPanel } from "./DetailsPanel.tsx";
 import { PurgeControl, SettingsTab, TrashDialog } from "./SettingsTab.tsx";
-import { KindControlsSink, type KindControls } from "~/lib/artifacts/kindControls.ts";
+import {
+  KindControlsSink,
+  RegionNamesSink,
+  type KindControls,
+  type RegionNames,
+} from "~/lib/artifacts/kindControls.ts";
 import { PANEL_SPECS, panelOf, spelledTheOldWay, withPanel, type PanelName } from "./panels.ts";
 import { useArtifactPresence } from "./presence.ts";
-import { followMoves, followTarget, moves, slideOfRegion } from "~/lib/artifacts/follow.ts";
+import { followMoves, followTarget, moves } from "~/lib/artifacts/follow.ts";
 import { useViewer } from "~/lib/viewer.ts";
 
 /** The head is pushed (`artifact_changed`); this read is the floor under a push the socket missed. */
@@ -450,7 +456,9 @@ function Loaded({
     [room.others, viewer.handle],
   );
   // WHERE SOMEBODY IS, as the reader sees it: a row by its number in the
-  // sheet's own order, a column by its label.
+  // sheet's own order, a column by its label, a doc's tab or a deck's slide
+  // by the name its view publishes (`useRegionNames`).
+  const [regions, setRegions] = useState<RegionNames | null>(null);
   const schema = store?.schema ?? null;
   const place = useMemo<PresencePlace>(
     () => ({
@@ -462,17 +470,20 @@ function Loaded({
         schema?.collections
           .find((c) => c.name === collection)
           ?.columns?.find((c) => c.key === field)?.label ?? null,
+      region: (region) => regions?.[region] ?? null,
     }),
-    [store, schema],
+    [store, schema, regions],
   );
   const drawn = useMemo(() => {
     const out = presenceMembers(others, people, held.current, place);
     held.current = out.hues;
     return out.members;
   }, [others, people, place]);
-  // The reader, first in the People panel as "You", drawn as their own seat.
+  // The reader, first in the People panel as "You", drawn as their own seat,
+  // or as the person their login is where they hold none: left out, a reader
+  // signed in with no seat saw a panel of everybody but themselves.
   const selfFace = useMemo<PeopleRailSelf | undefined>(() => {
-    if (!viewer.handle) return undefined;
+    if (!viewer.handle) return viewer.login ? { name: viewer.login, kind: "human" } : undefined;
     const p = people.seatPrincipal(viewer.handle);
     return {
       name: p.name,
@@ -481,7 +492,7 @@ function Loaded({
       hue: p.hue,
       src: p.src,
     };
-  }, [viewer.handle, people]);
+  }, [viewer.handle, viewer.login, people]);
 
   // ---- the bar's actions ----------------------------------------------------
   // WHETHER THE READER PINNED IT is their own record, which the head does not
@@ -734,6 +745,31 @@ function Loaded({
         Changes made by others will appear when the connection comes back.
       </Callout>,
     );
+  // AN OLDER VERSION IS SAID, not only tinted on the chip: it is read, never
+  // edited, and the way back to the latest is one press.
+  if (versioned && version > 0 && version < detail.head_number)
+    notices.push(
+      <Callout
+        key="older"
+        layout="banner"
+        variant="info"
+        action={
+          <Button
+            size="small"
+            variant="secondary"
+            onClick={() => {
+              setVersion("");
+              setShownHead(detail.head_number);
+            }}
+          >
+            Show the latest
+          </Button>
+        }
+      >
+        You are looking at version {version}, an older version. The latest is version{" "}
+        {detail.head_number}.
+      </Callout>,
+    );
   if (newer)
     notices.push(
       <Callout
@@ -800,9 +836,10 @@ function Loaded({
           onStop={stopFollowing}
           labels={{
             following: (name) => {
-              // A SLIDE IS MOVED TO, not said: the view is already on it.
+              // A SLIDE OR A DOC'S TAB IS MOVED TO, not said: the view is
+              // already on it. A page's own region is said in its words.
               const region = target.focus.region;
-              const where = region && !slideOfRegion(region) ? ` They are in ${region}.` : "";
+              const where = region && !isViewRegion(region) ? ` They are in ${region}.` : "";
               return `Following ${name}.${where} Press Esc or scroll to stop.`;
             },
           }}
@@ -851,21 +888,23 @@ function Loaded({
         }
       >
         <KindControlsSink.Provider value={setKind}>
-          <ViewTab
-            detail={detail}
-            version={showing}
-            versions={versions}
-            store={store}
-            room={room}
-            presence={presence}
-            drawn={drawn}
-            bridgeStores={bridgeStores}
-            onPublished={(n: number) => {
-              refetch();
-              setVersion("");
-              setShownHead(n);
-            }}
-          />
+          <RegionNamesSink.Provider value={setRegions}>
+            <ViewTab
+              detail={detail}
+              version={showing}
+              versions={versions}
+              store={store}
+              room={room}
+              presence={presence}
+              drawn={drawn}
+              bridgeStores={bridgeStores}
+              onPublished={(n: number) => {
+                refetch();
+                setVersion("");
+                setShownHead(n);
+              }}
+            />
+          </RegionNamesSink.Provider>
         </KindControlsSink.Provider>
       </ArtifactWorkspace>
       <ArtifactShare
