@@ -59,15 +59,6 @@ func HeldOf(docs ...Document) Held {
 	return held
 }
 
-// PageSelection, PageOpeningRead, PageWithdrawals and PageCoverageCount are
-// the page corpus's four statements, for the plan gate.
-var (
-	PageSelection     = pageSelection
-	PageOpeningRead   = pageOpeningRead
-	PageWithdrawals   = pageWithdrawals
-	PageCoverageCount = pageCoverageCount
-)
-
 // EmbedReadChars is [embedReadChars], for the gate that holds a selection to
 // reading only the opening of a body.
 const EmbedReadChars = embedReadChars
