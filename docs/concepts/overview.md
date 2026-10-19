@@ -283,7 +283,10 @@ internal/
 ├── jsinflight/           # A compare-and-set the leader answers "another write
 │                         #   is still in flight" is waited out until the
 │                         #   leader decides it, never read as a lost race
-├── httpx/ textcut/      # The shared HTTP transport; rune-safe shortening
+├── httpx/ textcut/       # The shared HTTP transport; rune-safe shortening
+├── plainjson/            # JSON read as text: `<`, `>` and `&` as themselves,
+│                         #   for every record and answer a person or a model
+│                         #   reads
 ├── api/                  # REST + dashboard: webhooks/, stream/, queries/,
 │                         #   livestate/, configapi/, setupapi/, secretsapi/,
 │                         #   auth/, httpjson/, mcpbridge/, operator/ (ONE

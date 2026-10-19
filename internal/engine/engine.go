@@ -449,7 +449,8 @@ func (c *Company) TurnSettings(wallClock int) turn.Settings {
 //
 // A meta-tool is never a delivery, so in a record whose only job is "what
 // already happened that matters" it is pure noise. Named here rather than in
-// the ledger because the ledger imports nothing from crewlet, deliberately.
+// the ledger, which imports nothing from crewlet but a standard-library leaf,
+// deliberately, and so knows no tool by name: its caller hands it the list.
 func MetaToolNames() []string {
 	return []string{"activate_tool", "list_mcp_server_tools"}
 }
