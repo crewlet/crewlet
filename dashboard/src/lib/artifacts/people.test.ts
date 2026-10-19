@@ -59,8 +59,25 @@ test("a member on a cell is placed by the row's number and the column's label", 
   const { members } = presenceMembers(room, artifactPeople(null), new Map(), {
     row: (_, doc) => (doc === "r1" ? "row 4" : null),
     field: (_, field) => (field === "score" ? "Gate" : null),
+    region: () => null,
   });
   expect(members[0]?.location).toBe("Editing row 4, Gate");
+});
+
+// A VIEW'S REGION IS AN ADDRESS: a doc reader was "Viewing in tab:index.md"
+// and a deck's "Viewing in slide:<id>". Named by the view, or left unsaid.
+test("a doc's tab and a deck's slide are said by the names their views give them", () => {
+  const on = (region: string, version?: number) =>
+    member({ session: region, seat: region, focus: { region, ...(version ? { version } : {}) } });
+  const names: Record<string, string> = { "tab:index.md": "Overview", "slide:s1": "slide 3" };
+  const place = { row: () => null, field: () => null, region: (r: string) => names[r] ?? null };
+  const at = (m: ReturnType<typeof on>) =>
+    presenceMembers([m], artifactPeople(null), new Map(), place).members[0]?.location;
+  expect(at(on("tab:index.md"))).toBe("Viewing Overview");
+  expect(at(on("slide:s1"))).toBe("Viewing slide 3");
+  expect(at(on("tab:gone.md", 2))).toBe("Viewing version 2");
+  expect(at(on("tab:gone.md"))).toBeUndefined();
+  expect(at(on("the pricing table"))).toBe("Viewing in the pricing table");
 });
 
 test("the reader's own other tab is counted beside You, never drawn as somebody else", () => {

@@ -69,6 +69,21 @@ describe("a history row", () => {
     );
   });
 
+  // AN ADMINISTRATOR'S READ SAID IT TWICE: "opened version 1 as an
+  // administrator (as an administrator)", the row's flag appended to a
+  // sentence that already names it.
+  test("a change made as an administrator says so once", () => {
+    expect(historyWords(entry({ op: "read_elevated", number: 1, elevated: true }), names)).toBe(
+      "opened version 1 as an administrator",
+    );
+    expect(
+      historyWords(
+        entry({ op: "share", elevated: true, summary: { audience: "seat:pm", role: "viewer" } }),
+        names,
+      ),
+    ).toBe("shared it with Pat Mills: can view (as an administrator)");
+  });
+
   test("an op this build does not know is still said, in its own words", () => {
     expect(historyWords(entry({ op: "rename_collection" }), names)).toBe("rename collection");
   });

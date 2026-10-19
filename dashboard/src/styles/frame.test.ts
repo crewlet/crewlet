@@ -1785,3 +1785,17 @@ test("the engine's row takes its control marks from the kit alone, and the user 
     expect(sheet(name), name).not.toMatch(/\.user-block/);
   }
 });
+
+// THE KIT'S CONTENT PADDING IS ONE STEP WIDE AND ANOTHER NARROW, so a screen
+// that cancels it with a negative margin of the wide step overshoots under a
+// laptop's width: the artifact page did, and on a phone its body ran 8px past
+// both edges of the window and 4px under its bar. A screen that draws to the
+// sheet's edges takes the padding back on the column (`:has`), as the org
+// chart and the artifact page do.
+test("no screen cancels the content column's padding with a negative margin", () => {
+  for (const name of ["frame.css", "screens.css"]) {
+    expect(sheet(name), name).not.toMatch(
+      /margin[^;:]*:\s*calc\(\s*-1\s*\*\s*var\(--spacing-5\)\s*\)/,
+    );
+  }
+});

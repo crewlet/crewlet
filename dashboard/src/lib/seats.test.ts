@@ -1144,6 +1144,14 @@ test("a seat's principal is subtitled by its unit, never its handle", () => {
   expect(principalOfSeat(undefined, "gone").detail).toBeUndefined();
 });
 
+// A LOGIN WITH NO SEAT IS SOMEBODY SIGNED IN, not an agent: drawn as one it
+// wore an agent's face and the share dialog said it acted "in its turns".
+test("a handle the chart does not hold is a person when it is a login", () => {
+  expect(principalOfSeat(undefined, "token:review").kind).toBe("person");
+  expect(principalOfSeat(undefined, "jane.doe").kind).toBe("person");
+  expect(principalOfSeat(undefined, "gone").kind).toBe("agent");
+});
+
 // A COUNT OF NONE IS LEFT OUT of a team's line: "0 people, 2 agents" was half
 // about what the team does not hold.
 test("a unit's principal counts only what it holds", () => {
