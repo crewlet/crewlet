@@ -79,15 +79,26 @@ test("shows the frame's own placeholder, named for the page, while its ticket is
 
 test("says a refused ticket as the frame says a failed page, and tries again", async () => {
   vi.mocked(mintFrame)
-    .mockRejectedValueOnce(new RestError(404, { error: "artifact_not_framed", detail: "" }))
+    .mockRejectedValueOnce(new RestError(500, { error: "internal", detail: "" }))
     .mockReturnValue(new Promise(() => {}));
   const { container } = mount("design-board-frame");
   expect(await screen.findByText("This page could not be opened")).toBeDefined();
-  expect(screen.getByText("This version has no page to show.")).toBeDefined();
+  expect(
+    screen.getByText("The engine could not open this page. Try again in a moment."),
+  ).toBeDefined();
   expect(container.firstElementChild?.className).toBe("artifact-frame-box design-board-frame");
   expect(container.querySelector(".crewlet-sandboxed-frame__end")).not.toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Try again" }));
   await waitFor(() => expect(mintFrame).toHaveBeenCalledTimes(2));
+});
+
+test("a refusal asking again cannot change offers no Try again", async () => {
+  vi.mocked(mintFrame).mockRejectedValue(
+    new RestError(503, { error: "artifact_origin_unset", detail: "" }),
+  );
+  mount();
+  expect(await screen.findByText(/not set up to show pages yet/)).toBeDefined();
+  expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
 });
 
 test("an engine nobody heard from is said in the reader's words, not the transport's", async () => {

@@ -69,6 +69,25 @@ function mintRefusal(err: RestError): string {
   }
 }
 
+/**
+ * Whether asking again can open the page: a request nothing answered, a
+ * budget spent for now, or an engine that failed on its side. A version with
+ * no page, a trashed artifact, a deployment with no artifact origin and a
+ * refused share answer the same however often.
+ */
+function mintRetryable(err: RestError): boolean {
+  if (SETTLED_REFUSALS.has(err.code)) return false;
+  return err.status === 0 || err.status === 429 || err.status >= 500;
+}
+
+/** The refusals a second ask answers the same. */
+const SETTLED_REFUSALS = new Set([
+  "artifact_origin_unset",
+  "artifact_not_framed",
+  "artifact_trashed",
+  "session_revoked",
+]);
+
 export function FrameView({
   detail,
   version,
@@ -221,9 +240,11 @@ export function FrameView({
           title={name}
           heading="This page could not be opened"
           action={
-            <Button variant="outline" size="small" onClick={() => setAttempt((n) => n + 1)}>
-              Try again
-            </Button>
+            mintRetryable(frame.error) ? (
+              <Button variant="outline" size="small" onClick={() => setAttempt((n) => n + 1)}>
+                Try again
+              </Button>
+            ) : undefined
           }
         >
           {mintRefusal(frame.error)}
@@ -269,7 +290,7 @@ export function FrameView({
         }}
         onReload={() => setAttempt((n) => n + 1)}
       />
-      {dataNote && state === "ready" && version !== detail.head_number && (
+      {dataNote && needsData && state === "ready" && version !== detail.head_number && (
         <p className="artifact-note">Every version shows today's data.</p>
       )}
       <LinkInterstitial
