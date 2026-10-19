@@ -1096,10 +1096,7 @@ func oneSidedSubject(edge OneSided) string {
 func (d *duty) pendingOneSided(ctx context.Context) (bool, error) {
 	var any int
 	err := d.deps.DB.Read(ctx, func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx, `
-			SELECT EXISTS (SELECT 1 FROM tracker_relations
-			               WHERE one_sided = 1 AND one_sided_final = 0)`).
-			Scan(&any)
+		return tx.QueryRowContext(ctx, pendingOneSidedStatement).Scan(&any)
 	})
 	if err != nil {
 		return false, fmt.Errorf("worklet: probe for one-sided dependencies: %w", err)

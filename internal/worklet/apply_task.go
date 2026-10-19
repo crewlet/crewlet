@@ -704,20 +704,8 @@ func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
 			// apply is the entry BELOW this one in the same loop,
 			// which is still ahead of us whether the rows went out
 			// one at a time or all at once.
-			return insertMany(ctx, tx, c.maxVariables, `
-				INSERT INTO tracker_relations
-					(task_id, other_id, kind, derived, one_sided,
-					 one_sided_final, note, created_at)
-				VALUES`,
-				`(?,?,?,0,
-					CASE WHEN ? = 'waiting_on' AND NOT EXISTS (
-						SELECT 1 FROM tracker_task_dependents d
-						WHERE d.task_id = ? AND d.dependent_id = ?)
-					THEN 1 ELSE 0 END, ?, ?, ?)`,
-				`ON CONFLICT (task_id, other_id, kind) DO UPDATE SET
-					one_sided = excluded.one_sided,
-					one_sided_final = excluded.one_sided_final,
-					note = excluded.note`,
+			return insertMany(ctx, tx, c.maxVariables, relationsInsertPrefix,
+				relationsInsertRow, relationsInsertConflict,
 				task.Relations, func(r Relation) []any {
 					return []any{task.ID, r.Other, string(r.Kind),
 						string(r.Kind), r.Other, task.ID,
@@ -733,10 +721,8 @@ func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
 		{"tracker_task_dependents", func() (int, error) {
 			// THE MIRROR AS A ROW, so the derivation above is an
 			// indexed probe rather than a document decode per edge.
-			return insertMany(ctx, tx, c.maxVariables,
-				`INSERT INTO tracker_task_dependents (task_id, dependent_id) VALUES`,
-				`(?,?)`,
-				`ON CONFLICT (task_id, dependent_id) DO NOTHING`,
+			return insertMany(ctx, tx, c.maxVariables, mirrorInsertPrefix,
+				mirrorInsertRow, mirrorInsertConflict,
 				task.Dependents, func(id string) []any {
 					return []any{task.ID, id}
 				})
@@ -880,12 +866,7 @@ func (a *Applier) maintainDeps(ctx context.Context, tx *sql.Tx, task Task,
 	// dependent set while waiting, and the duty repairs an edge that is
 	// already whole — for ever, because its repair writes the mirror that
 	// is already there.
-	res, err = tx.ExecContext(ctx, `
-		UPDATE tracker_relations SET one_sided =
-			CASE WHEN EXISTS (SELECT 1 FROM tracker_task_dependents d
-			                  WHERE d.task_id = ? AND d.dependent_id = tracker_relations.task_id)
-			THEN 0 ELSE 1 END
-		WHERE other_id = ? AND kind = 'waiting_on'`, task.ID, task.ID)
+	res, err = tx.ExecContext(ctx, rejudgeEdgesStatement, task.ID, task.ID)
 	if err != nil {
 		return 0, fmt.Errorf("worklet: re-judge the edges waiting on %s: %w",
 			task.ID, err)
@@ -1679,15 +1660,11 @@ type otherEdit struct {
 func othersNaming(ctx context.Context, tx *sql.Tx, id string,
 	children []string) (map[string]otherEdit, error) {
 
-	relating, err := idsOf(ctx, tx, `
-		SELECT DISTINCT task_id FROM tracker_relations
-		WHERE other_id = ? AND task_id <> ?`, id, id)
+	relating, err := idsOf(ctx, tx, relatingStatement, id, id)
 	if err != nil {
 		return nil, fmt.Errorf("worklet: read the tasks relating to %s: %w", id, err)
 	}
-	mirroring, err := idsOf(ctx, tx, `
-		SELECT task_id FROM tracker_task_dependents
-		WHERE dependent_id = ? AND task_id <> ?`, id, id)
+	mirroring, err := idsOf(ctx, tx, mirroringStatement, id, id)
 	if err != nil {
 		return nil, fmt.Errorf("worklet: read the blockers listing %s: %w", id, err)
 	}
