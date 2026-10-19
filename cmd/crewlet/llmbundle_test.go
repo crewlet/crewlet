@@ -276,3 +276,44 @@ func TestTheCommandsThatReplaceTheLoginDoNotRestoreItFirst(t *testing.T) {
 		}
 	})
 }
+
+// A LOGOUT WHOSE VENDOR HALF FAILED STILL SAYS WHAT HOLDS THE BUNDLE BACK. The
+// login is removed and the logout recorded whatever the vendor's own logout
+// does, so the bundle stays out — and the command, failing over the vendor's
+// half, returned before it said so: the operator revoking a compromised login
+// never heard that the bundle is now withheld here, nor what retires it for a
+// fresh volume. The notice follows the record, not the command's success.
+//
+// Mutation: print the notice only when the logout succeeded, and this is red.
+func TestALogoutWhoseVendorHalfFailedStillNamesTheBundle(t *testing.T) {
+	flags, login := bundledEntryWithLogout(t, llmBundle(t, `{"token":"k-bundled"}`), "exit 3")
+	if _, stderr, err := runSub(t, flags, "status"); err != nil {
+		t.Fatalf("status: %v (%s)", err, stderr)
+	}
+	if got := readLogin(t, login); got == "" {
+		t.Fatal("the premise: status did not restore the bundle")
+	}
+
+	stdout, stderr, err := runSub(t, flags, "logout")
+	if err == nil || !strings.Contains(err.Error(), "did not finish") {
+		t.Fatalf("logout = %v, want the vendor's own logout reported unfinished (%s)", err, stderr)
+	}
+	if got := readLogin(t, login); got != "" {
+		t.Fatalf("the premise: a failed vendor logout left the login: %q", got)
+	}
+	if strings.Contains(stdout, "Logged sub out") {
+		t.Errorf("a logout whose vendor half failed reported success:\n%s", stdout)
+	}
+	for _, want := range []string{cliagent.BundleVarName("sub"), "fresh volume", "`crewlet llm login sub`"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the failed logout does not say %q about the bundle it holds back:\n%s", want, stdout)
+		}
+	}
+	// And it does hold it back.
+	if _, _, err := runSub(t, flags, "status"); err != nil {
+		t.Fatalf("status after the logout: %v", err)
+	}
+	if got := readLogin(t, login); got != "" {
+		t.Errorf("status after a logout whose vendor half failed restored the login: %q", got)
+	}
+}

@@ -178,14 +178,22 @@ func runLLM(environ config.Source, args []string, stdout, stderr io.Writer) erro
 		if err != nil {
 			return err
 		}
-		if err := p.Logout(ctx, stdout, stderr); err != nil {
-			return err
+		logoutErr := p.Logout(ctx, stdout, stderr)
+		if logoutErr == nil {
+			fmt.Fprintf(stdout, "Logged %s out and removed its credentials.\n", p.Key())
 		}
-		fmt.Fprintf(stdout, "Logged %s out and removed its credentials.\n", p.Key())
-		if notice := p.LogoutNotice(); notice != "" {
+		// WHETHER OR NOT THE LOGOUT AS A WHOLE SUCCEEDED: a vendor logout that
+		// failed after the login was removed fails this command with the
+		// logout recorded all the same, and that record is what keeps the
+		// configured bundle out — which the operator revoking a compromised
+		// login most needs to hear. See [cliagent.Provider.LogoutNotice].
+		switch notice, err := p.LogoutNotice(); {
+		case err != nil:
+			fmt.Fprintf(stderr, "crewlet: %s: %v\n", p.Key(), err)
+		case notice != "":
 			fmt.Fprintln(stdout, notice)
 		}
-		return nil
+		return logoutErr
 	case "export":
 		return exportLLM(ctx, environ, providers, key, *secretStore, *bootstrapPath, stdout)
 	case "import":

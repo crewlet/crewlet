@@ -587,20 +587,33 @@ func (p *Provider) loggedOutError() error {
 }
 
 // LogoutNotice is what `crewlet llm logout` tells the operator about the
-// entry's configured credential bundle once its login is removed, or "" for an
-// entry that configures none: that nothing restores the bundle onto this host
+// entry's configured credential bundle while the logout's record stands
+// ([Workspace.markLoggedOut]): that nothing restores the bundle onto this host
 // until a login is written again, that a state directory with no record of the
-// logout — a fresh volume — still does, and what retires it.
-func (p *Provider) LogoutNotice() string {
+// logout, a fresh volume, still does, and what retires it. It is "" for an
+// entry that configures no bundle, and while no record stands: a logout that
+// stopped before writing one leaves a directory the next restore does refill,
+// and saying otherwise would be false.
+//
+// READ OFF THE RECORD, never off whether [Provider.Logout] returned an error: a
+// vendor logout that fails after the login was removed fails the command with
+// the record written all the same, and the operator revoking a compromised
+// login — the case the notice is for — was told nothing about the bundle now
+// held back, nor about what retires it for a fresh volume. An error is a record
+// that cannot be read, which the restore would answer with too.
+func (p *Provider) LogoutNotice() (string, error) {
 	if p.bundle == "" {
-		return ""
+		return "", nil
+	}
+	if out, err := p.ws.loggedOut(); err != nil || !out {
+		return "", err
 	}
 	return fmt.Sprintf("Its configured credential bundle (%s) is not restored onto this host until "+
 		"a login is written again (`crewlet llm login %s`, `-from-host` or `crewlet llm import %s`) — "+
 		"not at the engine's next boot or apply, and not by `crewlet llm status`, `export`, `doctor` "+
 		"or `list`. A state directory with no record of this logout, such as a fresh volume, still "+
 		"restores it; to retire the bundle, %s.",
-		p.bundleSource(), p.key, p.key, p.retireBundle())
+		p.bundleSource(), p.key, p.key, p.retireBundle()), nil
 }
 
 // bundleSource names where the entry's configured bundle came from.

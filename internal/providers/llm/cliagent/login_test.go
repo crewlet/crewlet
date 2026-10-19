@@ -583,19 +583,67 @@ func TestALogoutIsNotUndoneByTheConfiguredBundle(t *testing.T) {
 	}
 	// What the operator is told about the bundle, naming where it came
 	// from: the conventional secret here, the field where one is set.
+	notice := logoutNotice(t, p)
 	for _, want := range []string{BundleVarName("sub"), "fresh volume", "`crewlet llm login sub`"} {
-		if !strings.Contains(p.LogoutNotice(), want) {
-			t.Errorf("the logout notice does not name %q: %s", want, p.LogoutNotice())
+		if !strings.Contains(notice, want) {
+			t.Errorf("the logout notice does not name %q: %s", want, notice)
 		}
 	}
 	p.bundleConfigured = true
-	if notice := p.LogoutNotice(); !strings.Contains(notice, "providers.llm.sub.cli.auth.credential_bundle") {
+	if notice := logoutNotice(t, p); !strings.Contains(notice, "providers.llm.sub.cli.auth.credential_bundle") {
 		t.Errorf("the notice for a bundle named in the document does not name the field: %s", notice)
 	}
 	p.bundle = ""
-	if notice := p.LogoutNotice(); notice != "" {
+	if notice := logoutNotice(t, p); notice != "" {
 		t.Errorf("an entry with no bundle was told about one: %s", notice)
 	}
+}
+
+// THE LOGOUT NOTICE SPEAKS FOR THE RECORD, never for whether Logout succeeded:
+// a vendor logout that fails after the login is removed fails the command with
+// the record written, and the operator was then told nothing about the bundle
+// it now holds back — while a directory with no record is one the next restore
+// refills, about which the notice would be false.
+//
+// Mutation: answer the notice for any entry with a bundle, without reading the
+// record, and the case before the logout is red; drop the record from Logout,
+// and the case after a failed vendor logout is.
+func TestTheLogoutNoticeSpeaksForTheRecord(t *testing.T) {
+	t.Parallel()
+	p := loginProvider(t)
+	p.bundle = bundleOf(t, "creds.json", `{"token":"k-bundled"}`)
+	if notice := logoutNotice(t, p); notice != "" {
+		t.Errorf("an entry nobody logged out was told its bundle is held back: %s", notice)
+	}
+	if err := p.RestoreConfiguredBundle(t.Context()); err != nil {
+		t.Fatalf("the boot's restore: %v", err)
+	}
+	// The vendor's own logout fails, after which the login is removed and the
+	// logout recorded all the same.
+	p.profile.Binary = "sh"
+	p.profile.LogoutArgs = []string{"-c", "exit 3"}
+	err := p.Logout(t.Context(), &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "did not finish") {
+		t.Fatalf("the premise: Logout = %v, want the vendor's logout reported unfinished", err)
+	}
+	if p.Workspace().HasLogin() {
+		t.Fatalf("the premise: a failed vendor logout left the login: %v", p.Workspace().LoginFiles())
+	}
+	if notice := logoutNotice(t, p); !strings.Contains(notice, BundleVarName("sub")) {
+		t.Errorf("after a logout whose vendor half failed, the notice says nothing of the bundle "+
+			"it holds back: %q", notice)
+	}
+}
+
+// logoutNotice is p's logout notice, failing the test on a record it cannot
+// read.
+func logoutNotice(t *testing.T, p *Provider) string {
+	t.Helper()
+	notice, err := p.LogoutNotice()
+	if err != nil {
+		t.Fatalf("LogoutNotice: %v", err)
+	}
+	return notice
 }
 
 // A LOGIN OF RECORD ENDS A LOGOUT. Whichever way the operator signs the entry
