@@ -33,6 +33,7 @@ import {
   BRIDGE_MESSAGE,
   capabilityOf,
   readEvent,
+  readDeclaredCapabilities,
   readInit,
   readResult,
   type BridgeConnection,
@@ -80,8 +81,15 @@ class Bridge {
     this.resolveReady = resolve;
   });
 
+  /**
+   * @param declared What the origin wrote on this script's element: the
+   *   frame's grant, answered until the host's handshake, which is the
+   *   authority from then on.
+   */
+  constructor(private readonly declared: readonly RuntimeCapability[]) {}
+
   get capabilities(): readonly RuntimeCapability[] {
-    return this.init?.capabilities ?? [];
+    return this.init?.capabilities ?? this.declared;
   }
 
   get viewer(): BridgeViewer | null {
@@ -140,7 +148,10 @@ class Bridge {
     }
   }
 
-  /** Whether the version declared a capability. Before the host has said, nothing is declared. */
+  /**
+   * Whether the version declared a capability: from the page's first script,
+   * as the origin told it, and as the host said at the handshake once it has.
+   */
   has(capability: RuntimeCapability): boolean {
     return this.capabilities.includes(capability);
   }
@@ -180,7 +191,10 @@ class Bridge {
   }
 }
 
-const bridge = new Bridge();
+// READ WHILE THIS SCRIPT RUNS: `currentScript` names it only now.
+const bridge = new Bridge(
+  readDeclaredCapabilities(document.currentScript?.getAttribute("data-capabilities") ?? null),
+);
 
 // ---- the handshake ---------------------------------------------------------
 

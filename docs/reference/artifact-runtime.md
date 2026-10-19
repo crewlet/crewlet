@@ -94,6 +94,13 @@ type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
 A namespace whose capability the version did not declare exists, and every
 call on it rejects with `capability_not_declared`.
 
+`capabilities` answers from the page's first script: the origin writes the
+frame's grant on the runtime's own element, so a page may branch on
+`capabilities.has` before `ready` resolves. Calls made before then wait for
+the handshake, and the host's answer at the handshake is the authority from
+then on. What the viewer is, and who is in the room, are known only once
+`ready` has resolved.
+
 ### Connection
 
 ```ts
