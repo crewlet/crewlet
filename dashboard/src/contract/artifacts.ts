@@ -549,6 +549,18 @@ export const DASHBOARD_NUMBER_FORMATS = ["number", "integer", "percent", "compac
 /** What a dataset's column holds (`dashspec.ColumnTypes`). */
 export const DASHBOARD_COLUMN_TYPES = ["text", "number", "date", "boolean"] as const;
 
+/**
+ * The vocabularies a text column's ids are drawn in (`dashspec.WordSets`): a
+ * tracker status, status group or priority, or an agent's activity, shown in
+ * the words the domain's own screens use.
+ */
+export const DASHBOARD_COLUMN_WORDS = [
+  "tracker_status",
+  "tracker_status_group",
+  "tracker_priority",
+  "agent_activity",
+] as const;
+
 /** The grid every board lays out on (`artifacts.DashboardColumns`). */
 export const DASHBOARD_COLUMNS = 12;
 
