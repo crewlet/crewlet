@@ -237,7 +237,13 @@ else
 fi
 echo "git.sh: building git $version from $tarball into $install (a minute or two)" >&2
 
-if ! curl -fsSL --retry 3 -o "$work/$tarball" "$downloads/$tarball"; then
+# The download gives up when it STALLS — nothing received for a minute (`--speed-limit 1 --speed-time 60`, the stall
+# bound the engine's object store holds a transfer to, objstore.Stall) or no connection in 30 seconds — and is asked
+# again on a transient failure, never for being slow while it moves: about 8 MB, which a slow link takes minutes to
+# bring and still moves. Unbounded, a kernel.org transfer that stopped moving held whatever ran it — a CI test job on a
+# cache miss, the release's image build — until that job's own limit, six hours for a GitHub job, while curl's own
+# connect timeout is five minutes an attempt. scripts/git-pin-check.sh downloads with the same bounds.
+if ! curl -fsSL --retry 3 --connect-timeout 30 --speed-limit 1 --speed-time 60 -o "$work/$tarball" "$downloads/$tarball"; then
 	echo "git.sh: could not download $downloads/$tarball" >&2
 	exit 1
 fi

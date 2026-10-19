@@ -284,9 +284,12 @@ s="$(scripts incomplete)"
 pin "$s" 2.56.0 "$zero" 2.55.0 "$zero" 2.40.4 "$zero"
 plant "$TMPROOT/incomplete/cache" 2.56.0 >/dev/null
 served="$(standin "$TMPROOT/incomplete/downloads" 2.56.0)"
+: >"$TMPROOT/curl.log"
 run env CREWLET_GIT_CACHE="$TMPROOT/incomplete/cache" GIT_PIN_DOWNLOADS="file://$TMPROOT/incomplete/downloads" "$s/git.sh" node
 expect "git.sh rebuilds a build without .complete, and refuses a tarball that is not the pin's" 1 "" "hashes to $served"
 expect "git.sh names both digests when the tarball is not the pin's" 1 "" "pins $zero"
+# Mutation: drop the stall bound from the recipe's download -> red.
+bounded "every download the recipe makes ends when it stalls"
 
 # --- two builders at once publish one build, and neither deletes the other's git -----------------------------
 
