@@ -947,6 +947,10 @@ const (
 	// CodeWriteBudget is a datastore write this node's cost-weighted
 	// budget refused for now. 429 with a Retry-After; never a lockout.
 	CodeWriteBudget Code = "write_budget"
+	// CodeReadBudget is a dashboard dataset read this node's cost-weighted
+	// budget for live sources refused for now (adr/0043). 429 with a
+	// Retry-After; never a lockout.
+	CodeReadBudget Code = "read_budget"
 )
 
 // codes is THE TABLE: every code this engine answers with, each with the one
@@ -1281,6 +1285,8 @@ var codes = map[Code]string{
 		"nothing changed. Change fewer columns at a time.",
 	CodeWriteBudget: "Too many changes to this data at once. Wait the moment " +
 		"Retry-After names, then send it again.",
+	CodeReadBudget: "This dashboard asked for its live data too often. Wait the " +
+		"moment Retry-After names, then refresh it.",
 }
 
 // Codes is every code in the vocabulary, sorted.

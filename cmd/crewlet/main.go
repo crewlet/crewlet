@@ -2385,6 +2385,12 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	if artifactDataSurface != nil {
 		opts.ArtifactData = artifactDataSurface
 	}
+	// AND A DASHBOARD'S DATASETS, read from the artifacts surface's boards
+	// and the datastore, each answered as its viewer (adr/0043). Set only
+	// where both were built.
+	if artifactsSurface != nil && artifactDataSource != nil {
+		opts.Datasets = &api.DatasetsSource{Boards: artifactsSurface, Data: artifactDataSource.Reads}
+	}
 	// AND THE SOCKET'S ARTIFACT ROOMS, decided by that same admission and
 	// fed by this engine's appliers and presence hub.
 	opts.Rooms = artifactRooms

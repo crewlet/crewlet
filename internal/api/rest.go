@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
@@ -243,26 +244,18 @@ func (a *App) serveFrom(kind stream.Kind, build func(stream.Audience) any) http.
 		if !ok {
 			return
 		}
-		if !principal.Stage.MayAct() {
-			// THE AUTHORITY TABLE'S FIRST CHECK, as every question's: a
-			// person whose stage may not act reads nothing, the overview
-			// included.
-			httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized,
-				authz.RefusalDetail(authz.ReasonStage, nil))
-			return
-		}
-		audience := a.stream.AudienceFor(r.Context(), principal)
-		if !audience.Receives(kind) {
+		out, err := a.overview(r.Context(), principal, kind, build)
+		var refusal *queries.Refusal
+		if errors.As(err, &refusal) {
 			// THE SAME TWO FIELDS every refusal on authority carries,
 			// rather than a sentence naming the permission: a client
 			// reading `grants` off a refused question reads it off this
 			// too.
-			need, _ := stream.NeedOf(kind)
 			httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized,
-				authz.RefusalDetail(authz.ReasonNoGrant, need.Grants()))
+				authz.RefusalDetail(refusal.Reason, refusal.Grants))
 			return
 		}
-		writeJSON(w, http.StatusOK, stream.ShapeFor(build(audience), audience))
+		writeJSON(w, http.StatusOK, out)
 	}
 }
 

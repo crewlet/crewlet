@@ -701,8 +701,8 @@ func TestEveryRouteIsGuardedAndDocumented(t *testing.T) {
 	if err := g.svc.Routes(rec); err != nil {
 		t.Fatal(err)
 	}
-	if len(rec.patterns) != 24 {
-		t.Fatalf("the surface mounts %d routes, and this case knows 24: %v", len(rec.patterns), rec.patterns)
+	if len(rec.patterns) != 25 {
+		t.Fatalf("the surface mounts %d routes, and this case knows 25: %v", len(rec.patterns), rec.patterns)
 	}
 	doc, err := os.ReadFile(filepath.Join("..", "..", "..", "docs", "reference", "api-endpoints.md"))
 	if err != nil {
