@@ -88,13 +88,22 @@ Usage:
 Flags:
   -company PATH  Tier B, the company document naming the providers (default %q)
   -config PATH   Tier A, carrying the store and the secret keyring (default %q)
+  -api URL       Store a token or bundle through this running node, which puts it
+                 on every node at once, rather than into the rows of the store
+                 -config names (login and export -secret-store)
   -home PATH     Read a host login from somewhere other than this user's home
   -no-smoke      Skip doctor's real completions (the tool call and both probes; an
                  anthropic entry's Models API read still runs, it bills nothing)
   -print-token   Write a captured token to stdout instead of the store (login only)
 `
 
-func runLLM(environ config.Source, args []string, stdout, stderr io.Writer) error {
+// runLLM dispatches `crewlet llm`.
+//
+// STDIN IS AN ARGUMENT for every subcommand that reads it — a token or a
+// password `login` is handed, the prompts of a vendor's own login, and the
+// bundle `import` restores — as it is for `crewlet iam`, so a suite can pipe
+// one in and drive the write each of them ends in.
+func runLLM(environ config.Source, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	sub, rest := splitSubject(args)
 	if sub == "" || sub == "help" {
 		fmt.Fprintf(stdout, llmUsage, defaultCompanyPath, defaultBootstrapPath)
@@ -129,6 +138,13 @@ func runLLM(environ config.Source, args []string, stdout, stderr io.Writer) erro
 		"skip the real completions — the tool call and both isolation probes (doctor only)")
 	printToken := fs.Bool("print-token", false,
 		"write a captured token to stdout instead of storing it (login only)")
+	// THE FLAG `crewlet secrets` AND THE PROVISIONERS TAKE, for their
+	// reason: the store is the fleet's, and naming a running node is how a
+	// value written where no engine is running reaches the fleet now rather
+	// than at this node's next start.
+	apiURL := nodeAPIFlag(fs,
+		"store a token or bundle through this running node rather than into "+
+			"the store -config names (login and export only)")
 	if err := fs.Parse(rest); err != nil {
 		return err
 	}
@@ -164,7 +180,8 @@ func runLLM(environ config.Source, args []string, stdout, stderr io.Writer) erro
 			providers: providers, key: key, home: *home,
 			fromHost: *fromHost, captureToken: *captureToken,
 			tokenStdin: *tokenStdin, username: *username, passwordStdin: *passwordStdin,
-			bootstrapPath: *bootstrapPath, printToken: *printToken,
+			bootstrapPath: *bootstrapPath, apiURL: *apiURL, printToken: *printToken,
+			stdin: stdin,
 		}, stdout, stderr)
 	case "status":
 		p, err := oneProvider(providers, key)
@@ -195,9 +212,10 @@ func runLLM(environ config.Source, args []string, stdout, stderr io.Writer) erro
 		}
 		return logoutErr
 	case "export":
-		return exportLLM(ctx, environ, providers, key, *secretStore, *bootstrapPath, stdout)
+		return exportLLM(ctx, environ, providers, key, *secretStore,
+			secretDestination{bootstrapPath: *bootstrapPath, apiURL: *apiURL}, stdout)
 	case "import":
-		return importLLM(ctx, providers, key, os.Stdin, stdout)
+		return importLLM(ctx, providers, key, stdin, stdout)
 	default:
 		fmt.Fprintf(stderr, llmUsage, defaultCompanyPath, defaultBootstrapPath)
 		return fmt.Errorf("unknown llm command %q", sub)
@@ -492,7 +510,9 @@ type loginRequest struct {
 	username      string
 	passwordStdin bool
 	bootstrapPath string
+	apiURL        string
 	printToken    bool
+	stdin         io.Reader
 }
 
 func loginLLM(ctx context.Context, environ config.Source, req loginRequest, stdout, stderr io.Writer) error {
@@ -546,7 +566,7 @@ func loginLLM(ctx context.Context, environ config.Source, req loginRequest, stdo
 		var token string
 		if req.tokenStdin {
 			//nolint:govet // shadow: scoped to this block; see .golangci.yml
-			raw, err := io.ReadAll(os.Stdin)
+			raw, err := io.ReadAll(req.stdin)
 			if err != nil {
 				return fmt.Errorf("reading the token from stdin: %w", err)
 			}
@@ -555,7 +575,7 @@ func loginLLM(ctx context.Context, environ config.Source, req loginRequest, stdo
 				return errors.New("stdin held no token")
 			}
 		} else {
-			token, err = p.CaptureToken(ctx, os.Stdin, stderr)
+			token, err = p.CaptureToken(ctx, req.stdin, stderr)
 			if err != nil {
 				return err
 			}
@@ -588,14 +608,16 @@ func loginLLM(ctx context.Context, environ config.Source, req loginRequest, stdo
 					"Reference it as ${%s}.\n", tokenVar)
 			return nil
 		}
-		if err := storeLLMSecret(ctx, environ, req.bootstrapPath, tokenVar, token); err != nil {
+		fmt.Fprintf(stdout, "Storing the headless token as %s.\n", tokenVar)
+		if err := storeLLMSecret(ctx, environ, secretDestination{
+			bootstrapPath: req.bootstrapPath, apiURL: req.apiURL,
+		}, tokenVar, token, stdout); err != nil {
 			return err
 		}
 		fmt.Fprintf(stdout,
-			"Stored the headless token as %s in the encrypted secret store.\n"+
-				"Reference it from the company document as:\n\n"+
+			"\nReference it from the company document as:\n\n"+
 				"  providers:\n    llm:\n      %s:\n        cli:\n          auth:\n"+
-				"            token: \"${%s}\"\n", tokenVar, key, tokenVar)
+				"            token: \"${%s}\"\n", key, tokenVar)
 		return nil
 
 	case req.username != "":
@@ -603,7 +625,7 @@ func loginLLM(ctx context.Context, environ config.Source, req loginRequest, stdo
 			return errors.New("-username requires -password-stdin: a password on argv is " +
 				"visible in ps and lands in shell history")
 		}
-		raw, err := io.ReadAll(os.Stdin)
+		raw, err := io.ReadAll(req.stdin)
 		if err != nil {
 			return fmt.Errorf("reading the password from stdin: %w", err)
 		}
@@ -618,7 +640,7 @@ func loginLLM(ctx context.Context, environ config.Source, req loginRequest, stdo
 		return nil
 
 	default:
-		if err := p.BrokerLogin(ctx, os.Stdin, stdout, stderr); err != nil {
+		if err := p.BrokerLogin(ctx, req.stdin, stdout, stderr); err != nil {
 			return err
 		}
 		fmt.Fprintf(stdout, "\nLogin written to %s.\n", p.Workspace().CredentialsDir())
@@ -627,7 +649,8 @@ func loginLLM(ctx context.Context, environ config.Source, req loginRequest, stdo
 	}
 }
 
-func exportLLM(ctx context.Context, environ config.Source, providers []cliAgentProvider, key string, toStore bool, bootstrapPath string, stdout io.Writer) error {
+func exportLLM(ctx context.Context, environ config.Source, providers []cliAgentProvider,
+	key string, toStore bool, to secretDestination, stdout io.Writer) error {
 	p, err := oneProvider(providers, key)
 	if err != nil {
 		return err
@@ -653,28 +676,49 @@ func exportLLM(ctx context.Context, environ config.Source, providers []cliAgentP
 		return nil
 	}
 	name := cliagent.BundleVarName(key)
-	if err := storeLLMSecret(ctx, environ, bootstrapPath, name, bundle); err != nil {
+	fmt.Fprintf(stdout, "Storing the credential bundle as %s.\n", name)
+	if err := storeLLMSecret(ctx, environ, to, name, bundle, stdout); err != nil {
 		return err
 	}
-	// NOT "any engine sharing that database". The store is one file, one
-	// process — a second engine pointed at this path is corruption, not a
-	// warm standby — so what actually restores a bundle on another node is
-	// running this command there too.
+	// EVERY ENGINE OF THE COMPANY, not "this node's". The secret store is
+	// the fleet's — a write through a running node lands there at once, and
+	// one into this node's own rows is moved there at its next start — so
+	// every node whose credentials directory for this provider is empty,
+	// and on which nobody logged the entry out since its last login,
+	// restores the same login, and running this once per node, as this
+	// used to say, rewrote one shared value with each node's copy in turn.
+	// What that sharing costs is the one thing worth saying beside it.
 	fmt.Fprintf(stdout,
-		"Stored the credential bundle as %s in THIS NODE's encrypted secret\n"+
-			"store. This engine restores it at boot when its own credentials\n"+
-			"directory is empty; on a fleet, run this once per node.\n"+
+		"\nAn engine restores it into %s's credentials directory at boot and at\n"+
+			"every apply it publishes, when that directory is empty and nobody logged\n"+
+			"the entry out there since its last login — on a fleet, every such node.\n"+
+			"Each copy then descends from one refresh token, and a vendor that rotates\n"+
+			"them can log out whichever side refreshes second; a headless token, where\n"+
+			"the CLI mints one (`crewlet llm login %s -capture-token`), avoids that.\n"+
 			"Reference it as:\n\n"+
 			"  providers:\n    llm:\n      %s:\n        cli:\n          auth:\n"+
-			"            credential_bundle: \"${%s}\"\n", name, key, name)
+			"            credential_bundle: \"${%s}\"\n", key, key, key, name)
 	return nil
 }
 
-// storeLLMSecret writes one value into the encrypted secret store, as
-// [secrets.SourceLLMLogin] where the store keeps the word — a stopped node's
-// own table — and as the running node's route records it otherwise.
-func storeLLMSecret(ctx context.Context, environ config.Source, bootstrapPath, name, value string) error {
-	sv, closeStore, err := openSecretStore(ctx, environ, bootstrapPath, "")
+// secretDestination is where `crewlet llm` stores a credential: the store the
+// Tier A file at bootstrapPath describes, or the running node apiURL names.
+type secretDestination struct {
+	bootstrapPath string
+	apiURL        string
+}
+
+// storeLLMSecret writes one value into the encrypted secret store — as
+// [secrets.SourceLLMLogin] where the store keeps the word, a stopped node's
+// own table, and as the running node's route records it otherwise — and says
+// which store it was, the fleet's through a running node or this node's own
+// rows, with what each does next, exactly as `crewlet secrets set` does,
+// because which of the two a credential landed in decides whether a fleet
+// has it.
+func storeLLMSecret(ctx context.Context, environ config.Source, to secretDestination,
+	name, value string, stdout io.Writer) error {
+
+	sv, closeStore, err := openSecretStore(ctx, environ, to.bootstrapPath, to.apiURL)
 	if err != nil {
 		return fmt.Errorf("cannot reach the secret store to save %s: %w", name, err)
 	}
@@ -683,6 +727,7 @@ func storeLLMSecret(ctx context.Context, environ config.Source, bootstrapPath, n
 		time.Now().UTC()); err != nil {
 		return fmt.Errorf("writing %s: %w", name, err)
 	}
+	sv.reportWrite(stdout)
 	return nil
 }
 

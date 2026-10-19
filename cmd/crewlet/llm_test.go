@@ -74,6 +74,116 @@ func TestALoginBundleRoundTripsThroughTheCLI(t *testing.T) {
 	}
 }
 
+// A STORED CREDENTIAL GOES WHERE -api POINTS, AND SAYS WHICH STORE THAT IS.
+//
+// The secret store is the fleet's: a write through a running node lands on
+// every node at once, and one into this node's own rows is moved there at its
+// next start. `llm export -secret-store` told an operator the bundle was in
+// "THIS NODE's" store and to run it once per node, which rewrote one shared
+// value with each node's copy in turn; and neither it nor `llm login`'s token
+// store could name a node at all, where `crewlet secrets` and the provisioners
+// each take -api. So both writes are driven here through a node -api names.
+// Mutation: drop -api from the llm flag set and both runs fail on an
+// undefined flag; leave it off either write's destination and that write
+// reaches no node; drop the report of the write and the output names no
+// store; restore the old sentence and the export names this node.
+func TestAStoredLLMCredentialGoesThroughTheNamedNodeAndSaysSo(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	state := filepath.Join(dir, "state")
+	creds := filepath.Join(state, "credentials", "creds.json")
+	if err := os.MkdirAll(filepath.Dir(creds), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(creds, []byte(`{"token":"moved"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	company := writeFile(t, dir, "company.yaml", fmt.Sprintf(`name: Acme
+providers:
+  llm:
+    sub:
+      type: cli-agent
+      model: m
+      cli:
+        agent: custom
+        state_dir: %s
+        overrides:
+          binary: "true"
+          complete_args: ["-p"]
+          model_args: ["--model", "{model}"]
+          output: text
+          token_env: SUB_HEADLESS_TOKEN
+          credential_paths: [".fake/creds.json"]
+          host_credential_paths: [".fake/creds.json"]
+roles:
+  - name: CEO
+    handle: ceo
+    llm: sub
+`, state))
+	bootstrap := bootstrapWithKeyring(t, "k1")
+
+	for _, tc := range []struct {
+		name  string
+		args  []string
+		stdin string
+		// stored is the secret the node is asked to write, and value what
+		// it is asked to write there ("" for a bundle, whose bytes are the
+		// archive's).
+		stored, value string
+		says          []string
+	}{
+		{
+			name:   "an exported bundle",
+			args:   []string{"export", "sub", "-secret-store"},
+			stored: cliagent.BundleVarName("sub"),
+			says:   []string{"every such node"},
+		},
+		{
+			name:   "a headless token",
+			args:   []string{"login", "sub", "-token-stdin"},
+			stdin:  "tok-from-stdin\n",
+			stored: "SUB_HEADLESS_TOKEN", value: "tok-from-stdin",
+			says: []string{`token: "${SUB_HEADLESS_TOKEN}"`},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			node := newFakeSecretsNode(t)
+			var out, errs bytes.Buffer
+			args := append(slices.Clone(tc.args), "-company", company,
+				"-config", bootstrap, "-api", node.server.URL)
+			if err := runLLM(tokenEnviron("ops-token"), args,
+				strings.NewReader(tc.stdin), &out, &errs); err != nil {
+				t.Fatalf("%s: %v\n%s", strings.Join(tc.args, " "), err, errs.String())
+			}
+			if want := "/secrets/" + tc.stored; node.last.method != http.MethodPut ||
+				node.last.path != want {
+				t.Fatalf("the node saw %q %q, want PUT %s", node.last.method,
+					node.last.path, want)
+			}
+			if tc.value != "" && node.last.body != tc.value {
+				t.Errorf("the node was sent %q, want %q", node.last.body, tc.value)
+			}
+			if node.last.auth != "Bearer ops-token" {
+				t.Errorf("the write carried %q, want the invocation's own token",
+					node.last.auth)
+			}
+			for _, want := range append([]string{node.server.URL, secretsFleetNote},
+				tc.says...) {
+				if !strings.Contains(out.String(), want) {
+					t.Errorf("the output does not say %q:\n%s", want, out.String())
+				}
+			}
+			for _, stale := range []string{"THIS NODE", "once per node"} {
+				if strings.Contains(out.String(), stale) {
+					t.Errorf("the output still says %q of a store every node reads:\n%s",
+						stale, out.String())
+				}
+			}
+		})
+	}
+}
+
 // AN EXISTING LOGIN IS NOT OVERWRITTEN, and the refusal is REPORTED rather
 // than swallowed: a host that has been running holds the fresher refresh
 // token, and "nothing happened" and "restored" look identical from outside.
@@ -269,7 +379,7 @@ func TestDoctorExaminesAnAnthropicEntry(t *testing.T) {
 	args := append([]string{"doctor"}, doctorCompany(t,
 		anthropicEntry("claude", "claude-opus-5-5", url)+openAIEntry)...)
 	var out, notes bytes.Buffer
-	if err := runLLM(noEnviron, args, &out, &notes); err != nil {
+	if err := runLLM(noEnviron, args, strings.NewReader(""), &out, &notes); err != nil {
 		t.Fatalf("doctor: %v\n%s", err, out.String())
 	}
 	for _, want := range []string{
@@ -298,7 +408,7 @@ func TestDoctorFailsOnAnAnthropicEntryThatDoesNotCall(t *testing.T) {
 	_, url := serveClaude(t, false)
 	args := append([]string{"doctor", "claude"}, doctorCompany(t, anthropicEntry("claude", "claude-opus-5-5", url))...)
 	var out, notes bytes.Buffer
-	err := runLLM(noEnviron, args, &out, &notes)
+	err := runLLM(noEnviron, args, strings.NewReader(""), &out, &notes)
 	if err == nil || !strings.Contains(err.Error(), "1 of 1 providers have problems") {
 		t.Fatalf("err = %v\n%s", err, out.String())
 	}
@@ -317,7 +427,7 @@ func TestDoctorReportsAnEntryThatDoesNotBuildBesideTheOthers(t *testing.T) {
 		anthropicEntry("claude", "claude-opus-5-5", url)+
 			anthropicEntry("broken", `"${CREWLET_DOCTOR_TEST_UNSET_MODEL}"`, url))...)
 	var out, notes bytes.Buffer
-	err := runLLM(noEnviron, args, &out, &notes)
+	err := runLLM(noEnviron, args, strings.NewReader(""), &out, &notes)
 	if err == nil || !strings.Contains(err.Error(), "1 of 2 providers have problems") {
 		t.Fatalf("err = %v\n%s", err, out.String())
 	}
@@ -339,12 +449,12 @@ func TestDoctorNamesWhatItDoesNotExamine(t *testing.T) {
 	_, url := serveClaude(t, true)
 	var out, notes bytes.Buffer
 	err := runLLM(noEnviron, append([]string{"doctor", "gpt"},
-		doctorCompany(t, anthropicEntry("claude", "claude-opus-5-5", url)+openAIEntry)...), &out, &notes)
+		doctorCompany(t, anthropicEntry("claude", "claude-opus-5-5", url)+openAIEntry)...), strings.NewReader(""), &out, &notes)
 	if err == nil || !strings.Contains(err.Error(), `provider "gpt" is type "openai"`) {
 		t.Errorf("err = %v", err)
 	}
 	err = runLLM(noEnviron, append([]string{"doctor", "nobody"},
-		doctorCompany(t, anthropicEntry("claude", "claude-opus-5-5", url))...), &out, &notes)
+		doctorCompany(t, anthropicEntry("claude", "claude-opus-5-5", url))...), strings.NewReader(""), &out, &notes)
 	if err == nil || !strings.Contains(err.Error(), `no provider "nobody" (doctor examines claude)`) {
 		t.Errorf("err = %v", err)
 	}
@@ -352,7 +462,7 @@ func TestDoctorNamesWhatItDoesNotExamine(t *testing.T) {
 	dir := t.TempDir()
 	company := writeFile(t, dir, "company.yaml", "name: Acme\nproviders:\n  llm:\n"+openAIEntry+
 		"roles:\n  - name: CEO\n    handle: ceo\n    llm: gpt\n")
-	err = runLLM(noEnviron, []string{"doctor", "-company", company, "-config", filepath.Join(dir, "absent.yaml")}, &out, &notes)
+	err = runLLM(noEnviron, []string{"doctor", "-company", company, "-config", filepath.Join(dir, "absent.yaml")}, strings.NewReader(""), &out, &notes)
 	if err == nil || !strings.Contains(err.Error(), "declares no cli-agent or anthropic providers") {
 		t.Errorf("err = %v", err)
 	}
