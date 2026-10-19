@@ -86,7 +86,7 @@ func objectsStatus(environ config.Source, args []string, stdout, stderr io.Write
 	var asJSON *bool
 	client, err := nodeClientFor(environ, args, "objects status", stderr, func(fs *flag.FlagSet) {
 		asJSON = fs.Bool("json", false,
-			"print the fleet view's objects block as the node answered it")
+			"print the fleet view's objects block as JSON, for a script")
 	})
 	if err != nil {
 		return err
@@ -102,8 +102,7 @@ func objectsStatus(environ config.Source, args []string, stdout, stderr io.Write
 			"none, so ask a node that does with -api")
 	}
 	if *asJSON {
-		_, err := fmt.Fprintf(stdout, "%s\n", answer.Objects)
-		return err
+		return printAnswer(stdout, answer.Objects)
 	}
 	var view objectsView
 	if err := json.Unmarshal(answer.Objects, &view); err != nil {

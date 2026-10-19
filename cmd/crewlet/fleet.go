@@ -119,7 +119,7 @@ type brokerGroupView struct {
 func fleetBrokerList(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	var asJSON *bool
 	client, err := nodeClientFor(environ, args, "fleet broker list", stderr, func(fs *flag.FlagSet) {
-		asJSON = fs.Bool("json", false, "print the node's answer as it came, for a script")
+		asJSON = fs.Bool("json", false, "print the node's answer as JSON, for a script")
 	})
 	if err != nil {
 		return err
@@ -129,8 +129,7 @@ func fleetBrokerList(environ config.Source, args []string, stdout, stderr io.Wri
 		return err
 	}
 	if *asJSON {
-		_, err := fmt.Fprintf(stdout, "%s\n", raw)
-		return err
+		return printAnswer(stdout, raw)
 	}
 	var view brokerView
 	if err := json.Unmarshal(raw, &view); err != nil {
