@@ -85,9 +85,9 @@ import {
   ArrangeControls,
   SCOPE_OPTIONS,
   ScopeControl,
-  ShapeTabs,
+  ShapeSwitch,
   SubstringBox,
-  ViewTabs,
+  ViewSwitch,
 } from "./toolbar/WorkBar.tsx";
 import { FEED_PAGE, PurgeBand } from "./feed.tsx";
 import { usePagedItems } from "./usePagedItems.ts";
@@ -794,17 +794,19 @@ export function ItemsView({
 
   return (
     <>
-      {/* THE FIRST ROW: what is drawn. The shape tabs, then — on the screens
+      {/* THE FIRST ROW: what is drawn. The shape switch, then (on the screens
           that ARE this list, never on a host, whose own tabs already name the
-          page — the container's own list, the views this reader pinned, a way
+          page) the container's own list, the views this reader pinned, a way
           to save the query on screen, and the inventory. See
           `toolbar/WorkBar.tsx`. */}
       <div className="work-tabs">
-        <ShapeTabs shape={shape} onShape={(next) => setShapeKey(next === viewShape ? "" : next)} />
+        <ShapeSwitch
+          shape={shape}
+          onShape={(next) => setShapeKey(next === viewShape ? "" : next)}
+        />
         {!host && (
           <>
-            <span className="work-tabs-sep" aria-hidden="true" />
-            <ViewTabs
+            <ViewSwitch
               views={saved}
               chosen={chosenView}
               // THE TRAIL NAMES THE SCOPE, so the container's own list

@@ -459,8 +459,9 @@ Two kinds, and nothing is both:
   grouping, the order, the grid's columns, the board lanes put away — and it
   is drawn as a control that SAYS WHAT IT IS SET TO, so the arrangement is
   readable without opening anything. The three a reader changes all day are
-  on screen: the five shapes are a row of pressed buttons ahead of the saved
-  views, and **Group by** and **Sort** sit at the far end of the chip bar,
+  on screen: the five shapes are a segmented row of glyphs ahead of the
+  saved views (the kit's `SegmentedControl`, the same switch the Artifacts
+  gallery draws its List and Cards with), and **Group by** and **Sort** sit at the far end of the chip bar,
   each showing its value — the default order named for what it is ("Manual",
   "Recently updated", "Start date") rather than "Default". What a reader sets
   once and forgets — the second axis, the grid's columns, what a board's
@@ -541,7 +542,7 @@ from an absent key, and the address writer deleted it — so the Unassigned
 column's own "N more →" loaded the whole board.
 
 A **saved view** is neither: it is a query somebody arranged and put somewhere,
-so it is a tab in the strip. The five shapes are not tabs beside it — a shape
+so it is an option in the strip. The five shapes are not options beside it: a shape
 is a way of drawing any query, and mixed into one strip the two read as the
 same kind of thing. That is also why `view=` and `shape=` are two keys:
 switching a saved board to a list must not throw the saved filters away.
@@ -586,7 +587,7 @@ each the answer to one thing that went missing at one item:
   not, and that card is a 292 px object in a 1500 px field. A list degrades to
   one full-width row and is still a list. So a container with no default view
   opens as a list and the board is one press away, the second of the five
-  shape buttons ahead of the saved views — and the
+  shape glyphs ahead of the saved views, and the
   landing shape is never conditional on how much work exists, because a screen
   that redraws itself as a company fills up is a screen nobody can learn.
 - **A closed-set axis draws every declared value; an open one draws what
@@ -5818,8 +5819,13 @@ is one of the rules on this page applied to a tracker.
   somebody saved: mixed in beside an arranged query, the two read as the same
   kind of thing, which is why `view=` and `shape=` are two keys. The SIDEBAR
   drops them because a builtin carries no id, so there is no row to address.
-  The five shapes are the first row's own buttons; after a divider the strip is
-  the container's own tab, the views THIS reader pinned (★) plus whichever one
+  The five shapes are the first row's own segmented switch, and the strip is a
+  second one in its own well. Both are radio groups with manual activation,
+  because each choice is a URL change that re-runs the list: the arrows move
+  focus and Enter or Space chooses, so walking a row leaves no history entry
+  per keypress. A strip with more views than the row holds wraps inside its
+  well, as every kit segmented row does, and a long name is cut at 200px with
+  its title carrying the rest. The strip is the container's own list, the views THIS reader pinned (★) plus whichever one
   is running, **+ View** — the query on screen saved under a name, shared or
   kept to the person who saved it, with the shape as its type and without its
   paging or a calendar's month — and the inventory, as one glyph named **All
@@ -5842,9 +5848,8 @@ is one of the rules on this page applied to a tracker.
   the first lives in these docs and the empty state and the second is said
   when somebody tries to drag outside the manual order (and in the Sort
   control's title on a board). On a phone the
-  row is the sticky band, so it stays ONE line that scrolls sideways, like the
-  shape tabs above it: wrapped, it stood three rows tall and covered the
-  board's lane heads as the page scrolled under it. Both fade the edge with
+  row is the sticky band, so it stays ONE line that scrolls sideways: wrapped, it stood three rows tall and covered the
+  board's lane heads as the page scrolled under it. It fades the edge with
   more past it, as the page bar's controls do — cut at the edge with nothing
   said, "Ta" and "No g" read as broken labels — and what scrolls in the bar is
   the run of controls inside it, never the opaque band, which a fade would let
