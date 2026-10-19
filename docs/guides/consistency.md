@@ -192,10 +192,10 @@ Six of the eight state logs grant it; the vectors and the usage log do not.
 |---|---|---|
 | The tracker (`CREWLET_TRACKER_LOG`) | Yes | It encodes the barrier as one of its own records. |
 | The knowledge base (`CREWLET_PAGES_LOG`) | Yes | Likewise. |
-| The identity estate (`CREWLET_IAM_LOG`) | Yes | Likewise. |
+| The identity estate (`CREWLET_IAM_LOG`) | Yes | Likewise — and no surface reads it that way: every identity answer is a node's own rows with their lag beside them, so its declared read rate is zero (below). |
 | The artifacts log (`CREWLET_ARTIFACTS_LOG`) | Yes | Likewise: an artifact's head, versions, shares and history are read at a position, and a seat tool reads them at `linearizable`. |
 | The artifact datastore (`CREWLET_ARTIFACT_DATA_LOG`) | Yes | Likewise: a store's rows, history and state digest are read at a position, and every datastore read question takes the same freshness parameters as the other estate reads, so a caller that must see every write acknowledged before it asks at `linearizable`. |
-| The Dashboard Assistant's log (`CREWLET_ASSISTANT_LOG`) | Yes | Likewise. No surface in this release asks for it, since a person reads their own conversation through the node their own writes waited on and an approval is arbitrated at the broker; the barrier is what the gate reserve on this identity-claiming log is proved against. |
+| The Dashboard Assistant's log (`CREWLET_ASSISTANT_LOG`) | Yes | Likewise. No surface in this release asks for it, since a person reads their own conversation through the node their own writes waited on and an approval is arbitrated at the broker; the barrier is what the gate reserve on this identity-claiming log is proved against. Its declared read rate is zero (below). |
 | The vectors (`CREWLET_TRACKER_VECTORS`) | **No** — declared, not omitted | A compacted changelog keeping one message per source, and every value in it is derived from a source another log owns, so a read of the vectors claims no position a barrier could prove anything about. No surface reads them at a level: a search ranks with them, and what it answers for is the pages and tasks those sources came from. |
 | The usage log (`CREWLET_USAGE_LOG`) | **No** — declared, not omitted | A compacted changelog keeping one message per (node, company day, seat, schedule or person), each written by the one node whose own event log it was derived from — nothing is arbitrated, and no node can vouch for another node's day being whole until that node publishes it. A barrier would prove only that this node holds every record published before it, which a day still being written by its node never makes complete. A spend window reports the days and the `horizon` it answered from instead. |
 
@@ -204,6 +204,15 @@ The decision is **declared per log**, in the engine's register of domains
 encoder it appends with or `NoBarrier`, and a boot refuses an entry that states
 neither or both. It used to be a switch, where a log that grants no
 `linearizable` read and a log whose author forgot it looked the same.
+
+An entry with a barrier also states **how often it is read that way**: the
+linearizable reads a day each agent seat puts on its log — 125 on the
+tracker's, the knowledge base's, the artifacts log's and the artifact
+datastore's, none on the identity estate's or the Dashboard Assistant's — and
+a boot refuses a barrier stated without it. That figure is the log's census,
+which [`census_drift`](../reference/alarms.md) holds it to, and a term in the
+log's ceiling; see [Retention § The storage
+forecast](retention.md#the-storage-forecast).
 
 ## The fourteen refusals
 

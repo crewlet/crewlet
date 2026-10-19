@@ -46,7 +46,12 @@ func artifactsRegistrations() []registration {
 			return writeSeams{Rows: rows, Fence: fence,
 				Gates: artifactsdomain.NewGates(s.estate().Reader()), Evicted: fence.Evicted}, nil
 		},
-		Barrier:    artifactsdomain.EncodeBarrier,
+		Barrier: artifactsdomain.EncodeBarrier,
+		// THE REFERENCE COMPANY'S WHOLE RATE, for the tracker's reason: a
+		// seat's artifact tools read at `linearizable`
+		// (statelog.ReadLevelDefaults), and the census does not say how a
+		// company's reads split between the logs a seat reads.
+		Reads:      &statelog.ReadModel{PerSeatDay: statelog.LinearizableReadsPerSeatDay},
 		Generation: artifactsdomain.GenerationRecord{},
 		NewGate: func(s *stateLog, _ *runningLog,
 			publisher *statelog.Publisher) (gateWrite, error) {

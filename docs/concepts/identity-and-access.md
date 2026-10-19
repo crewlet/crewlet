@@ -3260,7 +3260,10 @@ either.
 
 Sessions are what size it. People, credentials and invitations are hundreds of
 records a year; a session writes one record when it opens and one when it
-closes and nothing in between. Unset, it takes a flat **512 MiB**, which is
+closes and nothing in between. Read barriers add nothing: no read of the
+identity estate is `linearizable`, so none appends one, and the log's census
+is zero — see [Retention § The storage
+forecast](../guides/retention.md#the-storage-forecast). Unset, it takes a flat **512 MiB**, which is
 roughly eighteen months of a *completely blocked* trim at a pessimistic rate
 for a company of a few hundred people, and about five years at a realistic one.
 
