@@ -27,6 +27,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tracing"
 	"github.com/crewlet/crewlet/internal/workkey"
 )
@@ -1476,7 +1477,7 @@ func (d *Dispatcher) RecordSession(ctx context.Context, handle, conversation,
 		// against a reply that was never sent.
 		Delivered: res.Delivered,
 		Decision:  res.Decision.String(),
-		Skip:      MetaToolNames(),
+		Skip:      toolname.Discovery(),
 	}
 	if w := res.LastWork; w != nil {
 		// The LAST round's, which is the one the reply came out of. The

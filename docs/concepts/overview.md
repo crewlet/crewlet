@@ -287,6 +287,9 @@ internal/
 ├── plainjson/            # JSON read as text: `<`, `>` and `&` as themselves,
 │                         #   for every record and answer a person or a model
 │                         #   reads
+├── toolname/             # The engine's own tool names that a package below
+│                         #   their owner must spell, declared once and held
+│                         #   by a walk of every string literal in the tree
 ├── keyset/               # A row's place in an order as the arms the rows
 │                         #   after or before it are read through — one seek
 │                         #   of the order's index each — so a later page

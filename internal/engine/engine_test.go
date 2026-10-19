@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/toolsession"
 )
 
@@ -120,7 +121,7 @@ func TestTurnSettingsComeFromTheEpochNotALiveCell(t *testing.T) {
 	if got.MaxIterations != 7 || got.DelegationDepthLimit != 2 {
 		t.Errorf("settings = %+v", got)
 	}
-	if !slices.Contains(got.SkipNames, "activate_tool") {
+	if !slices.Contains(got.SkipNames, toolname.Activate) {
 		t.Errorf("skip names = %v, want the meta-tools", got.SkipNames)
 	}
 	// The wall-clock cap comes off the TRIGGER, not the epoch: a scheduled

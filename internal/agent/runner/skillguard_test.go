@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -241,7 +242,7 @@ func TestEveryRefusalIsPublishedForOperators(t *testing.T) {
 func TestARequiredSkillOnAnActivatedMCPToolIsEnforced(t *testing.T) {
 	t.Parallel()
 	prov := &scriptedProvider{execute: []llmtest.Response{
-		submitCall(t, runner.ActivateTool, `{"name":"slack_post"}`),
+		submitCall(t, toolname.Activate, `{"name":"slack_post"}`),
 		submitCall(t, "slack_post", `{"text":"hi"}`),
 		text("gave up"),
 	}}

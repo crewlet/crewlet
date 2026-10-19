@@ -72,6 +72,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/toolsession"
 )
@@ -154,8 +155,8 @@ var controlDenylist = map[string]struct{}{
 	// the phase that spawned it — the one escalation the grant exists to
 	// stop. The child gets its own pair, bound to its own surface, from
 	// Config.Discovery.
-	"activate_tool":         {},
-	"list_mcp_server_tools": {},
+	toolname.Activate:           {},
+	toolname.ListMCPServerTools: {},
 
 	// Cross-agent communication. A short-lived worker's half-formed
 	// conclusions must not land on a teammate's desk under the parent's

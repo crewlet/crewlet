@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/crewlet/crewlet/internal/agent/prompts"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools/argval"
 	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
@@ -43,8 +44,8 @@ import (
 // the phase.
 var ExemptTools = []string{
 	LoaderTool,
-	"activate_tool",
-	"list_mcp_server_tools",
+	toolname.Activate,
+	toolname.ListMCPServerTools,
 	"submit_work",
 	"submit_review",
 	"mark_onboarded",

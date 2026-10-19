@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -341,7 +342,7 @@ func TestGoldenAToolFailureIsOrdinaryAndTheTurnContinues(t *testing.T) {
 		t.Fatalf("decision = %s (breach %+v)", res.Decision, res.Breach)
 	}
 	if !slices.ContainsFunc(prov.answered("execute"), func(r llmtest.Result) bool {
-		return r.Name == runner.ActivateTool && r.Failed
+		return r.Name == toolname.Activate && r.Failed
 	}) {
 		t.Error("no call failed, so this case holds nothing about a failure being ordinary")
 	}

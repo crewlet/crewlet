@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/structured"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -264,7 +265,7 @@ func (r *Runner) ReopenAgentRun(ctx context.Context, state execstate.State,
 
 	active := slices.Clone(state.ActiveTools)
 	for _, call := range called {
-		if call.Name == ActivateTool && !call.Failed {
+		if call.Name == toolname.Activate && !call.Failed {
 			active = append(active, activationTarget(call.Args))
 		}
 	}

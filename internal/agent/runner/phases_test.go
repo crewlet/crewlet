@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -248,7 +249,7 @@ func submitWork(t *testing.T) llmtest.Response {
 // STARTING SURFACE — that is the whole point of discovery — so a fixture that
 // posts has to promote the tool first, exactly as a real turn does.
 func activate(name string) llmtest.Response {
-	return calling(llmtest.Call{Name: runner.ActivateTool, Args: `{"name":"` + name + `"}`})
+	return calling(llmtest.Call{Name: toolname.Activate, Args: `{"name":"` + name + `"}`})
 }
 
 // deliver is the ordinary three-round delivery: discover, call, report.
