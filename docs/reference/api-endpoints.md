@@ -790,7 +790,8 @@ access this needs (Worklet)"); a refused relation (`not_self`, `not_lead`,
 `not_author` or `unnamed`) says what the rule asked and names the `grants`
 beside it as what would admit you anyway, or says that no access would; and
 every other reason says what does clear it, whatever `grants` holds: `role`, a
-share of an artifact below the role the verb asks, that its owner can share it
+share of an artifact below the role the verb asks (which every route answering
+it names as `role`, the role to ask the owner for), that its owner can share it
 with you at a higher one (the admin path admits whatever the shares say, but
 the share is what to ask for), `unseated` a credential bound to a human seat
 (`crewlet iam bind`),

@@ -467,19 +467,17 @@ const RetryUndecidedSeconds = 2
 //     it holds no company yet — so it is `503 unavailable` with a
 //     `Retry-After`, never a 403 that sends somebody to ask for an authority
 //     they already hold. See the package doc.
-//   - A REFUSAL is `403 unauthorized`, carrying the rule's reason and the
-//     grants that would have admitted the caller ([RefusalDetail]).
-//   - A STALE PROOF is `403 step_up_required` — the code the sign-in surface
-//     already answers for the same fact, so a client learns ONE spelling —
-//     carrying the window it needs ([StepUpDetail]): the rule admitted the
-//     caller, and confirming who they are and replaying the request is the
-//     whole remedy, which a client can do without asking anybody.
-//   - A MACHINE TOKEN on a verb that needs a person present is `403
-//     token_refused`, its own code for step_up_required's reason: the
-//     `unauthorized` code's sentence is about a grant the credential lacks,
-//     and no grant on a token would admit it. It was that code with a
-//     sentence of its own as `detail`, so the envelope's `message` and its
-//     `detail` contradicted each other.
+//   - A REFUSAL is a 403 in the code [RefusalFields] gives it: `unauthorized`
+//     carrying the rule's reason and the grants that would have admitted the
+//     caller; `step_up_required` for a stale proof — the code the sign-in
+//     surface already answers for the same fact, so a client learns ONE
+//     spelling — carrying the window it needs, which a client can clear
+//     without asking anybody; and `token_refused` for a machine token on a
+//     verb that needs a person present, since the `unauthorized` code's
+//     sentence is about a grant the credential lacks and no grant on a token
+//     would admit it. It was that code with a sentence of its own as
+//     `detail`, so the envelope's `message` and its `detail` contradicted
+//     each other.
 //   - THE DASHBOARD ASSISTANT on a verb of the human-only list is `403
 //     unauthorized` with the `assist_refused` reason, and its `detail` is the
 //     sentence the list gives that verb's family ([AssistNeverSentence]): the
@@ -487,34 +485,24 @@ const RetryUndecidedSeconds = 2
 //     and where they do it, while the card they read says the reason's own
 //     sentence, since a route's `detail` is the model's alone.
 //   - A CALLER WITH NO RELATION to an artifact is `404 not_found` with
-//     nothing beside it ([Decision.NotFound]): no reason and no grants, the
-//     answer a surface gives for an id nothing holds, so the refusal cannot
-//     say whether the artifact exists.
+//     nothing beside it ([Decision.NotFound]), the same mapping's answer: no
+//     reason and no grants, the answer a surface gives for an id nothing
+//     holds, so the refusal cannot say whether the artifact exists.
 func EnvelopeRefusal(w http.ResponseWriter, _ *http.Request, p Policy, d Decision) {
-	switch {
-	case d.Unknown():
+	if d.Unknown() {
 		httpjson.Unavailable(w, httpjson.CodeUnavailable, RetryUndecidedSeconds)
-	case d.NotFound():
-		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
-	case d.Reason == ReasonStepUp:
-		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeStepUpRequired,
-			StepUpDetail(d))
-	case d.Reason == ReasonTokenRefused:
-		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeTokenRefused,
-			RefusalDetail(d.Reason, d.Grants))
-	case d.Reason == ReasonAssistRefused:
+		return
+	}
+	status, code, detail := RefusalFields(d)
+	if d.Reason == ReasonAssistRefused {
 		// THE PERSON IS TOLD WHY IT STAYS WITH THEM, and where they do it,
 		// in the sentence the human-only list gives the verb's family: the
 		// assistant hands `detail` to its model, which tells them in its reply.
-		detail := RefusalDetail(d.Reason, d.Grants)
 		if tell := AssistNeverSentence(p.Action); tell != "" {
 			detail["detail"] = tell
 		}
-		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized, detail)
-	default:
-		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized,
-			RefusalDetail(d.Reason, d.Grants))
 	}
+	httpjson.FailWithFields(w, status, code, detail)
 }
 
 // Handle mounts one guarded route.

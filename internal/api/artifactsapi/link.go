@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
@@ -158,7 +159,7 @@ func (s *Service) mayUpdateWorkItem(w http.ResponseWriter, r *http.Request, p ia
 		unavailable(w, d.Err, "this node could not decide whether you may change work items")
 		return false
 	case !d.Allowed:
-		refuseDecision(w, r, authz.ActionWorkUpdate, d)
+		operator.RefuseDecision(w, r, authz.ActionWorkUpdate, d)
 		return false
 	}
 	return true
