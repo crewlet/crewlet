@@ -114,10 +114,10 @@ When in doubt, ask: "If I stopped right now, would a reader of this diff conside
 ```
 cmd/crewlet/          # The one binary: run / validate / schema / migrate / budgets /
                       #   backup / retention / work / objects / fleet / seats /
-                      #   artifacts / secrets / config / iam / llm / search, and the
-                      #   six vendor CLIs (gitlab, github, jira, slack, confluence,
-                      #   mattermost). Every command the switch dispatches must
-                      #   appear in usage(): nothing connects them, a test asserts it
+                      #   artifacts / chat / secrets / config / iam / llm / search,
+                      #   and the six vendor CLIs (gitlab, github, jira, slack,
+                      #   confluence, mattermost). Every command the switch dispatches
+                      #   must appear in usage(): nothing connects them, a test asserts it
 internal/             # Everything else, mapped package by package in
                       #   internal/README.md. Nothing here is importable from outside
                       #   the module: the engine has no stable Go API, only a CLI, a
@@ -241,8 +241,8 @@ The implementation follows `docs/concepts/`. Its subsystems:
 3. **Agent Runtime** — queue-driven seats, a two-stage turn, an LLM tool loop that can suspend
 4. **Work Tracker** — the engine's own, `statelog`'s first domain; a company on an external PM tool sets `tracker.backend` to it and the engine mirrors nothing. Hand-offs are bounded on the item (`reassignments`), not by the delegation depth cap
 5. **Decision Framework** — DACI stays behavioural guidance; what the engine records is a structured ask on a work item (`adr/0023`), enforcing only its shape, that a choice names one of its options, and a promised `inform`
-6. **Knowledge System** — the company's pages (`statelog`'s third domain), searched by keyword (BM25 over the engine's own index; Turso has no fts5), semantically (two-stage 1-bit retrieval: a replicated inverted file over sign codes, then an exact rerank) or `hybrid` by default (the two fused by reciprocal rank fusion at k = 60). Embeddings are a domain computed once by a fleet duty. Confluence is the other backend, one per company. Plus each agent's diary. The company's CHAT is deliberately outside this corpus and outside the vector budget entirely: it has its own inverted list and no semantic half, because a year at the declared census needs several times the whole supported vector corpus and the knowledge base's own embeddings are what would pay for it (ADR-0046)
-7. **Communication** — chat and ephemeral A2A channels. Chat is a backend axis like the tracker's and the knowledge base's: `chat.backend` is `native` (the engine's own, `internal/chat`), `vendor` (Mattermost or Slack) or `none`, and native beside a vendor is refused, because with two live chat homes a person replies where the agents aren't reading; the eight surfaces are `integration.Kinds`
+6. **Knowledge System** — the company's pages (`statelog`'s third domain), searched by keyword (BM25 over the engine's own index; Turso has no fts5), semantically (two-stage 1-bit retrieval: a replicated inverted file over sign codes, then an exact rerank) or `hybrid` by default (the two fused by reciprocal rank fusion at k = 60). Embeddings are a domain computed once by a fleet duty. Confluence is the other backend, one per company. Plus each agent's diary. The company's chat is deliberately outside this corpus and the vector budget: it has its own inverted list and no semantic half, because a year at the declared census needs several times the whole supported vector corpus, and the knowledge base's own embeddings would pay for it (ADR-0046)
+7. **Communication** — chat and ephemeral A2A channels. Chat is a backend axis like the tracker's and the knowledge base's: `chat.backend` is `native` (the engine's own, `internal/chat`, the default for a company that declares no vendor chat surface), `vendor` (Mattermost or Slack) or `none`, and native beside a vendor is refused, because with two live chat homes a person replies where the agents aren't reading. `vendor` names a posture rather than a product, because Mattermost and Slack legitimately run together. On the engine's own chat everybody speaks as a seat: an agent as itself, a person as the human seat they hold (the `chat` app), so a credential acting as itself reads no room, and a seat's read state, rooms and conversations pass to whoever holds it next; the eight surfaces are `integration.Kinds`
 8. **Notification Service** — a queue-based spine, the vendors on top
 9. **Provider Layer** — pluggable LLM and embeddings, behind a credential pool and a fallback chain
 10. **Store** — each node's own embedded Turso files: its NODE file and, on a data node, the whole REPLICATED estate beside it (two files, because a snapshot copies one); a node without `data` keeps a scratch file. Spend and turn history is the replicated `usage` domain, kept 181 days (ADR-0020); turn detail stays 30 days in each data node's event log and is read from every node at query time (ADR-0021)

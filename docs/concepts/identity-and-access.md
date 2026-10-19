@@ -158,7 +158,7 @@ it, and which of its four apps they **use**.
 | `tracker` | **Tracker** | Uses the native [work tracker](../guides/work-tracker.md): reads it and writes it |
 | `knowledge` | **Knowledge** | Uses the native [knowledge base](knowledge-system.md): reads it and writes it |
 | `artifacts` | **Artifacts** | **Authors** artifacts: creates them, publishes their versions and shapes their data. It never gates opening one: what somebody may do on an artifact is decided by its [shares](#an-artifact-is-opened-by-its-shares) |
-| `chat` | **Chat** | Uses the company's own [chat](../guides/tools-and-mcp.md#the-native-chat): reads its rooms and talks in them |
+| `chat` | **Chat** | Uses the company's own [chat](chat.md): reads its rooms and talks in them |
 
 They are stored in the `grants` field of a person's row, an invitation, a
 machine token and a Tier A token entry — the field keeps its name, and the
@@ -2007,8 +2007,10 @@ ticked; and **Create token** for a service account opens with the account's own
 permissions that the minter holds too — the account exists to act with them —
 while a person's own **New token** opens with nothing ticked. A note under
 the picker says what an unticked app costs: with **Tracker** unticked a person
-receives no work from their agents, who send work through the tracker, and with
-nothing ticked they have the overview only. What each gesture ends is the
+receives no work from their agents, who send work through the tracker; on a
+company whose chat is the engine's own, with **Chat** unticked nothing agents
+say to them in a room or a direct message reaches them; and with nothing ticked
+they have the overview only. What each gesture ends is the
 route's:
 
 | Gesture | What it does, and what it ends |
