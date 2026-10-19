@@ -13,14 +13,9 @@ import (
 	"github.com/nats-io/nats.go"
 	natsjs "github.com/nats-io/nats.go/jetstream"
 
-	"github.com/crewlet/crewlet/internal/artifactdata"
-	"github.com/crewlet/crewlet/internal/artifactsdomain"
-	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -68,10 +63,19 @@ func TestAnEvictionIsWrittenAsWhoPressedItOnEveryLog(t *testing.T) {
 		t.Fatalf("evict: %v (%+v)", err, res)
 	}
 
-	// EVERY IDENTITY-CLAIMING LOG, named: a log this build adds has to be
-	// added here too, or the gesture answering for it goes unchecked.
-	logs := []evictionLog{worklet.Domain{}, doclet.Domain{}, iamdomain.Domain{},
-		artifactsdomain.Domain{}, artifactdata.Domain{}, assistantdomain.Domain{}}
+	// EVERY IDENTITY-CLAIMING LOG, read off the register rather than named:
+	// a log this build adds is checked here from the change that registers
+	// it, where a list written again here answered for the logs it named and
+	// left the newest unchecked.
+	var logs []evictionLog
+	for _, domain := range identityLogs(t) {
+		log, lists := domain.(evictionLog)
+		if !lists {
+			t.Fatalf("the %s log claims identity and cannot list who is evicted "+
+				"on it", domain.Name())
+		}
+		logs = append(logs, log)
+	}
 	var answered, want []string
 	for _, d := range res.Domains {
 		answered = append(answered, d.Domain)
