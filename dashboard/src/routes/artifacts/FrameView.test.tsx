@@ -42,7 +42,10 @@ const detail = {
   role: "owner",
 } as unknown as ArtifactDetail;
 
-const room = { roster: { members: new Map(), truncated: false } } as never;
+const room = {
+  state: { kind: "joined", role: "owner", session: "s-reader" },
+  roster: { members: new Map(), counts: null, truncated: false },
+} as never;
 
 function mount(className?: string) {
   return render(

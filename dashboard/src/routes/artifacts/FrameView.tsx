@@ -44,8 +44,9 @@ import type { ArtifactRoom } from "~/lib/artifacts/room.ts";
 import { useDataStore } from "~/lib/artifacts/useDataStore.ts";
 import { useArtifactPeople } from "~/lib/artifacts/people.ts";
 import { rowID, type ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
-import type { BridgeRoster, BridgeViewer, RuntimeCapability } from "~/runtime/bridge.ts";
+import type { BridgeViewer, RuntimeCapability } from "~/runtime/bridge.ts";
 import { PageHost } from "./host.ts";
+import { pageRoster, pageSelf, pageViewer } from "./pageIdentity.ts";
 import type { PresenceReport } from "./presence.ts";
 
 /** Why a frame could not be minted, in the reader's words, from the engine's code. */
@@ -171,16 +172,16 @@ export function FrameView({
   // WHO IS VIEWING, and the people a page may name, to a page that declared
   // it may know: display facts only, from the chart this tab holds.
   const knows = capabilities.includes("identity");
+  const self = useMemo(
+    () => pageSelf(viewer, people),
+    // Read through the fields that name the reader.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [people, viewer.handle, viewer.kind, viewer.name],
+  );
   const bridgeViewer = useMemo<BridgeViewer | null>(
-    () =>
-      knows && viewer.handle
-        ? {
-            ...people.pagePerson(viewer.handle, viewer.kind === "agent" ? "agent" : "human"),
-            displayName: viewer.name || people.seatName(viewer.handle),
-            role: detail.role,
-          }
-        : null,
-    [knows, people, viewer.handle, viewer.kind, viewer.name, detail.role],
+    () => (knows ? pageViewer(viewer, self, detail.role) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [knows, viewer.loading, viewer.anonymous, self, detail.role],
   );
   useEffect(() => host?.setViewer(bridgeViewer), [host, bridgeViewer]);
   useEffect(() => host?.setPeople(knows ? people.pagePeople : []), [host, knows, people]);
@@ -188,19 +189,11 @@ export function FrameView({
     () => host?.setConnection(connection.connected ? "live" : "reconnecting"),
     [host, connection.connected],
   );
-  const roster = useMemo<BridgeRoster>(
-    () => ({
-      members: [...room.roster.members.values()].map((m) => ({
-        ...people.pagePerson(m.seat, m.kind === "agent" ? "agent" : "human"),
-        session: m.session,
-        activity: m.activity,
-        focus: m.focus,
-        at: m.at,
-      })),
-      ...(room.roster.counts ? { counts: room.roster.counts } : {}),
-      truncated: room.roster.truncated,
-    }),
-    [room.roster, people],
+  // The reader's own session is in the room's roster too, named as the reader.
+  const ownSession = room.state.kind === "joined" ? room.state.session : null;
+  const roster = useMemo(
+    () => pageRoster(room.roster, ownSession, self, people),
+    [room.roster, ownSession, self, people],
   );
   useEffect(() => host?.setRoster(roster), [host, roster]);
 

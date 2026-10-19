@@ -1,0 +1,72 @@
+import { expect, test } from "vitest";
+import type { ArtifactPresenceMember } from "~/protocol/index.ts";
+import type { Roster } from "~/lib/artifacts/room.ts";
+import { pageRoster, pageSelf, pageViewer } from "./pageIdentity.ts";
+
+const people = {
+  pagePerson: (handle: string, kind: "human" | "agent" = "human") => ({
+    seat: handle,
+    kind,
+    displayName: handle === "maya" ? "Maya Ortiz" : handle || "Somebody",
+  }),
+  seatName: (handle: string) => (handle === "maya" ? "Maya Ortiz" : handle),
+};
+
+const member = (session: string, seat: string): ArtifactPresenceMember =>
+  ({
+    session,
+    seat,
+    kind: "human",
+    activity: "viewing",
+    focus: {},
+    at: "2026-10-19T09:00:00Z",
+  }) as unknown as ArtifactPresenceMember;
+
+const roster = (...members: ArtifactPresenceMember[]): Roster => ({
+  members: new Map(members.map((m) => [m.session, m])),
+  counts: null,
+  truncated: false,
+});
+
+test("a reader with a seat is told as that seat, by the name the dashboard shows them", () => {
+  const self = pageSelf({ handle: "maya", kind: "human", name: "Maya O." }, people);
+  expect(self).toEqual({ seat: "maya", kind: "human", displayName: "Maya O." });
+  expect(pageViewer({ loading: false, anonymous: false }, self, "editor")).toEqual({
+    ...self,
+    role: "editor",
+  });
+});
+
+test("a reader signed in without a seat is still somebody viewing, never unknown", () => {
+  const named = pageSelf({ handle: "", kind: "", name: "Release operator" }, people);
+  expect(named).toEqual({ seat: "", kind: "human", displayName: "Release operator" });
+  expect(pageViewer({ loading: false, anonymous: false }, named, "owner")).toEqual({
+    ...named,
+    role: "owner",
+  });
+  // Without a name either, the reader is "You": the only one a page tells it to.
+  expect(pageSelf({ handle: "", kind: "", name: "" }, people).displayName).toBe("You");
+});
+
+test("nobody is told as viewing before the dashboard knows who is signed in", () => {
+  const self = pageSelf({ handle: "maya", kind: "human", name: "" }, people);
+  expect(pageViewer({ loading: true, anonymous: false }, self, "viewer")).toBeNull();
+  expect(pageViewer({ loading: false, anonymous: true }, self, "viewer")).toBeNull();
+});
+
+test("the reader's own session in the room is named as the reader, everybody else from the chart", () => {
+  const self = pageSelf({ handle: "", kind: "", name: "Release operator" }, people);
+  const told = pageRoster(
+    roster(member("s-reader", ""), member("s-maya", "maya"), member("s-other", "")),
+    "s-reader",
+    self,
+    people,
+  );
+  expect(told.members.map((m) => [m.session, m.seat, m.displayName])).toEqual([
+    ["s-reader", "", "Release operator"],
+    ["s-maya", "maya", "Maya Ortiz"],
+    ["s-other", "", "Somebody"],
+  ]);
+  expect(told.truncated).toBe(false);
+  expect(told).not.toHaveProperty("counts");
+});

@@ -131,7 +131,11 @@ interface IdentityApi {
 }
 ```
 
-Never a token, a login or an email address. `people` answers from the chart
+Never a token, a login or an email address. `me` answers every signed-in
+viewer: one signed in without a seat (an operator's API token) has an empty
+`seat`, which a person column cannot store, and the name the dashboard shows
+them. The viewer's own session is in the presence roster too, named the same
+way. `people` answers from the chart
 the viewer's dashboard already holds, so a page learns no one the viewer could
 not see there; a seat a value names that it does not list is one that has left
 the company. When the viewer's share is removed while the page is open, the host
