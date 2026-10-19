@@ -341,7 +341,14 @@ func (s *Service) joinArtifact(ctx context.Context, client *Client, req request)
 	}
 	principal, how := iam.From(ctx)
 	if how != iam.Resolved {
-		client.Reply(refuse(CodeUnauthorized))
+		// A JOIN ASKED BY NOBODY IS A FAULT, as a question asked by nobody
+		// is: every socket authenticates at its handshake and closes when
+		// its credential ends, so a join reaching here unresolved means this
+		// node lost who the socket is — which no refusal a client acts on
+		// describes, and an `unauthorized` naming no decision least of all.
+		log.ErrorContext(ctx, "stream_room_join_unresolved",
+			"artifact", id.String(), "resolution", string(how))
+		client.Reply(refuse(CodeQueryFailed))
 		return
 	}
 	role, err := s.rooms.Access.Standing(ctx, principal, id)

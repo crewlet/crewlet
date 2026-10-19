@@ -420,8 +420,8 @@ func Handler(guard *auth.Guard, origins CrossSite, svc *Service, query Query,
 		// the guard happens to do. Refused before the upgrade, where the
 		// status is visible to the page's HTTP re-ask.
 		if !principal.Stage.MayAct() {
-			httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized,
-				authz.RefusalDetail(authz.ReasonStage, nil))
+			authz.EnvelopeRefusal(w, r, authz.Policy{},
+				authz.Decision{Reason: authz.ReasonStage})
 			return
 		}
 		// WHAT THE SOCKET WAS OPENED WITH, which is what decides it again

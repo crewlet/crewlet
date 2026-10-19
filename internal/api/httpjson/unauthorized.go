@@ -23,7 +23,7 @@ import (
 // The two keys of a refusal on authority the sentence is chosen by: the
 // deciding rule's reason and the grants that would have admitted the caller —
 // internal/authz's DetailReason and DetailGrants, which every surface refusing
-// on authority writes through authz.RefusalDetail. Spelled here because this
+// on authority writes through authz.RefusalFields. Spelled here because this
 // package imports no engine machinery, and held to authz's by this package's
 // tests, which build every refusal they read through authz itself.
 const (
@@ -68,11 +68,16 @@ type authority struct {
 
 // refusals are the sentences, keyed by the authority table's own reason words.
 //
-// EVERY REASON THE TABLE REFUSES BY, AND NO OTHER: an admission ("grant",
-// "self", …) never reaches a refusal, and a reason this table does not carry
-// is told the code's own sentence. This package's tests hold the keys to
-// authz.Reasons in both directions, so a reason the table grows reaches a
-// person with its own words or fails the build.
+// EVERY REASON THE TABLE ANSWERS `unauthorized`, AND NO OTHER: an admission
+// ("grant", "self", …) never reaches a refusal; a stale proof, a machine
+// token where a person must be present and no relation to an artifact are
+// answered under codes of their own (`step_up_required`, `token_refused`,
+// `not_found`), whose own sentences say it, so a row for one would be words no
+// refusal is told; and a reason this table does not carry is told the code's
+// own sentence. This package's tests hold the keys to the reasons the
+// authority table's one mapping answers `unauthorized` in both directions, so
+// a reason the table grows reaches a person with its own words or fails the
+// build.
 var refusals = map[string]authority{
 	"no_grant":   {grantCures: true},
 	"not_self":   {said: "This belongs to someone else.", grantCures: true},
@@ -84,13 +89,10 @@ var refusals = map[string]authority{
 	"seat_only":    {said: "Only an agent can do this."},
 	"unseated": {said: "This is done as a seat, and this account has none. Ask " +
 		"an admin to bind it to a human seat (crewlet iam bind)."},
-	"token_refused": {said: "Access tokens can't do this. Sign in and try again."},
 	"stage": {said: "This account isn't active. Ask an admin to activate it " +
 		"(crewlet iam activate)."},
-	"step_up": {said: "Confirm it's you to do this, then try again."},
 	"unknown_action": {said: "This engine has no rule for that request. It may " +
 		"be running a different version. Reload the page."},
-	"not_shared": {said: "This isn't shared with you.", grantCures: true},
 	"role": {said: "Your role on this doesn't allow that. Whoever owns it can " +
 		"share it with you at a higher one.", grantCures: true},
 	"ceiling": {said: "The person this agent is working for can't do this, so " +
