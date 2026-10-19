@@ -1023,13 +1023,18 @@ func TestAKeyWhoseLastLineEndsInTheTextAroundItIsRedacted(t *testing.T) {
 // that crashed mid-print leaves, and in every wrapping a key is read in. Read
 // as a line interrupting the key, the label and its value are redacted with
 // it when the value can be its last line, and left to the password's rule
-// when it cannot. A run's own `=` is base64's padding, so a last line ending
-// in `pwd=` is still the key's.
+// when it cannot. So is a key whose separator is an `=` ending its line,
+// `pwd=` and `PASSWORD=`, which was read as base64's padding: the line was the
+// key's last, and the value on the next one published. And a token is no line
+// of the key either, so it is redacted as the token it is. What that costs is
+// a key's last line that ends in a password's key and `=`, when no END
+// follows it: it is published, and what follows it on its line is taken for
+// the password.
 //
-// Mutation: drop the label from bodyLine, and the value is published in every
-// case but the last; take a separator inside the run as one, and the last
-// line ending in `pwd=` is published; look at a run's first match alone, and
-// the second key in one is read as a line of the key.
+// Mutation: read no rule's match as keeping a run off the body, and every
+// value is published; read a password's key only where its separator is past
+// the run, and the values after `pwd=` and `PASSWORD=` are; name no token, and
+// the token is taken into the key's marker.
 func TestAPasswordsKeyUnderAKeyWithNoEndIsNoLineOfIt(t *testing.T) {
 	m := marker
 	begin := "-----BEGIN RSA PRIVATE KEY-----\n" + pemBody(2)
@@ -1070,9 +1075,17 @@ func TestAPasswordsKeyUnderAKeyWithNoEndIsNoLineOfIt(t *testing.T) {
 			begin + "u1pwd=Xpassword:\nhunter2\n",
 			m + "\n",
 		},
-		"a last line ending in pwd=, then a cut's mark": {
-			begin + "u1SU1Lpwd= \u2026",
-			m + " \u2026",
+		"its key ending its line in =": {
+			begin + "pwd=\nhunter2 is it\n",
+			m + "\npwd=\n" + redact.Marker + "password] is it\n",
+		},
+		"the same in capitals, its value indented": {
+			begin + "PASSWORD=\n  hunter2-x y\n",
+			m + "\nPASSWORD=\n  " + redact.Marker + "password] y\n",
+		},
+		"a token where its last line would be": {
+			begin + "AKIAABCDEFGHIJKLMNOP\nnext line\n",
+			m + "\n" + redact.Marker + "aws-key]\nnext line\n",
 		},
 	} {
 		got := redact.Secrets(form.text)
@@ -1083,6 +1096,10 @@ func TestAPasswordsKeyUnderAKeyWithNoEndIsNoLineOfIt(t *testing.T) {
 		if got != form.want {
 			t.Errorf("%s:\n got %q\nwant %q", name, got, form.want)
 		}
+	}
+	text := begin + "u1SU1Lpwd= \u2026"
+	if want := m + "\nu1SU1Lpwd= " + redact.Marker + "password]"; redact.Secrets(text) != want {
+		t.Errorf("a last line ending in pwd=, then a cut's mark:\n got %q\nwant %q", redact.Secrets(text), want)
 	}
 }
 

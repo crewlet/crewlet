@@ -705,9 +705,10 @@ func keySpans(text string) [][2]int {
 //
 // Read forward, a body line that ends in anything else — the `"}` that closes
 // the string a key was written into, the `…` of a cut — ENDS the block at its
-// base64, because what follows is the enclosing text. Except a password's key
-// and its separator (`Password:`), which is a line interrupting the key, so
-// its value is never cut off from it ([wrapping.bodyLine]).
+// base64, because what follows is the enclosing text. Except what another
+// rule names — a token, a password's key and its separator (`Password:`,
+// `pwd=`) — which is a line interrupting the key, so a password's value is
+// never cut off from its key ([wrapping.bodyLine]).
 func keyBlocks(text string) ([][2]int, int) {
 	if !strings.Contains(text, keyArmour) {
 		return nil, -1
@@ -716,6 +717,7 @@ func keyBlocks(text string) ([][2]int, int) {
 	// closed is where each END a BEGIN's block reached begins, in order.
 	var closed []int
 	open := -1
+	c := &claims{text: text}
 	begins := keyBegin.FindAllStringIndex(text, -1)
 	for _, b := range begins {
 		if len(spans) > 0 && b[0] < spans[len(spans)-1][1] {
@@ -723,7 +725,7 @@ func keyBlocks(text string) ([][2]int, int) {
 			// its own.
 			continue
 		}
-		block := readKey(text, b)
+		block := readKey(text, b, c)
 		if block.end > 0 {
 			spans = append(spans, [2]int{b[0], block.end})
 		}
@@ -747,7 +749,7 @@ func keyBlocks(text string) ([][2]int, int) {
 			closed = closed[1:]
 		}
 		if len(closed) == 0 || closed[0] != e[0] {
-			if start, ok := readBack(text, e, prev); ok {
+			if start, ok := readBack(text, e, prev, c); ok {
 				spans = append(spans, [2]int{start, e[1]})
 			}
 		}
@@ -791,8 +793,9 @@ type keyBlock struct {
 }
 
 // readKey reads the block of the BEGIN armour at b (its start and end in
-// text), forward. See [keyBlocks] for the structure it reads.
-func readKey(text string, b []int) keyBlock {
+// text), forward, c being what the rules name in text. See [keyBlocks] for the
+// structure it reads.
+func readKey(text string, b []int, c *claims) keyBlock {
 	// THE REST OF THE BEGIN LINE — nothing, the wrapping's per-line suffix,
 	// or, for a key on one line, its body — read only as far as the FIRST of
 	// three places: the line's break, the next armour on the line, and
@@ -851,7 +854,7 @@ func readKey(text string, b []int) keyBlock {
 	// BEGIN.
 	gutter := strings.Trim(text[segmentStart(text, b[0]):b[0]], " \t")
 	r := keyReader{
-		wrapping: wrapping{shape: prefixShape(gutter)},
+		wrapping: wrapping{shape: prefixShape(gutter), claims: c},
 		text:     text,
 		from:     b[1],
 	}
@@ -910,8 +913,12 @@ func oneLineKey(text string, b, armour []int) keyBlock {
 
 // wrapping is what a text puts round every line of a key: the armour line's
 // per-line prefix, as [prefixShape] has it, and its suffix — the text after
-// the armour on that line, where that is the wrapping's rather than a body.
-type wrapping struct{ shape, suffix string }
+// the armour on that line, where that is the wrapping's rather than a body —
+// together with what the rules name in the text ([claims]).
+type wrapping struct {
+	shape, suffix string
+	claims        *claims
+}
 
 // lineKind is what one line of a key's block is.
 type lineKind int
@@ -931,15 +938,22 @@ const (
 // begins and ends, and whether what follows the base64 is the enclosing text
 // rather than the wrapping's suffix.
 //
-// A line on which a PASSWORD'S KEY ENDS THE BASE64, its separator after it —
-// `Password:`, `pwd :` — is no line of the body, whatever it ends in: read as
-// the body's last line written up to the enclosing text, it put the word the
-// password's rule keys on into the key's block and left the `:` outside it,
-// so an unclosed key followed by `Password:` and a value on the next line
-// published the value, which the same two lines with no key above them
-// redact. Read as a line interrupting the key, it is redacted with the key
-// when a line of the key follows it, the value read as the short last line,
-// and left to the password's rule when none does.
+// A RUN ANOTHER RULE NAMES ANY OF IS NO LINE OF THE BODY ([claims]),
+// whatever it ends in. Read as the body's last line written up to the
+// enclosing text, a password's key — `Password:`, `pwd :`, a `pwd=` whose
+// value is on the next line — went into the key's block and left its
+// separator and its value outside it, where the password's rule no longer
+// finds a key, so a key whose END was never written published the value that
+// the same lines with no key above them redact. Read as a line interrupting
+// the key, the key and its value are redacted with the key when a line of the
+// key follows them, the value read as the short last line, and left to the
+// password's rule when none does. An `=` that ends a run was read as base64's
+// padding rather than a separator, so `pwd=` alone on a line was the key's
+// short last line: over passwords and tokens under a key whose END was never
+// written, 630 texts of 3,312 published the value on the line after it, every
+// one a password whose `=` ends its line. What that costs is a key's last line
+// ending in a password's key and `=` — about one key in fifty thousand — when
+// no END follows it: it is published.
 func (w wrapping) bodyLine(at int, line string) (kind lineKind, start, end int, terminated bool) {
 	core := line
 	if w.suffix != "" && strings.HasSuffix(core, w.suffix) {
@@ -951,7 +965,7 @@ func (w wrapping) bodyLine(at int, line string) (kind lineKind, start, end int, 
 	}
 	run := trailingRun(core)
 	if run == 0 || !w.prefixOK(strings.TrimRight(core[:len(core)-run], " \t")) ||
-		labelsPassword(line, len(core)-run, len(core)) {
+		w.claims.names(at+len(core)-run, at+len(core)) {
 		return otherLine, 0, 0, false
 	}
 	end = at + len(core)
@@ -959,20 +973,6 @@ func (w wrapping) bodyLine(at int, line string) (kind lineKind, start, end int, 
 		return fullLine, end - run, end, terminated
 	}
 	return shortLine, end - run, end, terminated
-}
-
-// labelsPassword reports whether a [passwordRule] match opens in line's run of
-// base64, from start to end, with its separator past the run: the run ends in
-// a password's key and the `:` after it is the line's. A run's own `=` is
-// base64's padding, so a key's last line ending in `pwd=` stays a line of it,
-// whatever follows it.
-func labelsPassword(line string, start, end int) bool {
-	for at, after, ok := passwordRule.next(line, start); ok && at < end; at, after, ok = passwordRule.next(line, after) {
-		if after > end && strings.ContainsAny(line[end:after], ":=") {
-			return true
-		}
-	}
-	return false
 }
 
 // prefixOK reports whether p — the text before a line's base64, trimmed — is
@@ -1242,7 +1242,7 @@ func (r *keyReader) header(line string) bool {
 // reads back, so on a line of many of them a scan back to the line's start —
 // or to the bound, which a long line reaches from every END on it — would cost
 // the armour count times the line, or times the bound.
-func readBack(text string, e []int, prev int) (int, bool) {
+func readBack(text string, e []int, prev int, c *claims) (int, bool) {
 	lineS := segmentStartAbove(text, e[0], max(prev, e[0]-MaxKeyBlockBytes, 0))
 	if prev > 0 && lineS == prev {
 		// No break since the last key armour: the line holds it, and a key
@@ -1267,7 +1267,7 @@ func readBack(text string, e []int, prev int) (int, bool) {
 		return 0, false
 	}
 	gutter := strings.Trim(pre, " \t")
-	w := wrapping{shape: prefixShape(gutter), suffix: suffix}
+	w := wrapping{shape: prefixShape(gutter), suffix: suffix, claims: c}
 	if start, ok := w.readBack(text, lineS, e[0]); ok {
 		return start, true
 	}
@@ -1630,6 +1630,66 @@ func keyLike(run string) bool {
 		}
 	}
 	return false
+}
+
+// claims is what the rules NAME in a text a key is read in: every token a rule
+// matches, and a password's key and the separator after it — as ranges of the
+// text in order, those that overlap made one — read the first time a line
+// asks, since a text holding a key's armour seldom holds either. A line of a
+// key's body holds none of it ([wrapping.bodyLine]). What that costs is a
+// key's line that holds a token's shape whole — `AKIA` and sixteen capitals
+// and digits, about once in four thousand million lines of a key — read as a
+// line interrupting it.
+type claims struct {
+	text  string
+	named [][2]int
+	read  bool
+}
+
+// names reports whether a token or a password's key and separator takes any
+// of text[start:end].
+func (c *claims) names(start, end int) bool {
+	c.load()
+	return overlaps(c.named, start, end)
+}
+
+// load reads the claims the first time a line asks.
+func (c *claims) load() {
+	if !c.read {
+		c.named = claimed(c.text)
+		c.read = true
+	}
+}
+
+// overlaps reports whether any of ranges, in order and apart, takes any of
+// [start, end).
+func overlaps(ranges [][2]int, start, end int) bool {
+	i, _ := slices.BinarySearchFunc(ranges, start, func(r [2]int, at int) int {
+		if r[1] <= at {
+			return -1
+		}
+		return 1
+	})
+	return i < len(ranges) && ranges[i][0] < end
+}
+
+// claimed is every range of text that names what the rules replace: [claims].
+// A password's key and separator are claimed whether or not a value follows
+// yet, so what a run is does not change when the line after it is written.
+func claimed(text string) [][2]int {
+	var named [][2]int
+	for _, r := range rules {
+		next := r.next
+		if r.value != nil {
+			// What names a password's value is its key and separator,
+			// the rule's own match.
+			next = r.find
+		}
+		for start, end, ok := next(text, 0); ok; start, end, ok = next(text, end) {
+			named = append(named, [2]int{start, end})
+		}
+	}
+	return mergeSpans(named)
 }
 
 // backHold is where the earliest line of text — a text ending on a line break —
