@@ -138,9 +138,9 @@ const rootsProjectStatement = `
 // under a parent in another project, see [refuseParent], and a merge carrying
 // subtasks across, [ErrReparentAcrossProjects]); this is what a record that
 // carries the shape anyway gets instead of a refusal that would stall every
-// node. The column, its filter and the attention index all shipped with the
-// schema and nothing ever set it, so the attention queue answered
-// `flag=inconsistent_project` with nothing on every company.
+// node. The column and its filter both shipped with the schema and nothing
+// ever set it, so the attention queue answered `flag=inconsistent_project`
+// with nothing on every company.
 //
 // DERIVED HERE, where the root is already known, and so on every apply that
 // can move either end: a task's own apply rebuilds its ancestry, and a root's
