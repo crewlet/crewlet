@@ -383,7 +383,7 @@ func TestARequestNamesTheOperationOutsideATurn(t *testing.T) {
 
 // opName is the part of an operation id that names the write — its LAST
 // segment. A seat's write is `<uuid>.<name>`; an operator's is a step of the
-// call's own operation, `<uuid>.<tool>.<digest>.<name>` (see
+// call's own operation, `<uuid>.<tool>-<digest>.<name>` (see
 // builtin.Actor.Operation), and the write's own name is what comes last in
 // both.
 func opName(id string) string {

@@ -80,6 +80,9 @@ import (
 //     often of one verb on several objects — a dependency on each of two
 //     tasks — so the name must carry the object. Every other arm names its id
 //     the same, so a write reads alike in the ledger whichever arm minted it.
+//     The object goes into the name through [statelog.OpNamePart], so the
+//     name is one segment of the grammar whatever the object holds — a
+//     file's path holds the dot that begins a step.
 //   - THE COMMENT'S ID ([commentID]) is a UUIDv5 rather than an operation id,
 //     because a tracker comment's id is the primary key of its row, apart
 //     from the operation that writes it — a comment rides its task's record,
