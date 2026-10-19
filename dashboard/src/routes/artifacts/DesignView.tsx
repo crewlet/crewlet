@@ -289,7 +289,6 @@ function Design({
       </div>
       {merge && (
         <Callout
-          className="design-merged"
           variant={merge.overlaps.length > 0 ? "warning" : "info"}
           title={`Moved onto version ${base.number}`}
           action={

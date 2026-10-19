@@ -11170,7 +11170,7 @@ a.live-row:focus-visible {
   height: max(28rem, calc(100cqb - var(--sticky-top) - 14rem));
   min-width: 0;
 }
-@media (max-width: 48rem) {
+@media (width < 640px) {
   .design-body {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -11193,9 +11193,10 @@ a.live-row:focus-visible {
 :is(.design-board-frame, .design-opened-frame, .design-print-frame) .artifact-note {
   display: none;
 }
+/* The dialog's own body bounds the height; a board wider than the dialog
+   scrolls sideways inside it. */
 .design-opened {
-  max-height: 75vh;
-  overflow: auto;
+  overflow-x: auto;
 }
 
 /* PRINT: one board over the whole window, at its corner and its own size,
