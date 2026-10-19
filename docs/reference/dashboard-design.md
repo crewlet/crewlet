@@ -2117,6 +2117,11 @@ show its ancestry beside the controls takes a line of its own.
   five pixels past the strip's end with nothing to say it was there. The
   object strip measures a twin of the kit's row — hidden, inert, clipped —
   since the kit draws a row whole, and hands the widths to the same fold.
+  **Both are the kit's underline row**: the section strip is `Tabs` in router
+  mode (a `nav` of links, the current one `aria-current="page"`), with "More"
+  and the reading note as its `trailing` node and its own root measured
+  through `ref`, so the tab, its figure, the accent bar under the current tab
+  and the focus ring are one control across a workspace and an object.
 - **The star is on every page that is one.** A workspace's own page is already
   a sidebar row, so the star there cannot keep it, but it is drawn,
   unavailable and saying "Already in the sidebar", rather than left out: left
@@ -3109,8 +3114,8 @@ On a phone Edit org folds into the bar's More menu, so Add seat stays in view.
 It is the same bar on every Agents section, Schedules included, where a found
 seat opens beside the list as it does on Teams.
 The section tabs carry the Roster, Teams and Schedules figures on every Agents
-section, as plain numbers in the tab's quiet ink — which is why Schedules no
-longer restates its count in the bar. The Agents sections open on their work,
+section, as the kit's count beside each name (the figure an object's own tabs
+draw), which is why Schedules no longer restates its count in the bar. The Agents sections open on their work,
 with no introduction above it.
 
 **The seat peek answers "who is this, and what is it doing".** A state card
@@ -5713,7 +5718,7 @@ indistinguishable to the next reader from one whose declaration they failed to
 find.
 
 So the frame's own hover vocabulary carries it. The sidebar's rows,
-`.section-tab` and `.crumb-link` already answer a pointer by moving to
+the section tabs and `.crumb-link` already answer a pointer by moving to
 `--color-text-primary`, and a link does the same: in dark the accent ink (#a9b0ff) brightens
 toward near-white, in light the violet (#4f51bd) darkens toward near-black, so
 in BOTH themes hovering makes a link MORE prominent rather than merely

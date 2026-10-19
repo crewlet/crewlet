@@ -248,6 +248,12 @@ export function WorkingNow() {
  * only for a workspace with more than one section, because a strip of one tab
  * is a heading wearing a control's clothes.
  *
+ * THE KIT'S ROW, in router mode: `Tabs` with the underline chrome, whose root
+ * is that `nav` and whose items are these links, so a workspace's sections and
+ * an object's own tabs (`ObjectTabs`) are one control. "More" and the reading
+ * note are its `trailing` node, inside the landmark with the links they
+ * continue.
+ *
  * # What does not fit goes into "More"
  *
  * A strip wider than the header used to scroll, with its bar hidden and a
@@ -294,76 +300,82 @@ export function SectionTabs({
     if (value) kept[key] = value;
   }
   const out = tabs.filter((s) => folded.includes(s.key));
+  const paths = new Map(tabs.map((s) => [s.key, s.path]));
   return (
-    <nav ref={strip} className="section-tabs" aria-label={`${row.label} sections`}>
-      {tabs.map((s) => {
+    <Tabs
+      ref={strip}
+      ariaLabel={`${row.label} sections`}
+      variant="underline"
+      className="section-tabs"
+      value={current.key}
+      items={tabs.map((s) => {
         const Glyph = glyphFor(s.icon);
-        const figure = counts[s.key];
-        const off = folded.includes(s.key);
-        return (
-          <a
-            key={s.key}
-            className="section-tab"
-            data-section={s.key}
-            href={href(s.path, kept)}
-            aria-current={s === current ? "page" : undefined}
-            // FOLDED INTO "MORE": still here to be measured, and out of reach
-            // of the pointer, the keyboard and a screen reader, which meet it
-            // in the menu instead.
-            {...(off ? { "data-folded": "", "aria-hidden": true, inert: true } : {})}
-          >
-            <Glyph size="sm" aria-hidden="true" />
-            <span>{s.label}</span>
-            {/* A PLAIN FIGURE in the tab's own quiet ink, as every approved
-                artboard draws it: a pill here was a second control-shaped
-                thing inside each tab. */}
-            {figure ? <span className="section-tab-count t-num">{figure}</span> : null}
-          </a>
-        );
+        return { value: s.key, label: s.label, icon: <Glyph size="sm" />, count: counts[s.key] };
       })}
-      {/* ALWAYS IN THE DOCUMENT, so its width is known before it is needed;
-          folded itself while every tab fits. */}
-      <span
-        className="section-tabs-more"
-        data-section-more=""
-        {...(out.length === 0 ? { "data-folded": "", "aria-hidden": true, inert: true } : {})}
-      >
-        <Menu
-          label={`More sections of ${row.label}`}
-          // THE CHEVRON SAYS IT OPENS, as a select's does: a bare "More" at
-          // the end of a row of links read as one more link.
-          trigger={
-            <span className="row gap-1">
-              More
-              <ChevronDownGlyph size="xs" aria-hidden="true" />
-            </span>
-          }
-          triggerVariant="ghost"
-          align="end"
-          // NO GLYPHS: a section's glyph at the head of a menu row sits where
-          // a menu draws its check, and Checklist's IS a check — the row read
-          // as a chosen answer. The name and its figure are the row.
-          items={out.map((s) => ({
-            key: s.key,
-            label: s.label,
-            hint: counts[s.key] || undefined,
-            onSelect: () => nav.to(s.path, kept),
-          }))}
-        />
-      </span>
-      {/* THE WORKSPACE'S READING NOTE comes after the tabs and gives way to
-          them: it is folded (out of the flow, still measured) whenever the
-          strip has no room for it beside every tab — see [noteFits]. */}
-      {row.note && (
-        <span
-          className="section-tabs-note"
-          data-section-note=""
-          {...(fit.note ? {} : { "data-folded": "", "aria-hidden": true })}
+      renderItem={({ item, className, isActive, children }) => (
+        <a
+          className={className}
+          data-section={item.value}
+          href={href(paths.get(item.value) ?? row.path, kept)}
+          aria-current={isActive ? "page" : undefined}
+          // FOLDED INTO "MORE": still here to be measured, and out of reach
+          // of the pointer, the keyboard and a screen reader, which meet it
+          // in the menu instead.
+          {...(folded.includes(item.value)
+            ? { "data-folded": "", "aria-hidden": true, inert: true }
+            : {})}
         >
-          {row.note}
-        </span>
+          {children}
+        </a>
       )}
-    </nav>
+      trailing={
+        <>
+          {/* ALWAYS IN THE DOCUMENT, so its width is known before it is
+              needed; folded itself while every tab fits. */}
+          <span
+            className="section-tabs-more"
+            data-section-more=""
+            {...(out.length === 0 ? { "data-folded": "", "aria-hidden": true, inert: true } : {})}
+          >
+            <Menu
+              label={`More sections of ${row.label}`}
+              // THE CHEVRON SAYS IT OPENS, as a select's does: a bare "More"
+              // at the end of a row of links read as one more link.
+              trigger={
+                <span className="row gap-1">
+                  More
+                  <ChevronDownGlyph size="xs" aria-hidden="true" />
+                </span>
+              }
+              triggerVariant="ghost"
+              align="end"
+              // NO GLYPHS: a section's glyph at the head of a menu row sits
+              // where a menu draws its check, and Checklist's IS a check (the
+              // row read as a chosen answer). The name and its figure are the
+              // row.
+              items={out.map((s) => ({
+                key: s.key,
+                label: s.label,
+                hint: counts[s.key] || undefined,
+                onSelect: () => nav.to(s.path, kept),
+              }))}
+            />
+          </span>
+          {/* THE WORKSPACE'S READING NOTE comes after the tabs and gives way
+              to them: it is folded (out of the flow, still measured) whenever
+              the strip has no room for it beside every tab, see [noteFits]. */}
+          {row.note && (
+            <span
+              className="section-tabs-note"
+              data-section-note=""
+              {...(fit.note ? {} : { "data-folded": "", "aria-hidden": true })}
+            >
+              {row.note}
+            </span>
+          )}
+        </>
+      }
+    />
   );
 }
 
