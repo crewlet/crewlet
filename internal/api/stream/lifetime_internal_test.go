@@ -76,7 +76,12 @@ type served struct {
 	conn *websocket.Conn
 
 	// decisions counts every time the socket's credential was decided by
-	// the guard — a read of the identity estate.
+	// the guard (a read of the identity estate), once the decision has
+	// ANSWERED. Counted as it began, a case that waited for its first
+	// decision and then moved the answer could see that decision read the
+	// moved one: it closed the socket, the move's own wake reached a loop
+	// that had already ended, and the second decision the case waited for
+	// never came.
 	decisions atomic.Int64
 }
 
@@ -154,8 +159,9 @@ func dial(t *testing.T, svc *Service, c socketCase) *served {
 			opened: c.opened,
 			ends:   c.ends,
 			decide: func(ctx context.Context) (*http.Request, *auth.Refusal) {
+				decided, refusal := c.decide(r.Clone(ctx))
 				s.decisions.Add(1)
-				return c.decide(r.Clone(ctx))
+				return decided, refusal
 			},
 		})
 	}))
@@ -242,6 +248,39 @@ func person(handle string) iam.Principal {
 // sessionOf is what a person's session socket was opened with.
 func sessionOf(p iam.Principal) opened {
 	return opened{lineage: uuid.NewString(), person: p.ID.String()}
+}
+
+// A DECISION IS COUNTED ONCE IT HAS ANSWERED, not as it begins.
+//
+// [served.settled] is what a case waits on before it moves the answer the
+// next decision reads, so a decision still asking when the count moved could
+// read the moved answer instead of the one the case meant it to. That race
+// failed TestADecisionThatMovesWhoASocketActsAsClosesIt in CI, once in many
+// runs; held open here, it fails every time.
+func TestADecisionIsCountedOnceItHasAnswered(t *testing.T) {
+	t.Parallel()
+	ana := person("ana")
+	began, release := make(chan struct{}, 1), make(chan struct{})
+	s := dial(t, newDecidingService(t, authz.NoChart{}), socketCase{
+		principal: ana, opened: sessionOf(ana),
+		decide: func(r *http.Request) (*http.Request, *auth.Refusal) {
+			signal(began)
+			<-release
+			return resolvedAs(ana)(r)
+		},
+	})
+	select {
+	case <-began:
+	case <-time.After(10 * time.Second):
+		close(release)
+		t.Fatal("the socket's first decision never began")
+	}
+	if got := s.decisions.Load(); got != 0 {
+		t.Errorf("a decision still asking was counted (%d): a case waiting on "+
+			"it could move the answer that decision then reads", got)
+	}
+	close(release)
+	s.settled(t, 1)
 }
 
 // --- what decides a socket ---------------------------------------------- //
