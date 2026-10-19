@@ -35,9 +35,9 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Button,
   ConfirmModal,
+  DocumentTitleField,
   EmptyState,
   FormField,
-  Input,
   RichEditor,
   SegmentedControl,
   Select,
@@ -55,6 +55,7 @@ import {
 } from "~/contract/pages.ts";
 import { fmtBytes, fmtDateCompact, plural, textBudget, utf8Bytes } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
+import { shownImage } from "~/lib/markdown.ts";
 import { resolveSearchMode } from "~/lib/search.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -373,9 +374,12 @@ export function Composer() {
             )}
           </div>
 
+          {/* THE TITLE IS SET AS THE PAGE WILL WEAR IT: the page title's own
+              type over the body, where a form's labelled box stood. Its link
+              address note shows while the title is typed. */}
           <FormField
-            label="Title"
             htmlFor="knowledge-composer-title"
+            helperOnFocus
             error={
               titleBudget.over ? (
                 titleBudget.line
@@ -392,20 +396,24 @@ export function Composer() {
               titleBudget.over || taken ? undefined : (titleBudget.line ?? "Also its link address.")
             }
           >
-            <Input
-              id="knowledge-composer-title"
-              className="knowledge-composer-title"
-              placeholder="Untitled"
-              autoComplete="off"
-              value={title}
-              error={titleBudget.over || Boolean(taken)}
-              onChange={(event) => setTitle(event.target.value)}
-            />
+            {(field) => (
+              <DocumentTitleField
+                id={field.id}
+                aria-label="Title"
+                aria-describedby={field.describedBy}
+                placeholder="Untitled"
+                autoComplete="off"
+                value={title}
+                error={titleBudget.over || Boolean(taken)}
+                onChange={(event) => setTitle(event.target.value)}
+              />
+            )}
           </FormField>
 
           <RichEditor
             value={body}
             onChange={setBody}
+            resolveImage={shownImage}
             label="The page"
             placeholder="Write the page, or type a slash for blocks"
             commands={COMMANDS}

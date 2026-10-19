@@ -349,10 +349,11 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
     case "artifacts":
       return sectionPage(where.section);
     case "artifact":
-      // AN ARTIFACT'S ADDRESS IS ITS ID, and what it is called is the
-      // artifact's own answer, published by its page; until then the trail
-      // names the id, which is still an address a reader can act on.
-      return [root(row, true), named(labels, where.id)];
+      // WHAT AN ARTIFACT IS CALLED is its own answer, published by its page.
+      // Until then, and for one the reader may not open, the trail says
+      // "Artifact" rather than its uuid: a 36-character id is nothing a
+      // person reads, and the address bar already carries it.
+      return [root(row, true), { label: labels[where.id] || "Artifact" }];
     case "new-artifact":
       return [root(row, true), { label: section("new")?.label ?? "New artifact" }];
     case "budgets":

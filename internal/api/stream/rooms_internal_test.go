@@ -135,3 +135,35 @@ func TestACredentialRecheckThatCannotDecideHoldsTheRoom(t *testing.T) {
 		t.Fatalf("the member was resumed as %+v, want the viewer the decision found", members)
 	}
 }
+
+// A READER WITH NO SEAT IS NAMED IN THE ROOM AS THE HISTORY NAMES THEM. The
+// room carried the seat alone, which is nothing for an unbound person or an
+// operator's token, so every such reader was drawn as an unnamed "somebody"
+// beside a change record that named them by their login.
+func TestAPresenceMemberIsNamedAsItsRecordIs(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		p    iam.Principal
+		want string
+	}{
+		{"a bound person, by their seat",
+			iam.Principal{Kind: iam.KindPerson, Login: "jane.doe", Seat: "jane"}, "jane"},
+		{"an unbound person, by their login",
+			iam.Principal{Kind: iam.KindPerson, Login: "jane.doe"}, "jane.doe"},
+		{"an operator's token, by its login",
+			iam.Principal{Kind: iam.KindMachine, Login: "token:review"}, "token:review"},
+		{"an agent, by its seat",
+			iam.Principal{Kind: iam.KindSeat, Login: "seat:pm", Seat: "pm"}, "pm"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := presenceSeat(tc.p); got != tc.want {
+				t.Fatalf("presenceSeat(%+v) = %q, want %q", tc.p, got, tc.want)
+			}
+			if got, want := presenceSeat(tc.p), iam.ActorFor(tc.p).Name; got != want {
+				t.Fatalf("the room names %q, the history %q", got, want)
+			}
+		})
+	}
+}

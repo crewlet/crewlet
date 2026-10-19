@@ -144,6 +144,8 @@ import type {
   WorkActivityRecord,
 } from "~/protocol/index.ts";
 import { artifactPath } from "~/lib/artifacts/api.ts";
+import { audienceName, useArtifactPeople } from "~/lib/artifacts/people.ts";
+import { historyOpTag, historyRefusalWords, historyWords } from "~/lib/artifacts/words.ts";
 import { itemPath, subjectItem } from "~/lib/work.ts";
 
 /**
@@ -316,6 +318,12 @@ export interface AuditEntry {
   /** Where that object lives, where it still has an address. */
   path?: string[];
   /**
+   * `subject` is a title somebody gave the object (a page's, an artifact's),
+   * set in the reading face; every other subject is an identifier, set in
+   * the monospace one so two of them are told apart by eye.
+   */
+  titled?: boolean;
+  /**
    * WHY `subject` IS EMPTY, said in the To cell, where the row's source has
    * a reason — a tool call's arguments are never recorded, which is a
    * different fact from a record that simply named nothing. Absent, an empty
@@ -413,26 +421,27 @@ function identitySubject(entry: IdentityAuditEntry): Pick<AuditEntry, "subject" 
 }
 
 /**
- * WHAT AN ARTIFACT TRAIL ROW SAYS HAPPENED, beyond its op: an administrator's
- * read of somebody's private artifact says so in words, since that is the row
- * this source exists to surface; a write only the admin path admitted says it
- * was an override; a refused record says why; and a row naming a version says
- * which.
+ * WHAT AN ARTIFACT TRAIL ROW SAYS HAPPENED, in the sentence the artifact's own
+ * history says it in (`historyWords`): an administrator's read of somebody's
+ * private artifact says so in words, since that is the row this source exists
+ * to surface; a write only the admin path admitted says so once, in the
+ * sentence's own words; and a refused record says why, in words rather than
+ * the log's reason code.
  */
-export function artifactDetail(entry: ArtifactTrailEntry): string {
+export function artifactDetail(
+  entry: ArtifactTrailEntry,
+  names: { audience: (raw: string) => string; seat: (handle: string) => string },
+): string {
   if (entry.op === "read_elevated") {
     return entry.number
       ? `Read version ${entry.number} as an administrator, with no share`
       : "Read as an administrator, with no share";
   }
-  const parts: string[] = [];
-  if (entry.outcome === "refused") {
-    parts.push(entry.reason ? `Refused: ${entry.reason.replaceAll("_", " ")}` : "Refused");
-  }
-  if (entry.elevated) parts.push("admitted only as an administrator");
-  if (entry.number) parts.push(`version ${entry.number}`);
-  const line = parts.join(", ");
-  return line ? line.charAt(0).toUpperCase() + line.slice(1) : "";
+  const line =
+    entry.outcome === "refused"
+      ? `refused: ${entry.reason ? historyRefusalWords(entry.reason) : "no reason recorded"}`
+      : historyWords(entry, names);
+  return line.charAt(0).toUpperCase() + line.slice(1);
 }
 
 /** A case-blind substring match. */
@@ -669,6 +678,13 @@ export function Audit() {
   const configData = held(config);
   const runtimeData = held(runtime);
   const artifactsData = held(artifacts);
+  // A SHARE'S AUDIENCE AND A TRANSFER'S SEAT BY THE NAMES THE CHART GIVES
+  // THEM, as the artifact's own Changes tab says them.
+  const people = useArtifactPeople();
+  const artifactNames = useMemo(
+    () => ({ audience: (raw: string) => audienceName(raw, people), seat: people.seatName }),
+    [people],
+  );
 
   const rows = useMemo<AuditEntry[]>(() => {
     const out: AuditEntry[] = [];
@@ -701,6 +717,7 @@ export function Audit() {
         // A PURGED PAGE HAS NO TITLE, and no page to open: its entry is the
         // record it ever existed.
         path: change.title ? ["knowledge", "pages", change.page_id] : undefined,
+        titled: Boolean(change.title),
         detail: plainText(change.excerpt ?? ""),
       });
     }
@@ -787,16 +804,17 @@ export function Audit() {
         id: `artifact:${entry.artifact}:${entry.position}`,
         at: entry.at,
         source: "artifacts",
-        kind: entry.op,
+        kind: historyOpTag(entry.op),
         actor: entry.actor.name,
         actorKind: entry.actor.kind,
         through: throughOf(entry.actor.name, entry.actor.operator_id),
         // A TITLE IS WHAT A PERSON NAMES AN ARTIFACT BY, and the row links to
         // it; one the head no longer holds is named by its id and links
         // nowhere, since a purge takes the page with it.
-        subject: entry.title || short(entry.artifact),
+        subject: entry.title || `artifact ${short(entry.artifact)}`,
         path: entry.title ? artifactPath(entry.artifact) : undefined,
-        detail: artifactDetail(entry),
+        titled: entry.title !== "",
+        detail: artifactDetail(entry, artifactNames),
       });
     }
     return out;
@@ -808,6 +826,7 @@ export function Audit() {
     runtimeData,
     identity.page,
     artifactsData,
+    artifactNames,
   ]);
 
   /** Newest first, narrowed to the window and to what the reader asked. */
@@ -895,6 +914,7 @@ export function Audit() {
         key: "as",
         header: "As",
         shrink: true,
+        drop: 2,
         sortValue: (row) => row.actorKind,
         cell: (row) =>
           row.actorKind ? (
@@ -909,6 +929,7 @@ export function Audit() {
         key: "through",
         header: "Through",
         shrink: true,
+        drop: 1,
         sortValue: (row) => row.through,
         cell: (row) =>
           row.through ? (
@@ -941,18 +962,27 @@ export function Audit() {
             // leaving a gap that reads as a lost value.
             <EmptyValue label={row.noSubject ?? "None recorded"} />
           ) : row.path ? (
-            <a className="mono t-link truncate" href={href(row.path)} title={row.subject}>
+            <a
+              className={`${row.titled ? "" : "mono "}t-link truncate`}
+              href={href(row.path)}
+              title={row.subject}
+            >
               {row.subject}
             </a>
           ) : (
-            <span className="mono truncate" title={row.subject}>
+            <span className={`${row.titled ? "" : "mono "}truncate`} title={row.subject}>
               {row.subject}
             </span>
           ),
       },
       {
+        // THE LINE THAT SAYS WHAT CHANGED is the point of the row, so it keeps
+        // a reading width: at zero every content-sized column beside it took
+        // its share, and an administrator's read printed as "R…" at 1440.
+        // The credential and the author's kind give way first (`drop`).
         key: "detail",
         header: "Detail",
+        floor: "16rem",
         cell: (row) =>
           row.detail ? (
             // THE WHOLE LINE ON THE TITLE, and the serving node under it: the

@@ -42,7 +42,7 @@ import type {
 } from "~/protocol/index.ts";
 import { labelVersion, restoreVersion } from "~/lib/artifacts/api.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
-import { useArtifactPeople } from "~/lib/artifacts/people.ts";
+import { audienceName, useArtifactPeople } from "~/lib/artifacts/people.ts";
 import { CAPABILITY_WORDS, actorName, historyWords } from "~/lib/artifacts/words.ts";
 import type { ArtifactRoom } from "~/lib/artifacts/room.ts";
 import type { ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
@@ -243,8 +243,11 @@ function VersionFiles({
           {files.map((f) => (
             <li key={f.path} className="artifact-file">
               <span className="mono truncate">{f.path}</span>
+              {/* THE SIZE, AND WHETHER IT IS THE ENTRY: the path already says
+                  what kind of file it is, and a media type ("text/markdown")
+                  said it again in the engine's words. */}
               <span className="artifact-file-meta">
-                {f.content_type.split(";")[0]}, {fmtBytes(f.object.size)}
+                {fmtBytes(f.object.size)}
                 {f.path === answer.data?.manifest.entry ? ", the entry" : ""}
               </span>
             </li>
@@ -261,11 +264,6 @@ function ChangeRecord({ detail }: { detail: ArtifactDetail }) {
   const now = useNow();
   const answer = useQuery("artifact_history", { id: detail.id, limit: 50 });
   const entries = (answer.data?.entries ?? []).filter((e) => e.op !== "opened");
-  const audienceName = (raw: string) => {
-    if (raw === "company") return `everyone in ${people.company}`;
-    const [kind, id] = raw.split(":");
-    return kind === "unit" ? people.unitName(id ?? "") : people.seatName(id ?? "");
-  };
   return (
     <Section title="Changes" hint="What was published, shared and changed, and by whom">
       <QueryState
@@ -285,9 +283,11 @@ function ChangeRecord({ detail }: { detail: ArtifactDetail }) {
                 {actorName(entry.actor, people.seatName)}
               </span>
               <span className="artifact-history-what">
-                {historyWords(entry, { audience: audienceName, seat: people.seatName })}
+                {historyWords(entry, {
+                  audience: (raw) => audienceName(raw, people),
+                  seat: people.seatName,
+                })}
                 {entry.work_item ? ` for ${entry.work_item}` : ""}
-                {entry.elevated ? " (as an administrator)" : ""}
               </span>
               <time className="artifact-history-when" dateTime={entry.at} title={entry.at}>
                 {relTime(entry.at, now)}

@@ -20,15 +20,27 @@ import type { ArtifactPanelSize } from "@crewlethq/ui";
 export const PANELS = ["details", "history", "data", "people", "settings"] as const;
 export type PanelName = (typeof PANELS)[number];
 
-/** What a panel is called in its head, and how wide it rests. */
+/**
+ * What a panel is called in its head, and how wide it rests: every panel of
+ * text at one width, so moving between them never moves the artifact's edge,
+ * and Data at the table's.
+ */
 export const PANEL_SPECS: Readonly<Record<PanelName, { title: string; size: ArtifactPanelSize }>> =
   {
-    details: { title: "Details", size: "sm" },
+    details: { title: "Details", size: "md" },
     history: { title: "Versions and history", size: "md" },
     data: { title: "Data", size: "lg" },
-    people: { title: "People here", size: "sm" },
+    people: { title: "People here", size: "md" },
     settings: { title: "Settings", size: "md" },
   };
+
+/**
+ * A panel's name for this artifact: a sheet keeps no versions a reader sees
+ * change (its content is its live data), so its History promises none.
+ */
+export function panelTitle(panel: PanelName, versioned: boolean): string {
+  return panel === "history" && !versioned ? "History" : PANEL_SPECS[panel].title;
+}
 
 /** The keys a panel owns besides `panel=` itself. */
 const PANEL_KEYS = ["expand", "against", "lens"] as const;

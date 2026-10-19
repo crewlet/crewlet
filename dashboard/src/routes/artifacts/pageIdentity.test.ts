@@ -4,6 +4,7 @@ import type { Roster } from "~/lib/artifacts/room.ts";
 import { pageRoster, pageSelf, pageViewer } from "./pageIdentity.ts";
 
 const people = {
+  index: { byHandle: new Map([["maya", {}]]) } as never,
   pagePerson: (handle: string, kind: "human" | "agent" = "human") => ({
     seat: handle,
     kind,
@@ -55,18 +56,24 @@ test("nobody is told as viewing before the dashboard knows who is signed in", ()
 });
 
 test("the reader's own session in the room is named as the reader, everybody else from the chart", () => {
-  const self = pageSelf({ handle: "", kind: "", name: "Release operator" }, people);
+  const self = pageSelf({ handle: "", kind: "", name: "" }, people);
   const told = pageRoster(
-    roster(member("s-reader", ""), member("s-maya", "maya"), member("s-other", "")),
+    roster(
+      member("s-reader", "token:review"),
+      member("s-maya", "maya"),
+      member("s-other", "jo@example.com"),
+    ),
     "s-reader",
     self,
     people,
   );
   expect(told.members.map((m) => [m.session, m.seat, m.displayName])).toEqual([
-    ["s-reader", "", "Release operator"],
+    ["s-reader", "", "You"],
     ["s-maya", "maya", "Maya Ortiz"],
+    // The room names a seatless member by login, and a page is never told a login.
     ["s-other", "", "Somebody"],
   ]);
+  expect(JSON.stringify(told)).not.toMatch(/token:review|jo@example\.com/);
   expect(told.truncated).toBe(false);
   expect(told).not.toHaveProperty("counts");
 });

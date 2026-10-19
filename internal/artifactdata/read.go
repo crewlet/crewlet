@@ -472,9 +472,9 @@ func scanDocs(ctx context.Context, tx *sql.Tx, c *collState, q string, args ...a
 		return nil, fmt.Errorf("artifactdata: read %s: %w", c.spec.Name, err)
 	}
 	defer func() { _ = rows.Close() }()
-	// AN EMPTY LIST, NEVER NIL: a page with no documents is `"docs": []` on
-	// the wire, and a client reading the list it was promised does not have
-	// to tell an empty collection from a broken answer.
+	// AN EMPTY PAGE IS AN EMPTY LIST, never null: a client reads `docs` as
+	// an array, and a collection with no rows yet (every new sheet's first
+	// state) answered `"docs":null`, which the dashboard could not iterate.
 	out := []Doc{}
 	for rows.Next() {
 		var d docRow

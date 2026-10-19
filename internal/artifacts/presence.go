@@ -42,7 +42,9 @@ type PresenceMember struct {
 	// Session distinguishes two tabs of one person.
 	Session string `json:"session"`
 
-	// Seat is the member's seat handle; the dashboard resolves the name.
+	// Seat is the name the member's own record is kept under: the seat handle
+	// a person or an agent acts as, which the dashboard resolves to a name,
+	// or the login of one acting under no seat, which it shows as written.
 	Seat string `json:"seat"`
 
 	// Kind is human or agent: an agent's tool session is present too.

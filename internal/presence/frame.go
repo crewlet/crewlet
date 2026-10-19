@@ -146,8 +146,8 @@ const (
 	// (crypto/rand's text form); the bound leaves room for another build's.
 	maxSessionBytes = 64
 
-	// maxSeatBytes bounds a seat handle, comfortably over the handle
-	// grammar's own length.
+	// maxSeatBytes bounds a seat handle or a login, comfortably over both
+	// grammars' own length.
 	maxSeatBytes = 128
 
 	// maxTurnBytes bounds an agent's turn: a run id is a few dozen bytes.

@@ -611,8 +611,11 @@ test("every artifact's history is merged in, an administrator's read said in wor
     expect(screen.getByText("Read version 2 as an administrator, with no share")).toBeTruthy(),
   );
   expect(asked(query, "artifact_trail").limit).toBe(200);
-  expect(screen.getByText("Version 3")).toBeTruthy();
-  expect(screen.getByText("read elevated")).toBeTruthy();
+  // THE ROW'S OWN SENTENCE, and the op as a word a reader knows, never the
+  // log's `read_elevated`.
+  expect(screen.getByText("Published version 3")).toBeTruthy();
+  expect(screen.getByText("admin read")).toBeTruthy();
+  expect(screen.queryByText("read elevated")).toBeNull();
   const links = screen.getAllByRole("link", { name: "Salary review" });
   expect(links[0]?.getAttribute("href")).toBe("#/artifacts/0192f00e-0000-7000-8000-00000000a001");
   expect(screen.getByText("took it off the board")).toBeTruthy();
@@ -631,7 +634,12 @@ test("every artifact's history is merged in, an administrator's read said in wor
   expect(screen.queryByText("took it off the board")).toBeNull();
 });
 
-test("artifactDetail: a refusal says why, and an override says it was one", () => {
+const NAMES = {
+  audience: (raw: string) => (raw === "seat:pat" ? "Pat Mills" : raw),
+  seat: (handle: string) => (handle === "pat" ? "Pat Mills" : handle),
+};
+
+test("artifactDetail: a refusal says why in words, and an override says it was one", () => {
   expect(
     artifactDetail(
       trailRow({
@@ -641,12 +649,36 @@ test("artifactDetail: a refusal says why, and an override says it was one", () =
         number: 0,
         elevated: false,
       }) as never,
+      NAMES,
     ),
-  ).toBe("Refused: head moved");
-  expect(artifactDetail(trailRow({ op: "trash", elevated: true, number: 0 }) as never)).toBe(
-    "Admitted only as an administrator",
+  ).toBe("Refused: a newer version was published first");
+  expect(artifactDetail(trailRow({ op: "trash", elevated: true, number: 0 }) as never, NAMES)).toBe(
+    "Moved it to the trash (as an administrator)",
   );
-  expect(artifactDetail(trailRow({ op: "share", elevated: false, number: 0 }) as never)).toBe("");
+  expect(
+    artifactDetail(
+      trailRow({
+        op: "share",
+        elevated: false,
+        number: 0,
+        summary: { audience: "seat:pat", role: "editor" },
+      }) as never,
+      NAMES,
+    ),
+  ).toBe("Shared it with Pat Mills: can edit");
+});
+
+test("a trail row whose artifact is gone names it as an artifact, unlinked", async () => {
+  serving({
+    artifact_trail: {
+      entries: [trailRow({ title: "", op: "purge", number: 0, elevated: false })],
+      complete: true,
+    },
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText("artifact 0192f00e")).toBeTruthy());
+  expect(screen.getByText("Deleted it for good")).toBeTruthy();
+  expect(screen.queryByRole("link", { name: "artifact 0192f00e" })).toBeNull();
 });
 
 test("a refused artifact trail names the grant, and the other sources stand", async () => {

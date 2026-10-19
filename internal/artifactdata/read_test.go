@@ -102,42 +102,6 @@ func TestAQueryIsAnsweredByTheFieldIndex(t *testing.T) {
 	}
 }
 
-// AN EMPTY COLLECTION READS AS AN EMPTY LIST: a collection nobody has
-// written, one whose only row was deleted, and a query that matches nothing
-// each answer `"docs": []`, never `null`, so a client never mistakes an empty
-// sheet for an answer it could not read.
-func TestAnEmptyCollectionReadsAsAnEmptyList(t *testing.T) {
-	t.Parallel()
-	n := newHarness(t)
-	jane := person("jane", artifacts.RoleOwner)
-	n.configure(jane,
-		artifacts.Collection{Name: "items", Preset: artifacts.PresetShared},
-		artifacts.Collection{Name: "untouched", Preset: artifacts.PresetShared})
-	n.applied(jane, set("items", "a", map[string]string{"n": `1`}))
-	n.applied(jane, artifacts.DataOp{Op: artifacts.DataDelete, Collection: "items", Doc: "a"})
-	rd := reading("jane", artifacts.RoleOwner)
-	for _, collection := range []string{"items", "untouched"} {
-		page, err := n.reader.Docs(t.Context(), sheet, rd, collection, 0, "", 0)
-		if err != nil {
-			t.Fatalf("%s: %v", collection, err)
-		}
-		wire, err := json.Marshal(page)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !bytes.Contains(wire, []byte(`"docs":[]`)) {
-			t.Errorf("%s reads as %s, want an empty docs list", collection, wire)
-		}
-	}
-	page, err := n.reader.Query(t.Context(), sheet, rd, "items", query.Query{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if page.Docs == nil {
-		t.Error("a query that matches nothing answers a nil docs list")
-	}
-}
-
 // A ROW HIDDEN FROM A READER IS HIDDEN FROM EVERY READ PATH (03 section 4.5):
 // the listing, a query, the document, the history, a cell's history, the
 // catch-up and the export each leave out a private row the reader did not
@@ -203,6 +167,52 @@ func TestARowHiddenFromAReaderIsHiddenFromEveryReadPath(t *testing.T) {
 	// AN EDITOR reads the editors' collection and every row's history.
 	if page, err := n.reader.Docs(ctx, sheet, reading("jane", artifacts.RoleEditor), "notes", 0, "", 0); err != nil || len(page.Docs) != 1 {
 		t.Fatalf("an editor's listing of notes: %+v, %v", page.Docs, err)
+	}
+}
+
+// AN EMPTY COLLECTION ANSWERS AN EMPTY LIST: a collection configured with
+// no rows yet, read whole or caught up, encodes its page's docs as `[]`, and
+// so do one whose only row was deleted and a query that matches nothing. It
+// encoded them as `null`, and a reader that iterates the array (the
+// dashboard's sheet) failed on every new sheet's first state.
+func TestAnEmptyCollectionAnswersAnEmptyList(t *testing.T) {
+	t.Parallel()
+	n := newHarness(t)
+	ctx := t.Context()
+	jane := person("jane", artifacts.RoleOwner)
+	n.configure(jane, artifacts.Collection{Name: "tasks", Preset: artifacts.PresetShared},
+		artifacts.Collection{Name: "done", Preset: artifacts.PresetShared})
+	n.applied(jane, set("done", "a", map[string]string{"n": `1`}))
+	n.applied(jane, artifacts.DataOp{Op: artifacts.DataDelete, Collection: "done", Doc: "a"})
+	rd := reading("jane", artifacts.RoleOwner)
+	emptied, err := n.reader.Docs(ctx, sheet, rd, "done", 0, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	matched, err := n.reader.Query(ctx, sheet, rd, "done", query.Query{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if matched.Docs == nil {
+		t.Error("a query that matches nothing answers a nil docs list")
+	}
+	whole, err := n.reader.Docs(ctx, sheet, rd, "tasks", 0, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caught, err := n.reader.Docs(ctx, sheet, rd, "tasks", whole.Through, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, page := range map[string]artifactdata.DocPage{"whole": whole, "catch-up": caught,
+		"emptied": emptied} {
+		encoded, err := json.Marshal(page)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(encoded, []byte(`"docs":[]`)) {
+			t.Fatalf("the %s read of an empty collection encodes %s, want docs as []", name, encoded)
+		}
 	}
 }
 
