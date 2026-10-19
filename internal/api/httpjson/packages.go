@@ -24,7 +24,7 @@ var goPackages = map[string]bool{
 	"compact": true, "config": true, "configapi": true, "configplane": true,
 	"confluence": true, "coord": true,
 	"coordtest": true, "credential": true, "cron": true, "datadog": true,
-	"docsgate": true, "e2e": true, "embeddings": true,
+	"docindex": true, "docsgate": true, "e2e": true, "embeddings": true,
 	"engine": true, "envfile": true, "envref": true, "estate": true,
 	"eventfan": true, "eventfantest": true, "events": true, "execstate": true,
 	"extension": true, "externaltest": true, "fleetsecrets": true,
