@@ -211,7 +211,7 @@ func runIn(environ config.Source, args []string, stdout, stderr io.Writer) error
 	case "artifacts":
 		return runArtifacts(environ, rest, stdout, stderr)
 	case "llm":
-		return runLLM(environ, rest, stdout, stderr)
+		return runLLM(environ, rest, os.Stdin, stdout, stderr)
 	case "search":
 		return runSearch(rest, stdout, stderr)
 	case "gitlab", "github", "jira", "slack", "confluence", "mattermost":
