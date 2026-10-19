@@ -4,7 +4,10 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/base64"
+	"go/ast"
+	"go/token"
 	"io"
 	"log/slog"
 	"os"
@@ -12,8 +15,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
@@ -23,7 +28,8 @@ import (
 // what `crewlet validate` calls, so a configured credential bundle restored
 // while the providers were constructed wrote a login onto whatever host
 // validated the document. The restore is [Company.restoreBundles], which a
-// node's boot and every apply make before the epoch is published.
+// node's boot and every apply make before the epoch is published — the cases
+// below hold those two call sites; this one holds the helper.
 func TestAnEpochRestoresItsBundlesOnlyWhenItIsRun(t *testing.T) {
 	t.Setenv(config.CLIHomeEnv, t.TempDir())
 	profile, err := cliprofile.Load("claude-code", nil)
@@ -70,6 +76,208 @@ roles:
 		t.Fatalf("restoreBundles left %q (%v), want the configured bundle's login", got, err)
 	}
 }
+
+// A BOOT RESTORES THE CONFIGURED BUNDLE, through [New] itself: a container
+// rebuilt on every deploy comes up on an empty state volume, and the bundle —
+// here the conventional variable `crewlet llm export -secret-store` writes —
+// is what signs it in before its first turn. The restore moved out of the
+// provider's constructor into the engine, and a boot that lost the call came up
+// signed out with every test of the helper still green.
+//
+// NOT PARALLEL: it sets the variable the bundle is read from.
+//
+// Mutation: drop the restore from New, and this is red.
+func TestABootRestoresTheConfiguredBundle(t *testing.T) {
+	login := bundledLogin(t)
+	e := bundleNode(t, parseBundled(t, bundledCompanyDoc))
+	if e.Company() == nil {
+		t.Fatal("the premise: the node booted with no company")
+	}
+	if got, err := os.ReadFile(login); err != nil || string(got) != `{"token":"configured"}` { //nolint:gosec // the test's own state directory
+		t.Errorf("the boot left %q (%v), want the configured bundle's login", got, err)
+	}
+}
+
+// AN APPLY RESTORES THE CONFIGURED BUNDLE into a credentials directory found
+// empty, and a revision the apply REFUSES restores nothing: the directory is
+// the running epoch's too, so a bundle a refused revision wrote would sign its
+// seats in as an account no published revision names — and outlive every
+// retry, since the next revision's restore finds a login present and keeps it.
+//
+// NOT PARALLEL: it sets the variable the bundle is read from.
+//
+// Mutation: drop the restore from Apply, and the first half is red; make it
+// before the stages that can still refuse the revision, and the second is.
+func TestAnApplyRestoresTheBundleOnlyForARevisionItPublishes(t *testing.T) {
+	login := bundledLogin(t)
+	e := bundleNode(t, nil)
+
+	status, stages, err := e.Apply(t.Context(), parseBundled(t, refusedBundledCompanyDoc), time.Now())
+	if err == nil || status != configplane.StatusError {
+		t.Fatalf("the premise: Apply = (%s, %v, %v), want the revision refused", status, stages, err)
+	}
+	if _, statErr := os.Stat(login); !os.IsNotExist(statErr) {
+		t.Fatalf("a refused revision restored its bundle (%v) into the directory the running "+
+			"epoch's seats share", statErr)
+	}
+
+	status, stages, err = e.Apply(t.Context(), parseBundled(t, bundledCompanyDoc), time.Now())
+	if err != nil || status != configplane.StatusOK {
+		t.Fatalf("Apply = (%s, %v, %v), want ok", status, stages, err)
+	}
+	if got, err := os.ReadFile(login); err != nil || string(got) != `{"token":"configured"}` { //nolint:gosec // the test's own state directory
+		t.Fatalf("the apply left %q (%v), want the configured bundle's login", got, err)
+	}
+
+	// Emptied under a running node, and the next apply restores it again.
+	if err := os.Remove(login); err != nil {
+		t.Fatal(err)
+	}
+	if status, stages, err := e.Apply(t.Context(), parseBundled(t, bundledCompanyDoc), time.Now()); err != nil || status != configplane.StatusOK {
+		t.Fatalf("Apply = (%s, %v, %v), want ok", status, stages, err)
+	}
+	if got, err := os.ReadFile(login); err != nil || string(got) != `{"token":"configured"}` { //nolint:gosec // the test's own state directory
+		t.Errorf("the next apply left %q (%v), want the bundle restored into the emptied directory", got, err)
+	}
+}
+
+// THE BUNDLE IS IN PLACE BEFORE THE EPOCH IS CURRENT, and on an apply only once
+// nothing can refuse the revision. A turn can start the moment the pointer
+// moves, so a restore made after it lets the epoch's first call run signed out;
+// one made before a stage that can still refuse writes a login for a revision
+// that is never published. Neither order is visible from outside a running
+// node, so the two calls are read out of the source.
+//
+// Mutation: move the restore below installEpoch in New or in Apply, or above
+// any `return configplane.StatusError` in Apply, and this is red.
+func TestTheBundleIsRestoredBeforeTheEpochIsCurrent(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"New", "Apply"} {
+		fn := engineFunction(t, name)
+		restore, install := firstCall(fn, "restoreBundles"), firstCall(fn, "installEpoch")
+		if restore == token.NoPos || install == token.NoPos {
+			t.Fatalf("%s: found restoreBundles at %v and installEpoch at %v — both must be called", name, restore, install)
+		}
+		if restore > install {
+			t.Errorf("%s restores the bundles after the epoch is current, so its first call runs signed out", name)
+		}
+		if name != "Apply" {
+			continue
+		}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			ret, ok := n.(*ast.ReturnStmt)
+			if !ok || len(ret.Results) == 0 {
+				return true
+			}
+			if sel, ok := ret.Results[0].(*ast.SelectorExpr); ok && sel.Sel.Name == "StatusError" && ret.Pos() > restore {
+				t.Errorf("Apply can still refuse the revision after restoring its bundles (a StatusError " +
+					"return follows the restore), so a refused revision leaves a login behind")
+			}
+			return true
+		})
+	}
+}
+
+// engineFunction is the function or *Engine method of this package with the
+// given name.
+func engineFunction(t *testing.T, name string) *ast.FuncDecl {
+	t.Helper()
+	for _, file := range enginePackage(t) {
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if ok && fn.Name.Name == name && (fn.Recv == nil || receiverIsEngine(fn)) {
+				return fn
+			}
+		}
+	}
+	t.Fatalf("no function %s in the engine package", name)
+	return nil
+}
+
+// firstCall is where fn first calls a method of the given name, or NoPos.
+func firstCall(fn *ast.FuncDecl, method string) token.Pos {
+	at := token.NoPos
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || at != token.NoPos {
+			return at == token.NoPos
+		}
+		if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == method {
+			at = call.Pos()
+		}
+		return true
+	})
+	return at
+}
+
+// bundledLogin points the CLI state directories at a fresh one, sets the
+// conventional bundle variable of the "subscription" entry to a bundle holding
+// one claude-code login, and returns where that login lands.
+func bundledLogin(t *testing.T) string {
+	t.Helper()
+	t.Setenv(config.CLIHomeEnv, t.TempDir())
+	profile, err := cliprofile.Load("claude-code", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := filepath.Base(profile.CredentialPaths[0])
+	t.Setenv(cliagent.BundleVarName("subscription"), testBundle(t, name, `{"token":"configured"}`))
+	c := parseBundled(t, bundledCompanyDoc)
+	stateDir, err := c.Providers.LLM["subscription"].CLI.ResolvedStateDir("subscription")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(stateDir, "credentials", name)
+}
+
+// bundleNode boots an engine over a fresh store on company, nil for none.
+func bundleNode(t *testing.T, company *config.Company) *Engine {
+	t.Helper()
+	b := testBootstrap(t)
+	dir := t.TempDir()
+	b.Store.Path = filepath.Join(dir, "crewlet.db")
+	b.Stream.StoreDir = filepath.Join(dir, "stream")
+	SeedStore(t, &b)
+	e, err := New(t.Context(), Options{Bootstrap: &b, Company: company})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { e.Stop(context.Background()) })
+	return e
+}
+
+func parseBundled(t *testing.T, doc string) *config.Company {
+	t.Helper()
+	c, err := config.ParseCompany([]byte(doc))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	return c
+}
+
+// refusedBundledCompanyDoc is [bundledCompanyDoc] with a sandbox catalogue that
+// builds no backend — its key resolves to nothing — which the apply refuses
+// after the company itself has been built.
+const refusedBundledCompanyDoc = `
+name: Acme
+providers:
+  llm:
+    subscription:
+      type: cli-agent
+      model: sonnet
+      cli:
+        agent: claude-code
+  sandbox:
+    e2b:
+      api_key: "${CREWLET_TEST_E2B_KEY_NEVER_SET}"
+roles:
+  - name: CEO
+    handle: ceo
+    llm: subscription
+    sandbox:
+      enabled: true
+      run_in: e2b
+`
 
 // AN EPOCH DOES NOT UNDO A LOGOUT. The directory `crewlet llm logout` empties
 // is exactly what a configured bundle restores into, so every apply and every

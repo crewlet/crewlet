@@ -249,7 +249,6 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 		return configplane.StatusError, applied, fmt.Errorf("engine: apply: %w", err)
 	}
 	stampActivation(next, activatedAt)
-	next.restoreBundles(ctx)
 	applied = append(applied, "company")
 	// THE REVISION'S SANDBOX MANAGER, built HERE — beside the company it is
 	// a part of, before anything below mutates this node — because a
@@ -401,6 +400,15 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	e.reconcileSkills(next)
 	applied = append(applied, "integrations")
 
+	// THE CONFIGURED CREDENTIAL BUNDLES, written HERE and nowhere earlier:
+	// every stage that can refuse the revision has run, so only a revision
+	// about to be published writes its bundle — and still before the epoch
+	// is current, so its first call finds the login. A workspace is one per
+	// state directory and shared with the running epoch's seats, so a bundle
+	// a refused revision wrote would sign those seats in as an account no
+	// published revision names, and outlive every retry: the next revision's
+	// restore finds a login present and keeps it. See [Company.restoreBundles].
+	next.restoreBundles(ctx)
 	previous := e.Company()
 	e.installEpoch(ctx, next)
 	applied = append(applied, "epoch")

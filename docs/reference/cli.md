@@ -2022,7 +2022,8 @@ not by the engine's next boot or apply, and not by `status`, `export` or
 and restores the bundle as before, so `logout` names the field or secret that
 retires it when the entry has one.
 
-The engine also restores a bundle **itself**, at boot and at every apply, from
+The engine also restores a bundle **itself**, at boot and at every apply it
+publishes (never for a revision it refuses), from
 `cli.auth.credential_bundle` or the conventional
 `CREWLET_LLM_CLI_<KEY>_CREDENTIALS` variable — and only into an empty
 credential directory, by the same rule, and never after a `logout` until a

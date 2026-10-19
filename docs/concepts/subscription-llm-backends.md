@@ -1307,7 +1307,8 @@ crewlet llm export default -secret-store
 ```
 
 That engine restores it when it builds a company to run — at boot, and again
-at every apply — whenever its own `credentials/` directory is empty and
+at every apply it publishes (a revision the apply refuses writes none) —
+whenever its own `credentials/` directory is empty and
 nobody has [logged the entry out](#1-broker-the-vendors-own-login-any-cli)
 since its last login, so a fresh container on the same store comes up already
 authenticated. `crewlet llm
