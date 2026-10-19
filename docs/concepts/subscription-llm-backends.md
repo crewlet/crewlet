@@ -1311,18 +1311,29 @@ encrypted secret store:
 crewlet llm export default -secret-store
 ```
 
-That engine restores it when it builds a company to run — at boot, and again
+An engine restores it when it builds a company to run — at boot, and again
 at every apply it publishes (a revision the apply refuses writes none) —
 whenever its own `credentials/` directory is empty and nobody has [logged the
-entry out](#1-broker-the-vendors-own-login-any-cli) since its last login, so a
-fresh container on the same store comes up already authenticated. `crewlet llm
-list`, `status`, `export` and `doctor` restore it first too, so they answer
-about the login the engine would run with; `login`, `logout` and `import` do
-not, since each replaces or removes that login. `crewlet validate` never does:
-checking a document writes nothing onto the host.
-It is **that node's** store and nothing else's — the rows do not travel, and a
-second host needs its own `crewlet llm login`, or the same bundle handed to it
-through `providers.llm[].auth.credential_bundle`. The blob is validated on the way back in — only the
+entry out](#1-broker-the-vendors-own-login-any-cli) there since its last login,
+so a fresh container comes up already authenticated. `crewlet llm list`,
+`status`, `export` and `doctor` restore it first too, so they answer about the
+login the engine would run with; `login`, `logout` and `import` do not, since
+each replaces or removes that login. `crewlet validate` never does: checking a
+document writes nothing onto the host. The secret store is the **fleet's**:
+written through the running node `-api` names, the bundle is on every node at
+once, and written without it, it goes into the rows of the store `-config`
+names, which that node's engine moves into the fleet's store at its next start.
+The export, like every `crewlet llm` command, reads the company's references
+out of that same store first, so it runs where no engine is holding it — on a
+node whose engine is up it is refused, and a stopped node reaches the fleet
+with `-api`. So one export reaches every node, and every node whose
+`credentials/` directory is empty and whose entry nobody logged out there
+restores the same login. Each copy then
+descends from one refresh token, exactly as
+[`-from-host`](#0-already-logged-in-on-this-machine-adopt-it)'s copy does, and
+a vendor that rotates refresh tokens can log out whichever node refreshes
+second — where the CLI mints a headless token (option 2), that is the better
+answer for a fleet. The blob is validated on the way back in — only the
 profile's own credential paths, files only, size-capped — because an
 archive is an execution surface if it is unpacked on trust.
 

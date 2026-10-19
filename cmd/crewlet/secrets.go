@@ -502,17 +502,24 @@ func setSecret(ctx context.Context, sv *secretTarget, name, value string,
 	// and the credential beside it where one made the write.
 	fmt.Fprintf(stdout, "stored %s (%d bytes) as %s\n", name, len(value),
 		describeAuthor(recorded.Name, recorded.OperatorID))
-	// SAID EVERY TIME, because the difference between the two stores is
-	// invisible afterwards and decides whether a fleet has the value: an
-	// operator who cannot tell which one they wrote finds out when a vendor
-	// rejects a credential on the one node that never got it.
-	fmt.Fprintf(stdout, "written to %s\n", sv.where)
-	if !sv.fleet {
+	sv.reportWrite(stdout)
+	return nil
+}
+
+// reportWrite is the line every command that writes a secret prints after it:
+// which store it landed in, and what that store does with it next.
+//
+// SAID EVERY TIME, because the difference between the two stores is invisible
+// afterwards and decides whether a fleet has the value: an operator who cannot
+// tell which one they wrote finds out when a vendor rejects a credential on
+// the one node that never got it.
+func (t *secretTarget) reportWrite(stdout io.Writer) {
+	fmt.Fprintf(stdout, "written to %s\n", t.where)
+	if !t.fleet {
 		fmt.Fprintln(stdout, secretsLocalNote)
 	} else {
 		fmt.Fprintln(stdout, secretsFleetNote)
 	}
-	return nil
 }
 
 // secretsFleetNote is what a write to the FLEET's store does not do yet.
