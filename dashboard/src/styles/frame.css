@@ -187,20 +187,6 @@
   }
 }
 
-/* A DIALOG'S MARK SITS ON ITS TITLE'S LINE. The kit centres the header's items,
-   which is right for a title alone and wrong once a subtitle runs to two or
-   three lines under it: the mark floated beside the description, belonging to
-   neither line. With a subtitle the row aligns to the top, and the mark's box
-   is one title line tall so the glyph centres on that line. A dialog with no
-   subtitle keeps the kit's centring, where the two are the same thing. */
-.crewlet-modal__header:has(.crewlet-modal__subtitle) {
-  align-items: flex-start;
-}
-.crewlet-modal__header:has(.crewlet-modal__subtitle) .crewlet-modal__icon {
-  align-items: center;
-  height: calc(var(--font-size-sm) * var(--font-line-height-tight));
-}
-
 /* THE GROUP HEADINGS IN THE DESIGN'S REGISTER: "Tasks", "Pages", "Actions"
    in sentence case at the small label step, as the approved palette writes
    them — the listbox's uppercase micro-label is a table's column head, and
@@ -212,12 +198,6 @@
   text-transform: none;
 }
 
-/* THE LEGEND SPANS THE BAND, keys at its start and what the search is doing at
-   its end, as the approved palette draws it. The kit's start slot is sized to
-   its content; this lets it take the band so the end can sit at the end. */
-.palette .crewlet-modal__footer-start {
-  flex: 1 1 auto;
-}
 /* THE KEYS WRAP rather than run off the band: a phone's palette is 358px wide
    and three keys with their words are not. */
 .palette-keys {

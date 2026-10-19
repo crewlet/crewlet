@@ -961,9 +961,10 @@ const RAIL_ARTIFACTS = 20;
  * counts rows the reader's access withheld, and saying "3 more" would tell a
  * reader that artifacts they cannot open exist.
  *
- * A reader holding the artifacts app is offered a sheet started for the task
- * (`#/artifacts/new?item=`), which the engine then lists here; for anybody
- * else the section is left out until there is something to list.
+ * A reader holding the artifacts app is offered a new artifact for the task
+ * (`#/artifacts/new?item=`: a sheet, a doc or a deck), which the engine then
+ * lists here; for anybody else the section is left out until there is
+ * something to list.
  */
 function ArtifactLinks({ item }: { item: string }) {
   const listed = useQuery(
@@ -991,7 +992,7 @@ function ArtifactLinks({ item }: { item: string }) {
       )}
       {canStart && (
         <Link size="caption" variant="quiet" href={href(["artifacts", "new"], { item })}>
-          Start a sheet for this task
+          New artifact for this task
         </Link>
       )}
     </section>

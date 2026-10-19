@@ -195,7 +195,10 @@ test("a deck's versions are compared slide by slide", async () => {
   );
   expect(await screen.findByText("1 slide changed, 1 added, 1 removed, 1 moved.")).toBeTruthy();
   expect(screen.getByRole("radio", { name: "By slide" })).toBeTruthy();
-  expect(screen.getByText("Not in Version 11")).toBeTruthy();
-  expect(screen.getByText("Not in Version 12")).toBeTruthy();
+  // EACH SIDE IS NAMED by its version, over the columns and to a screen reader.
+  expect(screen.getAllByText(/Not in this version/).map((p) => p.textContent)).toEqual([
+    "Version 12: Not in this version",
+    "Version 11: Not in this version",
+  ]);
   expect(screen.getByText(/^Moved from/)).toBeTruthy();
 });

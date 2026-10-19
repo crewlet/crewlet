@@ -391,20 +391,33 @@ export function renderInline(
       // whole would overflow a phone's column.
       out.push(createElement(InlineCode, { key, whole: code.length <= UnbrokenCode }, code));
     } else if (g.src !== undefined) {
-      const src = options.image ? options.image(g.src) : safeHref(g.src);
+      const alt = g.alt ?? "";
+      const src = options.image ? options.image(g.src) : shownImage(g.src);
+      // A PICTURE FROM ANOTHER ORIGIN IS A LINK TO IT, labelled by its alt
+      // text: the dashboard's policy (`img-src 'self' data: blob:`) refuses to
+      // load it, so an `img` there was a broken picture, and loading it would
+      // tell a third party who reads the page and when. The reader can still
+      // follow it on purpose. Inside a link's own label it stays its alt text,
+      // since a link inside a link is no link at all.
+      const elsewhere = !src && !options.image && options.links !== "text" ? safeHref(g.src) : null;
       // AN IMAGE WITH A REFUSED SOURCE RENDERS AS ITS ALT TEXT, which is
       // what alt text is for — not as a broken image and not as nothing.
       out.push(
         src
-          ? createElement("img", { key, src, alt: g.alt ?? "", loading: "lazy" })
-          : createElement("span", { key }, g.alt ?? ""),
+          ? createElement("img", { key, src, alt, loading: "lazy" })
+          : elsewhere
+            ? anchor(key, elsewhere, [alt || elsewhere])
+            : createElement("span", { key }, alt),
       );
     } else if (g.href !== undefined) {
       const href = options.links === "text" ? null : safeHref(g.href);
       const label = g.label ?? "";
+      // A LINK'S LABEL IS TEXT TO ANY LINK INSIDE IT: an anchor inside an
+      // anchor is invalid, and a browser splits the outer one around it.
+      const inner = href ? { ...options, links: "text" as const } : options;
       out.push(
         href
-          ? anchor(key, href, renderInline(label, key, options))
+          ? anchor(key, href, renderInline(label, key, inner))
           : createElement("span", { key }, renderInline(label, key, options)),
       );
     } else if (g.auto !== undefined) {
@@ -424,6 +437,23 @@ export function renderInline(
     out.push(breakLines(text.slice(at), `${keyPrefix}-t${n}`, hard, options.highlight));
   }
   return out;
+}
+
+/**
+ * A picture source this origin shows by itself: a safe address on the
+ * dashboard's own origin, which is all its policy (`img-src 'self' data:
+ * blob:`) loads. Null for anything else, which the renderer draws as a link
+ * and the rich editor as the picture's alt text, rather than as a picture the
+ * browser refuses. An app route (`#/...`) is an address, never a picture.
+ */
+export function shownImage(src: string): string | null {
+  const href = safeHref(src);
+  if (!href || href.startsWith("#")) return null;
+  try {
+    return new URL(href, window.location.href).origin === window.location.origin ? href : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

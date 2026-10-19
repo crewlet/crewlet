@@ -79,14 +79,16 @@ test("every column is held at the width its content needs but the prose, which i
     </ToastProvider>,
   );
   const cols = handed.at(-1)!;
-  expect(cols.outcome?.width).toBe(104);
-  expect(cols.status?.width).toBe(119);
+  // Measured by the estimate (jsdom draws nothing): "succeeded" at 7.5px a
+  // character, the cell's 28px and, as the first column, the frame's 4px more.
+  expect(cols.outcome?.width).toBe(100);
+  expect(cols.status?.width).toBe(111);
   expect(cols.outcome?.defaultWidth).toBeUndefined();
   expect(cols.status?.defaultWidth).toBeUndefined();
-  // 37 characters at 7.5 px and the cell's 36 px of padding, fitted no
-  // narrower than about twenty characters.
-  expect(cols.title?.defaultWidth).toBe(314);
-  expect(cols.title?.minWidth).toBe(180);
+  // 37 characters at 7.5 px, the cell's 28 px and the last column's 4 px,
+  // fitted no narrower than about twenty characters.
+  expect(cols.title?.defaultWidth).toBe(310);
+  expect(cols.title?.minWidth).toBe(150);
   expect(Object.values(cols).every((c) => c.sortable === false)).toBe(true);
   expect(cols.title?.width).toBeUndefined();
 });

@@ -93,6 +93,7 @@ import { patchArtifact, untrashArtifact } from "~/lib/artifacts/api.ts";
 import { usePinToggle, usePins } from "~/lib/artifacts/pins.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import {
+  isViewRegion,
   memberTurn,
   presenceMembers,
   selfWords,
@@ -119,10 +120,22 @@ import { HistoryTab } from "./HistoryTab.tsx";
 import { DataTab } from "./DataTab.tsx";
 import { DetailsPanel } from "./DetailsPanel.tsx";
 import { PurgeControl, SettingsTab, TrashDialog } from "./SettingsTab.tsx";
-import { KindControlsSink, type KindControls } from "~/lib/artifacts/kindControls.ts";
-import { PANEL_SPECS, panelOf, spelledTheOldWay, withPanel, type PanelName } from "./panels.ts";
+import {
+  KindControlsSink,
+  RegionNamesSink,
+  type KindControls,
+  type RegionNames,
+} from "~/lib/artifacts/kindControls.ts";
+import {
+  PANEL_SPECS,
+  panelOf,
+  panelTitle,
+  spelledTheOldWay,
+  withPanel,
+  type PanelName,
+} from "./panels.ts";
 import { useArtifactPresence } from "./presence.ts";
-import { followMoves, followTarget, moves, slideOfRegion } from "~/lib/artifacts/follow.ts";
+import { followMoves, followTarget, moves } from "~/lib/artifacts/follow.ts";
 import { useViewer } from "~/lib/viewer.ts";
 
 /** The head is pushed (`artifact_changed`); this read is the floor under a push the socket missed. */
@@ -243,12 +256,16 @@ function Trashed({ detail, onChanged }: { detail: ArtifactDetail; onChanged: () 
         <EmptyState
           icon={<TrashGlyph size="xl" />}
           title="This artifact is in the trash"
-          description={`${trashedBy} moved it to the trash. ${purgeSentence(detail.trashed_at)}`}
+          // WHY THE WAY BACK IS HELD, said where it is read: a held Restore
+          // otherwise only said so under the pointer.
+          description={`${trashedBy} moved it to the trash. ${purgeSentence(detail.trashed_at)}${
+            restore.can || restore.block === "loading" ? "" : ` ${restore.reason}`
+          }`}
           action={
             <span className="artifact-actions">
               <Button
                 size="small"
-                variant="secondary"
+                variant="primary"
                 loading={gesture.busy}
                 disabledReason={restore.can ? undefined : restore.reason}
                 onClick={async () => {
@@ -359,13 +376,17 @@ function Loaded({
   // ---- who is here, and following them --------------------------------------
   const presence = useArtifactPresence(room, people, showing);
   const viewer = useViewer();
+  // THE NAME THE ROOM KNOWS THIS READER BY: their seat, or the login of a
+  // reader acting under none, as the engine names every member (its
+  // `iam.RecordOwner`, which the frame holds as `owner`).
+  const selfName = viewer.owner;
   const [follow, setFollow] = useParam("follow", "");
   const [sheetParam] = useParam("sheet", "");
   const [slideParam] = useParam("slide", "");
   const [doctabParam] = useParam("doctab", "");
   // WHO IS FOLLOWED is somebody else in the room: following oneself moves
   // nothing, and a seat that left is said once and then let go.
-  const followed = follow && follow !== viewer.handle ? follow : "";
+  const followed = follow && follow !== selfName ? follow : "";
   const target = useMemo(
     () => (followed ? followTarget(room.others, followed) : null),
     [room.others, followed],
@@ -446,11 +467,13 @@ function Loaded({
   // THE READER'S OWN OTHER TABS are counted beside "You", never drawn as a
   // collaborator with a Follow that would move nothing.
   const { others, ownTabs } = useMemo(
-    () => splitOwnSessions(room.others, viewer.handle),
-    [room.others, viewer.handle],
+    () => splitOwnSessions(room.others, selfName),
+    [room.others, selfName],
   );
   // WHERE SOMEBODY IS, as the reader sees it: a row by its number in the
-  // sheet's own order, a column by its label.
+  // sheet's own order, a column by its label, a doc's tab or a deck's slide
+  // by the name its view publishes (`useRegionNames`).
+  const [regions, setRegions] = useState<RegionNames | null>(null);
   const schema = store?.schema ?? null;
   const place = useMemo<PresencePlace>(
     () => ({
@@ -462,17 +485,20 @@ function Loaded({
         schema?.collections
           .find((c) => c.name === collection)
           ?.columns?.find((c) => c.key === field)?.label ?? null,
+      region: (region) => regions?.[region] ?? null,
     }),
-    [store, schema],
+    [store, schema, regions],
   );
   const drawn = useMemo(() => {
     const out = presenceMembers(others, people, held.current, place);
     held.current = out.hues;
     return out.members;
   }, [others, people, place]);
-  // The reader, first in the People panel as "You", drawn as their own seat.
+  // The reader, first in the People panel as "You", drawn as their own seat,
+  // or as the person their login is where they hold none: left out, a reader
+  // signed in with no seat saw a panel of everybody but themselves.
   const selfFace = useMemo<PeopleRailSelf | undefined>(() => {
-    if (!viewer.handle) return undefined;
+    if (!viewer.handle) return viewer.login ? { name: viewer.login, kind: "human" } : undefined;
     const p = people.seatPrincipal(viewer.handle);
     return {
       name: p.name,
@@ -481,7 +507,7 @@ function Loaded({
       hue: p.hue,
       src: p.src,
     };
-  }, [viewer.handle, people]);
+  }, [viewer.handle, viewer.login, people]);
 
   // ---- the bar's actions ----------------------------------------------------
   // WHETHER THE READER PINNED IT is their own record, which the head does not
@@ -541,7 +567,7 @@ function Loaded({
     },
     {
       key: "history",
-      label: "Versions and history",
+      label: panelTitle("history", !contentIsData(detail.kind)),
       icon: <RotateCcwClockGlyph size="sm" />,
       keys: ["h"],
       pressed: panel === "history",
@@ -734,6 +760,31 @@ function Loaded({
         Changes made by others will appear when the connection comes back.
       </Callout>,
     );
+  // AN OLDER VERSION IS SAID, not only tinted on the chip: it is read, never
+  // edited, and the way back to the latest is one press.
+  if (versioned && version > 0 && version < detail.head_number)
+    notices.push(
+      <Callout
+        key="older"
+        layout="banner"
+        variant="info"
+        action={
+          <Button
+            size="small"
+            variant="secondary"
+            onClick={() => {
+              setVersion("");
+              setShownHead(detail.head_number);
+            }}
+          >
+            Show the latest
+          </Button>
+        }
+      >
+        You are looking at version {version}, an older version. The latest is version{" "}
+        {detail.head_number}.
+      </Callout>,
+    );
   if (newer)
     notices.push(
       <Callout
@@ -800,9 +851,10 @@ function Loaded({
           onStop={stopFollowing}
           labels={{
             following: (name) => {
-              // A SLIDE IS MOVED TO, not said: the view is already on it.
+              // A SLIDE OR A DOC'S TAB IS MOVED TO, not said: the view is
+              // already on it. A page's own region is said in its words.
               const region = target.focus.region;
-              const where = region && !slideOfRegion(region) ? ` They are in ${region}.` : "";
+              const where = region && !isViewRegion(region) ? ` They are in ${region}.` : "";
               return `Following ${name}.${where} Press Esc or scroll to stop.`;
             },
           }}
@@ -834,7 +886,7 @@ function Loaded({
           panel ? (
             <ArtifactPanel
               key={panel}
-              title={PANEL_SPECS[panel].title}
+              title={panelTitle(panel, !contentIsData(detail.kind))}
               size={PANEL_SPECS[panel].size}
               focusOnOpen={readerOpened.current}
               onClose={() => openPanel(null)}
@@ -851,21 +903,23 @@ function Loaded({
         }
       >
         <KindControlsSink.Provider value={setKind}>
-          <ViewTab
-            detail={detail}
-            version={showing}
-            versions={versions}
-            store={store}
-            room={room}
-            presence={presence}
-            drawn={drawn}
-            bridgeStores={bridgeStores}
-            onPublished={(n: number) => {
-              refetch();
-              setVersion("");
-              setShownHead(n);
-            }}
-          />
+          <RegionNamesSink.Provider value={setRegions}>
+            <ViewTab
+              detail={detail}
+              version={showing}
+              versions={versions}
+              store={store}
+              room={room}
+              presence={presence}
+              drawn={drawn}
+              bridgeStores={bridgeStores}
+              onPublished={(n: number) => {
+                refetch();
+                setVersion("");
+                setShownHead(n);
+              }}
+            />
+          </RegionNamesSink.Provider>
         </KindControlsSink.Provider>
       </ArtifactWorkspace>
       <ArtifactShare

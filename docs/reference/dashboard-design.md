@@ -3490,6 +3490,14 @@ content it read somewhere else:
   rather than as a link, and an image with a refused source renders as its alt
   text. An allowlist rather than a denylist: enumerating the bad schemes is
   wrong the moment a browser grows one more.
+- **A picture is shown from this origin only.** The dashboard's policy loads
+  images from its own origin (and `data:` and `blob:`), so an image whose
+  allowed address is on another host renders as a link to it, labelled by its
+  alt text, rather than as a picture the browser refuses; loading it would also
+  tell that host who reads the page and when. The rich editor shows the same
+  picture as its alt text (`shownImage` in `lib/markdown.ts`). A doc's pictures
+  are files of its version, fetched with the reader's credential, and are
+  unaffected. A link inside a link's label is that label's text.
 
 An outbound link opens in a new tab with `rel="noopener noreferrer"`; an
 in-app `#/` link does neither, because it *is* this application. A task

@@ -12,6 +12,7 @@ import {
   splitSections,
   UnbrokenCode,
   imageSources,
+  shownImage,
 } from "./markdown.ts";
 // THE FIXTURES ARE REAL FILES, imported verbatim rather than inlined as
 // template literals: a document written in a `.md` file is a document
@@ -814,7 +815,14 @@ describe("pictures a host resolves", () => {
       </div>,
     );
     expect(imageSources(source)).toEqual([...new Set(asked)]);
-    expect(imageSources(source)).toEqual(["img/logo.png", "img/list.png", "img/cell.png"]);
+    // The picture inside a link's label is a picture too, as a badge that
+    // links somewhere is: the grammar reads it whole before the label ends.
+    expect(imageSources(source)).toEqual([
+      "img/logo.png",
+      "img/chart.png",
+      "img/list.png",
+      "img/cell.png",
+    ]);
   });
 
   it("shows an image through the resolver, and its alt text where the resolver has none", () => {
@@ -829,5 +837,45 @@ describe("pictures a host resolves", () => {
     expect(imgs).toHaveLength(1);
     expect(imgs[0]!.getAttribute("src")).toBe("blob:team");
     expect(container.textContent).toContain("Far");
+  });
+});
+
+describe("a picture with no resolver", () => {
+  // THE DASHBOARD LOADS PICTURES FROM ITS OWN ORIGIN ONLY (`img-src 'self'
+  // data: blob:`), so an `img` naming another origin is a picture the browser
+  // refuses: a Knowledge page's remote picture drew as a broken image.
+  it("links to a picture on another origin rather than drawing one the policy refuses", () => {
+    const el = draw("![The rota](https://example.com/rota.png)");
+    expect(el.querySelector("img")).toBeNull();
+    const link = el.querySelector("a")!;
+    expect(link.getAttribute("href")).toBe("https://example.com/rota.png");
+    expect(link.textContent).toBe("The rota");
+    expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+  });
+
+  it("names a link to a picture with no alt text by its address", () => {
+    const el = draw("![](https://example.com/rota.png)");
+    expect(el.querySelector("a")?.textContent).toBe("https://example.com/rota.png");
+  });
+
+  it("shows a picture on the dashboard's own origin", () => {
+    const own = `${window.location.origin}/static/rota.png`;
+    const el = draw(`![The rota](${own})`);
+    expect(el.querySelector("img")?.getAttribute("src")).toBe(own);
+    expect(shownImage(own)).toBe(own);
+    expect(shownImage("https://example.com/rota.png")).toBeNull();
+    expect(shownImage("#/knowledge")).toBeNull();
+  });
+});
+
+describe("a link's label", () => {
+  // A LINK INSIDE A LINK IS NO LINK: a browser splits the outer anchor around
+  // the inner one, so an address in a label is the label's text.
+  it("keeps an address inside a link's label as text, never a link in a link", () => {
+    const el = draw("[see <https://example.com/a>](https://example.com/oncall)");
+    const links = el.querySelectorAll("a");
+    expect(links).toHaveLength(1);
+    expect(links[0]!.getAttribute("href")).toBe("https://example.com/oncall");
+    expect(links[0]!.textContent).toBe("see https://example.com/a");
   });
 });
