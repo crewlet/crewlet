@@ -26,12 +26,13 @@
 // rather than reading the DDL, because an index's trailing comment naming a
 // reader is a CLAIM and only the plan says whether that reader reaches it.
 // What every such gate reads is here, once: a statement's plan ([PlanTree],
-// [Plan]), what a plan line says about an index ([IndexesIn], [Seeks],
-// [Walks], [Sorts], [ScansHeap], [Decorrelated]), what the schema declares
-// ([IndexesOn]), and every statement the module's source spells against a
-// table ([StatementLiterals]), which is what holds a gate's registered set
-// COMPLETE. Two gates with a copy each of a plan's spelling are two gates a
-// driver bump can blind one at a time.
+// [Plan], through either estate's [Handle] — the node's own file as much as
+// the replicated estate), what a plan line says about an index ([IndexesIn],
+// [Seeks], [Walks], [Sorts], [ScansHeap], [Decorrelated]), what the schema
+// declares ([IndexesOn]), and every statement the module's source spells
+// against a table ([StatementLiterals]), which is what holds a gate's
+// registered set COMPLETE. Two gates with a copy each of a plan's spelling are
+// two gates a driver bump can blind one at a time.
 package storetest
 
 import (
@@ -960,35 +961,13 @@ func testRelatedIndexed(t *testing.T, db *store.DB) {
 		t.Fatalf("a seat with no events got %d rows", len(quiet))
 	}
 
-	var plan string
-	rows, err := db.SQL().QueryContext(ctx, `EXPLAIN QUERY PLAN
+	plan := strings.Join(Plan(t, db, `
 		SELECT crewlet_events.event_id FROM crewlet_events
 		JOIN crewlet_event_parties
 		  ON crewlet_event_parties.event_time = crewlet_events.event_time
 		 AND crewlet_event_parties.event_id = crewlet_events.event_id
 		WHERE crewlet_event_parties.party = ?
-		ORDER BY crewlet_events.event_time DESC LIMIT 50`, "a-lead")
-	if err != nil {
-		t.Fatalf("explain: %v", err)
-	}
-	defer func() { _ = rows.Close() }()
-	cols, err := rows.Columns()
-	if err != nil {
-		t.Fatalf("explain columns: %v", err)
-	}
-	for rows.Next() {
-		cells := make([]any, len(cols))
-		into := make([]any, len(cols))
-		for i := range cells {
-			into[i] = &cells[i]
-		}
-		if err := rows.Scan(into...); err != nil {
-			t.Fatalf("explain scan: %v", err)
-		}
-		for _, cell := range cells {
-			plan += fmt.Sprintf("%v ", cell)
-		}
-	}
+		ORDER BY crewlet_events.event_time DESC LIMIT 50`, []any{"a-lead"}), "\n")
 	if strings.Contains(plan, "SCAN crewlet_events") {
 		t.Fatalf("the related filter scans the log rather than seeking an index:\n%s", plan)
 	}
