@@ -16,7 +16,7 @@
  * (`protocol/types.ts`), so this module stays the declarations a gate reads.
  */
 
-/** Every kind of artifact (`artifacts.Kinds`): a page that runs code, a document, a deck, a native sheet. */
+/** Every kind of artifact (`artifacts.Kinds`): a page that runs code, a doc, a deck, a native sheet. */
 export const ARTIFACT_KINDS = ["html", "doc", "slides", "sheet"] as const;
 
 /**
