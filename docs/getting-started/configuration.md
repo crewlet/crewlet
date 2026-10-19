@@ -802,10 +802,11 @@ stream:
                                     #   stream was provisioned last. Bounds:
                                     #   6 GiB..64 TiB, and it must not be
                                     #   smaller than the ceilings declared
-                                    #   inside it. The eight state logs
-                                    #   reserve 7.5 GiB at their smallest, so
-                                    #   a value the bounds admit can be short
-                                    #   of what a node boots in: `crewlet
+                                    #   inside it. What a fresh node reserves
+                                    #   (every state log at its floor, and the
+                                    #   object bucket) can exceed the bounds'
+                                    #   own floor, so a value they admit can
+                                    #   be short of what a node boots in: `crewlet
                                     #   validate` warns below the least a
                                     #   fresh node of the configuration
                                     #   reserves (see the deployment guide).

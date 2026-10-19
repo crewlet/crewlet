@@ -204,8 +204,8 @@ const (
 	// and at a busy seat-day's ≈ 6.5 KiB that is about 217 MB: a gibibyte
 	// holds that window four times over, which is room for a fleet to grow
 	// before anybody has to touch the field. Beside the other logs it is
-	// one gibibyte of the 7 GiB that eight unset ceilings reserve at their
-	// smallest (see [StoreMaxBytesFloor]).
+	// one gibibyte of what every unset ceiling reserves at its smallest
+	// (see [StoreMaxBytesFloor]).
 	//
 	// THE FLOOR IS 64 MiB, by the per-log rule [IamLogMaxBytesFloor]
 	// records: the broker grants a stream its whole ceiling when it creates
@@ -316,27 +316,32 @@ const (
 	// THE FLOOR IS SIX GIBIBYTES, a bound on what the field may say rather
 	// than what a node of a given configuration needs. Every node reserves
 	// every state-log domain's ceiling whatever it runs, and left unset the
-	// eight come to 7 GiB at their smallest: the tracker's, the vectors', the
-	// knowledge base's, the artifacts', the datastore's and the usage log's at
-	// the gibibyte scaling stops at, and the identity log's and the
-	// assistant's 512 MiB defaults. So a value this floor admits can be short of
-	// what a configuration boots in, and that is said where it can be acted
-	// on: engine.BrokerFloorFor computes the least a fresh node of the
+	// eight come to 6.5625 GiB at their smallest: the tracker's, the
+	// vectors', the knowledge base's, the artifacts' and the datastore's at
+	// the gibibyte scaling stops at, the usage log's 1 GiB default and the
+	// identity log's 512 MiB one (neither scaled below what it asks), and the
+	// assistant's 64 MiB, where its own scaling stops. The object store's nats
+	// bucket is reserved beside them. So a value this floor admits can be
+	// short of what a configuration boots in, and that is said where it can be
+	// acted on: engine.BrokerFloorFor computes the least a fresh node of the
 	// configuration reserves, `crewlet validate` and every start's
 	// advisories warn below it, and a refused reservation quotes it. Before
 	// the artifact and assistant logs the floor was the logs' 4.5 GiB with
 	// room beside them, which is why it is six.
 	//
-	// THE COMPANY'S FILES RESERVE NOTHING HERE: the object store's NATS
-	// bucket is created with no byte ceiling, so it grows against this
-	// number beside the unreserved streams rather than claiming a share of
-	// it up front.
+	// THE COMPANY'S FILES RESERVE A SHARE OF IT where they live in the broker:
+	// the object store's nats bucket is reserved before any log is sized, a
+	// quarter of the limit unless store.objects.nats_max_bytes sets it, so a
+	// limit holds the logs' reservations only beside the bucket's.
 	//
 	// THE CEILING IS A TYPO GUARD rather than a policy: 64 TiB is more than
 	// an order of magnitude above the largest estate the domain ceilings can
-	// describe (1 TiB of mutation log, 2 TiB of vectors, 256 GiB of
-	// knowledge base), so anything past it is a unit mistake rather than a
-	// deployment.
+	// describe (1 TiB of mutation log, 2 TiB of vectors, 512 GiB of artifact
+	// datastore, 256 GiB each of knowledge base and artifacts, 64 GiB each of
+	// usage and assistant, and 16 GiB of identity — about 4.1 TiB together),
+	// so anything past it is a unit mistake rather than a deployment. The
+	// object bucket's own bound is this one, and its reservation has to fit
+	// inside whatever limit is set, beside the logs'.
 	StoreMaxBytesFloor   int64 = 6 << 30
 	StoreMaxBytesCeiling int64 = 64 << 40
 )
