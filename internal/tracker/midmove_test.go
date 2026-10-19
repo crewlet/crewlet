@@ -358,10 +358,6 @@ func TestAGenerationRecordNamesItsOperatorsKindAndCredential(t *testing.T) {
 				OperatorID: "pat:0193"},
 			author: "jane.doe", kind: "human", operator: "pat:0193",
 		},
-		"a principal's kind": {
-			facts:  statelog.GenerationFacts{By: "jane.doe", ByKind: "person"},
-			author: "jane.doe", kind: "human",
-		},
 		"a token under its own login": {
 			facts:  statelog.GenerationFacts{By: "token:ops", ByKind: "operator"},
 			author: "token:ops", kind: "operator", operator: "token:ops",

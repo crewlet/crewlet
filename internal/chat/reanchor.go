@@ -111,10 +111,7 @@ func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.G
 // [statelog.GenerationFacts.Author]'s party, which every domain's generation
 // record names alike, in this package's words — which are the actor kinds
 // themselves ([AuthorKind] is its four words), the engine as the system
-// included. Read in this package's vocabulary alone, a reanchor the engine
-// named by its principal kind would record a person as an operator on this
-// log and as a person on the tracker's, which is one party as two in the audit
-// feed the histories are read side by side in.
+// included.
 //
 // NOBODY NAMED IS THE NODE, recorded under its own id and as the system, as
 // this domain's own narration is, rather than as an empty author column.

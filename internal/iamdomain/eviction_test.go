@@ -153,34 +153,25 @@ func TestAGenerationRecordNamesItsAuthorAndCarriesItsStamp(t *testing.T) {
 		kind  iam.Kind
 	}{
 		"a person acting as their seat": {
-			facts: statelog.GenerationFacts{By: "eng", ByKind: string(iam.ActorHuman)},
+			facts: statelog.GenerationFacts{By: "eng", ByKind: iam.ActorHuman},
 			actor: "eng", kind: iam.KindPerson,
 		},
 		"an administrator in no seat": {
 			facts: statelog.GenerationFacts{By: "jane.doe",
-				ByKind: string(iam.ActorOperator)},
+				ByKind: iam.ActorOperator},
 			actor: "jane.doe", kind: iam.KindPerson,
 		},
 		"a Tier A token": {
 			facts: statelog.GenerationFacts{By: "token:ops",
-				ByKind: string(iam.ActorOperator)},
+				ByKind: iam.ActorOperator},
 			actor: "token:ops", kind: iam.KindMachine,
 		},
-		"a service account named by its principal kind": {
-			facts: statelog.GenerationFacts{By: "ci:release",
-				ByKind: string(iam.KindMachine)},
-			actor: "ci:release", kind: iam.KindMachine,
-		},
-		"a person named by their principal kind": {
-			facts: statelog.GenerationFacts{By: "eng", ByKind: string(iam.KindPerson)},
-			actor: "eng", kind: iam.KindPerson,
-		},
 		"a seat": {
-			facts: statelog.GenerationFacts{By: "eng", ByKind: string(iam.ActorAgent)},
+			facts: statelog.GenerationFacts{By: "eng", ByKind: iam.ActorAgent},
 			actor: "eng", kind: iam.KindSeat,
 		},
 		"the engine": {
-			facts: statelog.GenerationFacts{By: "engine", ByKind: string(iam.ActorSystem)},
+			facts: statelog.GenerationFacts{By: "engine", ByKind: iam.ActorSystem},
 			actor: "engine", kind: iam.KindEngine,
 		},
 		"a person's login with no kind stated": {
@@ -201,7 +192,7 @@ func TestAGenerationRecordNamesItsAuthorAndCarriesItsStamp(t *testing.T) {
 		// log's generation record ([statelog.GenerationFacts.Author]):
 		// this one read it as a person called "  ".
 		"a name of spaces": {
-			facts: statelog.GenerationFacts{By: "  ", ByKind: string(iam.ActorHuman)},
+			facts: statelog.GenerationFacts{By: "  ", ByKind: iam.ActorHuman},
 			actor: "node-a", kind: iam.KindMachine,
 		},
 	} {
