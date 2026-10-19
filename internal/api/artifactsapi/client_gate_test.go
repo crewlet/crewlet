@@ -209,4 +209,3 @@ func TestTheDashboardDrawsTheBoardFormat(t *testing.T) {
 		}
 	}
 }
-
