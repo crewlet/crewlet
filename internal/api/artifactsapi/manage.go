@@ -1,6 +1,7 @@
 package artifactsapi
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
@@ -119,9 +120,31 @@ func (s *Service) share(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body, false) {
 		return
 	}
+	if !s.audiencesKnown(w, r, body.Audience) {
+		return
+	}
 	out, err := s.writes.Share(r.Context(), c, a.Head.ID,
 		artifacts.Share{Audience: body.Audience, Role: body.Role})
 	done(w, r, key, "share the artifact", a.Head.ID, out, err)
+}
+
+// audiencesKnown answers a share naming an audience nobody holds as invalid
+// (422), with the sentence that says which, and a roster this node could not
+// read as unavailable. It reports whether every audience is known.
+func (s *Service) audiencesKnown(w http.ResponseWriter, r *http.Request, audiences ...artifacts.Audience) bool {
+	for _, a := range audiences {
+		switch err := s.gate.knownAudience(r.Context(), a); {
+		case err == nil:
+		case errors.Is(err, artifacts.ErrInvalidAudience), errors.Is(err, ErrUnknownAudience):
+			invalid(w, say(err))
+			return false
+		default:
+			unavailable(w, err, "the company's seats and units could not be read to check "+
+				"who the share names; try again")
+			return false
+		}
+	}
+	return true
 }
 
 // unshare withdraws one audience's share (`DELETE

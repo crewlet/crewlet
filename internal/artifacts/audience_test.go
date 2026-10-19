@@ -14,7 +14,7 @@ func TestAnAudienceRoundTripsThroughItsTextForm(t *testing.T) {
 		{Kind: AudienceSeat, ID: "ada"},
 		{Kind: AudienceUnit, ID: "platform"},
 		{Kind: AudienceCompany},
-		{Kind: AudienceSeat, ID: "handle:with:colons"},
+		{Kind: AudienceUnit, ID: "key:with:colons"},
 	} {
 		text := a.String()
 		got, err := ParseAudience(text)
@@ -44,5 +44,23 @@ func TestAnAudienceRefusesWhatNamesNoPrincipalSet(t *testing.T) {
 	}
 	if err := (Audience{Kind: "link", ID: "x"}).Validate(); !errors.Is(err, ErrInvalidAudience) {
 		t.Errorf("an unknown audience kind validated: %v", err)
+	}
+}
+
+// A SEAT AUDIENCE IS A SEAT HANDLE, NEVER A LOGIN. `seat:token:maya` was
+// written, counted by Maya's Shared listing and admitted by nothing, since the
+// authority table matches a seat share against the principal's seat alone.
+func TestASeatAudienceRefusesALogin(t *testing.T) {
+	t.Parallel()
+	for _, id := range []string{"token:maya", "maya.ortiz", "ci:release", "Maya", "-maya"} {
+		err := (Audience{Kind: AudienceSeat, ID: id}).Validate()
+		if !errors.Is(err, ErrInvalidAudience) || !strings.Contains(err.Error(), "not a seat handle") {
+			t.Errorf("a seat audience naming %q validated or said %v", id, err)
+		}
+	}
+	for _, id := range []string{"maya", "founder", "swe-2"} {
+		if err := (Audience{Kind: AudienceSeat, ID: id}).Validate(); err != nil {
+			t.Errorf("the seat %q was refused: %v", id, err)
+		}
 	}
 }

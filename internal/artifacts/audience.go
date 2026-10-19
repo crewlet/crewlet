@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"unicode"
+
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // AN AUDIENCE'S TEXT FORM: `seat:<handle>`, `unit:<key>` or `company`. It is
@@ -67,13 +69,26 @@ func validAudienceID(kind AudienceKind, id string) error {
 				"character or a URL delimiter", ErrInvalidAudience, kind, id)
 		}
 	}
+	// A SEAT AUDIENCE NAMES A SEAT, in the chart's own grammar, and NEVER A
+	// LOGIN: the kinds are a closed set of company principals ([AudienceKind]),
+	// and the authority table matches a seat share against the principal's
+	// SEAT alone. A person's dotted login and a machine's or a Tier A token's
+	// coloned one are disjoint from a handle by construction ([iam.ValidSeatHandle]),
+	// so a share to one was written, counted by the listing and then admitted
+	// by nothing: `seat:token:maya` reached nobody while saying it reached Maya.
+	if kind == AudienceSeat && !iam.ValidSeatHandle(id) {
+		return fmt.Errorf("%w: %q is not a seat handle: a share names the seat a "+
+			"person or an agent holds, and a login (a person's dotted name, a service "+
+			"account's or an API token's coloned one) is not a seat, so share with the "+
+			"seat it acts as", ErrInvalidAudience, id)
+	}
 	return nil
 }
 
 // ParseAudience reads an audience's text form back.
 //
-// THE KIND IS CUT AT THE FIRST SEPARATOR, so a seat handle or unit key that
-// itself contains one still reads back whole; an audience the text form could
+// THE KIND IS CUT AT THE FIRST SEPARATOR, so a unit key that itself contains
+// one still reads back whole (a seat handle never does); an audience the text form could
 // not have produced is refused rather than guessed at.
 func ParseAudience(s string) (Audience, error) {
 	if s == string(AudienceCompany) {

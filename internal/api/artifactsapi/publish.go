@@ -330,8 +330,13 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	shares := make([]artifacts.Share, len(body.Shares))
+	audiences := make([]artifacts.Audience, len(body.Shares))
 	for i, sh := range body.Shares {
 		shares[i] = artifacts.Share{Audience: sh.Audience, Role: sh.Role}
+		audiences[i] = sh.Audience
+	}
+	if !s.audiencesKnown(w, r, audiences...) {
+		return
 	}
 	actor := iam.ActorFor(p)
 	out, report, err := pipe.Create(r.Context(), s.creatorCall(p, key, item), artifactupload.CreateRequest{

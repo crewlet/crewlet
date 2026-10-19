@@ -6211,7 +6211,7 @@ for. The domain's applier decides from the record alone.
 | `POST /artifacts/{id}/versions/{n}/restore` | `publish_artifact` | Version `n` again as a new version, every file carried, based on `If-Match` |
 | `PATCH /artifacts/{id}` | `update_artifact` | The title, the description or the icon |
 | `PATCH /artifacts/{id}/versions/{n}` | `update_artifact` | Version `n`'s label (`{"label": ""}` clears it); a labelled version is kept past the hundred unlabelled ones |
-| `PUT /artifacts/{id}/shares` | `share_artifact` | `{"audience": {"kind": "seat", "id": "bob"}, "role": "editor"}`; never above the sharer's own role, and never the company from an agent |
+| `PUT /artifacts/{id}/shares` | `share_artifact` | `{"audience": {"kind": "seat", "id": "bob"}, "role": "editor"}`; never above the sharer's own role, and never the company from an agent. A seat audience is a seat handle, never a login (`token:maya` or `jane.doe` is refused 422, `invalid`), and a seat or a unit the company's roster does not hold is refused the same way, with the sentence that says which; a create's `shares` are held to the same rule |
 | `DELETE /artifacts/{id}/shares/{audience}` | `unshare_artifact` | The audience as `seat:<handle>`, `unit:<key>` or `company` |
 | `POST /artifacts/{id}/transfer` | `artifacts.transfer` | `{"to": "<seat>"}` |
 | `DELETE /artifacts/{id}` | `artifacts.trash` | Into the trash: every frame stops loading at once, and it is purged after thirty days |

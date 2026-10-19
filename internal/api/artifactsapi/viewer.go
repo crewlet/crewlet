@@ -48,6 +48,45 @@ type RosterSeat struct {
 var ErrNoRoster = errors.New("artifactsapi: this node runs no company yet, so it " +
 	"cannot tell which units and seats a viewer relates to")
 
+// ErrUnknownAudience is a share naming a seat or a unit the company does not
+// hold: well formed, and nobody's.
+var ErrUnknownAudience = errors.New("artifactsapi: nobody holds that audience")
+
+// knownAudience refuses an audience a share could not reach: one that is not
+// an audience at all ([artifacts.Audience.Validate], a login named as a seat
+// included), and a seat or a unit the company's roster does not hold. The
+// agents' share tool asks the running org the same question
+// (internal/agent/builtin), so a share is refused alike from either side.
+//
+// AN ERROR READING THE ROSTER IS NOT A REFUSAL: the caller answers it as
+// unavailable rather than telling a person their colleague does not exist.
+func (g Gate) knownAudience(ctx context.Context, a artifacts.Audience) error {
+	if err := a.Validate(); err != nil {
+		return err
+	}
+	switch a.Kind {
+	case artifacts.AudienceSeat:
+		seats, err := g.Roster.Seats(ctx)
+		if err != nil {
+			return err
+		}
+		if !slices.ContainsFunc(seats, func(s RosterSeat) bool { return s.Handle == a.ID }) {
+			return fmt.Errorf("%w: the company has no seat %q; share with a seat the "+
+				"org chart holds", ErrUnknownAudience, a.ID)
+		}
+	case artifacts.AudienceUnit:
+		units, err := g.Roster.Units(ctx)
+		if err != nil {
+			return err
+		}
+		if !slices.Contains(units, a.ID) {
+			return fmt.Errorf("%w: the company has no unit %q; share with a unit the "+
+				"org chart holds", ErrUnknownAudience, a.ID)
+		}
+	}
+	return nil
+}
+
 // viewerFor is the listing filter for principal p: their record, the units the
 // chart seats them in (or below), and the agent seats it says they lead. An
 // error is a chart or roster this node could not read, which a listing answers
