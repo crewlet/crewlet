@@ -79,7 +79,17 @@ type served struct {
 	conn *websocket.Conn
 
 	// decisions counts every time the socket's credential was decided by
-	// the guard — a read of the identity estate.
+	// the guard — a read of the identity estate — once the guard has
+	// ANSWERED.
+	//
+	// ANSWERED, NOT BEGUN, because a case reads the count to know the
+	// socket has acted on what the guard said ([served.settled]) before it
+	// changes what the guard will say next. Counted as the decision began,
+	// settled(n) returned while decision n was still in flight, and a case
+	// that then flipped who the guard resolves had that in-flight decision
+	// read the flip: the socket closed on decision n for a move the case
+	// meant to signal afterwards, the move reached no live socket, and the
+	// next decision never came.
 	decisions atomic.Int64
 }
 
@@ -157,7 +167,7 @@ func dial(t *testing.T, svc *Service, c socketCase) *served {
 			opened: c.opened,
 			ends:   c.ends,
 			decide: func(ctx context.Context) (*http.Request, *auth.Refusal) {
-				s.decisions.Add(1)
+				defer s.decisions.Add(1)
 				return c.decide(r.Clone(ctx))
 			},
 		})
@@ -230,7 +240,8 @@ func (s *served) open(t *testing.T) {
 }
 
 // settled waits until the socket's credential has been decided at least n
-// times.
+// times — each decision answered, so none of them can still read what a case
+// changes next.
 func (s *served) settled(t *testing.T, n int64) {
 	t.Helper()
 	waitUntil(t, func() bool { return s.decisions.Load() >= n },
@@ -245,6 +256,44 @@ func person(handle string) iam.Principal {
 // sessionOf is what a person's session socket was opened with.
 func sessionOf(p iam.Principal) opened {
 	return opened{lineage: uuid.NewString(), person: p.ID.String()}
+}
+
+// THE HARNESS COUNTS A DECISION ONCE IT HAS BEEN ANSWERED.
+//
+// A case waits on [served.settled] and then changes what the guard resolves:
+// that is only sound if every decision the count includes has already read the
+// guard. A decision held inside the guard is not counted, and is counted the
+// moment it answers.
+//
+// Mutation: count the decision before its answer again and the count reads 1
+// while the answer is held.
+func TestSettledCountsADecisionOnceItIsAnswered(t *testing.T) {
+	t.Parallel()
+	svc := newDecidingService(t, authz.NoChart{})
+	ana := person("ana")
+	entered, release := make(chan struct{}), make(chan struct{})
+	var enter, leave sync.Once
+	s := dial(t, svc, socketCase{principal: ana, opened: sessionOf(ana),
+		decide: func(r *http.Request) (*http.Request, *auth.Refusal) {
+			enter.Do(func() { close(entered) })
+			<-release
+			return resolvedAs(ana)(r)
+		}})
+	// RELEASED BEFORE THE SERVER CLOSES, which waits for the handler the
+	// held decision is inside: cleanups run last registered first.
+	letGo := func() { leave.Do(func() { close(release) }) }
+	t.Cleanup(letGo)
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the socket's credential was never decided")
+	}
+	if got := s.decisions.Load(); got != 0 {
+		t.Fatalf("a decision held inside the guard was counted (%d) before "+
+			"it answered", got)
+	}
+	letGo()
+	s.settled(t, 1)
 }
 
 // --- what decides a socket ---------------------------------------------- //
