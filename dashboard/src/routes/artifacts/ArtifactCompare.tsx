@@ -1,5 +1,5 @@
 /**
- * Two versions of an artifact, compared: the History tab's answer to "what
+ * Two versions of an artifact, compared: the History panel's answer to "what
  * changed when the agent republished it".
  *
  * TWO LENSES, addressed in the URL (`against=` names the other version and

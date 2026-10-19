@@ -35,13 +35,13 @@ import {
   ConfirmModal,
   ConflictNote,
   DocTabsEditor,
-  EditingStatus,
   Input,
   MergeConflicts,
   RichEditor,
   markdownWords,
   useToast,
 } from "@crewlethq/ui";
+import { CheckGlyph, XGlyph } from "@crewlethq/icons/glyphs";
 import type { ArtifactDetail, ArtifactDoc } from "~/protocol/index.ts";
 import { newActOpID } from "~/protocol/index.ts";
 import { ARTIFACT_LABEL_MAX_BYTES } from "~/contract/artifacts.ts";
@@ -49,6 +49,7 @@ import { plural, textBudget } from "~/lib/format.ts";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
 import { clashesOf } from "~/lib/merge.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useKindControls } from "~/lib/artifacts/kindControls.ts";
 import { publishVersion, readDoc, uploadTexts, versionText } from "~/lib/artifacts/api.ts";
 import {
   DOC_INDEX,
@@ -213,26 +214,39 @@ export function DocEditor({
   const leave = () => (dirty ? setDiscard(true) : onDone());
   const busy = save.busy || saving;
 
+  // THE BAR WHILE EDITING (`lib/artifacts/kindControls.ts`): the state,
+  // Cancel and Save, in Edit's place, so the control a writer pressed is
+  // where they finish. Save keeps its word at every width; the reason it
+  // cannot be pressed is the one the shortcut reads too.
+  useKindControls({
+    editing: { dirty, saving: busy },
+    tools: [
+      {
+        key: "cancel",
+        label: "Cancel",
+        icon: <XGlyph size="sm" />,
+        labelled: true,
+        ...(busy ? { disabledReason: "Saving the doc." } : {}),
+        onSelect: leave,
+      },
+      {
+        key: "save",
+        label: "Save",
+        icon: <CheckGlyph size="sm" />,
+        labelled: true,
+        emphasis: "primary",
+        ...(busy
+          ? { disabledReason: "Saving the doc." }
+          : blocked
+            ? { disabledReason: blocked }
+            : {}),
+        onSelect: () => void press(),
+      },
+    ],
+  });
+
   return (
     <>
-      {/* THE BAR WHILE EDITING: the state, Cancel and Save, where Edit was. */}
-      <div className="doc-bar">
-        <EditingStatus dirty={dirty} saving={busy} />
-        <span className="doc-bar-actions">
-          <Button size="small" variant="ghost" onClick={leave} disabled={busy}>
-            Cancel
-          </Button>
-          <Button
-            size="small"
-            variant="primary"
-            loading={busy}
-            disabledReason={blocked}
-            onClick={() => void press()}
-          >
-            Save
-          </Button>
-        </span>
-      </div>
       <div className="doc-read doc-read--editing">
         <div className="doc-read-side">
           <DocTabsEditor

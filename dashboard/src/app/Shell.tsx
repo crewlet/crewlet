@@ -84,6 +84,7 @@ import { runningTarget } from "~/lib/turns.ts";
 import { focusSearchTarget } from "./searchTarget.ts";
 import { KeyLegend } from "./KeyLegend.tsx";
 import { FillRequest } from "./fill.tsx";
+import { OwnHeaderRequest, OwnHeaderSlot } from "./frame/OwnHeader.tsx";
 import { PeekRestingWidth, PeekWidthRequest } from "./frame/peekWidth.ts";
 
 /**
@@ -433,6 +434,10 @@ function Frame({ children }: { children: ReactNode }) {
   const [menu, setMenu] = useState<PageMenuEntry[]>([]);
   const [publishedFleet, setFleet] = useState<PublishedFleet | null>(null);
   const [ownStar, setOwnStar] = useState(false);
+  // A SCREEN THAT DRAWS ITS OWN HEAD (an open artifact): the frame draws the
+  // slot it lands in instead of its bar. See `frame/OwnHeader.tsx`.
+  const [ownHeader, setOwnHeader] = useState(false);
+  const [headerSlot, setHeaderSlot] = useState<HTMLElement | null>(null);
 
   // WATCH THE VIEWER'S OWN RECORD, which is what asks the engine for its
   // `inbox_changed` frames. The shell owns it because the shell outlives every
@@ -548,7 +553,11 @@ function Frame({ children }: { children: ReactNode }) {
   const screen = (
     <FillRequest.Provider value={setFilling}>
       <PeekWidthRequest.Provider value={setRestingPeek}>
-        <PageContextValue.Provider value={page}>{children}</PageContextValue.Provider>
+        <OwnHeaderRequest.Provider value={setOwnHeader}>
+          <OwnHeaderSlot.Provider value={ownHeader ? headerSlot : null}>
+            <PageContextValue.Provider value={page}>{children}</PageContextValue.Provider>
+          </OwnHeaderSlot.Provider>
+        </OwnHeaderRequest.Provider>
       </PeekWidthRequest.Provider>
     </FillRequest.Provider>
   );
@@ -577,18 +586,25 @@ function Frame({ children }: { children: ReactNode }) {
           toggleLabel="Navigation"
           sidebar={<Sidebar onSearch={() => setPaletteOpen(true)} />}
           topbar={
-            <PageHeader
-              crumbs={crumbs}
-              row={row}
-              counts={counts}
-              title={where}
-              workspace={workspace}
-              working={showWorking}
-              menu={menu}
-              star={!ownStar}
-            >
-              <StateBar degraded={degraded} coverage={coverage} />
-            </PageHeader>
+            ownHeader ? (
+              <div className="page-head">
+                <div ref={setHeaderSlot} />
+                <StateBar degraded={degraded} coverage={coverage} />
+              </div>
+            ) : (
+              <PageHeader
+                crumbs={crumbs}
+                row={row}
+                counts={counts}
+                title={where}
+                workspace={workspace}
+                working={showWorking}
+                menu={menu}
+                star={!ownStar}
+              >
+                <StateBar degraded={degraded} coverage={coverage} />
+              </PageHeader>
+            )
           }
           footer={
             <PeekRestingWidth.Provider value={restingPeek ?? PEEK_WIDTH}>

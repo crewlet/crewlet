@@ -16,14 +16,12 @@
 
 import { useMemo, useState } from "react";
 import {
-  Button,
   PrincipalPicker,
   ShareDialog,
   type CompanyAccess,
   type PrincipalOption,
   type ShareAudienceRow,
 } from "@crewlethq/ui";
-import { Share2Glyph } from "@crewlethq/icons/glyphs";
 import {
   newActOpID,
   type ArtifactAudience,
@@ -81,29 +79,23 @@ export function principalOptions(
   return out.slice(0, PICK_LIMIT);
 }
 
-export function ShareControl({
+/**
+ * The share dialog, opened by the artifact bar's Share (or its key) and
+ * mounted only while open, so the access it reads is read when it is asked
+ * for and fresh each time.
+ */
+export function ArtifactShare({
   detail,
+  open,
+  onClose,
   onChanged,
 }: {
   detail: ArtifactDetail;
+  open: boolean;
+  onClose: () => void;
   onChanged: () => void;
 }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <>
-      <Button
-        size="small"
-        variant="secondary"
-        leadingIcon={<Share2Glyph size="sm" />}
-        onClick={() => setOpen(true)}
-      >
-        Share
-      </Button>
-      {open && (
-        <ShareSurface detail={detail} onClose={() => setOpen(false)} onChanged={onChanged} />
-      )}
-    </>
-  );
+  return open ? <ShareSurface detail={detail} onClose={onClose} onChanged={onChanged} /> : null;
 }
 
 function ShareSurface({

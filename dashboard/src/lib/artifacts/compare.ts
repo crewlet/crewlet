@@ -2,7 +2,7 @@
  * Comparing two versions of an artifact: which files changed between them,
  * and, for a text file, which lines.
  *
- * PURE: the History tab's compare pane fetches the manifests and the texts and
+ * PURE: the History panel's compare pane fetches the manifests and the texts and
  * hands them here, so what a comparison says is held by tests rather than by a
  * screen.
  *

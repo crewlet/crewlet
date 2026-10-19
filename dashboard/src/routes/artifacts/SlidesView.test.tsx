@@ -11,7 +11,9 @@ import { join } from "node:path";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
+import { LayerHost } from "@crewlethq/ui";
 import { SlidesView } from "./SlidesView.tsx";
+import { WithKindBar } from "~/test/kindControls.tsx";
 import { Router } from "~/app/router.tsx";
 import type { ArtifactDeck, ArtifactDetail } from "~/protocol/index.ts";
 
@@ -60,9 +62,18 @@ afterEach(() => {
 const mount = () =>
   render(
     <Router>
-      <main style={{ overflowY: "auto" }}>
-        <SlidesView detail={detail} version={1} presence={{ at: () => {} }} />
-      </main>
+      <LayerHost>
+        <WithKindBar>
+          <main style={{ overflowY: "auto" }}>
+            <SlidesView
+              detail={detail}
+              version={1}
+              presence={{ at: () => {} }}
+              onPublished={() => {}}
+            />
+          </main>
+        </WithKindBar>
+      </LayerHost>
     </Router>,
   );
 

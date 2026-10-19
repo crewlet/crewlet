@@ -288,7 +288,7 @@ export const SHEET_TEMPLATES = [
   {
     key: "blank",
     label: "Blank sheet",
-    description: "One column to start from. Add columns on its Data tab.",
+    description: "One column to start from. Add columns in its Data panel.",
     schema: blankSheetSchema,
   },
 ] as const;

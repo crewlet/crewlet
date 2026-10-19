@@ -27,8 +27,8 @@
  */
 
 import { useEffect, useId, useMemo, useState } from "react";
-import { Button, Document, Skeleton, TabPanel, Tabs, preloadRichEditor } from "@crewlethq/ui";
-import { PencilGlyph } from "@crewlethq/icons/glyphs";
+import { Document, Skeleton, TabPanel, Tabs } from "@crewlethq/ui";
+import { FileTextGlyph, PencilGlyph } from "@crewlethq/icons/glyphs";
 import type { ArtifactDetail, ArtifactDoc, ArtifactDocAnswer } from "~/protocol/index.ts";
 import { useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
@@ -42,6 +42,7 @@ import { currentTab, docImagePaths, tabImages, tabRegion } from "~/lib/artifacts
 import { useVersionImages } from "~/lib/artifacts/versionImages.ts";
 import { DocEditor } from "./DocEditor.tsx";
 import type { PresenceReport } from "./presence.ts";
+import { useKindControls } from "~/lib/artifacts/kindControls.ts";
 
 export function DocView({
   detail,
@@ -123,6 +124,8 @@ function Doc({
   );
 
   if (editing) {
+    // WHILE EDITING, THE EDITOR'S CONTROLS ARE THE BAR'S: it publishes its
+    // state, Cancel and Save itself (`DocEditor`), in Edit's place.
     return (
       <div className="doc-view">
         <DocEditor
@@ -157,8 +160,9 @@ function Doc({
 
   return (
     <div className="doc-view">
-      <div className="doc-bar">
-        {many && (
+      {primary && <ReadingControls editable={editable} onEdit={() => setEditing(true)} />}
+      {many && (
+        <div className="doc-bar">
           <Tabs
             variant="underline"
             size="sm"
@@ -168,25 +172,8 @@ function Doc({
             value={tab.path}
             onValueChange={choose}
           />
-        )}
-        <span className="doc-bar-actions">
-          {editable && (
-            <Button
-              size="small"
-              variant="secondary"
-              leadingIcon={<PencilGlyph size="sm" />}
-              onPointerEnter={preloadRichEditor}
-              onFocus={preloadRichEditor}
-              onClick={() => setEditing(true)}
-            >
-              Edit
-            </Button>
-          )}
-          <Button size="small" variant="ghost" onClick={() => window.print()}>
-            Print
-          </Button>
-        </span>
-      </div>
+        </div>
+      )}
       <div className="doc-read">
         <div className="doc-read-side">
           <OnThisPage body={tab.text} />
@@ -204,6 +191,40 @@ function Doc({
       {primary && <DocPrint doc={doc} loaded={loaded} />}
     </div>
   );
+}
+
+/**
+ * EDIT AND PRINT ARE THE PAGE BAR'S (`lib/artifacts/kindControls.ts`): Edit
+ * labelled at its end while the doc is read, Print in its More. Published by
+ * a component that is mounted only while the doc is read, so the editor's
+ * own controls take the bar the moment Edit is pressed, and nothing has to
+ * decide which of the two published last.
+ */
+function ReadingControls({ editable, onEdit }: { editable: boolean; onEdit: () => void }) {
+  useKindControls({
+    ...(editable
+      ? {
+          tools: [
+            {
+              key: "edit",
+              label: "Edit",
+              icon: <PencilGlyph size="sm" />,
+              labelled: true,
+              onSelect: onEdit,
+            },
+          ],
+        }
+      : {}),
+    menu: [
+      {
+        key: "print",
+        label: "Print or save as PDF",
+        icon: <FileTextGlyph size="sm" />,
+        onSelect: () => window.print(),
+      },
+    ],
+  });
+  return null;
 }
 
 /**

@@ -35,7 +35,6 @@ import {
   FormField,
   Input,
   PresenterView,
-  SegmentedControl,
   Skeleton,
   SlideFilmstrip,
   SlideGrid,
@@ -75,7 +74,9 @@ import {
 } from "~/lib/artifacts/deck.ts";
 import { renderSlide, withText, type SlideRenderContext } from "~/lib/slides.tsx";
 import { SLIDE_TRANSITIONS } from "~/contract/artifacts.ts";
+import { FileTextGlyph, MonitorGlyph } from "@crewlethq/icons/glyphs";
 import type { PresenceReport } from "./presence.ts";
+import { useKindControls } from "~/lib/artifacts/kindControls.ts";
 
 /** The views of a deck, as `mode=` names them; "" is the editor (or the reader's slides). */
 type DeckMode = "" | "grid" | "present" | "presenter";
@@ -176,28 +177,42 @@ function Deck({
     [go, channel],
   );
 
+  // THE DECK'S VIEWS AND ITS TWO ACTIONS ARE THE PAGE BAR'S (`lib/artifacts/kindControls.ts`):
+  // Edit, Grid and Present in its middle, the presenter's window and Print in
+  // its More. A side of a comparison publishes none.
+  useKindControls(
+    primary
+      ? {
+          modes: {
+            label: "View",
+            value: mode === "presenter" ? "present" : mode,
+            options: [
+              { value: "", label: editable ? "Edit" : "Slides" },
+              { value: "grid", label: "Grid" },
+              { value: "present", label: "Present" },
+            ],
+            onValueChange: (v: string) => setMode(v),
+          },
+          menu: [
+            {
+              key: "presenter",
+              label: "Open the presenter view",
+              icon: <MonitorGlyph size="sm" />,
+              onSelect: () => openPresenter(current.id),
+            },
+            {
+              key: "print",
+              label: "Print or save as PDF",
+              icon: <FileTextGlyph size="sm" />,
+              onSelect: () => window.print(),
+            },
+          ],
+        }
+      : null,
+  );
+
   return (
     <div className="slides-view">
-      <div className="slides-bar">
-        <SegmentedControl
-          label="View"
-          semantics="radio"
-          size="sm"
-          options={[
-            { value: "", label: editable ? "Edit" : "Slides" },
-            { value: "grid", label: "Grid" },
-            { value: "present", label: "Present" },
-          ]}
-          value={mode === "presenter" ? "present" : mode}
-          onValueChange={(v: string) => setMode(v)}
-        />
-        <Button size="small" variant="ghost" onClick={() => openPresenter(current.id)}>
-          Presenter view
-        </Button>
-        <Button size="small" variant="ghost" onClick={() => window.print()}>
-          Print
-        </Button>
-      </div>
       {mode === "" && (
         <DeckEditor
           detail={detail}

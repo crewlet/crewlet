@@ -1,8 +1,19 @@
 /**
  * One artifact: its page, addressed by its id (`#/artifacts/{id}`), with the
- * frame's object tabs (View, Data, History, Settings) and the version on show
- * in the address (`version=`), so a link survives a reload and a pasted
- * address in chat.
+ * version on show in the address (`version=`) and the panel open at its side
+ * (`panel=`), so a link survives a reload and a pasted address in chat.
+ *
+ * # One slim bar, then the artifact
+ *
+ * The artifact is the screen, so its page draws a single bar in the frame's
+ * place (`OwnPageHeader`, the kit's `ArtifactBar`) and gives the artifact
+ * everything under it. The bar holds the way back, what it is (its glyph, its
+ * title, renamed in place by an editor, and the version chip), the kind's own
+ * views, and at its end the controls that open the rest on demand: Details,
+ * History, Data where it keeps any, the people here, Share and More. What the
+ * page header, its fact line and the View, Data, History and Settings tabs
+ * used to stack over the artifact is in those panels now, one at a time at
+ * its side (`panels.ts`), each reached by its key too (`app/keymap.ts`).
  *
  * # The engine decides what this reader sees
  *
@@ -16,14 +27,14 @@
  * # In the room while the page is open
  *
  * The page joins the artifact's room (`useArtifactRoom`): who else is here is
- * drawn in the header, what moves on the artifact re-reads the head and the
+ * drawn in the bar, what moves on the artifact re-reads the head and the
  * versions, what its datastore commits moves the sheet and the page bridge,
  * and a room the engine withdraws (the reader's share was removed while they
  * had it open) turns the page into the card that says so.
  *
  * # Who is here, and following them
  *
- * The People rail (`rail=people`, opened from the presence stack or its own
+ * The People panel (`panel=people`, opened from the presence stack or its own
  * control) lists everybody in words with Follow, and an agent's turn. Following
  * (`follow={handle}`, so a link can start it) moves this reader to the version
  * and, on a sheet, the collection the followed person is on, under a
@@ -31,42 +42,54 @@
  * the body stops it, as do Escape and the followed person leaving.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-  ArtifactIcon,
+  ArtifactBar,
+  ArtifactPanel,
+  ArtifactVersionChip,
+  ArtifactWorkspace,
   Button,
   ButtonLink,
   Callout,
   EmptyState,
   FollowBanner,
-  Menu,
   PeopleRail,
   PresenceStack,
   Skeleton,
   peopleRailKey,
   useToast,
+  type ArtifactBarTool,
+  type MenuEntry,
   type NodeHue,
   type PeopleRailSelf,
+  EditingStatus,
 } from "@crewlethq/ui";
 import {
   CopyGlyph,
-  EllipsisGlyph,
+  DatabaseGlyph,
+  ExternalLinkGlyph,
+  ImageGlyph,
+  InfoGlyph,
+  PencilGlyph,
   PinGlyph,
+  RotateCcwClockGlyph,
+  SettingsGlyph,
+  Share2Glyph,
   TrashGlyph,
   UsersGlyph,
 } from "@crewlethq/icons/glyphs";
-import { href, useNavigator, useParam } from "~/app/router.tsx";
-import { useOwnStar, usePageLabels, usePageMenu } from "~/app/Shell.tsx";
-import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
-import { ObjectTabs } from "~/app/frame/ObjectTabs.tsx";
-import { useTab } from "~/app/frame/tabs.ts";
+import { href, useNavigator, useParam, useRoute } from "~/app/router.tsx";
+import { useFillScreen } from "~/app/fill.tsx";
+import { useKeymap } from "~/app/keymap.ts";
+import { FrameNavToggle, OwnPageHeader } from "~/app/frame/OwnHeader.tsx";
+import { useOwnStar, usePageLabels } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { useNow } from "~/lib/clock.ts";
-import { fmtDate, relTime } from "~/lib/format.ts";
+import { utf8Bytes } from "~/lib/format.ts";
 import { useConnection } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { useKeyedGesture } from "~/lib/keyedWrite.ts";
-import { untrashArtifact } from "~/lib/artifacts/api.ts";
+import { keyedWrite, useKeyedGesture } from "~/lib/keyedWrite.ts";
+import { ARTIFACT_TITLE_MAX_BYTES } from "~/contract/artifacts.ts";
+import { patchArtifact, untrashArtifact } from "~/lib/artifacts/api.ts";
 import { usePinToggle, usePins } from "~/lib/artifacts/pins.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import {
@@ -80,20 +103,24 @@ import {
 import { useArtifactRoom } from "~/lib/artifacts/room.ts";
 import { useDataStore } from "~/lib/artifacts/useDataStore.ts";
 import type { ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
-import { keepsData } from "~/lib/artifacts/kinds.ts";
-import { KIND_WORDS, ROLE_WORDS, purgeAt, purgeSentence } from "~/lib/artifacts/words.ts";
-import type {
-  ArtifactDetail,
-  ArtifactVersionSummary,
-  LogRefusal,
-  QueryRefusal,
+import { contentIsData, keepsData } from "~/lib/artifacts/kinds.ts";
+import { KIND_WORDS, purgeSentence } from "~/lib/artifacts/words.ts";
+import {
+  newActOpID,
+  type ArtifactDetail,
+  type ArtifactVersionSummary,
+  type LogRefusal,
+  type QueryRefusal,
 } from "~/protocol/index.ts";
-import { Denied, copyAddress, deniedReason } from "./parts.tsx";
-import { ShareControl } from "./Share.tsx";
+import { Denied, artifactAddress, copyAddress, deniedReason } from "./parts.tsx";
+import { ArtifactShare } from "./Share.tsx";
 import { ViewTab } from "./ViewTab.tsx";
 import { HistoryTab } from "./HistoryTab.tsx";
 import { DataTab } from "./DataTab.tsx";
-import { PurgeControl, SettingsTab } from "./SettingsTab.tsx";
+import { DetailsPanel } from "./DetailsPanel.tsx";
+import { PurgeControl, SettingsTab, TrashDialog } from "./SettingsTab.tsx";
+import { KindControlsSink, type KindControls } from "~/lib/artifacts/kindControls.ts";
+import { PANEL_SPECS, panelOf, spelledTheOldWay, withPanel, type PanelName } from "./panels.ts";
 import { useArtifactPresence } from "./presence.ts";
 import { followMoves, followTarget, moves, slideOfRegion } from "~/lib/artifacts/follow.ts";
 import { useViewer } from "~/lib/viewer.ts";
@@ -101,16 +128,11 @@ import { useViewer } from "~/lib/viewer.ts";
 /** The head is pushed (`artifact_changed`); this read is the floor under a push the socket missed. */
 const DETAIL_POLL_MS = 60_000;
 
-/** The object tabs, in order: the digits 1 to 4 reach them. */
-const TABS = ["view", "data", "history", "settings"] as const;
-type Tab = (typeof TABS)[number];
+/** How many versions the chip's menu lists before "Every version" takes the rest. */
+const CHIP_VERSIONS = 8;
 
-const TAB_WORDS: Readonly<Record<Tab, string>> = {
-  view: "View",
-  data: "Data",
-  history: "History",
-  settings: "Settings",
-};
+/** Where the bar's way back goes: the gallery. */
+const BACK = { href: href(["artifacts"]), label: "Back to artifacts" };
 
 export function ArtifactPage({ id }: { id: string }) {
   const detail = useQuery("artifact", { id }, { pollMs: DETAIL_POLL_MS });
@@ -124,7 +146,7 @@ export function ArtifactPage({ id }: { id: string }) {
   // THE STAR IS IN THIS PAGE'S MORE MENU, beside Pin, so the frame draws none.
   useOwnStar();
 
-  // THE SHEET AND THE DATA TAB write as the dashboard; a page's bridge
+  // THE SHEET AND THE DATA PANEL write as the dashboard; a page's bridge
   // writes as the page's version, through a store of its own (ViewTab).
   const store = useDataStore(id, { via: "dashboard" }, live === true && keepsData(head!));
   const bridgeStores = useRef(new Set<ArtifactDataStore>());
@@ -157,28 +179,40 @@ export function ArtifactPage({ id }: { id: string }) {
   }
   if (!head) {
     return detail.loading ? (
-      <Skeleton variant="text" rows={6} label="Loading the artifact" />
+      <>
+        {/* THE BAR STANDS WHILE THE HEAD IS READ, so the frame's own bar is
+            never drawn for a moment and then swapped for this one. */}
+        <OwnPageHeader>
+          <ArtifactBar
+            title=""
+            kind="html"
+            kindLabel="Artifact"
+            pending
+            back={BACK}
+            start={<FrameNavToggle />}
+          />
+        </OwnPageHeader>
+        <div className="artifact-loading">
+          <Skeleton variant="text" rows={6} label="Loading the artifact" />
+        </div>
+      </>
     ) : (
       <QueryState error={detail.error} refusal={detail.refusal} loading={false} />
     );
   }
-  return (
-    <>
-      {head.status === "trashed" ? (
-        <Trashed detail={head} onChanged={detail.refetch} />
-      ) : (
-        <Loaded
-          detail={head}
-          versions={versions.data?.versions ?? []}
-          versionsError={versions.error}
-          versionsRefusal={versions.refusal}
-          room={room}
-          store={store}
-          bridgeStores={bridgeStores.current}
-          refetch={detail.refetch}
-        />
-      )}
-    </>
+  return head.status === "trashed" ? (
+    <Trashed detail={head} onChanged={detail.refetch} />
+  ) : (
+    <Loaded
+      detail={head}
+      versions={versions.data?.versions ?? []}
+      versionsError={versions.error}
+      versionsRefusal={versions.refusal}
+      room={room}
+      store={store}
+      bridgeStores={bridgeStores.current}
+      refetch={detail.refetch}
+    />
   );
 }
 
@@ -189,59 +223,55 @@ function Trashed({ detail, onChanged }: { detail: ArtifactDetail; onChanged: () 
   const gesture = useKeyedGesture();
   const toast = useToast();
   const trashedBy = people.seatName(detail.trashed_by.name);
-  const deleteOn = purgeAt(detail.trashed_at);
   return (
     <>
-      <ObjectHeader
-        kind={KIND_WORDS[detail.kind]}
-        icon={<ArtifactIcon icon={detail.icon} kind={detail.kind} size="xs" />}
-        title={detail.title}
-        facts={[
-          { label: "Trashed by", value: trashedBy },
-          { label: "Trashed on", value: fmtDate(detail.trashed_at) },
-          ...(deleteOn ? [{ label: "Deleted on", value: fmtDate(deleteOn) }] : []),
-        ]}
-        actions={
-          <ButtonLink
-            size="small"
-            variant="secondary"
-            href={href(["artifacts", "mine"], { status: "trashed" })}
-          >
-            Back to the trash
-          </ButtonLink>
-        }
-      />
-      <EmptyState
-        icon={<TrashGlyph size="xl" />}
-        title="This artifact is in the trash"
-        description={`${trashedBy} moved it to the trash. ${purgeSentence(detail.trashed_at)}`}
-        action={
-          <span className="artifact-actions">
-            <Button
-              size="small"
-              variant="secondary"
-              loading={gesture.busy}
-              disabledReason={restore.can ? undefined : restore.reason}
-              onClick={async () => {
-                const answer = await gesture.run(untrashArtifact(detail.id));
-                if (answer?.kind === "done") {
-                  toast.ok(`Restored “${detail.title}”`);
-                  onChanged();
-                } else if (answer) {
-                  toast.show({
-                    variant: "danger",
-                    title: "Could not restore it",
-                    message: answer.text,
-                  });
-                }
-              }}
-            >
-              Restore
-            </Button>
-            <PurgeControl detail={detail} />
-          </span>
-        }
-      />
+      <OwnPageHeader>
+        <ArtifactBar
+          title={detail.title}
+          kind={detail.kind}
+          icon={detail.icon}
+          kindLabel={KIND_WORDS[detail.kind]}
+          start={<FrameNavToggle />}
+          back={{
+            href: href(["artifacts", "mine"], { status: "trashed" }),
+            label: "Back to the trash",
+          }}
+          version={<span className="artifact-trashed-chip">In the trash</span>}
+        />
+      </OwnPageHeader>
+      <div className="artifact-trashed">
+        <EmptyState
+          icon={<TrashGlyph size="xl" />}
+          title="This artifact is in the trash"
+          description={`${trashedBy} moved it to the trash. ${purgeSentence(detail.trashed_at)}`}
+          action={
+            <span className="artifact-actions">
+              <Button
+                size="small"
+                variant="secondary"
+                loading={gesture.busy}
+                disabledReason={restore.can ? undefined : restore.reason}
+                onClick={async () => {
+                  const answer = await gesture.run(untrashArtifact(detail.id));
+                  if (answer?.kind === "done") {
+                    toast.ok(`Restored “${detail.title}”`);
+                    onChanged();
+                  } else if (answer) {
+                    toast.show({
+                      variant: "danger",
+                      title: "Could not restore it",
+                      message: answer.text,
+                    });
+                  }
+                }}
+              >
+                Restore
+              </Button>
+              <PurgeControl detail={detail} />
+            </span>
+          }
+        />
+      </div>
     </>
   );
 }
@@ -265,12 +295,14 @@ function Loaded({
   bridgeStores: Set<ArtifactDataStore>;
   refetch: () => void;
 }) {
+  // THE PAGE HAS THE WINDOW'S HEIGHT: the body scrolls inside itself and a
+  // panel beside it stays in view however far the artifact is read.
+  useFillScreen(true);
   const people = useArtifactPeople();
-  const now = useNow();
   const toast = useToast();
   const connection = useConnection();
-  const tabs = useMemo(() => TABS.filter((t) => t !== "data" || keepsData(detail)), [detail]);
-  const [tab, setTab] = useTab("tab", tabs);
+  const route = useRoute();
+  const nav = useNavigator();
   const [versionParam, setVersion] = useParam("version", "");
   const asked = Number(versionParam);
   const version = Number.isInteger(asked) && asked > 0 && asked <= detail.head_number ? asked : 0;
@@ -284,11 +316,49 @@ function Loaded({
   const showing = version > 0 ? version : shownHead;
   const newer = version === 0 && detail.head_number > shownHead;
 
+  // ---- the panel at the side ------------------------------------------------
+  const hasData = keepsData(detail) && store !== null;
+  const panel = panelOf(route.query, keepsData(detail));
+  // AN OLDER LINK'S `tab=` OR `rail=` is read as the panel it became, and the
+  // address rewritten in place.
+  useEffect(() => {
+    if (spelledTheOldWay(route.query)) nav.replace(route.path, withPanel(route.query, panel));
+  }, [route.path, route.query, panel, nav]);
+  // FOCUS GOES TO A PANEL THE READER OPENED, never to one a link opened.
+  const readerOpened = useRef(false);
+  const [settingsFocus, setSettingsFocus] = useState<"icon" | undefined>(undefined);
+  const openPanel = useCallback(
+    (next: PanelName | null) => {
+      readerOpened.current = true;
+      if (next !== "settings") setSettingsFocus(undefined);
+      nav.to(route.path, withPanel(route.query, next));
+    },
+    [nav, route.path, route.query],
+  );
+  const toggle = useCallback(
+    (p: PanelName) => openPanel(panel === p ? null : p),
+    [openPanel, panel],
+  );
+  const [expandParam] = useParam("expand", "");
+  const [againstParam] = useParam("against", "");
+  // A COMPARISON TAKES THE WORKSPACE: two versions side by side do not fit
+  // the side's width.
+  const comparing = panel === "history" && againstParam !== "";
+  const expanded = panel !== null && (expandParam === "1" || comparing);
+  const setExpanded = useCallback(
+    (on: boolean) => nav.filter(on ? { expand: "1" } : { expand: null, against: null }),
+    [nav],
+  );
+  const panelBox = useRef<HTMLDivElement>(null);
+  /** Whether the open panel is drawn over the artifact rather than beside it. */
+  const covering = () => {
+    const aside = panelBox.current?.closest("aside");
+    return expanded || (aside ? getComputedStyle(aside).position === "absolute" : false);
+  };
+
+  // ---- who is here, and following them --------------------------------------
   const presence = useArtifactPresence(room, people, showing);
   const viewer = useViewer();
-  const nav = useNavigator();
-  const [rail, setRail] = useParam("rail", "", "section");
-  const peopleOpen = rail === "people";
   const [follow, setFollow] = useParam("follow", "");
   const [sheetParam] = useParam("sheet", "");
   const [slideParam] = useParam("slide", "");
@@ -319,7 +389,8 @@ function Loaded({
       kind: detail.kind,
       head: detail.head_number,
       showing,
-      tab,
+      // THE ARTIFACT IS IN VIEW unless a panel has taken the workspace.
+      tab: expanded ? (panel ?? "view") : "view",
       sheet: sheetParam,
       slide: slideParam,
       doctab: doctabParam,
@@ -332,7 +403,7 @@ function Loaded({
       ...(move.sheet !== undefined ? { sheet: move.sheet } : {}),
       ...(move.slide !== undefined ? { slide: move.slide } : {}),
       ...(move.doctab !== undefined ? { doctab: move.doctab } : {}),
-      ...(move.tab !== undefined ? { tab: null } : {}),
+      ...(move.tab !== undefined ? { expand: null, against: null } : {}),
     });
   }, [
     followed,
@@ -341,7 +412,8 @@ function Loaded({
     detail.kind,
     detail.head_number,
     showing,
-    tab,
+    expanded,
+    panel,
     sheetParam,
     slideParam,
     doctabParam,
@@ -398,7 +470,7 @@ function Loaded({
     held.current = out.hues;
     return out.members;
   }, [others, people, place]);
-  // The reader, first on the People rail as "You", drawn as their own seat.
+  // The reader, first in the People panel as "You", drawn as their own seat.
   const selfFace = useMemo<PeopleRailSelf | undefined>(() => {
     if (!viewer.handle) return undefined;
     const p = people.seatPrincipal(viewer.handle);
@@ -411,6 +483,7 @@ function Loaded({
     };
   }, [viewer.handle, people]);
 
+  // ---- the bar's actions ----------------------------------------------------
   // WHETHER THE READER PINNED IT is their own record, which the head does not
   // carry: their pins are a listing of their own, the same one the sidebar
   // draws, and every press anywhere in this tab asks it again.
@@ -419,8 +492,133 @@ function Loaded({
     detail.id,
     (pins.data?.items ?? []).some((item) => item.id === detail.id),
   );
+  const renameAccess = useArtifactAccess({ role: "editor", held: detail.role });
+  const trashAccess = useArtifactAccess({ role: "owner", held: detail.role, person: true });
+  const [renaming, setRenaming] = useState(false);
+  const [sharing, setSharing] = useState(false);
+  const [trashing, setTrashing] = useState(false);
+  const [kind, setKind] = useState<KindControls | null>(null);
 
-  usePageMenu([
+  // RENAMED IN PLACE, as the Settings panel's Title field renames it: the same
+  // bound, the same route, and the engine's refusal said where it was typed.
+  const rename = useCallback(
+    async (title: string): Promise<string | undefined> => {
+      if (utf8Bytes(title) > ARTIFACT_TITLE_MAX_BYTES)
+        return `That title is too long. Keep it to ${ARTIFACT_TITLE_MAX_BYTES} characters.`;
+      const answer = await keyedWrite({
+        ...patchArtifact(detail.id, { title }),
+        key: newActOpID(),
+      });
+      if (answer.kind === "done") {
+        refetch();
+        return undefined;
+      }
+      return answer.text;
+    },
+    [detail.id, refetch],
+  );
+
+  useKeymap({
+    "artifact.details": () => toggle("details"),
+    "artifact.history": () => toggle("history"),
+    "artifact.data": { run: () => toggle("data"), when: hasData },
+    "artifact.people": () => toggle("people"),
+    "artifact.share": () => setSharing(true),
+  });
+
+  const peopleLabel =
+    drawn.length === 0
+      ? "People here"
+      : `People here, ${drawn.length} ${drawn.length === 1 ? "other" : "others"}`;
+  const tools: ArtifactBarTool[] = [
+    {
+      key: "details",
+      label: "Details",
+      icon: <InfoGlyph size="sm" />,
+      keys: ["i"],
+      pressed: panel === "details",
+      onSelect: () => toggle("details"),
+    },
+    {
+      key: "history",
+      label: "Versions and history",
+      icon: <RotateCcwClockGlyph size="sm" />,
+      keys: ["h"],
+      pressed: panel === "history",
+      onSelect: () => toggle("history"),
+    },
+    ...(hasData
+      ? [
+          {
+            key: "data",
+            label: "Data",
+            icon: <DatabaseGlyph size="sm" />,
+            keys: ["d"],
+            pressed: panel === "data",
+            onSelect: () => toggle("data"),
+          },
+        ]
+      : []),
+    {
+      key: "people",
+      label: peopleLabel,
+      icon: <UsersGlyph size="sm" />,
+      keys: ["p"],
+      pressed: panel === "people",
+      ...(drawn.length > 0 ? { badge: drawn.length } : {}),
+      onSelect: () => toggle("people"),
+    },
+    {
+      key: "share",
+      label: "Share",
+      icon: <Share2Glyph size="sm" />,
+      keys: ["s"],
+      labelled: true,
+      onSelect: () => setSharing(true),
+    },
+  ];
+  const menu: MenuEntry[] = [
+    {
+      key: "rename",
+      label: "Rename",
+      icon: <PencilGlyph size="sm" />,
+      ...(renameAccess.can
+        ? { onSelect: () => setRenaming(true) }
+        : { onSelect: () => {}, disabled: true, description: renameAccess.reason }),
+    },
+    {
+      key: "icon",
+      label: "Change icon",
+      icon: <ImageGlyph size="sm" />,
+      ...(renameAccess.can
+        ? {
+            onSelect: () => {
+              setSettingsFocus("icon");
+              readerOpened.current = true;
+              nav.to(route.path, withPanel(route.query, "settings"));
+            },
+          }
+        : { onSelect: () => {}, disabled: true, description: renameAccess.reason }),
+    },
+    {
+      key: "settings",
+      label: "Settings",
+      icon: <SettingsGlyph size="sm" />,
+      onSelect: () => toggle("settings"),
+    },
+    ...(kind?.menu && kind.menu.length > 0
+      ? [{ kind: "separator" as const, key: "sep:kind" }, ...kind.menu]
+      : []),
+    { kind: "separator", key: "sep:links" },
+    {
+      key: "tab",
+      label: "Open in a new tab",
+      icon: <ExternalLinkGlyph size="sm" />,
+      // THE DASHBOARD'S PAGE, never the frame's own address: a page runs
+      // only inside its sandboxed frame, under the host that answers its
+      // bridge, and a frame URL opened as a window would be neither.
+      onSelect: () => void window.open(artifactAddress(detail.id), "_blank", "noopener,noreferrer"),
+    },
     {
       key: "copy",
       label: "Copy link",
@@ -433,125 +631,171 @@ function Loaded({
       icon: <PinGlyph size="sm" />,
       onSelect: () => void pin.toggle(),
     },
-  ]);
+    { kind: "separator", key: "sep:trash" },
+    {
+      key: "trash",
+      label: "Move to the trash",
+      icon: <TrashGlyph size="sm" />,
+      danger: true,
+      ...(trashAccess.can
+        ? { onSelect: () => setTrashing(true) }
+        : { onSelect: () => {}, disabled: true, description: trashAccess.reason }),
+    },
+  ];
 
-  const updater = people.seatName(detail.updated_by.name);
+  const versioned = !contentIsData(detail.kind) && detail.head_number > 0;
+  const chipItems: MenuEntry[] = [
+    ...versions.slice(0, CHIP_VERSIONS).map((v): MenuEntry => ({
+      key: `v${v.number}`,
+      label:
+        v.number === detail.head_number ? `Version ${v.number}, the latest` : `Version ${v.number}`,
+      ...(v.label ? { description: v.label } : {}),
+      checked: v.number === showing,
+      onSelect: () => {
+        setVersion(v.number === detail.head_number ? "" : String(v.number));
+        if (v.number === detail.head_number) setShownHead(detail.head_number);
+      },
+    })),
+    { kind: "separator", key: "sep" },
+    {
+      key: "history",
+      label:
+        versions.length > CHIP_VERSIONS ? "Every version and the history" : "Versions and history",
+      icon: <RotateCcwClockGlyph size="sm" />,
+      onSelect: () => openPanel("history"),
+    },
+  ];
+
+  const panelBody: Record<PanelName, () => ReactNode> = {
+    details: () => <DetailsPanel detail={detail} showing={showing} />,
+    history: () => (
+      <HistoryTab
+        detail={detail}
+        versions={versions}
+        versionsError={versionsError}
+        versionsRefusal={versionsRefusal}
+        showing={showing}
+        onShow={(n: number) => {
+          setVersion(n === detail.head_number ? "" : String(n));
+          // THE VERSION IS LOOKED AT, so a panel drawn over the artifact
+          // makes way for it; one beside it stays, to pick the next.
+          if (covering()) openPanel(null);
+        }}
+        room={room}
+        presence={presence}
+        bridgeStores={bridgeStores}
+      />
+    ),
+    data: () => (store ? <DataTab detail={detail} store={store} /> : null),
+    people: () => (
+      <PeopleRail
+        variant="plain"
+        members={drawn}
+        self={selfFace}
+        following={followed || undefined}
+        onFollow={(member) => {
+          setLeft(null);
+          setFollow(member ? peopleRailKey(member) : "");
+          // FOLLOWING IS WATCHING THE ARTIFACT: a panel over it steps aside.
+          if (member && covering()) openPanel(null);
+        }}
+        labels={{ you: selfWords(ownTabs) }}
+        actions={(member) => {
+          const turn = memberTurn(room.roster.members, member);
+          return turn ? (
+            <ButtonLink size="small" variant="ghost" href={href(["live", "turns", turn])}>
+              Open turn
+            </ButtonLink>
+          ) : null;
+        }}
+      />
+    ),
+    settings: () => <SettingsTab detail={detail} onChanged={refetch} focus={settingsFocus} />,
+  };
+
+  const notices: ReactNode[] = [];
+  if (detail.elevated)
+    notices.push(
+      <Callout key="elevated" layout="banner" variant="info" title="Opened as an administrator">
+        The engine recorded it: its owner and editors see that in its history, and every
+        administrator sees it on the company's audit trail.
+      </Callout>,
+    );
+  if (room.state.kind === "refused" && room.state.code !== "not_found")
+    notices.push(
+      <Callout key="room" layout="banner" variant="warning" title="Live changes are paused">
+        This page could not join the artifact's room, so others' changes and who is here are not
+        shown live.
+      </Callout>,
+    );
+  if (!connection.connected)
+    notices.push(
+      <Callout key="offline" layout="banner" variant="warning" title="Offline">
+        Changes made by others will appear when the connection comes back.
+      </Callout>,
+    );
+  if (newer)
+    notices.push(
+      <Callout
+        key="newer"
+        layout="banner"
+        variant="info"
+        live="polite"
+        action={
+          <Button size="small" variant="secondary" onClick={() => setShownHead(detail.head_number)}>
+            Show it
+          </Button>
+        }
+      >
+        Version {detail.head_number} was published while you were looking.
+      </Callout>,
+    );
+
   return (
     <div className="artifact-page">
-      <ObjectHeader
-        kind={KIND_WORDS[detail.kind]}
-        icon={<ArtifactIcon icon={detail.icon} kind={detail.kind} size="xs" />}
-        title={detail.title}
-        description={detail.description || undefined}
-        facts={[
-          {
-            label: "Owner",
-            value: people.seatName(detail.owner),
-            path: ["agents", "seats", detail.owner],
-          },
-          {
-            label: "Updated",
-            value: `${relTime(detail.updated_at, now)} by ${updater}`,
-          },
-          // A SHEET'S CONTENT IS ITS LIVE DATA: its version number names
-          // nothing a reader sees change, so it is not a fact of its header.
-          ...(detail.head_number > 0 && detail.kind !== "sheet"
-            ? [{ label: "Version", value: `${detail.head_number}` }]
-            : []),
-          {
-            label: "Your role",
-            value: detail.elevated ? "Administrator" : ROLE_WORDS[detail.role],
-          },
-        ]}
-        actions={
-          <span className="artifact-actions">
-            {drawn.length > 0 && (
+      <OwnPageHeader>
+        <ArtifactBar
+          title={detail.title}
+          kind={detail.kind}
+          icon={detail.icon}
+          kindLabel={KIND_WORDS[detail.kind]}
+          start={<FrameNavToggle />}
+          back={BACK}
+          {...(renameAccess.can ? { onRename: rename } : {})}
+          renaming={renaming}
+          onRenamingChange={setRenaming}
+          version={
+            versioned ? (
+              <ArtifactVersionChip
+                version={showing}
+                latest={detail.head_number}
+                items={chipItems}
+              />
+            ) : undefined
+          }
+          {...(kind?.modes ? { modes: kind.modes } : {})}
+          presence={
+            drawn.length > 0 ? (
               <PresenceStack
                 members={drawn}
                 self
-                size="sm"
-                className="artifact-presence"
-                onSelect={() => setRail("people")}
+                size="xs"
+                onSelect={() => openPanel(panel === "people" ? null : "people")}
               />
-            )}
-            <Button
-              size="small"
-              variant={peopleOpen ? "secondary" : "ghost"}
-              leadingIcon={<UsersGlyph size="sm" />}
-              pressed={peopleOpen}
-              onClick={() => setRail(peopleOpen ? "" : "people")}
-            >
-              People
-            </Button>
-            <ShareControl detail={detail} onChanged={refetch} />
-            <span className="page-action-folds">
-              <Menu
-                label={`More for “${detail.title}”`}
-                icon={<EllipsisGlyph size="sm" />}
-                triggerVariant="ghost"
-                align="end"
-                items={[
-                  {
-                    key: "copy",
-                    label: "Copy link",
-                    icon: <CopyGlyph size="sm" />,
-                    onSelect: () => void copyAddress(detail.id, toast),
-                  },
-                  {
-                    key: "pin",
-                    label: pin.label,
-                    icon: <PinGlyph size="sm" />,
-                    onSelect: () => void pin.toggle(),
-                  },
-                ]}
-              />
-            </span>
-          </span>
-        }
-      />
-      {detail.elevated && (
-        <Callout variant="info" title="You can open this because you are an administrator">
-          The engine recorded that you opened it: its owner and editors see that in its history, and
-          every administrator sees it on the company's audit trail.
-        </Callout>
-      )}
-      {room.state.kind === "refused" && room.state.code !== "not_found" && (
-        <Callout variant="warning" title="Live changes are paused">
-          This page could not join the artifact's room, so others' changes and who is here are not
-          shown live.
-        </Callout>
-      )}
-      {!connection.connected && (
-        <Callout variant="warning" title="Offline">
-          Changes made by others will appear when the connection comes back.
-        </Callout>
-      )}
-      <ObjectTabs
-        ariaLabel={`${detail.title} tabs`}
-        items={tabs.map((t) => ({ value: t, label: TAB_WORDS[t] }))}
-        value={tab}
-        onValueChange={(value) => setTab(value as Tab)}
-      />
-      {version > 0 && (
-        <div className="artifact-bar" role="status">
-          <span>
-            Viewing version {version} of {detail.head_number}.
-          </span>
-          <Button size="small" variant="ghost" onClick={() => setVersion("")}>
-            Back to latest
-          </Button>
-        </div>
-      )}
-      {newer && (
-        <div className="artifact-bar" role="status">
-          <span>Version {detail.head_number} was published.</span>
-          <Button size="small" variant="secondary" onClick={() => setShownHead(detail.head_number)}>
-            Load it
-          </Button>
-        </div>
-      )}
+            ) : undefined
+          }
+          {...(kind?.editing
+            ? { status: <EditingStatus dirty={kind.editing.dirty} saving={kind.editing.saving} /> }
+            : {})}
+          kindTools={kind?.tools ?? []}
+          tools={tools}
+          menu={menu}
+        />
+      </OwnPageHeader>
+      {notices.length > 0 && <div className="artifact-notices">{notices}</div>}
       {followed && target && (
         <FollowBanner
+          className="artifact-follow"
           name={people.seatName(followed)}
           onStop={stopFollowing}
           labels={{
@@ -566,6 +810,7 @@ function Loaded({
       )}
       {left && !followed && (
         <FollowBanner
+          className="artifact-follow"
           name={people.seatName(left.seat)}
           state="left"
           onStop={() => setLeft(null)}
@@ -579,67 +824,57 @@ function Loaded({
               })}
         />
       )}
-      <div className={peopleOpen ? "artifact-with-rail" : undefined}>
-        {peopleOpen && (
-          <PeopleRail
-            className="artifact-people"
-            members={drawn}
-            self={selfFace}
-            following={followed || undefined}
-            onFollow={(member) => {
-              setLeft(null);
-              setFollow(member ? peopleRailKey(member) : "");
-            }}
-            onClose={() => setRail("")}
-            labels={{ you: selfWords(ownTabs) }}
-            actions={(member) => {
-              const turn = memberTurn(room.roster.members, member);
-              return turn ? (
-                <ButtonLink size="small" variant="ghost" href={href(["live", "turns", turn])}>
-                  Open turn
-                </ButtonLink>
-              ) : null;
+      <ArtifactWorkspace
+        className="artifact-workspace"
+        bodyRef={body}
+        bodyClassName={`artifact-body artifact-body--${detail.kind}`}
+        bodyLabel={detail.title}
+        expanded={expanded}
+        panel={
+          panel ? (
+            <ArtifactPanel
+              key={panel}
+              title={PANEL_SPECS[panel].title}
+              size={PANEL_SPECS[panel].size}
+              focusOnOpen={readerOpened.current}
+              onClose={() => openPanel(null)}
+              expanded={expanded}
+              {...(panel === "data" || panel === "history"
+                ? { onExpandedChange: setExpanded }
+                : {})}
+            >
+              <div className="artifact-panel-body" ref={panelBox}>
+                {panelBody[panel]()}
+              </div>
+            </ArtifactPanel>
+          ) : null
+        }
+      >
+        <KindControlsSink.Provider value={setKind}>
+          <ViewTab
+            detail={detail}
+            version={showing}
+            versions={versions}
+            store={store}
+            room={room}
+            presence={presence}
+            drawn={drawn}
+            bridgeStores={bridgeStores}
+            onPublished={(n: number) => {
+              refetch();
+              setVersion("");
+              setShownHead(n);
             }}
           />
-        )}
-        <div className="artifact-body" ref={body}>
-          {tab === "view" && (
-            <ViewTab
-              detail={detail}
-              version={showing}
-              versions={versions}
-              store={store}
-              room={room}
-              presence={presence}
-              drawn={drawn}
-              bridgeStores={bridgeStores}
-              onPublished={(n: number) => {
-                refetch();
-                setVersion("");
-                setShownHead(n);
-              }}
-            />
-          )}
-          {tab === "data" && store && <DataTab detail={detail} store={store} />}
-          {tab === "history" && (
-            <HistoryTab
-              detail={detail}
-              versions={versions}
-              versionsError={versionsError}
-              versionsRefusal={versionsRefusal}
-              showing={showing}
-              onShow={(n: number) => {
-                setVersion(n === detail.head_number ? "" : String(n));
-                setTab("view");
-              }}
-              room={room}
-              presence={presence}
-              bridgeStores={bridgeStores}
-            />
-          )}
-          {tab === "settings" && <SettingsTab detail={detail} onChanged={refetch} />}
-        </div>
-      </div>
+        </KindControlsSink.Provider>
+      </ArtifactWorkspace>
+      <ArtifactShare
+        detail={detail}
+        open={sharing}
+        onClose={() => setSharing(false)}
+        onChanged={refetch}
+      />
+      <TrashDialog detail={detail} open={trashing} onClose={() => setTrashing(false)} />
     </div>
   );
 }

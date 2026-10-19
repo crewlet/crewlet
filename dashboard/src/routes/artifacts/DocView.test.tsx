@@ -9,6 +9,7 @@ import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
 import { DocView } from "./DocView.tsx";
+import { WithKindBar } from "~/test/kindControls.tsx";
 import { Router } from "~/app/router.tsx";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { useClient, useConnection } from "~/lib/store-hooks.ts";
@@ -142,12 +143,14 @@ function show(onPublished = vi.fn()) {
     <ToastProvider>
       <LayerHost>
         <Router>
-          <DocView
-            detail={detail}
-            version={2}
-            presence={{ at: vi.fn() } as never}
-            onPublished={onPublished}
-          />
+          <WithKindBar>
+            <DocView
+              detail={detail}
+              version={2}
+              presence={{ at: vi.fn() } as never}
+              onPublished={onPublished}
+            />
+          </WithKindBar>
         </Router>
       </LayerHost>
     </ToastProvider>,
@@ -158,9 +161,12 @@ function show(onPublished = vi.fn()) {
 /** The editor's document, by the name it carries for the tab it edits. */
 const editor = () => screen.getByRole("textbox", { name: /^The text of/ });
 
+/** The editing state the page bar carries, apart from the editor's own live regions. */
+const barStatus = () => document.querySelector(".crewlet-artifact-bar__status") as HTMLElement;
+
 /** Opens the editor on the tab on show and retypes one run of its text. */
 async function edit(from: string, to: string) {
-  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  fireEvent.click((await screen.findAllByRole("button", { name: "Edit" }))[0]!);
   await retype(editor(), from, to);
 }
 
@@ -191,6 +197,25 @@ test("saves an edit as the one changed passage, against the version it started f
   expect(body.edits[0]!.path).toBe("tabs/start.md");
   expect(body.edits[0]!.old_str).toBe("ten");
   expect(body.edits[0]!.new_str).toBe("five");
+});
+
+test("the page bar carries the editing state, Cancel and Save while the doc is edited", async () => {
+  show();
+  fireEvent.click((await screen.findAllByRole("button", { name: "Edit" }))[0]!);
+  await screen.findByRole("button", { name: "Save" });
+  expect(barStatus().textContent).toContain("Editing");
+  expect(barStatus().textContent).not.toContain("Unsaved changes");
+  expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+  await retype(editor(), "ten minutes", "five minutes");
+  await waitFor(() => expect(barStatus().textContent).toContain("Unsaved changes"));
+  // THE BAR DRAWS A LABELLED TOOL ONCE PER WIDTH; the first is the one on show here.
+  fireEvent.click(screen.getAllByRole("button", { name: "Cancel" })[0]!);
+  fireEvent.click(await screen.findByRole("button", { name: "Discard" }));
+  expect((await screen.findAllByRole("button", { name: "Edit" })).length).toBeGreaterThan(0);
+  expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+  expect(screen.getByRole("article", { name: "On-call handbook, Start" }).textContent).toContain(
+    "ten minutes",
+  );
 });
 
 test("a save that raced another publish is merged onto it, and saved again against it", async () => {
@@ -241,7 +266,7 @@ test("where both changed the same lines, the person settles each before saving",
 
 test("adds, renames, moves and removes tabs, and saves them as one version", async () => {
   const onPublished = show();
-  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  fireEvent.click((await screen.findAllByRole("button", { name: "Edit" }))[0]!);
   const tabs = screen.getByRole("list", { name: "Tabs of On-call handbook" });
   fireEvent.change(within(tabs).getByRole("textbox", { name: "Title of tab 1" }), {
     target: { value: "Start here" },
@@ -303,7 +328,7 @@ test("a tab both renamed is the person's to keep or take, and the save waits for
   };
   publishAnswer = () => json(412, { error: "version_moved", detail: "moved", live: { number: 3 } });
   show();
-  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  fireEvent.click((await screen.findAllByRole("button", { name: "Edit" }))[0]!);
   fireEvent.change(screen.getByRole("textbox", { name: "Title of tab 1" }), {
     target: { value: "Start here" },
   });

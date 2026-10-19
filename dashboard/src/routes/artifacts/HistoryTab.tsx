@@ -1,5 +1,5 @@
 /**
- * The History tab: an artifact's versions, newest first, the one picked with
+ * The History panel: an artifact's versions, newest first, the one picked with
  * its files and what it declared, and the artifact's own change record.
  *
  * SELECTING IS NOT RESTORING. Picking a version shows it; Restore is its own
@@ -9,7 +9,7 @@
  * oldest unlabelled ones.
  *
  * DATA IS LIVE AND IS NOT VERSIONED WITH THE PAGE: every version shows
- * today's data, which the Data tab's history records cell by cell.
+ * today's data, which the Data panel's history records cell by cell.
  *
  * COMPARING IS ADDRESSED: the version a reader compares the picked one with is
  * `against=` and the way they compare is `lens=`, so a link to a comparison
@@ -129,7 +129,7 @@ export function HistoryTab({
     return (
       <>
         <p className="artifact-note">
-          A sheet's content is its data, which is live: the Data tab keeps every change.
+          A sheet's content is its data, which is live: the Data panel keeps every change.
         </p>
         <ChangeRecord detail={detail} />
       </>
