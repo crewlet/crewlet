@@ -2,8 +2,10 @@ package cache_test
 
 import (
 	"bufio"
+	"encoding/binary"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -33,17 +35,21 @@ import (
 // which APPENDS WHOLE every base the push's deltas borrowed from the packs
 // before it, and kept as one pack (transfer.unpackLimit=1) — stored as its
 // bundle and its row, installed by a cold round, and indexed by the cache's
-// own maintainer, its bitmap written by the git that then serves it. So an
-// object a later push edited sits in two packs, a delta in its own push's and
-// whole in the next one's, and the multi-pack-index keeps ONE copy, as git's
-// midx_oid_compare orders them: the preferred pack's; else the copy in the
-// pack whose .pack is newer to the second; and among one second's packs the
-// first in the write's own listing of the pack directory, the filesystem's
-// order, never the pushes' (an entry carried from an index already on disk
-// counts as oldest of all). A cold round installs nearly every pack within
-// one second, so on these copies the listing chooses which edited objects
-// the index keeps whole and which as their deltas — and `multi` sends as
-// they are stored the whole copies it keeps.
+// own maintainer, its bitmap written by the git that then serves it — so the
+// bitmap prefers the pack git chooses for an index written with no
+// --preferred-pack: the oldest .pack to the second, and among a second's
+// packs, which a cold round's nearly all are, whichever git lists first,
+// reported beside each arm (preferredShare). So an object a later push
+// edited sits in two packs, a delta in its own push's and whole in the next
+// one's, and the multi-pack-index keeps ONE copy, as git's midx_oid_compare
+// orders them: the preferred pack's; else the copy in the pack whose .pack
+// is newer to the second; and among one second's packs the first in the
+// write's own listing of the pack directory, the filesystem's order, never
+// the pushes' (an entry carried from an index already on disk counts as
+// oldest of all). A cold round installs nearly every pack within one second,
+// so on these copies the listing chooses which edited objects the index
+// keeps whole and which as their deltas — and `multi` sends as they are
+// stored the whole copies it keeps.
 //
 //   - history=tree is 200 pushes each ADDING fifty files of 3 000 random
 //     bytes (code/host's BenchmarkCloneWarm tree): nothing is edited, so a
@@ -123,6 +129,7 @@ func (w *syncWorld) reuseArms(b *testing.B, repo, git string, n int) {
 	if found, _ := filepath.Glob(filepath.Join(s.Dir, "objects", "pack", "multi-pack-index-*.bitmap")); len(found) == 0 {
 		b.Fatal("the maintainer wrote no bitmap: there would be nothing to reuse")
 	}
+	preferred, rank := preferredShare(b, s.Dir)
 	for _, reuse := range []string{"single", "multi"} {
 		b.Run("reuse="+reuse, func(b *testing.B) {
 			config := withReuse(c.ServeConfig(), reuse)
@@ -145,8 +152,43 @@ func (w *syncWorld) reuseArms(b *testing.B, repo, git string, n int) {
 			}
 			b.ReportMetric(float64(sent), "bytes")
 			b.ReportMetric(float64(cpu.Microseconds())/1e3/float64(b.N), "server-cpu-ms")
+			b.ReportMetric(preferred, "preferred-%objects")
+			b.ReportMetric(float64(rank), "preferred-rank")
 		})
 	}
+}
+
+// preferredShare is what the copy at dir's bitmap PREFERS — the pack single
+// reuse sends as it is stored, git's choice for the maintainer's index: its
+// share of the objects every pack holds, in percent, and its rank among the
+// packs by object count (1, the most). Reported beside each arm, because the
+// choice is the oldest .pack to the second and, among a second's packs,
+// whichever git lists first, so a copy installed cold prefers a pack no rule
+// of the cache picked — and that pack is what single sends as it is stored.
+func preferredShare(b *testing.B, dir string) (percent float64, rank int) {
+	b.Helper()
+	objects := func(idx string) int64 {
+		head, err := os.ReadFile(idx)
+		if err != nil || len(head) < 8+256*4 {
+			b.Fatalf("the index %s: %v", idx, err)
+		}
+		return int64(binary.BigEndian.Uint32(head[8+255*4:]))
+	}
+	idxs, err := filepath.Glob(filepath.Join(dir, "objects", "pack", "pack-*.idx"))
+	if err != nil || len(idxs) == 0 {
+		b.Fatalf("the copy's indexes: %v", err)
+	}
+	mine := objects(gittest.PreferredPack(b, dir) + ".idx")
+	var all int64
+	rank = 1
+	for _, idx := range idxs {
+		n := objects(idx)
+		all += n
+		if n > mine {
+			rank++
+		}
+	}
+	return 100 * float64(mine) / float64(all), rank
 }
 
 // withReuse is config with pack.allowPackReuse set to value, and every other

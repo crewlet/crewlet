@@ -671,17 +671,19 @@ failing on one damaged copy cost one repair. How depends on the damage:
   and nothing that request's own check had just read), then once a day while
   it is used, and at once when a git process reports a pack or an object of it
   unreadable or dies of a crash. That is the one way two kinds of damage are
-  ever found: a damaged pack is sent to clients byte for byte (git's pack
-  reuse copies what the bitmap names without reading it, so no git on the node
-  notices while every clone of it fails at the client), and a file damaged in
-  place after it was checked — a bitmap missing an object fails every clone of
-  its branch — is reported by nothing. What fails its checksum, or what the
-  disk cannot read, is fetched again or dropped as above, one download a pack;
-  a pack fetched again for its body alone keeps the multi-pack-index, bitmap
-  and commit-graph built over it, since it is the same pack byte for byte. A
-  download that fails leaves the copy serving as it is and is tried again ten
-  minutes later, then twice as long each time up to a day
-  (`code_cache_pack_reinstall_failed`). It runs one copy at a time on a node,
+  ever found: a damaged pack is sent to clients byte for byte (git copies a
+  stored object as it is stored — damaged bytes from any pack, and a damaged
+  entry header from the bitmap's preferred pack, which it sends without
+  reading — so no git on the node notices while every clone of it fails at
+  the client), and a file damaged in place after it was checked — a bitmap
+  missing an object fails every clone of its branch — is reported by
+  nothing. What fails its checksum, or what the disk cannot read, is fetched
+  again or dropped as above, one download a pack; a pack fetched again for
+  its body alone keeps the multi-pack-index, bitmap and commit-graph built
+  over it, since it is the same pack byte for byte. A download that fails
+  leaves the copy serving as it is and is tried again ten minutes later, then
+  twice as long each time up to a day (`code_cache_pack_reinstall_failed`).
+  It runs one copy at a time on a node,
   a core and a read slot a 64 MiB piece, and reads nothing of a copy nobody
   uses; scrubs go in the order of their evidence — one a failing request
   asked, then one a report asked, then a copy's first, then the daily ones —

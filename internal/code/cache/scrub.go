@@ -22,17 +22,21 @@ import (
 // before it answers (check.go) reads the index files alone, and only those
 // this process has neither written nor checked, so two kinds of damage pass
 // it. A PACK BODY: on a copy the maintainer has served from, upload-pack's
-// bitmap pack reuse sends a damaged entry to the client byte for byte, and
-// the commit-graph spares every walk the commit's parse, so no git process on
-// the node names it while every clone of it fails at the client (measured on
-// git 2.40.4 to 2.56.0, both protocols). And damage that arrives in a file
-// AFTER this process vouched for it with no change of the file's identity —
-// media damage — which no vouch can see: a bitmap damaged so fails every
-// clone, upload-pack exiting 0 and saying nothing. Holding the packs before a
-// copy first answers would hold the largest repository's first request for
-// as long as it takes to read twenty gigabytes, so a SCRUB reads them behind
-// the serving instead — each .pack against its own trailer, which is its
-// name, and every index file by the check's rule, vouched or not:
+// pack-objects copies a stored object to the client as it is stored, byte
+// for byte — damaged bytes from any pack, and a damaged entry header from the
+// bitmap's preferred pack, which single reuse (ServeConfig) sends without
+// reading it, where git names the header of any other pack's entry — and the
+// commit-graph spares every walk the commit's parse, so no git process on the
+// node names it while every clone of it fails at the client (measured on the
+// node pin and the floor).
+// And damage that arrives in a file AFTER this process vouched for it with no
+// change of the file's identity — media damage — which no vouch can see: a
+// bitmap damaged so fails every clone, upload-pack exiting 0 and saying
+// nothing. Holding the packs before a copy first answers would hold the
+// largest repository's first request for as long as it takes to read twenty
+// gigabytes, so a SCRUB reads them behind the serving instead — each .pack
+// against its own trailer, which is its name, and every index file by the
+// check's rule, vouched or not:
 //
 //   - ONCE after an incarnation's first full round in this process, when a
 //     previous process left it (incarnation.inherited): its packs are bytes no

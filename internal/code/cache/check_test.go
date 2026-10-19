@@ -87,10 +87,31 @@ func (w *syncWorld) packTips(t testing.TB, f *fixture, tips ...string) code.Pack
 // multi-pack-index with its bitmap and the commit-graph — the copy a previous
 // process served clones from — and stops it, answering the incarnation's
 // directory.
+//
+// The bitmap PREFERS THE NEWER PACK, so a clone of the copy is sent the newer
+// pack's entries as they are stored (pack.allowPackReuse=single,
+// cache.ServeConfig) and the case that damages one of them knows a clone
+// reads it nowhere. The maintainer writes its index with no --preferred-pack,
+// so git takes the pack whose .pack has the oldest modification time to the
+// second (gittest.PreferredPack), and which that is would otherwise be the
+// round's install timing: the two packs nearly always land in one second, and
+// git then took the newer, but now and then they straddle one and it took the
+// older, and pack-objects read the newer pack's damaged entry and named it —
+// so the newer pack's .pack is dated an hour before the older's.
 func (w *syncWorld) served(t testing.TB, h history, clk *clock) string {
 	t.Helper()
 	c := w.open(t, clk.on)
 	w.sync(t, c, h.repo)
+	dir := w.dir(t, c, h.repo)
+	pack := filepath.Join(dir, "objects", "pack")
+	older, err := os.Stat(filepath.Join(pack, "pack-"+h.older.GitChecksum+".pack"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	newer := filepath.Join(pack, "pack-"+h.newer.GitChecksum)
+	if err := os.Chtimes(newer+".pack", time.Time{}, older.ModTime().Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
 	clk.Add(cache.MidxDebounce)
 	if ran := cache.MaintainerPass(c); len(ran) != 1 {
 		t.Fatalf("the maintainer ran %v, want %s", ran, h.repo)
@@ -99,7 +120,10 @@ func (w *syncWorld) served(t testing.TB, h history, clk *clock) string {
 		t.Fatalf("the maintainer wrote an index over %d packs (bitmap %t) and a graph %t, want two packs, a "+
 			"bitmap and a graph", packs, bitmap, graph)
 	}
-	dir := w.dir(t, c, h.repo)
+	if got := gittest.PreferredPack(t, dir); got != newer {
+		t.Fatalf("the maintainer's bitmap prefers %s, want the newer pack %s", filepath.Base(got),
+			filepath.Base(newer))
+	}
 	c.Stop(context.Background())
 	return dir
 }

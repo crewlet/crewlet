@@ -94,15 +94,20 @@ func reportsTotal(w *syncWorld) uint64 {
 }
 
 // A PACK BODY NO GIT NAMES IS FOUND BY THE SCRUB. On a copy the maintainer has
-// served from, upload-pack's bitmap pack reuse sends a damaged entry to the
-// client byte for byte and exits 0 saying nothing — S1, an entry's stated
-// size one too large, and C, eight bytes of the pack's middle — so every
-// clone fails at the client while no report reaches the cache. Damage written
-// IN PLACE after this process vouched for the pack keeps the file's identity,
-// so nothing but the scrub can see it: once the copy has been used past its
-// interval, the scrub holds the pack to its trailer, and the repair round
-// installs it again over its files — one GET, the same incarnation — and the
-// next clone completes. On every git the suite runs.
+// served from, upload-pack's pack reuse sends a damaged entry of the bitmap's
+// preferred pack — the newer pack here (served) — to the client byte for byte
+// and exits 0 saying nothing — S1, an entry's stated size one too large, and
+// C, eight bytes of the pack's middle — so every clone fails at the client
+// while no report reaches the cache. (Which pack the bitmap prefers matters
+// to S1 alone: the newer pack's entry under a bitmap preferring the older pack
+// has its stated size read and its pack named by git, while C's bytes are
+// copied as they are stored either way — measured on the node pin and the
+// floor.) Damage written IN PLACE after this process vouched for the pack
+// keeps the file's identity, so nothing but the scrub can see it: once the
+// copy has been used past its interval, the scrub holds the pack to its
+// trailer, and the repair round installs it again over its files — one GET,
+// the same incarnation — and the next clone completes. On every git the suite
+// runs.
 //
 // Mutations: the scrub skips .pack files, or honours vouches — it finds
 // nothing and the clone keeps failing; no interval (a first scrub only) —

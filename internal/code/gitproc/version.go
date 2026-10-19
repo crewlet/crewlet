@@ -23,15 +23,16 @@ var ClientMinVersion = Version{2, 40, 0}
 // NAMED base with no chain file (`multi-pack-index write --incremental
 // --base=<checksum> --no-write-chain-file`, 2.55: `write` offers neither
 // option in v2.54.0's documentation and both in v2.55.0's), which is how a
-// repository's maintainer publishes the layers every git node installs; and
-// pack.allowPackReuse=multi sending a cache's overlapping packs whole, which
-// is why every cache serves with that value and nothing chooses it per binary
-// (cache.ServeConfig; TestMultiPackReuseSendsOverlappingPacksWhole, on the
-// node pin and on the floor's own build). That was fixed in 2.48.0
+// repository's maintainer publishes the layers every git node installs.
+// Every git at the floor also sends a cache's overlapping packs whole under
+// either pack.allowPackReuse value
+// (TestEveryPackReuseModeSendsOverlappingPacksWhole, on the node pin and on
+// the floor's own build), so nothing chooses the value per binary: a cache
+// serves `single` (cache.ServeConfig says why). `multi` was fixed in 2.48.0
 // (tb/multi-pack-reuse-dupfix, "Object reuse code based on multi-pack-index
-// sent an unwanted copy of object"): 2.43 refuses the value outright ("bad
-// boolean config value 'multi'"), and 2.44 to 2.47 accept it and, reusing
-// from several packs that hold one object — which a cache's are, since
+// sent an unwanted copy of object"): 2.43 refuses it outright ("bad boolean
+// config value 'multi'"), and 2.44 to 2.47 accept it and, reusing from
+// several packs that hold one object — which a cache's are, since
 // receive-pack completes each thin push with the bases it borrowed from the
 // packs before it — sent that object twice or a delta without its base, so
 // the client's index-pack refused the whole pack ("REF_DELTA … already

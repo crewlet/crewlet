@@ -16,9 +16,10 @@ import (
 // THE SERVE CONFIGURATION IS WHAT THE HOST RUNS: exactly these pairs, every
 // key one the pool's allowlist admits — upload-pack runs with them — and none
 // that would serve an object no advertised tip reaches, nor any the pool sets
-// for every process itself. pack.allowPackReuse is multi whatever the pool's
-// git, which every git at the node floor serves whole
-// (gitproc's TestMultiPackReuseSendsOverlappingPacksWhole).
+// for every process itself. pack.allowPackReuse is single whatever the pool's
+// git — the reuse that sends a cache's clones the fewest bytes
+// (BenchmarkPackReuse) — and every git at the node floor serves it whole
+// (gitproc's TestEveryPackReuseModeSendsOverlappingPacksWhole).
 func TestTheServeConfigIsWhatTheHostRuns(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -30,7 +31,7 @@ func TestTheServeConfigIsWhatTheHostRuns(t *testing.T) {
 	got := c.ServeConfig()
 	want := []gitproc.KV{
 		{Key: "core.multiPackIndex", Value: "true"},
-		{Key: "pack.allowPackReuse", Value: "multi"},
+		{Key: "pack.allowPackReuse", Value: "single"},
 		{Key: "pack.windowMemory", Value: strconv.FormatInt(2*code.DefaultLimits().MaxBlobBytes, 10)},
 		{Key: "pack.useBitmaps", Value: "true"},
 		{Key: "pack.writeBitmapLookupTable", Value: "true"},

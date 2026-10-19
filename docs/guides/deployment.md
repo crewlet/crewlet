@@ -1130,16 +1130,19 @@ cache on its own disk. What such a node needs from its host:
   neither, whatever they hold. A local sandbox box
   that runs as the engine (`run_in: direct`) on a node from that image runs this
   git too, so a coding agent's `git grep -P` fails there; a `container` or
-  `e2b` box runs its own image's git. The node serves a clone with
-  multi-pack reuse — what it can of every pack the cache holds sent as it is
-  stored — which 2.44 to 2.47 could not do without sending a pack the client
-  refuses, and every git at the node floor can. It costs a clone bytes: the
-  cache keeps a pack a push, each completed by receive-pack with whole copies
-  of the objects the push's deltas were made against, and multi-pack reuse
-  sends many of those copies whole, so a clone is sent 9% more than reusing
-  the bitmap's preferred pack alone over a history of pushes that add files
-  and 57% more over one of pushes that edit them, and the node spends more
-  CPU on it too (measured, `internal/code/cache`'s `BenchmarkPackReuse`).
+  `e2b` box runs its own image's git. The node serves a clone with git's
+  single-pack reuse — the bitmap's preferred pack sent as it is stored, every
+  other object as git packs any object, a stored delta reused and a whole copy
+  searched for a delta — rather than multi-pack reuse, which every git
+  at the node floor could serve (2.44 to 2.47 sent a pack the client
+  refuses) but which costs a clone bytes: the cache keeps a pack a push, each
+  completed by receive-pack with whole copies of the objects the push's
+  deltas were made against, and multi-pack reuse sends as they are stored the
+  whole copies the multi-pack-index keeps — 8.5–9% more over a history of
+  pushes that add files and 48–57% more over one of pushes that edit them, for
+  more of the node's CPU too (measured over copies the cache made,
+  `internal/code/cache`'s `BenchmarkPackReuse`; the spread is which copy of
+  each edited object a copy's index happened to keep).
 - **A volume for `git.cache_dir`.** The cache holds every repository the node
   serves, whole, and a cold sync writes everything it downloads at the speed
   the object store delivers it — so a volume of its own is worth it: its own

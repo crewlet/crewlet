@@ -276,8 +276,9 @@ var baseKeys = []KV{
 // needs is added here in the commit that adds the call site.
 var allowedConfig = map[string]string{
 	"core.multipackindex": "the cache's serve configuration and its maintainer",
-	"pack.allowpackreuse": "the cache's serve configuration: `multi` — every pack a cache holds reused whole, " +
-		"which every git at the node floor sends correctly (2.48 fixed overlapping packs)",
+	"pack.allowpackreuse": "the cache's serve configuration: `single` — the bitmap's preferred pack sent " +
+		"verbatim and every other object packed as pack-objects packs any (a stored delta reused, a whole " +
+		"copy searched for a delta), which sends a cache's clones fewer bytes than `multi`",
 	"pack.windowmemory": "the cache's serve configuration",
 	"pack.usebitmaps":   "the cache's serve configuration",
 	// Read only by a bitmap write (the maintainer's multi-pack-index), so

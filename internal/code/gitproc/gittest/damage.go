@@ -36,9 +36,12 @@ import (
 // answers the same damage differently on each: a copy before its first
 // maintenance holds only packs, and every git process reads a pack body
 // through its index; a copy the maintainer has served from also holds a
-// bitmapped multi-pack-index and a commit-graph, and there upload-pack's pack
-// reuse sends a damaged pack entry to the client byte for byte and walks read
-// commits from the graph, so no process names a damaged pack body at all.
+// bitmapped multi-pack-index and a commit-graph, and there upload-pack's
+// pack-objects copies a stored object to the client as it is stored —
+// damaged bytes from any pack, a damaged entry header from the bitmap's
+// preferred pack ([PreferredPack]), which single reuse sends without reading
+// it — and walks read commits from the graph, so no process names that
+// damage at all.
 
 // DamageCase is one damage [Damage] does to a repository's files; its value
 // is the case's name in the measurements every suite is held to.
@@ -941,6 +944,50 @@ func WriteServed(tb testing.TB, c *Client, dir string) {
 	c.Run(tb, "", gitDir, "-c", "core.multiPackIndex=true", "-c", "pack.writeBitmapLookupTable=true",
 		"multi-pack-index", "write", "--bitmap", "--no-progress")
 	c.Run(tb, "", gitDir, "commit-graph", "write", "--reachable", "--no-progress")
+}
+
+// PreferredPack is the pack a served copy's multi-pack-index PREFERS — its
+// path without an extension — read from the index as git reads it
+// (midx_preferred_pack): the object at the first position of the index's
+// pseudo-pack order, its reverse index (the RIDX chunk), is the preferred
+// pack's, and that object's row of the object offsets (OOFF) names its pack by
+// the pack's position among the index's pack names (PNAM). With
+// pack.allowPackReuse=single, a clone is sent that pack's objects as they are
+// stored, and every other object as pack-objects packs any object. Which pack
+// it is was the writer's choice — for an index written with no
+// --preferred-pack, the pack whose .pack has the oldest modification time to
+// the second, and among packs of one second whichever the writer listed first
+// (an index it replaces in that index's order, then the directory's) — so a
+// case that needs the pack reads it here rather than presume one. It fails tb
+// on a copy with no multi-pack-index or one with no reverse index, which every
+// git at the node floor writes beside a bitmap.
+func PreferredPack(tb testing.TB, repo string) string {
+	tb.Helper()
+	pack := filepath.Join(repo, "objects", "pack")
+	midx := filepath.Join(pack, "multi-pack-index")
+	body, err := os.ReadFile(midx)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	ridx, ridxEnd := MidxChunk(tb, midx, "RIDX")
+	offsets, offsetsEnd := MidxChunk(tb, midx, "OOFF")
+	names, namesEnd := MidxChunk(tb, midx, "PNAM")
+	if ridxEnd-ridx < 4 || ridxEnd > int64(len(body)) {
+		tb.Fatalf("%s's reverse index holds no position", midx)
+	}
+	at := offsets + 8*int64(binary.BigEndian.Uint32(body[ridx:]))
+	if at+8 > offsetsEnd || offsetsEnd > int64(len(body)) {
+		tb.Fatalf("%s's reverse index names an object past its offsets", midx)
+	}
+	id := binary.BigEndian.Uint32(body[at:])
+	if namesEnd > int64(len(body)) {
+		tb.Fatalf("%s's pack names run past its end", midx)
+	}
+	list := strings.Split(strings.TrimRight(string(body[names:namesEnd]), "\x00"), "\x00")
+	if int64(id) >= int64(len(list)) {
+		tb.Fatalf("%s's first object is in pack %d of its %d", midx, id, len(list))
+	}
+	return filepath.Join(pack, strings.TrimSuffix(list[id], ".idx"))
 }
 
 // FileIdentity is what a cache's vouch for a file is kept by — its device and

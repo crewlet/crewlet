@@ -318,12 +318,15 @@
 // The check reads index files alone, and only those this process has neither
 // written nor checked, so two kinds of damage pass it, and a SCRUB behind the
 // serving is what finds them (scrub.go). A PACK BODY: on a copy the
-// maintainer has served from, upload-pack's bitmap pack reuse sends a damaged
-// entry to the client byte for byte and exits 0, and the commit-graph spares
-// every walk the commit's parse, so no git process on the node names it while
-// every clone of it fails at the client (measured from git 2.40.4 to 2.56.0);
-// and holding the packs before a copy first answered would hold the largest
-// repository's first request for as long as reading twenty gigabytes takes.
+// maintainer has served from, upload-pack's pack-objects copies a stored
+// object to the client as it is stored — damaged bytes from any pack, and a
+// damaged entry header from the bitmap's preferred pack, which single reuse
+// sends without reading it — and exits 0, and the commit-graph spares every
+// walk the commit's parse, so no git process on the node names it while
+// every clone of it fails at the client (measured on the node pin and the
+// floor); and holding the packs before a copy first
+// answered would hold the largest repository's first request for as long as
+// reading twenty gigabytes takes.
 // And damage that lands in a file AFTER this process vouched for it, with no
 // change of its identity — media damage — which no vouch can see: a bitmap
 // damaged so drops an object from every clone of its branch, upload-pack
@@ -880,11 +883,22 @@
 //
 // What a CLONE IS SENT, and what its pack-objects costs the node, under each
 // value of ServeConfig's pack.allowPackReuse (BenchmarkPackReuse: pushes
-// received thin, a cold round's install and the maintainer's bitmap, three
-// runs of five on 2.56.0 and on 2.55.0, which agree): over 200 pushes adding
-// files 38.4 MB and 0.85–0.87 s of CPU with single, 41.8 MB and 0.96–1.10 s
-// with multi; over 200 pushes of gittest.History's edits 21.7 MB and
-// 0.53–0.55 s, 34.0 MB and 1.89–1.97 s; and over those edits once all but
-// their last 20 pushes are one compacted pack 17.3 MB and 0.20–0.22 s,
-// 19.1 MB and 0.31–0.33 s.
+// received thin, a cold round's install and the maintainer's bitmap,
+// seventeen copies of each history on 2.56.0 and seventeen on 2.55.0, each
+// arm held three to five times): over 200 pushes adding files 38.2–38.5 MB
+// and 0.82–0.91 s of CPU with single, 41.6–41.8 MB and 0.94–1.14 s with
+// multi; over 200 pushes of gittest.History's edits 20.8–21.9 MB and
+// 0.50–0.56 s, 30.7–34.0 MB and 1.52–1.98 s; and over those edits once all
+// but their last 20 pushes are one compacted pack 17.3–17.4 MB and
+// 0.19–0.24 s, 19.1–19.2 MB and 0.30–0.34 s — multi against single on each
+// copy 8.5–9%, 48–57% and 10% more bytes for 8–30% more CPU, 3.0–3.7 times
+// and 45–71% more. On every copy the bitmap preferred one push's pack, about
+// 0.5% of the objects (git's choice with no --preferred-pack, reported
+// beside each arm with its rank by objects: 1, 10 and 81 seen). Which pack
+// that is, and which copy of each edited object the multi-pack-index keeps
+// (serve.go), are chosen by when each pack landed, to the second, and by the
+// order the filesystem lists the pack directory, so the edits' bytes moved
+// from copy to copy by up to 5% under single and 11% under multi; single
+// sent fewer bytes for less CPU on every copy: the figures ServeConfig's
+// single is set from.
 package cache
