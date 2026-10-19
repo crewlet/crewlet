@@ -42,7 +42,7 @@ import { currentTab, docImagePaths, tabImages, tabRegion } from "~/lib/artifacts
 import { useVersionImages } from "~/lib/artifacts/versionImages.ts";
 import { DocEditor } from "./DocEditor.tsx";
 import type { PresenceReport } from "./presence.ts";
-import { useKindControls } from "~/lib/artifacts/kindControls.ts";
+import { useKindControls, useRegionNames } from "~/lib/artifacts/kindControls.ts";
 
 export function DocView({
   detail,
@@ -114,6 +114,11 @@ function Doc({
   useEffect(() => {
     if (primary) at({ region: tabRegion(where) }, editing && drafting);
   }, [at, primary, where, editing, drafting]);
+  // AND WHAT THOSE REGIONS ARE CALLED, so the room says "Viewing Overview"
+  // rather than the tab's address.
+  useRegionNames(
+    primary ? Object.fromEntries(doc.tabs.map((t) => [tabRegion(t.path), t.title])) : null,
+  );
 
   const choose = (path: string) => setTab(path === doc.tabs[0]?.path ? "" : path);
   const many = doc.tabs.length > 1;

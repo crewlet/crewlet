@@ -60,9 +60,10 @@ vi.mock("~/lib/artifacts/people.ts", async () => {
   };
   return { ...actual, useArtifactPeople: () => people };
 });
+const reader = vi.hoisted(() => ({ handle: "", login: "" }));
 vi.mock("~/lib/viewer.ts", async () => {
   const actual = await vi.importActual<typeof import("~/lib/viewer.ts")>("~/lib/viewer.ts");
-  return { ...actual, useViewer: () => ({ handle: "" }) };
+  return { ...actual, useViewer: () => reader };
 });
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
@@ -166,6 +167,8 @@ beforeEach(() => {
   }) as never);
   vi.mocked(useDataStore).mockReturnValue(null);
   onMode.mockClear();
+  reader.handle = "";
+  reader.login = "";
 });
 
 afterEach(() => {
@@ -233,6 +236,15 @@ test("each panel has its key, and the key closes what it opened", () => {
   expect(screen.queryByRole("complementary")).toBeNull();
   press("s");
   expect(screen.getByText("The share dialog")).toBeTruthy();
+});
+
+// A READER SIGNED IN WITH NO SEAT saw a People panel of everybody but
+// themselves: "You" was drawn only from a seat.
+test("the People panel starts with the reader, seat or none", () => {
+  reader.login = "token:review";
+  mount(`#/artifacts/${ID}?panel=people`);
+  const panel = screen.getByRole("complementary", { name: "People here" });
+  expect(within(panel).getByText("You")).toBeTruthy();
 });
 
 test("Data is a control and a key only where the artifact keeps data", () => {
