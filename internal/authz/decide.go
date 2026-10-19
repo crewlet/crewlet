@@ -274,6 +274,9 @@ var relationClasses = []Class{
 // identity refuses an ADMITTED principal whose proof is older than that
 // window ([ReasonStepUp], naming the window in [Decision.Recency]). Last,
 // because every earlier answer is one a fresher proof would not change.
+//
+// A GESTURE OF SEVERAL DECISIONS is answered in this same order by [Combine],
+// so a write decided part by part is refused as one question would have been.
 func Decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Chart,
 	now time.Time) Decision {
 

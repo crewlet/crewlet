@@ -10,13 +10,6 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// The admissions: the reasons a rule ADMITS by, which no refusal carries, so
-// `unauthorized` has no sentence for them.
-var admissions = []authz.Reason{
-	authz.ReasonGrant, authz.ReasonSelf, authz.ReasonAuthor, authz.ReasonLead,
-	authz.ReasonEverybody, authz.ReasonAsked, authz.ReasonShared,
-}
-
 // unauthorizedSays is the message a refusal on authority is answered with,
 // built the way every surface builds one — through authz.RefusalDetail, so the
 // keys this package reads are the ones authz writes.
@@ -163,7 +156,9 @@ func TestEveryRefusalReasonHasASentence(t *testing.T) {
 		said[reason] = true
 	}
 	for _, reason := range authz.Reasons {
-		if slices.Contains(admissions, reason) {
+		// AN ADMISSION is carried by no refusal, so `unauthorized` has
+		// no sentence for it.
+		if reason.Admits() {
 			if said[string(reason)] {
 				t.Errorf("%q admits, and unauthorized keeps a sentence for it", reason)
 			}
@@ -178,6 +173,31 @@ func TestEveryRefusalReasonHasASentence(t *testing.T) {
 	for leftover := range said {
 		if !authz.Reason(leftover).Valid() {
 			t.Errorf("unauthorized keeps a sentence for %q and no rule reports it", leftover)
+		}
+	}
+}
+
+// A PERMISSION CURES EXACTLY THE REFUSALS AUTHZ SAYS ONE LIFTS.
+//
+// The sentence table decides for each reason whether the grants beside it are
+// a way past the rule, and internal/authz decides the same thing for itself —
+// [authz.Reason.Authority], which its fold of a gesture's several decisions
+// reads to tell a part a permission lifts from a bar on the caller. Two
+// answers to one question drift unless something holds them together: a
+// relation the fold reads as a bar would be told its remedy here, and one this
+// table thinks a permission lifts would be refused by the fold as a bar.
+// Mutation: flip grantCures on not_author and its row fails.
+func TestGrantCuresIsAuthzsAuthorityPartition(t *testing.T) {
+	t.Parallel()
+	reasons := httpjson.UnauthorizedReasons()
+	if len(reasons) < 10 {
+		t.Fatalf("read %d reasons; a walk that stopped reading the table "+
+			"certifies nothing", len(reasons))
+	}
+	for _, reason := range reasons {
+		if got, want := httpjson.GrantCures(reason), authz.Reason(reason).Authority(); got != want {
+			t.Errorf("unauthorized says a permission cures %q: %v; authz says "+
+				"it is a refusal on authority: %v", reason, got, want)
 		}
 	}
 }
