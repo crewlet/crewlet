@@ -130,7 +130,8 @@ var (
 	ChatAdvanceWatermarkStatement = chatAdvanceWatermarkStatement
 	ChatAdvanceErasedStatement    = chatAdvanceErasedStatement
 	ChatBeginRebuildStatement     = chatBeginRebuildStatement
-	ChatRebuildingStatement       = chatRebuildingStatement
+	ChatStateStatement            = chatStateStatement
+	ChatRecordInstanceStatement   = chatRecordInstanceStatement
 	ChatDropBatchStatement        = chatDropBatchStatement
 	ChatRebuiltStatement          = chatRebuiltStatement
 	ChatCorpusStatement           = chatCorpusStatement
