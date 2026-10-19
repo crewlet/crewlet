@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/chat"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -126,30 +127,29 @@ func TestTheGenerationRecordLandsOnItsSubjectAndAppliesAsItsAuditRow(t *testing.
 //
 // The engine hands the transition its operator as the identity directory names
 // a party ([iam.ActorFor]'s four kinds, which are chat's author kinds word for
-// word), the framework's facts admit a principal's own kind as well, and a
-// reanchor run by nobody in particular is this node's own. Each lands on the
-// record as the kind every chat reader renders, and a credential acting as
-// itself carries its login as the credential when nothing else is named — the
-// same reading the knowledge base's generation record makes. Mutation: map any
-// kind below to another, or drop the credential's default, and its case says
-// so.
+// word), and a reanchor run by nobody in particular is this node's own. Each
+// lands on the record as the kind every chat reader renders, and a credential
+// acting as itself carries its login as the credential when nothing else is
+// named — the same reading the knowledge base's generation record makes.
+// Mutation: map any kind below to another, or drop the credential's default,
+// and its case says so.
 func TestAGenerationRecordNamesItsAuthorInChatsWords(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
-		by, byKind, operator string
-		want                 chat.Actor
+		by       string
+		byKind   iam.ActorKind
+		operator string
+		want     chat.Actor
 	}{
 		"nobody named": {"", "", "",
 			chat.Actor{Handle: "node-a", Kind: chat.AuthorSystem}},
-		"a person, as the directory names one": {"jane", "human", "pat:1",
+		"a person, as the directory names one": {"jane", iam.ActorHuman, "pat:1",
 			chat.Actor{Handle: "jane", Kind: chat.AuthorHuman, OperatorID: "pat:1"}},
-		"a person, as a principal's kind": {"jane", "person", "",
-			chat.Actor{Handle: "jane", Kind: chat.AuthorHuman}},
-		"a seat": {"eng", "seat", "",
+		"a seat": {"eng", iam.ActorAgent, "",
 			chat.Actor{Handle: "eng", Kind: chat.AuthorAgent}},
-		"the engine": {"engine", "engine", "",
+		"the engine": {"engine", iam.ActorSystem, "",
 			chat.Actor{Handle: "engine", Kind: chat.AuthorSystem}},
-		"a credential acting as itself": {"ops-1", "operator", "",
+		"a credential acting as itself": {"ops-1", iam.ActorOperator, "",
 			chat.Actor{Handle: "ops-1", Kind: chat.AuthorOperator, OperatorID: "ops-1"}},
 		"a kind nobody stated": {"ci", "", "",
 			chat.Actor{Handle: "ci", Kind: chat.AuthorOperator, OperatorID: "ci"}},

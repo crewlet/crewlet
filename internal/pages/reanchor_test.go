@@ -3,6 +3,7 @@ package pages_test
 import (
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -25,32 +26,19 @@ func TestAGenerationRecordNamesItsAuthorAsEveryRowDoes(t *testing.T) {
 		operator string
 	}{
 		"a person through a machine token": {
-			facts: statelog.GenerationFacts{By: "jane.doe", ByKind: "human",
+			facts: statelog.GenerationFacts{By: "jane.doe", ByKind: iam.ActorHuman,
 				OperatorID: "pat:0b8f6b44"},
 			actor: "jane.doe", kind: pages.AuthorHuman, operator: "pat:0b8f6b44",
 		},
 		"a Tier A token": {
-			facts: statelog.GenerationFacts{By: "token:ops", ByKind: "operator",
+			facts: statelog.GenerationFacts{By: "token:ops", ByKind: iam.ActorOperator,
 				OperatorID: "token:ops"},
 			actor: "token:ops", kind: pages.AuthorOperator, operator: "token:ops",
-		},
-		// THE PRINCIPAL'S VOCABULARY IS READ TOO, as the tracker's record
-		// reads it, so one reanchor names one party the same way on both
-		// logs.
-		"a person named by their principal kind": {
-			facts: statelog.GenerationFacts{By: "eng", ByKind: "person",
-				OperatorID: "session:0196f0c2"},
-			actor: "eng", kind: pages.AuthorHuman, operator: "session:0196f0c2",
-		},
-		"a seat named by its principal kind": {
-			facts: statelog.GenerationFacts{By: "eng", ByKind: "seat",
-				OperatorID: "eng"},
-			actor: "eng", kind: pages.AuthorAgent, operator: "eng",
 		},
 		// AN OPERATOR WITH NO CREDENTIAL STATED is a credential acting under
 		// its own login, so the login is the credential — and only there.
 		"a machine with no credential stated": {
-			facts: statelog.GenerationFacts{By: "ci:release", ByKind: "machine"},
+			facts: statelog.GenerationFacts{By: "ci:release", ByKind: iam.ActorOperator},
 			actor: "ci:release", kind: pages.AuthorOperator, operator: "ci:release",
 		},
 		"a kind nobody stated": {
@@ -58,18 +46,14 @@ func TestAGenerationRecordNamesItsAuthorAsEveryRowDoes(t *testing.T) {
 			actor: "token:ops", kind: pages.AuthorOperator, operator: "token:ops",
 		},
 		"a person with no credential stated": {
-			facts: statelog.GenerationFacts{By: "eng", ByKind: "human"},
+			facts: statelog.GenerationFacts{By: "eng", ByKind: iam.ActorHuman},
 			actor: "eng", kind: pages.AuthorHuman,
 		},
 		// A KIND THIS DOMAIN HAS NO WORD FOR is a party acting on the
 		// company's behalf, which is an operator — and the engine acts
 		// through no credential, so none is invented for it.
 		"the engine itself": {
-			facts: statelog.GenerationFacts{By: "engine", ByKind: "system"},
-			actor: "engine", kind: pages.AuthorOperator,
-		},
-		"the engine named by its principal kind": {
-			facts: statelog.GenerationFacts{By: "engine", ByKind: "engine"},
+			facts: statelog.GenerationFacts{By: "engine", ByKind: iam.ActorSystem},
 			actor: "engine", kind: pages.AuthorOperator,
 		},
 		// NOBODY NAMED IS THE NODE, never an empty author column.
