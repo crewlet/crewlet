@@ -40,8 +40,10 @@ var ErrNotInTrash = errors.New("doclet: the page is not in the trash past the cu
 // OLDEST FIRST so a pass that stops at its cap has purged the pages longest
 // past their term, and the next pass starts where it left off. THE ID BREAKS A
 // TIE, so two passes over the same rows list them in the same order on every
-// node. Over the partial index on `trashed_at` (migration 0005), which holds
-// the trashed pages and nothing else.
+// node. A SEEK OF THE INDEX IN THAT ORDER, with no sort: the partial index on
+// `trashed_at` and the id (replicated 0066) holds the trashed pages and
+// nothing else, so the LIMIT stops the seek at the cap rather than after every
+// page past the cutoff has been read and sorted.
 func (s *Store) TrashedBefore(ctx context.Context, cutoff time.Time, limit int) ([]string, error) {
 	switch {
 	case cutoff.IsZero():
