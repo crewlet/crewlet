@@ -196,6 +196,12 @@ func TestAListingIsReadInItsOrder(t *testing.T) {
 	cursor := listCursor{Container: "ENG", Title: "Page 5", ID: "p-0005"}
 	shapes := listingShapes()
 	for name, shape := range shapes {
+		if shape.drivenBy != "" {
+			// NOT IN THE ORDER'S INDEX: a listing narrowed by a filter's
+			// own rows reads those rows and sorts them, which
+			// [TestAFilterIsReadFromItsOwnRows] holds instead.
+			continue
+		}
 		t.Run(name, func(t *testing.T) {
 			reads := map[string]listSpec{"the first window": {}}
 			for i, arm := range listResumes(cursor, shape.pinned) {
@@ -309,11 +315,13 @@ func TestAListingCountsChildrenBySeekingTheirParents(t *testing.T) {
 }
 
 // listingShape is one listing as the surfaces ask for it: its predicate, the
-// predicate its rows' children are counted under, and whether it is pinned to
-// one container ([listResumes]).
+// predicate its rows' children are counted under, whether it is pinned to one
+// container ([listResumes]), and the index of the filter whose own rows drive
+// it, where one does.
 type listingShape struct {
 	spec, child listSpec
 	pinned      bool
+	drivenBy    string
 }
 
 // listingShapes is every shape of listing the plan tests hold, by name: the
@@ -332,10 +340,90 @@ func listingShapes() map[string]listingShape {
 		"a tree level under one page":   {ParentID: "p-0001", Status: live, Skills: &ordinary},
 		"the tool skills":               {Skills: &skills, Status: []Status{StatusPublished}},
 		"a title in one container":      {Container: "ENG", Title: "page"},
+		"a label's pages":               {Label: "runbook"},
+		"a label's pages in a container": {Container: "ENG", Label: "runbook",
+			Status: live},
+		"one person's watched pages": {Watcher: "jane", Status: live},
 	} {
 		spec, child := compileListing(f)
-		shapes[name] = listingShape{spec, child, f.Container != ""}
+		shape := listingShape{spec: spec, child: child, pinned: f.Container != ""}
+		switch {
+		case f.Label != "":
+			shape.drivenBy = "pages_labels_label_idx"
+		case f.Watcher != "":
+			shape.drivenBy = "pages_watchers_handle_idx"
+		}
+		shapes[name] = shape
 	}
 	shapes["a page's own children"] = listingShape{spec: childListing("p-0001")}
 	return shapes
+}
+
+// A FILTER BY A PAGE'S OWN ROWS IS READ FROM THOSE ROWS.
+//
+// A label and a watcher narrow a listing to the pages one label or one person
+// names, and each has an index for exactly that: `pages_labels_label_idx` and
+// `pages_watchers_handle_idx`. Written as a probe of each listed page's own
+// rows, the filter walked the listing's order asking every page in it, and the
+// listing's total counted the same way — one person's watched pages read, and
+// counted, every page in the company to find the few they follow. So each such
+// listing's total, first window and every arm of a later one are held to: a
+// seek of the filter's own index; `pages_heads` read by nothing but its key;
+// and no walk of the heads, the labels or the watchers. Each window sorts the
+// filter's matches, which is what it costs instead of the knowledge base.
+//
+// Mutation: probe the listed pages' own rows again, and every read walks the
+// heads; drop the filter's index, and the filter's rows are read whole.
+func TestAFilterIsReadFromItsOwnRows(t *testing.T) {
+	t.Parallel()
+	db := pagePlanStore(t)
+	cursor := listCursor{Container: "ENG", Title: "Page 5", ID: "p-0005"}
+	held := 0
+	for name, shape := range listingShapes() {
+		if shape.drivenBy == "" {
+			continue
+		}
+		held++
+		t.Run(name, func(t *testing.T) {
+			total, totalArgs := listTotalStatement(shape.spec)
+			reads := map[string]struct {
+				sql  string
+				args []any
+			}{"the total": {total, totalArgs}}
+			for i, from := range append(slices.Clone(listFromStart),
+				listResumes(cursor, shape.pinned)...) {
+				statement, args := listRowsStatement(shape.spec, from, DefaultLimit+1)
+				reads[fmt.Sprintf("window read %d", i)] = struct {
+					sql  string
+					args []any
+				}{statement, args}
+			}
+			for read, statement := range reads {
+				details := storetest.Details(storetest.PlanTree(t, db, statement.sql,
+					statement.args))
+				shown := strings.Join(details, "\n")
+				if !storetest.Seeks(details, shape.drivenBy) {
+					t.Errorf("%s does not seek %s, the filter's own index:\n%s",
+						read, shape.drivenBy, shown)
+				}
+				for _, line := range details {
+					switch {
+					case strings.HasPrefix(line, "SCAN pages_heads"),
+						strings.HasPrefix(line, "SCAN pages_labels"),
+						strings.HasPrefix(line, "SCAN pages_watchers"):
+						t.Errorf("%s walks a table the filter names its rows of:\n%s",
+							read, shown)
+					case strings.HasPrefix(line, "SEARCH p ") &&
+						!strings.Contains(line, "sqlite_autoindex_pages_heads_1 (id=?)"):
+						t.Errorf("%s reads the heads other than by the key of a page "+
+							"the filter named:\n%s", read, shown)
+					}
+				}
+			}
+		})
+	}
+	if held == 0 {
+		t.Fatal("no listing shape is narrowed by a filter's own rows, so this " +
+			"test holds nothing")
+	}
 }
