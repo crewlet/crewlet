@@ -30,7 +30,7 @@ import (
 // recording what it was asked, so a case can say both what was answered and
 // what was never touched.
 //
-// The company: jane owns `page` (an HTML artifact) and `notes` (Markdown); the
+// The company: jane owns `page` (an HTML artifact) and `notes` (a doc); the
 // page is shared with bob as viewer, with the ENG unit as editor and with sam
 // as editor. `scribe` is an agent owning `report`, led by lee. dana relates to
 // nothing, and ada is an administrator who relates to nothing either.
@@ -89,7 +89,7 @@ func heads() map[artifacts.ID]artifactsdomain.Head {
 		page: {ID: page, Label: page.Label(), Kind: artifacts.KindHTML, Title: "Page", Owner: "jane",
 			OwnerKind: iam.ActorHuman, HeadNumber: 2, Status: artifactsdomain.StatusLive,
 			Shares: pageShares, AccessEpoch: 4},
-		notes: {ID: notes, Kind: artifacts.KindMarkdown, Title: "Notes", Owner: "jane",
+		notes: {ID: notes, Kind: artifacts.KindDoc, Title: "Notes", Owner: "jane",
 			OwnerKind: iam.ActorHuman, HeadNumber: 1, Status: artifactsdomain.StatusLive,
 			Shares: []artifacts.Share{share(artifacts.AudienceSeat, "bob", artifacts.RoleViewer)}},
 		report: {ID: report, Kind: artifacts.KindHTML, Title: "Report", Owner: "scribe",

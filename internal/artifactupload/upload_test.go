@@ -62,7 +62,7 @@ func TestNoByteIsAcceptedBeforeItsReservation(t *testing.T) {
 	// THE PIPELINE'S OWN BYTES ARE HELD TO IT TOO: inline content past the
 	// budget is refused before it is stored.
 	_, _, err = h.svc.Create(t.Context(), h.person("ada", h.opKey("create")), artifactupload.CreateRequest{
-		Kind: artifacts.KindMarkdown, Title: "x", Owner: "ada", OwnerKind: "human", Entry: "a.md",
+		Kind: artifacts.KindDoc, Title: "x", Owner: "ada", OwnerKind: "human", Entry: "a.md",
 		Files: []artifactupload.FileSpec{{Path: "a.md", Inline: []byte(strings.Repeat("m", 100))}},
 	})
 	if !errors.As(err, &pending) {
@@ -339,14 +339,14 @@ func TestContentIsHeldToItsTypeAndAgentsToNoCredential(t *testing.T) {
 	h := newHarness(t, options{})
 	key := "AKIA" + "IOSFODNN7EXAMPLE"
 	_, _, err := h.svc.Create(t.Context(), h.agent("bot", "turn-1", h.opKey("c")), artifactupload.CreateRequest{
-		Kind: artifacts.KindMarkdown, Title: "x", Owner: "bot", OwnerKind: "agent", Entry: "a.md",
+		Kind: artifacts.KindDoc, Title: "x", Owner: "bot", OwnerKind: "agent", Entry: "a.md",
 		Files: []artifactupload.FileSpec{{Path: "a.md", Inline: []byte("# Setup\n\nkey: " + key + "\n")}},
 	})
 	if !errors.Is(err, artifactupload.ErrCredential) || !strings.Contains(err.Error(), "line 3") {
 		t.Fatalf("an agent's credential answered %v", err)
 	}
 	if _, _, err := h.svc.Create(t.Context(), h.person("ada", h.opKey("c")), artifactupload.CreateRequest{
-		Kind: artifacts.KindMarkdown, Title: "x", Owner: "ada", OwnerKind: "human", Entry: "a.md",
+		Kind: artifacts.KindDoc, Title: "x", Owner: "ada", OwnerKind: "human", Entry: "a.md",
 		Files: []artifactupload.FileSpec{{Path: "a.md", Inline: []byte("# Setup\n\nkey: " + key + "\n")}},
 	}); err != nil {
 		t.Fatalf("a person's page was held to the agent rule: %v", err)

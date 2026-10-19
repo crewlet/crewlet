@@ -13,7 +13,7 @@ the ones the engine enforces at publish; the page's runtime API is the
 | You want | Kind |
 |---|---|
 | A table people fill in together: a review, a sign-up, a tracker of decisions | `sheet`. Declare the schema and the dashboard draws it, with presence, per-cell history and accessibility, and no page code at all |
-| A document: a report, a plan, release notes | `markdown`. The dashboard renders it; there is nothing to run |
+| A document: a report, a plan, release notes | `doc`. The dashboard renders it; there is nothing to run |
 | A dashboard, a calculator, a custom view over shared data | `html`, with the capabilities it needs |
 
 Start from a `sheet` whenever the content is rows and columns. A native sheet

@@ -27,7 +27,7 @@ import { plural } from "../format.ts";
 /** What each kind is called, in the eyebrow, the gallery's Type column and its filter. */
 export const KIND_WORDS: Readonly<Record<ArtifactKind, string>> = {
   html: "Page",
-  markdown: "Document",
+  doc: "Doc",
   sheet: "Sheet",
 };
 

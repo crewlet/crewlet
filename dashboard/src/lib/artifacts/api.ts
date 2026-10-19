@@ -225,7 +225,7 @@ export async function mintFrame(id: string, version: number): Promise<ArtifactFr
   )) as ArtifactFrame;
 }
 
-/** A version's entry as text, for a Markdown document the dashboard renders itself. */
+/** A version's entry as text, for a doc the dashboard renders itself. */
 export async function readSource(
   id: string,
   version: number,

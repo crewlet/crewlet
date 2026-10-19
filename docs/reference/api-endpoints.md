@@ -6135,7 +6135,7 @@ appends a generation record, and the window's mode appends nothing.
 
 ## Artifacts
 
-An **artifact** is a page, a Markdown document or a native sheet a person or a
+An **artifact** is a page, a doc or a native sheet a person or a
 seat publishes for others to open: immutable numbered versions of its files,
 shared with seats, units or the whole company at a role (`viewer`,
 `commenter`, `contributor`, `editor`; the owner holds every role). Its records
@@ -6302,13 +6302,13 @@ The API origin **never renders an artifact**:
   token, the `origin` its bridge must hear from, and the `sandbox` and `allow`
   attributes the dashboard sets verbatim. The page is re-authorized on every
   document request there, so a withdrawn share, a sign-out or the trash closes
-  it at once. A Markdown document or a sheet is `409 artifact_not_framed`, and
+  it at once. A doc or a sheet is `409 artifact_not_framed`, and
   a deployment with no `api.artifacts.external_url` is
   `409 artifact_origin_unset`. Minting a frame records that the caller opened
   the artifact, at most once in fifteen minutes.
 - `GET /artifacts/{id}/versions/{n}/source` answers a version's entry as JSON
   (`text`, `content_type`, `size`), read back and checked against its digest:
-  how the dashboard renders a Markdown document, which runs no author code.
+  how the dashboard renders a doc, which runs no author code.
 - `GET /artifacts/{id}/versions/{n}/files/{path}` streams one file as an
   **attachment**, any text and anything a browser could run (HTML, SVG, a
   script) as `text/plain`, under the API's own `default-src 'none'` policy and

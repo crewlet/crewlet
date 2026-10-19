@@ -56,10 +56,10 @@ import (
 // artifactsUsage is the command's usage.
 const artifactsUsage = `usage: crewlet artifacts <command> [arguments] [<config.yaml>] [-url URL]
 
-  list [-scope mine|shared|company|agents|all] [-kind html|markdown|sheet]
+  list [-scope mine|shared|company|agents|all] [-kind html|doc|sheet]
        [-q TEXT] [-status live|trashed] [-work-item KEY] [-limit N]
   get <id>
-  publish <dir|file> [-artifact ID] [-title TEXT] [-kind html|markdown]
+  publish <dir|file> [-artifact ID] [-title TEXT] [-kind html|doc]
        [-entry PATH] [-label TEXT] [-contract VERSION] [-capabilities a,b]
        [-work-item KEY] [-force] [-op-id ID]
   versions <id>

@@ -56,9 +56,9 @@ const (
 	// origin inside a sandboxed frame.
 	KindHTML Kind = "html"
 
-	// KindMarkdown is a document the dashboard renders with its own
+	// KindDoc is a document: Markdown the dashboard renders with its own
 	// element-constructing renderer. It carries no author code.
-	KindMarkdown Kind = "markdown"
+	KindDoc Kind = "doc"
 
 	// KindSheet is a native sheet: its content is its datastore and the
 	// dashboard draws it from the schema alone, so there is nothing for a
