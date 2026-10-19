@@ -87,8 +87,9 @@ export type SectionRenderer = "tabs" | "lenses" | "column" | "rail" | "none";
 
 /**
  * Where a workspace's row sits in the sidebar — or `menu`, for the one with no
- * row: the reader's own Account, which the user block at the sidebar's foot
- * links from its name and its menu, since that block already IS the reader.
+ * row: the reader's own Account, which the menu the reader's name opens in the
+ * user block at the sidebar's foot links to, since that block already IS the
+ * reader.
  */
 export type SidebarPlace = "you" | "workspace" | "foot" | "menu";
 
