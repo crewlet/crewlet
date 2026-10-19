@@ -18,14 +18,17 @@
  * somebody moves this reader to the tab they are on: the tab is said to the
  * room as the region `tab:<path>`.
  *
- * A PERSON'S EDIT IS A VERSION (D54, D69): Edit opens the doc's tabs to rename,
- * reorder, add and remove and each tab's Markdown, and Save publishes the
- * whole change as one version against the version it started from
- * (`DocEditor`).
+ * A PERSON'S EDIT IS A VERSION (D54, D69): Edit turns the doc itself into the
+ * editor, each tab's text edited in place and its tabs renamed, reordered,
+ * added and removed beside it, and the bar's Edit into the editing state,
+ * Cancel and Save, which publishes the whole change as one version against
+ * the version it started from (`DocEditor`). ONE CONTROL ON THE BAR becomes
+ * the other, so the bar stays one slim row either way.
  */
 
 import { useEffect, useId, useMemo, useState } from "react";
-import { Button, Document, Skeleton, TabPanel, Tabs } from "@crewlethq/ui";
+import { Button, Document, Skeleton, TabPanel, Tabs, preloadRichEditor } from "@crewlethq/ui";
+import { PencilGlyph } from "@crewlethq/icons/glyphs";
 import type { ArtifactDetail, ArtifactDoc, ArtifactDocAnswer } from "~/protocol/index.ts";
 import { useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
@@ -119,34 +122,9 @@ function Doc({
     </Document>
   );
 
-  return (
-    <div className="doc-view">
-      <div className="doc-bar">
-        {many && !editing && (
-          <Tabs
-            variant="underline"
-            size="sm"
-            ariaLabel="Tabs"
-            panelId={panel}
-            items={doc.tabs.map((t) => ({ value: t.path, label: t.title }))}
-            value={tab.path}
-            onValueChange={choose}
-          />
-        )}
-        <span className="doc-bar-actions">
-          {editable && !editing && (
-            <Button size="small" variant="secondary" onClick={() => setEditing(true)}>
-              Edit
-            </Button>
-          )}
-          {!editing && (
-            <Button size="small" variant="ghost" onClick={() => window.print()}>
-              Print
-            </Button>
-          )}
-        </span>
-      </div>
-      {editing ? (
+  if (editing) {
+    return (
+      <div className="doc-view">
         <DocEditor
           detail={detail}
           version={version}
@@ -154,6 +132,13 @@ function Doc({
           selected={tabParam}
           onSelect={choose}
           image={(path) => tabImages({ path }, loaded)}
+          imageVersion={loaded}
+          reading={(path) => {
+            const t = doc.tabs.find((x) => x.path === path);
+            return t ? (
+              <Document>{renderMarkdown(t.text, { image: tabImages(t, loaded) })}</Document>
+            ) : null;
+          }}
           onDraft={setDrafting}
           onDone={() => {
             setEditing(false);
@@ -165,22 +150,57 @@ function Doc({
             onPublished?.(n);
           }}
         />
-      ) : (
-        <div className="doc-read">
-          <div className="doc-read-side">
-            <OnThisPage body={tab.text} />
-          </div>
-          <div className="doc-read-page">
-            {many ? (
-              <TabPanel id={panel} value={tab.path}>
-                {body}
-              </TabPanel>
-            ) : (
-              body
-            )}
-          </div>
+        {primary && <DocPrint doc={doc} loaded={loaded} />}
+      </div>
+    );
+  }
+
+  return (
+    <div className="doc-view">
+      <div className="doc-bar">
+        {many && (
+          <Tabs
+            variant="underline"
+            size="sm"
+            ariaLabel="Tabs"
+            panelId={panel}
+            items={doc.tabs.map((t) => ({ value: t.path, label: t.title }))}
+            value={tab.path}
+            onValueChange={choose}
+          />
+        )}
+        <span className="doc-bar-actions">
+          {editable && (
+            <Button
+              size="small"
+              variant="secondary"
+              leadingIcon={<PencilGlyph size="sm" />}
+              onPointerEnter={preloadRichEditor}
+              onFocus={preloadRichEditor}
+              onClick={() => setEditing(true)}
+            >
+              Edit
+            </Button>
+          )}
+          <Button size="small" variant="ghost" onClick={() => window.print()}>
+            Print
+          </Button>
+        </span>
+      </div>
+      <div className="doc-read">
+        <div className="doc-read-side">
+          <OnThisPage body={tab.text} />
         </div>
-      )}
+        <div className="doc-read-page">
+          {many ? (
+            <TabPanel id={panel} value={tab.path}>
+              {body}
+            </TabPanel>
+          ) : (
+            body
+          )}
+        </div>
+      </div>
       {primary && <DocPrint doc={doc} loaded={loaded} />}
     </div>
   );

@@ -1112,7 +1112,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/knowledge/diaries` · `#/knowledge/diaries/{handle}` | **Agent diaries** — every agent's diary at a glance, each counted by the node holding the agent; one agent's diary and episodes *(needs Admin access)*. Handles live here as they do under `seats/` | |
 | `#/artifacts` · `#/artifacts/mine` · `#/artifacts/shared` · `#/artifacts/company` · `#/artifacts/agents` | **Artifacts**: For you (what the reader opened most lately and what was shared with them, their pins first), then Mine, Shared with you, Company and By agents, each the engine's `artifacts` listing under one scope, every row decided by `get_artifact`. A list or cards. No permission opens the workspace: a share alone admits a reader (D01), and the engine decides every artifact. An administrator also sees the company's storage against its quotas | `kind=html\|doc\|slides\|sheet` · `q=` · `sort=updated\|created\|title\|opened` · `shape=list\|cards` (all four kept across the sections) · `status=trashed` (Mine: the reader's own trash) |
 | `#/artifacts/new` | **New artifact**: a native sheet, blank or from the Review sheet template, or a doc or a deck from the engine's starter, owned by the reader *(needs Artifacts access)*. A page is published by an agent's tool or the CLI, not typed here | `kind=sheet\|doc\|slides` · `template=review\|blank` · `item=` (the task it is made for, which lists it on that task's Artifacts card) |
-| `#/artifacts/{id}` | **Artifact**: addressed by its id. A page runs in a sandboxed frame on the artifact origin, a doc is rendered here tab by tab by the dashboard's own Markdown renderer with its outline beside it, Edit (text and tabs: add, rename, reorder, remove; each save a version, a raced save merged onto the newer one) and Print, a deck is drawn from its canonical tree, a sheet is drawn from its schema; who is here, Share, Pin, the version on show, History (versions, Restore, labels and the change record), Data (rows, the schema editor and every write, with Undo) and Settings (details, what it can do, its owner, the trash). A reader with no relation is told it is not there or not theirs, in one card | `tab=view\|data\|history\|settings` · `version=` · `sheet=` (which collection a sheet draws) · `doctab=` (which tab of a doc is on show) · `data=rows\|schema\|history` |
+| `#/artifacts/{id}` | **Artifact**: addressed by its id. A page runs in a sandboxed frame on the artifact origin, a doc is rendered here tab by tab by the dashboard's own Markdown renderer with its outline beside it, Edit (the text in place, in the rich editor, and the tabs: add, rename, reorder, remove; each save a version, a raced save merged onto the newer one) and Print, a deck is drawn from its canonical tree, a sheet is drawn from its schema; who is here, Share, Pin, the version on show, History (versions, Restore, labels and the change record), Data (rows, the schema editor and every write, with Undo) and Settings (details, what it can do, its owner, the trash). A reader with no relation is told it is not there or not theirs, in one card | `tab=view\|data\|history\|settings` · `version=` · `sheet=` (which collection a sheet draws) · `doctab=` (which tab of a doc is on show) · `data=rows\|schema\|history` |
 | `#/spend` | **Spend › Overview**: the window's tokens against the one before, the monthly budget, the prompt-cache share and the median task; daily tokens by phase (or model, provider, seat, unit, worker); then by agent beside by provider and by team, and the three most expensive tasks beside the auxiliary model by purpose (tokens only) | `window=7d\|30d\|90d\|<from>/<to>` (whole company days, kept across the sections) · `group=phase\|model\|provider\|seat\|unit\|worker` |
 | `#/spend/tasks` | **Expensive tasks** — the tasks last changed inside the window, most tokens first, each with what drove it: turns, workers, reopens and send-backs *(needs Tracker access)* | `window=7d\|30d\|90d\|<from>/<to>` (kept across the sections) |
 | `#/spend/budgets` | **Budgets** — the company's and every agent seat's day, week and month: spent, the ceiling (raised in place by an admin whose credential the document admits), and what is refusing. ONE address: Settings lists it as a cross-link | `window=` is not read here, and is carried through to the other sections |
@@ -3398,12 +3398,23 @@ schema — and the dashboard printed them as literal characters: a reader saw
 `## Decision`, `- [ ] ship it` and `[the guide](https://…)` as the text an
 agent typed rather than as the document it wrote.
 
-`lib/markdown.ts` renders a CommonMark subset to React nodes. It is in-tree
-for the same reason the rest of this engine writes its own small pieces: a
-markdown library's real surface is its HTML passthrough and the sanitiser that
-has to follow it, and this renderer needs **neither** — it emits no raw HTML
-under any input, so there is no `dangerouslySetInnerHTML` on the path and
+`lib/markdown.ts` renders a CommonMark subset to React nodes. The grammar it
+reads is the design system's (`parseMarkdown` and `markdownInline` from
+`@crewlethq/ui`), the same grammar the rich editor reads a body by, so what a
+writer edits and what a reader sees cannot disagree about where a list ends or
+what a backslash escapes. It is written in-tree rather than taken from a
+markdown library for the reason the rest of this engine writes its own small
+pieces: a library's real surface is its HTML passthrough and the sanitiser
+that has to follow it, and this renderer needs **neither**. It emits no raw
+HTML under any input, so there is no `dangerouslySetInnerHTML` on the path and
 nothing to sanitise.
+
+Beyond the usual blocks it reads three things a page or a doc uses: a
+**backslash escape** (`\*` is an asterisk), an **escaped pipe** in a table
+cell (`a \| b`, a pipe of that cell, inside a code span too, as GitHub reads
+it), and a **callout** in GitHub's alert syntax, a quote whose first line is
+`[!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]` or `[!CAUTION]`, drawn as a
+tinted note with its tone named on a line of its own.
 
 Two rules are load-bearing, because a page is written by an agent acting on
 content it read somewhere else:
@@ -6667,9 +6678,13 @@ page is one column and the outline is not drawn.
   page's changes, each drawn as the person, the change and the turn that made
   it. It reads one revision in the page's place, as what it changed against
   the one saved before it (by line) or as its full text.
-- **Edit writes as you.** The editor is the design system's `MarkdownEditor`
-  (a formatting bar, Write and Preview, Link a page) and saves through
-  `save_page` on
+- **Edit writes as you, in place.** The page itself becomes the editor (the
+  design system's `RichEditor`, [ADR-0044](../../adr/0044-a-page-is-edited-in-place-and-saved-as-the-markdown-it-was.md)): it looks the same while it is
+  edited as when it is read, blocks come from a slash menu or from Markdown
+  typed as Markdown, a selection gets a formatting toolbar, and the page bar's
+  Edit becomes the editing state, Cancel and Save. The body stays Markdown,
+  and a save with no edit sends the bytes that were opened, so only the lines
+  a writer changed ever move. It saves through `save_page` on
   [`/operator/act`](api-endpoints.md#operatoract--the-dashboards-write-surface)
   with the revision it was opened on as `base_version`. The page keeps being
   read while it is open (every 20 s), so a save by somebody else is SEEN
@@ -6684,9 +6699,11 @@ page is one column and the outline is not drawn.
   merge is precisely what the engine's refusal of a stale base exists to
   prevent: the next save would be accepted against the new revision and
   delete what they wrote. Save and Command or Control with Enter read one
-  answer for whether a save can be sent. A page link is inserted by picking a
-  page, and is written in the address the backlinks read
-  (`PAGE_ADDRESS_PREFIX`, held against `pages.AddressPrefix` by a test).
+  answer for whether a save can be sent. A page link is inserted from the
+  slash menu's "Link to a page", by picking a page, and is written in the
+  address the backlinks read (`PAGE_ADDRESS_PREFIX`, held against
+  `pages.AddressPrefix` by a test). The note kept with the revision is a line
+  under the page, beside its word count.
 
 ### The composer: a new page
 
