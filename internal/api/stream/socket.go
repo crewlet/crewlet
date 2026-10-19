@@ -142,15 +142,19 @@ const (
 // query_failed.
 var (
 	ErrUnknownQuery = errors.New("stream: unknown query")
+	// ErrUnauthorized is what a [RefusedError] is to [errors.Is]. Only a
+	// RefusedError reaches a client as a refusal: a bare one names no
+	// decision.
 	ErrUnauthorized = errors.New("stream: this caller may not ask that")
 	ErrNotFound     = errors.New("stream: no such record")
 	ErrBadParams    = errors.New("stream: query refused")
 	ErrUnavailable  = errors.New("stream: not available on this node")
 )
 
-// RefusedError is [ErrUnauthorized] carrying WHY: the rule's reason and the
-// grants that would have admitted the caller, which the error frame answers
-// with beside the code.
+// RefusedError is [ErrUnauthorized] carrying WHY: the code the authority
+// table's mapping gives the refusal, and the rule's reason and the grants that
+// would have admitted the caller, which the error frame answers with beside
+// it. Built by [RefusedFor] and by nothing else.
 //
 // An error rather than a field on the answer, because the query surface
 // reports a refusal the way it reports every failure — as the error — and the
@@ -158,6 +162,8 @@ var (
 type RefusedError struct {
 	// What is what was refused, for the log.
 	What string
+	// Code is the frame's code, as [authz.RefusalFields] gives it.
+	Code httpjson.Code
 	Refused
 }
 
@@ -167,6 +173,41 @@ func (e *RefusedError) Error() string {
 
 // Unwrap is what keeps every errors.Is(err, ErrUnauthorized) arm answering it.
 func (e *RefusedError) Unwrap() error { return ErrUnauthorized }
+
+// errUnspokenRefusal is a refusal on authority the mapping words in a code this
+// socket's vocabulary does not have — see [RefusedFor].
+var errUnspokenRefusal = errors.New("stream: a refusal this socket cannot say")
+
+// RefusedFor is how one refusal the authority table made is answered over this
+// socket, a question's and a watch's alike: the code, the reason and the
+// grants the table's ONE MAPPING ([authz.RefusalFields]) gives it, exactly as
+// the REST twin and every other surface answer it. The frames used to spell
+// `unauthorized` beside the decision's reason and grants for themselves, which
+// agreed with the mapping only for as long as nothing refused here was
+// refused any other way.
+//
+// A CODE THIS SOCKET DOES NOT SPEAK IS A FAULT, never a frame. The mapping
+// answers a stale proof `step_up_required` and a machine token on a verb that
+// needs a person present `token_refused`, and neither is in this vocabulary —
+// a socket cannot carry a step-up, the dashboard replays one over REST alone,
+// and the frames' codes are held against the dashboard's in both directions.
+// No question may be decided by a verb that asks either (internal/api/queries
+// refuses the registration, and a walk in internal/authz holds the verbs an
+// answer or a watch decides by inside itself), so this is unreachable; reached,
+// it is this build's mistake, answered as one — `query_failed`, its words in
+// the log — rather than as a refusal a reader would take for a permission they
+// lack.
+func RefusedFor(what string, d authz.Decision) error {
+	_, code, detail := authz.RefusalFields(d)
+	reason, readable := detail[authz.DetailReason].(string)
+	grants, listed := detail[authz.DetailGrants].([]string)
+	if code != CodeUnauthorized || !readable || !listed {
+		return fmt.Errorf("%w: %s was refused %s (%s)", errUnspokenRefusal,
+			what, code, d.Reason)
+	}
+	return &RefusedError{What: what, Code: code,
+		Refused: Refused{Reason: reason, Grants: grants}}
+}
 
 // BadParamsError is [ErrBadParams] carrying the refusal's own sentence.
 //
@@ -198,8 +239,9 @@ func (e *BadParamsError) Unwrap() error { return ErrBadParams }
 // WHO IS ASKING TRAVELS IN THE CONTEXT, which the guard resolved before this
 // handler ran — never as an argument beside it, because two identities on one
 // call are two chances to answer about different people. A query the caller
-// may not ask returns [ErrUnauthorized] rather than deciding for itself what
-// to do about it, so the refusal reaches the client as a code it handles.
+// may not ask returns what [RefusedFor] makes of the decision that refused it,
+// rather than deciding for itself what to do about it, so the refusal reaches
+// the client as a code it handles, in the words every surface uses.
 type Query func(ctx context.Context, what string, params map[string]any) (any, error)
 
 // request is one client-to-server frame.
@@ -789,9 +831,21 @@ func (w *watching) mayLook(principal iam.Principal) iam.MayLook {
 		}
 		log.InfoContext(ctx, "stream_watch_refused", "login", principal.Login,
 			"asked", login, "reason", string(d.Reason))
-		return &watchAnswer{code: CodeUnauthorized,
-			refused: NewRefused(d.Reason, d.Grants)}
+		return refusedWatch(ctx, d)
 	}
+}
+
+// refusedWatch is a watch the authority table refused, answered through
+// [RefusedFor] — the frame a query refused on the same decision carries — or,
+// for a refusal this socket cannot say, as the fault [RefusedFor] makes it.
+func refusedWatch(ctx context.Context, d authz.Decision) *watchAnswer {
+	err := RefusedFor(watchWhat, d)
+	var refused *RefusedError
+	if !errors.As(err, &refused) {
+		log.ErrorContext(ctx, "stream_watch_refusal_unspoken", "error", err)
+		return &watchAnswer{code: CodeQueryFailed}
+	}
+	return &watchAnswer{code: refused.Code, refused: &refused.Refused}
 }
 
 // watchAnswer is a watch that was not installed: the code its error frame
@@ -862,7 +916,7 @@ func (w *watching) decide(ctx context.Context, principal iam.Principal,
 	case !d.Allowed:
 		log.InfoContext(ctx, "stream_watch_refused", "login", principal.Login,
 			"seat", seat, "reason", string(d.Reason))
-		return &watchAnswer{code: CodeUnauthorized, refused: NewRefused(d.Reason, d.Grants)}
+		return refusedWatch(ctx, d)
 	}
 	return nil
 }
@@ -906,17 +960,19 @@ func (w *watching) recheck(ctx context.Context) {
 // runQuery answers one question onto the client's own queue.
 func runQuery(ctx context.Context, client *Client, query Query, req request) {
 	data, err := query(ctx, req.What, req.Params)
+	var refused *RefusedError
 	switch {
 	case err == nil:
 		client.Reply(Envelope{Kind: KindResult, ID: req.ID, What: req.What, Data: data})
 	case errors.Is(err, ErrUnknownQuery):
 		client.Reply(queryError(req, CodeUnknownQuery))
-	case errors.Is(err, ErrUnauthorized):
-		env := queryError(req, CodeUnauthorized)
-		var refused *RefusedError
-		if errors.As(err, &refused) {
-			env.Refused = &refused.Refused
-		}
+	case errors.As(err, &refused):
+		// THE MAPPING'S CODE AND FIELDS, carried whole from [RefusedFor]. A
+		// bare [ErrUnauthorized] names no decision, so it is answered by the
+		// default arm as the fault it is rather than as a refusal nobody
+		// could say the reason for.
+		env := queryError(req, refused.Code)
+		env.Refused = &refused.Refused
 		client.Reply(env)
 	case errors.Is(err, ErrNotFound):
 		client.Reply(queryError(req, CodeNotFound))

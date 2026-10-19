@@ -59,7 +59,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
-	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
 )
@@ -620,15 +619,6 @@ func (e *Envelope) unavailable(u Unavailable) {
 type Refused struct {
 	Reason string   `json:"reason"`
 	Grants []string `json:"grants"`
-}
-
-// NewRefused is the refusal a decision made, as the frame carries it.
-func NewRefused(reason authz.Reason, grants []iam.Grant) *Refused {
-	names := make([]string, 0, len(grants))
-	for _, g := range grants {
-		names = append(names, string(g))
-	}
-	return &Refused{Reason: string(reason), Grants: names}
 }
 
 // Push builds a broadcast envelope stamped now.
