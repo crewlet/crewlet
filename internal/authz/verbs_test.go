@@ -1,21 +1,12 @@
 package authz_test
 
 import (
-	"bytes"
-	"go/ast"
-	"go/parser"
-	"go/token"
-	"io/fs"
-	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // SEAT-ONLY, HUMAN-ONLY AND SEATED ARE CHECKED BEFORE THE CLASS.
@@ -185,82 +176,24 @@ func TestNoRowIsBothSeatOnlyAndHumanOnly(t *testing.T) {
 // this holds it to anything. A dotted row nothing asks is a rule that decides
 // nothing — `pages.container` sat in the table, asked by no surface, for as
 // long as nobody happened to read it — and it reads to a reviewer as a gesture
-// the engine gates. So the walk reads this package's own rules.go for the
+// the engine gates. So the walk — [treeScan], the one every gate over which
+// code names which verb shares — reads this package's own rules.go for the
 // wire name of every `Action…` constant, then every non-test Go file in the
-// tree outside this package for an `authz.<Constant>` selector, and fails on a
-// dotted verb no such selector names.
+// tree outside this package for a selector naming one, under whatever name the
+// file imports the package as, and this fails on a dotted verb none names.
 //
 // Mutation: delete `work.thread`'s one call site in internal/api/workapi and
 // this goes red naming it.
 func TestEveryDottedVerbIsAskedByANonTestCallSite(t *testing.T) {
 	t.Parallel()
-	root := sourcetree.Root(t)
-	wire := actionWireNames(t, filepath.Join(root, "internal", "authz", "rules.go"),
-		stringConstants(t, filepath.Join(root, "internal", "toolname")))
-	if len(wire) != len(authz.Actions()) {
-		t.Fatalf("read %d Action constants out of rules.go and the table holds %d "+
-			"verbs — the parse no longer sees the declarations", len(wire),
-			len(authz.Actions()))
-	}
-	asked := map[string]bool{}
-	files := 0
-	err := sourcetree.Walk(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			switch d.Name() {
-			case "node_modules", "testdata", "static", "dashboard":
-				return filepath.SkipDir
-			}
-			if path == filepath.Join(root, "internal", "authz") {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		files++
-		body, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		// A FILE THAT NEVER SPELLS THE PACKAGE'S NAME HOLDS NO SELECTOR
-		// INTO IT, so only the files that do are parsed.
-		if !bytes.Contains(body, []byte("authz.")) {
-			return nil
-		}
-		file, err := parser.ParseFile(token.NewFileSet(), path, body, parser.SkipObjectResolution)
-		if err != nil {
-			return err
-		}
-		ast.Inspect(file, func(n ast.Node) bool {
-			sel, ok := n.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
-			if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "authz" {
-				asked[sel.Sel.Name] = true
-			}
-			return true
-		})
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walk the tree: %v", err)
-	}
-	if files < 100 {
-		t.Fatalf("read %d Go files — the root is not this module's, so an "+
-			"absence found here proves nothing", files)
-	}
+	scan := treeScan(t)
 	dotted := 0
-	for constant, verb := range wire {
+	for constant, verb := range scan.wire {
 		if !strings.Contains(verb, ".") {
 			continue
 		}
 		dotted++
-		if !asked[constant] {
+		if !scan.asked(constant) {
 			t.Errorf("%s (%q) is a dotted verb no non-test code asks, so its row "+
 				"decides nothing — ask it where the gesture is decided, or delete it",
 				constant, verb)
@@ -269,104 +202,4 @@ func TestEveryDottedVerbIsAskedByANonTestCallSite(t *testing.T) {
 	if dotted == 0 {
 		t.Fatal("no dotted verb was read, so this walk certifies nothing")
 	}
-}
-
-// actionWireNames reads every `Action…` constant rules.go declares with an
-// `Action` type and a string value, keyed by its Go name.
-//
-// A verb named after a tool that a package below its owner must spell takes
-// its value from internal/toolname (`Action = toolname.SendDM`), so a value
-// that is a selector on that package is read from its declarations, handed in
-// as names.
-func actionWireNames(t *testing.T, path string, names map[string]string) map[string]string {
-	t.Helper()
-	file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
-	if err != nil {
-		t.Fatalf("parse %s: %v", path, err)
-	}
-	out := map[string]string{}
-	for _, decl := range file.Decls {
-		gen, ok := decl.(*ast.GenDecl)
-		if !ok || gen.Tok != token.CONST {
-			continue
-		}
-		for _, spec := range gen.Specs {
-			value, ok := spec.(*ast.ValueSpec)
-			if !ok || len(value.Names) != 1 || len(value.Values) != 1 {
-				continue
-			}
-			typ, ok := value.Type.(*ast.Ident)
-			if !ok || typ.Name != "Action" {
-				continue
-			}
-			if sel, ok := value.Values[0].(*ast.SelectorExpr); ok {
-				if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "toolname" {
-					verb, known := names[sel.Sel.Name]
-					if !known {
-						t.Fatalf("%s is toolname.%s, which internal/toolname does not "+
-							"declare", value.Names[0].Name, sel.Sel.Name)
-					}
-					out[value.Names[0].Name] = verb
-				}
-				continue
-			}
-			lit, ok := value.Values[0].(*ast.BasicLit)
-			if !ok || lit.Kind != token.STRING {
-				continue
-			}
-			verb, err := strconv.Unquote(lit.Value)
-			if err != nil {
-				t.Fatalf("%s: %v", value.Names[0].Name, err)
-			}
-			out[value.Names[0].Name] = verb
-		}
-	}
-	return out
-}
-
-// stringConstants reads every string constant the package in dir declares in
-// its non-test source, by name.
-func stringConstants(t *testing.T, dir string) map[string]string {
-	t.Helper()
-	files, err := filepath.Glob(filepath.Join(dir, "*.go"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	out := map[string]string{}
-	for _, path := range files {
-		if strings.HasSuffix(path, "_test.go") {
-			continue
-		}
-		file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
-		if err != nil {
-			t.Fatalf("parse %s: %v", path, err)
-		}
-		for _, decl := range file.Decls {
-			gen, ok := decl.(*ast.GenDecl)
-			if !ok || gen.Tok != token.CONST {
-				continue
-			}
-			for _, spec := range gen.Specs {
-				value := spec.(*ast.ValueSpec)
-				for i, name := range value.Names {
-					if i >= len(value.Values) {
-						continue
-					}
-					lit, ok := value.Values[i].(*ast.BasicLit)
-					if !ok || lit.Kind != token.STRING {
-						continue
-					}
-					text, err := strconv.Unquote(lit.Value)
-					if err != nil {
-						t.Fatalf("%s: %v", name.Name, err)
-					}
-					out[name.Name] = text
-				}
-			}
-		}
-	}
-	if len(out) == 0 {
-		t.Fatalf("read no string constant out of %s", dir)
-	}
-	return out
 }
