@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/api/paced"
 	"github.com/crewlet/crewlet/internal/artifacts"
@@ -197,7 +198,7 @@ func (s *Service) transfer(w http.ResponseWriter, r *http.Request) {
 		d := authz.Decide(r.Context(), p, authz.ActionArtifactCreate,
 			authz.Object{Kind: authz.KindArtifact}, s.gate.Chart, s.gate.now())
 		if d.Unknown() || !d.Allowed {
-			refuseDecision(w, r, authz.ActionArtifactCreate, d)
+			operator.RefuseDecision(w, r, authz.ActionArtifactCreate, d)
 			return
 		}
 	} else {
