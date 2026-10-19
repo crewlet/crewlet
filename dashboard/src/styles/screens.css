@@ -11006,15 +11006,36 @@ a.live-row:focus-visible {
 .slides-edit > .slides-merged {
   grid-column: 1 / -1;
 }
+/* The strip scrolls itself (uilet's own), bounded here: as tall as the view
+   beside the stage, and a row as wide as the column under it on a phone. */
 .slides-strip {
   max-height: max(24rem, var(--artifact-view, 100cqb));
-  overflow: auto;
 }
 .slides-main {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-3);
   min-width: 0;
+}
+/* UNDER THE STAGE: where the reader is in the deck, and whether the slide on
+   the stage is one Present skips. */
+.slides-stage-caption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-3);
+  margin: calc(var(--spacing-1) * -1) 0 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+.slides-stage-position {
+  font-variant-numeric: tabular-nums;
+}
+.slides-stage-hidden {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  color: var(--color-text-secondary);
 }
 .slides-panel {
   display: grid;
@@ -11028,14 +11049,18 @@ a.live-row:focus-visible {
   gap: var(--spacing-2);
 }
 .slides-notes {
+  display: grid;
+  gap: var(--spacing-2);
   max-width: var(--size-measure);
+}
+.slides-notes > p {
+  margin: 0;
+}
+.slides-notes-body {
   padding: var(--spacing-3);
   border-radius: var(--radius-md);
   background: var(--color-surface-subtle);
   white-space: pre-wrap;
-}
-.slides-notes p {
-  margin: 0;
 }
 .slides-conflicts {
   display: flex;
@@ -11047,7 +11072,6 @@ a.live-row:focus-visible {
     grid-template-columns: minmax(0, 1fr);
   }
   .slides-strip {
-    order: 2;
     max-height: none;
   }
 }
@@ -11059,14 +11083,40 @@ a.live-row:focus-visible {
    The show's height follows its content, and its scroll margins are what that
    room keeps clear. */
 .slides-show {
+  position: relative;
   display: flex;
   flex-direction: column;
   scroll-margin-top: var(--sticky-top);
   scroll-margin-bottom: var(--spacing-4);
-  background: var(--color-surface-inset);
 }
+.slides-show:focus-visible {
+  outline: none;
+}
+/* FULL SCREEN IS A PROJECTOR: the slide fills the screen on black, and its
+   controls float over its foot, put away with the cursor while the pointer
+   rests. */
 .slides-show:fullscreen {
   height: 100%;
+  background: var(--color-projection-letterbox);
+}
+.slides-show:fullscreen .slides-show-bar {
+  position: absolute;
+  inset-inline: 0;
+  bottom: var(--spacing-5);
+  pointer-events: none;
+  transition: opacity var(--motion-duration-moderate) var(--motion-easing-out);
+}
+.slides-show:fullscreen .slides-show-bar > * {
+  pointer-events: auto;
+}
+.slides-show[data-idle] {
+  cursor: none;
+}
+.slides-show[data-idle] .slides-show-bar {
+  opacity: 0;
+}
+.slides-show[data-idle] .slides-show-bar > * {
+  pointer-events: none;
 }
 .slides-show-slide[data-transition="fade"] {
   animation: slides-fade var(--motion-duration-moderate) var(--motion-easing-out);
@@ -11088,13 +11138,7 @@ a.live-row:focus-visible {
 .slides-show-bar {
   display: flex;
   justify-content: center;
-  align-items: center;
-  gap: var(--spacing-2);
-  padding: var(--spacing-2);
-}
-.slides-show-count {
-  color: var(--color-text-secondary);
-  font-variant-numeric: tabular-nums;
+  padding-top: var(--spacing-2);
 }
 .slides-presenter {
   height: max(30rem, var(--artifact-view, 100cqb));
