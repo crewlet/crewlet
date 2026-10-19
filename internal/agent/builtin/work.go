@@ -2315,6 +2315,16 @@ func handles(all ...string) []string {
 // stores' rule, for the reason [callOpKey] states once for every id the
 // tracker's tools derive.
 //
+// # And the object is one segment of the name
+//
+// Written through [statelog.OpNamePart] in every arm: a task's id, a
+// project's key and a handle as themselves, and a file's path or a caller's
+// view id escaped, because in the grammar a dot begins a STEP and a name is
+// bounded — `file-ENG/docs/a.md` read as the name `file-ENG/docs/a` with a
+// step `md`, and a kilobyte of path put an id the engine refuses back from a
+// caller into every record and ledger row the write made. The derived arm's
+// identity carries the object as it was asked, so only the name is escaped.
+//
 // tool is the calling tool's own name, which is what the call's repeat count
 // is kept by.
 //
@@ -2335,7 +2345,7 @@ func handles(all ...string) []string {
 // derived one the instant its key carries, [Actor.OperationSince]; and a step
 // of a caller's operation that operation's own.
 func opIDFor(actor Actor, tool, verb, object string, args map[string]any) string {
-	name := verb + "-" + object
+	name := verb + "-" + statelog.OpNamePart(object)
 	if actor.Operation != "" {
 		return statelog.StepOpID(actor.Operation, name)
 	}
@@ -4179,6 +4189,10 @@ func (d WorkDeps) bindOperation(actor Actor, tool string,
 // change apart with certainty, which is all this check is for — a caller can
 // mint any id that carries an instant anyway, so this is not a credential.
 // The `op_id` itself is left out of it, since the first call carried none.
+//
+// JOINED BY A DASH, because the name is one segment of the grammar and a dot
+// begins a step: joined by one, the name was escaped whole and an operator
+// reading the ledger could no longer see which tool an id was minted for.
 func callName(tool string, args map[string]any) string {
 	rest := make(map[string]any, len(args))
 	for key, value := range args {
@@ -4186,14 +4200,15 @@ func callName(tool string, args map[string]any) string {
 			rest[key] = value
 		}
 	}
-	return tool + "." + turnctx.ArgsDigest(rest)[:callDigestLen]
+	return tool + "-" + turnctx.ArgsDigest(rest)[:callDigestLen]
 }
 
 // callDigestLen is how many hex digits of the arguments' digest an operator's
 // operation id carries: 64 bits, far past any accidental collision, in an id
 // of at most 74 bytes with the longest tool that offers one
 // (comment_on_work_item: 36 + 1 + 20 + 1 + 16) — well inside
-// [statelog.MaxCallerOpIDBytes].
+// [statelog.MaxCallerOpIDBytes], and a name well inside one segment
+// ([statelog.MaxOpSegmentBytes]).
 const callDigestLen = 16
 
 // withOperation puts the call's operation on its answer, where it has one:
