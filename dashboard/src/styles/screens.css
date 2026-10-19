@@ -11358,7 +11358,7 @@ a.live-row:focus-visible {
 .dashboard-view {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-3);
+  gap: var(--spacing-4);
   min-width: 0;
 }
 .dashboard-bar {
@@ -11392,21 +11392,31 @@ a.live-row:focus-visible {
 .dashboard-figure {
   min-width: 0;
 }
+/* A STAT STANDS ON THE FOOT OF ITS FRAME, over the citation, so the values of
+   a row of stats share one baseline whether a title or a label above them
+   took one line or two. */
+.dashboard-figure[data-figure="stat"] {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  height: 100%;
+}
 /* A share: the bar, and under it the legend naming each part and its value. */
 .dashboard-share {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-3);
 }
+/* The rail is one card; its entries are rows on the card's inset, each
+   entry's own 12px plus this 4px putting its words under the card's title. */
 .dashboard-sources {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
   min-width: 0;
 }
-.dashboard-sources-title {
-  margin: 0;
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-medium);
+.dashboard-sources-list {
+  padding: var(--spacing-2) var(--spacing-1);
+}
+/* A note fills its cell, as a figure's frame does, so a row of blocks ends
+   on one line. */
+.dashboard-note {
+  height: 100%;
 }

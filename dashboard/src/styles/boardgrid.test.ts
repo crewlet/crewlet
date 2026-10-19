@@ -24,3 +24,20 @@ test("no board keeps a grid of its own", () => {
   expect(css).not.toMatch(/\.home-board-grid\b/);
   expect(css).not.toMatch(/\.dashboard-board\s*\{[^}]*display:\s*grid/);
 });
+
+// A ROW OF STATS SHARES ONE BASELINE: each stat stands on the foot of its
+// frame, over the citation, whether its title took one line or two.
+test("a stat stands on the foot of its frame", () => {
+  const body = /\n\.dashboard-figure\[data-figure="stat"\] \{([^}]*)\}/.exec(css)?.[1] ?? "";
+  expect(body).toMatch(/justify-content:\s*flex-end;/);
+  expect(body).toMatch(/height:\s*100%;/);
+});
+
+// THE VIEW'S SECTIONS ARE SET ON THE BOARD'S OWN GAP: the filters, the board
+// and the Sources rail are one step apart, the step between two widgets.
+test("a dashboard's sections are one board gap apart", () => {
+  const view = /\n\.dashboard-view \{([^}]*)\}/.exec(css)?.[1] ?? "";
+  const body = /\n\.dashboard-body \{([^}]*)\}/.exec(css)?.[1] ?? "";
+  expect(view).toMatch(/gap:\s*var\(--spacing-4\);/);
+  expect(body).toMatch(/gap:\s*var\(--spacing-4\);/);
+});
