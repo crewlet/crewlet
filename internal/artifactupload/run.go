@@ -15,7 +15,6 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/artifacts/mediatype"
-	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/artifactupload/edits"
 	"github.com/crewlet/crewlet/internal/artifactupload/lint"
@@ -63,9 +62,11 @@ type run struct {
 	// for the dark-mode warning.
 	read [][]byte
 
-	// deck is the version's deck where the kind's format is the slide
-	// format, read whole by [run.checkFormat].
-	deck *slideformat.Deck
+	// formatText is the readable text the kind's format extracted from
+	// the version ([run.checkFormat]), for a kind whose search rule is
+	// [artifacts.SearchFormat]; formatted reports the format was read.
+	formatText string
+	formatted  bool
 
 	warnings []lint.Finding
 }

@@ -63,6 +63,14 @@ const (
 	// subset does not take, a bound passed, or a file the deck names that the
 	// version does not hold. The message names the rule broken.
 	CodeSlideFormat Code = "slide_format"
+
+	// CodeDashboardFormat is a board outside the board format
+	// (internal/artifacts/dashspec): a field the format does not have, a
+	// widget over a column its dataset does not hold, an engine source or
+	// parameter the catalogue does not take, a calculation step outside the
+	// closed set, or a file dataset whose rows break its declared columns.
+	// The message names the field.
+	CodeDashboardFormat Code = "dashboard_format"
 )
 
 // The warnings: legal, and almost certainly not what the author meant.
@@ -97,7 +105,7 @@ func (c Code) Refusing() bool {
 	return slices.Contains([]Code{
 		CodeRemoteScript, CodeRemoteStylesheet, CodeUnpinned, CodeRemoteImport,
 		CodeFormOffOrigin, CodeRefreshOffOrigin, CodeJavaScriptURL, CodePlaceholder,
-		CodeVendorOff, CodeVendorFailed, CodeUnparseable, CodeSlideFormat,
+		CodeVendorOff, CodeVendorFailed, CodeUnparseable, CodeSlideFormat, CodeDashboardFormat,
 	}, c)
 }
 

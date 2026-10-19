@@ -6,14 +6,17 @@ import (
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/dashspec"
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
 	"github.com/crewlet/crewlet/internal/artifactupload/lint"
 )
 
 // checkFormat holds the composed version to its kind's format: for a deck,
-// the index, every slide it orders and every file they name, read whole and
-// refused, finding by finding, when any of it is outside the slide format.
+// the index, every slide it orders and every file they name; for a board, its
+// spec and every file dataset it reads. Each is read whole and refused,
+// finding by finding, when any of it is outside the format, and the text the
+// format extracts is kept for the search index.
 //
 // THE WHOLE VERSION, NOT THE FILES THIS PUBLISH BRINGS: a patch that removes an
 // image breaks a carried slide that shows it, and an index that drops a slide
@@ -34,7 +37,18 @@ func (r *run) checkFormat(ctx context.Context, m artifacts.Manifest) error {
 		if err != nil {
 			return err
 		}
-		r.deck = &deck
+		r.formatText, r.formatted = deck.Text(), true
+		return nil
+	case artifacts.FormatDashboard:
+		board, err := dashspec.Read(versionSource{ctx: ctx, run: r, m: m})
+		var invalid *dashspec.Invalid
+		if errors.As(err, &invalid) {
+			return boardRefusal(invalid)
+		}
+		if err != nil {
+			return err
+		}
+		r.formatText, r.formatted = board.Spec.Text(), true
 		return nil
 	}
 	return fmt.Errorf("artifactupload: a %s artifact's format %q is not one this pipeline "+
@@ -52,7 +66,21 @@ func slideRefusal(refused *slideformat.Refused) error {
 	return out
 }
 
-// versionSource is a composed version as the slide format reads it: the bytes
+// boardRefusal is a board's refusal in the linter's shape, for the reason a
+// deck's is.
+func boardRefusal(invalid *dashspec.Invalid) error {
+	out := &lint.Refusal{Findings: make([]lint.Finding, len(invalid.Findings))}
+	for i, f := range invalid.Findings {
+		msg := f.Message
+		if f.Field != "" {
+			msg = f.Field + ": " + msg
+		}
+		out.Findings[i] = lint.Finding{Path: f.Path, Line: f.Line, Code: lint.CodeDashboardFormat, Message: msg}
+	}
+	return out
+}
+
+// versionSource is a composed version as a native format reads it: the bytes
 // this run holds for a file it brings, else the object the manifest names.
 type versionSource struct {
 	ctx context.Context

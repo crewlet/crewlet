@@ -104,6 +104,15 @@ func (s EngineSource) Param(key string) (SourceParam, bool) {
 
 func num(f float64) *float64 { return &f }
 
+// MaxSpendDays is the longest spend window a source reads, the usage domain's
+// own bound (tokens.MaxSpendRangeDays, held equal by the datasets surface's
+// suite), and MaxSpendBands the bands a daily series names before the rest is
+// Other (tokens.DefaultSeriesGroups).
+const (
+	MaxSpendDays  = 90
+	MaxSpendBands = 4
+)
+
 // catalogue is the table, in the order every listing follows.
 var catalogue = []EngineSource{
 	{
@@ -168,7 +177,7 @@ var catalogue = []EngineSource{
 			"`days` is absent.",
 		Access: "everybody the company admits: spend is the overview",
 		Params: []SourceParam{
-			{Key: "days", Type: ParamNumber, Min: num(1), Max: num(181),
+			{Key: "days", Type: ParamNumber, Min: num(1), Max: num(MaxSpendDays),
 				Summary: "company days ending today; absent reads the live window"},
 		},
 		Columns: []Column{
@@ -191,7 +200,7 @@ var catalogue = []EngineSource{
 			"busiest bands named, the rest as Other).",
 		Access: "everybody the company admits: spend is the overview",
 		Params: []SourceParam{
-			{Key: "days", Type: ParamNumber, Min: num(1), Max: num(181), Default: "14",
+			{Key: "days", Type: ParamNumber, Min: num(1), Max: num(MaxSpendDays), Default: "14",
 				Summary: "company days ending today"},
 			{Key: "group", Type: ParamEnum, Summary: "what a band is",
 				Enum: []string{"seat", "phase", "model", "provider", "unit", "worker"}, Default: "seat"},
@@ -202,7 +211,7 @@ var catalogue = []EngineSource{
 			{Key: "total_tokens", Type: ColumnNumber, Label: "Tokens"},
 		},
 		Signal:  SignalTokens,
-		MaxRows: 181 * 21,
+		MaxRows: MaxSpendDays * (MaxSpendBands + 1),
 	},
 	{
 		Name:    "agents.status",
