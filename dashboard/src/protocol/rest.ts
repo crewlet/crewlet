@@ -291,9 +291,10 @@ export type QueryValue = string | number | boolean | undefined;
 export interface RequestOptions {
   /**
    * The request body. Encoded as JSON unless `contentType` names a type that
-   * is not JSON, in which case it must already be a string and is sent
-   * byte for byte: `PUT /secrets/{name}` takes the credential itself, and an
-   * encoding step would seal JSON quotes into it.
+   * is not JSON, in which case it must already be a string or a `Blob` and is
+   * sent byte for byte: `PUT /secrets/{name}` takes the credential itself, and
+   * an encoding step would seal JSON quotes into it; an artifact's picture is
+   * its bytes.
    */
   body?: unknown;
   /**
@@ -516,11 +517,11 @@ async function attempt(
     timeoutMs = REQUEST_TIMEOUT_MS,
   } = options;
   const contentType = options.contentType ?? (body === undefined ? undefined : "application/json");
-  let encoded: string | undefined;
+  let encoded: string | Blob | undefined;
   if (body !== undefined) {
     if (contentType && !isJson(contentType)) {
-      if (typeof body !== "string") {
-        throw new TypeError(`rest.request: a ${contentType} body must be a string`);
+      if (typeof body !== "string" && !(body instanceof Blob)) {
+        throw new TypeError(`rest.request: a ${contentType} body must be a string or a Blob`);
       }
       encoded = body;
     } else {
@@ -762,6 +763,13 @@ export const rest = {
    */
   putText: (path: string, value: string) =>
     bodyOf("PUT", path, { body: value, contentType: "text/plain; charset=utf-8" }),
+  /**
+   * A file's bytes as the body, under the file's own type (or
+   * `application/octet-stream` where the browser knows none): an artifact's
+   * picture moving through the engine's transfer route.
+   */
+  putBytes: (path: string, value: Blob) =>
+    bodyOf("PUT", path, { body: value, contentType: value.type || "application/octet-stream" }),
   // DELETE CARRIES A BODY HERE, which is unusual and deliberate: a
   // disconnect is not one act but a family of them, and which one it is —
   // whether the accounts go too, whether to stop waiting for a third-party

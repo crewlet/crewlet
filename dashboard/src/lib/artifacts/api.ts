@@ -23,6 +23,8 @@ import type {
   DashboardCatalogueAnswer,
   DashboardDatasetAnswer,
   ArtifactUploadIntent,
+  ArtifactCapability,
+  ArtifactCheckAnswer,
   DataCollection,
   DataOp,
   ShareableRole,
@@ -360,57 +362,135 @@ export async function readCatalogue(signal: AbortSignal): Promise<DashboardCatal
 /**
  * Publish a new version based on `head` (`POST …/versions` with `If-Match`):
  * a patch of exact edits, removals and the files an upload brought, and the
- * entry where it moves (a doc gaining its index).
+ * entry where it moves (a doc gaining its index); or a whole version, every
+ * file named (a page saved again from its create page), with the capabilities
+ * it declares.
  */
 export function publishVersion(
   id: string,
   head: number,
-  body: {
-    mode: "patch";
-    edits: unknown[];
-    files: unknown[];
-    upload?: string;
-    entry?: string;
-    label?: string;
-  },
+  body:
+    | {
+        mode: "patch";
+        edits: unknown[];
+        files: unknown[];
+        upload?: string;
+        entry?: string;
+        label?: string;
+      }
+    | {
+        mode: "whole";
+        files: PublishFile[];
+        upload?: string;
+        entry: string;
+        capabilities: readonly ArtifactCapability[];
+      },
 ): Omit<KeyedRequest, "key"> {
   return { method: "POST", path: `${base(id)}/versions`, body, headers: ifMatch(head) };
+}
+
+/**
+ * Make an HTML page from the files an upload brought (`POST /artifacts`):
+ * the engine lints every page, copies its allowlisted CDN files in and
+ * publishes version 1, owned by the caller and shared with nobody.
+ */
+export function createPage(fields: {
+  title: string;
+  upload: string;
+  files: PublishFile[];
+  entry: string;
+  capabilities: readonly ArtifactCapability[];
+  workItem?: string;
+}): Omit<KeyedRequest, "key"> {
+  return {
+    method: "POST",
+    path: "/artifacts",
+    body: {
+      kind: "html",
+      title: fields.title,
+      upload: fields.upload,
+      files: fields.files,
+      entry: fields.entry,
+      capabilities: fields.capabilities,
+      ...(fields.workItem ? { work_item: fields.workItem } : {}),
+    },
+  };
+}
+
+/**
+ * What a publish of a page's text files would say, every refusal and warning
+ * with its file and line, with nothing written (`POST /artifacts/checks`).
+ * Not keyed: a check is no operation. `signal` is the caller's, which aborts
+ * a check the person's next edit superseded.
+ */
+export async function checkPage(
+  files: readonly { path: string; text: string }[],
+  entry: string,
+  signal?: AbortSignal,
+): Promise<ArtifactCheckAnswer> {
+  const answer = await rest.request("POST", "/artifacts/checks", {
+    body: { kind: "html", entry, files: files.map((f) => ({ path: f.path, text: f.text })) },
+    ...(signal ? { signal } : {}),
+  });
+  return answer.body as ArtifactCheckAnswer;
 }
 
 /** A file a publish names: one an upload brought, one carried by digest, or one removed. */
 export type PublishFile =
   { path: string; upload: true } | { path: string; carry: string } | { path: string; remove: true };
 
-/** The SHA-256 of text as UTF-8, lowercase hex: how the engine names a file's bytes. */
-export async function textDigest(text: string): Promise<string> {
-  const sum = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+/** A file a save brings: its text, or a picture's bytes. */
+export interface UploadFile {
+  path: string;
+  body: string | Blob;
+}
+
+/** The SHA-256 of bytes, lowercase hex: how the engine names a file's bytes. */
+async function digestOf(bytes: BufferSource): Promise<string> {
+  const sum = await crypto.subtle.digest("SHA-256", bytes);
   return [...new Uint8Array(sum)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+/** The SHA-256 of text as UTF-8, lowercase hex: how the engine names a file's bytes. */
+export async function textDigest(text: string): Promise<string> {
+  return digestOf(new TextEncoder().encode(text));
+}
+
+/** A file's digest and size, as its upload declares them. */
+async function declared(f: UploadFile): Promise<{ sha256: string; size: number }> {
+  if (typeof f.body === "string") {
+    const bytes = new TextEncoder().encode(f.body);
+    return { sha256: await digestOf(bytes), size: bytes.length };
+  }
+  return { sha256: await digestOf(await f.body.arrayBuffer()), size: f.body.size };
+}
+
 /**
- * Bring text files into an artifact's next version: an upload intent
- * (`POST /artifacts/{id}/uploads`, keyed by `key`), then each file's bytes put
- * through the engine, the only transfer the dashboard is handed (its own
- * policy reaches no other origin). Answers the upload to publish with and the
+ * Bring files into an artifact's next version, or into a new artifact's
+ * first (`id` null): an upload intent (`POST /artifacts/{id}/uploads`, or
+ * `POST /artifacts/uploads` for a create, keyed by `key`), then each file's
+ * bytes put through the engine. Answers the upload to publish with and the
  * file each path is named by; a file the artifact already holds is carried by
  * its digest and moves no byte.
+ *
+ * THE ENGINE NEVER HANDS THE DASHBOARD A PUT STRAIGHT TO THE BUCKET: a
+ * session's intent is the dashboard's (`originOf`), and `reachesBucket`
+ * (internal/artifactupload) streams every one of its files through the engine,
+ * since the dashboard's own policy reaches no other origin. A direct transfer
+ * here is that contract broken, and refused rather than followed.
  */
-export async function uploadTexts(
-  id: string,
-  files: readonly { path: string; text: string }[],
+export async function uploadFiles(
+  id: string | null,
+  files: readonly UploadFile[],
   key: string,
 ): Promise<{ upload: string; files: PublishFile[] }> {
-  const digests = await Promise.all(files.map((f) => textDigest(f.text)));
-  const entries = files.map((f, i) => ({
-    path: f.path,
-    sha256: digests[i]!,
-    size: new TextEncoder().encode(f.text).length,
-  }));
+  const facts = await Promise.all(files.map(declared));
+  const entries = files.map((f, i) => ({ path: f.path, ...facts[i]! }));
+  const ask = { body: { entries }, headers: { "Idempotency-Key": key } };
   const intent = (
-    await rest.request("POST", `/artifacts/${encodeURIComponent(id)}/uploads`, {
-      body: { entries },
-      headers: { "Idempotency-Key": key },
-    })
+    id === null
+      ? await rest.request("POST", "/artifacts/uploads", ask)
+      : await rest.request("POST", `/artifacts/${encodeURIComponent(id)}/uploads`, ask)
   ).body as ArtifactUploadIntent;
   const carried = new Set(intent.carried ?? []);
   for (const t of intent.transfers ?? []) {
@@ -421,18 +501,35 @@ export async function uploadTexts(
     // from the answer: the transfer route is the engine's own, and a client
     // that put bytes wherever an answer pointed would trust that answer with
     // the reader's credential.
+    const upload = encodeURIComponent(intent.upload);
     const segments = t.path.split("/").map(encodeURIComponent).join("/");
-    await rest.putText(
-      `/artifacts/uploads/${encodeURIComponent(intent.upload)}/files/${segments}`,
-      f.text,
-    );
+    if (typeof f.body === "string") {
+      await rest.putText(`/artifacts/uploads/${upload}/files/${segments}`, f.body);
+    } else {
+      await rest.putBytes(`/artifacts/uploads/${upload}/files/${segments}`, f.body);
+    }
   }
   return {
     upload: intent.upload,
     files: files.map((f, i) =>
-      carried.has(f.path) ? { path: f.path, carry: digests[i]! } : { path: f.path, upload: true },
+      carried.has(f.path)
+        ? { path: f.path, carry: facts[i]!.sha256 }
+        : { path: f.path, upload: true },
     ),
   };
+}
+
+/** Bring text files into an artifact's next version: [uploadFiles] for a doc's tabs. */
+export function uploadTexts(
+  id: string,
+  files: readonly { path: string; text: string }[],
+  key: string,
+): Promise<{ upload: string; files: PublishFile[] }> {
+  return uploadFiles(
+    id,
+    files.map((f) => ({ path: f.path, body: f.text })),
+    key,
+  );
 }
 
 /** A doc's version tab by tab (`GET …/versions/{n}/doc`): what the dashboard draws it from. */
