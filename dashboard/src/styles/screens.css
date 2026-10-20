@@ -10676,6 +10676,29 @@ a.live-row:focus-visible {
   max-width: var(--size-measure);
   min-width: 0;
 }
+/* THE PAGE'S HEAD: how the doc is made, and who will see it, on one line
+   that wraps on a phone. */
+.doc-create-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2) var(--spacing-4);
+}
+/* THE BRIEF: the fields an agent is asked with, in the form's own rhythm
+   under the title. */
+.doc-create-brief {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-5);
+}
+.doc-create-next {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding-inline-start: var(--spacing-5);
+}
 /* WHO WILL SEE IT, said once above the title, quietly. */
 .doc-create-where {
   display: flex;

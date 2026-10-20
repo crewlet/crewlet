@@ -9,9 +9,11 @@ import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { Router } from "~/app/router.tsx";
 import { DOC_TEMPLATES } from "~/lib/artifacts/docTemplates.ts";
 import type { KeyedAnswer, KeyedRequest } from "~/lib/keyedWrite.ts";
-import { DocCreate } from "./DocCreate.tsx";
+import { DocCreate, docBrief } from "./DocCreate.tsx";
+import type { ArtifactTaskRequest, FiledArtifactTask } from "./fileTask.ts";
 
 const write = vi.fn<(req: KeyedRequest) => Promise<KeyedAnswer>>();
+const fileTask = vi.fn<(req: ArtifactTaskRequest) => Promise<FiledArtifactTask | null>>();
 
 vi.mock("~/lib/keyedWrite.ts", async () => {
   const actual = await vi.importActual<typeof import("~/lib/keyedWrite.ts")>("~/lib/keyedWrite.ts");
@@ -20,6 +22,30 @@ vi.mock("~/lib/keyedWrite.ts", async () => {
     useKeyedGesture: () => actual.useKeyedGesture((req) => write(req)),
   };
 });
+vi.mock("./fileTask.ts", async () => {
+  const actual = await vi.importActual<typeof import("./fileTask.ts")>("./fileTask.ts");
+  return {
+    ...actual,
+    useFileArtifactTask: () => ({
+      fileArtifactTask: fileTask,
+      busy: false,
+      refusal: null,
+      held: null,
+    }),
+  };
+});
+vi.mock("./WhoBuildsIt.tsx", () => ({
+  useWhoBuildsIt: () => ({
+    builders: [{ seat: { handle: "sre-lead", name: "SRE Lead" }, suggested: true }],
+    seat: "sre-lead",
+    setSeat: () => {},
+    project: "ENG",
+    setProject: () => {},
+    projects: [],
+    projectsLoading: false,
+  }),
+  WhoBuildsIt: () => <p>Who builds it</p>,
+}));
 vi.mock("~/lib/artifacts/access.ts", async () => {
   const actual = await vi.importActual<typeof import("~/lib/artifacts/access.ts")>(
     "~/lib/artifacts/access.ts",
@@ -28,6 +54,8 @@ vi.mock("~/lib/artifacts/access.ts", async () => {
 });
 
 beforeEach(() => {
+  fileTask.mockReset();
+  fileTask.mockResolvedValue({ item: "ENG-2", key: "ENG-2", linked: null });
   write.mockReset();
   write.mockResolvedValue({ kind: "done", pending: false, body: { artifact: "doc-1" } });
 });
@@ -144,4 +172,61 @@ test("Cancel asks before discarding a title, and leaves at once when nothing is 
   mount();
   fireEvent.click(screen.getAllByRole("button", { name: "Cancel" })[0]!);
   expect(location.hash).toBe("#/artifacts");
+});
+
+// ASK AN AGENT turns the column into a brief, and the press files one task to
+// the agent with the brief and lands on it; nothing is created here.
+test("Ask an agent files the brief as a task to the agent and opens the task", async () => {
+  mount("#/artifacts/new/doc?mode=agent");
+  expect(screen.getByRole("radio", { name: "Ask an agent" }).getAttribute("aria-checked")).toBe(
+    "true",
+  );
+  expect(screen.getByText("What happens next")).toBeTruthy();
+  const ask = () => screen.getByRole("button", { name: "Ask SRE Lead" });
+  fireEvent.change(title(), { target: { value: "Incident review guide" } });
+  expect(ask().getAttribute("aria-disabled")).toBe("true");
+  fireEvent.change(screen.getByRole("textbox", { name: "Brief" }), {
+    target: { value: "  How we run incident reviews. " },
+  });
+  fireEvent.click(ask());
+  await waitFor(() => expect(location.hash).toBe("#/work/ENG-2"));
+  expect(fileTask).toHaveBeenCalledWith({
+    kind: "doc",
+    title: "Incident review guide",
+    brief: "How we run incident reviews.",
+    seat: "sre-lead",
+    project: "ENG",
+  });
+  expect(write).not.toHaveBeenCalled();
+});
+
+// THE TITLE AND THE PAGE GO ACROSS: a template chosen in Write it reaches the
+// agent as the outline to follow.
+test("switching to Ask an agent keeps the title and hands over the template", async () => {
+  mount();
+  fireEvent.change(title(), { target: { value: "Database failover" } });
+  fireEvent.click(screen.getByRole("radio", { name: "Runbook" }));
+  fireEvent.click(screen.getByRole("radio", { name: "Ask an agent" }));
+  expect((title() as HTMLInputElement).value).toBe("Database failover");
+  expect(screen.getByText(/runbook outline goes with it/)).toBeTruthy();
+  fireEvent.change(screen.getByRole("textbox", { name: "Brief" }), {
+    target: { value: "For the on-call rota." },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Ask SRE Lead" }));
+  await waitFor(() => expect(fileTask).toHaveBeenCalledOnce());
+  const runbook = DOC_TEMPLATES.find((t) => t.key === "runbook")!;
+  expect(fileTask.mock.calls[0]![0].brief).toBe(
+    `For the on-call rota.\n\nFollow the runbook outline:\n\n${runbook.body.trim()}`,
+  );
+});
+
+test("a brief carries a draft to build on, or nothing beyond the reader's words", () => {
+  const meeting = DOC_TEMPLATES[0]!;
+  expect(docBrief(" Cover it. ", "", undefined)).toBe("Cover it.");
+  expect(docBrief("Cover it.", "## Mine\n", meeting)).toBe(
+    "Cover it.\n\nBuild on this first draft:\n\n## Mine",
+  );
+  expect(docBrief("Cover it.", meeting.body, meeting)).toContain(
+    "Follow the meeting notes outline:",
+  );
 });
