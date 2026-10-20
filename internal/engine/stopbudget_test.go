@@ -3,7 +3,9 @@ package engine_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -32,12 +34,14 @@ import (
 // a share of the allowance no step before it can spend — carved out of the
 // allowance rather than added to it. Each step used to wait out a bound of its
 // own, so the stop spent their sum, close to an orchestrator's kill grace and
-// past it once the flushes behind them ran. Here every round trip to the lease
-// and fleet stores stalls for five seconds once the stop begins, against a
-// lease TTL of three — an allowance of one second, the admission's share
-// included — so the old sum is past half a minute and one allowance is a
-// second. (The stream stays up: the native backends this company runs are
-// reached through the broker's own client, which a stand-in cannot be.)
+// past it once the flushes behind them ran. Here every read and give-back the
+// lease and fleet stores are asked for stalls once the stop begins — until the
+// deadline its context carries, or for five seconds, a client's own timeout,
+// where it carries none — against a lease TTL of three: an allowance of one
+// second, the admission's share included, so the old sum is past half a
+// minute and one allowance is a second. (The stream stays up: the native
+// backends this company runs are reached through the broker's own client,
+// which a stand-in cannot be.)
 //
 // A RECONCILE PASS IS IN FLIGHT WHEN THE STOP BEGINS, under the hold on its
 // surface: the integration loop's first grant is held back until then. The
@@ -54,6 +58,22 @@ import (
 // client's bound like any round trip in flight when a stop begins, and a case
 // that took the store away first measured whether one of those happened to
 // start in between.
+//
+// THE ALLOWANCE IS READ OFF THE DEADLINES THE STOP HANDED ITS ROUND TRIPS,
+// never off the stop's wall clock. The clock is the allowance plus every
+// local step of the teardown — the loops it ends, the flushes, the native
+// half and the stream it closes — which a loaded machine stretches past any
+// margin, and a margin wide enough for that would let a step that waited out
+// a bound of its own through too. The deadlines are exact, whatever the
+// scheduler does: a step begun at an instant is given the rest of the one
+// allowance ([seat.StopStep]), which is spent only while a step is in flight,
+// so the time covered by the stalled steps' spans from start to deadline is at
+// most the allowance less the admission's share — up to the start of the step
+// whose deadline is latest the covered time is time a step was in flight, and
+// from there that step was handed what was left — and the admission's own
+// bound adds at most its share. So the verdict is that measure, and that no
+// round trip ended on the client's own timeout: a step the stop left
+// unbounded, whose span no deadline covers.
 func TestAStopAgainstAnUnreachableStoreSpendsOneAllowance(t *testing.T) {
 	t.Parallel()
 	b := bootstrap(t, func(b *config.Bootstrap) {
@@ -71,8 +91,9 @@ func TestAStopAgainstAnUnreachableStoreSpendsOneAllowance(t *testing.T) {
 		return e != nil && e.ShuttingDown()
 	}
 	pass := &heldPass{granted: make(chan struct{})}
-	back.Coord = stallingLeases{coordBackend: back.Coord, gone: gone, pass: pass}
-	back.Fleet = stallingFleet{fleet: back.Fleet, gone: gone}
+	record := &stalls{}
+	back.Coord = stallingLeases{coordBackend: back.Coord, gone: gone, pass: pass, stalls: record}
+	back.Fleet = stallingFleet{fleet: back.Fleet, gone: gone, stalls: record}
 
 	e, err := engine.New(t.Context(), engine.Options{
 		Bootstrap: b, Company: parsedCompany(t, companyDoc), Backends: back,
@@ -99,32 +120,177 @@ func TestAStopAgainstAnUnreachableStoreSpendsOneAllowance(t *testing.T) {
 			"so no pass is in flight for the stop to wait on")
 	}
 
-	started := time.Now()
 	e.Stop(context.Background())
-	took := time.Since(started)
+	calls := record.all()
+
+	// THE PREMISE: the stop made every kind of round trip the verdict is
+	// about — a lease given back by the drain, the duties' read, the
+	// admission's withdrawal — and the held pass gave its hold back as a
+	// step of the stop, ended when the allowance ran out. Without the last,
+	// the case would pass with the give-back it exists for never reached.
+	for _, want := range []struct {
+		what string
+		is   func(stalled) bool
+	}{
+		{"a presence or seat lease given back", func(c stalled) bool {
+			return c.op == "release" && (coord.ClassNode.Holds(c.resource) ||
+				coord.ClassSeat.Holds(c.resource))
+		}},
+		{"a duty read before its release", func(c stalled) bool {
+			return c.op == "get" && coord.ClassWorker.Holds(c.resource)
+		}},
+		{"the admission withdrawn", func(c stalled) bool { return c.op == "forget_admission" }},
+		{"the held pass's hold given back and ended by the stop", func(c stalled) bool {
+			return c.op == "release" && c.ended == endedByCaller &&
+				strings.HasPrefix(c.resource, coord.WorkerResource("setup-provision-"))
+		}},
+	} {
+		if !slices.ContainsFunc(calls, want.is) {
+			t.Errorf("the premise: the stop made no round trip that is %s; it made %v",
+				want.what, calls)
+		}
+	}
+	// NO ROUND TRIP WAITED OUT A BOUND OF ITS OWN: one stalled call is five
+	// seconds, five times the whole allowance.
+	for _, c := range calls {
+		if c.ended == endedByOwnBound {
+			t.Errorf("%s %s carried no deadline and waited out the client's own %v: "+
+				"the stop left it a bound of its own", c.op, c.resource, clientTimeout)
+		}
+	}
+	// AND THE STEPS' DEADLINES COVER ONE ALLOWANCE BETWEEN THEM.
 	allowance := seat.StopAllowance(3 * time.Second)
-	// THE ALLOWANCE, and room for the local teardown around it: one stalled
-	// round trip alone is five seconds, so a stop that left even one of its
-	// steps to a bound of its own would be past this.
-	if limit := allowance + 3*time.Second; took > limit {
-		t.Fatalf("the stop took %v against a store that answers nothing, past "+
-			"its %v allowance and %v of local teardown: its round trips each "+
-			"waited out a bound of their own", took, allowance, limit-allowance)
+	if covered := coveredByDeadlines(calls); covered > allowance {
+		t.Errorf("the stop's round trips were handed deadlines covering %v between "+
+			"them, past its %v allowance: its steps did not share one: %v",
+			covered, allowance, calls)
 	}
 }
 
 // errGone is what the stalled store answers once its stall is over.
 var errGone = errors.New("the coordination store has lost quorum")
 
-// stall waits out a round trip to a store that has gone away: until the
-// request's context ends, or five seconds — a client's own timeout.
-func stall(ctx context.Context) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-time.After(5 * time.Second):
+// clientTimeout is what a coordination client waits for a request whose
+// context carries no deadline of its own.
+const clientTimeout = 5 * time.Second
+
+// stallEnd is how a round trip to the gone store ended.
+type stallEnd int
+
+const (
+	// endedByDeadline is a round trip whose context's deadline passed:
+	// the bound the stop handed it.
+	endedByDeadline stallEnd = iota
+	// endedByCaller is one whose context was cancelled before any
+	// deadline — a loop the teardown stopped, or a give-back whose step of
+	// the allowance ran out — which is its caller's bound, not one of its
+	// own.
+	endedByCaller
+	// endedByOwnBound is one that carried no deadline and waited out the
+	// client's own timeout.
+	endedByOwnBound
+)
+
+func (e stallEnd) String() string {
+	switch e {
+	case endedByDeadline:
+		return "deadline"
+	case endedByCaller:
+		return "caller"
+	default:
+		return "own bound"
+	}
+}
+
+// stalled is one round trip the gone store answered: what it was, when it
+// began, the deadline its context carried (zero for none) and how it ended.
+type stalled struct {
+	op, resource string
+	start        time.Time
+	deadline     time.Time
+	ended        stallEnd
+}
+
+func (c stalled) String() string {
+	span := "no deadline"
+	if !c.deadline.IsZero() {
+		span = c.deadline.Sub(c.start).Round(time.Millisecond).String()
+	}
+	return fmt.Sprintf("%s %s (%s, ended by %s)", c.op, c.resource, span, c.ended)
+}
+
+// stalls records every round trip the gone store answers.
+type stalls struct {
+	mu    sync.Mutex
+	calls []stalled
+}
+
+// stall waits out a round trip to a store that has gone away and records it.
+//
+// A CONTEXT WITH A DEADLINE IS ANSWERED ONLY WHEN IT ENDS — no timer of the
+// stand-in's races it, so a goroutine the scheduler starves cannot pick the
+// client's bound over the deadline it was handed. One with none ends with its
+// context or the client's own timeout, whichever comes first.
+func (s *stalls) stall(ctx context.Context, op, resource string) error {
+	c := stalled{op: op, resource: resource, start: time.Now()}
+	c.deadline, _ = ctx.Deadline()
+	if !c.deadline.IsZero() {
+		<-ctx.Done()
+		c.ended = endedByCaller
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			c.ended = endedByDeadline
+		}
+	} else {
+		select {
+		case <-ctx.Done():
+			c.ended = endedByCaller
+		case <-time.After(clientTimeout):
+			c.ended = endedByOwnBound
+		}
+	}
+	s.mu.Lock()
+	s.calls = append(s.calls, c)
+	s.mu.Unlock()
+	if c.ended == endedByOwnBound {
 		return errGone
 	}
+	return ctx.Err()
+}
+
+// all is every round trip recorded so far.
+func (s *stalls) all() []stalled {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.calls)
+}
+
+// coveredByDeadlines is the measure of the union of the spans from each round
+// trip's start to the deadline it ended on: how much time the stop's bounds
+// covered between them, however they overlapped. A span whose deadline is not
+// after its start — a step begun with nothing of the allowance left, handed a
+// context already ended — covers nothing.
+func coveredByDeadlines(calls []stalled) time.Duration {
+	type span struct{ from, to time.Time }
+	spans := make([]span, 0, len(calls))
+	for _, c := range calls {
+		if c.ended == endedByDeadline && c.deadline.After(c.start) {
+			spans = append(spans, span{c.start, c.deadline})
+		}
+	}
+	slices.SortFunc(spans, func(a, b span) int { return a.from.Compare(b.from) })
+	var covered time.Duration
+	var reach time.Time
+	for _, sp := range spans {
+		from := sp.from
+		if from.Before(reach) {
+			from = reach
+		}
+		if sp.to.After(from) {
+			covered += sp.to.Sub(from)
+			reach = sp.to
+		}
+	}
+	return covered
 }
 
 type coordBackend = coord.Backend
@@ -134,8 +300,9 @@ type coordBackend = coord.Backend
 // surface's hold until then ([heldPass]).
 type stallingLeases struct {
 	coordBackend
-	gone func() bool
-	pass *heldPass
+	gone   func() bool
+	pass   *heldPass
+	stalls *stalls
 }
 
 // heldPass is the reconcile pass a stop begins in the middle of: granted is
@@ -169,14 +336,14 @@ func (l stallingLeases) TryAcquire(ctx context.Context, resource string,
 
 func (l stallingLeases) Release(ctx context.Context, resource, owner string, epoch int64) (bool, error) {
 	if l.gone() {
-		return false, stall(ctx)
+		return false, l.stalls.stall(ctx, "release", resource)
 	}
 	return l.coordBackend.Release(ctx, resource, owner, epoch)
 }
 
 func (l stallingLeases) Get(ctx context.Context, resource string) (*coord.Lease, error) {
 	if l.gone() {
-		return nil, stall(ctx)
+		return nil, l.stalls.stall(ctx, "get", resource)
 	}
 	return l.coordBackend.Get(ctx, resource)
 }
@@ -185,12 +352,13 @@ func (l stallingLeases) Get(ctx context.Context, resource string) (*coord.Lease,
 // gone answers true.
 type stallingFleet struct {
 	fleet
-	gone func() bool
+	gone   func() bool
+	stalls *stalls
 }
 
 func (f stallingFleet) ForgetAdmission(ctx context.Context, nodeID, incarnation string) error {
 	if f.gone() {
-		return stall(ctx)
+		return f.stalls.stall(ctx, "forget_admission", nodeID)
 	}
 	return f.fleet.ForgetAdmission(ctx, nodeID, incarnation)
 }
