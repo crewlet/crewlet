@@ -266,9 +266,9 @@ func (e *Engine) migrateSecrets(ctx context.Context) {
 		fleetsecrets.New(e.backends.Fleet, e.cipher))
 	if err != nil {
 		log.ErrorContext(ctx, "secret_migration_incomplete", "error", err,
-			"detail", "this node's own secret rows are still local and no peer "+
-				"can see them; it keeps serving from them and retries at the "+
-				"next start")
+			"detail", "this node's own secret rows not named moved are still local "+
+				"and no peer can see them; it keeps serving from them and retries "+
+				"at the next start")
 	}
 }
 
