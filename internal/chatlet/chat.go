@@ -27,14 +27,18 @@
 // that room's subject and conditioned on its last sequence there, so two
 // writers changing one room contend at the broker and exactly one wins.
 //
-// MESSAGES ARE ADDITIVE. A post carries NO expectation at all, on the
-// precedent [github.com/crewlet/crewlet/internal/worklet.KindTurn] set for the
-// same reason: the records COMMUTE. Two people talking in one room are not
-// racing for anything — neither post is deciding against the other's state —
-// and paying for arbitration would serialise the single hottest subject in
-// the company behind itself at the declared census of [ChatMessagesPerDay].
-// A rejection there would also be a message somebody typed and lost, which is
-// the one failure a chat system may not have.
+// MESSAGES ARE SEQUENCED ([statelog.PatternSequenced]). A post carries NO
+// expectation at all: two people talking in one room are not racing for
+// anything, and paying for arbitration would serialise the single hottest
+// subject in the company behind itself at the declared census of
+// [ChatMessagesPerDay] — and a rejection there would be a message somebody
+// typed and lost, which is the one failure a chat system may not have. But
+// the records do NOT all commute: a post into a room a record ahead of it
+// archived, an edit of a message a delete ahead of it took back, a reaction
+// that would be the thirty-third emoji — each depends on what came before it,
+// which the writer's snapshot cannot hold. So the log orders them and the
+// APPLIER decides each at its position, writing a [Verdict] the writer reads
+// back before it answers (verdict.go).
 //
 // # Why a message record is scoped to its CHANNEL and never to itself
 //

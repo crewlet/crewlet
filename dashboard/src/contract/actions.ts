@@ -303,7 +303,7 @@ export const ACTIONS = {
   // reading of the body — the tool takes no `mentions` and no flag — so a
   // message is sent as what was typed.
   post_message: {
-    // THE COMPOSER'S SEND. A message is additive and arbitrates nothing at
+    // THE COMPOSER'S SEND. A message is sequenced and arbitrates nothing at
     // the broker, so the operation key (the request's `Idempotency-Key`) is
     // what tells a retry from a second remark: the outbox repeats an
     // unanswered message under the key it was first sent with

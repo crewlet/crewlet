@@ -259,6 +259,14 @@ func (h *applyHarness) number(query string, args ...any) int64 {
 	return out.Int64
 }
 
+// lastVerdict is what the applier decided about the latest message record it
+// consumed: the verdict at the highest position.
+func (h *applyHarness) lastVerdict() chatlet.Verdict {
+	h.t.Helper()
+	return chatlet.Verdict(h.scalar(
+		`SELECT verdict FROM chat_verdicts ORDER BY position DESC LIMIT 1`))
+}
+
 // applyReplicatedTables is every table this domain's records rebuild, and it
 // is [chatlet.ReproducibleTables] rather than a list of its own — a table added
 // there and forgotten here would be one the determinism cases never compared.
@@ -443,8 +451,11 @@ func TestTheRoomsSequenceIsContiguousAndARedeliveredPostConsumesNoNumber(t *test
 	if err != nil {
 		t.Fatalf("redeliver a post: %v", err)
 	}
-	if rows != 0 {
-		t.Errorf("a redelivered post wrote %d rows", rows)
+	// NOTHING BUT ITS VERDICT: the copy is decided `repeated`, and the
+	// operation's own verdict is the first copy's.
+	if rows != 1 || h.lastVerdict() != chatlet.VerdictRepeated {
+		t.Errorf("a redelivered post wrote %d rows and was decided %q, want its "+
+			"verdict alone, %q", rows, h.lastVerdict(), chatlet.VerdictRepeated)
 	}
 	if got := h.number(`SELECT message_seq FROM chat_channels WHERE id = ?`,
 		"room-1"); got != 2 {
@@ -544,16 +555,20 @@ func TestATombstoneKeepsTheRowSoAReplyStillResolves(t *testing.T) {
 		t.Errorf("the reply's root reads %q", got)
 	}
 
-	// AND AN EDIT OF A TOMBSTONE WRITES NOTHING: the body was removed on
-	// purpose, and restoring text into it would undo a deletion nobody
-	// asked to undo.
+	// AND AN EDIT OF A TOMBSTONE WRITES NOTHING BUT ITS REFUSAL: the body
+	// was removed on purpose, and restoring text into it would undo a
+	// deletion nobody asked to undo.
 	edit := applyRecord(chatlet.MessageSubject("room-1"), chatlet.OpEdit, "op-edit-1",
 		chatlet.MessageEdit{
 			V: chatlet.DocumentVersion, MessageID: "msg-1", Body: "back again",
 			EditedBy: "ada", EditedByKind: chatlet.AuthorHuman,
 		}, chatlet.ScopeSet{Subject: true})
-	if rows, _, err := h.apply(edit); err != nil || rows != 0 {
-		t.Fatalf("an edit of a tombstone wrote %d rows (%v)", rows, err)
+	if rows, _, err := h.apply(edit); err != nil || rows != 1 {
+		t.Fatalf("an edit of a tombstone wrote %d rows (%v), want its verdict alone",
+			rows, err)
+	}
+	if got := h.lastVerdict(); got != chatlet.VerdictDeleted {
+		t.Errorf("an edit of a tombstone was decided %q, want %q", got, chatlet.VerdictDeleted)
 	}
 	if got := h.scalar(`SELECT body FROM chat_messages WHERE id = ?`, "msg-1"); got != "" {
 		t.Errorf("an edit restored %q into a tombstone", got)
@@ -591,13 +606,31 @@ func TestAnErasedMessageIsNeverResurrectedByAReplay(t *testing.T) {
 
 	// THE REPLAY. Same record, later position — which is what a
 	// redelivered acknowledgement and a reanchored stream both look like.
-	rows, _, err := h.applyAt(post, h.seq+1, applyBrokerAt)
+	// Its operation is already decided, so it is a copy that does nothing.
+	h.seq++
+	rows, _, err := h.applyAt(post, h.seq, applyBrokerAt)
 	if err != nil {
 		t.Fatalf("replay the post: %v", err)
 	}
-	if rows != 0 || h.count("chat_messages") != 0 {
+	if rows != 1 || h.count("chat_messages") != 0 {
 		t.Fatalf("a replayed post wrote %d rows and the room holds %d "+
 			"messages — an erased message came back", rows, h.count("chat_messages"))
+	}
+
+	// AND THE MARKER STOPS WHAT THE VERDICT CANNOT: a post of the erased
+	// id whose operation no verdict names — the copy of one whose verdict
+	// the horizon has let go — writes nothing but its refusal.
+	stale := post
+	stale.OpID = "op-post-msg-1-past-the-horizon"
+	h.seq++
+	rows, _, err = h.applyAt(stale, h.seq, applyBrokerAt)
+	if err != nil {
+		t.Fatalf("post an erased id under an undecided operation: %v", err)
+	}
+	if rows != 1 || h.count("chat_messages") != 0 || h.lastVerdict() != chatlet.VerdictGone {
+		t.Fatalf("a post of an erased id wrote %d rows, the room holds %d messages "+
+			"and it was decided %q — an erased message came back", rows,
+			h.count("chat_messages"), h.lastVerdict())
 	}
 }
 
@@ -707,10 +740,15 @@ func TestTwoEstatesFedOneLogHoldIdenticalRowsAndApplyingTwiceEqualsOnce(t *testi
 			h.t.Fatalf("post: %v", err)
 		}
 		if redeliver {
-			// A REDELIVERY IN THE MIDDLE OF THE LOG. It must
-			// consume no sequence number and write no row, or the
-			// two estates diverge from here on.
-			if _, _, err := h.applyAt(root, h.seq+1, applyBrokerAt); err != nil {
+			// A REDELIVERY IN THE MIDDLE OF THE LOG, of the record at
+			// its own position — the one log both nodes are fed. It
+			// must consume no sequence number and write no row, its
+			// verdict included, or the two estates diverge from here
+			// on. (A copy at a LATER position is another record of
+			// the log, decided `repeated`, which
+			// TestTheRoomsSequenceIsContiguousAndARedeliveredPostConsumesNoNumber
+			// holds.)
+			if _, _, err := h.applyAt(root, h.seq, applyBrokerAt); err != nil {
 				h.t.Fatalf("redeliver: %v", err)
 			}
 		}
@@ -1016,6 +1054,111 @@ func TestAnEvictedNodesRecordsApplyNowhere(t *testing.T) {
 	}
 }
 
+// A SECOND COPY OF AN OPERATION DOES NOTHING, even where its effect would.
+//
+// Two publishers that each found an operation's ledger silent append it twice,
+// and the copy lands at a later position — after whatever happened in between.
+// An edit copied past the edit made after it would put the older words back,
+// and a reaction copied past its own take-back would put the mark back; both
+// are decided `repeated`, by the first copy's verdict, before either case runs.
+//
+// Mutation: make decidedBefore answer false and the older words and the mark
+// come back.
+func TestASecondCopyOfAnOperationDoesNothing(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	if _, _, err := h.apply(applyCreateRoom("room-1", "launch")); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, _, err := h.apply(applyPostRecord("room-1", "msg-1", "ship friday", "")); err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	edit := func(opID, body string) chatlet.MutationRecord {
+		return applyRecord(chatlet.MessageSubject("room-1"), chatlet.OpEdit, opID,
+			chatlet.MessageEdit{V: chatlet.DocumentVersion, MessageID: "msg-1", Body: body,
+				EditedBy: "ada", EditedByKind: chatlet.AuthorHuman},
+			chatlet.ScopeSet{Subject: true})
+	}
+	first := edit("op-edit-1", "ship monday")
+	for _, rec := range []chatlet.MutationRecord{first, edit("op-edit-2", "ship tuesday"), first} {
+		if _, _, err := h.apply(rec); err != nil {
+			t.Fatalf("apply %s: %v", rec.OpID, err)
+		}
+	}
+	if got := h.scalar(`SELECT body FROM chat_messages WHERE id = ?`, "msg-1"); got !=
+		"ship tuesday" {
+		t.Errorf("a copy of the first edit, applied after the second, left %q", got)
+	}
+	if got := h.lastVerdict(); got != chatlet.VerdictRepeated {
+		t.Errorf("the copy was decided %q, want %q", got, chatlet.VerdictRepeated)
+	}
+
+	react := func(opID string, removed bool) chatlet.MutationRecord {
+		return applyRecord(chatlet.MessageSubject("room-1"), chatlet.OpReact, opID,
+			chatlet.Reaction{V: chatlet.DocumentVersion, MessageID: "msg-1", Emoji: ":+1:",
+				By: "ada", Removed: removed},
+			chatlet.ScopeSet{Subject: true})
+	}
+	add := react("op-react-1", false)
+	for _, rec := range []chatlet.MutationRecord{add, react("op-unreact-1", true), add} {
+		if _, _, err := h.apply(rec); err != nil {
+			t.Fatalf("apply %s: %v", rec.OpID, err)
+		}
+	}
+	if got := h.count("chat_reactions"); got != 0 {
+		t.Errorf("a copy of a reaction, applied after it was taken back, put %d "+
+			"marks back", got)
+	}
+}
+
+// A VERDICT IS KEPT FOR THE LEDGER'S HORIZON, BY THE BROKER'S CLOCK, and the
+// prune is part of a record's own apply: every node removes the same rows at
+// the same position, a batch at a time so a quiet month costs one record
+// nothing it cannot afford.
+//
+// Mutation: prune by the record's own broker instant without the horizon, or
+// without the batch bound, and the counts below move.
+func TestAVerdictIsKeptForTheLedgersHorizonAndPrunedABatchAtATime(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	if _, _, err := h.apply(applyCreateRoom("room-1", "launch")); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	const old = 70
+	for i := range old {
+		id := fmt.Sprintf("msg-%d", i)
+		if _, _, err := h.apply(applyPostRecord("room-1", id, "said", "")); err != nil {
+			t.Fatalf("post %s: %v", id, err)
+		}
+	}
+	// ONE INSTANT INSIDE THE HORIZON prunes nothing.
+	inside := applyBrokerAt.Add(chatlet.VerdictRetention)
+	if _, _, err := h.applyStoredAt(applyPostRecord("room-1", "msg-inside", "said", ""),
+		inside); err != nil {
+		t.Fatalf("post inside the horizon: %v", err)
+	}
+	if got := h.count("chat_verdicts"); got != old+1 {
+		t.Fatalf("%d verdicts after a record at the horizon, want %d", got, old+1)
+	}
+	past := applyBrokerAt.Add(chatlet.VerdictRetention + time.Second)
+	if _, _, err := h.applyStoredAt(applyPostRecord("room-1", "msg-past", "said", ""),
+		past); err != nil {
+		t.Fatalf("post past the horizon: %v", err)
+	}
+	if got, want := h.count("chat_verdicts"), old+2-64; got != want {
+		t.Fatalf("%d verdicts after the first record past the horizon, want %d: "+
+			"sixty-four go, oldest first", got, want)
+	}
+	if _, _, err := h.applyStoredAt(applyPostRecord("room-1", "msg-later", "said", ""),
+		past); err != nil {
+		t.Fatalf("post past the horizon again: %v", err)
+	}
+	if got := h.count("chat_verdicts"); got != 3 {
+		t.Errorf("%d verdicts once the backlog is gone, want the three inside the "+
+			"horizon", got)
+	}
+}
+
 // TestTheThirtyThirdDistinctReactionIsDeclinedDeterministically.
 //
 // [chatlet.MaxReactionEmoji] is the applier's to enforce, and the record's shape
@@ -1034,8 +1177,15 @@ func TestTheThirtyThirdDistinctReactionIsDeclinedDeterministically(t *testing.T)
 		t.Fatalf("post: %v", err)
 	}
 	react := func(emoji, by string, removed bool) chatlet.MutationRecord {
+		// THE SIGN IS PART OF THE OPERATION, as the writer derives it: a
+		// reaction taken back is a second operation, never a copy of the
+		// first.
+		verb := "op-react-"
+		if removed {
+			verb = "op-unreact-"
+		}
 		return applyRecord(chatlet.MessageSubject("room-1"), chatlet.OpReact,
-			"op-react-"+emoji+"-"+by, chatlet.Reaction{
+			verb+emoji+"-"+by, chatlet.Reaction{
 				V: chatlet.DocumentVersion, MessageID: "msg-1", Emoji: emoji,
 				By: by, Removed: removed,
 			}, chatlet.ScopeSet{Subject: true})
@@ -1048,18 +1198,24 @@ func TestTheThirtyThirdDistinctReactionIsDeclinedDeterministically(t *testing.T)
 	// ONE MORE PERSON ON AN EMOJI THE MESSAGE ALREADY CARRIES IS STILL
 	// ADMITTED: the cap is on how many MARKS a message carries, and a
 	// hundred people agreeing with one thumb is one mark.
-	if rows, _, err := h.apply(react(":e0:", "grace", false)); err != nil || rows != 1 {
-		t.Fatalf("a second reactor on an existing emoji wrote %d rows (%v)",
-			rows, err)
+	if rows, _, err := h.apply(react(":e0:", "grace", false)); err != nil || rows != 2 ||
+		h.lastVerdict() != chatlet.VerdictApplied {
+		t.Fatalf("a second reactor on an existing emoji wrote %d rows (%v) and was "+
+			"decided %q, want its reaction and its verdict", rows, err, h.lastVerdict())
 	}
 	rows, _, err := h.apply(react(":one-too-many:", "ada", false))
 	if err != nil {
 		t.Fatalf("the thirty-third emoji: %v", err)
 	}
-	if rows != 0 {
-		t.Errorf("the thirty-third distinct emoji wrote %d rows — every one is "+
-			"a row replicated to every node, and past the cap a message's "+
-			"reactions are longer than the message", rows)
+	if rows != 1 {
+		t.Errorf("the thirty-third distinct emoji wrote %d rows beside its verdict — "+
+			"every one is a row replicated to every node, and past the cap a "+
+			"message's reactions are longer than the message", rows-1)
+	}
+	// AND THE WRITER IS TOLD: the refusal is the verdict it reads back.
+	if got := h.lastVerdict(); got != chatlet.VerdictReactionsFull {
+		t.Errorf("the thirty-third distinct emoji was decided %q, want %q", got,
+			chatlet.VerdictReactionsFull)
 	}
 	if got := h.number(
 		`SELECT COUNT(DISTINCT emoji) FROM chat_reactions WHERE message_id = ?`,

@@ -37,7 +37,7 @@ import (
 // Rule 2 has an exception here that neither of the other domains has: a
 // message's `channel_seq` is minted from the ROOM'S OWN high-water mark, read
 // inside this transaction, rather than carried on the record. A writer cannot
-// carry it — posts are additive, so two writers in one room form no
+// carry it — posts are sequenced, so two writers in one room form no
 // expectation and would compute the same number — and the applier can, because
 // every data node applies the same records in the same order.
 //

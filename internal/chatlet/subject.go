@@ -79,10 +79,11 @@ const (
 	// held for the stream's whole retention window, for an arbitration
 	// nothing ever asks for.
 	//
-	// THE ONE ADDITIVE KIND, on the precedent of
-	// [github.com/crewlet/crewlet/internal/worklet.KindTurn]: it carries
-	// no expectation, decides against nothing, and its apply is guarded by
-	// its own id insert affecting a row.
+	// THE ONE SEQUENCED KIND ([statelog.PatternSequenced]): it carries no
+	// expectation, the log orders it, and the applier decides it at its
+	// position against the room as it is there, writing a [Verdict] the
+	// writer reads back — and a post's apply is guarded by its own id
+	// insert affecting a row besides.
 	KindMessage ObjectKind = "message"
 
 	// KindEviction is a node's eviction from THIS log, or its readmission.
@@ -132,9 +133,10 @@ func (k ObjectKind) Valid() bool { return slices.Contains(ObjectKinds, k) }
 // the only objects two writers ever decide against each other over.
 //
 // EVERYTHING ELSE PAYS NOTHING FOR ARBITRATION IT DOES NOT USE. A message is
-// additive — the records commute, so an expectation there would serialise the
-// single hottest subject in the company behind itself and turn a lost race
-// into a message somebody typed and lost. A barrier shares one subject across
+// sequenced — nothing in a room races, so an expectation there would serialise
+// the single hottest subject in the company behind itself and turn a lost race
+// into a message somebody typed and lost; what a message does depend on, the
+// applier decides at its position. A barrier shares one subject across
 // the whole domain, so an anchor there would put an upsert per linearizable
 // read on one hot row inside the transaction holding this store's only writer.
 // An eviction and a generation are fleet machinery with a handful of records

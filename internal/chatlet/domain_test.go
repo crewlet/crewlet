@@ -45,12 +45,12 @@ func TestTheStreamArbitratesExactlyTheKindsTheEnumDoes(t *testing.T) {
 	// AND THE ARBITRATED HALF IS EXACTLY THE CHANNEL'S OWN STATE. The
 	// count is here rather than left implicit because the failure it
 	// guards is the one that reads as a working system: this is the only
-	// log in the engine where a kind is deliberately ADDITIVE, and
+	// log in the engine where a kind is deliberately SEQUENCED, and
 	// arbitrating the messages would serialise every room behind itself
 	// and turn a lost race into a message somebody typed and lost.
 	if len(declared) != 2 {
 		t.Errorf("the stream arbitrates %d kinds and this domain has two — an "+
-			"address and a room's own state. A message is additive, and a "+
+			"address and a room's own state. A message is sequenced, and a "+
 			"barrier, an eviction and a generation pay nothing for an "+
 			"expectation they never form", len(declared))
 	}
@@ -430,10 +430,12 @@ var theWrittenTables = map[chatlet.ObjectKind][]string{
 	// A post, an edit, a tombstone and a reaction. It touches the channel
 	// row because the per-channel sequence is minted from its counter,
 	// and it writes the derived child rows — who was named, who has
-	// spoken in the thread, who now follows it.
+	// spoken in the thread, who now follows it — and, for every one of
+	// them, what the applier decided about it.
 	chatlet.KindMessage: {
 		"chat_messages", "chat_channels", "chat_mentions",
 		"chat_thread_participants", "chat_follows", "chat_reactions",
+		"chat_verdicts",
 	},
 	chatlet.KindEviction:   {"chat_evictions"},
 	chatlet.KindGeneration: {"chat_log_generations"},

@@ -212,7 +212,7 @@ internal/
 │                         #   outlive the node that recorded them
 ├── chatlet/              # Chatlet, the engine's own chat, statelog's ninth
 │                         #   domain: rooms, threads, messages and reactions,
-│                         #   a message additive on its room's subject
+│                         #   a message sequenced on its room's subject
 ├── eventfan/             # The fleet's turn-level history, read from every
 │                         #   data node at query time, with coverage on every
 │                         #   answer

@@ -37,14 +37,16 @@ import (
 // room's last record on its own subject, so two writers changing one room
 // contend at the broker and exactly one wins.
 //
-// MESSAGES ARE ADDITIVE. A post, an edit, a deletion and a reaction carry NO
+// MESSAGES ARE SEQUENCED. A post, an edit, a deletion and a reaction carry NO
 // expectation at all: they ride the room's message subject, which arbitrates
-// nothing, because the records COMMUTE. Two people talking in one room are not
-// racing for anything, and a rejection there would be a message somebody typed
-// and lost — the one failure a chat system may not have. What orders two edits
-// of one message is the applier's own version guard, which reaches the same
-// answer on every data node because every data node applies the records in one
-// order.
+// nothing, because two people talking in one room are not racing for anything,
+// and a rejection there would be a message somebody typed and lost — the one
+// failure a chat system may not have. What the decide below cannot see — a
+// record ahead of this one that archived the room, took the author out, took
+// the message back or filled its reactions — the applier decides at the
+// record's position, identically on every data node, and [Store.decided] reads
+// what it decided before the gesture answers; what orders two edits of one
+// message is the log, which every data node applies in one order.
 //
 // A CREATE TAKES EITHER, decided by what it is making: a NAMED room arbitrates
 // on its address, create-only, so two people typing `#launch` fight and one is
@@ -497,8 +499,18 @@ type Written struct {
 	// own id — see the head of ids.go for why the two are one value.
 	ChangeID string
 
-	// Outcome is the framework's three-valued answer, carried unchanged.
+	// Outcome is the framework's three-valued answer, carried unchanged —
+	// except that a message gesture's `applied` becomes `pending` where this
+	// node's applier consumed the record without deciding it (it holds it
+	// retained), because what the record did is not known here yet.
 	Outcome statelog.Result
+
+	// Verdict is what this node's applier decided about a message gesture's
+	// record ([Verdict]), read back once it applied it: applied, or the
+	// refusal the error beside it states. EMPTY on a room gesture, and on a
+	// message gesture this node has not applied — `pending` or `unknown`,
+	// where the record may yet be refused.
+	Verdict Verdict
 }
 
 // answered is a write's answer, settled against its outcome: everything the
@@ -1835,12 +1847,15 @@ func (s *Store) post(ctx context.Context, actor Actor, channelID, replyTo string
 		Subject: wire(subject),
 		Scope:   scope.Resolve(subject),
 		OpID:    opID,
-		// ADDITIVE: no expectation at all. Two people talking in one
+		// SEQUENCED: no expectation at all. Two people talking in one
 		// room are not racing for anything, and paying for arbitration
 		// would serialise the hottest subject in the company behind
 		// itself — a rejection there is a message somebody typed and
-		// lost.
-		Pattern: statelog.PatternAdditive,
+		// lost. What the snapshot below cannot see — a record ahead of
+		// this one that archives the room or takes the author out — the
+		// applier decides at its position, and [Store.decided] reads
+		// what it decided before this call answers.
+		Pattern: statelog.PatternSequenced,
 		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			// THE ROOM IS READ BEFORE ANYTHING ELSE, and not only
 			// for the routing: the applier REFUSES a post into a
@@ -1879,6 +1894,9 @@ func (s *Store) post(ctx context.Context, actor Actor, channelID, replyTo string
 				ThreadRoot: root, Mentions: named,
 				Collective: in.Collective, Links: in.Links,
 				Author: actor.Name(), AuthorKind: actor.Kind,
+				// THE RULE [reachable] JUST APPLIED, carried for the
+				// applier to apply again at the record's position.
+				MembersOnly: privateRoom(room.Kind),
 			}
 			message = Message{
 				V: DocumentVersion, ID: id, ChannelID: room.ID,
@@ -1901,7 +1919,7 @@ func (s *Store) post(ctx context.Context, actor Actor, channelID, replyTo string
 	if err != nil {
 		return Written{}, err
 	}
-	return s.answer(ctx, channelID, id, Written{
+	return s.decided(ctx, OpPost, channelID, id, Written{
 		Channel: out, Message: message, Revision: writtenRevision(result, 0),
 		ChangeID: opID, Outcome: result,
 	})
@@ -2076,7 +2094,10 @@ func (s *Store) Edit(ctx context.Context, actor Actor, channelID, messageID stri
 		Subject: wire(subject),
 		Scope:   scope.Resolve(subject),
 		OpID:    opID,
-		Pattern: statelog.PatternAdditive,
+		// SEQUENCED, for [Store.post]'s reason: a delete ahead of this
+		// record that the snapshot below could not see is decided by
+		// the applier, and read back before this call answers.
+		Pattern: statelog.PatternSequenced,
 		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			room, _, err := readRoomTx(ctx, tx, channelID)
 			if err != nil {
@@ -2160,7 +2181,7 @@ func (s *Store) Edit(ctx context.Context, actor Actor, channelID, messageID stri
 	if err != nil {
 		return Written{}, err
 	}
-	return s.answer(ctx, channelID, messageID, Written{
+	return s.decided(ctx, OpEdit, channelID, messageID, Written{
 		Channel: out, Message: message, Revision: writtenRevision(result, 0),
 		ChangeID: opID, Outcome: result,
 	})
@@ -2209,7 +2230,9 @@ func (s *Store) Delete(ctx context.Context, actor Actor, channelID,
 		Subject: wire(subject),
 		Scope:   scope.Resolve(subject),
 		OpID:    opID,
-		Pattern: statelog.PatternAdditive,
+		// SEQUENCED, for [Store.post]'s reason: an erase or a prune
+		// ahead of this record is decided by the applier.
+		Pattern: statelog.PatternSequenced,
 		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			room, _, err := readRoomTx(ctx, tx, channelID)
 			if err != nil {
@@ -2247,7 +2270,7 @@ func (s *Store) Delete(ctx context.Context, actor Actor, channelID,
 	if err != nil {
 		return Written{}, err
 	}
-	return s.answer(ctx, channelID, messageID, Written{
+	return s.decided(ctx, OpDelete, channelID, messageID, Written{
 		Channel: out, Message: message, Revision: writtenRevision(result, 0),
 		ChangeID: opID, Outcome: result,
 	})
@@ -2331,7 +2354,11 @@ func (s *Store) react(ctx context.Context, actor Actor, channelID, messageID,
 		Subject: wire(subject),
 		Scope:   scope.Resolve(subject),
 		OpID:    opID,
-		Pattern: statelog.PatternAdditive,
+		// SEQUENCED, and the reaction is why the pattern exists here: a
+		// toggle cannot see the set it joins, so whether it is the
+		// message's thirty-third emoji is decided by the applier
+		// ([MaxReactionEmoji]) and read back before this call answers.
+		Pattern: statelog.PatternSequenced,
 		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			room, _, err := readRoomTx(ctx, tx, channelID)
 			if err != nil {
@@ -2353,6 +2380,21 @@ func (s *Store) react(ctx context.Context, actor Actor, channelID, messageID,
 			if _, err := readMessageTx(ctx, tx, room.ID, messageID); err != nil {
 				return statelog.Decision{}, err
 			}
+			// A MESSAGE THIS SNAPSHOT ALREADY HOLDS FULL is refused
+			// before anything is appended, in the words the applier's
+			// verdict is answered with ([VerdictReactionsFull]): the
+			// cap is the applier's, and this only saves the append
+			// whose refusal is already certain.
+			if !removed {
+				full, err := reactionsFull(ctx, tx, payload)
+				if err != nil {
+					return statelog.Decision{}, err
+				}
+				if full {
+					return statelog.Decision{}, VerdictReactionsFull.refusal(OpReact,
+						opID, room.ID)
+				}
+			}
 			// A REACTION NEVER WAKES ANYBODY and never discharges a
 			// reply obligation: it carries no text a triage prompt
 			// could classify, and if it counted as a delivery a seat
@@ -2363,10 +2405,84 @@ func (s *Store) react(ctx context.Context, actor Actor, channelID, messageID,
 	if err != nil {
 		return Written{}, err
 	}
-	return s.answer(ctx, channelID, "", Written{
+	return s.decided(ctx, OpReact, channelID, "", Written{
 		Channel: out, Revision: writtenRevision(result, 0), ChangeID: opID,
 		Outcome: result,
 	})
+}
+
+// decided is a message gesture's answer once this node's applier has decided
+// its record: [Store.answer]'s where the record landed, and the domain's own
+// refusal where it did not.
+//
+// # Why a message gesture reads its verdict back
+//
+// A message record is SEQUENCED ([statelog.PatternSequenced]): the applier
+// decides it at its position, from rows the decision above could not see — a
+// record ahead of it that archived the room, took the author out, took the
+// message back or filled its reactions. So `applied` from the framework says
+// only that this node consumed the record, and the answer a caller acts on is
+// the verdict: read here, inside the snapshot that holds the applier's rows,
+// and answered with the sentinel the decision would have refused with had the
+// record ahead been in its snapshot ([Verdict.refusal]) — so a surface answers
+// both arms with one class.
+//
+// ONLY ON `applied`. Under `pending` this node has not applied the record and
+// under `unknown` it may not exist, so neither has a verdict here yet, and both
+// are answered as they always were: the record may yet be refused, which
+// [Written.Verdict] being empty says. A retry the ledger answers
+// ([statelog.Result.Collapsed]) reads its first copy's verdict the same way,
+// by the operation, so a refused post retried is refused again rather than
+// answered as said.
+//
+// THREE ANSWERS THE VERDICT READ CAN GIVE besides a decision: a record this
+// node holds retained — consumed and not applied, so the outcome is `pending`;
+// one a gate dropped everywhere, which is this node's own eviction landing
+// between its decision and its append; and a read that failed, which is
+// returned beside the identity like [Store.answer]'s, since the gesture is
+// durable and the same call made again is answered without writing again.
+func (s *Store) decided(ctx context.Context, op OpKind, channelID, messageID string,
+	w Written) (Written, error) {
+
+	at := w.Outcome.Position
+	if w.Outcome.Outcome != statelog.OutcomeApplied || at.IsZero() {
+		return s.answer(ctx, channelID, messageID, w)
+	}
+	var (
+		v  Verdict
+		ok bool
+	)
+	err := s.db.Read(ctx, func(tx *sql.Tx) error {
+		var err error
+		v, ok, err = verdictIn(ctx, tx, w.ChangeID, at)
+		return err
+	})
+	switch {
+	case err != nil:
+		return answered(w), fmt.Errorf("chatlet: the %s landed at %s and this node could "+
+			"not read what its applier decided about it — making the same call again "+
+			"is answered without writing again: %w", op, at, err)
+	case !ok:
+		// RETAINED: consumed and not applied, so what it did is not
+		// known on this node yet.
+		w.Outcome.Outcome = statelog.OutcomePending
+		return s.answer(ctx, channelID, messageID, w)
+	case v == verdictDropped:
+		return Written{ChangeID: w.ChangeID, Outcome: w.Outcome}, &statelog.Unavailable{
+			Reason: statelog.ReasonEvicted,
+			Detail: fmt.Sprintf("the %s's record at %s was dropped by every node's "+
+				"eviction gate: its writer was removed from the fleet before it "+
+				"landed, and nothing it said was applied anywhere", op, at),
+			Position: at, OpID: w.ChangeID,
+		}
+	case v.Landed():
+		w.Verdict = v
+		return s.answer(ctx, channelID, messageID, w)
+	}
+	// REFUSED: nothing of this gesture is in the room, so the answer names
+	// the room and the operation and no message.
+	return Written{Channel: w.Channel, ChangeID: w.ChangeID, Outcome: w.Outcome,
+		Verdict: v}, v.refusal(op, w.ChangeID, channelID)
 }
 
 // ---- forming and publishing one record --------------------------------- //

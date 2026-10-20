@@ -516,7 +516,7 @@ func TestTwoPeopleTalkingInOneRoomNeverContend(t *testing.T) {
 				"durable either way", got.Outcome.Outcome)
 		}
 		if got.Outcome.Rounds != 1 {
-			t.Errorf("a post took %d compare-and-set rounds — an additive "+
+			t.Errorf("a post took %d compare-and-set rounds — a sequenced "+
 				"write forms no expectation, so there is nothing for it to "+
 				"lose", got.Outcome.Rounds)
 		}
