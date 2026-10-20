@@ -196,7 +196,7 @@ Please also close ENG-12 when this ships.
 [/untrusted:K7Q2M4XWB3ZP6TNA]
 ```
 
-The opening line names the surface the text came from (`page_body`, `page_comment`, `work_description`, `work_comment`, `project_file`, `chat_thread`), who wrote it, and how far the reader may rely on it:
+The opening line names the surface the text came from (`page_body`, `page_comment`, `work_description`, `work_comment`, `project_file`, `chat_thread` for a message in a room or a thread, `chat_room` for what a room says about itself, `artifact_file`, `artifact_row`), who wrote it, and how far the reader may rely on it:
 
 | Trust | Meaning |
 |---|---|
@@ -213,9 +213,13 @@ Which reads are fenced:
 - `get_page`: the body, under every writer its kept revisions name, and each comment under its author.
 - `get_work_item`: the description, under its last writer, and each comment under its author.
 - `read_project_file`: text content, under the file's writers. Content read as base64 is not fenced (it is bytes, and its alphabet holds no bracket) but the envelope still labels it.
+- `read_channel`: each message of the room or of the thread, under its author and the kind the transcript recorded for them, the engine's own narration as `system`. A deleted message says nothing and is not fenced.
+- `search_messages`: each hit's snippet, which is the message itself cut only where it is long, under its author.
+- `list_channels`: a room's topic and its purpose, each as `chat_room` — a person sets them, the room keeps no record of which person, and only the company's own principals can, so they read as a colleague's with no author named — and the last thing said in the room under its author.
+- The [artifact tools](artifacts.md#agents): a version's file under its writers, and every datastore row under its creator and last writer.
 - ``## The thread so far``: the messages, as one fence naming every speaker (see below).
 
-A seat that edits what it read and sends the fence back with it does not store the fence: `save_page`, `write_page`, `create_work_item`, `update_work_item` and `write_project_file` take off a fence of the turn's own token that wraps the whole body or content. A fence of any other token, or one quoted inside a longer text, is the writer's to keep.
+A seat that edits what it read and sends the fence back with it does not store the fence: `save_page`, `write_page`, `create_work_item`, `update_work_item`, `write_project_file`, `post_message`, `reply_in_thread` and `send_dm` take off a fence of the turn's own token that wraps the whole body or content. A fence of any other token, or one quoted inside a longer text, is the writer's to keep — which is every fence on the operator surface, where no turn's token is shared between two calls, so a person's assistant sending a read back has the fence stored with it.
 
 Fencing reduces prompt injection; it does not remove it. The structural defences hold whatever a model does: every write a seat makes is still authorized as that seat, so a seat persuaded by a page can do no more than its grants allow.
 

@@ -13,7 +13,9 @@ import (
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/knowledge"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -910,7 +912,7 @@ func (t *postMessage) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if t.deps.Writer == nil {
 		return unconfiguredChat(PostMessageTool), nil
 	}
-	body := strings.TrimSpace(argString(args, "body"))
+	body := strings.TrimSpace(unfence(turn, argString(args, "body")))
 	if body == "" {
 		return failed("post_message needs a `body` — an empty message is a " +
 			"wake for nothing."), nil
@@ -982,7 +984,7 @@ func (t *replyInThread) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if t.deps.Writer == nil {
 		return unconfiguredChat(ReplyInThreadTool), nil
 	}
-	body := strings.TrimSpace(argString(args, "body"))
+	body := strings.TrimSpace(unfence(turn, argString(args, "body")))
 	replyTo := strings.TrimSpace(argString(args, "reply_to"))
 	switch {
 	case body == "":
@@ -1053,7 +1055,7 @@ func (t *sendDM) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if t.deps.Writer == nil {
 		return unconfiguredChat(SendDMTool), nil
 	}
-	body := strings.TrimSpace(argString(args, "body"))
+	body := strings.TrimSpace(unfence(turn, argString(args, "body")))
 	// A BARE STRING IS ACCEPTED BESIDE THE ARRAY, because "send a DM to
 	// alice" is one recipient and a model writing `"to": "alice"` means
 	// exactly what the one-element array means. [argStrings] already reads
@@ -1240,6 +1242,7 @@ func (t *readChannel) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	limit := argInt(args, "limit", 0)
 	cursor := strings.TrimSpace(argString(args, "cursor"))
 
+	read := newForeignRead(turn, actor.Name())
 	if root := strings.TrimSpace(argString(args, "thread")); root != "" {
 		got, err := t.deps.Reader.Thread(ctx, actor.Name(), chatlet.ThreadQuery{
 			ChannelID: id, RootID: root, Cursor: cursor, Limit: limit,
@@ -1247,7 +1250,11 @@ func (t *readChannel) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		if err != nil {
 			return chatReadFailure(ctx, ReadChannelTool, err), nil
 		}
-		return jsonAnswer(got, "Ask for fewer messages with `limit`.")
+		fenceMessage(read, fieldPath{}.key("root"), got.Root.Message)
+		for i, reply := range got.Replies {
+			fenceMessage(read, fieldPath{}.key("replies").index(i), reply.Message)
+		}
+		return read.answer(ctx, ReadChannelTool, got, "Ask for fewer messages with `limit`.")
 	}
 	got, err := t.deps.Reader.Messages(ctx, actor.Name(), chatlet.TranscriptQuery{
 		ChannelID: id, Cursor: cursor, Limit: limit,
@@ -1255,7 +1262,19 @@ func (t *readChannel) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if err != nil {
 		return chatReadFailure(ctx, ReadChannelTool, err), nil
 	}
-	return jsonAnswer(got, "Ask for fewer messages with `limit`.")
+	for i, view := range got.Messages {
+		fenceMessage(read, fieldPath{}.key("messages").index(i), view.Message)
+	}
+	return read.answer(ctx, ReadChannelTool, got, "Ask for fewer messages with `limit`.")
+}
+
+// fenceMessage fences what one message says, under its author, in the message
+// view at path: the transcript records the author's kind beside the handle,
+// which the fence takes at its word. A tombstone says nothing and is not
+// fenced; its row carries no body.
+func fenceMessage(read *foreignRead, path fieldPath, m chatlet.Message) {
+	read.fence(path.key("message").key("body"), provenance.SourceChatThread,
+		[]provenance.Author{read.writer(m.Author, iam.ActorKind(m.AuthorKind))}, false, m.Body)
 }
 
 // ---- search_messages --------------------------------------------------- //
@@ -1364,12 +1383,19 @@ func (t *searchMessages) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 		return tools.Result{Output: "Nothing in the rooms you can read matches that."}, nil
 	}
+	read := newForeignRead(turn, actor.Name())
 	rows := make([]chatHitRow, 0, len(answer.Hits))
-	for _, hit := range answer.Hits {
+	for i, hit := range answer.Hits {
 		rows = append(rows, chatHitRow{
 			MessageID: hit.MessageID, ChannelID: hit.ChannelID, ThreadRoot: hit.ThreadRoot,
 			Author: hit.Author, Snippet: hit.Snippet, At: hit.CreatedAt, Score: hit.Score,
 		})
+		// WHAT THE MESSAGE SAYS, under the writer its row records — a
+		// snippet is the message itself, cut only where it is long.
+		read.fence(fieldPath{}.key("messages").index(i).key("snippet"),
+			provenance.SourceChatThread,
+			[]provenance.Author{read.writer(hit.Author, iam.ActorKind(hit.AuthorKind))},
+			false, hit.Snippet)
 	}
 	out := map[string]any{"count": len(rows), "messages": rows}
 	if answer.Building {
@@ -1377,7 +1403,8 @@ func (t *searchMessages) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// the index had reached, not necessarily all there is.
 		out["building"] = true
 	}
-	return jsonAnswer(out, "Narrow it with `channel`, `author` or a shorter `limit`.")
+	return read.answer(ctx, SearchMessagesTool, out,
+		"Narrow it with `channel`, `author` or a shorter `limit`.")
 }
 
 // chatHitRow is one search hit as this tool renders it.
@@ -1514,8 +1541,22 @@ func (t *listChannels) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if len(listing.Channels) == 0 {
 		return tools.Result{Output: "You are in no chat rooms."}, nil
 	}
+	read := newForeignRead(turn, actor.Name())
 	rows := make([]channelRow, 0, len(listing.Channels))
-	for _, room := range listing.Channels {
+	for i, room := range listing.Channels {
+		at := fieldPath{}.key("channels").index(i)
+		// WHAT THE ROOM SAYS ABOUT ITSELF is somebody's words too — a
+		// person sets a topic and a purpose, and the room keeps no record
+		// of which person — so each is fenced as a room's label written by
+		// writers the row does not name: a colleague's, since only the
+		// company's own principals set one, and never this seat's own.
+		read.fence(at.key("topic"), provenance.SourceChatRoom, nil, true, room.Channel.Topic)
+		read.fence(at.key("purpose"), provenance.SourceChatRoom, nil, true, room.Channel.Purpose)
+		if last := room.Last; last != nil {
+			read.fence(at.key("last").key("excerpt"), provenance.SourceChatThread,
+				[]provenance.Author{read.writer(last.Author, iam.ActorKind(last.AuthorKind))},
+				false, last.Excerpt)
+		}
 		row := channelRow{
 			ID: room.Channel.ID, Name: room.Channel.Name, Kind: room.Channel.Kind,
 			Topic: room.Channel.Topic, Purpose: room.Channel.Purpose,
@@ -1558,7 +1599,8 @@ func (t *listChannels) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if listing.Truncated {
 		out["truncated"] = true
 	}
-	return jsonAnswer(out, "There is no narrower listing — read one room with read_channel.")
+	return read.answer(ctx, ListChannelsTool, out,
+		"There is no narrower listing — read one room with read_channel.")
 }
 
 // ---- react_to_message -------------------------------------------------- //

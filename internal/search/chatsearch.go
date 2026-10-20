@@ -50,6 +50,14 @@ type ChatHit struct {
 	ThreadRoot string
 	Author     string
 
+	// AuthorKind is the kind the transcript recorded beside the author —
+	// chat's own vocabulary (`agent`, `human`, `operator`, `system`) as the
+	// row keeps it — so a reader can say who wrote the snippet without
+	// resolving the handle against a chart: the engine's own narration has
+	// no seat to resolve, and a person whose seat has since gone is still
+	// a person.
+	AuthorKind string
+
 	// Snippet is what the message says, cut from the transcript row when
 	// the hit was read, its whitespace collapsed: the whole message when it
 	// fits [ChatSnippetBytes], otherwise the window around the first query
@@ -79,15 +87,19 @@ var ErrNoViewer = errors.New("search: a chat search needs the viewer's visible c
 //
 // MaxChatSearchLimit is the most any query is answered with, whatever it
 // asked for — and a caller's number reaches here as it was typed, a seat's
-// `limit` argument included. FIFTY, because one answer is ONE TOOL RESULT for
+// `limit` argument included. FORTY, because one answer is ONE TOOL RESULT for
 // a seat and its ceiling is 64 KiB (the builtin's ToolAnswerBytes): a hit is
 // at most [ChatSnippetBytes] of message plus three ids, a handle, an instant
-// and a score, about a kilobyte rendered as prose, so fifty still renders as
-// one answer rather than a refusal to answer at all — 48 KiB of prose, 58 KiB
-// with a quoted character in every snippet, and sixty would not — and fifty is
-// a screen, the chat reader's own default page. Without it a query asked for a
-// million hits was ranked and returned whole, and the surface that asked
-// refused to hand it over.
+// and a score, and the snippet arrives FENCED as somebody else's words — a
+// fence whose two lines carry the turn's token and name the author, and an
+// envelope naming every author once — about one and a quarter kilobytes
+// rendered as prose with the longest handle in each place it appears. So
+// forty still renders as one answer rather than a refusal to answer at all —
+// 50 KiB of prose by forty different authors, 58 KiB with a quoted character
+// in every snippet, and forty-five would not; it was fifty until the fence,
+// at which that page is 72 KiB. Without it a query asked for a million hits
+// was ranked and returned whole, and the surface that asked refused to hand it
+// over. A screen of forty is still more than one screen holds.
 //
 // AS PROSE, and the qualifier is the ceiling's to keep: a tool answer writes
 // markup as it was written, but a snippet dense with what its JSON still
@@ -97,7 +109,7 @@ var ErrNoViewer = errors.New("search: a chat search needs the viewer's visible c
 // rather than handed over cut.
 const (
 	ChatSearchLimit    = 20
-	MaxChatSearchLimit = 50
+	MaxChatSearchLimit = 40
 )
 
 // ChatSnippetBytes bounds a hit's snippet — beside the marks a cut leaves at
@@ -351,8 +363,8 @@ func chatPostingScanStatement(n int, narrowed bool) string {
 
 // chatHydrateStatement reads n messages' rows from the transcript.
 func chatHydrateStatement(n int) string {
-	return `SELECT id, channel_id, thread_root, author_handle, body, created_at,
-		       deleted_at IS NOT NULL
+	return `SELECT id, channel_id, thread_root, author_handle, author_kind, body,
+		       created_at, deleted_at IS NOT NULL
 		  FROM chat_messages WHERE id IN (` + binds(n) + `)`
 }
 
@@ -413,7 +425,7 @@ func hydrateChunk(ctx context.Context, tx *sql.Tx, ids, terms []string,
 		var createdAt int64
 		var deleted bool
 		if err := rows.Scan(&hit.MessageID, &hit.ChannelID, &hit.ThreadRoot,
-			&hit.Author, &body, &createdAt, &deleted); err != nil {
+			&hit.Author, &hit.AuthorKind, &body, &createdAt, &deleted); err != nil {
 			return err
 		}
 		if deleted {

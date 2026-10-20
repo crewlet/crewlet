@@ -104,6 +104,15 @@ type fakeChat struct {
 	// to learn whose words they are is visible.
 	threads []chatlet.ThreadQuery
 
+	// What a read answers beyond the bare room: the transcript a room read
+	// is handed, the root's words and the replies a thread read is, and the
+	// last thing said in the room a listing shows.
+	transcript []chatlet.MessageView
+	rootBody   string
+	rootKind   chatlet.AuthorKind
+	replies    []chatlet.MessageView
+	last       *chatlet.MessagePreview
+
 	// What the person's gestures handed the store, in order.
 	created     []chatlet.NewChannel
 	patches     []chatlet.ChannelPatch
@@ -147,6 +156,7 @@ func (f *fakeChat) Channels(_ context.Context, viewer string, q chatlet.Channels
 		Channels: []chatlet.ChannelSummary{{
 			Channel: f.room,
 			Unread:  int(max(chatRoomMessages-q.Cursors[chatRoomID], 0)),
+			Last:    f.last,
 		}},
 	}, nil
 }
@@ -181,7 +191,7 @@ func (f *fakeChat) Messages(_ context.Context, viewer string, q chatlet.Transcri
 	if err := f.read(viewer, fresh); err != nil {
 		return chatlet.Transcript{}, err
 	}
-	return chatlet.Transcript{ChannelID: q.ChannelID}, nil
+	return chatlet.Transcript{ChannelID: q.ChannelID, Messages: f.transcript}, nil
 }
 
 // Thread answers any message as the root of its own thread, as the store
@@ -194,8 +204,9 @@ func (f *fakeChat) Thread(_ context.Context, viewer string, q chatlet.ThreadQuer
 		return chatlet.Thread{}, err
 	}
 	return chatlet.Thread{ChannelID: q.ChannelID, Root: chatlet.MessageView{
-		Message: chatlet.Message{ID: q.RootID, ChannelID: q.ChannelID, Author: f.author},
-	}}, nil
+		Message: chatlet.Message{ID: q.RootID, ChannelID: q.ChannelID, Author: f.author,
+			AuthorKind: f.rootKind, Body: f.rootBody},
+	}, Replies: f.replies}, nil
 }
 
 func (f *fakeChat) Post(_ context.Context, actor chatlet.Actor, channelID string,
@@ -2023,15 +2034,19 @@ func TestAChatSearchHitIsKeyedAsEveryChatAnswerIs(t *testing.T) {
 		t.Fatalf("the answer is %s (%v)", got.Output, err)
 	}
 	want := map[string]any{"message_id": "m1", "channel_id": chatRoomID, "thread_root": "m0",
-		"author": "agent-ceo", "snippet": "the backoff", "at": at.Format(time.RFC3339), "score": 2.5}
+		"author": "agent-ceo", "at": at.Format(time.RFC3339), "score": 2.5}
 	for key, value := range want {
 		if answer.Messages[0][key] != value {
 			t.Errorf("the hit's %s is %v, want %v: %v", key, answer.Messages[0][key], value,
 				answer.Messages[0])
 		}
 	}
-	if len(answer.Messages[0]) != len(want) {
-		t.Errorf("the hit carries %v, want exactly %v", answer.Messages[0], want)
+	// THE SNIPPET IS THE MESSAGE ITSELF, and arrives fenced as one.
+	if said := unfenced(t, answer.Messages[0]["snippet"]); said != "the backoff" {
+		t.Errorf("the hit's snippet says %q, want the message", said)
+	}
+	if len(answer.Messages[0]) != len(want)+1 {
+		t.Errorf("the hit carries %v, want exactly %v and its snippet", answer.Messages[0], want)
 	}
 }
 
@@ -2077,8 +2092,10 @@ func TestASearchOfAnIndexStillBeingBuiltSaysSo(t *testing.T) {
 // [builtin.ToolAnswerBytes]: a page past it is REFUSED rather than delivered,
 // so a ceiling the answer could not carry would be a search that answers its
 // own largest page of ordinary words with "ask for fewer". Held at a heavy one
-// — every snippet cut at its bound, both marks on it, the longest handle and
-// quotes throughout, each of which the answer's JSON writes as two bytes.
+// — every snippet cut at its bound, both marks on it, fenced, a different
+// author of the longest handle on every hit (so the fence's label and the
+// envelope each name the longest handle once a hit), and quotes throughout,
+// each of which the answer's JSON writes as two bytes.
 //
 // A PAGE OF MARKUP IS ONE ANSWER TOO, AND READS AS WRITTEN: a tool answer
 // carries `<`, `>` and `&` as the bytes they are, not as the six-byte escapes
@@ -2091,7 +2108,7 @@ func TestASearchOfAnIndexStillBeingBuiltSaysSo(t *testing.T) {
 // is for. Held so the limit's doc stays true in both directions — a limit
 // small enough to carry that page turns this half red and the doc is re-read.
 //
-// Mutation: raise MaxChatSearchLimit to 100 and the first half goes red; put
+// Mutation: raise MaxChatSearchLimit to 45 and the first half goes red; put
 // the HTML escaping back and the markup half does; drop the narrowing advice
 // from the search's answer and the last one does.
 func TestAFullChatSearchPageIsOneToolAnswer(t *testing.T) {
@@ -2099,11 +2116,13 @@ func TestAFullChatSearchPageIsOneToolAnswer(t *testing.T) {
 	page := func(body string) tools.Result {
 		f := newFakeChat()
 		f.hits = nil
-		for range search.MaxChatSearchLimit {
+		for i := range search.MaxChatSearchLimit {
 			f.hits = append(f.hits, search.ChatHit{
 				MessageID: uuid.NewString(), ChannelID: uuid.NewString(),
-				ThreadRoot: uuid.NewString(), Author: strings.Repeat("h", iam.MaxLogin),
-				Snippet: "…" + body + "…", CreatedAt: time.Now().UTC(), Score: 12.3456789,
+				ThreadRoot: uuid.NewString(),
+				Author:     strings.Repeat("h", iam.MaxLogin-2) + fmt.Sprintf("%02d", i),
+				AuthorKind: string(chatlet.AuthorAgent),
+				Snippet:    "…" + body + "…", CreatedAt: time.Now().UTC(), Score: 12.3456789,
 			})
 		}
 		return callChat(t, chatRegistry(t, chatDeps(f)), builtin.SearchMessagesTool,
