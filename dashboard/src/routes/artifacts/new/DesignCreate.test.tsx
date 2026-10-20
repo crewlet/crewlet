@@ -226,7 +226,7 @@ test("Cancel asks before discarding what was laid out", () => {
   pickLanding();
   fireEvent.click(screen.getAllByRole("button", { name: "Cancel" })[0]!);
   expect(screen.getByRole("alertdialog", { name: "Discard this design?" })).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Keep working" }));
+  fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
   expect(location.hash).toBe("#/artifacts/new/design");
 });
 
@@ -268,4 +268,13 @@ test("below a laptop's width the hand-off waits for the press rather than coveri
   expect(screen.queryByRole("complementary", { name: "Ask an agent" })).toBeNull();
   fireEvent.click(screen.getAllByRole("button", { name: "Ask an agent" })[0]!);
   expect(screen.getByRole("complementary", { name: "Ask an agent" })).toBeTruthy();
+});
+
+// ADD BOARD IS ALWAYS IN REACH: beside the list of boards, and beside the
+// panel's heading for the widths where that list is folded away.
+test("the design's panel carries Add board, for widths where the list of boards is folded away", () => {
+  mount();
+  pickLanding();
+  const head = screen.getByRole("heading", { name: "Design" }).parentElement!;
+  expect(within(head).getByRole("button", { name: "Add board" })).toBeTruthy();
 });

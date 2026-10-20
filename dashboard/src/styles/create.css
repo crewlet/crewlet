@@ -290,6 +290,11 @@
   font-size: var(--font-size-md);
   font-weight: var(--font-weight-semibold);
 }
+/* Add board beside the panel's heading, for the widths where the list of
+   boards that carries it is folded away. */
+.design-create-panel-add {
+  display: none;
+}
 .design-create-size {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -411,6 +416,9 @@
   .design-create-layers {
     display: none;
   }
+  .design-create-panel-add {
+    display: contents;
+  }
 }
 /* A phone: the canvas over the panel, and the page scrolls. */
 @container design-create (width < 40rem) {
@@ -449,7 +457,8 @@
   min-width: 0;
   min-height: 0;
   overflow: auto;
-  padding: var(--spacing-6);
+  /* The create pages' one inset: 16px under the bar, 20px at the sides. */
+  padding: var(--spacing-4) var(--spacing-5) var(--spacing-5);
 }
 .dashboard-create-head {
   display: flex;
@@ -499,15 +508,17 @@
   color: inherit;
   cursor: pointer;
 }
+/* A starter reads at the body's step, under the empty state that introduces
+   it: at a step above, the cards outranked the heading they answer. */
 .dashboard-create-starter-label {
   color: var(--color-text-primary);
-  font-size: var(--font-size-md);
+  font-size: var(--font-size-sm);
   font-weight: var(--font-weight-medium);
 }
 .dashboard-create-starter-text {
   color: var(--color-text-secondary);
-  font-size: var(--font-size-sm);
-  line-height: 1.45;
+  font-size: var(--font-size-xs);
+  line-height: var(--font-line-height-normal);
 }
 .dashboard-create-data {
   display: flex;
@@ -516,20 +527,22 @@
   min-width: 0;
   min-height: 0;
   overflow: auto;
-  padding: var(--spacing-6) var(--spacing-4);
+  padding: var(--spacing-4) var(--spacing-4) var(--spacing-5);
   border-inline-start: 1px solid var(--color-border-default);
   background: var(--color-surface-subtle);
 }
+/* Inset as a source's own text is (its padding and its hairline), so the
+   heading, the line under it and every source start on one edge. */
 .dashboard-create-data-head {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-1);
-  padding: 0 var(--spacing-1);
+  padding: 0 calc(var(--spacing-3) + 1px);
 }
 .dashboard-create-data-head h2 {
   margin: 0;
   color: var(--color-text-primary);
-  font-size: var(--font-size-lg);
+  font-size: var(--font-size-md);
   font-weight: var(--font-weight-semibold);
 }
 .dashboard-create-data-head p {
@@ -537,6 +550,12 @@
   color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
   line-height: 1.45;
+}
+.dashboard-create-data-note {
+  margin: 0;
+  padding: 0 calc(var(--spacing-3) + 1px);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
 }
 /* An open source: its settings, then its figures, under its entry. */
 .dashboard-create-source {
@@ -566,11 +585,6 @@
 }
 .dashboard-create-suggestion--half {
   grid-column: auto;
-}
-@container dashboard-create (width < 60rem) {
-  .dashboard-create-main {
-    padding: var(--spacing-5);
-  }
 }
 /* NARROW, the board and the Data panel are two tabs over one pane. */
 .dashboard-create[data-narrow] {
@@ -630,10 +644,13 @@
   justify-content: space-between;
   gap: var(--spacing-2);
 }
+/* Ghost buttons, so their words end on the editor's edge rather than their
+   padding's. */
 .html-create-pick {
   display: flex;
   flex-wrap: wrap;
   gap: var(--spacing-1);
+  margin-inline-end: calc(var(--spacing-2) * -1);
 }
 .html-create-source {
   display: flex;
@@ -667,11 +684,6 @@
   grid-template-columns: repeat(auto-fill, minmax(min(17rem, 100%), 1fr));
   gap: var(--spacing-3) var(--spacing-4);
   min-width: 0;
-}
-.html-create-first-action {
-  display: grid;
-  justify-items: center;
-  gap: var(--spacing-2);
 }
 .html-create-keys {
   display: inline-flex;

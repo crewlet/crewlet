@@ -42,13 +42,13 @@ import {
   Button,
   Callout,
   Card,
+  ConfirmModal,
   DatasetSource,
   DatasetSourceList,
   EmptyState,
   FormField,
   IconButton,
   Input,
-  Modal,
   SegmentedControl,
   Select,
   Skeleton,
@@ -358,6 +358,8 @@ export function DashboardCreate() {
       ]}
       action={{
         label: "Create dashboard",
+        // A PHONE'S BAR HOLDS THE VERB ALONE, so the page's title is not cut.
+        short: "Create",
         icon: <CheckGlyph size="sm" />,
         onSelect: () => void create(),
         ...(hold
@@ -489,7 +491,8 @@ export function DashboardCreate() {
           ) : null}
           {catalogue.data === null ? (
             catalogue.loading ? (
-              <Skeleton variant="grid" count={4} label="Loading the data you can use" />
+              // THE BOARD'S OWN SHAPE while the catalogue loads: figures in rows.
+              <Skeleton variant="grid" rows={2} columns={3} label="Loading the data you can use" />
             ) : (
               <QueryState error={catalogue.code} refusal={catalogue.refusal} loading={false} />
             )
@@ -511,6 +514,8 @@ export function DashboardCreate() {
           panelId={narrow && pane === "data" ? PANE : undefined}
           sources={sources}
           loading={catalogue.loading && catalogue.data === null}
+          failed={!catalogue.loading && catalogue.data === null}
+          narrow={narrow}
           draft={draft}
           open={open}
           onOpen={setOpen}
@@ -520,25 +525,16 @@ export function DashboardCreate() {
           boardTitle={title.trim() || "New dashboard"}
         />
       </div>
-      <Modal
+      <ConfirmModal
         open={confirmLeave}
-        onClose={() => setConfirmLeave(false)}
-        role="alertdialog"
-        size="sm"
+        destructive
         title="Discard this dashboard?"
-        footer={
-          <>
-            <Button variant="secondary" onClick={() => setConfirmLeave(false)}>
-              Keep editing
-            </Button>
-            <Button variant="danger" onClick={leave}>
-              Discard
-            </Button>
-          </>
-        }
-      >
-        Its title, its figures and any brief you wrote are not saved anywhere yet.
-      </Modal>
+        message="Its title, its figures and any brief you wrote are not saved anywhere yet."
+        cancelLabel="Keep editing"
+        confirmLabel="Discard"
+        onClose={() => setConfirmLeave(false)}
+        onConfirm={leave}
+      />
     </CreateShell>
   );
 }
@@ -580,6 +576,7 @@ function BoardDraft({
       {resolved.length === 0 ? (
         <div className="dashboard-create-empty">
           <EmptyState
+            size="compact"
             icon={<ArtifactKindGlyph kind="dashboard" size="lg" />}
             title={optional ? "Give the agent a starting point" : "Start your board"}
             description={
@@ -665,6 +662,8 @@ function DataPanel({
   panelId,
   sources,
   loading,
+  failed,
+  narrow,
   draft,
   open,
   onOpen,
@@ -678,6 +677,10 @@ function DataPanel({
   panelId: string | undefined;
   sources: readonly DashboardEngineSource[];
   loading: boolean;
+  /** The catalogue could not be read; the board says why. */
+  failed: boolean;
+  /** The panel is the narrow page's Data tab, which names it already. */
+  narrow: boolean;
   draft: Draft;
   open: string | null;
   onOpen: (name: string | null) => void;
@@ -695,11 +698,22 @@ function DataPanel({
       {...(panelId ? { id: panelId } : {})}
     >
       <div className="dashboard-create-data-head">
-        <h2 id="dashboard-create-data-title">Data</h2>
+        {narrow ? (
+          <VisuallyHidden as="h2" id="dashboard-create-data-title">
+            Data
+          </VisuallyHidden>
+        ) : (
+          <h2 id="dashboard-create-data-title">Data</h2>
+        )}
         <p>Open a source to see the figures it offers, drawn from its live rows.</p>
       </div>
       {loading ? (
-        <Skeleton variant="list" rows={5} label="Loading the data you can use" />
+        // A SOURCE'S OWN SHAPE: a title over its lines, one under the other.
+        <Skeleton variant="grid" rows={5} columns={1} label="Loading the data you can use" />
+      ) : failed ? (
+        // THE BOARD SAYS WHY, in its own place; the panel says where the
+        // sources will be, so it is not left blank under its heading.
+        <p className="dashboard-create-data-note">The sources appear here once they can be read.</p>
       ) : (
         <DatasetSourceList label="Data you can use">
           {sources.map((src) => {

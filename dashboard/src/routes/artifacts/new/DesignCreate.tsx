@@ -211,8 +211,8 @@ export function DesignCreate() {
       (builder ? undefined : "Add an agent to the chart to build it.") ??
       (briefBudget.over ? "Shorten the brief." : hold));
   const busy = create.busy || ask.busy;
-  // A PHONE'S BAR HOLDS THE VERB ALONE: the agent's name is in the panel, and
-  // beside the page's title it pushed the title out of the bar.
+  // A PHONE'S BAR KEEPS ITS WIDTH FOR THE NAME AND THE ACTION: the board
+  // count is the boards list's own there.
   const narrow = useMediaMatch("(width < 40rem)");
 
   const submit = useCallback(async () => {
@@ -369,12 +369,13 @@ export function DesignCreate() {
             notice={
               <>
                 {create.answer && create.answer.kind !== "done" && (
-                  <Callout variant="danger" title="The design was not created">
+                  <Callout variant="danger" title="The design was not created" live="polite">
                     <p>{create.answer.text}</p>
                   </Callout>
                 )}
                 {ask.refusal && (
                   <Callout
+                    live="polite"
                     variant={made ? "warning" : "danger"}
                     title={
                       made
@@ -533,7 +534,15 @@ export function DesignCreate() {
                   onDone={() => setSelected(null)}
                 />
               ) : (
-                <DesignPanel boards={draft.boards.length} />
+                <DesignPanel
+                  boards={draft.boards.length}
+                  addBoard={
+                    <AddBoardMenu
+                      disabled={draft.boards.length >= DESIGN_MAX_BOARDS}
+                      onAdd={addPreset}
+                    />
+                  }
+                />
               )}
             </div>
           </div>
@@ -545,7 +554,7 @@ export function DesignCreate() {
           destructive
           title="Discard this design?"
           message="The boards and brief you laid out are not kept."
-          cancelLabel="Keep working"
+          cancelLabel="Keep editing"
           confirmLabel="Discard"
           onClose={() => setConfirmLeave(false)}
           onConfirm={leave}
@@ -674,10 +683,20 @@ function BoardPlaceholder({ board }: { board: DraftBoard }) {
 }
 
 /** The panel with nothing selected: what the canvas holds, and how to shape a board. */
-function DesignPanel({ boards }: { boards: number }) {
+function DesignPanel({
+  boards,
+  addBoard,
+}: {
+  boards: number;
+  /** Add board, drawn here where the list of boards that carries it is folded away. */
+  addBoard: ReactNode;
+}) {
   return (
     <div className="design-create-fields">
-      <h2 className="design-create-panel-title">Design</h2>
+      <div className="design-create-panel-head">
+        <h2 className="design-create-panel-title">Design</h2>
+        <span className="design-create-panel-add">{addBoard}</span>
+      </div>
       <p className="design-create-note">
         {boards === 0
           ? "Place a board on the canvas to start."
