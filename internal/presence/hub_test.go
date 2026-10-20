@@ -839,3 +839,51 @@ func waitCounts(t *testing.T, s *screen, id Room, want *Counts) {
 		}
 	}
 }
+
+// A ROOM'S FAN-OUTS REACH ITS SINKS IN THE ORDER THEY WERE TAKEN.
+//
+// Each fan-out is the difference from the one before it, and two of a room are
+// two timers: the second can fire while the first is still in its sinks. Taken
+// then and handed over first, a member's leave reaches the sink ahead of the
+// upsert taken before it, and what the sink shows ends with the member in the
+// room — for good, since nothing says they left again.
+//
+// Mutation: drop [Hub.delivering] from flush, and the screen ends showing dana
+// beside erin.
+func TestARoomsFanOutsReachItsSinksInTheOrderTheyWereTaken(t *testing.T) {
+	t.Parallel()
+	broker, c := memory.NewBroker(), newClock()
+	n := startNode(t, broker, "node-a", c)
+	shown := newScreen()
+	inSink, release, out := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var first atomic.Bool
+	n.hub.OnChange(func(ch Change) {
+		if ch.Room != room1 {
+			return
+		}
+		if first.CompareAndSwap(false, true) {
+			// THE FIRST FAN-OUT IS HELD in this sink, as a slow socket
+			// hand-off would hold it, while the room moves on.
+			close(inSink)
+			<-release
+			defer close(out)
+		}
+		shown.apply(ch)
+	})
+
+	danaSession, _, err := n.hub.Join(room1, dana)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-inSink
+	if _, _, err := n.hub.Join(room1, erin); err != nil {
+		t.Fatal(err)
+	}
+	n.hub.Leave(room1, danaSession)
+	// LONG ENOUGH FOR THE NEXT FAN-OUT TO HAVE BEEN TAKEN AND HANDED OVER,
+	// were it not waiting for the one in the sink.
+	settle()
+	close(release)
+	<-out
+	shown.waitFor(t, "the held sink", room1, "erin:viewing")
+}

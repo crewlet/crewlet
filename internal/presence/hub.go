@@ -111,9 +111,12 @@ var (
 // Hub is this node's presence: the rooms its sockets and its agents are in,
 // what its peers last told it about the same rooms, and the frames between.
 //
-// ONE LOCK, never held across the broker or a sink: every broadcast, listen,
-// withdrawal, ask and fan-out runs after it is released, so a handler of the
-// queue's (which takes it) can never wait on a call made under it.
+// ONE LOCK OVER ITS STATE, never held across the broker or a sink: every
+// broadcast, listen, withdrawal, ask and fan-out runs after it is released, so
+// a handler of the queue's (which takes it) can never wait on a call made
+// under it. The one lock held across a sink is [Hub.delivering], taken by a
+// fan-out alone and always before the first, which orders what the sinks are
+// handed and nothing else.
 type Hub struct {
 	queue     Queue
 	wire      *Wire
@@ -130,6 +133,15 @@ type Hub struct {
 	sinkSeq uint64
 	running bool
 	stopped bool
+
+	// delivering serialises the fan-outs this hub hands its sinks: every
+	// flush takes it before mu and holds it until its sinks have returned
+	// ([Hub.flush]). Two fan-outs of a room are two timers, and the second
+	// can fire while the first is still in its sinks — taking its change
+	// after the first did and handing it over before, so a member's leave
+	// reached a socket ahead of the upsert taken before it and the socket
+	// went on showing the member until they moved again.
+	delivering sync.Mutex
 
 	// listening is the rooms this node is a listener for:
 	// listened and withdrawn by the reconciler alone ([Hub.reconcile]),
@@ -181,7 +193,8 @@ func (h *Hub) Domain() string { return h.wire.Domain() }
 
 // OnChange registers what this node does with a room's fan-out, and answers
 // the function that unregisters it. fn must not block: it is called after the
-// hub's lock is released, on the goroutine of whatever moved the room.
+// hub's lock is released, on the fan-out's own goroutine, one fan-out at a
+// time and in the order the changes were taken.
 func (h *Hub) OnChange(fn func(Change)) (stop func()) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -463,7 +476,13 @@ func (h *Hub) scheduleSendLocked(r *room) {
 // flush fans one room out to this node's sockets: what changed of its
 // presentation, at most [FrameMembers] members re-presented,
 // and another fan-out arranged for the rest.
+//
+// IN THE ORDER THE CHANGES WERE TAKEN, under [Hub.delivering]: each change is
+// the difference from the one before it, so a sink handed two out of order
+// applies the older last and shows what the newer had already undone.
 func (h *Hub) flush(id Room) {
+	h.delivering.Lock()
+	defer h.delivering.Unlock()
 	h.mu.Lock()
 	r := h.rooms[id]
 	if r == nil || h.stopped {
