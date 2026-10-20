@@ -17,7 +17,6 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/artifactupload"
 	"github.com/crewlet/crewlet/internal/clientsource"
-	"github.com/crewlet/crewlet/internal/presence"
 )
 
 // THE DASHBOARD SPEAKS THE ARTIFACTS' VOCABULARY, IN THE ENGINE'S ORDER.
@@ -25,10 +24,9 @@ import (
 // The gallery filters by kind and scope and sorts by what the listing sorts
 // by, the share dialog grants the roles a share may hold to the audiences a
 // share may name, the viewer embeds a frame by the origin mode the engine
-// minted it in, the presence chrome draws what a member is doing, and the
-// history and the company trail word every op a history row is filed under. Every
-// one of those is a closed set the engine owns, so `contract/artifacts.ts`
-// (and `contract/brand.ts`, for a brand kit's) declares each once and this
+// minted it in, and the history and the company trail word every op a history
+// row is filed under. Every one of those is a closed set the engine owns, so
+// `contract/artifacts.ts` (and `contract/brand.ts`, for a brand kit's) declares each once and this
 // holds it: a value the engine grew that the
 // dashboard lacks is a kind it cannot draw or a role nobody can grant; one the
 // dashboard keeps that the engine dropped is a choice every write refuses.
@@ -54,7 +52,6 @@ func TestTheDashboardSpeaksTheArtifactsVocabulary(t *testing.T) {
 		"SHAREABLE_ROLES":       names(artifacts.ShareableRoles),
 		"AUDIENCE_KINDS":        names(artifacts.AudienceKinds),
 		"ORIGIN_MODES":          names(artifacts.OriginModes),
-		"PRESENCE_ACTIVITIES":   names(presence.Activities),
 		"ARTIFACT_LIST_SCOPES":  names(artifactsdomain.ListScopes),
 		"ARTIFACT_LIST_SORTS":   names(artifactsdomain.ListSorts),
 		"ARTIFACT_HISTORY_OPS":  names(artifactsdomain.HistoryOps),
@@ -116,15 +113,12 @@ func TestTheDashboardDrawsEachKindAsTheKindTableSays(t *testing.T) {
 	}
 }
 
-// THE DASHBOARD BOUNDS WHAT A PERSON TYPES, AND WHAT IT TELLS A ROOM, AT THE
-// ENGINE'S CAPS.
+// THE DASHBOARD BOUNDS WHAT A PERSON TYPES AT THE ENGINE'S CAPS.
 //
 // The settings form and the version label dialog stop a title, a description,
 // an icon word or a label at these, so a person is told at the field rather
 // than refused after Save; a bound looser than the engine's is a form that
-// accepts what the engine will refuse. And the presence chrome sends at most
-// as many frames a second as a socket's room takes: the engine drops the rest,
-// so a faster client spends its own CPU telling the room nothing.
+// accepts what the engine will refuse.
 func TestTheDashboardBoundsArtifactTextAtTheEnginesCaps(t *testing.T) {
 	t.Parallel()
 	for name, engine := range map[string]int{
@@ -132,7 +126,6 @@ func TestTheDashboardBoundsArtifactTextAtTheEnginesCaps(t *testing.T) {
 		"ARTIFACT_DESCRIPTION_MAX_BYTES": artifacts.MaxDescriptionBytes,
 		"ARTIFACT_ICON_MAX_BYTES":        artifacts.MaxIconBytes,
 		"ARTIFACT_LABEL_MAX_BYTES":       artifacts.MaxLabelBytes,
-		"PRESENCE_FRAMES_PER_SECOND":     presence.ClientRate,
 		"ARTIFACT_CHECK_MAX_FILES":       artifactupload.MaxCheckFiles,
 		"ARTIFACT_CHECK_MAX_BYTES":       artifactupload.MaxCheckBytes,
 		"DOC_MAX_TABS":                   docindex.MaxTabs,

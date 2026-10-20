@@ -109,12 +109,12 @@ func (h *heardLive) dataMoved(moved []artifactdata.Moved) {
 // quietPoster is a [notify.StatusPoster] that shows nothing.
 type quietPoster struct{}
 
-func (quietPoster) StatusBackend() string                                          { return chatlet.Source }
-func (quietPoster) SupportsStatusText() bool                                       { return true }
-func (quietPoster) StatusRefresh() time.Duration                                   { return time.Minute }
-func (quietPoster) AddressRule() notify.AddressRule                                { return chatlet.AddressRule() }
-func (quietPoster) SetStatus(context.Context, string, string, string, string) bool { return true }
-func (quietPoster) ClearStatus(context.Context, string, string, string) bool       { return true }
+func (quietPoster) StatusBackend() string                                    { return chatlet.Source }
+func (quietPoster) SupportsStatusText() bool                                 { return true }
+func (quietPoster) StatusRefresh() time.Duration                             { return time.Minute }
+func (quietPoster) AddressRule() notify.AddressRule                          { return chatlet.AddressRule() }
+func (quietPoster) SetStatus(context.Context, notify.StatusPost) bool        { return true }
+func (quietPoster) ClearStatus(context.Context, string, string, string) bool { return true }
 
 // heard is one snapshot of what a node's sockets were handed.
 type heard struct {

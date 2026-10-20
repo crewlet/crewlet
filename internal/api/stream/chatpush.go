@@ -2,21 +2,21 @@ package stream
 
 import (
 	"context"
-	"encoding/json"
-	"maps"
+	"errors"
 	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/backoff"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
-	"github.com/crewlet/crewlet/internal/queue"
-	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -76,9 +76,13 @@ import (
 // working on a message. None of it is durable, none of it is applied, and none
 // of it may ever become a record — a keystroke that landed on the chat log
 // would be a row every data node applies and every backup carries, for ever.
-// It rides the queue's EPHEMERAL scatter on [topics.ChatPresence], which is
-// deliberately outside the chat log's own wildcard, and it is a READ: see
-// [ChatHub.answer] for why it is not signed.
+// It is the presence hub's (internal/presence, ADR-0038), as an artifact's
+// room is: a tab's `presence` frame naming a chat room joins this socket to
+// that room's presence ([ChatHub.presenceFrame]) once the room's own
+// visibility admits its viewer, every frame between nodes is sealed under the
+// fleet keyring, and what a socket is pushed is the hub's fan-out of the room
+// ([ChatHub.presenceChanged]). A seat's working indicator is a member of the
+// same room ([ChatHub.SetStatus]).
 //
 // A PERSON'S OWN READ STATE is the third, and it is pushed from the DURABLE
 // RECORD rather than from whoever wrote it: every node serving sockets watches
@@ -151,11 +155,12 @@ const (
 	KindChatCursorMoved Kind = "chat_cursor_moved"
 
 	// KindChatPresence is who is looking at, typing in, or working on a
-	// message in the room this socket said it is watching.
+	// message in the room this socket's `presence` frame named
+	// ([ChatPresence]): the room whole as the socket joins it, and every
+	// change the presence hub fans out after.
 	//
 	// NOT PAST TENSE, because it is not a thing that happened: it is the
-	// current answer, whole, for the room this socket asked about. A delta
-	// would need a starting point a reconnecting tab does not have.
+	// room's presence, as [KindArtifactPresence] is an artifact's.
 	KindChatPresence Kind = "chat_presence"
 )
 
@@ -172,68 +177,11 @@ func ChatPushKinds() []Kind {
 	}
 }
 
-// ChatFocusKind is the ONE client-to-server frame this arm adds: which room a
-// tab is looking at, and whether the person is typing in it.
-//
-// A FRAME RATHER THAN A QUERY, because it asks nothing and answers nothing —
-// it is the client telling the server where its attention is, which is what
-// makes a fleet-wide presence probe bounded to the rooms anybody is actually
-// watching. A tab that sends none is in no room's presence probe, so it sees
-// no presence and nobody sees it: bounding the probe to the rooms a tab has
-// open is what makes that true. A reconnecting tab sends it again, as it sends
-// its `watch`, because the new socket is a new watcher.
-const ChatFocusKind = "chat_focus"
-
-// The presence cadence, and every number here is tied to what it buys.
+// The arm's timings, and every number here is tied to what it buys.
 const (
-	// ChatPresenceInterval is the IDLE cadence: how often a node
-	// re-probes its peers when nothing has changed locally.
-	//
-	// THREE SECONDS, and it is sized against [ChatTypingTTL] rather than
-	// against latency, because latency is the wake path's job (a focus
-	// change probes immediately). What this interval alone has to cover
-	// is the tab that stopped typing without saying so — a lid closed
-	// mid-word — and the indicator is then wrong for at most one interval
-	// past the TTL.
-	ChatPresenceInterval = 3 * time.Second
-
-	// ChatPresenceGap is the floor between two probes.
-	//
-	// HALF A SECOND, because a focus change probes at once and typing is
-	// a focus change per keystroke: without a floor a fast typist is one
-	// fleet-wide scatter per character. It is under the threshold at
-	// which a person perceives the indicator as lagging, so coalescing
-	// here costs nothing anybody can see — which holds only because a
-	// change the floor skips is probed at the gap's END rather than left
-	// to the idle tick ([ChatHub.presenceLoop]).
-	ChatPresenceGap = 500 * time.Millisecond
-
-	// ChatPresenceAsk is how long one probe waits for its peers.
-	//
-	// The scatter asks for no particular number of replies — a node
-	// cannot know how many peers are serving — so it waits out this
-	// deadline every time, which makes it the cost of a probe rather than
-	// a timeout. THREE QUARTERS OF A SECOND: enough for a reply across a
-	// region (a same-region round trip is single-digit milliseconds and a
-	// cross-region one tens), short enough that it stays well inside
-	// [ChatPresenceGap] plus a tick, so probes never pile up on each
-	// other. A peer that does not answer inside it is treated as having
-	// nobody in the room, and the next probe corrects it.
-	ChatPresenceAsk = 750 * time.Millisecond
-
-	// ChatTypingTTL is how long a typing flag survives without being
-	// re-asserted.
-	//
-	// SIX SECONDS, which is two idle intervals: a client re-asserts while
-	// somebody types, so one lost frame must not blink the indicator off,
-	// and two must. Closing the socket withdraws it immediately — this
-	// covers the tab that stops typing and says nothing, not the tab that
-	// goes away.
-	ChatTypingTTL = 6 * time.Second
-
 	// ChatStatusRefresh is what the working-indicator driver re-asserts
-	// at. See [ChatHub.StatusRefresh] for why it is long.
-	ChatStatusRefresh = 30 * time.Second
+	// at: [presence.Rebroadcast]. See [ChatHub.StatusRefresh].
+	ChatStatusRefresh = presence.Rebroadcast
 
 	// ChatVisibilityBudget bounds ONE visibility decision.
 	//
@@ -283,14 +231,6 @@ const (
 	chatReadRewatchCeiling = coord.ReconcileInterval
 )
 
-// chatPresenceProtocol is the presence scatter's payload version.
-//
-// ONE, and it moves only for a reshape — a new FIELD needs no bump, because a
-// peer ignores what it does not know. A reply this build cannot read is a
-// MISSING reply, exactly as the search fan-out treats one: presence is a
-// courtesy, and a rolling upgrade must degrade it rather than break it.
-const chatPresenceProtocol = 1
-
 // ChatRooms answers whether one viewer may read one room.
 //
 // Declared by the consumer and kept to the two reads this arm makes: a room
@@ -318,16 +258,6 @@ type ChatRooms interface {
 type roomRead func(ctx context.Context, viewer, channelID string,
 	fresh statelog.Freshness) (chatlet.ChannelDetail, error)
 
-// ChatPeers is the ephemeral scatter presence rides.
-//
-// The two verbs that leave no trace, declared by the consumer so this arm
-// depends on the shape rather than on the broker: nothing here may be
-// published, retained, redelivered or recorded. See [queue.EventQueue.Ask].
-type ChatPeers interface {
-	Ask(ctx context.Context, subject string, request []byte, want int) ([][]byte, error)
-	Serve(ctx context.Context, subject string, h queue.AnswerFunc) (queue.Unsubscribe, error)
-}
-
 // ChatReadWatch is the coordination store's read-state watch, as this arm
 // consumes it: every record that exists, the marker, then every change.
 // See [coord.ChatReads.WatchChatReads].
@@ -335,45 +265,29 @@ type ChatReadWatch interface {
 	WatchChatReads(ctx context.Context) (<-chan coord.ChatReadUpdate, error)
 }
 
-// ChatWorking is one seat working on a message in a room.
-type ChatWorking struct {
-	Handle string `json:"handle"`
-
-	// Thread is the message the work will be answered under, which is
-	// what puts the indicator where the reply will land rather than
-	// somewhere else in the room.
-	Thread string `json:"thread,omitempty"`
-
-	// Status is the phrase to render, and empty renders the bare
-	// indicator. Empty is what [notify.StatusDriver] hands a poster that
-	// renders no words ([notify.StatusPoster.SupportsStatusText] false);
-	// this hub declares it renders them ([ChatHub.SupportsStatusText]), so
-	// every frame it sends carries one.
-	Status string `json:"status,omitempty"`
-}
-
-// ChatRoomPresence is who is in one room right now.
-type ChatRoomPresence struct {
-	// Viewing are the people with this room open. Handles, because a
-	// person in chat IS a seat.
-	Viewing []string `json:"viewing,omitempty"`
-
-	// Typing are the people composing in it, which is a subset of
-	// Viewing that expires on its own — see [ChatTypingTTL].
-	Typing []string `json:"typing,omitempty"`
-
-	// Working are the seats running a turn against a message here.
-	Working []ChatWorking `json:"working,omitempty"`
-}
-
-// ChatPresenceFrame is the presence push's payload: the room this socket
-// asked about, whole.
+// ChatPresence is a `chat_presence` push: one chat room's presence, as the
+// presence hub fans it out ([presence.Change]), named by the room's id as
+// every chat frame names its room.
 //
-// WHOLE RATHER THAN A DELTA, because a tab that reconnects has no starting
-// point to apply one against, and presence is small: a handful of handles per
-// room somebody is actually looking at.
-type ChatPresenceFrame struct {
-	Rooms map[string]ChatRoomPresence `json:"rooms"`
+// Roster set is the room WHOLE, as the socket joining it is handed it: replace
+// what was held. Otherwise it is a change: the members now presented that are
+// new or changed, and the sessions no longer presented. A person's member is
+// viewing or, while they type, editing, its focus the thread they are typing
+// under; a seat working on an answer is an agent's member, editing, its focus
+// the thread the answer will land in and its status the line shown beside it.
+// Past [presence.RoomTop] members the room presents the most recent and counts
+// the rest, as an artifact's does.
+//
+// A ROSTER NAMING NO MEMBER is also what a socket is sent when it is taken out
+// of a room it may no longer be in ([ChatHub.withdrawPresence]), so the room it
+// was shown empties rather than standing.
+type ChatPresence struct {
+	ChannelID string            `json:"channel_id"`
+	Roster    bool              `json:"roster,omitempty"`
+	Upsert    []presence.Member `json:"upsert"`
+	Leave     []string          `json:"leave"`
+	Counts    *presence.Counts  `json:"counts,omitempty"`
+	Truncated bool              `json:"truncated"`
 }
 
 // ChatChange is one committed chat record as a socket renders it.
@@ -454,10 +368,12 @@ type ChatHubOptions struct {
 	// like a quiet company.
 	Rooms func() ChatRooms
 
-	// Peers carries presence to the rest of the fleet. Nil keeps it on
-	// this node's own sockets, which is honest and is the whole truth on a
-	// single-node deployment.
-	Peers ChatPeers
+	// Presence is this node's presence hub, which a chat room's presence
+	// rides as an artifact's does: who has a room open, who is typing in it
+	// and which seat is answering there. Nil shows nobody in any room and
+	// raises no working indicator — honest on an engine with no broker,
+	// which has no peer to tell either.
+	Presence ChatPresenceHub
 
 	// Reads is the coordination store's read-state watch, which every
 	// node serving sockets follows to push a person's read state to their
@@ -465,20 +381,21 @@ type ChatHubOptions struct {
 	// rail alone.
 	Reads ChatReadWatch
 
-	// NodeID names this node in its own presence answer, so an asker can
-	// drop the reply to its own scatter rather than merging itself twice.
-	NodeID string
-
-	// Now is injectable so a test can pin the typing window.
+	// Now is injectable so a test can pin the instant a frame is stamped.
 	Now func() time.Time
+}
 
-	// PresenceInterval and AskBudget override [ChatPresenceInterval] and
-	// [ChatPresenceAsk] — the presence probe's cadence and its wait for
-	// replies. Injectable for the reason [Options.HealthInterval] is: a
-	// suite that waited out the production value would either be slow or
-	// assert nothing.
-	PresenceInterval time.Duration
-	AskBudget        time.Duration
+// ChatPresenceHub is the presence hub as a chat room uses it: a socket's
+// join, its frames and its leave, an agent's working line touched and
+// withdrawn, and the fan-out.
+type ChatPresenceHub interface {
+	Join(room presence.Room, who presence.Local) (string, presence.Roster, error)
+	Update(room presence.Room, session string, activity presence.Activity,
+		focus presence.Focus) error
+	Leave(room presence.Room, session string)
+	Touch(room presence.Room, a presence.Agent)
+	Withdraw(room presence.Room, seat string, focus presence.Focus)
+	OnChange(fn func(presence.Change)) (stop func())
 }
 
 // chatWatcher is one socket watching chat.
@@ -492,28 +409,23 @@ type chatWatcher struct {
 	// rather than of a check somebody has to remember.
 	viewer string
 
-	// channel is the room this tab is looking at, and typingAt is when it
-	// last said it was composing there. A zero instant is not typing.
-	channel  string
-	typingAt time.Time
-
-	// sent is the fingerprint of the last presence frame this socket was
-	// given, so an unchanged view costs no frame. Presence is the one
-	// thing here that is re-evaluated on a timer rather than on an event,
-	// so without this every tab would get a frame every interval for ever.
-	sent string
+	// room is the chat room this socket's presence is in, by its id, and
+	// session the member it is there; the zero room is in none. One room
+	// at a time, because a tab looks at one room at a time.
+	room    uuid.UUID
+	session string
 }
 
-// chatStatusKey identifies one live working indicator.
-type chatStatusKey struct{ handle, channel, thread string }
+// seenKey is one visibility decision: one viewer, one room.
+type seenKey struct{ viewer, channel string }
 
 // ChatHub is the chat arm of the live channel: the watchers, the visibility
-// filter, the presence scatter and the read-state push.
+// filter, a chat room's presence and the read-state push.
 //
 // ONE PER PROCESS, and its lifetime is the process's rather than the API's: a
 // seat raises its working indicator on whichever node its turn runs on, and
-// the presence answer that shows it is served by every node, so the engine
-// is attached to a hub on every node, whether or not that node serves an API
+// the presence hub tells the room open on another node, so the engine is
+// attached to a hub on every node, whether or not that node serves an API
 // ([ChatHub.ServesSockets] says which).
 type ChatHub struct {
 	opts ChatHubOptions
@@ -532,10 +444,6 @@ type ChatHub struct {
 	rereadOwed atomic.Bool
 	rereadWake chan struct{}
 
-	// wake asks the presence loop to probe now rather than at the next
-	// tick. Buffered to one: a burst of keystrokes is one probe.
-	wake chan struct{}
-
 	// sockets is closed once the API's socket surface is built over this
 	// hub ([ChatHub.AttachSockets]); serving says so to the engine.
 	sockets     chan struct{}
@@ -544,7 +452,6 @@ type ChatHub struct {
 
 	mu       sync.Mutex
 	watchers map[*Client]*chatWatcher
-	working  map[chatStatusKey]ChatWorking
 
 	// pushed is the read-state revision last pushed per seat, so a watch
 	// begun again re-delivering every record pushes only what moved.
@@ -554,11 +461,13 @@ type ChatHub struct {
 	stop    chan struct{}
 	done    chan struct{}
 
+	// stopPresence stops hearing the presence hub's fan-outs; nil while
+	// the hub is not running or has no presence.
+	stopPresence func()
+
 	// unwired says the missing-reader warning has been given. Once, not
-	// per record: this is the busiest log in the engine. unserved is the
-	// same for the presence subscription, which is retried per tick.
-	unwired  sync.Once
-	unserved sync.Once
+	// per record: this is the busiest log in the engine.
+	unwired sync.Once
 
 	// dropped counts batches the fan-out could not keep up with, and says
 	// so while the hub runs — see [chatDropReportEvery].
@@ -581,41 +490,24 @@ func NewChatHub(opts ChatHubOptions) *ChatHub {
 		now:        opts.Now,
 		applied:    make(chan []chatlet.Applied, chatAppliedQueue),
 		rereadWake: make(chan struct{}, 1),
-		wake:       make(chan struct{}, 1),
 		sockets:    make(chan struct{}),
 		watchers:   map[*Client]*chatWatcher{},
-		working:    map[chatStatusKey]ChatWorking{},
 		pushed:     map[string]uint64{},
 	}
 	if h.now == nil {
 		h.now = func() time.Time { return time.Now().UTC() }
 	}
-	if h.opts.PresenceInterval <= 0 {
-		h.opts.PresenceInterval = ChatPresenceInterval
-	}
-	if h.opts.AskBudget <= 0 {
-		h.opts.AskBudget = ChatPresenceAsk
-	}
 	return h
 }
 
-// Start runs the fan-out, the presence loop and the read-state push until ctx
-// is done or [Stop] is called.
+// Start runs the fan-out and the read-state push until ctx is done or [Stop] is
+// called, and hears the presence hub's fan-outs of chat rooms.
 //
-// THREE GOROUTINES, not one. A presence probe waits out its scatter's deadline
-// by construction (a scatter has no roster, so there is no reply count that
-// ends it early), and a live message queued behind that wait would be
-// delivered that much after it was said; a read-state watch is a stream with
-// a loop of its own.
-//
-// AND THIS NODE ANSWERS ITS PEERS' PRESENCE PROBES BEFORE IT RETURNS: the
-// subscription is attempted here rather than on the loop's first turn, so the
-// node a boot hands back is one already in the fleet's presence. A refused
-// attempt is retried on every tick.
+// TWO GOROUTINES, not one: a read-state watch is a stream with a loop of its
+// own, and a live message must not wait behind it.
 //
 // Idempotent: a second call while one is running is a no-op rather than a
-// second set of loops, which would probe twice per interval and leave
-// goroutines [Stop] never joins.
+// second set of loops, which would leave goroutines [Stop] never joins.
 func (h *ChatHub) Start(ctx context.Context) {
 	if h == nil {
 		return
@@ -628,12 +520,13 @@ func (h *ChatHub) Start(ctx context.Context) {
 	h.started = true
 	stop, done := make(chan struct{}), make(chan struct{})
 	h.stop, h.done = stop, done
+	if h.opts.Presence != nil {
+		h.stopPresence = h.opts.Presence.OnChange(h.presenceChanged)
+	}
 	h.mu.Unlock()
 
-	unsubscribe := h.serve(ctx)
 	var loops sync.WaitGroup
 	loops.Go(func() { h.fanLoop(ctx, stop) })
-	loops.Go(func() { h.presenceLoop(ctx, stop, unsubscribe) })
 	loops.Go(func() { h.readsLoop(ctx, stop) })
 
 	go func() {
@@ -642,9 +535,9 @@ func (h *ChatHub) Start(ctx context.Context) {
 	}()
 }
 
-// Stop ends the three loops and waits for them, and says whatever was dropped
-// since the last line [chatDropReportEvery] allowed. A hub stopped is not
-// started again by its process.
+// Stop ends the two loops and waits for them, stops hearing the presence hub,
+// and says whatever was dropped since the last line [chatDropReportEvery]
+// allowed. A hub stopped is not started again by its process.
 func (h *ChatHub) Stop() {
 	if h == nil {
 		return
@@ -653,10 +546,15 @@ func (h *ChatHub) Stop() {
 	stop, done, running := h.stop, h.done, h.started
 	h.started = false
 	h.stop, h.done = nil, nil
+	stopPresence := h.stopPresence
+	h.stopPresence = nil
 	batches, total := h.dropped.rest(), h.dropped.total
 	h.mu.Unlock()
 	if !running {
 		return
+	}
+	if stopPresence != nil {
+		stopPresence()
 	}
 	close(stop)
 	<-done
@@ -762,7 +660,9 @@ func (h *ChatHub) Applied(batch []chatlet.Applied) {
 // its rooms again — the engine switched the source its batches come from (its
 // own applier, a peer's relayed), or this hub dropped a batch. Nothing between
 // is replayed, and a frame per room would need to know every room each screen
-// holds.
+// holds — and every socket in a room's presence is decided again, since the
+// gap may have held the record that took its viewer out of the room
+// ([ChatHub.presenceAfterGap]).
 //
 // NEVER BLOCKS AND IS NEVER LOST: it sets a flag the fan loop reads after
 // every batch and on its own wake, so a burst of gaps is one re-read and a
@@ -792,13 +692,14 @@ func (h *ChatHub) fanLoop(ctx context.Context, stop <-chan struct{}) {
 		case <-h.rereadWake:
 		}
 		if h.rereadOwed.Swap(false) {
-			h.reread()
+			h.reread(ctx)
 		}
 	}
 }
 
-// reread sends every watcher the frame that names no room.
-func (h *ChatHub) reread() {
+// reread sends every watcher the frame that names no room, and decides again
+// who may stay in the rooms' presence.
+func (h *ChatHub) reread(ctx context.Context) {
 	watchers := h.current()
 	if len(watchers) == 0 {
 		return
@@ -808,6 +709,45 @@ func (h *ChatHub) reread() {
 		targets = append(targets, w.client)
 	}
 	fanOut(targets, Push(KindChatRoomChanged, ChatChange{}, h.now()))
+	h.presenceAfterGap(ctx, watchers)
+}
+
+// presenceAfterGap decides again whether every socket in a room's presence may
+// still see the room, and takes out the ones it definitely may not.
+//
+// A GAP MAY HAVE HELD THE RECORD THAT NARROWED A ROOM — a batch this hub
+// dropped, or one applied while the engine's source switched — and that
+// record is what takes a removed person out of the room's presence
+// ([ChatHub.redecidePresence]). Missed, its subject would go on seeing who is
+// typing in a room they were taken out of, and be shown there, until their
+// tab moved. So a gap re-decides every socket in a room, as the record would
+// have.
+//
+// WHAT IT CANNOT DECIDE IT KEEPS, the way an artifact's room keeps an
+// undecidable member on a reset, rather than failing closed as a narrowing
+// record's re-decision does: that record is evidence the room changed, while
+// a gap is only the possibility, and a store blip during one would otherwise
+// empty every room's presence on the node — with nothing to bring a person
+// who is only looking back until they typed or reconnected.
+func (h *ChatHub) presenceAfterGap(ctx context.Context, watchers []chatWatcher) {
+	rooms := h.rooms()
+	if rooms == nil {
+		return
+	}
+	for _, w := range watchers {
+		if w.session == "" {
+			continue
+		}
+		visible, err := h.sees(ctx, rooms.Channel, presenceRead, w.viewer, w.room.String())
+		if err != nil {
+			log.DebugContext(ctx, "chat_presence_kept_undecided", "channel", w.room,
+				"error", err)
+			continue
+		}
+		if !visible {
+			h.withdrawPresence(w.client, w.room)
+		}
+	}
 }
 
 // fan delivers one committed batch to every socket entitled to see it.
@@ -857,12 +797,15 @@ func (h *ChatHub) fan(ctx context.Context, batch []chatlet.Applied) {
 		return
 	}
 	at := statelog.Freshness{Level: statelog.ReadStale, MinPosition: batchPosition(batch)}
-	decided := map[chatStatusKey]bool{}
+	decided := map[seenKey]bool{}
 	targets := make([]*Client, 0, len(watchers))
 	for _, applied := range batch {
 		kind, push := chatPushKind(applied.Op)
 		if !push {
 			continue
+		}
+		if kind == KindChatRoomChanged || kind == KindChatMembershipChanged {
+			h.redecidePresence(ctx, rooms, at, decided, watchers, applied)
 		}
 		targets = targets[:0]
 		for _, w := range watchers {
@@ -888,6 +831,32 @@ func (h *ChatHub) fan(ctx context.Context, batch []chatlet.Applied) {
 	}
 }
 
+// redecidePresence takes out of a room's presence every socket in it whose
+// viewer the record took out of the room or that may no longer read it at the
+// batch's position: a membership replaced, a room made private, erased. Who
+// may be in a room's presence is who may read the room, decided again by the
+// one record that can narrow it, as an artifact's room is by a share
+// withdrawn.
+func (h *ChatHub) redecidePresence(ctx context.Context, rooms ChatRooms,
+	at statelog.Freshness, decided map[seenKey]bool, watchers []chatWatcher,
+	applied chatlet.Applied) {
+
+	room, err := uuid.Parse(applied.ChannelID)
+	if err != nil {
+		return
+	}
+	for _, w := range watchers {
+		if w.room != room {
+			continue
+		}
+		if !slices.Contains(applied.Removed, w.viewer) &&
+			h.maySee(ctx, rooms.ChannelHere, at, decided, w.viewer, applied.ChannelID) {
+			continue
+		}
+		h.withdrawPresence(w.client, room)
+	}
+}
+
 // batchPosition is the furthest position a committed batch reached: the floor
 // every decision about it is held to. One applier wrote it, so every record in
 // it is on the one log and the comparison never crosses streams.
@@ -902,10 +871,11 @@ func batchPosition(batch []chatlet.Applied) statelog.Position {
 	return furthest
 }
 
-// presenceRead is the freshness a presence decision reads at: STALE, with no
+// presenceRead is the freshness a presence join reads at: STALE, with no
 // floor, because it is about no record — who may be told somebody is looking
 // at a room — and a linearizable read would put a quorum barrier append on the
-// broker for every watcher of every room on every probe.
+// broker for every tab that opens a room. A record that narrows the room is
+// decided again at its own position ([ChatHub.redecidePresence]).
 var presenceRead = statelog.Freshness{Level: statelog.ReadStale}
 
 // maySee answers whether one viewer may be shown one room, through the
@@ -925,31 +895,49 @@ var presenceRead = statelog.Freshness{Level: statelog.ReadStale}
 //
 // THE READ AND ITS FRESHNESS ARE THE PASS'S: a committed frame's decision
 // reads this node's copy first at the batch's own position ([ChatHub.fan]), a
-// presence decision whichever copy the walk prefers ([presenceRead]).
+// presence join whichever copy the walk prefers ([presenceRead]).
 func (h *ChatHub) maySee(ctx context.Context, read roomRead, fresh statelog.Freshness,
-	decided map[chatStatusKey]bool, viewer, channelID string) bool {
+	decided map[seenKey]bool, viewer, channelID string) bool {
 
 	if viewer == "" || channelID == "" {
 		return false
 	}
-	key := chatStatusKey{handle: viewer, channel: channelID}
+	key := seenKey{viewer: viewer, channel: channelID}
 	if answer, known := decided[key]; known {
 		return answer
 	}
-	readCtx, cancel := context.WithTimeout(ctx, ChatVisibilityBudget)
-	defer cancel()
-	detail, err := read(readCtx, viewer, channelID, fresh)
-	answer := err == nil && chatlet.Visible(viewer, detail.Channel, detail.Member)
+	answer, err := h.sees(ctx, read, fresh, viewer, channelID)
 	if err != nil {
-		// DEBUG. A room the viewer may not read answers `not found`
-		// here, which is the ordinary case on any message in a private
-		// room — at warn it would be a log line per outsider per
-		// message.
+		// DEBUG, for the reason [ChatHub.sees] gives for its own line.
 		log.DebugContext(ctx, "chat_live_frame_withheld", "channel", channelID,
 			"error", err)
 	}
 	decided[key] = answer
 	return answer
+}
+
+// sees is one visibility decision, THREE-VALUED: (true, nil) the viewer may
+// see the room, (false, nil) definitely not — the room's own rule refuses
+// them, or the reader answers that it serves them no such room — and (false,
+// err) undecided, a read that failed or ran out of [ChatVisibilityBudget].
+// [ChatHub.maySee] fails closed on the third; a re-decision after a gap keeps
+// what it cannot decide ([ChatHub.presenceAfterGap]).
+func (h *ChatHub) sees(ctx context.Context, read roomRead, fresh statelog.Freshness,
+	viewer, channelID string) (bool, error) {
+
+	readCtx, cancel := context.WithTimeout(ctx, ChatVisibilityBudget)
+	defer cancel()
+	detail, err := read(readCtx, viewer, channelID, fresh)
+	switch {
+	case errors.Is(err, chatlet.ErrNotFound):
+		// A room the viewer may not read answers `not found`, which is
+		// the ordinary case on any message in a private room: a
+		// decision, and no line at all.
+		return false, nil
+	case err != nil:
+		return false, err
+	}
+	return chatlet.Visible(viewer, detail.Channel, detail.Member), nil
 }
 
 // chatPushKind maps a record's op onto the frame it becomes, reporting false
@@ -1166,21 +1154,21 @@ func (h *ChatHub) join(client *Client, viewer string) bool {
 	return true
 }
 
-// leave withdraws a socket, and with it whatever it was looking at.
+// leave withdraws a socket, and with it the room's presence it was in.
 //
-// IMMEDIATELY, rather than waiting out [ChatTypingTTL]: a socket that closed
-// is a person who is demonstrably not typing, and the TTL exists for the tab
-// that stays open and stops.
+// IMMEDIATELY, rather than waiting out [presence.TypingLapse]: a socket that
+// closed is a person who is demonstrably not in the room, and the lapse exists
+// for the tab that stays open and stops.
 func (h *ChatHub) leave(client *Client) {
 	if h == nil || client == nil {
 		return
 	}
 	h.mu.Lock()
-	_, watching := h.watchers[client]
+	w, watching := h.watchers[client]
 	delete(h.watchers, client)
 	h.mu.Unlock()
-	if watching {
-		h.probe()
+	if watching && w.session != "" && h.opts.Presence != nil {
+		h.opts.Presence.Leave(presence.ChatRoom(w.room), w.session)
 	}
 }
 
@@ -1196,40 +1184,6 @@ func (h *ChatHub) current() []chatWatcher {
 	return watchers
 }
 
-// focus records what one socket is looking at.
-//
-// THE FRAME IS TRUSTED ABOUT ATTENTION AND NEVER ABOUT PERMISSION. A client
-// may name any room it likes here — it is saying where it is looking, and the
-// answer it gets back is filtered by [ChatHub.maySee] exactly as a committed
-// frame is. So naming a private room somebody is not in produces nothing at
-// all, which is the same answer as a room that does not exist.
-func (h *ChatHub) focus(client *Client, channelID string, typing bool) {
-	if h == nil || client == nil {
-		return
-	}
-	channelID = strings.TrimSpace(channelID)
-	h.mu.Lock()
-	w, watching := h.watchers[client]
-	if watching {
-		if w.channel != channelID {
-			// A NEW ROOM IS A NEW FRAME. The fingerprint is of the
-			// last view SENT, and the view is per room, so a tab
-			// that moved has to be told about the room it moved to
-			// even if that room's presence has not changed.
-			w.sent = ""
-		}
-		w.channel = channelID
-		w.typingAt = time.Time{}
-		if typing && channelID != "" {
-			w.typingAt = h.now()
-		}
-	}
-	h.mu.Unlock()
-	if watching {
-		h.probe()
-	}
-}
-
 func (h *ChatHub) rooms() ChatRooms {
 	if h.opts.Rooms == nil {
 		return nil
@@ -1239,457 +1193,168 @@ func (h *ChatHub) rooms() ChatRooms {
 
 // ---- presence ---------------------------------------------------------- //
 
-// presenceLoop probes the fleet on a tick, or sooner when a tab moves.
+// presenceFrame is one socket's `presence` frame naming a chat room: where its
+// tab is looking and whether its person is typing, under which thread. Called
+// on the socket's room goroutine, in the order its frames arrived, so a leave
+// never overtakes the join it undoes.
 //
-// IT ALSO OWNS THIS NODE'S ANSWERING HALF, attempted at [ChatHub.Start] and
-// again on every tick until it takes: a broker that refused the subscription
-// once would otherwise leave this node answering nobody's probe for the rest
-// of its life, silently, while it went on sending its own to everybody else.
-func (h *ChatHub) presenceLoop(ctx context.Context, stop <-chan struct{},
-	unsubscribe queue.Unsubscribe) {
+// A FRAME NAMING ANOTHER ROOM MOVES THE SOCKET, because a tab looks at one room
+// at a time: out of the room it was in, and into the one it names once the
+// room's own visibility admits its viewer ([ChatHub.maySee], the decision a
+// committed frame takes) — and a refusal leaves it in none, with nothing said,
+// which is the answer a room that does not exist gets too. A frame naming no
+// room takes it out of the one it was in.
+//
+// THE FRAME IS TRUSTED ABOUT ATTENTION AND NEVER ABOUT PERMISSION: a client may
+// name any room it likes, and naming a private room its viewer is not in puts
+// it in nobody's presence and shows it nobody's.
+func (h *ChatHub) presenceFrame(ctx context.Context, client *Client, channelID string,
+	activity presence.Activity, focus presence.Focus) {
 
-	ticker := time.NewTicker(h.opts.PresenceInterval)
-	defer ticker.Stop()
-	defer func() {
-		// WITHOUT THE CALLER'S CANCELLATION, because this teardown is
-		// usually undoing the shutdown's own context, and a cleanup that
-		// inherits a dead context does nothing at all.
-		if unsubscribe != nil {
-			_ = unsubscribe(context.WithoutCancel(ctx))
-		}
-	}()
-	serve := func() {
-		if unsubscribe == nil {
-			unsubscribe = h.serve(ctx)
-		}
+	if h == nil || client == nil || h.opts.Presence == nil {
+		return
 	}
-
-	// owed is the one probe a wake inside [ChatPresenceGap] is owed, at the
-	// gap's end: nil while none is. ONE TIMER, RESET RATHER THAN STACKED, so
-	// a burst of keystrokes inside one gap is one probe at its end — and not
-	// the next idle tick, which would be up to [ChatPresenceInterval], six
-	// times the gap the floor's own reasoning promises nobody can see.
-	gap := time.NewTimer(ChatPresenceGap)
-	gap.Stop()
-	defer gap.Stop()
-	var owed <-chan time.Time
-
-	var last time.Time
-	sweep := func() {
-		last = h.sweep(ctx)
-		// A SWEEP PAYS WHATEVER PROBE WAS OWED, whichever arm ran it: the
-		// state it was owed for is what this one just gathered.
-		if owed != nil {
-			gap.Stop()
-			owed = nil
-		}
-	}
-	for {
-		select {
-		case <-ctx.Done():
+	channelID = strings.TrimSpace(channelID)
+	var room uuid.UUID
+	if channelID != "" {
+		parsed, err := uuid.Parse(channelID)
+		if err != nil {
+			// NOT A ROOM ANYBODY CAN BE IN: every room's id is a UUID.
+			log.DebugContext(ctx, "chat_presence_frame_refused", "channel", channelID,
+				"error", err.Error())
 			return
-		case <-stop:
-			return
-		case <-ticker.C:
-			serve()
-			sweep()
-		case <-owed:
-			owed = nil
-			sweep()
-		case <-h.wake:
-			// THE FLOOR IS ENFORCED HERE rather than by the sender,
-			// because the sender is a keystroke: a client that
-			// signals per character must cost one scatter, not one
-			// per character. What it skips is owed at the gap's end.
-			if since := h.now().Sub(last); since < ChatPresenceGap {
-				if owed == nil {
-					gap.Reset(ChatPresenceGap - since)
-					owed = gap.C
-				}
-				continue
-			}
-			sweep()
 		}
-	}
-}
-
-// probe asks the presence loop to run now. Never blocks: a full channel
-// already means a probe is pending, and two are one.
-func (h *ChatHub) probe() {
-	select {
-	case h.wake <- struct{}{}:
-	default:
-	}
-}
-
-// sweep gathers this node's presence, asks the fleet for theirs, and pushes
-// each socket the room it is watching.
-//
-// It reports the instant the sweep ran, which is what the floor above is
-// measured from.
-func (h *ChatHub) sweep(ctx context.Context) time.Time {
-	at := h.now()
-	rooms := h.rooms()
-	if rooms == nil {
-		return at
-	}
-	// ONE VISIBILITY PASS SERVES BOTH HALVES, and they really are two
-	// questions: who is LEGITIMATELY looking at a room, and who may be
-	// TOLD about it. A watcher whose tab names a room it cannot open is
-	// neither — it contributes nobody and it hears nothing — which is
-	// what stops a socket advertising itself into a private conversation
-	// by naming its id.
-	decided := map[chatStatusKey]bool{}
-	eligible := make([]chatWatcher, 0, 8)
-	for _, w := range h.current() {
-		if w.channel == "" || !h.maySee(ctx, rooms.Channel, presenceRead, decided,
-			w.viewer, w.channel) {
-			continue
-		}
-		eligible = append(eligible, w)
-	}
-	if len(eligible) == 0 {
-		// NOBODY IS LOOKING, so nothing is asked. This is what keeps a
-		// fleet-wide scatter off an idle company's broker entirely: the
-		// probe's cost is a function of how many tabs are open on a
-		// room, not of how many nodes exist.
-		return at
-	}
-	asked := focusedRooms(eligible)
-	merged := h.presenceOf(eligible, asked, at)
-	for _, reply := range h.askPeers(ctx, asked) {
-		mergePresence(merged, reply)
-	}
-	h.deliverPresence(eligible, merged)
-	return at
-}
-
-// deliverPresence hands each eligible socket the presence of the room it is
-// watching — each through [fanOut] alone, because each socket's payload is its
-// own room.
-func (h *ChatHub) deliverPresence(eligible []chatWatcher,
-	merged map[string]ChatRoomPresence) {
-
-	for _, w := range eligible {
-		frame := ChatPresenceFrame{
-			Rooms: map[string]ChatRoomPresence{w.channel: merged[w.channel]},
-		}
-		print := presenceFingerprint(frame)
-		h.mu.Lock()
-		held, watching := h.watchers[w.client]
-		unchanged := watching && held.sent == print
-		if watching {
-			held.sent = print
-		}
-		h.mu.Unlock()
-		if !watching || unchanged {
-			// AN UNCHANGED VIEW COSTS NO FRAME. Presence is the one
-			// thing here evaluated on a timer rather than on an
-			// event, so without this every open tab would receive a
-			// frame every interval for as long as it stayed open.
-			continue
-		}
-		fanOut([]*Client{w.client}, Push(KindChatPresence, frame, h.now()))
-	}
-}
-
-// focusedRooms is every room these sockets are looking at, deduped and
-// ordered so two probes of one state ask an identical question.
-func focusedRooms(watchers []chatWatcher) []string {
-	seen := make(map[string]bool, len(watchers))
-	for _, w := range watchers {
-		if w.channel != "" {
-			seen[w.channel] = true
-		}
-	}
-	return slices.Sorted(maps.Keys(seen))
-}
-
-// presenceOf is this node's own answer for a set of rooms, from the watchers
-// already established as entitled to be in them.
-//
-// IT IS THE WHOLE ANSWER ON A SINGLE-NODE DEPLOYMENT and half of it on a
-// fleet, which is why it is computed rather than obtained by asking ourselves:
-// a node that learned its own sockets' focus from the broker would show
-// nothing at all whenever the broker was slow.
-//
-// THE WORKING INDICATORS ARE NOT TIED TO A WATCHER, and that is the common
-// case rather than an edge: the node running a seat's turn is rarely the node
-// somebody's browser is connected to, so it answers with no watchers at all
-// and the indicator still reaches the room.
-func (h *ChatHub) presenceOf(watchers []chatWatcher, rooms []string,
-	at time.Time) map[string]ChatRoomPresence {
-
-	want := make(map[string]bool, len(rooms))
-	for _, room := range rooms {
-		want[room] = true
-	}
-	out := make(map[string]ChatRoomPresence, len(rooms))
-	for _, w := range watchers {
-		if w.channel == "" || !want[w.channel] {
-			continue
-		}
-		room := out[w.channel]
-		room.Viewing = insertHandle(room.Viewing, w.viewer)
-		if !w.typingAt.IsZero() && at.Sub(w.typingAt) < ChatTypingTTL {
-			room.Typing = insertHandle(room.Typing, w.viewer)
-		}
-		out[w.channel] = room
+		room = parsed
 	}
 	h.mu.Lock()
-	for key, working := range h.working {
-		if !want[key.channel] {
-			continue
-		}
-		room := out[key.channel]
-		room.Working = append(room.Working, working)
-		out[key.channel] = room
+	w, watching := h.watchers[client]
+	var held chatWatcher
+	if watching {
+		held = *w
 	}
 	h.mu.Unlock()
-	for id, room := range out {
-		slices.SortFunc(room.Working, func(a, b ChatWorking) int {
-			return strings.Compare(a.Handle+a.Thread, b.Handle+b.Thread)
-		})
-		out[id] = room
+	if !watching {
+		return
 	}
-	return out
-}
-
-// chatPresenceRequest is one probe on the wire.
-type chatPresenceRequest struct {
-	// Version is what the ASKER speaks. A peer that does not know it
-	// answers nothing, which is the same fact as a peer with nobody in
-	// the room.
-	Version int `json:"version"`
-
-	// Channels are the rooms being asked about. INSIDE THE REQUEST rather
-	// than in the subject, because the scatter is served on ONE subject
-	// for the whole fleet — a subject per room would need every node to
-	// serve a wildcard, which a request/reply answerer cannot.
-	Channels []string `json:"channels"`
-}
-
-// chatPresenceReply is one node's answer.
-type chatPresenceReply struct {
-	Version int    `json:"version"`
-	Node    string `json:"node"`
-
-	Rooms map[string]ChatRoomPresence `json:"rooms,omitempty"`
-}
-
-// askPeers scatters one probe and returns the replies this build can read.
-func (h *ChatHub) askPeers(ctx context.Context, rooms []string) []chatPresenceReply {
-	peers := h.opts.Peers
-	if peers == nil {
-		return nil
+	if held.session != "" && held.room == room {
+		if err := h.opts.Presence.Update(presence.ChatRoom(room), held.session, activity,
+			focus); err != nil {
+			log.DebugContext(ctx, "chat_presence_frame_refused", "channel", channelID,
+				"error", err.Error())
+		}
+		return
 	}
-	request, err := json.Marshal(chatPresenceRequest{
-		Version: chatPresenceProtocol, Channels: rooms,
-	})
+	if held.session != "" {
+		h.withdrawPresence(client, held.room)
+	}
+	if room == uuid.Nil {
+		return
+	}
+	rooms := h.rooms()
+	if rooms == nil || !h.maySee(ctx, rooms.Channel, presenceRead, map[seenKey]bool{},
+		held.viewer, channelID) {
+		return
+	}
+	// THE JOIN, THE SOCKET'S PLACE IN THE ROOM AND THE ROSTER IT IS HANDED
+	// ARE ONE STEP UNDER THE HUB'S LOCK, which every fan-out of the room's
+	// presence holds while it chooses its sockets and sends
+	// ([ChatHub.presenceChanged]): a fan-out the presence hub computed before
+	// the join reaches the socket before its roster or not at all, and one
+	// computed after it reaches it after. Taken apart, the room's own
+	// fan-out of this join could reach the tab ahead of the roster it is part
+	// of, and one computed in between — another member moving — reached
+	// nobody, so the tab showed that member as they were until they moved
+	// again. The presence hub never holds its own lock across a sink, so the
+	// two locks are always taken in this order and never the other.
+	h.mu.Lock()
+	w, watching = h.watchers[client]
+	if !watching || w.session != "" {
+		// THE SOCKET LEFT while the room's visibility was being decided.
+		h.mu.Unlock()
+		return
+	}
+	session, roster, err := h.opts.Presence.Join(presence.ChatRoom(room),
+		presence.Local{Seat: held.viewer, Kind: iam.ActorHuman})
 	if err != nil {
-		log.DebugContext(ctx, "chat_presence_encode_failed", "error", err)
-		return nil
+		h.mu.Unlock()
+		log.WarnContext(ctx, "chat_presence_join_refused", "channel", channelID,
+			"error", err.Error())
+		return
 	}
-	askCtx, cancel := context.WithTimeout(ctx, h.opts.AskBudget)
-	defer cancel()
-	// WANT ZERO, which waits out the deadline. A scatter has no roster —
-	// nothing here knows how many nodes are serving — so any other number
-	// would either cut the probe short of a peer that was about to answer
-	// or wait for one that does not exist.
-	raw, err := peers.Ask(askCtx, topics.ChatPresence, request, 0)
-	if err != nil {
-		log.DebugContext(ctx, "chat_presence_ask_failed", "error", err)
-		return nil
-	}
-	out := make([]chatPresenceReply, 0, len(raw))
-	for _, blob := range raw {
-		var reply chatPresenceReply
-		if err := json.Unmarshal(blob, &reply); err != nil ||
-			reply.Version != chatPresenceProtocol {
-			// AN UNREADABLE REPLY IS A MISSING ONE, on the search
-			// fan-out's rule: it came from a build this one does
-			// not speak, and guessing at its fields would render
-			// people into a room on the strength of a shape nobody
-			// declared.
-			continue
+	w.room, w.session = room, session
+	fanOut([]*Client{client}, Push(KindChatPresence, ChatPresence{
+		ChannelID: channelID, Roster: true, Upsert: roster.Members, Leave: []string{},
+		Counts: roster.Counts, Truncated: roster.Truncated}, h.now()))
+	h.mu.Unlock()
+	if activity != presence.Viewing || focus != (presence.Focus{}) {
+		if err := h.opts.Presence.Update(presence.ChatRoom(room), session, activity,
+			focus); err != nil {
+			log.DebugContext(ctx, "chat_presence_frame_refused", "channel", channelID,
+				"error", err.Error())
 		}
-		if reply.Node != "" && reply.Node == h.opts.NodeID {
-			// OUR OWN ANSWER, which the broker delivers back to us
-			// because every server of a subject sees every request.
-			// [ChatHub.presenceOf], which [ChatHub.sweep] calls for
-			// this node's own watchers before peers' replies are
-			// merged, already has it, first-hand and without the
-			// round trip.
-			continue
-		}
-		out = append(out, reply)
-	}
-	return out
-}
-
-// serve makes this node an answerer for the fleet's presence probes.
-func (h *ChatHub) serve(ctx context.Context) queue.Unsubscribe {
-	peers := h.opts.Peers
-	if peers == nil {
-		return nil
-	}
-	unsubscribe, err := peers.Serve(ctx, topics.ChatPresence,
-		func(askCtx context.Context, raw []byte) ([]byte, error) {
-			return h.answer(askCtx, raw)
-		})
-	if err != nil {
-		// NOT FATAL, AND SAID ONCE. Presence is a courtesy: a node that
-		// cannot serve probes still applies every record, still pushes
-		// every committed frame, and is merely invisible to its peers'
-		// typing indicators. The loop retries on every tick, so a line
-		// per attempt would be a warning every few seconds for as long
-		// as the broker was unhappy.
-		h.unserved.Do(func() {
-			log.Warn("chat_presence_serve_failed", "error", err,
-				"hint", "this node's own readers will not appear in anybody "+
-					"else's presence; its transcripts are unaffected, and it "+
-					"keeps retrying")
-		})
-		return nil
-	}
-	return unsubscribe
-}
-
-// answer is one presence probe, answered from this node's own memory.
-//
-// # Read-only, and so not signed
-//
-// The fleet's ephemeral channels that are INSTRUCTIONS are signed
-// (internal/signedask): a node carries the request out as somebody. This is a
-// READ — the asker asks who is looking at, typing in or working in some rooms,
-// and this node answers about its own sockets and its own seats' indicators —
-// and carries nothing out: what the asker does with the answer is light an
-// indicator for its own watchers, each filtered by that watcher's own
-// visibility of the room. It is the scatters that only read (ADR-0031). A
-// forged probe learns which seats are viewing, typing or working in a room
-// whose id it knows — this node filters its watchers by THEIR visibility, not
-// the asker's, because the asker is nobody it can check — and a forged reply
-// can name a seat in a room's presence: what a party on the broker can do on
-// any subject it reaches, and why keeping the broker's ports private is the
-// operator's half (SECURITY.md).
-//
-// A NODE WITH NOTHING TO SAY SAYS NOTHING. An answerer that returns an error
-// answers nothing at all, which the asker reads as a node that is not there —
-// and those are the same fact for presence, so the empty answer is spelled as
-// the cheap one rather than as an empty map on the wire per node per probe.
-func (h *ChatHub) answer(ctx context.Context, raw []byte) ([]byte, error) {
-	var req chatPresenceRequest
-	if err := json.Unmarshal(raw, &req); err != nil {
-		return nil, err
-	}
-	if req.Version != chatPresenceProtocol || len(req.Channels) == 0 {
-		return nil, errChatPresenceUnreadable
-	}
-	reader := h.rooms()
-	if reader == nil {
-		// NO READER, NO ANSWER. Who is entitled to be in a room is the
-		// same question here as it is at delivery, and a node that
-		// cannot answer it must not report its watchers as present in a
-		// room they may not be able to open.
-		return nil, errChatPresenceEmpty
-	}
-	decided := map[chatStatusKey]bool{}
-	eligible := make([]chatWatcher, 0, 8)
-	for _, w := range h.current() {
-		if w.channel == "" || !slices.Contains(req.Channels, w.channel) {
-			continue
-		}
-		if !h.maySee(ctx, reader.Channel, presenceRead, decided, w.viewer, w.channel) {
-			continue
-		}
-		eligible = append(eligible, w)
-	}
-	rooms := h.presenceOf(eligible, req.Channels, h.now())
-	if len(rooms) == 0 {
-		return nil, errChatPresenceEmpty
-	}
-	return json.Marshal(chatPresenceReply{
-		Version: chatPresenceProtocol, Node: h.opts.NodeID, Rooms: rooms,
-	})
-}
-
-// The silences, named so the reason a node did not answer is readable where it
-// is decided rather than inferred from a nil.
-var (
-	errChatPresenceUnreadable = errChat("a presence probe this build does not speak")
-	errChatPresenceEmpty      = errChat("nobody here is in those rooms")
-)
-
-// errChat is one of this arm's named silences.
-type errChat string
-
-func (e errChat) Error() string { return "stream: " + string(e) }
-
-// mergePresence folds one peer's answer into the merged view.
-//
-// UNION ON THE SETS, because two nodes describe DIFFERENT people: each answers
-// about its own sockets, so nobody appears twice and nothing has to be
-// reconciled. The handles are kept sorted so a fingerprint over the result is
-// stable whatever order the replies arrived in — which is the whole of what
-// stops an unchanged view being pushed as a change.
-func mergePresence(into map[string]ChatRoomPresence, reply chatPresenceReply) {
-	for id, room := range reply.Rooms {
-		held := into[id]
-		for _, handle := range room.Viewing {
-			held.Viewing = insertHandle(held.Viewing, handle)
-		}
-		for _, handle := range room.Typing {
-			held.Typing = insertHandle(held.Typing, handle)
-		}
-		held.Working = append(held.Working, room.Working...)
-		slices.SortFunc(held.Working, func(a, b ChatWorking) int {
-			return strings.Compare(a.Handle+a.Thread, b.Handle+b.Thread)
-		})
-		held.Working = slices.CompactFunc(held.Working, func(a, b ChatWorking) bool {
-			return a.Handle == b.Handle && a.Thread == b.Thread
-		})
-		into[id] = held
 	}
 }
 
-// insertHandle keeps a sorted set of handles.
-func insertHandle(held []string, handle string) []string {
-	if handle == "" {
-		return held
+// withdrawPresence takes a socket out of the room's presence it is in, if it is
+// still in that one, and empties the room it was shown: a roster naming nobody.
+//
+// THE EMPTY ROSTER IS SENT UNDER THE LOCK THAT TAKES THE SOCKET OUT, as a
+// join's roster is sent under the lock that puts it in: a withdrawal decided
+// on the fan-out's goroutine can meet the socket's own next frame joining the
+// room again, and sent after the lock the roster naming nobody could overtake
+// the join's and leave a tab in the room showing it empty. A fan-out of the
+// room chooses its sockets and sends under the same lock
+// ([ChatHub.presenceChanged]), so it reaches this socket before this roster or
+// not at all.
+func (h *ChatHub) withdrawPresence(client *Client, room uuid.UUID) {
+	h.mu.Lock()
+	w, watching := h.watchers[client]
+	if !watching || w.session == "" || w.room != room {
+		h.mu.Unlock()
+		return
 	}
-	at, found := slices.BinarySearch(held, handle)
-	if found {
-		return held
-	}
-	return slices.Insert(held, at, handle)
+	session := w.session
+	w.room, w.session = uuid.Nil, ""
+	fanOut([]*Client{client}, Push(KindChatPresence, ChatPresence{
+		ChannelID: room.String(), Roster: true, Upsert: []presence.Member{},
+		Leave: []string{}}, h.now()))
+	h.mu.Unlock()
+	h.opts.Presence.Leave(presence.ChatRoom(room), session)
 }
 
-// presenceFingerprint is a stable string for one socket's view.
+// presenceChanged pushes one chat room's presence fan-out to the sockets in
+// it: the presence hub's sink, called on the hub's goroutine. A room of any
+// other kind is another surface's.
 //
-// Built rather than marshalled: this runs per socket per probe, and a JSON
-// encode per tab per three seconds to decide whether to send anything would
-// cost more than the frame it saves.
-func presenceFingerprint(frame ChatPresenceFrame) string {
-	var b strings.Builder
-	for _, id := range slices.Sorted(maps.Keys(frame.Rooms)) {
-		room := frame.Rooms[id]
-		b.WriteString(id)
-		b.WriteString("|v:")
-		b.WriteString(strings.Join(room.Viewing, ","))
-		b.WriteString("|t:")
-		b.WriteString(strings.Join(room.Typing, ","))
-		b.WriteString("|w:")
-		for _, working := range room.Working {
-			b.WriteString(working.Handle)
-			b.WriteString("@")
-			b.WriteString(working.Thread)
-			b.WriteString("=")
-			b.WriteString(working.Status)
-			b.WriteString(";")
-		}
-		b.WriteString("\n")
+// TO THE SOCKETS IN THE ROOM AND NOBODY ELSE, which is the visibility filter
+// for presence: a socket is in a room's presence only once the room's own
+// visibility admitted its viewer, and is taken out by the record that narrows
+// it ([ChatHub.redecidePresence]).
+//
+// CHOSEN AND SENT UNDER THE HUB'S LOCK, which a join holds while it hands its
+// socket the room's roster and a withdrawal while it hands its socket a roster
+// naming nobody: so this fan-out reaches a socket wholly before either or
+// wholly after, and a socket taken out of the room in between is never sent
+// it. Sending is a non-blocking hand-off to each socket's queue
+// ([Client.send]), so the lock is never held across a slow reader.
+func (h *ChatHub) presenceChanged(c presence.Change) {
+	if c.Room.Kind != presence.RoomChat {
+		return
 	}
-	return b.String()
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var targets []*Client
+	for _, w := range h.watchers {
+		if w.session != "" && w.room == c.Room.ID {
+			targets = append(targets, w.client)
+		}
+	}
+	if len(targets) == 0 {
+		return
+	}
+	fanOut(targets, Push(KindChatPresence, ChatPresence{
+		ChannelID: c.Room.ID.String(), Upsert: c.Upsert, Leave: c.Leave, Counts: c.Counts,
+		Truncated: c.Truncated}, h.now()))
 }
 
 // ---- the working indicator --------------------------------------------- //
@@ -1700,7 +1365,11 @@ func presenceFingerprint(frame ChatPresenceFrame) string {
 // right now: it is true for minutes, it is worthless the moment the turn ends,
 // and nothing replays it. On the log it would be two records per turn on the
 // busiest stream in the engine, applied by every node and carried in every
-// backup, to say something no reader will ever ask about again.
+// backup, to say something no reader will ever ask about again. So it is the
+// seat's member of the room's presence (internal/presence): an agent, editing,
+// focused on the thread its answer will land in, naming the turn and showing
+// the phrase as its status — raised on the node running the turn, and told to
+// whichever node holds the room's sockets as every member is.
 //
 // It is driven by [notify.StatusDriver] — the same driver Slack's and
 // Mattermost's indicators use — so the lifecycle, the reference counting per
@@ -1727,13 +1396,14 @@ func (h *ChatHub) SupportsStatusText() bool { return true }
 
 // StatusRefresh implements [notify.StatusPoster].
 //
-// THIRTY SECONDS, and it is long because nothing here expires. A vendor's
-// indicator lapses on the vendor's own timer, so its refresh is sized against
-// that; this entry lives in the memory of the node running the turn and is
-// removed when the turn ends. What the heartbeat buys instead is the one case
-// that memory cannot cover — a re-raise after this node restarted mid-turn —
-// so it is sized against how long an indicator may be missing after a restart
-// rather than against an expiry that does not exist.
+// [presence.Rebroadcast], FIFTEEN SECONDS, sized against the presence hub's
+// own expiry: an agent's member leaves a room [presence.Expiry] after its last
+// touch, three rebroadcasts, and this heartbeat is its touch — so a turn
+// working longer than that keeps its line, and a node that died mid-turn takes
+// it down within the expiry, as it takes its viewers. It was thirty seconds
+// while the line lived in this hub's own memory and expired never; against a
+// forty-five-second expiry that left one late heartbeat between a working seat
+// and a room showing nobody.
 func (h *ChatHub) StatusRefresh() time.Duration { return ChatStatusRefresh }
 
 // AddressRule implements [notify.StatusPoster]: the domain's own answer to
@@ -1746,37 +1416,51 @@ func (h *ChatHub) StatusRefresh() time.Duration { return ChatStatusRefresh }
 // end in silence, and a silence after a spinner, are one bug.
 func (h *ChatHub) AddressRule() notify.AddressRule { return chatlet.AddressRule() }
 
-// SetStatus implements [notify.StatusPoster]: raise or update the indicator.
+// SetStatus implements [notify.StatusPoster]: raise or update the indicator —
+// the seat's member of the room's presence, touched.
 //
-// It never fails. A failed indicator is cosmetic and is not a turn's problem,
-// which is why the seam reports a bool rather than an error — and here there
-// is nothing that can fail at all: the entry is a map write, and the frame it
-// produces is sent by the next probe.
-func (h *ChatHub) SetStatus(_ context.Context, handle, channel, thread, status string) bool {
-	if h == nil || handle == "" || channel == "" {
+// It reports false only for what no room can show: a hub with no presence, a
+// post naming no seat, or a conversation that is not a room's id. A failed
+// indicator is cosmetic and is not a turn's problem, which is why the seam
+// reports a bool rather than an error.
+func (h *ChatHub) SetStatus(_ context.Context, post notify.StatusPost) bool {
+	room, ok := h.statusRoom(post.Handle, post.Channel)
+	if !ok {
 		return false
 	}
-	h.mu.Lock()
-	h.working[chatStatusKey{handle: handle, channel: channel, thread: thread}] =
-		ChatWorking{Handle: handle, Thread: thread, Status: status}
-	h.mu.Unlock()
-	h.probe()
+	h.opts.Presence.Touch(room, presence.Agent{Seat: post.Handle, Turn: post.Turn,
+		Activity: presence.Editing, Focus: presence.Focus{Thread: post.Thread},
+		Status: post.Text})
 	return true
 }
 
-// ClearStatus implements [notify.StatusPoster]: take the indicator down.
+// ClearStatus implements [notify.StatusPoster]: take the indicator down — the
+// seat's member for the thread WITHDRAWN at once, never left to linger out its
+// expiry, because a line still saying "is thinking…" after the answer landed
+// says the seat is working on something it has finished.
 //
 // SEPARATE FROM SetStatus WITH AN EMPTY STRING, on the seam's own rule: the
 // two are the same operation only on a backend that renders text, and
 // overloading them makes "raise" and "clear" indistinguishable for one that
 // does not.
 func (h *ChatHub) ClearStatus(_ context.Context, handle, channel, thread string) bool {
-	if h == nil {
+	room, ok := h.statusRoom(handle, channel)
+	if !ok {
 		return false
 	}
-	h.mu.Lock()
-	delete(h.working, chatStatusKey{handle: handle, channel: channel, thread: thread})
-	h.mu.Unlock()
-	h.probe()
+	h.opts.Presence.Withdraw(room, handle, presence.Focus{Thread: thread})
 	return true
+}
+
+// statusRoom is the room a seat's indicator sits in, or false for one no room
+// can show it in.
+func (h *ChatHub) statusRoom(handle, channel string) (presence.Room, bool) {
+	if h == nil || h.opts.Presence == nil || handle == "" {
+		return presence.Room{}, false
+	}
+	id, err := uuid.Parse(channel)
+	if err != nil {
+		return presence.Room{}, false
+	}
+	return presence.ChatRoom(id), true
 }

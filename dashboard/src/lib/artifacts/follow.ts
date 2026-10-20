@@ -17,14 +17,14 @@
  * region is said in words beside the follow rather than moved to.
  */
 
-import type { ArtifactKind, ArtifactPresenceMember, PresenceActivity } from "~/protocol/index.ts";
+import type { ArtifactKind, RoomMember, PresenceActivity } from "~/protocol/index.ts";
 import { tabOfRegion } from "./doc.ts";
 
 const RANK: Readonly<Record<PresenceActivity, number>> = { editing: 0, viewing: 1, idle: 2 };
 
 /** The room's members, one a seat, the most active tab of each, in the order they arrived. */
-export function bySeat(members: readonly ArtifactPresenceMember[]): ArtifactPresenceMember[] {
-  const best = new Map<string, ArtifactPresenceMember>();
+export function bySeat(members: readonly RoomMember[]): RoomMember[] {
+  const best = new Map<string, RoomMember>();
   for (const m of members) {
     const seat = m.seat || m.session;
     const held = best.get(seat);
@@ -33,17 +33,14 @@ export function bySeat(members: readonly ArtifactPresenceMember[]): ArtifactPres
   return [...best.values()];
 }
 
-function better(a: ArtifactPresenceMember, b: ArtifactPresenceMember): boolean {
+function better(a: RoomMember, b: RoomMember): boolean {
   const rank = RANK[a.activity] - RANK[b.activity];
   if (rank !== 0) return rank < 0;
   return a.at > b.at;
 }
 
 /** The member a reader following seat follows: that seat's most active tab, or none once they left. */
-export function followTarget(
-  members: readonly ArtifactPresenceMember[],
-  seat: string,
-): ArtifactPresenceMember | null {
+export function followTarget(members: readonly RoomMember[], seat: string): RoomMember | null {
   return bySeat(members.filter((m) => m.seat === seat))[0] ?? null;
 }
 
@@ -82,7 +79,7 @@ export function slideOfRegion(region: string | undefined): string {
 }
 
 /** The moves that bring view to where target is. */
-export function followMoves(target: ArtifactPresenceMember, view: FollowView): FollowMove {
+export function followMoves(target: RoomMember, view: FollowView): FollowMove {
   const out: FollowMove = {};
   const f = target.focus;
   if (f.version && f.version > 0 && f.version <= view.head && f.version !== view.showing) {

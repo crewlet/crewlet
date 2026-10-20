@@ -1376,9 +1376,9 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	}
 
 	// THE COMPANY'S OWN CHAT, LIVE, on EVERY node and from here on: a seat
-	// raises its working indicator on whichever node its turn runs on and
-	// every node answers the fleet's presence probe, so the hub is the
-	// PROCESS's rather than the API's — built after the engine and attached
+	// raises its working indicator on whichever node its turn runs on, as
+	// its member of the room's presence on this node's presence hub, so the
+	// hub is the PROCESS's rather than the API's — built after the engine and attached
 	// through its setter, started before it is attached. serveAPI mounts the
 	// socket over it where this node serves one. See [api.EngineChatLive].
 	chatLive := api.NewEngineChatLive(ctx, e)

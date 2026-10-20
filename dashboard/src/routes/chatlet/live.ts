@@ -32,7 +32,9 @@ import type {
   ChatLive,
   ChatReadState,
   ChatRoomPresence,
+  ChatWorking,
   HeldChatChange,
+  RoomRoster,
 } from "~/protocol/index.ts";
 
 /**
@@ -159,8 +161,41 @@ export function useChatFrames(
 export function useChatPresence(channelID: string): ChatRoomPresence {
   return useSlice(
     ["chatPresence"],
-    useCallback((state) => state.chatPresence.rooms[channelID] ?? NO_PRESENCE, [channelID]),
+    useCallback((state) => chatRoomPresence(state.chatPresence.rooms[channelID]), [channelID]),
   );
+}
+
+/**
+ * A chat room's members, as the room's screen draws them.
+ *
+ * A PERSON is in `viewing` whatever they are doing in the room — one with it
+ * open in another tab and away is still in it — and in `typing` while their
+ * member is editing, which the engine puts back to viewing once nothing has
+ * re-asserted it. A SEAT is `working` while its member is editing, which is
+ * what the working indicator is (the engine raises it as the seat's member and
+ * withdraws it as the turn lets go), under the thread its answer will land in
+ * and with the line the room shows beside it. Each person and each seat's
+ * thread once, however many sessions present them.
+ */
+export function chatRoomPresence(roster: RoomRoster | undefined): ChatRoomPresence {
+  const members = roster?.members ?? [];
+  if (members.length === 0) return NO_PRESENCE;
+  const viewing = new Set<string>();
+  const typing = new Set<string>();
+  const working = new Map<string, ChatWorking>();
+  for (const member of members) {
+    if (member.kind === "agent") {
+      if (member.activity !== "editing") continue;
+      const thread = member.focus?.thread || undefined;
+      const key = `${member.seat} ${thread ?? ""}`;
+      if (!working.has(key))
+        working.set(key, { handle: member.seat, thread, status: member.status });
+      continue;
+    }
+    viewing.add(member.seat);
+    if (member.activity === "editing") typing.add(member.seat);
+  }
+  return { viewing: [...viewing], typing: [...typing], working: [...working.values()] };
 }
 
 /** This person's own read state, or null when nothing has said. */
@@ -210,13 +245,15 @@ export function useCoalesced(signal: number, task: () => void, window = LIVE_REF
 
 /**
  * Tell the engine which room this tab is looking at, and whether somebody is
- * typing in it.
+ * typing in it: the chat room's `presence` frame, viewing or, while somebody
+ * types, editing — re-asserted at most every `TYPING_THROTTLE_MS`, inside the
+ * engine's lapse.
  *
  * THE FRAME IS TRUSTED ABOUT ATTENTION AND NEVER ABOUT PERMISSION. A tab may
- * name any room it likes; what comes back is filtered by the same visibility
- * rule every committed frame is, so naming a room somebody is not in produces
- * nothing at all. What it buys is that the fleet-wide presence probe is
- * bounded to the rooms somebody actually has open.
+ * name any room it likes; the engine puts the socket in the room's presence
+ * only once the room's own visibility rule admits its reader, the rule every
+ * committed frame is filtered by, so naming a room somebody is not in produces
+ * nothing at all.
  *
  * Withdrawn on the way out — an empty room id — because a tab that navigated
  * away is not looking at anything, and leaving the last room asserted would

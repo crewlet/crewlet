@@ -60,16 +60,18 @@ crewlet.events.{type}                # What the engine records about itself:
 crewlet.config.revision_activated
 crewlet.config.revision_applied
 
-# Who is looking at which chat room, who is typing, and which seat is working
-# there. ONE FLEET-WIDE SUBJECT, and deliberately outside the chat log's own
-# `crewlet.chat.log.>` space: this is in-flight state with no durable record
-# and no applier, so a subject inside the log's wildcard would make every
-# keystroke a record every data node applies for ever. An ephemeral READ,
-# answered from each node's own memory and filtered by each reader's sight of
-# the room, so it is not signed: a forged answer can light an indicator and
-# nothing else. A person's chat read state has no subject at all — it is a
-# coordination record every node serving sockets watches
-crewlet.chat.presence
+# Who is in which room right now — an artifact's or a chat room's: who is
+# looking, who is editing or typing, and which seat is working there (ADR-0038).
+# One subject per room, named by its kind and its id, that a node listens on
+# only while one of its sockets is in the room, and one fleet-wide subject a
+# node asks its peers on as it gains a room's first socket. Ephemeral — no
+# stream, no applier — and deliberately outside every log's wildcard, so a
+# keystroke is never a record every data node applies. Every frame is SEALED
+# under the fleet keyring and one the fleet did not seal shows nobody. A
+# person's chat read state has no subject at all — it is a coordination record
+# every node serving sockets watches
+crewlet.rooms.{artifact|chat}.{id}
+crewlet.rooms.ask
 
 # A seat's memory, ONE SUBJECT PER ROW, on a stream that retains one message
 # per subject — so it holds the current value of every row rather than a log of

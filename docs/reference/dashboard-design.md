@@ -9156,7 +9156,7 @@ a tab can be. It is the only kind of socket the company's own chat is pushed to,
 since every chat frame is decided per recipient seat; one tab is one person, as
 on the dashboard. So the capture also carries the founder using **Chatlet** the way
 its screen does: a room made from the tab with a seat in it, looked at (the
-`chat_focus` frame), a message said and reacted to, and the seat asked in that
+chat room's `presence` frame), a message said and reacted to, and the seat asked in that
 message's thread. The seat's turn claims to have answered, is refused for
 having said nothing, replies in the thread — held on that round until the
 room's presence has shown it at work, which is true only while its turn runs —

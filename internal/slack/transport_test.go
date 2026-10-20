@@ -213,7 +213,8 @@ func TestTheWorkingIndicatorIsRaisedAndCleared(t *testing.T) {
 	if !tr.SupportsStatusText() {
 		t.Fatal("Slack's indicator renders text and the poster says it does not")
 	}
-	if !tr.SetStatus(context.Background(), "swe", "C0ENG", "1.1", "is thinking...") {
+	if !tr.SetStatus(context.Background(), notify.StatusPost{Handle: "swe", Channel: "C0ENG",
+		Thread: "1.1", Text: "is thinking..."}) {
 		t.Fatal("the indicator was not raised")
 	}
 	if got := ws.lastBody("assistant.threads.setStatus")["status"]; got != "is thinking..." {
@@ -238,7 +239,8 @@ func TestAFailedIndicatorIsReportedNotRaised(t *testing.T) {
 	if err := tr.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if tr.SetStatus(context.Background(), "swe", "C0ENG", "1.1", "is thinking...") {
+	if tr.SetStatus(context.Background(), notify.StatusPost{Handle: "swe", Channel: "C0ENG",
+		Thread: "1.1", Text: "is thinking..."}) {
 		t.Fatal("a refused status reported success")
 	}
 }

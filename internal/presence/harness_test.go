@@ -44,6 +44,12 @@ func (c *clock) Advance(d time.Duration) {
 // second.
 const testCoalesce = 10 * time.Millisecond
 
+// testLapse is the typing lapse a suite runs at: short against the production
+// six seconds, and long against a re-assertion a case makes every quarter of
+// it, so a loaded runner's scheduling never lapses a member a case keeps
+// typing.
+const testLapse = 400 * time.Millisecond
+
 func wireFor(t *testing.T, ring statelog.Keyring) *Wire {
 	t.Helper()
 	w, err := signedask.NewOneWay[Frame](Channel, ring)
@@ -79,7 +85,7 @@ func startNodeAsking(t *testing.T, broker *memory.Broker, name string, c *clock,
 	}
 	t.Cleanup(func() { _ = q.Stop(context.Background()) })
 	h, err := New(Options{Queue: q, Wire: wireFor(t, fleetRing), Node: name,
-		AskBudget: askBudget, Now: c.Now, Coalesce: testCoalesce})
+		AskBudget: askBudget, Now: c.Now, Coalesce: testCoalesce, TypingLapse: testLapse})
 	if err != nil {
 		t.Fatal(err)
 	}

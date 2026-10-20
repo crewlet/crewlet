@@ -2,7 +2,7 @@
  * The bounds the chat screens refuse on early, as the engine bounds them
  * (`internal/chatlet`), and the one thing the screen shares with the engine
  * rather than refusing on: how often a typing flag is re-asserted against the
- * engine's expiry. How a read cursor packs a position is not here: it packs
+ * engine's lapse. How a read cursor packs a position is not here: it packs
  * with `positions.ts`'s stride, the one copy of the engine's.
  *
  * Each screen holds a value at its limit while a person is typing, so the
@@ -17,7 +17,7 @@
  *    (`TestTheDashboardsChannelNameGrammarIsTheEngines`), since two regular
  *    expressions can be spelled differently and mean the same thing;
  *  - the typing throttle, an INEQUALITY — at most half of
- *    `stream.ChatTypingTTL` (`internal/api/stream`'s
+ *    `presence.TypingLapse` (`internal/presence`'s
  *    `TestTheDashboardReassertsTypingInsideTheEnginesExpiry`).
  *
  * A limit drifts silently from the side that sees it: a copy too low greys
@@ -73,18 +73,18 @@ export const MAX_DIRECT_PARTICIPANTS = 8;
 /**
  * How often a tab re-asserts that somebody is typing, in ms.
  *
- * THREE SECONDS, AT MOST HALF the engine's `stream.ChatTypingTTL` (six): the
- * engine forgets a typing flag nobody re-asserted, which is what clears the
- * indicator under a lid closed mid-word, so a tab re-asserting at the TTL
+ * THREE SECONDS, AT MOST HALF the engine's `presence.TypingLapse` (six): the
+ * engine puts a typing line nobody re-asserted back to viewing, which is what
+ * clears it under a lid closed mid-word, so a tab re-asserting at the lapse
  * would blink off and on under somebody who never stopped typing. At half of
  * it, a re-assert that came late is invisible and a second one is not.
  *
- * It is also a rate limit on a FLEET-WIDE probe: a focus frame makes the node
- * re-ask its peers who is in the room, so one frame per keystroke would be a
- * scatter per character.
+ * It is also a bound on what the frame costs: each is a `presence` frame, held
+ * to the socket's allowance with every other, and one per keystroke would
+ * spend it on characters.
  *
- * Held POSITIVE AND AT MOST HALF of `stream.ChatTypingTTL` — an inequality,
- * not an equality, since any value inside it works — by `internal/api/stream`'s
+ * Held POSITIVE AND AT MOST HALF of `presence.TypingLapse` — an inequality, not
+ * an equality, since any value inside it works — by `internal/presence`'s
  * `TestTheDashboardReassertsTypingInsideTheEnginesExpiry`.
  */
 export const TYPING_THROTTLE_MS = 3_000;

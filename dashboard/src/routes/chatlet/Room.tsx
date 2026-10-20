@@ -216,9 +216,9 @@ export function Room({ channelID, viewer, nameOf, summary, cursors, outbox }: Ro
     detail.refetch();
   });
 
-  // WHERE THIS TAB IS LOOKING. It bounds the fleet-wide presence probe to the
-  // rooms somebody actually has open, and it is what puts this reader in the
-  // "who is here" line on everybody else's screen.
+  // WHERE THIS TAB IS LOOKING. It joins this socket to the room's presence,
+  // which is what puts this reader in the "who is here" line on everybody
+  // else's screen and what brings this screen the line on theirs.
   const typing = useChatFocus(channelID);
   const presence = useChatPresence(channelID);
 

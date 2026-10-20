@@ -1141,9 +1141,9 @@ func (e *Engine) stopNotifications(ctx context.Context) {
 	e.notify.mattermost, e.notify.slack, e.notify.chatletStatus = nil, nil, nil
 	e.notify.mu.Unlock()
 	if chatletStatus != nil {
-		// THE SAME REASON AS THE HOSTED SURFACE BELOW: the hub would go on
-		// answering every presence probe with a seat working on a turn
-		// this process is about to stop running.
+		// THE SAME REASON AS THE HOSTED SURFACE BELOW: the room's presence
+		// would go on showing a seat working on a turn this process is
+		// about to stop running.
 		chatletStatus.Stop(ctx)
 	}
 	if selfHosted != nil {

@@ -294,7 +294,7 @@ func TestARoomCrossesTheFleetOnTheSocket(t *testing.T) {
 	presentIn(t, erin, erinRoom, "dana", "erin")
 	presentIn(t, dana, danaRoom, "dana", "erin")
 
-	write(t, dana, map[string]any{"kind": "presence", "artifact": sheet.String(),
+	write(t, dana, map[string]any{"kind": "presence", "room": "artifact", "artifact": sheet.String(),
 		"activity": "editing", "focus": map[string]any{"collection": "review", "doc": "row-12"}})
 	deadline := time.Now().Add(10 * time.Second)
 	for {
@@ -679,7 +679,7 @@ func TestPresenceFramesAreHeldToTheirAllowance(t *testing.T) {
 	dana := n.open(t, "dana")
 	join(t, dana, sheet, 0)
 	for range 5 * presence.ClientRate {
-		write(t, dana, map[string]any{"kind": "presence", "artifact": sheet.String(),
+		write(t, dana, map[string]any{"kind": "presence", "room": "artifact", "artifact": sheet.String(),
 			"activity": "editing"})
 	}
 	write(t, dana, map[string]any{"kind": "ping"})

@@ -21,7 +21,8 @@ import type {
   AgentRow,
   CallVersions,
   ChatChange,
-  ChatPresenceFrame,
+  ChatPresencePush,
+  ChatPresenceState,
   ChatReadState,
   FeedRow,
   EventEnvelope,
@@ -448,14 +449,16 @@ export interface StoreState {
    */
   chat: ChatLive;
   /**
-   * Who is looking at, typing in, or working on a message in the rooms this
-   * socket said it is watching — the server's current answer, whole.
+   * Who is looking at, typing in, or working on a message in the room this
+   * socket's `presence` frame named: the room's members, as the presence
+   * hub's pushes left them.
    *
-   * Its own slice because it MOVES ON A DIFFERENT CLOCK: presence is
-   * re-probed every few seconds whatever the conversation does, so a rail
-   * that woke on it would re-render the whole channel list on a tick.
+   * Its own slice because it MOVES ON A DIFFERENT CLOCK: presence changes
+   * with every keystroke a person in the room re-asserts and every phase a
+   * seat at work moves to, whatever the conversation does, so a rail that
+   * woke on it would re-render the whole channel list on each.
    */
-  chatPresence: ChatPresenceFrame;
+  chatPresence: ChatPresenceState;
   /**
    * Where this person has read to, what they have muted, and whether they are
    * in do-not-disturb — or null when nothing has said.
@@ -922,13 +925,38 @@ export class Store {
     delete rooms[oldest];
   }
 
-  /** Who is in the rooms this socket is watching, whole. */
-  applyChatPresence(frame: ChatPresenceFrame | null | undefined): void {
-    // REPLACED RATHER THAN MERGED, because the frame is the whole answer for
-    // the rooms this socket asked about: a room that has gone quiet appears by
-    // being ABSENT, and merging would leave the last person who was typing
-    // there for the life of the tab.
-    this.state.chatPresence = frame?.rooms ? frame : { rooms: {} };
+  /**
+   * One chat room's presence push, as the presence hub fanned it out.
+   *
+   * A ROSTER REPLACES and a change MERGES — members upserted by session,
+   * sessions left removed — exactly as an artifact's room is applied, because
+   * it is the same hub's fan-out: the engine hands a socket the room whole as
+   * it joins and every change after, and hands it a roster naming nobody when
+   * it takes the socket out. A room left with nobody in it is FORGOTTEN, so a
+   * tab that moved on holds nothing of the room it was in.
+   */
+  applyChatPresence(push: ChatPresencePush | null | undefined): void {
+    const room = push?.channel_id;
+    if (!push || typeof room !== "string" || room === "") return;
+    const members = new Map(
+      push.roster
+        ? []
+        : (this.state.chatPresence.rooms[room]?.members ?? []).map((m) => [m.session, m]),
+    );
+    for (const session of push.leave ?? []) members.delete(session);
+    for (const member of push.upsert ?? []) {
+      if (member && typeof member.session === "string") members.set(member.session, member);
+    }
+    const rooms = { ...this.state.chatPresence.rooms };
+    const counted = (push.counts?.human ?? 0) + (push.counts?.agent ?? 0);
+    if (members.size === 0 && counted === 0) delete rooms[room];
+    else
+      rooms[room] = {
+        members: [...members.values()],
+        counts: push.counts,
+        truncated: push.truncated,
+      };
+    this.state.chatPresence = { rooms };
     this.emit("chatPresence");
   }
 

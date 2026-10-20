@@ -13,8 +13,33 @@ import { LIVE_CALL_DETAIL, MAX_EVENTS } from "../contract/wire.ts";
 import { MAX_CHAT_LIVE, MAX_CHAT_ROOMS, MAX_PHASES, Store } from "./store.ts";
 import { LiveSocket, QueryError } from "./socket.ts";
 import { nodeCountLabel } from "../lib/format.ts";
-import type { ChatChange, EventEnvelope, FeedRow, OverlayRow } from "./types.ts";
+import type {
+  ChatChange,
+  ChatPresencePush,
+  EventEnvelope,
+  FeedRow,
+  OverlayRow,
+  RoomMember,
+} from "./types.ts";
 import { healthFrame } from "~/test/health.ts";
+
+/** One member of a room, as the presence hub presents it. */
+function member(seat: string, over: Partial<RoomMember> = {}): RoomMember {
+  return {
+    session: `${seat}-tab`,
+    seat,
+    kind: "human",
+    activity: "viewing",
+    focus: {},
+    at: "2026-01-01T00:00:00Z",
+    ...over,
+  };
+}
+
+/** A `chat_presence` roster: the room whole, as a socket joining it is handed it. */
+function roster(room: string, ...members: RoomMember[]): ChatPresencePush {
+  return { channel_id: room, roster: true, upsert: members, leave: [], truncated: false };
+}
 
 function feedRow(id: string, over: Partial<FeedRow> = {}): FeedRow {
   return {
@@ -1225,22 +1250,76 @@ describe("chat", () => {
     // five seconds.
     const store = new Store();
     store.applyChatChange(change());
-    store.applyChatPresence({ rooms: { "room-1": { viewing: ["ada"] } } });
+    store.applyChatPresence(roster("room-1", member("ada")));
     store.applyChatRead({ handle: "ada", cursors: { "room-1": 42 } });
     store.applySnapshot({ agents: [] });
     expect(store.state.chat.rooms["room-1"]?.changes).toHaveLength(1);
-    expect(store.state.chatPresence.rooms["room-1"]?.viewing).toEqual(["ada"]);
+    expect(store.state.chatPresence.rooms["room-1"]?.members?.map((m) => m.seat)).toEqual(["ada"]);
     expect(store.state.chatRead?.cursors?.["room-1"]).toBe(42);
   });
 
-  test("presence is replaced whole, because a room that went quiet says so by being absent", () => {
-    // Merged instead, the last person seen typing in a room would be left
-    // there for the life of the tab.
+  test("a roster replaces a room's members and a change merges into them", () => {
+    // THE HUB'S FAN-OUT: the room whole as the socket joins it, then only
+    // what moved. Merged rather than replaced, a roster would leave whoever
+    // left while this socket was elsewhere; replaced rather than merged, a
+    // change would empty the room of everybody it did not mention.
     const store = new Store();
-    store.applyChatPresence({ rooms: { "room-1": { viewing: ["ada"], typing: ["ada"] } } });
-    store.applyChatPresence({ rooms: { "room-2": { viewing: ["bo"] } } });
+    store.applyChatPresence(
+      roster("room-1", member("ada", { activity: "editing" }), member("cy"), member("eve")),
+    );
+    store.applyChatPresence({
+      channel_id: "room-1",
+      upsert: [member("ada"), member("bo")],
+      leave: ["cy-tab"],
+      truncated: false,
+    });
+    const held = store.state.chatPresence.rooms["room-1"]?.members ?? [];
+    // EVE IS NOT MENTIONED AND IS STILL HERE.
+    expect(held.map((m) => [m.seat, m.activity])).toEqual([
+      ["ada", "viewing"],
+      ["eve", "viewing"],
+      ["bo", "viewing"],
+    ]);
+    store.applyChatPresence(roster("room-1", member("dee")));
+    expect(store.state.chatPresence.rooms["room-1"]?.members?.map((m) => m.seat)).toEqual(["dee"]);
+  });
+
+  test("a room left with nobody in it is forgotten, and one naming no room changes nothing", () => {
+    // THE ENGINE TAKES A SOCKET OUT OF A ROOM WITH A ROSTER NAMING NOBODY —
+    // the tab moved on, or the room narrowed past its reader — and the room
+    // it was shown must not stand.
+    const store = new Store();
+    store.applyChatPresence(roster("room-1", member("ada")));
+    store.applyChatPresence(roster("room-2", member("bo")));
+    store.applyChatPresence(roster("room-1"));
     expect(store.state.chatPresence.rooms["room-1"]).toBeUndefined();
-    expect(store.state.chatPresence.rooms["room-2"]?.viewing).toEqual(["bo"]);
+    store.applyChatPresence({
+      channel_id: "room-2",
+      upsert: null,
+      leave: ["bo-tab"],
+      truncated: false,
+    });
+    expect(store.state.chatPresence.rooms).toEqual({});
+    // A ROOM PAST ITS TOP COUNTS WHO IT DOES NOT PRESENT, and is not empty.
+    store.applyChatPresence({
+      channel_id: "room-3",
+      roster: true,
+      upsert: [],
+      leave: [],
+      counts: { human: 3, agent: 0 },
+      truncated: true,
+    });
+    expect(store.state.chatPresence.rooms["room-3"]?.counts).toEqual({ human: 3, agent: 0 });
+    const woke = vi.fn();
+    store.subscribe(["chatPresence"], woke);
+    store.applyChatPresence({
+      channel_id: "",
+      upsert: [member("ada")],
+      leave: [],
+      truncated: false,
+    });
+    store.applyChatPresence(null);
+    expect(woke).not.toHaveBeenCalled();
   });
 
   test("an unread read state is null rather than an empty cursor set", () => {
@@ -1306,7 +1385,7 @@ describe("chat", () => {
     const store = new Store();
     store.applyChatRead({ handle: "ana", cursors: {}, revision: 10 });
     store.applyChatChange(change({ channel_id: "ana-private", excerpt: "salary review" }));
-    store.applyChatPresence({ rooms: { "ana-private": { viewing: ["ana"] } } });
+    store.applyChatPresence(roster("ana-private", member("ana")));
     const woke = vi.fn();
     store.subscribe(["chat", "chatPresence"], woke);
     store.applyChatRead({ handle: "bo", cursors: {}, revision: 3 });
@@ -1322,7 +1401,7 @@ describe("chat", () => {
   test("forgetting the seat empties every chat slice and wakes each", () => {
     const store = new Store();
     store.applyChatChange(change());
-    store.applyChatPresence({ rooms: { "room-1": { viewing: ["ana"] } } });
+    store.applyChatPresence(roster("room-1", member("ana")));
     store.applyChatRead({ handle: "ana", cursors: { "room-1": 4 }, revision: 10 });
     const woke = { chat: vi.fn(), chatPresence: vi.fn(), chatRead: vi.fn() };
     for (const [slice, fn] of Object.entries(woke)) store.subscribe([slice as never], fn);
@@ -1345,7 +1424,7 @@ describe("chat", () => {
     const store = new Store();
     store.applyChatChange(change());
     store.applyChatChange(change({ op_id: "op-2" }));
-    store.applyChatPresence({ rooms: { "room-1": { viewing: ["ana"] } } });
+    store.applyChatPresence(roster("room-1", member("ana")));
     store.applyChatRead({ handle: "ana", cursors: { "room-1": 4 }, revision: 10 });
     const woke = { chat: vi.fn(), chatPresence: vi.fn(), chatRead: vi.fn() };
     for (const [slice, fn] of Object.entries(woke)) store.subscribe([slice as never], fn);
@@ -1386,12 +1465,13 @@ describe("chat", () => {
   });
 
   test("each chat slice wakes only its own listeners", () => {
-    // Presence is re-probed every few seconds whatever the conversation does,
-    // so a rail that woke on it would re-render the channel list on a tick.
+    // Presence moves with every keystroke re-asserted in the room and every
+    // phase a seat at work moves to, whatever the conversation does, so a
+    // rail that woke on it would re-render the channel list on each.
     const store = new Store();
     const fn = vi.fn();
     store.subscribe(["chat"], fn);
-    store.applyChatPresence({ rooms: {} });
+    store.applyChatPresence(roster("room-1", member("ada")));
     store.applyChatRead({ handle: "ada", cursors: {} });
     expect(fn).not.toHaveBeenCalled();
     store.applyChatChange(change());

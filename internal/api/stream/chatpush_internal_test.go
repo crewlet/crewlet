@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"slices"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,8 +20,10 @@ import (
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
-	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/presence"
+	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -70,27 +72,77 @@ func (p permissiveRooms) ChannelHere(ctx context.Context, viewer, channelID stri
 	return p.Channel(ctx, viewer, channelID, fresh)
 }
 
+// The two rooms every case here holds, by the ids a room has: UUIDs, so a
+// room's presence can be told on the hub (internal/presence names a room by
+// one).
+var (
+	privateRoom = uuid.NewSHA1(uuid.NameSpaceURL, []byte("chat-suite-private")).String()
+	publicRoom  = uuid.NewSHA1(uuid.NameSpaceURL, []byte("chat-suite-public")).String()
+)
+
 // twoRooms is a private room alice is in and bob is not, plus a public one.
 func twoRooms() permissiveRooms {
 	return permissiveRooms{
 		rooms: map[string]chatlet.Channel{
-			"private-1": {ID: "private-1", Kind: chatlet.KindPrivate},
-			"public-1":  {ID: "public-1", Kind: chatlet.KindPublic},
+			privateRoom: {ID: privateRoom, Kind: chatlet.KindPrivate},
+			publicRoom:  {ID: publicRoom, Kind: chatlet.KindPublic},
 		},
-		members: map[string][]string{"private-1": {"alice"}},
+		members: map[string][]string{privateRoom: {"alice"}},
 	}
 }
 
 // chatClock is the instant every hub here is pinned to.
 var chatClock = time.Unix(1_700_000_000, 0).UTC()
 
-// hubOver builds a hub over rooms, on this node, at [chatClock].
-func hubOver(rooms ChatRooms) *ChatHub {
+// hubOver builds a hub over rooms, on this node, at [chatClock], with a running
+// presence hub of its own over an in-memory broker: the real hub, so a chat
+// room's presence is certified through what carries it, never a stub that
+// agrees with this package. The chat hub itself is not started, so a case
+// drives its committed half by hand; one about presence starts it
+// ([liveHubOver]), which is what hears the presence hub's fan-outs.
+func hubOver(t *testing.T, rooms ChatRooms) *ChatHub {
+	t.Helper()
 	return NewChatHub(ChatHubOptions{
-		Rooms:  func() ChatRooms { return rooms },
-		NodeID: "node-a",
-		Now:    func() time.Time { return chatClock },
+		Rooms:    func() ChatRooms { return rooms },
+		Presence: presenceHub(t, memory.NewBroker(), "node-a"),
+		Now:      func() time.Time { return chatClock },
 	})
+}
+
+// liveHubOver is [hubOver], started.
+func liveHubOver(t *testing.T, rooms ChatRooms) *ChatHub {
+	t.Helper()
+	h := hubOver(t, rooms)
+	h.Start(t.Context())
+	t.Cleanup(h.Stop)
+	return h
+}
+
+// presenceHub is one node's running presence hub over broker, fanning out at
+// once and lapsing a typing line in a blink, so a case waits milliseconds.
+func presenceHub(t *testing.T, broker *memory.Broker, node string) *presence.Hub {
+	t.Helper()
+	q := broker.Client()
+	if err := q.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = q.Stop(context.Background()) })
+	wire, err := signedask.NewOneWay[presence.Frame](presence.Channel,
+		statelog.OneKey("k1", "the chat arm suite's fleet key material"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hub, err := presence.New(presence.Options{Queue: q, Wire: wire, Node: node,
+		AskBudget: 200 * time.Millisecond, Coalesce: 5 * time.Millisecond,
+		Broadcast: 5 * time.Millisecond, TypingLapse: 300 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := hub.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { hub.Stop(context.Background()) })
+	return hub
 }
 
 // chatPerson is a person acting as their own human seat and holding Chatlet
@@ -112,10 +164,12 @@ func watcherFor(t *testing.T, h *ChatHub, p iam.Principal) *Client {
 	return c
 }
 
-// chatKinds is what a client was sent, in order.
+// chatKinds is what a client was sent, in order, each frame applied to its
+// [screen].
 func chatKinds(c *Client) []Kind {
 	var out []Kind
 	for _, f := range drainClient(c) {
+		screenOf(c).apply(f)
 		out = append(out, f.Kind())
 	}
 	return out
@@ -195,11 +249,11 @@ func (r *recordingRooms) ChannelHere(ctx context.Context, viewer, channelID stri
 func TestACommittedFrameIsDecidedHereAtItsBatchsPosition(t *testing.T) {
 	t.Parallel()
 	rooms := &recordingRooms{permissiveRooms: twoRooms()}
-	h := hubOver(rooms)
+	h := hubOver(t, rooms)
 	alice := watcherFor(t, h, chatPerson("alice"))
 	watcherFor(t, h, chatPerson("bob"))
 
-	h.fan(t.Context(), []chatlet.Applied{post("private-1", 9), post("public-1", 7)})
+	h.fan(t.Context(), []chatlet.Applied{post(privateRoom, 9), post(publicRoom, 7)})
 	want := statelog.Position{Stream: topics.ChatLogStream, Generation: 1, Seq: 9}
 	rooms.mu.Lock()
 	reads, fresh := slices.Clone(rooms.reads), slices.Clone(rooms.fresh)
@@ -215,12 +269,11 @@ func TestACommittedFrameIsDecidedHereAtItsBatchsPosition(t *testing.T) {
 		}
 	}
 
-	h.focus(alice, "public-1", false)
-	h.sweep(t.Context())
+	h.presenceFrame(t.Context(), alice, publicRoom, presence.Viewing, presence.Focus{})
 	rooms.mu.Lock()
 	defer rooms.mu.Unlock()
 	if len(rooms.reads) == 0 {
-		t.Fatal("the sweep decided nothing, so the presence half asserts nothing")
+		t.Fatal("the presence join decided nothing, so the presence half asserts nothing")
 	}
 	for i, read := range rooms.reads {
 		if read != "channel" || !rooms.fresh[i].MinPosition.IsZero() {
@@ -238,11 +291,11 @@ func TestACommittedFrameIsDecidedHereAtItsBatchsPosition(t *testing.T) {
 // themselves go with it.
 func TestAChatFrameForAPrivateRoomNeverReachesANonMember(t *testing.T) {
 	t.Parallel()
-	h := hubOver(twoRooms())
+	h := hubOver(t, twoRooms())
 	inside := watcherFor(t, h, chatPerson("alice"))
 	outside := watcherFor(t, h, chatPerson("bob"))
 
-	h.fan(t.Context(), []chatlet.Applied{post("private-1", 7)})
+	h.fan(t.Context(), []chatlet.Applied{post(privateRoom, 7)})
 
 	if got := chatKinds(inside); !slices.Equal(got, []Kind{KindChatPosted}) {
 		t.Errorf("the member was sent %v, want one %s", got, KindChatPosted)
@@ -265,18 +318,18 @@ func TestAPersonTakenOutOfAPrivateRoomIsToldItChanged(t *testing.T) {
 	rooms := twoRooms()
 	// AT THE BATCH'S POSITION alice is already gone: the room's only member
 	// is carol, who the same record kept.
-	rooms.members["private-1"] = []string{"carol"}
-	h := hubOver(rooms)
+	rooms.members[privateRoom] = []string{"carol"}
+	h := hubOver(t, rooms)
 	removed := watcherFor(t, h, chatPerson("alice"))
 	kept := watcherFor(t, h, chatPerson("carol"))
 	stranger := watcherFor(t, h, chatPerson("bob"))
 
 	members := chatlet.Applied{
 		Position:  statelog.Position{Stream: topics.ChatLogStream, Generation: 1, Seq: 12},
-		Subject:   chatlet.ChannelSubject("private-1"),
+		Subject:   chatlet.ChannelSubject(privateRoom),
 		Op:        chatlet.OpMembers,
 		OpID:      "op-members",
-		ChannelID: "private-1",
+		ChannelID: privateRoom,
 		Actor:     "carol",
 		ActorKind: chatlet.AuthorHuman,
 		At:        chatClock,
@@ -290,7 +343,7 @@ func TestAPersonTakenOutOfAPrivateRoomIsToldItChanged(t *testing.T) {
 			"their rail keeps the room until something else reads it again",
 			frames, KindChatMembershipChanged)
 	}
-	if got := dataAs[ChatChange](t, frames[0]); got.ChannelID != "private-1" || got.OpID != "op-members" {
+	if got := dataAs[ChatChange](t, frames[0]); got.ChannelID != privateRoom || got.OpID != "op-members" {
 		t.Errorf("the removal frame is %+v, want the room's own membership record", got)
 	}
 	if got := chatKinds(kept); !slices.Equal(got, []Kind{KindChatMembershipChanged}) {
@@ -308,11 +361,11 @@ func TestAPersonTakenOutOfAPrivateRoomIsToldItChanged(t *testing.T) {
 // would still pass.
 func TestAChatFrameForAPublicRoomReachesEverySeatInOneEncode(t *testing.T) {
 	t.Parallel()
-	h := hubOver(twoRooms())
+	h := hubOver(t, twoRooms())
 	joined := watcherFor(t, h, chatPerson("alice"))
 	stranger := watcherFor(t, h, chatPerson("bob"))
 
-	h.fan(t.Context(), []chatlet.Applied{post("public-1", 3)})
+	h.fan(t.Context(), []chatlet.Applied{post(publicRoom, 3)})
 
 	var sent []*Frame
 	for name, client := range map[string]*Client{"a member": joined, "a non-member": stranger} {
@@ -322,7 +375,7 @@ func TestAChatFrameForAPublicRoomReachesEverySeatInOneEncode(t *testing.T) {
 		}
 		change := dataAs[ChatChange](t, got[0])
 		if change.ChannelSeq != 3 || change.MessageID != "m-1" ||
-			change.ChannelID != "public-1" || change.Op != chatlet.OpPost {
+			change.ChannelID != publicRoom || change.Op != chatlet.OpPost {
 			t.Errorf("%s was sent %+v", name, change)
 		}
 		sent = append(sent, got[0])
@@ -366,12 +419,12 @@ func TestOnlyAPersonActingAsTheirSeatWithChatIsShownChat(t *testing.T) {
 			if got := chatViewerOf(tc.p); got != tc.want {
 				t.Fatalf("the viewer is %q, want %q", got, tc.want)
 			}
-			h := hubOver(twoRooms())
+			h := hubOver(t, twoRooms())
 			c := NewClient(NewAudience(tc.p, nil))
 			if joined := h.join(c, chatViewerOf(tc.p)); joined != (tc.want != "") {
 				t.Fatalf("joined = %v", joined)
 			}
-			h.fan(t.Context(), []chatlet.Applied{post("public-1", 1)})
+			h.fan(t.Context(), []chatlet.Applied{post(publicRoom, 1)})
 			if got := chatKinds(c); (len(got) == 1) != (tc.want != "") {
 				t.Errorf("was sent %v", got)
 			}
@@ -385,14 +438,14 @@ func TestOnlyAPersonActingAsTheirSeatWithChatIsShownChat(t *testing.T) {
 // the join above would be the only lock.
 func TestAChatFrameNeedsItsReadersChatApp(t *testing.T) {
 	t.Parallel()
-	h := hubOver(twoRooms())
+	h := hubOver(t, twoRooms())
 	withoutChat := iam.Principal{Login: "bob.login", Kind: iam.KindPerson, Seat: "bob",
 		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantWorklet}}
 	c := NewClient(NewAudience(withoutChat, nil))
 	h.join(c, "bob")
-	h.fan(t.Context(), []chatlet.Applied{post("public-1", 1)})
+	h.fan(t.Context(), []chatlet.Applied{post(publicRoom, 1)})
 	h.Reread()
-	h.reread()
+	h.reread(t.Context())
 	if got := chatKinds(c); len(got) != 0 {
 		t.Errorf("a reader without Chatlet was sent %v", got)
 	}
@@ -414,10 +467,10 @@ func TestAFrameWhoseVisibilityCannotBeDecidedIsWithheld(t *testing.T) {
 	t.Parallel()
 	broken := twoRooms()
 	broken.err = errors.New("this node is behind the log")
-	h := hubOver(broken)
+	h := hubOver(t, broken)
 	client := watcherFor(t, h, chatPerson("alice"))
 
-	h.fan(t.Context(), []chatlet.Applied{post("public-1", 1)})
+	h.fan(t.Context(), []chatlet.Applied{post(publicRoom, 1)})
 
 	if got := chatKinds(client); len(got) != 0 {
 		t.Errorf("a frame went out on a read that failed: %v", got)
@@ -431,7 +484,7 @@ func TestAHubWithNoRoomReaderSendsNothing(t *testing.T) {
 	t.Parallel()
 	h := NewChatHub(ChatHubOptions{Rooms: func() ChatRooms { return nil }})
 	client := watcherFor(t, h, chatPerson("alice"))
-	h.fan(t.Context(), []chatlet.Applied{post("public-1", 1)})
+	h.fan(t.Context(), []chatlet.Applied{post(publicRoom, 1)})
 	if got := chatKinds(client); len(got) != 0 {
 		t.Errorf("a frame went out with no room reader: %v", got)
 	}
@@ -510,7 +563,7 @@ func TestAChatFrameIsNeverBroadcast(t *testing.T) {
 	reader := NewClient(NewAudience(chatPerson("alice"), nil))
 	hub.Register(reader)
 	for _, kind := range ChatPushKinds() {
-		hub.Broadcast(Push(kind, ChatChange{ChannelID: "private-1"}, chatClock))
+		hub.Broadcast(Push(kind, ChatChange{ChannelID: privateRoom}, chatClock))
 	}
 	if got := chatKinds(reader); len(got) != 0 {
 		t.Errorf("a broadcast delivered chat frames %v", got)
@@ -523,25 +576,24 @@ func TestAChatFrameIsNeverBroadcast(t *testing.T) {
 // AND A COMMITTED FRAME IT WILL NEVER BE SENT COSTS NO VISIBILITY READ: the
 // posture is asked before the room is, so a degraded node — every socket on it
 // degraded — does not read a room through the router for every batch only to
-// withhold each frame. Its tab still CONTRIBUTES to presence, which is why the
-// sweep below may read.
+// withhold each frame. Its presence frame still joins the room, which is why it
+// may read; what the room is pushed is withheld from it all the same.
 func TestADegradedClientIsSentNoChatFrame(t *testing.T) {
 	t.Parallel()
 	rooms := &recordingRooms{permissiveRooms: twoRooms()}
-	h := hubOver(rooms)
+	h := hubOver(t, rooms)
 	client := watcherFor(t, h, chatPerson("alice"))
 	if !client.SetPosture(FrameDegraded) {
 		t.Fatal("the posture did not take")
 	}
-	h.fan(t.Context(), []chatlet.Applied{post("public-1", 1)})
+	h.fan(t.Context(), []chatlet.Applied{post(publicRoom, 1)})
 	rooms.mu.Lock()
 	read := slices.Clone(rooms.reads)
 	rooms.mu.Unlock()
 	if len(read) != 0 {
 		t.Errorf("a committed frame no socket would be sent read its room: %v", read)
 	}
-	h.focus(client, "public-1", false)
-	h.sweep(t.Context())
+	h.presenceFrame(t.Context(), client, publicRoom, presence.Viewing, presence.Focus{})
 	if got := chatKinds(client); len(got) != 0 {
 		t.Errorf("a degraded client was sent %v", got)
 	}
@@ -555,7 +607,7 @@ func TestADegradedClientIsSentNoChatFrame(t *testing.T) {
 // nothing, as it is told nothing else.
 func TestAGapTellsEveryWatcherToReadItsRoomsAgain(t *testing.T) {
 	t.Parallel()
-	h := hubOver(twoRooms())
+	h := hubOver(t, twoRooms())
 	h.Start(t.Context())
 	t.Cleanup(h.Stop)
 	alice := watcherFor(t, h, chatPerson("alice"))
@@ -584,6 +636,7 @@ func nextFrame(t *testing.T, c *Client, kind Kind) *Frame {
 			if !open {
 				t.Fatalf("the client was closed waiting for %s", kind)
 			}
+			screenOf(c).apply(f)
 			if f.Kind() == kind {
 				return f
 			}
@@ -609,13 +662,13 @@ func nextFrame(t *testing.T, c *Client, kind Kind) *Frame {
 // deadlock.
 func TestTheApplierIsNeverBlockedAndADropIsRepaired(t *testing.T) {
 	t.Parallel()
-	h := hubOver(twoRooms())
+	h := hubOver(t, twoRooms())
 	client := watcherFor(t, h, chatPerson("alice"))
 
 	// Nothing is draining: no loop is running, which is exactly the state
 	// a node in a burst is in for a moment.
 	for i := range chatAppliedQueue * 2 {
-		h.Applied([]chatlet.Applied{post("public-1", int64(i))})
+		h.Applied([]chatlet.Applied{post(publicRoom, int64(i))})
 	}
 	h.mu.Lock()
 	dropped := h.dropped
@@ -686,20 +739,20 @@ func TestAReadStateReachesOnlyItsOwnPersonsSockets(t *testing.T) {
 	other := watcherFor(t, h, chatPerson("bob"))
 
 	written, err := fleet.AdvanceChatRead(t.Context(), "alice", coord.ChatReadDelta{
-		Cursors: map[string]int64{"public-1": 7}, At: chatClock,
+		Cursors: map[string]int64{publicRoom: 7}, At: chatClock,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	pushed := dataAs[coord.PersonChatRead](t, nextFrame(t, mine, KindChatCursorMoved))
-	if pushed.Handle != "alice" || pushed.Cursors["public-1"] != 7 ||
+	if pushed.Handle != "alice" || pushed.Cursors[publicRoom] != 7 ||
 		pushed.Revision != written.Revision {
 		t.Errorf("the push is %+v, want alice's state at revision %d", pushed,
 			written.Revision)
 	}
 	// AND NOT BOB'S: a write of his own, after hers, is what he hears first.
 	if _, err := fleet.AdvanceChatRead(t.Context(), "bob", coord.ChatReadDelta{
-		Mute: []string{"public-1"}, At: chatClock,
+		Mute: []string{publicRoom}, At: chatClock,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -715,9 +768,9 @@ func TestAReadStateReachesOnlyItsOwnPersonsSockets(t *testing.T) {
 // revision already pushed.
 func TestAPushedReadStateIsThePersonsOwnAndOnlyWhenItMoved(t *testing.T) {
 	t.Parallel()
-	h := hubOver(twoRooms())
+	h := hubOver(t, twoRooms())
 	client := watcherFor(t, h, chatPerson("alice"))
-	stamped := coord.ChatReadState{Cursors: map[string]int64{"public-1": 3},
+	stamped := coord.ChatReadState{Cursors: map[string]int64{publicRoom: 3},
 		Revision: 5, AbsentSince: chatClock}
 
 	h.pushRead(coord.ChatReadUpdate{Handle: "alice", State: &stamped})
@@ -843,356 +896,360 @@ func waitFor(t *testing.T, ch <-chan struct{}, what string) {
 
 // PRESENCE IS FILTERED BY THE SAME RULE AS A MESSAGE, IN BOTH DIRECTIONS.
 //
-// A tab may name any room it likes in a focus frame — it is saying where it is
-// looking, not claiming a permission — so two things have to hold. It must
-// learn nothing about a room it cannot open, and it must not APPEAR in that
-// room to the people who can: a socket that could advertise itself into a
+// A tab may name any room it likes in a `presence` frame — it is saying where
+// it is looking, not claiming a permission — so two things have to hold. It
+// must learn nothing about a room it cannot open, and it must not APPEAR in
+// that room to the people who can: a socket that could advertise itself into a
 // private conversation by guessing its id would tell its members that a
 // stranger was reading them.
+//
+// Mutation: drop the visibility decision from the join, and bob is in the
+// private room and shown alice there.
 func TestPresenceNeitherReachesNorNamesSomebodyOutsideTheRoom(t *testing.T) {
 	t.Parallel()
-	h := hubOver(twoRooms())
+	h := liveHubOver(t, twoRooms())
 	inside := watcherFor(t, h, chatPerson("alice"))
 	outside := watcherFor(t, h, chatPerson("bob"))
-	h.focus(inside, "private-1", true)
-	h.focus(outside, "private-1", true)
+	typing := presence.Focus{Thread: "m-1"}
+	h.presenceFrame(t.Context(), inside, privateRoom, presence.Editing, typing)
+	h.presenceFrame(t.Context(), outside, privateRoom, presence.Editing, typing)
 
-	h.sweep(t.Context())
-
+	shown := roomShown(t, inside, privateRoom, func(r shownRoom) bool {
+		return r.members["alice"] == presence.Editing
+	})
+	if _, there := shown.members["bob"]; there {
+		t.Errorf("the room shows %v — somebody who cannot open a room is not in it, "+
+			"whatever their tab says", shown.members)
+	}
+	settleChat()
 	if got := chatKinds(outside); len(got) != 0 {
 		t.Errorf("a non-member was told about a private room's presence: %v", got)
 	}
-	got := drainClient(inside)
-	if len(got) != 1 || got[0].Kind() != KindChatPresence {
-		t.Fatalf("the member was sent %d frames, want one %s", len(got), KindChatPresence)
-	}
-	room := dataAs[ChatPresenceFrame](t, got[0]).Rooms["private-1"]
-	if !slices.Equal(room.Viewing, []string{"alice"}) {
-		t.Errorf("the room reports %v as viewing — somebody who cannot open a "+
-			"room is not in it, whatever their tab says", room.Viewing)
-	}
-	if !slices.Equal(room.Typing, []string{"alice"}) {
-		t.Errorf("the room reports %v as typing", room.Typing)
-	}
 }
 
-// A PEER'S PROBE IS ANSWERED UNDER THE SAME RULE, by THIS node's watchers'
-// own visibility — the asker is nobody it can check — and names the node so
-// the asker can drop its own reply.
-func TestAPresenceProbeIsAnsweredWithOnlyThePeopleEntitledToBeInTheRoom(t *testing.T) {
-	t.Parallel()
-	h := hubOver(twoRooms())
-	inside := watcherFor(t, h, chatPerson("alice"))
-	outside := watcherFor(t, h, chatPerson("bob"))
-	h.focus(inside, "private-1", false)
-	h.focus(outside, "private-1", false)
-
-	raw, err := h.answer(t.Context(), mustJSON(t, chatPresenceRequest{
-		Version: chatPresenceProtocol, Channels: []string{"private-1"},
-	}))
-	if err != nil {
-		t.Fatalf("the probe was not answered: %v", err)
-	}
-	var reply chatPresenceReply
-	if err := json.Unmarshal(raw, &reply); err != nil {
-		t.Fatal(err)
-	}
-	if got := reply.Rooms["private-1"].Viewing; !slices.Equal(got, []string{"alice"}) {
-		t.Errorf("the answer names %v as viewing a private room", got)
-	}
-	if reply.Node != "node-a" {
-		t.Errorf("the answer names node %q, so an asker cannot drop its own", reply.Node)
-	}
-}
-
-// mustJSON encodes a presence payload for the wire.
-func mustJSON(t *testing.T, value any) []byte {
-	t.Helper()
-	raw, err := json.Marshal(value)
-	if err != nil {
-		t.Fatalf("encode: %v", err)
-	}
-	return raw
-}
-
-// A PROBE THIS BUILD DOES NOT SPEAK IS ANSWERED WITH SILENCE, which the asker
-// reads as a node with nobody in the room.
-func TestAPresenceProbeFromAnotherProtocolIsNotAnswered(t *testing.T) {
-	t.Parallel()
-	h := hubOver(twoRooms())
-	client := watcherFor(t, h, chatPerson("alice"))
-	h.focus(client, "public-1", false)
-
-	if _, err := h.answer(t.Context(), mustJSON(t, chatPresenceRequest{
-		Version: chatPresenceProtocol + 1, Channels: []string{"public-1"},
-	})); err == nil {
-		t.Fatal("a probe from a protocol this build does not speak was answered")
-	}
-}
-
-// AN UNCHANGED VIEW COSTS NO FRAME, and a change does.
+// A `presence` FRAME NAMING A ROOM JOINS IT, AND A TAB IS IN ONE ROOM AT A TIME.
 //
-// Presence is the one thing here evaluated on a timer rather than on an event,
-// so without the fingerprint every open tab would receive a frame every
-// interval for as long as it stayed open.
-func TestAnUnchangedPresenceViewIsNotPushedAgain(t *testing.T) {
+// The join is handed the room whole, its own member in it, and a frame naming
+// another room moves the socket: out of the first, whose members see it leave,
+// and into the second. A frame naming no room takes it out of the one it was
+// in. Each socket is shown only the room it is in.
+//
+// Mutation: skip the leave on a move, and alice stays in the public room.
+func TestAPresenceFrameJoinsTheRoomItNamesAndATabIsInOneRoom(t *testing.T) {
 	t.Parallel()
-	h := hubOver(twoRooms())
-	client := watcherFor(t, h, chatPerson("alice"))
-	h.focus(client, "public-1", false)
+	h := liveHubOver(t, twoRooms())
+	alice := watcherFor(t, h, chatPerson("alice"))
+	bob := watcherFor(t, h, chatPerson("bob"))
 
-	h.sweep(t.Context())
-	if got := len(drainClient(client)); got != 1 {
-		t.Fatalf("the first sweep sent %d frames", got)
+	h.presenceFrame(t.Context(), alice, publicRoom, presence.Viewing, presence.Focus{})
+	joined := nextFrame(t, alice, KindChatPresence)
+	if got := dataAs[ChatPresence](t, joined); !got.Roster || got.ChannelID != publicRoom ||
+		len(got.Upsert) != 1 || got.Upsert[0].Seat != "alice" {
+		t.Fatalf("the join was handed %+v, want the room whole with alice in it", got)
 	}
-	h.sweep(t.Context())
-	if got := chatKinds(client); len(got) != 0 {
-		t.Errorf("an unchanged view was pushed again: %v", got)
-	}
-	h.SetStatus(t.Context(), "agent-swe", "public-1", "m-1", "reading the room")
-	h.sweep(t.Context())
-	if got := len(drainClient(client)); got != 1 {
-		t.Errorf("a changed view sent %d frames", got)
+	h.presenceFrame(t.Context(), bob, publicRoom, presence.Viewing, presence.Focus{})
+	roomShown(t, bob, publicRoom, func(r shownRoom) bool { return len(r.members) == 2 })
+
+	h.presenceFrame(t.Context(), alice, privateRoom, presence.Viewing, presence.Focus{})
+	roomShown(t, bob, publicRoom, func(r shownRoom) bool {
+		_, there := r.members["alice"]
+		return !there && len(r.members) == 1
+	})
+	h.presenceFrame(t.Context(), bob, "", presence.Viewing, presence.Focus{})
+	waitUntil(t, func() bool {
+		for _, w := range h.current() {
+			if w.viewer == "bob" && w.session != "" {
+				return false
+			}
+		}
+		return true
+	}, "a frame naming no room left bob in the room he was in")
+}
+
+// A RECORD THAT NARROWS A ROOM TAKES WHOEVER IT SHUTS OUT OF ITS PRESENCE.
+//
+// A membership replaced, a room made private: whoever the record took out, or
+// may no longer read the room at the batch's position, leaves its presence at
+// once — told so with a roster naming nobody, and gone from what the room's
+// remaining members see — as an artifact's room withdraws a share. A presence
+// decided only at the join would show a removed person in the room, and the
+// room to them, until their tab moved.
+//
+// Mutation: drop the re-decision from the fan, and alice stays in the room;
+// send a fan-out outside the lock it chooses its sockets under, with a pause
+// between the two (the window a slow hand-off opens), and carol's typing,
+// chosen for alice before she was taken out, reaches her after the roster that
+// emptied the room.
+func TestARecordThatNarrowsARoomTakesWhoeverItShutsOutOfItsPresence(t *testing.T) {
+	t.Parallel()
+	rooms := twoRooms()
+	rooms.members[privateRoom] = []string{"alice", "carol"}
+	h := liveHubOver(t, rooms)
+	alice := watcherFor(t, h, chatPerson("alice"))
+	carol := watcherFor(t, h, chatPerson("carol"))
+	h.presenceFrame(t.Context(), alice, privateRoom, presence.Viewing, presence.Focus{})
+	h.presenceFrame(t.Context(), carol, privateRoom, presence.Viewing, presence.Focus{})
+	roomShown(t, carol, privateRoom, func(r shownRoom) bool { return len(r.members) == 2 })
+	roomShown(t, alice, privateRoom, func(r shownRoom) bool { return len(r.members) == 2 })
+
+	// A FAN-OUT IN FLIGHT AS THE RECORD LANDS: carol starts typing, and the
+	// room's next fan-out is on its way while alice is taken out.
+	h.presenceFrame(t.Context(), carol, privateRoom, presence.Editing,
+		presence.Focus{Thread: "m-1"})
+	time.Sleep(10 * time.Millisecond)
+	rooms.members[privateRoom] = []string{"carol"}
+	removal := post(privateRoom, 11)
+	removal.Op, removal.Subject, removal.Removed = chatlet.OpMembers,
+		chatlet.ChannelSubject(privateRoom), []string{"alice"}
+	h.fan(t.Context(), []chatlet.Applied{removal})
+
+	roomShown(t, alice, privateRoom, func(r shownRoom) bool {
+		return r.roster && len(r.members) == 0
+	})
+	roomShown(t, carol, privateRoom, func(r shownRoom) bool {
+		_, there := r.members["alice"]
+		return !there && len(r.members) == 1
+	})
+	// AND NOTHING OF THE ROOM REACHES HER AFTER: a fan-out sent once she was
+	// taken out would show her its members again.
+	settleChat()
+	chatKinds(alice)
+	if shown, err := screenOf(alice).shown(privateRoom); err != nil || len(shown.members) != 0 {
+		t.Errorf("once taken out of the room alice is shown %v (%v), want nobody",
+			shown.members, err)
 	}
 }
 
-// A TYPING FLAG EXPIRES ON ITS OWN, for the tab that stops typing and says
-// nothing. Closing a socket withdraws it at once; this is the other case.
-func TestATypingFlagExpiresWithoutBeingReasserted(t *testing.T) {
+// A GAP DECIDES AGAIN WHO MAY STAY IN A ROOM'S PRESENCE, AND KEEPS WHAT IT
+// CANNOT DECIDE.
+//
+// A gap may have held the record that took somebody out of a room — the hub
+// dropped its batch, or the engine's source switched past it — and that record
+// is what takes them out of the room's presence. So every socket in a room is
+// decided again: one the room no longer admits is taken out, with a roster
+// naming nobody, and one it still admits stays. A read that cannot be decided
+// keeps the socket where it is: a gap is the possibility of a change, not
+// evidence of one, and failing closed would empty every room on the node over
+// a store blip.
+//
+// Mutation: drop the re-decision from the gap, and alice stays in the room;
+// fail it closed, and carol is taken out by the blip.
+func TestAGapDecidesAgainWhoMayStayInARoomsPresence(t *testing.T) {
 	t.Parallel()
-	h := hubOver(twoRooms())
-	client := watcherFor(t, h, chatPerson("alice"))
-	h.focus(client, "public-1", true)
+	rooms := &blippingRooms{permissiveRooms: twoRooms()}
+	rooms.members[privateRoom] = []string{"alice", "carol"}
+	h := liveHubOver(t, rooms)
+	alice := watcherFor(t, h, chatPerson("alice"))
+	carol := watcherFor(t, h, chatPerson("carol"))
+	h.presenceFrame(t.Context(), alice, privateRoom, presence.Viewing, presence.Focus{})
+	h.presenceFrame(t.Context(), carol, privateRoom, presence.Viewing, presence.Focus{})
+	roomShown(t, carol, privateRoom, func(r shownRoom) bool { return len(r.members) == 2 })
 
-	watchers := h.current()
-	if got := h.presenceOf(watchers, []string{"public-1"}, chatClock)["public-1"].Typing; len(got) != 1 {
-		t.Fatalf("a fresh typing flag reads as %v", got)
+	// THE BLIP FIRST: nothing can be decided, so nobody moves.
+	rooms.fail(errors.New("the estate did not answer"))
+	h.Reread()
+	nextFrame(t, carol, KindChatRoomChanged)
+	settleChat()
+	for _, w := range h.current() {
+		if w.session == "" {
+			t.Errorf("%s was taken out of the room's presence by a read that "+
+				"could not be decided", w.viewer)
+		}
 	}
-	stale := chatClock.Add(ChatTypingTTL)
-	if got := h.presenceOf(watchers, []string{"public-1"}, stale)["public-1"].Typing; len(got) != 0 {
-		t.Errorf("a typing flag survived its own window: %v", got)
-	}
+
+	// THE REMOVAL THE GAP HID: alice is no longer a member, and no record
+	// says so.
+	rooms.fail(nil)
+	rooms.members[privateRoom] = []string{"carol"}
+	h.Reread()
+	roomShown(t, alice, privateRoom, func(r shownRoom) bool {
+		return r.roster && len(r.members) == 0
+	})
+	roomShown(t, carol, privateRoom, func(r shownRoom) bool {
+		_, there := r.members["alice"]
+		return !there && len(r.members) == 1
+	})
 }
 
-// A CLOSED SOCKET STOPS BEING A WATCHER, and with it stops appearing in the
-// rooms it was looking at.
+// blippingRooms is [permissiveRooms] whose every read can be made to fail, as a
+// store that does not answer fails it.
+type blippingRooms struct {
+	permissiveRooms
+	mu  sync.Mutex
+	err error
+}
+
+func (b *blippingRooms) fail(err error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.err = err
+}
+
+func (b *blippingRooms) Channel(ctx context.Context, viewer, channelID string,
+	fresh statelog.Freshness) (chatlet.ChannelDetail, error) {
+
+	b.mu.Lock()
+	err := b.err
+	b.mu.Unlock()
+	if err != nil {
+		return chatlet.ChannelDetail{}, err
+	}
+	return b.permissiveRooms.Channel(ctx, viewer, channelID, fresh)
+}
+
+func (b *blippingRooms) ChannelHere(ctx context.Context, viewer, channelID string,
+	fresh statelog.Freshness) (chatlet.ChannelDetail, error) {
+	return b.Channel(ctx, viewer, channelID, fresh)
+}
+
+// A CLOSED SOCKET LEAVES THE ROOM'S PRESENCE AT ONCE, rather than its member
+// standing until a lapse or an expiry: a socket that closed is a person who is
+// demonstrably not in the room.
 func TestALeavingSocketIsNoLongerPresent(t *testing.T) {
 	t.Parallel()
-	h := hubOver(twoRooms())
-	client := watcherFor(t, h, chatPerson("alice"))
-	h.focus(client, "public-1", true)
-	h.leave(client)
+	h := liveHubOver(t, twoRooms())
+	alice := watcherFor(t, h, chatPerson("alice"))
+	bob := watcherFor(t, h, chatPerson("bob"))
+	h.presenceFrame(t.Context(), alice, publicRoom, presence.Editing, presence.Focus{})
+	h.presenceFrame(t.Context(), bob, publicRoom, presence.Viewing, presence.Focus{})
+	roomShown(t, bob, publicRoom, func(r shownRoom) bool { return len(r.members) == 2 })
 
-	if got := h.presenceOf(h.current(), []string{"public-1"}, chatClock); len(got) != 0 {
-		t.Errorf("a socket that closed is still in the room: %v", got)
-	}
-}
-
-// A CHANGE INSIDE THE GAP IS PROBED AT THE GAP'S END, NOT AT THE NEXT TICK.
-//
-// The floor between two probes coalesces a burst — typing is a focus change
-// per keystroke — and its own justification is that half a second is under
-// what a person perceives. That holds only if what it skips is owed at the
-// gap's end. Here the tick is ten seconds away, so only the owed probe can
-// deliver in time.
-func TestAFocusChangeInsideTheGapIsProbedAtItsEnd(t *testing.T) {
-	t.Parallel()
-	h := NewChatHub(ChatHubOptions{
-		Rooms:            func() ChatRooms { return twoRooms() },
-		NodeID:           "node-a",
-		PresenceInterval: 10 * time.Second,
+	h.leave(alice)
+	roomShown(t, bob, publicRoom, func(r shownRoom) bool {
+		_, there := r.members["alice"]
+		return !there
 	})
-	h.Start(t.Context())
-	t.Cleanup(h.Stop)
-
-	client := watcherFor(t, h, chatPerson("alice"))
-	h.focus(client, "public-1", false)
-	presenceFor(t, client, "public-1", ChatPresenceGap+time.Second)
-
-	// INSIDE THE GAP the first sweep just opened.
-	h.focus(client, "private-1", false)
-	presenceFor(t, client, "private-1", ChatPresenceGap+time.Second)
 }
 
-// presenceFor waits for a presence frame naming room, failing after within.
-func presenceFor(t *testing.T, c *Client, room string, within time.Duration) {
+// shownRoom is one chat room as a socket's presence frames left it: each
+// member's seat and activity, the agents' working lines by thread, and whether
+// the last frame was the room whole.
+type shownRoom struct {
+	members map[string]presence.Activity
+	working map[string]presence.Member
+	roster  bool
+}
+
+// screens is what each socket's chat presence frames have left it showing,
+// kept across every read of the socket as a tab keeps its screen.
+//
+// A PRESENCE FRAME IS A CHANGE TO WHAT THE TAB SHOWS, so a reader that applied
+// frames from nothing part way through the stream, or that missed one another
+// read took off the socket, would show a room short of whoever that frame
+// named: a member's upsert taken by a read waiting for another kind left a
+// later wait seeing only the member who left. So every read of a socket in
+// these cases applies what it takes to the one screen ([nextFrame],
+// [chatKinds], [roomShown]).
+var screens sync.Map // *Client → *screen
+
+// screen is one socket's chat rooms as its presence frames left them.
+type screen struct {
+	mu    sync.Mutex
+	rooms map[string]*roomScreen
+	err   error
+}
+
+// roomScreen is one room on a [screen]: its members by session, and whether
+// the last frame was the room whole.
+type roomScreen struct {
+	bySession map[string]presence.Member
+	roster    bool
+}
+
+func screenOf(c *Client) *screen {
+	s, _ := screens.LoadOrStore(c, &screen{rooms: map[string]*roomScreen{}})
+	return s.(*screen)
+}
+
+// apply applies one frame a read took off the socket, as the dashboard applies
+// it: a roster replaces the room, an upsert sets members, a leave removes them.
+// A frame of another kind changes nothing.
+func (s *screen) apply(f *Frame) {
+	if f.Kind() != KindChatPresence {
+		return
+	}
+	var outer struct {
+		Data ChatPresence `json:"data"`
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := json.Unmarshal(f.Raw(), &outer); err != nil {
+		s.err = fmt.Errorf("decode %s: %w", f.Raw(), err)
+		return
+	}
+	got := outer.Data
+	r := s.rooms[got.ChannelID]
+	if r == nil {
+		r = &roomScreen{bySession: map[string]presence.Member{}}
+		s.rooms[got.ChannelID] = r
+	}
+	if got.Roster {
+		clear(r.bySession)
+	}
+	for _, m := range got.Upsert {
+		r.bySession[m.Session] = m
+	}
+	for _, session := range got.Leave {
+		delete(r.bySession, session)
+	}
+	r.roster = got.Roster
+}
+
+// shown is room as the screen shows it now.
+func (s *screen) shown(room string) (shownRoom, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := shownRoom{members: map[string]presence.Activity{},
+		working: map[string]presence.Member{}}
+	r := s.rooms[room]
+	if r == nil {
+		return out, s.err
+	}
+	out.roster = r.roster
+	for _, m := range r.bySession {
+		if m.Kind == iam.ActorAgent {
+			out.working[m.Focus.Thread] = m
+			continue
+		}
+		out.members[m.Seat] = m.Activity
+	}
+	return out, s.err
+}
+
+// roomShown is room on c's [screen] once done holds of it, applying every frame
+// c is sent until it does and failing after two seconds.
+func roomShown(t *testing.T, c *Client, room string, done func(shownRoom) bool) shownRoom {
 	t.Helper()
-	deadline := time.After(within)
+	view := func() shownRoom {
+		v, err := screenOf(c).shown(room)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	if v := view(); done(v) {
+		return v
+	}
+	deadline := time.After(2 * time.Second)
 	for {
 		select {
 		case f, open := <-c.Out():
 			if !open {
-				t.Fatalf("the socket was closed waiting for %s's presence", room)
+				t.Fatalf("the socket closed waiting on %s's presence", room)
 			}
-			if f.Kind() != KindChatPresence {
-				continue
-			}
-			if _, named := dataAs[ChatPresenceFrame](t, f).Rooms[room]; named {
-				return
+			screenOf(c).apply(f)
+			if v := view(); done(v) {
+				return v
 			}
 		case <-deadline:
-			t.Fatalf("no presence frame for %s within %s", room, within)
+			t.Fatalf("%s's presence never got there: it shows %+v", room, view())
 		}
 	}
 }
 
-// stubPeers is the ephemeral scatter, recording what was asked and answering
-// with whatever a case put in it.
-type stubPeers struct {
-	mu      sync.Mutex
-	subject string
-	asked   []string
-	reply   *chatPresenceReply
-
-	// refuse is how many Serve attempts fail before one takes, and serves
-	// counts every attempt.
-	refuse int
-	serves atomic.Int64
-	served chan struct{}
-}
-
-func (p *stubPeers) Ask(_ context.Context, subject string, request []byte, _ int) (
-	[][]byte, error) {
-
-	var req chatPresenceRequest
-	if err := json.Unmarshal(request, &req); err != nil {
-		return nil, err
-	}
-	p.mu.Lock()
-	p.subject, p.asked = subject, req.Channels
-	reply := p.reply
-	p.mu.Unlock()
-	if reply == nil {
-		return nil, nil
-	}
-	raw, err := json.Marshal(reply)
-	if err != nil {
-		return nil, err
-	}
-	return [][]byte{raw}, nil
-}
-
-func (p *stubPeers) Serve(_ context.Context, subject string, _ queue.AnswerFunc) (
-	queue.Unsubscribe, error) {
-
-	n := p.serves.Add(1)
-	if subject != topics.ChatPresence {
-		return nil, errors.New("served on the wrong subject")
-	}
-	if int(n) <= p.refuse {
-		return nil, errors.New("the broker is not answering yet")
-	}
-	if p.served != nil {
-		select {
-		case p.served <- struct{}{}:
-		default:
-		}
-	}
-	return func(context.Context) error { return nil }, nil
-}
-
-// A PEER'S ANSWER IS MERGED, and the probe asks only about the rooms somebody
-// here has open.
-//
-// The second half is what keeps a fleet-wide scatter off an idle company's
-// broker: the cost of presence is a function of how many tabs are open on a
-// room, not of how many nodes exist.
-func TestAPeersPresenceIsMergedIntoWhatALocalSocketIsShown(t *testing.T) {
-	t.Parallel()
-	peers := &stubPeers{reply: &chatPresenceReply{
-		Version: chatPresenceProtocol, Node: "node-b",
-		Rooms: map[string]ChatRoomPresence{"public-1": {
-			Viewing: []string{"carol"}, Typing: []string{"carol"},
-			Working: []ChatWorking{{Handle: "agent-swe", Thread: "m-1"}},
-		}},
-	}}
-	h := NewChatHub(ChatHubOptions{
-		Rooms: func() ChatRooms { return twoRooms() }, Peers: peers, NodeID: "node-a",
-	})
-	client := watcherFor(t, h, chatPerson("alice"))
-	h.focus(client, "public-1", false)
-
-	h.sweep(t.Context())
-
-	peers.mu.Lock()
-	subject, asked := peers.subject, peers.asked
-	peers.mu.Unlock()
-	if subject != topics.ChatPresence {
-		t.Errorf("the probe went to %q", subject)
-	}
-	if !slices.Equal(asked, []string{"public-1"}) {
-		t.Errorf("the probe asked about %v, want only the room somebody has open", asked)
-	}
-	got := drainClient(client)
-	if len(got) != 1 {
-		t.Fatalf("the socket was sent %d frames", len(got))
-	}
-	room := dataAs[ChatPresenceFrame](t, got[0]).Rooms["public-1"]
-	if !slices.Equal(room.Viewing, []string{"alice", "carol"}) {
-		t.Errorf("the merged view is %v — a peer's readers and this node's own "+
-			"are different people, so the sets are a union", room.Viewing)
-	}
-	if len(room.Working) != 1 || room.Working[0].Handle != "agent-swe" {
-		t.Errorf("a seat working on another node does not reach the room: %v",
-			room.Working)
-	}
-}
-
-// A REPLY CLAIMING TO BE THIS NODE IS DROPPED: this node's own presence is
-// already in hand, first-hand and without the round trip.
-func TestAPresenceReplyFromThisNodeItselfIsDropped(t *testing.T) {
-	t.Parallel()
-	peers := &stubPeers{reply: &chatPresenceReply{
-		Version: chatPresenceProtocol, Node: "node-a",
-		Rooms: map[string]ChatRoomPresence{"public-1": {Viewing: []string{"mallory"}}},
-	}}
-	h := NewChatHub(ChatHubOptions{
-		Rooms: func() ChatRooms { return twoRooms() }, Peers: peers, NodeID: "node-a",
-	})
-	client := watcherFor(t, h, chatPerson("alice"))
-	h.focus(client, "public-1", false)
-
-	h.sweep(t.Context())
-
-	got := drainClient(client)
-	if len(got) != 1 {
-		t.Fatalf("the socket was sent %d frames", len(got))
-	}
-	if room := dataAs[ChatPresenceFrame](t, got[0]).Rooms["public-1"]; slices.Contains(room.Viewing, "mallory") {
-		t.Errorf("a reply claiming to be this node was merged: %v", room.Viewing)
-	}
-}
-
-// A STARTED HUB ALREADY ANSWERS ITS PEERS, and one the broker refused is
-// retried until it takes.
-//
-// The attempt is made by [ChatHub.Start] itself, so the node a boot hands back
-// is in the fleet's presence before its first tick; and a node that never
-// answered a probe would be invisible to every colleague's typing indicator
-// for the rest of its life, with nothing to say so.
-func TestAHubAnswersItsPeersFromItsStartAndRetriesARefusal(t *testing.T) {
-	t.Parallel()
-	ready := &stubPeers{}
-	h := NewChatHub(ChatHubOptions{
-		Rooms: func() ChatRooms { return twoRooms() }, Peers: ready, NodeID: "node-a",
-		PresenceInterval: time.Hour,
-	})
-	h.Start(t.Context())
-	t.Cleanup(h.Stop)
-	if ready.serves.Load() != 1 {
-		t.Errorf("Start returned with %d attempts to answer, want the one it makes",
-			ready.serves.Load())
-	}
-
-	refused := &stubPeers{refuse: 2, served: make(chan struct{}, 1)}
-	retried := NewChatHub(ChatHubOptions{
-		Rooms: func() ChatRooms { return twoRooms() }, Peers: refused, NodeID: "node-b",
-		PresenceInterval: 5 * time.Millisecond,
-	})
-	retried.Start(t.Context())
-	t.Cleanup(retried.Stop)
-	waitFor(t, refused.served, "the presence subject served after two refusals")
-}
+// settleChat waits long enough for a presence fan-out that must NOT happen to
+// have had its chance.
+func settleChat() { time.Sleep(150 * time.Millisecond) }
 
 // ---- the working indicator --------------------------------------------- //
 
@@ -1218,7 +1275,7 @@ func TestTheWorkingIndicatorFollowsTheCompanysTypingStatus(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			h := hubOver(twoRooms())
+			h := hubOver(t, twoRooms())
 			driver := notify.NewStatusDriver(notify.StatusOptions{
 				Poster: h, Mode: notify.StatusMode(expect.mode),
 			})
@@ -1237,57 +1294,45 @@ func TestTheWorkingIndicatorFollowsTheCompanysTypingStatus(t *testing.T) {
 }
 
 // AND RAISING IT PUTS THE SEAT IN THE ROOM IT IS ANSWERING, under the thread
-// the reply will land in, with words — and it comes down when the turn ends.
+// the reply will land in, with words and the turn a person can open — and it
+// comes down the moment the turn ends, rather than lingering out the presence
+// hub's expiry.
+//
+// Mutation: post the indicator with no turn or no thread, and the room shows
+// neither; leave ClearStatus a no-op, and the seat stands after its turn.
 func TestRaisingTheIndicatorPutsTheSeatInTheRoomItIsAnswering(t *testing.T) {
 	t.Parallel()
-	h := hubOver(twoRooms())
+	h := liveHubOver(t, twoRooms())
+	viewer := watcherFor(t, h, chatPerson("alice"))
+	h.presenceFrame(t.Context(), viewer, publicRoom, presence.Viewing, presence.Focus{})
 	driver := notify.NewStatusDriver(notify.StatusOptions{
 		Poster: h, Mode: notify.StatusMode(config.StatusAlways),
 	})
 	t.Cleanup(func() { driver.Stop(context.Background()) })
 
-	session := driver.Begin(t.Context(), "agent-swe", "turn-1", "execute",
+	session := driver.Begin(t.Context(), "agent-swe", "run-1", "execute",
 		chatTrigger(string(chatlet.ReasonMention)))
 	if session == nil {
 		t.Fatal("no indicator was raised for a mention under `always`")
 	}
-	working := workingIn(t, h, "public-1", 1)
-	if len(working) != 1 || working[0].Handle != "agent-swe" {
-		t.Fatalf("the room reports %v as working", working)
+	working := roomShown(t, viewer, publicRoom, func(r shownRoom) bool {
+		return len(r.working) == 1
+	}).working["m-1"]
+	if working.Seat != "agent-swe" || working.Kind != iam.ActorAgent ||
+		working.Activity != presence.Editing {
+		t.Fatalf("the room shows %+v working under the thread, want agent-swe editing "+
+			"under the one the reply will land in", working)
 	}
-	if working[0].Thread != "m-1" {
-		t.Errorf("the indicator sits under %q rather than the thread the reply "+
-			"will land in", working[0].Thread)
-	}
-	if working[0].Status == "" {
+	if working.Status == "" {
 		t.Error("the indicator carries no words, although this backend renders " +
 			"text — a reader then cannot tell which phase is running")
 	}
+	if working.Turn != "run-1" {
+		t.Errorf("the indicator names turn %q, want the run holding it", working.Turn)
+	}
 
 	session.End(t.Context(), false)
-	if got := h.presenceOf(nil, []string{"public-1"}, chatClock)["public-1"].Working; len(got) != 0 {
-		t.Errorf("the indicator survived the turn: %v", got)
-	}
-}
-
-// workingIn is the room's working set once it has n entries: a WAIT rather
-// than a read, because the raise is the driver's goroutine's first act rather
-// than [notify.StatusDriver.Begin]'s last, so a turn never blocks on a chat
-// backend to start working. Bounded and loud.
-func workingIn(t *testing.T, h *ChatHub, room string, n int) []ChatWorking {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		got := h.presenceOf(nil, []string{room}, chatClock)[room].Working
-		if len(got) >= n {
-			return got
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("%s reports %v as working after two seconds, want %d",
-				room, got, n)
-		}
-		time.Sleep(time.Millisecond)
-	}
+	roomShown(t, viewer, publicRoom, func(r shownRoom) bool { return len(r.working) == 0 })
 }
 
 // THE BACKEND NAME IS THE DOMAIN'S OWN: the driver matches it against the
@@ -1295,7 +1340,7 @@ func workingIn(t *testing.T, h *ChatHub, room string, n int) []ChatWorking {
 // spelling raises no indicator at all — silently, on every Chatlet turn.
 func TestTheIndicatorAnswersToTheNameTheChatParserStamps(t *testing.T) {
 	t.Parallel()
-	h := hubOver(twoRooms())
+	h := hubOver(t, twoRooms())
 	if h.StatusBackend() != chatlet.Source {
 		t.Errorf("the poster answers to %q and the parser stamps %q",
 			h.StatusBackend(), chatlet.Source)
@@ -1312,7 +1357,7 @@ func TestTheIndicatorAnswersToTheNameTheChatParserStamps(t *testing.T) {
 func chatTrigger(reason string) map[string]string {
 	return map[string]string{
 		notify.TransportField:   chatlet.Source,
-		notify.ChannelField:     "public-1",
+		notify.ChannelField:     publicRoom,
 		notify.ChannelTypeField: string(chatlet.KindPublic),
 		notify.ChannelNameField: "general",
 		notify.MessageIDField:   "m-1",
@@ -1334,13 +1379,14 @@ func chatTrigger(reason string) map[string]string {
 // AND LEAVES WHEN WHAT ENDS ITS CREDENTIAL CLOSES IT.
 //
 // Through serveSocket, as the handler serves one: the join uses the principal
-// the audience was built from, a `chat_focus` frame moves the watcher's room,
-// and a move naming nobody — which closes every socket for its handshake to
-// decide again — takes the watcher out of the registry, so a principal that
-// moved is never shown chat as the seat it used to be.
+// the audience was built from, a chat `presence` frame puts the watcher in the
+// room's presence, and a move naming nobody — which closes every socket for
+// its handshake to decide again — takes the watcher out of the registry and
+// the room, so a principal that moved is never shown chat as the seat it used
+// to be.
 func TestASocketJoinsAsItsSeatAndLeavesWhenItIsClosed(t *testing.T) {
 	t.Parallel()
-	h := hubOver(twoRooms())
+	h := liveHubOver(t, twoRooms())
 	svc := newDecidingService(t, authz.NoChart{})
 	alice := chatPerson("alice")
 	s := serve(t, svc, socketCase{principal: alice, opened: sessionOf(alice),
@@ -1351,12 +1397,13 @@ func TestASocketJoinsAsItsSeatAndLeavesWhenItIsClosed(t *testing.T) {
 		watchers := h.current()
 		return len(watchers) == 1 && watchers[0].viewer == "alice"
 	}, "the socket never joined chat as alice")
-	s.write(t, map[string]any{"kind": ChatFocusKind, "channel_id": "public-1", "typing": true})
+	s.write(t, map[string]any{"kind": "presence", "room": presence.RoomChat,
+		"channel_id": publicRoom, "activity": presence.Editing})
 	waitUntil(t, func() bool {
 		watchers := h.current()
-		return len(watchers) == 1 && watchers[0].channel == "public-1" &&
-			!watchers[0].typingAt.IsZero()
-	}, "the focus frame never reached the watcher")
+		return len(watchers) == 1 && watchers[0].room.String() == publicRoom &&
+			watchers[0].session != ""
+	}, "the presence frame never put the watcher in the room")
 
 	svc.CredentialsMoved(Moved{Everyone: true})
 	if got := s.closedWith(t); got != CloseUndecided {

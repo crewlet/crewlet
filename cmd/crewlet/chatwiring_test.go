@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -15,17 +14,19 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/opkey"
-	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
-	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -304,70 +305,90 @@ func TestAMaintenanceModeNodeTakesAPersonsReadStateAndNoChatWrite(t *testing.T) 
 	}
 }
 
-// A NODE SERVING NO API STILL ANSWERS FOR ITS SEATS' WORKING INDICATORS.
+// A NODE SERVING NO API STILL SHOWS ITS SEATS' WORKING INDICATORS.
 //
 // The node running a seat's turn is rarely the node a browser is attached to,
-// so an indicator raised on it reaches a room through that node's answer to a
-// peer's presence probe — and when the hub that answers was the API's, a node
-// with no ingress role or `api.port: 0` recorded every indicator its seats
-// raised in a map no probe read: the seat working, every room showing
-// nothing, and nothing anywhere to say so. So this builds the hub the way
-// `crewlet run` builds it ([api.NewEngineChatLive], beside the engine and
-// before any listener), binds NO listener, raises an indicator as the engine's
-// status driver does, and asks the fleet's own subject as a peer would. Red if
-// the hub is not running, and red if it never learned the engine: its
-// answerer rides the engine's broker, and it decides who may be in a room
-// through the engine's router.
-func TestANodeServingNoAPIAnswersForItsSeatsIndicators(t *testing.T) {
+// so an indicator raised on it reaches a room as the seat's member of that
+// room's presence, on this node's presence hub, which tells the node the room
+// is open on — and when the hub that raised it was the API's, a node with no
+// ingress role or `api.port: 0` raised every indicator into nothing: the seat
+// working, every room showing nothing, and nothing anywhere to say so. So this
+// builds the hub the way `crewlet run` builds it ([api.NewEngineChatLive],
+// beside the engine and before any listener), binds NO listener, raises an
+// indicator as the engine's status driver does, and asks the engine's own
+// presence hub who is in the room, as its peers learn it. Red if the hub never
+// learned the engine's presence hub.
+func TestANodeServingNoAPIShowsItsSeatsIndicators(t *testing.T) {
 	t.Parallel()
 	e := testEngine(t)
 	chatLive := chatNode(t.Context(), t, e)
-	chatLive.Hub().SetStatus(t.Context(), "ceo", "room-1", "", "reading the room")
-	if !answersFor(t, e, "ceo", 3*stream.ChatPresenceInterval+5*time.Second) {
-		t.Fatal("a node serving no API never answered a presence probe for the " +
-			"indicator its own seat raised — the hub is not running, or never " +
-			"learned the engine")
+	room := uuid.New()
+	if !chatLive.Hub().SetStatus(t.Context(), notify.StatusPost{Handle: "ceo",
+		Channel: room.String(), Turn: "run-1", Text: "reading the room"}) {
+		t.Fatal("the hub refused the indicator")
+	}
+	if got := workingIn(t, e, room, func(got string) bool {
+		return got == "ceo run-1 reading the room"
+	}); got != "ceo run-1 reading the room" {
+		t.Fatalf("the engine's presence hub shows %q working in the room, want the "+
+			"seat the hub raised — the hub never learned the engine", got)
 	}
 }
 
-// THE HUB OUTLIVES THE CONTEXT THAT BUILT IT, AND ITS OWNER'S STOP ENDS IT.
+// THE HUB'S INDICATORS GO UP AFTER THE CONTEXT THAT BUILT IT ENDS, AND COME
+// DOWN WITH ITS OWNER'S STOP.
 //
 // `crewlet run` builds the hub under the signal context, which is cancelled
 // at the START of the drain — and the drain is when the turns already running
-// post their replies and lower their indicators, which a peer's room learns of
-// through this hub. A hub that ended with that context went dark for exactly
-// the stretch an operator watching a rolling restart most wants it. So the
-// context's cancellation must not end it, and [api.EngineChatLive.Stop] must.
-func TestTheChatHubOutlivesTheContextThatBuiltIt(t *testing.T) {
+// post their replies and raise and lower their indicators, which a room on
+// another node learns of through the presence hub. So a turn raising one
+// through the engine's own status driver after that context ended must still
+// show in the room, and [api.EngineChatLive.Stop] must take it down: the
+// driver built over the hub goes with it, and lowers every line it held,
+// rather than leaving the room showing a seat at work for the presence hub's
+// whole expiry.
+func TestTheChatHubsIndicatorsOutliveItsContextAndEndWithItsStop(t *testing.T) {
 	t.Parallel()
 	built, cancel := context.WithCancel(t.Context())
 	e := testEngine(t)
 	chatLive := chatNode(built, t, e)
-	chatLive.Hub().SetStatus(t.Context(), "ceo", "room-1", "", "reading the room")
-	if !answersFor(t, e, "ceo", 3*stream.ChatPresenceInterval+5*time.Second) {
-		t.Fatal("the hub never answered at all, so this asserts nothing")
-	}
-
 	cancel()
-	// PAST THE TEARDOWN a cancelled hub would make: its loops return on the
-	// context at once, and the answerer is unsubscribed on the way out.
-	time.Sleep(200 * time.Millisecond)
-	if !answersFor(t, e, "ceo", 3*stream.ChatPresenceInterval) {
-		t.Fatal("the hub stopped answering when the context that built it was " +
-			"cancelled — which is the start of the drain, when the turns that are " +
-			"finishing still raise and lower indicators")
+
+	room := uuid.New()
+	session := e.Status().Begin(t.Context(), "ceo", "run-1", "execute", map[string]string{
+		notify.TransportField: chatlet.Source, notify.ChannelField: room.String(),
+		notify.ChannelTypeField: string(chatlet.KindPublic), notify.MessageIDField: "m-1",
+		notify.ThreadAnchorField: "m-1", notify.FollowReasonField: string(chatlet.ReasonMention),
+		notify.UserField: "founder", notify.ActorField: "founder",
+		chatlet.MetaAuthorKind: string(chatlet.AuthorHuman),
+	})
+	if session == nil {
+		t.Fatal("the engine's driver raised nothing for a mention in a Chatlet room")
+	}
+	working := func(got string) bool { return strings.HasPrefix(got, "ceo run-1 ") }
+	if got := workingIn(t, e, room, working); !working(got) {
+		t.Fatalf("the room shows %q working after the building context ended, want ceo", got)
 	}
 
 	chatLive.Stop(context.WithoutCancel(t.Context()))
-	if answersFor(t, e, "ceo", 2*stream.ChatPresenceAsk) {
-		t.Fatal("the hub still answered after its owner stopped it")
+	nobody := func(got string) bool { return got == "" }
+	if got := workingIn(t, e, room, nobody); got != "" {
+		t.Fatalf("the room still shows %q working after the hub's owner stopped it", got)
+	}
+	// AND STAYS DOWN for a second more: nothing the stopped hub held raises
+	// it again.
+	for until := time.Now().Add(time.Second); time.Now().Before(until); {
+		if got := workingNow(t, e, room); got != "" {
+			t.Fatalf("the room shows %q working again after the hub's owner stopped it", got)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 
 // chatNode builds a node's engine and its chat hub the way `crewlet run`
 // does, the hub under ctx and no listener at all, and takes both down in
-// [shutdown]'s order: the hub before the engine whose broker its answerer is
-// subscribed on — cleanups run last-registered first, and [testEngine]
+// [shutdown]'s order: the hub before the engine whose presence hub it raises
+// indicators on — cleanups run last-registered first, and [testEngine]
 // registered the engine's.
 func chatNode(ctx context.Context, t *testing.T, e *engine.Engine) *api.EngineChatLive {
 	t.Helper()
@@ -379,29 +400,38 @@ func chatNode(ctx context.Context, t *testing.T, e *engine.Engine) *api.EngineCh
 	return chatLive
 }
 
-// answersFor reports whether a presence probe on room-1 is answered naming
-// handle as working within wait — the question a peer's hub asks.
-func answersFor(t *testing.T, e *engine.Engine, handle string, wait time.Duration) bool {
+// workingIn is [workingNow] once want holds of it, asked again for up to two
+// seconds, because the driver raises on its own goroutine and the room is
+// shown a change on its next fan-out; the last answer is returned either way.
+func workingIn(t *testing.T, e *engine.Engine, room uuid.UUID, want func(string) bool) string {
 	t.Helper()
-	deadline := time.Now().Add(wait)
+	deadline := time.Now().Add(2 * time.Second)
 	for {
-		ctx, cancel := context.WithTimeout(t.Context(), stream.ChatPresenceAsk)
-		replies, err := e.Backends().Queue.Ask(ctx, topics.ChatPresence,
-			[]byte(`{"version":1,"channels":["room-1"]}`), 0)
-		cancel()
-		if err != nil && !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatalf("probe: %v", err)
+		got := workingNow(t, e, room)
+		if want(got) || time.Now().After(deadline) {
+			return got
 		}
-		for _, reply := range replies {
-			if strings.Contains(string(reply), `"`+handle+`"`) {
-				return true
-			}
-		}
-		if time.Now().After(deadline) {
-			return false
-		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
 	}
+}
+
+// workingNow is who the engine's presence hub shows working in a chat room, as
+// "seat turn status", or "" for nobody: what a socket joining the room is
+// handed, which is the room as the node's sockets were last shown it.
+func workingNow(t *testing.T, e *engine.Engine, room uuid.UUID) string {
+	t.Helper()
+	session, roster, err := e.Presence().Join(presence.ChatRoom(room),
+		presence.Local{Seat: "watcher", Kind: iam.ActorHuman})
+	if err != nil {
+		t.Fatalf("join the room: %v", err)
+	}
+	e.Presence().Leave(presence.ChatRoom(room), session)
+	for _, m := range roster.Members {
+		if m.Kind == iam.ActorAgent {
+			return m.Seat + " " + m.Turn + " " + m.Status
+		}
+	}
+	return ""
 }
 
 // `crewlet run` BUILDS THE HUB ON EVERY NODE, whatever it serves.
@@ -471,6 +501,6 @@ func TestRunBuildsTheChatHubOnEveryNode(t *testing.T) {
 	if !top {
 		t.Error("runEngine does not build the chat hub as a statement of its own " +
 			"body, so a node that serves no API — or one a branch skips — answers " +
-			"no presence probe for the indicators its seats raise")
+			"shows no room the indicators its seats raise")
 	}
 }

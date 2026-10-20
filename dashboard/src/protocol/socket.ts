@@ -71,6 +71,7 @@ import type {
   LogRefusal,
   PresenceActivity,
   PresenceFocus,
+  PresenceRoomKind,
   QueryMap,
   QueryName,
   QueryRefusal,
@@ -548,18 +549,23 @@ export class LiveSocket {
   }
 
   /**
-   * Say which room this tab is looking at, and whether it is being typed in.
+   * Say which chat room this tab is looking at, and whether it is being typed
+   * in: the chat room's `presence` frame, which names the room by its kind and
+   * its id like every room's (ADR-0038).
    *
-   * IT ASKS NOTHING AND IS ANSWERED BY NOTHING. What it buys is that the
-   * fleet-wide presence probe is bounded to the rooms somebody actually has
-   * open — without it a node would have to ask its peers about every room in
-   * the company on every tick.
+   * THE FRAME ITSELF JOINS, unlike an artifact's, because a tab looks at one
+   * chat room at a time: naming a room puts this socket in its presence (once
+   * the engine has decided the room is one this reader may see) and takes it
+   * out of the room it was in, and an empty room id takes it out of the one it
+   * was in. The engine answers with the room's members (`chat_presence`) and
+   * every change after; typing is EDITING, which the engine puts back to
+   * viewing once nothing has re-asserted it inside its lapse.
    *
    * It is not delivered while the socket is down and is not queued: presence
-   * is about now, and a probe from ten seconds ago is worse than none. The
-   * reconnect re-sends what this tab is looking at, which is the state above.
-   * Only the chat screen sends it, and the frame mounts that screen only for
-   * a reader holding Chatlet, so a tab without it never names a room.
+   * is about now. The reconnect re-sends what this tab is looking at, which is
+   * the state above, since the new socket is in no room. Only the chat screen
+   * sends it, and the frame mounts that screen only for a reader holding
+   * Chatlet, so a tab without it never names a room.
    */
   focus(channelID: string, typing: boolean): void {
     this.focused = channelID;
@@ -569,9 +575,11 @@ export class LiveSocket {
 
   private sendFocus(): void {
     if (!this.connected || !this.sock) return; // `onopen` sends it
+    const activity: PresenceActivity = this.focused !== "" && this.typing ? "editing" : "viewing";
+    const room: PresenceRoomKind = "chat";
     try {
       this.sock.send(
-        JSON.stringify({ kind: "chat_focus", channel_id: this.focused, typing: this.typing }),
+        JSON.stringify({ kind: "presence", room, channel_id: this.focused, activity }),
       );
     } catch {
       // The close handler owns recovery, and the next open re-sends it.
@@ -655,7 +663,8 @@ export class LiveSocket {
     const room = this.rooms.get(artifact);
     if (!room?.joined || !this.connected || !this.sock) return;
     try {
-      this.sock.send(JSON.stringify({ kind: "presence", artifact, activity, focus }));
+      const room: PresenceRoomKind = "artifact";
+      this.sock.send(JSON.stringify({ kind: "presence", room, artifact, activity, focus }));
     } catch {
       // The close handler owns recovery, and the next join says it again.
     }

@@ -125,7 +125,12 @@ var contract = []Entry{
 	{"MAX_PURPOSE_BYTES", ReadScalar, "internal/chatlet.TestTheDashboardsChatLimitsAreTheEngines"},
 	{"MAX_DIRECT_PARTICIPANTS", ReadScalar, "internal/chatlet.TestTheDashboardsChatLimitsAreTheEngines"},
 	{"CHANNEL_NAME_PATTERN", ReadScalar, "internal/chatlet.TestTheDashboardsChannelNameGrammarIsTheEngines"},
-	{"TYPING_THROTTLE_MS", ReadScalar, "internal/api/stream.TestTheDashboardReassertsTypingInsideTheEnginesExpiry"},
+	{"TYPING_THROTTLE_MS", ReadScalar, "internal/presence.TestTheDashboardReassertsTypingInsideTheEnginesExpiry"},
+
+	// presence.ts
+	{"PRESENCE_ROOMS", ReadLiteral, "internal/presence.TestTheDashboardSpeaksThePresenceVocabulary"},
+	{"PRESENCE_ACTIVITIES", ReadLiteral, "internal/presence.TestTheDashboardSpeaksThePresenceVocabulary"},
+	{"PRESENCE_FRAMES_PER_SECOND", ReadScalar, "internal/presence.TestTheDashboardSpeaksThePresenceVocabulary"},
 
 	// audit.ts
 	{"OPERATOR_SOURCE", ReadScalar, "internal/events/types.TestTheAuditLogReadsEveryRuntimeAuditType"},
@@ -499,7 +504,6 @@ var contract = []Entry{
 	{"SHAREABLE_ROLES", ReadLiteral, "internal/api/artifactsapi.TestTheDashboardSpeaksTheArtifactsVocabulary"},
 	{"AUDIENCE_KINDS", ReadLiteral, "internal/api/artifactsapi.TestTheDashboardSpeaksTheArtifactsVocabulary"},
 	{"ORIGIN_MODES", ReadLiteral, "internal/api/artifactsapi.TestTheDashboardSpeaksTheArtifactsVocabulary"},
-	{"PRESENCE_ACTIVITIES", ReadLiteral, "internal/api/artifactsapi.TestTheDashboardSpeaksTheArtifactsVocabulary"},
 	{"ARTIFACT_LIST_SCOPES", ReadLiteral, "internal/api/artifactsapi.TestTheDashboardSpeaksTheArtifactsVocabulary"},
 	{"ARTIFACT_LIST_SORTS", ReadLiteral, "internal/api/artifactsapi.TestTheDashboardSpeaksTheArtifactsVocabulary"},
 	{"ARTIFACT_HISTORY_OPS", ReadLiteral, "internal/api/artifactsapi.TestTheDashboardSpeaksTheArtifactsVocabulary"},
@@ -507,7 +511,6 @@ var contract = []Entry{
 	{"ARTIFACT_DESCRIPTION_MAX_BYTES", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
 	{"ARTIFACT_ICON_MAX_BYTES", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
 	{"ARTIFACT_LABEL_MAX_BYTES", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
-	{"PRESENCE_FRAMES_PER_SECOND", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
 	{"ARTIFACT_CHECK_MAX_FILES", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
 	{"ARTIFACT_CHECK_MAX_BYTES", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
 	{"DOC_MAX_TABS", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},

@@ -12,22 +12,28 @@ import (
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/presence"
 )
 
 // THE LIVE CHANNEL ACROSS A FLEET: what one node's hub tells a socket attached
-// to another. The hub's own suite proves each half against an in-process
-// scatter; what only a running pair of nodes can show is that every node runs
-// one — `crewlet run` builds it through [api.NewEngineChatLive] whatever the
-// node's roles, and so does this harness ([newEngine]) — that the broker
-// carries the presence scatter between them, and that a person's read state,
-// which no log carries, reaches their tab from the coordination record
-// whichever node wrote it.
+// to another. The chat hub's own suite proves each half against an in-process
+// presence hub; what only a running pair of nodes can show is that every node
+// runs one — `crewlet run` builds it through [api.NewEngineChatLive] whatever
+// the node's roles, and so does this harness ([newEngine]) — that the broker
+// carries the presence hubs' SEALED frames between them (internal/presence,
+// ADR-0038), and that a person's read state, which no log carries, reaches
+// their tab from the coordination record whichever node wrote it.
 
-// focusOn tells a socket's hub which room its tab is looking at.
+// focusOn tells a socket's hub which room its tab is looking at: the chat
+// room's `presence` frame, viewing, which joins the socket to that room's
+// presence as the room's screen does when it opens.
 func focusOn(t *testing.T, conn *websocket.Conn, channelID string) {
 	t.Helper()
 	frame, err := json.Marshal(map[string]any{
-		"kind": stream.ChatFocusKind, "channel_id": channelID, "typing": false,
+		"kind": "presence", "room": string(presence.RoomChat), "channel_id": channelID,
+		"activity": string(presence.Viewing),
 	})
 	if err != nil {
 		t.Fatalf("encode the focus frame: %v", err)
@@ -68,19 +74,22 @@ func awaitFrame(t *testing.T, conn *websocket.Conn, kind stream.Kind, what strin
 //
 // The node running a seat's turn is rarely the node a browser is attached to:
 // here it is the pair's stateless member, which holds no data and binds no
-// API, and the seat pinned to it raises its indicator in that node's hub. The
-// room is open on the data member. What reaches the tab is that member's
-// presence probe, answered by the stateless member's hub over the broker —
-// the hub that used to be started only by the API, and so never ran on a node
-// like this one.
+// API, and the seat pinned to it raises its indicator in that node's chat hub
+// — the hub that used to be started only by the API, and so never ran on a
+// node like this one. The indicator is the seat's member of the room's
+// presence on that node's presence hub, and the room is open on the data
+// member: what reaches the tab is the data member's presence hub asking its
+// peers as its first socket joins the room, and the stateless member's hub
+// answering with a frame SEALED under the fleet keyring, which the data member
+// opens before it shows anybody.
 //
-// THE SCATTER ALONE: the indicator is raised on the hub by hand, so this
-// certifies the hub-to-hub half and nothing of the turn. That a turn raises it
-// — the engine's [notify.StatusDriver] over the stateless member's hub, under
-// `chat.chatlet.typing_status` — is
+// THE PRESENCE HUBS ALONE: the indicator is raised on the chat hub by hand,
+// so this certifies the node-to-node half and nothing of the turn. That a turn
+// raises it — the engine's [notify.StatusDriver] over the stateless member's
+// hub, under `chat.chatlet.typing_status` — is
 // [TestASeatOnAStatelessNodeAnswersInARoomTheFleetHolds]'s, which holds a real
 // turn until the same tab has been shown it. This case stays because it fails
-// on the scatter alone, where that one fails on either half.
+// on the hubs alone, where that one fails on either half.
 func TestAnIndicatorRaisedOnANodeWithNoAPIShowsInARoomOnAnother(t *testing.T) {
 	t.Parallel()
 	p := startStatelessPairSpec(t, pairSpec{company: peopleDoc, dataBoot: withSignIn})
@@ -90,7 +99,9 @@ func TestAnIndicatorRaisedOnANodeWithNoAPIShowsInARoomOnAnother(t *testing.T) {
 	made := openRoomAs(t, p.data, alices, map[string]any{
 		"channel": "standup", "kind": string(chatlet.KindPublic),
 	})
-	if !p.agent.chat.Hub().SetStatus(t.Context(), "ceo", made.Channel, "", "reading the room") {
+	if !p.agent.chat.Hub().SetStatus(t.Context(), notify.StatusPost{
+		Handle: "ceo", Channel: made.Channel, Turn: "run-standup", Text: "reading the room",
+	}) {
 		t.Fatal("the stateless member's hub refused the indicator")
 	}
 
@@ -98,13 +109,22 @@ func TestAnIndicatorRaisedOnANodeWithNoAPIShowsInARoomOnAnother(t *testing.T) {
 	focusOn(t, conn, made.Channel)
 	awaitFrame(t, conn, stream.KindChatPresence, "ceo working in #"+made.Name,
 		func(data json.RawMessage) bool {
-			var frame stream.ChatPresenceFrame
-			if json.Unmarshal(data, &frame) != nil {
-				return false
-			}
-			return slices.ContainsFunc(frame.Rooms[made.Channel].Working,
-				func(w stream.ChatWorking) bool { return w.Handle == "ceo" })
+			return showsWorking(data, made.Channel, "ceo", "reading the room")
 		})
+}
+
+// showsWorking reports whether one `chat_presence` push shows a seat at work
+// in a room: its agent member, editing, with the line the room shows beside
+// it — or any line, where status is empty.
+func showsWorking(data json.RawMessage, room, seat, status string) bool {
+	var frame stream.ChatPresence
+	if json.Unmarshal(data, &frame) != nil || frame.ChannelID != room {
+		return false
+	}
+	return slices.ContainsFunc(frame.Upsert, func(m presence.Member) bool {
+		return m.Seat == seat && m.Kind == iam.ActorAgent &&
+			m.Activity == presence.Editing && (status == "" || m.Status == status)
+	})
 }
 
 // A PERSON'S READ STATE MOVED THROUGH ONE NODE REACHES THEIR SOCKET ON ANOTHER.

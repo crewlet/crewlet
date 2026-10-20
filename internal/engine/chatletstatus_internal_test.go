@@ -53,10 +53,10 @@ func (h *recordingHub) ClearStatus(context.Context, string, string, string) bool
 	return true
 }
 
-func (h *recordingHub) SetStatus(_ context.Context, handle, channel, _, status string) bool {
+func (h *recordingHub) SetStatus(_ context.Context, post notify.StatusPost) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.raised = append(h.raised, handle+" in "+channel+": "+status)
+	h.raised = append(h.raised, post.Handle+" in "+post.Channel+": "+post.Text)
 	close(h.posted)
 	h.posted = make(chan struct{})
 	return true

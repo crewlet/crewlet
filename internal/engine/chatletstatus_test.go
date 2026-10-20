@@ -62,7 +62,7 @@ func (*quietHub) ClearStatus(context.Context, string, string, string) bool {
 	return true
 }
 
-func (*quietHub) SetStatus(context.Context, string, string, string, string) bool {
+func (*quietHub) SetStatus(context.Context, notify.StatusPost) bool {
 	return true
 }
 
