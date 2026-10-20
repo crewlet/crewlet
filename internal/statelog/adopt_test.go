@@ -51,9 +51,10 @@ type joinHarness struct {
 	reopens  atomic.Int64
 
 	// holdErr is what every hold reports instead of pinning, nil by
-	// default — a register this node cannot write to. Each attempt still
-	// counts in held.
-	holdErr error
+	// default — a register this node cannot write to. holdAsks counts every
+	// attempt, a refused one included, which is one per offer adopted.
+	holdErr  error
+	holdAsks atomic.Int64
 
 	// began is every start Record was handed, one per call.
 	began []time.Time
@@ -227,10 +228,11 @@ func (h *joinHarness) adopter(t *testing.T) *statelog.Adopter {
 			}, nil
 		},
 		Hold: func(context.Context, map[string]statelog.DomainPosition) (func(), error) {
-			h.held.Add(1)
+			h.holdAsks.Add(1)
 			if h.holdErr != nil {
 				return nil, h.holdErr
 			}
+			h.held.Add(1)
 			return func() { h.released.Add(1) }, nil
 		},
 		Close: func(ctx context.Context) error {
@@ -296,10 +298,11 @@ func TestANodeBelowTheFloorAdoptsAVerifiedArtefact(t *testing.T) {
 	logs := &lockedBuffer{}
 	h.logger = slog.New(slog.NewJSONHandler(logs, nil))
 
-	m, err := h.adopter(t).Join(t.Context())
+	adoption, err := h.adopter(t).Join(t.Context())
 	if err != nil {
 		t.Fatalf("Join: %v", err)
 	}
+	m := adoption.Manifest
 	if m.NodeID != "donor" {
 		t.Fatalf("adopted an artefact from %q, want the donor's", m.NodeID)
 	}
@@ -356,12 +359,24 @@ func TestANodeBelowTheFloorAdoptsAVerifiedArtefact(t *testing.T) {
 			"first attempt minted before it", before)
 	}
 
-	// THE HOLD WAS TAKEN BEFORE THE FETCH AND RELEASED AFTER.
-	if h.held.Load() != 1 || h.released.Load() != 1 {
-		t.Fatalf("the replay tail was held %d time(s) and released %d — without "+
-			"the hold the trim can pass the artefact while it is in flight, and "+
-			"this node installs a snapshot whose tail is already gone",
-			h.held.Load(), h.released.Load())
+	// THE HOLD WAS TAKEN BEFORE THE FETCH AND HANDED TO THE CALLER, NOT
+	// RELEASED: the installed artefact's tail is what this node replays
+	// next, and nothing in the fleet counts that until a position of the
+	// node's own is published — which only the caller can see.
+	if h.held.Load() != 1 || h.released.Load() != 0 {
+		t.Fatalf("the replay tail was held %d time(s) and released %d by the "+
+			"join — without the hold the trim can pass the artefact while it is "+
+			"in flight, and released with the join it can pass the tail the node "+
+			"has just installed itself in front of", h.held.Load(), h.released.Load())
+	}
+	if adoption.Release == nil {
+		t.Fatal("an installed adoption carries no release, so the pin on its " +
+			"tail is either gone already or held for ever")
+	}
+	adoption.Release()
+	if h.released.Load() != 1 {
+		t.Fatalf("the adoption's release released %d hold(s), want its own one",
+			h.released.Load())
 	}
 
 	// AND THE ADOPTION WAS RECORDED THROUGH ITS PHASES. A node that
@@ -640,7 +655,7 @@ func TestALiveDatabaseThatDidNotComeBackIsNeverAnEmptyFleet(t *testing.T) {
 			defer cancel()
 			c.stage(h, cancel)
 
-			_, err := h.adopter(t).Join(ctx)
+			adoption, err := h.adopter(t).Join(ctx)
 			if !errors.Is(err, statelog.ErrEstateNotRestored) {
 				t.Fatalf("Join = %v, want ErrEstateNotRestored — the live database "+
 					"is not open, and nothing else in the error says so", err)
@@ -678,9 +693,22 @@ func TestALiveDatabaseThatDidNotComeBackIsNeverAnEmptyFleet(t *testing.T) {
 			if left := h.debris(t); len(left) != 0 {
 				t.Fatalf("the join left %v beside the live database", left)
 			}
-			if h.held.Load() != h.released.Load() {
-				t.Fatalf("the tail was held %d time(s) and released %d",
-					h.held.Load(), h.released.Load())
+			// AN INSTALLED ARTEFACT IS AN ADOPTION, open or not: its manifest
+			// and its pin go to the caller, since whatever opens the estate
+			// next opens the artefact and replays its tail. One never
+			// installed keeps no pin.
+			if c.installed {
+				if adoption.Manifest.SHA256 != h.manifest.SHA256 || adoption.Release == nil ||
+					h.released.Load() != 0 {
+					t.Fatalf("an installed artefact that did not open came back as "+
+						"%q with a release %v, after %d release(s) — the artefact is "+
+						"the live file, and its tail is the node's to replay",
+						adoption.Manifest.SHA256, adoption.Release != nil, h.released.Load())
+				}
+			} else if adoption.Release != nil || h.held.Load() != h.released.Load() {
+				t.Fatalf("the tail was held %d time(s) and released %d, and a "+
+					"release was handed over: %v", h.held.Load(), h.released.Load(),
+					adoption.Release != nil)
 			}
 		})
 	}
@@ -722,7 +750,8 @@ func TestAnInstallWhoseRecordFailsIsStillAnAdoption(t *testing.T) {
 				return nil
 			}
 
-			m, err := h.adopter(t).Join(t.Context())
+			adoption, err := h.adopter(t).Join(t.Context())
+			m := adoption.Manifest
 			if !errors.Is(err, statelog.ErrAdoptionUnrecorded) {
 				t.Fatalf("Join = %v, want ErrAdoptionUnrecorded — the artefact is "+
 					"installed and open, and only its record is short", err)
@@ -747,6 +776,12 @@ func TestAnInstallWhoseRecordFailsIsStillAnAdoption(t *testing.T) {
 			if n := h.held.Load(); n != 1 {
 				t.Fatalf("the tail was held %d time(s), want once: a join that moved "+
 					"on fetched another offer", n)
+			}
+			// AND ITS PIN GOES WITH IT, as any installed artefact's does.
+			if adoption.Release == nil || h.released.Load() != 0 {
+				t.Fatalf("the installed artefact's pin was released %d time(s) by "+
+					"the join and handed over %v — it is the caller's, until this "+
+					"node is counted", h.released.Load(), adoption.Release != nil)
 			}
 			if scrubbed := slices.Index(h.phases[1:], statelog.AdoptionScrubbed); scrubbed >= 0 {
 				t.Fatalf("the adoption recorded %v — a second offer was verified "+
@@ -858,7 +893,7 @@ func TestAFaultOfThisNodesOwnEndsTheJoin(t *testing.T) {
 			h.logger = slog.New(slog.NewJSONHandler(logs, nil))
 			c.stage(t, h)
 
-			m, err := h.adopter(t).Join(t.Context())
+			adoption, err := h.adopter(t).Join(t.Context())
 			if err == nil {
 				t.Fatal("a join whose node failed it reported an adoption")
 			}
@@ -879,11 +914,16 @@ func TestAFaultOfThisNodesOwnEndsTheJoin(t *testing.T) {
 				t.Fatalf("Join = %v: nothing was installed and the live database "+
 					"is open", err)
 			}
-			if m.SHA256 != "" {
+			if adoption.Manifest.SHA256 != "" || adoption.Release != nil {
 				t.Fatalf("Join returned the manifest %q for a join that installed "+
-					"nothing — a manifest beside an error means installed", m.SHA256)
+					"nothing — a manifest beside an error means installed",
+					adoption.Manifest.SHA256)
 			}
-			if n := h.held.Load(); n != 1 {
+			if h.held.Load() != h.released.Load() {
+				t.Fatalf("the tail was held %d time(s) and released %d — a join "+
+					"that installed nothing keeps no pin", h.held.Load(), h.released.Load())
+			}
+			if n := h.holdAsks.Load(); n != 1 {
 				t.Fatalf("the join tried %d offers, want one — every other offer "+
 					"meets the same fault on this node", n)
 			}

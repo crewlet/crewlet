@@ -356,15 +356,6 @@ type Service struct {
 // reading a stalled trim sees what is pinning it rather than which node is.
 const HoldPurpose = "backup"
 
-// HoldHeartbeat is how often the hold is renewed while a copy runs.
-//
-// A QUARTER OF THE STALE BOUND, which is the derivation every other
-// heartbeated fact in this estate uses: a holder may miss three beats and
-// still be believed. Deriving it rather than picking a number is what keeps
-// the two in step — a heartbeat slower than the bound would have the trim
-// ignore a live backup's pin, which is the bug the pin exists to prevent.
-const HoldHeartbeat = statelog.TrimHoldStale / 4
-
 // New builds the service.
 //
 // A MISSING STORE, HOLD REGISTER OR BACKUP REGISTER IS REFUSED. `crewlet run`
@@ -790,10 +781,12 @@ func storeBytes(m Manifest) int64 {
 
 // hold pins the trim at this node's current positions and returns the release.
 //
-// A GOROUTINE RENEWS IT while the copy runs, because the trim ignores a hold
-// older than its stale bound — a pin that stopped being renewed would be
-// treated as a crashed holder, which is exactly right for a crashed holder and
-// exactly wrong for a 40-minute copy of a large store.
+// RENEWED WHILE THE COPY RUNS, because the trim ignores a hold older than its
+// stale bound — a pin that stopped being renewed would be treated as a crashed
+// holder, which is exactly right for a crashed holder and exactly wrong for a
+// 40-minute copy of a large store. The pin is [statelog.HoldTail]'s, the one
+// implementation every holder of the tail shares, renewed on
+// [statelog.TrimHoldHeartbeat].
 //
 // A node holding no replicated estate — replicated is nil — gets a no-op
 // release and no pin: there is no applier cursor to read a position from, so
@@ -812,56 +805,22 @@ func (s *Service) hold(ctx context.Context, replicated *store.DB) (func(), error
 		// stream exists.
 		return func() {}, nil
 	}
-	owner := coord.HoldOwner(s.nodeID, HoldPurpose)
-	put := func(ctx context.Context) error {
-		return s.holds.PutHold(ctx, coord.TrimHold{
-			Owner: owner, At: s.now(), Streams: live,
-			Reason: "a backup is copying this node's store",
-		})
-	}
-	if err := put(ctx); err != nil {
+	pin, err := statelog.HoldTail(ctx, statelog.TailHold{
+		Register: s.holds,
+		Owner:    coord.HoldOwner(s.nodeID, HoldPurpose),
+		Streams:  live,
+		Reason:   "a backup is copying this node's store",
+		Every:    statelog.TrimHoldHeartbeat,
+		Now:      s.now,
+		Logger:   log,
+	})
+	if err != nil {
 		// REFUSED RATHER THAN CARRIED ON WITHOUT. A backup that cannot
 		// pin the log is a backup whose own gap may be trimmed away
 		// while it runs, and it would report success either way.
 		return nil, fmt.Errorf("backup: pin the log's tail before copying: %w", err)
 	}
-
-	beat, stop := context.WithCancel(context.WithoutCancel(ctx))
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		ticker := time.NewTicker(HoldHeartbeat)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-beat.Done():
-				return
-			case <-ticker.C:
-				if err := put(beat); err != nil {
-					// LOGGED AND CARRIED. A missed beat is
-					// survivable — the stale bound allows
-					// three — and the assertion is what
-					// catches the case where it was not.
-					log.WarnContext(beat, "backup_hold_not_renewed",
-						"owner", owner, "error", err.Error())
-				}
-			}
-		}
-	}()
-	return func() {
-		stop()
-		<-done
-		// RELEASED WITH A CONTEXT THAT OUTLIVES THE FAILURE. The
-		// failure being undone here is often the cancellation itself,
-		// and a release that inherited a dead context would leave the
-		// pin standing until the stale bound expired it.
-		if err := s.holds.ReleaseHold(context.WithoutCancel(ctx), owner); err != nil {
-			log.WarnContext(ctx, "backup_hold_not_released",
-				"owner", owner, "error", err.Error(),
-				"detail", "the trim ignores it after the stale bound, so this "+
-					"delays trimming rather than stopping it")
-		}
-	}, nil
+	return pin.Release, nil
 }
 
 // livePositions is where the appliers of the replicated estate a backup copies
@@ -947,7 +906,7 @@ func assertReplayable(m Manifest) error {
 				"and the captured log starts at %d: the records between them "+
 				"were trimmed while the copy ran, so a restore would apply a "+
 				"prefix with a hole in it and report nothing. The trim hold did "+
-				"not cover the copy; look for backup_hold_not_renewed in this "+
+				"not cover the copy; look for statelog_hold_not_renewed in this "+
 				"node's log (a hold that misses its renewals is read as "+
 				"abandoned), then take the backup again",
 				artifact.Name, at.Seq, state.FirstSeq)

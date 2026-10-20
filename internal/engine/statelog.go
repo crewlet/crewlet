@@ -460,6 +460,21 @@ type stateLog struct {
 	rejoining   bool
 	rejoinAfter time.Time
 	rejoinPause time.Duration
+
+	// tailHoldEvery is how often the join's pin on the replay tail is
+	// renewed: [statelog.TrimHoldHeartbeat], set once at start. A field so
+	// a case can renew on a cadence it can wait out ([statelog.HoldTail]).
+	tailHoldEvery time.Duration
+
+	// tailMu guards tailHeld: the release of the pin an INSTALLED artefact
+	// still needs, held until this node's own published position counts the
+	// tail it pins ([stateLog.holdUntilCounted]). Nil when no adoption is
+	// waiting to be counted. A lock of its own rather than publishing's,
+	// because the join hands the pin over while a publish may be mid-flight,
+	// and a publish decides by what it CAPTURED at its start — see
+	// [stateLog.publishPositions].
+	tailMu   sync.Mutex
+	tailHeld *heldTail
 }
 
 // applyHooks are what each domain's applier calls after a committed batch,
@@ -783,6 +798,7 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 		run:       runCtx, stop: cancel,
 		snapshotNudge:  make(chan struct{}, 1),
 		heartbeatNudge: make(chan struct{}, 1),
+		tailHoldEvery:  statelog.TrimHoldHeartbeat,
 	}
 	// PROVISION EVERY LOG FIRST, and only then decide whether this node
 	// can replay from where it is.
@@ -925,6 +941,12 @@ func (s *stateLog) Stop() {
 	}
 	s.stop()
 	s.done.Wait()
+	// A PIN NO ROW WILL NOW COUNT is released here, once the heartbeat that
+	// would have counted it has stopped: left, its own renewal would go on
+	// pinning the trim for as long as this process ran, and for a stale
+	// window after it exited — on a boot that failed after its join, for a
+	// node that is not coming up.
+	s.releaseTail()
 	s.haltAppliers()
 	// THE CONSUMERS ARE GIVEN UP LAST, once no loop can fetch through them:
 	// the process and its connection may outlive this state log — an engine
@@ -2402,7 +2424,14 @@ func (e *Engine) join(ctx context.Context, s *stateLog,
 	if err != nil {
 		return "", statelog.OfferRequest{}, err
 	}
-	_, err = adopter.Join(ctx)
+	adoption, err := adopter.Join(ctx)
+	// AN INSTALLED ARTEFACT'S PIN OUTLIVES THE JOIN, whatever came beside
+	// it: the tail it pins is the one this node is about to replay, and
+	// nothing in the fleet counts that until a row of this node's own does
+	// — see [stateLog.holdUntilCounted].
+	if adoption.Release != nil {
+		s.holdUntilCounted(adoption.Release)
+	}
 	switch {
 	case errors.Is(err, statelog.ErrNoOffer):
 		// NOT A FAILURE — see the doc comment. The node comes up on what
@@ -3185,15 +3214,26 @@ func (s *stateLog) stillUsable(ctx context.Context, logs map[string]*jetstream.D
 }
 
 // holdTail pins the replay tail for the whole transfer and returns the
-// release.
+// release ([statelog.AdoptDeps.Hold]).
 //
-// ONE HOLD FOR THE WHOLE JOIN, keyed on this node and this purpose, so a
-// second attempt replaces the first rather than accumulating pins nobody
-// releases. The release is called on every path out of the join — including
-// the failures — because a hold nobody released stops the trim for its whole
-// stale window, which is the one way a repair makes the fleet worse.
+// ONE HOLD FOR THE WHOLE JOIN, keyed on this node and this purpose
+// ([coord.HoldOwner]), so a second attempt replaces the first rather than
+// accumulating pins nobody releases. The adopter releases it on every path
+// that installed nothing — including the failures — because a pin nobody
+// released goes on renewing itself and holds the trim for as long as this node
+// runs, which is the one way a repair makes the fleet worse; an installed
+// artefact's pin is handed back instead, and kept until this node is counted
+// ([stateLog.holdUntilCounted]).
+//
+// RENEWED, by [statelog.HoldTail], for as long as it is held: put once, the
+// pin was ignored by the trim a minute into any transfer, and a boot's join —
+// which nothing else counts — could lose the very tail it was fetching.
 func (s *stateLog) holdTail(ctx context.Context, at map[string]statelog.DomainPosition) (func(), error) {
-	owner := s.nodeID + ":join"
+	// AN EARLIER ADOPTION STILL WAITING TO BE COUNTED gives its pin up
+	// first: the register holds one key per owner, so its renewals would
+	// otherwise put the old positions back over this one's on every beat.
+	// This join's own pin is what protects the tail from here.
+	s.releaseTail()
 	// KEYED BY STREAM, which is what [coord.TrimHold.Streams] holds: a
 	// hold is a pin on a LOG, and the backup's own hold — taken from
 	// `statelog_cursor`, which is keyed on the stream — has to land in the
@@ -3218,24 +3258,166 @@ func (s *stateLog) holdTail(ctx context.Context, at map[string]statelog.DomainPo
 			Stream: stream, Generation: pos.Generation, Seq: pos.Seq,
 		}
 	}
-	if err := s.fleet.PutHold(ctx, coord.TrimHold{
-		Owner: owner, At: time.Now().UTC(), Streams: streams,
-		Reason: "this node is below the log's floor and is fetching a peer's snapshot",
-	}); err != nil {
-		return nil, fmt.Errorf("engine: pin the replay tail for the join: %w", err)
+	pin, err := statelog.HoldTail(ctx, statelog.TailHold{
+		Register: s.fleet,
+		Owner:    coord.HoldOwner(s.nodeID, joinHoldPurpose),
+		Streams:  streams,
+		Reason:   "this node is below the log's floor and is fetching a peer's snapshot",
+		Every:    s.tailHoldEvery,
+		Logger:   log,
+	})
+	if err != nil {
+		// UNWRAPPED: the error names the hold by its owner, `<node>/join`,
+		// and the adopter's own says what it was pinning for.
+		return nil, err
 	}
-	return func() {
-		// WithoutCancel: the release is undoing the hold, and the
-		// failure it is most often undoing is the cancellation itself —
-		// a release that inherited a dead context would leave the pin
-		// standing for its whole stale window.
-		if err := s.fleet.ReleaseHold(context.WithoutCancel(ctx), owner); err != nil {
-			log.ErrorContext(ctx, "statelog_join_hold_not_released",
-				"owner", owner, "error", err.Error(),
-				"detail", "the trim is pinned at this node's join position until "+
-					"the hold goes stale")
+	return pin.Release, nil
+}
+
+// joinHoldPurpose names a join in the trim-hold register ([coord.HoldOwner]),
+// beside the backup's: an operator reading a stalled trim sees which node pins
+// it and what it is doing.
+const joinHoldPurpose = "join"
+
+// heldTail is an installed artefact's pin, waiting for this node to be counted
+// ([stateLog.holdUntilCounted]). A pointer, because WHICH pin a publish
+// captured is a question of identity: a join may hand over a newer one while
+// a publish is in flight.
+type heldTail struct {
+	release func()
+}
+
+// holdUntilCounted keeps the pin an installed artefact still needs until this
+// node's own published position counts the tail it pins.
+//
+// # Why the pin outlives the join
+//
+// The trim may remove a record once every node it COUNTS has applied past it,
+// and a node adopting a snapshot is about to replay the tail above the
+// artefact. A boot's join runs before the node holds a presence lease and
+// before its heartbeat has published a row, so nothing in the fleet counts it
+// at all; a running node's row still names the checkpoint the artefact
+// replaced until a publish reads the runners again. Released at the end of
+// the join, the pin left that window unpinned — a trim tick landing in it
+// could remove the tail the node had just installed itself in front of, and
+// the node would then find itself below the floor and fetch the whole estate
+// again.
+//
+// So it is held, and renewed, until a publish counts the tail
+// ([stateLog.releaseCountedTail]); a later join's own pin replaces it
+// ([stateLog.holdTail]), and the state log's stop releases it.
+func (s *stateLog) holdUntilCounted(release func()) {
+	s.tailMu.Lock()
+	previous := s.tailHeld
+	s.tailHeld = &heldTail{release: release}
+	s.tailMu.Unlock()
+	if previous != nil {
+		previous.release()
+	}
+}
+
+// waitingTail is the pin waiting to be counted, or nil.
+func (s *stateLog) waitingTail() *heldTail {
+	s.tailMu.Lock()
+	defer s.tailMu.Unlock()
+	return s.tailHeld
+}
+
+// releaseTail releases the pin waiting to be counted, if there is one.
+func (s *stateLog) releaseTail() {
+	s.tailMu.Lock()
+	held := s.tailHeld
+	s.tailHeld = nil
+	s.tailMu.Unlock()
+	if held != nil {
+		held.release()
+	}
+}
+
+// releaseCountedTail releases pin — the one a publish captured at its start —
+// once row, which that publish has just written, counts the tail it pins.
+//
+// A ROW COUNTS THE TAIL when, on every log, it names a position no further
+// along than the rows this node now holds: the trim then keeps everything
+// above it, which includes everything this node has still to apply. Read
+// against the FILE'S checkpoint, in its own reading after the row was written,
+// rather than trusted from the row, because a row can name a position the
+// node does not hold: a running node's runner still keyed to the checkpoint
+// the artefact replaced reports that position until it is re-keyed, and it
+// may be ahead of the artefact on a log the node was current on. A row at a
+// LOWER generation counts too, since the trim reads it as unknown and keeps
+// everything. Anything this cannot establish — a log the row does not name,
+// an estate it cannot read — keeps the pin for the next publish.
+//
+// THE PIN IS THE ONE CAPTURED, not whatever is held now: a join that handed
+// over a newer pin after this publish began is one whose installed file this
+// row's runners may not have read.
+func (s *stateLog) releaseCountedTail(ctx context.Context, pin *heldTail, row coord.NodePositions) {
+	if pin == nil {
+		return
+	}
+	counts, err := s.rowCountsTail(ctx, row)
+	if err != nil {
+		// AN ESTATE NOT OPEN IS SAID ALREADY, at error on every beat
+		// (`statelog_estate_lost`), and the pin is kept for the same
+		// reason the line is written: nothing is counted until it opens.
+		if ctx.Err() == nil && !errors.Is(err, store.ErrNoEstate) {
+			log.WarnContext(ctx, "statelog_join_hold_kept",
+				"node", s.nodeID, "error", err.Error(),
+				"detail", "whether this node's published position counts the "+
+					"tail its adoption needs could not be read, so the join's "+
+					"pin on the trim is kept, renewed, until a later heartbeat can")
 		}
-	}, nil
+		return
+	}
+	if !counts {
+		return
+	}
+	s.tailMu.Lock()
+	current := s.tailHeld == pin
+	if current {
+		s.tailHeld = nil
+	}
+	s.tailMu.Unlock()
+	if !current {
+		// RELEASED ALREADY, or replaced by a later join's — whose own
+		// pin is what that join's installed file is protected by.
+		return
+	}
+	pin.release()
+	log.InfoContext(ctx, "statelog_join_hold_released", "node", s.nodeID,
+		"detail", "this node's own published position now counts the tail its "+
+			"adoption replays, so the join's pin on the trim is released")
+}
+
+// rowCountsTail is whether row names, on every registered log, a position no
+// further along than this node's own rows hold — see
+// [stateLog.releaseCountedTail].
+func (s *stateLog) rowCountsTail(ctx context.Context, row coord.NodePositions) (bool, error) {
+	for _, domain := range registeredDomains() {
+		name, stream := domain.Name(), domain.Stream().Name
+		published, named := row.Domains[name]
+		if !named {
+			return false, nil
+		}
+		held, _, found, err := statelog.CursorFor(ctx, s.estate().Reader(), stream)
+		if err != nil {
+			return false, fmt.Errorf("read %s's checkpoint: %w", name, err)
+		}
+		if !found {
+			// NO CHECKPOINT ROW IS THE ZERO POSITION: a log nobody has
+			// written to has applied nothing.
+			held = statelog.Position{}
+		}
+		switch {
+		case published.Generation < held.Generation:
+		case published.Generation > held.Generation:
+			return false, nil
+		case published.Seq > held.Seq:
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // registered is every registered domain's log, as the framework's own
@@ -4173,6 +4355,11 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 	// change before it.
 	s.publishing.Lock()
 	defer s.publishing.Unlock()
+	// THE PIN AN ADOPTION IS WAITING TO HAVE COUNTED, captured BEFORE the
+	// runners are read: one handed over after this point belongs to an
+	// install this reading may predate, and is the next publish's to judge
+	// ([stateLog.releaseCountedTail]).
+	tail := s.waitingTail()
 	held := s.running()
 	row := coord.NodePositions{
 		NodeID:        s.nodeID,
@@ -4402,7 +4589,11 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 			"detail", "the trim cannot see this node until it publishes again, "+
 				"so it may delete records this node still needs; the next "+
 				"heartbeat retries")
+		return
 	}
+	// AND A ROW THE TRIM NOW COUNTS releases the pin an adoption held for
+	// exactly this moment — only once it has been written.
+	s.releaseCountedTail(ctx, tail, row)
 }
 
 // positionGauges publishes each domain's progress on the same beat the
