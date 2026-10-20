@@ -1060,8 +1060,10 @@ describe("what the frame holds open", () => {
     await act(async () => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true }));
     });
+    // FOUND, NOT QUERIED: the palette's code is a chunk of its own, so the
+    // dialog draws once that chunk is in.
     expect(
-      screen.queryByRole("dialog"),
+      await screen.findByRole("dialog"),
       "ctrl-k did not open the palette, so this test proves nothing",
     ).not.toBeNull();
 

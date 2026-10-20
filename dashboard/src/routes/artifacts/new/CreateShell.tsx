@@ -24,8 +24,15 @@
  * the frame's. It fills the window's height under the bar (`useFillScreen`)
  * and scrolls inside itself, so a kind can be a canvas, an editor or a
  * composer and place its own inset.
+ *
+ * # Its stylesheet arrives with it
+ *
+ * The create pages' rules are `styles/create.css`, imported here rather than
+ * by `main.tsx`, so the build ships them beside the create pages' chunks and a
+ * reader who only reads never downloads them (see that sheet's note).
  */
 
+import "~/styles/create.css";
 import type { ReactNode } from "react";
 import { ArtifactBar, type ArtifactBarTool } from "@crewlethq/ui";
 import { XGlyph } from "@crewlethq/icons/glyphs";

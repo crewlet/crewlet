@@ -55,7 +55,6 @@ import { samePath, useNavigator, useRoute } from "./router.tsx";
 import { crumbsFor, titleOf, type Labels } from "./crumbs.ts";
 import { remember } from "~/lib/recents.ts";
 import { SCREEN_SCROLL_ID } from "~/lib/scroller.ts";
-import { CommandPalette } from "./palette/Palette.tsx";
 import { LayerBoundary } from "./boundaries.tsx";
 import { NewTaskOpener, type NewTaskPreset } from "./newTask.ts";
 import { lazyScreen } from "./lazyScreen.ts";
@@ -629,7 +628,8 @@ function Frame({ children }: { children: ReactNode }) {
 
         {/* THE PALETTE HAS A BOUNDARY OF ITS OWN, and it is mounted only while
           open, so a palette that threw is a dialog saying so — closed the
-          way the palette closes — and the next ⌘K is a fresh palette. */}
+          way the palette closes — and the next ⌘K is a fresh palette. Its
+          code is a chunk of its own, the first the idle prefetch fetches. */}
         {paletteOpen && (
           <LayerBoundary title="Search" onClose={() => setPaletteOpen(false)}>
             <CommandPalette
@@ -657,3 +657,6 @@ function Frame({ children }: { children: ReactNode }) {
 
 /** The New task sheet, out of the Work chunk. See [LayerBoundary]. */
 const NewTaskSheet = lazyScreen("work", (module) => module.NewTaskSheet);
+
+/** The command palette, out of a chunk of its own (`lazyScreen.ts`). See [LayerBoundary]. */
+const CommandPalette = lazyScreen("palette", (module) => module.CommandPalette);
