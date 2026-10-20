@@ -570,6 +570,11 @@ export function QueryState({
     hint: ReactNode;
     /** The one way on from an empty answer, where the reader has one. */
     action?: ReactNode;
+    /**
+     * `"none"` where the card the claim sits in already names it with a
+     * title of its own, as the kit's `EmptyState` asks of such a claim.
+     */
+    headingLevel?: "none";
   };
   children?: ReactNode;
 }) {
@@ -601,6 +606,7 @@ export function QueryState({
       // component's own defaults now.
       <EmptyState
         size="compact"
+        headingLevel={empty.headingLevel}
         title={empty.title}
         description={empty.hint}
         action={empty.action}

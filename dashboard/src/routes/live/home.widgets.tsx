@@ -11,10 +11,10 @@
  */
 
 import { useMemo } from "react";
-import { EmptyState, List, ListItem } from "@crewlethq/ui";
+import { List, ListItem } from "@crewlethq/ui";
 import { ActivityGlyph, BrainGlyph, SquareTerminalGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
-import { EventRow, QueryState } from "~/components/common.tsx";
+import { EventRow } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { fmtDateTime, fmtDuration, plural, relTime } from "~/lib/format.ts";
 import { RUNS_POLL_MS } from "~/lib/runs.ts";
@@ -22,7 +22,7 @@ import { indexOrg, nameOfIn } from "~/lib/seats.ts";
 import { useEvents, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { RunStatus, mergeRuns, runTitle } from "~/routes/live/Runs.tsx";
-import { WidgetCard, defineWidgets } from "~/routes/home/board/kit.tsx";
+import { WidgetCard, WidgetQuery, defineWidgets, gapsOf } from "~/routes/home/board/kit.tsx";
 
 const ROWS = 5;
 
@@ -38,10 +38,13 @@ function CodingRuns() {
   const rows = useMemo(() => mergeRuns(data?.runs ?? [], live), [data, live]);
   return (
     <WidgetCard title="Coding runs" from="live-runs">
-      <QueryState
+      <WidgetQuery
         error={error}
         refusal={refusal}
         loading={loading && rows.length === 0}
+        // NOTHING TO READ A GAP FROM: neither the runs' answer nor the push
+        // says what it could not account for.
+        gaps={[]}
         empty={
           rows.length === 0
             ? {
@@ -77,7 +80,7 @@ function CodingRuns() {
             {`All ${plural(rows.length, "run")}`}
           </a>
         ) : null}
-      </QueryState>
+      </WidgetQuery>
     </WidgetCard>
   );
 }
@@ -95,23 +98,27 @@ function LatestEvents({ params }: { params: Readonly<Record<string, string>> }) 
   const rows = (failedOnly ? pushed.filter((e) => e.failed) : pushed).slice(0, EVENT_ROWS);
   return (
     <WidgetCard title={failedOnly ? "Failed events" : "Latest events"} from="live-events">
-      {rows.length === 0 ? (
-        <EmptyState
-          size="compact"
-          title={failedOnly ? "Nothing has failed" : "Nothing has happened yet"}
-          description={
-            failedOnly
-              ? "Failed events appear here as they happen."
-              : "Events appear here as agents work."
-          }
-        />
-      ) : (
+      <WidgetQuery
+        error={null}
+        loading={false}
+        gaps={[]}
+        empty={
+          rows.length === 0
+            ? {
+                title: failedOnly ? "Nothing has failed" : "Nothing has happened yet",
+                hint: failedOnly
+                  ? "Failed events appear here as they happen."
+                  : "Events appear here as agents work.",
+              }
+            : undefined
+        }
+      >
         <div className="live-feed">
           {rows.map((ev) => (
             <EventRow key={ev.id} event={ev} compact />
           ))}
         </div>
-      )}
+      </WidgetQuery>
     </WidgetCard>
   );
 }
@@ -138,10 +145,11 @@ function FailedTurns() {
   const rows = data?.turns ?? [];
   return (
     <WidgetCard title="Failed turns" from="live-turns">
-      <QueryState
+      <WidgetQuery
         error={error}
         refusal={refusal}
         loading={loading && !data}
+        gaps={gapsOf([data])}
         empty={
           data && rows.length === 0
             ? { title: "No failed turns", hint: "No turn failed in the last 24 hours." }
@@ -175,7 +183,7 @@ function FailedTurns() {
             </ListItem>
           ))}
         </List>
-      </QueryState>
+      </WidgetQuery>
     </WidgetCard>
   );
 }

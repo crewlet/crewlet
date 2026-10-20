@@ -9,6 +9,8 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import type { Store } from "~/protocol/index.ts";
 import { ADA, mountChat } from "~/test/chat.tsx";
+import { INCOMPLETE_NOTE } from "~/components/work.tsx";
+import { NOTHING_TO_LIST } from "~/routes/home/board/kit.tsx";
 import { widgets } from "./home.widgets.tsx";
 import { LIVE_REFETCH_MS } from "./live.ts";
 
@@ -92,7 +94,7 @@ describe("unread rooms", () => {
     });
     await settle();
     expect(screen.getByText(/couldn’t be read/)).toBeTruthy();
-    expect(screen.queryByText("You are caught up")).toBeNull();
+    expect(screen.queryByText("You’re caught up")).toBeNull();
     expect(screen.queryByText("#general")).toBeNull();
   });
 
@@ -109,8 +111,8 @@ describe("unread rooms", () => {
     await settle();
     // NOT "CAUGHT UP": a muted room has messages waiting, and the line that
     // says so goes where the list would have been.
-    expect(screen.queryByText("You are caught up")).toBeNull();
-    expect(screen.getByText("Nothing unread to list")).toBeTruthy();
+    expect(screen.queryByText("You’re caught up")).toBeNull();
+    expect(screen.getByText(NOTHING_TO_LIST)).toBeTruthy();
     expect(screen.getByText("1 muted room with unread messages left out.")).toBeTruthy();
     expect(screen.queryByText("#noise")).toBeNull();
   });
@@ -118,7 +120,7 @@ describe("unread rooms", () => {
   test("a rail cut at the engine's bound says only its rooms are counted", async () => {
     const { Component } = ROOMS;
     const cut =
-      "You are in more rooms than Chatlet lists, so only your 4 most recently active are counted here.";
+      "You’re in more rooms than Chatlet lists, so only your 4 most recently active are counted here.";
     mountChat(<Component params={{}} />, {
       answers: { chat_channels: { ...RAIL, truncated: true } },
     });
@@ -138,8 +140,8 @@ describe("unread rooms", () => {
       },
     });
     await settle();
-    expect(screen.queryByText("You are caught up")).toBeNull();
-    expect(screen.getByText("Nothing unread to list")).toBeTruthy();
+    expect(screen.queryByText("You’re caught up")).toBeNull();
+    expect(screen.getByText(NOTHING_TO_LIST)).toBeTruthy();
     expect(screen.getByText(cut)).toBeTruthy();
   });
 
@@ -149,7 +151,7 @@ describe("unread rooms", () => {
       answers: { chat_channels: { ...RAIL, channels: [room("c-quiet", "quiet", 0)] } },
     });
     await settle();
-    expect(screen.getByText("You are caught up")).toBeTruthy();
+    expect(screen.getByText("You’re caught up")).toBeTruthy();
   });
 });
 
@@ -246,6 +248,46 @@ describe("mentions", () => {
     });
     await settle();
     expect(screen.getByText("Nobody has named you")).toBeTruthy();
+  });
+});
+
+// A RAIL OR A FEED THAT COULD NOT ACCOUNT FOR EVERYTHING never claims the
+// reader is caught up or unnamed: a record this build cannot decode met the
+// read, so the rows it would have produced may be missing.
+describe("an answer that could not account for everything", () => {
+  test("the rail says so rather than that the reader is caught up", async () => {
+    const { Component } = ROOMS;
+    mountChat(<Component params={{}} />, {
+      answers: {
+        chat_channels: { ...RAIL, complete: false, channels: [room("c-quiet", "quiet", 0)] },
+      },
+    });
+    await settle();
+    expect(screen.queryByText("You’re caught up")).toBeNull();
+    expect(screen.getByText(NOTHING_TO_LIST)).toBeTruthy();
+    expect(screen.getByText(INCOMPLETE_NOTE, { exact: false })).toBeTruthy();
+  });
+
+  test("a room a newer engine made is counted as left out", async () => {
+    const { Component } = ROOMS;
+    mountChat(<Component params={{}} />, {
+      answers: {
+        chat_channels: { ...RAIL, unreadable: 1, channels: [room("c-quiet", "quiet", 0)] },
+      },
+    });
+    await settle();
+    expect(screen.queryByText("You’re caught up")).toBeNull();
+    expect(screen.getByText(/1 room came from a newer version of the engine/)).toBeTruthy();
+  });
+
+  test("the feed says so rather than that nobody named the reader", async () => {
+    const { Component } = MENTIONS;
+    mountChat(<Component params={{}} />, {
+      answers: { chat_mentions: { handle: "ada", mentions: [], complete: false } },
+    });
+    await settle();
+    expect(screen.queryByText("Nobody has named you")).toBeNull();
+    expect(screen.getByText(NOTHING_TO_LIST)).toBeTruthy();
   });
 });
 
