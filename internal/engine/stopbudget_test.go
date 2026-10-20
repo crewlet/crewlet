@@ -84,9 +84,13 @@ func TestAStopAgainstAnUnreachableStoreSpendsOneAllowance(t *testing.T) {
 	if err := e.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	if len(e.Node().Host().Held()) == 0 {
-		t.Fatal("the premise: the node holds seats for its stop to give back")
-	}
+	// THE PREMISE, waited for: a node claims its seats once its appliers
+	// are level with their logs, which on a loaded machine comes after
+	// Start returns — read at once, the case failed its premise whenever
+	// the claim gate opened a moment late.
+	waitFor(t, "both seats to be claimed", func() bool {
+		return len(e.Node().Host().Held()) == 2
+	})
 	select {
 	case <-pass.granted:
 	case <-time.After(30 * time.Second):
