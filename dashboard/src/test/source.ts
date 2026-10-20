@@ -96,23 +96,61 @@ export function isNode(value: unknown): value is Node {
   );
 }
 
-/** Parses one module's text into its `Program`. */
+/**
+ * Every `Program` this worker has parsed, by language and text.
+ *
+ * ONE PARSE OF A MODULE PER SUITE, not one per gate. A suite holding three
+ * gates over the tree parsed all of it three times — `parseAst` hands its tree
+ * across as JSON, and decoding that is most of what a gate costs — and the
+ * gates are CPU-bound work inside the runner's per-test budget, so a gate that
+ * re-parsed the tree was a gate that ran out of time on a loaded machine
+ * (measured over the thirteen suites that parse, as the CPU each test spent:
+ * 25.9 s before, 15.7 s after). The key is the text itself, so a gate parsing
+ * its own snippet gets its own tree, and a module that is edited between runs
+ * is a new key. No gate writes to a tree it was handed, which is what makes
+ * sharing one between the gates of a suite sound.
+ */
+const parsed: Record<Lang, Map<string, Node>> = { ts: new Map(), tsx: new Map(), dts: new Map() };
+
+/** Parses one module's text into its `Program`, once per worker. */
 export function parse(text: string, lang: Lang): Node {
-  return parseAst(text, { lang }) as unknown as Node;
+  const known = parsed[lang].get(text);
+  if (known) return known;
+  const program = parseAst(text, { lang }) as unknown as Node;
+  parsed[lang].set(text, program);
+  return program;
 }
 
-/** A node's direct children with the field each is held under, in source order. */
+/**
+ * A node's direct children with the field each is held under, in source order.
+ *
+ * SORTED ONLY WHEN THE FIELDS ARE NOT ALREADY IN ORDER. ESTree lists a node's
+ * fields in the order their text appears for almost every node, so the
+ * children come out in source order as they are read; a node whose fields do
+ * not (a template literal lists all its quasis before all its substitutions,
+ * which interleave in the text) is sorted, stably, which is exactly what
+ * sorting every node did — without paying for the sort on the four hundred
+ * thousand nodes a gate over the tree visits.
+ */
 function fieldsOf(node: Node): { child: Node; key: string }[] {
   const out: { child: Node; key: string }[] = [];
-  for (const [key, value] of Object.entries(node)) {
+  let ordered = true;
+  let last = -Infinity;
+  const take = (child: Node, key: string) => {
+    if (child.start < last) ordered = false;
+    last = child.start;
+    out.push({ child, key });
+  };
+  for (const key in node) {
     if (key === "type" || key === "start" || key === "end") continue;
+    const value = node[key];
     if (Array.isArray(value)) {
-      for (const item of value) if (isNode(item)) out.push({ child: item, key });
+      for (const item of value) if (isNode(item)) take(item, key);
     } else if (isNode(value)) {
-      out.push({ child: value, key });
+      take(value, key);
     }
   }
-  return out.sort((a, b) => a.child.start - b.child.start);
+  return ordered ? out : out.sort((a, b) => a.child.start - b.child.start);
 }
 
 /** A node's direct children, in source order. */
