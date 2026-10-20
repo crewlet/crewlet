@@ -5649,16 +5649,25 @@ export interface DashboardBoardAnswer {
   outline: DashboardOutline;
 }
 
-/** One dataset as its viewer may read it (`GET …/sources/{dataset}`, `datasetsapi.Answer`). */
-export interface DashboardDatasetAnswer {
-  artifact: string;
-  version: number;
-  dataset: string;
+/** What one read of a dataset or a source answered (`datasetsapi.Reading`). */
+export interface DashboardReading {
   status: DashboardDatasetStatus;
   as_of?: string;
   table?: DashboardTable;
   refusal?: { dataset: string; reason: string; grants?: string[] };
   detail?: string;
+}
+
+/** One dataset as its viewer may read it (`GET …/sources/{dataset}`, `datasetsapi.Answer`). */
+export interface DashboardDatasetAnswer extends DashboardReading {
+  artifact: string;
+  version: number;
+  dataset: string;
+}
+
+/** One engine source read directly, before any board exists (`GET /artifacts/sources/preview/{name}`, `datasetsapi.Preview`). */
+export interface DashboardSourcePreview extends DashboardReading {
+  source: string;
 }
 
 /** The engine source catalogue (`GET /artifacts/sources`). */

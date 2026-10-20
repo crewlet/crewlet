@@ -17,6 +17,7 @@ import type {
   DashboardColumnType,
   DashboardDataset,
   DashboardDatasetAnswer,
+  DashboardReading,
   DashboardFreshness,
   DashboardNumberFormat,
   DashboardParam,
@@ -467,12 +468,12 @@ export function definitionWords(
 }
 
 /** A rows count as the rail says it. */
-export function rowsWords(answer: DashboardDatasetAnswer | null | undefined): number | undefined {
+export function rowsWords(answer: DashboardReading | null | undefined): number | undefined {
   return answer?.status === "ready" ? (answer.table?.rows.length ?? 0) : undefined;
 }
 
 /** A dataset's rows as CSV cells, in its columns' order, each value as the spreadsheet should hold it. */
-export function csvOf(answer: DashboardDatasetAnswer): {
+export function csvOf(answer: DashboardReading): {
   header: string[];
   rows: DashboardValue[][];
 } {

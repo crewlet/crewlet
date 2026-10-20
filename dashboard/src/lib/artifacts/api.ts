@@ -22,6 +22,7 @@ import type {
   DashboardBoardAnswer,
   DashboardCatalogueAnswer,
   DashboardDatasetAnswer,
+  DashboardSourcePreview,
   ArtifactUploadIntent,
   DataCollection,
   DataOp,
@@ -147,6 +148,33 @@ export function createFromStarter(fields: {
       kind: fields.kind,
       title: fields.title,
       starter: true,
+      ...(fields.workItem ? { work_item: fields.workItem } : {}),
+    },
+  };
+}
+
+/**
+ * Create an artifact whose first version is files an upload brought
+ * ([uploadTexts] with no artifact): a dashboard a person composed, held to
+ * its kind's format by the engine at publish.
+ */
+export function createFromUpload(fields: {
+  kind: "dashboard";
+  title: string;
+  upload: string;
+  files: PublishFile[];
+  entry: string;
+  workItem?: string;
+}): Omit<KeyedRequest, "key"> {
+  return {
+    method: "POST",
+    path: "/artifacts",
+    body: {
+      kind: fields.kind,
+      title: fields.title,
+      upload: fields.upload,
+      files: fields.files,
+      entry: fields.entry,
       ...(fields.workItem ? { work_item: fields.workItem } : {}),
     },
   };
@@ -352,6 +380,23 @@ export async function readDataset(
   return res.body as DashboardDatasetAnswer;
 }
 
+/**
+ * One engine source's rows as this reader may read them, before any board
+ * exists (`GET /artifacts/sources/preview/{name}`), with the source's
+ * parameters as the query: what New dashboard draws its suggestions from.
+ */
+export async function previewSource(
+  name: string,
+  params: Readonly<Record<string, string>>,
+  signal: AbortSignal,
+): Promise<DashboardSourcePreview> {
+  const res = await rest.request("GET", `/artifacts/sources/preview/${encodeURIComponent(name)}`, {
+    query: { ...params },
+    signal,
+  });
+  return res.body as DashboardSourcePreview;
+}
+
 /** The engine source catalogue a dashboard's engine datasets read (`GET /artifacts/sources`). */
 export async function readCatalogue(signal: AbortSignal): Promise<DashboardCatalogueAnswer> {
   return (await rest.get("/artifacts/sources", signal)) as DashboardCatalogueAnswer;
@@ -388,15 +433,16 @@ export async function textDigest(text: string): Promise<string> {
 }
 
 /**
- * Bring text files into an artifact's next version: an upload intent
- * (`POST /artifacts/{id}/uploads`, keyed by `key`), then each file's bytes put
- * through the engine, the only transfer the dashboard is handed (its own
- * policy reaches no other origin). Answers the upload to publish with and the
- * file each path is named by; a file the artifact already holds is carried by
- * its digest and moves no byte.
+ * Bring text files into an artifact's next version, or into a new artifact's
+ * first (`id` null): an upload intent (`POST /artifacts/{id}/uploads`, or
+ * `POST /artifacts/uploads` for a create, keyed by `key`), then each file's
+ * bytes put through the engine, the only transfer the dashboard is handed
+ * (its own policy reaches no other origin). Answers the upload to publish
+ * with and the file each path is named by; a file the artifact already holds
+ * is carried by its digest and moves no byte.
  */
 export async function uploadTexts(
-  id: string,
+  id: string | null,
   files: readonly { path: string; text: string }[],
   key: string,
 ): Promise<{ upload: string; files: PublishFile[] }> {
@@ -407,7 +453,7 @@ export async function uploadTexts(
     size: new TextEncoder().encode(f.text).length,
   }));
   const intent = (
-    await rest.request("POST", `/artifacts/${encodeURIComponent(id)}/uploads`, {
+    await rest.request("POST", id === null ? "/artifacts/uploads" : `${base(id)}/uploads`, {
       body: { entries },
       headers: { "Idempotency-Key": key },
     })
