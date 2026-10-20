@@ -62,6 +62,8 @@ type ArtifactsWriter interface {
 		artifactsdomain.Written, error)
 	Transfer(ctx context.Context, c artifactsdomain.Call, id artifacts.ID, toSeat string) (
 		artifactsdomain.Written, error)
+	LinkWorkItem(ctx context.Context, c artifactsdomain.Call, id artifacts.ID, item string) (
+		artifactsdomain.Written, error)
 	Trash(ctx context.Context, c artifactsdomain.Call, id artifacts.ID) (artifactsdomain.Written, error)
 	Restore(ctx context.Context, c artifactsdomain.Call, id artifacts.ID) (artifactsdomain.Written, error)
 	Purge(ctx context.Context, c artifactsdomain.Call, id artifacts.ID) (artifactsdomain.Written, error)
@@ -342,6 +344,21 @@ var opArtifactTransfer = define("artifacts.transfer", opOnceWrite, artifactsDoma
 		return w.Transfer(ctx, a.Call, a.ID, a.ToSeat)
 	}).repeatableWhen(func(a artifactTransferArgs) bool { return keyedCall(a.Call) })
 
+type artifactLinkArgs struct {
+	Call artifactsdomain.Call
+	ID   artifacts.ID
+	Item string
+}
+
+var opArtifactLinkWorkItem = define("artifacts.link_work_item", opOnceWrite, artifactsDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a artifactLinkArgs) (artifactsdomain.Written, error) {
+		w, err := b.artifactsWriter()
+		if err != nil {
+			return artifactsdomain.Written{}, err
+		}
+		return w.LinkWorkItem(ctx, a.Call, a.ID, a.Item)
+	}).repeatableWhen(func(a artifactLinkArgs) bool { return keyedCall(a.Call) })
+
 // artifactCallArgs is a write that names its artifact and nothing else.
 type artifactCallArgs struct {
 	Call artifactsdomain.Call
@@ -573,6 +590,13 @@ func (a Artifacts) Transfer(ctx context.Context, c artifactsdomain.Call, id arti
 	toSeat string) (artifactsdomain.Written, error) {
 	return a.written(call(ctx, a.r, opArtifactTransfer, nil,
 		artifactTransferArgs{Call: c, ID: id, ToSeat: toSeat}))
+}
+
+// LinkWorkItem links an artifact to a tracker work item.
+func (a Artifacts) LinkWorkItem(ctx context.Context, c artifactsdomain.Call, id artifacts.ID,
+	item string) (artifactsdomain.Written, error) {
+	return a.written(call(ctx, a.r, opArtifactLinkWorkItem, nil,
+		artifactLinkArgs{Call: c, ID: id, Item: item}))
 }
 
 // Trash stamps an artifact trashed.

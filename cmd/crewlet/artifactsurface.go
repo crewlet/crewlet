@@ -20,8 +20,9 @@ import (
 // through a peer's, and a node without `data` through a data node), the chart
 // the rest of the API decides by, the company's own artifacts settings read per
 // decision, the Tier A plan quotas this node stamps, the upload pipeline the
-// engine builds on first use, and the frames minted for the artifact origin
-// where the deployment names one.
+// engine builds on first use, the company's own tracker a link to a work item
+// is checked against, and the frames minted for the artifact origin where the
+// deployment names one.
 
 // artifactsSurfaces builds the artifacts surface and its questions' source, or
 // neither on an engine built with no estate router (which serves no estate to
@@ -55,6 +56,7 @@ func artifactsSurfaces(e *engine.Engine, boot *config.Bootstrap) (
 			}
 			return pipeline, nil
 		},
+		WorkItems: func() (artifactsapi.WorkItems, error) { return companyTracker(e) },
 	}
 	// THE FRAMES, only where the deployment names an artifact origin: the
 	// ticket codec and the origin are the ones the origin's own handler is
@@ -95,6 +97,27 @@ func artifactsGate(e *engine.Engine, boot *config.Bootstrap, arts estate.Artifac
 			return config.CompanyArtifacts{}
 		},
 	}
+}
+
+// companyTracker is the company's own tracker as a link to a work item reads
+// it, through the estate router: [artifactsapi.ErrTrackerNotUp] on a node not
+// yet handed a company, and [artifactsapi.ErrNoTracker] for a company whose
+// work items another tracker keeps.
+//
+// ASKED PER REQUEST, for the reason the human write surface asks for its
+// halves per request: the tracker comes up with the node's first company,
+// which a node that booted with none meets after this surface is serving.
+// [engine.Engine.NativeStarted] first, because it is monotonic, so a tracker
+// read as absent after it is one this company does not run.
+func companyTracker(e *engine.Engine) (artifactsapi.WorkItems, error) {
+	if !e.NativeStarted() {
+		return nil, artifactsapi.ErrTrackerNotUp
+	}
+	work, ok := engine.OperatorWork(e)
+	if !ok {
+		return nil, artifactsapi.ErrNoTracker
+	}
+	return work, nil
 }
 
 // engineObjects is the engine's object store as the artifacts surface reads a

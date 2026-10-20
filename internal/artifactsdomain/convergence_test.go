@@ -19,8 +19,9 @@ import (
 // This is the identity claim the domain declares ([artifactsdomain.Domain]
 // claims identity), held across the cases that make it hard: creates, publishes
 // that race on one artifact from both nodes, carries, retention, shares and
-// narrowings, assets, pins and a purge, all through two independent publishers
-// and appliers. Every Replicated table is compared whole.
+// narrowings, assets, links to work items, pins and a purge, all through two
+// independent publishers and appliers. Every Replicated table is compared
+// whole.
 //
 // Mutation: write the applying node's own clock into any row (time.Now for a
 // history row's instant), or the capability list from an unsorted map, and the
@@ -88,6 +89,10 @@ func TestTwoNodesConvergeOnOneLogAndAReplayRebuildsTheirEstate(t *testing.T) {
 			Artifact: own, Name: "logo.png", Object: upload(t, "logo.png", "png of "+label).Object,
 		}); err != nil {
 			failures <- fmt.Errorf("%s asset: %w", label, err)
+			return
+		}
+		if _, err := n.writer.LinkWorkItem(ctx, c, own, "CRW-"+label); err != nil {
+			failures <- fmt.Errorf("%s link: %w", label, err)
 			return
 		}
 		if _, err := n.writer.Pin(ctx, c, shared, true); err != nil {

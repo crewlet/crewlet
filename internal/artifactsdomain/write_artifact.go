@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
@@ -16,7 +17,7 @@ import (
 )
 
 // The artifact's own writes: the create, a publish and a rollback, a patch,
-// shares, a transfer, the trash and the purge.
+// shares, a transfer, a link to a work item, the trash and the purge.
 
 // Create makes an artifact and its first version in one record.
 //
@@ -418,14 +419,7 @@ func (w *Writer) Patch(ctx context.Context, c Call, id artifacts.ID, p Patch) (W
 			}
 			return w.decision(stamp, c, subject, OpPatch, scope, opID, payload, at)
 		}))
-	if err != nil {
-		return Written{Result: res}, err
-	}
-	e, found, err := w.verdict(ctx, id.String(), opID, res)
-	if err != nil || !found {
-		return Written{Result: res}, err
-	}
-	return Written{Result: res}, w.refused(ctx, id.String(), e)
+	return w.written(ctx, id, opID, res, err)
 }
 
 // patchFor is the record a patch publishes, carrying only what it changes, and
@@ -617,6 +611,76 @@ func (w *Writer) Transfer(ctx context.Context, c Call, id artifacts.ID, toSeat s
 			})
 	})
 	return w.written(ctx, id, opID, res, err)
+}
+
+// LinkWorkItem links an artifact that already exists to one tracker work item,
+// so the item's listing finds it ([ListQuery.WorkItem]) exactly as it finds one
+// created or published for the item. The record changes no artifact state; its
+// history row names the item.
+//
+// IDEMPOTENT FROM THE CALLER'S VIEW, in both of the ways a caller repeats it. A
+// retry under the same key is the same operation, answered from the ledger. A
+// second link to an item the artifact's history already names (an earlier
+// link, or a create or a publish made for it) publishes nothing and answers
+// success: the artifact is on the item's listing already, and a history that
+// recorded every repeat would say the link happened twice.
+//
+// WHO MAY LINK, AND WHETHER THE ITEM EXISTS, ARE DECIDED BEFORE THIS: the
+// caller's read of the artifact and their write of the item are the API's
+// (internal/api/artifactsapi), and the item is the tracker's, another log this
+// writer does not read. The item is stamped on the call's authority; a call
+// already charged to another item is refused rather than silently relinked.
+func (w *Writer) LinkWorkItem(ctx context.Context, c Call, id artifacts.ID, item string) (Written, error) {
+	if err := validCall(c); err != nil {
+		return Written{}, err
+	}
+	item = strings.TrimSpace(item)
+	if err := checkText("the work item", item, artifacts.MaxWorkItemBytes, true); err != nil {
+		return Written{}, err
+	}
+	if charged := c.Authority.WorkItem; charged != "" && charged != item {
+		return Written{}, fmt.Errorf("%w: the call is made for work item %s and links %s: "+
+			"a link names the one item it is for", ErrInvalid, charged, item)
+	}
+	authority := c.Authority
+	authority.WorkItem = item
+	at := w.now()
+	opID, err := w.operation(c, string(OpLinkWorkItem), id.String(), item)
+	if err != nil {
+		return Written{}, err
+	}
+	subject, scope := ArtifactSubject(id), ScopeSet{Subject: true}
+	res, err := w.publish(ctx, request(subject, scope, opID, statelog.PatternArbitrated,
+		func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			head, err := mustHead(ctx, tx, id.String()) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
+			if err != nil {
+				return statelog.Decision{}, err
+			}
+			if head.Status == StatusTrashed {
+				return statelog.Decision{}, fmt.Errorf("%w: %s", ErrTrashed, id)
+			}
+			linked, err := linkedTo(ctx, tx, id.String(), item)
+			if err != nil || linked {
+				return statelog.Decision{}, err
+			}
+			return w.decision(stamp, c, subject, OpLinkWorkItem, scope, opID,
+				LinkPayload{V: baseRecordVersion, Authority: authority}, at)
+		}))
+	return w.written(ctx, id, opID, res, err)
+}
+
+// linkedTo reports whether artifact id's history already files an applied row
+// under work item item, read in the transaction the caller holds: the
+// question [ListQuery.WorkItem] asks of the same rows.
+func linkedTo(ctx context.Context, tx *sql.Tx, id, item string) (bool, error) {
+	var n int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM artifact_history
+		WHERE work_item = ? AND artifact_id = ? AND outcome = ?`,
+		item, id, string(OutcomeApplied)).Scan(&n); err != nil {
+		return false, fmt.Errorf("artifactsdomain: read whether %s is linked to %s: %w", id, item, err)
+	}
+	return n > 0, nil
 }
 
 // Trash stamps an artifact trashed. Trashing a trashed artifact publishes

@@ -52,6 +52,7 @@ func TestACallerWithNoRelationIsToldTheArtifactIsNotFound(t *testing.T) {
 		{"DELETE", "", ``},
 		{"POST", "/restore", ``},
 		{"POST", "/transfer", `{"to":"@dana"}`},
+		{"POST", "/work-items", `{"work_item":"ENG-12"}`},
 		{"PUT", "/pin", ``},
 	} {
 		for who, p := range map[string]iam.Principal{"a person": person("dana"),
@@ -865,8 +866,8 @@ func TestEveryRouteIsGuardedAndDocumented(t *testing.T) {
 	if err := g.svc.Routes(rec); err != nil {
 		t.Fatal(err)
 	}
-	if len(rec.patterns) != 26 {
-		t.Fatalf("the surface mounts %d routes, and this case knows 26: %v", len(rec.patterns), rec.patterns)
+	if len(rec.patterns) != 27 {
+		t.Fatalf("the surface mounts %d routes, and this case knows 27: %v", len(rec.patterns), rec.patterns)
 	}
 	doc, err := os.ReadFile(filepath.Join("..", "..", "..", "docs", "reference", "api-endpoints.md"))
 	if err != nil {

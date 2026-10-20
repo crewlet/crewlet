@@ -88,6 +88,24 @@ describe("a history row", () => {
     ).toBe("shared it with Pat Mills: can view (as an administrator)");
   });
 
+  test("an asset's rows are said as the asset's", () => {
+    expect(historyWords(entry({ op: "asset_create", summary: { name: "logo.png" } }), names)).toBe(
+      "added the asset logo.png",
+    );
+    expect(historyWords(entry({ op: "asset_remove", summary: { name: "logo.png" } }), names)).toBe(
+      "removed the asset logo.png",
+    );
+  });
+
+  test("a link names the work item it put the artifact on", () => {
+    expect(historyWords(entry({ op: "link_work_item", work_item: "ENG-12" }), names)).toBe(
+      "linked it to ENG-12",
+    );
+    expect(
+      historyWords(entry({ op: "link_work_item", work_item: "ENG-12", outcome: "refused" }), names),
+    ).toBe("tried to link it to ENG-12 and was refused");
+  });
+
   test("an op this build does not know is still said, in its own words", () => {
     expect(historyWords(entry({ op: "rename_collection" }), names)).toBe("rename collection");
   });
@@ -201,6 +219,8 @@ describe("the words other screens say an artifact's facts in", () => {
     expect(historyOpTag("read_elevated")).toBe("admin read");
     expect(historyOpTag("patch")).toBe("edit");
     expect(historyOpTag("restore")).toBe("untrash");
+    expect(historyOpTag("link_work_item")).toBe("link work item");
+    expect(historyOpTag("asset_create")).toBe("add asset");
     expect(historyOpTag("some_new_op")).toBe("some new op");
   });
 

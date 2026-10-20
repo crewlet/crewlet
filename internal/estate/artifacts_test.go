@@ -170,6 +170,11 @@ func (v *vault) Pin(_ context.Context, c artifactsdomain.Call, _ artifacts.ID, p
 	return v.wrote(fmt.Sprintf("pin:%v", pinned), c), nil
 }
 
+func (v *vault) LinkWorkItem(_ context.Context, c artifactsdomain.Call, _ artifacts.ID, item string) (
+	artifactsdomain.Written, error) {
+	return v.wrote("link_work_item:"+item, c), nil
+}
+
 func (v *vault) Opened(_ context.Context, c artifactsdomain.Call, _ artifacts.ID) (artifactsdomain.Written, error) {
 	return v.wrote("opened", c), nil
 }
@@ -282,9 +287,13 @@ func TestEveryArtifactsOperationCrossesWhole(t *testing.T) {
 			return err
 		},
 		"transfer:bob": func() error { _, err := a.Transfer(ctx, jane, id, "bob"); return err },
-		"trash":        func() error { _, err := a.Trash(ctx, jane, id); return err },
-		"restore":      func() error { _, err := a.Restore(ctx, jane, id); return err },
-		"purge":        func() error { _, err := a.Purge(ctx, jane, id); return err },
+		"link_work_item:ENG-12": func() error {
+			_, err := a.LinkWorkItem(ctx, jane, id, "ENG-12")
+			return err
+		},
+		"trash":   func() error { _, err := a.Trash(ctx, jane, id); return err },
+		"restore": func() error { _, err := a.Restore(ctx, jane, id); return err },
+		"purge":   func() error { _, err := a.Purge(ctx, jane, id); return err },
 		"add_asset": func() error {
 			_, _, err := a.AddAsset(ctx, jane, artifactsdomain.AssetInput{Artifact: id, Name: "a.png"})
 			return err
@@ -301,8 +310,8 @@ func TestEveryArtifactsOperationCrossesWhole(t *testing.T) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	for _, want := range []string{"create:jane", "publish:jane", "patch:jane", "share:jane",
-		"unshare:jane", "transfer:bob:jane", "trash:jane", "restore:jane", "purge:jane",
-		"add_asset:jane", "remove_asset:jane", "pin:true:jane", "opened:jane", "read_elevated:4:jane"} {
+		"unshare:jane", "transfer:bob:jane", "link_work_item:ENG-12:jane", "trash:jane",
+		"restore:jane", "purge:jane", "add_asset:jane", "remove_asset:jane", "pin:true:jane", "opened:jane", "read_elevated:4:jane"} {
 		found := false
 		for _, got := range v.calls {
 			found = found || got == want

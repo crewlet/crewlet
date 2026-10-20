@@ -116,6 +116,10 @@ func (a apiArtifacts) Transfer(context.Context, artifactsdomain.Call, artifacts.
 	artifactsdomain.Written, error) {
 	return a.applied()
 }
+func (a apiArtifacts) LinkWorkItem(context.Context, artifactsdomain.Call, artifacts.ID, string) (
+	artifactsdomain.Written, error) {
+	return a.applied()
+}
 func (a apiArtifacts) Trash(context.Context, artifactsdomain.Call, artifacts.ID) (artifactsdomain.Written, error) {
 	return a.applied()
 }
@@ -159,7 +163,8 @@ func TestTheArtifactsRoutesAndQuestionsShareOneMux(t *testing.T) {
 	surface, err := artifactsapi.New(artifactsapi.Options{Gate: gate, Reads: estate, Writes: estate,
 		Objects: estate, Ready: ready, Uploads: func() (artifactsapi.Pipeline, error) {
 			return nil, artifactupload.ErrInvalid
-		}})
+		},
+		WorkItems: func() (artifactsapi.WorkItems, error) { return nil, artifactsapi.ErrTrackerNotUp }})
 	if err != nil {
 		t.Fatal(err)
 	}
