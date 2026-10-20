@@ -10811,13 +10811,15 @@ a.live-row:focus-visible {
   overflow-wrap: anywhere;
 }
 @media (width < 900px) {
+  /* STACKED, THE PAGE GROWS WITH WHAT IT HOLDS and the body scrolls it:
+     held to the body's height, the two rows were squeezed over each other. */
   .html-create {
+    flex: none;
     grid-template-columns: minmax(0, 1fr);
-    grid-auto-rows: auto;
-    overflow: auto;
   }
   .html-create-main,
   .html-create-side {
+    min-height: auto;
     overflow: visible;
   }
   .html-create-main {
@@ -10830,6 +10832,10 @@ a.live-row:focus-visible {
   .html-create-side {
     padding-right: var(--spacing-4);
     padding-left: var(--spacing-4);
+  }
+  /* A phone has no Command+Enter to hint at. */
+  .html-create-keys {
+    display: none;
   }
 }
 .artifact-loading,
