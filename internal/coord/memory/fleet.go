@@ -715,6 +715,10 @@ func (f *Fleet) ClaimFire(_ context.Context, key string, at time.Time) (bool, er
 // ClaimCustody records node as the keeper of batch unless one is recorded,
 // answering the keeper. The bucket's age is not modelled, for the completion
 // ledger's reason.
+//
+// It never answers [coord.ErrCustodyUndecidable]: this store holds nothing a
+// claim did not write, and a claim names its node or is refused, so every
+// keeper it holds is one a later claim can be told.
 func (f *Fleet) ClaimCustody(_ context.Context, batch, node string) (string, error) {
 	if batch == "" || node == "" {
 		return "", errors.New("coord/memory: a custody claim needs a batch and a node")

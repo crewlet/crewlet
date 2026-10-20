@@ -2552,11 +2552,26 @@ type fireRecord struct {
 
 // ---- the custody claims ----------------------------------------------- //
 
-// custodyRecord is one batch's keeper on the wire. The instant is diagnostic,
-// and nothing branches on it.
+// custodyRecord is one batch's keeper on the wire, as a claim writes it. The
+// instant is diagnostic, and nothing branches on it.
 type custodyRecord struct {
 	Node string    `json:"node"`
 	At   time.Time `json:"at"`
+}
+
+// custodyKeeper is what a claim READS of a record: the keeper, and nothing
+// else.
+//
+// NOT [custodyRecord], whose instant would be decoded too: a record whose
+// `at` a later build retyped, or that a hand wrote another way, names its
+// keeper perfectly well, and decoded whole it failed on a field nothing reads
+// and was answered [coord.ErrCustodyUndecidable] — the batch's copy left
+// unsettled for a month, uncounted where this node keeps it and a second copy
+// where a peer does. Undecidable has to mean that the KEEPER cannot be read,
+// so only what decides is decoded; a field this build has no use for is
+// ignored, as encoding/json ignores one it has no home for.
+type custodyKeeper struct {
+	Node string `json:"node"`
 }
 
 // ClaimCustody records node as the keeper of batch unless one is recorded,
@@ -2568,6 +2583,9 @@ type custodyRecord struct {
 // copy. A key that has gone between the refusal and the read — aged out, which
 // needs a month — is created again rather than answered, for the fleet store's
 // patience ([FleetStore.retryRaces]).
+//
+// A record nothing can read as a keeper is [coord.ErrCustodyUndecidable] —
+// see [FleetStore.undecidable] for the three shapes it takes.
 func (f *FleetStore) ClaimCustody(ctx context.Context, batch, node string) (string, error) {
 	if batch == "" || node == "" {
 		return "", errors.New("coord/kv: a custody claim needs a batch and a node")
@@ -2584,6 +2602,11 @@ func (f *FleetStore) ClaimCustody(ctx context.Context, batch, node string) (stri
 		case created == nil:
 			keeper = node
 			return false, nil
+		case errors.Is(created, errUndecodableHeaders):
+			// The create reads the key's newest message back from the
+			// leader to tell a marker from a value, and this one's
+			// headers say neither.
+			return false, f.undecidable(batch, created)
 		case !errors.Is(created, jetstream.ErrKeyExists):
 			return false, unavailable("claim custody of batch "+batch, created)
 		}
@@ -2591,18 +2614,17 @@ func (f *FleetStore) ClaimCustody(ctx context.Context, batch, node string) (stri
 		switch {
 		case errors.Is(read, jetstream.ErrKeyNotFound):
 			return true, nil
+		case errors.Is(read, errUndecodableHeaders):
+			return false, f.undecidable(batch, read)
 		case read != nil:
 			return false, unavailable("read the keeper of batch "+batch, read)
 		}
-		// RAISED, never answered as a keeper: a record that cannot be read,
-		// or names nobody, cannot decide whose copy goes, and guessing
-		// either way loses the batch or keeps it twice.
-		var held custodyRecord
+		var held custodyKeeper
 		if decode := json.Unmarshal(entry.Value(), &held); decode != nil {
-			return false, fmt.Errorf("coord/kv: the keeper of batch %s is unreadable: %w", batch, decode)
+			return false, f.undecidable(batch, decode)
 		}
 		if held.Node == "" {
-			return false, fmt.Errorf("coord/kv: the keeper of batch %s names no node", batch)
+			return false, f.undecidable(batch, errors.New("it names no node"))
 		}
 		keeper = held.Node
 		return false, nil
@@ -2611,6 +2633,28 @@ func (f *FleetStore) ClaimCustody(ctx context.Context, batch, node string) (stri
 		return "", err
 	}
 	return keeper, nil
+}
+
+// undecidable is the answer for a batch whose keeper record the leader holds
+// and nothing can read as a keeper: its headers do not decode, its value does
+// not, or it decodes and names no node.
+//
+// RAISED, never answered as a keeper: a record that cannot be read, or names
+// nobody, cannot decide whose copy goes, and guessing either way loses the
+// batch or keeps it twice. And DEFINITE, never [coord.ErrUnavailable]: the
+// leader answered, and will answer the same until the record is removed or
+// ages out, so a caller that waited on it as on a store it could not reach
+// would wait out the bucket's month.
+//
+// It NAMES THE BUCKET AND THE KEY the record is under, because removing the
+// record is the one remedy short of the month, and the error is all the
+// caller logs: the key is the batch id escaped as a document key
+// ([coord.DocumentKey]), which for the uuid a batch is named by is the id
+// itself, and the bucket's name is this store's prefix, which no log line
+// would otherwise carry.
+func (f *FleetStore) undecidable(batch string, why error) error {
+	return fmt.Errorf("%w: batch %s (key %s in bucket %s): %w", coord.ErrCustodyUndecidable,
+		batch, encodeKey(batch), f.custody.Bucket(), why)
 }
 
 // ---- the rebases -------------------------------------------------------- //
