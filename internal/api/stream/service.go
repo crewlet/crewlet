@@ -130,10 +130,6 @@ type Service struct {
 	work         *roomWork
 	stopPresence func()
 
-	// withholding is this node's artifact copies out of service: its
-	// appliers' pushes are withheld until they return ([Service.ArtifactsCopy]).
-	withholding atomic.Bool
-
 	// metrics records the socket's push lag; nil records nothing.
 	metrics Metrics
 

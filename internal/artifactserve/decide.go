@@ -220,9 +220,12 @@ func (v *verdicts) forget(ids []artifacts.ID, all bool) {
 	}
 }
 
-// ArtifactsMoved is what this node's artifacts applier says after a committed
-// batch (internal/engine's OnArtifactsMoved): every verdict about an artifact
-// that moved is forgotten, and a reset forgets everything.
+// ArtifactsMoved is what this node hears an artifacts applier say after a
+// committed batch (internal/engine's OnArtifactsMoved): its own while its copy
+// serves, and a sound peer's, relayed, while it does not — so a share withdrawn
+// on the fleet is forgotten here even when this node's applier is halted.
+// Every verdict about an artifact that moved is forgotten, and a reset — which
+// every switch between the two sources is — forgets everything.
 //
 // ANY MOVEMENT, NOT ONLY A NARROWING: a new asset changes what an asset route
 // may answer, and telling a narrowing from a widening here would be a second

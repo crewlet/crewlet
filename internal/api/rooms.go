@@ -44,12 +44,12 @@ type StoreCatalogue interface {
 }
 
 // RoomFeed is where this node hears what moved on its artifacts: both
-// appliers' committed batches, and its copies leaving or returning to service
+// appliers' committed batches, from whichever source the engine's live relay
+// says this node's sockets hear, and a reset at every switch of it
 // ([engine.Engine] satisfies it).
 type RoomFeed interface {
 	OnArtifactsMoved(fn func([]artifactsdomain.Moved)) (stop func())
 	OnArtifactDataMoved(fn func([]artifactdata.Moved)) (stop func())
-	SetOnArtifactsServing(fn func(serving bool))
 }
 
 // metrics is r's push-lag recorder, nil for no rooms.
