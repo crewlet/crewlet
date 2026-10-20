@@ -233,7 +233,8 @@ func MembershipTools() []string {
 // [MembershipTools] is the one such pair here. A reaction is one tool with a
 // `remove` flag, so taking one back and putting it on again are calls to one
 // tool and are already counted together. The three posting tools are not a
-// family: a post is ADDITIVE, so nothing one of them says can undo another,
+// family: a post adds a remark and takes none back, so nothing one of them
+// says can undo another,
 // and the tool is part of every key a turn derives, so they never derive one
 // another's ids.
 //

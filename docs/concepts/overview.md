@@ -214,7 +214,7 @@ internal/
 │                         #   outlive the node that recorded them
 ├── chat/                 # The engine's own chat — statelog's eighth domain:
 │                         #   rooms, threads, messages and reactions, a
-│                         #   message additive on its room's subject
+│                         #   message sequenced on its room's subject
 ├── eventfan/             # The fleet's turn-level history, read from every
 │                         #   data node at query time, with coverage on every
 │                         #   answer

@@ -98,7 +98,7 @@ export interface StartReport {
  *
  * A PRESS AGAIN IS A NEW OPERATION, and that is safe for every one of these
  * for a reason that is a property of the gesture itself rather than of its
- * key: a message is additive and needs its own operation key to be recognised
+ * key: a message arbitrates nothing and needs its own operation key to be recognised
  * as a retry (the outbox keeps one per row), while these arbitrate on
  * something the engine can see. It is worth saying out loud, because "may have landed"
  * plus "do not repeat it" is a dead end for a person holding a dialog.

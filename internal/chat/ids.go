@@ -43,7 +43,7 @@ import (
 //
 // # Why a keyed gesture's id is derived rather than minted
 //
-// A post is ADDITIVE. It carries no expectation and arbitrates nothing — see
+// A post is SEQUENCED. It carries no expectation and arbitrates nothing — see
 // [KindMessage] — so there is nothing at the broker that can tell a retry from
 // a second remark, and a freshly minted id would make the two
 // indistinguishable everywhere else too. What makes a retried post idempotent

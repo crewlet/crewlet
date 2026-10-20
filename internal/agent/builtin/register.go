@@ -605,8 +605,8 @@ func annotationsFor(name string) tools.Annotations {
 		// flag asks whether a second party is reached, and a private
 		// conversation reaches exactly one.
 		//
-		// Not destructive — a message is additive and an edit is a
-		// verb no seat is offered — and NOT idempotent: a second call is
+		// Not destructive — a post adds a remark and takes none back,
+		// and an edit is a verb no seat is offered — and NOT idempotent: a second call is
 		// a second message. The derived key makes a RE-RUN of one turn
 		// post once, which is the engine protecting a redelivery rather
 		// than a licence to repeat.

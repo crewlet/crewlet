@@ -7,9 +7,9 @@ package topics
 // state — a topic, a membership set, an archive, a prune — arbitrates on the
 // channel's own subject, so two writers renaming one room contend at the
 // broker and exactly one wins. New messages ride a SEPARATE kind whose id is
-// that same channel's, additively: two people talking in one room never
-// contend, and the broker's per-subject index is bounded by the number of
-// channels rather than by the number of things anybody ever said.
+// that same channel's, sequenced with no expectation: two people talking in
+// one room never contend, and the broker's per-subject index is bounded by the
+// number of channels rather than by the number of things anybody ever said.
 //
 // It lives here for the reason the other domains' grammar does — the
 // publisher builds the subject, the wake feed's consumer filters on it, and
@@ -53,8 +53,8 @@ const (
 // ChatLogSubject builds the subject for one object on the chat log:
 // [LogSubject] under [ChatLogPrefix], and refused wherever that is.
 //
-// The id of a message is its CHANNEL's, under the message kind — the additive
-// kind arbitrates nothing, so a room has ONE message subject rather than one
+// The id of a message is its CHANNEL's, under the message kind — the
+// sequenced kind arbitrates nothing, so a room has ONE message subject rather than one
 // per message — which is the shape a reader is most likely to mistake for the
 // message's own. It is not the room's own state subject either: that is the
 // channel kind's, under the same id, and keeping the two apart is what keeps

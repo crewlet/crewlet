@@ -51,12 +51,30 @@ a retention horizon — each is published on the room's own subject and
 conditioned on that room's last change, so two people renaming one channel
 contend and exactly one wins.
 
-**Messages are additive.** A post carries no expectation at all. Two people
+**Messages are sequenced.** A post carries no expectation at all. Two people
 talking in the same room are not racing for anything, so paying for arbitration
 would serialise the busiest subject in the company behind itself — and its
 failure mode is the one a chat system may not have: a refusal on a message
-somebody typed. This is recorded as
-[ADR-0045](../../adr/0045-a-message-is-additive-on-its-channels-subject.md).
+somebody typed. The log orders the messages instead, and every node DECIDES
+each one where it applies it, from the room as it is at that record's position
+— because a message can depend on something that landed just ahead of it,
+which the node it was written on could not yet see:
+
+- a post into a room somebody archived a moment before, or — in a private room
+  or a direct conversation — by somebody taken out of it a moment before;
+- an edit of a message its author or a moderator took back a moment before;
+- a reaction that would be the message's thirty-third distinct emoji;
+- an edit, a delete or a reaction of a message an erase or a retention prune
+  removed.
+
+Each is refused, and the person or seat that wrote it is told exactly as they
+would have been had the earlier change already reached them: the room is
+archived, they are not in it, the message is gone, the message carries all the
+emoji it can. Every node reaches the same decision and records it, so a retry
+of a refused message is refused again rather than reported as said. A gesture answered `pending` — durable, and not
+yet applied on the node that answered — may still be refused this way when it
+applies. This is recorded as
+[ADR-0045](../../adr/0045-a-message-is-sequenced-on-its-channels-subject.md).
 
 A message's subject carries its **channel's** id — one message subject per
 room, apart from the room's own state subject — and its declared scope is that
