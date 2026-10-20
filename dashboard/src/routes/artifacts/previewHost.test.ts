@@ -2,14 +2,21 @@
  * The preview host: it tells a page it may read its datastore and nothing
  * else, names nobody, answers reads through the datastore's own questions and
  * a subscription once, answers each read once and every repeat from that
- * answer, and refuses every write, state change, presence, identity, link and
- * print, asking the engine nothing for them.
+ * answer, keeps a newcomer's state of its own, and refuses every write,
+ * presence, identity, link and print, asking the engine nothing for them.
  */
 
 import { describe, expect, test, vi } from "vitest";
 import type { LiveSocket } from "~/protocol/index.ts";
 import { BRIDGE_MESSAGE, BRIDGE_METHODS, type BridgeMethod } from "~/runtime/bridge.ts";
-import { PREVIEW_READS, PREVIEW_SNAPSHOT_LIMIT, PreviewHost } from "./previewHost.ts";
+import {
+  PREVIEW_READS,
+  PREVIEW_SNAPSHOT_LIMIT,
+  PREVIEW_STATE_KEYS,
+  PREVIEW_STATE_VALUE_BYTES,
+  PreviewHost,
+  hostAnswers,
+} from "./previewHost.ts";
 
 const doc = (id: string) => ({
   id,
@@ -101,7 +108,7 @@ describe("a preview's host", () => {
     }
   });
 
-  test("refuses every call that is not a read, and asks the engine nothing for it", async () => {
+  test("refuses every call that is not a read or the newcomer's state, and asks the engine nothing for it", async () => {
     const s = socket();
     const host = new PreviewHost({
       artifact: "a1",
@@ -117,10 +124,20 @@ describe("a preview's host", () => {
       "data.subscribe",
       "data.unsubscribe",
       "assets.list",
+      "state.get",
+      "state.list",
+      "state.set",
+      "state.delete",
     ]);
     const others = (Object.keys(BRIDGE_METHODS) as BridgeMethod[]).filter((m) => !reads.has(m));
     expect(others).toEqual(
-      expect.arrayContaining(["data.write", "data.undo", "data.redo", "state.set", "presence.set"]),
+      expect.arrayContaining([
+        "data.write",
+        "data.undo",
+        "data.redo",
+        "presence.set",
+        "identity.me",
+      ]),
     );
     for (const method of others) {
       const answer = await call(host, p, method, { ops: [], collection: "rows", url: "https://x" });
@@ -140,6 +157,58 @@ describe("a preview's host", () => {
       "capability_not_declared",
     );
     expect(s.query).not.toHaveBeenCalled();
+  });
+
+  // A NEWCOMER'S STATE: empty at first, what the page sets while its frame
+  // lives read back as it would be, and never the reader's own, so the engine
+  // is asked nothing for it either way.
+  test("keeps a newcomer's state of its own, and never asks the engine for the reader's", async () => {
+    const s = socket();
+    const host = new PreviewHost({ artifact: "a1", socket: s, granted: ["state"] });
+    const p = port();
+    host.attach(p);
+    expect(p.sent[0]).toMatchObject({ capabilities: ["state"], viewer: null });
+    expect(await call(host, p, "state.get", { key: "branch" })).toMatchObject({
+      ok: true,
+      value: null,
+    });
+    expect((await call(host, p, "state.list")).value).toEqual([]);
+    expect((await call(host, p, "state.set", { key: "branch", value: "main" })).ok).toBe(true);
+    expect((await call(host, p, "state.set", { key: "tab", value: { open: 2 } })).ok).toBe(true);
+    expect((await call(host, p, "state.get", { key: "branch" })).value).toBe("main");
+    expect((await call(host, p, "state.list", { prefix: "b" })).value).toEqual(["branch"]);
+    expect((await call(host, p, "state.delete", { key: "branch" })).ok).toBe(true);
+    expect((await call(host, p, "state.list")).value).toEqual(["tab"]);
+    expect(s.query).not.toHaveBeenCalled();
+    // ANOTHER CARD'S FRAME holds a state of its own.
+    const other = new PreviewHost({ artifact: "a1", socket: s, granted: ["state"] });
+    expect((await call(other, port(), "state.get", { key: "tab" })).value).toBeNull();
+  });
+
+  test("keeps only a few small remembered choices", async () => {
+    const host = new PreviewHost({ artifact: "a1", socket: socket(), granted: ["state"] });
+    const p = port();
+    for (let i = 0; i < PREVIEW_STATE_KEYS; i++) {
+      expect((await call(host, p, "state.set", { key: `k${i}`, value: i })).ok).toBe(true);
+    }
+    expect(await call(host, p, "state.set", { key: "one more", value: 1 })).toMatchObject({
+      ok: false,
+      error: { code: "rate_limited" },
+    });
+    // A key it already holds may still change.
+    expect((await call(host, p, "state.set", { key: "k0", value: 2 })).ok).toBe(true);
+    const big = "x".repeat(PREVIEW_STATE_VALUE_BYTES);
+    expect(await call(host, p, "state.set", { key: "k1", value: big })).toMatchObject({
+      ok: false,
+      error: { code: "invalid" },
+    });
+  });
+
+  test("is on a frame's port only for a datastore or a state to answer", () => {
+    expect(hostAnswers(["db"])).toBe(true);
+    expect(hostAnswers(["state"])).toBe(true);
+    expect(hostAnswers(["assets"])).toBe(false);
+    expect(hostAnswers([])).toBe(false);
   });
 
   // A SNAPSHOT, NOT A LIVE VIEW: the frame stays loaded after it has drawn,

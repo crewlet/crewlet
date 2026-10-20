@@ -209,9 +209,11 @@ func TestAMintRefusesClaimsNoTicketMayCarry(t *testing.T) {
 		},
 		"unknown purpose": func(cl *artifacts.TicketClaims) { cl.Purpose = "embed" },
 		// A PREVIEW IS GRANTED WHAT DRAWING NEEDS, and lives minutes.
-		"preview with the viewer's state": func(cl *artifacts.TicketClaims) {
+		// A newcomer's state is drawing's (the preview host holds it); who
+		// the viewer is never is.
+		"preview with the viewer": func(cl *artifacts.TicketClaims) {
 			cl.Purpose = artifacts.TicketPurposePreview
-			cl.Capabilities = []artifacts.Capability{artifacts.CapabilityDB, artifacts.CapabilityState}
+			cl.Capabilities = []artifacts.Capability{artifacts.CapabilityState, artifacts.CapabilityIdentity}
 			cl.Expires = c.at.Add(artifacts.PreviewTicketLifetime)
 		},
 		"preview with presence": func(cl *artifacts.TicketClaims) {
@@ -242,7 +244,8 @@ func TestAPreviewsTicketOpensAsAPreview(t *testing.T) {
 	codec := codec(t, c, runtoken.OneKey(k1.ID, k1.Material))
 	in := claims(c)
 	in.Purpose = artifacts.TicketPurposePreview
-	in.Capabilities = []artifacts.Capability{artifacts.CapabilityAssets, artifacts.CapabilityDB}
+	in.Capabilities = []artifacts.Capability{artifacts.CapabilityAssets, artifacts.CapabilityDB,
+		artifacts.CapabilityState}
 	in.Expires = c.at.Add(artifacts.PreviewTicketLifetime)
 	tok, err := codec.Mint(in)
 	if err != nil {
@@ -252,7 +255,7 @@ func TestAPreviewsTicketOpensAsAPreview(t *testing.T) {
 	if err != nil || verdict != ticket.Valid {
 		t.Fatalf("Open: %v %v", verdict, err)
 	}
-	if out.Purpose != artifacts.TicketPurposePreview || len(out.Capabilities) != 2 {
+	if out.Purpose != artifacts.TicketPurposePreview || len(out.Capabilities) != 3 {
 		t.Errorf("the preview opened as %+v", out)
 	}
 }

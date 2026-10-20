@@ -10,7 +10,7 @@ import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { LivePreviewBudgetProvider } from "@crewlethq/ui";
-import { GalleryPreview, previewWidgets, previewable, snapshotKey } from "./GalleryPreview.tsx";
+import { GalleryPreview, previewWidgets, snapshotKey } from "./GalleryPreview.tsx";
 import type { ArtifactListItem, DashboardWidget } from "~/protocol/index.ts";
 import type { ArtifactPeople } from "~/lib/artifacts/people.ts";
 import { mintFrame, readBoard, readOutline } from "~/lib/artifacts/api.ts";
@@ -250,27 +250,50 @@ test("the preview host tells the page the frame's grant, never the item's declar
   expect(sent[0]).toMatchObject({ type: "bridge.init", capabilities: ["assets", "db"] });
 });
 
-test("a page that keeps each viewer's own state shows the kind's drawing, and reads nothing", async () => {
+// A PAGE THAT KEEPS EACH VIEWER'S OWN STATE IS DRAWN, as a newcomer sees it:
+// it used to stand as its kind's drawing for good, so a dashboard that
+// remembered its branch filter (Pipeline health) never had a preview. Its
+// frame's host answers the state the page itself set while it lives, and
+// never asks the engine for the reader's.
+test("a page that keeps each viewer's own state is drawn with a newcomer's state", async () => {
   vi.stubGlobal("IntersectionObserver", SeenObserver);
-  expect(previewable({ kind: "html", capabilities: ["state", "assets"] })).toBe(false);
-  expect(previewable({ kind: "html", capabilities: ["db", "identity", "presence"] })).toBe(true);
-  expect(previewable({ kind: "html", capabilities: ["db"] })).toBe(true);
-  expect(previewable({ kind: "sheet", capabilities: [] })).toBe(true);
-  const { container } = render(
+  framed.props = null;
+  vi.mocked(mintFrame).mockResolvedValueOnce({
+    frame_url: "https://p3.artifacts.example.net/t/x/index.html#n=abc",
+    origin: "https://p3.artifacts.example.net",
+    mode: "per-artifact",
+    sandbox: "allow-scripts",
+    allow: "",
+    nonce: "abc",
+    capabilities: ["state"],
+  } as never);
+  render(
     <GalleryPreview
-      item={item({ id: "p3", kind: "html", capabilities: ["db", "state"] })}
+      item={item({ id: "p3", kind: "html", capabilities: ["db", "identity", "state"] })}
       people={people}
     />,
   );
-  await act(async () => {});
-  expect(container.querySelector(".crewlet-kind-ground.crewlet-kind--html")).not.toBeNull();
-  expect(container.querySelector(".crewlet-live-preview__live")).toBeNull();
-  expect(mintFrame).not.toHaveBeenCalled();
+  await waitFor(() =>
+    expect(mintFrame).toHaveBeenCalledWith("p3", 3, undefined, { preview: true }),
+  );
+  await waitFor(() => expect(framed.props).not.toBeNull());
+  const sent: Record<string, unknown>[] = [];
+  const port = { postMessage: (m: Record<string, unknown>) => sent.push(m) } as never;
+  (framed.props!["onReady"] as (port: MessagePort) => void)(port);
+  expect(sent[0]).toMatchObject({ type: "bridge.init", capabilities: ["state"], viewer: null });
+  const onMessage = framed.props!["onMessage"] as (data: unknown, port: MessagePort) => void;
+  onMessage({ type: "bridge.call", id: 1, method: "state.get", params: { key: "branch" } }, port);
+  onMessage(
+    { type: "bridge.call", id: 2, method: "state.set", params: { key: "branch", value: "main" } },
+    port,
+  );
+  onMessage({ type: "bridge.call", id: 3, method: "state.get", params: { key: "branch" } }, port);
+  await waitFor(() => expect(sent).toHaveLength(4));
+  expect(sent[1]).toMatchObject({ id: 1, ok: true, value: null });
+  expect(sent[2]).toMatchObject({ id: 2, ok: true });
+  expect(sent[3]).toMatchObject({ id: 3, ok: true, value: "main" });
 });
 
-// A SNAPSHOT OF A VERSION, KEPT FOR THE VISIT: a card mounted again under the
-// gallery's provider (a filter, the list's shape) shows what it drew and
-// reads nothing, and a new version is drawn afresh.
 test("a card mounted again on the same visit shows its snapshot and reads nothing", async () => {
   vi.stubGlobal("IntersectionObserver", SeenObserver);
   vi.mocked(readBoard).mockClear();

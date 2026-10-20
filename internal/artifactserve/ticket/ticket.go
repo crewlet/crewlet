@@ -219,8 +219,9 @@ func check(claims artifacts.TicketClaims) error {
 				ErrInvalidClaims, c)
 		}
 		// A PREVIEW NEVER CARRIES MORE THAN DRAWING NEEDS, on a mint and on
-		// every open, so no ticket proves a preview granted the viewer, their
-		// state or the room.
+		// every open, so no ticket proves a preview granted the viewer or the
+		// room. Its state is a newcomer's, held by the dashboard's preview
+		// host, never the viewer's own.
 		if claims.Purpose == artifacts.TicketPurposePreview &&
 			!slices.Contains(artifacts.PreviewCapabilities, c) {
 			return fmt.Errorf("%w: capability %q is not one a preview is granted",
