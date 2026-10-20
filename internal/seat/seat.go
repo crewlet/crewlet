@@ -50,6 +50,12 @@
 //     nothing to learn but what the apply already knew. At most one such
 //     pass per interval, so the rate limit above still bounds a node to
 //     two passes' claims in any interval however many applies arrive.
+//   - And so does the claim gate OPENING ([Config.Ready]), asked for by the
+//     gate's owner, since the host cannot see the gate change. A node that
+//     booted behind its logs claimed nothing at [Host.Start] and then
+//     waited for the tick with every seat it could run unclaimed. An asked
+//     pass the gate withheld, giving nothing back either, changed nothing,
+//     so it does not count against the one ask an interval honours.
 //
 // # Losing a seat is as important as gaining one
 //
@@ -166,7 +172,7 @@ const (
 	// absorbed within ~TTL plus a few sweeps, without polling the store
 	// hard enough to matter. It is the cadence for what changes in the
 	// FLEET; a change to the seats themselves asks for a pass at once
-	// ([Host.Resweep]).
+	// ([Host.Resweep]), and so does the claim gate opening ([Config.Ready]).
 	SweepInterval = 5 * time.Second
 
 	// ClaimLimitPerSweep is how many seats one sweep may newly claim.
@@ -516,6 +522,13 @@ type SweepResult struct {
 // Blocked reports whether the mixed-version gate is what stopped this pass
 // from claiming.
 func (r SweepResult) Blocked() bool { return r.BlockedByProtocol > 0 }
+
+// idle reports whether this pass changed nothing because the claim gate
+// withheld it: it claimed nothing and gave nothing back, so it spent none of
+// the rate the per-sweep limits bound ([Host.sweepLoop]).
+func (r SweepResult) idle() bool {
+	return r.Withheld && len(r.Claimed) == 0 && len(r.Lost) == 0
+}
 
 // clone returns a SweepResult that shares no backing array with the
 // original.
