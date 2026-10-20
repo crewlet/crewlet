@@ -441,8 +441,9 @@ func Catalogue() []Instrument {
 			Attributes: []string{"domain"},
 			Shows: "How much of the ceiling ordinary writes are held to is " +
 				"left — on every log that claims identity (the tracker, the " +
-				"pages, the identity estate and chat), the ceiling " +
-				"less the gate reserve kept above it for evictions. At zero the log " +
+				"pages, the identity estate, the artifacts, the artifact " +
+				"datastore and chat), the ceiling less the gate reserve kept " +
+				"above it for evictions. At zero the log " +
 				"refuses every write AND every linearizable read, and the " +
 				"remedy is a fleet-wide maintenance cycle, so this is the one " +
 				"number worth alarming on long before it is small.",

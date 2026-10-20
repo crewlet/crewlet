@@ -389,4 +389,21 @@ func TestThePagesCountTheNativeToolsTheRegistryHolds(t *testing.T) {
 		t.Errorf("the tools guide's table lists %d tools, want every page tool (%d) "+
 			"and the tracker's item and file tools (%d)", len(rows), len(pages), listed)
 	}
+
+	// AND THE ARTIFACTS SECTION, counted off the two lists the registry adds on
+	// every node that takes artifact uploads, which the operator catalogue
+	// builds from the same sets. Kept by hand, it read "Twelve more" above
+	// nine and four.
+	art, data := len(builtin.ArtifactTools()), len(builtin.ArtifactDataTools())
+	for _, want := range []string{
+		title(spelled(t, art+data)) + " more, registered on every node that takes " +
+			"artifact uploads",
+		spelled(t, art) + " for the artifact and " + spelled(t, data) + " for its datastore",
+		"the operator catalogue serves the same " + spelled(t, art+data),
+	} {
+		if !strings.Contains(guide, want) {
+			t.Errorf("the tools guide does not say %q — the registry adds %d artifact "+
+				"and %d datastore tools", want, art, data)
+		}
+	}
 }
