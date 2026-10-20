@@ -6,7 +6,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { FrameReadings } from "~/app/Shell.tsx";
 import { Router } from "~/app/router.tsx";
@@ -190,8 +190,10 @@ test("leaving with a title typed asks first, and keeping on stays", async () => 
   mount();
   fireEvent.change(await title(), { target: { value: "Board review" } });
   fireEvent.click(screen.getAllByRole("button", { name: "Cancel" })[0]!);
-  expect(await screen.findByText("Leave without creating the deck?")).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
+  // THE SAME PROMPT AS EVERY CREATE PAGE'S: discard the kind, or keep editing.
+  const prompt = await screen.findByRole("alertdialog", { name: "Discard this deck?" });
+  expect(within(prompt).getByRole("button", { name: "Discard" })).toBeTruthy();
+  fireEvent.click(within(prompt).getByRole("button", { name: "Keep editing" }));
   expect(location.hash).toBe("#/artifacts/new/slides");
 });
 

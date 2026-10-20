@@ -539,10 +539,10 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
           setLeaving(null);
           go?.leave();
         }}
-        title="Leave without creating the deck?"
-        message="The title, theme and slides you chose will be lost."
-        confirmLabel="Discard and leave"
+        title="Discard this deck?"
+        message="Its title, its theme and the slides you laid out are not saved anywhere yet."
         cancelLabel="Keep editing"
+        confirmLabel="Discard"
         destructive
       />
     </CreateShell>
