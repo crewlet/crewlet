@@ -545,14 +545,19 @@ func anchored(re *regexp.Regexp) bool {
 
 // validateAll is every declaration's Validate, and what holds only across
 // them: names unique; no two maintainer writes of one Step, since the refusal
-// counter and gauge are keyed by step; every file under objects/ — the root
-// is the repository's own fixed files, refs/ stays empty (a loose ref would
-// outrank packed-refs for every reader), and what a boot counts of a copy
-// with no state is objects/ and packed-refs (measureIncarnation); and every
-// part a damage report may drop (gitproc.Damage.Drops) some declaration's, or
-// that damage would drop nothing. Open refuses a cache whose declarations
-// fail it, so a build whose declarations are wrong never opens one — and
-// TestEveryDerivedFileIsDeclared catches it first.
+// counter and gauge are keyed by step; every file a declaration owns or holds
+// under objects/ — the root is the repository's own fixed files, and refs/
+// stays empty (a loose ref would outrank packed-refs for every reader); and
+// every part a damage report may drop (gitproc.Damage.Drops) some
+// declaration's, or that damage would drop nothing. Open refuses a cache
+// whose declarations fail it, so a build whose declarations are wrong never
+// opens one — and TestEveryDerivedFileIsDeclared catches it first.
+//
+// THE ROOT RULE IS WHAT LETS A BOOT WALK objects/ ALONE: a copy with no state
+// is counted by its files under objects/ and its packed-refs
+// (measureIncarnation), which counts every derived file only because this
+// rule keeps them there. A root admitted here is a root that walk must read
+// too, and the two change together.
 func validateAll(decls []Derived) error {
 	names := map[DerivedName]bool{}
 	steps := map[Step]DerivedName{}
