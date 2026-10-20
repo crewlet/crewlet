@@ -117,17 +117,50 @@ test("the reader's own artifact is owned by You, and anybody else's by their nam
   expect(within(theirs).getByText("Can edit")).toBeTruthy();
 });
 
+// A ROW READS AS THE GRID'S CARD DOES: the kind's mark on its tint, the
+// title over the kind's word and the description, who can open it in words,
+// and the owner's badge beside their name. The kind is printed under the
+// title, so there is no Type column to repeat it.
+test("a list row draws the kind's mark, the kind and description under the title, its access and its owner's badge", () => {
+  asList();
+  items = [
+    row({ description: "How the engine replicates its estate" }),
+    row({
+      id: "a2",
+      title: "Vendor scorecard",
+      kind: "sheet",
+      owner: "maya",
+      role: "editor",
+      share_count: 2,
+      shares: [{ audience: { kind: "company" } }] as never,
+    }),
+  ];
+  mount("all");
+  expect(headers()).toEqual(["Name", "Access", "Owner", "Edited", "Your role", ""]);
+  const own = screen.getByText("Architecture notes").closest(".grid-row") as HTMLElement;
+  expect(own.querySelector(".crewlet-artifact-name__mark.crewlet-kind--doc")).not.toBeNull();
+  expect(own.querySelector(".crewlet-artifact-name__detail")?.textContent).toBe(
+    "Doc·, How the engine replicates its estate",
+  );
+  expect(within(own).getByText("Private")).toBeTruthy();
+  const theirs = screen.getByText("Vendor scorecard").closest(".grid-row") as HTMLElement;
+  expect(theirs.querySelector(".crewlet-artifact-name__mark.crewlet-kind--sheet")).not.toBeNull();
+  expect(theirs.querySelector(".crewlet-artifact-name__detail")?.textContent).toBe("Sheet");
+  expect(within(theirs).getByText("Company")).toBeTruthy();
+  expect(theirs.querySelector(".crewlet-table-cell__entity .crewlet-avatar")).not.toBeNull();
+});
+
 test("Yours draws no owner and no role, which would say You and Owner on every row", () => {
   asList();
   mount("yours", "#/artifacts/yours");
-  expect(headers()).toEqual(["Name", "Type", "Edited", ""]);
+  expect(headers()).toEqual(["Name", "Access", "Edited", ""]);
 });
 
 test("the trash says when each went in and when it goes for good, and offers a restore and no pin", () => {
   asList();
   items = [row({ status: "trashed", trashed_at: "2026-10-18T10:00:00Z", title: "Old draft" })];
   mount("yours", "#/artifacts/yours?status=trashed");
-  expect(headers()).toEqual(["Name", "Type", "Trashed", "Deleted for good", ""]);
+  expect(headers()).toEqual(["Name", "Trashed", "Deleted for good", ""]);
   expect(screen.getByText(/Only you see your trash/)).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "More for “Old draft”" }));
   expect(screen.queryByRole("menuitem", { name: "Pin to your sidebar" })).toBeNull();
@@ -178,7 +211,7 @@ test("the gallery opens as a grid, and a reader's choice of the list is remember
 
 test("the Make row offers every kind on All and Yours, each opening its kind's own page", () => {
   mount("all");
-  const make = screen.getByRole("region", { name: "Make something new" });
+  const make = screen.getByRole("region", { name: "Start a new artifact" });
   const tiles = within(make).getAllByRole("link");
   expect(tiles.map((t) => t.getAttribute("aria-label"))).toEqual([
     "Docs",
@@ -196,7 +229,7 @@ test("the Make row offers every kind on All and Yours, each opening its kind's o
   expect(tiles[5]!.getAttribute("href")).toBe("#/artifacts/new/sheet");
   cleanup();
   mount("yours", "#/artifacts/yours");
-  expect(screen.getByRole("region", { name: "Make something new" })).toBeTruthy();
+  expect(screen.getByRole("region", { name: "Start a new artifact" })).toBeTruthy();
 });
 
 // NEW IS A MENU OF THE KINDS, in the Make row's order, each row opening that
@@ -219,13 +252,13 @@ test("New opens a menu of every kind, each going to its own create page", () => 
 
 test("the Make row steps aside on Shared with you, in the trash and for a search", () => {
   mount("shared", "#/artifacts/shared");
-  expect(screen.queryByRole("region", { name: "Make something new" })).toBeNull();
+  expect(screen.queryByRole("region", { name: "Start a new artifact" })).toBeNull();
   cleanup();
   mount("yours", "#/artifacts/yours?status=trashed");
-  expect(screen.queryByRole("region", { name: "Make something new" })).toBeNull();
+  expect(screen.queryByRole("region", { name: "Start a new artifact" })).toBeNull();
   cleanup();
   mount("all", "#/artifacts?q=vendor");
-  expect(screen.queryByRole("region", { name: "Make something new" })).toBeNull();
+  expect(screen.queryByRole("region", { name: "Start a new artifact" })).toBeNull();
 });
 
 test("an earlier gallery's address is rewritten in place to the section it became", () => {
