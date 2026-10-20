@@ -11,6 +11,12 @@
  * primary action (`action`). A create page reads as the artifact it is about
  * to become, so the bar does not jump when the new artifact opens.
  *
+ * The primary action is pressed with the command key and Enter from anywhere
+ * on the page, a field included (`create.start` in `app/keymap.ts`), so every
+ * kind starts the same way and none binds its own. On a narrow bar it takes
+ * its short word (`short`), so "Create and ask SRE Lead" reads "Create" on a
+ * phone.
+ *
  * # The body is the kind's
  *
  * Writing a doc, laying out a deck and asking an agent for a dashboard share
@@ -25,6 +31,7 @@ import { ArtifactBar, type ArtifactBarTool } from "@crewlethq/ui";
 import { XGlyph } from "@crewlethq/icons/glyphs";
 import { FrameNavToggle, OwnPageHeader } from "~/app/frame/OwnHeader.tsx";
 import { useFillScreen } from "~/app/fill.tsx";
+import { capsOf, keyRow, useKeymap } from "~/app/keymap.ts";
 import { href, useNavigator } from "~/app/router.tsx";
 import { artifactSectionPath } from "~/app/routes.ts";
 import { KIND_WORDS, NEW_KIND_TITLES } from "~/lib/artifacts/words.ts";
@@ -34,7 +41,13 @@ import type { ArtifactKind } from "~/protocol/index.ts";
 const GALLERY = artifactSectionPath("all");
 
 /** The kind's primary action, drawn as the bar's last control: "Start the doc". */
-export type CreateAction = Omit<ArtifactBarTool, "key" | "labelled" | "emphasis" | "pressed">;
+export interface CreateAction extends Omit<
+  ArtifactBarTool,
+  "key" | "labelled" | "emphasis" | "pressed" | "keys" | "shortLabel"
+> {
+  /** Its word on a narrow bar, where the full one would push the title out: "Create". */
+  short?: string | undefined;
+}
 
 export interface CreateShellProps {
   kind: ArtifactKind;
@@ -69,6 +82,15 @@ export function CreateShell({
 }: CreateShellProps) {
   useFillScreen(true);
   const leave = useLeaveCreate();
+  useKeymap({
+    "create.start": {
+      run: (e) => {
+        e.preventDefault();
+        action?.onSelect();
+      },
+      when: action !== undefined && action.disabledReason === undefined,
+    },
+  });
   const bar: ArtifactBarTool[] = [
     ...tools,
     {
@@ -78,7 +100,7 @@ export function CreateShell({
       onSelect: onCancel ?? leave,
       labelled: true,
     },
-    ...(action ? [{ ...action, key: "create", labelled: true, emphasis: "primary" as const }] : []),
+    ...(action ? [primaryTool(action)] : []),
   ];
   return (
     <div className="artifact-create" data-kind={kind}>
@@ -97,4 +119,16 @@ export function CreateShell({
       <div className="artifact-create-body">{children}</div>
     </div>
   );
+}
+
+/** The page's action as the bar draws it: primary, labelled, with its key and its short word. */
+function primaryTool({ short, ...action }: CreateAction): ArtifactBarTool {
+  return {
+    ...action,
+    key: "create",
+    labelled: true,
+    emphasis: "primary",
+    keys: capsOf(keyRow("create.start").presses[0]!),
+    ...(short ? { shortLabel: short } : {}),
+  };
 }
