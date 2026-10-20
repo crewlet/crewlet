@@ -757,8 +757,12 @@ func artifactNotFound(tool, ref string) tools.Result {
 // artifactTrashed is the answer for a read of an artifact in the trash, to a
 // caller it is disclosed to: its content is not served until a person
 // restores it, so nothing of it is read.
+//
+// THE ARTIFACT'S STATE, A CONFLICT, as every gesture on a trashed artifact is
+// and as the API's `409 artifact_trashed` says — never `not_found`: the
+// artifact is there, and a caller told it is not makes another.
 func artifactTrashed(tool string, h artifactsdomain.Head) tools.Result {
-	return refusedBy(tools.RefusalNotFound, artifactsdomain.ErrTrashed, fmt.Sprintf("%s: "+
+	return refusedBy(tools.RefusalConflict, artifactsdomain.ErrTrashed, fmt.Sprintf("%s: "+
 		"artifact %s is in the trash, and its content is not served until its owner (%s) "+
 		"restores it. Nothing was read.", tool, h.ID, h.Owner))
 }

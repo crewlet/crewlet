@@ -62,10 +62,11 @@ func TestEveryRefusalAPersonReadsIsTheEnginesSentence(t *testing.T) {
 // A REFUSAL THAT IS NO COLLISION IS NEVER WORDED AS ONE. A 409 says the request
 // met a state of the target, and most of those states are not a race: a turn
 // holding as many notes as it may, or one that has taken all it takes, a turn
-// that ended, an item handed on as often as it may be, a full inbox, a spent
-// budget, a question already answered. Each reads as what it is, and one no
-// change to the request can mend is not promised a change that can apply. A
-// conflict with no code of its own is still a collision.
+// that ended, an item handed on as often as it may be, a full inbox, a limit
+// on what is kept, a spent budget, a question already answered. Each reads as
+// what it is, and one no change to the request can mend is not promised a
+// change that can apply. A conflict with no code of its own is still a
+// collision.
 //
 // Mutation: drop a code from personSentence, or give a settled refusal the
 // hint that promises a change, and this goes red.
@@ -82,6 +83,7 @@ func TestARefusalThatIsNoCollisionIsNeverWordedAsOne(t *testing.T) {
 		httpjson.CodeAlreadyAnswered:    {"already answered", true},
 		httpjson.CodeReassignmentBudget: {"A person has to pick it up", false},
 		httpjson.CodeInboxFull:          {"Mark everything up to here read", false},
+		httpjson.CodeQuotaExceeded:      {"limit on how much can be kept", false},
 		httpjson.CodeBudgetExhausted:    {"budget for this window is spent", false},
 	} {
 		got := cards.PersonRefusal(wire.Refusal{Code: string(code)}, http.StatusConflict).Message

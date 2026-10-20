@@ -56,6 +56,7 @@ const (
 	refusedAnswered   = "Somebody has already answered it."
 	refusedHandedOn   = "It has been handed between seats as often as it may be. A person has to pick it up now."
 	refusedInboxFull  = "The inbox holds as many marks as it may. Mark everything up to here read first."
+	refusedQuota      = "This would pass a limit on how much can be kept here. Remove what is no longer needed, or ask whoever sets the limit to raise it."
 	refusedNotesFull  = "The turn already holds as many notes as it can before it reads them. Send it again once it has read them, at its next step."
 	refusedNotesSpent = "The turn has taken as many notes as a turn takes. Put the rest on its work item."
 	refusedNotRunning = "It is not running any more, or not waiting for this."
@@ -118,7 +119,8 @@ func PersonRefusal(r wire.Refusal, status int) wire.Refusal {
 // personSentence is the sentence for refusal r, answered at status: its
 // rule's, where the authority table refused; else its code's, where that says
 // more than its status (a 409 that is an existing record, a full or spent
-// turn, a turn that ended, rather than a race); else its status's class.
+// turn, a turn that ended, a limit on what is kept, rather than a race); else
+// its status's class.
 func personSentence(r wire.Refusal, status int) string {
 	if r.Reason != "" {
 		if said := httpjson.RefusalMessage(httpjson.Code(r.Code), r.Reason, r.Grants); said != "" {
@@ -139,6 +141,8 @@ func personSentence(r wire.Refusal, status int) string {
 		return refusedHandedOn
 	case string(httpjson.CodeInboxFull):
 		return refusedInboxFull
+	case string(httpjson.CodeQuotaExceeded):
+		return refusedQuota
 	case string(httpjson.CodeNotesFull):
 		return refusedNotesFull
 	case string(httpjson.CodeNotesSpent):

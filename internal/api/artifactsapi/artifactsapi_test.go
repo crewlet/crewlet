@@ -853,7 +853,7 @@ func TestEveryRefusalOfAPublishHasItsOwnAnswer(t *testing.T) {
 		status int
 		code   string
 	}{
-		{&artifactsdomain.QuotaExceeded{Limit: 1, Usage: 2, Key: "artifacts.limits.company_bytes"}, 413, "quota_exceeded"},
+		{&artifactsdomain.QuotaExceeded{Limit: 1, Usage: 2, Key: "artifacts.limits.company_bytes"}, 409, "quota_exceeded"},
 		{&artifactsdomain.CarriedObjectGone{Paths: []string{"a.css"}}, 409, "carried_object_gone"},
 		{&artifactupload.UploadMismatch{Path: "a.css"}, 422, "upload_mismatch"},
 		{&artifactupload.UploadMissing{Paths: []string{"a.css"}}, 409, "upload_missing"},

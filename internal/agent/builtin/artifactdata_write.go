@@ -104,7 +104,10 @@ func (t *writeArtifactData) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return *refusal, nil
 	}
 	if a.head.Status == artifactsdomain.StatusTrashed {
-		return refusedBy(tools.RefusalForbidden, artifactdata.ErrGone, fmt.Sprintf("%s: the "+
+		// THE ARTIFACT'S STATE, under its own sentinel: never the
+		// datastore's ErrGone, which is a purge's and says the data will
+		// not come back.
+		return refusedBy(tools.RefusalConflict, artifactsdomain.ErrTrashed, fmt.Sprintf("%s: the "+
 			"artifact is in the trash, and its data is not written until a person restores "+
 			"it. Nothing was written.", t.Name())), nil
 	}
@@ -218,16 +221,19 @@ func (d dataTools) verdict(ctx context.Context, turn *turnctx.Turn, tool string,
 		}
 		return r, err
 	}
-	class := tools.RefusalInvalid
-	switch res.Verdict {
-	case artifacts.DataForbidden, artifacts.DataQuota:
-		class = tools.RefusalForbidden
-	case artifacts.DataGone:
-		class = tools.RefusalNotFound
-	}
-	return refusedBy(class, fmt.Errorf("artifactdata: %s: %s", res.Verdict, res.Reason),
+	class := DataVerdictClass(res.Verdict)
+	refusal := refusedBy(class, fmt.Errorf("artifactdata: %s: %s", res.Verdict, res.Reason),
 		fmt.Sprintf("%s did not write anything: the datastore refused the batch (%s: %s). "+
-			"No op of it landed.", tool, res.Verdict, res.Reason)), nil
+			"No op of it landed.", tool, res.Verdict, res.Reason))
+	if res.Verdict == artifacts.DataQuota {
+		// A LIMIT ON WHAT THE DATA MAY HOLD, its own class, in a person's
+		// words beside the model's sentence (ADR-0060): the sentence names
+		// the applier's reason, a collection, a count or a Tier A key, and a
+		// person's surface answers the catalog's phrasing in its place, as a
+		// publish past the company's storage is answered.
+		return toPerson(refusal, caveat.DatastoreQuotaReached()), nil
+	}
+	return refusal, nil
 }
 
 // ---- set_artifact_schema ------------------------------------------------- //
@@ -327,7 +333,7 @@ func (t *setArtifactSchema) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return *refusal, nil
 	}
 	if a.head.Status == artifactsdomain.StatusTrashed {
-		return refusedBy(tools.RefusalForbidden, artifactdata.ErrGone, fmt.Sprintf("%s: the "+
+		return refusedBy(tools.RefusalConflict, artifactsdomain.ErrTrashed, fmt.Sprintf("%s: the "+
 			"artifact is in the trash. Nothing was changed.", t.Name())), nil
 	}
 	t.d.touch(a.c, a.head.ID, presence.Editing, presence.Focus{})

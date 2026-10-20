@@ -89,12 +89,15 @@ export const ACT_ERRORS = {
   not_found: "It is not there any more. Somebody may have removed or moved it.",
   forbidden: null,
   stale_version: "Changed by somebody else since you opened it. Look again, then retry.",
-  conflict: "It collided with another change landing at the same moment. Look again, then retry.",
+  conflict:
+    "It collided with another change, or its state no longer takes this. Look again, then retry.",
   exists: "That already exists.",
   already_answered: "Somebody has already answered it.",
   reassignment_budget:
     "It has been handed between seats too many times. A person has to pick it up now.",
   inbox_full: "Your inbox holds too many marks. Mark everything read up to here first.",
+  quota_exceeded:
+    "This would pass a limit on what the company keeps. Remove what it no longer needs, or ask an admin to raise the limit.",
   notes_full:
     "The turn already holds as many notes as it can before it reads them. Send this again once it has read them, at its next step.",
   notes_spent:

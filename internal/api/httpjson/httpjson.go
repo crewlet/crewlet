@@ -907,9 +907,19 @@ const (
 	// its data may already be gone for good. 409: the purge finishes on its
 	// retry, an administrator's purge or the trash reaper's next pass.
 	CodeArtifactPurging Code = "artifact_purging"
-	// CodeQuotaExceeded is a write the company's plan quota refuses. 413,
-	// the detail naming the limit, the usage and the Tier A key an operator
-	// raises.
+	// CodeQuotaExceeded is a write past a limit on what is kept: the
+	// company's storage (the artifacts' bytes, or a datastore's footprint,
+	// the store's own or the company's), or a cap on what one datastore
+	// holds (its collections and documents, a collection's rows, one
+	// participant's rows). 409, the code of the tools' `quota_exceeded`
+	// refusal class, because it is the state of what is held that the write
+	// collided with and no larger or smaller request changes it. ITS
+	// SENTENCE STANDS ALONE, because what is beside it differs by route: the
+	// artifacts routes answer the limit, the usage and the Tier A key an
+	// operator raises; a datastore's routes answer the applier's reason,
+	// which names the limit, as the detail; and the act route answers the
+	// refusal in a person's words where the tool gave it some, and no
+	// detail otherwise (ADR-0060).
 	CodeQuotaExceeded Code = "quota_exceeded"
 	// CodeCarriedObjectGone is a publish carrying files the artifact no
 	// longer holds the bytes of. 409, the detail naming the paths to upload
@@ -1008,12 +1018,9 @@ const (
 // `stale_version`, a rule that refused is `forbidden` and a value that failed
 // is `invalid`, the codes every write surface already answers with.
 const (
-	// CodeDataQuota is a datastore write the stamped plan quota refused:
-	// the store's or the company's footprint would pass its limit. 413,
-	// and the detail names the Tier A key an operator raises.
-	CodeDataQuota Code = "data_quota"
-	// CodeDataGone is a datastore whose artifact was purged, or is in the
-	// trash, so nothing is written to it. 410.
+	// CodeDataGone is a datastore whose artifact was purged, so nothing is
+	// written to it. 410. An artifact in the trash is [CodeArtifactTrashed],
+	// as it is on every other artifacts route: it is restored, not gone.
 	CodeDataGone Code = "data_gone"
 	// CodeNotUndoable is an undo of a write the history cannot undo. 409,
 	// and the detail says why.
@@ -1384,9 +1391,9 @@ var codes = map[Code]string{
 		"restore it, then try again.",
 	CodeArtifactPurging: "This artifact is being deleted for good, so it " +
 		"cannot be restored. The deletion finishes on its own.",
-	CodeQuotaExceeded: "This would take the company past its artifacts quota, " +
-		"so nothing was saved. Remove artifacts, or ask an operator to raise " +
-		"the limit the detail names.",
+	CodeQuotaExceeded: "This would pass a limit on how much can be kept here, " +
+		"so nothing was saved. Remove what is no longer needed, or ask whoever " +
+		"sets the limit to raise it.",
 	CodeCarriedObjectGone: "Some files this version keeps are no longer stored, " +
 		"so nothing was published. Upload the files the detail names again.",
 	CodeUploadMismatch: "A file that arrived is not the one the upload " +
@@ -1435,11 +1442,8 @@ var codes = map[Code]string{
 		"to go ahead.",
 	CodeFolderAmbiguous: "That path names more than one folder you can see. Choose one " +
 		"of the folders the detail lists, by its id.",
-	CodeDataQuota: "This would take the data past its size limit, so nothing " +
-		"was written. Delete rows, or ask an operator to raise the limit the " +
-		"detail names.",
-	CodeDataGone: "This artifact's data is gone: the artifact was deleted or is " +
-		"in the trash, so nothing was written.",
+	CodeDataGone: "This artifact's data is gone: the artifact was deleted, so " +
+		"nothing was written.",
 	CodeNotUndoable: "That change can't be undone. The detail says why.",
 	CodeMigrationTooLarge: "This schema change rewrites too many rows at once, so " +
 		"nothing changed. Change fewer columns at a time.",

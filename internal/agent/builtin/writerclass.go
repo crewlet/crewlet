@@ -6,6 +6,7 @@ import (
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/artifactdata"
+	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/doclet"
@@ -237,12 +238,18 @@ func pageClass(err error) (tools.Refusal, bool) {
 
 // artifactClass is the class of a refusal the artifacts' writer decided.
 //
-// AS THE TOOLS CLASS IT ([publishFailure]): an artifact in the trash refuses a
-// change until a person restores it, a label another version holds is an
-// argument to change, and an upload past its term — or carried bytes the
-// artifact no longer names — is the same call made again. A write refused
-// because the artifact's purge has begun is the artifact's state, as a tracker
-// restore with nothing in the trash is.
+// AS THE TOOLS CLASS IT ([publishFailure]) AND AS THE ARTIFACTS API ANSWERS IT
+// (internal/api/artifactsapi's writeFailed): one class per refusal, whose
+// status is the API's, which internal/api/artifactsapi's cross-surface case
+// holds. An artifact in the trash, one whose purge has begun and a label
+// another version holds (or the labels it keeps, all used) are each the
+// ARTIFACT'S STATE, which the gesture collided with — a conflict, as a
+// tracker restore with nothing in the trash is, and never a permission
+// (`forbidden` told a model to go and ask for one) or an argument (`invalid`
+// told it to send another, which a label somebody holds is only by luck). A
+// quota is what the company holds at its plan's limit: `quota_exceeded`,
+// which nobody's permission lifts. An upload past its term, or carried bytes
+// the artifact no longer names, is the same call made again.
 func artifactClass(err error) (tools.Refusal, bool) {
 	var (
 		moved *artifactsdomain.VersionMoved
@@ -256,17 +263,40 @@ func artifactClass(err error) (tools.Refusal, bool) {
 		return tools.RefusalStaleVersion, true
 	case errors.Is(err, artifactsdomain.ErrSourceTaken):
 		return tools.RefusalExists, true
-	case errors.Is(err, artifactsdomain.ErrTrashed), errors.Is(err, artifactsdomain.ErrAgentCompanyShare),
-		errors.Is(err, artifactsdomain.ErrAboveOwnRole), errors.As(err, &quota):
+	case errors.As(err, &quota):
+		return tools.RefusalQuotaExceeded, true
+	case errors.Is(err, artifactsdomain.ErrAgentCompanyShare),
+		errors.Is(err, artifactsdomain.ErrAboveOwnRole):
 		return tools.RefusalForbidden, true
 	case errors.Is(err, artifactsdomain.ErrConflict), errors.Is(err, artifactsdomain.ErrPurging),
+		errors.Is(err, artifactsdomain.ErrTrashed), errors.Is(err, artifactsdomain.ErrLabelTaken),
 		errors.Is(err, artifactsdomain.ErrUploadStale), errors.As(err, &gone):
 		return tools.RefusalConflict, true
-	case errors.Is(err, artifactsdomain.ErrInvalid), errors.Is(err, artifactsdomain.ErrLabelTaken),
-		errors.Is(err, artifactsdomain.ErrBadCursor):
+	case errors.Is(err, artifactsdomain.ErrInvalid), errors.Is(err, artifactsdomain.ErrBadCursor):
 		return tools.RefusalInvalid, true
 	}
 	return "", false
+}
+
+// DataVerdictClass is the class of a datastore write the APPLIER refused, by
+// the verdict it wrote — the class whose status internal/api/artifactdataapi
+// answers the same verdict in, which that package's cross-surface case holds,
+// and the reason this is exported. A quota is `quota_exceeded`, never `forbidden`: no permission
+// lifts it. A verdict this build does not know is a newer peer's decision
+// about a record that landed, which this build cannot describe: a conflict,
+// as the API's 409 says, rather than an argument the caller should change.
+func DataVerdictClass(v artifacts.DataVerdict) tools.Refusal {
+	switch v {
+	case artifacts.DataInvalid:
+		return tools.RefusalInvalid
+	case artifacts.DataForbidden:
+		return tools.RefusalForbidden
+	case artifacts.DataQuota:
+		return tools.RefusalQuotaExceeded
+	case artifacts.DataGone:
+		return tools.RefusalNotFound
+	}
+	return tools.RefusalConflict
 }
 
 // artifactDataClass is the class of a refusal a datastore's writer decided.

@@ -194,8 +194,11 @@ func writeFailed(w http.ResponseWriter, r *http.Request, key, verb string, err e
 		detail["paths"] = gone.Paths
 		fail(http.StatusConflict, httpjson.CodeCarriedObjectGone)
 	case errors.As(err, &quota):
+		// 409, NOT 413: what the write collided with is how much the
+		// company holds, which a smaller request does not change — the
+		// tools' `quota_exceeded` class, answered in its status.
 		detail["limit"], detail["usage"], detail["key"] = quota.Limit, quota.Usage, quota.Key
-		fail(http.StatusRequestEntityTooLarge, httpjson.CodeQuotaExceeded)
+		fail(http.StatusConflict, httpjson.CodeQuotaExceeded)
 	case errors.As(err, &mismatch):
 		detail["path"] = mismatch.Path
 		failClient(httpjson.CodeUploadMismatch)

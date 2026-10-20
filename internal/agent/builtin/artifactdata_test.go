@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -335,6 +336,44 @@ func TestASchemaChangeIsTheWritersToJudge(t *testing.T) {
 	if !refused.Failed || tools.RefusalOf(refused) != tools.RefusalForbidden ||
 		!strings.Contains(refused.Output, "never loosens") {
 		t.Fatalf("a refused schema change answered %v %q", tools.RefusalOf(refused), refused.Output)
+	}
+}
+
+// A LIMIT ON WHAT AN ARTIFACT'S DATA MAY HOLD IS TOLD TO A PERSON IN A
+// PERSON'S WORDS (ADR-0060), on a write and on a schema change alike.
+//
+// The applier refuses either for one verdict, `quota`, whichever limit it was:
+// the company's storage settings, a collection's own row caps, or the
+// engine's caps on one store. The tool's sentence names the applier's reason
+// for the model; a person's surface answers the catalog's phrasing in its
+// place, which is true of every one of those limits, where without one it
+// answered nothing but its code's own sentence.
+//
+// Mutation: drop the phrasing from the verdict's quota arm, and both go red.
+func TestADatastoreLimitIsToldToAPersonInTheirWords(t *testing.T) {
+	t.Parallel()
+	r := newDataRig(t, artifactChart{}, requesters{})
+	h := r.art.seed("agent-cto", iam.ActorAgent, cto, nil, [2]string{"index.html", "<p>x</p>"})
+	turn, _ := readerTurn(t)
+	r.data.verdict, r.data.reason = artifacts.DataQuota,
+		"review would hold 501 rows and its maximum is 500"
+	for name, args := range map[string]map[string]any{
+		builtin.WriteArtifactDataTool: {"artifact": h.ID.String(), "ops": []any{
+			map[string]any{"op": "set", "collection": "review", "doc": "a",
+				"fields": map[string]any{"x": 1}}}},
+		builtin.SetArtifactSchemaTool: {"artifact": h.ID.String(), "collections": []any{
+			map[string]any{"name": "review", "preset": "contribute"}}},
+	} {
+		got := r.call(t, turn, name, args)
+		if !got.Failed || tools.RefusalOf(got) != tools.RefusalQuotaExceeded ||
+			!strings.Contains(got.Output, "its maximum is 500") {
+			t.Errorf("%s past a limit answered %v %q, want quota_exceeded naming the "+
+				"applier's reason", name, tools.RefusalOf(got), got.Output)
+		}
+		if got.PersonRefusal != caveat.DatastoreQuotaReached() {
+			t.Errorf("%s past a limit answers a person %q, want the catalog's words", name,
+				got.PersonRefusal.Person())
+		}
 	}
 }
 
