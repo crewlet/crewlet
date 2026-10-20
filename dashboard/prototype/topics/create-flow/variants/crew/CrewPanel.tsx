@@ -1,5 +1,5 @@
 /**
- * The panel a kind's character opens: a side sheet beside the gallery,
+ * The panel a kind's tile opens: a side sheet beside the gallery,
  * holding that kind's create experience whole. Its head is the kind's mark
  * and name; its foot the create, for what a person writes, while a brief to
  * an agent carries its own send.

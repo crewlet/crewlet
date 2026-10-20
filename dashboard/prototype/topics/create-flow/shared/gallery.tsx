@@ -10,7 +10,7 @@
  */
 
 import type { ComponentType, ReactNode } from "react";
-import { ArtifactCard, type ArtifactCardKindMark, type ArtifactCardSize } from "@crewlethq/ui";
+import { ArtifactCard, type ArtifactCardSize } from "@crewlethq/ui";
 import { ArtifactGallery as Shipped } from "@original/routes/artifacts/Gallery.tsx";
 import { accessOf } from "@original/routes/artifacts/parts.tsx";
 import { GalleryPreview } from "~/routes/artifacts/GalleryPreview.tsx";
@@ -46,10 +46,10 @@ export function withMake(Make: ComponentType<{ section: ArtifactSection }>) {
 
 /**
  * The shipped card mapping, with the gallery's cards drawn as `tile` (a step
- * smaller) and the badge the proposal chose. A task rail's `compact` row is
- * left as it is.
+ * smaller), each still badged with its kind's glyph in its colour. A task
+ * rail's `compact` row is left as it is.
  */
-export function tileCards(kindMark: ArtifactCardKindMark) {
+export function tileCards() {
   return function ListedArtifactCard({
     item,
     people,
@@ -86,7 +86,6 @@ export function tileCards(kindMark: ArtifactCardKindMark) {
         pinned={item.pinned ?? false}
         version={item.head_number > 0 ? item.head_number : undefined}
         size={drawn}
-        kindMark={kindMark}
         now={now}
         {...(drawn === "tile"
           ? {
