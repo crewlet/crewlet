@@ -334,7 +334,24 @@ type moduleSource struct {
 // literalRuns is every maximal run of adjacent string literals in a file's
 // concatenations, each folded into the one string it spells.
 func literalRuns(file *ast.File) []string {
-	var out []string
+	runs := literalRunsAt(file)
+	out := make([]string, len(runs))
+	for i, run := range runs {
+		out[i] = run.text
+	}
+	return out
+}
+
+// literalRun is one of [literalRuns] and where it starts: its first literal.
+type literalRun struct {
+	pos  token.Pos
+	text string
+}
+
+// literalRunsAt is [literalRuns] with each run's position, for a walk that
+// names the line it refuses.
+func literalRunsAt(file *ast.File) []literalRun {
+	var out []literalRun
 	var visit func(ast.Node) bool
 	visit = func(n ast.Node) bool {
 		switch x := n.(type) {
@@ -370,10 +387,11 @@ func literalRuns(file *ast.File) []string {
 		}
 		flatten(n.(ast.Expr))
 		var run strings.Builder
+		var at token.Pos
 		held := false
 		end := func() {
 			if held {
-				out = append(out, run.String())
+				out = append(out, literalRun{pos: at, text: run.String()})
 			}
 			run.Reset()
 			held = false
@@ -381,6 +399,9 @@ func literalRuns(file *ast.File) []string {
 		for _, operand := range operands {
 			if lit, ok := operand.(*ast.BasicLit); ok && lit.Kind == token.STRING {
 				if value, err := strconv.Unquote(lit.Value); err == nil {
+					if !held {
+						at = lit.Pos()
+					}
 					run.WriteString(value)
 					held = true
 				}
