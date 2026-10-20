@@ -22,11 +22,12 @@
  * shown, word for word but for what the person changes next.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   Button,
   Callout,
   ConfirmModal,
+  DocumentTitleField,
   FormField,
   Input,
   Kbd,
@@ -151,7 +152,6 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
   const [leaving, setLeaving] = useState<{ leave: () => void } | null>(null);
   const creating = useRef(false);
   const leave = useLeaveCreate();
-  const titleField = useRef<HTMLInputElement>(null);
 
   const theme = starters.themes.find((t) => t.id === themeId) ?? starters.themes[0]!;
   const layouts = useMemo(
@@ -182,10 +182,6 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
         }
       : null,
   );
-
-  useEffect(() => {
-    titleField.current?.focus();
-  }, []);
 
   // ASKING AN AGENT drafts the same deck: the page makes it from the plan,
   // shared with the agent as an editor so its turns can publish versions of
@@ -353,17 +349,17 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
       <div className="slides-create">
         {!phone && strip}
         <div className="slides-create-main">
-          <FormField label="Title" error={titleWrong}>
+          <FormField error={titleWrong}>
             {(field) => (
-              <Input
-                ref={titleField}
+              <DocumentTitleField
+                autoFocus
                 id={field.id}
                 aria-describedby={field.describedBy}
-                aria-invalid={field.invalid}
-                className="slides-create-title"
-                width="full"
+                aria-label="Title"
+                error={field.invalid}
+                autoComplete="off"
                 value={title}
-                placeholder="Quarterly plan"
+                placeholder="Untitled deck"
                 onChange={(e) => setTitle(e.target.value)}
               />
             )}

@@ -143,47 +143,6 @@
   --crewlet-sheet-max-height: calc(100vh - 280px);
   --crewlet-sheet-min-height: 160px;
 }
-.sheet-create-head {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-}
-.sheet-create-head > :first-child {
-  flex: none;
-}
-.sheet-create-title {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-.sheet-create-title-input {
-  box-sizing: border-box;
-  width: 100%;
-  margin: 0;
-  padding: var(--spacing-1) var(--spacing-2);
-  margin-inline-start: calc(var(--spacing-2) * -1);
-  border: 0;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--color-text-primary);
-  font: inherit;
-  font-size: var(--font-size-2xl);
-  font-weight: var(--font-weight-semibold);
-  line-height: var(--font-line-height-tight);
-}
-.sheet-create-title-input::placeholder {
-  color: var(--color-text-tertiary);
-}
-.sheet-create-title-input:hover {
-  background: var(--color-surface-hover);
-}
-/* FOCUSED, THE TITLE IS UNDERLINED in the focus ink rather than boxed: it
-   is the page's heading being written, and a ring round it read as a form. */
-.sheet-create-title-input:focus-visible {
-  outline: 2px solid transparent;
-  background: transparent;
-  box-shadow: inset 0 -2px 0 var(--color-focus);
-  border-radius: var(--radius-md) var(--radius-md) 0 0;
-}
 .sheet-create-source,
 .sheet-create-hint,
 .sheet-create-note {
@@ -278,9 +237,6 @@
   }
   .sheet-create-rail {
     position: static;
-  }
-  .sheet-create-title-input {
-    font-size: var(--font-size-xl);
   }
 }
 
@@ -931,11 +887,6 @@
   display: flex;
   flex-direction: column;
   gap: var(--spacing-3);
-}
-/* The title reads as the deck's name, a step above a form field's text. */
-.slides-create-title input {
-  font-size: var(--font-size-lg);
-  font-weight: var(--font-weight-semibold);
 }
 /* The stage keeps its 16:9 whatever the column's height: it never shrinks. */
 .slides-create-stage {
