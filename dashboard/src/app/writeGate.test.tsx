@@ -118,6 +118,12 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
     why: "a page's eye, a save_page carrying only the person's own watch",
     suite: "routes/knowledge/page/PageView.test.tsx",
   },
+  "routes/artifacts/new/fileTask.ts": {
+    why:
+      "a create page's ask an agent: one create_work_item filed to the chosen seat, " +
+      "whose reason the page draws on its action for a reader who cannot file",
+    suite: "routes/artifacts/new/fileTask.test.tsx",
+  },
   "routes/work/NewTask.tsx": {
     why:
       "the New task sheet's Create — one create_work_item carrying the whole task — " +

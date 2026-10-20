@@ -104,6 +104,13 @@ const (
 	// monotone on broker time.
 	OpOpened OpKind = "opened"
 
+	// OpLinkWorkItem links an artifact that already exists to a tracker
+	// work item. It changes no artifact state: it writes one history row
+	// carrying the item's key, which is what a work item's listing reads
+	// ([ListQuery.WorkItem]), so the artifact appears on that item exactly
+	// as one created or published for it does.
+	OpLinkWorkItem OpKind = "link_work_item"
+
 	// OpReadElevated records that the admin path opened an artifact for a
 	// caller with no relation to it (D09), which the artifact's own history
 	// shows its owner and editors. Additive: its operation id is derived
@@ -124,8 +131,24 @@ const (
 // OpKinds are every op, in the order they are documented.
 var OpKinds = []OpKind{
 	OpCreate, OpPublish, OpRestoreVersion, OpPatch, OpShare, OpUnshare, OpTransfer,
-	OpTrash, OpRestore, OpPurgeBegin, OpPurge, OpRemove, OpPin, OpUnpin, OpOpened, OpReadElevated,
-	OpEviction, OpGeneration, OpBarrier,
+	OpTrash, OpRestore, OpPurgeBegin, OpPurge, OpRemove, OpPin, OpUnpin, OpOpened, OpLinkWorkItem,
+	OpReadElevated, OpEviction, OpGeneration, OpBarrier,
+}
+
+// HistoryOps are every op an artifact's history row is filed under, in the
+// order they are documented: what the dashboard words a history row by, and
+// what the company trail narrows to.
+//
+// NOT [OpKinds]. A purge removes the history with the artifact and writes no
+// row of its own; a pin, an unpin and an opened mark are one person's
+// browsing rather than something that happened to the artifact; the log's own
+// records are about no artifact; and an asset's records are filed under the
+// asset's own name ([historyOp]), so the history tells an asset's create from
+// the artifact's.
+var HistoryOps = []OpKind{
+	OpCreate, OpPublish, OpRestoreVersion, OpPatch, OpShare, OpUnshare, OpTransfer,
+	OpTrash, OpRestore, OpPurgeBegin, historyOp(KindAsset, OpCreate), historyOp(KindAsset, OpRemove),
+	OpLinkWorkItem, OpReadElevated,
 }
 
 // Valid reports whether an op off the wire is one this build knows.

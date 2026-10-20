@@ -6225,6 +6225,7 @@ sign-in, not a seat. Remove it and share with their seat.") and offers Remove as
 its one action, and the listing never counts it toward the login's Shared
 section, where every read of it would be withheld.
 | `POST /artifacts/{id}/transfer` | `artifacts.transfer` | `{"to": "<seat>"}` |
+| `POST /artifacts/{id}/work-items` | `get_artifact` on the artifact and `update_work_item` on the item | `{"work_item": "ENG-12"}`: links the artifact to a work item the tracker holds, so the item's Artifacts panel lists it. See [Linking to a work item](#linking-to-a-work-item) |
 | `DELETE /artifacts/{id}` | `artifacts.trash` | Into the trash: every frame stops loading at once, and it is purged after thirty days |
 | `POST /artifacts/{id}/restore` | `artifacts.restore` | Out of the trash; `409 artifact_purging` once a purge has begun on it |
 | `POST /artifacts/{id}/purge` | `artifacts.purge` | Gone for good, in three steps: the artifact is committed to its purge (into the trash, never restored again), its datastore goes, then its own rows |
@@ -6240,6 +6241,39 @@ record id is derived, so a retry under the same key is the same operation
 again under the same key, never a fresh one. The transfer needs no key: the
 upload claims each file before a byte is read, and a second put of it is
 refused `409 upload_consumed`.
+
+### Linking to a work item
+
+`POST /artifacts/{id}/work-items` puts an artifact that already exists on a
+tracker work item's Artifacts panel, the way a create or a publish carrying
+`work_item` does for what it makes. It records one `link_work_item` row in the
+artifact's history, filed under the item, and changes nothing else.
+
+```bash
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  -H "Idempotency-Key: $(uuidgen)" -H "Content-Type: application/json" \
+  -d '{"work_item": "ENG-12"}' \
+  "http://localhost:8000/artifacts/$ID/work-items"
+```
+
+- **The artifact is decided as a read** (`get_artifact`): any role on it,
+  viewer and above. A caller with no relation is `404 not_found` like any
+  other artifact route, and an administrator with none is admitted on the
+  admin path, recorded as an elevated read first.
+- **The item is decided as a write** (`update_work_item`), by the same rule
+  `PATCH /work/items/{key}` takes: a caller who does not use the tracker is
+  `403 unauthorized`.
+- **The item must be live.** `work_item` is a key or an item id, at most 64
+  bytes of visible ASCII; one the tracker does not hold, or holds removed, is
+  `422 invalid`, as is a company whose work items another tracker keeps. A node
+  not yet handed a company answers `503 no_active_revision`. A trashed
+  artifact is `409 artifact_trashed`.
+
+The answer is `{"artifact", "work_item", "op_id", "outcome", "position"}`,
+where `work_item` is the item's current key: an id or a former key is linked
+under it, so the panel finds it. A link the artifact's history already makes
+(an earlier link, or a write made for the item) answers `200` and writes
+nothing.
 
 ### Publishing a version
 
@@ -6297,12 +6331,12 @@ a person present, and the version is marked forced.
 | `GET /artifacts/{id}` | `artifact` | The head, the caller's `role`, whether they may publish (`writer`), and the shares to the owner and editors (`share_count` below) |
 | `GET /artifacts/{id}/versions` | `artifact_versions` | The retained versions, newest first |
 | `GET /artifacts/{id}/versions/{n}` | `artifact_version` | One version and its manifest |
-| `GET /artifacts/{id}/history` | `artifact_history` | Every publish, share, trash and elevated read, newest first; below editor, without the elevated reads or who a share named |
+| `GET /artifacts/{id}/history` | `artifact_history` | Every publish, share, trash, link to a work item and elevated read, newest first; below editor, without the elevated reads or who a share named |
 | `GET /artifacts/{id}/assets` | `artifact_assets` | The asset store |
 | `GET /artifacts/{id}/seen-by` | `artifact_seen_by` | Who has opened it, to the owner and editors while the company's `artifacts.seen_by` is `editors` (`shown: false` otherwise) |
 | `GET /artifacts/{id}/access` | `artifact_access` | The share dialog's list: the owner, each share with the seats a unit share reaches today (and `invalid: true` on a share that reaches nobody, see above), and an agent owner's leads; to a viewer, the owner and a count |
 | `GET /artifacts/usage` | `artifact_usage` | The company's counters against the Tier A quotas; `artifacts.usage`, an administrator's |
-| `GET /artifacts/trail` | `artifact_trail` | **The company trail of every artifact**: every artifact's history rows across the company, private ones included, newest first in the log's order, each naming its `artifact`, its current `title` and `owner`, the op, the actor and whether only the admin path admitted them. `op=` narrows it to one op (`read_elevated` lists every administrator's override, so one nobody would find in an artifact's own history is found here), with `cursor` and `limit`; an op the log does not record is `400 bad_params`. `audit.read`, an administrator's, decided by no relation to any artifact |
+| `GET /artifacts/trail` | `artifact_trail` | **The company trail of every artifact**: every artifact's history rows across the company, private ones included, newest first in the log's order, each naming its `artifact`, its current `title` and `owner`, the op, the actor and whether only the admin path admitted them. `op=` narrows it to one op (`read_elevated` lists every administrator's override, so one nobody would find in an artifact's own history is found here), with `cursor` and `limit`; an op no history row is filed under (a pin, an opened mark, a purge, which takes the history with it) is `400 bad_params`. `audit.read`, an administrator's, decided by no relation to any artifact |
 
 A head and every version carry `capabilities`, the set the version declares,
 always present and `[]` for none, so a version that declares nothing is told

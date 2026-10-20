@@ -46,6 +46,16 @@
 // replicated counters, so two writes racing past a quota apply identically on
 // every node: the second is refused everywhere.
 //
+// # A work item's artifacts are named by their history
+//
+// An artifact is listed on a tracker work item when an applied row of its own
+// history names the item: a create, a publish or a rollback made for the item
+// carries it on the stamped authority, and a link ([OpLinkWorkItem]) files one
+// row under it for an artifact that already exists, changing nothing else. A
+// link the history already makes publishes nothing, so a repeat is not a
+// second row. The tracker is another log: whether the item exists and whether
+// the caller may write it are decided at the API, before the record is formed.
+//
 // # A refusal is a row
 //
 // A record the broker accepted that the rows refuse (a head that moved, a

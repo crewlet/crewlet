@@ -1079,7 +1079,8 @@ function LeadChip({
           <span className="truncate">{leadChipLabel(unit)}</span>
         ) : (
           <Menu
-            label={`Lead of ${unit.name}`}
+            // THE CHIP'S OWN WORDS, then the unit they are about.
+            label={`${leadChipLabel(unit)} for ${unit.name}`}
             items={leadMenu(api, structure, unit)}
             triggerTabIndex={-1}
             onOpenChange={(opened) => opened && card.activate(unit.key)}

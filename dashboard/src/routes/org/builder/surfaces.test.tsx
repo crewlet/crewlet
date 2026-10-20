@@ -104,8 +104,8 @@ test("the toolbar's Delete opens the delete dialog for the selected seat", async
   // SELECTED BY A PRESS, not by `seat=` in the address, which is a request
   // to open the seat's editor now (`editWiring.test.tsx`).
   fireEvent.click(await tableRow("CEO"));
-  fireEvent.click(await screen.findByRole("button", { name: "CEO" }));
-  const menu = await screen.findByRole("menu", { name: "Actions for CEO" });
+  fireEvent.click(await screen.findByRole("button", { name: "Actions for CEO, selected" }));
+  const menu = await screen.findByRole("menu", { name: "Actions for CEO, selected" });
   fireEvent.click(within(menu).getByRole("menuitem", { name: /^Delete/ }));
   // An ALERT dialog: a removal interrupts to ask something a save makes
   // permanent, so the whole surface is announced rather than its name alone.
@@ -145,8 +145,8 @@ test("the toolbar offers the selected seat's whole list: its entries, order and 
   fireEvent.click(
     view.container.querySelector<HTMLElement>('[role="treeitem"][data-tree-id="seat:ceo"]')!,
   );
-  fireEvent.click(await screen.findByRole("button", { name: "CEO" }));
-  const toolbar = entries(await screen.findByRole("menu", { name: "Actions for CEO" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Actions for CEO, selected" }));
+  const toolbar = entries(await screen.findByRole("menu", { name: "Actions for CEO, selected" }));
   const labels = toolbar.map((e) => e.label);
   expect(labels).toContain("Edit reports");
   // The three a card and a row draw as controls of their own, which only the
@@ -204,7 +204,7 @@ test("the toolbar offers no screen for a seat that exists only in the draft", as
     hash: "#/agents/edit?view=table",
   });
   await screen.findByText("No problems");
-  fireEvent.click(screen.getByRole("button", { name: "Add" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add to the organization" }));
   fireEvent.click(await screen.findByRole("menuitem", { name: "Add agent seat" }));
   const dialog = await screen.findByRole("dialog", { name: "Add to Acme" });
   fireEvent.change(within(dialog).getByLabelText("Name"), { target: { value: "Analyst" } });
@@ -216,8 +216,8 @@ test("the toolbar offers no screen for a seat that exists only in the draft", as
   );
   // Pressing a row selects the node it holds.
   fireEvent.click(await tableRow("Analyst"));
-  fireEvent.click(await screen.findByRole("button", { name: "Analyst" }));
-  const menu = await screen.findByRole("menu", { name: "Actions for Analyst" });
+  fireEvent.click(await screen.findByRole("button", { name: "Actions for Analyst, selected" }));
+  const menu = await screen.findByRole("menu", { name: "Actions for Analyst, selected" });
   const labels = entries(menu).map((e) => e.label);
   expect(labels).toContain("Edit reports");
   expect(labels).not.toContain("Open seat");
@@ -233,8 +233,8 @@ test("Edit reports opens the seat's editor at Manages", async () => {
   });
   await screen.findByText("No problems");
   fireEvent.click(await tableRow("CEO"));
-  fireEvent.click(await screen.findByRole("button", { name: "CEO" }));
-  const menu = await screen.findByRole("menu", { name: "Actions for CEO" });
+  fireEvent.click(await screen.findByRole("button", { name: "Actions for CEO, selected" }));
+  const menu = await screen.findByRole("menu", { name: "Actions for CEO, selected" });
   fireEvent.click(within(menu).getByRole("menuitem", { name: "Edit reports" }));
   const editor = await screen.findByRole("dialog", { name: "Edit CEO" });
   await waitFor(() =>
@@ -462,7 +462,7 @@ test("an add puts the kind first in both shells, and opens on it in the dialog",
     hash: "#/agents/edit?view=table",
   });
   await screen.findByText("No problems");
-  fireEvent.click(screen.getByRole("button", { name: "Add" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add to the organization" }));
   fireEvent.click(await screen.findByRole("menuitem", { name: "Add agent seat" }));
   const dialog = await screen.findByRole("dialog", { name: "Add to Acme" });
   expect(document.activeElement).toBe(within(dialog).getByRole("radio", { name: "Agent seat" }));
@@ -522,7 +522,7 @@ test("an add falls back to the dialog when its parent leaves the draft", async (
   });
   await screen.findByText("No problems");
   // A unit of the draft alone, so an undo can take it away again.
-  fireEvent.click(screen.getByRole("button", { name: "Add" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add to the organization" }));
   fireEvent.click(await screen.findByRole("menuitem", { name: "Add unit" }));
   const dialog = await screen.findByRole("dialog", { name: "Add to Acme" });
   fireEvent.change(within(dialog).getByLabelText("Name"), { target: { value: "Tooling" } });

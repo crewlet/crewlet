@@ -53,6 +53,7 @@ import type {
 import type { PushKind, SeatActivity, StoppedReason } from "../contract/wire.ts";
 import type {
   ARTIFACT_CAPABILITIES,
+  ARTIFACT_HISTORY_OPS,
   ARTIFACT_KINDS,
   ARTIFACT_LIST_SCOPES,
   ARTIFACT_LIST_SORTS,
@@ -5009,6 +5010,8 @@ export type PresenceActivity = (typeof PRESENCE_ACTIVITIES)[number];
 export type ArtifactListScope = (typeof ARTIFACT_LIST_SCOPES)[number];
 /** How a listing is ordered. */
 export type ArtifactListSort = (typeof ARTIFACT_LIST_SORTS)[number];
+/** What an artifact's history row is filed under (`artifactsdomain.HistoryOps`). */
+export type ArtifactHistoryOp = (typeof ARTIFACT_HISTORY_OPS)[number];
 /** How one datastore field is stored and drawn. */
 export type ColumnType = (typeof COLUMN_TYPES)[number];
 /** Who reads a collection's rows. */
@@ -5229,7 +5232,11 @@ export interface ArtifactHistorySummary {
 export interface ArtifactHistoryEntry {
   position: number;
   op_id: string;
-  /** `create`, `publish`, `restore_version`, `patch`, `share`, `unshare`, `transfer`, `prune`, `trash`, `restore`, `purge_begin`, `purge`, `remove`, `pin`, `unpin`, `opened`, `read_elevated`. */
+  /**
+   * An [ArtifactHistoryOp]. Typed as text, because a newer engine may file a
+   * row under an op this build has not met, which is still said in its own
+   * words.
+   */
   op: string;
   outcome: "applied" | "refused";
   reason?: string;
