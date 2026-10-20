@@ -21,6 +21,14 @@
  * format at publish; a refusal is said where the reader is looking and keeps
  * the draft. A retry after an answer nobody could confirm sends the same
  * upload with the same key, so it lands once.
+ *
+ * # Or an agent builds it
+ *
+ * Ask an agent files a real tracker task to the chosen agent seat with the
+ * reader's brief (`useFileArtifactTask`). With figures on the board, the
+ * board is created first and linked to the task, so the agent refines it and
+ * the reader lands on it; with none, the agent builds the board from the
+ * brief and the reader lands on the task.
  */
 
 import { useMemo, useRef, useState } from "react";
@@ -42,11 +50,12 @@ import {
   SegmentedControl,
   Select,
   Skeleton,
+  Textarea,
   VisuallyHidden,
   useReorder,
   useToast,
 } from "@crewlethq/ui";
-import { CheckGlyph, PlusGlyph, RefreshCwGlyph } from "@crewlethq/icons/glyphs";
+import { CheckGlyph, PlusGlyph, RefreshCwGlyph, SendGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator } from "~/app/router.tsx";
 import { artifactPath } from "~/app/routes.ts";
 import { QueryState } from "~/components/common.tsx";
@@ -57,6 +66,8 @@ import { useKeyChords } from "~/lib/keys.ts";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
 import { plural } from "~/lib/format.ts";
 import { refusalText } from "~/lib/refusal.ts";
+import { youNeedWords } from "~/lib/access.ts";
+import type { Refusal } from "~/lib/useAct.ts";
 import { useNarrowerThan } from "~/lib/useNarrowerThan.ts";
 import { useRest } from "~/lib/useRest.ts";
 import {
@@ -67,6 +78,8 @@ import {
 import { DashboardWidget } from "../DashboardWidget.tsx";
 import { CreateShell, useLeaveCreate } from "./CreateShell.tsx";
 import { titleHold, titleProblem, useWorkItem } from "./create.ts";
+import { useFileArtifactTask } from "./fileTask.ts";
+import { WhoBuildsIt, useWhoBuildsIt, type WhoBuildsItState } from "./WhoBuildsIt.tsx";
 import {
   EMPTY_DRAFT,
   SPEC_PATH,
@@ -94,6 +107,9 @@ import {
   type Starter,
 } from "./dashboard/model.ts";
 import { previewRows, previewStatus, usePreviews, type Previews } from "./dashboard/usePreviews.ts";
+
+/** Whether the person composes the board here, or asks an agent for it. */
+type Mode = "build" | "agent";
 
 /** One board row's height in pixels: the board's own (`DashboardView`). */
 const ROW = 16;
@@ -143,6 +159,14 @@ export function DashboardCreate() {
   const root = useRef<HTMLDivElement>(null);
   const narrow = useNarrowerThan(root, NARROW_BELOW);
   const [pane, setPane] = useState<"board" | "data">("board");
+  const [mode, setMode] = useState<Mode>("build");
+  const [brief, setBrief] = useState("");
+  const who = useWhoBuildsIt("dashboard");
+  const filer = useFileArtifactTask();
+  const agentName = who.builders.find((b) => b.seat.handle === who.seat)?.seat.name ?? "";
+  // THE BOARD AN AGENT IS ASKED TO REFINE, once made: a task that could not be
+  // filed is asked again without making a second board.
+  const madeFor = useRef<{ text: string; id: string } | null>(null);
   const catalogue = useRest("artifacts/sources", readCatalogue);
   const sources = useMemo(() => catalogue.data?.sources ?? [], [catalogue.data]);
   const resolved = useMemo(() => resolve(draft, sources), [draft, sources]);
@@ -167,13 +191,21 @@ export function DashboardCreate() {
   }, [sources, draft.settings, open, resolved]);
   const previews = usePreviews(needed);
 
-  const busy = uploading || gesture.busy;
+  const busy = uploading || gesture.busy || filer.busy;
+  const tooMany = tooManyDatasets(resolved)
+    ? "This board reads more datasets than one board holds."
+    : undefined;
   const hold =
-    titleHold(title) ??
-    (resolved.length === 0 ? "Add at least one figure to the board." : undefined) ??
-    (tooManyDatasets(resolved)
-      ? "This board reads more datasets than one board holds."
-      : undefined);
+    mode === "build"
+      ? (titleHold(title) ??
+        (resolved.length === 0 ? "Add at least one figure to the board." : undefined) ??
+        tooMany)
+      : (titleHold(title) ??
+        (brief.trim() === "" ? "Say what the board should answer." : undefined) ??
+        (who.seat === "" ? "There is no agent on the chart to ask." : undefined) ??
+        filer.held ??
+        (who.project === "" ? "Choose the project the task is filed in." : undefined) ??
+        tooMany);
 
   const add = (src: DashboardEngineSource, r: Recipe) => {
     if (!hasRoom(draft)) return;
@@ -188,11 +220,12 @@ export function DashboardCreate() {
     setOpen(starterSources(s)[0] ?? null);
   };
 
-  const create = async () => {
-    if (hold || busy) return;
+  /** Make the board as composed, or answer null with the refusal said on the page. */
+  const createBoard = async (): Promise<string | null> => {
     setUploadFailure(null);
     const name = title.trim();
     const text = `${JSON.stringify(composeSpec(name, draft, sources), null, 2)}\n`;
+    if (madeFor.current?.text === text) return madeFor.current.id;
     // THE SAME SPEC IS THE SAME UPLOAD: a retry after an answer nobody could
     // confirm sends the very request again, so the engine lands it once.
     let brought = uploaded.current?.text === text ? uploaded.current : null;
@@ -204,7 +237,7 @@ export function DashboardCreate() {
         uploaded.current = brought;
       } catch (err) {
         setUploadFailure(refusalText(err));
-        return;
+        return null;
       } finally {
         setUploading(false);
       }
@@ -224,17 +257,52 @@ export function DashboardCreate() {
       answer?.kind === "done" && typeof answer.body.artifact === "string"
         ? answer.body.artifact
         : "";
-    if (!id) return;
-    toast.ok(`Created “${name}”`);
-    nav.to(artifactPath(id));
+    if (!id) return null;
+    madeFor.current = { text, id };
+    return id;
+  };
+
+  const create = async () => {
+    if (hold || busy) return;
+    const name = title.trim();
+    if (mode === "build") {
+      const id = await createBoard();
+      if (!id) return;
+      toast.ok(`Created “${name}”`);
+      nav.to(artifactPath(id));
+      return;
+    }
+    // AN AGENT ASKED WITH FIGURES ON THE BOARD refines that board: it is made
+    // first and handed over with the task. With none, the brief is the whole
+    // ask and the agent publishes the board to the task.
+    const id = resolved.length > 0 ? await createBoard() : null;
+    if (resolved.length > 0 && !id) return;
+    const filed = await filer.fileArtifactTask({
+      kind: "dashboard",
+      title: name,
+      brief,
+      seat: who.seat,
+      project: who.project,
+      ...(id ? { artifact: id } : {}),
+    });
+    if (!filed) return;
+    if (typeof filed.linked === "string") {
+      toast.show({
+        variant: "warning",
+        title: "The board was not linked to the task",
+        message: filed.linked,
+      });
+    }
+    nav.to(id ? artifactPath(id) : ["work", filed.item]);
   };
 
   useKeyChords([{ key: "enter", meta: true, whileTyping: true, run: () => void create() }]);
 
-  const dirty = title.trim() !== "" || draft.placed.length > 0;
+  const dirty = title.trim() !== "" || draft.placed.length > 0 || brief.trim() !== "";
   const refusal =
     uploadFailure ??
     (gesture.answer && gesture.answer.kind !== "done" ? gesture.answer.text : null);
+  const taskRefusal = mode === "agent" ? filer.refusal : null;
   const problem = titleProblem(title);
 
   return (
@@ -244,7 +312,9 @@ export function DashboardCreate() {
         // A NARROW BAR has room for its title and its actions alone; the
         // Board tab says how many figures there are.
         busy
-          ? "Creating…"
+          ? mode === "agent"
+            ? "Asking…"
+            : "Creating…"
           : !narrow && resolved.length > 0
             ? plural(resolved.length, "figure")
             : undefined
@@ -258,14 +328,19 @@ export function DashboardCreate() {
         },
       ]}
       action={{
-        label: "Create dashboard",
-        icon: <CheckGlyph size="sm" />,
+        label:
+          mode === "agent"
+            ? agentName
+              ? `Ask ${agentName}`
+              : "Ask the agent"
+            : "Create dashboard",
+        icon: mode === "agent" ? <SendGlyph size="sm" /> : <CheckGlyph size="sm" />,
         onSelect: () => void create(),
         keys: ["Mod", "Enter"],
         ...(hold
           ? { disabledReason: hold }
           : busy
-            ? { disabledReason: "Creating the dashboard…" }
+            ? { disabledReason: mode === "agent" ? "Asking the agent…" : "Creating the dashboard…" }
             : {}),
       }}
       onCancel={() => (dirty ? setConfirmLeave(true) : leave())}
@@ -312,7 +387,29 @@ export function DashboardCreate() {
                 />
               )}
             </FormField>
+            <FormField label="Who builds it" className="dashboard-create-mode">
+              <SegmentedControl
+                label="Who builds it"
+                semantics="radio"
+                value={mode}
+                onValueChange={setMode}
+                options={[
+                  { value: "build", label: "Build it now" },
+                  { value: "agent", label: "Ask an agent" },
+                ]}
+              />
+            </FormField>
           </div>
+          {mode === "agent" ? (
+            <AgentBrief
+              brief={brief}
+              onBrief={setBrief}
+              who={who}
+              agentName={agentName}
+              figures={resolved.length}
+              refusal={taskRefusal}
+            />
+          ) : null}
           {refusal ? (
             <Callout variant="danger" title="The dashboard was not created" live="polite">
               {refusal}
@@ -332,6 +429,7 @@ export function DashboardCreate() {
               fresh={fresh}
               onDraft={setDraft}
               onStart={start}
+              optional={mode === "agent"}
               boardTitle={title.trim() || "New dashboard"}
             />
           )}
@@ -367,9 +465,61 @@ export function DashboardCreate() {
           </>
         }
       >
-        Its title and the figures on its board are not saved anywhere yet.
+        Its title, its figures and any brief you wrote are not saved anywhere yet.
       </Modal>
     </CreateShell>
+  );
+}
+
+// ---- asking an agent ----------------------------------------------------- //
+
+/** The brief, who builds it, and what happens once the task is filed. */
+function AgentBrief({
+  brief,
+  onBrief,
+  who,
+  agentName,
+  figures,
+  refusal,
+}: {
+  brief: string;
+  onBrief: (brief: string) => void;
+  who: WhoBuildsItState;
+  agentName: string;
+  figures: number;
+  refusal: Refusal | null;
+}) {
+  const agent = agentName || "The agent";
+  const project = who.projects.find((p) => p.key === who.project)?.name ?? who.project;
+  return (
+    <Card padding="md" className="dashboard-create-agent" aria-label="Ask an agent">
+      <FormField label="What should the board answer?">
+        {(field) => (
+          <Textarea
+            id={field.id}
+            aria-describedby={field.describedBy}
+            autoResize
+            rows={3}
+            value={brief}
+            placeholder="Show how much work each team is carrying, what is overdue, and how many tokens each agent used this month."
+            onChange={(e) => onBrief(e.target.value)}
+          />
+        )}
+      </FormField>
+      <WhoBuildsIt who={who} />
+      <p className="dashboard-create-next">
+        {figures > 0
+          ? `${agent} gets a task${project ? ` in ${project}` : ""} with your brief, and the board as it stands is created and handed over with it. ${agent} refines it and publishes each change as a new version, which you can follow from the task and the dashboard.`
+          : `${agent} gets a task${project ? ` in ${project}` : ""} with your brief, builds the board from the data it can read, and publishes it to the task. It appears on the task's Artifacts card and in Artifacts.`}
+      </p>
+      {refusal ? (
+        <Callout variant="danger" title="The task was not filed" live="polite">
+          {refusal.grants.length > 0
+            ? `${youNeedWords(refusal.grants)} Ask an admin.`
+            : refusal.sentence}
+        </Callout>
+      ) : null}
+    </Card>
   );
 }
 
@@ -382,6 +532,7 @@ function BoardDraft({
   fresh,
   onDraft,
   onStart,
+  optional,
   boardTitle,
 }: {
   draft: Draft;
@@ -390,6 +541,8 @@ function BoardDraft({
   fresh: string | null;
   onDraft: (d: Draft) => void;
   onStart: (s: Starter) => void;
+  /** The board is the agent's starting point, which it may do without. */
+  optional: boolean;
   boardTitle: string;
 }) {
   const root = useRef<HTMLDivElement>(null);
@@ -408,8 +561,12 @@ function BoardDraft({
         <div className="dashboard-create-empty">
           <EmptyState
             icon={<ArtifactKindGlyph kind="dashboard" size="lg" />}
-            title="Start your board"
-            description="Open a source under Data to see the figures it offers, or start from a ready-made board."
+            title={optional ? "Give the agent a starting point" : "Start your board"}
+            description={
+              optional
+                ? "Optional. Add figures from Data or start from a ready-made board, and the agent refines them. Without any, it builds the board from your brief."
+                : "Open a source under Data to see the figures it offers, or start from a ready-made board."
+            }
             headingLevel={2}
           />
           <ul className="dashboard-create-starters" aria-label="Ready-made boards">

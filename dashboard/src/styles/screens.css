@@ -10678,6 +10678,21 @@ a.live-row:focus-visible {
   flex: 1 1 22rem;
   max-width: 40rem;
 }
+.dashboard-create-mode {
+  flex: 0 0 auto;
+}
+.dashboard-create-agent {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  max-width: 48rem;
+}
+.dashboard-create-next {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+}
 .dashboard-create-board {
   display: flex;
   flex: 1 0 auto;
@@ -10733,7 +10748,7 @@ a.live-row:focus-visible {
   min-width: 0;
   min-height: 0;
   overflow: auto;
-  padding: var(--spacing-5) var(--spacing-4) var(--spacing-6);
+  padding: var(--spacing-6) var(--spacing-4);
   border-inline-start: 1px solid var(--color-border-default);
   background: var(--color-surface-subtle);
 }

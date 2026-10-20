@@ -6,12 +6,57 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
+import { FrameReadings } from "~/app/Shell.tsx";
 import { Router } from "~/app/router.tsx";
-import type { DashboardEngineSource, DashboardSpec } from "~/protocol/index.ts";
+import { ClientContext } from "~/lib/store-hooks.ts";
+import { reloadForTest } from "~/lib/prefs.ts";
+import {
+  LiveSocket,
+  Store,
+  type DashboardEngineSource,
+  type DashboardSpec,
+  type WorkProjectRow,
+} from "~/protocol/index.ts";
+import { healthFrame } from "~/test/health.ts";
+import { withDerived } from "~/test/org.ts";
 import catalogue from "./dashboard/testdata/catalogue.json";
 import { DashboardCreate } from "./DashboardCreate.tsx";
 
 const MADE = "0192f2c4-3333-7000-8000-000000000003";
+
+class InertWebSocket {
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSED = 3;
+  readyState = InertWebSocket.CONNECTING;
+  send(): void {}
+  close(): void {}
+}
+
+const JANE = {
+  login: "U0FOUNDER",
+  grants: ["admin", "tracker", "artifacts"],
+  handle: "jane",
+  owner: "jane",
+  name: "Jane Founder",
+  kind: "human",
+  acts: ["create_work_item"],
+  project: "OPS",
+};
+
+const ORG = {
+  name: "Acme",
+  timezone: "UTC",
+  roles: [
+    { name: "Jane Founder", handle: "jane", kind: "human" },
+    { name: "Agent Analyst", handle: "analyst", kind: "agent", goal: "Metrics and dashboards" },
+    { name: "Agent Designer", handle: "designer", kind: "agent", goal: "Brand and UX design" },
+  ],
+  units: [],
+};
+
+const project = (key: string): WorkProjectRow =>
+  ({ key, name: key, unit: { resolved: true }, lead: { handle: "jane" } }) as WorkProjectRow;
 
 /** What the fake engine was sent, in order. */
 let sent: { method: string; path: string; body: unknown }[] = [];
@@ -52,6 +97,7 @@ function json(status: number, body: unknown): Response {
 }
 
 beforeEach(() => {
+  Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
   sent = [];
   createAnswer = { status: 201, body: { artifact: MADE } };
   location.hash = "#/artifacts/new/dashboard";
@@ -100,6 +146,15 @@ beforeEach(() => {
       if (url.pathname === "/artifacts" && method === "POST") {
         return json(createAnswer.status, createAnswer.body);
       }
+      if (url.pathname === "/operator/act/create_work_item") {
+        return json(200, {
+          tool: "create_work_item",
+          outcome: "applied",
+          position: "CREWLET_TRACKER_LOG@1:9",
+          receipt: { id: "0f0f", item: "OPS-4", key: "OPS-4" },
+        });
+      }
+      if (url.pathname === `/artifacts/${MADE}/work-items`) return json(200, { linked: true });
       return json(404, { error: "not_found" });
     }),
   });
@@ -108,18 +163,42 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  localStorage.clear();
+  reloadForTest();
 });
 
-const mount = () =>
-  render(
-    <Router>
+function mount() {
+  const store = new Store();
+  store.applyHealth(healthFrame({ nodes: 1 }));
+  store.applyOrg(withDerived(ORG) as never);
+  const socket = new LiveSocket(store);
+  socket.query = ((what: string) => {
+    const answers: Record<string, unknown> = {
+      viewer: JANE,
+      work_projects: { projects: [project("DES"), project("OPS")] },
+      work_inbox: { handle: "jane", notices: [], unread: 0, primary: 0 },
+    };
+    return Promise.resolve(answers[what] ?? {});
+  }) as typeof socket.query;
+  return render(
+    <ToastProvider>
       <LayerHost>
-        <ToastProvider>
-          <DashboardCreate />
-        </ToastProvider>
+        <ClientContext.Provider value={{ store, socket }}>
+          <FrameReadings>
+            <Router>
+              <DashboardCreate />
+            </Router>
+          </FrameReadings>
+        </ClientContext.Provider>
       </LayerHost>
-    </Router>,
+    </ToastProvider>,
   );
+}
+
+/** The task the page filed, as the act route was sent it. */
+const filed = () =>
+  sent.find((r) => r.path === "/operator/act/create_work_item")?.body as
+    { args: { title: string; assignee: string; body: string; project: string } } | undefined;
 
 const data = () => screen.getByRole("complementary", { name: "Data" });
 
@@ -201,4 +280,46 @@ test("a board the engine refuses is said where the reader is looking, and the dr
   expect(await screen.findByText("The dashboard was not created")).toBeTruthy();
   expect(location.hash).toBe("#/artifacts/new/dashboard");
   expect(within(screen.getByRole("region", { name: "Board" })).getByText("Open work")).toBeTruthy();
+});
+
+test("an agent asked with nothing on the board gets a task with the brief, and the reader lands on it", async () => {
+  mount();
+  await waitFor(() => expect(within(data()).getByText("Work items")).toBeTruthy());
+  fireEvent.click(screen.getByRole("radio", { name: "Ask an agent" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Title" }), {
+    target: { value: "Team load" },
+  });
+  fireEvent.change(screen.getByRole("textbox", { name: "What should the board answer?" }), {
+    target: { value: "Who is carrying the most work." },
+  });
+  // THE AGENT WHOSE WORK IS DASHBOARDS is suggested first.
+  const ask = await screen.findByRole("button", { name: /Ask Agent Analyst/ });
+  fireEvent.click(ask);
+  await waitFor(() => expect(location.hash).toBe("#/work/OPS-4"));
+  expect(filed()?.args).toMatchObject({ title: "Team load", assignee: "analyst" });
+  expect(filed()?.args.body).toContain("Who is carrying the most work.");
+  expect(sent.some((r) => r.method === "POST" && r.path === "/artifacts")).toBe(false);
+});
+
+test("an agent asked with figures on the board refines it: the board is made, then linked to its task", async () => {
+  mount();
+  await waitFor(() => expect(within(data()).getByText("Work items")).toBeTruthy());
+  fireEvent.click(screen.getByRole("radio", { name: "Ask an agent" }));
+  fireEvent.click(screen.getByRole("button", { name: /Team workload/ }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Title" }), {
+    target: { value: "Team load" },
+  });
+  fireEvent.change(screen.getByRole("textbox", { name: "What should the board answer?" }), {
+    target: { value: "Add a trend per team." },
+  });
+  fireEvent.click(await screen.findByRole("button", { name: /Ask Agent Analyst/ }));
+  await waitFor(() => expect(location.hash).toBe(`#/artifacts/${MADE}`));
+  const order = sent.map((r) => `${r.method} ${r.path}`);
+  const made = order.indexOf("POST /artifacts");
+  const task = order.indexOf("POST /operator/act/create_work_item");
+  const link = order.indexOf(`POST /artifacts/${MADE}/work-items`);
+  expect(made).toBeGreaterThan(-1);
+  expect(task).toBeGreaterThan(made);
+  expect(link).toBeGreaterThan(task);
+  expect(filed()?.args.body).toContain(`artifact ${MADE}`);
 });
