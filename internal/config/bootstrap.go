@@ -1012,9 +1012,8 @@ func ValidNodeID(id string) bool {
 // register, because nothing downstream can tell which of the two wrote a row.
 func reservedNodeID(id string) string {
 	if id == coord.OperatorBackupOwner {
-		return fmt.Sprintf("%q is reserved: the fleet's backup register files "+
-			"the operator's acknowledgements under it, so a node of that name "+
-			"would have its own backups read as one — choose another id", id)
+		return fmt.Sprintf("%q is reserved for the operator's backup "+
+			"acknowledgements. Choose another id", id)
 	}
 	return ""
 }
