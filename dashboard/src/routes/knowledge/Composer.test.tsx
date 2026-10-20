@@ -292,7 +292,9 @@ test("Discard asks first when something is written, and leaves for where it came
   fireEvent.change(title(), { target: { value: "Half a thought" } });
   fireEvent.click(screen.getByRole("button", { name: "Discard" }));
   const ask = await screen.findByRole("alertdialog", { name: "Discard this page?" });
-  fireEvent.click(within(ask).getByRole("button", { name: "Keep writing" }));
+  // The same prompt every page a person makes something on asks.
+  expect(ask.textContent).toContain("Its title and what you wrote are not saved anywhere yet.");
+  fireEvent.click(within(ask).getByRole("button", { name: "Keep editing" }));
   await settle();
   expect((title() as HTMLInputElement).value).toBe("Half a thought");
 

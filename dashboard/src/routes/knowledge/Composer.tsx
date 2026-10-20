@@ -492,8 +492,8 @@ export function Composer() {
         open={leaving !== null}
         destructive
         title="Discard this page?"
-        message="What you wrote is not saved anywhere."
-        cancelLabel="Keep writing"
+        message="Its title and what you wrote are not saved anywhere yet."
+        cancelLabel="Keep editing"
         confirmLabel="Discard"
         onClose={() => setLeaving(null)}
         onConfirm={() => {
