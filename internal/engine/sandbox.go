@@ -1412,18 +1412,35 @@ func sandboxMCP(
 	if len(gate.MCP.Servers) == 0 {
 		return nil, nil
 	}
-	servers := make([]sandbox.MCPServer, 0, len(c.Config.MCPServers))
-	for _, s := range c.Config.MCPServers {
-		servers = append(servers, sandbox.MCPServer{
-			Name: s.Name, Transport: sandbox.Transport(s.Kind()),
-			Command: s.Command, Args: s.Args, Env: s.Env,
-			URL: s.URL, Headers: s.Headers,
-		})
-	}
 	// RESOLVED HERE, like the run env and for the same reason: an in-box
 	// server has to authenticate, and Tier B stores its references
 	// verbatim. Only the scoped servers': a block the box is not given is
 	// nothing this run resolves or reports.
+	//
+	// THE SERVER'S OWN VALUES AS WELL AS THE SEAT'S. They were handed over
+	// verbatim, `${VAR}` and all, and written into the CLI's config that
+	// way: OpenCode reads `{env:VAR}` and not `${VAR}`, so a shared key
+	// reached its server as the literal text, and Claude Code expands one
+	// from its own environment — the run env, which holds none of the
+	// company's secrets unless a seat repeats them there. The engine's own
+	// child of the same server reads each through the secret store
+	// ([serverSpec]), and a box's is the same server.
+	scopedNames := make(map[string]struct{}, len(gate.MCP.Servers))
+	for _, name := range gate.MCP.Servers {
+		scopedNames[name] = struct{}{}
+	}
+	servers := make([]sandbox.MCPServer, 0, len(c.Config.MCPServers))
+	for _, s := range c.Config.MCPServers {
+		box := sandbox.MCPServer{
+			Name: s.Name, Transport: sandbox.Transport(s.Kind()),
+			Command: s.Command, Args: s.Args,
+		}
+		if _, given := scopedNames[s.Name]; given {
+			box.Env, box.URL, box.Headers =
+				resolveMap(env, s.Env), env.Value(s.URL), resolveMap(env, s.Headers)
+		}
+		servers = append(servers, box)
+	}
 	scoped := make([]string, 0, len(gate.MCP.Servers))
 	credentials := make(map[string]map[string]string, len(gate.MCP.Servers))
 	var withheld []*seatCredentialMissing

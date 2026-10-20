@@ -407,3 +407,64 @@ func TestACodingAgentIsNotOfferedAServerWhoseSeatCredentialIsMissing(t *testing.
 			tracker.Env["SEAT_TOKEN"])
 	}
 }
+
+// A BOX'S TOOL SERVER READS ITS OWN REFERENCES THROUGH THE ENGINE, as the
+// engine's own child of the same server does: the server's env, its headers
+// and its url, beside the seat's credentials.
+//
+// They were handed to the box verbatim and written into the coding CLI's
+// config as `${VAR}` text. OpenCode reads `{env:VAR}`, so a shared key reached
+// its server as the literal, and Claude Code expands one from the run env,
+// which holds no company secret unless a seat repeats it there.
+func TestABoxsToolServerReadsItsOwnReferencesThroughTheEngine(t *testing.T) {
+	t.Parallel()
+	company := specCompany(t, `
+name: Acme
+providers:
+  llm:
+    zulu:
+      type: anthropic
+      model: claude-sonnet-5
+      api_keys: ["sk-ant-fake-spec-key"]
+mcp_servers:
+  - name: search
+    command: "search-server"
+    env:
+      SEARCH_KEY: "${SEARCH_KEY}"
+  - name: docs
+    transport: http
+    shared: false
+    url: "https://${DOCS_HOST}/mcp"
+    headers:
+      X-Workspace: "${DOCS_WORKSPACE}"
+roles:
+  - name: CEO
+    handle: ceo
+    llm: zulu
+    mcp_env:
+      docs:
+        Authorization: "Bearer ${CEO_DOCS_TOKEN}"
+`)
+	seat := company.Org.AgentSeatByHandle("ceo")
+	env := config.NewResolver(config.MapSource{
+		"SEARCH_KEY": "search-secret", "DOCS_HOST": "docs.example.com",
+		"DOCS_WORKSPACE": "acme", "CEO_DOCS_TOKEN": "docs-ceo",
+	})
+	gate := &org.RoleSandbox{MCP: org.RoleSandboxMCP{Servers: []string{"search", "docs"}}}
+
+	got, withheld := sandboxMCP(env, company, seat, gate, nil)
+	if len(withheld) != 0 {
+		t.Fatalf("withheld = %+v: every reference resolves", withheld)
+	}
+	if key := got["search"].Env["SEARCH_KEY"]; key != "search-secret" {
+		t.Errorf("the box's search server is given SEARCH_KEY %q, want the stored value", key)
+	}
+	docs := got["docs"]
+	if docs.URL != "https://docs.example.com/mcp" {
+		t.Errorf("the box's docs server is dialled at %q, want its url resolved", docs.URL)
+	}
+	want := map[string]string{"X-Workspace": "acme", "Authorization": "Bearer docs-ceo"}
+	if !maps.Equal(docs.Headers, want) {
+		t.Errorf("the box's docs server sends %v, want %v", docs.Headers, want)
+	}
+}

@@ -29,7 +29,10 @@ import (
 //
 // Declared here rather than imported from config so this package depends on
 // the SHAPE and not on the config tree — the same reason the setup step is a
-// translation. A caller assembles these from whatever its config says.
+// translation. A caller assembles these from whatever its config says, with
+// every `${VAR}` reference already RESOLVED: what lands here is written into
+// the coding CLI's own config as it stands, and neither CLI reads a reference
+// the way the engine does.
 type MCPServer struct {
 	Name      string
 	Transport Transport
