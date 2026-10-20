@@ -176,13 +176,20 @@
 .sheet-create-title-input:hover {
   background: var(--color-surface-hover);
 }
-/* FOCUSED, THE TITLE IS UNDERLINED in the focus ink rather than boxed: it
-   is the page's heading being written, and a ring round it read as a form. */
+/* FOCUSED, THE TITLE IS UNDERLINED rather than boxed, as DocumentTitleField
+   underlines one: it is the page's heading being written, and a ring round it
+   read as a form. Two pixels in the focus colour for the keyboard, and one in
+   the selected edge (the accent mixed toward the page) where a pointer put the
+   caret, since the reader is already looking at it and the page focuses its
+   title on load. */
 .sheet-create-title-input:focus-visible {
   outline: 2px solid transparent;
   background: transparent;
   box-shadow: inset 0 -2px 0 var(--color-focus);
   border-radius: var(--radius-md) var(--radius-md) 0 0;
+}
+:root[data-crewlet-focus="pointer"] .sheet-create-title-input:focus-visible {
+  box-shadow: inset 0 -1px 0 var(--color-border-selected);
 }
 .sheet-create-source,
 .sheet-create-hint,
