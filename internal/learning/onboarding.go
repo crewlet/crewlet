@@ -404,7 +404,8 @@ func (o *Onboarding) Get(ctx context.Context, agentID string) (Marker, bool, err
 // after your unit" is a rule it has to reconstruct and will get wrong.
 const OnboardingPageTitle = "Onboarding"
 
-// Hint is the instruction set an unmarked agent is shown.
+// Hint is the instruction set an unmarked agent's onboarding pass is shown
+// (internal/agent/runner's onboarding pass, under its `## What to do`).
 //
 // It enumerates the SCOPES on the seat's chain — the org, then each unit from
 // the outermost down to its own — and leaves finding each page to the agent's
@@ -437,8 +438,8 @@ func Hint(o *org.Organization, r *org.Role) string {
 		"via `reflect_and_persist`. Write declarative facts, not instructions " +
 		"to yourself.\n" +
 		"- When you have read all available pages and persisted what matters, " +
-		"call `mark_onboarded` with a one-line summary. After that, this " +
-		"section disappears from your prompt.\n\n" +
+		"call `mark_onboarded` with a one-line summary. That ends this " +
+		"pass, and it does not run again for this team configuration.\n\n" +
 		"If a page changes later you can re-read it any time — the onboarding " +
 		"marker only re-fires when the org structure itself changes."
 }

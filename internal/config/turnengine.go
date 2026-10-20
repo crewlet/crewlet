@@ -47,7 +47,8 @@ type TurnEngine struct {
 	// OnboardingMaxToolRounds is the dedicated first-turn onboarding
 	// pass's own budget. It runs BEFORE the executor with its own rounds
 	// so onboarding never starves the work submission on a first turn.
-	// 0 disables the dedicated pass.
+	// 0 disables onboarding: the dedicated pass is the only place a seat
+	// onboards, since the executor never reaches mark_onboarded.
 	OnboardingMaxToolRounds int `yaml:"onboarding_max_tool_rounds,omitempty" json:"onboarding_max_tool_rounds,omitempty" js:"min=0" desc:"Rounds for the first-turn onboarding pass; 0 disables it."`
 
 	// ExtensionEnabled is the master switch for the round-cap extension

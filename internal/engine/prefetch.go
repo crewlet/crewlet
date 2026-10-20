@@ -70,7 +70,6 @@ func (e *Engine) prefetchSources(company *Company) prefetch.Sources {
 		src.Episodes = learning.NewEpisodes(db)
 		src.Counterparties = learning.NewCounterparties(db)
 		src.Skills = learning.NewSkills(db)
-		src.Onboarding = learning.NewOnboarding(db)
 	}
 	// A nil *Registry would satisfy the interface and then be dereferenced,
 	// so the seam is left unset rather than filled with one — which renders
@@ -223,8 +222,6 @@ func (e *Engine) publishPrefetchSummary(ctx context.Context, seat *org.Role,
 		SynthesizedSkillsBytes: len(b.SynthesizedSkills),
 		EpisodeRecallHit:       b.EpisodeRecall != "",
 		EpisodeRecallBytes:     len(b.EpisodeRecall),
-		OnboardingHintHit:      b.OnboardingHint != "",
-		OnboardingHintBytes:    len(b.OnboardingHint),
 		PersonalMemoryHit:      b.PersonalMemory != "",
 		PersonalMemoryBytes:    len(b.PersonalMemory),
 		RelevantKnowledgeHit:   b.RelevantKnowledge != "",

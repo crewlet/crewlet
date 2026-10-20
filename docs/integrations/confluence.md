@@ -483,7 +483,7 @@ roles:
 
 ### 2. The `Onboarding` page convention (per unit)
 
-Each unit's Confluence space can host an `Onboarding` page that fresh agents are nudged to read on their first turn. A dedicated first-turn onboarding pass runs before the executor, shown a ``## First-turn onboarding`` block listing every `Onboarding` page on the agent's unit chain (org root + each ancestor unit + own unit); the agent reads them, captures conventions via `reflect_and_persist`, and calls `mark_onboarded` to suppress the hint until the org chain changes. See [Agent Learning § Prompt scaffolding](../concepts/agent-learning.md#prompt-scaffolding).
+Each unit's Confluence space can host an `Onboarding` page that fresh agents are nudged to read on their first turn. A dedicated first-turn onboarding pass runs before the executor, its prompt listing every `Onboarding` page on the agent's unit chain (org root + each ancestor unit + own unit); the agent reads them, captures conventions via `reflect_and_persist`, and calls `mark_onboarded`, after which the pass does not run again until the org chain changes. See [Turn Engine § First-turn onboarding](../concepts/turn-engine.md#first-turn-onboarding).
 
 ### 3. Query-time Confluence search (engine side)
 

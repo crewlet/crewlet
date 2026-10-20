@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -313,4 +314,88 @@ func TestBothPathsToTheExecutorEntryAgree(t *testing.T) {
 			}
 		}
 	}
+}
+
+// AN AGENT-MODE SEAT'S GATE PLACES NOTHING AND DRIVES NOTHING.
+//
+// Such a seat is never offered run_sandbox: its one box is its executor's,
+// placed by the entry's own cli.run_in, and run by that entry's CLI. So a
+// gate's `run_in` naming a cell, or a `coding_agent` naming another runner,
+// reads as a working choice and is read by nothing — and the cell used to be
+// counted as reached, so a company was refused for want of an image no box
+// would ever run. Refused on a write, naming the entry that does place the
+// box; applied with a warning, since the company runs either way.
+func TestAnAgentModeSeatsGatePlacesNothing(t *testing.T) {
+	t.Parallel()
+	company := func(gate string) string {
+		return "name: Acme\nproviders:\n  sandbox:\n    local: {}\n    default_run_in: direct\n" +
+			"  llm:\n    sub:\n      type: cli-agent\n      model: sonnet\n" +
+			"      cli: {agent: claude-code, mode: agent, run_in: direct}\n" +
+			"roles:\n  - name: SWE\n    llm: sub\n    sandbox: " + gate + "\n"
+	}
+
+	err := rejects(t, company("{enabled: true, run_in: container}"), "roles[0].sandbox.run_in")
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("want ErrConflict, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "providers.llm.sub.cli.run_in") {
+		t.Errorf("the refusal does not name what places the box:\n%v", err)
+	}
+	// Only that: the container is reached by nothing, so no image is asked
+	// for it.
+	if strings.Contains(err.Error(), "local.image") {
+		t.Errorf("an image was demanded for a cell no box runs in:\n%v", err)
+	}
+	assertAdmissionOnly(t, company("{enabled: true, run_in: container}"), "roles[0].sandbox.run_in")
+	cfg, err := ParseCompanyDocument([]byte(company("{enabled: true, run_in: container}")))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if _, reached := cfg.SandboxPlacements()[PlacementContainer]; reached {
+		t.Error("an agent-mode seat's gate reached a cell, so the engine builds a backend for nobody")
+	}
+
+	err = rejects(t, company("{enabled: true, coding_agent: opencode}"), "roles[0].sandbox.coding_agent")
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("want ErrConflict, got %v", err)
+	}
+	assertAdmissionOnly(t, company("{enabled: true, coding_agent: opencode}"), "roles[0].sandbox.coding_agent")
+
+	// What it may say: `self`, nothing, or the entry's own CLI — and a cell
+	// with the gate off is still unread, so it is refused there too.
+	for _, gate := range []string{
+		"{enabled: true, run_in: self}",
+		"{enabled: true}",
+		"{enabled: true, coding_agent: claude-code}",
+	} {
+		mustCompany(t, company(gate))
+	}
+	rejects(t, company("{enabled: false, run_in: e2b}"), "roles[0].sandbox.run_in")
+	// And a cell the catalogue does not hold is not a placement the
+	// running company lacks: nothing would run there, so an apply is not
+	// refused over it.
+	assertAdmissionOnly(t, company("{enabled: true, run_in: e2b}"), "roles[0].sandbox.run_in")
+}
+
+// AN AGENT-MODE SEAT'S BOX READS ITS GATE WHETHER OR NOT IT IS ENABLED: the
+// executor's box is given the gate's setup, env and mcp on every turn. So a
+// gate that is off with provisioning under it is refused only where nothing
+// reads it — a seat on any other runtime — and the remedy it gave, "remove the
+// block", would have taken steps out of an agent-mode seat's box.
+func TestAGateThatIsOffIsReadOnAnAgentModeSeat(t *testing.T) {
+	t.Parallel()
+	const providers = "name: Acme\nproviders:\n  sandbox:\n    local: {}\n    default_run_in: direct\n" +
+		"  llm:\n    main:\n      type: anthropic\n      model: claude-golden\n" +
+		"    sub:\n      type: cli-agent\n      model: sonnet\n      cli: {agent: claude-code, mode: agent}\n"
+	const gate = "    sandbox:\n      enabled: false\n      env: {GITLAB_TOKEN: \"${T}\"}\n" +
+		"      setup:\n        - {name: tools, brief: b}\n"
+
+	mustCompany(t, providers+"roles:\n  - name: SWE\n    llm: sub\n"+gate)
+
+	doc := providers + "roles:\n  - name: SWE\n    llm: main\n" + gate
+	err := rejects(t, doc, "roles[0].sandbox.enabled")
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("want ErrConflict, got %v", err)
+	}
+	assertAdmissionOnly(t, doc, "roles[0].sandbox.enabled")
 }

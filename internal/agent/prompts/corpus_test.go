@@ -115,17 +115,17 @@ func richExecutorInput() ExecutorInput {
 	return ExecutorInput{
 		ToolCatalogue: "- `read_file` — read a file\n- MCP servers: atlassian, github",
 		AvailableTools: []string{
-			"read_file", "mark_onboarded", "delegate", "comment_on_work_item",
+			"read_file", "delegate", "comment_on_work_item",
 		},
 		Workers:             "- `researcher` — digs; returns `findings`",
 		CounterpartyProfile: "Ana prefers bullet points — and emoji 👍",
 		SynthesizedSkills:   "## Deploy summaries\nLead with the version.",
 		EpisodeRecall:       "### 2026-09-30 — deploy 2.2\nposted in #eng",
-		OnboardingHint:      "Read `## Engineering handbook` first.",
 		PersonalMemory:      "# Diary\n- Ana likes threads",
 		RelevantKnowledge:   "## Runbook: deploys\n1. tag\n2. ship 🚢",
 		ThreadContext:       "- Ana: ## not a heading of ours\n- Bo: ok",
 		Skills:              richSkills(),
+		OffersSandbox:       true,
 	}
 }
 

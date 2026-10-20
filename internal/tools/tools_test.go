@@ -296,7 +296,7 @@ func TestTheCatalogueNamesServersRatherThanExpandingThem(t *testing.T) {
 		mustRegister(t, r, tool(n), tools.Origin("github"))
 	}
 
-	got := r.Catalogue()
+	got := r.Snapshot().Catalogue()
 	if !strings.Contains(got, "- reflect: Record a lesson.") {
 		t.Errorf("the builtin is missing its one-line description:\n%s", got)
 	}
@@ -326,8 +326,39 @@ func TestAnEmptyCatalogueSaysSo(t *testing.T) {
 	t.Parallel()
 	// An empty string in a prompt reads as a section the engine forgot to
 	// fill in.
-	if got := tools.NewRegistry().Catalogue(); got != "(no tools available)" {
+	if got := tools.NewRegistry().Snapshot().Catalogue(); got != "(no tools available)" {
 		t.Errorf("catalogue = %q", got)
+	}
+}
+
+// A TOOL A SNAPSHOT LEAVES OUT IS OUT OF EVERYTHING READ FROM IT: the
+// catalogue a phase is shown, and the activation it can make by name. Left off
+// a phase's active list alone, a tool was still listed to it and one
+// activate_tool call away.
+func TestASnapshotWithoutAToolNeitherListsNorActivatesIt(t *testing.T) {
+	t.Parallel()
+	r := tools.NewRegistry()
+	for _, n := range []string{"keep", "drop"} {
+		mustRegister(t, r, tool(n), tools.OriginBuiltin)
+	}
+	full := r.Snapshot()
+	narrowed := full.Without("drop", "never-registered")
+
+	if got := narrowed.Catalogue(); strings.Contains(got, "drop") || !strings.Contains(got, "keep") {
+		t.Errorf("catalogue = %q, want the kept tool and not the dropped one", got)
+	}
+	if !slices.Equal(narrowed.Names(), []string{"keep"}) {
+		t.Errorf("names = %v", narrowed.Names())
+	}
+	if _, held := narrowed.Lookup("drop"); held {
+		t.Error("a dropped tool can still be looked up")
+	}
+	if tools.NewSurface("execute", narrowed, nil).Activate("drop") {
+		t.Error("a dropped tool can still be activated by name")
+	}
+	// A COPY: the snapshot it was made from is unchanged.
+	if _, held := full.Lookup("drop"); !held || !strings.Contains(full.Catalogue(), "drop") {
+		t.Error("narrowing a snapshot changed the one it was made from")
 	}
 }
 

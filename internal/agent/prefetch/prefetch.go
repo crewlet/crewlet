@@ -117,10 +117,6 @@ type Blocks struct {
 	// names, since a rename must not restart the clock.
 	SkillIDs []string
 
-	// OnboardingHint renders only for a seat that has not completed
-	// onboarding for its current org chain.
-	OnboardingHint string
-
 	// TurnEmbedding is what became of the turn's one vector: embedded,
 	// failed, or a company with no embeddings — "" where no search asked for
 	// it. Carried out for the reason [Blocks.ThreadContextRead] is: an
@@ -193,8 +189,7 @@ type Blocks struct {
 func (b Blocks) Empty() bool {
 	return b.PersonalMemory == "" && b.RelevantKnowledge == "" &&
 		b.EpisodeRecall == "" && b.CounterpartyProfile == "" &&
-		b.SynthesizedSkills == "" && b.OnboardingHint == "" &&
-		b.ThreadContext == ""
+		b.SynthesizedSkills == "" && b.ThreadContext == ""
 }
 
 // Request is one turn's worth of context to prefetch against.
@@ -204,12 +199,11 @@ type Request struct {
 	// internal/learning's package doc).
 	Seat *org.Role
 
-	// AgentID is the seat's derived runtime id, which is what the diary and
-	// the onboarding marker are keyed on.
+	// AgentID is the seat's derived runtime id, which is what the diary is
+	// keyed on.
 	AgentID string
 
-	// Org is the company, for the knowledge search's read scope and the
-	// onboarding hint.
+	// Org is the company, for the knowledge search's read scope.
 	Org *org.Organization
 
 	// Task is the trigger as the turn describes it to its executor: the
@@ -383,11 +377,6 @@ type Skills interface {
 	List(ctx context.Context, handle string, opts learning.ListOptions) ([]learning.Skill, error)
 }
 
-// Onboarding says whether this seat has been through its first-turn pass.
-type Onboarding interface {
-	Onboarded(ctx context.Context, agentID, chainHash string) (bool, error)
-}
-
 // Threads reads back the chat thread a turn was woken in.
 //
 // Satisfied by *notify.ThreadReaders, whose fan-out is what keeps a company
@@ -420,7 +409,6 @@ type Sources struct {
 	Episodes       Episodes
 	Counterparties Counterparties
 	Skills         Skills
-	Onboarding     Onboarding
 
 	// Threads reads the chat thread a turn was woken in. Nil renders the
 	// UNREADABLE hint rather than an empty block for a trigger that names
@@ -529,7 +517,6 @@ func (f *Fetcher) Fetch(ctx context.Context, r Request) Blocks {
 		defer recoverSkills(&blocks.SynthesizedSkills, &blocks.SkillIDs)
 		blocks.SynthesizedSkills, blocks.SkillIDs = f.synthesizedSkills(ctx, r)
 	})
-	run(&blocks.OnboardingHint, func() string { return f.onboardingHint(ctx, r) })
 	// Its own goroutine too, and for the same reason twice over: it reports
 	// a message count AND two facts the prose cannot carry.
 	wg.Go(func() {

@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -284,7 +285,10 @@ func TestASuspensionRecordsTheClockItParkedOn(t *testing.T) {
 		activate("run_sandbox"),
 		submitCall(t, "run_sandbox", `{"task":"fix the failing test"}`),
 	}}
-	r, reg := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{})
+	// The gate is what lets the seat reach run_sandbox at all; without it
+	// the tool is not in the executor's snapshot to activate.
+	r, reg := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}},
+		buildOpts{sandbox: &org.RoleSandbox{Enabled: true}})
 	if err := reg.RegisterWith(suspendingTool{}, tools.Origin("sandbox"), tools.Annotations{}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}

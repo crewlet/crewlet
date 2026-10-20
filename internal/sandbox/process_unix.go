@@ -6,8 +6,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 
 	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/procgroup"
@@ -64,10 +66,11 @@ func runHost(ctx context.Context, cmd hostCommand) (ExecResult, error) {
 
 	select {
 	case err := <-done:
+		code, said := hostExit(proc.ProcessState, stderr.String())
 		return ExecResult{
-			ExitCode: proc.ProcessState.ExitCode(),
+			ExitCode: code,
 			Stdout:   stdout.String(),
-			Stderr:   stderr.String(),
+			Stderr:   said,
 		}, exitOnly(err)
 	case <-ctx.Done():
 		logSignal("kill", proc.Process.Pid, procgroup.Kill(proc.Process.Pid))
@@ -95,6 +98,30 @@ func runHost(ctx context.Context, cmd hostCommand) (ExecResult, error) {
 			Stderr:   detail,
 		}, nil
 	}
+}
+
+// hostExit is the status a finished host process reports, and what it said on
+// stderr, with a SIGNAL read the way a shell reads one: 128 plus its number,
+// and the signal named after whatever the process printed.
+//
+// os.ProcessState.ExitCode answers -1 for a process a signal ended, and an
+// ExecResult's ExitCode is read everywhere as an exit status: a setup command
+// whose own shell was killed — an OOM kill, or a command that `exec`s into a
+// program that dies of a signal — read "failed (exit -1)", a status no process
+// can exit with, with nothing saying a signal ended it. A child the shell
+// waits on already reads as the shell reports it (137 for a SIGKILL), and so
+// does a container box's command, which `docker exec` reports the same way.
+func hostExit(state *os.ProcessState, stderr string) (int, string) {
+	status, ok := state.Sys().(syscall.WaitStatus)
+	if !ok || !status.Signaled() {
+		return state.ExitCode(), stderr
+	}
+	signal := status.Signal()
+	note := fmt.Sprintf("killed by signal %d (%s)", int(signal), signal)
+	if said := strings.TrimRight(stderr, "\n"); said != "" {
+		note = said + "\n" + note
+	}
+	return 128 + int(signal), note
 }
 
 // exitOnly swallows a non-zero exit, which every caller reads off ExitCode,

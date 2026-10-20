@@ -136,6 +136,67 @@ func TestWithinIsStrictAndNotAPrefixTest(t *testing.T) {
 	}
 }
 
+// WHERE A PATH LANDS IN A LOCAL BOX is one table, because both local cells and
+// config validation read it: a case that moved here moves all three at once.
+func TestInHomeIsWhereALocalBoxPutsAFile(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name, home, path string
+		rel              string // empty: refused
+	}{
+		{"an absolute path under the home", ContainerHome, "/home/user/.npmrc", ".npmrc"},
+		{"deeper under the home", ContainerHome, "/home/user/.local/bin/tool", ".local/bin/tool"},
+		{"a doubled separator is still under it", ContainerHome, "/home/user//x", "x"},
+		{"a climb that comes back", ContainerHome, "/home/user/../user/x", "x"},
+		{"a name that starts with two dots", ContainerHome, "/home/user/..x", "..x"},
+		{"a relative path, under any home", ContainerHome, ".config/tool.toml", ".config/tool.toml"},
+		{"a relative path that comes back", ContainerHome, "a/../b", "b"},
+		{"a system path", ContainerHome, "/usr/local/bin/tool", ""},
+		{"a climb out of the home", ContainerHome, "/home/user/../../etc/cron.d/x", ""},
+		{"a neighbour sharing the prefix", ContainerHome, "/home/user-2/x", ""},
+		{"the home itself, which is no file", ContainerHome, "/home/user", ""},
+		{"the home itself with a slash", ContainerHome, "/home/user/", ""},
+		{"a relative climb out", ContainerHome, "../escape", ""},
+		{"a relative climb that ends at the parent", ContainerHome, "a/../..", ""},
+		{"a relative path to the home itself", ContainerHome, ".", ""},
+		{"nothing at all", ContainerHome, "", ""},
+		// A direct box's home is minted per box, so to a document no
+		// absolute path names it, and only a relative path lands.
+		{"a minted home and an absolute path", "", "/home/user/.npmrc", ""},
+		{"a minted home and a relative path", "", ".npmrc", ".npmrc"},
+		{"a minted home and a relative climb out", "", "../x", ""},
+		// A leading tilde is the home, in every cell, as a remote box's
+		// own agent reads one; another account's home is refused there and
+		// so here.
+		{"a tilde path", ContainerHome, "~/.npmrc", ".npmrc"},
+		{"a tilde path in a minted home", "", "~/.local/bin/tool", ".local/bin/tool"},
+		{"the tilde alone, which is the home itself", "", "~", ""},
+		{"the tilde and a slash, the home again", ContainerHome, "~/", ""},
+		{"a climb out from the tilde", "", "~/../x", ""},
+		{"another account's home", ContainerHome, "~bob/.npmrc", ""},
+		{"a name that only starts with a tilde", "", "~x", ""},
+		{"a tilde that is not the first character", "", "a/~/x", "a/~/x"},
+		// The direct box itself holds its home, and so can name it.
+		{"a held host home", "/var/lib/crewlet/boxes/ab12/home", "/var/lib/crewlet/boxes/ab12/home/x", "x"},
+		{"a neighbouring box's home", "/var/lib/crewlet/boxes/ab12/home", "/var/lib/crewlet/boxes/cd34/home/x", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rel, inside := InHome(tc.home, tc.path)
+			if want := tc.rel != ""; inside != want {
+				t.Fatalf("InHome(%q, %q) inside = %v, want %v", tc.home, tc.path, inside, want)
+			}
+			if inside && rel != tc.rel {
+				t.Fatalf("InHome(%q, %q) = %q, want %q", tc.home, tc.path, rel, tc.rel)
+			}
+			if !inside && rel != "" {
+				t.Fatalf("InHome(%q, %q) refused but answered %q", tc.home, tc.path, rel)
+			}
+		})
+	}
+}
+
 func TestInheritTakesOnlyTheAllowlist(t *testing.T) {
 	t.Setenv("PATH", "/usr/bin")
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-not-for-the-child")

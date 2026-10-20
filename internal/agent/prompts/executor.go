@@ -96,7 +96,8 @@ const KeyUntrustedText = "untrusted_text"
 const executorKnowledgeNote = "  Relevant team documentation was surfaced in the " +
 	"`## Relevant knowledge` block below."
 
-// executorSandboxSection is rendered only for sandbox-enabled roles.
+// executorSandboxSection is rendered only where the executor is offered
+// run_sandbox ([ExecutorInput.OffersSandbox]).
 //
 // Gated because it is absent for very nearly every role: unconditional, it
 // would be ~200 tokens of prose about a tool the seat does not have, on every
@@ -132,9 +133,12 @@ type ExecutorInput struct {
 	// with a one-line description, MCP servers by name only.
 	ToolCatalogue string
 
-	// AvailableTools is the tool surface registered for this turn. It
-	// scopes skill matching, and gates the onboarding hint — see
-	// OnboardingHint.
+	// AvailableTools is every name on the surface built for this phase,
+	// the tools the phase adds to it included (`submit_work`, the
+	// discovery pair, `delegate`) — never the registry snapshot it was
+	// built from, which holds none of those. It scopes skill matching,
+	// and gates every section that tells the model to call a tool
+	// (escalation, workers).
 	AvailableTools []string
 
 	// Workers is the rendered `## Your workers` block: one line per
@@ -159,12 +163,6 @@ type ExecutorInput struct {
 	// re-queried mid-turn precisely to preserve prefix caching.
 	EpisodeRecall string
 
-	// OnboardingHint renders only when this agent has not yet completed
-	// onboarding for its current org chain AND mark_onboarded is in
-	// AvailableTools — instructing an agent to call a tool that is not
-	// registered (reflection disabled) is worse than saying nothing.
-	OnboardingHint string
-
 	// PersonalMemory is the agent-scope diary block, already filtered for
 	// relevance to this task. Empty when the filter is unavailable, fails,
 	// or finds no candidates.
@@ -182,6 +180,16 @@ type ExecutorInput struct {
 	// Skills is the tool-skill registry. Nil keeps the prompt free of skill
 	// scaffolding entirely.
 	Skills SkillCatalogue
+
+	// OffersSandbox is whether run_sandbox is on the surface this executor
+	// is offered, which is what the sandbox section teaches.
+	//
+	// THE CALLER'S ANSWER, not the role's gate read here: the gate is not
+	// what says a seat holds the tool. A seat whose executor runs in agent
+	// mode is never offered it — it already holds a shell — whatever its
+	// gate says, and the section rendered off the gate told that seat's
+	// coding CLI about a tool its bridge never lists, on every turn.
+	OffersSandbox bool
 }
 
 // workersPreamble frames the list that follows it.
@@ -269,15 +277,14 @@ func BuildExecutor(seat Seat, in ExecutorInput) Prompt {
 	// seat and costs the prompt cache nothing.
 	b.Heading(KeyUntrustedText, untrustedTextHeading, provenance.StandingInstruction)
 
-	if seat.ok() && seat.Role.Sandbox != nil && seat.Role.Sandbox.Enabled {
+	if in.OffersSandbox {
 		b.Heading("sandbox", executorSandboxSection)
 	}
 
 	// FIRST of the prefetched blocks, because it is the trigger's own
 	// context rather than something retrieved about it, and the executor
 	// reads this prompt top-down: what the conversation is before what the
-	// seat remembers about conversations like it, and before the standing
-	// instruction to go and read the team's onboarding pages.
+	// seat remembers about conversations like it.
 	//
 	// "The thread so far" rather than "Thread context", which is what the
 	// chat prompt titles the section it writes into the notification BODY
@@ -286,12 +293,6 @@ func BuildExecutor(seat Seat, in ExecutorInput) Prompt {
 	// whichever it saw last.
 	if in.ThreadContext != "" {
 		b.Heading(KeyThreadContext, "\n## The thread so far", in.ThreadContext)
-	}
-	// The onboarding hint gates on the tool as well as the marker: the
-	// same rule the memory / skill blocks follow, so a prompt never tells
-	// the model to call something that is not registered.
-	if in.OnboardingHint != "" && slices.Contains(in.AvailableTools, "mark_onboarded") {
-		b.Heading(KeyOnboardingHint, "\n## First-turn onboarding", in.OnboardingHint)
 	}
 	if in.PersonalMemory != "" {
 		b.Heading(KeyPersonalMemory, "\n## Personal memory", in.PersonalMemory)
@@ -337,7 +338,6 @@ func BuildExecutor(seat Seat, in ExecutorInput) Prompt {
 // them, rather than a second list here drifting from it.
 const (
 	KeyThreadContext     = "thread_context"
-	KeyOnboardingHint    = "onboarding_hint"
 	KeyPersonalMemory    = "personal_memory"
 	KeySynthesizedSkills = "synthesized_skills"
 	KeyRelevantKnowledge = "relevant_knowledge"

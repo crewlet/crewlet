@@ -626,7 +626,7 @@ const escalationTool = "comment_on_work_item"
 // after asking is to finish everything that does not depend on the answer and
 // stop.
 //
-// GATED ON THE TOOL, the same rule the onboarding hint follows: a prompt never
+// GATED ON THE TOOL, the same rule the workers block follows: a prompt never
 // tells a model to call something it does not hold.
 func BuildEscalationSection(availableTools []string) []string {
 	if !slices.Contains(availableTools, escalationTool) {
