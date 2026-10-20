@@ -51,22 +51,26 @@ const (
 	// later than this is one the person never saw arrive.
 	DataResolvedWithin = 5 * time.Second
 
-	// ChangeVisibleWithin bounds the time from an applier committing a
-	// change to the push frame written to a watching socket: one second,
-	// which is when a collaborator stops reading a sheet as live.
+	// ChangeVisibleWithin bounds the time from the broker storing a
+	// committed change's record to its push to the sockets watching it: one
+	// second, which is when a collaborator stops reading a sheet or a
+	// conversation as live.
 	ChangeVisibleWithin = time.Second
 
-	// WakeSlack bounds a wake past its debounce window: from the end of the
-	// window a watch or a mention waits out to the woken turn's start. Ten
-	// seconds, a placement and a turn start with room for one retry; the
-	// debounce itself is the author's choice and is never counted against
-	// the engine.
-	WakeSlack = 10 * time.Second
+	// WakeWithin bounds a wake's share of the change feed: from the broker
+	// storing the record that wakes somebody to the wake published on the
+	// inbound edge, for every domain that wakes. Ten seconds: the feed's
+	// whole path — the fleet-wide consumer's delivery behind a burst, a
+	// claim, the publish riding out a leader election — with room for one
+	// redelivery after a failed publish (the feed's two-second nak delay).
+	// Past it, a person who mentioned a seat has watched nothing happen for
+	// longer than a reply takes to type.
+	WakeWithin = 10 * time.Second
 
-	// PresenceJoinWithin and PresenceCursorWithin bound presence: a joiner
-	// sees the room's roster within a second, and a cursor crosses nodes
-	// within 150 ms, the point past which a followed pointer visibly lags
-	// the voice describing it.
+	// PresenceJoinWithin and PresenceCursorWithin bound presence: a node's
+	// first socket in a room is shown its peers' members within a second,
+	// and a member's move crosses nodes within 150 ms, the point past which
+	// a followed pointer visibly lags the voice describing it.
 	PresenceJoinWithin   = time.Second
 	PresenceCursorWithin = 150 * time.Millisecond
 )
@@ -248,36 +252,42 @@ var catalogue = []Objective{
 		Reason:    "an edit whose verdict never arrives is lost to the person who made it",
 	},
 	{
-		Name:      ChangeVisibility,
-		Measures:  "Change visibility",
-		Where:     "the stream push of a committed artifact or datastore change",
-		GoodEvent: "the applier's commit to the frame written to the socket",
+		Name:     ChangeVisibility,
+		Measures: "Change visibility",
+		Where: "the socket's push of a committed batch (`internal/api/stream`): an artifact's " +
+			"movement, a datastore's changed documents and a chat record, on every node " +
+			"pushing to a watching socket, whether from its own applier or a peer's relayed",
+		GoodEvent: "the broker storing the record to its push to the sockets watching it",
 		Within:    ChangeVisibleWithin,
 		Target:    TargetChangeVisible,
-		Reason:    "past a second a collaborator stops reading the sheet as live",
+		Reason:    "past a second a collaborator stops reading the sheet or the conversation as live",
 	},
 	{
-		Name:      WakeLatency,
-		Measures:  "Wake latency",
-		Where:     "the changefeed, for a watch that fired or a mention",
-		GoodEvent: "the end of the debounce window to the woken turn's start",
-		Within:    WakeSlack,
-		Target:    TargetWake,
-		Reason:    "the debounce is the author's; the engine answers for what follows it",
+		Name:     WakeLatency,
+		Measures: "Wake latency",
+		Where: "the change feed (`internal/changefeed`), for every wake of every domain " +
+			"that wakes: the tracker, the knowledge base and chat",
+		GoodEvent: "the broker storing the record that wakes somebody to its wake published " +
+			"on the inbound edge",
+		Within: WakeWithin,
+		Target: TargetWake,
+		Reason: "a wake is derived from the durable record, so the feed's path is the " +
+			"engine's whole share of it before the notification service routes it",
 	},
 	{
-		Name:      PresenceJoin,
-		Measures:  "Presence join",
-		Where:     "the presence hub",
-		GoodEvent: "a join to the first roster",
-		Within:    PresenceJoinWithin,
-		Reason:    "best effort: presence is told, never stored, and degrades silently",
+		Name:     PresenceJoin,
+		Measures: "Presence join",
+		Where:    "the presence hub (`internal/presence`), for a node's first socket in a room",
+		GoodEvent: "the room's first socket on the node to its peers' members shown (the " +
+			"last answer to its ask applied, or the ask sent where nobody answers)",
+		Within: PresenceJoinWithin,
+		Reason: "best effort: presence is told, never stored, and degrades silently",
 	},
 	{
 		Name:      PresenceCursor,
 		Measures:  "Presence cursor",
-		Where:     "the presence hub, across nodes",
-		GoodEvent: "a cursor frame to its delivery on another node",
+		Where:     "the presence hub, for every member a peer's frame says moved",
+		GoodEvent: "the member's move on its node to the frame naming it heard on this one",
 		Within:    PresenceCursorWithin,
 		Reason:    "best effort: a late cursor is redrawn by the next one",
 	},

@@ -20,6 +20,7 @@ import (
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/objectives"
 	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -303,6 +304,59 @@ func TestAChatFrameForAPrivateRoomNeverReachesANonMember(t *testing.T) {
 	if got := chatKinds(outside); len(got) != 0 {
 		t.Errorf("a private room's message reached a non-member as %v", got)
 	}
+}
+
+// A COMMITTED CHAT RECORD IS TIMED FROM ITS BROKER INSTANT WHEN A VIEWER IS
+// SHOWN IT, AND NOT OTHERWISE.
+//
+// Change visibility is the record's storing to its push, and the record's own
+// `at` is the broker's instant every node renders. A record in a room nobody
+// watching may read was shown to nobody: no event, or a private room's every
+// message would read as visible to the people it was kept from.
+//
+// Mutation: time the fan before it knows who was sent the frame, and the
+// private room's record is timed.
+func TestACommittedChatRecordIsTimedWhenAViewerIsShownIt(t *testing.T) {
+	t.Parallel()
+	judge := &stampsOf{}
+	h := NewChatHub(ChatHubOptions{
+		Rooms:      func() ChatRooms { return twoRooms() },
+		Presence:   presenceHub(t, memory.NewBroker(), "node-a"),
+		Objectives: judge,
+		Now:        func() time.Time { return chatClock },
+	})
+	watcherFor(t, h, chatPerson("bob"))
+
+	shown, hidden := post(publicRoom, 7), post(privateRoom, 8)
+	shown.At, hidden.At = chatClock.Add(-time.Second), chatClock.Add(-2*time.Second)
+	h.fan(t.Context(), []chatlet.Applied{shown, hidden})
+
+	if got := judge.all(); !slices.Equal(got, []time.Time{shown.At}) {
+		t.Errorf("chat pushes were timed from %v, want only the public room's record at %v",
+			got, shown.At)
+	}
+}
+
+// stampsOf is an objective meter that keeps every stamp it was handed for
+// change visibility.
+type stampsOf struct {
+	mu     sync.Mutex
+	stamps []time.Time
+}
+
+func (s *stampsOf) RecordSince(n objectives.Name, stamp time.Time, answered bool) {
+	if n != objectives.ChangeVisibility || !answered {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stamps = append(s.stamps, stamp)
+}
+
+func (s *stampsOf) all() []time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.stamps)
 }
 
 // A PERSON TAKEN OUT OF A PRIVATE ROOM IS TOLD IT CHANGED; NOBODY ELSE OUTSIDE IS.

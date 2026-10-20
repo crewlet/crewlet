@@ -139,6 +139,23 @@ func (m *Meter) Record(n Name, elapsed time.Duration, answered bool) {
 	l.add(m.now(), good)
 }
 
+// RecordSince counts one observation of objective n whose event began at
+// stamp, ending now on the meter's own clock.
+//
+// FOR AN EVENT STAMPED BY ANOTHER CLOCK — the broker's own instant for a
+// stored record, a peer's for a presence member's move — and so CLAMPED AT
+// ZERO: a stamp a little after this node's now is the two clocks' skew, never
+// an event answered before it began, and read as negative it would be a bad
+// event ([Objective.Good]) the engine did nothing to cause. What skew the
+// other way adds is inside the bound, which is why every bound measured
+// across clocks is one no skew a healthy fleet runs with comes near.
+func (m *Meter) RecordSince(n Name, stamp time.Time, answered bool) {
+	if m == nil || stamp.IsZero() {
+		return
+	}
+	m.Record(n, max(0, m.now().Sub(stamp)), answered)
+}
+
 // Burns is every budgeted objective's burn over every pair of windows, for
 // each objective that has recorded an event inside the longest window, in
 // catalogue order and the fastest pair first.

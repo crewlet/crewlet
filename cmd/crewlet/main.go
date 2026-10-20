@@ -1968,7 +1968,8 @@ func artifactDataSurfaces(e *engine.Engine, boot *config.Bootstrap) (
 	// runs: a node with none serves no room rather than rooms that never
 	// say who is there.
 	if hub := e.Presence(); hub != nil {
-		rooms = &api.Rooms{Gate: gate, Stores: data, Presence: hub, Feed: e}
+		rooms = &api.Rooms{Gate: gate, Stores: data, Presence: hub, Feed: e,
+			Objectives: e.Objectives()}
 		if m := e.Recorder(); m != nil {
 			rooms.Metrics = m
 		}

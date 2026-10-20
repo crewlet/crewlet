@@ -1030,19 +1030,22 @@ func (c *Client) Reply(env Envelope) {
 // broadcast with it. The two ends genuinely race: the transport closes when its
 // socket dies while the ingest path is fanning out. Holding it is cheap because
 // nothing here blocks: every operation is a select with a default.
-func (c *Client) send(frame *Frame) {
+//
+// It reports whether the frame was queued: false for no frame and for a client
+// already closed.
+func (c *Client) send(frame *Frame) bool {
 	if frame == nil {
-		return
+		return false
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
-		return
+		return false
 	}
 	for {
 		select {
 		case c.out <- frame:
-			return
+			return true
 		default:
 		}
 		// Full. Take one off the front and try again. The take can only
@@ -1536,29 +1539,31 @@ func (h *Hub) Clients() int {
 // Never blocks on any client: each client's own queue absorbs the difference,
 // and one that has fallen behind loses its oldest frame rather than holding up
 // the publish path.
-func (h *Hub) Broadcast(env Envelope) {
+//
+// It answers how many clients it handed the frame to ([fanOut]).
+func (h *Hub) Broadcast(env Envelope) int {
 	route := RouteOf(env.Kind)
 	switch {
 	case !route.Valid():
 		log.Error("stream_unrouted_kind", "kind", env.Kind,
 			"hint", "add the kind to internal/api/stream's route table; a push "+
 				"with no route is dropped rather than sent to every client")
-		return
+		return 0
 	case route == RouteDirect:
 		log.Error("stream_direct_kind_broadcast", "kind", env.Kind,
 			"hint", "an answer belongs to the client that asked; use Client.Reply")
-		return
+		return 0
 	case route == RouteViewer:
 		log.Error("stream_viewer_kind_broadcast", "kind", env.Kind,
 			"hint", "a chat frame reaches the viewers its room admits, decided "+
 				"one by one by the chat hub; broadcast, it is a private room "+
 				"delivered to every open tab")
-		return
+		return 0
 	case route == RouteRoom && env.room == "":
 		log.Error("stream_room_frame_without_a_room", "kind", env.Kind,
 			"hint", "build it with PushSeat or PushArtifact; a room-routed frame "+
 				"with no room has no audience and is never fanned out to everyone")
-		return
+		return 0
 	}
 
 	h.mu.RLock()
@@ -1570,7 +1575,7 @@ func (h *Hub) Broadcast(env Envelope) {
 	}
 	h.mu.RUnlock()
 
-	fanOut(targets, env)
+	return fanOut(targets, env)
 }
 
 // fanOut hands env to every target its need, its posture and its room admit,
@@ -1583,7 +1588,13 @@ func (h *Hub) Broadcast(env Envelope) {
 // its own — so who may read a kind, what a posture delivers, how a payload is
 // shaped and how often it is encoded are each decided in one place. A producer
 // with a send loop of its own would be a second answer to all four.
-func fanOut(targets []*Client, env Envelope) {
+//
+// It answers how many clients it handed the frame to: what a producer timing a
+// push to the sockets watching a change counts as the change pushed
+// (internal/objectives' change visibility), so a change nobody is watching is
+// no event.
+func fanOut(targets []*Client, env Envelope) int {
+	sent := 0
 	type encoding struct {
 		slot    int
 		variant string
@@ -1622,8 +1633,11 @@ func fanOut(targets []*Client, env Envelope) {
 			}
 			cache[key] = frame
 		}
-		c.send(frame)
+		if c.send(frame) {
+			sent++
+		}
 	}
+	return sent
 }
 
 // reader is who c is as a push to room is shaped, and false where c must not

@@ -381,6 +381,10 @@ type ChatHubOptions struct {
 	// rail alone.
 	Reads ChatReadWatch
 
+	// Objectives records the change visibility of every committed record
+	// this hub pushes ([Objectives]); nil records nothing.
+	Objectives Objectives
+
 	// Now is injectable so a test can pin the instant a frame is stamped.
 	Now func() time.Time
 }
@@ -826,7 +830,8 @@ func (h *ChatHub) fan(ctx context.Context, batch []chatlet.Applied) {
 			}
 		}
 		if len(targets) > 0 {
-			fanOut(targets, Push(kind, chatChangeOf(applied), applied.At))
+			visible(h.opts.Objectives,
+				fanOut(targets, Push(kind, chatChangeOf(applied), applied.At)), applied.At)
 		}
 	}
 }

@@ -130,8 +130,10 @@ type Service struct {
 	work         *roomWork
 	stopPresence func()
 
-	// metrics records the socket's push lag; nil records nothing.
+	// metrics records the socket's push lag, and judge the change
+	// visibility of what a room is pushed; nil records nothing.
 	metrics Metrics
+	judge   Objectives
 
 	// tokensDirty means a phase completed since the last rollup went out.
 	// Set on the publish path and cleared on the tick — see flushTokens.
@@ -257,6 +259,10 @@ type Options struct {
 
 	// Metrics records the socket's push lag; nil records nothing.
 	Metrics Metrics
+
+	// Objectives records the change visibility of what the artifact rooms
+	// are pushed ([Objectives]); nil records nothing.
+	Objectives Objectives
 }
 
 // NewService builds the fan-out over a projection, or refuses a missing
@@ -312,6 +318,7 @@ func NewService(state *livestate.LiveState, opts Options) (*Service, error) {
 		pushed:    map[string]pushedCall{},
 		rooms:     opts.Rooms,
 		metrics:   opts.Metrics,
+		judge:     opts.Objectives,
 	}
 	if s.now == nil {
 		s.now = func() time.Time { return time.Now().UTC() }

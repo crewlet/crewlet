@@ -773,8 +773,9 @@ func New(opts Options) (*App, error) {
 		},
 
 		// THE ARTIFACT ROOMS, every half or none ([Rooms]).
-		Rooms:   opts.Rooms.streamRooms(),
-		Metrics: opts.Rooms.metrics(),
+		Rooms:      opts.Rooms.streamRooms(),
+		Metrics:    opts.Rooms.metrics(),
+		Objectives: opts.Rooms.objectives(),
 
 		Now:            now,
 		HealthInterval: opts.HealthInterval,
