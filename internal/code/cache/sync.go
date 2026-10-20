@@ -52,6 +52,40 @@ type round struct {
 	// did is what the round's applies did, summed: what a request's
 	// in-place round answers its escalation by (applied.repaired).
 	did applied
+	// reader is the name the round's own git runs carry in its incarnation
+	// (roundReader), minted as it first applies to it.
+	reader roundReader
+}
+
+// roundReader is the reader a round's own git runs name in the incarnation
+// it applies to (gitproc.Cmd.Repairer: the peel of the tags it sets), so what
+// they report is HELD for the round rather than made the copy's scrub at once
+// (report.go, HELD FOR THE REQUEST) — and SETTLED once the round's answer is
+// known (settleReader): CONSUMED by the repair of a pack's or an object's
+// damage the round asked of its own git's failure (repairDamaged), which
+// answers exactly what such a report names, and otherwise handed to the
+// ordinary rules (handOn), as a request's reader's release hands them. Made
+// due beside that repair, the report's scrub read the whole copy — 1.13 times
+// its pack bytes — while the repair fetched one pack again, and raced it to
+// that pack: the cost a request's failure is spared by the same hold, which a
+// round's own failure repaired in place would pay just the same.
+type roundReader struct {
+	inc *incarnation
+	by  gitproc.Repairer
+}
+
+// settleReader ends rd, a round's reader: what its runs reported is the
+// round's repair's — consumed, counted reports{outcome=request} — when
+// answered says the round asked one that answers it, and handed to the
+// ordinary rules otherwise; either way its name is closed. e.mu is held.
+func (c *Cache) settleReader(e *entry, rd roundReader, answered bool) {
+	if rd.inc == nil {
+		return
+	}
+	if answered {
+		c.consume(rd.inc, rd.by)
+	}
+	c.handOn(e, rd.inc, rd.by)
 }
 
 // waiter is one caller of a round.
@@ -61,19 +95,41 @@ type waiter struct {
 	// an ordinary round (Cache.run).
 	fresh   statelog.Freshness
 	rebuild bool
-	// escalate: the caller is a REQUEST whose pack or object damage of the
-	// incarnation failedOn this round repairs in place (Cache.Rebuild), for
-	// this reason: should the round repair nothing, the caller is not
-	// answered by it but handed to the scrub and, past it, to the whole
-	// rebuild (Cache.escalate) — only while the round's incarnation IS
-	// failedOn, since one a rebuild made since is not the copy that failed.
+	// escalate: the caller's pack or object damage of the incarnation
+	// failedOn is being repaired in place — a REQUEST's (Cache.Rebuild), or
+	// the damage a sync's own round's git met (damagedRound) — for this
+	// reason, and this round is the in-place round that repairs it: should
+	// the round repair nothing, a request is not answered by it but handed to
+	// the scrub and, past it, to the whole rebuild (Cache.escalate) — only
+	// while the round's incarnation IS failedOn, since one a rebuild made
+	// since is not the copy that failed. Should the round's own git meet the
+	// damage again, the caller goes on to the scrub too (damagedRound).
 	escalate RebuildReason
 	failedOn *incarnation
-	// began is when the failed request's process began (Failure.Began), the
+	// began is when the failing process began (Failure.Began), the
 	// escalation's guard: a repair written into failedOn after it — while the
 	// repair ran — may be what ended the failure, so the caller is answered
-	// from the copy as it stands rather than handed on to a rebuild.
+	// as the guard answers it (standOrSync) rather than handed on to a
+	// rebuild.
 	began time.Time
+	// request: the caller is a REQUEST's repair (Cache.Rebuild) — its own git
+	// failed over a Synced it held, and it runs that git again over whatever
+	// it is answered — rather than a sync, which is answered only by a round
+	// that converged. So a request's in-place round that repaired nothing
+	// hands it on to the scrub, and the guard answers it from the copy as it
+	// stands; a sync whose own round's git met the damage is answered by its
+	// in-place round once that converges, whatever it repaired — that
+	// round's git met nothing — and the guard hands it to a round of the copy
+	// as it stands, never answers it from a copy no round converged.
+	request bool
+	// scrubbedOn is the incarnation the repair's SCRUB ran on for this
+	// caller (Cache.escalate) and found damaged, its findings handed to the
+	// round the caller then waits on, and whole is the packs that scrub
+	// found whole. Should that round's own git meet the damage again, no
+	// repair in place is left to try: the caller goes to the whole rebuild,
+	// seeded with whole (damagedRound).
+	scrubbedOn *incarnation
+	whole      []string
 	// asIs: the caller is such a request, answered from the copy as it
 	// stands once the round that may be repairing it has ended (asItStands):
 	// with Kind SyncNone, whatever the round queued behind it read.
@@ -370,17 +426,23 @@ func (c *Cache) start(e *entry) {
 // the peel of the tags it sets, a full round's index — run in the incarnation,
 // and a full round holds what its sweep left to the pool's own shape check, so
 // a failure classified as damage (DamageReason) is the cache's to repair
-// exactly as a host's process's is, under the same rules. Answered with the
-// failure instead, no caller would ever hold a Synced to ask for the repair
-// with, and every round after it would meet the same directory: a cache
-// refused for its shape, with a tag pushed since, failed every sync until a
-// restart.
+// exactly as a host's process's is, under the same rules — a pack's or an
+// object's damage IN PLACE FIRST, one GET a damaged pack, as a request's is
+// (rebuild.go), since a peel over every tag a full round sets meets a damaged
+// tag object as readily as any request does, and read whole into a new
+// incarnation for it a repository of the largest size the defaults admit is
+// thousands of GETs where one would do. Answered with the failure instead, no
+// caller would ever hold a Synced to ask for the repair with, and every round
+// after it would meet the same directory: a cache refused for its shape, with
+// a tag pushed since, failed every sync until a restart.
 //
 // The body runs holding the entry's write lock: nothing changes what the
 // directory holds beside a round (entry.write).
 //
-// A ROUND WHOSE OWN GIT NAMED A PACK ONLY IN WORDS ENDS BEFORE IT HASHES IT
-// (hinted, confirmRound). The hash is minutes of a slow disk for the largest
+// A ROUND WHOSE OWN GIT NAMED A PACK IN WORDS ENDS BEFORE IT HASHES IT
+// (hinted, confirmRound) — through 2.56's bare message alone, or beside a row
+// of git's table naming the damage, as 2.55 always and 2.56 mostly report it.
+// The hash is minutes of a slow disk for the largest
 // pack a push stores, and writes nothing; so the round lets the write lock go
 // AND stops being the repository's running round first — its incarnation
 // pinned until its callers are answered, so no eviction takes the directory
@@ -391,8 +453,9 @@ func (c *Cache) start(e *entry) {
 // and every push's advertisement on the node waited for a verdict none of
 // them had asked for. Only the hinted round's own callers wait for it, and
 // once it is reached they are answered as any round's are: by the repair of
-// damage it confirms — if the incarnation is still the entry's — or with
-// git's own failure. An incarnation a rebuild replaced while the pack was
+// the damage — the pack it confirms named to it, one GET — if the incarnation
+// is still the entry's, or with git's own failure when nothing but a sound
+// pack's hint named any. An incarnation a rebuild replaced while the pack was
 // hashed serves nobody, so its callers are queued again for a round on the
 // current one; a pack that rounds queued meanwhile meet the same hint about
 // is hashed once, every one of them waiting for the one verdict (packCheck).
@@ -415,31 +478,44 @@ func (c *Cache) run(e *entry, r *round) {
 	}
 	e.mu.Lock()
 	var (
-		d       *damaged
-		quit    *refused
-		refusee []*waiter
+		d      *damaged
+		repair roundRepair
 	)
 	// replaced: the round's incarnation stopped being the entry's while its
-	// hint was hashed, so what its git met is no copy that still serves.
-	replaced := h != nil && !e.dead && e.current != h.inc
+	// hint was hashed, so what its git met is no copy that still serves — or
+	// its hints confirmed nothing to repair and a REPAIR was written into the
+	// copy after its git began (predates): a request's repair of the same
+	// pack, whose reinstall moved the files under the hash so it decided
+	// nothing, or the scrubber's of the damage the hint stood for. Its git's
+	// failure may be of what that repair replaced, and a sync told it would
+	// fail on a copy that no longer fails: its callers are synced again.
+	replaced := h != nil && !e.dead &&
+		(e.current != h.inc || !errors.As(err, new(*damaged)) && predates(h.inc, h.began()))
 	if r.rebuild == "" && errors.As(err, &d) && !e.dead && e.current == d.inc {
-		quit, refusee = c.damagedRound(e, r, d)
+		repair = c.damagedRound(e, r, d)
 	}
+	c.settleReader(e, r.reader, repair.answers)
 	requeue := r.rebuild != "" && err != nil && !e.dead
 	if requeue {
 		failedRebuild(r.of, err)
 	}
-	// A REQUEST'S IN-PLACE ROUND (Cache.Rebuild) that repaired nothing hands
-	// its callers on rather than answer them from the copy that failed them:
-	// to the scrub, and past it to the whole rebuild (Cache.escalate).
+	// AN IN-PLACE ROUND of a pack's or an object's damage (Cache.Rebuild,
+	// damagedRound) that converged repaired what its callers' failures asked
+	// of it, or found nothing to. A REQUEST it repaired nothing for is handed
+	// on rather than answered from the copy that failed it: to the scrub, and
+	// past it to the whole rebuild (Cache.escalate). A sync whose own round
+	// met the damage (no waiter.request) is answered by it either way: the
+	// round's own git met nothing this time, and a converged round is all a
+	// sync asked for.
 	var escalating []*waiter
 	requeued := func(w *waiter) bool { return (replaced || requeue && !w.rebuild) && !w.gone }
-	asks := func(w *waiter) bool {
+	repairs := func(w *waiter) bool {
 		return !requeued(w) && w.escalate != "" && w.failedOn == inc && err == nil && r.rebuild == ""
 	}
+	asks := func(w *waiter) bool { return repairs(w) && w.request }
 	if r.did.repaired() && r.did.reinstalled == 0 && r.did.restored == 0 && c.metrics != nil &&
-		slices.ContainsFunc(r.waiters, asks) {
-		// COUNTED BY WHAT IT DID, never by its mark: a request's round that
+		slices.ContainsFunc(r.waiters, repairs) {
+		// COUNTED BY WHAT IT DID, never by its mark: an in-place round that
 		// only dropped is a derived file's repair. One that put a pack in —
 		// over its files, or one the copy had lost — was counted `stored` by
 		// its apply, whoever waited on it. And counted BEFORE anybody is
@@ -482,29 +558,31 @@ func (c *Cache) run(e *entry, r *round) {
 	// Let go only now: every caller holds its own pin or is queued again,
 	// so the copy was never evictable between the hash and their answers.
 	held.Release()
-	if quit != nil {
+	if repair.quit != nil {
 		// COUNTED AND LOGGED BEFORE IT IS ANSWERED, as Rebuild's own
 		// refusal is: a caller woken by the refusal reads a counter and a
 		// log that already hold it. Reported under e.mu it would hold the
 		// entry through a log write; answered first, the caller could read
 		// both before they did.
-		c.report(*quit)
+		c.report(*repair.quit)
 		e.mu.Lock()
-		for _, w := range refusee {
-			c.answer(e, w, nil, "", quit.err())
+		for _, w := range repair.refusee {
+			c.answer(e, w, nil, "", repair.quit.err())
 		}
 		e.mu.Unlock()
 	}
 	if len(escalating) > 0 {
 		c.escalate(e, inc, escalating)
 	}
+	if len(repair.scrubbing) > 0 {
+		c.escalate(e, d.inc, repair.scrubbing)
+	}
 }
 
 // damagedRound answers the callers of r, a round whose own git named damage d
 // of the entry's current incarnation; e.mu is held. Every caller of r is
-// answered or handed on here but those a refused rebuild answers: it returns
-// that refusal, to report once e.mu is let go, and its callers, to answer with
-// it once it is reported — or nil and none.
+// answered or handed on here but those a refused rebuild answers and those
+// the repair's scrub is for, which it leaves to Cache.run (roundRepair).
 //
 //   - A CHECK (waiter.checks) is answered with the damage and the incarnation
 //     pinned: it names the damage, and an operator's Repair is what repairs
@@ -520,19 +598,23 @@ func (c *Cache) run(e *entry, r *round) {
 //     way, the next round dropping the files the damage named — unless THIS
 //     round had already dropped every one of them a drop can repair (their
 //     declarations drop on a report, OnReported), in which case the damage
-//     survived its drop, or no drop ends it, and is asked as RebuildCorrupt,
-//     below.
-//     Damage a sweep or a drop did not end — a shape refusal past the sweep
-//     of the very round that met it, derived damage past its drop, a pack
-//     or an object git could not read — is a REBUILD, asked for as Rebuild
-//     asks for one (askRebuild: joined if one is queued, refused by the same
-//     rules, counted as an ask of the incarnation's line). A refused rebuild
-//     answers its callers as it answers Rebuild (ErrRebuildRefused); one that
-//     fails answers them as it answers the callers of any round it was queued
-//     over — queued again for an ordinary round, which meets the damage again
-//     and is refused by the window the failed attempt opened.
-func (c *Cache) damagedRound(e *entry, r *round, d *damaged) (*refused, []*waiter) {
-	c.log.Info("code_sync_damaged", "repo", e.id, "reason", string(d.reason), "swept", d.swept, "error", d.err)
+//     survived its drop, or no drop ends it, and is a pack's
+//     (RebuildCorrupt), below.
+//     A PACK'S OR AN OBJECT'S DAMAGE (RebuildCorrupt, RebuildMissing) is
+//     repaired as a request's is, IN PLACE FIRST, one GET a damaged pack
+//     (repairDamaged).
+//     A shape refusal past the sweep of the very round that met it is a
+//     REBUILD, asked for as Rebuild asks for one (askRebuild: joined if one
+//     is queued, refused by the same rules, counted as an ask of the
+//     incarnation's line): no read in place ends it, and no scrub finds it.
+//     A refused rebuild answers its callers as it answers Rebuild
+//     (ErrRebuildRefused); one that fails answers them as it answers the
+//     callers of any round it was queued over — queued again for an ordinary
+//     round, which meets the damage again and is refused by the window the
+//     failed attempt opened.
+func (c *Cache) damagedRound(e *entry, r *round, d *damaged) roundRepair {
+	c.log.Info("code_sync_damaged", "repo", e.id, "reason", string(d.reason), "swept", d.swept,
+		"packs", d.packs, "error", d.err)
 	var asking []*waiter
 	for _, w := range r.waiters {
 		switch {
@@ -548,14 +630,14 @@ func (c *Cache) damagedRound(e *entry, r *round, d *damaged) (*refused, []*waite
 	r.waiters = nil
 	switch {
 	case len(asking) == 0:
-		return nil, nil
+		return roundRepair{}
 	case d.reason == RebuildShape && !d.swept,
 		d.reason == RebuildDerived && c.image.reported(d.drops)&c.image.dropping(EventReported)&^d.dropped != 0:
 		c.markWhole(d.inc, Failure{Reason: d.reason, Drops: d.drops, Began: d.began}, dropRound)
 		for _, w := range asking {
 			c.queue(e, w)
 		}
-		return nil, nil
+		return roundRepair{}
 	}
 	reason := d.reason
 	if reason == RebuildDerived {
@@ -563,16 +645,143 @@ func (c *Cache) damagedRound(e *entry, r *round, d *damaged) (*refused, []*waite
 		// declaration drops on a report) was dropped by the round that met
 		// it — or none can be, a declaration that keeps its files on a
 		// report being repaired by no drop: what git could not read is no
-		// derived file a drop of the copy's ends.
+		// derived file a drop of the copy ends, but a pack's.
 		reason = RebuildCorrupt
+	}
+	if reason != RebuildShape {
+		return c.repairDamaged(e, d, reason, asking)
 	}
 	next, rule := c.askRebuild(e, d.inc, reason, true, nil, c.now())
 	if rule == "" {
 		next.waiters = append(next.waiters, asking...)
-		return nil, nil
+		return roundRepair{}
 	}
 	f := c.refusal(e, d.name, reason, rule, c.now())
-	return &f, asking
+	return roundRepair{quit: &f, refusee: asking}
+}
+
+// roundRepair is what damagedRound leaves for Cache.run once e.mu is let go:
+// a refused rebuild to report (quit) and the callers to answer with it once
+// it is reported (refusee), the callers the repair's scrub is for
+// (scrubbing, Cache.escalate) — and whether the repair it asked answers what
+// the round's own git reported (answers, settleReader): a pack's or an
+// object's repair does, every step of it; a shape's or a derived file's, read
+// in place, reads no pack and answers none of a stored report, a hint or a
+// crash.
+type roundRepair struct {
+	quit      *refused
+	refusee   []*waiter
+	scrubbing []*waiter
+	answers   bool
+}
+
+// repairDamaged is damagedRound for a PACK'S OR AN OBJECT'S damage d, of
+// reason (RebuildCorrupt or RebuildMissing), that a round's own git met: the
+// four steps a request's repair takes (Cache.Rebuild, rebuild.go), each
+// caller taken on from the step it has reached; e.mu is held, and its answers
+// are damagedRound's, every one of them answering what the round's own git
+// reported (roundRepair.answers).
+//
+//  1. THE GUARD. Damage met by a process that began before this process last
+//     wrote a repair into the copy may be of what the repair replaced — a
+//     request's repair of the same pack landing while the round's hint was
+//     hashed — so every caller is answered as Rebuild's guard answers it: a
+//     request from the copy as it stands, a sync by a round of it
+//     (standOrSync), which meets the damage again or does not.
+//  2. IN PLACE, for a caller that has taken no step yet: the copy marked to
+//     be read whole by a FORCED round (markWhole, repairMark.forces) — every
+//     index file held to its checksum whatever its vouch — that installs
+//     again over its files every pack a confirmed hint named (d.packs), one
+//     GET a pack, and the caller queued for it (waiter.escalate): it answers
+//     a sync once it converges, and hands a request it repaired nothing for
+//     to the scrub (Cache.run). Skipped, as a request's is, when no pack it
+//     could fetch is named — none, or every one held off after a failed GET
+//     (repairMark.fetchable), which install leaves as it stands — and a
+//     forced round has already said what one would: the round that met d was
+//     itself forced (d.forced), or a forced round of the copy found nothing
+//     within ScrubCooldown with no repair written since (forcedLately).
+//  3. THE SCRUB, for a caller whose in-place round met the damage again, or
+//     that skipped it: handed back to Cache.run, which runs Cache.escalate for
+//     them once e.mu is let go — the scrub finds a pack body no index shows,
+//     and past it the whole rebuild is seeded with every pack it found whole.
+//  4. THE WHOLE REBUILD, for a caller whose scrub's findings were put to its
+//     round and whose round still met the damage (waiter.scrubbedOn): asked
+//     as escalate asks it, seeded with what that scrub found whole, refused
+//     by the same rules, its failure the caller's answer — and NOT ASKED
+//     while a pack it would download is held off (repairMark.heldOffFor): it
+//     would ask the store for that very pack again within the backoff, so
+//     the caller is answered with the store's own refusal of it instead.
+//
+// Each caller passes each step at most once on one incarnation, so a repair
+// ends whatever the damage: a pack the object store will not hand over goes
+// from the forced round, whose one GET of it fails and holds it off, to the
+// scrub, and from the scrub's round to that failure — no rebuild asks the
+// store for it again, and no forced round is run that could fetch nothing,
+// until its backoff passes and step 2 asks once more.
+func (c *Cache) repairDamaged(e *entry, d *damaged, reason RebuildReason, asking []*waiter) roundRepair {
+	inc := d.inc
+	if predates(inc, d.began) {
+		c.countPart(partOf(reason), reportStale)
+		for _, w := range asking {
+			w.escalate = ""
+			c.standOrSync(e, inc, w)
+		}
+		return roundRepair{answers: true}
+	}
+	now := c.now()
+	skip := len(inc.repair.fetchable(d.packs, now)) == 0 && (d.forced || c.forcedLately(inc))
+	var inPlace, scrub, rebuild []*waiter
+	for _, w := range asking {
+		switch {
+		case w.scrubbedOn == inc:
+			rebuild = append(rebuild, w)
+		case skip, w.escalate != "" && w.failedOn == inc:
+			scrub = append(scrub, w)
+		default:
+			inPlace = append(inPlace, w)
+		}
+	}
+	for _, ws := range [][]*waiter{inPlace, scrub} {
+		for _, w := range ws {
+			w.escalate, w.failedOn = reason, inc
+			// The guard measures from the NEWEST failure: what the caller's
+			// in-place round wrote before its git met the damage again ended
+			// nothing.
+			if d.began.After(w.began) {
+				w.began = d.began
+			}
+		}
+	}
+	if len(inPlace) > 0 {
+		c.markWhole(inc, Failure{Reason: RebuildStored}, dropRound)
+		inc.repair.forces++
+		c.reinstallHinted(inc, d.packs)
+		for _, w := range inPlace {
+			c.queue(e, w)
+		}
+	}
+	out := roundRepair{scrubbing: scrub, answers: true}
+	if len(rebuild) == 0 {
+		return out
+	}
+	if err := inc.repair.heldOffFor(now, rebuild[0].whole); err != nil {
+		for _, w := range rebuild {
+			w.escalate, w.scrubbedOn, w.whole = "", nil, nil
+			c.answer(e, w, nil, "", err)
+		}
+		return out
+	}
+	next, rule := c.askRebuild(e, inc, reason, true, rebuild[0].whole, now)
+	if rule == "" {
+		for _, w := range rebuild {
+			w.escalate, w.rebuild, w.scrubbedOn, w.whole = "", true, nil, nil
+		}
+		next.waiters = append(next.waiters, rebuild...)
+		return out
+	}
+	f := c.refusal(e, d.name, reason, rule, now)
+	out.quit, out.refusee = &f, rebuild
+	return out
 }
 
 // markWhole marks inc to be read WHOLE, IN PLACE, by its next round, for
@@ -619,7 +828,15 @@ type damaged struct {
 	drops   gitproc.Part
 	dropped derivedSet
 	began   time.Time
-	err     error
+	// packs is the packs a confirmed hint of the round's git named
+	// (confirmRound): the in-place repair fetches each again, one GET a pack
+	// (Failure.Packs). forced: the round that met the damage was itself a
+	// forced in-place round, which held every index file to its checksum
+	// (checked.forced) — so another finds nothing a pack's damage named by no
+	// hint needs.
+	packs  []string
+	forced bool
+	err    error
 }
 
 func (d *damaged) Error() string { return d.err.Error() }
@@ -639,7 +856,7 @@ func (c *Cache) converging(e *entry, r *round) (*incarnation, SyncKind, error) {
 		return nil, "", ErrStopped
 	}
 	defer c.releaseWrite(e, writeExclusive)
-	return c.converge(e, r.fresh, r.rebuild, r.of, r.whole, &r.found, &r.did)
+	return c.converge(e, r.fresh, r.rebuild, r.of, r.whole, &r.found, &r.did, &r.reader)
 }
 
 // converge is one round's body, in order — every step's name is the field
@@ -693,7 +910,7 @@ func (c *Cache) converging(e *entry, r *round) (*incarnation, SyncKind, error) {
 // What each check it runs finds failing and repairs is added to found
 // (round.found), and what each apply did to did (round.did).
 func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReason, of *incarnation,
-	whole []string, found *[]string, did *applied) (_ *incarnation, _ SyncKind, err error) {
+	whole []string, found *[]string, did *applied, reader *roundReader) (_ *incarnation, _ SyncKind, err error) {
 
 	if !c.enter() {
 		return nil, "", ErrStopped
@@ -816,7 +1033,14 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReas
 			}
 			e.mu.Unlock()
 		}
-		res, err = c.apply(ctx, e, inc, snap, epoch, marks)
+		if reader.inc != inc {
+			// The round's own git runs in inc from here (the peel): what they
+			// report is held for the round (roundReader).
+			e.mu.Lock()
+			*reader = roundReader{inc: inc, by: c.reader(inc)}
+			e.mu.Unlock()
+		}
+		res, err = c.apply(ctx, e, inc, snap, epoch, marks, reader.by)
 		*found = append(*found, res.checked.findings(c.image)...)
 		did.add(res)
 		var missing *ErrPackMissing
@@ -834,14 +1058,23 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReas
 			return nil, "", err
 		case err != nil:
 			f, ok := DamageReason(err)
-			if hints := hintsOf(err); !ok && rebuild == "" && len(hints) > 0 {
-				// Damage the round's own git named only in words (a hint,
-				// gitproc.Hint): the pack it nominates is held to its row —
+			hints := hintsOf(err)
+			if rebuild == "" && len(hints) > 0 &&
+				(!ok || f.Reason == RebuildCorrupt || f.Reason == RebuildMissing) {
+				// The round's own git named a pack in words (a hint,
+				// gitproc.Hint) — damage it named no other way (2.56's bare
+				// "%s"), or a pack's or an object's damage beside it (a row of
+				// git's table: 2.55's of the same sentence, or another report
+				// of the run's): the pack it nominates is held to its row —
 				// by Cache.run, once the write lock is let go and the round
-				// has ended, since a hash is minutes of a slow disk and
-				// nobody but the round's own callers waits on it — and only
-				// a pack that is not the row's asks a repair.
-				h := &hinted{inc: inc, name: snap.repo.Name, full: snap.full, hints: hints, err: err}
+				// has ended, since a hash is minutes of a slow disk and nobody
+				// but the round's own callers waits on it — and a pack that is
+				// not the row's is named to the repair, which then fetches
+				// THAT pack again rather than look for it: the host's rule for
+				// a request's git (host's confirmed). With no classification,
+				// only a pack that is not its row's asks a repair at all.
+				h := &hinted{inc: inc, name: snap.repo.Name, full: snap.full, hints: hints, err: err,
+					classified: ok, damage: f, forced: res.checked.forced}
 				if snap.full {
 					h.rows = &snap
 				}
@@ -852,7 +1085,7 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReas
 				// full answer, the sweep left a shape the pool refuses:
 				// Cache.run makes the repair of it this round's answer.
 				return nil, "", &damaged{inc: inc, name: snap.repo.Name, reason: f.Reason, swept: snap.full,
-					drops: f.Drops, dropped: res.dropped, began: f.Began, err: err}
+					drops: f.Drops, dropped: res.dropped, began: f.Began, forced: res.checked.forced, err: err}
 			}
 			return nil, "", err
 		}
@@ -922,9 +1155,10 @@ func (a applied) repaired() bool { return a.restored > 0 || a.reinstalled > 0 ||
 // apply makes inc equal to snap — steps 4 to 8 of converge. epoch is the
 // reread mark the round began under, and marks the incarnation's in-place
 // marks then (markWhole): a full answer converges the incarnation only while
-// no mark of either was made since.
-func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snapshot, epoch, marks uint64) (applied,
-	error) {
+// no mark of either was made since. by is the round's reader of inc
+// (roundReader), which its own git runs name.
+func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snapshot, epoch, marks uint64,
+	by gitproc.Repairer) (applied, error) {
 
 	var (
 		res       applied
@@ -953,10 +1187,12 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 		// in place; a derived one is dropped below. With nothing writing
 		// beside it — the write lock held, the maintainer stopped — what it
 		// hashes is what it repairs.
-		// A FAILED REQUEST'S REPAIR (Cache.Rebuild): every index file held to
-		// its trailer whatever its vouch, and the packs a confirmed hint
-		// named installed again — none of it under a check of the
-		// repository, whose release asks the round again.
+		// A PACK'S OR AN OBJECT'S REPAIR IN PLACE — a failed request's
+		// (Cache.Rebuild) or the damage a round's own git met
+		// (repairDamaged): every index file held to its trailer whatever its
+		// vouch, and the packs a confirmed hint named installed again — none
+		// of it under a check of the repository, whose release asks the round
+		// again.
 		forces, reinstall = c.requested(e, inc)
 		if res.checked, err = c.checkIndexes(ctx, e, inc, snap, forces > 0); err != nil {
 			return res, fmt.Errorf("cache: sync %s: check: %w", e.id, err)
@@ -996,8 +1232,8 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 	now := c.now()
 	e.mu.Lock()
 	unrepaired := inc.repair.heldOff(now)
-	for _, cs := range ins.failed {
-		inc.repair.fetchFailedAt(cs, now)
+	for cs, ferr := range ins.failed {
+		inc.repair.fetchFailedAt(cs, now, ferr)
 		unrepaired[cs] = true
 	}
 	e.mu.Unlock()
@@ -1021,6 +1257,28 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 		if err = c.dropDamaged(e, inc, &res); err != nil {
 			return res, fmt.Errorf("cache: sync %s: drop derived files: %w", e.id, err)
 		}
+		// SETTLED ONCE ACTED ON, never only once the round converges: the
+		// check has held what it was forced to, each finding is installed
+		// again, dropped, held off or already replaced, and what the round
+		// fails at past here — its refs' peel meeting damage nothing above
+		// could fetch — undoes none of it. Left on the mark by a round that
+		// failed at the peel, a request's forces kept every later round of
+		// the copy full and FORCED — every index file hashed again, about a
+		// quarter of the copy's pack bytes, with nothing it could fetch —
+		// and never recorded the verdict that bounds the next (forcedAt).
+		c.settleFound(e, inc, found, unrepaired)
+		c.settleRequested(e, inc, forces, reinstall, unrepaired)
+		if forces > 0 {
+			// A FORCED round that repaired nothing bounds the next one
+			// (forcedLately): its verdict holds for ScrubCooldown while no
+			// repair is written.
+			e.mu.Lock()
+			inc.forcedAt, inc.forcedEnded = time.Time{}, time.Time{}
+			if !res.repaired() {
+				inc.forcedAt, inc.forcedEnded = c.now(), time.Now()
+			}
+			e.mu.Unlock()
+		}
 		// The sweep's pack half is DECIDED here and done once the refs are
 		// in; an index that may name a pack it will remove goes now, and so
 		// does whatever in objects/pack is no pack's file, so the round's
@@ -1034,7 +1292,7 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 		indexed = c.indexRound(ctx, e, inc, snap)
 	}
 
-	refsWritten, err := c.writeRefs(ctx, e, inc, snap)
+	refsWritten, err := c.writeRefs(ctx, e, inc, snap, by)
 	if err != nil {
 		return res, err
 	}
@@ -1085,18 +1343,7 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 		}
 	}
 	if snap.full {
-		c.settleFound(e, inc, found, unrepaired)
-		c.settleRequested(e, inc, forces, reinstall, unrepaired)
 		e.mu.Lock()
-		if forces > 0 {
-			// A FORCED round that repaired nothing bounds the next request's
-			// (Cache.Rebuild): its verdict holds for ScrubCooldown while no
-			// repair is written.
-			inc.forcedAt, inc.forcedEnded = time.Time{}, time.Time{}
-			if !res.repaired() {
-				inc.forcedAt, inc.forcedEnded = c.now(), time.Now()
-			}
-		}
 		inc.converged = c.rereads.Load() == epoch && inc.marks == marks
 		var reason RebuildReason
 		if inc.converged {
@@ -1107,8 +1354,8 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 			c.firstScrub(inc)
 		}
 		e.mu.Unlock()
-		// A request's in-place read (RebuildStored) is counted by what its
-		// round did (Cache.run), not by its mark.
+		// A pack's in-place read (RebuildStored), a request's or a round's
+		// own, is counted by what its round did (Cache.run), not by its mark.
 		if reason != "" && reason != RebuildStored && c.metrics != nil {
 			c.metrics.Add(metrics.CodeCacheRebuilds, 1, metrics.Attrs{"reason": string(reason)})
 		}

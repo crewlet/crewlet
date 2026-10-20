@@ -84,7 +84,10 @@ func headValid(raw []byte) bool {
 // in-place round a failed request asks first (Cache.Rebuild) made every copy
 // a rebuild had just read look moved, and the rule that refuses a rebuild of
 // what the last one read (rebuildRefusal's unchanged) never held.
-func (c *Cache) writeRefs(ctx context.Context, e *entry, inc *incarnation, snap snapshot) (bool, error) {
+//
+// by is the round's reader of inc (roundReader), which the peel names.
+func (c *Cache) writeRefs(ctx context.Context, e *entry, inc *incarnation, snap snapshot,
+	by gitproc.Repairer) (bool, error) {
 	e.mu.Lock()
 	noState, branchMoved := inc.state == nil, inc.repo.DefaultBranch != snap.repo.DefaultBranch
 	digest := inc.refsDigest
@@ -116,7 +119,7 @@ func (c *Cache) writeRefs(ctx context.Context, e *entry, inc *incarnation, snap 
 	}()
 	var written refsFile
 	if writePacked {
-		peeled, err := c.peel(ctx, e.id, inc.dir, snap)
+		peeled, err := c.peel(ctx, e.id, inc.dir, snap, by)
 		if err != nil {
 			return false, err
 		}
@@ -475,7 +478,10 @@ func (l *refsReader) next() (refsLine, error) {
 // answers each object that is an annotated tag with what it points at.
 // An object no installed pack holds fails the round with
 // gitproc.ErrMissingObject: the rows name what the packs do not hold here.
-func (c *Cache) peel(ctx context.Context, id, dir string, snap snapshot) (map[string]string, error) {
+// The process names the round's reader by (gitproc.Cmd.Repairer), so what it
+// reports is held for the round's own repair (roundReader).
+func (c *Cache) peel(ctx context.Context, id, dir string, snap snapshot, by gitproc.Repairer) (map[string]string,
+	error) {
 	var oids []string
 	named := map[string]string{}
 	for _, r := range snap.refs {
@@ -523,7 +529,7 @@ func (c *Cache) peel(ctx context.Context, id, dir string, snap snapshot) (map[st
 	// round sets, while the round holds the repository's directory.
 	_, err := c.git.Run(ctx, gitproc.Cmd{
 		Dir: dir, Args: []string{"cat-file", "--batch-check=%(objectname)", "--buffer"}, Config: c.ServeConfig(),
-		Stdin: bytes.NewReader(stdin.Bytes()), Stdout: lines, Class: gitproc.ClassRead,
+		Stdin: bytes.NewReader(stdin.Bytes()), Stdout: lines, Class: gitproc.ClassRead, Repairer: by,
 		Deadline: gitproc.PackWorkDeadline(int64(stdin.Len())),
 	})
 	if cerr := lines.Close(); err == nil {

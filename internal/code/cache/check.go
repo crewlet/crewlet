@@ -88,12 +88,14 @@ const (
 	// triggerReport: a scrub a git process's report made due — a pack or an
 	// object it could not read, a pack it named in words, or a crash.
 	triggerReport checkTrigger = "report"
-	// triggerForced: a request's in-place round (Cache.Rebuild), holding
-	// every index file to its trailer whatever its vouch.
+	// triggerForced: the in-place round of a pack's or an object's repair —
+	// a failed request's (Cache.Rebuild) or a round's own git's
+	// (repairDamaged) — holding every index file to its trailer whatever its
+	// vouch.
 	triggerForced checkTrigger = "forced"
-	// triggerRequest: what a request's in-place round could not repair —
-	// the scrub it runs next (Cache.escalate) — and a pack a confirmed hint
-	// named, installed again without a hash of the cache's own.
+	// triggerRequest: what that in-place round did not end — the scrub the
+	// repair runs next (Cache.escalate) — and a pack a confirmed hint named,
+	// installed again without a hash of the cache's own.
 	triggerRequest checkTrigger = "request"
 )
 
@@ -578,9 +580,9 @@ func vouchedRels(inc *incarnation) []string {
 // checked is what a check found: why it ran, how many files were sound, every
 // file found damaged at the identity it was hashed at — a pack's .idx or .rev,
 // whose pack the install puts in again, or a derived file, which the round
-// drops (still) — and the bytes read. forced: a request's in-place round asked
-// it (Cache.Rebuild), so a pack the rows name and the directory lacks is
-// installed as that request's repair.
+// drops (still) — and the bytes read. forced: the in-place round of a pack's
+// or an object's repair asked it (Cache.Rebuild, repairDamaged), so a pack the
+// rows name and the directory lacks is installed as that repair's.
 type checked struct {
 	trigger checkTrigger
 	forced  bool
@@ -600,9 +602,10 @@ type checked struct {
 // The round holds the entry's write lock and has stopped the maintainer, so
 // nothing else writes a file it hashes.
 //
-// FORCED by a request's failure (Cache.Rebuild), it holds every file to its
-// trailer whether or not it is vouched for: what failed the request may be
-// damage that arrived after this process checked a file, which no vouch sees.
+// FORCED by a pack's or an object's damage — a request's failure
+// (Cache.Rebuild) or a round's own git's (repairDamaged) — it holds every file
+// to its trailer whether or not it is vouched for: what failed may be damage
+// that arrived after this process checked a file, which no vouch sees.
 //
 // (Not `check`: verify.go's Verify body has that name.)
 func (c *Cache) checkIndexes(ctx context.Context, e *entry, inc *incarnation, snap snapshot, forced bool) (checked,

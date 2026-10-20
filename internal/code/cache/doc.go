@@ -368,9 +368,9 @@
 // .idx failed takes them with it, since they may have been built from it. A
 // GET that fails is logged (code_cache_pack_reinstall_failed) and ends
 // nothing: the round goes on, the copy keeps serving, and that pack is asked
-// again after [RebuildCooldown] doubling to [RebuildBackoffCap], so an object
-// store that is down neither wedges the copy's rounds nor is asked once a
-// round.
+// again after [RebuildCooldown] doubling to [RebuildBackoffCap] — by no round
+// and by no rebuild meanwhile — so an object store that is down neither
+// wedges the copy's rounds nor is asked once a round.
 // What it costs, measured (BenchmarkScrub, the same histories, six runs
 // each): it reads 1.13 times the copy's pack bytes, 0.86 to 1.38 s a gigabyte
 // of packs from the page cache — 18 to 30 s for the largest repository the
@@ -397,8 +397,9 @@
 // not the shape the engine writes (gitproc.ErrRepoShape), makes the host
 // [Cache.Rebuild] it, read as [DamageReason] reads the failure; a round whose
 // own git — the peel of the tags it sets — names the same damage is answered
-// the same way (Cache.run), under the same rules. What the repair is follows
-// from what was lost:
+// the same way (Cache.run, damagedRound), under the same rules, the round's
+// callers waiting on the repair as the request does on its own. What the
+// repair is follows from what was lost:
 //
 //   - A SHAPE loses nothing — the pool refuses the directory before git reads
 //     a byte of it, so every pack is still whole — and is repaired IN PLACE:
@@ -421,8 +422,8 @@
 //     unless this process wrote one of them after the failing process began
 //     (the Failure's Began), which that process may not have read. A round
 //     whose own git meets it marks the same drop; a round that had dropped
-//     those very files and meets the damage again asks a rebuild
-//     ([RebuildCorrupt]) — the damage was the packs'.
+//     those very files and meets the damage again has met a pack's damage
+//     ([RebuildCorrupt]), repaired as the next item says.
 //   - A PACK OR AN OBJECT git could not read ([RebuildCorrupt],
 //     [RebuildMissing]) loses at most the packs that hold the damage, so
 //     those are what is fetched again, IN PLACE FIRST. A failure whose
@@ -441,10 +442,12 @@
 //     [Failure]'s Packs) is fetched again over its files — one GET a pack,
 //     the same incarnation — at most once a [ScrubCooldown] while it repairs
 //     nothing: a forced round that found nothing, with no repair written
-//     since, is not run again for the failures of the hour after it, which
-//     go to the scrub's answer, so a damaged pack body a busy repository's
-//     requests keep failing on costs one read of every index file rather than
-//     one a request. A repair written into the copy while that runs answers
+//     since, is not run again for the failures of the hour after it that name
+//     no pack it could fetch — none, or only packs whose last download the
+//     store refused and whose next is held off — which go to the scrub's
+//     answer, so a damaged pack body a busy repository's requests keep
+//     failing on costs one read of every index file rather than one a
+//     request. A repair written into the copy while that runs answers
 //     the failure from the copy as it stands too, asked again before the
 //     scrub and before a rebuild. A round that found nothing has the copy's
 //     SCRUB run at once for its callers — ahead of every routine scrub on the
@@ -456,8 +459,14 @@
 //     whole at the log's head into the NEXT incarnation, beside the one its
 //     readers hold, which replaces it once converged — seeded with every pack
 //     the scrub found whole, so it downloads nothing when the damage is in
-//     the rows. A request whose copy such a rebuild replaced while its round
-//     waited is answered from the rebuilt copy.
+//     the rows — and never while a pack it would download is one whose last
+//     download the store refused and whose next is held off: the rebuild
+//     would ask the store for that very pack again within the backoff, so the
+//     failure is answered with the store's own refusal of it until the
+//     backoff passes and the forced round asks once more (a store that will
+//     not hand a damaged pack over costs one GET a backoff window, never a
+//     download of the repository). A request whose copy such a rebuild
+//     replaced while its round waited is answered from the rebuilt copy.
 //
 // Ten requests failing on one damaged cache cost one repair, a request that
 // failed on an incarnation already replaced costs none, and a sync queued
@@ -480,10 +489,11 @@
 // a pack (gitproc.Hint), and repairs nothing until [Cache.ConfirmHint] has
 // hashed that pack, as a check does, against the row naming it: a pack that
 // is not its row's is a [RebuildCorrupt] repair naming THAT pack, fetched
-// again in place, a sound one is no repair, and a pack no row names is no
-// damage of the copy. The same sentence is a row on 2.55, a pack's
-// damage, whose pack is recorded as a hint beside it and confirmed the same
-// way, so the repair fetches that pack rather than look for it. A pack is hashed ONCE however many
+// again in place whichever git named it — a request's or a round's own — a
+// sound one is no repair, and a pack no row names is no damage of the copy.
+// The same sentence is a row on 2.55, a pack's damage, whose pack is recorded
+// as a hint beside it and confirmed the same way, so the repair fetches that
+// pack rather than look for it. A pack is hashed ONCE however many
 // hints name it, on the cache's lifetime rather than any request's — every
 // hint about a pack being hashed waits for that hash as long as its own
 // caller does, and a caller that leaves leaves it running for the next —
@@ -523,8 +533,9 @@
 // found whole and downloading only the rest, so one damaged pack costs one
 // GET. The read in place is the check's own, as the sync before it is:
 // damage its git meets is named to the check, never handed to the repair a
-// git process asks for, whose rebuild links nothing and stands in that
-// process's windows. Rebuilt for what a sweep puts right, a copy had
+// git process asks for — a request's or a round's own, which takes its own
+// steps (a forced round, a scrub, a rebuild seeded by that scrub) and stands
+// in that process's windows. Rebuilt for what a sweep puts right, a copy had
 // no index, bitmap or graph until the maintainer wrote them again — hours of
 // bitmapless clones of a large repository, and for good on a node whose
 // memory now refuses a bitmap. Either way the repaired copy is checked the
@@ -553,8 +564,8 @@
 //     run that reported. The round is FULL and LINEARIZABLE — a full round's
 //     sweep removes every pack its snapshot does not name, and an adoption
 //     installs a pack past the incarnation's own position — and it drops the
-//     files as a request's repair does. The copy is not taken out of service:
-//     it keeps answering at once meanwhile, as git did.
+//     files as a failing process's repair does. The copy is not taken out
+//     of service: it keeps answering at once meanwhile, as git did.
 //   - GUARDED, on the monotonic clock: a file this process wrote after the
 //     reporting run began is kept (`stale`), since that run may have read
 //     the one the write replaced — without it, every long clone that began
@@ -609,7 +620,11 @@
 // because a request's lifetime always ends. A
 // derived file's report that a drop repairs is never held — the drop is the
 // repair's own first step and races nothing — and nor is one from a scratch
-// or a view.
+// or a view. A ROUND'S OWN GIT is held the same way: the peel of the tags a
+// round sets names a reader the round mints (roundReader), and what it
+// reports is consumed by the pack's or the object's repair the round asks of
+// that failure — the same forced round, scrub and rebuild — and handed to the
+// ordinary rules once the round's answer is known otherwise.
 //
 // A dropped file is written again at once because the maintainer is woken
 // as the round lets the repository go — never from inside the round, since a

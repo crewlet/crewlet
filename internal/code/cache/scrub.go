@@ -48,25 +48,26 @@ import (
 //     held to their checksums — and never for one nobody reads;
 //   - AT ONCE when a git process over it reports a pack or an object it could
 //     not read, names a pack in words, or crashes (report.go), bounded by
-//     ScrubCooldown after a scrub that found nothing — unless the process was
-//     a request's whose failure that request repairs, which holds the report
-//     for the request's own repair: that repair is what scrubs, for it
-//     (scrubFor), if its in-place round finds nothing.
+//     ScrubCooldown after a scrub that found nothing — unless the process
+//     was one whose failure its reader repairs, a request's or a round's own
+//     (roundReader), which holds the report for that reader's own repair:
+//     that repair is what scrubs, for it (scrubFor), if its in-place round
+//     does not end the damage.
 //
-// ONE SCRUB ON THE NODE AT A TIME (scrubSlot), given BY EVIDENCE: a
-// REQUEST's (scrubFor: what a failed request's in-place round could not
-// repair, rebuild.go) before anything the scrubber has due, then a REPORT's,
-// then a copy's FIRST, then an INTERVAL's — within each the oldest asked
-// first, the interval's the least recently held to its checksums. Evidence
-// PREEMPTS routine work: a request or a report that finds a first or an
-// interval scrub running cancels it, and that scrub is due again as it was,
-// so a node just restarted, with every inherited copy's first scrub queued,
-// reads a failing copy next rather than after a terabyte of routine reads.
-// A request waits only for a report's or another request's scrub in flight,
-// and the scrubber takes nothing while a request waits: a mutex let go and
-// taken again by the scrubber's next scrub handed itself to a waiting
-// request only one scrub later, since Go's mutex wakes a waiter without
-// handing it the lock. Each hashes a piece at a time under one slot of the
+// ONE SCRUB ON THE NODE AT A TIME (scrubSlot), given BY EVIDENCE: a FAILING
+// REPAIR's (scrubFor: what the in-place round of a request's or a round's own
+// pack damage did not end, rebuild.go) before anything the scrubber has due,
+// then a REPORT's, then a copy's FIRST, then an INTERVAL's — within each the
+// oldest asked first, the interval's the least recently held to its
+// checksums. Evidence PREEMPTS routine work: a repair or a report that finds
+// a first or an interval scrub running cancels it, and that scrub is due
+// again as it was, so a node just restarted, with every inherited copy's
+// first scrub queued, reads a failing copy next rather than after a terabyte
+// of routine reads. A repair's scrub waits only for a report's or another
+// repair's scrub in flight, and the scrubber takes nothing while one waits: a
+// mutex let go and taken again by the scrubber's next scrub handed itself to
+// a waiting repair only one scrub later, since Go's mutex wakes a waiter
+// without handing it the lock. Each hashes a piece at a time under one slot of the
 // read lane (scrubHold), through one buffer of its own. It holds NO LOCK of
 // the entry, so the copy keeps answering and rounds and the maintainer run
 // beside it: a verdict holds only for the file it hashed (trailerSound), and
@@ -127,8 +128,9 @@ const (
 	// prioReport: a git process over the copy reported a pack or an object
 	// it could not read, named a pack in words, or crashed.
 	prioReport
-	// prioRequest: a request failed on the copy, and its in-place round
-	// found nothing to repair.
+	// prioRequest: a pack's or an object's damage failed a request on the
+	// copy, or a round's own git, and the in-place round of its repair did
+	// not end it (scrubFor).
 	prioRequest
 )
 
@@ -507,22 +509,26 @@ func (c *Cache) runScrub(sctx context.Context, e *entry, inc *incarnation, trigg
 	return out, nil
 }
 
-// scrubFor runs a scrub of inc for requests whose in-place round repaired
-// nothing (Cache.escalate: a request's repair, rebuild.go) and whose failing
-// processes began at or before began (zero: unknown) — the node's one scrub,
-// taken ahead of every scrub the scrubber has due and preempting a routine
-// one it is running (scrubSlot) — and answers what it found: its findings, on
-// the repair mark already with a repair round asked, and the packs it found
-// whole. What another scrub of inc already said answers instead, unread
-// again: findings it made that still wait for their repair, which is the
-// answer; or, when it found nothing, its verdict, when it began after every
-// failure it is asked about (it read the bytes they failed on) or ended
-// within ScrubCooldown with no repair written into inc since (the same
-// bytes would be found whole again). Nothing at all for an incarnation no
-// longer current; ErrStopped when the cache stops.
+// scrubFor runs a scrub of inc for the callers of a pack's or an object's
+// repair that its in-place round did not end (Cache.escalate, step 3: a
+// request's whose forced round repaired nothing, rebuild.go, and a sync's
+// whose round's own git met the damage again or skipped that round,
+// repairDamaged) and whose failing processes began at or before began (zero:
+// unknown) — the node's one scrub, taken ahead of every scrub the scrubber
+// has due and preempting a routine one it is running (scrubSlot) — and
+// answers what it found: its findings, on the repair mark already with a
+// repair round asked, and the packs it found whole. What another scrub of inc
+// already said answers instead, unread again: findings it made that still
+// wait for their repair, which is the answer, with the packs that scrub found
+// whole less the ones a waiting finding names (what a rebuild past their
+// repair links, seedRebuild); or, when it found nothing, its verdict, when it
+// began after every failure it is asked about (it read the bytes they failed
+// on) or ended within ScrubCooldown with no repair written into inc since
+// (the same bytes would be found whole again). Nothing at all for an
+// incarnation no longer current; ErrStopped when the cache stops.
 //
-// It takes no context: a request's scrub runs on the cache's lifetime, never
-// a caller's, since every caller of the round that asks it shares its answer
+// It takes no context: this scrub runs on the cache's lifetime, never a
+// caller's, since every caller of the round that asks it shares its answer
 // and one leaving must not end it for the rest.
 //
 //nolint:contextcheck // the scrub slot's context is derived from the cache's lifetime (above)
@@ -543,10 +549,25 @@ func (c *Cache) scrubFor(e *entry, inc *incarnation, began time.Time) (scrubbed,
 		e.mu.Unlock()
 		return scrubbed{}, nil
 	case len(inc.repair.found) > 0:
+		// THE PACKS THE LAST SCRUB FOUND WHOLE answer beside its findings,
+		// less every pack a finding still waiting names: what a rebuild past
+		// the findings' repair links rather than downloads (seedRebuild),
+		// exactly as when that scrub ran for the caller. Answered with no
+		// packs, the rebuild a round's caller asks once the findings' round
+		// still meets the damage (repairDamaged's step 4) downloaded every
+		// pack the repository holds.
 		var out scrubbed
 		for _, f := range inc.repair.found {
 			out.damaged = append(out.damaged, f)
 		}
+		out.whole = slices.DeleteFunc(slices.Clone(inc.scrubWhole), func(cs string) bool {
+			for _, f := range inc.repair.found {
+				if have, ok := packOfRel(f.rel); ok && have == cs {
+					return true
+				}
+			}
+			return false
+		})
 		e.mu.Unlock()
 		return out, nil
 	case recent:
@@ -729,8 +750,9 @@ func (c *Cache) scrubHold(ctx context.Context) (func(), error) {
 // foundByScrub is what scrubs found failing on inc that its repair mark still
 // holds, for a full round to repair (sync.go apply) — none while a check of
 // the repository is admitted, whose release asks the round again. Copied, not
-// taken: the round settles what it repaired (settleFound) only once it has
-// converged, so a round that fails leaves them for the next. e.mu is not held.
+// taken: the round settles what it repaired (settleFound) only once its
+// install and its drops have acted on them, so a round that fails before then
+// leaves them for the next. e.mu is not held.
 func (c *Cache) foundByScrub(e *entry, inc *incarnation) []checkedFile {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -745,8 +767,8 @@ func (c *Cache) foundByScrub(e *entry, inc *incarnation) []checkedFile {
 	return found
 }
 
-// settleFound takes off inc's repair mark every finding of found a converged
-// round has repaired, or found already repaired — each still on the mark at
+// settleFound takes off inc's repair mark every finding of found a full round
+// has repaired, or found already repaired — each still on the mark at
 // the identity it failed at; a newer finding about the same file stays, and
 // so does one of a pack in unrepaired, whose download failed or is held off.
 func (c *Cache) settleFound(e *entry, inc *incarnation, found []checkedFile, unrepaired map[string]bool) {

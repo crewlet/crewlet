@@ -272,16 +272,25 @@ func (w *syncWorld) putBundle(ctx context.Context, b gittest.Bundled, packID str
 func (w *syncWorld) tag(t testing.TB, repo, name string, annotated bool) string {
 	t.Helper()
 	f := w.repos[repo]
-	ref := "refs/tags/" + name
 	if !annotated {
-		w.log.write(repo, nil, map[string]string{ref: f.head})
+		w.log.write(repo, nil, map[string]string{"refs/tags/" + name: f.head})
 		return f.head
 	}
+	oid, _ := w.tagged(t, repo, name)
+	return oid
+}
+
+// tagged is an annotated tag of repo's newest commit, its tag object pushed
+// as its own pack: it answers the tag object and that pack's row.
+func (w *syncWorld) tagged(t testing.TB, repo, name string) (string, code.PackRow) {
+	t.Helper()
+	f := w.repos[repo]
+	ref := "refs/tags/" + name
 	w.client.Run(t, f.work, "tag", "-a", name, "-m", "tag "+name, f.head)
 	oid := strings.TrimSpace(w.client.Run(t, f.work, "rev-parse", ref))
 	row := w.pack(t, f, oid, "")
-	w.log.write(repo, []code.PackRow{row}, map[string]string{ref: oid})
-	return oid
+	row.Added = w.log.write(repo, []code.PackRow{row}, map[string]string{ref: oid})
+	return oid, row
 }
 
 // sync is a linearizable sync that must succeed, released when the case ends.

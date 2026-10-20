@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -351,12 +352,14 @@ func TestAHintReadsOnlyThePacksOfItsRows(t *testing.T) {
 // meanwhile (that nothing else of the repository waits on it either is
 // TestARoundEndsBeforeItsHintIsHashed's). A sound pack answers the round's
 // callers git's own failure; a pack that is not its row's answers them with
-// the repair — the repository read whole into a new incarnation — as any
-// damage the round's own git named.
+// the repair a request's confirmed hint gets: THAT pack fetched again over
+// its files in the same incarnation, one GET, counted `stored`.
 //
 // Mutations: confirm the hint inside the round, under its lock — the hash
 // finds the lock held; answer every round's hint with git's failure — the
-// damaged pack is never repaired.
+// damaged pack is never repaired; ask the whole rebuild for a round's
+// confirmed hint (damagedRound's askRebuild with nothing seeded) — a new
+// incarnation, every pack downloaded.
 func TestARoundHashesItsHintWithoutTheWriteLock(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -408,24 +411,314 @@ func TestARoundHashesItsHintWithoutTheWriteLock(t *testing.T) {
 	}
 
 	// The same pack, now not its row's: the next round's hint is confirmed,
-	// and the round's callers are answered by the rebuild.
+	// and the round's callers are answered by the repair of THAT pack, in
+	// place.
 	pack := filepath.Join(first.Dir, "objects", "pack", "pack-"+row.GitChecksum+".pack")
 	b, err := os.ReadFile(pack)
 	if err != nil {
 		t.Fatal(err)
 	}
 	overwriteBytes(t, pack, 20, []byte{b[20] ^ 0xff})
+	gets := w.objects.total()
 	repaired, err := c.Sync(t.Context(), repo, statelog.Freshness{Level: statelog.ReadLinearizable})
 	if err != nil {
 		t.Fatalf("a sync whose peel names a damaged pack in words: %v, want it answered by the repair", err)
 	}
 	defer repaired.Release()
-	if cache.Incarnation(repaired) == cache.Incarnation(first) {
-		t.Errorf("the repair left the copy at incarnation %d, want it read whole into a new one",
-			cache.Incarnation(repaired))
+	if cache.Incarnation(repaired) != cache.Incarnation(first) {
+		t.Errorf("the repair answered incarnation %d, want %d repaired in place", cache.Incarnation(repaired),
+			cache.Incarnation(first))
 	}
-	if got := counter(w.rec, metrics.CodeCacheRebuilds, "reason", string(cache.RebuildCorrupt)); got != 1 {
-		t.Errorf("%s{reason=corrupt} = %d, want the one rebuild the confirmed hint asked", metrics.CodeCacheRebuilds, got)
+	// The tag's pack is the copy's since the sync before: the hinted pack,
+	// by the repair, is the one download.
+	if got := w.objects.total() - gets; got != 1 {
+		t.Errorf("the sync and its repair downloaded %d bundles, want the hinted pack alone", got)
+	}
+	lines := w.logs.lines(t, "code_cache_pack_reinstalled")
+	if len(lines) != 1 || lines[0]["found"] != "hint" || lines[0]["pack_id"] != row.PackID {
+		t.Errorf("code_cache_pack_reinstalled = %v, want the hinted pack %s fetched again", lines, row.PackID)
+	}
+	if got := counter(w.rec, metrics.CodeCacheRebuilds, "reason", string(cache.RebuildStored)); got != 1 {
+		t.Errorf("%s{reason=stored} = %d, want the one in-place repair the confirmed hint asked",
+			metrics.CodeCacheRebuilds, got)
+	}
+	if got := counter(w.rec, metrics.CodeCacheRebuilds, "reason", string(cache.RebuildCorrupt)); got != 0 {
+		t.Errorf("%s{reason=corrupt} = %d, want no whole rebuild", metrics.CodeCacheRebuilds, got)
+	}
+}
+
+// A ROUND'S OWN PACK DAMAGE IS REPAIRED IN PLACE, as a request's is: ONE GET
+// for the damaged pack, never a whole rebuild that downloads every pack the
+// repository holds. A new process's first round is full and peels every tag
+// it sets, so an annotated tag whose packed object is damaged on disk — its
+// compressed bytes (G) or its header's stated size (S1), each in place — is
+// met by the round's own cat-file, on a copy before its first maintenance (no
+// bitmap and no graph: git inflates the object, and names the pack holding
+// it). Real git, on the node pin and on the node floor's own build, in both
+// of the ways git names it: through a bare "%s" alone (the pin's S1), and as a
+// row of git's format table — a pack's damage — with the pack recorded as a
+// hint beside it (the pin's G, and both on the floor). Both readings reach
+// the one repair: the hint confirmed against the pack's row, the pack named
+// to a forced round of the same incarnation, THAT pack fetched again over its
+// files — one GET of a repository holding seven packs, counted `stored`, with
+// no scrub of the copy made due beside it (what the round's git reported is
+// the round's repair's, reports{outcome=request}) and none run for the
+// repair.
+//
+// Mutations: send a round's pack damage to the whole rebuild (damagedRound's
+// askRebuild with nothing seeded) — a new incarnation, all seven packs
+// downloaded; read a row and its hint as the row alone (converge's hinted only
+// for an unclassified failure) — the arms git classifies have their forced
+// round told no pack, which finds nothing in the index files and goes on to
+// the scrub (checks{trigger=request}, found=trailer); name no reader on the
+// round's peel (refs.go), or never consume what it holds (settleReader) — its
+// report makes the copy's scrub due beside the repair (reports{queued}).
+func TestARoundsOwnPackDamageIsRepairedInPlace(t *testing.T) {
+	t.Parallel()
+	const pushes = 6
+	for _, git := range []struct {
+		name string
+		path func(testing.TB) string
+	}{{"pin", gittest.RequireNode}, {"floor", gittest.NodeFloor}} {
+		for _, damage := range []gittest.DamageCase{gittest.EntryBytes, gittest.EntrySize} {
+			t.Run(git.name+"/"+string(damage), func(t *testing.T) {
+				t.Parallel()
+				w := newSyncWorld(t, onMemory)
+				w.gitPath = git.path(t)
+				repo := w.repo(t, 1)
+				for range pushes {
+					w.push(t, repo, "refs/heads/main", nil)
+				}
+				tag := w.tag(t, repo, "v1", true)
+				c := w.open(t)
+				s, err := c.Sync(t.Context(), repo, linearizable)
+				if err != nil {
+					t.Fatalf("the first sync: %v", err)
+				}
+				dir, n := s.Dir, cache.Incarnation(s)
+				s.Release()
+				gittest.DamageInPlace(t, dir, damage, tag)
+				if _, err := runGit(t, w.pool, dir, "", "cat-file", "-p", tag); err == nil {
+					t.Fatalf("the tag reads whole after damage %s: the case damaged nothing", damage)
+				}
+
+				c = w.reopen(t, c) // its first round is full, and peels every tag
+				gets := w.objects.total()
+				// The case's own read of the damaged tag reported it too.
+				queued := counterOf(w.rec, metrics.CodeCacheReports, map[string]string{"outcome": "queued"})
+				ctx, cancel := context.WithTimeout(t.Context(), hangDetector)
+				defer cancel()
+				r, err := c.Sync(ctx, repo, linearizable)
+				if err != nil {
+					t.Fatalf("a sync whose own peel met a damaged tag object: %v, want its repair's answer", err)
+				}
+				defer r.Release()
+				if got := cache.Incarnation(r); got != n {
+					t.Errorf("the repair answered incarnation %d, want %d repaired in place", got, n)
+				}
+				if got := w.objects.total() - gets; got != 1 {
+					t.Errorf("the repair downloaded %d bundles, want the tag's pack alone of %d", got, pushes+1)
+				}
+				lines := w.logs.lines(t, "code_cache_pack_reinstalled")
+				if len(lines) != 1 || lines[0]["found"] != "hint" {
+					t.Errorf("code_cache_pack_reinstalled = %v, want the tag's pack fetched again for its hint", lines)
+				}
+				if got := counter(w.rec, metrics.CodeCacheHints, "outcome", "confirmed"); got != 1 {
+					t.Errorf("%s{outcome=confirmed} = %d, want the peel's one hint", metrics.CodeCacheHints, got)
+				}
+				for _, reason := range cache.RebuildReasons {
+					want := uint64(0)
+					if reason == cache.RebuildStored {
+						want = 1
+					}
+					if got := counter(w.rec, metrics.CodeCacheRebuilds, "reason", string(reason)); got != want {
+						t.Errorf("%s{reason=%s} = %d, want %d", metrics.CodeCacheRebuilds, reason, got, want)
+					}
+				}
+				if got := checks(w, "pack", "damaged", "request"); got != 0 {
+					t.Errorf("the repair's scrub found %d packs damaged, want none run: the hint named the pack", got)
+				}
+				got := counterOf(w.rec, metrics.CodeCacheReports, map[string]string{"outcome": "queued"}) - queued
+				if got != 0 {
+					t.Errorf("%s{outcome=queued} rose by %d, want the peel's report held for the round's repair",
+						metrics.CodeCacheReports, got)
+				}
+				if got := counterOf(w.rec, metrics.CodeCacheReports, map[string]string{"outcome": "request"}); got == 0 {
+					t.Errorf("%s{outcome=request} = 0, want the peel's report consumed by the round's repair",
+						metrics.CodeCacheReports)
+				}
+				if _, err := runGit(t, w.pool, r.Dir, "", "cat-file", "-p", tag); err != nil {
+					t.Errorf("the repaired copy still fails on the tag: %v", err)
+				}
+			})
+		}
+	}
+}
+
+// A DAMAGED PACK THE STORE WILL NOT HAND OVER IS ASKED FOR ONCE A WINDOW, and
+// nothing else is downloaded. A new process's first round peels an annotated
+// tag whose packed object is damaged on disk (G), in a repository of seven
+// packs, and the object store refuses that pack's bundle — an outage on its
+// key, or a bundle it lost. The round's repair asks its one GET (the in-place
+// round's reinstall of the pack the hint named), which fails and holds the
+// pack off (repairMark.fetchFailed); the scrub that follows finds the pack and
+// leaves it on the repair mark; and the whole rebuild past it would need that
+// same pack from the same store, so none is asked while it is held off: the
+// sync is answered with the store's refusal. Within the window no round asks
+// the store again and none is FORCED to hold every index file to its trailer
+// again (checks{trigger=forced}) — a forced round could fetch nothing and
+// learn nothing new. Each window that passes asks the store once more, and the
+// one after the store answers again installs the pack in place: the same
+// incarnation, one GET, counted `stored`, and no rebuild of the repository at
+// all.
+//
+// Mutations: ask the step-4 rebuild while a pack it needs is held off — the
+// store is asked twice a window; ask it unseeded, as a scrub answered from its
+// pending findings left it — every pack of the repository downloaded each
+// window; count a held-off named pack as a pack for step 2's skip, or leave a
+// forced round's forces unsettled once it fails at the peel — forced checks
+// within the window.
+func TestADamagedPackTheStoreRefusesIsAskedForOnceAWindow(t *testing.T) {
+	t.Parallel()
+	const pushes = 6
+	for _, git := range []struct {
+		name string
+		path func(testing.TB) string
+	}{{"pin", gittest.RequireNode}, {"floor", gittest.NodeFloor}} {
+		t.Run(git.name, func(t *testing.T) {
+			t.Parallel()
+			w := newSyncWorld(t, onMemory)
+			w.gitPath = git.path(t)
+			clk := newClock()
+			repo := w.repo(t, 1)
+			for range pushes {
+				w.push(t, repo, "refs/heads/main", nil)
+			}
+			tag, row := w.tagged(t, repo, "v1")
+			c := w.open(t, clk.on)
+			s, err := c.Sync(t.Context(), repo, linearizable)
+			if err != nil {
+				t.Fatalf("the first sync: %v", err)
+			}
+			dir, n := s.Dir, cache.Incarnation(s)
+			s.Release()
+			gittest.DamageInPlace(t, dir, gittest.EntryBytes, tag)
+			refused := errors.New("the object store refuses the tag's pack")
+			w.objects.mu.Lock()
+			w.objects.fail = func(k objstore.Key) error {
+				if k == row.Object {
+					return refused
+				}
+				return nil
+			}
+			w.objects.mu.Unlock()
+
+			c = w.reopen(t, c, clk.on) // its first round is full, and peels every tag
+			start, _, _ := w.objects.counts()
+			total := w.objects.total()
+			asked := func() (tagPack, all int) {
+				got, _, _ := w.objects.counts()
+				return got[row.Object] - start[row.Object], w.objects.total() - total
+			}
+			forced := func() uint64 {
+				return counterOf(w.rec, metrics.CodeCacheChecks, map[string]string{"trigger": "forced"})
+			}
+			sync := func(what string) error {
+				t.Helper()
+				ctx, cancel := context.WithTimeout(t.Context(), hangDetector)
+				defer cancel()
+				s, err := c.Sync(ctx, repo, linearizable)
+				if err == nil {
+					s.Release()
+					t.Fatalf("%s: answered, want the store's refusal of the tag's pack", what)
+				}
+				return err
+			}
+			for window := 1; window <= 3; window++ {
+				if err := sync("window " + strconv.Itoa(window)); !errors.Is(err, refused) ||
+					!errors.Is(err, cache.ErrStoreRead) {
+					t.Errorf("window %d: %v, want the store's refusal of the tag's pack", window, err)
+				}
+				if tagPack, all := asked(); tagPack != window || all != window {
+					t.Errorf("window %d: the store was asked for the tag's pack %d times and for %d bundles in "+
+						"all, want once a window and nothing else", window, tagPack, all)
+				}
+				before := forced()
+				for range 2 {
+					if err := sync("within window " + strconv.Itoa(window)); !errors.Is(err, refused) {
+						t.Errorf("within window %d: %v, want the store's refusal of the tag's pack", window, err)
+					}
+				}
+				if tagPack, all := asked(); tagPack != window || all != window {
+					t.Errorf("within window %d: the store was asked for the tag's pack %d times and for %d "+
+						"bundles in all, want no download until the window passes", window, tagPack, all)
+				}
+				if got := forced() - before; got != 0 {
+					t.Errorf("within window %d: %d files checked by forced rounds, want none: no forced round "+
+						"can fetch the held-off pack", window, got)
+				}
+				if window == 1 {
+					// A REQUEST whose confirmed hint names the held-off pack
+					// takes the same path: no forced round, no download, the
+					// store's refusal its answer.
+					p, ok := cache.Pin(c, repo)
+					if !ok {
+						t.Fatal("no incarnation to pin")
+					}
+					before := forced()
+					ctx, cancel := context.WithTimeout(t.Context(), hangDetector)
+					r, err := c.Rebuild(ctx, p, cache.Failure{Reason: cache.RebuildCorrupt,
+						Packs: []string{row.GitChecksum}, Began: time.Now()})
+					cancel()
+					p.Release()
+					if err == nil {
+						r.Release()
+					}
+					if !errors.Is(err, refused) {
+						t.Errorf("a request's repair naming the held-off pack: %v, want the store's refusal", err)
+					}
+					if tagPack, all := asked(); tagPack != window || all != window {
+						t.Errorf("a request's repair asked the store for the tag's pack %d times and for %d "+
+							"bundles in all, want no download until the window passes", tagPack, all)
+					}
+					if got := forced() - before; got != 0 {
+						t.Errorf("a request's repair naming the held-off pack: %d files checked by forced rounds, "+
+							"want none", got)
+					}
+				}
+				clk.Add(cache.RebuildWindow(window) + time.Second)
+			}
+			if got := counter(w.rec, metrics.CodeCacheRebuilds, "reason", string(cache.RebuildCorrupt)); got != 0 {
+				t.Errorf("%s{reason=corrupt} = %d, want no whole rebuild: it needs the held-off pack",
+					metrics.CodeCacheRebuilds, got)
+			}
+
+			// The store answers again: the next window's repair installs the
+			// pack in place.
+			w.objects.mu.Lock()
+			w.objects.fail = nil
+			w.objects.mu.Unlock()
+			ctx, cancel := context.WithTimeout(t.Context(), hangDetector)
+			defer cancel()
+			r, err := c.Sync(ctx, repo, linearizable)
+			if err != nil {
+				t.Fatalf("once the store answers again: %v, want the repaired copy", err)
+			}
+			defer r.Release()
+			if got := cache.Incarnation(r); got != n {
+				t.Errorf("the repair answered incarnation %d, want %d repaired in place", got, n)
+			}
+			if tagPack, all := asked(); tagPack != 4 || all != 4 {
+				t.Errorf("in all the store was asked for the tag's pack %d times and for %d bundles, want "+
+					"once a window and nothing else", tagPack, all)
+			}
+			if got := counter(w.rec, metrics.CodeCacheRebuilds, "reason", string(cache.RebuildStored)); got != 1 {
+				t.Errorf("%s{reason=stored} = %d, want the one pack installed again", metrics.CodeCacheRebuilds, got)
+			}
+			if _, err := runGit(t, w.pool, r.Dir, "", "cat-file", "-p", tag); err != nil {
+				t.Errorf("the repaired copy still fails on the tag: %v", err)
+			}
+		})
 	}
 }
 
@@ -590,5 +883,50 @@ func TestAHintedRoundsCallersFollowTheCopyThatReplacedItsOwn(t *testing.T) {
 	case a.incarnation != cache.Incarnation(rebuilt):
 		t.Errorf("the hinted round's caller was handed incarnation %d, want the rebuilt %d", a.incarnation,
 			cache.Incarnation(rebuilt))
+	}
+}
+
+// A HINTED ROUND'S CALLERS ARE SYNCED AGAIN PAST A REPAIR. While a round's
+// hint is hashed the repository has no running round, so a request's repair
+// of the same copy runs meanwhile — here it fetches the hinted pack again
+// over its files — and the hash, its files moved under it, decides nothing.
+// The round's git failed on what that repair may since have replaced: its
+// callers are synced again by a round of the copy as it now stands, as a
+// request whose failure predates a repair is run again, and never told a
+// failure the copy no longer has.
+//
+// Mutation: answer a hinted round's callers git's failure whenever its hints
+// confirm nothing (no predates clause in Cache.run's replaced) — the caller
+// is told git's failure over a repaired copy.
+func TestAHintedRoundsCallersAreSyncedAgainPastARepair(t *testing.T) {
+	t.Parallel()
+	h := holdAHint(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	repaired, err := h.c.Rebuild(ctx, h.first, cache.Failure{Reason: cache.RebuildCorrupt,
+		Packs: []string{h.row.GitChecksum}, Began: time.Now()})
+	if err != nil {
+		t.Fatalf("a request's repair asked while the round's hint was hashed: %v, want it run before the hash ends",
+			err)
+	}
+	defer repaired.Release()
+	if cache.Incarnation(repaired) != cache.Incarnation(h.first) {
+		t.Fatalf("the request's repair answered incarnation %d, want %d repaired in place",
+			cache.Incarnation(repaired), cache.Incarnation(h.first))
+	}
+	if lines := h.w.logs.lines(t, "code_cache_pack_reinstalled"); len(lines) != 1 {
+		t.Fatalf("code_cache_pack_reinstalled = %v, want the request's one reinstall of the hinted pack", lines)
+	}
+	h.unanswered(t)
+
+	h.letGo()
+	a := <-h.hinted
+	switch {
+	case a.err != nil:
+		t.Errorf("the hinted round's caller, a repair written into its copy while the pack was hashed: %v, "+
+			"want it synced again and answered", a.err)
+	case a.incarnation != cache.Incarnation(h.first):
+		t.Errorf("the hinted round's caller was handed incarnation %d, want %d", a.incarnation,
+			cache.Incarnation(h.first))
 	}
 }

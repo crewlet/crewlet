@@ -237,11 +237,11 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 	var todo []code.PackRow
 	// over is every pack this install places over files present, by its
 	// checksum, with what found it damaged and why that looked; absent, in a
-	// request's forced round, every pack it installs that the directory
-	// LOST — held before this round (lost) and gone from it since — that
-	// request's repair as much as one installed again. A pack the rows name
-	// that the copy never held is a push it has not read yet, which repairs
-	// nothing.
+	// forced round — the in-place round of a request's pack or object damage
+	// or of a round's own — every pack it installs that the directory LOST —
+	// held before this round (lost) and gone from it since — that repair as
+	// much as one installed again. A pack the rows name that the copy never
+	// held is a push it has not read yet, which repairs nothing.
 	over := map[string]reinstallWhy{}
 	absent := map[string]bool{}
 	now := c.now()
@@ -436,7 +436,10 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 				// A REPAIR THAT COULD NOT DOWNLOAD: the pack stays as it
 				// stands, and the round goes on without it.
 				failedMu.Lock()
-				out.failed = append(out.failed, staged.p.GitChecksum)
+				if out.failed == nil {
+					out.failed = map[string]error{}
+				}
+				out.failed[staged.p.GitChecksum] = err
 				failedMu.Unlock()
 				c.log.Warn("code_cache_pack_reinstall_failed", "repo", e.id, "incarnation", inc.n,
 					"pack_id", staged.p.PackID, "found", why.found, "error", err)
@@ -501,8 +504,9 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 // its checksum), `hint` (a confirmed hint named it: ConfirmHint held its
 // bytes to its row) or `size` (a full round found one at another size than
 // its row's) — and the trigger of the check or scrub that looked, both logged
-// with code_cache_pack_reinstalled; a request's forced round logs a pack the
-// directory lost (lost) as `absent`. drops: the derived files may have been
+// with code_cache_pack_reinstalled; a forced round — a request's in-place
+// repair or a round's own — logs a pack the directory lost (lost) as
+// `absent`. drops: the derived files may have been
 // built from the damage, so they go before it is placed (install's doc).
 type reinstallWhy struct {
 	found   string
@@ -516,13 +520,14 @@ type reinstallWhy struct {
 type installs struct {
 	added, replaced int
 	// restored is how many of the added were packs the copy had lost (lost):
-	// a request's forced round's repair, where the rest are pushes it had
-	// not yet read.
+	// a forced round's repair, a request's or a round's own, where the rest
+	// are pushes it had not yet read.
 	restored int
 	dropped  derivedSet
 	// failed is the packs, by checksum, it was to install again over their
-	// files and could not download: left as they stand.
-	failed []string
+	// files and could not download, each with the download's failure: left as
+	// they stand.
+	failed map[string]error
 }
 
 // indexVouched reports whether the .idx of inc's pack cs is one this process

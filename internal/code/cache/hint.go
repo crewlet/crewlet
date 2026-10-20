@@ -25,10 +25,15 @@ import (
 // names it, and answers a repair only when they differ. A sound pack answers
 // none whatever the message said; a pack no row names is no damage of the
 // copy. On 2.55 the same sentence is a format of git's table (gitproc), a
-// pack's damage the request's repair answers whatever a hash says, and the
-// pool records the pack its message names as a hint beside it: confirmed the
-// same way, it is named to that repair (Failure.Packs), which then fetches
-// that pack again rather than hash every pack the copy holds to find it.
+// pack's damage the repair answers whatever a hash says, and the pool records
+// the pack its message names as a hint beside it: confirmed the same way, it
+// is named to that repair (Failure.Packs), which then fetches that pack again
+// rather than hash every pack the copy holds to find it. ONE RULE FOR EVERY
+// NAMER: a request's git (the host asks ConfirmHint, then Cache.Rebuild) and a
+// round's own (confirmRound, then damagedRound) both hand the repair the packs
+// their hints confirmed, and both repair in place first — one GET a damaged
+// pack, the copy kept — where a round's damage read into a new directory was
+// thousands of GETs for the largest repository the defaults admit.
 //
 // ONE HASH A PACK, on the CACHE'S lifetime, never a request's. Damage that
 // fails a hot repository fails every request in flight on it at once, and a
@@ -108,23 +113,43 @@ func (c *Cache) ConfirmHint(ctx context.Context, s Synced, h gitproc.Hint) (Fail
 	return Failure{Reason: RebuildCorrupt, Packs: []string{h.Pack}}, true
 }
 
-// hinted is a round's own git process, in inc, failing with hints and no
-// damage its formats name (gitproc.Hint): what converge answers so Cache.run
-// can confirm them once the round has let the entry's write lock go and
-// stopped being its running round. rows is
-// the round's snapshot when it was a full read — every pack row, for the
-// confirmation to look the hint's pack up in — and nil otherwise. It reads as
-// the git failure it wraps.
+// hinted is a round's own git process, in inc, failing with hints
+// (gitproc.Hint) and either no damage its formats name (2.56's bare "%s") or
+// a pack's or an object's damage beside them (classified, damage — a row of
+// git's table, 2.55's of the same sentence or another the run reported,
+// DamageReason's reading): what converge answers so Cache.run can confirm
+// them once the round has let the entry's write lock go and stopped being
+// its running round. rows is the round's snapshot when it
+// was a full read — every pack row, for the confirmation to look the hint's
+// pack up in — and nil otherwise; forced, that the round was a forced
+// in-place round (damaged.forced). It reads as the git failure it wraps.
 type hinted struct {
-	inc   *incarnation
-	name  string
-	full  bool
-	rows  *snapshot
-	hints []gitproc.Hint
-	err   error
+	inc        *incarnation
+	name       string
+	full       bool
+	rows       *snapshot
+	hints      []gitproc.Hint
+	classified bool
+	damage     Failure
+	forced     bool
+	err        error
 }
 
 func (h *hinted) Error() string { return h.err.Error() }
+
+// began is when the round's git that recorded the hints began: its
+// classified damage's (Failure.Began), else its run's (gitproc.Result.Began),
+// zero when nothing says.
+func (h *hinted) began() time.Time {
+	if h.classified && !h.damage.Began.IsZero() {
+		return h.damage.Began
+	}
+	var exit *gitproc.ExitError
+	if errors.As(h.err, &exit) {
+		return exit.Result.Began
+	}
+	return time.Time{}
+}
 
 // Unwrap is the git failure.
 func (h *hinted) Unwrap() error { return h.err }
@@ -139,17 +164,37 @@ func hintsOf(err error) []gitproc.Hint {
 }
 
 // confirmRound confirms a round's hints (hinted), the entry's write lock
-// already let go and the round no longer the running one (Cache.run): the
-// first whose pack is not its row's makes the round's answer the damage it
-// asks repaired (damaged, RebuildCorrupt); with none, the round's answer is
-// git's failure.
+// already let go and the round no longer the running one (Cache.run) — each
+// pack once, however many of its objects git named, as the host confirms a
+// request's (host's confirmed) — and answers the damage the round's callers
+// are answered by the repair of (damaged): the packs found not their rows'
+// named to it (damaged.packs), the in-place round fetching each again with
+// one GET, under the reason the round's git classified, or RebuildCorrupt
+// where it classified none. With no pack confirmed and nothing classified —
+// every hint a sound pack's, an unknown one's or undecided — the round's
+// answer is git's failure, and nothing is repaired: a message only
+// nominates.
 func (c *Cache) confirmRound(e *entry, h *hinted) error {
+	var packs []string
+	asked := map[string]bool{}
 	for _, hint := range h.hints {
+		if asked[hint.Pack] {
+			continue
+		}
+		asked[hint.Pack] = true
 		if c.confirmHint(c.life, e, h.inc, hint, h.rows) {
-			return &damaged{inc: h.inc, name: h.name, reason: RebuildCorrupt, swept: h.full, err: h.err}
+			packs = append(packs, hint.Pack)
 		}
 	}
-	return h.err
+	if len(packs) == 0 && !h.classified {
+		return h.err
+	}
+	d := &damaged{inc: h.inc, name: h.name, reason: RebuildCorrupt, swept: h.full, packs: packs,
+		forced: h.forced, began: h.began(), err: h.err}
+	if h.classified {
+		d.reason = h.damage.Reason
+	}
+	return d
 }
 
 // packCheck is one hash of a hint's pack against its row

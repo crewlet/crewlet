@@ -2,6 +2,7 @@ package cache
 
 import (
 	"errors"
+	"fmt"
 	"maps"
 	"path/filepath"
 	"slices"
@@ -115,7 +116,10 @@ import (
 //     never held: its round drops it in place, races nothing and is the
 //     repair's own first step; nor is a report from a scratch or a view,
 //     whose process the host repairs only for its alternate's shape, which
-//     no process reports.
+//     no process reports. A ROUND'S OWN GIT is held the same way: the peel
+//     names a reader the round mints (roundReader, sync.go), and what it
+//     reports is consumed by the round's repair of a pack's or an object's
+//     damage, or handed on as the round settles otherwise (settleReader).
 
 // reportPart is what a report names: the `part` attribute of
 // crewlet.code.cache.reports.
@@ -166,9 +170,10 @@ const (
 	// ScrubCooldown of a scrub whose findings still wait for their repair:
 	// the repair is the answer, and no scrub is made due.
 	reportCovered reportOutcome = "covered"
-	// reportRequest: a report HELD FOR THE REQUEST whose own run made it,
-	// and answered by the repair that request asked (Cache.Rebuild): no
-	// scrub is made due beside it.
+	// reportRequest: a report HELD FOR THE REQUEST whose own run made it —
+	// or for the round whose own git did (roundReader) — and answered by the
+	// repair that request or that round asked (Cache.Rebuild, damagedRound):
+	// no scrub is made due beside it.
 	reportRequest reportOutcome = "request"
 )
 
@@ -317,9 +322,11 @@ type repairMark struct {
 	// reinstalls a pack, or drops a derived file, only while it still has
 	// that identity (checked.still).
 	found map[string]checkedFile
-	// forces is how many failed requests asked the next full round to hold
-	// EVERY index file to its trailer, vouched or not ([Cache.Rebuild]); a
-	// round settles those it answered.
+	// forces is how many in-place repairs of a pack's or an object's damage
+	// — a failed request's ([Cache.Rebuild]) or a round's own git's
+	// (repairDamaged) — asked the next full round to hold EVERY index file to
+	// its trailer, vouched or not; a round settles those its check and its
+	// install have acted on, whether or not it then converges.
 	forces int
 	// reinstall is the packs a confirmed hint named ([Failure].Packs), by
 	// checksum, each at the identity of its .pack when it was asked: the
@@ -334,11 +341,14 @@ type repairMark struct {
 	fetchFailed map[string]fetchBackoff
 }
 
-// fetchBackoff is a pack's download failures in a row, and when the next
-// attempt may be made (Options.Now's clock).
+// fetchBackoff is a pack's download failures in a row, when the next attempt
+// may be made (Options.Now's clock), and what the last one failed with — the
+// store's own answer (ErrStoreRead, ErrPackMissing, ErrCorruptPack), which is
+// what a caller whose repair waits on the pack is answered (heldOffFor).
 type fetchBackoff struct {
 	failures int
 	until    time.Time
+	err      error
 }
 
 // pending reports whether the mark asks anything at all.
@@ -380,16 +390,68 @@ func (m repairMark) heldOff(now time.Time) map[string]bool {
 	return held
 }
 
+// fetchable is the packs of packs whose download is not held off at now: what
+// a forced round asked to install them again (reinstallHinted) can fetch. A
+// held-off pack is no pack to that round — install leaves it as it stands —
+// so a repair whose named packs are all held off is decided as one that names
+// none (Cache.Rebuild's and repairDamaged's step 2).
+func (m repairMark) fetchable(packs []string, now time.Time) []string {
+	held := m.heldOff(now)
+	var out []string
+	for _, cs := range packs {
+		if !held[cs] {
+			out = append(out, cs)
+		}
+	}
+	return out
+}
+
 // fetchFailedAt records that a download of pack cs to install it again failed
-// at now, and holds the next one off.
-func (m *repairMark) fetchFailedAt(cs string, now time.Time) {
+// at now with err, and holds the next one off.
+func (m *repairMark) fetchFailedAt(cs string, now time.Time, err error) {
 	if m.fetchFailed == nil {
 		m.fetchFailed = map[string]fetchBackoff{}
 	}
 	b := m.fetchFailed[cs]
 	b.failures++
-	b.until = now.Add(rebuildWindow(b.failures))
+	b.until, b.err = now.Add(rebuildWindow(b.failures)), err
 	m.fetchFailed[cs] = b
+}
+
+// heldOffFor is what a WHOLE REBUILD seeded with seed (seedRebuild) would
+// meet first, answered without asking it: the last download failure of a pack
+// whose download is held off at now and that seed does not link — or nil when
+// there is none. A rebuild downloads every pack it does not link, so it would
+// ask the store for that very pack again, under the same row, within the
+// backoff that holds its download off (fetchFailed): a GET the backoff exists
+// to spare, from a store that refused it moments ago, which ends nothing the
+// in-place reinstall the backoff allows next would not end — and every one of
+// them a new incarnation's directory made, its whole rows read and its line's
+// window grown, for a rebuild that cannot complete. Every such pack is one the
+// rows still name: they drop a pack only with the repository's purge, which
+// ends the entry. The answer names the earliest pack by checksum and how long
+// its backoff has left, and wraps the store's own failure, so a host answers
+// it as the store's (cache.ErrStoreRead's 503, ErrPackMissing's,
+// ErrCorruptPack's).
+func (m repairMark) heldOffFor(now time.Time, seed []string) error {
+	var held []string
+	for cs := range m.heldOff(now) {
+		if !slices.Contains(seed, cs) {
+			held = append(held, cs)
+		}
+	}
+	if len(held) == 0 {
+		return nil
+	}
+	slices.Sort(held)
+	b := m.fetchFailed[held[0]]
+	more := ""
+	if len(held) > 1 {
+		more = fmt.Sprintf(" (and %d more)", len(held)-1)
+	}
+	return fmt.Errorf("cache: the copy's pack-%s%s is damaged and the object store did not hand it over to install "+
+		"again; a rebuild would ask it for the same pack, so none is asked until its next download, in %v: %w",
+		held[0], more, b.until.Sub(now).Round(time.Second), b.err)
 }
 
 // packOfRel is the checksum of the pack whose file rel is, or false.
@@ -633,8 +695,8 @@ func (c *Cache) dropDamaged(e *entry, inc *incarnation, res *applied) error {
 		// kept was dropped by nothing, so nothing below may log it repaired,
 		// count it dropped, stamp its damage or make its write due: recorded
 		// as dropped, the round that met its damage read it as damage that
-		// survived a drop (damagedRound) and asked for a whole rebuild of a
-		// copy no drop had touched.
+		// survived a drop (damagedRound) and asked a pack's repair of a copy
+		// no drop had touched.
 		kept := named &^ dropped
 		drop &^= kept
 		found &^= kept

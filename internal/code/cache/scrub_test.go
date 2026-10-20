@@ -1102,6 +1102,61 @@ func TestARepairTheStoreCannotServeLeavesTheCopyServing(t *testing.T) {
 	}
 }
 
+// A SCRUB ANSWERED FROM ITS FINDINGS NAMES THE PACKS IT FOUND WHOLE. A
+// repair's step 3 asks the copy's scrub (Cache.escalate), and a scrub whose
+// findings still wait for their repair — here one pack's reverse index, whose
+// reinstall the store refused — answers with those findings rather than read
+// the copy again. What it found WHOLE answers beside them, less the packs the
+// findings name: the rebuild a round's caller asks past the findings' repair
+// (step 4) links those rather than downloads them (seedRebuild), so one
+// damaged pack among thousands is one GET there too.
+//
+// Mutation: answer the pending findings with no packs whole (scrubFor's
+// repair.found case) — the rebuild past them downloads every pack the
+// repository holds.
+func TestAScrubAnsweredFromItsFindingsNamesThePacksItFoundWhole(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	h := w.measured(t)
+	c := w.open(t, newClock().on)
+	s := w.sync(t, c, h.repo)
+	gittest.DamageInPlace(t, s.Dir, gittest.RevTrailer, h.commits[3])
+	s.Release()
+	w.objects.mu.Lock()
+	w.objects.fail = func(k objstore.Key) error {
+		if k == h.newer.Object {
+			return errors.New("the object store is down")
+		}
+		return nil
+	}
+	w.objects.mu.Unlock()
+	cache.Report(c, gitproc.Ran{Dir: w.dir(t, c, h.repo), Result: gitproc.Result{Crashed: true}})
+	if done := cache.ScrubPass(c); len(done) != 1 {
+		t.Fatalf("the crash's scrub ran for %v", done)
+	}
+	eventually(t, "the repair round", func() bool { return cache.Quiet(c, h.repo) })
+	found := cache.ScrubFindings(c, h.repo)
+	if len(found) != 1 {
+		t.Fatalf("the scrub's findings are %v once the store refused the pack, want the reverse index kept", found)
+	}
+	checked := counterOf(w.rec, metrics.CodeCacheChecks, map[string]string{"trigger": "request"})
+
+	damaged, whole, err := cache.ScrubFor(c, h.repo)
+	if err != nil {
+		t.Fatalf("the repair's scrub: %v", err)
+	}
+	if !slices.Equal(damaged, found) {
+		t.Errorf("the repair's scrub answered %v damaged, want the finding still waiting, %v", damaged, found)
+	}
+	if want := []string{h.older.GitChecksum}; !slices.Equal(whole, want) {
+		t.Errorf("the repair's scrub answered %v whole, want %v: every pack the scrub found whole but the "+
+			"one its finding names", whole, want)
+	}
+	if got := counterOf(w.rec, metrics.CodeCacheChecks, map[string]string{"trigger": "request"}); got != checked {
+		t.Errorf("the repair's scrub hashed %d files, want none: its findings answer it", got-checked)
+	}
+}
+
 // derivedIdentities is the identity of the copy's multi-pack-index, its
 // bitmap and its commit-graph, by name.
 func derivedIdentities(t *testing.T, dir string) map[string][4]int64 {

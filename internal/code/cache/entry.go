@@ -325,8 +325,9 @@ type incarnation struct {
 	// held is what each of its readers' runs reported that the reader's own
 	// repair answers (report.go, HELD FOR THE REQUEST), by the reader's name
 	// (Synced.Repairer): a key for every reader pin hands it to, taken by
-	// that reader's release, so a report reaches a reader that is still
-	// there or the ordinary rules and never waits on one already gone.
+	// that reader's release — and for every round applying to it, taken as
+	// the round settles (roundReader) — so a report reaches a reader that is
+	// still there or the ordinary rules and never waits on one already gone.
 	held map[gitproc.Repairer][]heldReport
 	// written is when this process last changed each declaration's files —
 	// a write that moved a file's identity, the round's own index, or a drop
@@ -372,12 +373,14 @@ type incarnation struct {
 	scrubFound            bool
 	// scrubBegan and scrubEnded are when its last scrub began and ended, as
 	// time.Now() readings compared on the monotonic clock with repairWrite
-	// and a failed request's Began; scrubWhole is the packs that scrub found
-	// whole, all three files, by checksum. A request's escalation
-	// (Cache.escalate) takes them for a scrub of its own when that scrub
-	// began after the request failed, or found nothing within ScrubCooldown
-	// with no repair written since — the same bytes, which would be found
-	// whole again.
+	// and the Began of a failing process — a request's or a round's own;
+	// scrubWhole is the packs that scrub found whole, all three files, by
+	// checksum (and, while its findings wait for their repair, the packs a
+	// rebuild past them links, less the ones they name). A repair's
+	// escalation (Cache.escalate) takes them for a scrub of its own when
+	// that scrub began after the process failed, or found nothing within
+	// ScrubCooldown with no repair written since — the same bytes, which
+	// would be found whole again.
 	scrubBegan, scrubEnded time.Time
 	scrubWhole             []string
 	// repairWrite is when this process last wrote into it what can END a
@@ -385,22 +388,25 @@ type incarnation struct {
 	// a pack it had lost installed again, a derived file dropped (a
 	// multi-pack-index or a graph that placed an object wrongly is read
 	// around once it is gone) — as a time.Now() reading, compared on the
-	// monotonic clock with a failed request's Began (the guard of a
-	// request's repair, rebuild.go). NOTHING ELSE: a push's pack, an
-	// adoption and the maintainer's index or graph add what the failing
-	// request never needed, and leave whatever failed it as it was — taken
-	// for repairs, a repository taking pushes answered every request's
+	// monotonic clock with the Began of the git process whose pack or object
+	// damage is being repaired, a request's or a round's own (the guard of
+	// that repair, rebuild.go and repairDamaged). NOTHING ELSE: a push's
+	// pack, an adoption and the maintainer's index or graph add what the
+	// failing process never needed, and leave whatever failed it as it was —
+	// taken for repairs, a repository taking pushes answered every request's
 	// damage "as it stands" and never repaired it.
 	repairWrite time.Time
-	// forcedAt and forcedEnded are when its last FORCED round — a failed
-	// request's in-place repair, every index file held to its trailer —
-	// ended having repaired nothing, on Options.Now's clock and as a
-	// time.Now() reading; zero when that round repaired something. A
-	// request failing within ScrubCooldown of it, with no repair written
-	// since, is not given another (rebuild.go): the same files would hash
-	// the same, and each forced round reads the rows whole and holds every
-	// reader of the repository while it hashes a quarter of the copy's
-	// bytes.
+	// forcedAt and forcedEnded are when its last FORCED round — the in-place
+	// repair of a request's pack or object damage or of a round's own, every
+	// index file held to its trailer — had acted on what it found having
+	// repaired nothing, on Options.Now's clock and as a time.Now() reading,
+	// whatever the round met after (its refs' peel failing on the damage
+	// again); zero when that round repaired something. A repair asked within
+	// ScrubCooldown of it that names no pack it can fetch, with no repair
+	// written since, is not given another (rebuild.go, repairDamaged): the
+	// same files would hash the same, and each forced round reads the rows
+	// whole and holds every reader of the repository while it hashes a
+	// quarter of the copy's bytes.
 	forcedAt, forcedEnded time.Time
 	// lastUsed is when a reader last took or released it, or made a push's
 	// scratch over it: set as the incarnation is made or read at boot, and
@@ -498,6 +504,19 @@ func (c *Cache) used(inc *incarnation) {
 // incarnation's damage its caller repairs (report.go).
 const noReader gitproc.Repairer = 0
 
+// reader mints a name for a reader of inc and opens its key in inc.held, so
+// what a run naming it reports is held for it (report.go): a pin's (pin), or a
+// round's own git runs' (roundReader), which hold no pin — the round holds
+// the entry's write lock instead. The entry's mu is held.
+func (c *Cache) reader(inc *incarnation) gitproc.Repairer {
+	by := gitproc.Repairer(c.repairers.Add(1))
+	if inc.held == nil {
+		inc.held = map[gitproc.Repairer][]heldReport{}
+	}
+	inc.held[by] = nil
+	return by
+}
+
 // pin hands inc to a reader — a use (used) — under a name of its own
 // (Synced.Repairer), live on inc until the reader lets it go: what the
 // observer holds the reader's reports under (report.go). The entry's mu is
@@ -505,11 +524,7 @@ const noReader gitproc.Repairer = 0
 func (c *Cache) pin(e *entry, inc *incarnation, kind SyncKind) Synced {
 	inc.pins++
 	c.used(inc)
-	by := gitproc.Repairer(c.repairers.Add(1))
-	if inc.held == nil {
-		inc.held = map[gitproc.Repairer][]heldReport{}
-	}
-	inc.held[by] = nil
+	by := c.reader(inc)
 	return Synced{
 		Dir:      inc.dir,
 		Repo:     inc.repo,

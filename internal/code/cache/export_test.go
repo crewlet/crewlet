@@ -1016,6 +1016,31 @@ func ScrubFindings(c *Cache, repoID string) []string {
 	return out
 }
 
+// ScrubFor is the scrub a repair's step 3 asks of repoID's current
+// incarnation (scrubFor, as Cache.escalate asks it for callers whose failures
+// began at an unknown instant): what it answers failing, by path relative to
+// the incarnation, and the packs it answers whole — what a rebuild past it
+// links rather than downloads — both sorted.
+func ScrubFor(c *Cache, repoID string) (damaged, whole []string, err error) {
+	e := lookup(c, repoID)
+	if e == nil {
+		return nil, nil, errors.New("cache: no such repository in the cache")
+	}
+	e.mu.Lock()
+	inc := e.current
+	e.mu.Unlock()
+	if inc == nil {
+		return nil, nil, errors.New("cache: the repository has no incarnation")
+	}
+	out, err := c.scrubFor(e, inc, time.Time{})
+	for _, f := range out.damaged {
+		damaged = append(damaged, f.rel)
+	}
+	slices.Sort(damaged)
+	whole = slices.Sorted(slices.Values(out.whole))
+	return damaged, whole, err
+}
+
 // ScrubWakesWith makes the scrubber ask f for its wake at the next interval's
 // end — next, on the cache's clock — in place of a timer: a case on a clock of
 // its own sees when the scrubber means to wake, and wakes it.

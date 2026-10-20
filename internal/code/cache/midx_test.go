@@ -217,13 +217,21 @@ func TestADamagedMidxIsDroppedWhateverElseItsCopyIsReadWholeFor(t *testing.T) {
 // cost a new incarnation and a download of every pack.
 //
 // And damage that survives the drop: a round that dropped the very files its
-// git then names (here a knob writes the damaged index back before the full
-// round's peel) asks a whole rebuild, `corrupt`, which replaces the
-// incarnation once — rather than marking the same drop again for ever.
+// git then names (here a knob writes the damaged index back before every peel
+// of the incarnation) has met a pack's damage, repaired as a request's is —
+// a FORCED round in place, which drops the index again by its checksum and
+// meets the damage again; the scrub, which finds the index rewritten and
+// hands it to a round that meets it again; and only then a whole rebuild,
+// `corrupt`, SEEDED with every pack the scrub found whole, which replaces the
+// incarnation once and downloads nothing — rather than marking the same drop
+// again for ever.
 //
 // Mutations: send RebuildDerived to askRebuild from damagedRound (a new
 // incarnation and every pack fetched again); drop the dropped guard (the
-// second arm marks the drop again and again, never answering).
+// second arm marks the drop again and again, never answering); ask the whole
+// rebuild for damage that survived its drop without the in-place steps
+// (repairDamaged — no forced round's check, no scrub); seed it with nothing
+// (every pack downloaded again).
 func TestARoundsOwnGitMeetingADamagedIndexDropsItInPlace(t *testing.T) {
 	t.Parallel()
 	damages := map[string]func(t *testing.T, midx string){
@@ -252,10 +260,10 @@ func TestARoundsOwnGitMeetingADamagedIndexDropsItInPlace(t *testing.T) {
 				c := w.open(t, clk.on, func(o *cache.Options) {
 					cache.BeforePeel(o, func(dir string) {
 						midx := filepath.Join(dir, "objects", "pack", "multi-pack-index")
-						if _, err := os.Stat(midx); !again || dir != first || err == nil || damaged == nil ||
-							!fired.CompareAndSwap(false, true) {
+						if _, err := os.Stat(midx); !again || dir != first || err == nil || damaged == nil {
 							return
 						}
+						fired.Store(true)
 						if err := os.WriteFile(midx, damaged, 0o444); err != nil {
 							t.Error(err)
 						}
@@ -312,6 +320,20 @@ func TestARoundsOwnGitMeetingADamagedIndexDropsItInPlace(t *testing.T) {
 					t.Errorf("%s{reason=corrupt} = %d, want the one rebuild damage surviving its drop asks",
 						metrics.CodeCacheRebuilds, got)
 				}
+				// Asked only past the in-place steps: a forced round held the
+				// index to its checksum, and a scrub for the sync read the
+				// copy whole.
+				for _, trigger := range []string{"forced", "request"} {
+					if got := checks(w, "multi-pack-index", "damaged", trigger); got == 0 {
+						t.Errorf("checks{file=multi-pack-index,outcome=damaged,trigger=%s} = 0, want the step "+
+							"before the rebuild", trigger)
+					}
+				}
+				// The tag's own pack, by the delta that met the damage: the
+				// rebuild linked every pack the scrub found whole.
+				if got := w.objects.total() - before; got != 1 {
+					t.Errorf("the sync fetched %d objects, want the tag's pack alone", got)
+				}
 				if _, err := runGit(t, w.pool, after.Dir, "", "rev-list", "--objects", "--all"); err != nil {
 					t.Errorf("rev-list over the rebuilt incarnation: %v", err)
 				}
@@ -320,19 +342,23 @@ func TestARoundsOwnGitMeetingADamagedIndexDropsItInPlace(t *testing.T) {
 	}
 }
 
-// DAMAGE NO DROP CAN END ASKS A REBUILD, ONCE. A round's own git meeting
-// damage in a derived file whose declaration KEEPS its files on a report
-// (OnReported Keep) has no drop to ask for: the next round would keep the
-// file, its git meet the same damage, and the round after it mark the same
-// drop again for ever. So the round asks a whole rebuild, `corrupt`, as for
-// damage that survived its drop, and is answered by the incarnation that
-// replaces the damaged one — once, with the index the copy kept never
-// recorded as dropped.
+// A ROUND'S DAMAGE NO DROP REPAIRS IS REPAIRED AS A PACK'S IS, as a
+// request's is (TestARequestsDamageNoDropRepairsIsRepairedAsAPacks). A
+// round's own git meeting damage in a derived file whose declaration KEEPS
+// its files on a report (OnReported Keep) has no drop to ask for: the next
+// round would keep the file, its git meet the same damage, and the round
+// after it mark the same drop again for ever. So the round's damage is a
+// pack's, repaired in place first: a forced round holds every index file to
+// its trailer whatever its vouch, the index fails its check and is dropped by
+// that rule, the bytes having decided — the same incarnation, counted
+// `derived`, nothing fetched beyond the tag's own pack, the drop logged as
+// the check's and never as the report's.
 //
-// Mutation: have damagedRound ask the drop of every declaration the damage
+// Mutations: have damagedRound ask the drop of every declaration the damage
 // names, whatever its declaration says of a report — the sync is never
-// answered.
-func TestDamageNoDropCanEndAsksARebuild(t *testing.T) {
+// answered; send a round's pack damage to the whole rebuild (damagedRound's
+// askRebuild) — a new incarnation, counted `corrupt`.
+func TestARoundsDamageNoDropRepairsIsRepairedAsAPacks(t *testing.T) {
 	t.Parallel()
 	keep := cache.DerivedFiles()
 	for i := range keep {
@@ -350,9 +376,11 @@ func TestDamageNoDropCanEndAsksARebuild(t *testing.T) {
 	if ran := cache.MaintainerPass(c); len(ran) != 1 {
 		t.Fatalf("the maintainer ran %v, want the repository", ran)
 	}
-	overwriteBytes(t, filepath.Join(s.Dir, "objects", "pack", "multi-pack-index"), 0, []byte{0xde, 0xad, 0xbe, 0xef})
+	midx := filepath.Join(s.Dir, "objects", "pack", "multi-pack-index")
+	overwriteBytes(t, midx, 0, []byte{0xde, 0xad, 0xbe, 0xef})
 
 	w.tag(t, repo, "v1", true) // a tag object in a pack of its own: the next round peels it
+	gets := w.objects.total()
 	ctx, cancel := context.WithTimeout(t.Context(), hangDetector)
 	defer cancel()
 	after, err := c.Sync(ctx, repo, statelog.Freshness{Level: statelog.ReadLinearizable})
@@ -360,20 +388,28 @@ func TestDamageNoDropCanEndAsksARebuild(t *testing.T) {
 		t.Fatalf("the sync whose round met damage its declaration keeps: %v", err)
 	}
 	defer after.Release()
-	if got := cache.Incarnation(after); got != cache.Incarnation(s)+1 {
-		t.Errorf("answered incarnation %d, want %d — one rebuild", got, cache.Incarnation(s)+1)
+	if got := cache.Incarnation(after); got != cache.Incarnation(s) {
+		t.Errorf("answered incarnation %d, want %d repaired in place", got, cache.Incarnation(s))
 	}
-	if got := counter(w.rec, metrics.CodeCacheRebuilds, "reason", "corrupt"); got != 1 {
-		t.Errorf("%s{reason=corrupt} = %d, want the one rebuild", metrics.CodeCacheRebuilds, got)
+	if _, err := os.Lstat(midx); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the damaged index survived the round's repair: %v", err)
 	}
-	if got := counter(w.rec, metrics.CodeCacheRebuilds, "reason", "derived"); got != 0 {
-		t.Errorf("%s{reason=derived} = %d: nothing was dropped", metrics.CodeCacheRebuilds, got)
+	if got := w.objects.total() - gets; got != 1 {
+		t.Errorf("the sync fetched %d objects, want the tag's pack alone", got)
 	}
-	if lines := w.logs.lines(t, "code_cache_derived_repaired"); len(lines) != 0 {
-		t.Errorf("code_cache_derived_repaired = %v: a declaration that keeps its files was logged repaired", lines)
+	if got := counter(w.rec, metrics.CodeCacheRebuilds, "reason", "corrupt"); got != 0 {
+		t.Errorf("%s{reason=corrupt} = %d, want no whole rebuild", metrics.CodeCacheRebuilds, got)
+	}
+	if got := counter(w.rec, metrics.CodeCacheRebuilds, "reason", "derived"); got != 1 {
+		t.Errorf("%s{reason=derived} = %d, want the forced check's one drop", metrics.CodeCacheRebuilds, got)
+	}
+	lines := w.logs.lines(t, "code_cache_derived_repaired")
+	if len(lines) != 1 || lines[0]["trigger"] != "check" {
+		t.Errorf("code_cache_derived_repaired = %v, want the forced check's one drop — never the report's, "+
+			"which a declaration that keeps its files asks none of", lines)
 	}
 	if _, err := runGit(t, w.pool, after.Dir, "", "rev-list", "--objects", "--all"); err != nil {
-		t.Errorf("rev-list over the rebuilt incarnation: %v", err)
+		t.Errorf("rev-list over the repaired incarnation: %v", err)
 	}
 }
 

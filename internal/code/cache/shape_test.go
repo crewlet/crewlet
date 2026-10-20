@@ -191,23 +191,30 @@ func TestEveryShapeThePoolRefusesIsRepairedInPlace(t *testing.T) {
 // directory's shape there, the incarnation is read whole in place by the
 // round queued behind it and the sync is answered by that round, with no
 // download; when the peel finds an object a row names gone from the packs,
-// the sync is answered by the rebuild that downloads it. Answered with the
-// failure instead, every sync after it met the same directory and failed the
-// same way until a restart.
+// the sync is answered by the repair a request's would get: a forced round of
+// the same incarnation that installs again the pack the copy LOST — one GET,
+// counted `stored` — never a rebuild downloading every pack. Answered with
+// the failure instead, every sync after it met the same directory and failed
+// the same way until a restart.
 //
-// Mutation: answer a round's damage as its failure (damagedRound), and the
-// sync fails with the git error.
+// Mutations: answer a round's damage as its failure (damagedRound), and the
+// sync fails with the git error; ask a round's missing object a whole rebuild
+// (damagedRound's askRebuild), and the sync is answered by a new incarnation
+// that downloaded every pack.
 func TestASyncWhoseOwnGitFindsDamageIsAnsweredByItsRepair(t *testing.T) {
 	t.Parallel()
 	for name, d := range map[string]struct {
-		reason      cache.RebuildReason
-		incarnation int
-		spoil       func(t *testing.T, dir string)
+		// reason is what the round's own git met; counted, what its repair
+		// is counted as; gets, the bundles the sync downloads, the tag's own
+		// pack among them.
+		reason, counted cache.RebuildReason
+		gets            int
+		spoil           func(t *testing.T, dir string)
 	}{
-		"its shape": {cache.RebuildShape, 1, func(t *testing.T, dir string) {
+		"its shape": {cache.RebuildShape, cache.RebuildShape, 1, func(t *testing.T, dir string) {
 			shapeDamages[0].spoil(t, dir)
 		}},
-		"an object gone from its packs": {cache.RebuildMissing, 2, func(t *testing.T, dir string) {
+		"an object gone from its packs": {cache.RebuildMissing, cache.RebuildStored, 2, func(t *testing.T, dir string) {
 			// The pack holding the commit the tag will name, gone: a delta
 			// installs only what it adds, so the peel is what meets it.
 			for _, f := range packFiles(t, dir) {
@@ -234,19 +241,26 @@ func TestASyncWhoseOwnGitFindsDamageIsAnsweredByItsRepair(t *testing.T) {
 					name, err)
 			}
 			defer s.Release()
-			if cache.Incarnation(s) != d.incarnation {
-				t.Errorf("the sync answered incarnation %d, want %d", cache.Incarnation(s), d.incarnation)
+			if cache.Incarnation(s) != 1 {
+				t.Errorf("the sync answered incarnation %d, want 1 repaired in place", cache.Incarnation(s))
 			}
 			if packed := read(t, filepath.Join(s.Dir, "packed-refs")); !strings.Contains(packed, tag+" refs/tags/v1") {
 				t.Errorf("the repaired packed-refs does not set the tag:\n%s", packed)
 			}
-			if got := counter(w.rec, metrics.CodeCacheRebuilds, "reason", string(d.reason)); got != 1 {
-				t.Errorf("%s{reason=%s} = %d, want 1", metrics.CodeCacheRebuilds, d.reason, got)
+			for _, reason := range cache.RebuildReasons {
+				want := uint64(0)
+				if reason == d.counted {
+					want = 1
+				}
+				if got := counter(w.rec, metrics.CodeCacheRebuilds, "reason", string(reason)); got != want {
+					t.Errorf("%s{reason=%s} = %d, want %d", metrics.CodeCacheRebuilds, reason, got, want)
+				}
 			}
 			// The tag's own pack, fetched once by the delta that met the
-			// damage; the repair in place fetches nothing more.
-			if got := w.objects.total() - before; d.reason == cache.RebuildShape && got != 1 {
-				t.Errorf("the sync asked the object store for %d objects, want the tag's one pack", got)
+			// damage; a shape's repair in place fetches nothing more, and a
+			// missing object's fetches the one pack the copy lost.
+			if got := w.objects.total() - before; got != d.gets {
+				t.Errorf("the sync asked the object store for %d objects, want %d", got, d.gets)
 			}
 			lines := w.logs.lines(t, "code_sync_damaged")
 			if len(lines) != 1 || lines[0]["reason"] != string(d.reason) || lines[0]["repo"] != repo ||
