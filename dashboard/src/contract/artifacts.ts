@@ -80,6 +80,12 @@ export const DOC_MAX_TABS = 32;
 
 /** The longest tab title, in UTF-8 bytes (`docindex.MaxTitleBytes`). */
 export const DOC_TAB_TITLE_MAX_BYTES = 120;
+
+/** The most slides a starter deck opens with (`slideformat.MaxPlanSlides`). */
+export const DECK_PLAN_MAX_SLIDES = 60;
+
+/** The longest slide title in a starter deck's plan, in UTF-8 bytes (`slideformat.MaxSlideTitleBytes`). */
+export const DECK_SLIDE_TITLE_MAX_BYTES = 200;
 /**
  * How many days a trashed artifact is kept before it is deleted for good
  * (`artifacts.TrashRetention`): the date every trash sentence names.

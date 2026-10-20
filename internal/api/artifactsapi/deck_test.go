@@ -1,11 +1,16 @@
 package artifactsapi_test
 
 import (
+	"bytes"
 	"encoding/json"
+	"flag"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 )
+
+var updateStarters = flag.Bool("update", false, "rewrite testdata/slides-starters.golden.json from the route's answer")
 
 // A DECK IS ANSWERED AS ITS CANONICAL TREE, never its markup: the slides in
 // order with their notes taken out of the drawn tree, read once per version,
@@ -205,5 +210,45 @@ func TestTheSlidesStartersAreAnsweredAsTrees(t *testing.T) {
 	}
 	if strings.Contains(w.Body.String(), "<section") || strings.Contains(w.Body.String(), `"Feature"`) {
 		t.Errorf("the answer carries markup or a theme's palette fields: %.300s", w.Body)
+	}
+}
+
+// THE CREATE PAGE IS TESTED ON THIS ROUTE'S OWN ANSWER: what a deck can begin
+// from is held in testdata/slides-starters.golden.json, which the dashboard's
+// plan and create page tests draw. A theme or layout change fails here until
+// the golden is rewritten (`go test ./internal/api/artifactsapi -run
+// StartersGolden -update`), so those tests never certify trees the engine no
+// longer sends.
+func TestTheSlidesStartersGoldenIsTheRoutesAnswer(t *testing.T) {
+	t.Parallel()
+	g := newRig(t, true)
+	w := g.do(person("bob"), "GET", "/artifacts/starters/slides", ``)
+	if w.Code != http.StatusOK {
+		t.Fatalf("the starters: %d %s", w.Code, w.Body)
+	}
+	var tree any
+	if err := json.Unmarshal(w.Body.Bytes(), &tree); err != nil {
+		t.Fatal(err)
+	}
+	got, err := json.MarshalIndent(tree, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = append(got, '\n')
+	const path = "testdata/slides-starters.golden.json"
+	if *updateStarters {
+		if err := os.MkdirAll("testdata", 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, got, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("%v: run with -update to write it", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("%s is not the route's answer: run with -update and review the diff", path)
 	}
 }

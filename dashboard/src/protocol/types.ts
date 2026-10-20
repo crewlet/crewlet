@@ -5426,10 +5426,49 @@ export interface DeckFace {
 /** A version's deck as the dashboard draws it (`slideformat.Deck`). */
 export interface ArtifactDeck {
   title: string;
+  /** The theme the deck began in (`deck.json`'s `theme`), absent for a deck that names none. */
+  theme?: string;
   cover: string;
   sections: DeckSection[] | null;
   faces: DeckFace[] | null;
   slides: DeckSlide[] | null;
+}
+
+/** One slide a starter deck opens with: a layout and its title (`slideformat.PlanSlide`). */
+export interface DeckPlanSlide {
+  layout: string;
+  /** Absent is the layout's own heading; a cover's is the deck's title. */
+  title?: string;
+}
+
+/** What a starter deck is composed from (`slideformat.Plan`), sent as a create's `deck`. */
+export interface DeckPlan {
+  theme?: string;
+  slides?: DeckPlanSlide[];
+}
+
+/** One layout a starter deck can hold (`slideformat.Layout`). */
+export interface DeckLayout {
+  id: string;
+  name: string;
+  description: string;
+  /** The title a slide of this layout opens with when its plan names none. */
+  heading: string;
+}
+
+/** One theme a deck can begin in, drawn as a deck of every layout once (`artifactsapi.SlidesStarterTheme`). */
+export interface DeckTheme {
+  id: string;
+  name: string;
+  tag: string;
+  sample: ArtifactDeck;
+}
+
+/** `GET /artifacts/starters/slides` (`artifactsapi.SlidesStartersAnswer`). */
+export interface SlidesStartersAnswer {
+  themes: DeckTheme[];
+  layouts: DeckLayout[];
+  default: DeckPlan;
 }
 
 /** `GET /artifacts/{id}/versions/{n}/deck` (`artifactsapi.DeckAnswer`). */

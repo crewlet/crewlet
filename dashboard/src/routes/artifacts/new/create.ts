@@ -23,7 +23,7 @@ import { utf8Bytes } from "~/lib/format.ts";
 import { keyedWrite, useKeyedGesture, type KeyedAnswer } from "~/lib/keyedWrite.ts";
 import { configureSchema, createFromStarter, createSheet } from "~/lib/artifacts/api.ts";
 import { SHEET_TEMPLATES, type SheetTemplate } from "~/lib/artifacts/schema.ts";
-import { newActOpID } from "~/protocol/index.ts";
+import { newActOpID, type DeckPlan } from "~/protocol/index.ts";
 
 /**
  * The task a new artifact is made for (`item=`), which lists it on that
@@ -58,8 +58,11 @@ export interface CreateArtifact {
   busy: boolean;
   /** What the engine said when it refused the last write, or null. */
   refusal: string | null;
-  /** Make a doc or a deck from the engine's starter and open it. */
-  fromStarter: (kind: "doc" | "slides", title: string) => Promise<void>;
+  /**
+   * Make a doc or a deck from the engine's starter and open it. A deck's
+   * `deck` plan names its theme and the slides it opens with.
+   */
+  fromStarter: (kind: "doc" | "slides", title: string, deck?: DeckPlan) => Promise<void>;
   /** Make a sheet with a template's columns and open it. */
   sheet: (title: string, template: SheetTemplate) => Promise<void>;
 }
@@ -81,10 +84,17 @@ export function useCreateArtifact(): CreateArtifact {
     answer?.kind === "done" && typeof answer.body.artifact === "string" ? answer.body.artifact : "";
 
   const fromStarter = useCallback(
-    async (kind: "doc" | "slides", title: string) => {
+    async (kind: "doc" | "slides", title: string, deck?: DeckPlan) => {
       const name = title.trim();
       const id = made(
-        await run(createFromStarter({ kind, title: name, ...(workItem ? { workItem } : {}) })),
+        await run(
+          createFromStarter({
+            kind,
+            title: name,
+            ...(workItem ? { workItem } : {}),
+            ...(deck ? { deck } : {}),
+          }),
+        ),
       );
       if (!id) return;
       toast.ok(`Started “${name}”`);
