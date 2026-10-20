@@ -71,6 +71,19 @@ export const MAKE_ORDER: readonly ArtifactKind[] = [
   "sheet",
 ];
 
+/**
+ * The article each kind's word takes in a sentence, by how it is said rather
+ * than how it is spelled: "an HTML artifact", "a Doc artifact".
+ */
+export const KIND_ARTICLES: Readonly<Record<ArtifactKind, "a" | "an">> = {
+  html: "an",
+  doc: "a",
+  slides: "a",
+  dashboard: "a",
+  sheet: "a",
+  design: "a",
+};
+
 /** Every kind, in the engine's order, as the gallery's filter offers them. */
 export const KINDS: readonly ArtifactKind[] = ARTIFACT_KINDS;
 

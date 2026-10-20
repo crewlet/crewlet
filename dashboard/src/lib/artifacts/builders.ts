@@ -16,16 +16,22 @@ import type { OrgIndex, Seat } from "~/lib/seats.ts";
 
 /**
  * The words a seat that does each kind's work describes itself with, matched
- * against its name, goal and responsibilities as whole word starts.
+ * against its name, goal and responsibilities as whole word starts. Written as
+ * phrases, one word stem after another, since they are read as a reader would
+ * write them about a seat.
  */
 const KIND_WORK: Readonly<Record<ArtifactKind, readonly string[]>> = {
-  doc: ["writ", "doc", "content", "editor", "product", "pm", "research"],
-  slides: ["present", "deck", "slide", "marketing", "pitch", "strategy", "product"],
-  sheet: ["analy", "data", "finance", "operations", "ops", "spreadsheet", "report"],
-  design: ["design", "ux", "ui", "brand", "visual", "creative", "mockup"],
-  dashboard: ["dashboard", "metric", "analytic", "data", "insight", "report"],
-  html: ["frontend", "front-end", "web", "engineer", "developer", "prototype", "interactive"],
+  doc: words("writ doc content editor product pm research"),
+  slides: words("present deck slide marketing pitch strategy product"),
+  sheet: words("analy data finance operations ops spreadsheet report"),
+  design: words("design ux ui brand visual creative mockup"),
+  dashboard: words("dashboard metric analytic data insight report"),
+  html: words("frontend front-end web engineer developer prototype interactive"),
 };
+
+function words(phrase: string): readonly string[] {
+  return phrase.split(" ");
+}
 
 /** How strongly a seat speaks a kind's work: one point per word it uses, its name counting double. */
 export function builderScore(seat: Seat, kind: ArtifactKind): number {

@@ -21,6 +21,7 @@ import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 import {
   artifactTaskBody,
+  notAttached,
   useFileArtifactTask,
   type ArtifactTaskRequest,
   type FiledArtifactTask,
@@ -177,6 +178,18 @@ async function file(
   return filed;
 }
 
+// EACH KIND WITH ITS OWN ARTICLE, as it is said: "an HTML artifact".
+test.each([
+  ["html", "an HTML artifact (kind `html`)"],
+  ["doc", "a Doc artifact (kind `doc`)"],
+  ["slides", "a Slides artifact (kind `slides`)"],
+  ["dashboard", "a Dashboard artifact (kind `dashboard`)"],
+  ["sheet", "a Sheet artifact (kind `sheet`)"],
+  ["design", "a Design artifact (kind `design`)"],
+] as const)("a new %s is asked for with its article", (kind, phrase) => {
+  expect(artifactTaskBody(kind, "Brief.")).toBe(`Brief.\n\nPublish it as ${phrase} for this task.`);
+});
+
 test("the description is the brief, then what to publish and where", () => {
   expect(artifactTaskBody("design", "  Three onboarding screens.  ")).toBe(
     "Three onboarding screens.\n\nPublish it as a Design artifact (kind `design`) for this task.",
@@ -216,6 +229,13 @@ test("a task with no project is filed in the person's own", async () => {
   expect(posted[0]?.args.project).toBe("OPS");
 });
 
+test("an unattached artifact is named by its kind's word", () => {
+  expect(notAttached("html")).toBe(
+    "The task was filed, but the HTML page could not be attached to it. Attach it from the task.",
+  );
+  expect(notAttached("slides")).toContain("the slides could not be attached");
+});
+
 // THE TASK FIRST, THEN THE LINK: the artifact names the key the create minted.
 test("an artifact already made is linked to the new task by its key", async () => {
   const filed = await file({
@@ -230,8 +250,13 @@ test("an artifact already made is linked to the new task by its key", async () =
   expect(filed?.linked).toBe(true);
 });
 
-test("a link the engine refused is said, and the filed task is still returned", async () => {
-  linkAnswer = { kind: "refused", text: "You cannot open that artifact." };
+// A LINK THAT DID NOT LAND IS SAID IN WORDS, never the request's detail: the
+// sandbox's answer for a route it does not serve named the method and path.
+test("a link the engine refused is said in words, and the filed task is still returned", async () => {
+  linkAnswer = {
+    kind: "refused",
+    text: "This node serves nothing at POST /artifacts/a2/work-items.",
+  };
   const filed = await file({
     kind: "design",
     title: "Screens",
@@ -239,7 +264,13 @@ test("a link the engine refused is said, and the filed task is still returned", 
     seat: "designer",
     artifact: "a2",
   });
-  expect(filed).toEqual({ item: "DES-4", key: "DES-4", linked: "You cannot open that artifact." });
+  expect(filed).toEqual({
+    item: "DES-4",
+    key: "DES-4",
+    linked:
+      "The task was filed, but the design could not be attached to it. Attach it from the task.",
+  });
+  expect(String(filed!.linked)).not.toMatch(/POST|\/artifacts/);
 });
 
 // THE ASK IS HELD, NEVER HIDDEN, for every reader who cannot file: the hook

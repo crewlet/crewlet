@@ -52,7 +52,8 @@ export function startingProject(
 export function projectOptions(rows: readonly WorkProjectRow[], chosen: string): SelectOption[] {
   const options: SelectOption[] = rows.map((p) => ({
     value: p.key,
-    label: p.name ? `${p.key} · ${p.name}` : p.key,
+    // A NAME THAT IS ITS KEY is said once: "ENG · ENG" said nothing twice.
+    label: p.name && p.name !== p.key ? `${p.key} · ${p.name}` : p.key,
     text: `${p.key} ${p.name}`,
   }));
   // A PROJECT THE DOOR NAMED BEFORE THE LIST ANSWERED is still a value the

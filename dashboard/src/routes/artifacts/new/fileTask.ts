@@ -25,7 +25,7 @@ import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { keyedWrite } from "~/lib/keyedWrite.ts";
 import { linkWorkItem } from "~/lib/artifacts/api.ts";
-import { KIND_WORDS } from "~/lib/artifacts/words.ts";
+import { KIND_ARTICLES, KIND_WORDS } from "~/lib/artifacts/words.ts";
 import type { ArtifactKind } from "~/protocol/index.ts";
 import { newActOpID } from "~/protocol/index.ts";
 
@@ -51,8 +51,8 @@ export interface FiledArtifactTask {
   /** Its tracker key ("DES-12"), which an artifact's `work_item` names. */
   key: string;
   /**
-   * Whether the named artifact was linked, or why not, in a sentence. Null
-   * when no artifact was named.
+   * Whether the named artifact was linked, or, when it was not, the sentence
+   * a page shows (`notAttached`). Null when no artifact was named.
    */
   linked: true | string | null;
 }
@@ -67,8 +67,19 @@ export function artifactTaskBody(kind: ArtifactKind, brief: string, artifact?: s
   const word = KIND_WORDS[kind];
   const ask = artifact
     ? `Build it in the ${word} artifact already linked to this task (artifact ${artifact}), and publish your work as new versions of it.`
-    : `Publish it as a ${word} artifact (kind \`${kind}\`) for this task.`;
+    : `Publish it as ${KIND_ARTICLES[kind]} ${word} artifact (kind \`${kind}\`) for this task.`;
   return `${brief.trim()}\n\n${ask}`;
+}
+
+/**
+ * What a page says when the task was filed and the artifact was not linked to
+ * it: in a person's words, never the request's own detail (a route, a status),
+ * with what to do about it. The task stands either way, so it is never said as
+ * a failure of the whole ask.
+ */
+export function notAttached(kind: ArtifactKind): string {
+  const what = kind === "html" ? "HTML page" : KIND_WORDS[kind].toLowerCase();
+  return `The task was filed, but the ${what} could not be attached to it. Attach it from the task.`;
 }
 
 /** File an artifact's task, and what the last press came to. */
@@ -107,21 +118,14 @@ export function useFileArtifactTask(): FileArtifactTask {
       const key = typeof receipt.key === "string" ? receipt.key : "";
       const item = typeof receipt.item === "string" ? receipt.item : key;
       if (!request.artifact) return { item, key, linked: null };
-      if (!key) {
-        return {
-          item,
-          key,
-          linked:
-            "The task was filed, and the artifact could not be linked: its key is not known yet.",
-        };
-      }
+      if (!key) return { item, key, linked: notAttached(request.kind) };
       setLinking(true);
       try {
         const link = await keyedWrite({
           ...linkWorkItem(request.artifact, key),
           key: newActOpID(),
         });
-        return { item, key, linked: link.kind === "done" ? true : link.text };
+        return { item, key, linked: link.kind === "done" ? true : notAttached(request.kind) };
       } finally {
         setLinking(false);
       }
