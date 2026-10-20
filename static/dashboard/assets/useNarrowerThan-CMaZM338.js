@@ -1,0 +1,1 @@
+import{t as e}from"./useWidth-C9B8XI10.js";function t(t,n,r=!0){let i=e(t,r);return i>0&&i<n}export{t};

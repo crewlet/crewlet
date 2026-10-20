@@ -15,6 +15,8 @@
 // environment — its keyring and its Tier A token values among it. A container runtime's own CLI has a rule
 // of its own ([ContainerRuntime]), held here for the same reason: two callers
 // start one, the sandbox and a tool server declared as `command: docker`.
+// So does where a local box writes a file it is handed ([InHome], [SafeJoin]),
+// which config validation applies to a setup step before any box exists.
 //
 // Nothing here imports the rest of Crewlet: it sits below every consumer.
 package hostbox
@@ -241,6 +243,82 @@ func Environ(env map[string]string) []string {
 
 // ErrEscape reports a path that resolves outside the root it was joined to.
 var ErrEscape = errors.New("hostbox: path escapes its root")
+
+// ContainerHome is where a local sandbox's container box mounts its home, and
+// so the only place a path handed to that box can name a file in it.
+//
+// It is the home of the one account every remote (E2B) template runs as, and
+// the mount was put there so a path reads the same in either cell; the sandbox
+// package's DefaultHome is this value. HERE, beside [InHome], because it is
+// the home InHome judges a container box's paths against: this is the one
+// leaf package that config validation, both local boxes and the sandbox
+// package already import, so each of them reads the value from the rule's own
+// package rather than from a copy of it.
+const ContainerHome = "/home/user"
+
+// InHome is where path lands under a local sandbox box's home: the path
+// relative to that home, and whether it names a file inside it at all.
+//
+// THE LEXICAL HALF OF THE ONE RULE BOTH LOCAL CELLS HOLD A FILE TO — a direct
+// box, which has no filesystem of its own, and a container box, which writes
+// a file on the host side of its one mount — and the half that can be judged
+// before any box exists, which is what config validation does with a setup
+// step's files. Both boxes call this before they touch a path and
+// [SafeJoin] after it, which is the other half: following whatever links the
+// host's existing directories hold, which only a box on that host can do. A
+// copy of the rule in the validator would be the one that drifts, and the
+// symptom of the drift is a document that validates and a seat whose every box
+// fails at setup.
+//
+// A relative path is under the home as it stands. An absolute one is under
+// it only when it names somewhere beneath it, compared after both are
+// cleaned, so "/home/user//x" is inside and "/home/user/../../etc/x" is not.
+// Either is refused when it climbs out with "..", and so is the home itself,
+// which is no file in it — and so is an empty path, which names nothing.
+//
+// A LEADING "~" IS THE HOME, as a remote (E2B) box's own agent reads one when
+// it writes a file there: "~/x" is the relative "x", and "~" alone is the
+// home itself, refused as above. "~name/x" — another account's home — is
+// refused, as that agent refuses it. Read as an ordinary relative path
+// instead, "~/.npmrc" was accepted here and written to a directory named "~"
+// in a local box's home, while the same document put the file in the home in
+// a remote one: one setup step, two places, and a rule that approved both.
+//
+// home is the home as a path inside the box names it: [ContainerHome] for a
+// container box, the host directory a direct box was minted for. EMPTY is a
+// home NO path can name, which is what a direct box's home is to everything
+// written before the box exists — it is minted per box, under a name no
+// document holds — so only a relative path lands in one.
+func InHome(home, path string) (string, bool) {
+	if path == "" {
+		return "", false
+	}
+	if path[0] == '~' {
+		// Both separators, as the remote box's agent takes either after the
+		// tilde; what follows is then relative to the home, and an empty
+		// rest is the home itself, which the check below refuses.
+		if len(path) > 1 && path[1] != '/' && path[1] != '\\' {
+			return "", false
+		}
+		path = "." + string(filepath.Separator) + path[1:]
+	}
+	rel := filepath.Clean(path)
+	if filepath.IsAbs(path) {
+		if home == "" {
+			return "", false
+		}
+		within, err := filepath.Rel(home, rel)
+		if err != nil {
+			return "", false
+		}
+		rel = within
+	}
+	up := ".." + string(filepath.Separator)
+	if rel == "." || rel == ".." || strings.HasPrefix(rel, up) {
+		return "", false
+	}
+	return rel, true
+}
 
 // SafeJoin resolves rel under root, refusing anything that lands outside it.
 //

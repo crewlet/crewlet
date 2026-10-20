@@ -1934,13 +1934,294 @@ func TestHalfALineIsNeverSettled(t *testing.T) {
 	}
 }
 
-// A PASSWORD KEY WAITS FOR ITS VALUE, which the rule takes off the next line.
-func TestAPasswordKeyIsHeldUntilItsValueIsWritten(t *testing.T) {
-	text := "ok\nEnter the password:\n"
-	if got := redact.Settled(text); got != len("ok\n") {
-		t.Fatalf("Settled = %d; want the key's line held", got)
+// A KEY A BLOCK TAKES NAMES NO VALUE PAST IT. A password's key on a line a
+// key's block read from its BEGIN takes — `3 password:` interrupting a body
+// `printf` wrote in pieces — is inside the block's marker by the time the
+// rules run, so it names nothing; and its value, read past the wrapping's
+// blank line to the END's own line, is that END's to read back. Claimed as
+// the password's value, `u1SU1Lf=` was no part of the key the END read, and
+// it was published — until a second pass, the key gone into the marker, read
+// it back and redacted it.
+//
+// Mutation: claim the value of a password whose key a block took, and the
+// END's line keeps u1SU1Lf= in clear.
+func TestAKeyABlockTakesNamesNoValuePastIt(t *testing.T) {
+	t.Parallel()
+	key := redact.Marker + "private-key]"
+	text := "'-----BEGIN RSA PRIVATE KEY-----' '" + keyLine + "' '\n3 password:\n    32\t\n     9\u2192u1SU1Lf=-----END RSA PRIVATE KEY-----\n"
+	want := "'" + key + "\t\n     9\u2192" + key + "\n"
+	got := redact.Secrets(text)
+	if got != want {
+		t.Fatalf("Secrets:\n got %q\nwant %q", got, want)
 	}
-	if got := redact.Settled(text + "hunter2\n"); got != len(text+"hunter2\n") {
-		t.Fatalf("Settled = %d; want the line settled once its value is written", got)
+	if again := redact.Secrets(got); again != got {
+		t.Errorf("a second pass changed %q to %q", got, again)
+	}
+	for _, sizes := range [][]int{{1}, {5, 400}} {
+		if shown, _ := settle(text, sizes); shown != want {
+			t.Errorf("in pieces of %v: shown as it settled\n%q\nwant\n%q", sizes, shown, want)
+		}
+	}
+}
+
+// AN END READS BACK ACROSS A PASSWORD'S PROMPTS as it does across blank lines:
+// a line that ends in a password's key and its separator is one a key's block
+// can take whole, since what it names is on a line between it and the END,
+// which the block takes too — whatever the line holds before the key, another
+// password and its value among it. Read as lines interrupting the key, three
+// prompts — another process asking for a password three times — stopped the
+// END's read, and a key's tail above them, its BEGIN not in the text, was
+// published. A live view holds a key's line across prompts as an END could read
+// back across them, so what it shows is what the whole text redacts. A line
+// holding a password and its value and no prompt still interrupts the key, and
+// three of them end the read as any three other lines do.
+//
+// Mutation: read a prompt back as a line interrupting the key, and every case
+// but the last publishes the key's lines; let a live view count a prompt
+// toward letting a line it holds go, and shown in pieces the six prompts'
+// key is published before its END; read a line holding a second password's
+// key and its value before the prompt's as no prompt, and the key above three
+// of them is published; ask a prompt whether what comes before its key could
+// be a key's line, and the second pass of a value beside a prompt, a marker
+// there, reads back further than the first; read a key that is the value of
+// a key before it as a prompt, or one a token takes, and the line a first
+// pass never read back from, its key replaced, is a line of a key's text to
+// the second; read a prompt's key bare — no quote or markup closing it, no
+// operator after it — and the key above three prompts so written is
+// published; read a string that ends in the key's word as a prompt, and the
+// END reads back across three of them, which name no value a block could
+// take.
+func TestAnEndReadsBackAcrossPasswordPrompts(t *testing.T) {
+	t.Parallel()
+	key := redact.Marker + "private-key]"
+	end := "-----END RSA PRIVATE KEY-----"
+	for name, c := range map[string]struct{ text, want string }{
+		"three prompts": {
+			keyLine + "\n" + keyLine + "\npassword:\npassword:\npassword:\n" + end + "\n", key + "\n",
+		},
+		"six prompts": {
+			keyLine + "\n" + keyLine + "\n" + strings.Repeat("Password:\n", 6) + end + "\nnext\n", key + "\nnext\n",
+		},
+		"two prompts under a cut, words before the key": {
+			"[… 812 bytes truncated]" + keyLine[20:] + "\nEnter password:\nPassword:\n" + end + "\n",
+			"[… 812 bytes truncated]" + key + "\n",
+		},
+		"two prompts under a labelled line": {
+			"key: " + keyLine + "\nPassword:\nPassword:\n" + end + "\n", "key: " + key + "\n",
+		},
+		"three prompts each after another password and its value": {
+			keyLine + "\n" + keyLine + "\npwd=x password:\npwd=y password:\npwd=z password:\n" + end + "\n", key + "\n",
+		},
+		"three prompts a quote closes": {
+			keyLine + "\n" + keyLine + "\n\"password\":\n'password' =>\n**Password**:\n" + end + "\n", key + "\n",
+		},
+		"three prompts an operator separates": {
+			keyLine + "\n" + keyLine + "\npassword :=\npassword ==\npassword =>\n" + end + "\n", key + "\n",
+		},
+		"three prompts under a diff's marks": {
+			// The `+` is base64, so read back the block starts with it.
+			"+" + keyLine + "\n+" + keyLine + "\n+password:\n+Password :\n+pwd=\n+" + end + "\n", key + "\n",
+		},
+		// A string ending in the key's word is no key and no prompt, so
+		// three of them part a key as any three lines do.
+		"still published: three strings that end in the key's word": {
+			keyLine + "\n" + keyLine + "\n" + strings.Repeat("\"POST /auth/password\":\n", 3) + end + "\n",
+			keyLine + "\n" + keyLine + "\n" + strings.Repeat("\"POST /auth/password\":\n", 3) + end + "\n",
+		},
+		"still published: three lines holding a password beside its value": {
+			keyLine + "\n" + keyLine + "\npassword: a1\npassword: a2\npassword: a3\n" + end + "\n",
+			keyLine + "\n" + keyLine + "\npassword: " + redact.Marker + "password]\npassword: " + redact.Marker + "password]\npassword: " +
+				redact.Marker + "password]\n" + end + "\n",
+		},
+	} {
+		got := redact.Secrets(c.text)
+		if got != c.want {
+			t.Errorf("%s:\n got %q\nwant %q", name, got, c.want)
+		}
+		if again := redact.Secrets(got); again != got {
+			t.Errorf("%s: a second pass changed %q to %q", name, got, again)
+		}
+		for _, sizes := range [][]int{{1}, {5, 400}} {
+			if shown, _ := settle(c.text, sizes); shown != c.want {
+				t.Errorf("%s in pieces of %v: shown as it settled\n%q\nwant\n%q", name, sizes, shown, c.want)
+			}
+		}
+	}
+	// What comes before a prompt's key is replaced by a pass — a value
+	// another key named, a second key's, the prompt's own key as that value
+	// or inside a token — and a line reads back alike on every pass.
+	for name, text := range map[string]string{
+		"a line with two keys":                               keyLine + "\n" + keyLine + "\npwd=x password:\npassword:\npassword:\n" + end + "\n",
+		"a prompt whose key is the value of a key before it": keyLine[:30] + "\npwd= password:\npwd= password:\npwd= password:\n" + end + "\n",
+		"a prompt beside a value a prompt above it named": "u1SU1Lf= fAt0gun+\nPassword:\nSEKRIT2x9  # rotate the password:\n" +
+			"pwd=Ab12cdEF34gh\n" + end + "\n",
+		"a key's piece and a prompt whose key is the value of a key before it": "ffAt0gun passwd:Pwd:\n" + end + "\n",
+		"a key's piece and a prompt whose key a token takes":                   "ffAt0gun sk-" + strings.Repeat("q", 17) + "Pwd:\n" + end + "\n",
+	} {
+		once := redact.Secrets(text)
+		if twice := redact.Secrets(once); twice != once {
+			t.Errorf("%s: a second pass changed\n%q\nto\n%q", name, once, twice)
+		}
+	}
+}
+
+// A VALUE DECIDED ON A LINE A KEY STILL HOLDS WAITS WITH IT. A password's key
+// whose line ends in an `echo`'s quote is decided by the line after it, and
+// where that line is a key's BEGIN its END is not written yet: the END turns
+// the lines between into one marker that ends in the `echo`'s quote too, and
+// the value is read off it. Released on the line as first written — the
+// BEGIN's own marker, no line of the wrapping — the live view showed the
+// quote replaced, which the whole text keeps.
+//
+// Mutation: release a key whose line after it decided what its own line
+// alone gives while that line is held only by a block an END closes, and
+// the live view replaces the quote.
+func TestAValueDecidedOnALineAKeyHoldsWaitsWithIt(t *testing.T) {
+	t.Parallel()
+	lines := []string{
+		"echo \"Password:\" >> key.pem",
+		"KEY=-----BEGIN RSA PRIVATE KEY----- Proc-Type: 4,ENCRYPTED DEK-Info: AES-128-CBC,0123456789ABCDEF0123456789ABCDEF " + keyLine,
+		keyLine[:30],
+		"| hunter2x9 |",
+		"echo \"-----END RSA PRIVATE KEY-----\" >> key.pem",
+	}
+	text := strings.Join(lines, "\n") + "\n"
+	if got := redact.Settled(strings.Join(lines[:4], "\n") + "\n"); got != 0 {
+		t.Errorf("before the END is written, Settled = %d; want the key's line held", got)
+	}
+	want := redact.Secrets(text)
+	for _, sizes := range [][]int{{1}, {3, 16, 3}, {5, 400}} {
+		if shown, _ := settle(text, sizes); shown != want {
+			t.Errorf("in pieces of %v: shown as it settled\n%q\nwant\n%q", sizes, shown, want)
+		}
+	}
+}
+
+// A KEY WAITS WITH THE VALUE THE KEYS WERE READ BESIDE. A key's block is read
+// with every password's value claimed ([claims]), so a value on the line
+// after its key is no line of the key; but cut between the two, the text after
+// the cut is read with no key naming that value, and an END reads the value
+// back as the key's. Where the two agree on what is redacted, it is the same
+// line either way; where they do not — a block joins the value's line to an
+// END's line that a password's key follows, and the rule, reading that key on
+// the joined line, takes the key's own punctuation for the first one's value —
+// the live view showed the key's line redacted that the whole text keeps.
+//
+// Mutation: hold a key for the value the rule reads alone, as the keys are
+// not read beside it, and shown in pieces the value's line is the key's
+// marker.
+func TestAKeyWaitsWithTheValueTheKeysWereReadBeside(t *testing.T) {
+	t.Parallel()
+	text := "const key = \"Password:\\n\" +\n\t\"u1SU1Lf= fAt0gun+\\n\" +\n" +
+		"\t\"-----END RSA PRIVATE KEY-----|passwd:\\n\" +\n\t\"u1SU1Lf= fAt0gun+\\n\"\n"
+	lines := strings.SplitAfter(text, "\n")
+	if got := redact.Settled(strings.Join(lines[:3], "")); got != 0 {
+		t.Errorf("before the value's key is decided, Settled = %d; want the key's line held", got)
+	}
+	want := redact.Secrets(text)
+	for _, sizes := range [][]int{{1}, {5, 400}} {
+		if shown, _ := settle(text, sizes); shown != want {
+			t.Errorf("in pieces of %v: shown as it settled\n%q\nwant\n%q", sizes, shown, want)
+		}
+	}
+}
+
+// A PASSWORD KEY WAITS FOR ITS VALUE, which the rule takes off a later line:
+// its line is held while every line after it is one the value may still come
+// after — a blank line, the wrapping's blank line, the punctuation that closes
+// a concatenated string's line — and while a line ending in what the key's
+// line ends in may still say it was the wrapping's suffix, and released once
+// the line that decides is written: the value's, or one that holds a key of
+// its own or does not repeat the suffix, which leaves the key's line as the
+// whole text redacts it. Never for ever: a line that is none of those ends
+// the wait. And not while the next key waits: a line holding a key of its own
+// leaves the key above it the value its own line gives, which no line written
+// later changes — the quote of an `echo`'s or a string's that no line repeats,
+// or none — so a run of such keys is shown as it is written, its last line
+// alone held. The lines are read as the rule reads them, the tokens already
+// replaced: a key a token runs into is none.
+//
+// Mutation: hold a key only while nothing but whitespace follows it, as
+// Settled did, and the live view shows the `echo`'s quote, the blank
+// numbered line and the concatenation's glue replaced, then the value in
+// clear on the line after; hold a key whatever follows it, and the cases that
+// release it never settle; hold a key while the line that decided it waits,
+// whatever it decided, and the key above a key of its own waits with it; hold
+// one whose line's own quote is what it decided, and a run of `password:"` or
+// of `echo`ed keys is held back whole; hold one decided to name nothing where
+// its own line would name nothing either, and the key over a value already
+// redacted waits with the key beside that value; read a value of digits under
+// a numbered list item as a blank numbered line, and the key waits for as
+// long as such lines go on; pass over a blank line of the wrapping before
+// asking whether it holds a key, and the key above it waits for the line
+// below; read the next key from the end of the key rather than of its value,
+// and a key inside a value is held; read the values off the
+// text as written rather than as the rule reads it, and the key a token runs
+// into holds its line; hold a key a quote closes whatever string the quote
+// closes, and a route that ends in the key's word waits for the next line.
+func TestAPasswordKeyIsHeldUntilItsValueIsWritten(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		// lines are written one after another; held is how many of them,
+		// counted from the key's, are held after each is written.
+		lines []string
+		held  []int
+	}{
+		"plain":                       {[]string{"ok", "Enter the password:", "hunter2"}, []int{0, 1, 0}},
+		"echoed, a blank line echoed": {[]string{"echo \"Password:\" >> key.pem", "echo \"\" >> key.pem", "echo \"hunter2x9\" >> key.pem"}, []int{1, 2, 0}},
+		"under line numbers":          {[]string{"     9\u2192Password:", "    10\u2192", "    11\u2192hunter2x9"}, []int{1, 2, 0}},
+		"concatenated":                {[]string{"\t\"password:\\n\" +", "\t\"\\n\" +", "\t\"hunter2x9\\n\""}, []int{1, 2, 0}},
+		"an echo's quote no line repeats": {
+			[]string{"echo \"Password:\" >> key.pem", "chmod 600 key.pem"}, []int{1, 0},
+		},
+		"a key of its own on the next line": {[]string{"password:", "  password:", "  - x"}, []int{1, 1, 0}},
+		"a run of keys, each decided by the next": {
+			[]string{`password:"`, `password:"`, `password:"`}, []int{1, 1, 1},
+		},
+		"a run of echoed keys": {
+			[]string{"echo \"Password:\" >> key.pem", "echo \"Password:\" >> key.pem", "echo \"Password:\" >> key.pem"}, []int{1, 1, 1},
+		},
+		"a key over a value already redacted beside a key of its own": {
+			[]string{"password:", redact.Marker + "password] password:"}, []int{1, 1},
+		},
+		"a key over a value already redacted behind the gutter, beside a key of its own": {
+			[]string{"x password:", "x " + redact.Marker + "password] password:"}, []int{1, 1},
+		},
+		"a blank line of the wrapping holding a key of its own": {
+			[]string{"a pwd= b password:", "a pwd=", "hunter2x9"}, []int{1, 1, 0},
+		},
+		"a value of digits under a numbered list item": {
+			[]string{"     1\u21921. Password:", "     2\u2192839201"}, []int{1, 0},
+		},
+		"a key inside a value": {[]string{"pwd=password:"}, []int{0}},
+		// A quote closes a key only where it closes the key's own string:
+		// a route ending in the word is no key, and holds nothing.
+		"a string that ends in the key's word": {[]string{`"POST /auth/password"`, "next"}, []int{0, 0}},
+		// An operator's second character is the separator's, so the value
+		// is the word after it, on the key's own line.
+		"Go's short declaration": {[]string{"\tpassword := hunter2x9", "next"}, []int{0, 0}},
+		// Punctuation before another key on the rest of the line an
+		// escaped break ended the key's on is the value, as it is on the
+		// key's own line, and no line after decides anything.
+		"punctuation and a key after an escaped break": {[]string{"\"password:\\n\" + pwd: x"}, []int{0}},
+		// The token's marker on the line after ends it as the key's line
+		// does, so the value is none there — and no key holds that line,
+		// since the one written there is inside the token.
+		"a key a token runs into on the next line": {
+			[]string{"password: ]", "sk-" + strings.Repeat("A", 20) + "password: ]"}, []int{1, 0},
+		},
+	} {
+		var text string
+		for i, line := range c.lines {
+			text += line + "\n"
+			want := len(text)
+			for n := 0; n < c.held[i]; n++ {
+				want = strings.LastIndexByte(text[:want-1], '\n') + 1
+			}
+			if got := redact.Settled(text); got != want {
+				t.Errorf("%s, %d lines written: Settled = %d; want %d (%d lines held) of %q",
+					name, i+1, got, want, c.held[i], text)
+			}
+		}
 	}
 }

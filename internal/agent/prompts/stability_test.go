@@ -74,12 +74,10 @@ func TestExecutorPromptIsByteStableAcrossRounds(t *testing.T) {
 		ToolCatalogue: "- post_message: Post to a channel.",
 		// comment_on_work_item DELIBERATELY, so the escalation guidance
 		// it gates is inside the bytes held stable across rounds.
-		AvailableTools: []string{"post_message", "mark_onboarded", "refresh_memory",
-			"comment_on_work_item"},
+		AvailableTools:    []string{"post_message", "refresh_memory", "comment_on_work_item"},
 		ThreadContext:     "- **Ana Ruiz (ana)**: staging redirects in a loop",
 		PersonalMemory:    "- prefers short replies",
 		RelevantKnowledge: "- **Runbook**: steps",
-		OnboardingHint:    "Read the onboarding pages.",
 		Skills:            allSkills(),
 	}
 	// What a round actually changes, and where it goes: the user message.
