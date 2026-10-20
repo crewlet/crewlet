@@ -57,6 +57,17 @@ refusal codes. Treat a refusal code you do not recognise as a generic failure.
 
 `crewlet.version` is the exact contract the page is running.
 
+A page never includes the runtime: the origin places it as the first script
+of every HTML page of a version that pins a contract, named by its bytes,
+`/_crewlet/runtime/<contract>/runtime.<digest>.js` (the first 16 hex digits
+of its SHA-256). That name is public and kept a year (`public,
+max-age=31536000, immutable`): a fix to the runtime ships under the same
+contract and is a new name, so no browser or cache keeps a page on a runtime
+from before it. The contract's own path,
+`/_crewlet/runtime/<contract>/runtime.js`, still answers for a page or a
+cache that names it, as `public, no-cache, must-revalidate` with an `ETag`:
+every use is asked again, and an unchanged runtime answers `304`.
+
 The artifact kit is versioned the same way, by the page itself: it links
 `/_crewlet/kit/<version>/` with an exact version, and the engine serves every
 kit version it has shipped, public and immutable, so a published page keeps

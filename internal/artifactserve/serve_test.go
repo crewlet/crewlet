@@ -6,9 +6,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/google/uuid"
 
@@ -364,13 +366,15 @@ func TestEveryRequestIsCounted(t *testing.T) {
 	}
 }
 
-// TestTheEmbeddedRuntimeAndKitArePublicAndForever: versioned names, served on
-// any host with the public policy, kept a year, compressed for a client that
-// asks; nothing else in the tree is reachable.
+// TestTheEmbeddedRuntimeAndKitArePublicAndForever: the runtime at its bytes'
+// name and the kit at its release, served on any host with the public policy,
+// kept a year, compressed for a client that asks; nothing else in the tree is
+// reachable.
 func TestTheEmbeddedRuntimeAndKitArePublicAndForever(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
-	res := r.do(request{url: "https://anything.example.org/_crewlet/runtime/1.0.0/runtime.js",
+	runtime := r.embedded["runtime/1.0.0/runtime.js"].Data
+	res := r.do(request{url: "https://anything.example.org" + artifactserve.RuntimeAddress("1.0.0", runtime),
 		headers: map[string]string{"Accept-Encoding": "gzip"}})
 	raw := body(t, res)
 	for name, want := range map[string]string{
@@ -388,22 +392,128 @@ func TestTheEmbeddedRuntimeAndKitArePublicAndForever(t *testing.T) {
 	if err != nil {
 		t.Fatalf("not gzip: %v", err)
 	}
-	if plain, _ := io.ReadAll(zr); !bytes.Equal(plain, r.embedded["runtime/1.0.0/runtime.js"].Data) {
+	if plain, _ := io.ReadAll(zr); !bytes.Equal(plain, runtime) {
 		t.Fatal("the runtime does not decode to its file")
+	}
+	if kit := r.do(request{url: "https://anything.example.org/_crewlet/kit/0.18.0/kit.css"}); kit.StatusCode != http.StatusOK ||
+		kit.Header.Get("Cache-Control") != "public, max-age=31536000, immutable" {
+		t.Errorf("the kit answered %d, Cache-Control %q", kit.StatusCode, kit.Header.Get("Cache-Control"))
 	}
 	for _, path := range []string{
 		"/_crewlet/runtime/9.0.0/runtime.js", "/_crewlet/runtime/notes/runtime.js",
 		"/_crewlet/runtime/1.0/runtime.js", "/_crewlet/runtime/1.0.0/../../kit/0.18.0/kit.css",
 		"/_crewlet/runtime/1.0.0/runtime.exe", "/_crewlet/kit/0.18.0/", "/_crewlet/runtime/01.0.0/runtime.js",
+		// Another build's bytes, another contract's, and a digest of another length.
+		artifactserve.RuntimeAddress("1.0.0", []byte("another build")),
+		artifactserve.RuntimeAddress("1.0.0", r.embedded["runtime/1.2.0/runtime.js"].Data),
+		"/_crewlet/runtime/1.0.0/runtime." + strings.Repeat("a", 15) + ".js",
 	} {
 		empty(t, r.do(request{url: "https://anything.example.org" + path}), http.StatusNotFound)
 	}
-	if res := r.do(request{url: "https://anything.example.org/_crewlet/runtime/1.10.0/runtime.js"}); res.StatusCode != http.StatusOK {
+	if res := r.do(request{url: "https://anything.example.org" + artifactserve.RuntimeAddress("1.10.0",
+		r.embedded["runtime/1.10.0/runtime.js"].Data)}); res.StatusCode != http.StatusOK {
 		t.Errorf("a two-digit minor's runtime answered %d", res.StatusCode)
 	}
-	if artifactserve.RuntimePath("1.10.0") != "/_crewlet/runtime/1.10.0/runtime.js" {
-		t.Errorf("RuntimePath = %q", artifactserve.RuntimePath("1.10.0"))
+}
+
+// TestTheRuntimeAtItsContractsNameIsRevalidated: a page or a cache that still
+// names a contract's path is answered, but never kept unasked, because a fix
+// to the runtime ships under the same contract; an unchanged runtime answers
+// its ETag with a 304, so revalidating costs a round trip and no bytes, and a
+// changed one answers the new bytes. Mutation: serve the contract's path
+// immutable, and a browser keeps a runtime from before a fix for a year.
+func TestTheRuntimeAtItsContractsNameIsRevalidated(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	url := "https://anything.example.org" + artifactserve.RuntimePath("1.0.0")
+	if url != "https://anything.example.org/_crewlet/runtime/1.0.0/runtime.js" {
+		t.Fatalf("RuntimePath = %q", url)
 	}
+	first := r.do(request{url: url})
+	if first.StatusCode != http.StatusOK || first.Header.Get("Cache-Control") != "public, no-cache, must-revalidate" {
+		t.Fatalf("the contract's path answered %d, Cache-Control %q", first.StatusCode,
+			first.Header.Get("Cache-Control"))
+	}
+	etag := first.Header.Get("ETag")
+	if etag == "" || !bytes.Equal(body(t, first), r.embedded["runtime/1.0.0/runtime.js"].Data) {
+		t.Fatalf("the contract's path served no ETag (%q) or other bytes", etag)
+	}
+	again := r.do(request{url: url, headers: map[string]string{"If-None-Match": etag}})
+	if again.StatusCode != http.StatusNotModified {
+		t.Errorf("an unchanged runtime revalidated with %d, want 304", again.StatusCode)
+	}
+
+	// Another build of the same contract: the old ETag is answered the new bytes.
+	fixed := newRig(t)
+	fixed.embedded["runtime/1.0.0/runtime.js"] = &fstest.MapFile{Data: []byte("window.crewlet = {fixed: true};")}
+	res := fixed.do(request{url: url, headers: map[string]string{"If-None-Match": etag}})
+	if res.StatusCode != http.StatusOK || string(body(t, res)) != "window.crewlet = {fixed: true};" {
+		t.Errorf("a fixed runtime answered a stale ETag %d with %q", res.StatusCode, body(t, res))
+	}
+}
+
+// TestThePageNamesItsRuntimeByItsBytes: the element the origin places in a page
+// names the runtime's content-addressed path, which is served, kept a year,
+// and admitted by the page's own policy through the response's nonce; another
+// build of the same contract is another name, and the first build's name is
+// absent there, so no cache can hand a page a runtime of another build.
+// Mutation: place the contract's path, and the element names bytes no name
+// pins.
+func TestThePageNamesItsRuntimeByItsBytes(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	runtime := r.embedded["runtime/1.0.0/runtime.js"].Data
+	src, nonce := runtimeElement(t, r)
+	if want := artifactserve.RuntimeAddress("1.0.0", runtime); src != want {
+		t.Fatalf("the page names its runtime %q, want %q", src, want)
+	}
+	if !strings.HasPrefix(src, "/_crewlet/runtime/1.0.0/runtime.") || !strings.HasSuffix(src, ".js") {
+		t.Errorf("the runtime's address %q is not under its contract", src)
+	}
+	res := r.do(request{url: "https://anything.example.org" + src})
+	if res.StatusCode != http.StatusOK || !bytes.Equal(body(t, res), runtime) ||
+		res.Header.Get("Cache-Control") != "public, max-age=31536000, immutable" {
+		t.Errorf("the page's runtime answered %d, Cache-Control %q", res.StatusCode,
+			res.Header.Get("Cache-Control"))
+	}
+	if nonce == "" {
+		t.Error("the runtime element carries no nonce the page's policy admits")
+	}
+
+	fixed := newRig(t)
+	fixed.embedded["runtime/1.0.0/runtime.js"] = &fstest.MapFile{Data: []byte("window.crewlet = {fixed: true};")}
+	moved, _ := runtimeElement(t, fixed)
+	if moved == src {
+		t.Fatalf("another build of contract 1.0.0 kept the name %q", src)
+	}
+	empty(t, fixed.do(request{url: "https://anything.example.org" + src}), http.StatusNotFound)
+	if res := fixed.do(request{url: "https://anything.example.org" + moved}); res.StatusCode != http.StatusOK {
+		t.Errorf("the new build's runtime answered %d", res.StatusCode)
+	}
+
+	gone := newRig(t)
+	delete(gone.embedded, "runtime/1.0.0/runtime.js")
+	if got := string(body(t, gone.document(gone.frame()))); strings.Contains(got, "/_crewlet/runtime/") {
+		t.Errorf("a contract this binary holds no runtime for was placed: %s", got)
+	}
+}
+
+// runtimeElement is the runtime element of the rig's page: the path it names,
+// and its nonce, which must be the one the response's policy admits.
+func runtimeElement(t *testing.T, r *rig) (src, nonce string) {
+	t.Helper()
+	res := r.document(r.frame())
+	policy := nonceOf(t, res.Header.Get("Content-Security-Policy"))
+	m := regexp.MustCompile(`<script src="([^"]+)"[^>]* nonce="([^"]+)"></script>`).
+		FindStringSubmatch(string(body(t, res)))
+	if m == nil {
+		t.Fatalf("no runtime element in %s", body(t, res))
+	}
+	if m[2] != policy {
+		t.Errorf("the runtime element's nonce %q is not the policy's %q", m[2], policy)
+		return m[1], ""
+	}
+	return m[1], m[2]
 }
 
 // TestAHandlerWithNoRecorderRecordsNothingAndServes: the engine's reading of a
@@ -452,7 +562,8 @@ func TestTheRuntimeIsToldTheFramesCapabilities(t *testing.T) {
 	declared := func(f artifacts.Frame) string {
 		t.Helper()
 		got := string(body(t, r.document(f)))
-		const open = `<script src="/_crewlet/runtime/1.0.0/runtime.js"`
+		open := `<script src="` + artifactserve.RuntimeAddress("1.0.0",
+			r.embedded["runtime/1.0.0/runtime.js"].Data) + `"`
 		at := strings.Index(got, open)
 		if at < 0 {
 			t.Fatalf("no runtime element: %s", got)
@@ -486,8 +597,9 @@ func TestTheRuntimeIsToldTheFramesCapabilities(t *testing.T) {
 // refused by the page's own policy.
 func TestThePinnedRuntimeRunsBeforeEveryScriptOfThePage(t *testing.T) {
 	t.Parallel()
-	tag := func(nonce string) string {
-		return `<script src="/_crewlet/runtime/1.0.0/runtime.js" data-capabilities="assets" nonce="` +
+	tag := func(r *rig, nonce string) string {
+		return `<script src="` + artifactserve.RuntimeAddress("1.0.0",
+			r.embedded["runtime/1.0.0/runtime.js"].Data) + `" data-capabilities="assets" nonce="` +
 			nonce + `"></script>`
 	}
 	for name, tc := range map[string]struct{ page, before string }{
@@ -516,7 +628,7 @@ func TestThePinnedRuntimeRunsBeforeEveryScriptOfThePage(t *testing.T) {
 			res := r.document(r.frame())
 			nonce := nonceOf(t, res.Header.Get("Content-Security-Policy"))
 			got := string(body(t, res))
-			if !strings.HasPrefix(got, tc.before+tag(nonce)) || !strings.HasSuffix(got, tc.page[len(tc.before):]) {
+			if !strings.HasPrefix(got, tc.before+tag(r, nonce)) || !strings.HasSuffix(got, tc.page[len(tc.before):]) {
 				t.Fatalf("served %q, want %q then the runtime then the rest", got, tc.before)
 			}
 		})

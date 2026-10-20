@@ -290,7 +290,7 @@ func (h *Handler) template(ctx context.Context, obj objstore.Object, contract st
 		return nil, err
 	}
 	if contract != "" {
-		body = withRuntime(body, contract, declared)
+		body = h.withRuntime(body, contract, declared)
 	}
 	h.bodies.put(key, body)
 	return body, nil
@@ -315,14 +315,25 @@ func (h *Handler) template(ctx context.Context, obj objstore.Object, contract st
 // answers `crewlet.capabilities.has` correctly from the first script of the
 // page rather than only once the host's handshake lands: a page, and every kit
 // release up to 0.32.0, that asked before then was told the version declared
-// nothing, and a sheet said so for good. They are the frame's own grant, never
-// more than the host declares at the handshake, which stays the authority.
-func withRuntime(page []byte, contract, declared string) []byte {
+// nothing, and a sheet said so for good. They are the frame's own grant, the
+// same list the host declares at the handshake, which stays the authority.
+//
+// THE ELEMENT NAMES THE RUNTIME BY ITS BYTES ([RuntimeAddress]), the one name
+// served immutable: a fix to the runtime ships under the same contract, and a
+// page naming the contract's path ran whatever runtime its browser had kept.
+// A contract this binary holds no runtime for places nothing, as one of
+// another shape does: the element would name a file that is not there.
+func (h *Handler) withRuntime(page []byte, contract, declared string) []byte {
 	if !versionPattern.MatchString(contract) {
 		log.Warn("artifacts_serve_contract_unreadable", "contract", contract)
 		return page
 	}
-	tag := `<script src="` + RuntimePath(contract) + `"`
+	src, ok := h.public.runtimeAddress(contract)
+	if !ok {
+		log.Warn("artifacts_serve_runtime_missing", "contract", contract)
+		return page
+	}
+	tag := `<script src="` + src + `"`
 	if declared != "" {
 		tag += ` data-capabilities="` + declared + `"`
 	}

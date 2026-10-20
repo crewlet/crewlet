@@ -30,10 +30,33 @@ import (
 // RuntimeScript is the runtime's entry file within its contract's directory.
 const RuntimeScript = "runtime.js"
 
-// RuntimePath is the URL path a page loads the runtime of one contract from,
-// on its own artifact origin.
+// RuntimePath is the runtime of one contract at its CONTRACT'S name, on the
+// page's own artifact origin: answered for a page or a cache that still names
+// it, and revalidated on every use ([cacheRevalidate]), because a contract
+// names what the runtime promises and never its bytes. A fix to the runtime
+// ships under the same contract, so a year-long cache of this name kept a
+// browser on the runtime it first fetched long after the fix.
 func RuntimePath(contract string) string {
 	return "/_crewlet/runtime/" + contract + "/" + RuntimeScript
+}
+
+// runtimeAddressHex is how many hex digits of the runtime's SHA-256 name its
+// bytes: 64 bits, so two builds of one contract never share a name by
+// accident, and nothing else ever has to.
+const runtimeAddressHex = 16
+
+// runtimeAddressed is a content-addressed runtime file: `runtime.<digest>.js`.
+var runtimeAddressed = regexp.MustCompile(`^runtime\.([0-9a-f]{16})\.js$`)
+
+// RuntimeAddress is the runtime of one contract at the name of its BYTES,
+// `/_crewlet/runtime/<contract>/runtime.<sha256 prefix>.js`: what the origin
+// writes on the element it places in every page, and the one name of the
+// runtime served immutable for a year, since another build's runtime is
+// another name.
+func RuntimeAddress(contract string, runtime []byte) string {
+	sum := sha256.Sum256(runtime)
+	return "/_crewlet/runtime/" + contract + "/runtime." +
+		hex.EncodeToString(sum[:])[:runtimeAddressHex] + ".js"
 }
 
 // versionPattern is an exact version: three numbers, as a contract and a kit
@@ -48,6 +71,12 @@ var versionPattern = regexp.MustCompile(`^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5
 // the binary and is nobody's, and a year because that is the longest lifetime a
 // cache is conventionally asked to honour.
 const cacheForever = "public, max-age=31536000, immutable"
+
+// cacheRevalidate is a public file's Cache-Control where its name is not its
+// bytes (the runtime at its contract's name, [RuntimePath]): any cache may
+// keep it, and must ask again before every use, which the ETag answers with a
+// 304 while the bytes are the same.
+const cacheRevalidate = "public, no-cache, must-revalidate"
 
 // publicFiles serves the embedded tree, each file read, hashed and compressed
 // once for the life of the process: the tree is in the binary, so none of
@@ -64,6 +93,7 @@ type publicFiles struct {
 
 type publicFile struct {
 	body        []byte
+	digest      string
 	etag        string
 	contentType string
 	gzipped     func() []byte
@@ -77,10 +107,24 @@ func newPublicFiles(tree fs.FS) *publicFiles {
 // holds no such file. It reads no ticket and no host: the bytes are public and
 // identical on every artifact host, which is what lets an edge cache key them
 // without the host.
+//
+// A KIT is named by its release, whose bytes never change, so every kit file
+// is kept a year. A RUNTIME is named by its contract, whose bytes do change
+// with a fix, so only its content-addressed name ([RuntimeAddress]) is kept a
+// year, an address naming other bytes than this build's is absent, and every
+// other name in a contract's directory is revalidated on every use.
 func (p *publicFiles) serve(w http.ResponseWriter, r *http.Request, kind, rest string, secure bool) bool {
 	version, file, ok := strings.Cut(rest, "/")
 	if !ok || !versionPattern.MatchString(version) || file == "" {
 		return false
+	}
+	cache := cacheForever
+	address := ""
+	if kind == destRuntime {
+		cache = cacheRevalidate
+		if m := runtimeAddressed.FindStringSubmatch(file); m != nil {
+			file, address, cache = RuntimeScript, m[1], cacheForever
+		}
 	}
 	name := kind + "/" + version + "/" + file
 	typ, known := mediatype.For(file)
@@ -88,12 +132,12 @@ func (p *publicFiles) serve(w http.ResponseWriter, r *http.Request, kind, rest s
 		return false
 	}
 	f, ok := p.lookup(name, typ)
-	if !ok {
+	if !ok || (address != "" && f.digest[:runtimeAddressHex] != address) {
 		return false
 	}
 	h := w.Header()
 	pagepolicy.ArtifactPublic(h, secure)
-	h.Set("Cache-Control", cacheForever)
+	h.Set("Cache-Control", cache)
 	h.Set("Content-Type", f.contentType)
 	body, etag := f.body, f.etag
 	if gz := f.gzipped(); gz != nil {
@@ -106,6 +150,21 @@ func (p *publicFiles) serve(w http.ResponseWriter, r *http.Request, kind, rest s
 	h.Set("ETag", etag)
 	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(body))
 	return true
+}
+
+// runtimeAddress is the content-addressed path of one contract's runtime as
+// this binary holds it ([RuntimeAddress]), or false for a contract it does
+// not hold.
+func (p *publicFiles) runtimeAddress(contract string) (string, bool) {
+	if !versionPattern.MatchString(contract) {
+		return "", false
+	}
+	typ, _ := mediatype.For(RuntimeScript)
+	f, ok := p.lookup(destRuntime+"/"+contract+"/"+RuntimeScript, typ)
+	if !ok {
+		return "", false
+	}
+	return RuntimeAddress(contract, f.body), true
 }
 
 // lookup is one file, read and classified on first use.
@@ -121,9 +180,11 @@ func (p *publicFiles) lookup(name string, typ mediatype.Type) (*publicFile, bool
 		return nil, false
 	}
 	sum := sha256.Sum256(data)
+	digest := hex.EncodeToString(sum[:])
 	built := &publicFile{
 		body:        data,
-		etag:        `"` + hex.EncodeToString(sum[:20]) + `"`,
+		digest:      digest,
+		etag:        `"` + digest[:40] + `"`,
 		contentType: typ.Served,
 		gzipped: sync.OnceValue(func() []byte {
 			if !typ.Compressible {
