@@ -254,9 +254,10 @@ func (c *Company) ValidateRunnable() error {
 // Today they are the org's duplicate seat names, duplicate unit names and a
 // unit reference on a seat declared inside another unit (see
 // [org.Organization.ValidateAdmission]), duplicate sandbox setup step names
-// within one list, a GitHub App on a human seat, and the code host's two
-// policy bounds — at most [CodeMaxRepos] repositories, and a retention of at
-// most [CodeMaxDeletedRetentionDays] (see [Code.validateAdmission]).
+// within one list, a code access tier or a GitHub App on a human seat, and
+// the code host's two policy bounds — at most [CodeMaxRepos] repositories,
+// and a retention of at most [CodeMaxDeletedRetentionDays] (see
+// [Code.validateAdmission]).
 func (c *Company) ValidateAdmission() error {
 	o, index := c.organization()
 	return index.locate(c.validateAdmission(o))
@@ -266,34 +267,52 @@ func (c *Company) ValidateAdmission() error {
 // caller already built.
 func (c *Company) validateAdmission(o *org.Organization) error {
 	return errors.Join(o.ValidateAdmission(), c.validateSetupStepNames(),
-		c.validateHumanSeatApps(), c.Code.validateAdmission(field("code")))
+		c.validateHumanSeatCode(), c.Code.validateAdmission(field("code")))
 }
 
-// validateHumanSeatApps refuses a per-seat GitHub App on a human seat.
+// validateHumanSeatCode refuses on a human seat what a seat holds on a code
+// host: its code access tier (`code`) and its own GitHub App
+// (`integrations.github`).
 //
-// A seat's `integrations.github` is the seat's OWN app: the bot identity an
-// agent acts as on GitHub. A person acts as their own login, which is
-// `contact.github_login`, and every engine path that creates, installs or
-// reconciles an app skips a human seat. The block therefore reads as a
-// working setting and does nothing, which is the silence the org model's
-// human-seat rule exists to end for every other agent-only field.
+// A person acts on every code host as their own identity — a bound token on
+// the engine's own, their login, `contact.github_login`, on GitHub — so both
+// are agent settings. A seat's `code.access` is how much of a repository the
+// seat may do, which caps nothing for a person: the native grant gives a
+// person maintain through their token, and GitHub's tokens are minted only
+// for a seat's app. A seat's `integrations.github` is the bot identity an
+// agent acts as, and every engine path that creates, installs or reconciles
+// an app skips a human seat. Either block therefore reads as a working
+// setting and does nothing, which is the silence the org model's human-seat
+// rule exists to end for every other agent-only field.
 //
-// CHECKED HERE rather than beside that rule in [org.Role.Validate], because
-// the org model carries no code-host identity for a seat and so cannot see
-// the block. And an ADMISSION rule rather than a runnable one, because
-// nothing about running depends on it: every path that would act on the
-// block skips a human seat.
-func (c *Company) validateHumanSeatApps() error {
+// CHECKED HERE rather than beside that rule in [org.Role.Validate], and as an
+// ADMISSION rule rather than a runnable one, because nothing about running
+// depends on either: every path that would act on them skips a human seat.
+// That is what lets a later build relax one — a tier that caps a person is
+// the plausible relaxation — while this build, applying the revision its
+// newer peer admitted during a rolling upgrade, runs it rather than refusing
+// it and splitting the fleet's epoch.
+func (c *Company) validateHumanSeatCode() error {
 	var p problems
 	for role, path := range c.EachRole() {
-		if role.Kind != org.KindHuman || role.Integrations.GitHub == nil {
+		if role.Kind != org.KindHuman {
 			continue
 		}
-		p.add(at(path, "integrations.github"), ErrConflict,
-			"a human seat has no GitHub App of its own: an app is the identity "+
-				"an agent acts as, and a person acts as their own login, "+
-				"contact.github_login. Remove this block, or make the seat an "+
-				"agent seat")
+		if !role.Code.IsZero() {
+			p.add(at(path, "code"), ErrConflict,
+				"a human seat has no code access tier: a person acts on every "+
+					"code host as their own identity — their bound token on "+
+					"the engine's own, contact.github_login on GitHub — so a "+
+					"tier here would cap nothing. Remove this block, or make "+
+					"the seat an agent seat")
+		}
+		if role.Integrations.GitHub != nil {
+			p.add(at(path, "integrations.github"), ErrConflict,
+				"a human seat has no GitHub App of its own: an app is the identity "+
+					"an agent acts as, and a person acts as their own login, "+
+					"contact.github_login. Remove this block, or make the seat an "+
+					"agent seat")
+		}
 	}
 	return p.err()
 }

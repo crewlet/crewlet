@@ -2193,6 +2193,10 @@
             "null"
           ]
         },
+        "code": {
+          "$ref": "#/$defs/RoleCode",
+          "description": "This seat's access to the company's code, on the native code host and on GitHub."
+        },
         "contact": {
           "$ref": "#/$defs/HumanContact",
           "description": "Human seats: external account ids per surface."
@@ -2675,6 +2679,25 @@
         "null"
       ]
     },
+    "RoleCode": {
+      "additionalProperties": false,
+      "properties": {
+        "access": {
+          "description": "read_only, review or full_access. Empty means read_only.",
+          "enum": [
+            "read_only",
+            "review",
+            "full_access",
+            "",
+            null
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "RoleGitHub": {
       "additionalProperties": false,
       "properties": {
@@ -2726,15 +2749,6 @@
             "null"
           ]
         },
-        "tier": {
-          "description": "read_only, review or full_access. Empty means read_only.",
-          "type": [
-            "string",
-            "number",
-            "boolean",
-            "null"
-          ]
-        },
         "webhook_secret": {
           "description": "Reference to this seat's sealed GitHub App webhook secret. Returned by GitHub once.",
           "type": [
@@ -2756,7 +2770,7 @@
       "properties": {
         "github": {
           "$ref": "#/$defs/RoleGitHub",
-          "description": "This seat's own GitHub App: how much it may do, and where."
+          "description": "This seat's own GitHub App: the repositories it works in, and the identity the engine records for it. How much it may do is the seat's code.access."
         },
         "mattermost": {
           "$ref": "#/$defs/RoleMattermost",

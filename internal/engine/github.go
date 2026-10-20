@@ -302,7 +302,10 @@ func (e *Engine) githubSeatApps(company *Company, env *config.Resolver) []github
 		if app == nil {
 			continue
 		}
-		tier, _ := github.ParseTier(app.TierOrDefault())
+		// The seat's role.code.access, the one tier every code host reads:
+		// the manifest asked GitHub for its permission set, and every token
+		// is minted with exactly that set, so the two are one reading.
+		tier, _ := github.ParseTier(role.Code.AccessOrDefault())
 		out = append(out, github.SeatApp{
 			Handle: seat.Handle(), Name: role.Name, Tier: tier, Repos: app.Repos,
 			AppID: app.AppID, Slug: app.AppSlug,

@@ -115,6 +115,7 @@ var roleFields = map[string]classified{
 	"MCPEnv":               {exposureGuarded, "tool credentials and their ${VAR} names; which servers they grant is resolved from mcp_servers", ""},
 	"Sandbox":              {exposureGuarded, "setup commands and env, the usual home of a registry credential", ""},
 	"Placement":            {exposureGuarded, "node ids and labels describing the deployment", ""},
+	"Code":                 {exposureGuarded, "how much of a repository this seat may do: which seats can write is a map of what to attack, and it was guarded under integrations.github before it left that block", ""},
 	"Integrations":         {exposureGuarded, "vendor identities, bot tokens and signing secrets", ""},
 	"Project":              {exposureGuarded, "a tracker project key: the container this seat files work in", ""},
 	"Space":                {exposureGuarded, "a knowledge container key: where this seat writes pages", ""},

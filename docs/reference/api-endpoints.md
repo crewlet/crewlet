@@ -1218,9 +1218,10 @@ entry answers instead is what is still outstanding for that agent:
 
 `step` and `action_url` are the two clicks, described under
 [One agent's own GitHub App](#one-agents-own-github-app). `tier` is the seat's
-access tier, answered before the app exists because it is what the manifest
-asks for, and defaulting to `read_only` on a seat whose configuration is
-silent.
+access tier, read from its `role.code.access` — the seat's on every code host,
+so a seat with no GitHub block yet already has one — answered before the app
+exists because it is what the manifest asks for, and defaulting to `read_only`
+on a seat whose configuration is silent.
 
 **`present`** is whether the seat has an app at all, and **`satisfied`** needs
 that app installed *and* its sealed key readable by this node. A `${VAR}`

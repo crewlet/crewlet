@@ -151,14 +151,21 @@ func TestAnOrgRuleIsLocatedWhereItWasWritten(t *testing.T) {
 	}
 }
 
-// The two rules that refuse a key on a human seat, by their messages: the org
+// The rules that refuse a key on a human seat, by their messages: the org
 // model's, over every field a running seat alone reads, and the config
-// layer's admission rule over a seat's own GitHub App, which the org model
-// carries no field for.
+// layer's two admission rules over what a seat holds on a code host — its
+// code access tier and its own GitHub App — which nothing running reads off a
+// human seat.
 const (
-	agentOnlyOnHuman = "agent-only field set on a human seat"
-	githubAppOnHuman = "a human seat has no GitHub App"
+	agentOnlyOnHuman  = "agent-only field set on a human seat"
+	codeAccessOnHuman = "a human seat has no code access tier"
+	githubAppOnHuman  = "a human seat has no GitHub App"
 )
+
+// humanSeatRules is every rule that refuses a key on a human seat, in the
+// order the dashboard's builder strips them: the org model's, then the code
+// host's two.
+var humanSeatRules = []string{agentOnlyOnHuman, codeAccessOnHuman, githubAppOnHuman}
 
 // humanSeatKey is one key a seat is authored with, as a human seat would
 // carry it.
@@ -202,7 +209,8 @@ var humanSeatKeys = []humanSeatKey{
 	{"space", "DOCS", agentOnlyOnHuman},
 	{"mcp_env", "{atlassian: {JIRA_USERNAME: sarah}}", agentOnlyOnHuman},
 	{"behavioral_guidelines", "[Reply fast]", agentOnlyOnHuman},
-	{"integrations.github", "{tier: read_only}", githubAppOnHuman},
+	{"code", "{access: review}", codeAccessOnHuman},
+	{"integrations.github", "{repos: [acme/api]}", githubAppOnHuman},
 }
 
 // humanSeatWith is a company whose first seat is a human one carrying keys,
@@ -267,7 +275,10 @@ func TestEveryAgentOnlyKeyIsRefusedOnAHumanSeatWhereItWasWritten(t *testing.T) {
 		t.Run(k.key, func(t *testing.T) {
 			t.Parallel()
 			problems := config.Problems(parsed(t, humanSeatWith(k)).Validate())
-			got := append(locatedOf(problems, agentOnlyOnHuman), locatedOf(problems, githubAppOnHuman)...)
+			var got []located
+			for _, rule := range humanSeatRules {
+				got = append(got, locatedOf(problems, rule)...)
+			}
 			var want []located
 			if k.refusal != "" {
 				want = []located{{"roles[0]." + k.key, "conflict", "sarah", ""}}
@@ -303,6 +314,10 @@ func TestEveryAgentOnlyKeyIsRefusedOnAHumanSeatWhereItWasWritten(t *testing.T) {
 			if strings.Contains(p.Message, agentOnlyOnHuman) && !strings.HasSuffix(p.Message, ": "+strings.Join(refused, ", ")) {
 				t.Errorf("refusal lists other keys than %v: %s", refused, p.Message)
 			}
+		}
+		want = []located{{"roles[0].code", "conflict", "sarah", ""}}
+		if got := locatedOf(problems, codeAccessOnHuman); !reflect.DeepEqual(got, want) {
+			t.Errorf("code access refusals = %+v, want %+v", got, want)
 		}
 		want = []located{{"roles[0].integrations.github", "conflict", "sarah", ""}}
 		if got := locatedOf(problems, githubAppOnHuman); !reflect.DeepEqual(got, want) {
@@ -390,9 +405,9 @@ func TestTheBuilderStripsWhatEachKindRefuses(t *testing.T) {
 	}
 
 	// A HUMAN SEAT: the org model's refusals in its order — which the table is
-	// held to above — and then the admission rule's.
+	// held to above — and then the two admission rules'.
 	var human []string
-	for _, rule := range []string{agentOnlyOnHuman, githubAppOnHuman} {
+	for _, rule := range humanSeatRules {
 		for _, k := range humanSeatKeys {
 			if k.refusal == rule {
 				human = append(human, k.key)

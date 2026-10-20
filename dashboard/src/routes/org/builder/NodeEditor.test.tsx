@@ -123,9 +123,9 @@ function connected(): CompanyDocument {
     goal: "Build",
     mcp_env: { tracker: { TOKEN: "__redacted__", URL: "${TRACKER_URL}" } },
     sandbox: { enabled: true, run_in: "e2b", env: { KEY: "__redacted__" } },
+    code: { access: "review" },
     integrations: {
       github: {
-        tier: "review",
         app_slug: "acme-dev",
         private_key: "${DEV_GITHUB_KEY}",
         webhook_secret: "__redacted__",
@@ -752,7 +752,7 @@ describe("seat fields", () => {
     edit(keyedState(doc), "seat:dev");
     expect((field("GitHub login") as HTMLInputElement).value).toBe("dev");
     expect(field("Availability")).toBeDefined();
-    for (const agentOnly of ["Model", "Token budget", "Behavioral guidelines"]) {
+    for (const agentOnly of ["Model", "Token budget", "Behavioral guidelines", "Code access"]) {
       expect(screen.queryByLabelText(labelled(agentOnly))).toBeNull();
     }
     expect(screen.queryByRole("heading", { name: "Integrations" })).toBeNull();
@@ -766,7 +766,9 @@ describe("integrations", () => {
       const note = screen.getByText(`${tool} is not connected.`, { exact: false });
       expect(within(note).getByRole("link").getAttribute("href")).toBe("#/settings/integrations");
     }
-    expect(screen.queryByLabelText(labelled("Access tier"))).toBeNull();
+    // No code host reads a seat's code access here: GitHub is not connected and
+    // the company hosts no code of its own.
+    expect(screen.queryByLabelText(labelled("Code access"))).toBeNull();
     // A project and a space are no tool's: the engine's own tracker and
     // knowledge base need no block, so neither says Jira or Confluence is
     // missing.
@@ -802,8 +804,12 @@ describe("integrations", () => {
     expect(screen.getByText("Not the Datadog fallback.")).toBeDefined();
     // Already enrolled: its block exists, so a tier says nothing about enrolling.
     expect(screen.queryByText(/This enrols the seat in GitHub/)).toBeNull();
+    // The seat's code access is a section of its own, not a GitHub field: it
+    // is what every code host reads, and it reads the seat's `code.access`.
+    expect(screen.getByRole("heading", { name: "Code", level: 2 })).toBeDefined();
+    expect(field("Code access").textContent).toBe("Review");
 
-    choose("Access tier", "Full access");
+    choose("Code access", "Full access");
     expect(
       screen.getByText(
         "The app's permissions were fixed when it was created. Raise them at GitHub as well.",
@@ -839,21 +845,39 @@ describe("integrations", () => {
     ).toBeDefined();
   });
 
-  test("a tier on a seat with no GitHub block enrols it, and says so", () => {
+  // THE ACCESS IS THE SEAT'S, NOT ITS GITHUB BLOCK'S. Choosing one writes
+  // `code.access` and leaves `integrations.github` alone, so it enrols nobody
+  // in GitHub; naming a repository writes the block, and that does.
+  test("a code access writes the seat's own code block, and only a repository enrols it in GitHub", () => {
     const doc = connected();
-    edit(keyedState(doc), "seat:sre");
+    const view = edit(keyedState(doc), "seat:sre");
+    choose("Code access", "Review");
     expect(screen.queryByText(/This enrols the seat in GitHub/)).toBeNull();
-    choose("Access tier", "Review");
-    expect(
-      screen.getByText(/This enrols the seat in GitHub. Create its app from Integrations./),
-    ).toBeDefined();
+    apply();
+    const written = seatData(view.state(), "seat:sre");
+    expect(written.code).toEqual({ access: "review" });
+    expect(written.integrations?.github).toBeUndefined();
     cleanup();
 
-    // A repository alone writes the block as well, so it enrols the seat too.
     edit(keyedState(doc), "seat:sre");
     type("New repository", "acme/api");
     fireEvent.keyDown(field("New repository"), { key: "Enter" });
-    expect(screen.getByText(/This enrols the seat in GitHub/)).toBeDefined();
+    expect(
+      screen.getByText(/This enrols the seat in GitHub. Create its app from Integrations./),
+    ).toBeDefined();
+  });
+
+  // THE ENGINE'S OWN CODE HOST READS THE SAME FIELD. A company hosting code
+  // natively and connected to no GitHub still caps each seat's grant by its
+  // tier, so the field is there with GitHub not connected.
+  test("a company hosting its own code offers a seat's code access without GitHub", () => {
+    const doc = fixtureCompany();
+    doc.code = { native: true };
+    const view = edit(keyedState(doc), "seat:dev");
+    expect(screen.getByText("GitHub is not connected.", { exact: false })).toBeDefined();
+    choose("Code access", "Full access");
+    apply();
+    expect(seatData(view.state(), "seat:dev").code).toEqual({ access: "full_access" });
   });
 
   test("a seat with no chat app of its own says so, and the Datadog fallback is named on its seat", () => {

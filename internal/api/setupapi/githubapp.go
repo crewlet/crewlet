@@ -479,12 +479,15 @@ func seatByHandle(company *config.Company, handle string) *config.Role {
 	return nil
 }
 
-// seatTier is the access tier this seat runs at, as written down.
+// seatTier is the access tier this seat runs at: its role.code.access.
+//
+// WHETHER OR NOT THE SEAT HAS AN APP YET. The tier is the seat's, not its
+// app's, so a seat whose access says full_access and whose app is still to
+// be created is created at full_access. Read as nothing until a GitHub block
+// existed, such a manifest asked GitHub for read_only while every token the
+// engine then minted for the app asked for the seat's whole tier.
 func seatTier(seat *config.Role) string {
-	if seat.Integrations.GitHub == nil {
-		return ""
-	}
-	return seat.Integrations.GitHub.TierOrDefault()
+	return seat.Code.AccessOrDefault()
 }
 
 // orgOf is the organization whose repositories these agents work in.

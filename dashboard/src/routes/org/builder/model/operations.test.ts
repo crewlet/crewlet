@@ -435,7 +435,7 @@ describe("editing", () => {
       set: [
         { path: ["goal"], value: "Build" },
         { path: ["backstory"], value: "Joined early" },
-        { path: ["integrations", "github", "tier"], value: "developer" },
+        { path: ["code", "access"], value: "review" },
       ],
     });
     expect(op).toEqual({
@@ -443,7 +443,7 @@ describe("editing", () => {
       target: "seat:dev",
       changes: [
         { path: ["backstory"], after: "Joined early" },
-        { path: ["integrations", "github", "tier"], after: "developer" },
+        { path: ["code", "access"], after: "review" },
       ],
       accessLevels: [],
     });
@@ -730,8 +730,11 @@ describe("changing kind", () => {
       // nothing and left a draft the engine refuses.
       project: "ENG",
       space: "DOCS",
+      // A tier caps nothing a person does — they act on every code host as
+      // themselves — so the engine refuses `code` on a human seat.
+      code: { access: "full_access" },
       integrations: {
-        github: { tier: "review" },
+        github: { repos: ["acme/api"] },
         slack: { bot_token: "${DEV_SLACK_BOT}" },
       },
       goal: "Build",
@@ -751,6 +754,7 @@ describe("changing kind", () => {
       "space",
       "mcp_env",
       "behavioral_guidelines",
+      "code",
       "integrations.github",
     ]);
     expect(seat(draft, "seat:dev")).toEqual({
@@ -765,7 +769,7 @@ describe("changing kind", () => {
   });
 
   // The engine refuses a seat's own GitHub App on a human seat on admission
-  // (`config.Company.validateHumanSeatApps`): a person acts on GitHub as
+  // (`config.Company.validateHumanSeatCode`): a person acts on GitHub as
   // `contact.github_login`, never as an app. A kind change that kept the block
   // would produce a draft the next check refuses over a field nobody touched,
   // and the app's key is a credential the builder can never re-enter.
@@ -774,7 +778,7 @@ describe("changing kind", () => {
     base.units![0]!.roles![1] = {
       name: "Dev",
       integrations: {
-        github: { tier: "review", app_slug: "acme-dev", private_key: "${DEV_GITHUB_KEY}" },
+        github: { app_slug: "acme-dev", private_key: "${DEV_GITHUB_KEY}" },
       },
     };
     const { op, draft } = run(fixture(base), {

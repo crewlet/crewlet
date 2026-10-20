@@ -410,17 +410,29 @@ admits and injects per phase, and the learning subsystem drafts new ones from
 what turns did, so skills are managed in the knowledge base rather than on the
 seat. See [Tool Skills](../concepts/tool-skills.md).
 
+### Seat code access
+
+An agent seat's **Code** section holds its code access (`code.access`): read
+only (the default), review or full access. It is one setting for every code
+host the company runs — on the engine's own [code host](code.md) it caps what
+the chart grants the seat, and on GitHub it is the permission set the seat's
+app is created with — so it is drawn when the company is connected to GitHub
+or sets `code.native`, and not otherwise. A human seat has none: a person acts
+as their own identity on every code host. A seat's GitHub app permissions are
+fixed when the app is created, so after changing the access of a seat whose
+app exists, raise the app's permissions at GitHub as well; the GitHub section
+says so beside the app.
+
 ### Seat integrations
 
 Each field is shown only when the company has connected the tool. Otherwise the
 editor says the tool is not connected and links to **Integrations**. No
 credential is ever shown.
 
-- **GitHub:** access tier and repositories (an empty list means every
-  repository the installation covers). Setting a tier on a seat with no GitHub
-  block enrols the seat in GitHub; create its app from Integrations. A seat's
-  app permissions are fixed when the app is created, so after changing the tier
-  of a seat whose app exists, raise the app's permissions at GitHub as well.
+- **GitHub:** the repositories the seat works in (an empty list means every
+  repository the installation covers). Naming repositories on a seat with no
+  GitHub block enrols the seat in GitHub; create its app from Integrations,
+  where it is created at the seat's code access.
 - **Slack:** whether the seat speaks as its own Slack app. A seat's app has
   no channel of its own: the seat speaks in its unit's `channel`.
 - **Mattermost:** the default channel name, for a seat that has its own bot.

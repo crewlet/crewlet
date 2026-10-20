@@ -224,13 +224,16 @@ human seat is never claimed, so there is no claim to constrain),
 `integrations.slack` and `integrations.mattermost` (a seat's own chat app),
 `project` and `space` (the tracker project and knowledge container a seat
 owns, written at the top of the seat rather than under `integrations:`),
-`mcp_env` and `behavioral_guidelines`. A seat's own GitHub App
-(`integrations.github`) is refused on a human seat as well, because a person
-acts on GitHub as their own `contact.github_login`. That refusal is an
-[admission rule](configuration.md#what-a-stored-revision-is-held-to): a
-revision being applied that carries the block still runs, and the next write
-that keeps it is refused. The reverse holds too: `contact` or `availability`
-on an agent seat is refused with a hint to set `kind: human`.
+`mcp_env` and `behavioral_guidelines`. What a seat holds on a code host is
+refused on a human seat as well, because a person acts on every code host as
+their own identity — their bound token on the engine's own, their
+`contact.github_login` on GitHub: a seat's code access tier (`code`), which
+would cap nothing, and its own GitHub App (`integrations.github`). Those two
+refusals are [admission rules](configuration.md#what-a-stored-revision-is-held-to):
+nothing running reads either off a human seat, so a revision being applied
+that carries one still runs, and the next write that keeps it is refused. The
+reverse holds too: `contact` or `availability` on an agent seat is refused
+with a hint to set `kind: human`.
 
 A unit's `mcp_env` is shared with its direct **agent** members only. A
 human member inherits none of it, so a human seat can sit in, and lead, a

@@ -740,6 +740,17 @@ type Role struct {
 	Project string `yaml:"project,omitempty" json:"project,omitempty"`
 	Space   string `yaml:"space,omitempty" json:"space,omitempty"`
 
+	// CodeAccess is the seat's `role.code.access` as written — read_only,
+	// review or full_access — or empty where the document says nothing.
+	//
+	// WHAT WAS WRITTEN, never a default: empty and read_only are the same
+	// tier to every code host, and each reads silence as read_only through
+	// its own reading (config.RoleCode.AccessOrDefault, the GitHub app's
+	// permission set), so a default written here would be a second
+	// statement of it. What a seat may DO is that reading, never this field
+	// read bare.
+	CodeAccess string `yaml:"code_access,omitempty" json:"code_access,omitempty"`
+
 	// Schedules are this seat's own recurring work; each fires a task into
 	// this seat's inbox on its cron expression.
 	Schedules []Schedule `yaml:"schedules,omitempty" json:"schedules,omitempty"`
@@ -783,8 +794,12 @@ func (r *Role) Handle() string {
 // `integrations.confluence` sent an operator to the company's own vendor
 // blocks.
 //
-// A seat's own GitHub App is refused on a human seat too, by the config
-// layer: this model carries no code-host identity for a seat to check.
+// What a seat holds on a code host — its code access tier and its own
+// GitHub App — is refused on a human seat too, but by the config layer and
+// as an ADMISSION rule, not here: nothing running reads either off a human
+// seat, so a revision carrying one still runs, and a later build may relax
+// the rule (a tier that caps a person) without this build refusing to apply
+// what its newer peer admitted.
 func (r *Role) humanForbidden() []string {
 	fields := []struct {
 		name string

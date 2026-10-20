@@ -91,7 +91,7 @@ export type SeatKind = "agent" | "human";
 
 /** One field of an entity's own data, and the value it held when the edit was recorded. */
 export interface FieldChange {
-  /** Keys from the entity's data down to the field: `["integrations", "github", "tier"]`. */
+  /** Keys from the entity's data down to the field: `["code", "access"]`. */
   readonly path: readonly string[];
   /** The recorded value; omitted when the field was not set. */
   readonly before?: unknown;

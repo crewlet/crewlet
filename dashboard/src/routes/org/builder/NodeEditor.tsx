@@ -23,17 +23,20 @@
  * drawn: the configuration document keeps them, and the builder preserves
  * every key it does not model.
  *
- * A FIELD FOR A TOOL IS DRAWN ONLY WHERE THE TOOL IS. A seat's GitHub tier,
- * Mattermost channel and GitLab access level mean something only when the
- * company has connected that tool, so each says "<Tool> is not
- * connected" instead of offering a setting that does nothing. A project and a
+ * A FIELD FOR A TOOL IS DRAWN ONLY WHERE THE TOOL IS. A seat's GitHub
+ * repositories, Mattermost channel and GitLab access level mean something only
+ * when the company has connected that tool, so each says "<Tool> is not
+ * connected" instead of offering a setting that does nothing. A seat's code
+ * access is drawn where a code host reads it: GitHub connected, or the
+ * engine's own code host (`code.native`). A project and a
  * space are NOT a tool's: they are the seat's or unit's own `project` and
  * `space`, naming a container on whichever tracker and knowledge base the
  * company runs — the engine's own by default — so they are drawn unless the
- * company runs none. Two of the tool fields change more than their field,
- * and say so beside it: a GitHub tier on a seat with no GitHub block enrols
- * the seat, and a tier change on a seat whose app exists does not reach the
- * app, whose permissions were fixed when it was created.
+ * company runs none. Two of the seat's fields change more than their field,
+ * and say so beside it: naming a repository on a seat with no GitHub block
+ * enrols the seat in GitHub, and changing the code access of a seat whose
+ * app exists does not reach the app, whose permissions were fixed when it
+ * was created.
  *
  * NO CREDENTIAL IS RENDERED. Tool credentials appear as server and variable
  * names, a seat's chat app blocks as the settings a person writes (a channel,
@@ -113,6 +116,7 @@ import {
   nameOfHandle,
   placementSummary,
   providerOrder,
+  readsCodeAccess,
   toolCredentialNames,
   unpinnedProvider,
 } from "./nodeFacts.ts";
@@ -808,7 +812,7 @@ function UnitEditor({
 // A seat
 // ---------------------------------------------------------------------------
 
-const GITHUB_TIER: Segment[] = ["integrations", "github", "tier"];
+const CODE_ACCESS: Segment[] = ["code", "access"];
 const GITHUB_REPOS: Segment[] = ["integrations", "github", "repos"];
 const MATTERMOST_CHANNEL: Segment[] = ["integrations", "mattermost", "channel"];
 const MATTERMOST_USERNAME: Segment[] = ["integrations", "mattermost", "username"];
@@ -841,14 +845,15 @@ function seatFieldPaths(
           ["token_budget"] as Segment[],
           ...BUDGET_WINDOWS.map(({ period }) => ["token_budget", period] as Segment[]),
           ...(schedulesOf(data).length > 0 ? [["schedules"] as Segment[]] : []),
-          ...(isConnected(company, "github") ? [GITHUB_TIER, GITHUB_REPOS] : []),
+          ...(readsCodeAccess(company) ? [CODE_ACCESS] : []),
+          ...(isConnected(company, "github") ? [GITHUB_REPOS] : []),
           ...(seatBlock("mattermost") ? [MATTERMOST_CHANNEL, MATTERMOST_USERNAME] : []),
           ...ownsFieldPaths(company),
         ]),
   ];
 }
 
-const GITHUB_TIERS: FieldChoice[] = [
+const CODE_ACCESS_TIERS: FieldChoice[] = [
   { value: "", label: "Not set (read only)" },
   { value: "read_only", label: "Read only" },
   { value: "review", label: "Review" },
@@ -1060,6 +1065,20 @@ function SeatEditor({
             disabled={disabled}
             error={errorFor(["schedules"])}
           />
+          {readsCodeAccess(company) && (
+            <EditorSection title="Code">
+              <ConfigField
+                label="Code access"
+                kind="choice"
+                choices={CODE_ACCESS_TIERS}
+                value={form.codeAccess}
+                onChange={(codeAccess) => set({ codeAccess })}
+                disabled={disabled}
+                help="How much of a repository this seat may do: on the native code host it caps what the chart grants; on GitHub it is the app's permission set."
+                error={errorFor(CODE_ACCESS)}
+              />
+            </EditorSection>
+          )}
           <IntegrationsSection
             data={data}
             handle={handle}
@@ -1332,8 +1351,10 @@ function IntegrationsSection({
   const company = state.draft.company;
   const github = getPath(data, ["integrations", "github"]);
   const appSlug = isRecord(github) && typeof github.app_slug === "string" ? github.app_slug : "";
-  const enrolling = !isRecord(github) && (form.githubTier !== "" || form.githubRepos.length > 0);
-  const tierChanged = appSlug !== "" && form.githubTier !== initial.githubTier;
+  // A BLOCK IS THE OPT-IN, and the access is not part of one: it is the
+  // seat's on every code host, so only naming repositories writes the block.
+  const enrolling = !isRecord(github) && form.githubRepos.length > 0;
+  const tierChanged = appSlug !== "" && form.codeAccess !== initial.codeAccess;
   const slack = getPath(data, ["integrations", "slack"]);
   const mattermost = getPath(data, ["integrations", "mattermost"]);
   // A BOT IS THE ENGINE'S ONLY WHERE ITS TOKEN NAMES A SECRET STORE ENTRY.
@@ -1358,15 +1379,6 @@ function IntegrationsSection({
                 <InlineCode>{appSlug}</InlineCode>
               </ReadOnlyFact>
             )}
-            <ConfigField
-              label="Access tier"
-              kind="choice"
-              choices={GITHUB_TIERS}
-              value={form.githubTier}
-              onChange={(githubTier) => set({ githubTier })}
-              disabled={disabled}
-              error={errorFor(GITHUB_TIER)}
-            />
             <ListInput
               label="Repositories"
               itemName="repository"

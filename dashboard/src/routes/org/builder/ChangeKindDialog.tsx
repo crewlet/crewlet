@@ -3,8 +3,9 @@
  *
  * A KIND CHANGE REMOVES FIELDS, which is why it is its own step rather than a
  * control in the editor. A human seat runs no turns, so the engine refuses it
- * every runtime field (`org.Role.humanForbidden`) and, on admission, its own
- * GitHub App; an agent seat is refused `contact` and `availability`. The
+ * every runtime field (`org.Role.humanForbidden`) and, on admission, what it
+ * holds on a code host — its code access tier and its own GitHub App; an
+ * agent seat is refused `contact` and `availability`. The
  * operation strips exactly those, and the dialog lists them by their authored
  * names before anything is recorded.
  *

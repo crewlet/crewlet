@@ -16,8 +16,8 @@ Three surfaces, and they are deliberately separate:
   `role.mcp_env.github`. This is how an agent reads, reviews and tracks.
 - **Identity.** One GitHub App per agent, in `role.integrations.github`. An app
   carries exactly one bot identity, so each agent has its own, created and
-  installed from the dashboard and bounded by an access tier. See
-  [One GitHub App per agent](#one-github-app-per-agent).
+  installed from the dashboard and bounded by the seat's access tier,
+  `role.code.access`. See [One GitHub App per agent](#one-github-app-per-agent).
 
 GitHub tools are for **reading, reviewing and tracking** code — diffs,
 comments, reviews, run status. **Authoring** code changes goes through the
@@ -300,7 +300,7 @@ Together the card is normally correct by the time you switch back to it. If it i
 | `redirect_url` | `<public_base_url>/webhooks/github-app` |
 | `setup_url` | `<public_base_url>/webhooks/github-app?installed=<handle>` |
 | `default_events` | `issues`, `issue_comment`, `pull_request`, `pull_request_review`, `pull_request_review_comment` |
-| `default_permissions` | The seat's tier, below |
+| `default_permissions` | The seat's tier (`role.code.access`), below |
 
 **The events are named, never `*`.** An app with a delivery address and no
 events subscribes to nothing, receives nothing, and reports itself healthy
@@ -313,9 +313,21 @@ than through the seat's own app.
 
 ### The three access tiers
 
-A seat's tier is the one field in this block a person writes, and it decides
-two things: the permissions the app is created with, and the permissions every
-token minted for that app carries.
+A seat's tier is its `role.code.access` — a field of the seat, not of this
+block — and here it decides two things: the permissions the app is created
+with, and the permissions every token minted for that app carries. It is one
+setting for every code host the engine drives: the engine's own
+[code host](../concepts/code-host.md) caps what the chart grants the same seat
+by the same tier, so a seat moved from GitHub to the native host keeps what it
+may do. It is an agent seat's setting; a human seat carrying it is refused,
+because a person acts on GitHub as their own `contact.github_login`.
+
+```yaml
+roles:
+  - name: Senior Engineer
+    code:
+      access: review              # read_only (default) | review | full_access
+```
 
 | Tier | What it grants | GitHub permissions |
 |---|---|---|
@@ -332,10 +344,17 @@ token minted for that app carries.
 - **Each tier is an allow list.** GitHub's token endpoint takes the permissions
   to grant, so anything absent from a tier is simply not on the token. There is
   no catalogue to subtract from and therefore nothing to forget.
-- **A typo is refused, not guessed at.** `tier: reviw` fails config validation
-  naming the field, and a reader that takes the value anyway falls back to
-  `read_only` rather than to something wider. A hyphen is not a typo:
-  `full-access` and `full_access` are the same tier.
+- **A typo is refused, not guessed at.** `access: reviw` fails config
+  validation naming the field, and a reader that takes the value anyway falls
+  back to `read_only` rather than to something wider. Each tier has exactly
+  one spelling, the one in the table: `full-access`, `Review` and ` review `
+  are refused like any other value, because the published schema lists the
+  three as the field's enum, and an editor underlines exactly what the engine
+  refuses.
+- **The app is begun at the tier whether or not the seat has a GitHub block
+  yet.** The tier is the seat's, so the manifest of a seat whose
+  `code.access` says `full_access` asks GitHub for `full_access` from its
+  first creation.
 
 ### What no tier grants
 
@@ -367,9 +386,10 @@ agents keeps ten separate records:
 ```yaml
 roles:
   - name: Senior Engineer
+    code:
+      access: review              # the app's permission set: read_only (default) | review | full_access
     integrations:
       github:
-        tier: review              # read_only (default) | review | full_access
         repos: [acme/api]         # empty means every repository the installation covers
         # Written by the engine, never typed in:
         app_id: 1234567
@@ -379,7 +399,8 @@ roles:
         webhook_secret: "${SENIOR_ENGINEER_GITHUB_APP_WEBHOOK_SECRET}"
 ```
 
-`tier` and `repos` are the two fields a person writes. `app_id`, `app_slug`,
+`repos` is the one field of this block a person writes, beside the seat's own
+`code.access`. `app_id`, `app_slug`,
 `private_key` and `webhook_secret` are written when the app is created, and the slug is what the
 bot login derives from, so it is what an `@mention` of this agent resolves
 through. `installation_id` is written as `0` at that moment, because creating
@@ -535,7 +556,8 @@ and ready.
   carry the name that was asked for. That is why the install link is built from
   the slug the conversion returned rather than from the name that was
   requested.
-- **Permissions are frozen at creation.** Raising a seat's tier afterwards
+- **Permissions are frozen at creation.** Raising a seat's tier
+  (`role.code.access`) afterwards
   means editing the app's permissions at GitHub, where every installation has
   to approve the change before it takes effect. Choosing the tier before the
   app is created is the cheap moment to get it right.

@@ -46,10 +46,11 @@ export const BUDGET_WINDOWS = [
  * and knowledge `space` are written at the top of the seat, never under
  * `integrations:`.
  *
- * `integrations.github` comes last because a different rule refuses it: the
- * org model carries no code-host identity for a seat, so the config layer's
- * admission rule (`config.Company.validateHumanSeatApps`) is what refuses a
- * seat's own GitHub App on a human seat.
+ * `code` and `integrations.github` come last because a different rule
+ * refuses them: what a seat holds on a code host — its code access tier and
+ * its own GitHub App — is refused on a human seat by the config layer's
+ * admission rule (`config.Company.validateHumanSeatCode`), in that order,
+ * since nothing running reads either off a human seat.
  */
 export const HUMAN_FORBIDDEN = [
   "llm",
@@ -70,6 +71,7 @@ export const HUMAN_FORBIDDEN = [
   "space",
   "mcp_env",
   "behavioral_guidelines",
+  "code",
   "integrations.github",
 ] as const;
 

@@ -83,14 +83,14 @@ describe("structure", () => {
         target: "seat:ceo",
         set: [
           { path: ["goal"], value: "Grow" },
-          { path: ["integrations", "github", "tier"], value: "developer" },
+          { path: ["code", "access"], value: "review" },
         ],
       },
       { type: "updateCompany", set: [{ path: ["mission"], value: "Make better things." }] },
       {
         type: "updateSeat",
         target: "seat:sre",
-        set: [{ path: ["integrations", "github", "tier"], value: "maintainer" }],
+        set: [{ path: ["code", "access"], value: "full_access" }],
       },
     ]);
     const changes = changesOf(s);
@@ -104,11 +104,11 @@ describe("structure", () => {
       expect.arrayContaining([
         {
           ref: { key: "seat:ceo", kind: "seat", name: "CEO" },
-          fields: ["goal", "integrations.github"],
+          fields: ["code", "goal"],
         },
         { ref: { key: "seat:dev", kind: "seat", name: "Developer" }, fields: ["handle"] },
-        // Its project is untouched, so only the tool that changed is named.
-        { ref: { key: "seat:sre", kind: "seat", name: "SRE" }, fields: ["integrations.github"] },
+        // Its project is untouched, so only the block that changed is named.
+        { ref: { key: "seat:sre", kind: "seat", name: "SRE" }, fields: ["code"] },
       ]),
     );
     expect(changes.charter).toEqual(["mission"]);

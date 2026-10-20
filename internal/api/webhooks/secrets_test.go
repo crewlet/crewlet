@@ -441,9 +441,9 @@ roles:
   - name: SRE Lead
     handle: sre-lead
     llm: primary
+    code: {access: full_access}
     integrations:
       github:
-        tier: full_access
         app_id: 41
         app_slug: acme-sre-lead
         installation_id: 7
@@ -452,9 +452,9 @@ roles:
   - name: Reviewer
     handle: reviewer
     llm: primary
+    code: {access: review}
     integrations:
       github:
-        tier: review
         app_id: 42
         app_slug: acme-reviewer
   - name: Jane Founder

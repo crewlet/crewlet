@@ -47,7 +47,7 @@ function withFields(): CompanyDocument {
     mcp_env: { tracker: { TOKEN: "__redacted__" } },
     integrations: {
       slack: { bot_token: "${DEV_SLACK}", signing_secret: "${DEV_SIGN}" },
-      github: { tier: "review", app_slug: "acme-dev", private_key: "${DEV_KEY}" },
+      github: { app_slug: "acme-dev", private_key: "${DEV_KEY}" },
     },
   };
   return doc;

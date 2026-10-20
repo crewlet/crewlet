@@ -99,8 +99,8 @@ describe("json", () => {
     const removed = setPath(record, ["integrations", "mattermost", "channel"], undefined);
     expect(removed).toEqual({ keep: { deep: true } });
     expect(removed.keep).toBe(record.keep);
-    const added = setPath({}, ["integrations", "github", "tier"], "developer");
-    expect(added).toEqual({ integrations: { github: { tier: "developer" } } });
+    const added = setPath({}, ["integrations", "github", "repos"], ["acme/api"]);
+    expect(added).toEqual({ integrations: { github: { repos: ["acme/api"] } } });
     expect(setPath(record, ["missing", "x"], undefined)).toBe(record);
   });
 

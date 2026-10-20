@@ -920,6 +920,8 @@ export interface CompanyDocument {
   units?: ConfigUnit[];
   integrations?: Record<string, unknown>;
   providers?: Record<string, unknown>;
+  /** The native code host's block; `native: true` is a company hosting code. */
+  code?: Record<string, unknown>;
   [key: string]: unknown;
 }
 
@@ -964,6 +966,11 @@ export interface ConfigRole {
   mcp_env?: Record<string, Record<string, string>>;
   sandbox?: Record<string, unknown>;
   placement?: Record<string, unknown>;
+  /**
+   * The seat's code access, `role.code.access`: the one tier every code host
+   * reads — the native host's cap and a GitHub App's permission set.
+   */
+  code?: { access?: string; [key: string]: unknown };
   integrations?: ConfigRoleIntegrations;
   /**
    * The tracker project a root-level seat owns. Vendor-neutral, so on the seat
@@ -996,7 +1003,6 @@ export type HumanContactKey =
  */
 export interface ConfigRoleIntegrations {
   github?: {
-    tier?: string;
     repos?: string[];
     app_id?: number;
     app_slug?: string;
@@ -3636,8 +3642,8 @@ export interface SetupSeatState {
    * anything yet.
    *
    * Separate from `present`, and the gap between them is a real state: a
-   * GitHub seat that names the tier it will run at and has no app yet has
-   * opted in with both of its two acts still to do.
+   * GitHub seat with a `github` block — its repositories named, or an app
+   * begun — and no working app yet has opted in with its acts still to do.
    */
   enrolled?: boolean;
   satisfied: boolean;
