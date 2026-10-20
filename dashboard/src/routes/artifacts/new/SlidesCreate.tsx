@@ -83,13 +83,22 @@ export function SlidesCreate() {
       <CreateShell kind="slides">
         {starters.loading ? (
           <div className="slides-create" aria-busy="true">
-            <div className="slides-create-strip">
-              <Skeleton variant="list" rows={4} label="Loading themes and layouts" />
+            <div className="slides-create-strip slides-create-strip-hold">
+              {[0, 1, 2, 3].map((n) => (
+                <div key={n} className="slides-create-stage-hold">
+                  <Skeleton
+                    className="slides-create-skeleton"
+                    variant="box"
+                    height="100%"
+                    {...(n === 0 ? { label: "Loading themes and layouts" } : {})}
+                  />
+                </div>
+              ))}
             </div>
             <div className="slides-create-main">
               <Skeleton variant="box" height="var(--size-control-md)" />
               <div className="slides-create-stage-hold">
-                <Skeleton variant="box" height="100%" />
+                <Skeleton className="slides-create-skeleton" variant="box" height="100%" />
               </div>
             </div>
             <div className="slides-create-side">
