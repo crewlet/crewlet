@@ -31,7 +31,7 @@ Five figures per domain, and no others:
 |---|---|
 | `bytes` | what the log holds now |
 | `max_bytes` | the ceiling the **broker** is enforcing |
-| `reserve_bytes` | on every log that claims identity — the tracker's, the knowledge base's and the identity estate's — the top of that ceiling kept for gate records; see [the gate reserve](#the-gate-reserve) |
+| `reserve_bytes` | on every log that claims identity — the tracker's, the knowledge base's, the identity estate's, the artifacts log's and the artifact datastore's — the top of that ceiling kept for gate records; see [the gate reserve](#the-gate-reserve) |
 | `headroom_fraction` | how much of the ceiling **ordinary writes** are held to is unused: `max_bytes` less `reserve_bytes` |
 | `bytes_per_day` | what the log took in over the trailing day (`PER DAY` in the table) |
 
@@ -159,8 +159,9 @@ the group name alone finds nothing.
 A term that **could not be read** blocks, exactly as one that permits nothing
 does. A term nobody could read is not a term that is satisfied, and treating it
 as satisfied is how a trim advances past a node that could not report. A term
-this domain does not **have** — the vector log, the identity estate's and the
-usage log's have no wake feed — is `n/a`
+this domain does not **have** — the vector log, the identity estate's, the
+artifacts log's, the artifact datastore's and the usage log's have no wake
+feed — is `n/a`
 rather than zero, which is a different thing again. And a term that was
 read and **binds nothing** — no hold is pinning the log, or a solo fleet takes
 no snapshots — reads `unbounded` rather than carrying a sequence. Inside the
@@ -247,10 +248,10 @@ Two policies decide which copies count:
   the next log leaves the last one's acknowledgement standing. Under this
   policy every log is trimmed only as far as an acknowledgement of that log
   says, so the procedure is one acknowledgement per log. A log never
-  acknowledged is never trimmed: the five ordered logs, `CREWLET_TRACKER_LOG`,
-  `CREWLET_PAGES_LOG`, `CREWLET_ARTIFACTS_LOG`, `CREWLET_ARTIFACT_DATA_LOG` and
-  `CREWLET_IAM_LOG`, each grow until their own ceiling refuses writes — a full
-  identity log refuses every sign-in — while the two
+  acknowledged is never trimmed: the ordered logs, `CREWLET_TRACKER_LOG`,
+  `CREWLET_PAGES_LOG`, `CREWLET_IAM_LOG`, `CREWLET_ARTIFACTS_LOG` and
+  `CREWLET_ARTIFACT_DATA_LOG`, each grow until their own ceiling refuses
+  writes — a full identity log refuses every sign-in — while the two
   compacted logs, `CREWLET_TRACKER_VECTORS` and `CREWLET_USAGE_LOG`, age their
   records out on the broker whatever the trim decides; their trim and its
   alarms wait on an acknowledgement just the same.
@@ -615,11 +616,13 @@ See [Replication](replication.md#what-a-retry-is-judged-by-the-instant-its-opera
 
 ### A node a peer re-anchored past
 
-When one node [re-anchors](#re-anchoring-a-recreated-or-restored-log) the
-tracker's or the knowledge base's log, it opens the next generation from its
-own rows — and every other node's rows are then a history the log no longer
-continues from. Nothing on the log can bring them level, so each of those nodes
-adopts a snapshot from a node in the new generation, **on its own**:
+When one node [re-anchors](#re-anchoring-a-recreated-or-restored-log) a log
+that claims identity — the tracker's, the knowledge base's, the identity
+estate's, the artifacts log's or the artifact datastore's — it opens the next
+generation from its own rows, and every other node's rows are then a history
+the log no longer continues from. Nothing on the log can bring them level, so
+each of those nodes adopts a snapshot from a node in the new generation, **on
+its own**:
 
 - It learns of the new generation from the re-anchoring node's position row,
   which that node publishes the moment the reanchor completes, on its next
@@ -732,12 +735,13 @@ next backup afresh.
 
 The trim counts nodes **per log**, so an eviction is a record on every log it
 counts nodes on — every log that claims identity: the tracker's, the knowledge
-base's and the identity estate's. (The vector log and the
+base's, the identity estate's, the artifacts log's and the artifact
+datastore's. (The vector log and the
 usage log count nothing and get none: a node behind on the vectors is a
 coverage figure, and an evicted node's usage is still what its seats did.) Every
 node running the state log can make the gesture, whichever backends the
 company uses: every data node runs every one of those logs, and a company on an
-external tracker still runs all three.
+external tracker still runs every one of them.
 
 **The node you run the gesture on writes every log itself**: every data node
 holds the whole estate, so one gesture on any data node reaches every log. A
@@ -764,8 +768,10 @@ alphanumeric first, then letters, digits, `.`, `_` or `-`, at most 64
 characters) is refused before anything is judged.
 
 Past the judgement the record goes to every log at once, and each answers on
-its own line — the tracker's log, the pages log and the identity estate's — with the [three-valued outcome](replication.md#a-write-has-three-outcomes)
-every write has — `applied`, `pending` or `unknown` — or `not written` with the
+its own line — the tracker's log, the pages log, the identity estate's, the
+artifacts log and the artifact datastore's — with the
+[three-valued outcome](replication.md#a-write-has-three-outcomes) every write
+has — `applied`, `pending` or `unknown` — or `not written` with the
 reason that stopped that log. A log that answered holds its record whatever
 the others did, and the gesture runs to its end **whatever happens to the
 command**: once the first record is about to be written the node finishes the
@@ -950,7 +956,7 @@ the log has already lost or is licensed to lose.
 
 The comparison is the one the node's own [write fence](#the-trim-floor) makes,
 made once for every log before any is written: its last published position
-in each of the three logs, against the higher of each log's published floor and
+in each of those logs, against the higher of each log's published floor and
 its first surviving sequence. A node that has never published a position is
 judged as holding nothing. Nothing is written to any log on a refusal, and the node needs nothing from you but time: start it if it
 is not running, and it [catches up on its own](#the-join-runbook) — replaying
@@ -985,8 +991,9 @@ A single record larger than its log takes is a different refusal,
 changes it. Every log declares the largest record it publishes — 8 MiB less
 4 KiB on the tracker's, the knowledge base's, the vector changelog's and the
 usage log's, which is the largest the embedded broker's 8 MiB messages carry
-once a record is signed, 128 KiB on the identity
-estate's — and a record past it is refused before it is sent; the stream's
+once a record is signed, 128 KiB on the identity estate's, 2 MiB on the
+artifacts log's and 1 MiB plus 64 KiB on the artifact datastore's — and a
+record past it is refused before it is sent; the stream's
 own `max_msg_size` is that declaration plus 4 KiB for what a stored record
 carries beside it, so the broker holds a peer on another build to it too. Two
 more limits can refuse a record, and the detail says which it was: the file store's per-record limit,
@@ -1027,8 +1034,9 @@ evict`](#eviction) — is itself a record on that log, so a
 log that refused it like any other append could never be emptied: the
 eviction was refused, run again, and refused again.
 
-So on the three logs that carry gate records — every log that claims identity:
-the tracker's, the knowledge base's and the identity estate's — **ordinary writes are refused at a soft ceiling** below the
+So on the logs that carry gate records — every log that claims identity:
+the tracker's, the knowledge base's, the identity estate's, the artifacts log's
+and the artifact datastore's — **ordinary writes are refused at a soft ceiling** below the
 broker's, and the top of the ceiling — the **gate reserve**, `reserve_bytes`
 in `crewlet retention status` — takes only the records that install or lift a
 gate: an eviction and the readmission that inverts it. A log full for
@@ -1066,6 +1074,7 @@ So the reserve is the larger of two terms:
 |---|---|---|---|---|
 | tracker, knowledge base | 8 MiB less 4 KiB | 1 GiB | 64 MiB (a sixteenth) | 960 MiB |
 | identity estate | 128 KiB | 64 MiB | 4 MiB (a sixteenth) | 60 MiB |
+| artifacts | 2 MiB | 1 GiB | 64 MiB (a sixteenth) | 960 MiB |
 | artifact datastore | 1 MiB plus 64 KiB | 1 GiB | 64 MiB (a sixteenth) | 960 MiB |
 
 While a rolling upgrade runs, a node on an older build keeps no reserve, so
@@ -1080,7 +1089,9 @@ soft ceiling left, is there so that never happens.
 
 A log's Tier A ceiling (`stream.tracker_log_max_bytes`,
 `stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes`,
-`stream.iam_log_max_bytes`, `stream.usage_log_max_bytes`) is not a live
+`stream.iam_log_max_bytes`, `stream.usage_log_max_bytes`,
+`stream.artifacts_log_max_bytes`, `stream.artifact_data_log_max_bytes`) is not
+a live
 setting: it is the value the log's stream is created with, sized with the
 other logs inside what the broker can grant (see
 [Replication](replication.md#how-the-byte-ceilings-are-sized)). Changing a
@@ -1090,13 +1101,14 @@ maintenance window**, and the reason is not caution:
 - A resize is decided against the usage the log is at, and a publisher makes
   that a moving quantity. The verb decides it before the window opens: a
   target whose soft ceiling — the target less its
-  [gate reserve](#the-gate-reserve), on the three identity logs; the whole
+  [gate reserve](#the-gate-reserve), on the logs that claim identity; the whole
   target on the vector changelog and the usage log — is at or below what the
   log already holds is refused, naming both and the least target that would
   do, because that ceiling would refuse every ordinary append the moment it
   applied. So is a target under the floor Tier A holds that log's field to — a
-  gibibyte on the tracker's, the knowledge base's and the vector changelog's,
-  64 MiB on the identity estate's and the usage log's —
+  gibibyte on the tracker's, the knowledge base's, the vector changelog's, the
+  artifacts log's and the artifact datastore's, 64 MiB on the identity estate's
+  and the usage log's —
   naming the field. Anything else is fair, including a target under the
   current ceiling, which is how a log created larger than its budget gives
   the reservation back.
@@ -1480,7 +1492,8 @@ still holds every record the rows are missing — and the verb refuses it as
 having nothing to re-anchor.
 
 **It moves one log.** Each domain — the tracker, the knowledge base, the
-identity estate, the vectors and the usage days — has its own stream and its
+identity estate, the vectors, the usage days, the artifacts and their
+datastore — has its own stream and its
 own generation, and a reanchor moves only the one you named: that domain's
 checkpoint goes to the next generation, where its case puts it, keyed to the
 live instant. Every other domain keeps its checkpoint, its generation and its
@@ -1496,7 +1509,8 @@ In order, it: checks the confirmation against the live stream; refuses while
 the fleet guards below say so, and on a node evicted from that domain; appends
 the domain's own generation record to the adopted stream (every log that
 claims identity keeps one, applied as `tracker_log_generations`,
-`pages_log_generations` and `iam_log_generations`; the vectors and the usage
+`pages_log_generations`, `iam_log_generations`, `artifacts_log_generations` and
+`artifactdata_log_generations`; the vectors and the usage
 days keep none, because they claim no identity a second opening could
 violate); reads the stream's instant
 again, refusing if it was rebuilt again meanwhile; moves this node's consumer;
@@ -1517,7 +1531,8 @@ and each of them adopts a snapshot from a node in the new generation on its
 own ([a node a peer re-anchored past](#a-node-a-peer-re-anchored-past)).
 
 For every log that keeps a generation record — the tracker's, the knowledge
-base's and the identity estate's — it refuses while any peer
+base's, the identity estate's, the artifacts log's and the artifact
+datastore's — it refuses while any peer
 has already re-anchored the stream — a peer at a later generation of it — naming the peer:
 that peer's rows are the fleet's history in the new generation, and a second
 reanchor from another node's rows would open the same generation over a
@@ -1588,7 +1603,8 @@ them.
 
 **Every log can be re-anchored, by its own domain.** What a reanchor writes
 beside the checkpoint is the domain's to say: a log that claims identity — the
-tracker's, the knowledge base's and the identity estate's — appends its own
+tracker's, the knowledge base's, the identity estate's, the artifacts log's and
+the artifact datastore's — appends its own
 generation record, which is the audit row above and the first-writer-wins
 between two operators, while the vectors and the usage days declare that they
 keep none. A domain that cannot say is refused when the node boots, never when
@@ -1921,8 +1937,8 @@ every identity answer is a node's own rows with their lag beside them, and a
 session a node has not applied yet is waited for at the position its bearer
 states. So its ceiling, `stream.iam_log_max_bytes`, has no barrier term — its
 512 MiB default is sized from sessions, and the barrier half of the arithmetic
-at its definition is 0 × 100 × 365 × 140 B. It was held to the other two logs'
-125 a day per seat before the rate was declared per domain: a census its ceiling
+at its definition is 0 × 100 × 365 × 140 B. It was held to the tracker's and
+the knowledge base's 125 a day per seat before the rate was declared per domain: a census its ceiling
 was never sized for, which at the reference company is about 639 MB a year of
 barriers it would have had to hold against a 512 MiB ceiling, and which
 `census_drift` would have measured it against while it took none.
