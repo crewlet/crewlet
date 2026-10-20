@@ -385,20 +385,21 @@ func sizeCeilings(ctx context.Context, host domainHost, stream config.Stream,
 // ONE RULE FOR EVERY BROKER: the limit, less every reservation the broker has
 // granted to a stream that is not a state log. Where the broker states its
 // limit, that is what it has left with the logs' own ceilings (holding) added
-// back. Where it states none this node can read, the stream volume's free
-// space stands in for the limit, and what the broker reports reserved beyond
-// the logs' own (the object bucket's, say) comes off it: free space already
-// contains the logs' ceilings, because a reservation never spends it, but no
-// byte of it can be granted twice. A budget that could not be read reports no
-// reservation, so free space is all this node has.
+// back. Where it states none this node can read, the cap such a server holds
+// on the stream volume's free space ([unstatedLimit]) stands in for the limit,
+// and what the broker reports reserved beyond the logs' own (the object
+// bucket's, say) comes off it: free space already contains the logs' ceilings,
+// because a reservation never spends it, but no byte of it can be granted
+// twice. A budget that could not be read reports no reservation, so that cap
+// is all this node has.
 func logsGrantable(budget jetstream.StorageBudget, readErr error, free, holding int64) int64 {
 	if readErr != nil {
-		return free
+		return unstatedLimit(free)
 	}
 	if available := budget.Available(); available >= 0 {
 		return available + holding
 	}
-	return max(free-max(budget.Committed-holding, 0), 0)
+	return max(unstatedLimit(free)-max(budget.Committed-holding, 0), 0)
 }
 
 // heldCeiling is one log's answer to [domainHost.DomainStreamCeiling]: the
