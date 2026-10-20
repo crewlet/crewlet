@@ -566,3 +566,12 @@ export const DASHBOARD_COLUMNS = 12;
 
 /** The shortest interval an engine dataset refreshes at, in seconds (`artifacts.MinRefreshSeconds`). */
 export const DASHBOARD_MIN_REFRESH_SECONDS = 60;
+
+/** The most widgets one board holds, a group's children counted (`artifacts.MaxDashboardWidgets`). */
+export const DASHBOARD_MAX_WIDGETS = 64;
+
+/** The most datasets one board declares (`artifacts.MaxDashboardDatasets`). */
+export const DASHBOARD_MAX_DATASETS = 32;
+
+/** The most columns one table widget draws (`artifacts.MaxTableColumns`). */
+export const DASHBOARD_MAX_TABLE_COLUMNS = 16;
