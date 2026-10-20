@@ -199,7 +199,7 @@ func TestAnUnansweredClaimKeepsTheCopyUntilThePassSettlesIt(t *testing.T) {
 	if !a.holds(t, ids[0]) {
 		t.Error("the only copy was deleted")
 	}
-	if left, err := a.log.UnsettledCustody(t.Context(), time.Now().Add(time.Hour), 10); err != nil || len(left) != 0 {
+	if left, err := a.log.UnsettledCustody(t.Context(), time.Now().Add(time.Hour), store.UnsettledBatch{}, 10); err != nil || len(left) != 0 {
 		t.Errorf("unsettled after the pass = (%v, %v), want none", left, err)
 	}
 }
