@@ -80,9 +80,22 @@ func chatRegistrations() []registration {
 		},
 		// THE WAKE A COMMITTED MESSAGE SENDS, derived from the log on
 		// the domain's own fleet-wide group ([chatlet.FeedGroup]) rather
-		// than published by the writer's goroutine.
+		// than published by the writer's goroutine — and from what this
+		// node's applier decided about it, so a post the applier refused
+		// wakes nobody ([chatlet.Decisions]).
+		//
+		// ALWAYS THIS NODE'S DECISIONS, never a translator that asks
+		// nothing: built where no core runs (the register's own check
+		// of each entry's declaration) they are the zero estate, which
+		// refuses on use and is logged on every record the feed then
+		// derives from the record alone — loud, where a nil would be a
+		// feed that silently woke about refused posts.
 		Feed: func(_ *Engine, records domainFeed) (changefeed.Translator, changefeed.Opener) {
-			return chatlet.NewTranslator(), chatlet.FeedSource{Log: records}
+			decisions := chatlet.NodeDecisions{Estate: records.estate}
+			if records.applied != nil {
+				decisions.Applied = records.applied
+			}
+			return chatlet.NewTranslator(decisions), chatlet.FeedSource{Log: records}
 		},
 		// THE FRAMEWORK'S ONE HORIZON: ADR-0029 judges a retry
 		// against it, and a seat re-asks a chat operation on the

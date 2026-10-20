@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -289,4 +290,108 @@ func TestAPostByAnAuthorTakenOutOfAPrivateRoomAheadOfItIsRefused(t *testing.T) {
 		room.Channel.ID); n != 0 {
 		t.Fatalf("the private room holds %d messages from an author not in it", n)
 	}
+}
+
+// A REFUSED POST WAKES NOBODY, and an undecided one wakes as it always did.
+//
+// The change feed derives a wake from what this node's applier decided: a post
+// it refused is in no room, so a seat woken for it would open the room to
+// answer words nobody can read. Where this node has not decided the record —
+// its applier further behind than one pull, or the decisions unreadable — the
+// wake is the record's, because a feed that waited for an applier would make
+// the company's notifications wait on the slowest data node.
+//
+// Mutation: ignore the verdict in Translator.landed and the refused post
+// wakes; withhold the wake where nothing is decided and the lagging case goes
+// quiet.
+func TestARefusedPostWakesNobodyAndAnUndecidedOneWakesAsBefore(t *testing.T) {
+	t.Parallel()
+	r := newWriteRound(t, agents().withPeople("jane"))
+	room := r.room(person("jane"), "launch", "grace")
+	said, err := r.store.Post(t.Context(), keyed(person("jane"), requested("k-1")),
+		room.Channel.ID, chatlet.NewMessage{Body: "@grace can you look?",
+			Mentions: []string{"grace"}})
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	r.drain()
+	saidAt := r.consumed
+	archived := true
+	_, err = r.raced(peerOn(t, chatlet.ChannelSubject(room.Channel.ID), chatlet.OpPatch,
+		"5e2c1b90-0000-7000-8000-00000000a002",
+		chatlet.ChannelPatch{V: chatlet.DocumentVersion, Archived: &archived}),
+		func(ctx context.Context) (chatlet.Written, error) {
+			return r.store.Post(ctx, keyed(person("jane"), requested("k-2")),
+				room.Channel.ID, chatlet.NewMessage{Body: "@grace still there?",
+					Mentions: []string{"grace"}})
+		})
+	if !errors.Is(err, chatlet.ErrArchived) {
+		t.Fatalf("the raced post was answered %v, so nothing below is under test", err)
+	}
+	refusedAt := r.consumed
+
+	decided := chatlet.NewTranslator(chatlet.NodeDecisions{Estate: r.db.Reader(),
+		Applied: r.waiter})
+	if _, wake, err := decided.Translate(t.Context(), r.feedRecord(refusedAt)); err != nil ||
+		wake {
+		t.Errorf("a post the applier refused woke somebody (%v)", err)
+	}
+	if _, wake, err := decided.Translate(t.Context(), r.feedRecord(saidAt)); err != nil ||
+		!wake {
+		t.Errorf("a post the applier applied woke nobody (%v) — %s", err, said.ChangeID)
+	}
+
+	// AN APPLIER FURTHER BEHIND THAN ONE PULL is not waited for, and the
+	// wake is the record's.
+	lagging := chatlet.NewTranslator(chatlet.NodeDecisions{Estate: r.db.Reader(),
+		Applied: behind{}})
+	started := time.Now()
+	rec := r.feedRecord(refusedAt)
+	rec.Position += uint64(chatlet.DecisionLagRecords) + 1
+	if _, wake, err := lagging.Translate(t.Context(), rec); err != nil || !wake {
+		t.Errorf("a post this node has not decided woke nobody (%v)", err)
+	}
+	if took := time.Since(started); took >= chatlet.DecisionWait {
+		t.Errorf("the feed waited %v for an applier a pull behind the record", took)
+	}
+
+	// AND DECISIONS THAT CANNOT BE READ FAIL OPEN, rather than leave a
+	// person untold.
+	unread := chatlet.NewTranslator(chatlet.NodeDecisions{})
+	if _, wake, err := unread.Translate(t.Context(), r.feedRecord(refusedAt)); err != nil ||
+		!wake {
+		t.Errorf("a post whose verdict could not be read woke nobody (%v)", err)
+	}
+}
+
+// behind is an applier at the start of the log.
+type behind struct{}
+
+func (behind) Committed() statelog.Position {
+	return statelog.Position{Stream: chatlet.Domain{}.Stream().Name}
+}
+
+func (behind) WaitCommitted(ctx context.Context, _ statelog.Position) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// feedRecord is the record at seq as the change feed is handed it.
+func (r *writeRound) feedRecord(seq uint64) changefeed.Record {
+	r.t.Helper()
+	_, payload, _, ok, err := r.log.At(r.t.Context(), seq)
+	if err != nil || !ok {
+		r.t.Fatalf("read record %d: %v (present: %v)", seq, err, ok)
+	}
+	body, verdict := r.verifier.Open(payload)
+	if verdict != statelog.Verified {
+		r.t.Fatalf("record %d did not verify: %s", seq, verdict)
+	}
+	env, err := chatlet.DecodeEnvelope(body)
+	if err != nil {
+		r.t.Fatalf("decode record %d: %v", seq, err)
+	}
+	return changefeed.Record{ID: env.OpID, Position: seq,
+		Stream: chatlet.Domain{}.Stream().Name, Gen: uint64(env.Gen),
+		Key: env.Subject.String(), Payload: body}
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -56,6 +57,15 @@ type domainFeed struct {
 	// own rule then acknowledges and skips. Every notification stops, and
 	// the only symptom is a log line blaming the record.
 	verify *statelog.Verifier
+
+	// estate and applied are THIS NODE's replicated estate and the domain's
+	// own applier, for a translator that derives a wake from what the
+	// applier DECIDED about a record rather than from the record alone —
+	// chat's, whose applier decides every message at its position
+	// ([chatlet.Decisions]). Zero on a feed built where no core runs, which
+	// is the register's own check of what each entry declares.
+	estate  store.ReplicatedReader
+	applied *statelog.Runner
 }
 
 // One adapter serves every domain that declares a wake feed, so each domain's
@@ -220,7 +230,9 @@ func (e *Engine) feedFor(running *runningLog) (changefeed.Translator, changefeed
 			// second reader, and a domain decoder handed the frame reads
 			// every record in the company as undecodable. See
 			// [domainFeed.verify].
-			verify: running.verifier,
+			verify:  running.verifier,
+			estate:  e.feedEstate(),
+			applied: running.runner,
 		})
 	}
 	if err := checkFeed(running.domain, translator); err != nil {
@@ -230,6 +242,15 @@ func (e *Engine) feedFor(running *runningLog) (changefeed.Translator, changefeed
 		return nil, nil, nil
 	}
 	return translator, opener, nil
+}
+
+// feedEstate is this node's replicated estate as a wake feed reads it, or the
+// zero reader where no core runs.
+func (e *Engine) feedEstate() store.ReplicatedReader {
+	if c := e.core.Load(); c != nil && c.log != nil {
+		return c.log.estate().Reader()
+	}
+	return store.ReplicatedReader{}
 }
 
 // checkFeed refuses a wake feed that disagrees with its domain's declaration,
