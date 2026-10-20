@@ -955,11 +955,10 @@ func (u *Unit) validate(path Path) error {
 	// direction the schema must never take.
 	if u.Channel != "" && !unitChannel.MatchString(u.Channel) {
 		p.add(at(path, "channel"), ErrShape,
-			"%q is not a channel name: lowercase letters, digits, `-` and `_`, "+
-				"starting with a letter or a digit, up to 64 characters, and no "+
-				"surrounding whitespace. Write the name rather than an id or a "+
-				"rendering of one — `engineering`, not `#engineering` and not "+
-				"`C_ENG`", u.Channel)
+			"%q isn't a channel name. Use lowercase letters, digits, `-` and "+
+				"`_`, starting with a letter or a digit, up to 64 characters, "+
+				"with no spaces around it. Write the name, like `engineering`, "+
+				"not `#engineering` or an id like `C_ENG`", u.Channel)
 	}
 	for i := range u.Roles {
 		p.wrap(u.Roles[i].validate(idx(at(path, "roles"), i)))

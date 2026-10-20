@@ -676,12 +676,11 @@ func (c *Company) channelAdvisories() []Warning {
 	// the sentence says it is about all of them, because the path cannot.
 	if c.ChatBackendFor() == ChatChatlet && first != nil && len(declared) == 0 {
 		w := advisory(at(x.units[first], "channel"), fmt.Sprintf(
-			"no unit in this company declares a `channel`, and its chat is "+
-				"Chatlet — the engine opens a room for each channel a unit names "+
-				"and keeps its members to the org chart, so no team here has a "+
-				"room of its own until somebody opens one by hand and adds its "+
-				"seats. Give the units that work in the open a channel, starting "+
-				"with %q", first.Name))
+			"no unit in this company declares a `channel`. In Chatlet, "+
+				"each channel a unit names gets a room whose members follow the "+
+				"org chart. Without one, a team only has a room if someone opens "+
+				"one by hand and adds its seats. Give the units that work in the "+
+				"open a channel, starting with %q", first.Name))
 		w.Unit = first.Name
 		out = append(out, w)
 	}

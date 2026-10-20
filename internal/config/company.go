@@ -614,9 +614,8 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 	// of the intent.
 	if c.Tracker.Worklet != nil && c.TrackerBackendFor() != TrackerWorklet {
 		p.add(field("tracker.worklet"), ErrConflict,
-			"this company's tracker is %q, and `tracker.worklet` is Worklet's "+
-				"policy, so nothing would read it. Remove the block, or run "+
-				"Worklet", c.TrackerBackendFor())
+			"this company's tracker is %q, so nothing reads `tracker.worklet`. "+
+				"Remove the block, or use Worklet", c.TrackerBackendFor())
 	}
 
 	// The hierarchy's own rules (duplicate handles, human seats carrying
@@ -676,8 +675,8 @@ func (c *Company) validateKnowledgeBackend() error {
 	// path so the message names what to delete.
 	if c.Knowledge.Backend == KnowledgeDoclet && c.Integrations.Confluence != nil {
 		p.add(field("knowledge.backend"), ErrConflict,
-			"Doclet and integrations.confluence cannot both run: pages would "+
-				"live in two places and nothing would keep them in step. Remove one")
+			"Doclet and integrations.confluence can't both run, because "+
+				"pages would be split between them. Remove one")
 	}
 	if c.Knowledge.Backend == KnowledgeConfluence && c.Integrations.Confluence == nil {
 		p.add(field("knowledge.backend"), ErrConflict,
@@ -685,9 +684,8 @@ func (c *Company) validateKnowledgeBackend() error {
 	}
 	if c.Tracker.Backend == TrackerWorklet && c.Integrations.Jira != nil {
 		p.add(field("tracker.backend"), ErrConflict,
-			"Worklet and integrations.jira cannot both run: work would be filed "+
-				"in two places and a unit's project key would name two trackers. "+
-				"Remove one")
+			"Worklet and integrations.jira can't both run, because work "+
+				"would be split between them. Remove one")
 	}
 	if c.Tracker.Backend == TrackerJira && c.Integrations.Jira == nil {
 		p.add(field("tracker.backend"), ErrConflict,
@@ -708,14 +706,12 @@ func (c *Company) validateKnowledgeBackend() error {
 		if c.Knowledge.Vectors != nil && *c.Knowledge.Vectors &&
 			c.TrackerBackendFor() != TrackerWorklet {
 			p.add(field("knowledge.vectors"), ErrConflict,
-				"vectors need a knowledge backend or Worklet; with neither "+
-					"there is no corpus to embed")
+				"vectors need a knowledge backend or Worklet to search")
 		}
 	}
 	if c.Knowledge.Vectors != nil && *c.Knowledge.Vectors && c.Providers.Embeddings == nil {
 		p.add(field("knowledge.vectors"), ErrConflict,
-			"vector recall needs providers.embeddings — there is nothing to "+
-				"compute an embedding with")
+			"vectors need providers.embeddings to compute embeddings with")
 	}
 	return p.err()
 }
@@ -886,9 +882,10 @@ func (t *WorkletConfig) validate(path Path) error {
 	}
 	if d := t.InboxRetentionDays; d != 0 && (d < MinInboxRetentionDays || d > MaxInboxRetentionDays) {
 		p.add(at(path, "inbox_retention_days"), ErrOutOfRange,
-			"%d is outside %d..%d — below a month an inbox stops being one, and "+
-				"past ten years it is a second copy of the history it points at",
-			d, MinInboxRetentionDays, MaxInboxRetentionDays)
+			"%d is outside %d..%d. Under a month, notices are gone before "+
+				"people see them, and past ten years they only repeat the "+
+				"history they point at", d, MinInboxRetentionDays,
+			MaxInboxRetentionDays)
 	}
 	return p.err()
 }
