@@ -1,0 +1,257 @@
+/**
+ * Asking an agent from a create page: a real task, filed to the chosen seat in
+ * the chosen project, whose description carries the brief and the kind; an
+ * artifact already made is linked to it after it is filed, never before; and
+ * the who-builds-it block offers the agents as their characters with the
+ * project following the agent.
+ */
+
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { useEffect, type ReactNode } from "react";
+import { LayerHost, ToastProvider } from "@crewlethq/ui";
+
+import { FrameReadings } from "~/app/Shell.tsx";
+import { Router } from "~/app/router.tsx";
+import { ClientContext } from "~/lib/store-hooks.ts";
+import { reloadForTest } from "~/lib/prefs.ts";
+import { LiveSocket, Store, type WorkProjectRow } from "~/protocol/index.ts";
+import { healthFrame } from "~/test/health.ts";
+import { withDerived } from "~/test/org.ts";
+import {
+  artifactTaskBody,
+  useFileArtifactTask,
+  type ArtifactTaskRequest,
+  type FiledArtifactTask,
+} from "./fileTask.ts";
+import { WhoBuildsIt, useWhoBuildsIt, type WhoBuildsItState } from "./WhoBuildsIt.tsx";
+
+const linked: { id: string; workItem: string }[] = [];
+let linkAnswer: { kind: "done"; body: Record<string, unknown> } | { kind: "refused"; text: string };
+
+vi.mock("~/lib/keyedWrite.ts", async () => {
+  const actual = await vi.importActual<typeof import("~/lib/keyedWrite.ts")>("~/lib/keyedWrite.ts");
+  return {
+    ...actual,
+    keyedWrite: vi.fn(async (req: { path: string; body?: { work_item?: string } }) => {
+      linked.push({ id: req.path.split("/")[2] ?? "", workItem: req.body?.work_item ?? "" });
+      return linkAnswer;
+    }),
+  };
+});
+
+class InertWebSocket {
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSED = 3;
+  readyState = InertWebSocket.CONNECTING;
+  send(): void {}
+  close(): void {}
+}
+
+const JANE = {
+  login: "U0FOUNDER",
+  grants: ["admin", "tracker", "artifacts"],
+  handle: "jane",
+  owner: "jane",
+  name: "Jane Founder",
+  kind: "human",
+  acts: ["create_work_item"],
+  project: "OPS",
+};
+
+const ORG = {
+  name: "Acme",
+  timezone: "UTC",
+  roles: [
+    { name: "Jane Founder", handle: "jane", kind: "human" },
+    { name: "Agent PM", handle: "pm", kind: "agent", goal: "Own the roadmap" },
+    { name: "Agent Designer", handle: "designer", kind: "agent", goal: "Brand and UX design" },
+  ],
+  units: [],
+};
+
+const project = (key: string): WorkProjectRow =>
+  ({ key, name: key, unit: { resolved: true }, lead: { handle: "jane" } }) as WorkProjectRow;
+
+let posted: { tool: string; args: Record<string, unknown> }[];
+
+beforeEach(() => {
+  Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
+  posted = [];
+  linked.length = 0;
+  linkAnswer = { kind: "done", body: {} };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init: RequestInit) => {
+      const tool = decodeURIComponent(String(url).split("/operator/act/")[1] ?? "");
+      posted.push({ tool, args: (JSON.parse(init.body as string) as { args: never }).args });
+      return new Response(
+        JSON.stringify({
+          tool,
+          outcome: "applied",
+          position: "CREWLET_TRACKER_LOG@1:9",
+          receipt: { id: "0f0f", item: "DES-4", key: "DES-4" },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }),
+  );
+});
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+  localStorage.clear();
+  reloadForTest();
+  location.hash = "#/";
+});
+
+function mount(children: ReactNode) {
+  const store = new Store();
+  store.applyHealth(healthFrame({ nodes: 1 }));
+  store.applyOrg(withDerived(ORG) as never);
+  const socket = new LiveSocket(store);
+  socket.query = ((what: string) => {
+    const answers: Record<string, unknown> = {
+      viewer: JANE,
+      work_projects: { projects: [project("DES"), project("OPS")] },
+      work_inbox: { handle: "jane", notices: [], unread: 0, primary: 0 },
+    };
+    return Promise.resolve(answers[what] ?? {});
+  }) as typeof socket.query;
+  return render(
+    <ToastProvider>
+      <LayerHost>
+        <ClientContext.Provider value={{ store, socket }}>
+          <FrameReadings>
+            <Router>{children}</Router>
+          </FrameReadings>
+        </ClientContext.Provider>
+      </LayerHost>
+    </ToastProvider>,
+  );
+}
+
+async function settle() {
+  await act(async () => {
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+  });
+}
+
+/** Files `request` on its first render and hands back what was filed. */
+function Filer({
+  request,
+  onFiled,
+}: {
+  request: ArtifactTaskRequest;
+  onFiled: (filed: FiledArtifactTask | null) => void;
+}) {
+  const { fileArtifactTask } = useFileArtifactTask();
+  return (
+    <button type="button" onClick={() => void fileArtifactTask(request).then(onFiled)}>
+      File
+    </button>
+  );
+}
+
+async function file(request: ArtifactTaskRequest): Promise<FiledArtifactTask | null> {
+  let filed: FiledArtifactTask | null = null;
+  mount(<Filer request={request} onFiled={(f) => (filed = f)} />);
+  await settle();
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "File" }));
+  });
+  await settle();
+  return filed;
+}
+
+test("the description is the brief, then what to publish and where", () => {
+  expect(artifactTaskBody("design", "  Three onboarding screens.  ")).toBe(
+    "Three onboarding screens.\n\nPublish it as a Design artifact (kind `design`) for this task.",
+  );
+  expect(artifactTaskBody("dashboard", "Weekly signups.", "a1")).toBe(
+    "Weekly signups.\n\nBuild it in the Dashboard artifact already linked to this task (artifact a1), and publish your work as new versions of it.",
+  );
+});
+
+// A REAL TASK, as the person: the tracker's own create, filed to the seat in
+// the project, and nothing linked when no artifact was named.
+test("files one task to the agent in the project, and returns its address and key", async () => {
+  const filed = await file({
+    kind: "design",
+    title: " Onboarding screens ",
+    brief: "Three screens.",
+    seat: "designer",
+    project: "DES",
+  });
+  expect(posted).toEqual([
+    {
+      tool: "create_work_item",
+      args: {
+        title: "Onboarding screens",
+        project: "DES",
+        assignee: "designer",
+        body: artifactTaskBody("design", "Three screens."),
+      },
+    },
+  ]);
+  expect(filed).toEqual({ item: "DES-4", key: "DES-4", linked: null });
+  expect(linked).toEqual([]);
+});
+
+test("a task with no project is filed in the person's own", async () => {
+  await file({ kind: "html", title: "Calculator", brief: "A loan calculator.", seat: "pm" });
+  expect(posted[0]?.args.project).toBe("OPS");
+});
+
+// THE TASK FIRST, THEN THE LINK: the artifact names the key the create minted.
+test("an artifact already made is linked to the new task by its key", async () => {
+  const filed = await file({
+    kind: "dashboard",
+    title: "Signups",
+    brief: "Weekly signups.",
+    seat: "pm",
+    project: "DES",
+    artifact: "a1",
+  });
+  expect(linked).toEqual([{ id: "a1", workItem: "DES-4" }]);
+  expect(filed?.linked).toBe(true);
+});
+
+test("a link the engine refused is said, and the filed task is still returned", async () => {
+  linkAnswer = { kind: "refused", text: "You cannot open that artifact." };
+  const filed = await file({
+    kind: "design",
+    title: "Screens",
+    brief: "Two screens.",
+    seat: "designer",
+    artifact: "a2",
+  });
+  expect(filed).toEqual({ item: "DES-4", key: "DES-4", linked: "You cannot open that artifact." });
+});
+
+function Who({ onState }: { onState: (who: WhoBuildsItState) => void }) {
+  const who = useWhoBuildsIt("design");
+  useEffect(() => {
+    onState(who);
+  });
+  return <WhoBuildsIt who={who} />;
+}
+
+// THE AGENTS AS THEIR CHARACTERS, the one whose work the kind is first and
+// chosen, and the project the reader's own until they pick one.
+test("who builds it offers the agents, the suggested one first and chosen", async () => {
+  let state: WhoBuildsItState | null = null;
+  mount(<Who onState={(who) => (state = who)} />);
+  await settle();
+  const radios = screen.getAllByRole("radio") as HTMLInputElement[];
+  expect(radios.map((r) => r.value)).toEqual(["designer", "pm"]);
+  expect(radios[0]!.checked).toBe(true);
+  expect(screen.getByText("Suggested")).toBeTruthy();
+  expect(state!.seat).toBe("designer");
+  expect(state!.project).toBe("OPS");
+  fireEvent.click(radios[1]!);
+  await settle();
+  expect(state!.seat).toBe("pm");
+});
