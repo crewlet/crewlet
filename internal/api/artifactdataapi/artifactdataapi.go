@@ -195,7 +195,7 @@ func (s *Service) admitWith(w http.ResponseWriter, r *http.Request, action authz
 	case errors.As(err, &refused):
 		operator.RefuseDecision(w, r, action, refused.Decision)
 	case errors.Is(err, artifactsdomain.ErrTrashed):
-		dataGone(w, "the artifact is in the trash; its data is not served until it is restored")
+		trashed(w, "the artifact is in the trash; its data is not served until it is restored")
 	case errors.Is(err, artifactsapi.ErrRecordUnwritten):
 		log.WarnContext(r.Context(), "artifacts_elevated_read_unrecorded", "artifact", id.String(),
 			"error", err.Error())
@@ -211,15 +211,20 @@ func (s *Service) admitWith(w http.ResponseWriter, r *http.Request, action authz
 // served, so nothing is written to it until it is restored.
 func writable(w http.ResponseWriter, a artifactsapi.Admission) bool {
 	if a.Head.Status == artifactsdomain.StatusTrashed {
-		dataGone(w, "the artifact is in the trash; restore it to write its data")
+		trashed(w, "the artifact is in the trash; restore it to write its data")
 		return false
 	}
 	return true
 }
 
-// dataGone is `410 data_gone`: an artifact whose data is not served.
-func dataGone(w http.ResponseWriter, detail string) {
-	httpjson.FailWith(w, http.StatusGone, httpjson.CodeDataGone, map[string]string{"detail": detail})
+// trashed is `409 artifact_trashed`, the answer every artifacts route gives an
+// artifact in the trash: the artifact's state, which its owner's restore
+// changes. NOT `410 data_gone`, which is a purge's — a store that will never
+// come back — and which a trashed artifact's data is not: answered as gone, a
+// client stopped asking about data a restore brings back whole.
+func trashed(w http.ResponseWriter, detail string) {
+	httpjson.FailWith(w, http.StatusConflict, httpjson.CodeArtifactTrashed,
+		map[string]string{"detail": detail})
 }
 
 // Via is the surface a write declares it came through. A browser session
@@ -549,7 +554,10 @@ func answer(w http.ResponseWriter, r *http.Request, key string, res artifactdata
 	case artifacts.DataForbidden:
 		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeForbidden, body)
 	case artifacts.DataQuota:
-		httpjson.FailWithFields(w, http.StatusRequestEntityTooLarge, httpjson.CodeDataQuota, body)
+		// THE ONE ANSWER A QUOTA HAS on every surface, the tools' class
+		// `quota_exceeded` included: the state of what the company holds,
+		// which no other request changes.
+		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeQuotaExceeded, body)
 	case artifacts.DataGone:
 		httpjson.FailWithFields(w, http.StatusGone, httpjson.CodeDataGone, body)
 	default:

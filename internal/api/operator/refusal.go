@@ -114,8 +114,8 @@ type classAnswer struct {
 // BY WHAT THE CALLER DOES NEXT, which is the only thing a status is for: 422
 // for an argument to change, 404 for an object that is not there, 403 for a
 // gesture the domain forbids this caller, 409 for a state the request collided
-// with — re-read it, or (for a spent budget, a full inbox, a run that stopped)
-// change it — 503 for a node that could not serve it, the one class a retry of
+// with — re-read it, or (for a spent budget, a full inbox, a quota the
+// company's holdings reached, a run that stopped) change it — 503 for a node that could not serve it, the one class a retry of
 // the same request can fix, and 500 for a node that FAILED at something of its
 // own ([crewletmcp.RefusalInternalError]): nothing the caller does next helps,
 // and a 503 there told a client to come back in two seconds, for ever. A test
@@ -131,6 +131,7 @@ var classAnswers = map[crewletmcp.Refusal]classAnswer{
 	crewletmcp.RefusalAlreadyAnswered:    {http.StatusConflict, httpjson.CodeAlreadyAnswered},
 	crewletmcp.RefusalReassignmentBudget: {http.StatusConflict, httpjson.CodeReassignmentBudget},
 	crewletmcp.RefusalInboxFull:          {http.StatusConflict, httpjson.CodeInboxFull},
+	crewletmcp.RefusalQuotaExceeded:      {http.StatusConflict, httpjson.CodeQuotaExceeded},
 	crewletmcp.RefusalNotRunning:         {http.StatusConflict, httpjson.CodeNotRunning},
 	crewletmcp.RefusalSteerUnsupported:   {http.StatusConflict, httpjson.CodeSteerUnsupported},
 	crewletmcp.RefusalBudgetExhausted:    {http.StatusConflict, httpjson.CodeBudgetExhausted},

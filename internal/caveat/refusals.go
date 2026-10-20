@@ -4,7 +4,8 @@ import "fmt"
 
 // THE REFUSAL CATALOG: the person's words for the refusals a person meets most
 // often on the dashboard, answering a decision, filing or editing a work item,
-// and publishing an artifact an assistant drafted. Every other refusal is
+// publishing an artifact an assistant drafted, and writing its data past a
+// limit on what the data may hold. Every other refusal is
 // answered with its code's own sentence until it has a phrasing here
 // (ADR-0060 names the rest). Each names only what a person sees: a handle as
 // `@handle`, a question, an option, a title.
@@ -94,6 +95,19 @@ func ArtifactQuotaReached() Refusal {
 	return Refusal{person: "The company's artifact storage is full, so this " +
 		"was not published. Remove artifacts nobody needs, or ask an admin to " +
 		"raise the limit."}
+}
+
+// DatastoreQuotaReached is a write to an artifact's data, or a change to the
+// collections it keeps, past a limit on what that data may hold: the
+// company's storage settings, a collection's own row caps, or the engine's
+// caps on one store's collections and documents. ONE PHRASING FOR EVERY ONE
+// OF THEM, and true of each, because the refusal names which only in the
+// datastore's reason, which is written for a model and never parsed for a
+// person's words.
+func DatastoreQuotaReached() Refusal {
+	return Refusal{person: "This artifact's data has reached a limit on what " +
+		"it can hold, so nothing was saved. Remove what is no longer needed, " +
+		"or ask whoever sets the limit to raise it."}
 }
 
 // ArtifactTrashed is a change to an artifact that is in the trash.

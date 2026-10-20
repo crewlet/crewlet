@@ -78,9 +78,12 @@ const (
 	RefusalStaleVersion Refusal = "stale_version"
 
 	// RefusalConflict — the write lost its race against other writers for
-	// its whole round budget, or the running turn a note is for already
-	// holds as many unread notes as it takes. Each clears on its own: try
-	// again shortly.
+	// its whole round budget, the running turn a note is for already holds
+	// as many unread notes as it takes, or the object is in a STATE that
+	// refuses the gesture — an artifact in the trash or being purged, a
+	// restore with nothing in the trash — which the sentence names. Read
+	// the object again: a race clears on its own, and a state is changed by
+	// whoever the sentence names.
 	RefusalConflict Refusal = "conflict"
 
 	// RefusalExists — the object this call would create already exists.
@@ -95,6 +98,17 @@ const (
 
 	// RefusalInboxFull — a person's inbox list is at its ceiling.
 	RefusalInboxFull Refusal = "inbox_full"
+
+	// RefusalQuotaExceeded — the write would take what is kept past a limit
+	// on it: the company's storage (the artifacts' bytes, a datastore's
+	// footprint), which the sentence names with the setting an operator
+	// raises, or a cap on what one datastore holds (a collection's rows,
+	// one participant's rows, a store's collections and documents), which
+	// the sentence names. Nothing was written. NOT [RefusalForbidden]: no
+	// permission lifts it, and a caller told it may not would go and ask
+	// for one. It clears when somebody removes what is no longer needed or
+	// raises a limit that can be raised, never by trying again.
+	RefusalQuotaExceeded Refusal = "quota_exceeded"
 
 	// RefusalNotRunning — the run or turn the call addresses is not
 	// running, or not waiting for what the call supplies.
@@ -149,7 +163,8 @@ var Refusals = []Refusal{
 	RefusalInvalid, RefusalNotFound, RefusalForbidden,
 	RefusalStaleVersion, RefusalConflict, RefusalExists,
 	RefusalAlreadyAnswered, RefusalReassignmentBudget, RefusalInboxFull,
-	RefusalNotRunning, RefusalSteerUnsupported, RefusalBudgetExhausted,
+	RefusalQuotaExceeded, RefusalNotRunning, RefusalSteerUnsupported,
+	RefusalBudgetExhausted,
 	RefusalUnavailable, RefusalInternalError,
 }
 

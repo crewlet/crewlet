@@ -165,8 +165,9 @@ shipped surface is owed.
 
 **Remedies for the limits a person cannot change from the dashboard** are not
 part of this record. The artifact and datastore storage quotas
-(`ArtifactQuotaReached`, `data_quota`) and the per-node write, read and check
-budgets are Tier A, set in each node's own file by whoever runs the nodes, and
+(`ArtifactQuotaReached`, and the datastore's `quota_exceeded`) and the
+per-node write, read and check budgets are Tier A, set in each node's own file
+by whoever runs the nodes, and
 no dashboard screen edits them, so a link would open a page with nothing to
 change on it. Their refusals keep their words; a remedy is added with the
 setting's first editor.

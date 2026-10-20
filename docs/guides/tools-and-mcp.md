@@ -534,11 +534,12 @@ a model acts on:
 | `not_found` | The item, page, skill or colleague the call is *about* does not exist | Stop; it is gone or was never there |
 | `forbidden` | This caller may not do this here — outside a turn, somebody else's inbox or priorities, a view protected for its owner, a project's policy without the lead's authority, a reserved container | Ask whoever the sentence names |
 | `stale_version` | The object changed after the caller read it | Read it again and decide from what it says now |
-| `conflict` | The write lost its race to other writers, or the object's state moved under it | Read it again; a retry may land |
+| `conflict` | The write lost its race to other writers, or the object is in a state that refuses it — an artifact in the trash or being purged, a label another version holds, a restore with nothing in the trash — which the sentence names | Read it again; a race clears on its own, and a state is changed by whoever the sentence names |
 | `exists` | What the call would create is already there | Edit the existing one |
 | `already_answered` | The question this answers has an answer | Read the answer |
 | `reassignment_budget` | The item has been handed on as often as it may be | Do not reassign it again |
 | `inbox_full` | A person's inbox list is at its ceiling | Mark older entries read |
+| `quota_exceeded` | The write would take what is kept past a limit on it: the company's storage — an artifact's bytes, a datastore's footprint — which the sentence names with the setting an operator raises, or a cap on what one datastore holds — a collection's rows, one participant's rows, a store's collections and documents — which the sentence names. No permission lifts it | Remove what is no longer needed, or ask whoever sets the limit to raise it |
 | `not_running` | The run or turn the call addresses is not running, or not waiting for this | Nothing to act on |
 | `steer_unsupported` | The running turn's runtime cannot take a note mid-turn | Wait for the turn to end |
 | `budget_exhausted` | The company's token budget has no room left in one of its windows, so a call that would spend tokens was not made; nothing was spent. A person's answer carries a `remedy` naming the ceiling | Wait for the window the sentence names to turn over, or raise its ceiling |

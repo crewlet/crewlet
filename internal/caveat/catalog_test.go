@@ -77,6 +77,7 @@ var refusalSamples = map[string]caveat.Refusal{
 		caveat.Remedy{Setting: caveat.SettingSeatTokenBudget, Seat: "backend-engineer"}),
 	"TokenBudgetSpent (a person's assistant)": caveat.TokenBudgetSpent(
 		caveat.AssistantTokenBudget()),
+	"DatastoreQuotaReached": caveat.DatastoreQuotaReached(),
 }
 
 // EVERY CAVEAT A PERSON CAN BE SHOWN IS WORDED FOR A PERSON.

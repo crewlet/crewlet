@@ -2711,11 +2711,13 @@ as one that does not exist.
 | `GET` | `/artifacts/{id}/data/export.csv` | `collection=` one collection as CSV, streamed a page at a time *(editor and above)*, under the collection's read rule, written for a person to read: each column headed by its label (its key where it has none), choices as their labels, a person as the seat's name, the row's attribution under `ID`, `Created by`, `Created at`, `Updated by`, `Updated at` and `Version`, and any cell a spreadsheet would run as a formula written as text. An artifact in the trash is `410` `data_gone` |
 
 Every read here is a read of the artifact's content: an artifact in the trash
-answers none of them (the questions `404` `not_found`), and an administrator
+answers none of them (the questions `404` `not_found`, the routes `409`
+`artifact_trashed`), and an administrator
 only the admin path admits is recorded as reading it before a row is sent, or
 answered `503` with nothing when that record cannot be written. Every write
 route takes an `Idempotency-Key`, refuses a field it does not declare, and
-refuses a write to an artifact in the trash (`410` `data_gone`) until it is
+refuses a write to an artifact in the trash (`409` `artifact_trashed`, as every
+artifacts route answers the trash — `410` `data_gone` is a purge's) until it is
 restored. A write from a browser session states the surface it
 came through as `via`: `dashboard`, or `bridge` with the `version` of the page
 whose script made it, which must declare `db` (or `state`, for a state key) or
@@ -2734,7 +2736,7 @@ a refusal carries it next to its `error`:
 | `409` | `stale_version` | An `if_version` that no longer matches; `conflict` names the documents |
 | `422` | `invalid` | A value outside its column's type, a field the collection does not declare, a long text written whole without its guard |
 | `403` | `forbidden` | The caller's role, or the column's rule, does not let them write it |
-| `413` | `data_quota` | The write would take the store or the company past its footprint quota. A write that shrinks the store is never refused for it |
+| `409` | `quota_exceeded` | The write would take what is kept past a limit on it: the store's or the company's footprint (a Tier A setting an operator raises), a collection's rows or one participant's rows (caps its schema sets), or the collections and documents one store holds. `detail` is the applier's reason, which names the limit. A write that shrinks the store is never refused for it |
 | `410` | `data_gone` | The store was purged |
 | `429` | `write_budget` | This node's write budget for the caller on this store, or for the store, is spent. Weighed by the rows a batch's apply writes, which are each named document's whole field index rather than the fields the batch names, in units of sixteen rows (20 units a second with a burst of 100 per caller and store; 40 a second with a burst of 100 per store), with `Retry-After`, `scope` and `retry_after_ms` saying when it holds the cost again. Per node, never a lockout |
 
@@ -6071,7 +6073,7 @@ has them:
 | `invalid` | `422` |
 | `not_found` | `404` |
 | `forbidden` | `403` |
-| `stale_version`, `conflict`, `exists`, `already_answered`, `reassignment_budget`, `inbox_full`, `not_running`, `steer_unsupported`, `budget_exhausted` | `409` |
+| `stale_version`, `conflict`, `exists`, `already_answered`, `reassignment_budget`, `inbox_full`, `quota_exceeded`, `not_running`, `steer_unsupported`, `budget_exhausted` | `409` |
 | `unavailable` | `503` |
 | `internal_error` | `500` — a fault of the node's own store or code: a fixed sentence, the error itself only in the node's log, and **no** `Retry-After`, since no wait clears it. It is also the answer for a failure that carried no class |
 
@@ -7026,7 +7028,7 @@ owner and shares, **before** a version, a file or a byte is read:
 - **The trash stops serving content at once.** A trashed artifact's head, its
   versions and its history stay readable to its audience for the trash view;
   its files, source and frames are `409 artifact_trashed`, its datastore
-  questions `404 not_found`, its export `410 data_gone`, and a room's join is
+  questions `404 not_found`, its export `409 artifact_trashed`, and a room's join is
   refused, before anything is read or recorded.
 - **A purge is committed before anything it removes is gone.** Its first step
   stamps the artifact on its own record (`purge_begun_at` on the head, and into
@@ -7490,7 +7492,7 @@ dashboard follow the adopted brand live, drawn by the dashboard.
 | `409` | `conflict` | A frame whose ready time was already reported; see [Viewing a version](#viewing-a-version) |
 | `410` | `upload_expired` | The upload's window closed before it was finished |
 | `412` | `version_moved` | The head moved past the base; see [Publishing a version](#publishing-a-version) |
-| `413` | `quota_exceeded` | The company's quota; `key` names the Tier A setting an operator raises |
+| `409` | `quota_exceeded` | The company's quota; `key` names the Tier A setting an operator raises. A `409` because it is the state of what the company holds that the write collided with: no smaller request changes it, and every surface answers it so — the tools' class is `quota_exceeded` too |
 | `415` | `media_type_refused` | A file type an artifact may not publish |
 | `422` | `upload_mismatch` / `content_refused` | Bytes that are not the declared ones, or not what their type promises |
 | `422` | `edit_refused` / `policy_refused` | An edit that matched zero or several times (`index`, `matches`), or a page the publish policy refuses (`findings`) |
