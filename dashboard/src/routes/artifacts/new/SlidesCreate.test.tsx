@@ -233,5 +233,8 @@ test("asking an agent makes the deck shared with it, files its task linked to th
   expect(String(filed.args.body)).toContain("artifact a-1");
   const [, linkPath, link] = request.mock.calls.find(([, p]) => String(p).endsWith("/work-items"))!;
   expect(linkPath).toBe("/artifacts/a-1/work-items");
-  expect((link as { body: unknown }).body).toEqual({ work_item: "OPS-7" });
+  expect((link as { body: unknown }).body).toEqual({
+    work_item: "OPS-7",
+    after: "CREWLET_TRACKER_LOG@1:9",
+  });
 });
