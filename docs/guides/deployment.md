@@ -1601,8 +1601,9 @@ one** of them keeps each one:
    writing a batch a data node *claims* it in the coordination store,
    create-only. The claim's winner keeps the batch; any other node that wrote
    it deletes its copy. A batch is acknowledged only once its keeper is
-   decided, and a data node that crashed between writing and claiming settles
-   its copy the same way at its next boot.
+   decided — or once its keeper's record is one nothing can read (below) —
+   and a data node that crashed between writing and claiming settles its copy
+   the same way at its next boot.
 
 That last step is what keeps every figure derived from a node's own log
 honest: the `usage` domain sums each node's day, so a batch two data nodes
@@ -1622,6 +1623,33 @@ trace's or a turn's total, a page of turns' tokens, and the integrations' drop
 and merge counts: each data node counts the rows it keeps and names the ones it
 has not settled, and the node you asked counts each named row once
 ([Reading the fleet's history](../concepts/event-system.md#reading-the-fleets-history)).
+
+**A keeper record nothing can read is left alone rather than guessed at.**
+Every record in the coordination store's custody bucket is written by a claim,
+which names its node. A record that does not decode, or names no node, came
+from somewhere else — written there by hand or by a process that is not
+Crewlet, reshaped by a later build, or corrupted — and says neither who keeps
+the batch nor that nobody does. A data node holding such a batch keeps its copy
+as it is, counted in none of its days; acknowledges the delivery rather than
+hand it to the next data node to write once more; and logs
+`event_custody_undecidable` naming the batch when the delivery arrives and on
+every pass after, a minute apart; its error names where the record is, the
+bucket `crewlet_custody` under the batch's id. Every other batch settles as
+usual, before and after it. Left alone, the batch goes with its rows once it is
+older than the event log's retention, 31 days after it was written. Removing
+the record instead lets the next pass claim the batch afresh — but only once
+you know that no data node kept the batch before its record became unreadable:
+that node holds its copy as kept and logs nothing, and the claim after the
+removal would keep a second. Whether you can remove it depends on the broker:
+
+- **An external NATS cluster** (`stream.type: nats`): with the NATS CLI,
+  connected as the engine's own account, `nats kv del crewlet_custody
+  <batch-id>`, the id from the log line.
+- **The embedded broker:** there is no supported way to reach its buckets from
+  outside the engine — a solo server binds no socket, and the client port a
+  clustered member opens is one the server picks for itself at each start,
+  which no setting names — and the engine has no command that removes a
+  custody record. The batch waits out the event log's retention.
 
 **Upgrade the data nodes first.** A data node writes each event in a batch by
 its own build's category map, and leaves out a type its build does not place —
