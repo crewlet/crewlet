@@ -563,7 +563,9 @@ measured rather than derived: the object store on every backend
 (`objstoretest.Bench` — the broker's bucket at three replicas, and an S3 fake
 a provider's round trip away, among them — and the SHA-256 rate under every
 verified byte), one arbitrated write end to end and the applier's drain
-(`internal/statelog`), the store's own drain (`internal/store`), a git
+(`internal/statelog`), the store's own drain (`internal/store`), the
+company's token counter charged by many nodes at once, each a leaf of its own,
+and a gated lease claim (`internal/coord/kv`), a git
 process through the pool and the index-pack a push runs
 (`internal/code/gitproc`), the git cache's cold and delta syncs and a
 bundle's own file work, its index maintenance and what a request pays across
@@ -585,7 +587,7 @@ each, on one idle machine, and read the two outputs with
 
 | Variable | Default | What it sets |
 |---|---|---|
-| `BENCH_PKGS` | `internal/objstore`, its three backends, `internal/objstore/natsobj/replicated`, `internal/statelog`, `internal/store`, `internal/code/gitproc`, `internal/code/cache`, `internal/code`, `internal/code/codecluster`, `internal/code/host`, `internal/api/paced`, `cmd/crewlet` | which packages are measured |
+| `BENCH_PKGS` | `internal/objstore`, its three backends, `internal/objstore/natsobj/replicated`, `internal/statelog`, `internal/store`, `internal/coord/kv`, `internal/code/gitproc`, `internal/code/cache`, `internal/code`, `internal/code/codecluster`, `internal/code/host`, `internal/api/paced`, `cmd/crewlet` | which packages are measured |
 | `BENCH_PATTERN` | `.` | `-bench`, e.g. `Backend/via=member` |
 | `BENCH_TIME` | `3s` | `-benchtime` |
 | `BENCH_COUNT` | `1` | `-count` |

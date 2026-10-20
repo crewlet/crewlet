@@ -16,6 +16,31 @@ import (
 
 const testSeat = "agent:11111111-1111-1111-1111-111111111111"
 
+// ContendedCharges is how many charges the contention cases put on one counter
+// through one handle at once — here, and through EACH handle of the shared
+// cases ([RunSharedFleet]).
+//
+// TEN TIMES THE CONTENTION THE STORE BEFORE IT FAILED AT. coord/kv bounded a
+// charge's compare-and-swap at sixteen attempts with a wait doubling to a
+// 32 ms ceiling, and thirty-two concurrent charges through a leaf under load
+// lost every one of them — a healthy round failed closed as an outage. At
+// this figure a backend fails these cases with an attempt bound near the
+// charges in flight, or a backoff whose spread was tuned to one topology's
+// round trip rather than the one it meets.
+//
+// WHAT THE CASES CANNOT TELL is HOW a backend survives. Measured on coord/kv
+// with every charge made a compare-and-swap contender of its own — its
+// coalescing off, its 256 attempts and its round-trip window kept — the
+// contended cases passed through one handle, on a member and through a leaf,
+// and on three handles on a member, as a store that coalesces does: enough
+// attempts and a spread wait carry this many charges. What tells the two
+// apart is the backend's own count of what reaches its store
+// (coord/kv's TestANodesChargesOnOneScopeAreOneContender), and production is
+// where the difference binds: a counter's writers are every round in flight
+// on every node, which no attempt bound can be sized for, or the nodes, which
+// one can.
+const ContendedCharges = 320
+
 // windows is the suite's current windows: the day, week and month of the
 // harness's fixed instant, in UTC.
 func (h *fleetHarness) windows() coord.Windows {
@@ -915,14 +940,17 @@ var budgetCases = []fleetCase{{
 	fn: func(h *fleetHarness) {
 		// The property a compare-and-swap buys and a read-modify-write
 		// does not. Without it N concurrent rounds count as one, and
-		// the cap is whatever the last writer happened to see. Thirty-two
-		// callers, so a backend's retry budget is exercised rather than
-		// merely present.
-		const callers = 32
+		// the cap is whatever the last writer happened to see. At
+		// [ContendedCharges] callers, ten times the contention that
+		// failed the store before this one closed as an outage — see
+		// its doc for what the figure does and does not tell.
+		const callers = ContendedCharges
 		var wg sync.WaitGroup
+		start := make(chan struct{})
 		errs := make(chan error, callers)
 		for range callers {
 			wg.Go(func() {
+				<-start
 				if _, err := h.f.Charge(h.ctx, coord.ChargeRequest{
 					Seat: testSeat, Tokens: 10, Windows: h.windows(),
 				}); err != nil {
@@ -930,6 +958,7 @@ var budgetCases = []fleetCase{{
 				}
 			})
 		}
+		close(start)
 		wg.Wait()
 		close(errs)
 		for err := range errs {
@@ -947,14 +976,16 @@ var budgetCases = []fleetCase{{
 		// that were two steps would let every racing caller see room. What
 		// is ADMITTED is what the ceiling holds, exactly; what is COUNTED is
 		// every round, because every one of them was spent.
-		const callers = 32
+		const callers = ContendedCharges
 		var (
 			wg       sync.WaitGroup
 			admitted atomic.Int32
 		)
+		start := make(chan struct{})
 		errs := make(chan error, callers)
 		for range callers {
 			wg.Go(func() {
+				<-start
 				got, err := h.f.Charge(h.ctx, coord.ChargeRequest{
 					Seat: testSeat, Tokens: 10, Windows: h.windows(), OrgCaps: day(100),
 				})
@@ -966,6 +997,7 @@ var budgetCases = []fleetCase{{
 				}
 			})
 		}
+		close(start)
 		wg.Wait()
 		close(errs)
 		for err := range errs {

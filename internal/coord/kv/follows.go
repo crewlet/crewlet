@@ -146,32 +146,39 @@ func (f *FleetStore) Unfollow(ctx context.Context, backend, handle, channel, thr
 		return false, nil
 	}
 	key := followKey(backend, handle, channel, thread)
-	for range fleetCASRetries {
+	what := fmt.Sprintf("unfollow %s thread %s for %s", backend, thread, handle)
+	var removed bool
+	settled, err := casRetry(ctx, &f.followTrips, what, func() (bool, error) {
 		entry, err := f.get(ctx, f.follows, key)
 		switch {
 		case errors.Is(err, jetstream.ErrKeyNotFound):
-			return false, nil
+			return true, nil
 		case err != nil:
 			return false, unavailable(
 				fmt.Sprintf("read the follow on %s thread %s for %s", backend, thread, handle), err)
 		}
-		removed, err := f.deleteFollowAt(ctx, key, entry.Revision())
+		ok, err := f.deleteFollowAt(ctx, key, entry.Revision())
 		if err != nil {
-			return false, unavailable(
-				fmt.Sprintf("unfollow %s thread %s for %s", backend, thread, handle), err)
+			return false, unavailable(what, err)
 		}
-		if removed {
-			return true, nil
-		}
+		removed = ok
+		return ok, nil
+	})
+	switch {
+	case err != nil:
+		return false, err
+	case !settled:
+		// Every attempt lost means this key is being rewritten as fast as
+		// it is being read, which is not a state this engine produces: a
+		// follow is written by a message that names the seat in the thread
+		// or by the seat's own post there, and unfollowed by a person.
+		// Reported rather than answered, for [FleetStore.Allow]'s reason —
+		// an invented answer would tell somebody they had stopped watching
+		// a thread they are still watching.
+		return false, contended("unfollow",
+			fmt.Sprintf("%s thread %s for %s", backend, thread, handle))
 	}
-	// Sixteen rounds of losing means this key is being rewritten as fast as it
-	// is being read, which is not a state this engine produces: a follow is
-	// written by an inbound message and unfollowed by a person. Reported
-	// rather than answered, for [FleetStore.Allow]'s reason — an invented
-	// answer would tell somebody they had stopped watching a thread they are
-	// still watching.
-	return false, contended("unfollow",
-		fmt.Sprintf("%s thread %s for %s", backend, thread, handle))
+	return removed, nil
 }
 
 // deleteFollowAt removes a follow only if it is still at the revision the

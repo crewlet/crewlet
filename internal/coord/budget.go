@@ -24,6 +24,21 @@ import (
 // seat's second, exactly as it was on the counter that knew no calendar (see
 // [Budgets.Charge]).
 //
+// # A record's contenders are nodes
+//
+// The company's record is written by every round of every seat, so a backend
+// that made each charge a compare-and-swap of its own would have every round
+// in flight on every node contending one key — a number no attempt bound
+// covers, and a charge that runs out of attempts fails closed as an outage
+// while the store is answering and somebody is winning. A backend a fleet
+// shares therefore COALESCES each node's charges on one scope into one write
+// (coord/kv's writeLines): read once, every charge decided in arrival order
+// against what the ones before it left, each answered exactly as a serial
+// order would have answered it — so nothing a caller is told depends on what
+// it was batched with — and a key's contenders are the nodes charging it.
+// The memory twin is one process behind one mutex, which is the same serial
+// order with one node.
+//
 // # The roll is the reset
 //
 // A slot whose label is not the current window's belongs to an earlier window,

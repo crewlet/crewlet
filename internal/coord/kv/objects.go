@@ -26,27 +26,38 @@ func (f *FleetStore) AgreeObjectBackend(ctx context.Context, identity string) (s
 	if identity == "" {
 		return "", errors.New("coord/kv: an object backend needs an identity")
 	}
-	for range fleetCASRetries {
+	var agreed string
+	settled, err := casRetry(ctx, &f.objectTrips, "record the object backend", func() (bool, error) {
 		_, err := f.create(ctx, f.objects, objectBackendKey, []byte(identity))
 		switch {
 		case err == nil:
-			return identity, nil
+			agreed = identity
+			return true, nil
 		case !errors.Is(err, jetstream.ErrKeyExists):
-			return "", unavailable("record the object backend", err)
+			return false, unavailable("record the object backend", err)
 		}
 		entry, err := f.get(ctx, f.objects, objectBackendKey)
 		switch {
 		case errors.Is(err, jetstream.ErrKeyNotFound):
-			continue
+			// GONE between the refusal and the read, which only an
+			// operator removing the record does: the bucket has no age.
+			return false, nil
 		case err != nil:
-			return "", unavailable("read the object backend", err)
+			return false, unavailable("read the object backend", err)
 		}
 		if len(entry.Value()) == 0 {
-			return "", errors.New("coord/kv: the recorded object backend is empty")
+			return false, errors.New("coord/kv: the recorded object backend is empty")
 		}
-		return string(entry.Value()), nil
+		agreed = string(entry.Value())
+		return true, nil
+	})
+	switch {
+	case err != nil:
+		return "", err
+	case !settled:
+		return "", contended("AgreeObjectBackend", objectBackendKey)
 	}
-	return "", contended("AgreeObjectBackend", objectBackendKey)
+	return agreed, nil
 }
 
 // RecordObjectCollection stores the collector's last report, replacing the

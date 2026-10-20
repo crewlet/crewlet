@@ -1891,9 +1891,12 @@ the turn's own `agent_turn_completed`. The refused round is **counted all the
 same**, on the seat's counter and the company's, because the vendor has
 already billed it: the refusing window reads past its ceiling by the round that
 crossed it, and every later round is refused against that figure until the
-window turns over or the ceiling is raised. Each scope's check is atomic, and
-nothing a charge counted is taken back: a seat write that fails after the
-company's landed stops the round as an outage and leaves it on the company,
+window turns over or the ceiling is raised. Each scope's check is atomic — and
+a node's charges on one counter are one write, decided in the order they
+arrived, so the company's counter is contended by the nodes charging it rather
+than by every round in flight — and nothing a charge counted is taken back: a
+seat write that fails after the company's landed stops the round as an outage
+and leaves it on the company,
 whose record of a billed round is true, so only that seat's own counter is
 short of it — logged as `coord_kv_budget_spend_uncounted` — until the window
 turns over. In a fleet the counters live in the coordination

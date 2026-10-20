@@ -204,3 +204,14 @@ func TestUnencodableMetaIsRefusedNotDropped(t *testing.T) {
 func TestFleetContract(t *testing.T) {
 	coordtest.RunFleet(t, func(t *testing.T) coord.Fleet { return memory.NewFleet() })
 }
+
+// The shared fleet cases, through one twin handed out three times: the twin
+// serves a single process, so every handle is the same node, and the cases
+// hold it to the same arithmetic the store a fleet runs on is held to across
+// nodes.
+func TestSharedFleetContract(t *testing.T) {
+	coordtest.RunSharedFleet(t, func(t *testing.T) []coord.Fleet {
+		f := memory.NewFleet()
+		return []coord.Fleet{f, f, f}
+	})
+}

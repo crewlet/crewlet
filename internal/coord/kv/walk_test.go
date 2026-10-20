@@ -119,7 +119,7 @@ func openFleetForTest(t *testing.T, nc *nats.Conn, prefix string) *FleetStore {
 // production ledger's seven days would make a "this has lapsed" case wait
 // seven days. Every one is above the broker's 100 ms floor and far longer
 // than a case takes, so nothing lapses under a case that did not ask it to.
-func openFleetVia(t *testing.T, client jetstream.JetStream, prefix string) *FleetStore {
+func openFleetVia(t testing.TB, client jetstream.JetStream, prefix string) *FleetStore {
 	t.Helper()
 	store, err := OpenFleet(context.Background(), client, FleetConfig{
 		BucketPrefix:     prefix,

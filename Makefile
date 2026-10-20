@@ -680,7 +680,9 @@ require-node: ## fail unless node is on PATH (the e2e client replay needs it)
 # SHA-256 floor under every verified byte, and what one throttle costs a burst
 # of requests to an S3 bucket), an arbitrated write end to end
 # and the applier's drain (internal/statelog), the store's own drain
-# (internal/store), a git process through the pool end to end and
+# (internal/store), the company's token counter charged by many nodes at
+# once, each a leaf of its own, and a gated lease claim (internal/coord/kv),
+# a git process through the pool end to end and
 # receive-pack's index-pack at one thread (internal/code/gitproc), the git
 # cache's cold and delta syncs and a bundle's own file work, its index
 # maintenance and what a request pays across many packs, a node's boot of its
@@ -745,7 +747,7 @@ require-node: ## fail unless node is on PATH (the e2e client replay needs it)
 BENCH_PKGS    ?= ./internal/objstore ./internal/objstore/memobj \
                  ./internal/objstore/natsobj ./internal/objstore/natsobj/replicated \
                  ./internal/objstore/s3obj ./internal/statelog ./internal/store \
-                 ./internal/code/gitproc ./internal/code/cache ./internal/code \
+                 ./internal/coord/kv ./internal/code/gitproc ./internal/code/cache ./internal/code \
                  ./internal/code/codecluster ./internal/code/host ./internal/api/paced \
                  ./cmd/crewlet
 BENCH_PATTERN ?= .
@@ -753,7 +755,7 @@ BENCH_TIME    ?= 3s
 BENCH_COUNT   ?= 1
 BENCH_TIMEOUT ?= 8h
 
-bench: git ## measure the object store, the state log's write path, git, its cache, the code host's pushes and clones, a client's pace and the push hook's start (not a gate)
+bench: git ## measure the object store, the state log's write path, the fleet's token counter, git, its cache, the code host's pushes and clones, a client's pace and the push hook's start (not a gate)
 	$(call PREBUILD,,$(BENCH_PKGS))
 	$(GIT_ENV) $(GO) test -run '^$$' -bench '$(BENCH_PATTERN)' -benchmem \
 	  -benchtime $(BENCH_TIME) -count $(BENCH_COUNT) -timeout $(BENCH_TIMEOUT) \

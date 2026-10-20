@@ -13,7 +13,6 @@ import (
 
 	"github.com/nats-io/nats.go/jetstream"
 
-	"github.com/crewlet/crewlet/internal/backoff"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/period"
@@ -465,8 +464,7 @@ const (
 	// bucket as the pointer and for the same reason: neither may expire,
 	// and a payload in a bucket the pointer is not in could age out from
 	// under the epoch it belongs to.
-	payloadKey      = "revision_payload"
-	fleetCASRetries = 16
+	payloadKey = "revision_payload"
 )
 
 // FleetConfig is what a [FleetStore] needs at construction. Every duration is
@@ -635,6 +633,23 @@ type FleetStore struct {
 	// adopted as it stands, and its age is what it honours. Zero is a bucket
 	// with no age, which reaps nothing and so caps nothing.
 	maxClaim time.Duration
+
+	// The records this node reads, modifies and writes back, each
+	// COALESCED PER KEY ([writeLines]): every write this node has in flight
+	// on one key is decided by one compare-and-swap, so a key's
+	// contenders are the nodes writing it rather than the calls — which is
+	// what bounds the token counter, written by every round of every seat
+	// (casline.go).
+	tallies  writeLines[coord.Tally]
+	rates    writeLines[rateRecord]
+	cools    writeLines[[]byte]
+	channelW writeLines[coord.Channel]
+
+	// The round trips of the buckets whose compare-and-swap loops are not
+	// coalesced ([casRetry]): each a node-wide estimate of one bucket that
+	// every attempt there refines, for the reason a line's is
+	// ([roundTrip]).
+	claimTrips, custodyTrips, objectTrips, followTrips roundTrip
 }
 
 var _ coord.Fleet = (*FleetStore)(nil)
@@ -689,6 +704,26 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 	store := &FleetStore{
 		js:         js,
 		rateWindow: cfg.RateWindow, freshness: cfg.StatusFreshness,
+	}
+	store.tallies.codec = codec[coord.Tally]{
+		decode: decodeTally, encode: encodeTally,
+		reading: "read the token counter", decoding: "decode the token counter",
+	}
+	store.rates.codec = codec[rateRecord]{
+		decode: decodeRate, encode: encodeRate,
+		reading: "read the rate window", decoding: "decode the rate window",
+	}
+	store.cools.codec = codec[[]byte]{
+		// A cooldown's value is its end instant as text, and one that does
+		// not parse is OVERWRITTEN rather than refused ([FleetStore.Cool]),
+		// so it reaches the decision as the bytes it is.
+		decode:  func(raw []byte) ([]byte, error) { return raw, nil },
+		encode:  func(raw []byte) ([]byte, error) { return raw, nil },
+		reading: "read the cooldown", decoding: "decode the cooldown",
+	}
+	store.channelW.codec = codec[coord.Channel]{
+		decode: decodeChannelRecord, encode: encodeChannel,
+		reading: "read the channel", decoding: "decode the channel",
 	}
 	for _, bucket := range []struct {
 		into     *jetstream.KeyValue
@@ -820,7 +855,10 @@ type rateRecord struct {
 // The WINDOW IS IN THE KEY, so a new window is a new record and the previous
 // one simply ages out — there is nothing to reset and no sweep to run. The
 // increment is a compare-and-swap on that key, which is what makes four nodes
-// incrementing at once add up to four rather than one.
+// incrementing at once add up to four rather than one — and this node's own
+// increments of one window are COALESCED into one of them ([writeLines]),
+// decided in arrival order, so a burst of deliveries to one seat is one
+// contender on its window however many of them this node is handling.
 func (f *FleetStore) Allow(ctx context.Context, bucket string, limit int, window time.Duration, now time.Time) (bool, error) {
 	if bucket == "" {
 		return false, errors.New("coord/kv: a rate bucket needs a name")
@@ -838,53 +876,42 @@ func (f *FleetStore) Allow(ctx context.Context, bucket string, limit int, window
 	}
 	key := encodeKey(bucket + "|" + strconv.FormatInt(now.Truncate(window).UnixNano(), 10))
 
-	for range fleetCASRetries {
-		entry, err := f.get(ctx, f.rate, key)
-		if errors.Is(err, jetstream.ErrKeyNotFound) {
-			// Create, not Put: the first caller in a window must be
-			// distinguishable from a caller racing it, or two nodes both
-			// write "1" and the window counts one.
-			_, created := f.create(ctx, f.rate, key, mustEncodeRate(1))
-			switch {
-			case created == nil:
-				return true, nil
-			case errors.Is(created, jetstream.ErrKeyExists):
-				continue
-			default:
-				return false, unavailable("increment the rate window", created)
+	// A CREATE where the window has no record, so the first caller in a
+	// window is distinguishable from a caller racing it: two nodes that both
+	// wrote "1" would count one. The line creates exactly then, and a lost
+	// create is a lost compare-and-swap like any other.
+	var allowed bool
+	_, err := f.rates.write(ctx, f.rate, f.js, key, bucket, "increment the rate window",
+		func(stored rateRecord, _ bool) (rateRecord, bool) {
+			allowed = stored.Count < limit
+			if !allowed {
+				return stored, false
 			}
-		}
-		if err != nil {
-			return false, unavailable("read the rate window", err)
-		}
-		var record rateRecord
-		if decode := json.Unmarshal(entry.Value(), &record); decode != nil {
-			return false, unavailable("decode the rate window", decode)
-		}
-		if record.Count >= limit {
-			return false, nil
-		}
-		_, err = f.rate.Update(ctx, key, mustEncodeRate(record.Count+1), entry.Revision())
-		switch {
-		case err == nil:
-			return true, nil
-		case errors.Is(err, jetstream.ErrKeyRevisionMismatch):
-			continue
-		default:
-			return false, unavailable("increment the rate window", err)
-		}
+			return rateRecord{Count: stored.Count + 1}, true
+		})
+	if err != nil {
+		// Unreachable, or HOT past every attempt — every round had a
+		// winner and it was somebody else. Reported as an error rather than
+		// "allowed": the valve's whole purpose is a bucket under exactly
+		// this much pressure, and answering true would open it at the worst
+		// moment.
+		return false, err
 	}
-	// Exhausting the retries means the bucket is HOT — every round had a
-	// winner and it was somebody else. Reported as an error rather than
-	// "allowed": the valve's whole purpose is a bucket under exactly this
-	// much pressure, and answering true would open it at the worst moment.
-	return false, contended("increment", bucket)
+	return allowed, nil
 }
 
-func mustEncodeRate(count int) []byte {
-	// A two-field object with an int cannot fail to encode.
-	raw, _ := json.Marshal(rateRecord{Count: count})
-	return raw
+func encodeRate(r rateRecord) ([]byte, error) {
+	raw, err := json.Marshal(r)
+	if err != nil {
+		return nil, fmt.Errorf("coord/kv: encode the rate window: %w", err)
+	}
+	return raw, nil
+}
+
+func decodeRate(raw []byte) (rateRecord, error) {
+	var record rateRecord
+	err := json.Unmarshal(raw, &record)
+	return record, err
 }
 
 // ---- the delivery claims ----------------------------------------------- //
@@ -906,11 +933,19 @@ func (f *FleetStore) Claim(ctx context.Context, key string, ttl time.Duration, n
 	}
 	encoded := encodeKey(key)
 	value := mustEncodeClaim(claimRecord{At: now.UTC(), Until: now.Add(ttl).UTC()})
-	for range claimAttempts {
+	// A ROUND REPEATS ONLY WHEN THE KEY MOVED between this caller's create
+	// and its read or its take-over: reaped or released, or a lapsed claim
+	// another receiver of the same delivery took over first — and that one
+	// leaves a live claim the next round reads and answers. So its head
+	// count is the removals inside one claim's few round trips, far below
+	// the shared bound ([fleetCASAttempts]).
+	var first bool
+	settled, err := casRetry(ctx, &f.claimTrips, "claim the delivery", func() (bool, error) {
 		// Create is the mechanism: it fails when the key exists, so the
 		// FIRST caller wins and every other gets ErrKeyExists.
 		_, err := f.create(ctx, f.claims, encoded, value)
 		if err == nil {
+			first = true
 			return true, nil
 		}
 		if !errors.Is(err, jetstream.ErrKeyExists) {
@@ -925,12 +960,12 @@ func (f *FleetStore) Claim(ctx context.Context, key string, ttl time.Duration, n
 		switch {
 		case errors.Is(err, jetstream.ErrKeyNotFound):
 			// Reaped or released since the create lost: ask again.
-			continue
+			return false, nil
 		case err != nil:
 			return false, unavailable("read the delivery claim", err)
 		}
 		if decodeClaim(entry.Value()).Until.After(now) {
-			return false, nil
+			return true, nil
 		}
 		// LAPSED — or a value that names no deadline, which no claim this
 		// store writes is, and which is taken over as the claim the
@@ -939,23 +974,25 @@ func (f *FleetStore) Claim(ctx context.Context, key string, ttl time.Duration, n
 		_, err = f.claims.Update(ctx, encoded, value, entry.Revision())
 		switch {
 		case err == nil:
+			first = true
 			return true, nil
 		case errors.Is(err, jetstream.ErrKeyRevisionMismatch):
-			continue
+			return false, nil
 		default:
 			return false, unavailable("take over the lapsed delivery claim", err)
 		}
+	})
+	switch {
+	case err != nil:
+		return false, err
+	case !settled:
+		// Every round had a winner and it was somebody else — which is
+		// unknown rather than "claimed": the contract fails open on an
+		// error.
+		return false, contended("claim", key)
 	}
-	// Every round had a winner and it was somebody else — which is
-	// unknown rather than "claimed": the contract fails open on an error.
-	return false, contended("claim", key)
+	return first, nil
 }
-
-// claimAttempts bounds the create/read/take-over rounds of one claim. Each
-// lost round means another caller moved the key in between, and three such
-// rounds on one delivery id is a store under contention rather than a race
-// another round would settle.
-const claimAttempts = 3
 
 // claimRecord is one delivery claim: when it was taken and when it lapses.
 type claimRecord struct {
@@ -1057,40 +1094,24 @@ func (f *FleetStore) Cool(ctx context.Context, key string, until time.Time) erro
 	encoded := encodeKey(key)
 	value := []byte(until.UTC().Format(time.RFC3339Nano))
 
-	for range fleetCASRetries {
-		entry, err := f.get(ctx, f.cooldowns, encoded)
-		if errors.Is(err, jetstream.ErrKeyNotFound) {
-			_, created := f.create(ctx, f.cooldowns, encoded, value)
-			switch {
-			case created == nil:
-				return nil
-			case errors.Is(created, jetstream.ErrKeyExists):
-				continue
-			default:
-				return unavailable("record the cooldown", created)
+	// COALESCED PER KEY ([writeLines]): every call a vendor refused on one
+	// credential at once publishes the bench from its own goroutine, so a
+	// burst of refusals is one contender per node on the key rather than
+	// one per call in flight.
+	_, err := f.cools.write(ctx, f.cooldowns, f.js, encoded, key, "record the cooldown",
+		func(stored []byte, found bool) ([]byte, bool) {
+			// The LONGER of the two survives: both nodes saw a real
+			// refusal, and shortening a peer's cooldown sends this node
+			// straight back at a credential the peer already knows is
+			// spent. A stored value that does not parse is no instant to
+			// keep, and is written over.
+			if existing, parsed := time.Parse(time.RFC3339Nano, string(stored)); found && parsed == nil &&
+				existing.After(until) {
+				return stored, false
 			}
-		}
-		if err != nil {
-			return unavailable("read the cooldown", err)
-		}
-		// The LONGER of the two survives: both nodes saw a real refusal,
-		// and shortening a peer's cooldown sends this node straight back
-		// at a credential the peer already knows is spent.
-		if existing, parsed := time.Parse(time.RFC3339Nano, string(entry.Value())); parsed == nil &&
-			existing.After(until) {
-			return nil
-		}
-		_, err = f.cooldowns.Update(ctx, encoded, value, entry.Revision())
-		switch {
-		case err == nil:
-			return nil
-		case errors.Is(err, jetstream.ErrKeyRevisionMismatch):
-			continue
-		default:
-			return unavailable("record the cooldown", err)
-		}
-	}
-	return contended("cool", key)
+			return value, true
+		})
+	return err
 }
 
 // Since returns every cooldown that has not yet lapsed.
@@ -1473,93 +1494,25 @@ func (f *FleetStore) count(ctx context.Context, scope string, tokens int, window
 // scope has none — and answers the counter to write and whether to write it at
 // all. casTally answers what change last answered, written or not.
 //
-// A LOST RACE WAITS BEFORE IT RETRIES, which no other compare-and-swap in
-// this file does, because no other key is this hot: the org's counter is
-// written by every round of every seat the company runs, and a seat's by each
-// of its own rounds and its coding runs. Retried at once, N writers that lost
-// together race again together, and measured on the embedded broker 32
-// concurrent charges exhausted sixteen immediate retries in four runs of ten —
-// each one a round failed closed as an outage. See [counterRetryDelay].
+// COALESCED PER SCOPE ([writeLines]), because no other key is this hot: the
+// org's counter is written by every round of every seat the company runs, and
+// a seat's by each of its own rounds and its coding runs. One compare-and-swap
+// per call made every round in flight on every node a contender for the org's
+// key, which no attempt bound covers — the sixteen this replaced lost every
+// one of its attempts to the contract suite's thirty-two concurrent charges
+// through a leaf under load, a round of a healthy company failed closed as an
+// outage. Coalesced, a node's charges on a scope are decided in arrival order
+// by one write, each against what the ones before it left, so a charge is
+// admitted or refused exactly as it would have been alone, and the scope's
+// contenders are the nodes charging it: within [fleetCASAttempts].
 //
-// Exhausting the retries is reported as an ERROR, never as a refusal: a
+// Exhausting the attempts is reported as an ERROR, never as a refusal: a
 // charge's caller then fails the round rather than telling an agent it is out
 // of budget, which is the fail-closed direction the contract requires.
 func (f *FleetStore) casTally(ctx context.Context, scope, verb string,
 	change func(stored coord.Tally, found bool) (coord.Tally, bool)) (coord.Tally, error) {
 
-	key := encodeKey(scope)
-	for attempt := range fleetCASRetries {
-		if attempt > 0 {
-			select {
-			case <-ctx.Done():
-				return coord.Tally{}, unavailable(verb, ctx.Err())
-			case <-time.After(counterRetryDelay(attempt)):
-			}
-		}
-		var (
-			stored   coord.Tally
-			found    bool
-			revision uint64
-		)
-		entry, err := f.get(ctx, f.budgets, key)
-		switch {
-		case errors.Is(err, jetstream.ErrKeyNotFound):
-		case err != nil:
-			return coord.Tally{}, unavailable("read the token counter", err)
-		default:
-			if stored, err = decodeTally(entry.Value()); err != nil {
-				return coord.Tally{}, unavailable("decode the token counter", err)
-			}
-			found, revision = true, entry.Revision()
-		}
-		next, write := change(stored, found)
-		if !write {
-			return next, nil
-		}
-		raw, err := encodeTally(next)
-		if err != nil {
-			return coord.Tally{}, err
-		}
-		if found {
-			_, err = f.budgets.Update(ctx, key, raw, revision)
-		} else {
-			_, err = f.create(ctx, f.budgets, key, raw)
-		}
-		switch {
-		case err == nil:
-			return next, nil
-		case errors.Is(err, jetstream.ErrKeyRevisionMismatch), errors.Is(err, jetstream.ErrKeyExists):
-			continue
-		default:
-			return coord.Tally{}, unavailable(verb, err)
-		}
-	}
-	return coord.Tally{}, contended(verb, scope)
-}
-
-// The counter's retry backoff: a doubling wait from counterRetryBase to
-// counterRetryCeiling, jittered across most of itself.
-//
-// A MILLISECOND TO START, because that is a compare-and-swap's own round trip
-// on a clustered broker — a shorter wait is still inside the write that beat
-// this one — and doubling to a CEILING OF 32 ms, so the sixteen attempts
-// [fleetCASRetries] allows span about a third of a second at worst. That is
-// what a round waits behind a contended counter before it fails closed, and it
-// is small beside the model call the round is about to make; what the wait
-// buys is that the losers of one race do not arrive together at the next. The
-// JITTER is the widest [backoff.Jitter] gives, because a counter's writers
-// lost the same race at the same instant and only the spread separates them.
-// Measured on the embedded broker: 32 concurrent charges on one key, which
-// failed four runs in ten with no wait, succeeded in every one of 200.
-const (
-	counterRetryBase    = time.Millisecond
-	counterRetryCeiling = 32 * time.Millisecond
-	counterRetryJitter  = 0.9
-)
-
-// counterRetryDelay is the wait before the counter's attempt'th retry.
-func counterRetryDelay(attempt int) time.Duration {
-	return backoff.Jitter(backoff.Doubling(attempt, counterRetryBase, counterRetryCeiling), counterRetryJitter)
+	return f.tallies.write(ctx, f.budgets, f.js, encodeKey(scope), scope, verb, change)
 }
 
 // tally reads one scope's counter rolled to windows, which is what it would
@@ -2196,12 +2149,23 @@ func encodeChannel(ch coord.Channel) ([]byte, error) {
 }
 
 func decodeChannel(id string, raw []byte) (coord.Channel, error) {
-	var record channelRecord
-	if err := json.Unmarshal(raw, &record); err != nil {
+	ch, err := decodeChannelRecord(raw)
+	if err != nil {
 		return coord.Channel{}, unavailable("decode the channel", err)
 	}
+	ch.ID = id
+	return ch, nil
+}
+
+// decodeChannelRecord is a channel's record with no id — the id is its key —
+// and its decoder's own error, for a caller that names the failure itself.
+func decodeChannelRecord(raw []byte) (coord.Channel, error) {
+	var record channelRecord
+	if err := json.Unmarshal(raw, &record); err != nil {
+		return coord.Channel{}, err
+	}
 	ch := coord.Channel{
-		ID: id, Requester: record.Requester, Target: record.Target,
+		Requester: record.Requester, Target: record.Target,
 		Messages: record.Messages, OpenedAt: record.OpenedAt, LastAt: record.LastAt,
 	}
 	if record.ClosedAt != nil {
@@ -2273,37 +2237,25 @@ func (f *FleetStore) CountChannelMessage(ctx context.Context, id string, at time
 // A CAS rather than a blind Put, because the two writers are real: the
 // requester's node counts the ask while the target's node counts the answer,
 // and a lost update there is a message count that under-reports the very
-// traffic the cap on it exists to catch.
+// traffic the cap on it exists to catch. Coalesced per key like every
+// read-modify-write here ([writeLines]), so a channel's contenders are the
+// nodes writing it — the requester's, the target's and whichever closes it.
 func (f *FleetStore) mutateChannel(ctx context.Context, what, id string, apply func(coord.Channel) coord.Channel) (coord.Channel, bool, error) {
-	key := encodeKey(id)
-	for range fleetCASRetries {
-		entry, err := f.get(ctx, f.channels, key)
-		if errors.Is(err, jetstream.ErrKeyNotFound) {
-			return coord.Channel{}, false, nil
-		}
-		if err != nil {
-			return coord.Channel{}, false, unavailable("read the channel", err)
-		}
-		ch, err := decodeChannel(id, entry.Value())
-		if err != nil {
-			return coord.Channel{}, false, err
-		}
-		next := apply(ch)
-		raw, err := encodeChannel(next)
-		if err != nil {
-			return coord.Channel{}, false, err
-		}
-		_, err = f.channels.Update(ctx, key, raw, entry.Revision())
-		switch {
-		case err == nil:
-			return next, true, nil
-		case errors.Is(err, jetstream.ErrKeyRevisionMismatch):
-			continue
-		default:
-			return coord.Channel{}, false, unavailable(what+" the channel", err)
-		}
+	var found bool
+	ch, err := f.channelW.write(ctx, f.channels, f.js, encodeKey(id), id, what+" the channel",
+		func(stored coord.Channel, present bool) (coord.Channel, bool) {
+			// A channel that is not there is not opened by a count or a
+			// close: it is answered as absent.
+			if found = present; !present {
+				return coord.Channel{}, false
+			}
+			stored.ID = id
+			return apply(stored), true
+		})
+	if err != nil || !found {
+		return coord.Channel{}, false, err
 	}
-	return coord.Channel{}, false, contended(what, id)
+	return ch, true, nil
 }
 
 // OpenChannels returns every channel still open, by id.
@@ -2453,39 +2405,52 @@ func (f *FleetStore) ClaimCustody(ctx context.Context, batch, node string) (stri
 	if batch == "" || node == "" {
 		return "", errors.New("coord/kv: a custody claim needs a batch and a node")
 	}
-	raw, err := json.Marshal(custodyRecord{Node: node, At: time.Now().UTC()})
-	if err != nil {
-		return "", fmt.Errorf("coord/kv: encode the custody claim: %w", err)
+	raw, encodeErr := json.Marshal(custodyRecord{Node: node, At: time.Now().UTC()})
+	if encodeErr != nil {
+		return "", fmt.Errorf("coord/kv: encode the custody claim: %w", encodeErr)
 	}
 	key := encodeKey(batch)
-	for range fleetCASRetries {
-		_, err = f.create(ctx, f.custody, key, raw)
+	var keeper string
+	settled, err := casRetry(ctx, &f.custodyTrips, "claim custody of batch "+batch, func() (bool, error) {
+		_, err := f.create(ctx, f.custody, key, raw)
 		switch {
 		case err == nil:
-			return node, nil
+			keeper = node
+			return true, nil
 		case !errors.Is(err, jetstream.ErrKeyExists):
-			return "", unavailable("claim custody of batch "+batch, err)
+			return false, unavailable("claim custody of batch "+batch, err)
 		}
 		entry, err := f.get(ctx, f.custody, key)
 		switch {
 		case errors.Is(err, jetstream.ErrKeyNotFound):
-			continue
+			// GONE between the refusal and the read: the one way this
+			// loop goes round, and it needs the record removed — which
+			// only the bucket's month-long age does — so it repeats at
+			// most once in practice.
+			return false, nil
 		case err != nil:
-			return "", unavailable("read the keeper of batch "+batch, err)
+			return false, unavailable("read the keeper of batch "+batch, err)
 		}
-		// RAISED, never answered as a keeper: a record that cannot be read,
-		// or names nobody, cannot decide whose copy goes, and guessing
-		// either way loses the batch or keeps it twice.
+		// RAISED, never answered as a keeper: a record that cannot be
+		// read, or names nobody, cannot decide whose copy goes, and
+		// guessing either way loses the batch or keeps it twice.
 		var held custodyRecord
 		if err := json.Unmarshal(entry.Value(), &held); err != nil {
-			return "", fmt.Errorf("coord/kv: the keeper of batch %s is unreadable: %w", batch, err)
+			return false, fmt.Errorf("coord/kv: the keeper of batch %s is unreadable: %w", batch, err)
 		}
 		if held.Node == "" {
-			return "", fmt.Errorf("coord/kv: the keeper of batch %s names no node", batch)
+			return false, fmt.Errorf("coord/kv: the keeper of batch %s names no node", batch)
 		}
-		return held.Node, nil
+		keeper = held.Node
+		return true, nil
+	})
+	switch {
+	case err != nil:
+		return "", err
+	case !settled:
+		return "", contended("ClaimCustody", batch)
 	}
-	return "", contended("ClaimCustody", batch)
+	return keeper, nil
 }
 
 // ---- the rebases -------------------------------------------------------- //

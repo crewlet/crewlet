@@ -243,6 +243,34 @@
 // few percent of that ceiling. What a direct get would buy back is served by
 // nothing here, because every read in this package is one a caller acts on as
 // current — which is why none of them stays direct.
+//
+// # A fleet record's writes are coalesced per key
+//
+// Every retry of a compare-and-swap on a fleet record (fleet.go) follows a
+// LOST attempt: the store answered and somebody else's write landed. So what
+// bounds a loop is how many writers contend its key — [casAttempts]' rule for
+// a lease, applied to the fleet's records — and a healthy contended write that
+// runs out of attempts FAILS CLOSED as an outage, never as a refusal. The bound
+// this replaced was sixteen, below the contract suite's own thirty-two
+// concurrent charges, and the org's token counter — written by every round of
+// every seat in the company — lost every one of its attempts through a leaf
+// under load: a healthy round reported as a coordination outage.
+//
+// A bound can be sized for NODES and never for ROUNDS, which is why each node
+// COALESCES the read-modify-writes it has in flight on one key into ONE
+// compare-and-swap: a group commit per key, its batch decided in arrival order
+// and each write answered exactly as a serial order would answer it alone, so
+// the key's contenders are the nodes writing it however many rounds each has
+// in flight. The creates answered by the record that won, the delivery claim
+// and the unfollow are no read-modify-write and are not coalesced; what makes
+// one of them repeat is a removal or a re-asserted follow between two of its
+// round trips, far fewer than a node count, so the same bound covers them.
+// Between a lost attempt and the next, a loop waits a window counted in the
+// ROUND TRIPS this node measures on the bucket rather than in a ceiling tuned
+// on one topology, so a leaf or an external cluster spreads its writers by its
+// own latency. casline.go is where each of these is argued: the line
+// ([writeLines]), the head count it is bounded for ([fleetWriters]), the window
+// ([casWindow]) and the round trip the window is counted in ([roundTrip]).
 package kv
 
 import (
