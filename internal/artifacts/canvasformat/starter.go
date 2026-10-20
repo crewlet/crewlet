@@ -175,11 +175,11 @@ func placeholder(name string, b LayoutBoard) []byte {
 html, body { height: 100%; }
 body { display: flex; align-items: center; justify-content: center; padding: 6vw;
   background: var(--ground); color: var(--ink);
-  font: 400 clamp(14px, 2.2vw, 22px)/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  font: 400 clamp(13px, 3vw, 28px)/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
 main { display: flex; flex-direction: column; gap: 0.75em; max-width: 36em; width: 100%;
   border: 1px dashed var(--rule); border-radius: 12px; padding: 2em; }
-.size { color: var(--quiet); font-size: 0.8em; letter-spacing: 0.02em; }
-h1 { font-size: clamp(20px, 4.5vw, 48px); font-weight: 600; line-height: 1.15; overflow-wrap: anywhere; }
+.size { color: var(--quiet); font-size: 0.75em; letter-spacing: 0.02em; }
+h1 { font-size: clamp(20px, 6vw, 72px); font-weight: 600; line-height: 1.15; overflow-wrap: anywhere; }
 .brief { white-space: pre-wrap; overflow-wrap: anywhere; }
 .wait { color: var(--quiet); font-size: 0.85em; }
 </style>
