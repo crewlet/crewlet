@@ -159,10 +159,13 @@ function mount(
   store.applyOrg(ORG as never);
   store.applySeats([] as never);
   const socket = new LiveSocket(store);
-  socket.query = ((what: string) => {
+  // AN ANSWER MAY BE A FUNCTION OF THE QUESTION'S PARAMETERS, for the case
+  // where two surfaces ask one question at different limits.
+  socket.query = ((what: string, params?: Record<string, unknown>) => {
     const all: Record<string, unknown> = { ...base, viewer, ...answers };
+    const answer = all[what];
     return what in all
-      ? Promise.resolve(all[what])
+      ? Promise.resolve(typeof answer === "function" ? answer(params ?? {}) : answer)
       : Promise.reject(new QueryError("unknown_query"));
   }) as typeof socket.query;
   return render(
@@ -488,5 +491,49 @@ describe("what a widget counts over a page", () => {
     });
     await settle();
     expect(screen.getByText("in the recent history")).toBeTruthy();
+  });
+});
+
+describe("the Inbox widget", () => {
+  /** One unread primary notice, as the engine sends it. */
+  const notice = (n: number) => ({
+    record_id: `r-${n}`,
+    log_seq: n,
+    log_stream: "CREWLET_TRACKER_LOG",
+    log_generation: 1,
+    at: "2026-10-20T09:00:00Z",
+    reason: "assignee",
+    primary: true,
+    addressed: true,
+    kind: "assigned",
+    subject_id: `t-${n}`,
+    subject_key: `ENG-${n}`,
+    excerpt: "",
+    actor: "cto",
+    actor_kind: "agent",
+    read: false,
+  });
+
+  // THE CARD AND THE SIDEBAR SAY ONE COUNT: the card's page holds the few rows
+  // it draws, and the sidebar's holds a page of fifty with a cursor past it.
+  test("counts what the sidebar counts, as the floor the sidebar draws", async () => {
+    const inbox = (params: Record<string, unknown>) => {
+      const limit = Number(params.limit);
+      const all = Array.from({ length: 60 }, (_, i) => notice(i + 1));
+      return {
+        handle: "jane",
+        notices: all.slice(0, limit),
+        primary_reasons: ["assignee"],
+        primary: Math.min(limit, all.length),
+        next_cursor: limit < all.length ? "more" : "",
+        complete: true,
+      };
+    };
+    mount(<LeafView widget={leaf(WIDGETS.get("inbox.updates")!, {})} />, ADMIN, {
+      work_inbox: inbox,
+    });
+    await settle();
+    expect(screen.getByText("Inbox · 50+ unread")).toBeTruthy();
+    expect(screen.getByText("All 50+ unread")).toBeTruthy();
   });
 });
