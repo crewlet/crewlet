@@ -394,7 +394,7 @@ func TestTheIndicatorOpensOnTheExecutorsPhase(t *testing.T) {
 	t.Parallel()
 	e, ws := indicating(t, notify.StatusAlways)
 
-	s := e.beginWorkingStatus(t.Context(), "swe", "wk-open",
+	s := e.beginWorkingStatus(t.Context(), "swe", "run-open",
 		[]*events.Event{chatTrigger("D0ANA")})
 	if s == nil {
 		t.Fatal("no indicator was raised")
@@ -402,7 +402,7 @@ func TestTheIndicatorOpensOnTheExecutorsPhase(t *testing.T) {
 	// The pool's own line for that phase, at this session's seed and no
 	// rotation: the pick is deterministic, which is what lets a test name
 	// the phase a raise came out of.
-	want := notify.NewPhrases(nil).Pick(phase.Execute.String(), "wk-open", 0)
+	want := notify.NewPhrases(nil).Pick(phase.Execute.String(), "run-open", 0)
 	if got := ws.awaitShown(t, 1)[0]; got != want {
 		t.Errorf("the indicator opened on %q, want the executor's %q", got, want)
 	}
@@ -549,7 +549,7 @@ func TestAnIndicatorSurvivesOnlyWhatIsStillWorking(t *testing.T) {
 		return s
 	}
 
-	working := raise("wk-suspend", "D0ANA")
+	working := raise("run-suspend", "D0ANA")
 	ws.awaitShown(t, 1)
 	endWorkingStatus(t.Context(), working, true)
 	if got := ws.shown(); slices.Contains(got, "") {
@@ -564,7 +564,7 @@ func TestAnIndicatorSurvivesOnlyWhatIsStillWorking(t *testing.T) {
 	// settled instead of recorded are all the same fact here: nothing is
 	// working any more.
 	before := len(ws.shown())
-	ending := raise("wk-end", "D0END")
+	ending := raise("run-end", "D0END")
 	ws.awaitShown(t, before+1)
 	endWorkingStatus(t.Context(), ending, false)
 	if shown := ws.shown(); shown[len(shown)-1] != "" {
@@ -672,6 +672,67 @@ func TestASuspendedTurnKeepsItsIndicatorOnlyIfItsRunWasRecorded(t *testing.T) {
 			if live := e.notify.slack.Status().Live(); len(live) != tc.live {
 				t.Fatalf("%d indicators live, want %d: %v (the workspace heard %v)",
 					len(live), tc.live, live, ws.shown())
+			}
+		})
+	}
+}
+
+// A SUSPENDED TURN'S INDICATOR IS HELD UNDER ITS RUN, which is what its resume
+// and its stop name it by.
+//
+// The suspension's row is keyed on the run (ADR-0017), so a box's completion
+// resumes it as that run and a park or a settle reports that run stopped. The
+// indicator the dispatch raised was held under the WORK KEY, so the resume
+// found no hold to take back and raised none (a completion carries no chat
+// metadata), the stop released nothing, and the indicator the suspension kept
+// alive went on saying "is thinking…" until the seat moved or the node
+// stopped. Driven through [Engine.runTurn], with the run and the work key
+// apart, because every case that seeded the hold by hand named both alike.
+//
+// Mutation: begin the dispatch's indicator under req.WorkKey, and the rejoin
+// finds nothing and the stop leaves it live.
+func TestASuspendedTurnsIndicatorIsHeldUnderItsRun(t *testing.T) {
+	t.Parallel()
+	for name, settle := range map[string]func(*testing.T, *Engine){
+		"a box's completion takes the hold back": func(t *testing.T, e *Engine) {
+			completion := events.New(types.SandboxRunCompleted{TurnID: "run-code"},
+				events.TraceContext{})
+			session, rejoined := e.resumeWorkingStatus(t.Context(), "swe", "run-code", completion)
+			if !rejoined || session == nil {
+				t.Fatalf("the resume of run-code rejoined %v, want the hold its "+
+					"suspension kept alive", rejoined)
+			}
+			endWorkingStatus(t.Context(), session, false)
+		},
+		"a stop drops it": func(t *testing.T, e *Engine) {
+			e.releaseWorkingStatus(t.Context(), "swe", "run-code")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e, ws := indicatingWith(t, notify.StatusAlways, suspendingModel{})
+			store := sandbox.NewCoordStore(coordmem.NewFleet())
+			if _, err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
+				TurnID: "run-code", WorkKey: "wk-code", AgentHandle: "swe", Role: "SWE",
+			}, sandbox.Fence{}); err != nil {
+				t.Fatalf("BeginLaunch: %v", err)
+			}
+			equipForCode(t, e, store)
+
+			res, err := e.runTurn(t.Context(), Request{
+				Handle: "swe", WorkKey: "wk-code", RunID: "run-code", WorkSince: time.Now().UTC(),
+				Events: []*events.Event{chatTrigger("D0ANA")},
+			})
+			if err != nil {
+				t.Fatalf("runTurn: %v", err)
+			}
+			if !res.Suspended || len(e.notify.slack.Status().Live()) != 1 {
+				t.Fatalf("the turn suspended %v with %v live, so this case asserts nothing",
+					res.Suspended, e.notify.slack.Status().Live())
+			}
+			settle(t, e)
+			if live := e.notify.slack.Status().Live(); len(live) != 0 {
+				t.Errorf("%v still live (the workspace heard %v), want the suspended "+
+					"turn's hold gone", live, ws.shown())
 			}
 		})
 	}
@@ -787,7 +848,7 @@ func TestAParkedRunTakesItsIndicatorDown(t *testing.T) {
 	t.Parallel()
 	e, ws := indicating(t, notify.StatusAlways)
 
-	coding := e.beginWorkingStatus(t.Context(), "swe", "wk-code",
+	coding := e.beginWorkingStatus(t.Context(), "swe", "run-code",
 		[]*events.Event{chatTrigger("D0ANA")})
 	if coding == nil {
 		t.Fatal("no indicator was raised for a chat trigger")
@@ -797,13 +858,13 @@ func TestAParkedRunTakesItsIndicatorDown(t *testing.T) {
 
 	// A colleague's ask lands in the same thread while the box runs, and it
 	// is a different turn: the session is shared and reference-counted.
-	alongside := e.beginWorkingStatus(t.Context(), "swe", "wk-alongside",
+	alongside := e.beginWorkingStatus(t.Context(), "swe", "run-alongside",
 		[]*events.Event{chatTrigger("D0ANA")})
 	if alongside == nil {
 		t.Fatal("a second turn in the same thread joined no session")
 	}
 
-	e.releaseWorkingStatus(t.Context(), "swe", "wk-code")
+	e.releaseWorkingStatus(t.Context(), "swe", "run-code")
 
 	if got := ws.shown(); slices.Contains(got, "") {
 		t.Fatalf("the park cleared an indicator a second turn is still holding: %v", got)
@@ -855,12 +916,12 @@ func TestASettledRunTakesItsIndicatorDown(t *testing.T) {
 	}
 	rt := e.sandbox.Load()
 	if _, err := rt.pending.BeginLaunch(t.Context(), sandbox.PendingRun{
-		TurnID: "wk-code", AgentHandle: "swe", Role: "SWE",
+		TurnID: "run-code", AgentHandle: "swe", Role: "SWE",
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)
 	}
 
-	coding := e.beginWorkingStatus(t.Context(), "swe", "wk-code",
+	coding := e.beginWorkingStatus(t.Context(), "swe", "run-code",
 		[]*events.Event{chatTrigger("D0ANA")})
 	if coding == nil {
 		t.Fatal("no indicator was raised for a chat trigger")
@@ -870,7 +931,7 @@ func TestASettledRunTakesItsIndicatorDown(t *testing.T) {
 
 	// A colleague's ask lands in the same thread while the box runs, and it
 	// is a different turn: the session is shared and reference-counted.
-	alongside := e.beginWorkingStatus(t.Context(), "swe", "wk-alongside",
+	alongside := e.beginWorkingStatus(t.Context(), "swe", "run-alongside",
 		[]*events.Event{chatTrigger("D0ANA")})
 	if alongside == nil {
 		t.Fatal("a second turn in the same thread joined no session")
@@ -878,7 +939,7 @@ func TestASettledRunTakesItsIndicatorDown(t *testing.T) {
 
 	// The run is settled rather than resumed: its record is deleted, its box
 	// reclaimed, and the turn suspended into it is over.
-	if err := rt.coordinator.FailRun(t.Context(), "wk-code",
+	if err := rt.coordinator.FailRun(t.Context(), "run-code",
 		types.SandboxFailureSuspensionUnrecorded,
 		"the suspended conversation could not be written"); err != nil {
 		t.Fatalf("FailRun: %v", err)
@@ -914,7 +975,7 @@ func TestAnAnsweredClarificationRaisesTheIndicatorAgain(t *testing.T) {
 	t.Parallel()
 	e, ws := indicating(t, notify.StatusAlways)
 
-	answered, rejoined := e.resumeWorkingStatus(t.Context(), "swe", "wk-code", chatTrigger("D0ANA"))
+	answered, rejoined := e.resumeWorkingStatus(t.Context(), "swe", "run-code", chatTrigger("D0ANA"))
 	if answered == nil {
 		t.Fatal("the answer that resumed a parked run raised no indicator")
 	}
@@ -932,8 +993,8 @@ func TestAnAnsweredClarificationRaisesTheIndicatorAgain(t *testing.T) {
 	// A completion carries no chat conversation, and with no hold left to
 	// take back there is nothing to raise: a parked run's row deliberately
 	// keeps no chat metadata.
-	completion := events.New(types.SandboxRunCompleted{TurnID: "wk-box"}, events.TraceContext{})
-	if s, rejoined := e.resumeWorkingStatus(t.Context(), "swe", "wk-box", completion); s != nil || rejoined {
+	completion := events.New(types.SandboxRunCompleted{TurnID: "run-box"}, events.TraceContext{})
+	if s, rejoined := e.resumeWorkingStatus(t.Context(), "swe", "run-box", completion); s != nil || rejoined {
 		t.Errorf("a box's completion raised %v (rejoined %v), want neither",
 			s.Conversation(), rejoined)
 	}
@@ -969,7 +1030,7 @@ func TestAResumedTurnRejoinsTheIndicatorItKeptAlive(t *testing.T) {
 	seat := company.Org.AgentSeatByHandle("swe")
 
 	// The turn that suspended into a detached coding run.
-	suspended := e.beginWorkingStatus(t.Context(), "swe", "wk-1",
+	suspended := e.beginWorkingStatus(t.Context(), "swe", "run-1",
 		[]*events.Event{chatTrigger("D0ANA")})
 	ws.awaitShown(t, 1)
 	endWorkingStatus(t.Context(), suspended, true)
@@ -982,7 +1043,7 @@ func TestAResumedTurnRejoinsTheIndicatorItKeptAlive(t *testing.T) {
 	err := e.resumeTurn(t.Context(), resumeInput{
 		Company: company,
 		Run: sandbox.PendingRun{
-			TurnID: "wk-1", AgentHandle: "swe", Reply: "tool",
+			TurnID: "run-1", AgentHandle: "swe", Reply: "tool",
 			TaskDescription: "fix the failing test",
 		},
 		Turn: &turnctx.Turn{RunID: "run-1", WorkKey: "wk-1", Seat: seat, Org: company.Org,
@@ -1049,7 +1110,7 @@ func TestAResumeThatCouldNotStartKeepsItsIndicator(t *testing.T) {
 			company := e.Company()
 			seat := company.Org.AgentSeatByHandle("swe")
 
-			suspended := e.beginWorkingStatus(t.Context(), "swe", "wk-1",
+			suspended := e.beginWorkingStatus(t.Context(), "swe", "run-wk-1",
 				[]*events.Event{chatTrigger("D0ANA")})
 			if suspended == nil {
 				t.Fatal("no indicator was raised for a chat trigger")
@@ -1060,7 +1121,7 @@ func TestAResumeThatCouldNotStartKeepsItsIndicator(t *testing.T) {
 			err := e.resumeTurn(t.Context(), resumeInput{
 				Company: company,
 				Run: sandbox.PendingRun{
-					TurnID: "wk-1", AgentHandle: "swe", Reply: derail(company),
+					TurnID: "run-wk-1", AgentHandle: "swe", Reply: derail(company),
 					TaskDescription: "fix the failing test",
 				},
 				Turn: &turnctx.Turn{RunID: "run-wk-1", WorkKey: "wk-1", Seat: seat, Org: company.Org,
@@ -1138,7 +1199,7 @@ func TestAResumeThatHandsWorkBackToAPersonClearsItsIndicator(t *testing.T) {
 			err := e.resumeTurn(t.Context(), resumeInput{
 				Company: company,
 				Run: sandbox.PendingRun{
-					TurnID: "wk-code", AgentHandle: "swe", Reply: derail(company),
+					TurnID: "run-wk-code", AgentHandle: "swe", Reply: derail(company),
 					TaskDescription: "fix the failing test",
 					// Where the coordinator's claim will put it back.
 					ClaimedFrom: sandbox.StatusAwaiting,
@@ -1213,7 +1274,7 @@ func TestReleasingASeatTakesItsIndicatorDown(t *testing.T) {
 	t.Parallel()
 	e, ws := indicating(t, notify.StatusAlways)
 
-	s := e.beginWorkingStatus(t.Context(), "swe", "wk-1",
+	s := e.beginWorkingStatus(t.Context(), "swe", "run-1",
 		[]*events.Event{chatTrigger("D0ANA")})
 	ws.awaitShown(t, 1)
 	endWorkingStatus(t.Context(), s, true)
@@ -1243,7 +1304,7 @@ func TestTheClearSurvivesTheCancellationThatEndedTheTurn(t *testing.T) {
 	e, ws := indicating(t, notify.StatusAlways)
 	ctx, cancel := context.WithCancel(t.Context())
 
-	s := e.beginWorkingStatus(ctx, "swe", "wk-cancel", []*events.Event{chatTrigger("D0ANA")})
+	s := e.beginWorkingStatus(ctx, "swe", "run-cancel", []*events.Event{chatTrigger("D0ANA")})
 	ws.awaitShown(t, 1)
 	cancel()
 	endWorkingStatus(ctx, s, false)

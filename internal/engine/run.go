@@ -2942,7 +2942,15 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// It raises nothing at all for a trigger nobody is watching a composer
 	// for — see [chatMetadataOf] — and a nil session's every method is a
 	// no-op, so there is no branch here and none below.
-	status := e.beginWorkingStatus(ctx, req.Handle, req.WorkKey, req.Ask())
+	//
+	// HELD UNDER THE RUN, never the work key: a suspension's row is keyed
+	// on the run (ADR-0017), and the resume that takes this hold back
+	// ([Engine.resumeWorkingStatus]) and the stop that drops it
+	// ([Engine.releaseWorkingStatus]) both name it by that row's turn id.
+	// Held under the work key, neither ever found it, so an indicator kept
+	// up for a coding run said "is thinking…" until the seat moved or the
+	// node stopped.
+	status := e.beginWorkingStatus(ctx, req.Handle, req.RunID, req.Ask())
 	// ENDED ON EVERY PATH OUT OF THIS FRAME, the runner build failing below
 	// included: that path raised an indicator and never ran a turn, and
 	// nothing else would ever take it down. `working` stays false until a
