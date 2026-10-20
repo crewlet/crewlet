@@ -701,6 +701,17 @@ complete replica. `crewlet retention status` prints this node's store size, the
 projected join against a conservative profile, and the window — so a fleet
 whose store has outgrown its window says so before an incident does.
 
+It is also a term of every data node's **startup probe** in a fleet of more
+than one. A join at boot runs inside the node's recovery, before `/health`
+turns `200`, so a probe that allows the store's recovery and not the window
+kills a joining node partway through its transfer, and the next boot starts the
+transfer again from the first byte. Size the probe as
+[Sizing the startup probe](deployment.md#sizing-the-startup-probe) says, and
+raise it with the window. A lone data node never transfers, so its probe needs
+no such term. While a join runs, `statelog_join_progress` every ten seconds
+says how far it has got and at what rate, which is how a window is checked
+against this fleet's own disks and network rather than the projection.
+
 ## Eviction
 
 An absent node pins the `applied` term for ever: its position never advances,

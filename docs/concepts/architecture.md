@@ -305,8 +305,9 @@ bound — and `200` from then on, while what the company configures comes up;
 `Retry-After`
 ([While a node is starting](../reference/api-endpoints.md#while-a-node-is-starting)).
 The line between the two halves is the engine's own: `engine.Options.Recovered`
-is called once, at the boundary, and a startup probe sized for the store is
-never held by a tool server the company declared.
+is called once, at the boundary, and a startup probe sized for the store (and,
+on a data node of a fleet, for its join) is never held by a tool server the
+company declared.
 
 Then the node's surface takes the socket over, and only after that does the
 engine start claiming seats. A seat is not claimed until its per-role MCP
@@ -853,9 +854,10 @@ every write is refused with `503` from the drain's first moment. See
 **A starting node answers both before it serves.** Its listener is bound before
 the boot, `/health` answers `503` while it recovers what it holds and `200`
 once it has, and `/ready` answers `503 starting` until the node serves — so the
-startup probe bounds exactly the part only the deployment can size, the
-recovery of the node's own store, and nothing the company configures can hold
-it. See [While a node is starting](../reference/api-endpoints.md#while-a-node-is-starting).
+startup probe bounds exactly the part only the deployment can size — the
+recovery of the node's own store and, on a data node of a fleet, the snapshot
+it may have to fetch when the logs can no longer bring its rows level, which
+`rejoin_window` budgets — and nothing the company configures can hold it. See [While a node is starting](../reference/api-endpoints.md#while-a-node-is-starting).
 
 **One config, agreed by pointer.** An activation is a compare-and-set on an
 append-only pointer whose own revision *is* the epoch, so two operators

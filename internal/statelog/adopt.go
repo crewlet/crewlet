@@ -546,8 +546,8 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer, began time.Time) (keep
 	// 3. TRANSFER. A failure writing the copy is marked as this node's
 	// inside the fetch, and everything else it can fail on is the donor's
 	// or the link's.
-	//nolint:govet // shadow: scoped to this block; see .golangci.yml
-	if _, err := FetchArtefact(ctx, a.deps.Conn, offer, part); err != nil {
+	fetched, err := FetchArtefact(ctx, a.deps.Conn, offer, part, a.log)
+	if err != nil {
 		return nil, err
 	}
 	// Discarded on every path, the install's included: the rename moves the
@@ -584,15 +584,14 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer, began time.Time) (keep
 			"does not run", ahead)
 	}
 
-	// 5. VERIFY the bytes and the positions the file actually keeps.
-	digest, err := store.FileDigest(part)
-	if err != nil {
-		return nil, err
-	}
-	if digest != offer.Manifest.SHA256 {
+	// 5. VERIFY the bytes — hashed as the transfer wrote them, rather than
+	// read back whole: that second read was as long as the transfer again,
+	// inside a boot's recovery, and nothing could cancel it — and the
+	// positions the file actually keeps.
+	if fetched.SHA256 != offer.Manifest.SHA256 {
 		return nil, fmt.Errorf("statelog: the artefact hashes to %s and "+
 			"its manifest says %s — a transfer that dropped or reordered a chunk "+
-			"arrives looking exactly like one that did not", digest, offer.Manifest.SHA256)
+			"arrives looking exactly like one that did not", fetched.SHA256, offer.Manifest.SHA256)
 	}
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := a.verifyPositions(ctx, part, offer.Manifest); err != nil {

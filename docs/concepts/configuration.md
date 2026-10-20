@@ -328,7 +328,10 @@ The engine boots in this order:
 10. Start the **core runtime** — on every data node, with a company or without one: the [state log](../guides/consistency.md) for **every** registered domain, the node gate over every identity-claiming log, the [identity estate](identity-and-access.md) with the loops that keep this node's view of it, and — on a node that publishes — the log's own trim and the identity duties. None of it depends on a company, and a node with none is exactly the one that has to sign a Tier A token's session in — `ingress` requires `data`, so the node anybody signs in on always has it — because that session is what the dashboard creates the company through; the company's first person is invited or created once it declares the human seat they will hold. It is **every** domain rather than the identity estate alone because a join replaces the whole replicated file and a snapshot names every registered domain, and because the trim counts nodes per log: a node that applied part of the register could neither adopt nor donate, and would pin the rest of the logs' trims for as long as it was up. A node without `data` starts none of it: it applies no log, and reaches the estate — the identity directory included — through a node that holds it ([A node that holds no data](scaling.md#a-node-that-holds-no-data))
 11. **The node has recovered what it holds.** It logs `engine_recovered`, and
     `/health` turns `200` with `"phase": "preparing"`: everything above is the
-    node's own and is bounded by the deployment's startup probe, and
+    node's own and is bounded by the deployment's startup probe — a data
+    node's join in step 10 included, when a fleet's logs can no longer bring
+    its rows level, which is why that probe is sized by
+    `stream.tracker_retention.rejoin_window` on a data node of a fleet — and
     everything below is the company's, which no probe bounds — a part that
     waits on something else has a bound of its own, and the apply has none
     beyond its parts' (see

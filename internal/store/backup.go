@@ -465,10 +465,12 @@ func fileDigest(path string) (string, error) { return FileDigest(path) }
 
 // FileDigest is the SHA-256 of a file, streamed rather than read whole.
 //
-// EXPORTED because a snapshot's manifest carries one and a recipient
-// recomputes it, and the two must be the same digest over the same bytes — a
+// EXPORTED because a snapshot's manifest carries one and a joiner compares it
+// with the digest its transfer took of the bytes as it wrote them (statelog's
+// FetchArtefact), and the two must be the same digest over the same bytes — a
 // second implementation is how one comes to hash the file and the other its
-// path.
+// path, which is why statelog's TestAnArtefactArrivesByteForByte holds the
+// transfer's digest to this one.
 func FileDigest(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {

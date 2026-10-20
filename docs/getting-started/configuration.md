@@ -1011,10 +1011,13 @@ stream:
                                     #   nothing to resume from
   #   rejoin_window: 30m            #   the budget for a node to become a
                                     #   complete replica (5m..24h) — what a join
-                                    #   is measured against and reported on. A
-                                    #   setting rather than a constant, because
-                                    #   the answer is a property of the
-                                    #   operator's disks and network
+                                    #   is measured against and reported on, and
+                                    #   what a fleet's data nodes size their
+                                    #   startup probe by, since a join at boot
+                                    #   runs inside the recovery. A setting
+                                    #   rather than a constant, because the
+                                    #   answer is a property of the operator's
+                                    #   disks and network
   # event_retention_hours: 720      # 0 takes the queue's own default (30 days).
                                     #   Unbounded is deliberately not expressible:
                                     #   an event log nothing sweeps grows for the
