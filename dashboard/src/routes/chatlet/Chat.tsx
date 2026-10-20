@@ -281,7 +281,7 @@ function ChatAs({ channel = "", view = "room", seat }: ChatPlace & { seat: RefOb
         description={
           <>
             You&rsquo;re signed in as <InlineCode>{viewer.login}</InlineCode>, which holds no seat.
-            Chatlet is read and written as a seat, so no room is open to you, not even a public one.{" "}
+            Chatlet needs a seat, so no room is open to you.{" "}
             <UnboundRemedy to="read and write here" />
           </>
         }
@@ -295,8 +295,7 @@ function ChatAs({ channel = "", view = "room", seat }: ChatPlace & { seat: RefOb
   return (
     <>
       <PageNote>
-        The company's own chat: every message is a record on the shared log, and every data node
-        derives the same rooms from it.
+        Your company&rsquo;s own rooms and conversations.
         {/* ONLY A SEAT THE VIEWER NAMED: after a viewer read that failed
             nobody has said who this is, and the rooms below are the engine's
             answer about the session rather than a name this screen knows.
@@ -306,24 +305,22 @@ function ChatAs({ channel = "", view = "room", seat }: ChatPlace & { seat: RefOb
         {viewer.handle && (
           <>
             {" "}
-            You are <strong>{readerName(session.answer, viewer.login)}</strong>, reading as the seat{" "}
-            <strong>{viewer.name || viewer.handle}</strong>.
+            You&rsquo;re <strong>{readerName(session.answer, viewer.login)}</strong>, reading as the
+            seat <strong>{viewer.name || viewer.handle}</strong>.
           </>
         )}
       </PageNote>
 
       {rail.data?.truncated && (
         <Callout variant="warning">
-          You are in more rooms than this list holds ({channels.length}). The rest are still
-          readable by address and still searchable — the list is bounded because it is sorted by
-          activity, which cannot be paged without re-sorting each page against itself.
+          You&rsquo;re in more rooms than this list holds ({channels.length}). The rest still open
+          from a link and still show up in search.
         </Callout>
       )}
       {rail.data && !measured && (
         <Callout variant="warning">
-          The unread counts could not be read. Where you have got to in each room lives in the
-          coordination store rather than on the chat log, and this node could not reach it — so the
-          badges below are absent rather than zero, which is not the same as being caught up.
+          Unread counts couldn&rsquo;t be read, so the badges are missing. That doesn&rsquo;t mean
+          you&rsquo;re caught up.
         </Callout>
       )}
 
@@ -380,8 +377,8 @@ function ChatAs({ channel = "", view = "room", seat }: ChatPlace & { seat: RefOb
               channels.length
                 ? undefined
                 : {
-                    title: "You are in no rooms yet",
-                    hint: "A unit that names a channel in the org chart gets that room created for it, with the unit's seats as members. Somebody can also open a direct conversation with you — which needs no invitation, because its identity is derived from who is in it.",
+                    title: "You’re in no rooms yet",
+                    hint: "Give a team a channel in the org chart and its room appears here. Anyone can also message you directly.",
                   }
             }
           >
@@ -495,9 +492,8 @@ function ChatElsewhere({
         title="This company runs no chat"
         description={
           <>
-            <InlineCode>chat.backend</InlineCode> is <InlineCode>none</InlineCode>: its seats are
-            woken by the tracker, the code host and their schedules, and talk to nobody in chat. Set
-            it to <InlineCode>chatlet</InlineCode> to give the company the engine&rsquo;s own rooms.
+            <InlineCode>chat.backend</InlineCode> is <InlineCode>none</InlineCode>. Set it to{" "}
+            <InlineCode>chatlet</InlineCode> to give the company its own rooms.
           </>
         }
       />
@@ -507,15 +503,13 @@ function ChatElsewhere({
   return (
     <EmptyState
       icon={<MessageSquareGlyph size="xl" />}
-      title={`This company's chat is on ${where}`}
+      title={`This company’s chat is on ${where}`}
       description={
         <>
-          <InlineCode>chat.backend</InlineCode> is <InlineCode>vendor</InlineCode>: people and
-          agents talk there, and the engine reads and writes it through its integrations, so there
-          are no rooms here to read. To use the engine&rsquo;s own chat instead, set it to{" "}
-          <InlineCode>chatlet</InlineCode> and retire the vendor&rsquo;s chat integration — the
-          engine refuses the two at once, because a person would reply where the agents are not
-          reading.
+          <InlineCode>chat.backend</InlineCode> is <InlineCode>vendor</InlineCode>, so people and
+          agents talk there. To use the engine&rsquo;s own chat, set it to{" "}
+          <InlineCode>chatlet</InlineCode> and remove the vendor&rsquo;s chat integration. The two
+          can&rsquo;t run together.
         </>
       }
     />

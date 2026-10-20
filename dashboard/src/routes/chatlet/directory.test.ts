@@ -159,15 +159,17 @@ describe("what the screen may offer about membership", () => {
     // be taken out at the next apply. The note says where the door is.
     expect(canJoin({ kind: "unit", member: false })).toBe(false);
     expect(membershipNote({ kind: "unit", member: false, unit: "platform" })).toMatch(
-      /platform unit's own room.*org chart/i,
+      /platform team’s own room.*org chart/i,
     );
-    expect(membershipNote({ kind: "unit", member: false })).toMatch(/a unit's own room/i);
+    expect(membershipNote({ kind: "unit", member: false })).toMatch(/a team’s own room/i);
   });
 
   test("a private room is joined by being added, so no join is offered", () => {
     // Its membership is the only way in, and the engine refuses the gesture.
     expect(canJoin({ kind: "private", member: false })).toBe(false);
-    expect(membershipNote({ kind: "private", member: false })).toMatch(/only way into it/i);
+    expect(membershipNote({ kind: "private", member: false })).toMatch(
+      /someone already in it has to add you/i,
+    );
   });
 
   test("a direct conversation offers neither, because its id IS its people", () => {
@@ -194,7 +196,9 @@ describe("what the screen may offer about membership", () => {
     // write to one; the screen offers no gesture.
     expect(canJoin({ kind: "broadcast", member: false })).toBe(false);
     expect(canLeave({ kind: "broadcast", member: true })).toBe(false);
-    expect(membershipNote({ kind: "broadcast", member: false })).toMatch(/newer build/i);
+    expect(membershipNote({ kind: "broadcast", member: false })).toMatch(
+      /newer version of the engine/i,
+    );
   });
 
   test("being in a room is not an invitation to join it again", () => {

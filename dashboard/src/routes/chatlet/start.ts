@@ -37,11 +37,12 @@ import type { ActResult } from "~/protocol/act.ts";
 import type { ChatReceipt } from "~/protocol/index.ts";
 
 /**
- * What a text field past the engine's cap tells the person to do — the
- * remedy `textBudget` closes its line with — in the two dialogs that hold a
- * room's topic: nothing is cut to fit.
+ * What a text field past the engine's cap tells the person to do: the remedy
+ * `textBudget` closes its line with, for a message's body and for the two
+ * dialogs that hold a room's topic alike, so one refusal is said one way.
+ * Nothing is cut to fit.
  */
-export const SHORTEN = "Nothing is cut to fit — shorten it.";
+export const SHORTEN = "Nothing is cut to fit. Shorten it.";
 
 /** Which gesture answered, because the retry advice differs for each. */
 export type StartKind = "channel" | "direct" | "join" | "leave" | "topic";
@@ -108,18 +109,18 @@ function retryAdvice(kind: StartKind): string {
       // THE NAME IS THE ARBITRATION. If the first record landed, a second
       // create under the same name is refused as taken — which is the answer
       // "it is there" arriving as a refusal.
-      return "Ask again with the same name: the create arbitrates on it, so if the first one landed you will be told the name is taken — which means the room is there.";
+      return "Ask again with the same name. If the first try worked, you’ll be told the name is taken, which means the room is there.";
     case "direct":
       // THE ID IS DERIVED FROM THE PARTICIPANTS, so a second attempt reaches
       // the same room and reports that it did not have to create it.
-      return "Ask again with the same people: a direct conversation's id is derived from who is in it, so a second attempt opens that same room rather than a second one.";
+      return "Ask again with the same people. It opens the same conversation, never a second one.";
     case "join":
     case "leave":
       // MEMBERSHIP IS A SET. A repeat that agrees with what is already there
       // publishes nothing and reports that it applied.
-      return "Ask again: membership is a set, so a repeat that agrees with what is already there writes nothing at all.";
+      return "Ask again. If the first try worked, asking again changes nothing.";
     case "topic":
-      return "Ask again: a patch that changes nothing publishes nothing and reports that it applied.";
+      return "Ask again. If the first try worked, asking again changes nothing.";
   }
 }
 
@@ -127,15 +128,15 @@ function retryAdvice(kind: StartKind): string {
 function what(kind: StartKind): string {
   switch (kind) {
     case "channel":
-      return "The room";
+      return "the room was created";
     case "direct":
-      return "The conversation";
+      return "the conversation was opened";
     case "join":
-      return "Joining";
+      return "you joined";
     case "leave":
-      return "Leaving";
+      return "you left";
     case "topic":
-      return "The change";
+      return "the change was saved";
   }
 }
 
@@ -185,7 +186,7 @@ export function reportFor(kind: StartKind, result: ActResult): StartReport {
         // the one that would serve the read. Sending somebody to it now is a
         // "not found" for a room that is perfectly real.
         go: "",
-        note: `${what(kind)} is on the log and this node has not applied it yet. Nothing is wrong and nothing needs doing: every data node applies the same record, and your rooms are read again the moment this one does.`,
+        note: "Saved, but not shown here yet. Your rooms will update in a moment.",
         tone: "pending",
         taken: false,
         again: false,
@@ -196,7 +197,7 @@ export function reportFor(kind: StartKind, result: ActResult): StartReport {
         // NEVER A ROOM. See this module's own note: an id an answer
         // established nothing about is an id that may name nothing.
         go: "",
-        note: `Nobody can say whether ${what(kind).toLowerCase()} landed: ${result.reason} ${retryAdvice(kind)}`,
+        note: `Couldn’t confirm ${what(kind)}. ${result.reason} ${retryAdvice(kind)}`,
         tone: "warning",
         taken: false,
         again: true,
@@ -218,7 +219,7 @@ function refusal(kind: StartKind, result: Extract<ActResult, { kind: "refused" }
       // it reads as a fault, and the field a person has to change is the one
       // they are already looking at. The sentence is this module's rather than
       // the transport's "That already exists", which names no field.
-      note: "That name is already a room. A name is the address a create claims, and exactly one room may hold it — pick another.",
+      note: "Another room already has that name. Pick another.",
       tone: "warning",
       taken: true,
       again: false,
@@ -245,5 +246,4 @@ function refusal(kind: StartKind, result: Extract<ActResult, { kind: "refused" }
  * one of the two things it may mean and the one the engine is careful not to
  * say.
  */
-const NOT_FOUND =
-  "There is no such room, or it is not one you can read — the two answer identically, because a private room's existence is itself something to know.";
+const NOT_FOUND = "There’s no such room, or you can’t read it.";

@@ -67,6 +67,7 @@ import { useDraftBox } from "~/app/assistant/boxes.ts";
 import { capsOf, keyRow, matchesRow } from "~/app/keymap.ts";
 import { MAX_BODY_BYTES } from "~/contract/chat.ts";
 import { textBudget, type TextBudget } from "~/lib/format.ts";
+import { SHORTEN } from "./start.ts";
 
 /** What a message's Send or Save says over a body past the cap. */
 export const SHORTEN_FIRST = "Shorten it first.";
@@ -89,12 +90,7 @@ export const SHORTEN_FIRST = "Shorten it first.";
  * topic field beside it.
  */
 export function bodyBudget(body: string): TextBudget {
-  return textBudget(
-    body,
-    MAX_BODY_BYTES,
-    "a message",
-    "Nothing is cut to fit — shorten it, or put the long part somewhere with an address.",
-  );
+  return textBudget(body, MAX_BODY_BYTES, "a message", SHORTEN);
 }
 
 /**
@@ -239,7 +235,7 @@ export function Composer({
                 ? closed
                 : inThread
                   ? "Reply in this thread…"
-                  : `Message ${what} — @name to wake somebody, @channel for the room`
+                  : `Message ${what} (@name reaches one person, @channel the whole room)`
             }
             onChange={(event) => {
               setBody(event.target.value);

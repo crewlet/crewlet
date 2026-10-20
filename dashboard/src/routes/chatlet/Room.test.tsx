@@ -191,7 +191,7 @@ test("a write nobody can vouch for is never drawn as sent", async () => {
   await screen.findByText("line 2");
 
   await say("did that land?");
-  await waitFor(() => expect(screen.getByText(/nobody can say whether/i)).toBeTruthy());
+  await waitFor(() => expect(screen.getByText(/couldn’t confirm this was sent/i)).toBeTruthy());
   expect(document.querySelector('.chat-message[data-state="unknown"]')).toBeTruthy();
   expect(screen.queryByText(/^Sending/)).toBeNull();
 });
@@ -205,7 +205,7 @@ test("retrying an unknown write reuses its operation key, because a fresh one wo
   await screen.findByText("line 2");
   await say("did that land?");
 
-  const first = await screen.findByRole("button", { name: /same id/i });
+  const first = await screen.findByRole("button", { name: /send again/i });
   fireEvent.click(first);
   await waitFor(() => expect(pressesOf("post_message")).toHaveLength(2));
   const [sent, again] = pressesOf("post_message");
@@ -224,7 +224,7 @@ test("a retry offline is held with why, in the room", async () => {
   const { store } = mount();
   await screen.findByText("line 2");
   await say("did that land?");
-  const retry = await screen.findByRole("button", { name: /same id/i });
+  const retry = await screen.findByRole("button", { name: /send again/i });
   act(() => store.setConnected(false));
   await waitFor(() => expect(retry.getAttribute("title")).toBe(WRITE_REASONS.offline));
   expect(retry.getAttribute("aria-disabled")).toBe("true");
@@ -234,9 +234,9 @@ test("a retry offline is held with why, in the room", async () => {
 });
 
 test("a reply's retry offline is held with why, in a thread as in the room", async () => {
-  // THE THREAD'S PENDING ROW IS HELD AS THE ROOM'S IS: offline, its "Ask
-  // again under the same id" is held with the sentence every control is held
-  // with, rather than drawn pressable and sending nothing.
+  // THE THREAD'S PENDING ROW IS HELD AS THE ROOM'S IS: offline, its "Send
+  // again" is held with the sentence every control is held with, rather than
+  // drawn pressable and sending nothing.
   reply = (tool) => unknown(tool);
   answers.chat_thread = { ...served, channel_id: "room-1", root: message(2), replies: [] };
   const { store } = mount();
@@ -252,7 +252,7 @@ test("a reply's retry offline is held with why, in a thread as in the room", asy
   const send = within(pane).getByRole("button", { name: /^reply$/i });
   await waitFor(() => expect(send.getAttribute("aria-disabled")).not.toBe("true"));
   fireEvent.submit(box.closest("form")!);
-  const retry = await within(pane).findByRole("button", { name: /same id/i });
+  const retry = await within(pane).findByRole("button", { name: /send again/i });
   expect(pressesOf("reply_in_thread")[0]!.args).toEqual({
     channel: "room-1",
     reply_to: "m-2",
@@ -715,7 +715,7 @@ test("an archived room says why it takes no messages rather than greying a box",
   };
   mount();
   await waitFor(() => expect(callout(/archived/i)).not.toBeNull());
-  expect(callout(/readable for ever/i)).not.toBeNull();
+  expect(callout(/can still read it/i)).not.toBeNull();
   // THE ROOM CLOSES THE BOX, in its own words.
   const box = screen.getByLabelText(/^Message/) as HTMLTextAreaElement;
   expect(box.disabled).toBe(true);
@@ -736,12 +736,12 @@ test("a private room the reader is not in refuses every write, a reaction includ
     members: [],
   };
   mount();
-  await waitFor(() => expect(callout(/private room you are not in/i)).not.toBeNull());
+  await waitFor(() => expect(callout(/private room you’re not in/i)).not.toBeNull());
   // A PATCH FROM OUTSIDE IS REFUSED TOO, so the settings opener is held with
   // the same sentence rather than opening a dialog whose Save cannot land.
   const topic = screen.getByRole("button", { name: /^topic$/i });
   expect(topic.getAttribute("aria-disabled")).toBe("true");
-  expect(topic.getAttribute("title")).toMatch(/private room you are not in/i);
+  expect(topic.getAttribute("title")).toMatch(/private room you’re not in/i);
 });
 
 test("a room this build cannot classify is read-only rather than guessed at", async () => {
@@ -757,9 +757,9 @@ test("a room this build cannot classify is read-only rather than guessed at", as
     members: [],
   };
   mount();
-  await waitFor(() => expect(callout(/newer build/i)).not.toBeNull());
+  await waitFor(() => expect(callout(/newer version of the engine/i)).not.toBeNull());
   const topic = screen.getByRole("button", { name: /^topic$/i });
-  expect(topic.getAttribute("title")).toMatch(/newer build/i);
+  expect(topic.getAttribute("title")).toMatch(/newer version of the engine/i);
 });
 
 test("a seat working on an answer is drawn under the message it is answering", async () => {
@@ -1120,7 +1120,7 @@ test("a private room the reader is outside holds a reaction and still offers mod
   answers.chat_messages = { ...served, channel_id: "room-1", messages: [ownWithReaction()] };
   mount();
   const chip = await screen.findByRole("button", { name: /:tada:/ });
-  await waitFor(() => expect(holdOf(chip)).toMatch(/private room you are not in/i));
+  await waitFor(() => expect(holdOf(chip)).toMatch(/private room you’re not in/i));
   expect(holdOf(screen.getByRole("button", { name: /^delete$/i }))).toBeNull();
   expect(holdOf(screen.getByRole("button", { name: /^edit$/i }))).toBeNull();
   fireEvent.click(chip);
@@ -1135,11 +1135,11 @@ test("a room this build cannot classify draws every change to a message, held wi
   answers.chat_messages = { ...served, channel_id: "room-1", messages: [ownWithReaction()] };
   mount();
   const chip = await screen.findByRole("button", { name: /:tada:/ });
-  await waitFor(() => expect(holdOf(chip)).toMatch(/newer build/));
+  await waitFor(() => expect(holdOf(chip)).toMatch(/newer version of the engine/));
   const edit = screen.getByRole("button", { name: /^edit$/i });
   const remove = screen.getByRole("button", { name: /^delete$/i });
-  expect(holdOf(edit)).toMatch(/newer build/);
-  expect(holdOf(remove)).toMatch(/newer build/);
+  expect(holdOf(edit)).toMatch(/newer version of the engine/);
+  expect(holdOf(remove)).toMatch(/newer version of the engine/);
   fireEvent.click(remove);
   fireEvent.click(chip);
   await new Promise((r) => setTimeout(r, 20));
@@ -1187,9 +1187,9 @@ test("a room whose read failed says so rather than reading for ever", async () =
   await screen.findByText(/not found\. it may have been removed/i);
   await screen.findByText("mine");
   const box = screen.getByLabelText(/^Message/) as HTMLTextAreaElement;
-  expect(box.placeholder).toMatch(/could not be read/i);
+  expect(box.placeholder).toMatch(/couldn’t be read/i);
   expect(box.placeholder).not.toMatch(/reading the room/i);
-  expect(holdOf(screen.getByRole("button", { name: /^delete$/i }))).toMatch(/could not be read/i);
+  expect(holdOf(screen.getByRole("button", { name: /^delete$/i }))).toMatch(/couldn’t be read/i);
   expect(screen.queryByText(/0 members/)).toBeNull();
 });
 
@@ -1333,7 +1333,7 @@ test("a pending message's retry is held once its room stops taking messages", as
   const { store } = mount();
   await screen.findByText("line 2");
   await say("did that land?");
-  const retry = await screen.findByRole("button", { name: /same id/i });
+  const retry = await screen.findByRole("button", { name: /send again/i });
   expect(holdOf(retry)).toBeNull();
   answers.chat_channel = detailOf({ archived_at: "2026-02-01T00:00:00Z" });
   act(() => frame(store, 3, { op: "patch" }));
@@ -1627,7 +1627,7 @@ test("a room the reader may read but is not in says so, and offers to join", asy
     members: [],
   };
   mount();
-  await waitFor(() => expect(screen.getByText(/you are not in this room/i)).toBeTruthy());
+  await waitFor(() => expect(screen.getByText(/you’re not in this room/i)).toBeTruthy());
 
   const join = screen.getByRole("button", { name: /^join$/i });
   await waitFor(() => expect(join.getAttribute("aria-disabled")).not.toBe("true"));

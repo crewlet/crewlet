@@ -34,6 +34,14 @@ export function knownKind(kind: ChatKind): boolean {
 }
 
 /**
+ * Why a room of a kind this build cannot classify takes nothing from here:
+ * the composer's reason and the membership note alike, so the one fact is
+ * said one way wherever it holds a control.
+ */
+export const NEWER_ROOM =
+  "This room was made by a newer version of the engine, so it can’t be changed from this node until it’s upgraded.";
+
+/**
  * The glyph a room is drawn with, in the design system's own vocabulary.
  *
  * `network` for a unit's room rather than `users`, because that is the mark
@@ -74,7 +82,7 @@ export function roomKindLabel(kind: ChatKind): string {
     case "group":
       return "Group message";
     default:
-      return "A room this build does not know";
+      return "A newer kind of room";
   }
 }
 

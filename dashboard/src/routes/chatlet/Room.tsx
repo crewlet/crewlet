@@ -99,7 +99,7 @@ import {
 import type { OutboxHandle } from "./outbox.ts";
 import { coverageOf, PAGE } from "./page.ts";
 import { RoomSettings } from "./RoomSettings.tsx";
-import { isDirect, knownKind, roomKindLabel, roomMark, roomTitle } from "./rooms.ts";
+import { isDirect, knownKind, NEWER_ROOM, roomKindLabel, roomMark, roomTitle } from "./rooms.ts";
 import { reportFor, type StartReport } from "./start.ts";
 import { StartNote } from "./StartNote.tsx";
 import { ThreadPane } from "./Thread.tsx";
@@ -109,18 +109,16 @@ const NO_REPLIES: ChatMessageView[] = [];
 
 /** The three refusals a room makes of a reader, each a fact about the room. */
 const ARCHIVED =
-  "This room is archived. It stays readable for ever and takes no new messages — what was said in it can still be corrected, taken back or reacted to.";
-const UNKNOWN_KIND =
-  "This room was created by a newer build than this node runs, which refuses every write to it rather than guessing what kind of room it is.";
+  "This room is archived. You can still read it and edit, delete or react to what’s in it, but it takes no new messages.";
+const UNKNOWN_KIND = NEWER_ROOM;
 const OUTSIDER =
-  "This is a private room you are not in. A private room refuses every write from outside it, a reaction included — except taking a message down, which is moderation.";
+  "This is a private room you’re not in, so you can’t post or react here. An admin can still take a message down.";
 
 /** What every control says before the room's own answer has come. */
 const READING = "Reading the room before anything in it can change.";
 
 /** What every control says when the room's own answer did not come. */
-const UNREAD =
-  "This room could not be read, so nothing in it can change from here — why is said at the top of the room.";
+const UNREAD = "This room couldn’t be read, so nothing in it can change. The reason is at the top.";
 
 export interface RoomProps {
   channelID: string;
@@ -530,11 +528,11 @@ export function Room({ channelID, viewer, nameOf, summary, cursors, outbox }: Ro
                 {members.length} member{members.length === 1 ? "" : "s"}
               </span>
             )}
-            {channel?.unit && <span>the {channel.unit} unit's own room</span>}
+            {channel?.unit && <span>the {channel.unit} team&rsquo;s room</span>}
             {/* STANDING OUTSIDE A ROOM YOU CAN READ IS AN ORDINARY STATE, and
                 an unsaid one is what makes a rail that does not list the room
                 look like a rail that lost it. */}
-            {standing && !standing.member && <span>you are not in this room</span>}
+            {standing && !standing.member && <span>you&rsquo;re not in this room</span>}
             {summary?.follow_all && <span>every message here reaches you</span>}
             {channel?.retention_days !== undefined && channel.retention_days !== null && (
               <span>
@@ -587,9 +585,9 @@ export function Room({ channelID, viewer, nameOf, summary, cursors, outbox }: Ro
         {pageError && <QueryState error={pageError} refusal={null} loading={false} />}
         {tail.unreadable > 0 && (
           <Callout variant="warning">
-            {tail.unreadable} message{tail.unreadable === 1 ? "" : "s"} on this page were written by
-            a newer build than this node runs, so they are not drawn. Another node can render them,
-            and this one can once it is upgraded.
+            {tail.unreadable} message{tail.unreadable === 1 ? "" : "s"} on this page came from a
+            newer version of the engine, so {tail.unreadable === 1 ? "it isn’t" : "they aren’t"}{" "}
+            shown yet. Upgrading this node shows {tail.unreadable === 1 ? "it" : "them"}.
           </Callout>
         )}
 
@@ -605,7 +603,7 @@ export function Room({ channelID, viewer, nameOf, summary, cursors, outbox }: Ro
             tail.loaded && tail.messages.length === 0 && pending.length === 0
               ? {
                   title: "Nothing has been said here yet",
-                  hint: "A room exists from the moment it is created — say something, and every data node in the fleet derives the same first line from it.",
+                  hint: "Say something to start the conversation.",
                 }
               : undefined
           }
@@ -639,8 +637,8 @@ export function Room({ channelID, viewer, nameOf, summary, cursors, outbox }: Ro
             is the composer's own sentence, beside the Send it holds. */}
         {!connected && (
           <p className="t-caption muted">
-            The socket is down, so this room shows what it last read and nothing new arrives until
-            the socket is back — it reads again the moment it is.
+            The live connection is down, so this room shows what it last read. It catches up when
+            the connection is back.
           </p>
         )}
       </div>

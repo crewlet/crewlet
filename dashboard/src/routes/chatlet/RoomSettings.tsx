@@ -111,7 +111,7 @@ export function RoomSettings({
       icon={<PencilGlyph size="md" />}
       onClose={onClose}
       dismissable={!busy}
-      closeDisabledReason="Waiting for the log to acknowledge."
+      closeDisabledReason="Waiting for the engine to answer."
       size="md"
       stackBody
       onSubmit={() => void submit()}
@@ -161,8 +161,7 @@ export function RoomSettings({
         helper={
           purposeBudget.over
             ? undefined
-            : (purposeBudget.line ??
-              "What the room is for, for somebody deciding whether to be in it. Longer than a topic and read far less often.")
+            : (purposeBudget.line ?? "What the room is for, for someone deciding whether to join.")
         }
         error={purposeBudget.over ? purposeBudget.line : ""}
       >
@@ -183,13 +182,10 @@ export function RoomSettings({
 
       {note && <p className="t-caption muted">{note}</p>}
       <p className="t-caption muted">
-        A room’s name is the address its create claimed, and there is no rename, so it is not on
-        this form. Archiving a room and changing how long its messages are kept are not here either:
-        both decide what survives on every data node, so they are made deliberately. Ask the
-        assistant to archive a room and it proposes <InlineCode>update_channel</InlineCode>’s{" "}
-        <InlineCode>archived</InlineCode> for the room’s creator, its unit’s lead or an admin to
-        approve. An admin can ask it for a room’s horizon too, or send{" "}
-        <InlineCode>PUT /chatlet/channels/{"{id}"}/retention</InlineCode>.
+        A room can&rsquo;t be renamed. Archiving it and how long it keeps messages aren&rsquo;t on
+        this form. Ask the assistant to archive it: the room&rsquo;s creator, its team&rsquo;s lead
+        or an admin approves the change it proposes. An admin can ask it to change how long the room
+        keeps messages, or send <InlineCode>PUT /chatlet/channels/{"{id}"}/retention</InlineCode>.
       </p>
     </Modal>
   );

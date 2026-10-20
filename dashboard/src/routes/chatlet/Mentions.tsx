@@ -150,8 +150,8 @@ export function Mentions({ nameOf }: { nameOf: (handle: string) => string }) {
           <strong className="t-cell">Mentions</strong>
         </div>
         <p className="t-caption muted">
-          Where you were named. There is no notification away from this screen — the engine sends no
-          email, no push and no SMS.
+          Where you were named. The engine sends no email, push or text message, so this is where to
+          look.
         </p>
       </header>
 
@@ -168,7 +168,7 @@ export function Mentions({ nameOf }: { nameOf: (handle: string) => string }) {
               ? undefined
               : {
                   title: "Nobody has named you",
-                  hint: "A mention is a message that named your handle — @you. A broadcast to a whole room is not one, and neither is a reply in a thread you are in unless it names you.",
+                  hint: "A mention is a message that names your handle, like @you. A message to a whole room, or a reply in your thread, counts only when it names you.",
                 }
           }
         >

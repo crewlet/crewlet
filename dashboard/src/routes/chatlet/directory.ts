@@ -48,7 +48,7 @@ import {
 } from "~/protocol/index.ts";
 import { comparePositions } from "~/protocol/session.ts";
 
-import { isDirect, knownKind } from "./rooms.ts";
+import { isDirect, knownKind, NEWER_ROOM } from "./rooms.ts";
 
 /**
  * How many candidate rooms one pass resolves.
@@ -205,20 +205,20 @@ export function canLeave(standing: RoomStanding): boolean {
  */
 export function membershipNote(standing: RoomStanding): string {
   if (!knownKind(standing.kind)) {
-    return "This room was created by a newer build than this node runs, which refuses every write to it rather than guessing what kind of room it is.";
+    return NEWER_ROOM;
   }
   if (isDirect(standing.kind)) {
-    return "A direct conversation is the people in it — its id is derived from their handles — so there is nobody to add and nothing to join. A different set of people is a different conversation.";
+    return "A conversation is the people in it, so there’s nobody to add. Different people make a different conversation.";
   }
   if (standing.kind === "private" && !standing.member) {
-    return "A private room's membership is the only way into it, so it is joined by being added rather than by asking.";
+    return "You can’t join a private room yourself. Someone already in it has to add you.";
   }
   if (standing.kind === "unit" && standing.member) {
-    return "You are in this room because the org chart puts you there. Its membership is maintained by the unit, so leaving would be undone by the next apply.";
+    return "You’re in this room because the org chart puts you in its team, so you can’t leave it here.";
   }
   if (standing.kind === "unit") {
-    const whose = standing.unit ? `the ${standing.unit} unit's` : "a unit's";
-    return `This is ${whose} own room. Every seat can read it, and its membership is the org chart's: a seat is in it by being in the unit, so it is joined by moving into the unit in the company configuration rather than from here.`;
+    const whose = standing.unit ? `the ${standing.unit} team’s` : "a team’s";
+    return `This is ${whose} own room. Anyone can read it, and its members are the team’s, set in the org chart.`;
   }
   return "";
 }
