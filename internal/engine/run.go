@@ -3065,8 +3065,9 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// — the resume that rejoins it ([Engine.resumeWorkingStatus]) and the
 	// stop that releases it ([Engine.releaseWorkingStatus]) both read the
 	// row's turn id, which is this run's id (ADR-0017). Held under the work
-	// key, neither ever found it, and every parked turn's indicator stood
-	// until the backend's own expiry.
+	// key, neither ever found it, so every parked turn's indicator went on
+	// saying "is thinking…" every refresh until the seat moved or the node
+	// stopped.
 	status := e.beginWorkingStatus(ctx, req.Handle, req.RunID, req.Ask())
 	// ENDED ON EVERY PATH OUT OF THIS FRAME, the runner build failing below
 	// included: that path raised an indicator and never ran a turn, and
