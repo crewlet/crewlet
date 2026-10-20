@@ -26,13 +26,13 @@
  * on the new sheet. Cancel asks first when there is something to lose.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
-  ArtifactKindGlyph,
   Button,
   Callout,
   Checkbox,
   ChoiceList,
+  DocumentTitleField,
   FileDrop,
   FilePickButton,
   FormField,
@@ -172,16 +172,11 @@ export function SheetCreate() {
   const task = useFileArtifactTask();
   const panel = useAskPanel();
   const agentName = chosenAgent(who)?.seat.name ?? "";
-  const titleInput = useRef<HTMLInputElement>(null);
   const body = useRef<HTMLDivElement>(null);
 
   const draft = drafts[start];
   const preset = presets[start] ?? (draft ? presetOf(draft) : "shared");
   const columns = useMemo(() => (draft ? draftColumns(draft) : []), [draft]);
-
-  useEffect(() => {
-    titleInput.current?.focus({ preventScroll: true });
-  }, []);
 
   /** Change the draft the reader is looking at. */
   const update = useCallback(
@@ -497,33 +492,27 @@ export function SheetCreate() {
         onFiles={takeFiles}
       >
         <div className="sheet-create-main">
-          <div className="sheet-create-head">
-            <ArtifactKindGlyph kind="sheet" size="lg" />
-            <FormField className="sheet-create-title" error={titleProblem(title)}>
-              {(field) => (
-                <input
-                  ref={titleInput}
-                  id={field.id}
-                  aria-describedby={field.describedBy}
-                  aria-invalid={field.invalid || undefined}
-                  aria-label="Sheet title"
-                  className="sheet-create-title-input"
-                  value={title}
-                  placeholder="Untitled sheet"
-                  autoComplete="off"
-                  spellCheck
-                  onChange={(event) => setTitle(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key !== "Enter" || event.metaKey || event.ctrlKey) return;
-                    event.preventDefault();
-                    body.current
-                      ?.querySelector<HTMLElement>('[role="grid"] [tabindex="0"]')
-                      ?.focus();
-                  }}
-                />
-              )}
-            </FormField>
-          </div>
+          <FormField error={titleProblem(title)}>
+            {(field) => (
+              <DocumentTitleField
+                autoFocus
+                id={field.id}
+                aria-describedby={field.describedBy}
+                aria-label="Sheet title"
+                error={field.invalid}
+                value={title}
+                placeholder="Untitled sheet"
+                autoComplete="off"
+                spellCheck
+                onChange={(event) => setTitle(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter" || event.metaKey || event.ctrlKey) return;
+                  event.preventDefault();
+                  body.current?.querySelector<HTMLElement>('[role="grid"] [tabindex="0"]')?.focus();
+                }}
+              />
+            )}
+          </FormField>
 
           {start === "import" && imported && draft && (
             <p className="sheet-create-source">
