@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/config"
 )
 
@@ -40,9 +41,9 @@ func runSeats(environ config.Source, args []string, stdout, stderr io.Writer) er
 	sub, rest := splitSubject(args)
 	switch sub {
 	case "pause":
-		return seatsAct(environ, rest, "pause_seat", true, stdout, stderr)
+		return seatsAct(environ, rest, builtin.PauseSeatTool, true, stdout, stderr)
 	case "resume":
-		return seatsAct(environ, rest, "resume_seat", false, stdout, stderr)
+		return seatsAct(environ, rest, builtin.ResumeSeatTool, false, stdout, stderr)
 	case "", "help":
 		fmt.Fprintln(stderr, seatsUsage)
 		return flag.ErrHelp

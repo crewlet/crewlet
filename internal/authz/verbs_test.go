@@ -195,7 +195,8 @@ func TestNoRowIsBothSeatOnlyAndHumanOnly(t *testing.T) {
 func TestEveryDottedVerbIsAskedByANonTestCallSite(t *testing.T) {
 	t.Parallel()
 	root := sourcetree.Root(t)
-	wire := actionWireNames(t, filepath.Join(root, "internal", "authz", "rules.go"))
+	wire := actionWireNames(t, filepath.Join(root, "internal", "authz", "rules.go"),
+		stringConstants(t, filepath.Join(root, "internal", "toolname")))
 	if len(wire) != len(authz.Actions()) {
 		t.Fatalf("read %d Action constants out of rules.go and the table holds %d "+
 			"verbs — the parse no longer sees the declarations", len(wire),
@@ -272,7 +273,12 @@ func TestEveryDottedVerbIsAskedByANonTestCallSite(t *testing.T) {
 
 // actionWireNames reads every `Action…` constant rules.go declares with an
 // `Action` type and a string value, keyed by its Go name.
-func actionWireNames(t *testing.T, path string) map[string]string {
+//
+// A verb named after a tool that a package below its owner must spell takes
+// its value from internal/toolname (`Action = toolname.SendDM`), so a value
+// that is a selector on that package is read from its declarations, handed in
+// as names.
+func actionWireNames(t *testing.T, path string, names map[string]string) map[string]string {
 	t.Helper()
 	file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
 	if err != nil {
@@ -293,6 +299,17 @@ func actionWireNames(t *testing.T, path string) map[string]string {
 			if !ok || typ.Name != "Action" {
 				continue
 			}
+			if sel, ok := value.Values[0].(*ast.SelectorExpr); ok {
+				if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "toolname" {
+					verb, known := names[sel.Sel.Name]
+					if !known {
+						t.Fatalf("%s is toolname.%s, which internal/toolname does not "+
+							"declare", value.Names[0].Name, sel.Sel.Name)
+					}
+					out[value.Names[0].Name] = verb
+				}
+				continue
+			}
 			lit, ok := value.Values[0].(*ast.BasicLit)
 			if !ok || lit.Kind != token.STRING {
 				continue
@@ -303,6 +320,53 @@ func actionWireNames(t *testing.T, path string) map[string]string {
 			}
 			out[value.Names[0].Name] = verb
 		}
+	}
+	return out
+}
+
+// stringConstants reads every string constant the package in dir declares in
+// its non-test source, by name.
+func stringConstants(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	files, err := filepath.Glob(filepath.Join(dir, "*.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]string{}
+	for _, path := range files {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		for _, decl := range file.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				value := spec.(*ast.ValueSpec)
+				for i, name := range value.Names {
+					if i >= len(value.Values) {
+						continue
+					}
+					lit, ok := value.Values[i].(*ast.BasicLit)
+					if !ok || lit.Kind != token.STRING {
+						continue
+					}
+					text, err := strconv.Unquote(lit.Value)
+					if err != nil {
+						t.Fatalf("%s: %v", name.Name, err)
+					}
+					out[name.Name] = text
+				}
+			}
+		}
+	}
+	if len(out) == 0 {
+		t.Fatalf("read no string constant out of %s", dir)
 	}
 	return out
 }

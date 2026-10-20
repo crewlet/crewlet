@@ -31,7 +31,7 @@ import (
 const ExecutorHeader = "\n## Your turn" +
 	"\nYou decide what to do about the task below and you do it, in this " +
 	"one pass. Use tool calls for every action — writing about an action " +
-	"does not perform it. End by calling `submit_work` exactly once, " +
+	"does not perform it. End by calling `" + toolname.SubmitWork + "` exactly once, " +
 	"reporting what you actually did." +
 	"\n" +
 	"\n**Your `tools=[...]` starts with your first-party tools and the " +
@@ -105,16 +105,16 @@ const executorKnowledgeNote = "  Relevant team documentation was surfaced in the
 // Gated because it is absent for very nearly every role: unconditional, it
 // would be ~200 tokens of prose about a tool the seat does not have, on every
 // executor prompt in the company.
-const executorSandboxSection = "\n## Sandbox code work (the `run_sandbox` tool)" +
+const executorSandboxSection = "\n## Sandbox code work (the `" + toolname.RunSandbox + "` tool)" +
 	"\nFor **real code work** — implement or modify code, run tests, " +
-	"reproduce a bug, run a script — you have a `run_sandbox` tool: a " +
+	"reproduce a bug, run a script — you have a `" + toolname.RunSandbox + "` tool: a " +
 	"real computer with a shell and a git checkout where a coding agent " +
 	"works autonomously on a brief you give it and returns a structured " +
 	"report." +
 	"\n" +
 	"\nThe sandbox runs detached: this turn pauses and resumes " +
 	"automatically with the result, keeping full context. So after " +
-	"`run_sandbox` returns, report the outcome — or open / link the PR, " +
+	"`" + toolname.RunSandbox + "` returns, report the outcome — or open / link the PR, " +
 	"file a ticket, reply on the channel — in the SAME turn. Don't leave " +
 	"it for a separate report turn." +
 	"\n" +
@@ -203,7 +203,7 @@ type ExecutorInput struct {
 // says the answer comes back in this turn, which is what stops it treating a
 // delegation as fire-and-forget and ending the turn before reading anything.
 const workersPreamble = "Short-lived workers you can hand narrowly-scoped work " +
-	"to with `delegate`. Each one runs its own tool loop with a slice of your " +
+	"to with `" + toolname.Delegate + "`. Each one runs its own tool loop with a slice of your " +
 	"tools, cannot write anywhere, and reports back to you inside this turn — " +
 	"so you still finish the job yourself. They are not colleagues: work that " +
 	"belongs to another seat goes to that seat."
@@ -316,7 +316,7 @@ func BuildExecutor(seat Seat, in ExecutorInput) Prompt {
 	// about how to do the work rather than about which tool to call, and
 	// the executor reads this prompt top-down: what it is, what it knows,
 	// who it can hand work to, then what it can call itself.
-	if in.Workers != "" && slices.Contains(in.AvailableTools, "delegate") {
+	if in.Workers != "" && slices.Contains(in.AvailableTools, toolname.Delegate) {
 		b.Heading("workers", "\n## Your workers", workersPreamble, in.Workers)
 	}
 

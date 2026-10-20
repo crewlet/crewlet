@@ -30,7 +30,7 @@ const SubagentPreamble = "You are a short-lived worker. Do not delegate further.
 // wrong: it writes the answer as prose, calls the tool with a pointer to what
 // it just said, and the parent reads a field saying "see above" about a
 // conversation it cannot see.
-const SubagentSubmitRule = "When you are done, call `submit_result` with your " +
+const SubagentSubmitRule = "When you are done, call `" + toolname.SubmitResult + "` with your " +
 	"answer and stop. That submission is the ONLY thing passed back — your " +
 	"tool calls, your reasoning and anything you wrote as prose are not. If " +
 	"you could not finish, submit what you do have and say why in the fields " +

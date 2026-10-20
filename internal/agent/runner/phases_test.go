@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -61,7 +62,7 @@ func (p *scriptedProvider) scriptFor(req llm.Request) (string, []llm.Completion)
 	switch {
 	case slices.Contains(offered, runner.SubmitReviewTool):
 		return "review", p.review
-	case slices.Contains(offered, runner.MarkOnboardedTool):
+	case slices.Contains(offered, toolname.MarkOnboarded):
 		// Checked BEFORE the executor, because onboarding is the pass that
 		// offers mark_onboarded and the executor is deliberately denied it:
 		// a seat that could mark itself from inside the executor would
@@ -657,7 +658,7 @@ func TestTheExecutorIsNotOfferedTheOnboardingMarker(t *testing.T) {
 	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if slices.Contains(toolNames(prov.requestsFor("execute")[0].Tools), runner.MarkOnboardedTool) {
+	if slices.Contains(toolNames(prov.requestsFor("execute")[0].Tools), toolname.MarkOnboarded) {
 		t.Error("the executor was offered mark_onboarded")
 	}
 }

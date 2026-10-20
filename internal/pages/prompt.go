@@ -195,7 +195,7 @@ func promptGetContext(b *strings.Builder, meta map[string]string) {
 		return
 	}
 	b.WriteString("\n## Get full context" +
-		"\nRead the page with `get_page` before deciding whether anything is " +
+		"\nRead the page with `" + GetPageTool + "` before deciding whether anything is " +
 		"needed of you. A change summary is not the page.\n")
 	if url := meta["url"]; url != "" {
 		b.WriteString("Link: " + url + "\n")
@@ -214,10 +214,10 @@ func promptHandling(b *strings.Builder, meta map[string]string) {
 			"\n1. **Read the page first.** Somebody named you on it, and the " +
 			"question is almost always about what it says." +
 			"\n2. **Answer where you were asked** — comment on the page with " +
-			"`comment_on_page`, so the answer is beside the question for the " +
+			"`" + CommentOnPageTool + "`, so the answer is beside the question for the " +
 			"next person who reads it." +
 			"\n3. **If the answer is a change to the page**, make it with " +
-			"`save_page` and say in your comment what you changed. Pass the " +
+			"`" + SavePageTool + "` and say in your comment what you changed. Pass the " +
 			"`version` you read back as `base_version`, so an edit somebody " +
 			"else made in the meantime is a refusal rather than a silent " +
 			"overwrite." +

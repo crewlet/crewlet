@@ -10,11 +10,12 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // A2AAskTool is the tool's wire name.
-const A2AAskTool = "a2a_ask"
+const A2AAskTool = toolname.A2AAsk
 
 // Asker is what this tool needs from the A2A service.
 //
@@ -48,7 +49,7 @@ func (t *a2aAsk) Name() string { return A2AAskTool }
 
 func (t *a2aAsk) Description() string {
 	return "Ask one AI colleague one question, in their own turn. Use " +
-		"lookup_colleague first to get an exact handle. The colleague is " +
+		LookupColleagueTool + " first to get an exact handle. The colleague is " +
 		"woken with your brief and answers asynchronously — this call " +
 		"returns as soon as they have been asked, NOT with their answer, " +
 		"so finish your turn rather than waiting. AGENTS ONLY: a human " +
@@ -61,7 +62,7 @@ func (t *a2aAsk) Parameters() map[string]any {
 		"properties": map[string]any{
 			"target": map[string]any{
 				"type":        "string",
-				"description": "The colleague's exact handle, from lookup_colleague",
+				"description": "The colleague's exact handle, from " + LookupColleagueTool,
 			},
 			"brief": map[string]any{
 				"type": "string",
@@ -82,7 +83,7 @@ func (t *a2aAsk) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[s
 	seat, err := turn.RequireSeat()
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the model reads, not a Go error.
-		return refused(tools.RefusalForbidden, "a2a_ask can only be called during a turn, on behalf of a seat."), nil
+		return refused(tools.RefusalForbidden, A2AAskTool+" can only be called during a turn, on behalf of a seat."), nil
 	}
 	if t.svc == nil {
 		return refused(tools.RefusalUnavailable, "Agent-to-agent messaging is not configured on this deployment."), nil
@@ -92,9 +93,9 @@ func (t *a2aAsk) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[s
 	brief := strings.TrimSpace(argString(args, "brief"))
 	switch {
 	case target == "":
-		return failed("a2a_ask needs a `target` handle. Use lookup_colleague to find one."), nil
+		return failed(A2AAskTool + " needs a `target` handle. Use " + LookupColleagueTool + " to find one."), nil
 	case brief == "":
-		return failed("a2a_ask needs a `brief`. The colleague sees only this — " +
+		return failed(A2AAskTool + " needs a `brief`. The colleague sees only this — " +
 			"not your plan and not your conversation — so say what you need in full."), nil
 	}
 
@@ -111,7 +112,7 @@ func (t *a2aAsk) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[s
 		// instead, is the difference between a redirected agent and one
 		// that waits forever.
 		return failed(fmt.Sprintf(
-			"%s (%s) is a human teammate, so a2a_ask cannot reach them — "+
+			"%s (%s) is a human teammate, so "+A2AAskTool+" cannot reach them — "+
 				"no turn answers on their behalf. Mention them on a shared "+
 				"surface instead and continue without waiting.",
 			resolved.Name, resolved.Handle)), nil
@@ -121,7 +122,7 @@ func (t *a2aAsk) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[s
 		// decides who replies by comparing the woken seat against the
 		// requester, so a self-ask wakes this seat, is read as an incoming
 		// ANSWER, and is never replied to — a turn spent on nothing.
-		return failed("a2a_ask cannot address your own seat."), nil
+		return failed(A2AAskTool + " cannot address your own seat."), nil
 	}
 
 	id, err := t.svc.Open(ctx, a2a.Ask{
@@ -187,7 +188,7 @@ func (t *a2aAsk) resolve(turn *turnctx.Turn, target string) (colleague.Seat, *to
 	switch len(found) {
 	case 0:
 		return colleague.Seat{}, refusalOf(failed(fmt.Sprintf(
-			"No colleague matches %q. Call lookup_colleague to find the right handle.",
+			"No colleague matches %q. Call "+LookupColleagueTool+" to find the right handle.",
 			clip(target))))
 	case 1:
 		return found[0].Seat, nil

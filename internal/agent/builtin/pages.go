@@ -17,13 +17,14 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// The native knowledge base's tool names.
+// The native knowledge base's tool names, which the domain owns
+// (internal/pages/tools.go says why).
 const (
-	ListPagesTool     = "list_pages"
-	GetPageTool       = "get_page"
-	WritePageTool     = "write_page"
-	SavePageTool      = "save_page"
-	CommentOnPageTool = "comment_on_page"
+	ListPagesTool     = pages.ListPagesTool
+	GetPageTool       = pages.GetPageTool
+	WritePageTool     = pages.WritePageTool
+	SavePageTool      = pages.SavePageTool
+	CommentOnPageTool = pages.CommentOnPageTool
 )
 
 // PageTools are the five.

@@ -1458,7 +1458,7 @@ func (t *createWorkItem) Parameters() map[string]any {
 			},
 			"assignee": map[string]any{
 				"type": "string",
-				"description": "A seat's handle, from lookup_colleague. Omit " +
+				"description": "A seat's handle, from " + LookupColleagueTool + ". Omit " +
 					"and the project's default assignee takes it (describe_project " +
 					"names them), else it waits in triage for the lead to route.",
 			},
@@ -1541,7 +1541,7 @@ func (t *createWorkItem) askFor(ctx context.Context, actor Actor, task tracker.T
 	rawDecision, decided := args["decision"]
 	switch {
 	case asked == "" && decided:
-		return nil, refusalOf(failed("create_work_item: `decision` needs `ask` " +
+		return nil, refusalOf(failed(tracker.CreateWorkItemTool + ": `decision` needs `ask` " +
 			"— the handle of the person who has to choose. A decision asked " +
 			"of nobody wakes nobody."))
 	case asked == "":
@@ -1629,7 +1629,7 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		BodyAt:      now,
 	}
 	if task.Title == "" {
-		return failed("create_work_item needs a `title` — one line saying what " +
+		return failed(tracker.CreateWorkItemTool + " needs a `title` — one line saying what " +
 			"the work is."), nil
 	}
 	if raw, held := args["fields"]; held {
@@ -1690,7 +1690,7 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	if task.Project == "" {
 		task.Project = t.deps.defaultProject(actor)
 		if task.Project == "" {
-			return failed("create_work_item needs a `project`: your team owns " +
+			return failed(tracker.CreateWorkItemTool + " needs a `project`: your team owns " +
 				"none, so there is no default. Ask which project this belongs " +
 				"in rather than guessing."), nil
 		}
@@ -2070,7 +2070,7 @@ func dependencyFailure(id, key string, collision bool, why string) string {
 		filed = tracker.ItemNamed(id, key, collision)
 	}
 	return fmt.Sprintf("The item WAS filed, as %s, but recording what it "+
-		"waits on did not finish: %s. Do NOT call create_work_item again — that "+
+		"waits on did not finish: %s. Do NOT call "+tracker.CreateWorkItemTool+" again — that "+
 		"files a second item. Set its dependencies with update_work_item on %s, "+
 		"giving the same waiting_on: it records whichever of them are still "+
 		"missing, and says so if one cannot be.", filed, why,
@@ -2464,7 +2464,7 @@ func (t *updateWorkItem) Description() string {
 		"description, labels, checklists, or whether you watch it. Only the " +
 		"fields you pass are changed. An assignment can carry a `reason` the " +
 		"new assignee reads. Say WHY you closed something with " +
-		"comment_on_work_item — an item that went to `cancelled` with no " +
+		tracker.CommentOnWorkTool + " — an item that went to `cancelled` with no " +
 		"word is one somebody has to reconstruct. Closing as a duplicate " +
 		"also names the item that survives, in `duplicate_of`."
 }
@@ -2528,7 +2528,7 @@ func (t *updateWorkItem) Parameters() map[string]any {
 					"id or its name: that team's lead hears that work routes " +
 					"to them now. The lead's of the project the item is in " +
 					"to set — filing your own work into your own team is " +
-					"what `unit` on create_work_item does.",
+					"what `unit` on " + tracker.CreateWorkItemTool + " does.",
 			},
 			"waiting_on":   setArgSchema("The items this one is blocked BY. " + itemRefs),
 			"blocking":     setArgSchema("The items blocked BY this one. " + itemRefs),
@@ -3365,21 +3365,21 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	rawDecision, decided := args["decision"]
 	switch {
 	case ref == "":
-		return failed("comment_on_work_item needs an `item` — a key like ENG-42, or an id."), nil
+		return failed(tracker.CommentOnWorkTool + " needs an `item` — a key like ENG-42, or an id."), nil
 	case body == "" && choice == "":
 		// A CHOICE IS AN ANSWER ON ITS OWN: the option is what the asker
 		// was waiting for, and a reason is welcome but not owed.
-		return failed("comment_on_work_item needs a `body`. Say the substantive " +
+		return failed(tracker.CommentOnWorkTool + " needs a `body`. Say the substantive " +
 			"thing, once — or, answering a decision, a `choice`."), nil
 	case decided && strings.TrimSpace(argString(args, "ask")) == "":
 		// REFUSED BEFORE ANY READ, because nothing about the item can make
 		// it right: a decision is a question put to somebody, and one
 		// asked of nobody is a set of options nobody is woken to weigh.
-		return failed("comment_on_work_item: `decision` needs `ask` — the " +
+		return failed(tracker.CommentOnWorkTool + ": `decision` needs `ask` — the " +
 			"handle of the person who has to choose. A decision asked of " +
 			"nobody wakes nobody."), nil
 	case decided && choice != "":
-		return failed("comment_on_work_item: a comment either asks a decision " +
+		return failed(tracker.CommentOnWorkTool + ": a comment either asks a decision " +
 			"(`decision`) or answers one (`choice`), never both — they are two " +
 			"comments, by two people."), nil
 	}
@@ -3494,7 +3494,7 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// A CHOICE THAT ANSWERS NOTHING: no `answers` was named and no
 		// open question on the item is addressed to this caller, so there
 		// is no decision for the option to be one of.
-		return failed(fmt.Sprintf("comment_on_work_item: `choice` %q answers "+
+		return failed(fmt.Sprintf(tracker.CommentOnWorkTool+": `choice` %q answers "+
 			"a decision, and no open question on %s is addressed to you. Name "+
 			"the question with `answers` (its comment id), or answer in "+
 			"`body` without a choice.", clip(comment.Choice),

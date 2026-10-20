@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/structured"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/plainjson"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // How a worker answers, and how that answer is classified.
@@ -43,7 +44,7 @@ import (
 // Deliberately not `submit_work`: a worker and an executor answer different
 // questions with different schemas, and one name for two shapes is how a
 // model that has seen both prompts submits the wrong one.
-const SubmitTool = "submit_result"
+const SubmitTool = toolname.SubmitResult
 
 // Status is what became of one task. It rides the Result, the tool's report
 // to the parent and the phase event, so it is a wire string rather than an

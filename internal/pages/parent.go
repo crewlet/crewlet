@@ -145,7 +145,7 @@ func checkParent(ctx context.Context, tx *sql.Tx, pageID, container,
 			"empty to file it at its container's top")
 	case parentMissing:
 		return badParent("there is no page %s. Name the id of a page in "+
-			"container %s (list_pages finds one), or leave parent_id empty to "+
+			"container %s ("+ListPagesTool+" finds one), or leave parent_id empty to "+
 			"file this page at the container's top", parentID, container)
 	case parentPurged:
 		return badParent("page %s was purged and is gone for good. Name "+

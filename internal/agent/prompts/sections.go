@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // The shared section builders. Each returns the section's lines, or nil when
@@ -309,7 +310,7 @@ func planRoster(s Seat, a *rosterAllowance) roster {
 // name, a handle or a platform id, so an omission is one call away instead of
 // a dead end.
 func rosterGapLine(n int) string {
-	return "and " + strconv.Itoa(n) + " more — `lookup_colleague` names them"
+	return "and " + strconv.Itoa(n) + " more — `" + toolname.LookupColleague + "` names them"
 }
 
 // rosterHead is the ladder's SECOND rung: the one line that names a report
@@ -408,7 +409,7 @@ func rosterProfile(s Seat, report *org.Role) []string {
 		parts = append(parts,
 			"  - Working with them: hand work over in the PM tool "+
 				"and @-mention them as @"+report.Handle()+" in the "+
-				"company's chat (or message them with `send_dm`); they "+
+				"company's chat (or message them with `"+toolname.SendDM+"`); they "+
 				"reply asynchronously — don't expect an engine turn from "+
 				"them.")
 		return parts
@@ -508,7 +509,7 @@ func BuildHumanColleaguesNote(s Seat) []string {
 		"\n## Human colleagues",
 		"Some seats in this org are held by human teammates — marked " +
 			"**(human)** in your identity and roster, and " +
-			"`kind: human` in `lookup_colleague` results. When you need one " +
+			"`kind: human` in `" + toolname.LookupColleague + "` results. When you need one " +
 			"of them:",
 		"- Reach them where humans read: an @-mention on the team's " +
 			"chat, or a comment on the issue / doc where the work lives. " +
@@ -621,7 +622,7 @@ func BuildUnitContextSection(s Seat) []string {
 
 // escalationTool is the tool the escalation guidance names — the one a seat
 // asks a decision through. The guidance renders only when the seat holds it.
-const escalationTool = "comment_on_work_item"
+const escalationTool = toolname.CommentOnWorkItem
 
 // BuildEscalationSection is how a seat asks for a decision it cannot make.
 //
@@ -656,7 +657,7 @@ func BuildEscalationSection(availableTools []string) []string {
 			"off something your role does not own, or one you are genuinely " +
 			"torn on, ask the person who decides — on the work item, with `" +
 			escalationTool + "` (`ask` and `decision`), or with " +
-			"`create_work_item` (`ask` and `decision`) when there is no item " +
+			"`" + toolname.CreateWorkItem + "` (`ask` and `decision`) when there is no item " +
 			"yet. Shape it so it can be answered at a glance:",
 		"- **The question** in one sentence; the context goes in the body.",
 		"- **Two to four options**, each saying what choosing it means.",

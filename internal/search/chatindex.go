@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/textindex"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // The chat corpus's own keyword index, and why it is not the knowledge base's.
@@ -1021,7 +1022,7 @@ func (x *ChatIndexer) beginRebuild(ctx context.Context, now time.Time, reason st
 	x.pruneCursor = ""
 	log.InfoContext(ctx, "chat_index_rebuilding", "reason", reason,
 		"detail", "the chat index is being dropped and walked again because "+
-			"the replicated estate under it was replaced; search_messages "+
+			"the replicated estate under it was replaced; "+toolname.SearchMessages+" "+
 			"answers over what is indexed meanwhile, and Ready says false "+
 			"until the walk catches up")
 	return nil
@@ -1391,7 +1392,7 @@ func (x *ChatIndexer) Run(ctx context.Context) {
 			log.WarnContext(ctx, "chat_index_step_failed",
 				"error", err.Error(),
 				"detail", "the chat index is behind this node's own rows; "+
-					"search_messages answers over the messages it has "+
+					toolname.SearchMessages+" answers over the messages it has "+
 					"indexed so far and catches up on the next sweep")
 		case worked > 0:
 			continue
