@@ -240,6 +240,23 @@ describe("what makes it read again", () => {
     act(() => store.setConnected(true));
     expect(read).toHaveBeenCalledTimes(2);
   });
+
+  // A READ USED ONCE AND LET GO: a gallery preview's frame ticket, read
+  // again, would reload the page already drawn in its frame.
+  test("a read that asks not to is not read again when the socket comes back", async () => {
+    const store = new Store();
+    const socket = new LiveSocket(store);
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(ClientContext.Provider, { value: { store, socket } }, children);
+    const { read, calls } = scripted<string>();
+    renderHook(() => useRest("/ticket", read, { refetchOnReconnect: false }), { wrapper });
+    await act(async () => calls[0]!.resolve("ticket"));
+
+    act(() => store.setConnected(true));
+    act(() => store.setConnected(false));
+    act(() => store.setConnected(true));
+    expect(read).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("the code a refusal renders as", () => {
