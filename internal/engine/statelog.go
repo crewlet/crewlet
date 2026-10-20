@@ -3192,7 +3192,7 @@ func (s *stateLog) stillUsable(ctx context.Context, logs map[string]*jetstream.D
 // releases. The release is called on every path out of the join — including
 // the failures — because a hold nobody released stops the trim for its whole
 // stale window, which is the one way a repair makes the fleet worse.
-func (s *stateLog) holdTail(ctx context.Context, at map[string]uint64) (func(), error) {
+func (s *stateLog) holdTail(ctx context.Context, at map[string]statelog.DomainPosition) (func(), error) {
 	owner := s.nodeID + ":join"
 	// KEYED BY STREAM, which is what [coord.TrimHold.Streams] holds: a
 	// hold is a pin on a LOG, and the backup's own hold — taken from
@@ -3201,20 +3201,21 @@ func (s *stateLog) holdTail(ctx context.Context, at map[string]uint64) (func(), 
 	streams := make(map[string]coord.Position, len(at))
 	for _, domain := range registeredDomains() {
 		name, stream := domain.Name(), domain.Stream().Name
-		seq, held := at[name]
+		pos, held := at[name]
 		if !held {
 			continue
 		}
-		// THE GENERATION COMES FROM THIS NODE'S OWN CURSOR, because a
-		// bare sequence names a number space: a hold stated in the
-		// wrong generation pins a position on a log that no longer
-		// exists, which the trim reads as no hold at all.
-		cursor, _, _, err := statelog.CursorFor(ctx, s.estate().Reader(), stream)
-		if err != nil {
-			return nil, err
-		}
+		// THE ARTEFACT'S GENERATION, never this node's own cursor's. A
+		// bare sequence names a number space, and the artefact's is the
+		// live log's — the join refused any other ([statelog.Offer.Usable])
+		// — while this node's checkpoint is the one thing a join knows to
+		// be wrong: absent on a node that never ran, which read as
+		// generation 0, and one a reanchor left behind on a node it
+		// passed. Stated in either, the pin sat below the log's generation,
+		// and the trim reads such a hold as an unknown term: it blocked the
+		// whole log for a minute and then, gone stale, pinned nothing.
 		streams[stream] = coord.Position{
-			Stream: stream, Generation: cursor.Generation, Seq: seq,
+			Stream: stream, Generation: pos.Generation, Seq: pos.Seq,
 		}
 	}
 	if err := s.fleet.PutHold(ctx, coord.TrimHold{
