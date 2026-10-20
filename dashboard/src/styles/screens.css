@@ -10639,14 +10639,6 @@ a.live-row:focus-visible {
   display: grid;
   gap: var(--spacing-4);
 }
-/* A kind whose page has not landed yet: the empty state, centred in the body. */
-.artifact-create-pending {
-  display: flex;
-  flex: 1 1 auto;
-  align-items: center;
-  justify-content: center;
-  padding: var(--spacing-5);
-}
 
 /* ---- New doc ------------------------------------------------------------ */
 
@@ -10788,7 +10780,7 @@ a.live-row:focus-visible {
 /* FOCUSED, THE TITLE IS UNDERLINED in the focus ink rather than boxed: it
    is the page's heading being written, and a ring round it read as a form. */
 .sheet-create-title-input:focus-visible {
-  outline: none;
+  outline: 2px solid transparent;
   background: transparent;
   box-shadow: inset 0 -2px 0 var(--color-focus);
   border-radius: var(--radius-md) var(--radius-md) 0 0;
@@ -10811,7 +10803,7 @@ a.live-row:focus-visible {
 }
 .sheet-create-rail {
   position: sticky;
-  top: 0;
+  top: var(--sticky-top);
   display: flex;
   flex-direction: column;
   gap: var(--spacing-6);
@@ -10842,8 +10834,8 @@ a.live-row:focus-visible {
   align-items: center;
   gap: var(--spacing-2) var(--spacing-3);
 }
-.sheet-create-import > .crewlet-checkbox,
-.sheet-create-import > :last-child:not(button):not(.sheet-create-import-hint) {
+/* The header choice, once a file is in, takes a row of its own. */
+.sheet-create-import-header {
   flex-basis: 100%;
 }
 .sheet-create-import-hint {
@@ -10890,6 +10882,8 @@ a.live-row:focus-visible {
   }
   .sheet-create-title-input {
     font-size: var(--font-size-xl);
+  }
+}
 
 /* A NEW DESIGN (`routes/artifacts/new/DesignCreate.tsx`): the starting
    layouts, then the canvas a person lays out between the list of its boards
@@ -11057,7 +11051,7 @@ a.live-row:focus-visible {
 }
 .design-create-start-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(11rem, 100%), 1fr));
   gap: var(--spacing-5) var(--spacing-4);
   margin: 0;
   padding: 0;
@@ -11242,7 +11236,7 @@ a.live-row:focus-visible {
 }
 .dashboard-create-settings {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(9rem, 100%), 1fr));
   gap: var(--spacing-2) var(--spacing-3);
 }
 .dashboard-create-suggestions {
@@ -11300,7 +11294,7 @@ a.live-row:focus-visible {
    what the person brings on the left and what becomes of it on the right
    (the draft's live page, the checks, or the task an agent is sent). Each
    pane scrolls inside itself and the editor takes the height left; under
-   900px the panes stack and the body scrolls as one. */
+   the page's 900px fold the panes stack and the body scrolls as one. */
 .html-create {
   display: grid;
   flex: 1 1 auto;
@@ -11359,14 +11353,14 @@ a.live-row:focus-visible {
 }
 .html-create-caps {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(17rem, 100%), 1fr));
   gap: var(--spacing-3) var(--spacing-4);
   min-width: 0;
 }
 /* The starting points as a grid of tiles rather than a column of rows: six
    short answers read at a glance side by side. */
 .html-create-starters {
-  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(11rem, 100%), 1fr));
 }
 .html-create-first-action {
   display: grid;
@@ -11476,7 +11470,7 @@ a.live-row:focus-visible {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-@media (width < 900px) {
+@container page (width < 900px) {
   /* STACKED, THE PAGE GROWS WITH WHAT IT HOLDS and the body scrolls it:
      held to the body's height, the two rows were squeezed over each other. */
   .html-create {

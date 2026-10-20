@@ -373,12 +373,14 @@ export function SheetCreate() {
           </FilePickButton>
           <span className="sheet-create-import-hint">or drop it anywhere on this page</span>
           {imported && (
-            <Checkbox
-              size="sm"
-              label="The first row names the columns"
-              checked={imported.header}
-              onChange={(event) => takeTable(imported.file, imported.table, event.target.checked)}
-            />
+            <div className="sheet-create-import-header">
+              <Checkbox
+                size="sm"
+                label="The first row names the columns"
+                checked={imported.header}
+                onChange={(event) => takeTable(imported.file, imported.table, event.target.checked)}
+              />
+            </div>
           )}
         </div>
       ),
@@ -516,7 +518,6 @@ export function SheetCreate() {
           ) : draft ? (
             <>
               <SheetGrid
-                className="sheet-create-grid"
                 label={title.trim() || "Untitled sheet"}
                 columns={columns}
                 rows={draft.rows}

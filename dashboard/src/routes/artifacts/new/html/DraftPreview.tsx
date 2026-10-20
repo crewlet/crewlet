@@ -66,7 +66,6 @@ export function DraftPreview({
   return (
     <FrameView
       key={version}
-      className="html-create-frame"
       detail={head}
       version={version}
       versions={versions.data?.versions ?? []}

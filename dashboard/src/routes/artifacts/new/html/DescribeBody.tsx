@@ -166,7 +166,7 @@ export function DescribeBody({ modeSwitch }: { modeSwitch: ReactNode }) {
         </section>
 
         <aside className="html-create-side html-create-ask" aria-label="The task">
-          <section className="html-create-sent">
+          <section>
             <h2 className="html-create-side-title">What will be sent</h2>
             <p className="html-create-sent-title">{taskTitle(asked)}</p>
             <pre className="html-create-sent-body">
