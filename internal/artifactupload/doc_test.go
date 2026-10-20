@@ -1,6 +1,7 @@
 package artifactupload_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -122,5 +123,42 @@ func TestADocBeginsFromItsStarter(t *testing.T) {
 		!strings.HasPrefix(h.file(v, "index.md"), "# On\\-call handbook\n") {
 		t.Fatalf("the starter published %d files opening on %q: %q", len(v.Manifest.Files),
 			v.Manifest.Entry, h.file(v, "index.md"))
+	}
+}
+
+// A DOC BEGUN WITH ITS TEXT is the starter as its writer wrote it: one tab,
+// the title as its heading and the text under it, held to the format and to a
+// call's inline bound. The text with no starter, or on a kind that is not a
+// doc, is refused before a byte moves.
+func TestADocBeginsWithItsWrittenText(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, options{})
+	c := h.person("ada", h.opKey("write"))
+	got, _, err := h.svc.Create(t.Context(), c, artifactupload.CreateRequest{
+		Kind: artifacts.KindDoc, Title: "On-call handbook", Owner: "ada",
+		OwnerKind: c.Authority.Actor.Kind, Starter: true,
+		Doc: &artifactupload.DocStarter{Body: "## Paging\n\nAnswer within five minutes.\n"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := h.version(got.Artifact, 1)
+	want := "# On\\-call handbook\n\n## Paging\n\nAnswer within five minutes.\n"
+	if v.Manifest.Entry != "index.md" || len(v.Manifest.Files) != 1 || h.file(v, "index.md") != want {
+		t.Fatalf("the doc published %d files opening on %q: %q", len(v.Manifest.Files),
+			v.Manifest.Entry, h.file(v, "index.md"))
+	}
+	for name, req := range map[string]artifactupload.CreateRequest{
+		"no starter": {Kind: artifacts.KindDoc, Title: "Doc", Owner: "ada",
+			Doc: &artifactupload.DocStarter{Body: "Text"}},
+		"a deck": {Kind: artifacts.KindSlides, Title: "Deck", Owner: "ada", Starter: true,
+			Doc: &artifactupload.DocStarter{Body: "Text"}},
+		"too long": {Kind: artifacts.KindDoc, Title: "Doc", Owner: "ada", Starter: true,
+			Doc: &artifactupload.DocStarter{Body: strings.Repeat("a", int(artifacts.MaxInlineBytes))}},
+	} {
+		req.OwnerKind = c.Authority.Actor.Kind
+		if _, _, err := h.svc.Create(t.Context(), h.person("ada", h.opKey(name)), req); !errors.Is(err, artifactupload.ErrInvalid) {
+			t.Errorf("%s answered %v", name, err)
+		}
 	}
 }

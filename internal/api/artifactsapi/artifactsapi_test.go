@@ -907,3 +907,18 @@ func TestTheSurfaceRefusesAGateMissingWhatItDecidesBy(t *testing.T) {
 }
 
 var _ = authz.ActionArtifactRead
+
+// A DOC BEGUN WITH ITS TEXT reaches the pipeline as the starter and the text,
+// so the dashboard's New doc lands the doc its writer wrote as version 1.
+func TestADocBegunWithItsTextReachesThePipeline(t *testing.T) {
+	t.Parallel()
+	g := newRig(t, true)
+	body := `{"kind":"doc","title":"Runbook","starter":true,"doc":{"body":"## Steps\n\nPage the on-call."}}`
+	if w := g.do(person("dana"), "POST", "/artifacts", body, keyed()...); w.Code != http.StatusCreated {
+		t.Fatalf("a create: %d %s", w.Code, w.Body)
+	}
+	req := g.pipeline.creates[0]
+	if !req.Starter || req.Doc == nil || req.Doc.Body != "## Steps\n\nPage the on-call." {
+		t.Errorf("the pipeline was asked %+v", req)
+	}
+}

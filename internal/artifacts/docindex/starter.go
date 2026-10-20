@@ -15,6 +15,14 @@ const markdownPunctuation = "\\`*_{}[]()<>#+-.!|~"
 // titled, with a line saying where to begin. It is held to the doc format at
 // publish like any version.
 func Starter(title string) map[string][]byte {
+	return Written(title, "Start writing here. Press Edit to change this text, and Save to publish it as a new version.")
+}
+
+// Written is the content a doc begun in the dashboard with its text already
+// written publishes: one tab, the title as its heading and the body, as the
+// writer typed it, under it. A body of nothing but space leaves the heading
+// alone. Held to the doc format at publish like any version.
+func Written(title, body string) map[string][]byte {
 	var b strings.Builder
 	b.WriteString("# ")
 	for _, r := range strings.TrimSpace(title) {
@@ -23,6 +31,11 @@ func Starter(title string) map[string][]byte {
 		}
 		b.WriteRune(r)
 	}
-	b.WriteString("\n\nStart writing here. Press Edit to change this text, and Save to publish it as a new version.\n")
+	b.WriteByte('\n')
+	if body = strings.TrimRight(body, " \t\r\n"); strings.TrimSpace(body) != "" {
+		b.WriteByte('\n')
+		b.WriteString(strings.TrimLeft(body, "\r\n"))
+		b.WriteByte('\n')
+	}
 	return map[string][]byte{StarterEntry: []byte(b.String())}
 }
