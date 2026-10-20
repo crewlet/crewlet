@@ -28,6 +28,12 @@ var nodeStatusCases = []testCase{
 				{Server: "jira", Started: 1, Failed: 1, Tools: 9, Error: "401",
 					ErrorSeat: uuid.MustParse("6f1c2a3b-4d5e-5f60-8172-839405a6b7c8"),
 					Unlisted:  []string{"jira_add_coment", "linear_get_issue"}},
+				// A seat's child held back for its provisioned credential
+				// travels as a count beside the others, with its sentence
+				// and its seat as a failure's do.
+				{Server: "mattermost", Started: 1, Waiting: 2, Tools: 4,
+					Wait:     "not started: waiting for the mattermost integration to mint ${MM_CTO}",
+					WaitSeat: uuid.MustParse("0a1b2c3d-4e5f-5a6b-8c7d-8e9fa0b1c2d3")},
 			},
 		}
 		h.present("n1", "n1:a", want.Meta())

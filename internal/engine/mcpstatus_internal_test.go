@@ -130,7 +130,7 @@ func TestMCPStatusIsOneRowPerServerWithItsInstancesCounted(t *testing.T) {
 		{Server: "tracker", Started: 2, Failed: 2, Tools: 9, Error: "401 from swe's token", ErrorSeat: swe},
 	}
 	for range 5 { // map order must not reach the payload
-		if got := e.mcpStatus(); !reflect.DeepEqual(got, want) {
+		if got := e.mcpStatus(t.Context()); !reflect.DeepEqual(got, want) {
 			t.Fatalf("mcp status = %+v\nwant %+v", got, want)
 		}
 	}
@@ -164,7 +164,7 @@ func TestMCPStatusNamesOnlyKeysNoStartedInstanceLists(t *testing.T) {
 		{Server: "search", Shared: true, Started: 1, Tools: 5, Unlisted: []string{"search_web"}},
 	}
 	for range 5 { // map order must not reach the payload
-		if got := e.mcpStatus(); !reflect.DeepEqual(got, want) {
+		if got := e.mcpStatus(t.Context()); !reflect.DeepEqual(got, want) {
 			t.Fatalf("mcp status = %+v\nwant %+v", got, want)
 		}
 	}

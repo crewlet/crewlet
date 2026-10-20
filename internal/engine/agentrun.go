@@ -107,10 +107,10 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 
 	company := e.Company()
 	gate := seatSandbox(company, l.seat.Handle())
-	setup := e.boxSetup(manager.DefaultSetup(), l.seat.Handle(), gate)
+	setup := e.boxSetup(ctx, company, manager.DefaultSetup(), l.seat.Handle(), gate)
 	var servers map[string]sandbox.MCPServer
 	if gate != nil {
-		servers = sandboxMCP(e.resolver(), company, l.seat, gate)
+		servers = e.boxServers(ctx, company, l.seat, gate)
 	}
 	// THE SEAT'S OWN SERVERS PLUS THE BRIDGE. Both, because they answer
 	// different questions: a scoped MCP server is a credential the box
@@ -118,7 +118,7 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	// colleagues, its channels, its memory, its submission.
 	servers = withBridge(servers, endpoint)
 
-	run, refused := l.executorRun(company, e.sandboxEnv(l.seat, gate, setup))
+	run, refused := l.executorRun(company, e.sandboxEnv(ctx, company, l.seat, gate, setup))
 	if refused != nil {
 		e.bridge.Close(l.turn.RunID)
 		return refused

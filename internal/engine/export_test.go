@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -59,7 +60,7 @@ func WithMCPRetryBase(opts Options, base time.Duration) Options {
 
 // MCPStatus is this node's MCP servers as its heartbeat would publish them
 // now, for a test outside the package that reads what an operator is told.
-func MCPStatus(e *Engine) []coord.MCPServerStatus { return e.mcpStatus() }
+func MCPStatus(e *Engine) []coord.MCPServerStatus { return e.mcpStatus(context.Background()) }
 
 // WithSweepEvery is opts with this node's seat host sweeping placement every
 // every rather than every [seat.SweepInterval], for a test outside the package
@@ -125,7 +126,7 @@ func SeedStore(t testing.TB, b *config.Bootstrap) {
 // needs a manager, a pending-run store and a budget, none of which is what a
 // case about how a file reaches the box is about.
 func SeatBoxSetupForTest(e *Engine, defaults []sandbox.SetupStep, handle string) []sandbox.SetupStep {
-	return e.boxSetup(defaults, handle, seatSandbox(e.Company(), handle))
+	return e.boxSetup(context.Background(), e.Company(), defaults, handle, seatSandbox(e.Company(), handle))
 }
 
 // ForgetPersonBlinderForTest drops this node's resolved blinder, so the next

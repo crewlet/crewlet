@@ -81,16 +81,35 @@ func TestAStatusKeyFromANewerBuildDecodesHarmlessly(t *testing.T) {
 func TestAnMCPFailureIsClippedOnTheWire(t *testing.T) {
 	t.Parallel()
 	long := strings.Repeat("e", 4*coord.MaxMCPErrorBytes)
-	status := coord.NodeStatus{MCP: []coord.MCPServerStatus{{Server: "jira", Failed: 1, Error: long}}}
-	got, _ := coord.StatusFromMeta(map[string]any{coord.StatusKey: status.Meta()})
-	if len(got.MCP) != 1 {
-		t.Fatalf("decoded %d mcp rows, want 1", len(got.MCP))
-	}
-	if n := len(got.MCP[0].Error); n > coord.MaxMCPErrorBytes {
-		t.Errorf("the error travelled as %d bytes, over the %d-byte bound", n, coord.MaxMCPErrorBytes)
-	}
-	if !strings.HasSuffix(got.MCP[0].Error, "…") {
-		t.Errorf("a clipped error carries no marker: %q", got.MCP[0].Error)
+	// BOTH SENTENCES A ROW CARRIES, because both are re-sent on every beat
+	// and neither is the engine's to keep short: a waiting instance's names
+	// every variable it waits for, and a company decides how many a seat's
+	// block references and how long their names are.
+	for name, tc := range map[string]struct {
+		row  coord.MCPServerStatus
+		text func(coord.MCPServerStatus) string
+	}{
+		"a failed instance's error": {
+			row:  coord.MCPServerStatus{Server: "jira", Failed: 1, Error: long},
+			text: func(m coord.MCPServerStatus) string { return m.Error },
+		},
+		"a waiting instance's wait": {
+			row:  coord.MCPServerStatus{Server: "jira", Waiting: 1, Wait: long},
+			text: func(m coord.MCPServerStatus) string { return m.Wait },
+		},
+	} {
+		status := coord.NodeStatus{MCP: []coord.MCPServerStatus{tc.row}}
+		got, _ := coord.StatusFromMeta(map[string]any{coord.StatusKey: status.Meta()})
+		if len(got.MCP) != 1 {
+			t.Fatalf("%s: decoded %d mcp rows, want 1", name, len(got.MCP))
+		}
+		text := tc.text(got.MCP[0])
+		if n := len(text); n > coord.MaxMCPErrorBytes {
+			t.Errorf("%s travelled as %d bytes, over the %d-byte bound", name, n, coord.MaxMCPErrorBytes)
+		}
+		if !strings.HasSuffix(text, "…") {
+			t.Errorf("%s, clipped, carries no marker: %q", name, text)
+		}
 	}
 }
 

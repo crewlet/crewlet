@@ -14,6 +14,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -209,10 +210,26 @@ func (o *mcpOutcome) observe(bridge *mcp.Bridge, instance string) {
 // is reported by the bridge's own record, so a child that died since its
 // start counts as failed, with what took it down, until it is back.
 //
+// A seat's child held back for a credential a provisioning pass has not
+// sealed yet is WAITING, a count of its own: it never reached a bridge, so its
+// outcome is the only record of it, and counted as failed it would read as a
+// fault on the one screen an operator connecting an integration is watching.
+//
+// AND JUDGED AGAIN ON EVERY BEAT, against what the integration minting it last
+// recorded ([seatCredentialMissing.judged]). The pass that held it back ran at
+// the claim, which on a first boot comes before that integration's first pass,
+// and nothing about a person acting on an integration — or failing to —
+// reaches a seat's pass: so a child the pass could only call waiting becomes a
+// failure here the moment the integration reports that its own credential is
+// missing, or that this seat's account is switched off, and stops being one
+// when that clears. A beat that cannot read the record keeps the judgement
+// the seat's pass stored with the outcome, not the previous beat's; one with
+// nothing waiting reads nothing ([Engine.mintingStates]).
+//
 // Sorted by server, and a server's reported error is its first failure by the
-// seat's agent id, so a beat that re-sends the same facts sends the same
-// bytes.
-func (e *Engine) mcpStatus() []coord.MCPServerStatus {
+// seat's agent id — its reported wait likewise — so a beat that re-sends the
+// same facts sends the same bytes.
+func (e *Engine) mcpStatus(ctx context.Context) []coord.MCPServerStatus {
 	e.mcpMu.Lock()
 	all := slices.Clone(e.mcpShared)
 	for _, outcomes := range e.mcpSeats {
@@ -222,6 +239,14 @@ func (e *Engine) mcpStatus() []coord.MCPServerStatus {
 	slices.SortFunc(all, func(a, b mcpOutcome) int {
 		return cmp.Or(cmp.Compare(a.server, b.server), cmp.Compare(a.seat.String(), b.seat.String()))
 	})
+	var withheld []*seatCredentialMissing
+	for _, o := range all {
+		var missing *seatCredentialMissing
+		if errors.As(o.err, &missing) {
+			withheld = append(withheld, missing)
+		}
+	}
+	states := e.mintingStates(ctx, withheld)
 	var out []coord.MCPServerStatus
 	// unlistedBy counts, per key, the started instances of the current row
 	// that do not list it.
@@ -257,6 +282,18 @@ func (e *Engine) mcpStatus() []coord.MCPServerStatus {
 			tools, unlisted, failure = health.Tools, o.bridge.UnlistedOverrides(o.instance), nil
 			if !health.Serving {
 				failure = errors.New(health.Down)
+			}
+		}
+		var missing *seatCredentialMissing
+		if errors.As(failure, &missing) {
+			missing = missing.judged(states)
+			failure = missing
+			if missing.waiting() {
+				row.Waiting++
+				if row.Wait == "" {
+					row.Wait, row.WaitSeat = missing.Error(), o.seat
+				}
+				continue
 			}
 		}
 		if failure != nil {
@@ -430,10 +467,16 @@ func file(ctx context.Context, reg *tools.Registry, server string, change mcp.Ch
 // child, because a template with nobody's identity in it is a server nobody
 // can act through.
 //
-// A template whose ${VAR} references do not resolve into a launchable spec
-// comes back as an outcome instead, so the heartbeat reports it failed rather
-// than leaving it out as though the seat never declared it.
-func seatSpecs(c *Company, seat *org.Role, env *config.Resolver) ([]mcp.Spec, []mcpOutcome) {
+// A child whose seat's block references a variable that resolves to nothing
+// gets no spec: it comes back as an outcome carrying a
+// [seatCredentialMissing], which the pass judges and logs
+// ([Engine.withheldForCredentials]) — see seatcredentials.go. So does a
+// template that does not resolve into a launchable spec. Either way the
+// heartbeat reports the server rather than leaving it out as though the seat
+// never declared it.
+func seatSpecs(
+	c *Company, seat *org.Role, env *config.Resolver, minted map[string]integration.Kind,
+) ([]mcp.Spec, []mcpOutcome) {
 	var out []mcp.Spec
 	var unconfigured []mcpOutcome
 	for _, server := range c.Config.MCPServers {
@@ -443,7 +486,13 @@ func seatSpecs(c *Company, seat *org.Role, env *config.Resolver) ([]mcp.Spec, []
 			continue
 		}
 		values := seat.MCPEnv[server.Name]
-		spec, err := serverSpec(server, mcp.InstanceName(server.Name, seat.Name), env, values)
+		instance := mcp.InstanceName(server.Name, seat.Name)
+		if missing := seatCredentialsMissing(
+			seat.Handle(), server.Name, instance, values, env, minted); missing != nil {
+			unconfigured = append(unconfigured, mcpOutcome{server: server.Name, err: missing})
+			continue
+		}
+		spec, err := serverSpec(server, instance, env, values)
 		if err != nil {
 			log.Error("mcp_server_unconfigured", "server", server.Name, "seat", seat.Handle(),
 				"error", err, "detail", "this seat gets no child for it")
@@ -453,6 +502,51 @@ func seatSpecs(c *Company, seat *org.Role, env *config.Resolver) ([]mcp.Spec, []
 		out = append(out, spec)
 	}
 	return out, unconfigured
+}
+
+// withheldForCredentials judges every child of a seat's pass that was held
+// back for its credentials against what the integrations minting them last
+// recorded, logs each at the level its story earns, and hands back the
+// outcomes judged.
+//
+// NAMES ONLY: a variable is what an operator acts on, and what it would have
+// held is the credential.
+//
+// WAITING IS INFO, once per pass. A pass runs at the claim, at each apply and
+// when a seal refreshes this node's snapshot, and a child held back arms no
+// retry, so this is written as often as something could have changed it and
+// no more often — where the failure it replaced was an error line and a retry
+// line on every attempt of the restart schedule. The rest is an ERROR: the
+// operator's secret is missing, or the integration that would mint it waits
+// on a person.
+func (e *Engine) withheldForCredentials(ctx context.Context, outcomes []mcpOutcome) []mcpOutcome {
+	var missing []*seatCredentialMissing
+	for _, o := range outcomes {
+		var m *seatCredentialMissing
+		if errors.As(o.err, &m) {
+			missing = append(missing, m)
+		}
+	}
+	if len(missing) == 0 {
+		return outcomes
+	}
+	states := e.mintingStates(ctx, missing)
+	for i, o := range outcomes {
+		var m *seatCredentialMissing
+		if !errors.As(o.err, &m) {
+			continue
+		}
+		m = m.judged(states)
+		outcomes[i].err = m
+		attrs := append([]any{"server", m.server, "seat", m.seat}, m.logAttrs()...)
+		attrs = append(attrs, "detail", m.Error())
+		if m.waiting() {
+			log.InfoContext(ctx, "mcp_server_awaiting_credential", attrs...)
+			continue
+		}
+		log.ErrorContext(ctx, "mcp_server_credential_missing", attrs...)
+	}
+	return outcomes
 }
 
 // serverSpec turns one config entry into a launchable spec.
@@ -483,11 +577,26 @@ func serverSpec(
 	// shares — a base URL, a workspace — and the seat's block is the
 	// identity inside it, so a seat that names the same key is naming its
 	// own credential rather than a second default.
+	//
+	// INTO WHAT THE TRANSPORT AUTHENTICATES WITH: the environment of a
+	// stdio child, the headers of an http connection. It went into Env
+	// whatever the transport, and an http connection reads no environment
+	// ([mcp.Spec.Headers]), so every seat's child of a per-role http server
+	// — the remote GitHub server a seat reaches with its own
+	// `Authorization: Bearer …` — connected with the template's headers
+	// alone: refused for want of a token, or, under a template carrying
+	// one, every seat acting as that one identity. The in-box rendering of
+	// the same server has always split them this way
+	// ([sandbox.RenderMCP]).
 	if len(seatEnv) > 0 {
-		if spec.Env == nil {
-			spec.Env = make(map[string]string, len(seatEnv))
+		target := &spec.Env
+		if server.Kind() == config.TransportHTTP {
+			target = &spec.Headers
 		}
-		maps.Copy(spec.Env, resolveMap(env, seatEnv))
+		if *target == nil {
+			*target = make(map[string]string, len(seatEnv))
+		}
+		maps.Copy(*target, resolveMap(env, seatEnv))
 	}
 	return spec, nil
 }

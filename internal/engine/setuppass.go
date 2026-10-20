@@ -50,10 +50,10 @@ import (
 // GitLab is here too, and it is a different kind of act: its pass creates a
 // service account per agent, mints a token on each and adds them to a group.
 // Everything it makes outlives the run and is visible to the whole group, so
-// it runs only with a transient administrator credential asked for on every
-// pass and never stored, and it never deletes: decommissioning is left to the
-// command line, because a company mid-edit looks exactly like one that
-// removed a seat.
+// it runs only with the group Owner token the company document holds
+// ([gitlab.AdminCredential] says why it is held), and it never deletes:
+// decommissioning is left to the command line, because a company mid-edit
+// looks exactly like one that removed a seat.
 //
 // Mattermost is the same shape as GitLab and joins on the same terms. It is
 // the one third-party app here that needs no public address at all: it holds an
@@ -114,7 +114,8 @@ func (p *atlassianPass) Run(ctx context.Context, in setup.PassInput) ([]integrat
 				"subject and the key as the authority",
 		}}, nil
 	}
-	plan, err := atlassian.PlanFor(company.Org)
+	// THE SEAT PLAN, which is what a seat's child waits for: see [seatMinter].
+	plan, err := p.seatPlan(company)
 	if err != nil {
 		return nil, fmt.Errorf("engine: atlassian pass: %w", err)
 	}
@@ -470,10 +471,21 @@ func (p *datadogPass) Run(ctx context.Context, in setup.PassInput) ([]integratio
 		return nil, integration.ErrNotConfigured
 	}
 	if cfg.Provisioning == nil {
-		// A FINDING, NOT A FAULT, and not an error either: this company
-		// accepts alerts and asked for no identities, which is a complete
-		// configuration rather than a missing one.
-		return nil, nil
+		// THE KEYS ARE MISSING, which is how config reads it too: an
+		// enabled block with no provisioning is refused, because the
+		// provisioning keys are what register the webhook alerts arrive
+		// by, and a block without them serves a route, reports itself
+		// connected and receives nothing. A validated document never
+		// reaches here; a document that did would be exactly that
+		// block, so it is reported as the finding it is. This returned
+		// nothing — ready — calling it a company that "asked for no
+		// identities", which is the state config exists to refuse.
+		return []integration.Finding{{
+			Kind:    integration.FindingCredentialMissing,
+			Subject: "integrations.datadog.provisioning",
+			Detail: "integrations.datadog.provisioning is unset, so nothing can " +
+				"register the webhook alerts arrive by or make the agents' accounts",
+		}}, nil
 	}
 	env := p.engine.resolver()
 	// ASKED BEFORE BUILDING, so an unset or misspelled region is a
@@ -502,7 +514,8 @@ func (p *datadogPass) Run(ctx context.Context, in setup.PassInput) ([]integratio
 				"resolve, and Datadog refuses a write carrying only one",
 		}}, nil
 	}
-	plan, err := datadog.PlanFor(company.Org, cfg)
+	// THE SEAT PLAN, which is what a seat's child waits for: see [seatMinter].
+	plan, err := p.seatPlan(company)
 	if err != nil {
 		return nil, fmt.Errorf("engine: datadog pass: %w", err)
 	}
@@ -592,7 +605,11 @@ func (e *Engine) SetupSink(by iam.Actor) (provision.TokenSink, error) {
 // TWO STEPS, AND THE SECOND ONE IS THE ONE THAT WAS MISSING. Refreshing the
 // snapshot makes the new value RESOLVABLE; re-activating the revision makes
 // everything that already resolved the old one resolve again. See
-// [Engine.rebuildForSealedSecrets].
+// [Engine.rebuildForSealedSecrets]. Between the two, the refresh hands this
+// node's seats a pass over their tool servers ([Engine.passHeldSeats]), which
+// is the one part of that rebuild a node can do for itself and the one a
+// child held back for the sealed value has no other way to get when the
+// re-activation does not land.
 //
 // # A SECRET NOBODY CAN SEE IS A PASS THAT DID NOTHING
 //
@@ -642,7 +659,14 @@ func (s *refreshingSink) Flush(ctx context.Context) error {
 	// credentials are out there either way.
 	if s.sealed && !s.flushed {
 		s.flushed = true
-		s.engine.refreshSecrets(ctx)
+		// AND THIS NODE'S SEATS ARE ASKED AT ONCE, before the re-activation
+		// below is so much as requested: a child held back for what was just
+		// sealed starts here without waiting on a write that can fail
+		// ([Engine.passHeldSeats]). Only when a snapshot was installed — one
+		// that could not be read changed nothing a pass would see.
+		if s.engine.refreshSecrets(ctx) {
+			s.engine.passHeldSeats(ctx)
+		}
 		// NO CONTEXT ON PURPOSE, and contextcheck is reading the shape
 		// rather than the reason. This ctx is the PASS's: it is bounded by
 		// [setup.PassDeadline] and it is inside the surface lease, and the
@@ -722,8 +746,9 @@ func (e *Engine) rebuildForSealedSecrets(ctx context.Context, by iam.Actor) {
 		// rebuild, and the next apply from anywhere performs it.
 		log.WarnContext(ctx, "sealed_credentials_not_republished",
 			"detail", "this node cannot re-activate the revision, so anything "+
-				"built at the last apply keeps the credential it resolved then; "+
-				"POST /config/reload once a node with the config surface is up")
+				"built at the last apply but this node's seat tool servers keeps "+
+				"the credential it resolved then; POST /config/reload once a node "+
+				"with the config surface is up")
 		return
 	}
 	// DETACHED AND BOUNDED. This runs at the tail of a pass, on a context
@@ -739,9 +764,11 @@ func (e *Engine) rebuildForSealedSecrets(ctx context.Context, by iam.Actor) {
 	if err := writer.Reload(ctx,
 		"reload after provisioning sealed a credential", by); err != nil {
 		log.ErrorContext(ctx, "sealed_credentials_not_republished", "error", err,
-			"detail", "the credentials are sealed and resolvable, but the seat "+
-				"identities, parsers and tool children built at the last apply "+
-				"still hold what they resolved then; POST /config/reload")
+			"detail", "the credentials are sealed and resolvable, and this node's "+
+				"seat tool servers are brought onto them, but the seat "+
+				"identities, parsers and transports built at the last apply — and "+
+				"every other node's tool servers — still hold what they resolved "+
+				"then; POST /config/reload")
 		return
 	}
 	log.InfoContext(ctx, "sealed_credentials_republished",
@@ -917,11 +944,8 @@ type gitlabPass struct{ engine *Engine }
 
 func (*gitlabPass) Kind() integration.Kind { return integration.KindGitLab }
 
-// Needs is the group Owner token. Asked on every run and never stored: it
-// creates accounts and mints tokens on them, which is a standing power if it
-// is kept and a grant with an end if it is not.
 // Needs is nil: the Owner token is held in the company document like every
-// other credential now, so there is nothing transient left to ask for. See
+// other credential, so there is nothing transient to ask for. See
 // [gitlab.AdminCredential] for why it is kept.
 func (*gitlabPass) Needs() *setup.Requirement { return nil }
 
@@ -946,7 +970,8 @@ func (p *gitlabPass) Run(ctx context.Context, in setup.PassInput) ([]integration
 				"are what this pass mints, so it cannot bootstrap itself from them",
 		}}, nil
 	}
-	plan, err := gitlab.PlanFor(company.Org, cfg)
+	// THE SEAT PLAN, which is what a seat's child waits for: see [seatMinter].
+	plan, err := p.seatPlan(company)
 	if err != nil {
 		return nil, fmt.Errorf("engine: gitlab pass: %w", err)
 	}
@@ -1000,8 +1025,9 @@ func (p *gitlabPass) Run(ctx context.Context, in setup.PassInput) ([]integration
 
 // Teardown withdraws the hooks, and the service accounts when asked.
 //
-// The Owner token is the same transient credential the pass asks for, and it
-// is needed for the same reason: removing an account takes the authority
+// The Owner token is the one the pass creates accounts with — the
+// document's, or one handed in for this run ([gitlabAdminToken]) — and it is
+// needed for the same reason: removing an account takes the authority
 // creating it did. A teardown with none can still be attempted (the hooks
 // may come out under a weaker credential), so this refuses only when there is
 // nothing at all to authenticate with.
@@ -1045,9 +1071,8 @@ type mattermostPass struct{ engine *Engine }
 
 func (*mattermostPass) Kind() integration.Kind { return integration.KindMattermost }
 
-// Needs is the administrator token. Asked on every run and never stored, for
-// the reason GitLab's is: it creates accounts and mints tokens on them.
-// Needs is nil, for the reason GitLab's is: the administrator token is held.
+// Needs is nil, for the reason GitLab's is: the administrator token is held
+// in the company document.
 func (*mattermostPass) Needs() *setup.Requirement { return nil }
 
 func (p *mattermostPass) Run(ctx context.Context, in setup.PassInput) ([]integration.Finding, error) {
@@ -1072,7 +1097,12 @@ func (p *mattermostPass) Run(ctx context.Context, in setup.PassInput) ([]integra
 				"are what this pass mints, so it cannot bootstrap itself from them",
 		}}, people...), nil
 	}
-	plan, err := mattermost.PlanFor(company.Org, cfg)
+	// THE SEAT PLAN, which is what a seat's child waits for: see [seatMinter].
+	// It plans nothing for a company with no provisioning block, so an
+	// administrator token handed in for one run cannot mint bots the company
+	// never asked this pass to make — the setup route refuses that run before
+	// it starts, and this refuses it again where the plan is read.
+	plan, err := p.seatPlan(company)
 	if err != nil {
 		return nil, fmt.Errorf("engine: mattermost pass: %w", err)
 	}
@@ -1305,23 +1335,26 @@ func mattermostAdminToken(cfg *config.Mattermost, env *config.Resolver, override
 // coordination layer's graph to answer a question about Atlassian.
 //
 // NIL WHERE NOTHING CAN SAY — a company whose Atlassian plan cannot be
-// derived — and the tracker then reports a refusal as the failure it may well
-// be. The
-// alternative — guessing "still propagating" — would tell an operator not to
-// act on every genuinely broken seat, for ever.
+// derived, or that provisions no Atlassian accounts at all — and the tracker
+// then reports a refusal as the failure it may well be. The alternative —
+// guessing "still propagating" — would tell an operator not to act on every
+// genuinely broken seat, for ever.
 //
-// THE VARIABLE COMES FROM THE SAME PLAN THE PROVISIONING USES, so the name
-// read here is the name the token was sealed under. A second derivation
-// would be a second spelling, and a seat whose name did not match would read
-// as one whose credential was never sealed — which is the safe direction
-// only by accident.
+// THE VARIABLE COMES FROM THE PLAN THE PROVISIONING MINTS BY ([seatMinter]),
+// so the name read here is the name the token was sealed under, and a seat is
+// one this engine provisions exactly where that plan says so. It read the
+// vendor's plan directly, which plans every agent pointing a block at a
+// variable whether or not the company has the `integrations.atlassian` block
+// that makes any account: so in a company whose agents' accounts were made by
+// hand, a refusal minutes after a person sealed a token read as Atlassian
+// still applying a grant this engine never made.
 func (e *Engine) atlassianCredentialSealed(
 	company *Company,
 ) func(context.Context, string) (time.Time, bool) {
 	if e.cipher == nil || e.backends == nil || e.backends.Fleet == nil {
 		return nil
 	}
-	plan, err := atlassian.PlanFor(company.Org)
+	plan, err := (&atlassianPass{engine: e}).seatPlan(company)
 	if err != nil {
 		return nil
 	}

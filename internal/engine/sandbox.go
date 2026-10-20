@@ -25,6 +25,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
@@ -267,21 +268,27 @@ func seatSetupSteps(steps []org.SandboxSetupStep) []sandbox.SetupStep {
 // executor — because a file is read the same way whichever of them opens the
 // box. Nil-safe on the gate, since an agent-mode executor runs in a box
 // whether or not the seat has a sandbox block of its own.
-func (e *Engine) boxSetup(defaults []sandbox.SetupStep, seat string,
-	gate *org.RoleSandbox) []sandbox.SetupStep {
+func (e *Engine) boxSetup(ctx context.Context, c *Company, defaults []sandbox.SetupStep,
+	seat string, gate *org.RoleSandbox) []sandbox.SetupStep {
 
 	setup := slices.Clone(defaults)
 	if gate != nil {
 		setup = append(setup, seatSetupSteps(gate.Setup)...)
 	}
-	read, missing := setupFiles(e.resolver(), setup)
+	read, missing, names := setupFiles(e.resolver(), setup)
 	if len(missing) > 0 {
-		// PATHS ONLY, never a body: a file is written into a box because
-		// it is a credential more often than not.
-		log.Warn("sandbox_setup_file_unresolved", "seat", seat, "files", missing,
-			"hint", "each of these files is exactly one ${VAR} reference "+
-				"that nothing answered for, so it is written empty; put the "+
-				"name in the secret store")
+		// PATHS AND VARIABLES ONLY, never a body: a file is written into a
+		// box because it is a credential more often than not. Said at the
+		// level its story earns ([Engine.boxGap]).
+		gap := e.boxGap(ctx, c, seat, names)
+		attrs := append([]any{"seat", seat, "files", missing}, gap.logAttrs()...)
+		attrs = append(attrs, "detail", "each of these files is exactly one ${VAR} "+
+			"reference that nothing answered for, so it is written empty: "+gap.reason())
+		if gap.waiting() {
+			log.InfoContext(ctx, "sandbox_setup_file_unresolved", attrs...)
+		} else {
+			log.WarnContext(ctx, "sandbox_setup_file_unresolved", attrs...)
+		}
 	}
 	return read
 }
@@ -290,7 +297,8 @@ func (e *Engine) boxSetup(defaults []sandbox.SetupStep, seat string,
 // is read where it is used ([secrets.ReadContent]): a body that is exactly one
 // `${VAR}` becomes that variable's value, byte for byte, and any other body is
 // written as it is. Missing names each file — `<step>:<path>` — whose whole
-// reference nothing answered for.
+// reference nothing answered for, and names the variables those references
+// named, each once.
 //
 // # Why a file is not expanded like the env beside it
 //
@@ -306,9 +314,8 @@ func (e *Engine) boxSetup(defaults []sandbox.SetupStep, seat string,
 // shared by every launch on this node, and a body resolved into them would be
 // a credential cached past the snapshot it came from.
 func setupFiles(env *config.Resolver, steps []sandbox.SetupStep) (
-	[]sandbox.SetupStep, []string) {
+	read []sandbox.SetupStep, missing, names []string) {
 
-	var missing []string
 	out := make([]sandbox.SetupStep, len(steps))
 	for i, step := range steps {
 		out[i] = step
@@ -317,16 +324,20 @@ func setupFiles(env *config.Resolver, steps []sandbox.SetupStep) (
 		}
 		files := make(map[string]string, len(step.Files))
 		for path, body := range step.Files {
-			read, unresolved := secrets.ReadContent(body, env.LookupOK)
+			content, unresolved := secrets.ReadContent(body, env.LookupOK)
 			if unresolved != "" {
 				missing = append(missing, step.Name+":"+path)
+				if !slices.Contains(names, unresolved) {
+					names = append(names, unresolved)
+				}
 			}
-			files[path] = read
+			files[path] = content
 		}
 		out[i].Files = files
 	}
 	slices.Sort(missing)
-	return out, missing
+	slices.Sort(names)
+	return out, missing, names
 }
 
 func seconds(v float64) time.Duration { return time.Duration(v * float64(time.Second)) }
@@ -1200,8 +1211,8 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 		reuse = existing.SandboxID
 	}
 
-	setup := e.boxSetup(manager.DefaultSetup(), seat.Handle(), gate)
-	servers := sandboxMCP(l.engine.resolver(), company, seat, gate)
+	setup := e.boxSetup(ctx, company, manager.DefaultSetup(), seat.Handle(), gate)
+	servers := l.engine.boxServers(ctx, company, seat, gate)
 	// The seat's own model and login, resolved from llm_sandbox — which
 	// falls back to `llm`, because sandboxed work IS this seat's own work
 	// running somewhere else, and `llm` is what that work runs on — for the
@@ -1211,7 +1222,7 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 	if runner == "" {
 		runner = manager.DefaultCodingAgent()
 	}
-	run, refused := newCodingRun(company, seat, phase.Sandbox, runner, e.sandboxEnv(seat, gate, setup))
+	run, refused := newCodingRun(company, seat, phase.Sandbox, runner, e.sandboxEnv(ctx, company, seat, gate, setup))
 	if refused != nil {
 		return sandbox.LaunchResult{}, refused
 	}
@@ -1385,9 +1396,21 @@ func sandboxHeadroom(ctx context.Context, remaining runner.Remaining, floor int)
 //
 // The credentials are the seat's OWN, inherited down the org chart at build
 // time, so a seat gets the tokens it is entitled to and no others.
-func sandboxMCP(env *config.Resolver, c *Company, seat *org.Role, gate *org.RoleSandbox) map[string]sandbox.MCPServer {
+//
+// AND A SERVER WHOSE CREDENTIALS DO NOT RESOLVE IS NOT OFFERED, by the rule a
+// seat's own child is started by (seatcredentials.go): an in-box server handed
+// an empty token refuses to start or acts as nobody, and the agent would
+// spend a round finding that out — the reason [sandbox.RenderMCP] skips a
+// server it cannot render. It used to be offered with a warning that it
+// "will not authenticate". What was withheld comes back beside the servers,
+// for the caller to judge and say ([Engine.boxServers]); minted is what the
+// seat's provisioning passes mint ([Engine.mintedFor]).
+func sandboxMCP(
+	env *config.Resolver, c *Company, seat *org.Role, gate *org.RoleSandbox,
+	minted map[string]integration.Kind,
+) (map[string]sandbox.MCPServer, []*seatCredentialMissing) {
 	if len(gate.MCP.Servers) == 0 {
-		return nil
+		return nil, nil
 	}
 	servers := make([]sandbox.MCPServer, 0, len(c.Config.MCPServers))
 	for _, s := range c.Config.MCPServers {
@@ -1399,17 +1422,78 @@ func sandboxMCP(env *config.Resolver, c *Company, seat *org.Role, gate *org.Role
 	}
 	// RESOLVED HERE, like the run env and for the same reason: an in-box
 	// server has to authenticate, and Tier B stores its references
-	// verbatim.
-	credentials := make(map[string]map[string]string, len(seat.MCPEnv))
-	for name, values := range seat.MCPEnv {
-		resolved, missing := env.Map("mcp_env."+name, values)
-		if len(missing) > 0 {
-			log.Warn("sandbox_mcp_env_unresolved", "seat", seat.Handle(), "server", name,
-				"hint", "the in-box MCP server will not authenticate")
+	// verbatim. Only the scoped servers': a block the box is not given is
+	// nothing this run resolves or reports.
+	scoped := make([]string, 0, len(gate.MCP.Servers))
+	credentials := make(map[string]map[string]string, len(gate.MCP.Servers))
+	var withheld []*seatCredentialMissing
+	for _, name := range gate.MCP.Servers {
+		values := seat.MCPEnv[name]
+		if missing := seatCredentialsMissing(seat.Handle(), name, "", values, env, minted); missing != nil {
+			withheld = append(withheld, missing)
+			continue
 		}
+		scoped = append(scoped, name)
+		resolved, _ := env.Map("mcp_env."+name, values)
 		credentials[name] = resolved
 	}
-	return sandbox.RenderMCP(servers, gate.MCP.Servers, credentials)
+	return sandbox.RenderMCP(servers, scoped, credentials), withheld
+}
+
+// boxServers is the scoped MCP surface one coding run's box is given
+// ([sandboxMCP]), with every server withheld for its seat credentials judged
+// against the integrations minting them and said, at the level its story
+// earns — the seat's own child's ([Engine.withheldForCredentials]): waiting
+// for provisioning is info, and the rest a warning, since the run goes ahead
+// without the server either way.
+//
+// WHAT STARTS IT DIFFERS from a seat's own child, and the sentence says so:
+// nothing restarts a box's servers, so a server withheld from this run is
+// offered to the first coding run launched once the seal reaches this node.
+func (e *Engine) boxServers(
+	ctx context.Context, c *Company, seat *org.Role, gate *org.RoleSandbox,
+) map[string]sandbox.MCPServer {
+	servers, withheld := sandboxMCP(e.resolver(), c, seat, gate, e.mintedFor(c, seat.Handle()))
+	states := e.mintingStates(ctx, withheld)
+	for _, missing := range withheld {
+		missing = missing.judged(states)
+		attrs := append([]any{"seat", seat.Handle(), "server", missing.server}, missing.logAttrs()...)
+		if missing.waiting() {
+			log.InfoContext(ctx, "sandbox_mcp_server_withheld", append(attrs,
+				"detail", "the coding agent is not given this server for this run: "+
+					missing.reason()+"; a coding run launched once the seal reaches "+
+					"this node is given it")...)
+			continue
+		}
+		log.WarnContext(ctx, "sandbox_mcp_server_withheld", append(attrs,
+			"detail", "the coding agent is not given this server: "+missing.reason())...)
+	}
+	return servers
+}
+
+// boxGap judges the variables a seat's box would be launched without — a run
+// env value or a setup file that resolved to nothing — by the stories a seat's
+// own child is ([credentialGap]): one a provisioning pass mints for the seat,
+// whether that pass can, and one nothing will. Nil when there are none.
+//
+// JUDGED, so a warning names the remedy that applies: the box goes ahead
+// without the value either way — a coding run is a tool call a turn made, and
+// one refused for a variable a pass will mint in a minute is a turn that
+// failed for nothing — but "put it in the secret store" told the operator to
+// store a token an integration was about to mint into that very name.
+//
+// A nil c is a box launched with no company to read a plan from — a case
+// driving the launch by hand — and every variable is then the operator's.
+func (e *Engine) boxGap(ctx context.Context, c *Company, handle string, names []string) *seatCredentialMissing {
+	var minted map[string]integration.Kind
+	if c != nil {
+		minted = e.mintedFor(c, handle)
+	}
+	gap := credentialGap(handle, names, e.resolver(), minted)
+	if gap == nil {
+		return nil
+	}
+	return gap.judged(e.mintingStates(ctx, []*seatCredentialMissing{gap}))
 }
 
 // pauseTTL reads the seat's override, distinguishing "inherit" from "never".
@@ -1482,7 +1566,9 @@ func seatSandbox(c *Company, handle string) *org.RoleSandbox {
 // Precedence, later winning: identity, then the setup steps' contributions,
 // then the seat's own env — so an operator's explicit value always beats a
 // step's default.
-func (e *Engine) sandboxEnv(seat *org.Role, gate *org.RoleSandbox, setup []sandbox.SetupStep) map[string]string {
+func (e *Engine) sandboxEnv(
+	ctx context.Context, c *Company, seat *org.Role, gate *org.RoleSandbox, setup []sandbox.SetupStep,
+) map[string]string {
 	env := map[string]string{}
 	if handle := seat.Handle(); handle != "" {
 		env["CREWLET_AGENT_HANDLE"] = handle
@@ -1515,13 +1601,23 @@ func (e *Engine) sandboxEnv(seat *org.Role, gate *org.RoleSandbox, setup []sandb
 		// "Bearer ${TOKEN}" resolves to a truthy-but-broken "Bearer " when
 		// the variable is unset, so testing the result would miss exactly
 		// the composite shapes this field documents.
-		names := make([]string, 0, len(missing))
+		keys := make([]string, 0, len(missing))
+		var names []string
 		for _, m := range missing {
-			names = append(names, m.Path)
+			keys = append(keys, m.Path)
+			names = append(names, m.Names...)
 		}
-		log.Warn("sandbox_env_unresolved", "seat", seat.Handle(), "keys", names,
-			"hint", "the coding agent will see these as empty; export the "+
-				"variables or put them in the secret store")
+		// Said at the level its story earns ([Engine.boxGap]): a token a
+		// provisioning pass is minting into that name is no reason to tell
+		// an operator to store one there.
+		gap := e.boxGap(ctx, c, seat.Handle(), names)
+		attrs := append([]any{"seat", seat.Handle(), "keys", keys}, gap.logAttrs()...)
+		attrs = append(attrs, "detail", "the coding agent sees these as empty: "+gap.reason())
+		if gap.waiting() {
+			log.InfoContext(ctx, "sandbox_env_unresolved", attrs...)
+		} else {
+			log.WarnContext(ctx, "sandbox_env_unresolved", attrs...)
+		}
 	}
 	return resolved
 }

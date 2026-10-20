@@ -157,10 +157,19 @@ type MCPServerStatus struct {
 	Started int
 
 	// Failed is how many are not: a child that would not start or list
-	// its tools, one that died after starting and is being restarted, and
-	// a config whose ${VAR} references did not resolve into a launchable
-	// spec.
+	// its tools, one that died after starting and is being restarted, a
+	// config that did not resolve into a launchable spec, and a seat's
+	// child whose credential resolves to nothing that nothing will mint,
+	// or that the integration minting it cannot mint until a person acts.
 	Failed int
+
+	// Waiting is how many this node holds back UNSTARTED, and on purpose:
+	// a seat's child whose credential a provisioning pass mints for it and
+	// has not sealed yet, where nothing that pass last reported stops it.
+	// Neither started nor failed, because nothing is wrong — it starts
+	// once the seal reaches the node — and counting it with either would
+	// tell the person reading it the opposite of that.
+	Waiting int
 
 	// Tools is how many tools one started instance serves — the largest,
 	// where the instances of one template disagree.
@@ -178,6 +187,12 @@ type MCPServerStatus struct {
 	// that handle.
 	Error     string
 	ErrorSeat uuid.UUID
+
+	// Wait is ONE waiting instance's sentence — the variables it waits for
+	// and the integration that mints them — and WaitSeat its seat, chosen
+	// and bounded as Error and ErrorSeat are.
+	Wait     string
+	WaitSeat uuid.UUID
 
 	// Unlisted are the entry's tool_annotations keys that NO instance this
 	// node started lists a tool for, sorted. Such a key overrides nothing
@@ -245,6 +260,17 @@ func (s NodeStatus) Meta() map[string]any {
 			if m.ErrorSeat != uuid.Nil {
 				row["error_seat"] = m.ErrorSeat.String()
 			}
+			// OMITTED WHEN NOTHING WAITS, which is every row but a
+			// seat's during provisioning: absent reads as zero.
+			if m.Waiting > 0 {
+				row["waiting"] = m.Waiting
+			}
+			if m.Wait != "" {
+				row["wait"] = textcut.Within(m.Wait, MaxMCPErrorBytes)
+			}
+			if m.WaitSeat != uuid.Nil {
+				row["wait_seat"] = m.WaitSeat.String()
+			}
 			if len(m.Unlisted) > 0 {
 				row["unlisted"] = m.Unlisted
 			}
@@ -304,6 +330,9 @@ func StatusFromMeta(meta map[string]any) (NodeStatus, bool) {
 			Tools:     intFromMeta(row["tools"]),
 			Error:     stringFromMeta(row["error"]),
 			ErrorSeat: seatFromMeta(row["error_seat"]),
+			Waiting:   intFromMeta(row["waiting"]),
+			Wait:      stringFromMeta(row["wait"]),
+			WaitSeat:  seatFromMeta(row["wait_seat"]),
 			Unlisted:  stringsFromMeta(row["unlisted"]),
 		}
 		m.Shared, _ = row["shared"].(bool)

@@ -44,14 +44,28 @@ import type {
  *
  * UNREPORTED IS NOT ZERO: a node whose last heartbeat carried no status says
  * nothing, and "none" under its name would be a claim it never made.
+ *
+ * WAITING IS SAID AND NEVER TONED: an instance held back for a credential an
+ * integration is still minting is neither running nor failed, so it is named
+ * beside what was launched and leaves the tone to that — a cell where it is
+ * all there is reads neutral rather than "none here".
  */
 export function nodeCellWords(cell: McpServerNode): {
   text: string;
   tone: "success" | "warning" | "danger" | "neutral";
 } {
   if (!cell.reported) return { text: "not reported", tone: "neutral" };
+  const waiting = cell.waiting > 0 ? `${cell.waiting} waiting` : "";
   const launched = cell.started + cell.failed;
-  if (launched === 0) return { text: "none here", tone: "neutral" };
+  if (launched === 0) return { text: waiting || "none here", tone: "neutral" };
+  const words = launchedWords(cell, launched);
+  return waiting ? { text: `${words.text} · ${waiting}`, tone: words.tone } : words;
+}
+
+function launchedWords(
+  cell: McpServerNode,
+  launched: number,
+): { text: string; tone: "success" | "warning" | "danger" } {
   if (cell.failed === 0) return { text: `${cell.started} running`, tone: "success" };
   if (cell.started === 0) return { text: `${cell.failed} failed`, tone: "danger" };
   return { text: `${cell.failed} of ${launched} failed`, tone: "warning" };
@@ -249,6 +263,11 @@ export function failureLine(cell: McpServerNode): string {
   return cell.error_seat ? `for ${cell.error_seat}: ${cell.error}` : cell.error;
 }
 
+/** What a waiting instance waits for, under its node's chip as a failure is. */
+export function waitLine(cell: McpServerNode): string {
+  return cell.wait_seat ? `for ${cell.wait_seat}: ${cell.wait}` : cell.wait;
+}
+
 /**
  * One block per live node: its chip, and under THAT chip the first failure it
  * reported — so with several nodes every reason sits under the node it came
@@ -273,6 +292,11 @@ function NodeCells({ server }: { server: McpServerStatus }) {
             {cell.error && (
               <span className="t-caption clamp mcp-failure" title={failureLine(cell)}>
                 {failureLine(cell)}
+              </span>
+            )}
+            {cell.wait && (
+              <span className="t-caption clamp mcp-wait" title={waitLine(cell)}>
+                {waitLine(cell)}
               </span>
             )}
           </span>
@@ -337,6 +361,7 @@ export function ServerHeader({
   }
   const reach = reachOf(server, seats);
   const failures = server.nodes.filter((n) => n.error);
+  const waits = server.nodes.filter((n) => n.wait);
   return (
     <>
       <ObjectHeader
@@ -394,6 +419,26 @@ export function ServerHeader({
                   {cell.error_seat ? `, launched for ${cell.error_seat}` : ""}
                 </span>
                 <span className="t-body mono mcp-failure-whole">{cell.error}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {/* WHAT IT WAITS FOR, beside why it failed and apart from it: a seat's
+          instance held back for a credential an integration is minting is
+          not a fault, and its sentence names the variable and the
+          integration, which is all a reader can act on — or wait for. */}
+      {waits.length > 0 && (
+        <section className="col gap-2">
+          <div className="t-label">What it waits for</div>
+          <ul className="mcp-failures">
+            {waits.map((cell) => (
+              <li key={cell.node} className="col" style={{ gap: 2 }}>
+                <span className="t-caption">
+                  On <span className="mono">{cell.node}</span>
+                  {cell.wait_seat ? `, for ${cell.wait_seat}` : ""}
+                </span>
+                <span className="t-body mono mcp-failure-whole">{cell.wait}</span>
               </li>
             ))}
           </ul>

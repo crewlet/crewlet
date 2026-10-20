@@ -325,9 +325,17 @@ func mergedEnv(spec Spec, log *slog.Logger) []string {
 	slices.Sort(empty)
 
 	if len(empty) > 0 {
-		// Almost always an unresolved ${VAR}: the server will come up, fail
-		// to authenticate, and report something unrelated. Say it here, where
-		// the variable name is still in hand.
+		// Usually a ${VAR} that resolved to nothing, and a credential among
+		// them comes up, fails to authenticate and reports something
+		// unrelated, so it is said here. A WARNING AND NOT A REFUSAL, and
+		// naming the KEY rather than the variable: the reference was resolved
+		// before the spec got here, so the variable is gone, and an empty
+		// value is not always a mistake — a setting passed through by name is
+		// empty on every host that does not set it. A seat's own credentials
+		// never arrive here as a reference that resolved to nothing: the
+		// engine starts no seat child without them, where the variable is
+		// still in hand. A value a seat's block writes as a literal empty
+		// string still does, since nothing there was referenced.
 		log.Warn("empty_env_vars", "server", spec.Name, "empty_keys", empty)
 	}
 	// Keys only, never values — this line exists to debug a missing variable,

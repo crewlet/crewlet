@@ -97,6 +97,7 @@ const status: McpServersStatusAnswer = {
       state: "running",
       started: 2,
       failed: 0,
+      waiting: 0,
       tools: 4,
       unlisted_annotations: [],
       nodes: [
@@ -105,27 +106,36 @@ const status: McpServersStatusAnswer = {
           reported: true,
           started: 1,
           failed: 0,
+          waiting: 0,
           tools: 4,
           error: "",
           error_seat: "",
+          wait: "",
+          wait_seat: "",
         },
         {
           node: "node-b",
           reported: true,
           started: 1,
           failed: 0,
+          waiting: 0,
           tools: 4,
           error: "",
           error_seat: "",
+          wait: "",
+          wait_seat: "",
         },
         {
           node: "node-c",
           reported: false,
           started: 0,
           failed: 0,
+          waiting: 0,
           tools: 0,
           error: "",
           error_seat: "",
+          wait: "",
+          wait_seat: "",
         },
       ],
     },
@@ -140,6 +150,7 @@ const status: McpServersStatusAnswer = {
       state: "partial",
       started: 1,
       failed: 1,
+      waiting: 0,
       tools: 26,
       unlisted_annotations: ["create_pull_reqest"],
       nodes: [
@@ -148,27 +159,36 @@ const status: McpServersStatusAnswer = {
           reported: true,
           started: 1,
           failed: 0,
+          waiting: 0,
           tools: 26,
           error: "",
           error_seat: "",
+          wait: "",
+          wait_seat: "",
         },
         {
           node: "node-b",
           reported: true,
           started: 0,
           failed: 1,
+          waiting: 0,
           tools: 0,
           error: "401 Bad credentials",
           error_seat: "backend-dev",
+          wait: "",
+          wait_seat: "",
         },
         {
           node: "node-c",
           reported: false,
           started: 0,
           failed: 0,
+          waiting: 0,
           tools: 0,
           error: "",
           error_seat: "",
+          wait: "",
+          wait_seat: "",
         },
       ],
     },
@@ -185,6 +205,7 @@ const status: McpServersStatusAnswer = {
       state: "failing",
       started: 0,
       failed: 1,
+      waiting: 0,
       tools: 0,
       unlisted_annotations: [],
       nodes: [
@@ -193,10 +214,13 @@ const status: McpServersStatusAnswer = {
           reported: true,
           started: 0,
           failed: 1,
+          waiting: 0,
           tools: 0,
           error:
             'mcp: server "notes" failed to connect: exec: "notes-mcp": executable file not found in $PATH',
           error_seat: "",
+          wait: "",
+          wait_seat: "",
         },
       ],
     },
@@ -359,14 +383,99 @@ test("a node's cell never reads an unreported node as none", () => {
     reported: false,
     started: 0,
     failed: 0,
+    waiting: 0,
     tools: 0,
     error: "",
     error_seat: "",
+    wait: "",
+    wait_seat: "",
   };
   expect(nodeCellWords(cell).text).toBe("not reported");
   expect(nodeCellWords({ ...cell, reported: true }).text).toBe("none here");
   expect(nodeCellWords({ ...cell, reported: true, started: 1, failed: 1 }).tone).toBe("warning");
   expect(nodeCellWords({ ...cell, reported: true, failed: 2 }).tone).toBe("danger");
+});
+
+// A WAITING INSTANCE IS SAID AND NEVER TONED: held back for a credential an
+// integration is still minting, it is neither running nor failed, so it is
+// named beside what was launched and leaves the tone to that.
+test("a node's cell names its waiting instances without reading them as a fault", () => {
+  const cell = {
+    node: "n",
+    reported: true,
+    started: 0,
+    failed: 0,
+    waiting: 2,
+    tools: 0,
+    error: "",
+    error_seat: "",
+    wait: "",
+    wait_seat: "",
+  };
+  expect(nodeCellWords(cell)).toEqual({ text: "2 waiting", tone: "neutral" });
+  expect(nodeCellWords({ ...cell, started: 1, waiting: 1 })).toEqual({
+    text: "1 running · 1 waiting",
+    tone: "success",
+  });
+});
+
+// A SERVER WAITING FOR ITS PROVISIONED CREDENTIAL says so and says on what:
+// on a first boot under provisioning every seat's instance waits, and an
+// operator connecting the integration must read that as the pass's to finish,
+// not as a server to fix — and must find which variable it is.
+test("a server waiting for a provisioned credential names what it waits for, not a failure", async () => {
+  const wait =
+    "not started: waiting for the atlassian integration to mint ${CEO_ATLASSIAN_TOKEN}; " +
+    "it starts once the seal reaches this node";
+  const waiting: McpServersStatusAnswer = {
+    nodes: [{ id: "node-a", reported: true }],
+    servers: [
+      {
+        name: "github",
+        configured: true,
+        shared: false,
+        transport: "stdio",
+        command: "npx",
+        args: [],
+        url: "",
+        state: "waiting",
+        started: 0,
+        failed: 0,
+        waiting: 1,
+        tools: 0,
+        unlisted_annotations: [],
+        nodes: [
+          {
+            node: "node-a",
+            reported: true,
+            started: 0,
+            failed: 0,
+            waiting: 1,
+            tools: 0,
+            error: "",
+            error_seat: "",
+            wait,
+            wait_seat: "backend-dev",
+          },
+        ],
+      },
+    ],
+  };
+  mount(<Tools />, { answer: waiting });
+  await settle();
+  const github = screen.getByText("Waiting for credentials").closest(".grid-row") as HTMLElement;
+  expect(within(github).getByText(/1 waiting/)).toBeDefined();
+  const line = within(github).getByText(`for backend-dev: ${wait}`);
+  expect(line.classList.contains("mcp-wait")).toBe(true);
+  expect(within(github).queryByText(/failed/)).toBeNull();
+  cleanup();
+
+  location.hash = "#/settings/tools/servers/github";
+  mount(<Tools server="github" />, { answer: waiting });
+  await settle();
+  expect(screen.getByText("What it waits for")).toBeDefined();
+  expect(screen.queryByText("Why it failed")).toBeNull();
+  expect(screen.getByText(wait, { selector: ".mcp-failure-whole" })).toBeDefined();
 });
 
 // THE REASON SITS UNDER ITS NODE'S CHIP and does not restate the node: the

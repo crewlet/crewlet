@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -25,8 +26,20 @@ import (
 )
 
 // ghostCompany is a company with one agent on a Mattermost server at url and
-// one person, the founder, named by an account nobody there holds.
+// one person, the founder, named by an account nobody there holds. It asks
+// this engine to provision its bots, under an administrator token nothing
+// resolves, so a pass reaches the reconcile only with a token handed in.
 func ghostCompany(t *testing.T, url string) *Company {
+	t.Helper()
+	return ghostCompanyProvisioning(t, url, `
+    provisioning:
+      admin_token: "${GHOST_MATTERMOST_ADMIN_TOKEN}"`)
+}
+
+// ghostCompanyProvisioning is ghostCompany with provisioning as its
+// Mattermost block's provisioning lines: empty for a company whose bots were
+// made by hand.
+func ghostCompanyProvisioning(t *testing.T, url, provisioning string) *Company {
 	t.Helper()
 	cfg, err := config.ParseCompany([]byte(fmt.Sprintf(`
 name: Acme
@@ -40,7 +53,7 @@ integrations:
   mattermost:
     enabled: true
     url: %q
-    team: eng
+    team: eng%s
 roles:
   - name: CEO
     handle: ceo
@@ -52,7 +65,7 @@ roles:
     kind: human
     contact:
       mattermost_user_id: ghost
-`, url)))
+`, url, provisioning)))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -171,6 +184,28 @@ func TestTheMattermostPassReportsAPersonNobodyHolds(t *testing.T) {
 				t.Fatalf("the finding reads %+v", person)
 			}
 		})
+	}
+}
+
+// A TOKEN HANDED IN MINTS NO BOT FOR A COMPANY THAT PROVISIONS NONE. Its bots
+// were made by hand, so no seat's tool server waits on this pass
+// ([seatMinter]); a run that reconciled anyway would mint tokens for servers
+// that were never told one was coming. The setup route refuses that run
+// before it starts, and the pass refuses it again where it reads its plan.
+func TestAnAdministratorTokenMintsNoBotForACompanyThatProvisionsNone(t *testing.T) {
+	t.Parallel()
+	chat := ghostServer(t)
+	e := &Engine{}
+	e.epoch.current.Store(ghostCompanyProvisioning(t, chat.URL, ""))
+	sink, err := provision.NewEnvFileSink(filepath.Join(t.TempDir(), "minted.env"))
+	if err != nil {
+		t.Fatalf("NewEnvFileSink: %v", err)
+	}
+	findings, err := (&mattermostPass{engine: e}).Run(t.Context(),
+		setup.PassInput{Operator: "admin-token", Sink: sink})
+	if !errors.Is(err, integration.ErrNotConfigured) {
+		t.Fatalf("Run = %+v, %v; want the pass to refuse to reconcile a company "+
+			"that provisions no bots", findings, err)
 	}
 }
 

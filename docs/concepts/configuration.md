@@ -582,7 +582,13 @@ apply that stops declaring a server for a seat retires that child, one that
 starts declaring one starts it, and an `mcp_env` edit, or a credential sealed
 or rotated since the child started, restarts **only that seat's child**, on the
 apply that carried it — in place, without releasing the seat — and every other
-child keeps running. A seat the revision removes altogether loses all its
+child keeps running. A child whose seat's own credential does not resolve is
+not started at all, and one already running whose credential stopped resolving
+is stopped: it waits, unstarted, for a credential a provisioning pass is
+minting, and is reported failed for one nothing will mint or a pass cannot mint
+until somebody acts (see
+[Tools & MCP](../guides/tools-and-mcp.md#shared-vs-per-role-servers)). A seat
+the revision removes altogether loses all its
 children in the same step, while this node still holds it: placement releases
 the seat afterwards, up to a sweep interval later, and a child left running
 until then would go on acting at the vendor for an agent the company no longer
@@ -605,9 +611,13 @@ the seat's refiled registry, which still lists the children as the apply found
 them, and a call to one being restarted is refused, classed `unavailable`, as
 a server no longer running on this node; the seat refiles its registry again
 once its reconcile is done, so its next turn sees the restarted children. A
-child that would not start is retried on its own as well, while the seat is
+child whose start failed is retried on its own as well, while the seat is
 held, and one that dies after starting is restarted; an apply asks a child it
-finds down to try again at once rather than reconciling it. No reconcile, retry
+finds down to try again at once rather than reconciling it. A child held back
+for its credential is not retried on a timer — nothing about it changes until
+the secret snapshot does — and the pass that starts it is the one the next
+change to the snapshot runs: an apply, or the pass a provisioning run asks for
+on its own node as soon as it has sealed what it minted. No reconcile, retry
 or restart starts a child for a seat this node can no longer prove it holds.
 See
 [Tools & MCP](../guides/tools-and-mcp.md#shared-vs-per-role-servers).
