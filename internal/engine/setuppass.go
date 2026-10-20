@@ -50,10 +50,10 @@ import (
 // GitLab is here too, and it is a different kind of act: its pass creates a
 // service account per agent, mints a token on each and adds them to a group.
 // Everything it makes outlives the run and is visible to the whole group, so
-// it runs only with a transient administrator credential asked for on every
-// pass and never stored, and it never deletes: decommissioning is left to the
-// command line, because a company mid-edit looks exactly like one that
-// removed a seat.
+// it runs only with the group Owner token the company document holds
+// ([gitlab.AdminCredential] says why it is held), and it never deletes:
+// decommissioning is left to the command line, because a company mid-edit
+// looks exactly like one that removed a seat.
 //
 // Mattermost is the same shape as GitLab and joins on the same terms. It is
 // the one third-party app here that needs no public address at all: it holds an
@@ -933,11 +933,8 @@ type gitlabPass struct{ engine *Engine }
 
 func (*gitlabPass) Kind() integration.Kind { return integration.KindGitLab }
 
-// Needs is the group Owner token. Asked on every run and never stored: it
-// creates accounts and mints tokens on them, which is a standing power if it
-// is kept and a grant with an end if it is not.
 // Needs is nil: the Owner token is held in the company document like every
-// other credential now, so there is nothing transient left to ask for. See
+// other credential, so there is nothing transient to ask for. See
 // [gitlab.AdminCredential] for why it is kept.
 func (*gitlabPass) Needs() *setup.Requirement { return nil }
 
@@ -1017,8 +1014,9 @@ func (p *gitlabPass) Run(ctx context.Context, in setup.PassInput) ([]integration
 
 // Teardown withdraws the hooks, and the service accounts when asked.
 //
-// The Owner token is the same transient credential the pass asks for, and it
-// is needed for the same reason: removing an account takes the authority
+// The Owner token is the one the pass creates accounts with — the
+// document's, or one handed in for this run ([gitlabAdminToken]) — and it is
+// needed for the same reason: removing an account takes the authority
 // creating it did. A teardown with none can still be attempted (the hooks
 // may come out under a weaker credential), so this refuses only when there is
 // nothing at all to authenticate with.
@@ -1062,9 +1060,8 @@ type mattermostPass struct{ engine *Engine }
 
 func (*mattermostPass) Kind() integration.Kind { return integration.KindMattermost }
 
-// Needs is the administrator token. Asked on every run and never stored, for
-// the reason GitLab's is: it creates accounts and mints tokens on them.
-// Needs is nil, for the reason GitLab's is: the administrator token is held.
+// Needs is nil, for the reason GitLab's is: the administrator token is held
+// in the company document.
 func (*mattermostPass) Needs() *setup.Requirement { return nil }
 
 func (p *mattermostPass) Run(ctx context.Context, in setup.PassInput) ([]integration.Finding, error) {
