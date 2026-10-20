@@ -527,6 +527,40 @@ func TestUnsetReportsWhetherARowWent(t *testing.T) {
 	}
 }
 
+// AN UNSET THROUGH A NODE SAYS THE RUNNING FLEET STOPS AT ITS NEXT APPLY:
+// the node it went through, and the running fleet's note, never the stopped
+// engine's, which would tell an operator the removal waits for a start that is
+// not coming.
+//
+// Mutations, each red: the store line left out, and the stopped engine's note
+// given through a node.
+func TestAnUnsetThroughANodeSaysTheRunningFleetStopsAtItsNextApply(t *testing.T) {
+	t.Parallel()
+	node := newFakeSecretsNode(t)
+	node.body = `{"removed":true}`
+	cfg := bootstrapWithKeyring(t, "k1")
+
+	var out, errs bytes.Buffer
+	err := runIn(invocation{environ: tokenEnviron("ops-token")}, []string{"secrets", "unset", "GL_TOKEN",
+		"-config", cfg, "-api", node.server.URL}, &out, &errs)
+	if err != nil {
+		t.Fatalf("unset: %v\n%s", err, errs.String())
+	}
+	if node.last.method != http.MethodDelete || node.last.path != "/secrets/GL_TOKEN" {
+		t.Fatalf("the node saw %s %s", node.last.method, node.last.path)
+	}
+	for _, want := range []string{"removed GL_TOKEN\n", "written to ", node.server.URL,
+		secretsFleetRemovalNote} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("unset said %q, want it to carry %q", out.String(), want)
+		}
+	}
+	if strings.Contains(out.String(), secretsStoppedRemovalNote) {
+		t.Errorf("an unset through a running node was told this node's engine "+
+			"starts without it: %q", out.String())
+	}
+}
+
 // THE WHOLE COMMAND GOES THROUGH THE NODE when -api names one, and never
 // touches this machine's database.
 //
