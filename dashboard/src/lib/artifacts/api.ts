@@ -188,6 +188,15 @@ export function configureSchema(
 }
 
 /**
+ * Link an artifact that already exists to a tracker item
+ * (`POST /artifacts/{id}/work-items`), so the item's Artifacts card lists it.
+ * The engine checks the caller can open the artifact and change the item.
+ */
+export function linkWorkItem(id: string, workItem: string): Omit<KeyedRequest, "key"> {
+  return { method: "POST", path: `${base(id)}/work-items`, body: { work_item: workItem } };
+}
+
+/**
  * Where a datastore write comes from: the dashboard's own screens, or a page
  * script the bridge relays for the version it runs as. The engine checks a
  * bridge write's version declares the capability it uses.
