@@ -182,6 +182,17 @@ What is worth knowing about it:
 - **Streams are enumerated, not listed.** A namespace stream is created on
   first publish and a coordination bucket's name depends on a configurable
   prefix, so what gets captured is what is actually there.
+- **A stream is copied with its consumers, and one that ends mid-copy costs a
+  retake, not the backup.** The broker copies a stream's consumers — every
+  seat's delivery position — before its messages, and abandons the snapshot
+  when one of them has ended by the time it reads it. A working engine ends
+  consumers constantly: every listing of a coordination bucket is a consumer
+  that lives as long as the listing. So when the broker names a consumer it
+  no longer holds, that stream is snapshotted again (`backup_stream_retaken`),
+  five attempts in all: losing all five means something is churning that
+  stream's consumers far faster than the engine does, and the backup fails
+  naming the consumer. Every other abandoned snapshot fails the backup at
+  once.
 - **Every estate or none.** A failure anywhere leaves the directory without a
   manifest. A backup missing an estate is not a partial backup, it is an
   unrestorable one: the store alone loses every lease, ledger and credential;
