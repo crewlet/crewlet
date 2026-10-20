@@ -278,9 +278,10 @@ type ListQuery struct {
 	Pinned bool
 
 	// WorkItem narrows to the artifacts a write was made for this tracker
-	// item under ([artifacts.Authority.WorkItem]), as the history rows of the
-	// last [artifacts.HistoryRetention] record it: what a work item's
-	// Artifacts panel lists. Empty narrows nothing.
+	// item under ([artifacts.Authority.WorkItem]), or that were linked to it
+	// ([OpLinkWorkItem]), as the applied history rows of the last
+	// [artifacts.HistoryRetention] record it: what a work item's Artifacts
+	// panel lists. Empty narrows nothing.
 	WorkItem string
 
 	Sort   ListSort
@@ -794,8 +795,13 @@ type trailCursor struct {
 // its owner has left or never looks. The caller decides who may ask
 // (`audit.read`); this read answers whoever it is asked for.
 func (r *Reader) Trail(ctx context.Context, q TrailQuery) (TrailPage, error) {
-	if q.Op != "" && !q.Op.Valid() {
-		return TrailPage{}, fmt.Errorf("%w: %q is not an op the artifacts log records", ErrInvalid, q.Op)
+	// HELD TO THE HISTORY'S OPS, not to every op the log carries: a pin or
+	// an opened mark writes no history row, so narrowing to one answers an
+	// empty trail forever, and an asset's rows are filed under the asset's
+	// own op ([HistoryOps]).
+	if q.Op != "" && !slices.Contains(HistoryOps, q.Op) {
+		return TrailPage{}, fmt.Errorf("%w: %q is not an op an artifact's history records, "+
+			"which are %v", ErrInvalid, q.Op, HistoryOps)
 	}
 	var after trailCursor
 	if q.Cursor != "" {
@@ -1142,9 +1148,12 @@ func listSpecFor(v Viewer, q ListQuery) (listSpec, error) {
 		// THE ARTIFACT'S OWN HISTORY NAMES THE ITEM, read through the
 		// (work_item, artifact_id) index: one probe per artifact the page
 		// considers, never a scan of the history.
+		// AN APPLIED ROW ONLY: a write the log refused (a link to an
+		// artifact trashed before it applied, a publish over a moved head)
+		// made nothing for the item, and its row says so.
 		s.where = append(s.where, `EXISTS (SELECT 1 FROM artifact_history h
-			WHERE h.work_item = ? AND h.artifact_id = a.id)`)
-		s.args = append(s.args, item)
+			WHERE h.work_item = ? AND h.artifact_id = a.id AND h.outcome = ?)`)
+		s.args = append(s.args, item, string(OutcomeApplied))
 	}
 	sharedWithViewer, sharedArgs := sharedClause(v)
 	visible := `(` + sharedWithViewer + ` OR a.owner = ?`
