@@ -32,7 +32,7 @@ import { App } from "./App.tsx";
 import { Router } from "./router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
-import { modules, parse, stringValue, walk } from "~/test/source.ts";
+import { modules, parse, stringValue, walk, type Module } from "~/test/source.ts";
 
 let undo: (() => void)[] = [];
 
@@ -353,6 +353,33 @@ describe("the split", () => {
     return parts.join("/");
   }
 
+  /**
+   * Each module-relative or `~` import `m` makes that is not type-only, as
+   * the source it spells and the path under `src/` it lands on. A type-only
+   * import is erased and pulls in nothing.
+   */
+  function staticImports(m: Module) {
+    const found: { source: string; to: string }[] = [];
+    walk(parse(m.text, m.lang), (node) => {
+      if (
+        node.type !== "ImportDeclaration" &&
+        node.type !== "ExportNamedDeclaration" &&
+        node.type !== "ExportAllDeclaration"
+      )
+        return;
+      const decl = node as unknown as {
+        source?: unknown;
+        importKind?: string;
+        exportKind?: string;
+      };
+      if (decl.importKind === "type" || decl.exportKind === "type") return;
+      const source = stringValue(decl.source as never);
+      if (!source || !(source.startsWith("~/") || source.startsWith("."))) return;
+      found.push({ source, to: target(m.path, source) });
+    });
+    return found;
+  }
+
   // A SCREEN IMPORTED STATICALLY FROM OUTSIDE `routes/` IS BACK IN THE ENTRY.
   // The bundler follows a static import wherever it is, so one line in the
   // frame — a peek, a helper a screen happens to export — pulls that whole
@@ -366,30 +393,49 @@ describe("the split", () => {
     const offences: string[] = [];
     for (const m of modules()) {
       if (m.path.startsWith("routes/")) continue;
-      walk(parse(m.text, m.lang), (node) => {
-        if (
-          node.type !== "ImportDeclaration" &&
-          node.type !== "ExportNamedDeclaration" &&
-          node.type !== "ExportAllDeclaration"
-        )
-          return;
-        const decl = node as unknown as {
-          source?: unknown;
-          importKind?: string;
-          exportKind?: string;
-        };
-        if (decl.importKind === "type" || decl.exportKind === "type") return;
-        const source = stringValue(decl.source as never);
-        if (!source || !(source.startsWith("~/") || source.startsWith("."))) return;
-        const to = target(m.path, source);
+      for (const { source, to } of staticImports(m)) {
         if (to.startsWith("routes/") && to !== "routes/NotFound.tsx") {
           offences.push(`${m.path} imports ${source}`);
         }
-      });
+      }
     }
     expect(
       offences,
       "reach a screen through lazyScreen.ts's import(), never a static import",
+    ).toEqual([]);
+  });
+
+  // A WORKSPACE'S OWN MODULE UNDER `lib/` IS IN THE ENTRY ONCE THE FRAME
+  // REACHES IT. A bundler places a module whole, so the frame importing one
+  // small helper from a module that is otherwise a screen's carries all of it
+  // into the chunk every reader downloads first: the sidebar's and the
+  // palette's `artifactPath` once brought every artifact write and read with
+  // it. Such a module is named here, and the entry's static graph, walked
+  // from `main.tsx`, must not reach it.
+  const SCREEN_ONLY = ["lib/artifacts/api.ts"];
+
+  test("the entry's static graph reaches no module only a screen needs", () => {
+    const byPath = new Map(modules().map((m) => [m.path, m]));
+    const from = new Map<string, string>([["main.tsx", ""]]);
+    const queue = ["main.tsx"];
+    for (let path = queue.shift(); path !== undefined; path = queue.shift()) {
+      const m = byPath.get(path);
+      if (!m) continue;
+      for (const { to } of staticImports(m)) {
+        if (from.has(to)) continue;
+        from.set(to, path);
+        queue.push(to);
+      }
+    }
+    const chain = (path: string): string =>
+      from.get(path) ? `${chain(from.get(path)!)} > ${path}` : path;
+    expect(
+      SCREEN_ONLY.filter((path) => from.has(path)).map(chain),
+      "move what the frame needs out of the screen's module",
+    ).toEqual([]);
+    expect(
+      SCREEN_ONLY.filter((path) => !byPath.has(path)),
+      "a module named here that no longer exists",
     ).toEqual([]);
   });
 });

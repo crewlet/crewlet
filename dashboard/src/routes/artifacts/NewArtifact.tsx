@@ -26,12 +26,8 @@ import { utf8Bytes } from "~/lib/format.ts";
 import { keyedWrite, useKeyedGesture } from "~/lib/keyedWrite.ts";
 import { newActOpID } from "~/protocol/index.ts";
 import { ARTIFACT_TITLE_MAX_BYTES } from "~/contract/artifacts.ts";
-import {
-  artifactPath,
-  configureSchema,
-  createFromStarter,
-  createSheet,
-} from "~/lib/artifacts/api.ts";
+import { artifactPath } from "~/app/routes.ts";
+import { configureSchema, createFromStarter, createSheet } from "~/lib/artifacts/api.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { SHEET_TEMPLATES, type SheetTemplate } from "~/lib/artifacts/schema.ts";
 import { KIND_WORDS } from "~/lib/artifacts/words.ts";

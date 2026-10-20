@@ -121,7 +121,7 @@ import { href, useIsCurrent } from "~/app/router.tsx";
 import { pathOf } from "~/app/frame/objects.ts";
 import { PromptRecord } from "~/components/PromptDoc.tsx";
 import { WITHHELD_WHY, WITHHELD_WORDS } from "~/lib/access.ts";
-import { artifactPath } from "~/lib/artifacts/api.ts";
+import { artifactPath } from "~/app/routes.ts";
 import { writtenArtifact, type WrittenArtifact } from "~/lib/artifacts/transcript.ts";
 
 /**

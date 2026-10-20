@@ -91,7 +91,8 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { keyedWrite, useKeyedGesture } from "~/lib/keyedWrite.ts";
 import { ARTIFACT_TITLE_MAX_BYTES } from "~/contract/artifacts.ts";
 import { patchArtifact, untrashArtifact } from "~/lib/artifacts/api.ts";
-import { usePinToggle, usePins } from "~/lib/artifacts/pins.ts";
+import { usePins } from "~/lib/artifacts/pins.ts";
+import { usePinToggle } from "~/lib/artifacts/pinToggle.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import {
   isViewRegion,

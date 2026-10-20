@@ -14,7 +14,7 @@ import type { GlyphName } from "@crewlethq/icons/glyphs";
 import { DESTINATIONS, WORKSPACES } from "../nav.ts";
 import { accessNames, holdsAny, type Grant } from "~/lib/access.ts";
 import type { Navigator } from "../router.tsx";
-import { resolve } from "../routes.ts";
+import { artifactPath, resolve } from "../routes.ts";
 import type { Recent } from "~/lib/recents.ts";
 import { DENSITIES, THEMES, type ViewerPrefs } from "~/lib/prefs.ts";
 import type { OrgIndex, Seat, Unit } from "~/lib/seats.ts";
@@ -22,7 +22,6 @@ import { COLLEAGUE_QUERY_MAX } from "~/contract/wire.ts";
 import { sequenceWords } from "../keymap.ts";
 import { utf8Bytes } from "~/lib/format.ts";
 import { KIND_WORDS } from "~/lib/artifacts/words.ts";
-import { artifactPath } from "~/lib/artifacts/api.ts";
 import type { ArtifactKind, ArtifactListItem } from "~/protocol/index.ts";
 
 /**

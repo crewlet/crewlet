@@ -73,6 +73,7 @@ import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
 import { useSearchTarget } from "~/app/searchTarget.ts";
 import {
   LEGACY_ARTIFACT_SECTIONS,
+  artifactPath,
   artifactSectionPath,
   type ArtifactSection,
 } from "~/app/routes.ts";
@@ -83,7 +84,6 @@ import { STORAGE_KEYS } from "~/lib/storage.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useClient } from "~/lib/store-hooks.ts";
 import { useViewer, type ViewerState } from "~/lib/viewer.ts";
-import { artifactPath } from "~/lib/artifacts/api.ts";
 import { usePinsChanged } from "~/lib/artifacts/pins.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { useArtifactPeople, type ArtifactPeople } from "~/lib/artifacts/people.ts";

@@ -115,6 +115,18 @@ export function artifactSectionPath(section: ArtifactSection): string[] {
 }
 
 /**
+ * An artifact's own address in the dashboard, the one `artifactsRoute` reads.
+ * It lives here rather than beside the artifacts' REST calls
+ * (`lib/artifacts/api.ts`) because the frame draws it (a pinned artifact in
+ * the sidebar, a palette hit): a bundler places a module whole, so the frame
+ * importing one function from that module carried every artifact write and
+ * read into the entry.
+ */
+export function artifactPath(id: string): string[] {
+  return ["artifacts", id];
+}
+
+/**
  * The screens drawn outside the frame. An invitation's and a reset link's one
  * segment is `<id>.<secret>`, kept whole: the screen itself says when that is
  * not a whole link — a link cut short by a mail client is the ordinary way it

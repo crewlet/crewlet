@@ -18,7 +18,7 @@ import {
 import { href } from "~/app/router.tsx";
 import { queryErrorCode, type ArtifactListItem } from "~/protocol/index.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { artifactPath } from "~/lib/artifacts/api.ts";
+import { artifactPath } from "~/app/routes.ts";
 import type { ArtifactPeople } from "~/lib/artifacts/people.ts";
 import { GalleryPreview } from "./GalleryPreview.tsx";
 

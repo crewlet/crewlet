@@ -25,7 +25,7 @@ import { utf8Bytes } from "~/lib/format.ts";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
 import { patchArtifact, untrashArtifact } from "~/lib/artifacts/api.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
-import { usePinToggle } from "~/lib/artifacts/pins.ts";
+import { usePinToggle } from "~/lib/artifacts/pinToggle.ts";
 import { copyAddress } from "./parts.tsx";
 import { TrashDialog } from "./SettingsTab.tsx";
 
