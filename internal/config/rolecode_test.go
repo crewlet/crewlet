@@ -6,19 +6,22 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/github"
 )
 
-// ONE TIER VOCABULARY, WRITTEN TWICE, WHICH MUST NOT DRIFT.
+// ONE TIER VOCABULARY, WRITTEN THREE TIMES, WHICH MUST NOT DRIFT.
 //
 // role.code.access is the one per-seat code tier every code host reads: the
 // GitHub App's permission set is the tier's, and the native code host caps a
-// seat's grant by it. config is the leaf every integration package depends on,
-// so it restates the vocabulary rather than importing internal/github and
-// inverting that. The cost of restating is exactly this: a tier added on one
-// side and not the other would validate here and be read as read-only there,
-// or be refused here and be perfectly good there.
+// seat's grant by it (internal/code's Tier, ADR-0040). config is the leaf
+// every integration package depends on, so it restates the vocabulary rather
+// than importing internal/github and inverting that; internal/code spells its
+// tiers as config's own constants, and is held here all the same, element by
+// element. The cost of restating is exactly this: a tier added on one side and
+// not the other would validate here and be read as read-only there, or be
+// refused here and be perfectly good there.
 func TestRoleCodeAccessIsTheOneVocabulary(t *testing.T) {
 	t.Parallel()
 	if len(config.CodeAccessTiers) != len(github.Tiers) {
@@ -29,6 +32,15 @@ func TestRoleCodeAccessIsTheOneVocabulary(t *testing.T) {
 			t.Errorf("tier %d: config says %q, github says %q", i, tier, github.Tiers[i])
 		}
 	}
+	if tiers := code.Tiers(); len(tiers) != len(config.CodeAccessTiers) {
+		t.Errorf("config knows %v, the native code host %v", config.CodeAccessTiers, tiers)
+	} else {
+		for i, tier := range config.CodeAccessTiers {
+			if string(tiers[i]) != tier {
+				t.Errorf("tier %d: config says %q, the native code host %q", i, tier, tiers[i])
+			}
+		}
+	}
 	if config.TierReadOnly != string(github.DefaultTier) {
 		t.Errorf("config defaults to %q, github to %q", config.TierReadOnly, github.DefaultTier)
 	}
@@ -36,6 +48,10 @@ func TestRoleCodeAccessIsTheOneVocabulary(t *testing.T) {
 	if got := silent.AccessOrDefault(); got != string(github.DefaultTier) {
 		t.Errorf("a seat with no code block runs at %q, and github's default is %q",
 			got, github.DefaultTier)
+	}
+	// The native host reads an unset tier as the default tier's cap.
+	if unset, def := code.Tier("").Cap(), code.Tier(silent.AccessOrDefault()).Cap(); unset != def {
+		t.Errorf("an unset tier caps a seat at %s, and the default tier at %s", unset, def)
 	}
 }
 

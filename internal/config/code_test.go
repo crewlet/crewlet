@@ -288,6 +288,19 @@ func TestTheCodeBlockRefusesByField(t *testing.T) {
 			doc:  codeRepos(web + "      default_branch: main..next\n"),
 			path: "code.repos[0].default_branch", kind: "shape", says: []string{"main..next"},
 		},
+		// refs/heads/seats holds only each seat's own namespace: no push may
+		// create the root or a namespace as a branch, so a repository whose
+		// default branch is one would have one nobody can ever push.
+		"the seats root as the default branch": {
+			doc:  codeRepos(web + "      default_branch: seats\n"),
+			path: "code.repos[0].default_branch", kind: "conflict",
+			says: []string{`"seats"`, "reserved", "seats/<handle>/"},
+		},
+		"a seat's namespace as the default branch": {
+			doc:  codeRepos(web + "      default_branch: seats/main\n"),
+			path: "code.repos[0].default_branch", kind: "conflict",
+			says: []string{`"seats/main"`, "reserved", "seats/<handle>/"},
+		},
 		"a description past its bound": {
 			doc: codeRepos(web + "      description: " +
 				strings.Repeat("x", config.CodeMaxDescriptionBytes+1) + "\n"),
@@ -456,7 +469,7 @@ func TestAnUnprotectedDefaultBranchIsWarned(t *testing.T) {
 // with its validation's refusal beside it, as `crewlet validate` prints both.
 func TestARefusedDefaultBranchIsNotWarned(t *testing.T) {
 	t.Parallel()
-	for _, branch := range []string{"HEAD", "-x", "@"} {
+	for _, branch := range []string{"HEAD", "-x", "@", "seats", "seats/main"} {
 		c, err := config.ParseCompanyDocument([]byte(codeRepos(
 			"    - name: web\n      owner: {seat: swe}\n      default_branch: '" + branch + "'\n")))
 		if err != nil {

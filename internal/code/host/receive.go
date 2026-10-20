@@ -151,10 +151,22 @@ func (s *Server) receivePack(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
-	if adm.seat == "" {
-		refuseAll(RefusalUnbound, refuseWith(sec.Commands, func(parsedCommand) (code.Refusal, string) {
-			return "", unboundSentence
-		}))
+	// THE GRANT (ADR-0040), before the repository's status: a principal that
+	// may push nothing here — a token bound to nobody — is refused whole, as
+	// its advertisement refused it, every command with the sentence its grant
+	// gives. One that may push some commands has the rest refused beside the
+	// stateless rules, which come first: a reserved ref is reserved_ref to
+	// everybody, never a question of who asks. An update is judged here as a
+	// fast-forward, since whether it is forced is the landing's verdict, after
+	// the sync — which no principal this host admits can tell apart: a person
+	// maintains and passes both rows, and a token bound to nobody passes
+	// neither.
+	grant := adm.grant(adm.repo)
+	if !grant.MayPush() {
+		refuseAll(grantRefusal(adm.principal()), refuseWith(sec.Commands,
+			func(c parsedCommand) (code.Refusal, string) {
+				return grant.RefRule(code.Command{Ref: c.Ref, Old: c.Old, New: c.New})
+			}))
 		return
 	}
 	if s.refusedByStatus(adm.repo, sec, refuseAll) {
@@ -162,8 +174,11 @@ func (s *Server) receivePack(w http.ResponseWriter, r *http.Request) {
 	}
 	pre := map[string]answered{}
 	for _, c := range sec.Commands {
-		if reason := code.StatelessRefusal(code.Command{Ref: c.Ref, Old: c.Old, New: c.New}); reason != "" {
+		cmd := code.Command{Ref: c.Ref, Old: c.Old, New: c.New}
+		if reason := code.StatelessRefusal(cmd); reason != "" {
 			pre[c.Ref] = answered{Ref: c.Ref, Reason: reason}
+		} else if reason, words := grant.RefRule(cmd); reason != "" {
+			pre[c.Ref] = answered{Ref: c.Ref, Reason: reason, Detail: words}
 		}
 	}
 	if s.refusedEvery(sec, pre, refuseAll) {
@@ -362,7 +377,7 @@ func (s *Server) receiveOver(ctx context.Context, w http.ResponseWriter, r *http
 	defer cancel()
 	sess := newSession(work, cancel)
 	sess.synced, sess.scratch, sess.pushID = synced, scratch, pushID
-	sess.principal = code.Principal{Kind: code.PrincipalOperator, OperatorID: adm.operatorID, Seat: adm.seat}
+	sess.principal = adm.principal()
 	sess.receivedAt, sess.preRefused, sess.judged = s.now(), pre, judged
 	s.relay.open(sess)
 

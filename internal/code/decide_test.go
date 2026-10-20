@@ -167,6 +167,13 @@ func TestThePushDecide(t *testing.T) {
 			RefusalReservedRef, "outside refs/heads/"},
 		"the engine's own": {cmd("refs/crewlet/x/y", ZeroOID, oid("B")), ResultNG,
 			RefusalReservedRef, "the engine's own"},
+		// The seats' root and one seat's namespace as a branch are
+		// nobody's, a person's push included: under ref_conflict either
+		// would block seats' namespaces.
+		"the seats' root": {cmd("refs/heads/seats", ZeroOID, oid("B")), ResultNG,
+			RefusalReservedRef, "seats' own namespaces"},
+		"a namespace as a branch": {cmd("refs/heads/seats/ana", ZeroOID, oid("B")), ResultNG,
+			RefusalReservedRef, "seats' own namespaces"},
 		// 2, before 3: the tag is where the client says.
 		"a tag moved": {cmd("refs/tags/v1", oid("T"), oid("U")), ResultNG, RefusalTagMoved, "a tag does not move"},
 		// 3, before 4: the old value is wrong and the new one is already there.

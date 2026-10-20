@@ -164,12 +164,18 @@ func TestAnUnboundTokenCannotPush(t *testing.T) {
 	if res.Err == nil || !strings.Contains(res.Stderr, "fatal: remote error: this token is not bound to a person: ") {
 		t.Errorf("an unbound token's push: %s", res)
 	}
-	// A POST THAT NEVER ASKED FOR THE ADVERTISEMENT: a deletion carries no
-	// pack, so the command section is the whole body.
-	body := pkt(head+" "+gitrefZero+" refs/heads/main\x00report-status\n") + "0000"
+	// A POST THAT NEVER ASKED FOR THE ADVERTISEMENT: deletions carry no
+	// pack, so the command section is the whole body. Every command is
+	// refused by the token's grant (ADR-0040) — the domain's not_permitted,
+	// with the sentence the advertisement gives.
+	body := pkt(head+" "+gitrefZero+" refs/heads/main\x00report-status\n") +
+		pkt(head+" "+gitrefZero+" refs/heads/feature\n") + "0000"
 	resp, report := post(t, c, 0, "", "git-receive-pack", "", body)
-	if resp.StatusCode != http.StatusOK || !strings.Contains(report, "ng refs/heads/main this token is not bound to a person") {
-		t.Errorf("an unbound token's hand-built push answered %d %q", resp.StatusCode, report)
+	for _, ref := range []string{"refs/heads/main", "refs/heads/feature"} {
+		if resp.StatusCode != http.StatusOK ||
+			!strings.Contains(report, "ng "+ref+" not_permitted: this token is not bound to a person") {
+			t.Errorf("an unbound token's hand-built push answered %d %q for %s", resp.StatusCode, report, ref)
+		}
 	}
 	if got := c.Rows().Refs["refs/heads/main"]; got != head {
 		t.Errorf("main is at %s after refused pushes, want %s", got, head)

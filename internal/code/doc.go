@@ -234,6 +234,37 @@
 // declaration's answer from that one publish, rather than one wait of the
 // write budget each for the same refusal.
 //
+// # Who may read and push
+//
+// A principal's standing on a repository is DERIVED from the chart and never
+// stored (ADR-0040): there is no table of who may push where, because such a
+// table is a second chart, and it drifts from the first the day a seat moves
+// units. [GrantOf] computes it, every time it is asked, from the repository's
+// row and a [Roster] — the chart of the node that answers or decides, which
+// the engine adapts and this package declares, so a grant is a pure function
+// of the two and this package never reads the organization itself. A person
+// (an operator credential bound to a human seat) maintains every repository
+// and a token bound to nobody reads every one, which needs no chart; a seat
+// holds the minimum of its tier's cap ([Tier.Cap], role.code.access) and
+// what the chart relates it to the repository by. [Grant.RefRule] judges one
+// command against the grant before the protections are judged — a grant is
+// never a reason to skip one — and its sentence names what the principal
+// holds, what the command needs and a remedy the rule itself would admit.
+//
+// A full_access seat owns [SeatNamespace] — refs/heads/seats/<handle>/ — on
+// every repository it reads, which is where a seat whose relation is below
+// write pushes, in place of a fork. Under a root of its own and NEVER at
+// refs/heads/<handle>/, because a handle is a role name's slug and people
+// name their branches under exactly those (docs/, release/): what is a seat's
+// is then decidable from the ref alone. The root itself and one seat's
+// namespace as a branch are nobody's ([StatelessRefusal] refuses both
+// reserved_ref for every principal, and no repository takes either as its
+// default branch), since no ref is created beside a directory of its own name
+// — the push decide refuses one ref_conflict ([RefusalRefConflict]), because
+// no clone can hold a file and a directory of one name — so a branch named
+// seats would block every seat's namespace, and one named seats/<x> the
+// namespace of the seat x ([gitref.ReservedSeatBranch]).
+//
 // # What this package does not do
 //
 // It runs no git, moves no object bytes and serves no HTTP. It decides and

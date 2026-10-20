@@ -1030,8 +1030,12 @@ func gib(n int64) string { return fmt.Sprintf("%.2f GiB", float64(n)/(1<<30)) }
 func statelessDetail(c Command, r Refusal) string {
 	switch r {
 	case RefusalReservedRef:
-		if strings.HasPrefix(c.Ref, reservedPrefix) {
+		switch {
+		case strings.HasPrefix(c.Ref, reservedPrefix):
 			return fmt.Sprintf("%s is under %s, which is the engine's own", c.Ref, reservedPrefix)
+		case reservedSeatRef(c.Ref):
+			return fmt.Sprintf("%s as a branch would block seats' own namespaces (%s<handle>/), "+
+				"since no ref is created beside a directory of its name", c.Ref, SeatNamespaceRoot)
 		}
 		return fmt.Sprintf("%s is outside %s and %s", c.Ref, branchPrefix, tagPrefix)
 	case RefusalTagMoved:

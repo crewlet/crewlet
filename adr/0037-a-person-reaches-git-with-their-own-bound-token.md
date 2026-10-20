@@ -30,4 +30,5 @@ behind it. The bound token is already how this engine knows who a person is.
 ## What this does not decide
 
 How a seat's box reaches git (a run token in a key domain of its own, served where a box can reach it),
-per-repository read grants (derived from the chart), and SSH (not planned).
+what a seat may read and push on a repository (derived from the chart: ADR-0040, which leaves this record's rules
+for persons and tokens as they are), and SSH (not planned).

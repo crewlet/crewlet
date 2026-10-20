@@ -91,6 +91,7 @@ var sentinels = []sentinel{
 	{"code.ErrNoActivation", code.ErrNoActivation},
 	{"code.ErrNotConfigManaged", code.ErrNotConfigManaged},
 	{"code.ErrNotDeleted", code.ErrNotDeleted},
+	{"code.ErrNotPermitted", code.ErrNotPermitted},
 	{"code.ErrNotServing", code.ErrNotServing},
 	{"code.ErrNotYet", code.ErrNotYet},
 	{"code.ErrPurging", code.ErrPurging},

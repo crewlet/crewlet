@@ -275,6 +275,7 @@ step that would meet it:
 | `web would hold … of packs once the next step lands … past code.limits.repo_max_bytes` | The steps store more than the source's own pack (below). Raise `code.limits.repo_max_bytes` and run the same command again: it resumes. |
 | `commit … alone packs to …: it brings in the history of …, and no other branch of the source can carry it` | A merge of a history larger than one step that no other branch reaches. Mirror the source (`git clone --mirror`), give the commit it names a branch there (`git branch`), and import from the mirror: that history is stepped on the branch first. Delete the branch afterwards if you do not want it. |
 | `the source is a shallow clone` | Import from a full clone. |
+| `1 branch the code host keeps for its seats' own branches, which live under refs/heads/seats/<handle>/ — refs/heads/seats, and refs/heads/seats/<name> as a branch itself, would block them, since no ref is created beside a directory of its name: "refs/heads/seats/ana" — rename them in the source` | Rename the branch in the source (`git branch -m seats/ana seats-ana` in a clone you then import from, or on the forge) and run the import again; nothing was imported. A branch inside a namespace, `seats/ana/x`, is an ordinary branch and is kept. |
 | `refs/heads/main is at … on web and … in the source — this is not a resumed import of the same history` | Something else was pushed to the repository: import into an empty one, or delete the ref there first. |
 
 **Large histories go in steps.** One push carries at most

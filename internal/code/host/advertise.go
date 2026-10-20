@@ -175,8 +175,9 @@ func exitedByItself(err error) bool {
 
 // refusedAtAdvertisement answers the refusals an advertisement makes from a
 // repository row — a deleted or purging repository for either service, and
-// for a push a token bound to nobody or an archived repository — and audits a
-// push that ends here. It reports whether it answered.
+// for a push a principal whose grant lets it push nothing (a token bound to
+// nobody: code.Grant.MayPush) or an archived repository — and audits a push
+// that ends here. It reports whether it answered.
 func (s *Server) refusedAtAdvertisement(ctx context.Context, w http.ResponseWriter, svc string, push bool,
 	adm admission, repo code.RepoRef, start time.Time) bool {
 
@@ -187,8 +188,8 @@ func (s *Server) refusedAtAdvertisement(ctx context.Context, w http.ResponseWrit
 	switch {
 	case gone(repo.Status):
 		words, refusal = s.goneSentence(repo), AuditRefusal(code.RefusalRepoDeleted)
-	case push && adm.seat == "":
-		words, refusal = unboundSentence, RefusalUnbound
+	case push && !adm.grant(repo).MayPush():
+		words, refusal = adm.grant(repo).PushRefusal(), grantRefusal(adm.principal())
 	case push && repo.Status == code.RepoStatusArchived:
 		words, refusal = code.ArchivedDetail(repo.Name), AuditRefusal(code.RefusalRepoArchived)
 	default:

@@ -462,10 +462,19 @@ func (r CodeRepo) validate(path Path, owners *codeOwners) error {
 			r.Name, gitref.MaxRepoNameBytes)
 	}
 	r.Owner.validate(&p, at(path, "owner"), owners)
-	if r.DefaultBranch != "" && !gitref.ValidBranch(r.DefaultBranch) {
+	switch {
+	case r.DefaultBranch == "":
+	case !gitref.ValidBranch(r.DefaultBranch):
 		p.add(at(path, "default_branch"), ErrShape,
 			"%q is not a branch name git would take (git check-ref-format): unset it for %s, "+
 				"or name a branch", r.DefaultBranch, DefaultCodeBranch)
+	case gitref.ReservedSeatBranch(r.DefaultBranch):
+		// A shape the rest of the grammar takes, conflicting with the code
+		// host's own use of the name: no push may ever create it.
+		p.add(at(path, "default_branch"), ErrConflict,
+			"%q is reserved: seats/ holds only each seat's own namespace, seats/<handle>/, "+
+				"and no push may create seats or seats/<one name> as a branch; unset it for %s, "+
+				"or name another branch", r.DefaultBranch, DefaultCodeBranch)
 	}
 	switch {
 	case len(r.Description) > CodeMaxDescriptionBytes:
@@ -616,7 +625,7 @@ func (c *Company) codeWarnings() []Warning {
 		}
 		branch := r.ResolvedDefaultBranch()
 		ref := "refs/heads/" + branch
-		if !gitref.ValidBranch(branch) {
+		if !gitref.ValidBranch(branch) || gitref.ReservedSeatBranch(branch) {
 			// Refused by validation, which is the line to read first: a
 			// branch no push can create is no branch anybody force-pushes.
 			continue

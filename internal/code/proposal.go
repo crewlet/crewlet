@@ -302,16 +302,18 @@ func (p Proposal) validFields() error {
 		return fmt.Errorf("%w: repo_id: %q is not a UUID in its canonical lowercase spelling",
 			ErrInvalidProposal, p.RepoID)
 	}
-	switch {
+	switch why := p.Principal.invalid(); {
+	case why != "":
+		return fmt.Errorf("%w: %s", ErrInvalidProposal, why)
 	case p.Principal.Kind != PrincipalOperator:
+		// THE DECIDE JUDGES NO SEAT'S GRANT, so it takes no seat's push: a
+		// proposal is decided by the protections alone, and a grant never
+		// replaces them, nor they a grant.
 		return fmt.Errorf("%w: principal.kind: %q — a push is a person's, through the token "+
 			"bound to them (%s)", ErrInvalidProposal, p.Principal.Kind, PrincipalOperator)
-	case strings.TrimSpace(p.Principal.OperatorID) == "":
-		return fmt.Errorf("%w: principal.operator_id: a push names the credential it was made with",
-			ErrInvalidProposal)
-	case strings.TrimSpace(p.Principal.Seat) == "":
-		return fmt.Errorf("%w: principal.seat: a push names the person its token is bound to",
-			ErrInvalidProposal)
+	case p.Principal.Seat == "":
+		return fmt.Errorf("%w: principal.seat: a push names the person its token is bound to — a "+
+			"token bound to nobody fetches only", ErrInvalidProposal)
 	case strings.TrimSpace(p.Node) == "":
 		return fmt.Errorf("%w: node: a push names the node that received it", ErrInvalidProposal)
 	case p.ReceivedAt.IsZero():

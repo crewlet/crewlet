@@ -862,6 +862,29 @@ func TestImportRefusesRefsTheCodeHostCannotHoldBeforeCloning(t *testing.T) {
 	}
 }
 
+// AN IMPORT REFUSES A BRANCH THE SEATS' NAMESPACE RESERVES — refs/heads/seats,
+// and refs/heads/seats/<name> as a branch itself — before cloning, naming it
+// for what it is rather than as a ref git's rules refuse, which it is not; a
+// branch inside a seat's namespace is an ordinary branch, and kept.
+func TestImportRefusesABranchTheSeatsNamespaceReserves(t *testing.T) {
+	t.Parallel()
+	h := importNode(t)
+	var hist sourceHistory
+	c := hist.commit("refs/heads/main", 0, map[string]string{"README.md": "# web\n"})
+	hist.point("refs/heads/seats/ana", c)
+	_, url, _ := hist.load(t)
+
+	out, _, err := h.importInto(t, url)
+	if err == nil || !strings.Contains(err.Error(), "nothing was imported") ||
+		!strings.Contains(err.Error(), `"refs/heads/seats/ana"`) ||
+		!strings.Contains(err.Error(), "seats' own branches") || strings.Contains(err.Error(), "check-ref-format") {
+		t.Fatalf("an import of a seat's namespace as a branch = %v, want a refusal naming it as reserved", err)
+	}
+	if strings.Contains(out, "cloning") {
+		t.Errorf("the import cloned the source before refusing its refs:\n%s", out)
+	}
+}
+
 // AN IMPORT REFUSES A SHALLOW SOURCE: its history stops at commits whose
 // parents it lacks, which the code host refuses to be pushed — so it is said
 // before anything is.

@@ -15,7 +15,7 @@ import (
 // build does not know is a value rather than a panic.
 type Refusal string
 
-// The codes. The first sixteen may be RECORDED on a command ([Refusal.Recorded]);
+// The codes. The first seventeen may be RECORDED on a command ([Refusal.Recorded]);
 // the last five are answers ABOUT a push, never part of one.
 const (
 	// RefusalStale is a ref that is not where the client thought.
@@ -28,9 +28,16 @@ const (
 	RefusalProtectedDirect Refusal = "protected_direct"
 	// RefusalTagMoved is a tag pushed over another value.
 	RefusalTagMoved Refusal = "tag_moved"
-	// RefusalReservedRef is a ref outside refs/heads/ and refs/tags/, or
-	// under the engine's own refs/crewlet/.
+	// RefusalReservedRef is a ref outside refs/heads/ and refs/tags/, one
+	// under the engine's own refs/crewlet/, or one of the two kinds of ref
+	// under refs/heads/seats that are nobody's: the root itself as a branch,
+	// and a seat's namespace as a branch ([gitref.ReservedSeatBranch], which
+	// says why: either would block seats' namespaces under
+	// [RefusalRefConflict]).
 	RefusalReservedRef Refusal = "reserved_ref"
+	// RefusalNotPermitted is a command the principal's grant on the
+	// repository does not cover ([Grant.RefRule], ADR-0040).
+	RefusalNotPermitted Refusal = "not_permitted"
 	// RefusalBadRef is not a ref.
 	RefusalBadRef Refusal = "bad_ref"
 	// RefusalRepoArchived is a push to a read-only repository.
@@ -77,7 +84,7 @@ const (
 func Refusals() []Refusal {
 	return []Refusal{
 		RefusalStale, RefusalProtectedForce, RefusalProtectedDelete,
-		RefusalProtectedDirect, RefusalTagMoved, RefusalReservedRef, RefusalBadRef,
+		RefusalProtectedDirect, RefusalTagMoved, RefusalReservedRef, RefusalNotPermitted, RefusalBadRef,
 		RefusalRepoArchived, RefusalRepoDeleted, RefusalRepoSize, RefusalRepoRefs, RefusalRefConflict,
 		RefusalUploadExpired, RefusalAtomic, RefusalBlobTooLarge, RefusalPackTooLarge,
 		RefusalBusy, RefusalUnavailable, RefusalNotApplied, RefusalUnknown,
@@ -107,12 +114,14 @@ var sentences = map[Refusal]string{
 	RefusalProtectedDelete: "a protection on this ref refuses its deletion (allow_delete)",
 	RefusalProtectedDirect: "a protection on this ref takes no direct push (direct_push: none)",
 	RefusalTagMoved:        "a tag does not move: delete it and push it again",
-	RefusalReservedRef:     "only refs/heads/ and refs/tags/ are pushed; refs/crewlet/ is the engine's",
-	RefusalBadRef:          "not a ref: git's check-ref-format rules, at most 255 bytes of UTF-8 under refs/<namespace>/",
-	RefusalRepoArchived:    "the repository is archived and read-only",
-	RefusalRepoDeleted:     "the repository is deleted, being purged or gone, and takes no push",
-	RefusalRepoSize:        "the repository would hold more than code.limits.repo_max_bytes",
-	RefusalRepoRefs:        "the repository holds as many live refs as one repository may",
+	RefusalReservedRef: "only refs/heads/ and refs/tags/ are pushed; refs/crewlet/ is the engine's, and " +
+		"refs/heads/seats holds only each seat's own namespace, refs/heads/seats/<handle>/",
+	RefusalNotPermitted: "the caller's grant on this repository does not cover this command",
+	RefusalBadRef:       "not a ref: git's check-ref-format rules, at most 255 bytes of UTF-8 under refs/<namespace>/",
+	RefusalRepoArchived: "the repository is archived and read-only",
+	RefusalRepoDeleted:  "the repository is deleted, being purged or gone, and takes no push",
+	RefusalRepoSize:     "the repository would hold more than code.limits.repo_max_bytes",
+	RefusalRepoRefs:     "the repository holds as many live refs as one repository may",
 	RefusalRefConflict: "a ref and a directory of refs never share a name (feature beside feature/x): " +
 		"every clone holding one could not fetch the other",
 	RefusalUploadExpired: "the pack was uploaded too long ago to be committed; run git push again",
@@ -215,8 +224,9 @@ func ArchivedDetail(name string) string {
 //
 //  1. a ref [ValidRef] refuses is bad_ref — before anything else, because
 //     no other rule can reason about something that is not a ref;
-//  2. a ref outside refs/heads/ and refs/tags/, or under refs/crewlet/, is
-//     reserved_ref;
+//  2. a ref outside refs/heads/ and refs/tags/, one under refs/crewlet/, and
+//     refs/heads/seats or refs/heads/seats/<one component> as a branch, is
+//     reserved_ref ([reservedRef]);
 //  3. a tag whose old and new values are both commits is tag_moved — a tag
 //     may be created and deleted, never moved.
 //
@@ -226,13 +236,25 @@ func StatelessRefusal(c Command) Refusal {
 	switch {
 	case !ValidRef(c.Ref):
 		return RefusalBadRef
-	case strings.HasPrefix(c.Ref, reservedPrefix),
-		!strings.HasPrefix(c.Ref, branchPrefix) && !strings.HasPrefix(c.Ref, tagPrefix):
+	case reservedRef(c.Ref):
 		return RefusalReservedRef
 	case strings.HasPrefix(c.Ref, tagPrefix) && c.Old != ZeroOID && c.New != ZeroOID:
 		return RefusalTagMoved
 	}
 	return ""
+}
+
+// reservedRef reports a ref no principal pushes: one outside refs/heads/ and
+// refs/tags/, one under the engine's own refs/crewlet/, and the two kinds of
+// ref under refs/heads/seats that are nobody's ([reservedSeatRef]: a branch
+// there beside a directory of its name would block seats' namespaces, which
+// ref_conflict refuses) — so every judge of a push, the decide, the receiver
+// and every engine-built write, refuses them before any grant is read, a
+// person's push included.
+func reservedRef(ref string) bool {
+	return strings.HasPrefix(ref, reservedPrefix) ||
+		(!strings.HasPrefix(ref, branchPrefix) && !strings.HasPrefix(ref, tagPrefix)) ||
+		reservedSeatRef(ref)
 }
 
 // Protections is a repository's protection rules with each pattern PARSED

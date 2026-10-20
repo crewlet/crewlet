@@ -124,3 +124,8 @@ const ReconcileInFlight = reconcileInFlight
 
 // DecideEach is the reconcile's closed loop of decisions.
 var DecideEach = decideEach
+
+// MaxDetailBytes is the longest Detail a receiver may fill in on a command it
+// refused — the bound a grant's refusal sentence is held under, since the
+// receiver carries it into a proposal.
+const MaxDetailBytes = maxDetailBytes

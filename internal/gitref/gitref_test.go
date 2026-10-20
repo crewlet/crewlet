@@ -160,6 +160,39 @@ func TestValidBranchAgreesWithGitBranchRules(t *testing.T) {
 	}
 }
 
+// THE TWO BRANCHES UNDER seats THAT ARE NOBODY'S are seats itself and one
+// component below it — the root and one seat's namespace, as branches — and
+// nothing else: a branch inside a namespace is the seat's own, and a name that
+// merely begins with seats is a person's.
+func TestOnlyTheRootAndASeatsNamespaceAreReservedBranches(t *testing.T) {
+	t.Parallel()
+	for branch, reserved := range map[string]bool{
+		"seats":               true,
+		"seats/ana":           true,
+		"seats/release-bot":   true,
+		"seats/main":          true,
+		"seats/ana/x":         false, // inside ana's namespace: ana's own
+		"seats/ana/x/y":       false,
+		"seatsx":              false,
+		"seats-ana":           false,
+		"seats.ana":           false,
+		"x/seats":             false,
+		"x/seats/ana":         false,
+		"Seats":               false, // refs are case-sensitive; Seats is no seat's
+		"main":                false,
+		"refs/heads/seats":    false, // a branch NAME, never a whole ref
+		"refs/heads/seats/ab": false,
+	} {
+		if got := gitref.ReservedSeatBranch(branch); got != reserved {
+			t.Errorf("ReservedSeatBranch(%q) = %v, want %v", branch, got, reserved)
+		}
+	}
+	if !strings.HasPrefix(gitref.SeatsRoot, "refs/heads/") ||
+		!gitref.ReservedSeatBranch(strings.TrimSuffix(strings.TrimPrefix(gitref.SeatsRoot, "refs/heads/"), "/")) {
+		t.Errorf("SeatsRoot %q is not refs/heads/ and the reserved root branch", gitref.SeatsRoot)
+	}
+}
+
 // gitVerdict reads a check-ref-format run: a clean exit is valid, the exit
 // status git refuses a name with is invalid, and anything else — a usage
 // error, a signal, a deadline — is not a verdict at all and fails the test

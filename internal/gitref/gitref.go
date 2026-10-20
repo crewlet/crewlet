@@ -1,6 +1,8 @@
 // Package gitref is THE GRAMMAR OF GIT NAMES THE ENGINE AND ITS CONFIGURATION
 // SHARE: repository names, refs, branch names, protection patterns and object
-// ids, with their bounds.
+// ids, with their bounds — and where the seats' own branches live
+// ([SeatsRoot], [ReservedSeatBranch]), which a push and a repository's default
+// branch are both judged by.
 //
 // Configuration validates a document with it at `crewlet validate` and the
 // code domain decides a push with it. Two copies of one grammar drift
@@ -253,4 +255,41 @@ var refused = func() (t [256]bool) {
 func ValidBranch(branch string) bool {
 	return branch != "HEAD" && branch != "@" && !strings.HasPrefix(branch, "-") &&
 		ValidRef("refs/heads/"+branch)
+}
+
+// SeatsRoot is the directory of branches every seat's own namespace lives
+// under: a seat's namespace is refs/heads/seats/<handle>/, NEVER
+// refs/heads/<handle>/. A handle is a slug of a role name — docs, qa,
+// release, infra — and those are the prefixes people name their own branches
+// under, so a namespace at the handle alone would hand a full_access seat
+// that only READS a repository every docs/* or release/* branch a person
+// pushed there, to force, to delete, or to create one a pipeline deploys. No
+// branch convention uses seats/, so whose a ref is is decidable from the ref
+// alone.
+//
+// Here rather than in the code domain because two judges read it — the
+// domain deciding a push, and the configuration validating a repository's
+// default branch — and the domain imports the configuration.
+const SeatsRoot = "refs/heads/seats/"
+
+// seatsBranch is SeatsRoot as a branch name: "seats/".
+const seatsBranch = "seats/"
+
+// ReservedSeatBranch reports the two kinds of branch under refs/heads/seats
+// that are nobody's: seats itself, and seats/<one component> — one seat's
+// namespace as a branch.
+//
+// A ref is never created beside a directory of its own name — the code
+// domain refuses it (ref_conflict), because every clone holding the one could
+// not fetch the other — so a branch named seats would block every seat's
+// namespace on its repository, and one named seats/<x> the namespace of the
+// seat whose handle is x, one the chart has now or may add later. Reserved,
+// neither can ever exist: no push creates one, whoever pushes, and no
+// repository takes one as its default branch.
+func ReservedSeatBranch(branch string) bool {
+	if branch == strings.TrimSuffix(seatsBranch, "/") {
+		return true
+	}
+	rest, under := strings.CutPrefix(branch, seatsBranch)
+	return under && !strings.Contains(rest, "/")
 }

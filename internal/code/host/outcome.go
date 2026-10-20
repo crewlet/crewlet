@@ -46,8 +46,9 @@ func (a answered) line() string {
 	var words string
 	switch {
 	case a.Reason == "":
-		// A REFUSAL ONLY THE RECEIVER NAMES — a token bound to nobody, a
-		// command list past its bounds — has no code of the domain's.
+		// A REFUSAL ONLY THE RECEIVER NAMES — a command list past what one
+		// push may carry — has no code of the domain's. A token bound to
+		// nobody is no such refusal: its grant answers not_permitted.
 		words = a.Detail
 	case a.Detail == "":
 		words = string(a.Reason) + ": " + a.Reason.Sentence()

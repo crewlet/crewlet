@@ -80,6 +80,12 @@ var (
 	// full or delta afresh.
 	ErrSnapshotMoved = errors.New("code: the repository's history moved under this snapshot; read it again from the first page")
 
+	// ErrNotPermitted is a question or a write the asking principal's grant
+	// on the repository does not cover ([Grant.ReadRefusal] names why) — a
+	// refusal OF THE CALLER, never of the repository or the node: another
+	// node judging the same grant from the same chart refuses it too.
+	ErrNotPermitted = errors.New("code: the caller's grant does not cover this")
+
 	// ErrBadBundle is a pack bundle whose bytes are not the pack, index and
 	// reverse index its row describes — a section's header, a count, or the
 	// pack checksum the three must share disagrees. Returned by

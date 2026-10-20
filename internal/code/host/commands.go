@@ -206,8 +206,7 @@ func commandsRefusal(adm admission, node string, sec section, pre map[string]ans
 			cmds[i].Result, cmds[i].Reason = code.ResultNG, a.Reason
 		}
 	}
-	err := code.Proposal{Principal: code.Principal{Kind: code.PrincipalOperator, OperatorID: adm.operatorID,
-		Seat: adm.seat}, Node: node, Commands: cmds}.ValidateCommands()
+	err := code.Proposal{Principal: adm.principal(), Node: node, Commands: cmds}.ValidateCommands()
 	var wide *code.TooWideError
 	switch {
 	case err == nil:

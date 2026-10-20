@@ -47,7 +47,9 @@ This is the product's current shape, not a configuration choice:
 - **Only people use git.** A person clones, fetches and pushes over HTTPS
   with their own API token ([Persons and their
   tokens](#persons-and-their-tokens)); a seat as a git user does not exist
-  yet, so agents do not push.
+  yet, so agents do not push. The rule that will decide what each seat may
+  read and push is already the one a person's push is judged by ([Who may
+  read and push](#who-may-read-and-push)).
 - **There are no changes, reviews or checks** — no merge request, no review
   and no CI gate in front of a protected branch. A protection rule decides
   what a push may do to a ref, and nothing else stands in front of one.
@@ -89,7 +91,9 @@ code:
   the chart does not have refuses the revision, naming the units or seats it
   does have.
 - **`default_branch`** — what a clone checks out; any branch name git would
-  take, and unset is `main`.
+  take but `seats` and `seats/<one name>`, which hold the seats' own
+  namespaces (see [Who may read and push](#who-may-read-and-push)), and unset
+  is `main`.
 - **`description`** — one paragraph, at most 1 024 bytes of UTF-8.
 - **`archived`** — read-only. A push to an archived repository is refused as a
   whole, and reading it is not; unarchiving it is setting it back to `false`.
@@ -944,6 +948,67 @@ repository, binding a token and the first push.
 
 ---
 
+## Who may read and push
+
+What a principal may do to a repository is **derived, never stored**: there is
+no list of who may push to which repository, because such a list is a second
+org chart, and it drifts from the first the day a seat moves units. It is
+computed every time it is asked, from the repository's row and the chart the
+deciding node runs, by one rule
+([ADR-0040](https://github.com/crewlet/crewlet/blob/main/adr/0040-a-repository-grant-is-derived-from-the-chart.md)).
+
+| Who | What they may do |
+|---|---|
+| A person — a token bound to a human seat | **maintain** every repository: create, update, force and delete any branch, create and delete tags |
+| A token bound to nobody | **read** every repository: fetch and clone, never push |
+| A seat | the **lesser** of its tier and its relation to the repository, below |
+
+A seat's **tier** is its `role.code.access` and caps what it may do anywhere:
+`read_only` reads, `review` reads and reviews, `full_access` maintains; a seat
+that sets none reads. Its **relation** is what the chart relates it to the
+repository by, the first row that holds:
+
+| The repository's owner | The seat | Relation |
+|---|---|---|
+| a unit | the unit's effective lead (its own, or the nearest above it) | maintain |
+| a unit | sits in the unit or in a unit below it | write |
+| a unit | leads a unit above it | read |
+| a seat | is that seat | maintain |
+| a seat | leads that seat's unit or a unit above it | read |
+| anyone | any other seat | read |
+
+So a `full_access` seat in the owning unit writes — creates and fast-forwards
+branches, creates tags — and only the unit's lead, at `full_access`, also
+forces and deletes. A `review` seat reads whatever its relation.
+
+**A seat's own branches.** A `full_access` seat owns
+`refs/heads/seats/<its handle>/` on every repository it may read, and may do
+anything there — create, update, force, delete — whatever its relation: that is
+where a seat that only reads a repository pushes its work, in place of a fork.
+The namespace sits under `seats/` and never at the handle alone, because a
+handle is a role name's slug (`docs`, `release`, `qa`) and people name their own
+branches under exactly those prefixes. `refs/heads/seats` itself and
+`refs/heads/seats/<name>` as a branch are nobody's: no ref is ever created
+beside a directory of its own name ([A ref and a directory of
+refs](#a-ref-and-a-directory-of-refs)),
+so a branch named `seats` would block every seat's namespace on its repository,
+and one named `seats/<name>` the namespace of the seat with that handle — one
+the chart has now or may add later. Any push of either is refused
+`reserved_ref`, a person's included, and neither is taken as a repository's
+`default_branch`. Another seat's namespace takes maintain.
+
+The [protection rules](#protection-rules) are judged after the grant and are
+never skipped for one: a grant decides who may move a ref, a protection what
+any push may do to it.
+
+A person's standing reads no chart at all. A seat's is judged from the chart of
+the node that answers or decides, so two nodes on different activations may
+decide one command differently while one of them has not yet applied the
+other's; in this release no seat pushes or reads a repository yet ([What it
+does not do yet](#what-it-does-not-do-yet)).
+
+---
+
 ## A push, end to end
 
 A person pushes with git's own smart HTTP protocol, presenting their own API
@@ -1224,13 +1289,14 @@ words, since git does not read the header.
 | The repository is deleted | `fatal: remote error: repository <name> is deleted; declaring it again in code.repos restores it …` | Declare it again before its purge to restore it as it was. |
 | The repository is being purged | `fatal: remote error: repository <name> is being purged, which cannot be undone; once the purge completes, declaring its name in code.repos creates a new, empty repository`, or `(repo_deleted: repository <name> was purged and holds nothing; …)` on a push the purge overtook | Nothing brings it back. Once its purge completes, declaring the name again creates a new, empty repository. |
 | The repository is archived (a push) | `fatal: remote error: …archived…`, or `(repo_archived: …)` per ref | Fetch only; unarchive it in `code.repos` to push. |
-| A token bound to nobody (a push) | `fatal: remote error: this token is not bound to a person: …` | Push with your own token — the one your human seat's `contact.crewlet_operator_id` names. |
+| A token bound to nobody (a push) | `fatal: remote error: this token is not bound to a person: …`, or `(not_permitted: this token is not bound to a person: …)` on every ref of a push sent without its advertisement | Push with your own token — the one your human seat's `contact.crewlet_operator_id` names. |
+| A command the pusher's grant does not cover ([who may read and push](#who-may-read-and-push)) | `(not_permitted: …)`, saying what the pusher holds, what the command needs and what would admit it | Ask for what the sentence names, or push where it says. |
 | More than 1 000 refs in one push | `(this push names more than 1000 refs; push them in parts …)` | Push the refs in groups. |
 | More ref updates than one push's record holds — some six hundred of the longest refs whose characters the code log spells long (`&`, `<`, `>`) | `(this push's ref updates take up to <size> of its record, past the 1023.5 KiB one push may; push them in parts …)` | Push the refs in groups. Nothing of the push was run or stored. |
 | A push carries a push certificate — a signed push, from a client built by hand (`git push --signed` stops in git itself, since the engine advertises none) | `this push carries a push certificate (a signed push), which this engine never advertises and does not take: push without --signed` (400) | Push without `--signed`. Nothing of the push was run or stored. |
 | A ref moved since you fetched | `(stale: refs/heads/main is at <id>; fetch first)`, or `(stale: was at <id>, which this repository does not hold; fetch first)` when the commit you pushed from was never pushed here | Fetch, integrate, push again. |
 | A protection refused it | `(protected_force: refuses a force-push (protection <pattern>: allow_force))`, `(protected_delete: may not be deleted (protection <pattern>: allow_delete))`, or `(protected_direct: takes no direct push (protection <pattern>: direct_push none))` | The rule named says what it allows; a change to it is a change to `code.repos`. |
-| A tag moved, a reserved ref | `(tag_moved: …)`, `(reserved_ref: …)` | Create a new tag; push under `refs/heads/` or `refs/tags/`. |
+| A tag moved, a reserved ref — outside `refs/heads/` and `refs/tags/`, under `refs/crewlet/`, or `refs/heads/seats` or `refs/heads/seats/<name>` as a branch | `(tag_moved: …)`, `(reserved_ref: …)` | Create a new tag; push under `refs/heads/` or `refs/tags/`, and not as `seats` or `seats/<name>`, which hold seats' own branches. |
 | A ref the engine does not take — longer than 255 bytes, or one git's rules refuse | `(bad_ref: not a ref: git's check-ref-format rules, at most 255 bytes of UTF-8 under refs/<namespace>/)` | Name the ref within 255 bytes. git takes longer refs; the engine does not. |
 | One ref of an `--atomic` push refused | the refused ref's reason, and `(atomic: …)` on every other | Fix the refused ref; nothing of the push landed. |
 | A blob over the limit | `(blob_too_large: blob <id> (<path>) is <size>, past code.limits.max_blob_bytes …)` | Remove it from the history you push. |

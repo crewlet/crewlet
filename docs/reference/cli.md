@@ -1054,7 +1054,11 @@ In order:
    floor, refused below it as `export` refuses it — the first on `PATH`, or
    `-git PATH`) reads the source's own list of refs, and the import
    refuses a ref the code host takes no push of (git's ref rules, at most 255
-   bytes of UTF-8) and more refs than one repository holds (100 000). Where the
+   bytes of UTF-8), a branch the code host keeps for its seats' own namespaces
+   (`refs/heads/seats`, or `refs/heads/seats/<name>` as a branch itself —
+   [who may read and push](../concepts/code-host.md#who-may-read-and-push)),
+   and more refs than one repository holds (100 000), naming the refs it
+   refuses: rename them in the source. Where the
    source asks for a user name and password none of your credential helpers
    holds — or ssh for a host key on a first connection, or a key's passphrase
    with no agent — your git **asks you on the terminal**, here and in the clone,

@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/org"
 )
 
 // THE TYPED PAYLOADS, one per (kind, op), and the closed sets they spell.
@@ -75,15 +76,21 @@ func DirectPushes() []DirectPush { return []DirectPush{DirectPersons, DirectNone
 // Valid reports a value this build knows.
 func (d DirectPush) Valid() bool { return slices.Contains(DirectPushes(), d) }
 
-// PrincipalKind is who made a push.
+// PrincipalKind is who acts on a repository.
 type PrincipalKind string
 
-// PrincipalOperator is a person, through the token bound to them — the author
-// kind every operator write is recorded under.
-const PrincipalOperator PrincipalKind = "operator"
+const (
+	// PrincipalOperator is a credential — a person, through the token bound
+	// to them, or a token bound to nobody — the author kind every operator
+	// write is recorded under.
+	PrincipalOperator PrincipalKind = "operator"
+	// PrincipalAgent is a seat of the chart, by its handle, whose standing on
+	// a repository the chart decides ([GrantOf]).
+	PrincipalAgent PrincipalKind = "agent"
+)
 
 // PrincipalKinds is the closed set.
-func PrincipalKinds() []PrincipalKind { return []PrincipalKind{PrincipalOperator} }
+func PrincipalKinds() []PrincipalKind { return []PrincipalKind{PrincipalOperator, PrincipalAgent} }
 
 // Valid reports a value this build knows.
 func (p PrincipalKind) Valid() bool { return slices.Contains(PrincipalKinds(), p) }
@@ -178,6 +185,9 @@ func (s RepoSettings) Validate() error {
 		return fmt.Errorf("%w: owner.ref: a repository's owner names a unit or a seat", ErrInvalid)
 	case !gitref.ValidBranch(s.DefaultBranch):
 		return fmt.Errorf("%w: default_branch: %q is not a branch name", ErrInvalid, s.DefaultBranch)
+	case gitref.ReservedSeatBranch(s.DefaultBranch):
+		return fmt.Errorf("%w: default_branch: %q is reserved: refs/heads/seats holds only each seat's "+
+			"own namespace, and no push creates it", ErrInvalid, s.DefaultBranch)
 	case len(s.Description) > MaxDescriptionBytes:
 		return fmt.Errorf("%w: description: %d bytes, past the %d-byte cap", ErrInvalid,
 			len(s.Description), MaxDescriptionBytes)
@@ -276,11 +286,48 @@ type PushEntry struct {
 	ReceivedAt      time.Time `json:"received_at"`
 }
 
-// Principal is who made a push.
+// Principal is who acts on a repository: an operator credential and the
+// person it is bound to ("" for nobody), or a seat.
 type Principal struct {
 	Kind       PrincipalKind `json:"kind"`
-	OperatorID string        `json:"operator_id"`
-	Seat       string        `json:"seat"`
+	OperatorID string        `json:"operator_id,omitempty"`
+	Seat       string        `json:"seat,omitempty"`
+}
+
+// Validate refuses a principal no record or question may carry ([ErrInvalid],
+// naming the field): an operator names its credential, and the person it is
+// bound to by their handle or nobody; a seat names its handle and no
+// credential. A kind this build does not know is refused, since nothing here
+// could judge what one may do.
+func (p Principal) Validate() error {
+	if why := p.invalid(); why != "" {
+		return fmt.Errorf("%w: %s", ErrInvalid, why)
+	}
+	return nil
+}
+
+// invalid is why p is no principal, or "" — the one rule [Principal.Validate]
+// and a proposal's validation both state.
+func (p Principal) invalid() string {
+	switch p.Kind {
+	case PrincipalOperator:
+		switch {
+		case strings.TrimSpace(p.OperatorID) == "":
+			return "principal.operator_id: an operator names the credential it acts with"
+		case p.Seat != "" && !org.ValidHandle(p.Seat):
+			return fmt.Sprintf("principal.seat: %q is not a seat's handle", p.Seat)
+		}
+	case PrincipalAgent:
+		switch {
+		case !org.ValidHandle(p.Seat):
+			return fmt.Sprintf("principal.seat: %q is not a seat's handle — a seat acts by its handle", p.Seat)
+		case p.OperatorID != "":
+			return "principal.operator_id: a seat acts as itself, with no operator credential"
+		}
+	default:
+		return fmt.Sprintf("principal.kind: %q is not one of %v", p.Kind, PrincipalKinds())
+	}
+	return ""
 }
 
 // Command is one ref update and what became of it.

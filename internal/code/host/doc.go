@@ -233,6 +233,20 @@
 // the engine or the estate: its seams (Estate, Uploader, Persons, Audit) are
 // declared here and filled by the engine.
 //
+// What the admitted request may do is its GRANT (code.GrantOf, ADR-0040),
+// built from ONE principal — the admission's principal(), the credential and
+// the person it is bound to, the same value the push's session and proposal
+// carry — and asked with no roster, since a person's grant reads no chart:
+// maintain for a bound person, read for a token bound to nobody. The
+// advertisement asks it first (Grant.PushRefusal), so a token bound to nobody
+// is refused there, in git's words, before anything is sent; a push that
+// skipped the advertisement is refused per command by Grant.RefRule, asked
+// beside code.StatelessRefusal before the sync, with not_permitted and the
+// grant's own sentence on every ref. Such a push is still recorded under the
+// audit word `unbound` (grantRefusal), the class the dashboard and crewlet
+// read for it, since its remedy is a line of configuration rather than a
+// grant.
+//
 // # The hook relay cannot end the process
 //
 // The relay's accept loop and its connections run outside net/http's

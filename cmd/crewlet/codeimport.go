@@ -400,9 +400,13 @@ func (imp *importer) run(ctx context.Context, dryRun bool) error {
 // importKindOf is what an import does with a ref of the source: a ref the
 // code host takes a push of is KEPT; one outside refs/heads/ and refs/tags/ is
 // SKIPPED — a forge's pull and merge-request refs, its notes and remotes —
-// since the domain refuses it as reserved_ref; and one inside them that is no
-// ref at all is BAD, the domain's bad_ref. Asked of the domain's own rule
-// (code.StatelessRefusal), so the import keeps exactly what a push may carry.
+// since the domain refuses it as reserved_ref; one inside them that is no ref
+// at all is BAD, the domain's bad_ref; and a branch the domain reserves for
+// its seats — refs/heads/seats, or refs/heads/seats/<name> as a branch itself
+// (code.SeatNamespaceRoot) — is RESERVED, refused like a bad one but named for
+// what it is, since check-ref-format has nothing against it. Asked of the
+// domain's own rule (code.StatelessRefusal), so the import keeps exactly what
+// a push may carry.
 func importKindOf(ref string) importKind {
 	refusal := code.StatelessRefusal(code.Command{Ref: ref, Old: code.ZeroOID, New: strings.Repeat("1", oidHexLen)})
 	switch {
@@ -410,6 +414,8 @@ func importKindOf(ref string) importKind {
 		return importKept
 	case !strings.HasPrefix(ref, "refs/heads/") && !strings.HasPrefix(ref, "refs/tags/"):
 		return importSkipped
+	case refusal == code.RefusalReservedRef:
+		return importReserved
 	default:
 		return importBad
 	}
@@ -422,7 +428,51 @@ const (
 	importKept importKind = iota
 	importSkipped
 	importBad
+	importReserved
 )
+
+// importNotHeld is the refs of the source the code host takes no push of: the
+// ones git's rules or the engine's bound refuse (bad), and the branches the
+// engine keeps for its seats (reserved) — each counted, the first few named.
+type importNotHeld struct {
+	bad, reserved           []string
+	badCount, reservedCount int
+}
+
+// add counts ref under its kind; any other kind is not one of the refused.
+func (n *importNotHeld) add(kind importKind, ref string) {
+	switch kind {
+	case importBad:
+		n.badCount++
+		if len(n.bad) < importNamed {
+			n.bad = append(n.bad, fmt.Sprintf("%q", ref))
+		}
+	case importReserved:
+		n.reservedCount++
+		if len(n.reserved) < importNamed {
+			n.reserved = append(n.reserved, fmt.Sprintf("%q", ref))
+		}
+	}
+}
+
+// findings is the refusal's sentence for each kind of ref counted.
+func (n *importNotHeld) findings() []string {
+	var out []string
+	if n.badCount > 0 {
+		out = append(out, fmt.Sprintf("%s the code host takes no push of (git's check-ref-format "+
+			"rules, at most %d bytes of UTF-8): %s — rename them in the source", counted(n.badCount, "ref", "refs"),
+			code.MaxRefNameBytes, listed(n.bad, n.badCount)))
+	}
+	if n.reservedCount > 0 {
+		out = append(out, fmt.Sprintf("%s the code host keeps for its seats' own branches, which live under "+
+			"%s<handle>/ — %s, and %s<name> as a branch itself, would block them, since no ref is created "+
+			"beside a directory of its name: %s — rename them in the source",
+			counted(n.reservedCount, "branch", "branches"), code.SeatNamespaceRoot,
+			strings.TrimSuffix(code.SeatNamespaceRoot, "/"), code.SeatNamespaceRoot,
+			listed(n.reserved, n.reservedCount)))
+	}
+	return out
+}
 
 // namespaceOf is a skipped ref's namespace as the import names it:
 // refs/pull/1/head is refs/pull/*.
@@ -444,8 +494,7 @@ func (imp *importer) listSource(ctx context.Context) error {
 	var (
 		kept, skipped int
 		spaces        []string
-		bad           []string
-		badCount      int
+		notHeld       importNotHeld
 	)
 	seen := map[string]bool{}
 	w := &lineWriter{max: maxImportLine, fn: func(line []byte) error {
@@ -457,7 +506,7 @@ func (imp *importer) listSource(ctx context.Context) error {
 		if name == "HEAD" || strings.HasSuffix(name, "^{}") {
 			return nil
 		}
-		switch importKindOf(name) {
+		switch kind := importKindOf(name); kind {
 		case importKept:
 			kept++
 		case importSkipped:
@@ -466,11 +515,8 @@ func (imp *importer) listSource(ctx context.Context) error {
 				seen[ns] = true
 				spaces = append(spaces, ns)
 			}
-		case importBad:
-			badCount++
-			if len(bad) < importNamed {
-				bad = append(bad, fmt.Sprintf("%q", name))
-			}
+		default:
+			notHeld.add(kind, name)
 		}
 		return nil
 	}}
@@ -481,12 +527,7 @@ func (imp *importer) listSource(ctx context.Context) error {
 	if err := w.flush(); err != nil {
 		return err
 	}
-	var findings []string
-	if badCount > 0 {
-		findings = append(findings, fmt.Sprintf("%s the code host takes no push of (git's check-ref-format "+
-			"rules, at most %d bytes of UTF-8): %s — rename them in the source", counted(badCount, "ref", "refs"),
-			code.MaxRefNameBytes, listed(bad, badCount)))
-	}
+	findings := notHeld.findings()
 	if kept > code.MaxRefsPerRepo {
 		findings = append(findings, fmt.Sprintf("the source holds %d branches and tags, past the %d one repository "+
 			"holds", kept, code.MaxRefsPerRepo))
@@ -648,25 +689,21 @@ func (imp *importer) inspect(ctx context.Context) (importSource, error) {
 	}
 
 	var src importSource
-	var bad []string
-	badCount := 0
+	var notHeld importNotHeld
 	refs := &lineWriter{max: maxImportLine, fn: func(line []byte) error {
 		oid, rest, ok1 := bytes.Cut(line, []byte{' '})
 		kind, ref, ok2 := bytes.Cut(rest, []byte{' '})
 		if !ok1 || !ok2 || len(oid) != oidHexLen {
 			return fmt.Errorf("git for-each-ref printed a line that is no ref: %q", line)
 		}
-		switch importKindOf(string(ref)) {
+		switch which := importKindOf(string(ref)); which {
 		case importKept:
 			src.refs = append(src.refs, sourceRef{ref: string(ref), oid: string(oid), kind: string(kind)})
-		case importBad:
-			badCount++
-			if len(bad) < importNamed {
-				bad = append(bad, fmt.Sprintf("%q", ref))
-			}
 		case importSkipped:
 			// A bare clone fetches heads and tags alone; the
 			// advertisement already said what is skipped.
+		default:
+			notHeld.add(which, string(ref))
 		}
 		return nil
 	}}
@@ -677,10 +714,7 @@ func (imp *importer) inspect(ctx context.Context) (importSource, error) {
 	if err = refs.flush(); err != nil {
 		return importSource{}, err
 	}
-	if badCount > 0 {
-		findings = append(findings, fmt.Sprintf("%s the code host takes no push of: %s — rename them in the "+
-			"source", counted(badCount, "ref", "refs"), listed(bad, badCount)))
-	}
+	findings = append(findings, notHeld.findings()...)
 	if n := len(src.refs); n > code.MaxRefsPerRepo {
 		findings = append(findings, fmt.Sprintf("the source holds %d branches and tags, past the %d one repository "+
 			"holds", n, code.MaxRefsPerRepo))

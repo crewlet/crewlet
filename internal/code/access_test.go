@@ -1,0 +1,645 @@
+package code_test
+
+import (
+	"errors"
+	"fmt"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/code"
+)
+
+// chartUnit is one unit of a test chart: its id and name (a reference matches
+// either, folded, an id before a name — the chart's own durable lookup), the
+// key of the unit above it, and its own lead ("" inherits the nearest
+// ancestor's).
+type chartUnit struct{ id, name, parent, lead string }
+
+// chart is a code.Roster over a hand-built organization, keeping the roster's
+// contract — every unit argument a REFERENCE, resolved as org.Index.UnitByRef
+// resolves one — so a grant that compared references as strings instead of
+// asking the roster reads a unit spelled two ways as two units, and fails.
+type chart struct {
+	units []chartUnit
+	seats map[string]code.RosterSeat
+}
+
+func (c chart) resolve(ref string) (chartUnit, bool) {
+	folded := strings.ToLower(strings.TrimSpace(ref))
+	if folded == "" {
+		return chartUnit{}, false
+	}
+	for _, u := range c.units {
+		if strings.ToLower(u.id) == folded {
+			return u, true
+		}
+	}
+	for _, u := range c.units {
+		if strings.ToLower(u.name) == folded {
+			return u, true
+		}
+	}
+	return chartUnit{}, false
+}
+
+func (c chart) key(u chartUnit) string { return cmpOr(u.id, u.name) }
+
+func cmpOr(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}
+
+// up is the unit and every unit above it, nearest first.
+func (c chart) up(ref string) []chartUnit {
+	var out []chartUnit
+	for u, ok := c.resolve(ref); ok; u, ok = c.resolve(u.parent) {
+		out = append(out, u)
+	}
+	return out
+}
+
+func (c chart) Seat(handle string) (code.RosterSeat, bool) {
+	s, ok := c.seats[handle]
+	return s, ok
+}
+
+func (c chart) Lead(ref string) string {
+	for _, u := range c.up(ref) {
+		if u.lead != "" {
+			return u.lead
+		}
+	}
+	return ""
+}
+
+func (c chart) Leads(ref string) []string {
+	var out []string
+	for _, u := range c.up(ref) {
+		if lead := c.Lead(c.key(u)); lead != "" && !slices.Contains(out, lead) {
+			out = append(out, lead)
+		}
+	}
+	return out
+}
+
+func (c chart) Within(unit, ancestor string) bool {
+	a, ok := c.resolve(ancestor)
+	if !ok {
+		return false
+	}
+	for _, u := range c.up(unit) {
+		if c.key(u) == c.key(a) {
+			return true
+		}
+	}
+	return false
+}
+
+// testChart is three nested units under a fourth, a root seat and a human seat:
+//
+//	Engineering (id eng, lead cto)
+//	  Platform (id plat, lead plat-lead)
+//	    Infra (no id, no lead of its own: plat-lead leads it)
+//	Sales (id sales, lead vp-sales)
+//
+// Every seat's Unit is its unit's key in this epoch; the repositories below
+// name their owners as they were written, by name where a unit has an id.
+func testChart() chart {
+	seat := func(handle string, tier code.Tier, unit string) code.RosterSeat {
+		return code.RosterSeat{Handle: handle, Tier: tier, Unit: unit}
+	}
+	return chart{
+		units: []chartUnit{
+			{id: "eng", name: "Engineering", lead: "cto"},
+			{id: "plat", name: "Platform", parent: "eng", lead: "plat-lead"},
+			{name: "Infra", parent: "plat"},
+			{id: "sales", name: "Sales", lead: "vp-sales"},
+		},
+		seats: map[string]code.RosterSeat{
+			"cto":       seat("cto", code.TierFullAccess, "eng"),
+			"plat-lead": seat("plat-lead", code.TierReview, "plat"),
+			"dev":       seat("dev", code.TierFullAccess, "Infra"),
+			"reader":    seat("reader", code.TierReadOnly, "Infra"),
+			"unset":     seat("unset", "", "plat"),
+			"vp-sales":  seat("vp-sales", code.TierFullAccess, "sales"),
+			"root-bot":  seat("root-bot", code.TierFullAccess, ""),
+			"founder":   {Handle: "founder", Human: true, Tier: code.TierFullAccess, Unit: "eng"},
+		},
+	}
+}
+
+func agent(handle string) code.Principal {
+	return code.Principal{Kind: code.PrincipalAgent, Seat: handle}
+}
+
+func ownedBy(name string, kind code.OwnerKind, ref string) code.RepoRef {
+	return code.RepoRef{ID: "id-" + name, Name: name, Owner: code.Owner{Kind: kind, Ref: ref}}
+}
+
+// A GRANT FOLLOWS THE CHART: a seat's relation to a repository is the first of
+// §2.3's rows that holds — the owning unit's effective lead maintains, its
+// subtree writes, the lead chain above it reads, the owning seat maintains and
+// its unit's leads read, any other seat reads — and what it may do is the
+// minimum of that and its tier. Each unit is named as the repository wrote
+// it, so a grant that compared the owner's reference with a seat's unit as
+// strings would lose Platform's members their write (the unit is "Platform"
+// on the repository and "plat" on the seat).
+//
+// Mutations: Within replaced by a string compare of the two references → the
+// Platform rows of dev and unset read; a seat's access left at its relation
+// (no tier cap) → plat-lead maintains Platform; a human seat granted as a
+// seat → founder reads.
+func TestGrantsFollowTheChart(t *testing.T) {
+	t.Parallel()
+	r := testChart()
+	platform := ownedBy("platform", code.OwnerUnit, "Platform")
+	infra := ownedBy("infra-tools", code.OwnerUnit, "infra")
+	notes := ownedBy("notes", code.OwnerSeat, "dev")
+	orphan := ownedBy("orphan", code.OwnerUnit, "a unit since dissolved")
+	rootOwned := ownedBy("bot-notes", code.OwnerSeat, "root-bot")
+	for _, tc := range []struct {
+		repo             code.RepoRef
+		seat             string
+		relation, access code.Access
+	}{
+		// Platform: its effective lead, its subtree, the lead above it.
+		{platform, "plat-lead", code.AccessMaintain, code.AccessReview},
+		{platform, "dev", code.AccessWrite, code.AccessWrite},
+		{platform, "reader", code.AccessWrite, code.AccessRead},
+		{platform, "unset", code.AccessWrite, code.AccessRead},
+		{platform, "cto", code.AccessRead, code.AccessRead},
+		{platform, "vp-sales", code.AccessRead, code.AccessRead},
+		{platform, "root-bot", code.AccessRead, code.AccessRead},
+		// Infra has no lead of its own: Platform's lead is its effective
+		// lead, and the chain above is the same seat once, then the cto.
+		{infra, "plat-lead", code.AccessMaintain, code.AccessReview},
+		{infra, "dev", code.AccessWrite, code.AccessWrite},
+		{infra, "unset", code.AccessRead, code.AccessRead},
+		{infra, "cto", code.AccessRead, code.AccessRead},
+		// A seat's own repository: the seat maintains, its unit's leads read.
+		{notes, "dev", code.AccessMaintain, code.AccessMaintain},
+		{notes, "plat-lead", code.AccessRead, code.AccessRead},
+		{notes, "cto", code.AccessRead, code.AccessRead},
+		{notes, "reader", code.AccessRead, code.AccessRead},
+		{rootOwned, "root-bot", code.AccessMaintain, code.AccessMaintain},
+		{rootOwned, "cto", code.AccessRead, code.AccessRead},
+		// A unit the chart no longer holds has no lead and no members.
+		{orphan, "cto", code.AccessRead, code.AccessRead},
+		{orphan, "dev", code.AccessRead, code.AccessRead},
+	} {
+		g := code.GrantOf(agent(tc.seat), tc.repo, r)
+		if g.Relation != tc.relation || g.Access != tc.access {
+			t.Errorf("%s on %s: relation %s, access %s; want %s, %s", tc.seat, tc.repo.Name, g.Relation,
+				g.Access, tc.relation, tc.access)
+		}
+		if got := code.AccessOf(agent(tc.seat), tc.repo, r); got != g.Access {
+			t.Errorf("%s on %s: AccessOf %s, GrantOf's access %s", tc.seat, tc.repo.Name, got, g.Access)
+		}
+		if !g.MayRead() {
+			t.Errorf("%s on %s: a seat that reads is told it may not", tc.seat, tc.repo.Name)
+		}
+	}
+
+	// NOBODY'S STANDING without a seat of the chart behind it: a human seat
+	// asked as an agent, a handle the chart lacks, and any seat on a node
+	// with no chart. Each is none, and its read refusal says why.
+	for _, tc := range []struct {
+		g   code.Grant
+		why string
+	}{
+		{code.GrantOf(agent("founder"), platform, r), "human seat"},
+		{code.GrantOf(agent("ghost"), platform, r), "no seat of the chart"},
+		{code.GrantOf(agent("dev"), platform, nil), "no chart"},
+		{code.GrantOf(code.Principal{Kind: "robot", Seat: "dev"}, platform, r), "grants nothing"},
+	} {
+		if tc.g.Access != code.AccessNone || tc.g.MayRead() || tc.g.MayPush() {
+			t.Errorf("%+v holds %s", tc.g.Principal, tc.g.Access)
+		}
+		if refusal := tc.g.ReadRefusal(); !strings.Contains(refusal, tc.why) ||
+			!strings.Contains(refusal, `"platform"`) {
+			t.Errorf("%+v: read refusal %q, want it to name the repository and %q", tc.g.Principal, refusal, tc.why)
+		}
+	}
+
+	// A PERSON'S STANDING READS NO CHART: a bound credential maintains, one
+	// bound to nobody reads — with a roster and without one.
+	for _, roster := range []code.Roster{r, nil} {
+		bound := code.GrantOf(code.Principal{Kind: code.PrincipalOperator, OperatorID: "tok", Seat: "founder"},
+			orphan, roster)
+		unbound := code.GrantOf(code.Principal{Kind: code.PrincipalOperator, OperatorID: "ci"}, orphan, roster)
+		if bound.Access != code.AccessMaintain || unbound.Access != code.AccessRead {
+			t.Errorf("roster %v: a bound person holds %s and an unbound token %s; want maintain, read",
+				roster != nil, bound.Access, unbound.Access)
+		}
+	}
+}
+
+// A ROSTER IS NEVER ASKED ABOUT A PERSON: ADR-0037's rules need no chart, and
+// a person's push must not depend on a node having read one.
+func TestAPersonsGrantAsksNoRoster(t *testing.T) {
+	t.Parallel()
+	asked := askedRoster{}
+	code.GrantOf(code.Principal{Kind: code.PrincipalOperator, OperatorID: "tok", Seat: "ana"},
+		ownedBy("web", code.OwnerUnit, "eng"), &asked)
+	if asked.n != 0 {
+		t.Errorf("the roster was asked %d times for a person", asked.n)
+	}
+}
+
+type askedRoster struct{ n int }
+
+func (a *askedRoster) Seat(string) (code.RosterSeat, bool) { a.n++; return code.RosterSeat{}, false }
+func (a *askedRoster) Lead(string) string                  { a.n++; return "" }
+func (a *askedRoster) Leads(string) []string               { a.n++; return nil }
+func (a *askedRoster) Within(string, string) bool          { a.n++; return false }
+
+// The commands RefRule judges, one of each row of its table.
+var (
+	oidA, oidB = strings.Repeat("a", 40), strings.Repeat("b", 40)
+	commands   = map[string]code.Command{
+		"create a branch":         {Ref: "refs/heads/feature", Old: code.ZeroOID, New: oidB},
+		"fast-forward a branch":   {Ref: "refs/heads/feature", Old: oidA, New: oidB},
+		"force a branch":          {Ref: "refs/heads/feature", Old: oidA, New: oidB, Forced: true},
+		"delete a branch":         {Ref: "refs/heads/feature", Old: oidA, New: code.ZeroOID},
+		"create a tag":            {Ref: "refs/tags/v1", Old: code.ZeroOID, New: oidB},
+		"delete a tag":            {Ref: "refs/tags/v1", Old: oidA, New: code.ZeroOID},
+		"move a tag":              {Ref: "refs/tags/v1", Old: oidA, New: oidB},
+		"create in its namespace": {Ref: "refs/heads/seats/ana/x", Old: code.ZeroOID, New: oidB},
+		"force in its namespace":  {Ref: "refs/heads/seats/ana/x", Old: oidA, New: oidB, Forced: true},
+		"delete in its namespace": {Ref: "refs/heads/seats/ana/x", Old: oidA, New: code.ZeroOID},
+		"create in another's":     {Ref: "refs/heads/seats/bo/x", Old: code.ZeroOID, New: oidB},
+		"create under its handle": {Ref: "refs/heads/ana/x", Old: code.ZeroOID, New: oidB},
+		"the engine's own":        {Ref: "refs/crewlet/merge/1", Old: code.ZeroOID, New: oidB},
+		"the seats' root":         {Ref: "refs/heads/seats", Old: code.ZeroOID, New: oidB},
+		"a namespace as a branch": {Ref: "refs/heads/seats/ana", Old: code.ZeroOID, New: oidB},
+		"outside heads and tags":  {Ref: "refs/notes/commits", Old: code.ZeroOID, New: oidB},
+	}
+)
+
+// need is RefRule's table written out plainly, row by row (§2.4): what a
+// command needs of a principal that is not a seat in its own namespace, or
+// -1 for a ref nobody pushes.
+func need(c code.Command) code.Access {
+	switch {
+	case strings.HasPrefix(c.Ref, "refs/crewlet/"), c.Ref == "refs/heads/seats",
+		c.Ref == "refs/heads/seats/ana", c.Ref == "refs/notes/commits":
+		return -1
+	case strings.HasPrefix(c.Ref, "refs/heads/seats/"):
+		return code.AccessMaintain // another seat's namespace
+	case c.New == code.ZeroOID:
+		return code.AccessMaintain
+	case strings.HasPrefix(c.Ref, "refs/tags/") && c.Old != code.ZeroOID:
+		return code.AccessMaintain
+	case c.Forced:
+		return code.AccessMaintain
+	}
+	return code.AccessWrite
+}
+
+// grantFor is the grant a seat holds at tier and relation — Access by the
+// definition GrantOf computes, which TestGrantsFollowTheChart holds.
+func grantFor(tier code.Tier, relation code.Access) code.Grant {
+	return grantAs("ana", tier, relation)
+}
+
+// grantAs is grantFor for the seat handle.
+func grantAs(handle string, tier code.Tier, relation code.Access) code.Grant {
+	return code.Grant{Principal: agent(handle), RepoID: "id-web", RepoName: "web",
+		Owner: code.Owner{Kind: code.OwnerUnit, Ref: "eng"}, Tier: tier, Relation: relation,
+		Access: min(tier.Cap(), relation)}
+}
+
+// A REFUSAL SAYS THE SAME FOR EVERY SEAT: a sentence RefRule forms names no
+// handle, ref or repository, so its length is the same whoever asks and it
+// fits what a receiver may carry into a proposal (maxDetailBytes) whatever the
+// chart spells — a handle is a role name's slug, and org.ValidHandle bounds
+// its length by nothing. Every row of RefRule's table, for a seat of the
+// handle "ana" and of a handle four refs long, at every tier and relation —
+// the namespace rows spelled for each seat's own handle — and the sentences of
+// a principal that stands nowhere: no seat of the chart, a kind this build
+// grants nothing, a tier it does not know.
+//
+// Mutation: name the seat's namespace by its handle in the remedy → the long
+// handle's sentences differ and pass the bound, red.
+func TestARefusalSaysTheSameForEverySeat(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("a", 4*code.MaxRefNameBytes)
+	// "ana" is in no ref of the table but as the seat's handle.
+	as := func(handle string, c code.Command) code.Command {
+		c.Ref = strings.ReplaceAll(c.Ref, "ana", handle)
+		return c
+	}
+	bounded := func(what, words string) {
+		t.Helper()
+		if len(words) > code.MaxDetailBytes {
+			t.Errorf("%s: %d bytes, past the %d a receiver carries: %q", what, len(words), code.MaxDetailBytes, words)
+		}
+	}
+	for _, tier := range append(code.Tiers(), "", code.Tier(long)) {
+		for _, relation := range code.Accesses() {
+			for name, c := range commands {
+				_, short := grantAs("ana", tier, relation).RefRule(as("ana", c))
+				_, words := grantAs(long, tier, relation).RefRule(as(long, c))
+				what := fmt.Sprintf("tier %.12s, relation %s, %s", tier, relation, name)
+				bounded(what, words)
+				if tier != code.Tier(long) && words != short {
+					t.Errorf("%s: a seat of a long handle is told\n%q\nand ana\n%q", what, words, short)
+				}
+			}
+		}
+	}
+	r := testChart()
+	repo := ownedBy("web", code.OwnerUnit, "eng")
+	for name, g := range map[string]code.Grant{
+		"no seat of the chart": code.GrantOf(agent(long), repo, r),
+		"no chart":             code.GrantOf(agent(long), repo, nil),
+		"an unknown kind":      code.GrantOf(code.Principal{Kind: code.PrincipalKind(long), Seat: "dev"}, repo, r),
+	} {
+		reason, words := g.RefRule(commands["create a branch"])
+		if reason != code.RefusalNotPermitted {
+			t.Errorf("%s: %q", name, reason)
+		}
+		bounded(name, words)
+		bounded(name+" (advertised)", g.PushRefusal())
+	}
+}
+
+// REFRULE IS ITS TABLE, for every principal: a bound person passes every row
+// but the reserved refs, a token bound to nobody is refused every one with the
+// sentence git printed before grants existed, and a seat at every tier and
+// relation is held to each row — its own namespace by a read relation and the
+// full_access tier, everything else by its access against what the command
+// needs. Every refusal is not_permitted, names no ref (git prints it beside),
+// fits what a receiver may carry into a proposal, and offers a remedy RefRule
+// itself would admit. MayPush says whether any command could pass.
+//
+// Mutations: RefRule permitting a read-level create → the read rows red; the
+// namespace row ignoring the tier → its review and read_only rows red; a
+// remedy offering the namespace to a seat that does not own one → the remedy
+// check red.
+func TestRefRuleTable(t *testing.T) {
+	t.Parallel()
+	bound := code.GrantOf(code.Principal{Kind: code.PrincipalOperator, OperatorID: "tok", Seat: "founder"},
+		ownedBy("web", code.OwnerUnit, "eng"), nil)
+	unbound := code.GrantOf(code.Principal{Kind: code.PrincipalOperator, OperatorID: "ci"},
+		ownedBy("web", code.OwnerUnit, "eng"), nil)
+	for name, c := range commands {
+		reserved := need(c) < 0
+		if reason, words := bound.RefRule(c); (reason == "") == reserved {
+			t.Errorf("a bound person, %s: %q %q", name, reason, words)
+		}
+		reason, words := unbound.RefRule(c)
+		if reason != code.RefusalNotPermitted {
+			t.Errorf("a token bound to nobody, %s: permitted", name)
+		}
+		if !reserved && words != code.UnboundDetail {
+			t.Errorf("a token bound to nobody, %s: %q, want the unbound sentence", name, words)
+		}
+	}
+	if !bound.MayPush() || unbound.MayPush() || unbound.PushRefusal() != code.UnboundDetail ||
+		bound.PushRefusal() != "" {
+		t.Errorf("MayPush: bound %v %q, unbound %v %q", bound.MayPush(), bound.PushRefusal(),
+			unbound.MayPush(), unbound.PushRefusal())
+	}
+
+	tiers := append(code.Tiers(), "")
+	for _, tier := range tiers {
+		for _, relation := range code.Accesses() {
+			g := grantFor(tier, relation)
+			passed := false
+			for name, c := range commands {
+				reason, words := g.RefRule(c)
+				var want bool
+				switch n := need(c); {
+				case n < 0:
+					want = false
+				case strings.HasPrefix(c.Ref, code.SeatNamespace("ana")):
+					want = relation >= code.AccessRead && tier == code.TierFullAccess
+				default:
+					want = g.Access >= n
+				}
+				if (reason == "") != want {
+					t.Errorf("tier %s, relation %s, %s: %q %q, want permitted %v", tier, relation, name,
+						reason, words, want)
+					continue
+				}
+				if want {
+					passed = true
+					continue
+				}
+				if reason != code.RefusalNotPermitted || words == "" {
+					t.Errorf("tier %s, relation %s, %s: refused %q %q", tier, relation, name, reason, words)
+				}
+				if need(c) >= 0 && strings.Contains(words, c.Ref) {
+					t.Errorf("tier %s, relation %s, %s: the sentence names the ref: %q", tier, relation, name, words)
+				}
+				if len(words) > code.MaxDetailBytes {
+					t.Errorf("tier %s, relation %s, %s: %d bytes, past the %d a receiver carries",
+						tier, relation, name, len(words), code.MaxDetailBytes)
+				}
+				if need(c) >= 0 {
+					remedyAdmits(t, g, c, words)
+				}
+			}
+			if passed != g.MayPush() {
+				t.Errorf("tier %s, relation %s: some command passes = %v, MayPush = %v", tier, relation,
+					passed, g.MayPush())
+			}
+			if (g.PushRefusal() == "") != g.MayPush() {
+				t.Errorf("tier %s, relation %s: PushRefusal %q beside MayPush %v", tier, relation,
+					g.PushRefusal(), g.MayPush())
+			}
+		}
+	}
+
+	// TWO SENTENCES IN FULL, so a person can read what a seat is told.
+	_, words := grantFor(code.TierFullAccess, code.AccessRead).RefRule(commands["create a branch"])
+	if want := "this seat holds read on this repository (tier full_access, relation read); creating a branch " +
+		"needs write — push under its own namespace (refs/heads/seats/<its handle>/) instead, or ask the " +
+		"lead of the repository's owning unit"; words != want {
+		t.Errorf("a full_access seat that reads:\n got %q\nwant %q", words, want)
+	}
+	_, words = grantFor(code.TierReview, code.AccessWrite).RefRule(commands["create a branch"])
+	if want := "this seat holds review on this repository (tier review, relation write); creating a branch " +
+		"needs write — a person can set its role.code.access to full_access"; words != want {
+		t.Errorf("a review seat that writes:\n got %q\nwant %q", words, want)
+	}
+}
+
+// remedyAdmits holds a refusal's remedy to RefRule itself: whatever the
+// sentence offers, the grant it describes permits.
+func remedyAdmits(t *testing.T, g code.Grant, c code.Command, words string) {
+	t.Helper()
+	own := code.Command{Ref: code.SeatNamespace("ana") + "work", Old: code.ZeroOID, New: oidB}
+	with := func(tier code.Tier, relation code.Access) code.Grant {
+		return grantFor(tier, relation)
+	}
+	var admitted bool
+	const namespace = "its own namespace (" + code.SeatNamespaceRoot + "<its handle>/)"
+	switch {
+	case strings.Contains(words, "push under "+namespace+" instead"):
+		reason, _ := g.RefRule(own)
+		admitted = reason == ""
+	case strings.Contains(words, "a person can set its role.code.access to full_access"):
+		reason, _ := with(code.TierFullAccess, g.Relation).RefRule(c)
+		admitted = reason == ""
+	case strings.Contains(words, "with role.code.access full_access it pushes under "+namespace):
+		reason, _ := with(code.TierFullAccess, g.Relation).RefRule(own)
+		admitted = reason == ""
+	case strings.Contains(words, "and a person to set its role.code.access to full_access"):
+		reason, _ := with(code.TierFullAccess, code.AccessMaintain).RefRule(c)
+		admitted = reason == ""
+	case strings.Contains(words, "ask the lead of the repository's owning unit"):
+		reason, _ := with(g.Tier, code.AccessMaintain).RefRule(c)
+		admitted = reason == ""
+	}
+	if !admitted {
+		t.Errorf("tier %s, relation %s, %s: the remedy in %q is none RefRule admits", g.Tier, g.Relation, c.Ref,
+			words)
+	}
+}
+
+// A SEAT'S NAMESPACE IS UNDER THE SEATS' ROOT, never at its handle: a
+// full_access seat that only reads a repository creates, moves, forces and
+// deletes under refs/heads/seats/<handle>/ and is refused every one at
+// refs/heads/<handle>/, where people's branches live; and the root and a
+// seat's namespace as a branch are reserved to everybody, since no ref is
+// created beside a directory of its name (ref_conflict) and either would block
+// seats' namespaces.
+//
+// Mutations: the namespace matching refs/heads/<handle>/ → the <handle>/x rows
+// permitted; drop the reserved shapes → the two reserved_ref rows red.
+func TestASeatsNamespaceIsUnderTheSeatsRoot(t *testing.T) {
+	t.Parallel()
+	if got := code.SeatNamespace("ana"); got != "refs/heads/seats/ana/" {
+		t.Fatalf("SeatNamespace(ana) = %q", got)
+	}
+	g := grantFor(code.TierFullAccess, code.AccessRead)
+	for _, ref := range []string{"refs/heads/seats/ana/x", "refs/heads/ana/x"} {
+		for name, c := range map[string]code.Command{
+			"create": {Ref: ref, Old: code.ZeroOID, New: oidB},
+			"update": {Ref: ref, Old: oidA, New: oidB},
+			"force":  {Ref: ref, Old: oidA, New: oidB, Forced: true},
+			"delete": {Ref: ref, Old: oidA, New: code.ZeroOID},
+		} {
+			reason, words := g.RefRule(c)
+			own := strings.HasPrefix(ref, code.SeatNamespaceRoot)
+			if own && reason != "" {
+				t.Errorf("%s %s by its own full_access seat: %q %q", name, ref, reason, words)
+			}
+			if !own && reason != code.RefusalNotPermitted {
+				t.Errorf("%s %s by a seat that only reads: permitted", name, ref)
+			}
+		}
+	}
+	for ref, want := range map[string]code.Refusal{
+		"refs/heads/seats":         code.RefusalReservedRef,
+		"refs/heads/seats/ana":     code.RefusalReservedRef,
+		"refs/heads/seats/ana/x":   "",
+		"refs/heads/seats/ana/x/y": "",
+		"refs/heads/seatsx":        "",
+	} {
+		if got := code.StatelessRefusal(code.Command{Ref: ref, Old: code.ZeroOID, New: oidB}); got != want {
+			t.Errorf("StatelessRefusal(%s) = %q, want %q", ref, got, want)
+		}
+	}
+}
+
+// NO REPOSITORY TAKES A RESERVED SEAT BRANCH AS ITS DEFAULT: no push may create
+// one (reserved_ref), so a repository declared with one would have a default
+// branch nobody can ever push. The domain's own guard refuses it whatever
+// door the settings came through, beside configuration's refusal of the field.
+func TestARepositorysDefaultBranchIsNoReservedSeatBranch(t *testing.T) {
+	t.Parallel()
+	for branch, reserved := range map[string]bool{
+		"seats": true, "seats/main": true, "seats/ana": true,
+		"seats/ana/main": false, "main": false, "seatsx": false,
+	} {
+		s := code.RepoSettings{
+			ManagedBy: code.ManagedConfig, Owner: code.Owner{Kind: code.OwnerUnit, Ref: "ENG"},
+			DefaultBranch: branch,
+		}
+		err := s.Validate()
+		switch {
+		case reserved && !errors.Is(err, code.ErrInvalid):
+			t.Errorf("default_branch %s: %v, want ErrInvalid", branch, err)
+		case reserved && !strings.Contains(err.Error(), "default_branch"):
+			t.Errorf("default_branch %s: %v names no field", branch, err)
+		case !reserved && err != nil:
+			t.Errorf("default_branch %s: %v", branch, err)
+		}
+	}
+}
+
+// A PRINCIPAL NAMES ITSELF ONE WAY: an operator its credential and, where it is
+// bound, a person's handle; a seat its handle and no credential. A proposal
+// takes only a bound person's, since the push decide judges no seat's grant.
+func TestAPrincipalNamesItselfOneWay(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		p     code.Principal
+		valid bool
+	}{
+		{code.Principal{Kind: code.PrincipalOperator, OperatorID: "tok", Seat: "ana"}, true},
+		{code.Principal{Kind: code.PrincipalOperator, OperatorID: "ci"}, true},
+		{code.Principal{Kind: code.PrincipalOperator, Seat: "ana"}, false},
+		{code.Principal{Kind: code.PrincipalOperator, OperatorID: "tok", Seat: "Ana Smith"}, false},
+		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana"}, true},
+		{code.Principal{Kind: code.PrincipalAgent}, false},
+		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana/x"}, false},
+		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana", OperatorID: "tok"}, false},
+		{code.Principal{Kind: "robot", Seat: "ana"}, false},
+	} {
+		err := tc.p.Validate()
+		if (err == nil) != tc.valid || (err != nil && !errors.Is(err, code.ErrInvalid)) {
+			t.Errorf("%+v: %v, want valid %v", tc.p, err, tc.valid)
+		}
+	}
+	proposal := code.Proposal{PushID: "0190f3c4-0000-7000-8000-000000000002",
+		RepoID: "0190f3c4-0000-7000-8000-00000000b0b0", Node: "n1", ReceivedAt: time.Unix(1_800_000_000, 0),
+		Principal: code.Principal{Kind: code.PrincipalOperator, OperatorID: "tok", Seat: "ana"},
+		Commands:  []code.Command{commands["create a branch"]}}
+	if err := proposal.Validate(); err != nil {
+		t.Fatalf("a bound person's proposal: %v", err)
+	}
+	for _, p := range []code.Principal{
+		{Kind: code.PrincipalAgent, Seat: "ana"},
+		{Kind: code.PrincipalOperator, OperatorID: "ci"},
+		{Kind: code.PrincipalOperator, Seat: "ana"},
+	} {
+		proposal.Principal = p
+		if err := proposal.Validate(); !errors.Is(err, code.ErrInvalidProposal) {
+			t.Errorf("a proposal by %+v: %v, want refused", p, err)
+		}
+	}
+	if !slices.Equal(code.PrincipalKinds(), []code.PrincipalKind{code.PrincipalOperator, code.PrincipalAgent}) {
+		t.Errorf("PrincipalKinds = %v", code.PrincipalKinds())
+	}
+}
+
+// THE LEVELS ARE ORDERED AND NAMED, and a tier caps at its own level: the
+// minimum a grant takes is only meaningful over an order.
+func TestTheLevelsAreOrdered(t *testing.T) {
+	t.Parallel()
+	levels := code.Accesses()
+	for i, a := range levels {
+		if !a.Valid() || (i > 0 && levels[i-1] >= a) {
+			t.Errorf("level %d (%s) is out of order or invalid", i, a)
+		}
+	}
+	if got := fmt.Sprint(levels); got != "[none read review write maintain]" {
+		t.Errorf("the levels are %s", got)
+	}
+	for tier, want := range map[code.Tier]code.Access{
+		code.TierReadOnly: code.AccessRead, code.TierReview: code.AccessReview,
+		code.TierFullAccess: code.AccessMaintain, "": code.AccessRead, "full-access": code.AccessNone,
+	} {
+		if got := tier.Cap(); got != want {
+			t.Errorf("%q caps at %s, want %s", tier, got, want)
+		}
+	}
+}

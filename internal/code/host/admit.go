@@ -78,6 +78,34 @@ func (s *Server) admit(ctx context.Context, w http.ResponseWriter, r *http.Reque
 	return adm, true
 }
 
+// principal is who the admitted request acts as: the operator credential and
+// the person it is bound to — "" for nobody. The ONE construction of it, so a
+// push's proposal, its session and its grant can never name two different
+// principals.
+func (a admission) principal() code.Principal {
+	return code.Principal{Kind: code.PrincipalOperator, OperatorID: a.operatorID, Seat: a.seat}
+}
+
+// grant is the admitted principal's standing on repo (ADR-0040): a PERSON'S,
+// so it reads no chart — code.GrantOf consults the roster only for a seat — and
+// a credential bound to a human seat maintains every repository while one
+// bound to nobody reads it.
+func (a admission) grant(repo code.RepoRef) code.Grant {
+	return code.GrantOf(a.principal(), repo, nil)
+}
+
+// grantRefusal is the class a push its principal's grant refuses whole is
+// recorded under: `unbound` for a token bound to nobody — the word the
+// dashboard and crewlet read for it, since the remedy is a line of
+// configuration rather than a grant — and the domain's not_permitted for any
+// other principal.
+func grantRefusal(p code.Principal) AuditRefusal {
+	if p.Kind == code.PrincipalOperator && p.Seat == "" {
+		return RefusalUnbound
+	}
+	return AuditRefusal(code.RefusalNotPermitted)
+}
+
 // refuses reports whether a repository in status refuses op.
 func refuses(status code.RepoStatus, op auth.GitOp) bool {
 	switch status {
@@ -123,10 +151,6 @@ func seconds(d time.Duration) string { return strconv.Itoa(int(d/time.Second)) +
 func notFoundSentence(name string) string {
 	return "repository " + strconv.Quote(name) + " not found"
 }
-
-// unboundSentence is a push with a token bound to nobody.
-const unboundSentence = "this token is not bound to a person: a person pushes with their own token " +
-	"(contact.crewlet_operator_id on their human seat names it); a token bound to nobody fetches only"
 
 // goneSentence is a deleted or purging repository's: the domain's own
 // sentence for the state (code.RepoGone), so the advertisement, a fetch and a
