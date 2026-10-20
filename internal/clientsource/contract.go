@@ -465,6 +465,8 @@ var contract = []Entry{
 	{"PAGE_LABELS_MAX", ReadScalar, "internal/doclet.TestTheDashboardBoundsPageTextAtTheEnginesCaps"},
 	{"PAGE_LABEL_MAX_BYTES", ReadScalar, "internal/doclet.TestTheDashboardBoundsPageTextAtTheEnginesCaps"},
 	{"PAGE_CHANGES", ReadLiteral, "internal/doclet.TestEveryPageChangeTheEngineWritesReadsAsASentence"},
+	{"PAGE_LIST_ORDERS", ReadLiteral,
+		"internal/doclet.TestTheDashboardAsksForExactlyTheOrdersAListingIsReadIn"},
 
 	// artifacts.ts
 	{"ARTIFACT_KINDS", ReadLiteral, "internal/api/artifactsapi.TestTheDashboardSpeaksTheArtifactsVocabulary"},

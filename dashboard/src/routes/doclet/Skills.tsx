@@ -23,6 +23,18 @@
  * carried: a catalogue of six hundred skills says six hundred with the first
  * five hundred drawn and "Load more", and a seat with forty learned skills
  * says forty over the twenty-five listed.
+ *
+ * # The tool skills' order is the engine's
+ *
+ * The listing is read a window at a time, so the ENGINE orders it: by name
+ * (`order: "title"`), or newest first (`order: "newest"`, from the skill rows'
+ * own index), chosen in the toolbar and kept in `sort=` — `title` or
+ * `-updated`, the grid's own key, so the column the engine ordered by draws
+ * the arrow. The heads are not buttons. Sorted here, a head would order the
+ * rows one window held: past five hundred skills "Updated" put the newest of
+ * the alphabetically first ones at the top, which reads exactly like the
+ * newest skill. "Loaded by" is the usage domain's and no listing is ordered by
+ * it, so it is not sortable either.
  */
 
 import { useMemo } from "react";
@@ -55,15 +67,32 @@ import { useNow } from "~/lib/clock.ts";
 import { plural, tsKey, fmtCount } from "~/lib/format.ts";
 import { loadedBy } from "~/lib/pageReads.ts";
 import { seatBadge } from "~/ui/SeatAvatar.tsx";
-import type { SkillLoad } from "~/contract/pages.ts";
+import { PAGE_LIST_ORDERS, type SkillLoad } from "~/contract/pages.ts";
 import type { PageSummary } from "~/protocol/index.ts";
 import { usePagedPages } from "./usePagedPages.ts";
 
 /** The tool-skill pages: published, and only skills. */
 const SKILL_PAGES = { skills: true, status: "published" } as const;
 
+type ListOrder = (typeof PAGE_LIST_ORDERS)[number];
+
+/**
+ * Each order's `sort=`: the grid's own key for the column the engine orders
+ * by, so the head draws the arrow the rows were read in.
+ */
+const ORDER_SORT: Record<ListOrder, string> = { title: "title", newest: "-updated" };
+
+const ORDER_WORDS: Record<ListOrder, string> = { title: "Name", newest: "Newest" };
+
+/** The order a `sort=` asks for, the knowledge base's own for any other value. */
+export function skillOrderOf(sort: string): ListOrder {
+  return PAGE_LIST_ORDERS.find((order) => ORDER_SORT[order] === sort) ?? "title";
+}
+
 export function Skills() {
   const [kind, setKind] = useParam("kind", "pages");
+  const [sort, setSort] = useParam("sort", ORDER_SORT.title, "filter");
+  const order = skillOrderOf(sort);
   return (
     <>
       <div className="toolbar">
@@ -78,21 +107,36 @@ export function Skills() {
             { value: "learned", label: "Learned", title: "What one agent drew from its own work" },
           ]}
         />
+        {kind !== "learned" && (
+          <>
+            <span className="spacer" />
+            <SegmentedControl
+              semantics="radio"
+              activate="manual"
+              label="Order"
+              value={ORDER_SORT[order]}
+              onValueChange={setSort}
+              options={PAGE_LIST_ORDERS.map((o) => ({
+                value: ORDER_SORT[o],
+                label: ORDER_WORDS[o],
+              }))}
+            />
+          </>
+        )}
       </div>
-      {kind === "learned" ? <LearnedSkills /> : <ToolSkills />}
+      {kind === "learned" ? <LearnedSkills /> : <ToolSkills order={order} />}
     </>
   );
 }
 
-function ToolSkills() {
+function ToolSkills({ order }: { order: ListOrder }) {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
   const now = useNow();
-  const listing = usePagedPages(SKILL_PAGES, { pollMs: 60_000 });
-  const rows = useMemo(
-    () => [...listing.rows].sort((a, b) => a.title.localeCompare(b.title)),
-    [listing.rows],
-  );
+  const asked = useMemo(() => ({ ...SKILL_PAGES, order }), [order]);
+  const listing = usePagedPages(asked, { pollMs: 60_000 });
+  // IN THE ENGINE'S ORDER, as answered: see the module doc.
+  const rows = listing.rows;
   const name = (handle: string) => index.byHandle.get(handle)?.name ?? handle;
   const kindOf = (handle: string) => index.byHandle.get(handle)?.kind;
   const avatarOf = (handle: string) => index.byHandle.get(handle)?.avatar;
@@ -120,13 +164,15 @@ function ToolSkills() {
         <DataGrid<PageSummary>
           rows={rows}
           rowKey={(r) => r.id}
-          defaultSort="title"
+          defaultSort={ORDER_SORT.title}
+          // THE ENGINE ORDERED THE WHOLE LISTING; a head that re-sorted the
+          // windows loaded would answer another question under the same arrow.
+          serverSorted
           rowHref={(r) => href(["doclet", "pages", r.id])}
           columns={[
             {
               key: "title",
               header: "Skill",
-              sortValue: (r) => r.title,
               cell: (r) => (
                 <TableTextCell icon={<NamedGlyph name={"wand-sparkles"} size="xs" />}>
                   {r.title}
@@ -136,7 +182,6 @@ function ToolSkills() {
             {
               key: "loaded",
               header: "Loaded by, 30 days",
-              sortValue: (r) => (loads(r) ?? []).reduce((n, l) => n + l.loaded, 0),
               cell: (r) => {
                 const l = loads(r);
                 if (l === null) return <span className="muted">Not recorded on this node</span>;
@@ -168,7 +213,6 @@ function ToolSkills() {
               header: "Loads",
               shrink: true,
               align: "right",
-              sortValue: (r) => (loads(r) ?? []).reduce((n, l) => n + l.loaded, 0),
               cell: (r) => {
                 const l = loads(r);
                 return l === null ? (
@@ -183,7 +227,6 @@ function ToolSkills() {
               header: "Updated",
               shrink: true,
               align: "right",
-              sortValue: (r) => tsKey(r.updated_at),
               cell: (r) => <TableDateCell value={r.updated_at} now={now} />,
             },
           ]}

@@ -23,6 +23,7 @@ import { plural, relTime, tsKey } from "~/lib/format.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
+import type { PAGE_LIST_ORDERS } from "~/contract/pages.ts";
 import { uncounted } from "~/routes/doclet/Diaries.tsx";
 import { foldRuns, runPhrase } from "~/routes/doclet/landing.ts";
 import {
@@ -226,20 +227,25 @@ function Watching() {
   );
 }
 
-/** As Agent skills lists them: the published tool-skill pages. */
-const SKILL_PAGES = { skills: true, status: "published", limit: 50 } as const;
+/**
+ * The newest published tool skills, as Agent skills lists them newest first:
+ * the ENGINE's order, read from the skill rows' own index, a widget's window
+ * of it. This asked for fifty in the knowledge base's own order and sorted
+ * them here, so past fifty skills "newest" was the newest of the
+ * alphabetically first fifty.
+ */
+const NEWEST_SKILLS = {
+  skills: true,
+  status: "published",
+  order: "newest" satisfies (typeof PAGE_LIST_ORDERS)[number],
+  limit: ROWS,
+} as const;
 
 function Skills() {
   const now = useNow();
-  const listing = useQuery("pages", SKILL_PAGES, { pollMs: SPACES_POLL_MS });
+  const listing = useQuery("pages", NEWEST_SKILLS, { pollMs: SPACES_POLL_MS });
   const total = listing.data?.total;
-  const newest = useMemo(
-    () =>
-      [...(listing.data?.pages ?? [])]
-        .sort((a, b) => tsKey(b.updated_at) - tsKey(a.updated_at))
-        .slice(0, ROWS),
-    [listing.data],
-  );
+  const newest = listing.data?.pages ?? [];
   return (
     <WidgetCard title={total ? `Agent skills · ${total}` : "Agent skills"} from="doclet-skills">
       <WidgetQuery
