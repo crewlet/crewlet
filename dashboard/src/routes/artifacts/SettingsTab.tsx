@@ -22,6 +22,7 @@ import {
   confirmMatches,
   useToast,
 } from "@crewlethq/ui";
+import { artifactSectionPath } from "~/app/routes.ts";
 import { useNavigator } from "~/app/router.tsx";
 import { QueryState, Section } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
@@ -366,17 +367,23 @@ export function TrashControl({ detail }: { detail: ArtifactDetail }) {
 
 /**
  * Moving an artifact to the trash, said before it is done: from Settings'
- * own button and from the artifact bar's More. Its owner's, and a person's;
- * the caller offers it only to whoever may.
+ * own button, the artifact bar's More and a gallery card's More. Its
+ * owner's, and a person's; the caller offers it only to whoever may.
+ *
+ * WHERE THE READER GOES AFTER is the caller's (`onTrashed`): from the
+ * artifact's own page, to Yours, since the page it stood on stops opening;
+ * from the gallery, nowhere, since the card leaves the list in place.
  */
 export function TrashDialog({
   detail,
   open,
   onClose,
+  onTrashed,
 }: {
-  detail: ArtifactDetail;
+  detail: Pick<ArtifactDetail, "id" | "title">;
   open: boolean;
   onClose: () => void;
+  onTrashed?: () => void;
 }) {
   const gesture = useKeyedGesture();
   const toast = useToast();
@@ -386,7 +393,8 @@ export function TrashDialog({
     if (answer?.kind === "done") {
       toast.ok(`Moved “${detail.title}” to the trash`);
       onClose();
-      nav.to(["artifacts", "mine"]);
+      if (onTrashed) onTrashed();
+      else nav.to(artifactSectionPath("yours"));
     }
   };
   return (

@@ -88,12 +88,31 @@ const ME_SECTIONS: readonly MeSection[] = [
 ];
 
 /**
- * The Artifacts gallery's sections: For you (its landing), then the scopes the
- * engine's listing answers by (`artifactsdomain.ListScope`).
+ * The Artifacts gallery's sections: All (its landing, everything the reader
+ * can open), Yours and Shared with you, each one of the scopes the engine's
+ * listing answers by (`artifactsdomain.ListScope`).
  */
-export type ArtifactSection = "for-you" | "mine" | "shared" | "company" | "agents";
+export type ArtifactSection = "all" | "yours" | "shared";
 
-const ARTIFACT_SECTIONS: readonly ArtifactSection[] = ["mine", "shared", "company", "agents"];
+const ARTIFACT_SECTIONS: readonly ArtifactSection[] = ["yours", "shared"];
+
+/**
+ * The sections an earlier gallery had, and the section each now lands on: its
+ * own artifacts are Yours, and what the whole company or an agent shared is
+ * among All. The gallery rewrites such an address in place
+ * (`Navigator.replace`), so a link pasted before the change still opens the
+ * nearest list and the address bar says the current one.
+ */
+export const LEGACY_ARTIFACT_SECTIONS: Readonly<Record<string, ArtifactSection>> = {
+  mine: "yours",
+  company: "all",
+  agents: "all",
+};
+
+/** A gallery section's address. */
+export function artifactSectionPath(section: ArtifactSection): string[] {
+  return section === "all" ? ["artifacts"] : ["artifacts", section];
+}
 
 /**
  * The screens drawn outside the frame. An invitation's and a reset link's one
@@ -415,7 +434,7 @@ function knowledge(rest: string[], screen: Make, under: Under): Route {
 
 function artifactsRoute(rest: string[], screen: Make, under: Under): Route {
   const [first, ...tail] = rest;
-  if (first === undefined) return screen({ screen: "artifacts", section: "for-you" });
+  if (first === undefined) return screen({ screen: "artifacts", section: "all" });
   // NOTHING IS ADDRESSED UNDER AN ARTIFACT: its tabs, its version and its
   // compare are queries on its own address (`tab=`, `version=`, `against=`),
   // so a link survives a reload and a pasted address in chat.
@@ -423,6 +442,10 @@ function artifactsRoute(rest: string[], screen: Make, under: Under): Route {
   if (ARTIFACT_SECTIONS.includes(first as ArtifactSection)) {
     return screen({ screen: "artifacts", section: first as ArtifactSection });
   }
+  const moved = Object.hasOwn(LEGACY_ARTIFACT_SECTIONS, first)
+    ? LEGACY_ARTIFACT_SECTIONS[first]
+    : undefined;
+  if (moved) return screen({ screen: "artifacts", section: moved });
   if (first === "new") return screen({ screen: "new-artifact" });
   // AN ARTIFACT BY ITS ID, the uuid the engine derived from the operation
   // that created it; a word here names nothing the engine could have minted.

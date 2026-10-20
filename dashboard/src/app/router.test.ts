@@ -434,6 +434,29 @@ describe("the resolver", () => {
     expect(resolve(["account", "tokens"]).resolved).toBe(false);
   });
 
+  // THE GALLERY HAS THREE SECTIONS, and an earlier gallery's five addresses
+  // each land on the nearest: its own artifacts on Yours, what the company or
+  // an agent shared among All. The gallery rewrites the address in place.
+  test("the artifacts gallery's sections, and the earlier sections' addresses", () => {
+    expect(resolve(["artifacts"])).toMatchObject({ screen: "artifacts", section: "all" });
+    expect(resolve(["artifacts", "yours"])).toMatchObject({
+      screen: "artifacts",
+      section: "yours",
+    });
+    expect(resolve(["artifacts", "shared"])).toMatchObject({
+      screen: "artifacts",
+      section: "shared",
+    });
+    expect(resolve(["artifacts", "mine"])).toMatchObject({ screen: "artifacts", section: "yours" });
+    expect(resolve(["artifacts", "company"])).toMatchObject({
+      screen: "artifacts",
+      section: "all",
+    });
+    expect(resolve(["artifacts", "agents"])).toMatchObject({ screen: "artifacts", section: "all" });
+    expect(resolve(["artifacts", "for-you"]).resolved).toBe(false);
+    expect(resolve(["artifacts", "constructor"]).resolved).toBe(false);
+  });
+
   test("a key is a project, a key with a number or a uuid an item, and nothing else is", () => {
     expect(resolve(["work", "ENG"])).toMatchObject({ screen: "project", key: "ENG" });
     expect(resolve(["work", "ENG-42"])).toMatchObject({ screen: "item", id: "ENG-42" });
