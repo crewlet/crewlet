@@ -8,12 +8,15 @@
  * the kind's format, and the person edits it in place from there. A SHEET IS
  * TWO: the artifact, then its schema. Each is keyed, so a retry is the same
  * operation; a schema the engine refused after the sheet was made leaves the
- * sheet in place, and its page says so and offers the schema editor. A
+ * sheet in place, and its page says so and offers the schema editor. Rows
+ * the page typed or imported follow as keyed batches of at most a hundred,
+ * and a batch the engine refuses stops the rest: the sheet opens with the
+ * rows written, and says how many and why the rest were not. A
  * design, a dashboard or an HTML page is an agent's to publish, so its page
  * asks an agent in a new task ([useAskAgent]).
  */
 
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { useToast } from "@crewlethq/ui";
 import { useNavigator, useParam } from "~/app/router.tsx";
 import { useOpenNewTask, type OpenNewTask } from "~/app/newTask.ts";
@@ -21,8 +24,10 @@ import { ITEM_KEY_SHAPE, artifactPath } from "~/app/routes.ts";
 import { ARTIFACT_TITLE_MAX_BYTES } from "~/contract/artifacts.ts";
 import { utf8Bytes } from "~/lib/format.ts";
 import { keyedWrite, useKeyedGesture, type KeyedAnswer } from "~/lib/keyedWrite.ts";
-import { configureSchema, createFromStarter, createSheet } from "~/lib/artifacts/api.ts";
-import { SHEET_TEMPLATES, type SheetTemplate } from "~/lib/artifacts/schema.ts";
+import { configureSchema, createFromStarter, createSheet, writeData } from "~/lib/artifacts/api.ts";
+import { resultOf, rowID } from "~/lib/artifacts/datastore.ts";
+import { insertBatches, type DraftWrites } from "~/lib/artifacts/sheetDraft.ts";
+import { plural } from "~/lib/format.ts";
 import { newActOpID } from "~/protocol/index.ts";
 
 /**
@@ -60,9 +65,14 @@ export interface CreateArtifact {
   refusal: string | null;
   /** Make a doc or a deck from the engine's starter and open it. */
   fromStarter: (kind: "doc" | "slides", title: string) => Promise<void>;
-  /** Make a sheet with a template's columns and open it. */
-  sheet: (title: string, template: SheetTemplate) => Promise<void>;
+  /** Make a sheet with these columns and rows, and open it. */
+  sheet: (title: string, writes: DraftWrites) => Promise<void>;
+  /** The rows written of those being written, while a sheet's rows go in; null otherwise. */
+  progress: { done: number; total: number } | null;
 }
+
+/** How many times a row batch whose answer was lost, or that was rate limited, is sent again under its key. */
+const BATCH_RETRIES = 2;
 
 /**
  * Make a new artifact and open it, for the task the page was opened for
@@ -93,27 +103,60 @@ export function useCreateArtifact(): CreateArtifact {
     [run, workItem, toast, nav],
   );
 
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+
   const sheet = useCallback(
-    async (title: string, template: SheetTemplate) => {
+    async (title: string, writes: DraftWrites) => {
       const name = title.trim();
       const id = made(await run(createSheet({ title: name, ...(workItem ? { workItem } : {}) })));
       if (!id) return;
-      const chosen = SHEET_TEMPLATES.find((t) => t.key === template) ?? SHEET_TEMPLATES[0];
       const schema = await keyedWrite({
-        ...configureSchema(id, chosen.schema()),
+        ...configureSchema(id, writes.collections),
         key: newActOpID(),
       });
-      if (schema.kind === "done") {
-        toast.ok(`Started “${name}”`);
-        nav.to(artifactPath(id));
+      if (schema.kind !== "done") {
+        toast.show({
+          variant: "warning",
+          title: "The sheet was made, and its columns were not set",
+          message: schema.text,
+        });
+        nav.to(artifactPath(id), { tab: "data", data: "schema" });
         return;
       }
-      toast.show({
-        variant: "warning",
-        title: "The sheet was made, and its columns were not set",
-        message: schema.text,
-      });
-      nav.to(artifactPath(id), { tab: "data", data: "schema" });
+      const total = writes.rows.length;
+      const client = `create-${rowID()}`;
+      let done = 0;
+      let stopped: string | null = null;
+      if (total > 0) setProgress({ done, total });
+      for (const batch of insertBatches(writes.collection, writes.rows, rowID)) {
+        const key = newActOpID();
+        let result = resultOf(await keyedWrite({ ...writeData(id, batch, client, { via: "dashboard" }), key }));
+        for (let retry = 0; retry < BATCH_RETRIES; retry++) {
+          if (result.verdict !== "unknown" && result.verdict !== "rate_limited") break;
+          const wait = result.verdict === "rate_limited" ? (result.retryAfterMs ?? 1000) : 500;
+          await new Promise((settle) => setTimeout(settle, wait));
+          result = resultOf(await keyedWrite({ ...writeData(id, batch, client, { via: "dashboard" }), key }));
+        }
+        if (result.verdict !== "applied" && result.verdict !== "pending") {
+          stopped = result.reason;
+          break;
+        }
+        done += batch.length;
+        setProgress({ done, total });
+      }
+      setProgress(null);
+      if (stopped === null) toast.ok(`Started “${name}”`);
+      else {
+        toast.show({
+          variant: "warning",
+          title:
+            done === 0
+              ? "The sheet was made, and its rows were not written"
+              : `The sheet was made with ${done} of ${plural(total, "row")}`,
+          message: stopped,
+        });
+      }
+      nav.to(artifactPath(id));
     },
     [run, workItem, toast, nav],
   );
@@ -123,6 +166,7 @@ export function useCreateArtifact(): CreateArtifact {
     refusal: gesture.answer && gesture.answer.kind !== "done" ? gesture.answer.text : null,
     fromStarter,
     sheet,
+    progress,
   };
 }
 
