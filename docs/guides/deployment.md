@@ -1199,9 +1199,11 @@ node binds its listener before its boot, so the port answers from the first
 second, but until the node has recovered what it holds itself — its own store
 and that release's schema migrations, the broker's file store, the broker's
 listeners, JetStream catching up with its peers (on a node without `data`, its
-leaf link to a member), the streams and buckets it provisions, the replicated
-estate and its state logs, and a joining node's snapshot — `/health` answers
-`503` with `"phase": "recovering"`. Applying those logs is not part of it: it
+leaf link to a member), the streams and buckets it provisions, the secret rows
+an offline `crewlet secrets set` left in its own store (moved onto the fleet),
+the batches of a stateless node's events its own event log left unsettled, the
+replicated estate and its state logs, and a joining node's snapshot — `/health`
+answers `503` with `"phase": "recovering"`. Applying those logs is not part of it: it
 catches up in the background from the end of the recovery, and what waits for
 it is the node's first seat, never `/health`. Kubernetes runs no liveness or
 readiness probe until a startup probe has succeeded once, so the startup probe
@@ -1221,11 +1223,13 @@ deployment knows how large a store it gave the node.
 **Nothing the company configures is part of it.** The moment the recovery is
 over the node logs `engine_recovered` and `/health` turns `200`, with
 `"phase": "preparing"`, while the node brings up what its company configures:
-its shared MCP servers — each bounded by its own
-[`startup_timeout_seconds`](../getting-started/configuration.md#mcp-servers),
+the snapshot of the company's secrets its `${VAR}` references resolve from, the
+company built from its document, its shared MCP servers — each bounded by its
+own [`startup_timeout_seconds`](../getting-started/configuration.md#mcp-servers),
 for its start and again for its first tool listing, with no ceiling on the
-setting — its sandboxes and native halves, the first apply of its active
-revision, and the dashboard's projection. A probe sized by the store knows
+setting — its sandboxes and native halves, its coding CLIs' credential bundles,
+the first apply of its active revision, and the dashboard's projection. A probe
+sized by the store knows
 nothing about any of them, so none of them is allowed to hold it: the startup
 probe passes, the liveness probe takes over and is answered `200`, and
 `/ready` stays `503` with `reason: "starting"` until the node serves, so
@@ -1239,7 +1243,12 @@ as a whole has no deadline beyond its parts', since one cut short would publish
 a company missing whatever had not come up yet. So a part that hangs leaves
 the node `preparing`: `/health` `200`, `/ready` `503 starting`, and no restart.
 A restart would not cure it — the next boot meets the same company and waits on
-the same part — so what a deployment needs is to see it. A rollout stops
+the same part — so what a deployment needs is to see it. The same holds for a
+secret store that does not answer: the node builds no company until it has read
+the store, because one built from the environment alone would run on stale or
+missing credentials, so it asks again, logging `secret_store_unreadable`, until
+the store answers. A value the node's keyring cannot open is the one exception:
+no wait changes that answer, so the boot ends there, naming the secret. A rollout stops
 behind such a pod (a Deployment marks it with `ProgressDeadlineExceeded` after
 its `progressDeadlineSeconds`), and an alert on a pod whose `/ready` has named
 `starting` for longer than the startup probe's window plus twice the slowest

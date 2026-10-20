@@ -106,6 +106,8 @@ flowchart LR
 
 Because substitution has a single choke point, that one change covers everything downstream: LLM API keys, per-role `mcp_env`, sandbox env, webhook secrets, contact identities, knowledge-search tokens.
 
+The boot takes that snapshot **before it builds its company, and waits for it**. A store that does not answer — a coordination group still electing its leader, a leaf link not yet up — is asked again (`secret_store_unreadable`, every few seconds rising to every 15) while `/health` answers `200 preparing` and `/ready` `503 starting`, because a company built without the store would resolve every reference from the environment alone: a stale token wherever the environment held one, nothing wherever it did not. A record the node's keyring cannot open ends the boot instead, naming the secret, since only putting the key back in `secrets.keys` or setting the value again changes that answer. Once a node holds a snapshot, a later read that fails keeps it serving rather than falling back.
+
 ### Store wins; the environment is the fallback
 
 Deliberately, and not negotiable: env-first would let a stale `.env` shadow a freshly rotated secret, which is exactly the failure this removes. A rotation would appear to succeed and then quietly not take effect, surfacing days later as an auth error far from its cause.
