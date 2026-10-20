@@ -12,6 +12,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/crewlet/crewlet/internal/envref"
+	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
@@ -493,6 +494,21 @@ func wholeRef(value string) (string, bool) {
 //     they simply fail.
 //   - The commit identity comes from the engine's generic agent facts, so
 //     work attributes to the seat rather than to whoever built the image.
+//   - The helper lands in the box's HOME. Neither local cell writes a setup
+//     file outside it, and a direct box's home is minted per box, so no
+//     absolute path a file entry holds is inside it: the recipe as it
+//     stood, writing /usr/local/bin, was refused at setup in both local
+//     cells, and a reader copying it got a seat that could never provision
+//     a box. A file entry may still name the home RELATIVELY, which every
+//     cell writes under it; the recipe writes the helper with a command
+//     because git is given its absolute path, which only the box's shell
+//     knows.
+//   - That path is QUOTED where git is told it. git runs a helper's value
+//     through the shell, so an unquoted "$HOME/…" splits at a space in the
+//     home — a direct box's sits under state_dir: by default the engine
+//     user's ~/.crewlet/sandboxes, and a relative one, like the examples',
+//     resolved against wherever the engine was started — and every clone
+//     dies with "could not read Username".
 //
 // The prose around the block explains each of those to a reader editing it.
 // This is what fails when the edit lands anyway.
@@ -520,12 +536,35 @@ func TestTheDocumentedGitAuthRecipeStaysScoped(t *testing.T) {
 
 	var helper string
 	for path, content := range step.Files {
+		// The boxes' own rule, judged for a direct box's minted home, which
+		// is the strictest any local cell holds a file to.
+		if _, inside := hostbox.InHome("", path); !inside {
+			t.Errorf("the git-auth step writes %s as a setup file, which no direct box "+
+				"takes: its home is minted per box. Name the file relative to the box's "+
+				"home, or write it under \"$HOME\" with a command", path)
+		}
 		if strings.Contains(path, "git-credential-") {
 			helper = content
 		}
 	}
+	for _, command := range step.Commands {
+		if strings.Contains(command, "git-credential-") && strings.Contains(command, "<<") {
+			helper = command
+			if !strings.Contains(command, `"$HOME/`) {
+				t.Errorf("the credential helper is not written under the box's home, the " +
+					"one place every cell lets a setup step write it")
+			}
+		}
+	}
 	if helper == "" {
 		t.Fatal("the git-auth step writes no credential helper")
+	}
+	for _, command := range step.Commands {
+		if strings.Contains(command, "credential.") && strings.Contains(command, ".helper") &&
+			strings.Contains(command, "$HOME") && !strings.Contains(command, `"!'`) {
+			t.Errorf("the helper is registered by an unquoted path under $HOME, which a home "+
+				"holding a space splits: register it as \"!'$HOME/…'\":\n%s", command)
+		}
 	}
 
 	// Layer one: the script refuses to answer for a host it does not know.
@@ -577,9 +616,9 @@ func TestTheDocumentedGitAuthRecipeStaysScoped(t *testing.T) {
 func gitAuthRecipeBlock(t *testing.T) string {
 	t.Helper()
 	data := readRepoFile(t, "docs", "concepts", "code-sandbox.md")
-	// The page carries a second, abbreviated helper snippet for `direct`
-	// mode, so matching on the helper name alone would find that one. The
-	// recipe proper is the block that declares the whole provider.
+	// The recipe proper is the block that declares the whole provider, so a
+	// shorter snippet naming the helper elsewhere on the page is never
+	// mistaken for it.
 	for _, m := range yamlBlockRE.FindAllStringSubmatch(string(data), -1) {
 		if strings.HasPrefix(m[1], "providers:") && strings.Contains(m[1], "git-credential-") {
 			return m[1]

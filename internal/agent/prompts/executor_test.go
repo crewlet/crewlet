@@ -170,15 +170,24 @@ func TestExecutorPromptRosterInlinesMemberProfiles(t *testing.T) {
 		"Goal: Ship quality code.", "Responsibilities: Write tests.")
 }
 
-func TestExecutorPromptSandboxSectionIsGatedOnTheRole(t *testing.T) {
+// THE SANDBOX SECTION FOLLOWS THE TOOL, NOT THE ROLE'S GATE.
+//
+// It used to be rendered for every seat whose gate was enabled, which an
+// agent-mode executor's seat may be — and that seat is never offered
+// run_sandbox, so its coding CLI was taught a tool its bridge never lists,
+// every turn. The caller says whether the tool is offered; the gate alone
+// renders nothing.
+func TestExecutorPromptSandboxSectionIsGatedOnTheOfferedTool(t *testing.T) {
 	t.Parallel()
-	// Absent for the ~all roles that are not sandbox-enabled, so it never
+	// Absent for the ~all seats that are not offered the tool, so it never
 	// bloats the common prompt.
 	excludes(t, BuildExecutor(engineer(), ExecutorInput{}).Text, "Sandbox code work", "run_sandbox")
 
 	o := acme()
 	o.Role("eng").Sandbox = &org.RoleSandbox{Enabled: true, CodingAgent: "claude-code"}
-	p := BuildExecutor(seatIn(o, "eng"), ExecutorInput{}).Text
+	excludes(t, BuildExecutor(seatIn(o, "eng"), ExecutorInput{}).Text, "Sandbox code work", "run_sandbox")
+
+	p := BuildExecutor(seatIn(o, "eng"), ExecutorInput{OffersSandbox: true}).Text
 	// The run is detached and the SAME turn resumes with the result, which
 	// is what stops the model ending the turn to "report later".
 	contains(t, p, "run_sandbox", "resumes", "SAME turn")
@@ -228,8 +237,6 @@ func TestExecutorPromptPrefetchBlocks(t *testing.T) {
 	t.Parallel()
 	in := ExecutorInput{
 		ThreadContext:       "- **Ana Ruiz (ana)**: staging redirects in a loop",
-		OnboardingHint:      "- read #eng's Onboarding page",
-		AvailableTools:      []string{"mark_onboarded"},
 		PersonalMemory:      "- prefers short replies",
 		SynthesizedSkills:   "- how to triage a sev-1",
 		RelevantKnowledge:   "- **Incident Response Runbook**: Steps for a sev-1.",
@@ -237,16 +244,16 @@ func TestExecutorPromptPrefetchBlocks(t *testing.T) {
 		CounterpartyProfile: "Subject: U0TESTUSER1",
 	}
 	p := BuildExecutor(engineer(), in).Text
-	// Ordered so the agent reads the conversation it was woken in, then the
-	// standing first-turn instruction, then memory, then what it learned,
-	// then the team's docs, then prior work, then who it is talking to. The
-	// thread leads because it is the trigger's own context rather than
-	// something retrieved about it — and it led in the prose before it led
-	// in the prompt, with the onboarding block appended above it.
+	// Ordered so the agent reads the conversation it was woken in, then
+	// memory, then what it learned, then the team's docs, then prior work,
+	// then who it is talking to. The thread leads because it is the
+	// trigger's own context rather than something retrieved about it — and
+	// it led in the prose before it led in the prompt, with another block
+	// appended above it.
 	//
 	// EVERY BLOCK IS AN ANCHOR. A subset pins the blocks it names and says
 	// nothing about one appended between two of them, which is exactly how
-	// the onboarding block came to render first while the comment beside it
+	// another block once came to render first while the comment beside it
 	// and the docs both said the thread did.
 	//
 	// Anchored on the section break rather than the bare heading:
@@ -255,7 +262,6 @@ func TestExecutorPromptPrefetchBlocks(t *testing.T) {
 	// no block at all.
 	order(t, p,
 		"\n## The thread so far\n",
-		"\n## First-turn onboarding\n",
 		"\n## Personal memory\n",
 		"\n## Synthesized skills you've learned\n",
 		"\n## Relevant knowledge\n",
@@ -270,7 +276,7 @@ func TestExecutorPromptPrefetchBlocks(t *testing.T) {
 	excludes(t, p, "## Thread context")
 	// Each block is dropped whole when empty — no stub headings.
 	excludes(t, BuildExecutor(engineer(), ExecutorInput{}).Text,
-		"\n## The thread so far\n", "\n## First-turn onboarding\n",
+		"\n## The thread so far\n",
 		"\n## Personal memory\n", "\n## Synthesized skills you've learned\n",
 		"\n## Relevant knowledge\n", "\n## Similar prior work\n", "\n## Known counterparty\n")
 }
@@ -286,23 +292,6 @@ func TestTheKnowledgeNoteOnlyAppearsWithABlock(t *testing.T) {
 	}).Text, "Relevant team documentation was surfaced")
 	excludes(t, BuildExecutor(engineer(), ExecutorInput{}).Text,
 		"Relevant team documentation was surfaced")
-}
-
-// The onboarding hint gates on the tool as well as the marker: telling an
-// agent to call mark_onboarded when reflection is disabled and the builtin is
-// not registered sends it hunting for a tool that does not exist.
-func TestExecutorPromptOnboardingHintGatesOnTheTool(t *testing.T) {
-	t.Parallel()
-	hint := "Read the 'Onboarding' pages on your chain."
-	withTool := BuildExecutor(engineer(), ExecutorInput{
-		OnboardingHint: hint, AvailableTools: []string{"mark_onboarded"},
-	}).Text
-	contains(t, withTool, "## First-turn onboarding", hint)
-
-	excludes(t, BuildExecutor(engineer(), ExecutorInput{OnboardingHint: hint}).Text,
-		"## First-turn onboarding")
-	excludes(t, BuildExecutor(engineer(), ExecutorInput{AvailableTools: []string{"mark_onboarded"}}).Text,
-		"## First-turn onboarding")
 }
 
 // Both identity renderings must phrase a top-level seat the same way. They

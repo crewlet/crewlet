@@ -78,21 +78,48 @@ func (s SetupStep) timeout() time.Duration {
 	return DefaultSetupTimeout
 }
 
-// SetupError reports a setup step's command failing — the box is not usable as
-// promised, so the acquisition fails and the caller tears the box down.
+// SetupError reports a setup step failing — the box is not usable as promised,
+// so the acquisition fails and the caller tears the box down.
 //
 // Distinct from an install failure on purpose: a failed setup step is an
 // OPERATOR CONFIG problem (a broken role or provider setup command), not a
 // coding-agent install problem, and the two want different debugging.
+//
+// THREE FAILURES, AND THE MESSAGE SAYS WHICH. A step fails writing one of its
+// files, or running a command that then exits non-zero, or running a command
+// that reports no exit status at all — one the box could not start, or one
+// whose box went away under it, which the message cannot tell apart and so
+// does not claim either of: [SetupError.Detail] carries the box's own account.
+// One sentence for all three named a refused file "command #0 failed (exit
+// 0)" — a command that does not exist, failing with the status that means
+// success — and a command with no exit status "failed (exit 0)" too, which
+// sent the operator to read a command for the reason it exited cleanly.
 type SetupError struct {
-	Step    string
-	Command int // 1-based position within the step
-	Exit    int
-	Detail  string
+	Step string
+	// File is the path a write into the box failed for. Set only when a
+	// file is what failed, and Command is zero then.
+	File string
+	// Command is the failed command's 1-based position within the step.
+	Command int
+	// Exited is whether the command reported an exit status, which Exit
+	// then holds — a signal that ended it as a shell reports one, 128 plus
+	// its number. A command the box could not start has none, and neither
+	// does one whose box went away before it reported.
+	Exited bool
+	Exit   int
+	Detail string
 }
 
 func (e *SetupError) Error() string {
-	msg := fmt.Sprintf("setup step %q command #%d failed (exit %d)", e.Step, e.Command, e.Exit)
+	var msg string
+	switch {
+	case e.File != "":
+		msg = fmt.Sprintf("setup step %q could not write %s", e.Step, e.File)
+	case e.Exited:
+		msg = fmt.Sprintf("setup step %q command #%d failed (exit %d)", e.Step, e.Command, e.Exit)
+	default:
+		msg = fmt.Sprintf("setup step %q command #%d reported no exit status", e.Step, e.Command)
+	}
 	if e.Detail != "" {
 		msg += " — " + e.Detail
 	}
@@ -117,8 +144,8 @@ func SetupEnv(steps []SetupStep) map[string]string {
 // recipe can reference the engine's identity facts and its own configured
 // tokens at provisioning time.
 //
-// Returns a [SetupError] on the FIRST failed command so the caller tears the
-// box down: the coding agent's brief promises this environment, so a partial
+// Returns a [SetupError] on the FIRST failure, a file or a command, so the
+// caller tears the box down: the coding agent's brief promises this environment, so a partial
 // application must never reach a run.
 func ApplySetup(ctx context.Context, box Sandbox, steps []SetupStep, env map[string]string) error {
 	for _, step := range steps {
@@ -127,7 +154,7 @@ func ApplySetup(ctx context.Context, box Sandbox, steps []SetupStep, env map[str
 		paths := slices.Sorted(maps.Keys(step.Files))
 		for _, path := range paths {
 			if err := box.WriteFile(ctx, path, []byte(step.Files[path])); err != nil {
-				return &SetupError{Step: step.Name, Detail: err.Error()}
+				return &SetupError{Step: step.Name, File: path, Detail: err.Error()}
 			}
 		}
 		for i, cmd := range step.Commands {
@@ -150,6 +177,7 @@ func ApplySetup(ctx context.Context, box Sandbox, steps []SetupStep, env map[str
 				return &SetupError{
 					Step:    step.Name,
 					Command: i + 1,
+					Exited:  true,
 					Exit:    result.ExitCode,
 					Detail:  redact.Secrets(strings.TrimSpace(result.Stderr)),
 				}

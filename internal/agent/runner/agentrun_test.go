@@ -3,6 +3,7 @@ package runner_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
+	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // recordingLauncher stands in for the engine's detached-run seam.
@@ -88,6 +90,129 @@ func TestAnAgentModeExecutorLaunchesAndSuspends(t *testing.T) {
 	}
 	if !published {
 		t.Error("the bridged surface does not publish submit_work, so the run cannot say what it did")
+	}
+}
+
+// AN AGENT-MODE EXECUTOR IS NOT TAUGHT A TOOL IT IS NOT OFFERED.
+//
+// Its seat may carry an enabled gate — the gate is where the executor's box
+// reads its setup, env and MCP servers — but such a seat is never offered
+// run_sandbox: its CLI already holds a shell. The prompt's sandbox section was
+// rendered off the gate all the same, so the brief taught every such turn a
+// tool the bridge never lists. The same seat on the native loop is the
+// control, and is taught it, so a section that vanished everywhere fails too.
+func TestAnAgentModeExecutorIsNotTaughtRunSandbox(t *testing.T) {
+	t.Parallel()
+	gate := &org.RoleSandbox{Enabled: true}
+	withTool := func(t *testing.T, reg *tools.Registry) {
+		if err := reg.Register(stubTool{name: runner.RunSandboxTool}, tools.OriginBuiltin); err != nil {
+			t.Fatalf("Register: %v", err)
+		}
+	}
+
+	launcher := &recordingLauncher{}
+	agent, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
+		buildOpts{agentRun: launcher, sandbox: gate, register: withTool})
+	if _, _, err := agent.Execute(context.Background(), 1, "", nil); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if launcher.runs != 1 {
+		t.Fatalf("launched %d runs", launcher.runs)
+	}
+	for _, taught := range []string{"Sandbox code work", "run_sandbox"} {
+		if strings.Contains(launcher.req.Brief, taught) {
+			t.Errorf("the agent-mode brief teaches %q, a tool its surface never offers:\n%s", taught, launcher.req.Brief)
+		}
+	}
+
+	prov := &scriptedProvider{execute: []llm.Completion{submitCall(t, runner.SubmitWorkTool,
+		`{"outcome":"delivered","summary":"done","deliveries":["slack_post"]}`)}}
+	native, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}},
+		buildOpts{sandbox: gate, register: withTool})
+	if _, _, err := native.Execute(context.Background(), 1, "", nil); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if system := systemOf(t, prov, "execute"); !strings.Contains(system, "Sandbox code work") {
+		t.Error("a gated seat on the native loop, offered run_sandbox, was not taught it")
+	}
+}
+
+// A RESUMED EXECUTOR REACHES ONLY WHAT A FRESH ONE DOES, on both resume paths.
+//
+// A resume rebuilds the executor's surface from the registry, so it is the
+// second place the narrowing has to hold: built from the whole registry, a
+// resumed executor could activate mark_onboarded — and skip orientation for
+// good, which phaseScoped exists to prevent — and a resumed agent-mode run got
+// run_sandbox back. The parked state decides which path runs; the seat's gate
+// decides whether a native executor is offered run_sandbox, and a native seat
+// whose gate is on is the control that keeps it, so a resume that dropped the
+// tool everywhere fails too. The native case also ASKS to activate each hidden
+// tool, since activate_tool reaches exactly the universe the surface was built
+// from.
+func TestAResumedExecutorReachesOnlyWhatAFreshOneDoes(t *testing.T) {
+	t.Parallel()
+	hidden := func(t *testing.T, reg *tools.Registry) {
+		for _, name := range []string{runner.MarkOnboardedTool, runner.RunSandboxTool} {
+			if err := reg.Register(stubTool{name: name, out: "ok"}, tools.OriginBuiltin); err != nil {
+				t.Fatalf("Register: %v", err)
+			}
+		}
+	}
+	gate := &org.RoleSandbox{Enabled: true}
+	for _, tc := range []struct {
+		name       string
+		agentRun   bool
+		gate       *org.RoleSandbox
+		runSandbox bool
+	}{
+		{name: "native, no gate"},
+		{name: "native, gated", gate: gate, runSandbox: true},
+		{name: "agent mode, gated", agentRun: true, gate: gate},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			opts := buildOpts{sandbox: tc.gate, register: hidden}
+			prov := &scriptedProvider{}
+			if tc.agentRun {
+				opts.agentRun = &recordingLauncher{}
+				opts.resume = &runner.Resume{
+					State:   execstate.State{Version: execstate.Version, AgentRun: true, Round: 1},
+					Answer:  "done",
+					Bridged: []ledger.Call{{Name: "slack_post", Result: "posted"}},
+				}
+			} else {
+				prov.execute = []llm.Completion{
+					activate(runner.MarkOnboardedTool),
+					activate(runner.RunSandboxTool),
+					submitWork(t),
+				}
+				opts.resume = &runner.Resume{State: suspendedAfterTwoRounds(), Answer: "the run succeeded"}
+			}
+			r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, opts)
+			_, surface, err := r.Resume(context.Background(), nil)
+			if err != nil {
+				t.Fatalf("Resume: %v", err)
+			}
+			if slices.Contains(surface.Catalogue, runner.MarkOnboardedTool) {
+				t.Error("the resumed executor can reach mark_onboarded")
+			}
+			if got := slices.Contains(surface.Catalogue, runner.RunSandboxTool); got != tc.runSandbox {
+				t.Errorf("the resumed executor reaches run_sandbox = %v, want %v", got, tc.runSandbox)
+			}
+			for i, req := range prov.seen {
+				offered := toolNames(req.Tools)
+				if slices.Contains(offered, runner.MarkOnboardedTool) {
+					t.Errorf("resumed request %d was offered mark_onboarded, which activate_tool reached", i+1)
+				}
+				if !tc.runSandbox && slices.Contains(offered, runner.RunSandboxTool) {
+					t.Errorf("resumed request %d was offered run_sandbox, which activate_tool reached", i+1)
+				}
+			}
+			if !tc.agentRun && len(prov.seen) < 3 {
+				t.Fatalf("the resumed executor made %d requests; its activations never got a round after them",
+					len(prov.seen))
+			}
+		})
 	}
 }
 

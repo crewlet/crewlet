@@ -131,7 +131,7 @@ func TestAnEmptyBlockRendersNoHeading(t *testing.T) {
 	for _, heading := range []string{
 		"## The thread so far",
 		"## Personal memory", "## Relevant knowledge", "## Similar prior work",
-		"## Known counterparty", "## Synthesized skills", "## First-turn onboarding",
+		"## Known counterparty", "## Synthesized skills",
 	} {
 		if strings.Contains(system, heading) {
 			t.Fatalf("an empty block rendered %q", heading)

@@ -331,7 +331,7 @@ test("every figure column sits inside the box the rows are sized as", async () =
         event({
           type: "prefetch_summary",
           timestamp: "2026-09-13T10:00:00Z",
-          payload: { turn_id: TURN, onboarding_hint_hit: true, onboarding_hint_bytes: 1016 },
+          payload: { turn_id: TURN, counterparty_hit: true, counterparty_bytes: 1016 },
         }),
         promptSize({ approximate_tokens: 7400, system_bytes: 24_000, user_bytes: 1200 }),
       ],

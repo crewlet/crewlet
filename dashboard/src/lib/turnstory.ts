@@ -376,9 +376,9 @@ export interface PrefetchBlock {
 }
 
 /**
- * The seven context blocks an executor's prompt is built from.
+ * The six context blocks an executor's prompt is built from.
  *
- * The event's own one-line summary collapses this to "2/7 hits", which is the
+ * The event's own one-line summary collapses this to "2/6 hits", which is the
  * right shape for a feed and the wrong one for the screen about this turn:
  * every block degrades to empty on failure by design, so an unreachable store,
  * an unconfigured auxiliary model and a filter that selected nothing all
@@ -413,7 +413,6 @@ export function prefetchBlocks(event: EventRecord | undefined): PrefetchBlock[] 
     ),
     block("Who it was with", p, "counterparty", ""),
     block("Synthesized skills", p, "synthesized_skills", ""),
-    block("First-turn onboarding", p, "onboarding_hint", ""),
   ];
 }
 

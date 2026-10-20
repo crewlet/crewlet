@@ -115,31 +115,6 @@ func TestAFreshSeatGetsNoMemorySection(t *testing.T) {
 	}
 }
 
-// A SEAT THAT ONBOARDS ON THIS VERY TURN IS NOT THEN TOLD TO ONBOARD.
-//
-// The prefetch is frozen at turn start and the onboarding pass runs after
-// it, so the hint is rendered against a seat that has not onboarded YET —
-// which is true at that instant and false by the time the executor reads it.
-// Without the suppression the first turn of every seat's life ends with the
-// executor being told to go and read the pages it has just finished reading.
-func TestASeatThatJustOnboardedIsNotToldToOnboard(t *testing.T) {
-	t.Parallel()
-	n := start(t)
-	waitForSeat(t, n, "ceo")
-
-	n.wake(t, "ceo", "How did the week go?")
-	waitForTurn(t, n)
-
-	// The pass really did run — otherwise this asserts the absence of a
-	// hint that was never going to be there.
-	if phases := n.model.seen(); !slices.Contains(phases, "onboarding") {
-		t.Fatalf("the onboarding pass did not run; phases = %v", phases)
-	}
-	if system := executorPrompt(t, n); strings.Contains(system, "## First-turn onboarding") {
-		t.Fatalf("a seat that just onboarded was nagged:\n%s", tail(system))
-	}
-}
-
 // tail is the last of a long prompt, for a failure message that is readable.
 func tail(s string) string {
 	if len(s) <= 1200 {

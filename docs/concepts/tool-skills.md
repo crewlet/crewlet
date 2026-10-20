@@ -213,11 +213,11 @@ The engine substitutes the variables at **render time**, everywhere a skill's `s
 
 ## Phase scoping (catalogue visibility)
 
-A skill is **catalogued** in a phase's prompt when its declared `phases` includes that phase **and** its `trigger` matches the active surface:
+A skill is **catalogued** in a phase's prompt when its declared `phases` includes that phase **and** its `trigger` matches the phase's tool surface:
 
 | Phase | Tool surface seen | Notes |
 |---|---|---|
-| **Execute** | every first-party tool plus whatever the executor has activated, and the names of the MCP servers whose tools reach the seat | The executor's live surface, so a skill for a tool it discovered mid-run is catalogued from the next round. `run_sandbox` is on it only for a seat whose `role.sandbox` is enabled and whose executor is not itself a coding agent in agent mode, so a `tool: run_sandbox` trigger reaches exactly the seats that can launch a run. |
+| **Execute** | every tool the executor can reach, its first-party tools and every MCP server's tool alike, whether or not it is active yet, and the names of the MCP servers whose tools reach the seat | Matched once, when the phase opens, and the guard is armed over the same names, so a required skill for an MCP tool the executor activates later is enforced as the catalogue said. `run_sandbox` is on it only for a seat whose `role.sandbox` is enabled and whose executor is not itself a coding agent in agent mode, so a `tool: run_sandbox` trigger reaches exactly the seats that can launch a run. |
 | **Review** | empty (Review has no domain tools) | MCP-server-keyed skills still appear when an operator scopes a skill to the Review phase (lists it in the skill's `phases`), even though Review has no domain-tool surface. |
 | **Sub-agent** | the delegated task's allowlist | Same matching as Execute, against the worker's narrower surface. `subagent` is the wire name of the worker phase |
 

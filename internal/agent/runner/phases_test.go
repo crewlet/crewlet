@@ -212,6 +212,10 @@ type buildOpts struct {
 	// compact is the seat's compactor, for the cases about what a rewrite
 	// the prompt's assembly asks for costs.
 	compact compact.Bound
+
+	// sandbox is the seat's role.sandbox gate, for the cases about what a
+	// gate does and does not offer.
+	sandbox *org.RoleSandbox
 }
 
 func build(t *testing.T, entries []phase.Entry, reply ...turn.Reply) (*runner.Runner, *tools.Registry) {
@@ -274,6 +278,7 @@ func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Run
 		role.LLM = opts.execChain
 	}
 	role.LLMReview = org.ProviderKeys{"reviewer"}
+	role.Sandbox = opts.sandbox
 	organization := &org.Organization{Name: "Acme", Roles: []*org.Role{role}}
 
 	task := opts.task

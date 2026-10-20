@@ -406,6 +406,9 @@ func TestAParkedRoundsStopReasonSurvivesTheResume(t *testing.T) {
 		}}
 		r, reg := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{
 			resume: &runner.Resume{State: state, Answer: "the run succeeded"},
+			// The gate a seat that parked on run_sandbox has: without it
+			// the resumed executor is not offered the tool again.
+			sandbox: &org.RoleSandbox{Enabled: true},
 		})
 		if err := reg.RegisterWith(suspendingTool{}, tools.Origin("sandbox"), tools.Annotations{}); err != nil {
 			t.Fatalf("Register: %v", err)
