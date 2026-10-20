@@ -1,6 +1,7 @@
 package search_test
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
@@ -342,6 +343,40 @@ func TestAChatSearchIsScopedToTheViewersChannels(t *testing.T) {
 		if hit.ChannelID != "open" {
 			t.Fatalf("a search scoped to one room answered with a message in %s",
 				hit.ChannelID)
+		}
+	}
+}
+
+// A HIT SAYS WHAT KIND OF AUTHOR WROTE IT, as the transcript recorded it. A
+// reader fences a snippet as its author's words, and the handle alone cannot
+// say who that was: the engine's own narration has no seat to resolve, and a
+// person whose seat has since left the chart is still a person.
+//
+// Mutation: drop author_kind from the hydrate and every hit reads as nobody's.
+func TestAChatHitSaysWhatKindOfAuthorWroteIt(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	ctx := t.Context()
+	indexer := search.NewChatIndexer(db, db.Replicated().Reader())
+	writeChatRows(t, db,
+		chatRow{id: "m-ada", room: "c1", author: "ada", kind: "human",
+			body: "the release slipped", createdAt: 1000, version: 100},
+		chatRow{id: "m-swe", room: "c1", author: "swe", kind: "agent",
+			body: "the release is cut", createdAt: 1001, version: 101},
+		chatRow{id: "m-sys", room: "c1", author: "", kind: "system",
+			body: "the release room was archived", createdAt: 1002, version: 102},
+	)
+	sweepAll(ctx, t, indexer)
+
+	want := map[string]string{"m-ada": "human", "m-swe": "agent", "m-sys": "system"}
+	hits := searchChat(ctx, t, indexer, "release", "c1")
+	if len(hits) != len(want) {
+		t.Fatalf("the search found %d of %d messages: %+v", len(hits), len(want), hits)
+	}
+	for _, hit := range hits {
+		if hit.AuthorKind != want[hit.MessageID] {
+			t.Errorf("hit %s says its author is %q, want %q", hit.MessageID,
+				hit.AuthorKind, want[hit.MessageID])
 		}
 	}
 }
@@ -1030,6 +1065,9 @@ func TestALongChatQueryIsRefusedBeforeItRuns(t *testing.T) {
 type chatRow struct {
 	id, room, author, body string
 	createdAt, version     int64
+	// kind is the author's kind as the transcript records it: a person's
+	// where a case names none.
+	kind string
 }
 
 // writeChatRows puts rows into the replicated transcript in one transaction.
@@ -1041,9 +1079,9 @@ func writeChatRows(t *testing.T, db *store.DB, rows ...chatRow) {
 				INSERT INTO chat_messages (id, channel_id, thread_root, author_handle,
 				                           author_kind, body, links, channel_seq,
 				                           created_at, version, shard, document)
-				VALUES (?, ?, '', ?, 'human', ?, '', ?, ?, ?, ?, X'')`,
-				r.id, r.room, r.author, r.body, i+1, r.createdAt, r.version,
-				search.ChatShardOf(r.id)); err != nil {
+				VALUES (?, ?, '', ?, ?, ?, '', ?, ?, ?, ?, X'')`,
+				r.id, r.room, r.author, cmp.Or(r.kind, "human"), r.body, i+1, r.createdAt,
+				r.version, search.ChatShardOf(r.id)); err != nil {
 				return fmt.Errorf("insert message %s: %w", r.id, err)
 			}
 		}

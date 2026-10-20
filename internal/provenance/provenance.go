@@ -55,12 +55,20 @@ const (
 	SourceChatThread      Source = "chat_thread"
 	SourceArtifactFile    Source = "artifact_file"
 	SourceArtifactRow     Source = "artifact_row"
+
+	// SourceChatRoom is what a chat room says about itself — its topic and
+	// its purpose — as against what was said in it, which is
+	// [SourceChatThread]: a person writes both, but a room's settings are
+	// read beside every room a seat is in, and a reader auditing a
+	// transcript has to tell the room's label from a message.
+	SourceChatRoom Source = "chat_room"
 )
 
 // Sources are every surface.
 var Sources = []Source{
 	SourcePageBody, SourcePageComment, SourceWorkDescription, SourceWorkComment,
-	SourceProjectFile, SourceChatThread, SourceArtifactFile, SourceArtifactRow,
+	SourceProjectFile, SourceChatThread, SourceChatRoom, SourceArtifactFile,
+	SourceArtifactRow,
 }
 
 // Valid reports whether s is one of [Sources].
