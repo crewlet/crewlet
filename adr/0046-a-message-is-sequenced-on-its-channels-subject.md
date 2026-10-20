@@ -42,8 +42,9 @@ Three decisions, and they hold each other up:
   per record: `applied`, or refused and why — `archived`, `not_member`, `gone`,
   `deleted`, `reactions_full` — or `repeated`. The writer answers a refusal
   with the sentinel its own decision would have refused with had the record
-  ahead been in its snapshot, so every surface answers the two the same way,
-  and a retry the ledger answers reads its first copy's verdict the same way.
+  ahead been in its snapshot, so every surface answers the two the same way; a
+  retry the ledger answers reads its first copy's verdict the same way; and the
+  change feed withholds the wake of a record this node's applier refused.
 - **Scoped to the channel, because the applier mints the sequence.** A
   per-channel `channel_seq` cannot be minted by the writer (writers form no
   expectation and would compute the same number), so the applier mints it from
@@ -94,8 +95,12 @@ deferral grace every other domain has.
 
 A verdict row per message record, kept for the operation ledger's horizon
 (`statelog.OpsRetention`, thirty days) by the broker's clock and pruned inside
-each record's own apply, sixty-four at a time; and one read of it per
-gesture, after the apply the writer already waited for.
+each record's own apply, sixty-four at a time; one read of it per gesture,
+after the apply the writer already waited for; and one per post or edit the
+change feed handles. The feed never waits on an applier that cannot answer —
+one more than a pull behind, or holding the record retained — and derives the
+wake from the record there, so a post refused in a race a node has not applied
+yet can still wake a seat that then finds nothing.
 
 A write answered `pending` or `unknown` has no verdict yet, so the writer
 cannot say whether the record will be refused; it says so by carrying none.

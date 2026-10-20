@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // log is the package's logger. It lives beside the feed because the feed and
@@ -64,7 +65,7 @@ const FeedGroup = "crewlet-chat-feed"
 // they did. The record carries its own routing snapshot ([Notify]) precisely
 // so neither is necessary.
 //
-// # Why it holds nothing
+// # Why it holds no setting, and what it does hold
 //
 // Every decision below is a property of the RECORD. A translator with a
 // setting would be a wake filter a redelivery months later could not
@@ -72,10 +73,25 @@ const FeedGroup = "crewlet-chat-feed"
 // ([github.com/crewlet/crewlet/internal/doclet.Translator]) holds one, the
 // reserved skills container, and states the cost of reading it per change
 // rather than capturing it. Nothing here needs one.
-type Translator struct{}
+//
+// What it holds is this node's [Decisions]: the applier's verdict on a post or
+// an edit is the record's own decision, identical on every node, and a record
+// the applier refused wakes nobody ([Translator.Translate]).
+type Translator struct {
+	decisions Decisions
+}
 
-// NewTranslator builds Chatlet's feed translator.
-func NewTranslator() *Translator { return &Translator{} }
+// NewTranslator builds Chatlet's feed translator over this node's
+// decisions.
+//
+// NIL IS A TRANSLATOR THAT ASKS NOTHING and derives every wake from the record
+// alone, which is what one built where no estate is held answers — and what
+// every record's wake was before the applier decided messages. A node that
+// runs the feed holds the estate (its group needs data), so the engine always
+// hands it one.
+func NewTranslator(decisions Decisions) *Translator {
+	return &Translator{decisions: decisions}
+}
 
 // Source is the estate this translator serves: the notification source name
 // the parser registers under, and this domain's own fleet-wide consumer
@@ -92,7 +108,7 @@ func (t *Translator) Source() changefeed.Source {
 // Translate decides whether a committed record wakes anybody, and hands the
 // parser the whole thing.
 //
-// # The four ways a record wakes nobody, and why every one of them is an ACK
+// # The five ways a record wakes nobody, and why every one of them is an ACK
 //
 // A MACHINERY SUBJECT — a barrier, a generation, an eviction — is the fleet
 // talking to itself. A wake per barrier would page the company once per
@@ -110,7 +126,14 @@ func (t *Translator) Source() changefeed.Source {
 // narrating its own room, a reaction and a prune are the records it exists
 // for: each is a line to render or a row to remove, not a question to answer.
 //
-// All four are DECISIONS, and a decision is handling: acked rather than
+// A RECORD THE APPLIER REFUSED — a post into a room a record ahead of it
+// archived, or by an author taken out of it; an edit of a message taken back
+// — is in no room, and a seat woken for it would open a room to answer words
+// nobody can read. Where this node has not decided the record, the wake is
+// derived from the record as it always was: see [Decisions] for why the feed
+// never waits on an applier that cannot answer.
+//
+// All five are DECISIONS, and a decision is handling: acked rather than
 // naked, because a record naked for having nothing to say comes back for
 // ever.
 func (t *Translator) Translate(ctx context.Context, rec changefeed.Record) (
@@ -151,6 +174,10 @@ func (t *Translator) Translate(ctx context.Context, rec changefeed.Record) (
 		return changefeed.Delivery{}, false, nil
 	}
 
+	if !t.landed(ctx, rec, record) {
+		return changefeed.Delivery{}, false, nil
+	}
+
 	body, err := recordBody(record)
 	if err != nil {
 		return changefeed.Delivery{}, false, err
@@ -158,6 +185,43 @@ func (t *Translator) Translate(ctx context.Context, rec changefeed.Record) (
 	return changefeed.Delivery{
 		Body: body, ID: record.OpID, Actor: record.Actor,
 	}, true, nil
+}
+
+// landed reports whether a record may wake anybody as far as this node's
+// applier has decided it: false only for a verdict that says it did not land.
+//
+// FAILS OPEN on everything else — no decisions, no decision yet, and a verdict
+// this node could not read — because the wake was the record's before the
+// applier decided anything, and a wake for a refused post costs a seat one
+// look at a room while a wake withheld over a failed read is a person nobody
+// tells. A read that failed is logged, since it is the one of the three that
+// says something here is wrong.
+func (t *Translator) landed(ctx context.Context, rec changefeed.Record,
+	record MutationRecord) bool {
+
+	if t.decisions == nil {
+		return true
+	}
+	at := statelog.Position{Stream: rec.Stream, Generation: uint32(rec.Gen),
+		Seq: rec.Position}
+	v, ok, err := t.decisions.Decided(ctx, record.OpID, at)
+	switch {
+	case err != nil:
+		log.WarnContext(ctx, "chat_wake_verdict_unread", "subject",
+			record.Subject.String(), "op", record.OpID, "position", at.String(),
+			"error", err.Error(),
+			"detail", "the wake is derived from the record, as it is where this "+
+				"node has not decided it, and may be one for a message the "+
+				"applier refused")
+		return true
+	case !ok:
+		return true
+	case v.Landed():
+		return true
+	}
+	log.DebugContext(ctx, "chat_wake_withheld", "subject", record.Subject.String(),
+		"op", record.OpID, "verdict", string(v))
+	return false
 }
 
 // wakesAnybody reports an op whose records can carry a notification.

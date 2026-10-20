@@ -73,7 +73,8 @@ was (the room is archived, they are not in it, the message is gone, the message
 carries all the emoji it can), and a person is answered that class in its
 code's own words until the refusal catalog words it for them
 ([ADR-0060](../../adr/0060-a-caveat-or-a-refusal-is-worded-for-each-reader-and-a-person-is-never-shown-a-models.md)). Every node reaches the same decision and records it, so a retry
-of a refused message is refused again rather than reported as said. A gesture answered `pending` — durable, and not
+of a refused message is refused again rather than reported as said, and a
+refused message wakes nobody. A gesture answered `pending` — durable, and not
 yet applied on the node that answered — may still be refused this way when it
 applies. This is recorded as
 [ADR-0046](../../adr/0046-a-message-is-sequenced-on-its-channels-subject.md).

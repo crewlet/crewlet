@@ -248,7 +248,7 @@ func chatMessageWake(t *testing.T, author string) *events.Event {
 	if err != nil {
 		t.Fatalf("encode the chat record: %v", err)
 	}
-	delivery, wake, err := chatlet.NewTranslator().Translate(t.Context(),
+	delivery, wake, err := chatlet.NewTranslator(nil).Translate(t.Context(),
 		changefeed.Record{Payload: payload, Key: record.Subject.Wire()})
 	if err != nil || !wake {
 		t.Fatalf("the chat record relayed nothing: %v", err)

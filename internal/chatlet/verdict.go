@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // THE VERDICT: what the applier decided about one record on a room's message
@@ -24,13 +25,14 @@ import (
 // emoji are already on the message, whether an edit lands on whether a delete
 // ahead of it left a tombstone. Each of those was decided at the applier and
 // told to nobody: the writer answered `applied` for a record the applier had
-// dropped.
+// dropped, and the change feed woke seats about a post that is in no room.
 //
 // So the applier writes a verdict for every message record it consumes
 // (`chat_verdicts`), and every reader that reports what a record did reads it:
 // the writer before it answers ([Store.Post] and the other three), a retry the
-// operation ledger answers, and the applier itself before it decides a second
-// copy of an operation. ADR-0046 is the decision.
+// operation ledger answers, the change feed before it derives a wake
+// ([Translator]), and the applier itself before it decides a second copy of an
+// operation. ADR-0046 is the decision.
 //
 // # Why not arbitrated instead
 //
@@ -172,4 +174,111 @@ func verdictIn(ctx context.Context, tx *sql.Tx, opID string, at statelog.Positio
 		return verdictDropped, true, nil
 	}
 	return "", false, nil
+}
+
+// Decisions is what the change feed reads before it derives a wake: what this
+// node's applier decided about a record.
+//
+// A WAKE IS DERIVED FROM A DECISION WHERE ONE HAS BEEN TAKEN: a post the applier
+// refused is in no room, and a seat woken for it would open a room to answer a
+// message nobody can read. The feed runs only where the estate is held (its
+// group needs data), so the applier it asks is this node's own.
+//
+// AND FROM THE RECORD WHERE NONE HAS, which is the opposite of what a refusal
+// suggests and deliberate: the record carries its own routing snapshot so that
+// the company's notifications never wait on any one node's applier, and a feed
+// that held every wake until its own copy caught up would make them do exactly
+// that — a node catching up after a restart, or one holding a record it cannot
+// decode, would stop the whole fleet's chat wakes behind the record at the head
+// of its consumer. What that costs is a wake for a post refused in a race this
+// node has not applied yet, which the woken seat finds is not there.
+type Decisions interface {
+	// Decided is the verdict of operation opID, whose record is at, and
+	// whether this node has one to give. ok false is no answer — not
+	// reached inside the wait, or held retained — and the caller derives
+	// the wake from the record.
+	Decided(ctx context.Context, opID string, at statelog.Position) (v Verdict, ok bool, err error)
+}
+
+// CommitWaiter is the half of this node's applier [NodeDecisions] asks.
+type CommitWaiter interface {
+	Committed() statelog.Position
+	WaitCommitted(ctx context.Context, p statelog.Position) error
+}
+
+// DecisionWait is how long the feed waits for this node's applier to reach a
+// record before it derives the wake from the record alone.
+//
+// [statelog.ReadBudget], the two seconds a read is promised this node's
+// applier reaches what it waits for: the feed is one more reader of a position
+// this node is about to apply, and a node that cannot reach a record inside a
+// read's budget is one whose reads are being refused `behind` too. The applier
+// gives up its linger the instant somebody waits ([statelog.ApplyLinger]), so a
+// current node answers in one batch's commit, well inside it.
+const DecisionWait = statelog.ReadBudget
+
+// DecisionLagRecords is how far behind a record this node's applier may be for
+// the feed to wait for it at all: one pull ([statelog.FetchMessages]).
+//
+// AN APPLIER FURTHER BEHIND IS CATCHING UP, and its next batch will not reach
+// the record however long the feed waits — so the feed derives the wake at once
+// rather than spending [DecisionWait] on each record it is handed, which would
+// slow a node rejoining the group to one wake per wait.
+const DecisionLagRecords = statelog.FetchMessages
+
+// NodeDecisions is [Decisions] over this node's own estate and applier.
+//
+// THE ZERO VALUE REFUSES, naming what is missing: a feed built without either
+// would read no verdict and wake about every refused post with nothing to say
+// so, and the error is what the feed logs on every record it decides without
+// one.
+type NodeDecisions struct {
+	Estate  store.ReplicatedReader
+	Applied CommitWaiter
+}
+
+// Decided implements [Decisions].
+func (d NodeDecisions) Decided(ctx context.Context, opID string, at statelog.Position) (
+	Verdict, bool, error) {
+
+	switch {
+	case d.Estate.IsZero():
+		return "", false, errors.New("chatlet: the feed was given no replicated estate, " +
+			"where the applier writes its verdicts")
+	case d.Applied == nil:
+		return "", false, errors.New("chatlet: the feed was given no applier to ask " +
+			"whether it has decided a record")
+	}
+	committed := d.Applied.Committed()
+	if committed.Stream == at.Stream && committed.Generation == at.Generation &&
+		at.Seq > committed.Seq+uint64(DecisionLagRecords) {
+		return "", false, nil
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, DecisionWait)
+	defer cancel()
+	if err := d.Applied.WaitCommitted(waitCtx, at); err != nil {
+		if ctx.Err() != nil {
+			return "", false, ctx.Err()
+		}
+		if waitCtx.Err() != nil {
+			// NOT REACHED IN TIME is no answer, never an error: the
+			// record is durable and this node's applier is behind it.
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("chatlet: wait for this node's applier to reach %s: %w",
+			at, err)
+	}
+	var (
+		v  Verdict
+		ok bool
+	)
+	err := d.Estate.Read(ctx, func(tx *sql.Tx) error {
+		var err error
+		v, ok, err = verdictIn(ctx, tx, opID, at)
+		return err
+	})
+	if err != nil {
+		return "", false, err
+	}
+	return v, ok, nil
 }

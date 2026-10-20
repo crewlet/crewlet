@@ -71,7 +71,7 @@ func on(rec chatlet.MutationRecord, subject chatlet.Subject, op chatlet.OpKind) 
 // translate runs one record through the shipped translator.
 func translate(t *testing.T, rec changefeed.Record) (changefeed.Delivery, bool) {
 	t.Helper()
-	delivery, wake, err := chatlet.NewTranslator().Translate(t.Context(), rec)
+	delivery, wake, err := chatlet.NewTranslator(nil).Translate(t.Context(), rec)
 	if err != nil {
 		t.Fatalf("translate: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestTheFeedDropsANewerBuildsRecordWithoutWakingAnybody(t *testing.T) {
 		t.Fatalf("re-encode: %v", err)
 	}
 
-	delivery, wake, err := chatlet.NewTranslator().Translate(t.Context(),
+	delivery, wake, err := chatlet.NewTranslator(nil).Translate(t.Context(),
 		changefeed.Record{Payload: future, Key: "chat.message.room-1"})
 	if err != nil {
 		t.Fatalf("a record from a newer build failed the feed: %v — it is "+
@@ -223,7 +223,7 @@ func TestTheFeedDropsANewerBuildsRecordWithoutWakingAnybody(t *testing.T) {
 // stream, and acking them would make the corruption silent.
 func TestTheFeedRefusesBytesThatAreNotARecord(t *testing.T) {
 	t.Parallel()
-	_, _, err := chatlet.NewTranslator().Translate(t.Context(),
+	_, _, err := chatlet.NewTranslator(nil).Translate(t.Context(),
 		changefeed.Record{Payload: []byte(`{"v":0}`), Key: "chat.message.room-1"})
 	if err == nil {
 		t.Fatal("a payload with no version was accepted — a record that does " +
@@ -257,7 +257,7 @@ func TestTheSourceAndTheFeedGroupAreTheNamesTheFleetIsPositionedOn(t *testing.T)
 		t.Errorf("the durable consumer is named %q — renaming it abandons "+
 			"every wake the fleet had not handled", chatlet.FeedGroup)
 	}
-	got := chatlet.NewTranslator().Source()
+	got := chatlet.NewTranslator(nil).Source()
 	if got.Name != chatlet.Source || got.Group != chatlet.FeedGroup {
 		t.Errorf("the translator serves %+v, want the two constants above: "+
 			"the feed resolves its consumer's name from this value, so a "+
