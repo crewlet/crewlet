@@ -235,7 +235,14 @@ func (p ChatPrompt) Build(n Inbound, parties Parties) string {
 	if parties != nil {
 		if party, ok := parties.ByExternalID(p.Backend, meta[UserField]); ok {
 			if label := party.Label(); label != "" {
-				who = label + " — `" + meta[UserField] + "`"
+				who = label
+				// THE ID BESIDE THE NAME, which is what this surface's
+				// chat tools take to mention them — unless the id is the
+				// handle, as it is on the engine's own chat, which the
+				// label already carries.
+				if id := meta[UserField]; id != party.Handle {
+					who = label + " — `" + id + "`"
+				}
 			}
 		}
 	}

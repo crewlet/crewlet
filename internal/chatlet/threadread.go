@@ -127,10 +127,12 @@ func (r ThreadReader) ReadThread(ctx context.Context, handle, channel, root stri
 
 // message is one line of the transcript.
 //
-// THE LABEL TRAVELS AS THE SENDER'S NAME: a Chatlet author is a handle, which
-// no surface's external-id namespace holds, so the renderer's own lookup
-// misses by construction — and [AuthorLabel] is the rendering the woken
-// message's own sender is given, so one person reads the same in both.
+// THE LABEL TRAVELS AS THE SENDER'S NAME, for the author the renderer's own
+// lookup does not resolve. That lookup answers a Chatlet author by the handle
+// the sender id is, and names a colleague as the roster does; what it leaves
+// is an author the chart no longer holds, or the engine's own narration,
+// which [AuthorLabel] describes by kind — the rendering the woken message's
+// own sender is given, so one person reads the same in both.
 func (ThreadReader) message(m Message, viewer string, parties notify.Parties) notify.Message {
 	return notify.Message{
 		// THE MESSAGE'S OWN ID, which is what a Chatlet wake stamps as the

@@ -14,13 +14,16 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/datadog"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/slack"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // The inbound edge, wired.
@@ -424,6 +427,28 @@ func (e *Engine) refreshParties(ctx context.Context, c *Company) {
 	e.rebuildPartiesLocked(c, e.readStandingLocked(ctx))
 }
 
+// firstPartySources are the notification sources this engine hosts itself —
+// its tracker, its knowledge base and its chat — whose senders ARE seat
+// handles, declared to every party registry the engine builds
+// ([partyRegistry]) as the namespaces whose ids are handles.
+//
+// EVERY ONE, whether or not the company runs it natively: a source the
+// company keeps on a vendor publishes no wake under this name, so declaring
+// it costs nothing, and a list that followed the company's backends would
+// be a second reading of a revision that can disagree with the parsers
+// [Engine.nativeParsers] registered from it. A native source missing here
+// fails nothing — its every sender reads as an outside party, so a person's
+// comment wakes a seat that will not act for them — which is why a test
+// holds every native parser's source to this list.
+var firstPartySources = []string{worklet.Source, doclet.Source, chatlet.Source}
+
+// partyRegistry is the ONE construction of a party registry on this node: the
+// org's seats, with the engine's own surfaces declared as the namespaces whose
+// ids are handles ([firstPartySources]).
+func partyRegistry(o *org.Organization, lookup org.EnvLookup) *notify.Registry {
+	return notify.NewRegistry(o, lookup, firstPartySources...)
+}
+
 // rebuildPartiesLocked builds a WHOLE registry for c under one directory
 // reading and swaps it in. The caller holds [notifications.rebuilding].
 //
@@ -438,7 +463,7 @@ func (e *Engine) rebuildPartiesLocked(c *Company, standing notify.Standing) {
 	// the resolver could straddle a refresh and index the seat's address and
 	// its identities against two different stores.
 	lookup := e.resolver().LookupOK
-	reg := notify.NewRegistry(c.Org, lookup)
+	reg := partyRegistry(c.Org, lookup)
 	rec := reg.ReconcileHumanContacts(c.Org, lookup, standing)
 
 	// The CODE HOST's seat identities are config-derived, so they are

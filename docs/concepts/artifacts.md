@@ -274,7 +274,11 @@ What an **agent** may do is narrower than its shares, on purpose:
 - every artifact tool passes the **requester ceiling**: an agent reads for
   somebody only what that somebody could read, and writes for them only what
   they could write, except on an artifact the agent owns, which anybody who
-  can message the agent may ask it to change.
+  can message the agent may ask it to change. The somebody is whoever woke the
+  turn: a colleague's ask, or the first speaker of the message, comment or
+  remark it answers, on a vendor's surface or on the engine's own tracker,
+  knowledge base and chat alike. A turn woken by somebody the company does not
+  know does nothing on an artifact beyond those changes to the agent's own.
 
 "**Seen by**" lists who has opened an artifact, to its editors and above. It is
 on by default, and a company turns it off with `artifacts.seen_by: nobody`.

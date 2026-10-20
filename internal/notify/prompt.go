@@ -224,15 +224,21 @@ type Parties interface {
 	// ByExternalID resolves a transport-scoped external id. The second
 	// result is false when nobody matches, which is ordinary: most senders
 	// on a shared channel are not colleagues.
+	//
+	// It answers for EVERY source, the engine's own included: on a
+	// first-party source the id is the seat's handle, and the registry
+	// answers it as one ([NewRegistry]'s handle namespaces) — so a reader
+	// that asks whoever a trigger names, without knowing which sources are
+	// the engine's, is answered the same colleague a first-party prompt
+	// names.
 	ByExternalID(transport, externalID string) (Party, bool)
 
 	// ByHandle resolves a seat's own identity.
 	//
 	// FOR THE FIRST-PARTY SOURCES, whose actor IS a handle: nothing on
 	// Worklet or Doclet authenticates as an account
-	// somewhere else, so there is no external id to scope and asking for
-	// one would mean registering every seat's handle as its own external
-	// id in a namespace that exists only to satisfy this call.
+	// somewhere else, so a prompt that already holds the handle asks by it
+	// rather than through a namespace.
 	//
 	// A vendor parser must NOT reach for this to shortcut a lookup its
 	// payload cannot support — a Slack id is not a handle, and treating
