@@ -179,11 +179,10 @@ export function DocCreate() {
     setLoaded((n) => n + 1);
   };
 
+  // Command+Enter is the shell's (`create.start`): it passes through here.
   const onTitleKey = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-      event.preventDefault();
-      void press();
-    } else if (event.key === "Enter" || event.key === "ArrowDown") {
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) return;
+    if (event.key === "Enter" || event.key === "ArrowDown") {
       event.preventDefault();
       if (mode === "write") editor.current?.focus();
       else briefField.current?.focus();
@@ -217,7 +216,6 @@ export function DocCreate() {
       action={{
         label: mode === "write" ? "Create doc" : agent ? `Ask ${agent.name}` : "Ask an agent",
         icon: mode === "write" ? <CheckGlyph size="sm" /> : <SendGlyph size="sm" />,
-        keys: ["Mod", "Enter"],
         onSelect: () => void press(),
         ...(busy
           ? { disabledReason: mode === "write" ? "Creating the doc." : "Filing the task." }
@@ -332,10 +330,7 @@ export function DocCreate() {
                     disabled={busy}
                     onChange={(event) => setBrief(event.target.value)}
                     onKeyDown={(event) => {
-                      if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-                        event.preventDefault();
-                        void press();
-                      } else if (event.key === "Escape") {
+                      if (event.key === "Escape") {
                         event.preventDefault();
                         cancel();
                       }

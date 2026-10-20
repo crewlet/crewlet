@@ -234,18 +234,6 @@ export function DesignCreate() {
     nav,
   ]);
 
-  // COMMAND ENTER CREATES FROM ANYWHERE on the page, as a composer sends.
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.defaultPrevented) {
-        event.preventDefault();
-        void submit();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [submit]);
-
   const count = draft ? plural(draft.boards.length, "board") : undefined;
   const tools = draft
     ? [
@@ -293,7 +281,6 @@ export function DesignCreate() {
               ? `Create and ask ${builder.seat.name}`
               : "Create design",
         icon: <PlusGlyph size="sm" />,
-        keys: ["Mod", "Enter"],
         onSelect: () => void submit(),
         disabledReason: busy ? "Creating the design." : blocked,
       }}

@@ -23,7 +23,7 @@
  * on the new sheet. Cancel asks first when there is something to lose.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArtifactKindGlyph,
   Button,
@@ -276,16 +276,6 @@ export function SheetCreate() {
     if (draft) await create.sheet(title, draftWrites(draft, preset));
   };
 
-  // MOD+ENTER CREATES from anywhere in the page's body, as a composer's send
-  // does from its field: read here, on the body, rather than bound at the
-  // window, where the reply composer's row already answers the same press.
-  const onBodyKey = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.defaultPrevented || event.key !== "Enter" || event.altKey || event.shiftKey) return;
-    if (!(event.metaKey || event.ctrlKey)) return;
-    event.preventDefault();
-    void make();
-  };
-
   const dirty = touched || title.trim() !== "" || brief.trim() !== "";
   const cancel = () => (dirty ? setLeaving(true) : leave());
 
@@ -421,7 +411,6 @@ export function SheetCreate() {
             : "Create sheet",
         icon: asking ? <BotGlyph size="sm" /> : <PlusGlyph size="sm" />,
         onSelect: () => void make(),
-        keys: ["Mod", "Enter"],
         disabledReason: hold,
       }}
     >
@@ -431,7 +420,6 @@ export function SheetCreate() {
         title="Drop the file to start from it"
         hint="A CSV or TSV file. Its columns are typed from their values."
         onFiles={takeFiles}
-        onKeyDown={onBodyKey}
       >
         <div className="sheet-create-main">
           <div className="sheet-create-head">

@@ -62,7 +62,6 @@ import { QueryState } from "~/components/common.tsx";
 import { DASHBOARD_COLUMNS } from "~/contract/artifacts.ts";
 import { createFromUpload, readCatalogue, uploadTexts } from "~/lib/artifacts/api.ts";
 import { refreshWords } from "~/lib/artifacts/dashboard.ts";
-import { useKeyChords } from "~/lib/keys.ts";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
 import { plural } from "~/lib/format.ts";
 import { refusalText } from "~/lib/refusal.ts";
@@ -296,8 +295,6 @@ export function DashboardCreate() {
     nav.to(id ? artifactPath(id) : ["work", filed.item]);
   };
 
-  useKeyChords([{ key: "enter", meta: true, whileTyping: true, run: () => void create() }]);
-
   const dirty = title.trim() !== "" || draft.placed.length > 0 || brief.trim() !== "";
   const refusal =
     uploadFailure ??
@@ -336,7 +333,6 @@ export function DashboardCreate() {
             : "Create dashboard",
         icon: mode === "agent" ? <SendGlyph size="sm" /> : <CheckGlyph size="sm" />,
         onSelect: () => void create(),
-        keys: ["Mod", "Enter"],
         ...(hold
           ? { disabledReason: hold }
           : busy

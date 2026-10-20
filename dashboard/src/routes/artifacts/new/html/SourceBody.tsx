@@ -260,7 +260,6 @@ export function SourceBody({ modeSwitch }: { modeSwitch: ReactNode }) {
     : {
         label: "Preview privately",
         icon: <EyeGlyph size="sm" />,
-        keys: runKeys,
         onSelect: () => void preview(),
         ...(hold ? { disabledReason: hold } : {}),
       };

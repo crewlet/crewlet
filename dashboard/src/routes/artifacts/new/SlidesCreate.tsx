@@ -40,7 +40,6 @@ import {
   Textarea,
   ThemeGallery,
   useMediaMatch,
-  useShortcut,
   useToast,
 } from "@crewlethq/ui";
 import { PlusGlyph, PresentationGlyph, WandSparklesGlyph } from "@crewlethq/icons/glyphs";
@@ -268,7 +267,6 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
   };
 
   const commit = () => void (drafter === "agent" ? ask() : start());
-  useShortcut({ keys: [{ key: "Enter", mod: true }], onKey: commit });
 
   const add = (layout: string) => {
     const next = addAfter(rows, current?.key ?? "", layout);
@@ -340,7 +338,6 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
         icon:
           drafter === "agent" ? <WandSparklesGlyph size="sm" /> : <PresentationGlyph size="sm" />,
         onSelect: commit,
-        keys: ["Mod", "Enter"],
         ...(hold
           ? { disabledReason: hold }
           : busy

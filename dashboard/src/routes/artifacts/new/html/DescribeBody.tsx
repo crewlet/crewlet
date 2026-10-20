@@ -90,7 +90,6 @@ export function DescribeBody({ modeSwitch }: { modeSwitch: ReactNode }) {
       action={{
         label: agent ? `Ask ${agent.name}` : "Ask an agent",
         icon: <SendGlyph size="sm" />,
-        keys: ["Mod", "Enter"],
         onSelect: () => void ask(),
         ...(hold ? { disabledReason: hold } : {}),
       }}
