@@ -62,6 +62,29 @@
 // The router's own 404 and 405, which [Mux] turns into this envelope, so that
 // EVERY refusal the engine writes carries a code — which is what lets a client
 // tell the node's own answer from a proxy's page in front of it.
+//
+// # Escaped at the one writer, read by decoders
+//
+// [Write] marshals with encoding/json's default, which spells `<`, `>` and `&`
+// as `\u003c`, `\u003e` and `\u0026`, and that is decided rather than left.
+// The escaping protects nothing here: every listener answers with `nosniff`
+// and a `default-src 'none'` policy (internal/api/pagepolicy), and no answer is
+// ever embedded in a page. Nor does it cost anything, because every reader of
+// the wire DECODES it, and a decoder reads `\u003c` as `<`. What it buys is
+// that the wire is spelled ONE way: encoding/json re-escapes whatever a value
+// embeds — a MarshalJSON's output, a json.RawMessage, a stored event payload —
+// so escaping at this one writer spells every answer alike, whatever produced
+// each part of it. Switched off here alone, the wire would be spelled however
+// each producer chose; the only uniform alternative is every encoder in the
+// tree writing unescaped, which no gate can hold for a json.Marshal whose bytes
+// are embedded somewhere later.
+//
+// So a reader that shows an answer as TEXT decodes it first and writes it
+// again for its own reader — the dashboard does, and a command's `-json`
+// prints through internal/plainjson (cmd/crewlet/jsonout.go) — and never
+// shows the bytes as they came. The live socket's frames
+// (internal/api/stream.EncodeFrame) are written the same way, for the same
+// reason, and a test beside each writer holds it.
 package httpjson
 
 import (

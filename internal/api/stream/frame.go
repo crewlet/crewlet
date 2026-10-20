@@ -207,6 +207,11 @@ func (f *Frame) Raw() []byte { return f.raw }
 //
 // Here rather than at the transport so the bytes a test asserts about are the
 // bytes a browser receives, and so one encode can serve many clients.
+//
+// ESCAPED, with encoding/json's default, for the reason internal/api/httpjson
+// gives under "Escaped at the one writer, read by decoders": every client
+// decodes a frame, and escaping at the one writer is what spells a frame alike
+// whatever its payload embeds.
 func EncodeFrame(env Envelope) (*Frame, error) {
 	raw, err := json.Marshal(env)
 	if err != nil {
