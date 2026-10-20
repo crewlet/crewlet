@@ -17,6 +17,17 @@
  * its short word (`short`), so "Create and ask SRE Lead" reads "Create" on a
  * phone.
  *
+ * # Asking an agent sits beside the page
+ *
+ * A kind that can be handed to an agent passes `handoff`: the bar's "Ask an
+ * agent" (`askTool`) and its panel (`AskAgentPanel`), which the shell lays at
+ * the body's side in the open artifact's own workspace, so it is a column
+ * where there is room and a drawer where there is not. The body stays mounted
+ * as the panel opens and closes, so nothing the reader made is lost. The
+ * control sits before Cancel; on a kind only an agent makes, it is the bar's
+ * last control and its primary while the panel is closed, and Command+Enter
+ * outside the panel opens it (inside, the panel sends).
+ *
  * # The body is the kind's
  *
  * Writing a doc, laying out a deck and asking an agent for a dashboard share
@@ -34,7 +45,7 @@
 
 import "~/styles/create.css";
 import type { ReactNode } from "react";
-import { ArtifactBar, type ArtifactBarTool } from "@crewlethq/ui";
+import { ArtifactBar, ArtifactWorkspace, type ArtifactBarTool } from "@crewlethq/ui";
 import { XGlyph } from "@crewlethq/icons/glyphs";
 import { FrameNavToggle, OwnPageHeader } from "~/app/frame/OwnHeader.tsx";
 import { useFillScreen } from "~/app/fill.tsx";
@@ -69,8 +80,20 @@ export interface CreateShellProps {
    * something the reader typed asks first, then leaves with [useLeaveCreate].
    */
   onCancel?: (() => void) | undefined;
+  /** Asking an agent: the bar's control and, while it is open, its panel. */
+  handoff?: CreateHandoff | undefined;
   /** The kind's whole body, full bleed under the bar. */
   children: ReactNode;
+}
+
+/** A create page's hand-off to an agent, as the shell places it. */
+export interface CreateHandoff {
+  /** The bar's "Ask an agent" (`askTool`). */
+  tool: ArtifactBarTool;
+  /** The panel while it is open (`AskAgentPanel`), else null. */
+  panel: ReactNode;
+  /** Opens the panel: what Command+Enter does on a page with no other action. */
+  open: () => void;
 }
 
 /** Leave a create page for the gallery, replacing it: Back should not land on a half-made artifact. */
@@ -85,6 +108,7 @@ export function CreateShell({
   status,
   tools = [],
   onCancel,
+  handoff,
   children,
 }: CreateShellProps) {
   useFillScreen(true);
@@ -93,13 +117,19 @@ export function CreateShell({
     "create.start": {
       run: (e) => {
         e.preventDefault();
-        action?.onSelect();
+        if (action) action.onSelect();
+        else handoff?.open();
       },
-      when: action !== undefined && action.disabledReason === undefined,
+      when: action ? action.disabledReason === undefined : handoff !== undefined,
     },
   });
+  // THE HAND-OFF IS THE LAST CONTROL where it is the page's only way to make
+  // the kind, and it stays there as its panel opens: a control that moved
+  // when pressed would leave the pointer on Cancel.
+  const last = handoff !== undefined && action === undefined;
   const bar: ArtifactBarTool[] = [
     ...tools,
+    ...(handoff && !last ? [handoff.tool] : []),
     {
       key: "cancel",
       label: "Cancel",
@@ -108,6 +138,7 @@ export function CreateShell({
       labelled: true,
     },
     ...(action ? [primaryTool(action)] : []),
+    ...(handoff && last ? [handoff.tool] : []),
   ];
   return (
     <div className="artifact-create" data-kind={kind}>
@@ -123,7 +154,17 @@ export function CreateShell({
           kindTools={bar}
         />
       </OwnPageHeader>
-      <div className="artifact-create-body">{children}</div>
+      <div className="artifact-create-body">
+        {/* ALWAYS THE WORKSPACE, panel or none, so the body is never
+            remounted (and never loses what was typed) as the panel opens. */}
+        <ArtifactWorkspace
+          className="artifact-create-workspace"
+          bodyClassName="artifact-create-canvas"
+          panel={handoff?.panel ?? null}
+        >
+          {children}
+        </ArtifactWorkspace>
+      </div>
     </div>
   );
 }

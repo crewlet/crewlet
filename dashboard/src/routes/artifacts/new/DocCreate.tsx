@@ -20,13 +20,14 @@
  *
  * # Or an agent drafts it
  *
- * "Ask an agent" turns the same column into a brief: the title, what the doc
- * should cover, and who drafts it (`WhoBuildsIt`, each agent as its
- * character). The press files one real task to that agent
+ * "Ask an agent" in the bar opens the hand-off panel beside the page
+ * (`AskAgent.tsx`): what the doc should cover, who drafts it, and what goes
+ * with the brief. The page stays as it is, so the writer can go on writing
+ * while they ask. The send files one real task to that agent
  * (`useFileArtifactTask`), which publishes the doc on the task, and the page
- * lands on the task. Nothing typed is lost between the two: the title is
- * shared, and a draft or an untouched template goes with the brief for the
- * agent to build on. The mode is in the address (`mode=agent`).
+ * lands on the task. Nothing typed is lost: the title is the page's, and a
+ * draft or an untouched template goes with the brief for the agent to build
+ * on, as the panel lists.
  *
  * # Nothing exists until the press
  *
@@ -46,12 +47,10 @@ import {
   FilterChipGroup,
   FormField,
   RichEditor,
-  SegmentedControl,
-  Textarea,
   markdownWords,
   type RichEditorHandle,
 } from "@crewlethq/ui";
-import { CheckGlyph, LockGlyph, PencilGlyph, SendGlyph, BotGlyph } from "@crewlethq/icons/glyphs";
+import { CheckGlyph, FileTextGlyph, ListOrderedGlyph, LockGlyph } from "@crewlethq/icons/glyphs";
 import { useLeaveGuard, useNavigator, useParam } from "~/app/router.tsx";
 import { TASK_BODY_MAX_BYTES } from "~/contract/work.ts";
 import { plural, utf8Bytes } from "~/lib/format.ts";
@@ -60,12 +59,36 @@ import { DOC_TEMPLATES, docTemplate, type DocTemplate } from "~/lib/artifacts/do
 import { CreateShell, useLeaveCreate } from "./CreateShell.tsx";
 import { titleHold, titleProblem, useCreateArtifact, useWorkItem } from "./create.ts";
 import { artifactTaskBody, useFileArtifactTask } from "./fileTask.ts";
-import { WhoBuildsIt, useWhoBuildsIt } from "./WhoBuildsIt.tsx";
+import { useWhoBuildsIt } from "./WhoBuildsIt.tsx";
+import {
+  AskAgentPanel,
+  askTitleHold,
+  askTool,
+  chosenAgent,
+  taskRefusal,
+  useAskPanel,
+} from "./AskAgent.tsx";
 
-/** The two ways the page makes a doc, as the address names them. */
-const MODES = [
-  { value: "write", label: "Write it", icon: <PencilGlyph size="sm" /> },
-  { value: "agent", label: "Ask an agent", icon: <BotGlyph size="sm" /> },
+/** Briefs to start from, one press each. */
+const DOC_BRIEFS = [
+  {
+    key: "onboarding",
+    label: "Onboarding guide",
+    brief:
+      "A one-page guide for new engineers on how we review incidents: the timeline, the roles and the follow-ups. Draw on the last three reviews in Knowledge.",
+  },
+  {
+    key: "proposal",
+    label: "Proposal",
+    brief:
+      "A proposal for the change we discussed: the problem, the options we weighed, the one we recommend and what it costs. Written for the leads who decide.",
+  },
+  {
+    key: "summary",
+    label: "Summary of a thread",
+    brief:
+      "A summary of where the project stands for someone joining it today: what was decided, what is open, who owns what and where the work lives.",
+  },
 ] as const;
 
 /**
@@ -89,8 +112,7 @@ export function DocCreate() {
   const access = useArtifactAccess({ app: true });
   const workItem = useWorkItem();
   const leaveCreate = useLeaveCreate();
-  const [modeParam, setMode] = useParam("mode", "write");
-  const mode = modeParam === "agent" ? "agent" : "write";
+  const panel = useAskPanel();
   const [templateParam] = useParam("template", "");
   const [template, setTemplate] = useState<DocTemplate | undefined>(() =>
     docTemplate(templateParam),
@@ -117,26 +139,24 @@ export function DocCreate() {
   const words = markdownWords(body);
   const problem = titleProblem(title);
 
-  const agent = who.builders.find((b) => b.seat.handle === who.seat)?.seat;
+  const agent = chosenAgent(who)?.seat;
   const handed = docBrief(brief, body, template);
-  const taskBytes = utf8Bytes(artifactTaskBody("doc", handed));
+  const taskText = artifactTaskBody("doc", handed);
+  const taskBytes = utf8Bytes(taskText);
   const busy = create.busy || ask.busy;
-  const hold =
-    mode === "write"
-      ? !access.can
-        ? access.reason
-        : titleHold(title)
-      : (ask.held ??
-        titleHold(title) ??
-        (!agent
-          ? "Add an agent to the chart first."
-          : brief.trim() === ""
-            ? "Say what the doc should cover."
-            : !who.project
-              ? "Choose the project to file the task in."
-              : taskBytes > TASK_BODY_MAX_BYTES
-                ? `The brief and the draft are ${taskBytes} bytes, and a task holds at most ${TASK_BODY_MAX_BYTES}.`
-                : undefined));
+  const hold = !access.can ? access.reason : titleHold(title);
+  const askHold =
+    ask.held ??
+    (!agent
+      ? "Add an agent to the chart first."
+      : brief.trim() === ""
+        ? "Say what the doc should cover."
+        : (askTitleHold(title, "doc") ??
+          (!who.project
+            ? "Choose the project to file the task in."
+            : taskBytes > TASK_BODY_MAX_BYTES
+              ? `The brief and the draft are ${taskBytes.toLocaleString()} bytes, and a task holds at most ${TASK_BODY_MAX_BYTES.toLocaleString()}.`
+              : undefined)));
 
   const dirty = name !== "" || brief.trim() !== "" || (written && !untouched);
   useLeaveGuard(
@@ -156,19 +176,23 @@ export function DocCreate() {
   const press = async () => {
     if (hold || busy) return;
     released.current = true;
-    if (mode === "write") {
-      await create.fromStarter("doc", name, written ? { doc: { body } } : {});
-    } else {
-      const filed = await ask.fileArtifactTask({
-        kind: "doc",
-        title: name,
-        brief: handed,
-        seat: who.seat,
-        project: who.project,
-      });
-      if (filed?.item) nav.to(["work", filed.item]);
-    }
+    await create.fromStarter("doc", name, written ? { doc: { body } } : {});
     // STILL HERE: the engine refused, and its sentence is on the page.
+    released.current = false;
+  };
+
+  const send = async () => {
+    if (askHold || busy) return;
+    released.current = true;
+    const filed = await ask.fileArtifactTask({
+      kind: "doc",
+      title: name,
+      brief: handed,
+      seat: who.seat,
+      project: who.project,
+    });
+    if (filed?.item) nav.to(["work", filed.item]);
+    // STILL HERE: the engine refused, and its sentence is in the panel.
     released.current = false;
   };
 
@@ -184,67 +208,113 @@ export function DocCreate() {
     if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) return;
     if (event.key === "Enter" || event.key === "ArrowDown") {
       event.preventDefault();
-      if (mode === "write") editor.current?.focus();
-      else briefField.current?.focus();
+      editor.current?.focus();
     } else if (event.key === "Escape") {
       event.preventDefault();
       cancel();
     }
   };
 
-  const refusal =
-    mode === "write"
-      ? create.refusal && { title: "The doc was not created", text: create.refusal }
-      : ask.refusal && {
-          title: "The task was not filed",
-          text: [ask.refusal.sentence, ask.refusal.hint].filter(Boolean).join(" "),
-        };
+  const refusal = create.refusal && { title: "The doc was not created", text: create.refusal };
+
+  // WHAT GOES WITH THE BRIEF, as the panel lists it: the page's title, and
+  // the draft or the template's outline the agent builds on.
+  const carried = [
+    ...(name
+      ? [
+          {
+            key: "title",
+            icon: <FileTextGlyph size="sm" />,
+            label: `“${name}”`,
+            detail: "The doc's title",
+          },
+        ]
+      : []),
+    ...(!written
+      ? []
+      : untouched && template
+        ? [
+            {
+              key: "template",
+              icon: <ListOrderedGlyph size="sm" />,
+              label: `The ${template.label.toLowerCase()} outline`,
+              detail: "For the agent to follow",
+            },
+          ]
+        : [
+            {
+              key: "draft",
+              icon: <FileTextGlyph size="sm" />,
+              label: "Your draft",
+              detail: `${plural(words, "word")}, for the agent to build on`,
+            },
+          ]),
+  ];
 
   return (
     <CreateShell
       kind="doc"
       onCancel={cancel}
       status={
-        busy
-          ? mode === "write"
-            ? "Creating…"
-            : "Filing the task…"
-          : mode === "write" && words > 0
-            ? plural(words, "word")
-            : undefined
+        create.busy
+          ? "Creating…"
+          : ask.busy
+            ? "Filing the task…"
+            : words > 0
+              ? plural(words, "word")
+              : undefined
       }
       action={{
-        label: mode === "write" ? "Create doc" : agent ? `Ask ${agent.name}` : "Ask an agent",
-        icon: mode === "write" ? <CheckGlyph size="sm" /> : <SendGlyph size="sm" />,
+        label: "Create doc",
+        icon: <CheckGlyph size="sm" />,
         onSelect: () => void press(),
-        ...(busy
-          ? { disabledReason: mode === "write" ? "Creating the doc." : "Filing the task." }
-          : hold
-            ? { disabledReason: hold }
-            : {}),
+        ...(busy ? { disabledReason: "Creating the doc." } : hold ? { disabledReason: hold } : {}),
+      }}
+      handoff={{
+        tool: askTool(who, panel),
+        open: () => panel.setOpen(true),
+        panel: panel.open ? (
+          <AskAgentPanel
+            panel={panel}
+            who={who}
+            intro={`${agent?.name ?? "The agent"} gets a task with your brief, drafts the doc and publishes it on the task.`}
+            brief={brief}
+            onBrief={setBrief}
+            briefRef={briefField}
+            briefLabel="What should the doc cover?"
+            briefPlaceholder="A one-page guide for new engineers on how we review incidents."
+            briefHelper={
+              written
+                ? "What you wrote on the page goes with it."
+                : "Name the readers, the outline you have in mind and the pages to draw on."
+            }
+            starters={DOC_BRIEFS}
+            carried={carried}
+            alone="Write on the page, or start from a template, and it goes with the brief."
+            task={{ title: name || "Untitled doc", body: taskText }}
+            steps={[
+              `A task is filed to ${agent?.name ?? "the agent"}${who.project ? ` in ${who.project}` : ""}, with your brief.`,
+              `${agent?.name ?? "The agent"} drafts the doc and publishes it on the task.`,
+              "You review it, edit it in place and share it.",
+            ]}
+            notice={taskRefusal(ask.refusal)}
+            sendLabel={(n) => `Ask ${n}`}
+            onSend={() => void send()}
+            hold={askHold}
+            busy={ask.busy}
+          />
+        ) : null,
       }}
     >
       <div className="doc-create">
         <div className="doc-create-page">
-          <div className="doc-create-head">
-            <SegmentedControl
-              label="How to make it"
-              semantics="radio"
-              size="sm"
-              options={MODES.map((m) => ({ value: m.value, label: m.label, icon: m.icon }))}
-              value={mode}
-              onValueChange={(next: string) => setMode(next === "agent" ? "agent" : "")}
-            />
-            {mode === "write" && (
-              <p className="doc-create-where">
-                <LockGlyph size="sm" />
-                <span>
-                  Private to you until you share it
-                  {workItem ? `, and listed on ${workItem}` : ""}
-                </span>
-              </p>
-            )}
-          </div>
+          <p className="doc-create-where">
+            <LockGlyph size="sm" />
+            <span>
+              Private to you until you share it
+              {workItem ? `, and listed on ${workItem}` : ""}
+            </span>
+          </p>
 
           {/* THE ENGINE'S REFUSAL AT THE TOP OF THE PAGE, where the writer
               looks after the press, not under a long body. */}
@@ -272,87 +342,37 @@ export function DocCreate() {
             )}
           </FormField>
 
-          {mode === "write" ? (
-            <>
-              {untouched && (
-                <FilterChipGroup
-                  className="doc-create-starts"
-                  label="Start from a template"
-                  hideLabel
-                  semantics="radio"
-                  activate="manual"
-                  allowNone
-                  value={template?.key ?? null}
-                  onValueChange={startFrom}
-                >
-                  {DOC_TEMPLATES.map((t) => (
-                    <FilterChip key={t.key} value={t.key} aria-description={t.description}>
-                      {t.label}
-                    </FilterChip>
-                  ))}
-                </FilterChipGroup>
-              )}
-
-              <RichEditor
-                key={loaded}
-                ref={editor}
-                className="doc-create-editor"
-                value={body}
-                onChange={setBody}
-                label={name ? `The text of “${name}”` : "The text of the new doc"}
-                placeholder="Write, or type a slash for blocks"
-                disabled={busy}
-                onSubmit={() => void press()}
-                onEscape={cancel}
-              />
-            </>
-          ) : (
-            <div className="doc-create-brief">
-              <FormField
-                label="Brief"
-                helper={
-                  written
-                    ? untouched && template
-                      ? `The ${template.label.toLowerCase()} outline goes with it, for the agent to follow.`
-                      : "Your draft goes with it, for the agent to build on."
-                    : "What it should cover, who reads it, and what to draw on."
-                }
-              >
-                {(field) => (
-                  <Textarea
-                    ref={briefField}
-                    id={field.id}
-                    aria-describedby={field.describedBy}
-                    autoResize
-                    rows={5}
-                    placeholder="A one-page guide for new engineers on how we review incidents: the timeline, the roles and the follow-ups. Draw on the last three reviews in Knowledge."
-                    value={brief}
-                    disabled={busy}
-                    onChange={(event) => setBrief(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Escape") {
-                        event.preventDefault();
-                        cancel();
-                      }
-                    }}
-                  />
-                )}
-              </FormField>
-
-              <WhoBuildsIt who={who} />
-
-              <Callout variant="neutral" title="What happens next">
-                <ol className="doc-create-next">
-                  <li>
-                    A task is filed to {agent?.name ?? "the agent"}
-                    {who.project ? ` in ${who.project}` : ""}, with your brief.
-                  </li>
-                  <li>{agent?.name ?? "The agent"} drafts the doc and publishes it on the task.</li>
-                  <li>You review it, edit it in place and share it.</li>
-                </ol>
-              </Callout>
-            </div>
+          {untouched && (
+            <FilterChipGroup
+              className="doc-create-starts"
+              label="Start from a template"
+              hideLabel
+              semantics="radio"
+              activate="manual"
+              allowNone
+              value={template?.key ?? null}
+              onValueChange={startFrom}
+            >
+              {DOC_TEMPLATES.map((t) => (
+                <FilterChip key={t.key} value={t.key} aria-description={t.description}>
+                  {t.label}
+                </FilterChip>
+              ))}
+            </FilterChipGroup>
           )}
+
+          <RichEditor
+            key={loaded}
+            ref={editor}
+            className="doc-create-editor"
+            value={body}
+            onChange={setBody}
+            label={name ? `The text of “${name}”` : "The text of the new doc"}
+            placeholder="Write, or type a slash for blocks"
+            disabled={busy}
+            onSubmit={() => void press()}
+            onEscape={cancel}
+          />
         </div>
       </div>
 

@@ -31,7 +31,17 @@
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
+}
+/* THE BODY AND THE HAND-OFF PANEL BESIDE IT (`AskAgent.tsx`): the workspace
+   fills the body, and its body column is the kind's scroll, as the frame's
+   body was before a panel could stand beside it. */
+.artifact-create-workspace {
+  flex: 1 1 auto;
+}
+.artifact-create-canvas {
+  display: flex;
+  flex-direction: column;
 }
 /* WHO BUILDS IT: the agent, then the project, one field under the other. */
 .artifact-who {
@@ -66,29 +76,6 @@
   width: 100%;
   max-width: var(--size-measure);
   min-width: 0;
-}
-/* THE PAGE'S HEAD: how the doc is made, and who will see it, on one line
-   that wraps on a phone. */
-.doc-create-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--spacing-2) var(--spacing-4);
-}
-/* THE BRIEF: the fields an agent is asked with, in the form's own rhythm
-   under the title. */
-.doc-create-brief {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-5);
-}
-.doc-create-next {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-  margin: 0;
-  padding-inline-start: var(--spacing-5);
 }
 /* WHO WILL SEE IT, said once above the title, quietly. */
 .doc-create-where {
@@ -247,29 +234,6 @@
   min-height: 240px;
   align-content: center;
 }
-/* Ask an agent: the brief, a few examples to start from, who builds it, and
-   what happens next, in the grid's column at a reading measure. */
-.sheet-create-ask {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-4);
-  max-width: 640px;
-}
-.sheet-create-briefs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--spacing-2);
-  margin-top: calc(var(--spacing-2) * -1);
-}
-.sheet-create-next {
-  margin: 0;
-  padding: var(--spacing-3) var(--spacing-4);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-subtle);
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-sm);
-  line-height: var(--font-line-height-normal);
-}
 @media (width < 1024px) {
   .sheet-create {
     grid-template-columns: minmax(0, 1fr);
@@ -351,6 +315,13 @@
   display: flex;
   flex-direction: column;
   gap: var(--spacing-4);
+}
+/* WHERE THE REST IS: a board's settings on the canvas, the brief in the hand-off. */
+.design-create-note {
+  margin: 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+  line-height: var(--font-line-height-normal);
 }
 .design-create-panel-head {
   display: flex;
@@ -533,21 +504,6 @@
 .dashboard-create-title {
   flex: 1 1 22rem;
   max-width: 40rem;
-}
-.dashboard-create-mode {
-  flex: 0 0 auto;
-}
-.dashboard-create-agent {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-4);
-  max-width: 48rem;
-}
-.dashboard-create-next {
-  margin: 0;
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-sm);
-  line-height: 1.5;
 }
 .dashboard-create-board {
   display: flex;
@@ -756,11 +712,6 @@
   gap: var(--spacing-3) var(--spacing-4);
   min-width: 0;
 }
-/* The starting points as a grid of tiles rather than a column of rows: six
-   short answers read at a glance side by side. */
-.html-create-starters {
-  grid-template-columns: repeat(auto-fill, minmax(min(11rem, 100%), 1fr));
-}
 .html-create-first-action {
   display: grid;
   justify-items: center;
@@ -840,40 +791,6 @@
 }
 .html-create-leave {
   margin: 0;
-}
-.html-create-ask {
-  gap: var(--spacing-5);
-  padding-top: var(--spacing-4);
-}
-.html-create-side-title {
-  margin: 0 0 var(--spacing-2);
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-secondary);
-}
-.html-create-sent-title {
-  margin: 0 0 var(--spacing-2);
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-primary);
-}
-.html-create-sent-to {
-  margin: var(--spacing-2) 0 0;
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-.html-create-sent-body {
-  margin: 0;
-  padding: var(--spacing-3);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-inset);
-  color: var(--color-text-secondary);
-  font: inherit;
-  font-size: var(--font-size-sm);
-  line-height: var(--font-line-height-normal);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
 }
 @container page (width < 900px) {
   /* STACKED, THE PAGE GROWS WITH WHAT IT HOLDS and the body scrolls it:

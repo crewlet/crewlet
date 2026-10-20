@@ -4,6 +4,7 @@
  * starter and opens the design it made.
  */
 
+import { installWindow } from "~/testing.tsx";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
@@ -16,7 +17,8 @@ vi.mock("~/lib/artifacts/access.ts", () => ({
 }));
 const fileArtifactTask = vi.fn();
 const refusal = { current: null as { sentence: string } | null };
-vi.mock("./fileTask.ts", () => ({
+vi.mock("./fileTask.ts", async (original) => ({
+  ...(await original<typeof import("./fileTask.ts")>()),
   useFileArtifactTask: () => ({
     fileArtifactTask,
     busy: false,
@@ -70,7 +72,14 @@ beforeEach(() => {
   refusal.current = null;
 });
 
+let win: ReturnType<typeof installWindow>;
+beforeEach(() => {
+  // A LAPTOP'S WIDTH, where the hand-off stands beside the page as a column
+  // and so arrives open.
+  win = installWindow(1440);
+});
 afterEach(() => {
+  win.restore();
   cleanup();
   globalThis.ResizeObserver = realResizeObserver;
   location.hash = "";
@@ -145,7 +154,7 @@ test("Create is held until the design is named, then makes it, asks the agent an
   pickLanding();
   const create = screen.getByRole("button", { name: "Create and ask Ava Lindqvist" });
   expect(create.getAttribute("aria-disabled")).toBe("true");
-  fireEvent.change(screen.getByRole("textbox", { name: /^Name/ }), {
+  fireEvent.change(screen.getByRole("textbox", { name: /^Design name/ }), {
     target: { value: " Launch " },
   });
   await act(async () => {
@@ -180,17 +189,36 @@ test("Create is held until the design is named, then makes it, asks the agent an
   expect(location.hash).toBe(`#/artifacts/${ID}`);
 });
 
-test("Command Enter creates from anywhere on the page", async () => {
+test("Command Enter in the hand-off creates and asks", async () => {
   mount();
   pickLanding();
-  fireEvent.change(screen.getByRole("textbox", { name: /^Name/ }), { target: { value: "Launch" } });
+  fireEvent.change(screen.getByRole("textbox", { name: /^Design name/ }), {
+    target: { value: "Launch" },
+  });
   await act(async () => {
-    fireEvent.keyDown(screen.getByRole("textbox", { name: /^Brief/ }), {
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "What is the design for?" }), {
       key: "Enter",
       metaKey: true,
     });
   });
   expect(run).toHaveBeenCalledOnce();
+});
+
+// THE HAND-OFF IS THE PAGE'S ONE WAY TO MAKE A DESIGN: it arrives open, and
+// closed, the bar's Ask an agent is the primary that opens it again, as is
+// Command Enter from the canvas.
+test("closed, Ask an agent is the bar's primary, and Command Enter opens it again", () => {
+  mount();
+  pickLanding();
+  const panel = screen.getByRole("complementary", { name: "Ask an agent" });
+  expect(within(panel).getByText("3 boards")).toBeTruthy();
+  fireEvent.click(within(panel).getByRole("button", { name: "Close ask an agent" }));
+  expect(screen.queryByRole("complementary", { name: "Ask an agent" })).toBeNull();
+  const tool = screen.getAllByRole("button", { name: "Ask an agent" })[0]!;
+  expect(tool.className).toContain("primary");
+  fireEvent.keyDown(document.body, { key: "Enter", metaKey: true });
+  expect(screen.getByRole("complementary", { name: "Ask an agent" })).toBeTruthy();
+  expect(run).not.toHaveBeenCalled();
 });
 
 test("Cancel asks before discarding what was laid out", () => {
@@ -215,7 +243,9 @@ test("a task refused after the design was made keeps the page, and the next pres
   fileArtifactTask.mockResolvedValueOnce(null);
   mount();
   pickLanding();
-  fireEvent.change(screen.getByRole("textbox", { name: /^Name/ }), { target: { value: "Launch" } });
+  fireEvent.change(screen.getByRole("textbox", { name: /^Design name/ }), {
+    target: { value: "Launch" },
+  });
   refusal.current = { sentence: "The project DES does not take new tasks." };
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "Create and ask Ava Lindqvist" }));
@@ -228,4 +258,14 @@ test("a task refused after the design was made keeps the page, and the next pres
   expect(run).toHaveBeenCalledOnce();
   expect(fileArtifactTask).toHaveBeenCalledTimes(2);
   expect(location.hash).toBe(`#/artifacts/${ID}`);
+});
+
+// NARROWER, THE PANEL WOULD BE A DRAWER over the layouts, the page's first
+// step, so it waits for the press there.
+test("below a laptop's width the hand-off waits for the press rather than covering the layouts", () => {
+  win.set(1024);
+  mount();
+  expect(screen.queryByRole("complementary", { name: "Ask an agent" })).toBeNull();
+  fireEvent.click(screen.getAllByRole("button", { name: "Ask an agent" })[0]!);
+  expect(screen.getByRole("complementary", { name: "Ask an agent" })).toBeTruthy();
 });

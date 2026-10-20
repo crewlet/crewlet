@@ -6,7 +6,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { FrameReadings } from "~/app/Shell.tsx";
 import { Router } from "~/app/router.tsx";
@@ -206,10 +206,14 @@ test("themes that did not load say so and offer to ask again", async () => {
 test("asking an agent makes the deck shared with it, files its task linked to the deck, and opens the task", async () => {
   mount();
   fireEvent.change(await title(), { target: { value: "Board review" } });
-  fireEvent.click(screen.getByRole("radio", { name: "An agent" }));
-  const ask = await screen.findByRole("button", { name: "Ask Agent Marketer" });
+  fireEvent.click(screen.getAllByRole("button", { name: "Ask an agent" })[0]!);
+  const panel = screen.getByRole("complementary", { name: "Ask an agent" });
+  // THE SLIDES LAID OUT GO WITH THE BRIEF, and the panel says so.
+  expect(within(panel).getByText("4 slides")).toBeTruthy();
+  expect(within(panel).getByText("The Nightshade theme")).toBeTruthy();
+  const ask = within(panel).getByRole("button", { name: "Create and ask Agent Marketer" });
   expect(ask.getAttribute("aria-disabled")).toBe("true");
-  fireEvent.change(screen.getByRole("textbox", { name: "Brief" }), {
+  fireEvent.change(within(panel).getByRole("textbox", { name: "What is the deck for?" }), {
     target: { value: "A ten-minute update for the board." },
   });
   await waitFor(() => expect(ask.getAttribute("aria-disabled")).toBeNull());

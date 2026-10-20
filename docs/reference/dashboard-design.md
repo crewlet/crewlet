@@ -1117,7 +1117,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/knowledge/skills` | **Agent skills** — the tool skills the engine offers a phase, who loaded each; and what one agent learned | `kind=pages\|learned` · `seat=` (learned) |
 | `#/knowledge/diaries` · `#/knowledge/diaries/{handle}` | **Agent diaries** — every agent's diary at a glance, each counted by the node holding the agent; one agent's diary and episodes *(needs Admin access)*. Handles live here as they do under `seats/` | |
 | `#/artifacts` · `#/artifacts/yours` · `#/artifacts/shared` | **Artifacts**: All (everything the reader can open, the latest activity first, their pins above as a Pinned group), Yours (what they own, with their trash behind the Trash toggle) and Shared with you, each the engine's `artifacts` listing under one scope, every row decided by `get_artifact`. An earlier gallery's `#/artifacts/mine` is rewritten in place to Yours, and `#/artifacts/company` and `#/artifacts/agents` to All. All and Yours open on **Make something new**, one tile per kind with the kind's drawing (`ArtifactKindTile`), six across or, on a narrow page, three across in two rows, each opening New on that kind; it is drawn for a reader who may start one, and steps aside for a search, a type and the trash. The artifacts are a **grid of cards** by default: each card's preview is the artifact's own content drawn live and small (a doc's opening, a deck's cover slide, a sheet's first rows, a board's widgets from its top with their figures, filling the card within six dataset reads, a design's cover board and a page, each framed, a page that reads its datastore answered its reads by a read-only preview host that refuses every write, names no viewer and joins no room; a page that keeps each viewer's own state shows the kind's drawing, since a preview is handed no viewer), mounted only near the viewport and at most twelve at once, the kind's drawing standing in otherwise, and every read a preview that records no open; under it the title, who can open it (a lock, people or the company) and when it was edited, and a More menu (pin, copy link, rename, move to the trash; restore in the trash). The list is the second shape, and which one a browser shows is remembered there. The page bar holds the search and New; the toolbar holds the type, the order, the trash (Yours) and the shape. The reader's own artifacts are owned by "You", and Yours draws no owner or role column; the trash's rows say when each was trashed and when it is deleted for good. No permission opens the workspace: a share alone admits a reader (D01), and the engine decides every artifact. An administrator also sees the company's storage against its quotas as one line at the foot of All, counted over every artifact, private ones and the trash included | `kind=html\|doc\|slides\|design\|dashboard\|sheet` · `q=` · `sort=updated\|created\|title\|opened` (all three kept across the sections) · `status=trashed` (Yours: the reader's own trash) |
-| `#/artifacts/new/doc` · `#/artifacts/new/slides` · `#/artifacts/new/sheet` · `#/artifacts/new/design` · `#/artifacts/new/dashboard` · `#/artifacts/new/html` | **New doc**, **New slide deck**, **New sheet**, **New design**, **New dashboard**, **New HTML page**: each kind's own create page, in one shared frame (the artifact page's slim bar, then a full-bleed body the kind draws), each a chunk of its own. A doc or a deck starts from the engine's starter and a sheet blank or from the Review sheet template, owned by the reader *(needs Artifacts access)*. A design starts as the canvas a person lays out: a starting layout (landing page, app screens, one screen at three sizes, a presentation or a blank canvas), then boards shaped on the canvas (Frame `F` places one; Text and Sticky place notes) with a panel that follows the selection (the design's name, brief and references, or a board's name, frame preset or size, order and brief); Create publishes the boards as placeholder pages, shares the design with the chosen agent as an editor, files the agent a task carrying the brief and every board, links the design to it, and opens the design, whose boards fill in as the agent publishes. A dashboard or an HTML page is published by an agent's tool or the CLI, so its page offers to ask an agent in a new task. The gallery's Make row and its New menu open them | `item=` (the task it is made for, which lists it on that task's Artifacts card) |
+| `#/artifacts/new/doc` · `#/artifacts/new/slides` · `#/artifacts/new/sheet` · `#/artifacts/new/design` · `#/artifacts/new/dashboard` · `#/artifacts/new/html` | **New doc**, **New slide deck**, **New sheet**, **New design**, **New dashboard**, **New HTML page**: each kind's own create page, in one shared frame (the artifact page's slim bar, then a full-bleed body the kind draws), each a chunk of its own. A doc or a deck starts from the engine's starter and a sheet blank or from the Review sheet template, owned by the reader *(needs Artifacts access)*. A design starts as the canvas a person lays out: a starting layout (landing page, app screens, one screen at three sizes, a presentation or a blank canvas), then boards shaped on the canvas (Frame `F` places one; Text and Sticky place notes) with a panel that follows the selection (a board's name, frame preset or size, order and brief) and the hand-off panel beside it (the design's name, brief and references and who builds it); Create and ask publishes the boards as placeholder pages, shares the design with the chosen agent as an editor, files the agent a task carrying the brief and every board, links the design to it, and opens the design, whose boards fill in as the agent publishes. Every page offers **Ask an agent** in its bar, which opens the hand-off panel beside the page rather than replacing it ([Asking an agent from a create page is a panel, not a mode](#asking-an-agent-from-a-create-page-is-a-panel-not-a-mode)); a design and an HTML page arrive with it open where it fits beside the page. The gallery's Make row and its New menu open them | `item=` (the task it is made for, which lists it on that task's Artifacts card) · `panel=ask\|closed` (the hand-off panel; `closed` on a design or an HTML page, which open with it) |
 | `#/artifacts/new` | Not a page: an earlier link, rewritten in place to its kind's page when it carries `kind=`, and to the gallery when it does not | `kind=` (read once, then dropped) |
 | `#/artifacts/{id}` | **Artifact**: addressed by its id, drawn under ONE slim bar in the frame's place ([An open artifact is the screen](#an-open-artifact-is-the-screen)). A page runs in a sandboxed frame on the artifact origin, edge to edge, a doc is rendered here tab by tab by the dashboard's own Markdown renderer with its outline beside it, Edit (the text in place, in the rich editor, and the tabs: add, rename, reorder, remove; each save a version, a raced save merged onto the newer one) and Print, a deck is drawn from its canonical tree with Edit, Grid and Present in the bar, a sheet is drawn from its schema. The bar holds the way back, the title (renamed in place by an editor), the version chip, the kind's views, who is here, and the controls that open a panel at the side: Details (what the page header and its fact line used to say), History (versions, Compare, Restore, labels and the change record), Data where it keeps any (rows, the schema editor and every write, with Undo), People (who is here, with Follow) and, from More, Settings (details, what it can do, its owner, the trash); Share and More close the bar. A reader with no relation is told it is not there or not theirs, in one card | `panel=details\|history\|data\|people\|settings` (pushes; the old `tab=` and `rail=people` are read as the panel they became and rewritten) · `expand=1` (the panel takes the workspace) · `version=` · `against=` · `lens=` · `sheet=` (which collection a sheet draws) · `doctab=` (which tab of a doc is on show) · `data=rows\|schema\|history` · `mode=grid\|present\|presenter` · `slide=` · `follow=` |
 | `#/spend` | **Spend › Overview**: the window's tokens against the one before, the monthly budget, the prompt-cache share and the median task; daily tokens by phase (or model, provider, seat, unit, worker); then by agent beside by provider and by team, and the three most expensive tasks beside the auxiliary model by purpose (tokens only) | `window=7d\|30d\|90d\|<from>/<to>` (whole company days, kept across the sections) · `group=phase\|model\|provider\|seat\|unit\|worker` |
@@ -2199,6 +2199,51 @@ banners across the top of the workspace, and following somebody is the
 stays in view however far the artifact is read; a kind's view measures the
 body (`--artifact-view`) rather than reserving room for a header that is not
 there.
+
+### Asking an agent from a create page is a panel, not a mode
+
+Every kind's create page is the artifact being made: a doc's page, a deck's
+stage and filmstrip, a sheet's grid, a board, a design's canvas, an HTML
+page's source. Handing the work to an agent does not swap that page for a
+form. The bar carries **Ask an agent**, drawn with the suggested agent's
+Crewlet character, and it opens the hand-off panel at the page's side: the
+kit's `AgentHandoffPanel`, an `ArtifactPanel` like an open artifact's Details
+or History, so it is a column where there is room, a drawer over the page's
+end where there is not, and the screen on a phone. The page stays live
+beside it.
+
+**Why.** Each page used to switch between "make it yourself" and "ask an
+agent" with a segmented pill ("Write it | Ask an agent", "Who writes it: You,
+in the editor | An agent", "Build it now | Ask an agent", "Describe it | Bring
+the HTML"), which replaced half the page with a form and told the reader the
+two ways were rivals. They are not: a person lays out a few slides, then asks
+an agent to write them; drafts a page, then asks for the rest. A side panel
+is how Figma's and Notion's assistants and Linear's agent assignment sit
+beside the work, and it keeps the direct way the page's own.
+
+**The panel, top to bottom**: a line saying what the agent does with the
+brief, the brief (a composer, Command+Enter to send) with briefs to start
+from while it is empty, the kind's own fields (a design's name and references), who
+builds it and in which project (`WhoBuildsIt`), **Goes with it** (what the
+reader already made: the doc's draft or template, the slides and theme, the
+board's figures, the sheet's columns and rows, the design's boards, the HTML
+page's source and what it may use, and "Your brief alone" while there is
+nothing) with the task exactly as it is filed behind a disclosure, then
+**What happens next**. The send is the panel's foot, "Ask SRE Lead" beside
+that agent's character, pressed by Command+Enter anywhere in the panel; held,
+it says why in words beside the button, and the engine's refusal is said
+above it. The bar's primary stays the direct create.
+
+**Two kinds arrive with it open.** A design is drawn only by an agent, so its
+page opens with the panel beside the canvas and its bar's Ask an agent is the
+primary while the panel is closed (Command+Enter outside the panel opens it).
+An HTML page is most often described rather than written, so its page is the
+source with the panel open beside it; closing it leaves the source to write
+in. Each arrives with it open only where the panel stands beside the page
+as a column (a laptop's width and up); narrower, it would arrive as a drawer
+over the page's first step, so there it waits for the press. The panel's
+state is the address's (`panel=ask`, and `panel=closed` on a kind that opens
+with it), as an open artifact's panels are.
 
 ### Moving, and going back
 
