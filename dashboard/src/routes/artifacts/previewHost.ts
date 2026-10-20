@@ -18,14 +18,24 @@
  * engine. And it answers at most [PREVIEW_READS] distinct reads, so a page
  * that keeps inventing new ones is refused rather than read for.
  *
+ * A NEWCOMER'S STATE. A page that keeps each viewer's own state (`state`:
+ * the tab they chose, a filter, a dismissed hint) is handed the state of
+ * somebody opening it for the first time: empty, and kept by this host alone
+ * for as long as the frame lives, so a page that remembers a choice as it
+ * draws reads it back as it would, and it is never the reader's own. The
+ * reader's state is never read, since a card is not their visit, and nothing
+ * the page sets reaches the engine. A page that keeps state used to be shown
+ * as its kind's drawing instead, so a dashboard that remembered its branch
+ * filter had no preview at all.
+ *
  * WHAT IT NEVER DOES, by construction rather than by a check: it holds no
- * write path (no keyed write, no datastore copy, no state), so a write, an
- * undo, a state change or a print is refused before anything is asked; it
- * pushes nothing after a subscription's first answer, so it keeps no live
- * view of the room's data; it names no viewer and joins no room, so the page
- * learns nobody and shows nobody as viewing; and it files no ready report.
- * The frame around it is inert and takes no pointer, and the engine decides
- * every read again as the signed-in reader.
+ * write path to the engine (no keyed write, no datastore copy, no state
+ * write), so a datastore write, an undo or a print is refused before anything
+ * is asked; it pushes nothing after a subscription's first answer, so it
+ * keeps no live view of the room's data; it names no viewer and joins no
+ * room, so the page learns nobody and shows nobody as viewing; and it files
+ * no ready report. The frame around it is inert and takes no pointer, and the
+ * engine decides every read again as the signed-in reader.
  */
 
 import { RUNTIME_CONTRACT } from "~/contract/artifacts.ts";
@@ -63,12 +73,33 @@ export const PREVIEW_READS = 64;
  * of it only what this host answers. Anything else the version declares is
  * not offered, so the page's runtime never asks for it.
  */
-export const PREVIEW_HOST_CAPABILITIES: readonly RuntimeCapability[] = ["db", "assets"];
+export const PREVIEW_HOST_CAPABILITIES: readonly RuntimeCapability[] = ["db", "assets", "state"];
+
+/**
+ * The most keys a preview's newcomer state holds, and the most bytes one
+ * value may take as JSON: a page draws with a few remembered choices, and a
+ * page that writes more on every tick is refused rather than kept in the
+ * gallery's memory.
+ */
+export const PREVIEW_STATE_KEYS = 64;
+export const PREVIEW_STATE_VALUE_BYTES = 16 * 1024;
+
+/**
+ * Whether a frame granted `granted` is drawn from something this host answers
+ * (its datastore, or a state it remembers), and so has a host on its port. A
+ * page granted its assets alone draws from its own files and has nothing on
+ * its port, as before.
+ */
+export function hostAnswers(granted: readonly RuntimeCapability[]): boolean {
+  return granted.includes("db") || granted.includes("state");
+}
 
 export class PreviewHost {
   private nextSubscription = 1;
   /** Each distinct read the page has made, by method and parameters, as it was answered. */
   private readonly answered = new Map<string, Promise<unknown>>();
+  /** The newcomer's state the page has set while its frame lives: empty at first, never the reader's. */
+  private readonly state = new Map<string, unknown>();
 
   constructor(
     private readonly options: {
@@ -146,6 +177,27 @@ export class PreviewHost {
         return { subscription: this.nextSubscription++, docs };
       }
       case "data.unsubscribe":
+        return null;
+      case "state.get":
+        return this.state.get(str(p["key"], "key")) ?? null;
+      case "state.list": {
+        const prefix = typeof p["prefix"] === "string" ? p["prefix"] : "";
+        return [...this.state.keys()].filter((k) => k.startsWith(prefix)).sort();
+      }
+      case "state.set": {
+        const key = str(p["key"], "key");
+        const value = p["value"] ?? null;
+        if (!this.state.has(key) && this.state.size >= PREVIEW_STATE_KEYS) {
+          throw new Refusal("rate_limited", "a preview keeps only a few remembered choices");
+        }
+        if (JSON.stringify(value).length > PREVIEW_STATE_VALUE_BYTES) {
+          throw new Refusal("invalid", "a preview keeps only small remembered choices");
+        }
+        this.state.set(key, value);
+        return null;
+      }
+      case "state.delete":
+        this.state.delete(str(p["key"], "key"));
         return null;
       default:
         throw new Refusal("forbidden", "a preview only reads; open the artifact to do this");

@@ -15,14 +15,18 @@
  * An earlier gallery had five sections; an address of one is rewritten in
  * place to the section it became (`LEGACY_ARTIFACT_SECTIONS`).
  *
- * # Make something new, then the work
+ * # Start a new artifact, then the work
  *
  * All and Yours open on a quiet tray of the kinds a reader can start, each
  * its glyph on its own tint, its name and what it is for (`ArtifactMakeRow`),
  * a toolbar for making things rather than a hero, and then the artifacts as
  * a grid of cards whose previews are the artifacts' own content drawn small
  * (`GalleryPreview`). The list is the second shape, kept for a reader who
- * scans names, dates and roles; which one a browser shows is remembered in
+ * scans names, dates and roles: each row the kind's mark on its tint beside
+ * the title, the kind's word and the description under it
+ * (`ArtifactNameCell`), who can open it (`ArtifactAccessLabel`), its owner's
+ * badge and name, when it was edited and the reader's role, so a list reads
+ * as the grid's cards do rather than as a ledger; which one a browser shows is remembered in
  * the browser (`STORAGE_KEYS.artifactsShape`) rather than the address, so a
  * link somebody pastes opens in the reader's own shape.
  *
@@ -48,9 +52,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ArtifactAccessLabel,
   ArtifactCardSkeleton,
   ArtifactKindGlyph,
   ArtifactMakeRow,
+  ArtifactNameCell,
   Button,
   Input,
   LivePreviewBudgetProvider,
@@ -58,6 +64,8 @@ import {
   SegmentedControl,
   Select,
   Skeleton,
+  TableEntityCell,
+  PrincipalAvatar,
 } from "@crewlethq/ui";
 import {
   LayoutGridGlyph,
@@ -98,7 +106,7 @@ import {
   purgeAt,
   purgeSentence,
 } from "~/lib/artifacts/words.ts";
-import { ListedArtifactCard } from "./parts.tsx";
+import { ListedArtifactCard, accessOf } from "./parts.tsx";
 import { ArtifactMenu } from "./GalleryMenu.tsx";
 import { NewArtifactMenu } from "./new/NewArtifactMenu.tsx";
 import { ARTIFACT_LIST_SORTS } from "~/contract/artifacts.ts";
@@ -138,6 +146,9 @@ const SORT_WORDS: Readonly<Record<ArtifactListSort, string>> = {
   title: "Title, A to Z",
   opened: "Recently opened",
 };
+
+/** The Make row's heading: what the reader does there, said plainly. */
+export const MAKE_TITLE = "Start a new artifact";
 
 /** What each kind is called on the Make row: the kind's word, said as what one makes. */
 const MAKE_WORDS: Readonly<Record<ArtifactKind, string>> = {
@@ -321,12 +332,13 @@ function useShape(): [Shape, (next: Shape) => void] {
  * The fact columns' tracks, FIXED rather than sized to their contents: All
  * draws Pinned and the rest as two grids one above the other, and a page
  * loaded later is the same grid grown, so a track sized to what one grid holds
- * put "Type" at two places on one screen and moved it when a page came in.
- * Each is its widest value at the body size ("Dashboard", "Nov 18, 2026",
- * "Can comment"); a longer owner's name is cut, with the whole of it on hover.
+ * put a column at two places on one screen and moved it when a page came in.
+ * Each is its widest value at the body size ("Company" beside its glyph,
+ * "Nov 18, 2026", "Can comment"); a longer owner's name is cut, with the
+ * whole of it on hover.
  */
 const TRACK = {
-  kind: "7rem",
+  access: "7.5rem",
   owner: "11rem",
   when: "7.5rem",
   role: "8rem",
@@ -480,7 +492,7 @@ function MakeRow() {
   return (
     <section className="artifacts-make" aria-labelledby="artifacts-make-title">
       <h2 className="artifacts-make-title" id="artifacts-make-title">
-        Make something new
+        {MAKE_TITLE}
       </h2>
       <ArtifactMakeRow
         aria-labelledby="artifacts-make-title"
@@ -730,29 +742,38 @@ function Listing({
     {
       key: "title",
       header: "Name",
-      floor: "12rem",
+      floor: "14rem",
       phoneLead: true,
+      // THE KIND IS PRINTED UNDER THE TITLE, beside the description, so the
+      // list keeps no Type column of its own: the mark and its word are the
+      // grid card's badge, said in a row.
       cell: (item) => (
-        <span className="artifacts-name">
-          <ArtifactKindGlyph kind={item.kind} size="sm" />
-          <span className="truncate" title={item.title}>
-            {item.title}
-          </span>
-          {item.pinned && (
-            <span className="artifacts-pin" title="Pinned">
-              <PinGlyph size="xs" aria-hidden="true" />
-              <span className="sr-only">Pinned</span>
-            </span>
-          )}
-        </span>
+        <ArtifactNameCell
+          kind={item.kind}
+          title={item.title}
+          detail={item.description}
+          pinned={item.pinned ?? false}
+          trashed={item.status === "trashed"}
+          labels={{ kinds: KIND_WORDS }}
+        />
       ),
     },
-    {
-      key: "kind",
-      header: "Type",
-      width: TRACK.kind,
-      cell: (item) => KIND_WORDS[item.kind],
-    },
+    // WHO CAN OPEN IT, but not in the trash: a trashed artifact opens for
+    // nobody until it is restored, and its rows say when it goes instead.
+    ...(trashed
+      ? []
+      : [
+          {
+            key: "access",
+            header: "Access",
+            width: TRACK.access,
+            drop: 3,
+            // ON A PHONE the lead already says what it is; the line under it
+            // is when it was edited, and who can open it is its page's to say.
+            phoneOmit: true,
+            cell: (item: ArtifactListItem) => <ArtifactAccessLabel access={accessOf(item)} />,
+          },
+        ]),
     ...(own
       ? []
       : [
@@ -764,14 +785,15 @@ function Listing({
             // ON A PHONE the row's line is the type and the time: the owner
             // and the role are the artifact's own page's to say.
             phoneOmit: true,
-            cell: (item: ArtifactListItem) => {
-              const who = whoWords(item.owner, viewer, people);
-              return (
-                <span className="truncate" title={who}>
-                  {who}
-                </span>
-              );
-            },
+            // THE OWNER'S BADGE, as the chart draws them: a person's circle
+            // and an agent's character, so the column reads by who as well
+            // as by name.
+            cell: (item: ArtifactListItem) => (
+              <TableEntityCell
+                name={whoWords(item.owner, viewer, people)}
+                badge={<PrincipalAvatar principal={people.seatPrincipal(item.owner)} size="xs" />}
+              />
+            ),
           },
         ]),
     trashed
@@ -790,7 +812,7 @@ function Listing({
           header: "Edited",
           width: TRACK.when,
           cell: (item: ArtifactListItem) => (
-            <time dateTime={item.updated_at} title={item.updated_at}>
+            <time className="artifacts-when" dateTime={item.updated_at} title={item.updated_at}>
               {relTime(item.updated_at, now)}
             </time>
           ),
@@ -823,7 +845,9 @@ function Listing({
               width: TRACK.role,
               drop: 1,
               phoneOmit: true,
-              cell: (item: ArtifactListItem) => ROLE_WORDS[item.role],
+              cell: (item: ArtifactListItem) => (
+                <span className="artifacts-role">{ROLE_WORDS[item.role]}</span>
+              ),
             },
           ]),
     {
@@ -835,17 +859,19 @@ function Listing({
     },
   ];
   return (
-    <DataGrid
-      rows={items}
-      columns={columns}
-      rowKey={(item) => item.id}
-      rowHref={(item) => href(artifactPath(item.id))}
-      serverSorted
-      name={name}
-      phoneRows="compact"
-      onLoadMore={loadMore}
-      loadedNote={note}
-    />
+    <div className="artifacts-list">
+      <DataGrid
+        rows={items}
+        columns={columns}
+        rowKey={(item) => item.id}
+        rowHref={(item) => href(artifactPath(item.id))}
+        serverSorted
+        name={name}
+        phoneRows="compact"
+        onLoadMore={loadMore}
+        loadedNote={note}
+      />
+    </div>
   );
 }
 

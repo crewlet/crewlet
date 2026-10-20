@@ -12,7 +12,10 @@
  *   the reader through the datastore's own questions.
  * - dashboard: its board's first row of widgets with their real figures,
  *   each dataset read as the reader; the rest of the board is not read.
- * - design: its cover board, framed at the board's own size.
+ * - design: its cover board, framed at the board's own size and filling the
+ *   card edge to edge (`PreviewScale`'s `fill`): a laptop's board loses a
+ *   sliver of its foot rather than leaving an empty strip down each side, and
+ *   a phone's board, which filling would cut to its top, is shown whole.
  * - html: its page, framed at a desktop width.
  *
  * # What it costs
@@ -90,7 +93,7 @@ import { sheetColumns, sheetRows } from "~/lib/artifacts/sheet.ts";
 import type { ArtifactPeople } from "~/lib/artifacts/people.ts";
 import { useClient } from "~/lib/store-hooks.ts";
 import { DashboardWidget } from "./DashboardWidget.tsx";
-import { PreviewHost } from "./previewHost.ts";
+import { PreviewHost, hostAnswers } from "./previewHost.ts";
 import { sheetCollections } from "./SheetView.tsx";
 
 /** The width a board's preview is laid out at: a laptop's half, so its widgets fill a card's box. */
@@ -127,19 +130,6 @@ const LAYOUT_WIDTH: Readonly<Record<ArtifactKind, number | undefined>> = {
   html: 880,
 };
 
-/**
- * Whether a preview can show what the artifact is. A page that keeps each
- * viewer's own state (`state`) draws the state of nobody in a preview, which
- * is handed no viewer: it shows the kind's drawing instead. Every other page
- * is drawn live, a page that reads its datastore answered its reads by the
- * preview host, and a page that would name its viewer or the people present
- * drawn as it is before it knows them.
- */
-export function previewable(item: Pick<ArtifactListItem, "kind" | "capabilities">): boolean {
-  if (item.kind !== "html") return true;
-  return !item.capabilities.includes("state");
-}
-
 /** The kinds whose preview runs the artifact's page in a frame. */
 const FRAMED: ReadonlySet<ArtifactKind> = new Set(["html", "design"]);
 
@@ -168,10 +158,7 @@ export function GalleryPreview({
   const fallback = <ArtifactKindGround kind={item.kind} />;
   // NOTHING LIVE IN THE TRASH: a trashed artifact's page refuses a frame, and
   // its card is a way to restore it rather than to read it.
-  const still =
-    item.status === "trashed" ||
-    (item.kind !== "sheet" && item.head_number <= 0) ||
-    !previewable(item);
+  const still = item.status === "trashed" || (item.kind !== "sheet" && item.head_number <= 0);
   return (
     <LivePreview
       fallback={fallback}
@@ -485,7 +472,7 @@ function DesignPreview({ item }: { item: ArtifactListItem }) {
   }, [outline.error, outline.data, cover, preview]);
   if (!cover) return null;
   return (
-    <PreviewScale width={cover.w} height={cover.h} fit="contain">
+    <PreviewScale width={cover.w} height={cover.h} fit="fill">
       <PreviewFrame item={item} document={cover.path} title={cover.title || item.title} />
     </PreviewScale>
   );
@@ -500,8 +487,11 @@ function PagePreview({ item }: { item: ArtifactListItem }) {
  * recorded, and it grants only what drawing needs), the design system's frame
  * embedding it exactly as minted, and on its port at most the READ-ONLY
  * preview host (`previewHost.ts`): a page whose frame is granted a datastore
- * is answered its reads, so it draws its real content, and every other call
- * is refused. A page granted none has nothing on its port at all.
+ * is answered its reads, so it draws its real content; a page that keeps each
+ * viewer's own state is handed a newcomer's, empty and held by the frame
+ * alone, so it draws as somebody opening it for the first time sees it; and
+ * every other call is refused. A page granted none of these has nothing on
+ * its port at all.
  *
  * THE HOST IS BUILT FROM THE MINTED FRAME'S GRANT, never from the gallery
  * item: the origin tells the page's runtime that grant as it loads, so a
@@ -527,7 +517,7 @@ function PreviewFrame({
   const minted = frame.data;
   const host = useMemo(
     () =>
-      minted?.capabilities.includes("db")
+      minted && hostAnswers(minted.capabilities)
         ? new PreviewHost({ artifact: item.id, socket, granted: minted.capabilities })
         : null,
     [minted, item.id, socket],

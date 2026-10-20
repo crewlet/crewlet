@@ -294,9 +294,9 @@ func TestAFrameOpensOneVersionOfAPageForOneCredential(t *testing.T) {
 // A GALLERY'S PREVIEW OPENS NOTHING AND GRANTS ONLY A READ: a frame minted
 // with `?purpose=preview` is decided as any open is, records no open, and is
 // asked of the framer as a preview granted only what drawing needs (its
-// assets and its datastore, which the dashboard's preview host answers with
-// reads alone), so its page is offered no viewer, no state and no room, and
-// it files no ready report. An open still records its opening, and an
+// assets, its datastore and a newcomer's state, which the dashboard's preview
+// host answers with reads alone and a state of its own), so its page is
+// offered no viewer and no room, and it files no ready report. An open still records its opening, and an
 // administrator's preview of a private page is still recorded as the
 // elevated read it is. A purpose this build does not know is refused.
 func TestAPreviewsFrameRecordsNoOpeningAndGrantsOnlyARead(t *testing.T) {
