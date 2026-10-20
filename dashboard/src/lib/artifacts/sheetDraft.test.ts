@@ -7,7 +7,11 @@ import { describe, expect, test } from "vitest";
 import type { SheetPerson } from "@crewlethq/ui";
 import { DATA_BATCH_MAX_OPS } from "~/contract/artifacts.ts";
 import { SHEET_TEMPLATES, schemaProblem, trackerSheetSchema, reviewSheetSchema } from "./schema.ts";
+import type { DataCollection } from "~/protocol/index.ts";
+import { COLUMN_TYPE_WORDS } from "./words.ts";
 import {
+  BRIEF_ROWS_MAX,
+  draftBrief,
   draftColumns,
   draftFromTable,
   draftOf,
@@ -300,4 +304,53 @@ test("a column's name suggests its type", () => {
 test("a file's name reads as a title", () => {
   expect(titleFromFile("launch-gates.csv")).toBe("Launch gates");
   expect(titleFromFile("Q4_budget  final.TSV")).toBe("Q4 budget final");
+});
+
+describe("what an agent is handed", () => {
+  const collection: DataCollection = {
+    name: "items",
+    read: "all",
+    create: "editor",
+    delete: "editor",
+    columns: [
+      { key: "task", type: "text" as const, label: "Task", primary: true },
+      {
+        key: "stage",
+        type: "status" as const,
+        label: "Stage",
+        options: [
+          { id: "todo", label: "To do" },
+          { id: "done", label: "Done" },
+          { id: "old", label: "Old", archived: true },
+        ],
+      },
+      { key: "secret", type: "text" as const, label: "Secret", hidden: true },
+    ],
+  };
+
+  test("every visible column with its type, its choices and whether it is required", () => {
+    const text = draftBrief(draftOf([collection]), COLUMN_TYPE_WORDS);
+    expect(text).toBe(
+      [
+        "Start from these columns:",
+        "- Task (Text, required)",
+        "- Stage (Status): To do, Done",
+      ].join("\n"),
+    );
+  });
+
+  test("the rows typed so far, choices by their labels, blank rows left out", () => {
+    const draft = draftOf([collection], [{ task: "Write the plan", stage: "done" }, {}]);
+    const text = draftBrief(draft, COLUMN_TYPE_WORDS);
+    expect(text).toContain("And this first row:\n- Task: Write the plan; Stage: Done");
+  });
+
+  test("past the cap the rest are counted rather than spelled out", () => {
+    const rows = Array.from({ length: BRIEF_ROWS_MAX + 3 }, (_, i) => ({ task: `Row ${i}` }));
+    const text = draftBrief(draftOf([collection], rows), COLUMN_TYPE_WORDS);
+    expect(text.split("\n").filter((l) => l.startsWith("- Task: Row"))).toHaveLength(
+      BRIEF_ROWS_MAX,
+    );
+    expect(text).toContain("- and 3 more rows like these");
+  });
 });

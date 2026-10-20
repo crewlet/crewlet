@@ -286,15 +286,18 @@ test("a board the engine refuses is said where the reader is looking, and the dr
 test("an agent asked with nothing on the board gets a task with the brief, and the reader lands on it", async () => {
   mount();
   await waitFor(() => expect(within(data()).getByText("Work items")).toBeTruthy());
-  fireEvent.click(screen.getByRole("radio", { name: "Ask an agent" }));
+  fireEvent.click(screen.getAllByRole("button", { name: "Ask an agent" })[0]!);
   fireEvent.change(screen.getByRole("textbox", { name: "Title" }), {
     target: { value: "Team load" },
   });
   fireEvent.change(screen.getByRole("textbox", { name: "What should the board answer?" }), {
     target: { value: "Who is carrying the most work." },
   });
-  // THE AGENT WHOSE WORK IS DASHBOARDS is suggested first.
-  const ask = await screen.findByRole("button", { name: /Ask Agent Analyst/ });
+  // THE AGENT WHOSE WORK IS DASHBOARDS is suggested first, and with nothing
+  // on the board the brief goes alone.
+  const panel = screen.getByRole("complementary", { name: "Ask an agent" });
+  expect(within(panel).queryByText(/^The board, with/)).toBeNull();
+  const ask = await within(panel).findByRole("button", { name: "Ask Agent Analyst" });
   fireEvent.click(ask);
   await waitFor(() => expect(location.hash).toBe("#/work/OPS-4"));
   expect(filed()?.args).toMatchObject({ title: "Team load", assignee: "analyst" });
@@ -305,15 +308,20 @@ test("an agent asked with nothing on the board gets a task with the brief, and t
 test("an agent asked with figures on the board refines it: the board is made, then linked to its task", async () => {
   mount();
   await waitFor(() => expect(within(data()).getByText("Work items")).toBeTruthy());
-  fireEvent.click(screen.getByRole("radio", { name: "Ask an agent" }));
+  // A BOARD MADE BEFORE ASKING goes with the brief: the page is the same page.
   fireEvent.click(screen.getByRole("button", { name: /Team workload/ }));
+  fireEvent.click(screen.getAllByRole("button", { name: "Ask an agent" })[0]!);
   fireEvent.change(screen.getByRole("textbox", { name: "Title" }), {
     target: { value: "Team load" },
   });
   fireEvent.change(screen.getByRole("textbox", { name: "What should the board answer?" }), {
     target: { value: "Add a trend per team." },
   });
-  fireEvent.click(await screen.findByRole("button", { name: /Ask Agent Analyst/ }));
+  const panel = screen.getByRole("complementary", { name: "Ask an agent" });
+  expect(within(panel).getByText(/^The board, with \d+ figures?$/)).toBeTruthy();
+  fireEvent.click(
+    await within(panel).findByRole("button", { name: "Create and ask Agent Analyst" }),
+  );
   await waitFor(() => expect(location.hash).toBe(`#/artifacts/${MADE}`));
   const order = sent.map((r) => `${r.method} ${r.path}`);
   const made = order.indexOf("POST /artifacts");

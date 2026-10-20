@@ -26,7 +26,8 @@ vi.mock("~/lib/store-hooks.ts", async () => {
   return { ...actual, useOrg: () => null };
 });
 const fileArtifactTask = vi.hoisted(() => vi.fn());
-vi.mock("./fileTask.ts", () => ({
+vi.mock("./fileTask.ts", async (original) => ({
+  ...(await original<typeof import("./fileTask.ts")>()),
   useFileArtifactTask: () => ({ fileArtifactTask, busy: false, refusal: null, held: null }),
 }));
 vi.mock("./WhoBuildsIt.tsx", () => ({
@@ -219,21 +220,25 @@ test("Cancel with something typed asks before discarding it", () => {
   expect(location.hash).toBe("#/artifacts");
 });
 
-test("Ask an agent files a real task to the agent with the brief, and lands on it", async () => {
+test("Ask an agent opens the hand-off beside the grid, files a task with the brief, and lands on it", async () => {
   fileArtifactTask.mockResolvedValue({ item: "ENG-42", key: "ENG-42", linked: null });
   mount();
   fireEvent.change(screen.getByRole("textbox", { name: "Sheet title" }), {
     target: { value: "Hiring pipeline" },
   });
-  fireEvent.click(screen.getByRole("radio", { name: /Ask an agent/ }));
-  expect(screen.queryByRole("grid")).toBeNull();
-  expect(screen.queryByText("Who can change rows")).toBeNull();
-  const ask = screen.getByRole("button", { name: /Ask Analyst/ });
+  fireEvent.click(screen.getAllByRole("button", { name: "Ask an agent" })[0]!);
+  const panel = screen.getByRole("complementary", { name: "Ask an agent" });
+  // THE PAGE STAYS: the grid and the row policy are still there beside it.
+  expect(screen.getByRole("grid")).toBeTruthy();
+  expect(screen.getByText("Who can change rows")).toBeTruthy();
+  const ask = within(panel).getByRole("button", { name: "Ask Analyst" });
   fireEvent.click(ask);
   expect(fileArtifactTask).not.toHaveBeenCalled();
-  expect(screen.getByText("Say what the sheet should hold.")).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "A hiring pipeline" }));
-  expect(screen.getByText(/Analyst gets a task to set up “Hiring pipeline”/)).toBeTruthy();
+  expect(within(panel).getAllByText("Say what the sheet should hold.").length).toBeGreaterThan(0);
+  // AN UNTOUCHED BLANK GRID says nothing the brief does not: only the title goes.
+  expect(within(panel).getByText("“Hiring pipeline”")).toBeTruthy();
+  expect(within(panel).queryByText(/columns?$/)).toBeNull();
+  fireEvent.click(within(panel).getByRole("button", { name: "Hiring pipeline" }));
   fireEvent.click(ask);
   await waitFor(() => expect(location.hash).toBe("#/work/ENG-42"));
   expect(fileArtifactTask).toHaveBeenCalledWith({
@@ -244,4 +249,23 @@ test("Ask an agent files a real task to the agent with the brief, and lands on i
     project: "ENG",
   });
   expect(sent).toEqual([]);
+});
+
+test("the columns shaped in the grid go to the agent with the brief", async () => {
+  fileArtifactTask.mockResolvedValue({ item: "ENG-43", key: "ENG-43", linked: null });
+  mount();
+  fireEvent.change(screen.getByRole("textbox", { name: "Sheet title" }), {
+    target: { value: "Launch" },
+  });
+  fireEvent.click(screen.getByRole("radio", { name: /Tracker/ }));
+  fireEvent.click(screen.getAllByRole("button", { name: "Ask an agent" })[0]!);
+  const panel = screen.getByRole("complementary", { name: "Ask an agent" });
+  expect(within(panel).getByText(/^\d+ columns/)).toBeTruthy();
+  fireEvent.change(within(panel).getByRole("textbox", { name: "What should the sheet hold?" }), {
+    target: { value: "The launch gates." },
+  });
+  fireEvent.click(within(panel).getByRole("button", { name: "Ask Analyst" }));
+  await waitFor(() => expect(fileArtifactTask).toHaveBeenCalled());
+  const brief = fileArtifactTask.mock.calls.at(-1)![0].brief as string;
+  expect(brief.startsWith("The launch gates.\n\nStart from these columns:\n- ")).toBe(true);
 });

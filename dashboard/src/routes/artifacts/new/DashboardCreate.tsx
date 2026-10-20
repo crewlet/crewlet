@@ -24,11 +24,13 @@
  *
  * # Or an agent builds it
  *
- * Ask an agent files a real tracker task to the chosen agent seat with the
- * reader's brief (`useFileArtifactTask`). With figures on the board, the
- * board is created first and linked to the task, so the agent refines it and
- * the reader lands on it; with none, the agent builds the board from the
- * brief and the reader lands on the task.
+ * "Ask an agent" in the bar opens the hand-off panel beside the board
+ * (`AskAgent.tsx`), which files a real tracker task to the chosen agent seat
+ * with the reader's brief (`useFileArtifactTask`). The board stays live while
+ * the brief is written. With figures on it, the board is created first and
+ * linked to the task, so the agent refines it and the reader lands on it;
+ * with none, the agent builds the board from the brief and the reader lands
+ * on the task.
  */
 
 import { useMemo, useRef, useState } from "react";
@@ -50,12 +52,17 @@ import {
   SegmentedControl,
   Select,
   Skeleton,
-  Textarea,
   VisuallyHidden,
   useReorder,
   useToast,
 } from "@crewlethq/ui";
-import { CheckGlyph, PlusGlyph, RefreshCwGlyph, SendGlyph } from "@crewlethq/icons/glyphs";
+import {
+  CheckGlyph,
+  FileTextGlyph,
+  LayoutDashboardGlyph,
+  PlusGlyph,
+  RefreshCwGlyph,
+} from "@crewlethq/icons/glyphs";
 import { useNavigator } from "~/app/router.tsx";
 import { artifactPath } from "~/app/routes.ts";
 import { QueryState } from "~/components/common.tsx";
@@ -65,8 +72,6 @@ import { refreshWords } from "~/lib/artifacts/dashboard.ts";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
 import { plural } from "~/lib/format.ts";
 import { refusalText } from "~/lib/refusal.ts";
-import { youNeedWords } from "~/lib/access.ts";
-import type { Refusal } from "~/lib/useAct.ts";
 import { useNarrowerThan } from "~/lib/useNarrowerThan.ts";
 import { useRest } from "~/lib/useRest.ts";
 import {
@@ -77,8 +82,16 @@ import {
 import { DashboardWidget } from "../DashboardWidget.tsx";
 import { CreateShell, useLeaveCreate } from "./CreateShell.tsx";
 import { titleHold, titleProblem, useWorkItem } from "./create.ts";
-import { useFileArtifactTask } from "./fileTask.ts";
-import { WhoBuildsIt, useWhoBuildsIt, type WhoBuildsItState } from "./WhoBuildsIt.tsx";
+import { artifactTaskBody, useFileArtifactTask } from "./fileTask.ts";
+import { useWhoBuildsIt } from "./WhoBuildsIt.tsx";
+import {
+  AskAgentPanel,
+  askTitleHold,
+  askTool,
+  chosenAgent,
+  taskRefusal,
+  useAskPanel,
+} from "./AskAgent.tsx";
 import {
   EMPTY_DRAFT,
   SPEC_PATH,
@@ -107,8 +120,27 @@ import {
 } from "./dashboard/model.ts";
 import { previewRows, previewStatus, usePreviews, type Previews } from "./dashboard/usePreviews.ts";
 
-/** Whether the person composes the board here, or asks an agent for it. */
-type Mode = "build" | "agent";
+/** Briefs to start from, one press each. */
+const BOARD_BRIEFS = [
+  {
+    key: "load",
+    label: "Team load",
+    brief:
+      "Show how much work each team is carrying, what is overdue, and how many tokens each agent used this month.",
+  },
+  {
+    key: "delivery",
+    label: "Delivery pulse",
+    brief:
+      "A weekly delivery pulse: items opened and closed, what is blocked and for how long, and the oldest work still in progress.",
+  },
+  {
+    key: "spend",
+    label: "Agent spend",
+    brief:
+      "Spend by agent and by model over the last 30 days, the busiest seats, and any agent close to its budget.",
+  },
+] as const;
 
 /** One board row's height in pixels: the board's own (`DashboardView`). */
 const ROW = 16;
@@ -158,11 +190,11 @@ export function DashboardCreate() {
   const root = useRef<HTMLDivElement>(null);
   const narrow = useNarrowerThan(root, NARROW_BELOW);
   const [pane, setPane] = useState<"board" | "data">("board");
-  const [mode, setMode] = useState<Mode>("build");
+  const panel = useAskPanel();
   const [brief, setBrief] = useState("");
   const who = useWhoBuildsIt("dashboard");
   const filer = useFileArtifactTask();
-  const agentName = who.builders.find((b) => b.seat.handle === who.seat)?.seat.name ?? "";
+  const agentName = chosenAgent(who)?.seat.name ?? "";
   // THE BOARD AN AGENT IS ASKED TO REFINE, once made: a task that could not be
   // filed is asked again without making a second board.
   const madeFor = useRef<{ text: string; id: string } | null>(null);
@@ -195,16 +227,16 @@ export function DashboardCreate() {
     ? "This board reads more datasets than one board holds."
     : undefined;
   const hold =
-    mode === "build"
-      ? (titleHold(title) ??
-        (resolved.length === 0 ? "Add at least one figure to the board." : undefined) ??
-        tooMany)
-      : (titleHold(title) ??
-        (brief.trim() === "" ? "Say what the board should answer." : undefined) ??
-        (who.seat === "" ? "There is no agent on the chart to ask." : undefined) ??
-        filer.held ??
-        (who.project === "" ? "Choose the project the task is filed in." : undefined) ??
-        tooMany);
+    titleHold(title) ??
+    (resolved.length === 0 ? "Add at least one figure to the board." : undefined) ??
+    tooMany;
+  const askHold =
+    filer.held ??
+    (brief.trim() === "" ? "Say what the board should answer." : undefined) ??
+    askTitleHold(title, "dashboard") ??
+    (who.seat === "" ? "Add an agent to the chart first." : undefined) ??
+    (who.project === "" ? "Choose the project to file the task in." : undefined) ??
+    tooMany;
 
   const add = (src: DashboardEngineSource, r: Recipe) => {
     if (!hasRoom(draft)) return;
@@ -263,14 +295,15 @@ export function DashboardCreate() {
 
   const create = async () => {
     if (hold || busy) return;
+    const id = await createBoard();
+    if (!id) return;
+    toast.ok(`Created “${title.trim()}”`);
+    nav.to(artifactPath(id));
+  };
+
+  const ask = async () => {
+    if (askHold || busy) return;
     const name = title.trim();
-    if (mode === "build") {
-      const id = await createBoard();
-      if (!id) return;
-      toast.ok(`Created “${name}”`);
-      nav.to(artifactPath(id));
-      return;
-    }
     // AN AGENT ASKED WITH FIGURES ON THE BOARD refines that board: it is made
     // first and handed over with the task. With none, the brief is the whole
     // ask and the agent publishes the board to the task.
@@ -299,7 +332,6 @@ export function DashboardCreate() {
   const refusal =
     uploadFailure ??
     (gesture.answer && gesture.answer.kind !== "done" ? gesture.answer.text : null);
-  const taskRefusal = mode === "agent" ? filer.refusal : null;
   const problem = titleProblem(title);
 
   return (
@@ -308,13 +340,13 @@ export function DashboardCreate() {
       status={
         // A NARROW BAR has room for its title and its actions alone; the
         // Board tab says how many figures there are.
-        busy
-          ? mode === "agent"
-            ? "Asking…"
-            : "Creating…"
-          : !narrow && resolved.length > 0
-            ? plural(resolved.length, "figure")
-            : undefined
+        filer.busy
+          ? "Asking…"
+          : busy
+            ? "Creating…"
+            : !narrow && resolved.length > 0
+              ? plural(resolved.length, "figure")
+              : undefined
       }
       tools={[
         {
@@ -325,19 +357,85 @@ export function DashboardCreate() {
         },
       ]}
       action={{
-        label:
-          mode === "agent"
-            ? agentName
-              ? `Ask ${agentName}`
-              : "Ask the agent"
-            : "Create dashboard",
-        icon: mode === "agent" ? <SendGlyph size="sm" /> : <CheckGlyph size="sm" />,
+        label: "Create dashboard",
+        icon: <CheckGlyph size="sm" />,
         onSelect: () => void create(),
         ...(hold
           ? { disabledReason: hold }
           : busy
-            ? { disabledReason: mode === "agent" ? "Asking the agent…" : "Creating the dashboard…" }
+            ? { disabledReason: "Creating the dashboard…" }
             : {}),
+      }}
+      handoff={{
+        tool: askTool(who, panel),
+        open: () => panel.setOpen(true),
+        panel: panel.open ? (
+          <AskAgentPanel
+            panel={panel}
+            who={who}
+            intro={
+              resolved.length > 0
+                ? `The board as it stands is created and handed to ${agentName || "the agent"}, who refines it from your brief.`
+                : `${agentName || "The agent"} builds the board from your brief and the data it can read.`
+            }
+            brief={brief}
+            onBrief={setBrief}
+            briefLabel="What should the board answer?"
+            briefPlaceholder="How much work each team carries, and what is overdue."
+            briefHelper="The questions it answers and who looks at it. Every figure is read as whoever opens the dashboard."
+            starters={BOARD_BRIEFS}
+            carried={[
+              ...(title.trim()
+                ? [
+                    {
+                      key: "title",
+                      icon: <FileTextGlyph size="sm" />,
+                      label: `“${title.trim()}”`,
+                      detail: "The dashboard's title",
+                    },
+                  ]
+                : []),
+              ...(resolved.length > 0
+                ? [
+                    {
+                      key: "board",
+                      icon: <LayoutDashboardGlyph size="sm" />,
+                      label: `The board, with ${plural(resolved.length, "figure")}`,
+                      detail: resolved.map((r) => r.recipe.title).join(", "),
+                    },
+                  ]
+                : []),
+            ]}
+            alone="Add figures from Data, or start from a ready-made board, and the agent refines them."
+            task={{
+              title: title.trim() || "Untitled dashboard",
+              body: artifactTaskBody(
+                "dashboard",
+                brief,
+                resolved.length > 0 ? (madeFor.current?.id ?? "created when you send") : undefined,
+              ),
+            }}
+            steps={
+              resolved.length > 0
+                ? [
+                    "The board as it stands is created as the dashboard.",
+                    `A task is filed to ${agentName || "the agent"}${who.project ? ` in ${who.project}` : ""}, with the dashboard linked.`,
+                    `${agentName || "The agent"} refines it and publishes each change as a new version.`,
+                    "You land on the dashboard, and follow the work from it and the task.",
+                  ]
+                : [
+                    `A task is filed to ${agentName || "the agent"}${who.project ? ` in ${who.project}` : ""}, with your brief.`,
+                    `${agentName || "The agent"} builds the board from the data it can read.`,
+                    "It publishes the board to the task, where it appears on the Artifacts card.",
+                  ]
+            }
+            notice={taskRefusal(filer.refusal)}
+            sendLabel={(n) => (resolved.length > 0 ? `Create and ask ${n}` : `Ask ${n}`)}
+            onSend={() => void ask()}
+            hold={askHold}
+            busy={busy}
+          />
+        ) : null,
       }}
       onCancel={() => (dirty ? setConfirmLeave(true) : leave())}
     >
@@ -383,29 +481,7 @@ export function DashboardCreate() {
                 />
               )}
             </FormField>
-            <FormField label="Who builds it" className="dashboard-create-mode">
-              <SegmentedControl
-                label="Who builds it"
-                semantics="radio"
-                value={mode}
-                onValueChange={setMode}
-                options={[
-                  { value: "build", label: "Build it now" },
-                  { value: "agent", label: "Ask an agent" },
-                ]}
-              />
-            </FormField>
           </div>
-          {mode === "agent" ? (
-            <AgentBrief
-              brief={brief}
-              onBrief={setBrief}
-              who={who}
-              agentName={agentName}
-              figures={resolved.length}
-              refusal={taskRefusal}
-            />
-          ) : null}
           {refusal ? (
             <Callout variant="danger" title="The dashboard was not created" live="polite">
               {refusal}
@@ -425,7 +501,7 @@ export function DashboardCreate() {
               fresh={fresh}
               onDraft={setDraft}
               onStart={start}
-              optional={mode === "agent"}
+              optional={panel.open}
               boardTitle={title.trim() || "New dashboard"}
             />
           )}
@@ -464,58 +540,6 @@ export function DashboardCreate() {
         Its title, its figures and any brief you wrote are not saved anywhere yet.
       </Modal>
     </CreateShell>
-  );
-}
-
-// ---- asking an agent ----------------------------------------------------- //
-
-/** The brief, who builds it, and what happens once the task is filed. */
-function AgentBrief({
-  brief,
-  onBrief,
-  who,
-  agentName,
-  figures,
-  refusal,
-}: {
-  brief: string;
-  onBrief: (brief: string) => void;
-  who: WhoBuildsItState;
-  agentName: string;
-  figures: number;
-  refusal: Refusal | null;
-}) {
-  const agent = agentName || "The agent";
-  const project = who.projects.find((p) => p.key === who.project)?.name ?? who.project;
-  return (
-    <Card padding="md" className="dashboard-create-agent" aria-label="Ask an agent">
-      <FormField label="What should the board answer?">
-        {(field) => (
-          <Textarea
-            id={field.id}
-            aria-describedby={field.describedBy}
-            autoResize
-            rows={3}
-            value={brief}
-            placeholder="Show how much work each team is carrying, what is overdue, and how many tokens each agent used this month."
-            onChange={(e) => onBrief(e.target.value)}
-          />
-        )}
-      </FormField>
-      <WhoBuildsIt who={who} />
-      <p className="dashboard-create-next">
-        {figures > 0
-          ? `${agent} gets a task${project ? ` in ${project}` : ""} with your brief, and the board as it stands is created and handed over with it. ${agent} refines it and publishes each change as a new version, which you can follow from the task and the dashboard.`
-          : `${agent} gets a task${project ? ` in ${project}` : ""} with your brief, builds the board from the data it can read, and publishes it to the task. It appears on the task's Artifacts card and in Artifacts.`}
-      </p>
-      {refusal ? (
-        <Callout variant="danger" title="The task was not filed" live="polite">
-          {refusal.grants.length > 0
-            ? `${youNeedWords(refusal.grants)} Ask an admin.`
-            : refusal.sentence}
-        </Callout>
-      ) : null}
-    </Card>
   );
 }
 
