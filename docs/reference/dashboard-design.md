@@ -2918,6 +2918,9 @@ widgets, Cancel and Done. New task steps aside until Done.
   says there is nothing to list and why it may be wrong, and with rows it says
   the gap under them. A figure says "May be incomplete" on its second line, and
   a count that stopped at its ceiling is written as the floor it is ("50+").
+  A count another surface already says is read from that surface's reading,
+  never from the widget's own page: the Inbox card's is the sidebar badge's
+  (`useInboxCounts`), so the two never name different numbers.
   Every widget module, and every card Home's own widgets draw, goes through
   `WidgetQuery` rather than `QueryState` or `EmptyState`, which
   `board/kit.test.tsx` holds, and `board/widgets.render.test.tsx` answers every
