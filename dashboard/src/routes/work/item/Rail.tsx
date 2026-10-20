@@ -26,7 +26,7 @@
  */
 
 import { useMemo, useState, type ReactNode } from "react";
-import { Button, EmptyValue, IconButton, Input, Link, Menu, Tag, cx } from "@crewlethq/ui";
+import { Button, EmptyValue, IconButton, Input, Menu, Tag, cx } from "@crewlethq/ui";
 import {
   ArrowUpRightGlyph,
   CalendarGlyph,
@@ -52,6 +52,7 @@ import { KNOWLEDGE, accessNames, holds } from "~/lib/access.ts";
 import { useNow } from "~/lib/clock.ts";
 import { useArtifactPeople } from "~/lib/artifacts/people.ts";
 import { ListedArtifactCard } from "~/routes/artifacts/parts.tsx";
+import { NewArtifactMenu } from "~/routes/artifacts/new/NewArtifactMenu.tsx";
 import {
   fmtCount,
   fmtDate,
@@ -962,7 +963,7 @@ const RAIL_ARTIFACTS = 20;
  * reader that artifacts they cannot open exist.
  *
  * A reader holding the artifacts app is offered a new artifact for the task
- * (`#/artifacts/new?item=`: a sheet, a doc or a deck), which the engine then
+ * (`NewArtifactMenu`: each kind's create page, carrying `item=`), which the engine then
  * lists here; for anybody else the section is left out until there is
  * something to list.
  */
@@ -990,11 +991,7 @@ function ArtifactLinks({ item }: { item: string }) {
           ))}
         </ul>
       )}
-      {canStart && (
-        <Link size="caption" variant="quiet" href={href(["artifacts", "new"], { item })}>
-          New artifact for this task
-        </Link>
-      )}
+      {canStart && <NewArtifactMenu item={item} quiet />}
     </section>
   );
 }

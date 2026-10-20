@@ -176,7 +176,7 @@ test("the gallery opens as a grid, and a reader's choice of the list is remember
   expect(localStorage.getItem(STORAGE_KEYS.artifactsShape)).toBeNull();
 });
 
-test("the Make row offers every kind on All and Yours, each opening New on it", () => {
+test("the Make row offers every kind on All and Yours, each opening its kind's own page", () => {
   mount("all");
   const make = screen.getByRole("region", { name: "Make something new" });
   const tiles = within(make).getAllByRole("link");
@@ -188,11 +188,29 @@ test("the Make row offers every kind on All and Yours, each opening New on it", 
     "HTML",
     "Sheet",
   ]);
-  expect(tiles[0]!.getAttribute("href")).toBe("#/artifacts/new?kind=doc");
-  expect(tiles[5]!.getAttribute("href")).toBe("#/artifacts/new?kind=sheet");
+  expect(tiles[0]!.getAttribute("href")).toBe("#/artifacts/new/doc");
+  expect(tiles[5]!.getAttribute("href")).toBe("#/artifacts/new/sheet");
   cleanup();
   mount("yours", "#/artifacts/yours");
   expect(screen.getByRole("region", { name: "Make something new" })).toBeTruthy();
+});
+
+// NEW IS A MENU OF THE KINDS, in the Make row's order, each row opening that
+// kind's page: there is no generic page that asks for the type first.
+test("New opens a menu of every kind, each going to its own create page", () => {
+  mount("all");
+  fireEvent.click(screen.getByRole("button", { name: "New" }));
+  const rows = screen.getAllByRole("menuitem");
+  expect(rows.map((r) => r.textContent)).toEqual([
+    "Doc",
+    "Slides",
+    "Design",
+    "Dashboard",
+    "HTML",
+    "Sheet",
+  ]);
+  fireEvent.click(screen.getByRole("menuitem", { name: "Slides" }));
+  expect(location.hash).toBe("#/artifacts/new/slides");
 });
 
 test("the Make row steps aside on Shared with you, in the trash and for a search", () => {

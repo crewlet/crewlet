@@ -42,6 +42,33 @@ export const KIND_WORDS: Readonly<Record<ArtifactKind, string>> = {
   design: "Design",
 };
 
+/**
+ * What each kind's create page is called, in its bar and the trail
+ * ("Artifacts › New doc"). Slides are made as a deck, and an HTML artifact is
+ * a page, so each is said as what a person starts.
+ */
+export const NEW_KIND_TITLES: Readonly<Record<ArtifactKind, string>> = {
+  html: "New HTML page",
+  doc: "New doc",
+  slides: "New slide deck",
+  dashboard: "New dashboard",
+  sheet: "New sheet",
+  design: "New design",
+};
+
+/**
+ * The order the kinds are offered to make in, by the gallery's Make row and
+ * its New menu: what people write first, then what they lay out, then data.
+ */
+export const MAKE_ORDER: readonly ArtifactKind[] = [
+  "doc",
+  "slides",
+  "design",
+  "dashboard",
+  "html",
+  "sheet",
+];
+
 /** Every kind, in the engine's order, as the gallery's filter offers them. */
 export const KINDS: readonly ArtifactKind[] = ARTIFACT_KINDS;
 

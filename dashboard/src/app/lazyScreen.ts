@@ -13,7 +13,7 @@
  * workspace a reader opens is usually already in memory, so the round trip
  * the old comment worried about is spent while nobody is waiting on it.
  *
- * # One chunk per workspace, plus the org editor and the sign-in screens
+ * # One chunk per workspace, plus the org editor, the sign-in screens and each create page
  *
  * Each `routes/<workspace>/index.ts` is the whole of what this file imports
  * from that workspace, and it is imported ONLY here, by `import()` — a static
@@ -23,7 +23,9 @@
  * so it is its own (see `routes/org/OrgEdit.tsx`). And `routes/signin`, the
  * screens drawn outside the frame, which a reader who is signed in never
  * needs — so it is the one chunk the idle prefetch leaves alone ([CHUNKS]):
- * a reader who needs it is already on it.
+ * a reader who needs it is already on it. Each kind's create page
+ * (`routes/artifacts/new/`) is a chunk of its own too, and neither is it
+ * prefetched: a reader who opens Artifacts to look never needs an editor.
  *
  * # A failed load is a ChunkLoadError, and it can be retried
  *
@@ -43,6 +45,8 @@
  */
 
 import { createElement, use, type ComponentType } from "react";
+import { NEW_KIND_TITLES } from "~/lib/artifacts/words.ts";
+import type { ArtifactKind } from "~/protocol/index.ts";
 import { WORKSPACES, type Workspace } from "./nav.ts";
 import { resolve, type Resolved } from "./routes.ts";
 
@@ -64,7 +68,20 @@ const LOADERS = {
   settings: () => import("~/routes/settings/index.ts"),
   account: () => import("~/routes/account/index.ts"),
   signin: () => import("~/routes/signin/index.ts"),
-} satisfies Record<Workspace | "org" | "signin", () => Promise<unknown>>;
+  "new-doc": () => import("~/routes/artifacts/new/DocCreate.tsx"),
+  "new-slides": () => import("~/routes/artifacts/new/SlidesCreate.tsx"),
+  "new-sheet": () => import("~/routes/artifacts/new/SheetCreate.tsx"),
+  "new-design": () => import("~/routes/artifacts/new/DesignCreate.tsx"),
+  "new-dashboard": () => import("~/routes/artifacts/new/DashboardCreate.tsx"),
+  "new-html": () => import("~/routes/artifacts/new/HtmlCreate.tsx"),
+} satisfies Record<Workspace | "org" | "signin" | NewArtifactChunk, () => Promise<unknown>>;
+
+/**
+ * A kind's create page, a chunk of its own: a doc's editor, a deck's composer
+ * and a design's canvas share nothing but their frame, and the gallery's
+ * reader should download none of them until they start one.
+ */
+type NewArtifactChunk = `new-${ArtifactKind}`;
 
 /** A chunk: a workspace, the org editor, or the sign-in screens. */
 export type Chunk = keyof typeof LOADERS;
@@ -82,12 +99,14 @@ export const CHUNKS: readonly Chunk[] = [...WORKSPACES.map((ws) => ws.key), "org
 export function chunkLabel(chunk: Chunk): string {
   if (chunk === "org") return "Edit org";
   if (chunk === "signin") return "sign-in";
+  if (chunk.startsWith("new-")) return NEW_KIND_TITLES[chunk.slice(4) as ArtifactKind];
   return WORKSPACES.find((ws) => ws.key === chunk)?.label ?? chunk;
 }
 
 /** Which chunk draws a resolved screen. */
 export function chunkOf(route: Resolved): Chunk {
   if (route.workspace === "") return "signin";
+  if (route.screen === "new-artifact" && route.kind) return `new-${route.kind}`;
   return route.screen === "org-edit" ? "org" : route.workspace;
 }
 
@@ -107,7 +126,9 @@ export class ChunkLoadError extends Error {
   /** What to do about it: the fallback's sentence. */
   readonly advice: string;
   constructor(chunk: Chunk, cause: unknown) {
-    const title = `The ${chunkLabel(chunk)} screens could not be loaded`;
+    const title = chunk.startsWith("new-")
+      ? `The ${chunkLabel(chunk)} page could not be loaded`
+      : `The ${chunkLabel(chunk)} screens could not be loaded`;
     const advice = "The engine was updated. Reload to continue.";
     super(`${title}. ${advice}`, { cause });
     this.chunk = chunk;

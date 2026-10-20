@@ -77,6 +77,14 @@ describe("which chunk draws a screen", () => {
     expect(item.resolved && chunkOf(item)).toBe("work");
   });
 
+  test("each kind's create page is a chunk of its own, and none is prefetched", () => {
+    const doc = resolve(["artifacts", "new", "doc"]);
+    const html = resolve(["artifacts", "new", "html"]);
+    expect(doc.resolved && chunkOf(doc)).toBe("new-doc");
+    expect(html.resolved && chunkOf(html)).toBe("new-html");
+    expect(CHUNKS.some((c) => c.startsWith("new-"))).toBe(false);
+  });
+
   // Every place the sidebar and the palette can send a reader has a chunk that
   // loads — a `routes/<workspace>/index.ts` that stopped exporting a screen
   // would compile (the dispatch picks by name) and fail here.

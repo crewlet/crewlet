@@ -43,20 +43,27 @@
  * refusal left on screen are all the same bug waiting for somebody to notice.
  */
 
-import { useEffect, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useSyncExternalStore, type ComponentType, type ReactNode } from "react";
 import { Skeleton, ToastProvider } from "@crewlethq/ui";
 import { Shell } from "./Shell.tsx";
 import { StepUpHost } from "./StepUp.tsx";
 import { AppAnnouncer } from "./announcer.tsx";
 import { parseHash, useNavigator, useRoute } from "./router.tsx";
-import { resolve, type Resolved, type Route } from "./routes.ts";
+import {
+  artifactSectionPath,
+  newArtifactPath,
+  resolve,
+  type Resolved,
+  type Route,
+} from "./routes.ts";
 import { closedBy, framelessOf, guardedPath, personalPath } from "./nav.ts";
 import { AccessRefused } from "./frame/AccessRefused.tsx";
 import { GrantRequired } from "./frame/GrantRequired.tsx";
 import { useConnection } from "~/lib/store-hooks.ts";
 import { useHeldReading, useViewer } from "~/lib/viewer.ts";
 import { safeNext, signInHash } from "~/lib/session.ts";
-import { currentSessionNeed, onSessionNeed } from "~/protocol/index.ts";
+import { isArtifactKind } from "~/lib/artifacts/words.ts";
+import { currentSessionNeed, onSessionNeed, type ArtifactKind } from "~/protocol/index.ts";
 import { NotFound } from "~/routes/NotFound.tsx";
 import { lazyScreen, prefetchOnIdle } from "./lazyScreen.ts";
 import { ScreenBoundary } from "./boundaries.tsx";
@@ -97,7 +104,15 @@ const Diaries = lazyScreen("knowledge", (m) => m.Diaries);
 const Diary = lazyScreen("knowledge", (m) => m.Diary);
 const ArtifactGallery = lazyScreen("artifacts", (m) => m.ArtifactGallery);
 const ArtifactPage = lazyScreen("artifacts", (m) => m.ArtifactPage);
-const NewArtifact = lazyScreen("artifacts", (m) => m.NewArtifact);
+/** Each kind's create page, a chunk of its own (`lazyScreen.ts`). */
+const NEW_ARTIFACT: Readonly<Record<ArtifactKind, ComponentType>> = {
+  doc: lazyScreen("new-doc", (m) => m.DocCreate),
+  slides: lazyScreen("new-slides", (m) => m.SlidesCreate),
+  sheet: lazyScreen("new-sheet", (m) => m.SheetCreate),
+  design: lazyScreen("new-design", (m) => m.DesignCreate),
+  dashboard: lazyScreen("new-dashboard", (m) => m.DashboardCreate),
+  html: lazyScreen("new-html", (m) => m.HtmlCreate),
+};
 const Spend = lazyScreen("spend", (m) => m.Spend);
 const Budgets = lazyScreen("spend", (m) => m.Budgets);
 const ExpensiveTasks = lazyScreen("spend", (m) => m.ExpensiveTasks);
@@ -195,8 +210,11 @@ export function screenFor(route: Resolved): ReactNode {
       return <ArtifactGallery key={route.section} section={route.section} />;
     case "artifact":
       return <ArtifactPage key={route.id} id={route.id} />;
-    case "new-artifact":
-      return <NewArtifact />;
+    case "new-artifact": {
+      if (route.kind === null) return <NewArtifactRedirect />;
+      const Create = NEW_ARTIFACT[route.kind];
+      return <Create key={route.kind} />;
+    }
     case "spend":
       return <Spend />;
     case "spend-tasks":
@@ -240,6 +258,28 @@ export function screenFor(route: Resolved): ReactNode {
     case "appearance":
       return <Appearance />;
   }
+}
+
+/**
+ * The bare `#/artifacts/new`, which names no kind: an earlier link's, whose
+ * `kind=` said which. It is rewritten in place to that kind's own page,
+ * keeping the rest of what the link asked (the task it is for), or to the
+ * gallery, where the reader picks one; REPLACED, so Back never lands on it.
+ */
+function NewArtifactRedirect() {
+  const route = useRoute();
+  const nav = useNavigator();
+  useEffect(() => {
+    const kind = route.query.get("kind") ?? "";
+    if (!isArtifactKind(kind)) {
+      nav.replace(artifactSectionPath("all"));
+      return;
+    }
+    const rest = new URLSearchParams(route.query);
+    rest.delete("kind");
+    nav.replace(newArtifactPath(kind), rest);
+  }, [route.query, nav]);
+  return null;
 }
 
 /**

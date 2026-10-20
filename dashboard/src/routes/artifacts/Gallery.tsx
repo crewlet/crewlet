@@ -51,7 +51,6 @@ import {
   ArtifactKindGlyph,
   ArtifactKindTile,
   Button,
-  ButtonLink,
   Input,
   LivePreviewBudgetProvider,
   Meter,
@@ -75,6 +74,7 @@ import {
   LEGACY_ARTIFACT_SECTIONS,
   artifactPath,
   artifactSectionPath,
+  newArtifactPath,
   type ArtifactSection,
 } from "~/app/routes.ts";
 import { QueryState } from "~/components/common.tsx";
@@ -89,6 +89,7 @@ import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { useArtifactPeople, type ArtifactPeople } from "~/lib/artifacts/people.ts";
 import {
   KIND_WORDS,
+  MAKE_ORDER,
   KINDS,
   ROLE_WORDS,
   TRASH_KEPT,
@@ -98,6 +99,7 @@ import {
 } from "~/lib/artifacts/words.ts";
 import { ListedArtifactCard } from "./parts.tsx";
 import { ArtifactMenu } from "./GalleryMenu.tsx";
+import { NewArtifactMenu } from "./new/NewArtifactMenu.tsx";
 import { ARTIFACT_LIST_SORTS } from "~/contract/artifacts.ts";
 import {
   type ArtifactKind,
@@ -145,16 +147,6 @@ const MAKE_WORDS: Readonly<Record<ArtifactKind, string>> = {
   html: "HTML",
   sheet: "Sheet",
 };
-
-/** The Make row's order: what people write first, then what they lay out, then data. */
-const MAKE_ORDER: readonly ArtifactKind[] = [
-  "doc",
-  "slides",
-  "design",
-  "dashboard",
-  "html",
-  "sheet",
-];
 
 /** What a section says when it holds nothing, and what to do about it. */
 const EMPTY: Readonly<Record<ArtifactSection, { title: string; hint: string }>> = {
@@ -467,7 +459,7 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
 
 /**
  * The Make row: one tile per kind, each the kind's own drawing on its tinted
- * ground, opening New on that kind.
+ * ground, opening that kind's own create page.
  */
 function MakeRow() {
   return (
@@ -478,11 +470,7 @@ function MakeRow() {
       <ul className="artifacts-make-row" role="list">
         {MAKE_ORDER.map((k) => (
           <li key={k}>
-            <ArtifactKindTile
-              kind={k}
-              label={MAKE_WORDS[k]}
-              href={href(["artifacts", "new"], { kind: k })}
-            />
+            <ArtifactKindTile kind={k} label={MAKE_WORDS[k]} href={href(newArtifactPath(k))} />
           </li>
         ))}
       </ul>
@@ -545,14 +533,7 @@ function GalleryBar({
         />
       </span>
       {canAuthor === null ? (
-        <ButtonLink
-          size="small"
-          variant="primary"
-          href={href(["artifacts", "new"])}
-          leadingIcon={<PlusGlyph size="sm" />}
-        >
-          New
-        </ButtonLink>
+        <NewArtifactMenu />
       ) : (
         <Button
           size="small"

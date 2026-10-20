@@ -355,7 +355,16 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
       // person reads, and the address bar already carries it.
       return [root(row, true), { label: labels[where.id] || "Artifact" }];
     case "new-artifact":
-      return [root(row, true), { label: section("new")?.label ?? "New artifact" }];
+      // THE TRAIL NAMES THE KIND being made ("Artifacts › New doc"): each is
+      // its own page, and "New artifact" said nothing the reader did not pick.
+      return [
+        root(row, true),
+        {
+          label: where.kind
+            ? (section(`new-${where.kind}`)?.label ?? "New artifact")
+            : "New artifact",
+        },
+      ];
     case "budgets":
       return sectionPage("budgets");
     case "spend-tasks":

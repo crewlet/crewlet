@@ -10604,6 +10604,37 @@ a.live-row:focus-visible {
   min-width: 0;
   min-height: 0;
 }
+/* A KIND'S CREATE PAGE stands in the same frame (`routes/artifacts/new/
+   CreateShell.tsx`): the slim bar, then a full-bleed body that is the kind's
+   to draw. The body scrolls inside itself, and a kind places its own inset,
+   since a canvas wants none and a composer wants the page's. */
+.app .crewlet-app-shell__content:has(> .artifact-create) {
+  padding: 0;
+  gap: 0;
+}
+.artifact-create {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+.artifact-create-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+/* A kind whose page has not landed yet: the empty state, centred in the body. */
+.artifact-create-pending {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacing-5);
+}
 .artifact-loading,
 .artifact-trashed {
   min-width: 0;

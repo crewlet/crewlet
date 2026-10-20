@@ -14,8 +14,9 @@
  * because the switch spelled a route three different ways.
  *
  * So the table is data here, `App.tsx` maps a resolved screen to a component,
- * and everything else asks this function. It imports nothing but `nav.ts`,
- * which is what lets `lib/` and a Node test call it.
+ * and everything else asks this function. It imports nothing but `nav.ts`
+ * and the artifacts' kind words `nav.ts` already reads, which is what lets
+ * `lib/` and a Node test call it.
  *
  * # The sign-in screens resolve too, and to no workspace
  *
@@ -39,6 +40,8 @@
  * party's string and `servers` is a legal one.
  */
 
+import { isArtifactKind } from "~/lib/artifacts/words.ts";
+import type { ArtifactKind } from "~/protocol/index.ts";
 import {
   framelessOf,
   RESERVED_SEGMENTS,
@@ -127,6 +130,16 @@ export function artifactPath(id: string): string[] {
 }
 
 /**
+ * Where a new artifact of a kind is made: each kind has its own page
+ * (`routes/artifacts/new/`), because writing a doc, laying out a deck and
+ * asking an agent for a dashboard are three different gestures. Here for the
+ * reason [artifactPath] is: the frame links to it.
+ */
+export function newArtifactPath(kind: ArtifactKind): string[] {
+  return ["artifacts", "new", kind];
+}
+
+/**
  * The screens drawn outside the frame. An invitation's and a reset link's one
  * segment is `<id>.<secret>`, kept whole: the screen itself says when that is
  * not a whole link — a link cut short by a mail client is the ordinary way it
@@ -174,7 +187,8 @@ export type FramedScreen =
   | { screen: "diary"; handle: string }
   | { screen: "artifacts"; section: ArtifactSection }
   | { screen: "artifact"; id: string }
-  | { screen: "new-artifact" }
+  /** A kind's own create page, or, with no kind, the address that redirects to one. */
+  | { screen: "new-artifact"; kind: ArtifactKind | null }
   | { screen: "spend" }
   | { screen: "spend-tasks" }
   | { screen: "budgets" }
@@ -447,6 +461,21 @@ function knowledge(rest: string[], screen: Make, under: Under): Route {
 function artifactsRoute(rest: string[], screen: Make, under: Under): Route {
   const [first, ...tail] = rest;
   if (first === undefined) return screen({ screen: "artifacts", section: "all" });
+  // A NEW ARTIFACT IS MADE ON ITS KIND'S OWN PAGE (`#/artifacts/new/doc`).
+  // The bare address, which earlier links carry with `?kind=`, resolves too,
+  // and the frame rewrites it in place to the kind's page or the gallery.
+  if (first === "new") {
+    if (tail.length === 0) return screen({ screen: "new-artifact", kind: null });
+    const [kind, ...more] = tail;
+    if (more.length === 0 && kind !== undefined && isArtifactKind(kind)) {
+      return screen({ screen: "new-artifact", kind });
+    }
+    return missing(
+      "artifacts",
+      under("Artifacts"),
+      "a new artifact is a doc, slides, a sheet, a design, a dashboard or an HTML page",
+    );
+  }
   // NOTHING IS ADDRESSED UNDER AN ARTIFACT: its tabs, its version and its
   // compare are queries on its own address (`tab=`, `version=`, `against=`),
   // so a link survives a reload and a pasted address in chat.
@@ -458,7 +487,6 @@ function artifactsRoute(rest: string[], screen: Make, under: Under): Route {
     ? LEGACY_ARTIFACT_SECTIONS[first]
     : undefined;
   if (moved) return screen({ screen: "artifacts", section: moved });
-  if (first === "new") return screen({ screen: "new-artifact" });
   // AN ARTIFACT BY ITS ID, the uuid the engine derived from the operation
   // that created it; a word here names nothing the engine could have minted.
   if (ID_SHAPE.test(first)) return screen({ screen: "artifact", id: first });
