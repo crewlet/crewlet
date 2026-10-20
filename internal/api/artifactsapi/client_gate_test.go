@@ -114,6 +114,8 @@ func TestTheDashboardBoundsArtifactTextAtTheEnginesCaps(t *testing.T) {
 		"PRESENCE_FRAMES_PER_SECOND":     artifacts.PresenceClientRate,
 		"DOC_MAX_TABS":                   docindex.MaxTabs,
 		"DOC_TAB_TITLE_MAX_BYTES":        docindex.MaxTitleBytes,
+		"DECK_PLAN_MAX_SLIDES":           slideformat.MaxPlanSlides,
+		"DECK_SLIDE_TITLE_MAX_BYTES":     slideformat.MaxSlideTitleBytes,
 		"ARTIFACT_TRASH_RETENTION_DAYS":  int(artifacts.TrashRetention / (24 * time.Hour)),
 	} {
 		raw, err := clientsource.Scalar(clientsource.Tree(t), name)

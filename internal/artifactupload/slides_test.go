@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
+	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/artifactupload"
 	"github.com/crewlet/crewlet/internal/artifactupload/edits"
@@ -229,8 +230,10 @@ func TestADeckDeclaresNoCapability(t *testing.T) {
 }
 
 // A DECK BEGUN FROM ITS STARTER is published by the engine from its own
-// files, inline, held to the format like any version; a kind with no starter,
-// or a starter that also names files, is refused before a byte moves.
+// files, inline, held to the format like any version, composed from the plan
+// it names (its theme and slides) or the default one; a kind with no starter,
+// a starter that also names files, a plan the format does not hold, and a
+// plan sent without a slides starter are refused before a byte moves.
 func TestADeckBeginsFromItsStarter(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, options{})
@@ -247,9 +250,28 @@ func TestADeckBeginsFromItsStarter(t *testing.T) {
 		!strings.Contains(h.file(v, "slides/cover.html"), "Board review") {
 		t.Fatalf("the starter published %d files opening on %q", len(v.Manifest.Files), v.Manifest.Entry)
 	}
+	plan := &slideformat.Plan{Theme: "signal", Slides: []slideformat.PlanSlide{
+		{Layout: "cover"}, {Layout: "number", Title: "Uptime"}, {Layout: "closing"},
+	}}
+	got, _, err = h.svc.Create(t.Context(), h.person("ada", h.opKey("planned")), artifactupload.CreateRequest{
+		Kind: artifacts.KindSlides, Title: "Ops review", Owner: "ada",
+		OwnerKind: c.Authority.Actor.Kind, Starter: true, Deck: plan,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v = h.version(got.Artifact, 1)
+	if len(v.Manifest.Files) != 4 || !strings.Contains(h.file(v, "slides/number.html"), "Uptime") ||
+		!strings.Contains(h.file(v, "deck.json"), `"theme": "signal"`) {
+		t.Fatalf("the planned starter published %d files: %s", len(v.Manifest.Files), h.file(v, "deck.json"))
+	}
 	for _, req := range []artifactupload.CreateRequest{
 		{Kind: artifacts.KindSheet, Title: "Sheet", Owner: "ada", Starter: true},
 		{Kind: artifacts.KindSlides, Title: "Deck", Owner: "ada", Starter: true, Entry: "deck.json"},
+		{Kind: artifacts.KindSlides, Title: "Deck", Owner: "ada", Starter: true,
+			Deck: &slideformat.Plan{Theme: "neon"}},
+		{Kind: artifacts.KindSlides, Title: "Deck", Owner: "ada", Deck: plan},
+		{Kind: artifacts.KindDoc, Title: "Doc", Owner: "ada", Starter: true, Deck: plan},
 	} {
 		req.OwnerKind = c.Authority.Actor.Kind
 		if _, _, err := h.svc.Create(t.Context(), h.person("ada", h.opKey("again")), req); !errors.Is(err, artifactupload.ErrInvalid) {

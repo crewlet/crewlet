@@ -234,6 +234,7 @@ func (s *Service) Routes(mux authz.Mux) error {
 		{"POST /artifacts/{id}/uploads", pre, s.intendPublish},
 		{patternTransfer, pre, s.transfer},
 		{"POST /artifacts", create, s.create},
+		{"GET /artifacts/starters/slides", pre, s.slidesStarters},
 		{"POST /artifacts/{id}/versions", pre, s.publish},
 		{"POST /artifacts/{id}/versions/{n}/restore", pre, s.restoreVersion},
 		{"PATCH /artifacts/{id}", pre, s.patch},

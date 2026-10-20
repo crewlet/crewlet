@@ -11412,6 +11412,152 @@ a.live-row:focus-visible {
 .slides-notes > p {
   margin: 0;
 }
+
+/* ---- a new slide deck (routes/artifacts/new/SlidesCreate.tsx) ------------ */
+
+/* THREE COLUMNS, AS A PRESENTATION EDITOR'S: the slides to start with, the
+   stage with the title over it, and the deck's settings. Each column scrolls
+   itself inside the create body's height, so the stage stays in view while a
+   long strip or the theme grid is read. */
+.slides-create {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-columns: 11rem minmax(0, 1fr) 19rem;
+  grid-template-rows: minmax(0, 1fr);
+  gap: var(--spacing-5);
+  min-height: 0;
+  padding: var(--spacing-4) var(--spacing-5) 0;
+}
+.slides-create-strip,
+.slides-create-main,
+.slides-create-side {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding-bottom: var(--spacing-5);
+}
+.slides-create-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+}
+/* The title reads as the deck's name, a step above a form field's text. */
+.slides-create-title input {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+}
+/* The stage keeps its 16:9 whatever the column's height: it never shrinks. */
+.slides-create-stage {
+  flex: none;
+}
+.slides-create-stage-hold {
+  flex: none;
+  aspect-ratio: 16 / 9;
+}
+/* A placeholder fills its slide-shaped hold, so its glow is the slide's size. */
+.slides-create-skeleton {
+  height: 100%;
+}
+/* While the themes load: the strip's thumbnails as their own shapes. */
+.slides-create-strip-hold {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding-left: calc(var(--spacing-5) + var(--spacing-2));
+}
+.slides-create-caption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-3);
+  margin: calc(var(--spacing-1) * -1) 0 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+.slides-create-position {
+  font-variant-numeric: tabular-nums;
+}
+.slides-create-hint {
+  margin-left: auto;
+}
+.slides-create-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-5);
+}
+.slides-create-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+}
+.slides-create-heading {
+  margin: 0;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+.slides-create-note,
+.slides-create-keys {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  line-height: var(--font-line-height-normal);
+}
+.slides-create-keys {
+  color: var(--color-text-tertiary);
+}
+.slides-create-status {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* Themes and layouts did not load: what failed, and a way to ask again. */
+.slides-create-state {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-3);
+  padding: var(--spacing-5);
+}
+@container page (width < 1180px) {
+  .slides-create {
+    grid-template-columns: 9rem minmax(0, 1fr) 16rem;
+    gap: var(--spacing-4);
+    padding-inline: var(--spacing-4);
+  }
+  .slides-create-hint {
+    display: none;
+  }
+}
+/* A PHONE: one column that scrolls as a page, the strip a row under the
+   stage, the settings after it. */
+@media (width < 640px) {
+  .slides-create {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-5);
+    padding: var(--spacing-3) var(--spacing-4) var(--spacing-5);
+  }
+  /* Each part as tall as what it holds: the body scrolls, not the parts, so
+     none is shrunk to the window's height and drawn over the next. */
+  .slides-create-strip,
+  .slides-create-main,
+  .slides-create-side {
+    flex: none;
+    overflow: visible;
+    padding-bottom: 0;
+  }
+  /* A ROW UNDER THE STAGE, its own sideways scroller, never shrunk by the
+     column it stands in. */
+  .slides-create-main > .slides-create-strip {
+    flex: none;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+}
 .slides-notes-body {
   padding: var(--spacing-3);
   border-radius: var(--radius-md);

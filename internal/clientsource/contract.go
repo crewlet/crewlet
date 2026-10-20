@@ -319,6 +319,8 @@ var contract = []Entry{
 	{"PRESENCE_FRAMES_PER_SECOND", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
 	{"DOC_MAX_TABS", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
 	{"DOC_TAB_TITLE_MAX_BYTES", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
+	{"DECK_PLAN_MAX_SLIDES", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
+	{"DECK_SLIDE_TITLE_MAX_BYTES", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
 	{"ARTIFACT_TRASH_RETENTION_DAYS", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
 	{"COLUMN_TYPES", ReadLiteral, "internal/api/artifactdataapi.TestTheDashboardSpeaksTheDatastoreVocabulary"},
 	{"READ_RULES", ReadLiteral, "internal/api/artifactdataapi.TestTheDashboardSpeaksTheDatastoreVocabulary"},

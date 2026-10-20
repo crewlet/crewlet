@@ -15,6 +15,8 @@ import { rest } from "~/protocol/index.ts";
 import type {
   ArtifactAudience,
   ArtifactDeckAnswer,
+  DeckPlan,
+  SlidesStartersAnswer,
   ArtifactDocAnswer,
   ArtifactFrame,
   ArtifactSource,
@@ -152,7 +154,12 @@ export function createFromStarter(fields: {
   kind: "doc" | "slides";
   title: string;
   workItem?: string;
+  /** A doc's text as its writer wrote it, under the title's heading. Doc only. */
   doc?: { body: string };
+  /** A deck's plan: the theme it is drawn in and the slides it opens with. Slides only. */
+  deck?: DeckPlan;
+  /** Who else holds it from the start, and with which role: an agent asked to draft it. */
+  shares?: { audience: ArtifactAudience; role: ShareableRole }[];
 }): Omit<KeyedRequest, "key"> {
   return {
     method: "POST",
@@ -163,6 +170,8 @@ export function createFromStarter(fields: {
       starter: true,
       ...(fields.workItem ? { work_item: fields.workItem } : {}),
       ...(fields.kind === "doc" && fields.doc ? { doc: { body: fields.doc.body } } : {}),
+      ...(fields.kind === "slides" && fields.deck ? { deck: fields.deck } : {}),
+      ...(fields.shares && fields.shares.length > 0 ? { shares: fields.shares } : {}),
     },
   };
 }
@@ -319,6 +328,15 @@ export async function readDeck(
     `/artifacts/${encodeURIComponent(id)}/versions/${version}/deck`,
     signal,
   )) as ArtifactDeckAnswer;
+}
+
+/**
+ * What a deck can begin from (`GET /artifacts/starters/slides`): every theme
+ * drawn as a deck of every layout, the layouts, and the default plan. The
+ * same for every caller and every version of the engine's process.
+ */
+export async function readSlidesStarters(signal: AbortSignal): Promise<SlidesStartersAnswer> {
+  return (await rest.get("/artifacts/starters/slides", signal)) as SlidesStartersAnswer;
 }
 
 /** A version's outline (`GET …/versions/{n}/outline`): what the gallery draws a native cover from. */

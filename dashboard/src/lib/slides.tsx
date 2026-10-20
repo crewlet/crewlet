@@ -412,6 +412,28 @@ export function titleOf(root: SlideNode): string {
   return first(root, ["h1", "h2", "h3"]) || first(root, ["p"]);
 }
 
+/**
+ * Where a slide's title is written: the first run of text of the element
+ * [titleOf] reads it from (the first heading, else the first paragraph), or
+ * null for a slide with no text there. What a starter's preview replaces to
+ * draw a slide with the title a person typed.
+ */
+export function titlePath(root: SlideNode): NodePath | null {
+  const find = (n: SlideNode, path: string, tags: readonly string[]): NodePath | null => {
+    const kids = n.children ?? [];
+    if (n.tag !== undefined && tags.includes(n.tag)) {
+      const i = kids.findIndex((c) => c.tag === undefined);
+      return i < 0 ? null : path ? `${path}/${i}` : String(i);
+    }
+    for (let i = 0; i < kids.length; i++) {
+      const at = find(kids[i]!, path ? `${path}/${i}` : String(i), tags);
+      if (at) return at;
+    }
+    return null;
+  };
+  return find(root, "", ["h1", "h2", "h3"]) ?? find(root, "", ["p"]);
+}
+
 // ---- writing a slide back ------------------------------------------------- //
 
 const VOID = new Set(["br", "img", "hr"]);

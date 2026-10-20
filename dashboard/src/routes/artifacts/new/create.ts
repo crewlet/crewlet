@@ -23,7 +23,7 @@ import { utf8Bytes } from "~/lib/format.ts";
 import { keyedWrite, useKeyedGesture, type KeyedAnswer } from "~/lib/keyedWrite.ts";
 import { configureSchema, createFromStarter, createSheet } from "~/lib/artifacts/api.ts";
 import { SHEET_TEMPLATES, type SheetTemplate } from "~/lib/artifacts/schema.ts";
-import { newActOpID } from "~/protocol/index.ts";
+import { newActOpID, type DeckPlan } from "~/protocol/index.ts";
 
 /**
  * The task a new artifact is made for (`item=`), which lists it on that
@@ -54,7 +54,9 @@ export function titleHold(title: string): string | undefined {
 
 /** What a starter create carries beyond the kind and the title. */
 export interface StarterPlan {
-  /** A doc's text as its writer wrote it, under the title's heading. */
+  /** A deck's plan: the theme it is drawn in and the slides it opens with. Slides only. */
+  deck?: DeckPlan;
+  /** A doc's text as its writer wrote it, under the title's heading. Doc only. */
   doc?: { body: string };
 }
 
@@ -65,8 +67,9 @@ export interface CreateArtifact {
   /** What the engine said when it refused the last write, or null. */
   refusal: string | null;
   /**
-   * Make a doc or a deck from the engine's starter and open it; a doc with
-   * the text its writer wrote (`plan.doc`) begins as that text.
+   * Make a doc or a deck from the engine's starter and open it: a doc with
+   * the text its writer wrote (`plan.doc`) begins as that text, and a deck's
+   * plan (`plan.deck`) names its theme and the slides it opens with.
    */
   fromStarter: (kind: "doc" | "slides", title: string, plan?: StarterPlan) => Promise<void>;
   /** Make a sheet with a template's columns and open it. */
