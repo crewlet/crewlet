@@ -135,7 +135,7 @@ function Ask({ kind }: { kind: "design" | "dashboard" | "html" }) {
         </Button>
       </PageActions>
       <div className="cfq-ask">
-        <ArtifactKindMark kind={kind} size="xl" surface="bare" />
+        <ArtifactKindMark kind={kind} size="xl" />
         <h1 className="cfq-ask-title">{`What should ${KIND[kind].one} show?`}</h1>
         <BriefCanvas kind={kind} layout="inline" />
       </div>

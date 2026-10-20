@@ -1,7 +1,7 @@
 /**
  * Studio: a full creation studio per kind, reached straight from its tile.
  *
- * The studio's head names the kind by its maker character and lets a person
+ * The studio's head names the kind by its glyph and colour and lets a person
  * switch kinds without losing a draft. Under it, the kind's own editor on the
  * org chart's dotted canvas: a doc's page with its title focused, a sheet's
  * live grid, the deck's cover on its stage, and for what agents build, a
