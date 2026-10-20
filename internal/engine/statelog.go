@@ -605,6 +605,14 @@ const RejoinRetryCeiling = 5 * time.Minute
 // the floor and refusing, until a peer can donate.
 var errNoDonor = errors.New("engine: no peer could donate a usable snapshot")
 
+// errJoinUnable reports a runtime join that ended on a fault of this node's own
+// before anything was installed ([statelog.ErrJoinerFault]). Retried from like
+// [errNoDonor], and for the same reason: the node is as it was, below the floor
+// on its own intact rows. A separate value so the retry's line says whose fault
+// it was — the join has already logged what to fix.
+var errJoinUnable = errors.New("engine: this node could not adopt a peer's " +
+	"snapshot, for a fault of its own")
+
 // estate is the replicated estate's file AS THE RUNTIME HANDS IT to the
 // framework and the domains: resolved through this node's handle on every
 // call, never captured, because an adoption closes the file, renames a peer's
@@ -2285,6 +2293,33 @@ func (e *Engine) applyEpoch() map[string]any { return e.Company().Epoch() }
 // running node reopens it on its next heartbeat ([stateLog.restoreEstate]) and
 // asks the fleet again only when its retry interval allows.
 //
+// # And why a fault of this node's own is not one either
+//
+// A join can end before anything was installed on a fault of THIS NODE'S OWN
+// — its trim hold refused, its disk refusing the copy, its own store refusing
+// a write ([statelog.ErrJoinerFault]). The adopter ends the join there rather
+// than meeting the same fault on every offer, and blames no donor; and the
+// live database was never closed, or was reopened by the rollback, so the node
+// is exactly where it was before it asked: behind, on its own intact rows. That
+// is the no-donor state, and it is answered the same way — a boot comes up on
+// what it has and a running node asks again on its widening interval — with
+// the line saying whose fault it was, [joinUnable]. Stopping the boot on it
+// would turn a coordination store that refused one write into a process exit,
+// and a volume with no room for the copy into a crash loop paying the broker's
+// recovery on every attempt, for a node whose own estate was open and
+// untouched throughout.
+//
+// # And why an install whose record failed is an adoption
+//
+// The rename is the join's point of no return. An artefact installed and
+// opened whose history row could not then be advanced
+// ([statelog.ErrAdoptionUnrecorded]) is the live database, open, and every
+// applier resumes from its checkpoint — so it is reported ADOPTED, and a
+// running node does everything an adoption owes: it moves every consumer to
+// the file's checkpoint and tells every listener its rows were replaced
+// ([Engine.rejoin]). Reported as no donor, it skipped both for a file that had
+// been replaced, and the node, now current, never asked again.
+//
 // # And why it is the same join a running node makes
 //
 // Falling below the floor is not a boot-time event: it is what happens to a
@@ -2388,6 +2423,25 @@ func (e *Engine) join(ctx context.Context, s *stateLog,
 				"admission keep it from claiming work it cannot answer for, "+
 				"and it asks again on a widening interval")
 		return joinNoDonor, want, nil
+	case errors.Is(err, statelog.ErrAdoptionUnrecorded):
+		// ADOPTED — see the doc comment. The adopter has written both
+		// lines this needs: `statelog_adopted`, and the error naming the
+		// history row it could not advance.
+		return joinAdopted, want, nil
+	case errors.Is(err, statelog.ErrJoinerFault):
+		// BEHIND, AND THIS NODE'S OWN FAULT — see the doc comment. At
+		// error rather than warn, unlike nobody donating: an operator
+		// may have something to fix (a full volume, an unwritable
+		// directory), and the line names it.
+		log.ErrorContext(ctx, "statelog_join_unable",
+			"node", s.nodeID, "domains", slices.Concat(behind, passed),
+			"error", err.Error(),
+			"detail", "this node is behind and could not adopt a peer's snapshot "+
+				"for a fault of its own, before anything was installed — no donor "+
+				"refused it; it comes up on the history it has, as when nobody "+
+				"could donate, and asks again on a widening interval, meeting the "+
+				"same fault until what the error names is fixed")
+		return joinUnable, want, nil
 	case err != nil:
 		return "", statelog.OfferRequest{}, fmt.Errorf("engine: this node cannot "+
 			"replay its way to the fleet on %v and the join failed: %w",
@@ -2402,15 +2456,23 @@ func (e *Engine) join(ctx context.Context, s *stateLog,
 // joinOutcome is what a join concluded, for the caller that acts on the
 // difference.
 //
-// THREE ANSWERS, because "adopted nothing" is two different facts to a running
+// FOUR ANSWERS, because "adopted nothing" is three different facts to a running
 // node. Every domain could replay from the checkpoint its rows keep — nothing
 // was asked, and the consumers still belong at that checkpoint — or the node
-// is behind and nobody could donate, which is retried on a widening interval.
-// A bool reads the first as the second, and [Engine.rejoin] meets the first
-// when the estate under it holds an artefact an earlier rejoin installed and
-// could not open, which [stateLog.restoreEstate] has opened since: it would
-// report "no donor", widen its pause and leave every consumer where the
-// replaced file had it.
+// is behind and nobody could donate, or it is behind and met a fault of its
+// own before it installed anything. A bool reads the first as the second, and
+// [Engine.rejoin] meets the first when the estate under it holds an artefact
+// an earlier rejoin installed and could not open, which
+// [stateLog.restoreEstate] has opened since: it would report "no donor", widen
+// its pause and leave every consumer where the replaced file had it.
+//
+// THE LAST TWO ARE ACTED ON ALIKE — the node's rows are untouched, so a boot
+// comes up on them and a running node asks again on its widening interval —
+// and are two values only because what each reports names whose fault it
+// was. Nobody donating is the fleet's state, which an operator reads off the
+// donors' refusals; a pin the coordination store refused, or a volume with no
+// room for the copy, is something to fix on THIS node, and filed as no donor
+// it read as every donor refusing an artefact that was fine.
 //
 // Never read off the wire, so it carries no Valid: every value is one this
 // package's own join returned.
@@ -2421,12 +2483,20 @@ const (
 	// is, so the fleet was not asked.
 	joinCurrent joinOutcome = "current"
 
-	// joinAdopted — a peer's snapshot is installed and complete.
+	// joinAdopted — a peer's snapshot is installed and open: complete, or
+	// complete in everything but this node's history row of it
+	// ([statelog.ErrAdoptionUnrecorded]).
 	joinAdopted joinOutcome = "adopted"
 
 	// joinNoDonor — this node is behind and no peer could donate, or it
 	// has no broker connection to ask one over.
 	joinNoDonor joinOutcome = "no_donor"
+
+	// joinUnable — this node is behind and could not adopt a snapshot, for
+	// a fault of its own before anything was installed
+	// ([statelog.ErrJoinerFault]). Its rows are untouched, so it stands
+	// exactly where [joinNoDonor] leaves a node.
+	joinUnable joinOutcome = "unable"
 )
 
 // joinExpectation is who a join on this node waits to hear from
@@ -2568,8 +2638,9 @@ func namesArtefact(row coord.NodePositions) bool {
 //     [stateLog.resetConsumers], which [stateLog.restoreEstate] shares.
 //
 //  4. THE APPLIERS START AGAIN, whatever happened: a join that found no
-//     donor leaves the node as it was, below the floor and refusing, and a
-//     node with no appliers at all would be worse than that.
+//     donor, or met a fault of this node's own before it installed anything,
+//     leaves the node as it was, below the floor and refusing, and a node
+//     with no appliers at all would be worse than that.
 
 func (e *Engine) rejoin(ctx context.Context, s *stateLog) error {
 	// ONE RECOVERY AT A TIME: a reanchor moving a checkpoint in the file
@@ -2603,14 +2674,35 @@ func (e *Engine) rejoin(ctx context.Context, s *stateLog) error {
 	outcome, want, err := e.join(ctx, s, s.openLogs())
 	switch {
 	case err != nil:
-		// A JOIN THAT FAILED may have installed the artefact before it
-		// did, so the rows are told about as replaced: closing every open
+		// ONLY A JOIN THAT MAY HAVE PUT ANOTHER FILE IN PLACE, OR LEFT
+		// NONE OPEN, tells the rows' listeners they were replaced — and
+		// that is exactly [statelog.ErrEstateNotRestored]: the one error
+		// [Engine.join] returns beside an installed artefact (one whose
+		// own record failed comes back as [joinAdopted], with no error),
+		// and the one a rollback that could not reopen the live file
+		// returns. Every other failure left the live file as it was, open
+		// — a read that failed before anything was asked, a cancellation
+		// the rollback unwound — and announcing it replaced would close
+		// every dashboard socket on the node and reset every artifact room
+		// for rows that had not moved, again on every retry for as long as
+		// the failure lasted. Where the file did change, closing every
 		// socket for its handshake to decide costs one reconnect per tab,
 		// and not closing one a peer's record ended leaves it serving.
-		replaced = true
+		//
+		// SAID HERE, NOT LEFT TO [stateLog.restoreEstate], which says it
+		// again once it opens the file: that is the next heartbeat at the
+		// soonest and never while its cause lasts, and until then no batch
+		// commits to name a socket the donor's rows ended, so it would go
+		// on streaming the company.
+		replaced = errors.Is(err, statelog.ErrEstateNotRestored)
 		return err
 	case outcome == joinNoDonor:
 		return errNoDonor
+	case outcome == joinUnable:
+		// NOTHING WAS INSTALLED and the live file was never replaced, so
+		// nothing is announced: as [joinNoDonor], the node is where it
+		// was, and the retry widens.
+		return errJoinUnable
 	}
 	// AGAINST THE INSTANT THE JOIN JUDGED THE ARTEFACT BY — the live one it
 	// read before asking, which the adopter checked the offer against and

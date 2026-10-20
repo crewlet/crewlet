@@ -88,6 +88,7 @@ var sentinels = []sentinel{
 	{"pages.ErrStaleVersion", pages.ErrStaleVersion},
 	{"pages.ErrTitleTaken", pages.ErrTitleTaken},
 
+	{"statelog.ErrAdoptionUnrecorded", statelog.ErrAdoptionUnrecorded},
 	{"statelog.ErrAheadOfLog", statelog.ErrAheadOfLog},
 	{"statelog.ErrConflict", statelog.ErrConflict},
 	{"statelog.ErrDonorConnectionClosed", statelog.ErrDonorConnectionClosed},
@@ -95,6 +96,7 @@ var sentinels = []sentinel{
 	{"statelog.ErrExists", statelog.ErrExists},
 	{"statelog.ErrForeignPosition", statelog.ErrForeignPosition},
 	{"statelog.ErrGenerationPassed", statelog.ErrGenerationPassed},
+	{"statelog.ErrJoinerFault", statelog.ErrJoinerFault},
 	{"statelog.ErrLogDiverged", statelog.ErrLogDiverged},
 	{"statelog.ErrLogTruncated", statelog.ErrLogTruncated},
 	{"statelog.ErrNoDecision", statelog.ErrNoDecision},

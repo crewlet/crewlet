@@ -555,6 +555,17 @@ below the published floor whose missing records the log still holds reports
    resumes, and if that still leaves it refusing rows that are keyed to the
    stream the broker serves, the next heartbeat notices and a join re-keys it
    — `statelog_runner_not_rekeyed` is the line that says it happened.
+   A fault of the node's **own** before the install — its disk refusing the
+   copy, its own store refusing a write, the coordination store refusing the
+   hold — ends the join at that offer rather than fetching every other one to
+   meet it again, and is never logged against a donor: the node logs
+   `statelog_join_unable` at error naming the fault, comes up (or stays up) on
+   the rows it has, and asks again on the doubling interval, as when nobody
+   could donate. Fix what the line names; the next ask then adopts.
+   And once the artefact is installed the join is an adoption whatever fails
+   next: a node whose own `statelog_adoption` row could not be advanced logs
+   `statelog_adoption_unrecorded` at error level beside `statelog_adopted`,
+   and serves on the artefact like any other adoption.
 3. If none does, the skip reason says why. Fix that first: a fleet where every
    node is `lagging` has an applier problem, not a snapshot problem.
 4. If the fleet genuinely holds none — a single node, or every peer skipping —
