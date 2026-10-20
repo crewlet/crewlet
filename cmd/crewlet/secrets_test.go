@@ -94,6 +94,49 @@ func TestASecretRoundTripsThroughTheCLI(t *testing.T) {
 	}
 }
 
+// AN UNSET SAYS WHICH STORE IT REACHED, as a write does, and who stops
+// resolving the value when.
+//
+// A removal is as invisible afterwards as a write: the engine resolves a
+// `${VAR}` through the snapshot its last apply took, so a removed value goes
+// on being used until the next one, and an unset that said only "removed"
+// read as one that failed. With the engine stopped the command reaches the
+// fleet's store itself, names it, and gives the stopped engine's note; a name
+// the store does not hold is reported against that store.
+//
+// Mutations, each red: the store line left out, and the running fleet's note
+// given in place of the stopped engine's.
+func TestAnUnsetSaysWhichStoreItReached(t *testing.T) {
+	t.Parallel()
+	cfg := bootstrapWithKeyring(t, "k1")
+	if _, errs, err := secretsCmd(t, cfg, "set", "TOKEN", "-value", "sk-not-real"); err != nil {
+		t.Fatalf("set: %v (%s)", err, errs)
+	}
+	out, errs, err := secretsCmd(t, cfg, "unset", "TOKEN")
+	if err != nil {
+		t.Fatalf("unset: %v (%s)", err, errs)
+	}
+	for _, want := range []string{"removed TOKEN\n",
+		"written to the fleet's store, reached through ", "this node's engine is stopped",
+		secretsStoppedRemovalNote} {
+		if !strings.Contains(out, want) {
+			t.Errorf("unset said %q, want it to carry %q", out, want)
+		}
+	}
+	if strings.Contains(out, secretsFleetRemovalNote) {
+		t.Errorf("an unset with the engine stopped was told the running fleet "+
+			"stops at its next apply: %q", out)
+	}
+
+	again, errs, err := secretsCmd(t, cfg, "unset", "TOKEN")
+	if err != nil {
+		t.Fatalf("second unset: %v (%s)", err, errs)
+	}
+	if !strings.Contains(again, "TOKEN was not set in the fleet's store, reached through ") {
+		t.Errorf("an unset of a name the store does not hold said %q", again)
+	}
+}
+
 // READ-BACK IS BREAK-GLASS. Neither node route that returns a value answers a
 // request that did not ask for one on purpose, and this refuses without an
 // explicit flag for the same reason: the common need is "is X set", which the

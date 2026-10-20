@@ -716,6 +716,26 @@ func (t *secretTarget) writtenNote() string {
 	return secretsStoppedNote
 }
 
+// removalNext is [secretTarget.writtenNote] for an unset: who stops resolving the
+// removed value, and when.
+func (t *secretTarget) removalNext() string {
+	if t.throughNode {
+		return secretsFleetRemovalNote
+	}
+	return secretsStoppedRemovalNote
+}
+
+// secretsFleetRemovalNote is [secretsFleetNote] for an unset: the running
+// fleet goes on resolving the value its last apply read until its next one.
+const secretsFleetRemovalNote = "The running fleet stops resolving it at its next " +
+	"configuration apply; POST /config/reload to a node that is up re-activates the " +
+	"current revision now."
+
+// secretsStoppedRemovalNote is [secretsStoppedNote] for an unset.
+const secretsStoppedRemovalNote = "This node's engine starts without it; a node " +
+	"already running on the same store stops resolving it at its next configuration " +
+	"apply, and POST /config/reload to it re-activates the current revision now."
+
 // secretsFleetNote is what a write to the FLEET's store does not do yet.
 //
 // The engine resolves a `${VAR}` through a snapshot of the store taken at each
@@ -768,16 +788,24 @@ func getSecret(ctx context.Context, sv *secretTarget, name string, stdout io.Wri
 	return err
 }
 
+// unsetSecret removes a secret, and says which store it reached and who stops
+// resolving the value when: the two lines a write prints ([setSecret]),
+// because a removal is as invisible afterwards. The engine resolves a `${VAR}`
+// through the snapshot its last apply took, so a value removed from a running
+// fleet goes on being used until the next apply, and an unset that said only
+// "removed" read as one that failed.
 func unsetSecret(ctx context.Context, sv *secretTarget, name string, stdout io.Writer) error {
 	gone, err := sv.Unset(ctx, name)
 	if err != nil {
 		return err
 	}
 	if !gone {
-		fmt.Fprintf(stdout, "%s was not set\n", name)
+		fmt.Fprintf(stdout, "%s was not set in %s\n", name, sv.where)
 		return nil
 	}
 	fmt.Fprintf(stdout, "removed %s\n", name)
+	fmt.Fprintf(stdout, "written to %s\n", sv.where)
+	fmt.Fprintln(stdout, sv.removalNext())
 	return nil
 }
 

@@ -1083,7 +1083,7 @@ The engine's own key — the identity directory's blind-index key — shares the
 crewlet secrets unset <NAME> [-config PATH] [-api URL]
 ```
 
-Removes the record and says whether one was there — "was not set" is the outcome a cleanup script wanted on its second run, not a failure. Afterwards `${NAME}` falls back to the environment.
+Removes the record and says whether one was there — "was not set" is the outcome a cleanup script wanted on its second run, not a failure. Like [a write](#crewlet-secrets-set), it says which store it reached (`written to …`, or `was not set in …`) and who stops resolving the value when, since the engine resolves a `${VAR}` through the snapshot of its last apply: through a running node, the running fleet at its next configuration apply; with the engine stopped, this node's engine starts without it and a node already running on the same store stops at its next configuration apply. `POST /config/reload` brings either forward. Afterwards `${NAME}` falls back to the environment.
 
 ### `crewlet secrets get`
 
