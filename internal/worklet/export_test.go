@@ -10,6 +10,10 @@ var (
 	MoveClaim  = moveClaim
 )
 
+// OpenAsksStatement is [openAsksStatement], for the gate that plans the
+// statement the ask inference runs rather than a copy of it.
+const OpenAsksStatement = openAsksStatement
+
 // Hold takes resource as one of w's walks does, for the cases that hold a
 // claim the way a live walk on this very node holds it, and hands back its
 // release.

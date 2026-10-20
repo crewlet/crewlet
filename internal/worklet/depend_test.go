@@ -1,13 +1,13 @@
 package worklet_test
 
 import (
-	"database/sql"
 	"maps"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -560,37 +560,18 @@ func TestADependencyAnswersAtItsLastCommit(t *testing.T) {
 // matches a partial index by SYNTACTIC implication. `ask = ?` does not imply
 // `ask <> ”` to it, because a bound parameter could be the empty string, so
 // the query states the literal term as well and reads a seekable range rather
-// than every comment on the task.
+// than every comment on the task. The statement planned is the one the
+// inference runs, with its arguments bound as it binds them: a copy planned
+// here stayed green with the term deleted from the real one.
+//
+// Mutation: delete the non-empty ask term from the inference's statement and
+// the plan stops naming the open-asks index.
 func TestTheOpenAskInferenceIsIndexServed(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 
-	var plan string
-	if err := r.db.Read(t.Context(), func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(t.Context(), `
-			EXPLAIN QUERY PLAN
-			SELECT id, author, substr(body, 1, 120)
-			FROM tracker_comments
-			WHERE task_id = 't' AND ask = 'a' AND ask <> '' AND resolved = 0
-			  AND answered_by IS NULL AND removed = 0
-			ORDER BY created_at, id
-			LIMIT 6`)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = rows.Close() }()
-		for rows.Next() {
-			var a, b, c int
-			var detail string
-			if err := rows.Scan(&a, &b, &c, &detail); err != nil {
-				return err
-			}
-			plan += detail + " "
-		}
-		return rows.Err()
-	}); err != nil {
-		t.Fatalf("explain the ask inference: %v", err)
-	}
+	plan := strings.Join(storetest.Plan(t, r.db, worklet.OpenAsksStatement,
+		[]any{"t", "a", worklet.MaxOpenAsksNamed + 1}), "\n")
 	if !strings.Contains(plan, "tracker_comments_open_asks_idx") {
 		t.Errorf("the plan is %q and does not name the open-asks index — every "+
 			"comment on a task would pay for the length of its own thread",
