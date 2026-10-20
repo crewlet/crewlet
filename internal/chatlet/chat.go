@@ -298,7 +298,10 @@ const (
 	// cannot see the set it is joining. The applier can — it holds the
 	// message's rows in its own transaction — so it declines the
 	// thirty-third distinct emoji deterministically, reaching the same
-	// answer on every node.
+	// answer on every node. FROM THE RECORD'S STAMP ([Reaction.Cap]),
+	// which the writer sets to this, never from the applying node's own
+	// copy of it: a later build that moves the number would otherwise
+	// decide one record two ways.
 	MaxReactionEmoji = 32
 
 	// MaxEraseMessages bounds one erase gesture.
