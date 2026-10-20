@@ -20,7 +20,8 @@ import (
 // The gallery filters by kind and scope and sorts by what the listing sorts
 // by, the share dialog grants the roles a share may hold to the audiences a
 // share may name, the viewer embeds a frame by the origin mode the engine
-// minted it in, and the presence chrome draws what a member is doing. Every
+// minted it in, the presence chrome draws what a member is doing, and the
+// history and the company trail word every op a history row is filed under. Every
 // one of those is a closed set the engine owns, so `contract/artifacts.ts`
 // declares each once and this holds it: a value the engine grew that the
 // dashboard lacks is a kind it cannot draw or a role nobody can grant; one the
@@ -40,6 +41,7 @@ func TestTheDashboardSpeaksTheArtifactsVocabulary(t *testing.T) {
 		"PRESENCE_ACTIVITIES":   names(artifacts.PresenceActivities),
 		"ARTIFACT_LIST_SCOPES":  names(artifactsdomain.ListScopes),
 		"ARTIFACT_LIST_SORTS":   names(artifactsdomain.ListSorts),
+		"ARTIFACT_HISTORY_OPS":  names(artifactsdomain.HistoryOps),
 	} {
 		body, err := clientsource.Literal(tree, name)
 		if err != nil {

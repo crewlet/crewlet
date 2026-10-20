@@ -2,8 +2,8 @@
  * The artifacts' closed sets and bounds: what an artifact can be, what a
  * version may declare, the role ladder a share grants, who a share can name,
  * how the artifact origin isolates a page, what a listing scopes and sorts by,
- * what a datastore column, rule and write can be, and how long the text a
- * person types may run.
+ * what a history row is filed under, what a datastore column, rule and write
+ * can be, and how long the text a person types may run.
  *
  * EXACTLY THE ENGINE'S, in the engine's own order, each held by the gate its
  * row in `internal/clientsource/contract.go` names. A kind or a role the
@@ -62,6 +62,30 @@ export const ARTIFACT_LIST_SCOPES = ["mine", "shared", "company", "agents", "all
 
 /** How a listing is ordered (`artifactsdomain.ListSorts`), the engine's default first. */
 export const ARTIFACT_LIST_SORTS = ["updated", "created", "title", "opened"] as const;
+
+/**
+ * Every op an artifact's history row is filed under (`artifactsdomain.HistoryOps`),
+ * in the engine's order: what a history row and the company trail are worded
+ * by. Not every op the log carries: a purge takes the history with it, and a
+ * pin, an unpin and an opened mark are one person's browsing, so none of them
+ * is ever a row; an asset's records are filed under the asset's own op.
+ */
+export const ARTIFACT_HISTORY_OPS = [
+  "create",
+  "publish",
+  "restore_version",
+  "patch",
+  "share",
+  "unshare",
+  "transfer",
+  "trash",
+  "restore",
+  "purge_begin",
+  "asset_create",
+  "asset_remove",
+  "link_work_item",
+  "read_elevated",
+] as const;
 
 /** The longest title, in UTF-8 bytes (`artifacts.MaxTitleBytes`): a tab title and a card line. */
 export const ARTIFACT_TITLE_MAX_BYTES = 120;
