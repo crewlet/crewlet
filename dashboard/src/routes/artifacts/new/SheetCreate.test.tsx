@@ -214,7 +214,7 @@ test("Cancel with something typed asks before discarding it", () => {
     target: { value: "Plan" },
   });
   fireEvent.click(screen.getAllByRole("button", { name: "Cancel" })[0]!);
-  expect(screen.getByRole("dialog", { name: "Discard this sheet?" })).toBeTruthy();
+  expect(screen.getByRole("alertdialog", { name: "Discard this sheet?" })).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Discard" }));
   expect(location.hash).toBe("#/artifacts");
 });
