@@ -227,7 +227,7 @@ func pageClass(err error) (tools.Refusal, bool) {
 	case errors.Is(err, pages.ErrReserved):
 		return tools.RefusalForbidden, true
 	case errors.Is(err, pages.ErrInvalid), errors.Is(err, pages.ErrParent),
-		errors.Is(err, pages.ErrBadCursor):
+		errors.Is(err, pages.ErrBadCursor), errors.Is(err, pages.ErrUnservedOrder):
 		return tools.RefusalInvalid, true
 	}
 	return "", false

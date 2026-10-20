@@ -94,6 +94,7 @@ var sentinels = []sentinel{
 	{"pages.ErrReserved", pages.ErrReserved},
 	{"pages.ErrStaleVersion", pages.ErrStaleVersion},
 	{"pages.ErrTitleTaken", pages.ErrTitleTaken},
+	{"pages.ErrUnservedOrder", pages.ErrUnservedOrder},
 
 	{"chat.ErrArchived", chat.ErrArchived},
 	{"chat.ErrConflict", chat.ErrConflict},

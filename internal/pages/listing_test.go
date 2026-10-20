@@ -850,3 +850,139 @@ func TestAListingsChildCountFollowsItsNarrowing(t *testing.T) {
 		})
 	}
 }
+
+// THE NEWEST SKILLS ARE LISTED BY WHEN THEY CHANGED, ACROSS EVERY WINDOW.
+//
+// Agent skills and Home's Agent skills widget list the tool skills newest
+// first. The only listing there was ran in the knowledge base's own order —
+// container, title, id — so "newest" was a sort of whichever window that
+// order held: past one window of skills the newest could be one no window
+// drawn had loaded. A newest-first listing is now read in that order itself
+// ([pages.OrderNewest]), from the skill rows' own index, and paged by a cursor
+// in it. Here the skill whose title sorts first is the one saved last, a
+// rename moves another to the front, an ordinary page changed after every
+// skill is no row of it, and each window size pages the whole listing back
+// in the same order. And the instant each row reports is its HEAD's, which
+// the skill row copies on every apply that moves it.
+//
+// Mutation: order the newest listing by title again, and Alpha is listed
+// last; write the skill row's instant from anything but the head's, and a
+// row reports another instant than the page; drop the id from the cursor's
+// arm, and a window repeats the row the last one stopped on.
+func TestTheNewestSkillsAreListedByWhenTheyChanged(t *testing.T) {
+	t.Parallel()
+	r, _ := hooked(t)
+	written := map[string]pages.Written{}
+	for _, title := range []string{"Alpha", "Bravo", "Charlie", "Delta"} {
+		written[title] = r.write(author("jane"), pages.NewPage{Title: title, Body: skillBody})
+	}
+	written["Oncall"] = r.write(author("jane"), pages.NewPage{
+		Container: "OPS", Title: "Oncall", Body: skillBody,
+	})
+	if _, err := r.store.Rename(t.Context(), author("jane"), written["Charlie"].Page.ID,
+		"Charlie renamed", false); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	r.drain()
+	if _, err := r.store.SavePage(t.Context(), author("jane"), written["Alpha"].Page.ID,
+		pages.Save{BaseVersion: 1, Body: ptr(skillBody + "\nSay so in the channel.")}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	r.drain()
+	r.write(author("jane"), pages.NewPage{Title: "Echo", Body: "prose, changed after every skill"})
+
+	skills := true
+	newest := pages.Filter{Skills: &skills, Status: []pages.Status{pages.StatusPublished},
+		Order: pages.OrderNewest, Limit: pages.MaxLimit}
+	all := r.list(newest)
+	want := []string{"Alpha", "Charlie renamed", "Oncall", "Delta", "Bravo"}
+	if got := titles(all); !slices.Equal(got, want) || all.Total != len(want) || all.After != "" {
+		t.Fatalf("the newest skills are %v (total %d, next %q), want %v in one "+
+			"window", got, all.Total, all.After, want)
+	}
+	byTitle := pages.Filter{Skills: &skills, Status: newest.Status, Limit: pages.MaxLimit}
+	heads := map[string]pages.Summary{}
+	for _, row := range r.list(byTitle).Pages {
+		heads[row.ID] = row
+	}
+	for _, row := range all.Pages {
+		if head := heads[row.ID]; !row.Updated.Equal(head.Updated) || row.Updated.IsZero() {
+			t.Errorf("%s is listed newest first as changed at %v, and its head says %v",
+				row.Title, row.Updated, head.Updated)
+		}
+	}
+
+	for size := 1; size <= 3; size++ {
+		window := newest
+		window.Limit = size
+		var paged []string
+		for range len(want) + 1 {
+			got := r.list(window)
+			paged = append(paged, titles(got)...)
+			if got.Total != len(want) {
+				t.Errorf("a window of %d says total %d, want %d", size, got.Total, len(want))
+			}
+			if got.After == "" {
+				break
+			}
+			window.After = got.After
+		}
+		if !slices.Equal(paged, want) {
+			t.Errorf("paged %d at a time the newest skills are %v, want %v", size, paged, want)
+		}
+	}
+}
+
+// A NEWEST-FIRST LISTING IS SERVED FOR THE SKILLS ALONE, AND ITS CURSOR IN NO
+// OTHER ORDER.
+//
+// The order is held by the skill rows' own index, so over any other listing it
+// would sort everything that listing matches to return a window: refused,
+// naming what it is served for, rather than served slowly. And a cursor is a
+// place in ONE order, so a title listing's cursor handed to a newest-first one
+// — or the reverse — is refused rather than read as a place it does not name.
+//
+// Mutation: serve the newest order without the skill narrowing, and the
+// refusal is a listing; drop the order from the cursor, and either listing
+// resumes from a place in the other's.
+func TestANewestListingIsServedForTheSkillsAlone(t *testing.T) {
+	t.Parallel()
+	r, _ := hooked(t)
+	for _, title := range []string{"Alpha", "Bravo", "Charlie"} {
+		r.write(author("jane"), pages.NewPage{Title: title, Body: skillBody})
+	}
+	skills, ordinary := true, false
+	fresh := statelog.Freshness{Level: statelog.ReadSession}
+	for name, f := range map[string]pages.Filter{
+		"every page":         {Order: pages.OrderNewest},
+		"the ordinary pages": {Order: pages.OrderNewest, Skills: &ordinary},
+	} {
+		if _, err := r.reader.List(t.Context(), f, fresh); !errors.Is(err, pages.ErrUnservedOrder) {
+			t.Errorf("%s newest first answers %v, want %v", name, err, pages.ErrUnservedOrder)
+		}
+	}
+	if _, err := r.reader.List(t.Context(), pages.Filter{Order: "oldest"}, fresh); err == nil {
+		t.Error("a listing in an order this build does not read was served")
+	}
+
+	byTitle := pages.Filter{Skills: &skills, Limit: 1}
+	newest := pages.Filter{Skills: &skills, Limit: 1, Order: pages.OrderNewest}
+	titleCursor, newestCursor := r.list(byTitle).After, r.list(newest).After
+	if titleCursor == "" || newestCursor == "" {
+		t.Fatal("a window of one of three skills minted no cursor")
+	}
+	byTitle.After, newest.After = newestCursor, titleCursor
+	for name, f := range map[string]pages.Filter{
+		"a title listing from a newest cursor": byTitle,
+		"a newest listing from a title cursor": newest,
+	} {
+		if _, err := r.reader.List(t.Context(), f, fresh); !errors.Is(err, pages.ErrBadCursor) {
+			t.Errorf("%s answers %v, want %v", name, err, pages.ErrBadCursor)
+		}
+	}
+	for _, order := range pages.ListOrders() {
+		if !order.Valid() {
+			t.Errorf("%q is listed as an order this build reads and is not valid", order)
+		}
+	}
+}

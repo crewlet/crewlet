@@ -156,6 +156,10 @@ var domainErrors = map[string]map[string]classRow{
 			why: "the trash reaper's own purge, made as the engine, never a caller's request"},
 		"ErrStaleVersion": {err: pages.ErrStaleVersion, class: tools.RefusalStaleVersion},
 		"ErrTitleTaken":   {err: pages.ErrTitleTaken, class: tools.RefusalExists},
+		// A LISTING ORDER IS AN ARGUMENT: newest first is served for the
+		// tool-skill pages alone, so what fixes the call is the other order
+		// or the skills filter, exactly as a cursor from another listing.
+		"ErrUnservedOrder": {err: pages.ErrUnservedOrder, class: tools.RefusalInvalid},
 
 		"ErrFutureVersion": {err: &pages.ErrFutureVersion{},
 			why: "a record a newer build wrote, which the framework defers rather than refuses"},
