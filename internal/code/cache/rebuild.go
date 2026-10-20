@@ -963,23 +963,48 @@ func (c *Cache) queueRebuild(e *entry, inc *incarnation, reason RebuildReason, w
 }
 
 // seedRebuild links into a rebuild's new incarnation every pack of the one it
-// replaces whose checksum is in whole — the packs Verify has just held WHOLE
-// to their rows: every section at its row's size, the bundle hashing to the
-// row's Hash — so the rebuild's install finds them installed and asks the
-// object store only for the rest. An operator's repair of one damaged pack
-// among thousands is then one GET, not one a pack the repository holds.
+// replaces whose checksum is in whole — the packs a check has just held WHOLE
+// — so the rebuild's install finds them installed and asks the object store
+// only for the rest. Two checks hand it one:
 //
-// A LINK IS EXACTLY AS GOOD AS A DOWNLOAD HERE. Both incarnations are this
-// cache's, on one filesystem; a pack's files are read-only and nothing
-// writes one in place, so the link IS the bytes Verify hashed; and the
-// rebuild's own full round then holds each to its row's sizes and removes
-// whatever no row still names, as it does a download. What a link cannot
-// bring is a pack Verify did not find whole — damaged, missing, or never
-// asked about — which is why only whole is linked, and why the rebuild a
-// request's failure asks for, which says nothing of which pack is damaged,
-// links nothing.
+//   - Verify, which holds each bundle to its row: every section at its row's
+//     size, the bundle hashing to the row's Hash. An operator's repair of one
+//     damaged pack among thousands is then one GET, not one a pack the
+//     repository holds.
+//   - A failing request's scrub (scrubFor, step 3 of Rebuild's repair), which
+//     holds each of a pack's three files to its own trailer — the .pack's
+//     being its name, the checksum its row names — and counts a pack whole
+//     only when all three pass. The whole rebuild that request's repair asks
+//     for last (step 4) links what that scrub vouched for and downloads only
+//     the rest: nothing at all when the damage is in the rows rather than in
+//     any pack. Its list is not always a hash made for the request: scrubFor
+//     answers from an EARLIER scrub's verdict — one that began after the
+//     failing process, or one that found nothing within ScrubCooldown with
+//     no repair written since (its recent rule) — so the list can be up to
+//     an hour old.
 //
-// A pack gone from replaced since Verify held it — a round removed it — is
+// A LINK IS EXACTLY AS GOOD AS A DOWNLOAD for a pack a check has just hashed:
+// Verify's list, and a scrub that ran for the request. Both incarnations are
+// this cache's, on one filesystem; a pack's files are read-only and nothing
+// of the engine's writes one in place, so the link IS the bytes the check
+// hashed; and the rebuild's own full round then holds each to its row's sizes
+// and removes whatever no row still names, as it does a download. A REUSED
+// verdict links the bytes as they were when that scrub read them: a pack the
+// disk damaged in place since — the same identity, so no vouch notices — is
+// linked, and vouched, as it is, and the rebuild ends nothing for it. What
+// repairs it then is the scrub of the NEW copy, which has no scrub record:
+// the failing retry's report, handed on as the request lets the copy go,
+// makes that scrub due at once (report.go), and the pack is fetched again
+// with one GET. Hashing every listed pack again before linking it would read
+// the whole copy once more for every request the hour's verdict answers —
+// what the reuse is there to save. What a link cannot
+// bring is a pack no check found whole — damaged, missing, or never asked
+// about — which is why only whole is linked, and why a rebuild no check
+// preceded links nothing: the one a round's own git asks for (damagedRound —
+// a shape past its round's sweep, damage past its drop, a pack or an object
+// that git could not read), whose failure says nothing of which pack is whole.
+//
+// A pack gone from replaced since the check held it — a round removed it — is
 // passed over, and one that cannot be linked for any other reason is logged
 // and left to the download, which needs nothing from it. The directory is
 // synced once every link is made, as an install's renames are, before any
