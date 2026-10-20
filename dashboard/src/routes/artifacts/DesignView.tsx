@@ -33,7 +33,15 @@
  * because the browser prints a cross-origin frame as it is drawn on screen.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { createPortal } from "react-dom";
 import {
   Button,
@@ -442,7 +450,10 @@ const PRINT_TEARDOWN_MS = 1500;
  * In print nothing else of the dashboard shows, on a page of the board's own
  * size. The page size is a constructed stylesheet, since the dashboard's
  * policy admits no inline style element; it and the view go shortly after the
- * browser says the print is over.
+ * browser says the print is over, in one commit: the sheet is a layout
+ * effect's, so it never outlives the view by the task a passive effect's
+ * cleanup waits for, and a dashboard printed in that gap would come out on
+ * the board's page size.
  */
 function BoardPrint({
   board,
@@ -455,7 +466,7 @@ function BoardPrint({
 }): ReactNode {
   const done = useRef(onDone);
   done.current = onDone;
-  useEffect(() => {
+  useLayoutEffect(() => {
     const sheet = new CSSStyleSheet();
     sheet.replaceSync(`@media print {
   html, body { height: ${board.h}px !important; overflow: hidden !important; }
