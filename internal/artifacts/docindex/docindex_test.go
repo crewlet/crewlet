@@ -235,3 +235,27 @@ func TestTheStarterIsADoc(t *testing.T) {
 		t.Errorf("the starter opens %q", doc.Tabs[0].Text)
 	}
 }
+
+// A DOC BEGUN WITH ITS TEXT keeps the text as written under the escaped
+// title, and a text of nothing but space leaves the heading alone.
+func TestAWrittenStarterKeepsItsText(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ body, want string }{
+		{"Some *bold* text.\n\n- one\n", "# \\*Q3\\* plan\n\nSome *bold* text.\n\n- one\n"},
+		{"\n\n  indented code\n\n\n", "# \\*Q3\\* plan\n\n  indented code\n"},
+		{" \n\t\n", "# \\*Q3\\* plan\n"},
+	} {
+		got := docindex.Written("*Q3* plan", c.body)
+		src := files{}
+		for p, b := range got {
+			src[p] = string(b)
+		}
+		doc, err := docindex.Read(src, docindex.StarterEntry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if doc.Tabs[0].Text != c.want {
+			t.Errorf("Written(%q) = %q, want %q", c.body, doc.Tabs[0].Text, c.want)
+		}
+	}
+}

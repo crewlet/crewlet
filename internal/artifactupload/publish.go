@@ -118,6 +118,10 @@ type CreateRequest struct {
 	// Starter begins the artifact from its kind's starter content (a deck's
 	// four example slides), which the engine holds; it names no files.
 	Starter bool `json:"starter,omitempty"`
+
+	// Doc is a doc's starter as its writer already wrote it: with Starter,
+	// on a doc only.
+	Doc *DocStarter `json:"doc,omitempty"`
 }
 
 // StageNamespace scopes the derivation of a publish's own reservation from the
@@ -141,12 +145,16 @@ func (s *Service) create(ctx context.Context, c artifactsdomain.Call, req Create
 		return artifactsdomain.Published{}, Report{}, fmt.Errorf("%w: kind %q is not one of %v",
 			ErrInvalid, req.Kind, artifacts.Kinds)
 	}
+	if req.Doc != nil && !req.Starter {
+		return artifactsdomain.Published{}, Report{}, fmt.Errorf("%w: a doc's written text "+
+			"begins it from its starter: send it with \"starter\": true", ErrInvalid)
+	}
 	if req.Starter {
 		if req.Upload != "" || len(req.Files) > 0 || req.Entry != "" {
 			return artifactsdomain.Published{}, Report{}, fmt.Errorf("%w: a create from the "+
 				"kind's starter names no upload, files or entry: the starter is all of them", ErrInvalid)
 		}
-		files, entry, err := starter(req.Kind, req.Title)
+		files, entry, err := starter(req.Kind, req.Title, req.Doc)
 		if err != nil {
 			return artifactsdomain.Published{}, Report{}, err
 		}

@@ -144,12 +144,15 @@ export function createSheet(fields: {
 /**
  * Create a doc or a deck from the engine's starter (`POST /artifacts` with
  * `starter`): the engine publishes its own first version, held to the kind's
- * format, so the dashboard sends no upload.
+ * format, so the dashboard sends no upload. A doc may carry the text its
+ * writer already wrote (`doc`), which the engine writes under the title's
+ * heading in place of the starter's line.
  */
 export function createFromStarter(fields: {
   kind: "doc" | "slides";
   title: string;
   workItem?: string;
+  doc?: { body: string };
 }): Omit<KeyedRequest, "key"> {
   return {
     method: "POST",
@@ -159,6 +162,7 @@ export function createFromStarter(fields: {
       title: fields.title,
       starter: true,
       ...(fields.workItem ? { work_item: fields.workItem } : {}),
+      ...(fields.kind === "doc" && fields.doc ? { doc: { body: fields.doc.body } } : {}),
     },
   };
 }
