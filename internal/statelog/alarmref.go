@@ -58,9 +58,10 @@ var alarmMeaning = map[Kind]string{
 		"ordinary writes are held to. One alarm names every such log, " +
 		"leading with the one with the least room. A full log refuses writes " +
 		"rather than dropping records; on every log that claims identity " +
-		"(Worklet's, Doclet's, the identity estate's, the Dashboard " +
-		"Assistant's and Chatlet's) an eviction still lands in the gate reserve " +
-		"above that ceiling.",
+		"(Worklet's, Doclet's, the identity estate's, the artifacts " +
+		"log's, the artifact datastore's, the Dashboard Assistant's and " +
+		"Chatlet's) an eviction still lands in the gate reserve above that " +
+		"ceiling.",
 	KindBackupAge: "No verified backup of a log has been recorded, or the " +
 		"newest one covering it is older than the policy asks for. The trim " +
 		"does not advance that log either way. One alarm names every such " +

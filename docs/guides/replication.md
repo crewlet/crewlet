@@ -646,7 +646,8 @@ the **deferral grace** is 30 minutes, past which `deferred_old` fires — naming
 the log, the position of the oldest record held and the record version it was
 written at against the one this build reads. Where the node's copy is judged
 by that log (the tracker's, the knowledge base's and chat's are; the
-identity estate's, the vectors' and the usage log's are not) the node takes its copy
+identity estate's, the artifacts log's, the artifact datastore's, the Dashboard
+Assistant's, the vectors' and the usage log's are not) the node takes its copy
 out of service at the same moment — its seats stay, and read the estate from
 the other data nodes — because both are measured from one instant — the
 position heartbeat's first sighting of the record — and the alarm says which of

@@ -389,4 +389,43 @@ func TestThePagesCountTheNativeToolsTheRegistryHolds(t *testing.T) {
 		t.Errorf("the tools guide's table lists %d tools, want every page tool (%d) "+
 			"and the tracker's item and file tools (%d)", len(rows), len(pages), listed)
 	}
+
+	// AND THE ARTIFACTS SECTION, counted off the two lists the registry adds on
+	// every node that takes artifact uploads, which the operator catalogue
+	// builds from the same sets. Kept by hand, it read "Twelve more" above
+	// nine and four.
+	art, data := len(builtin.ArtifactTools()), len(builtin.ArtifactDataTools())
+	for _, want := range []string{
+		title(spelled(t, art+data)) + " more, registered on every node that takes " +
+			"artifact uploads",
+		spelled(t, art) + " for artifacts, their folders and the company's brand, and " +
+			spelled(t, data) + " for an artifact's datastore",
+		"the operator catalogue serves the same " + spelled(t, art+data),
+	} {
+		if !strings.Contains(guide, want) {
+			t.Errorf("the tools guide does not say %q — the registry adds %d artifact "+
+				"and %d datastore tools", want, art, data)
+		}
+	}
+
+	// AND THE REFERENCE'S LIST of the artifact tools the operator surface
+	// serves beside a seat's: every one of the two lists, in their order.
+	// Kept by hand, it left out list_dashboard_sources and then
+	// get_artifact_format, both served all along.
+	reference := readPage(t, "docs/reference/api-endpoints.md")
+	from := strings.Index(reference, "wherever the node takes artifact uploads,")
+	to := strings.Index(reference, "(see [Artifacts]")
+	if from < 0 || to < from {
+		t.Fatal("the API reference has no list of the artifact tools the operator " +
+			"surface serves to read")
+	}
+	var named []string
+	for _, m := range regexp.MustCompile("`([a-z_]+)`").
+		FindAllStringSubmatch(reference[from:to], -1) {
+		named = append(named, m[1])
+	}
+	if want := append(builtin.ArtifactTools(), builtin.ArtifactDataTools()...); !slices.Equal(named, want) {
+		t.Errorf("the API reference lists the artifact tools the operator surface "+
+			"serves as %v, and the registry adds %v", named, want)
+	}
 }
