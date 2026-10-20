@@ -339,11 +339,10 @@ func withRuntime(page []byte, contract, declared string) []byte {
 // A ticket is signed, so an unknown value is not expected; one is left out
 // rather than written into the page.
 func runtimeCapabilities(granted []artifacts.Capability) string {
-	words := make([]string, 0, len(granted))
-	for _, c := range artifacts.Capabilities {
-		if slices.Contains(granted, c) {
-			words = append(words, string(c))
-		}
+	canonical := canonicalGrant(granted)
+	words := make([]string, len(canonical))
+	for i, c := range canonical {
+		words[i] = string(c)
 	}
 	return strings.Join(words, " ")
 }
