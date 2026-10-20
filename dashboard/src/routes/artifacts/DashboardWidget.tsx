@@ -65,8 +65,16 @@ const CHARTS = new Set<Widget["type"]>(["timeseries", "columns", "activity", "ba
  * What a figure says when its dataset answered no rows: one phrase for every
  * widget kind, a table's included, where the board said "No rows." under one
  * figure and "Nothing recorded in this window" under the next.
+ *
+ * WORDED BY WHETHER THE SOURCE HAS A WINDOW. A spend source reads a span of
+ * company days (`windowed` in the catalogue), so its empty answer is nothing
+ * in that window; every other source reads what is true now (open work, the
+ * agents, an artifact's own rows), where "this window" names a window the
+ * reader cannot find.
  */
-const NO_ROWS = "Nothing in this window";
+export function nothingSaid(dataset: DashboardBoardDataset | undefined): string {
+  return dataset?.engine?.windowed ? "Nothing in this window" : "Nothing to show";
+}
 
 /** Why a chart could not be saved as an image, in a reader's words. */
 const PNG_REFUSALS: Record<ElementToPngError["reason"], string> = {
@@ -191,6 +199,7 @@ export function DashboardWidget({
             columns={ready.columns}
             rows={ready.rows}
             datasetTitle={dataset?.title ?? widget.dataset ?? ""}
+            empty={nothingSaid(dataset)}
           />
         ) : null}
       </div>
@@ -204,12 +213,15 @@ function Figure({
   columns,
   rows,
   datasetTitle,
+  empty,
 }: {
   widget: Widget;
   columns: readonly DashboardColumn[];
   rows: readonly DashboardRow[];
   /** What the figure counts when it names no column: its dataset. */
   datasetTitle: string;
+  /** What it says over no rows (`nothingSaid`). */
+  empty: string;
 }): ReactNode {
   const column = (key: string | undefined) => columns.find((c) => c.key === key);
   const label = (key: string | undefined) => column(key)?.label ?? key ?? "";
@@ -287,7 +299,7 @@ function Figure({
             from={from}
             to={to}
             format={(v) => num(v)}
-            emptyLabel={NO_ROWS}
+            emptyLabel={empty}
             legend={legend}
             {...time}
             series={series.map((s) => ({
@@ -305,7 +317,7 @@ function Figure({
           buckets={buckets}
           format={(v) => num(v)}
           formatScale={scaleFormat(w)}
-          emptyLabel={NO_ROWS}
+          emptyLabel={empty}
           legend={legend}
           {...time}
         />
@@ -317,7 +329,7 @@ function Figure({
       return (
         <ActivityStrip
           label={title}
-          emptyLabel={NO_ROWS}
+          emptyLabel={empty}
           reading={{
             formatTime: days ? (at) => formatDay(at) : (at) => new Date(at).toLocaleString(),
             format: (v) => num(v),
@@ -332,10 +344,10 @@ function Figure({
     case "bars":
       // AN EMPTY LIST STANDS IN ITS PLOT'S MIDDLE, as every empty chart on
       // the board does, not where its first row would have begun.
-      if (rows.length === 0) return <ChartEmpty>{NO_ROWS}</ChartEmpty>;
+      if (rows.length === 0) return <ChartEmpty>{empty}</ChartEmpty>;
       return (
         <BarList
-          emptyLabel={NO_ROWS}
+          emptyLabel={empty}
           limit={w.limit ?? 10}
           data={rows.map((r, i) => ({
             id: String(i),
@@ -357,7 +369,7 @@ function Figure({
         })),
       ).map((p) => ({ ...p, shown: num(p.value) }));
       if (!parts.some((p) => p.value > 0)) {
-        return <StackedBar format={(v) => num(v)} segments={[]} emptyLabel={NO_ROWS} />;
+        return <StackedBar format={(v) => num(v)} segments={[]} emptyLabel={empty} />;
       }
       return (
         <div className="dashboard-share">
@@ -375,6 +387,7 @@ function Figure({
           columns={columns}
           shown={w.columns ?? columns.map((c) => c.key)}
           rows={rows.slice(0, w.limit ?? 100)}
+          empty={empty}
         />
       );
   }
@@ -394,12 +407,15 @@ export function RowsTable({
   columns,
   shown,
   rows,
+  empty,
 }: {
   columns: readonly DashboardColumn[];
   /** The columns drawn, by key, in order. */
   shown: readonly string[];
   /** The rows drawn, already cut. */
   rows: readonly DashboardRow[];
+  /** What it says over no rows (`nothingSaid`). */
+  empty: string;
 }) {
   const column = (key: string) => columns.find((c) => c.key === key);
   const label = (key: string) => column(key)?.label ?? key;
@@ -454,7 +470,7 @@ export function RowsTable({
       columns={table}
       data={rows.map((r, i) => ({ ...r, __row: i }))}
       getRowKey={(r) => Number(r.__row)}
-      emptyMessage={NO_ROWS}
+      emptyMessage={empty}
     />
   );
 }

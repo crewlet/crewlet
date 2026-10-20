@@ -190,8 +190,10 @@ test("leaving with a title typed asks first, and keeping on stays", async () => 
   mount();
   fireEvent.change(await title(), { target: { value: "Board review" } });
   fireEvent.click(screen.getAllByRole("button", { name: "Cancel" })[0]!);
-  expect(await screen.findByText("Leave without creating the deck?")).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
+  // THE SAME PROMPT AS EVERY CREATE PAGE'S: discard the kind, or keep editing.
+  const prompt = await screen.findByRole("alertdialog", { name: "Discard this deck?" });
+  expect(within(prompt).getByRole("button", { name: "Discard" })).toBeTruthy();
+  fireEvent.click(within(prompt).getByRole("button", { name: "Keep editing" }));
   expect(location.hash).toBe("#/artifacts/new/slides");
 });
 

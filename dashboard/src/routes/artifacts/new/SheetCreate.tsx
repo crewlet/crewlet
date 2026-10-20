@@ -32,11 +32,11 @@ import {
   Callout,
   Checkbox,
   ChoiceList,
+  ConfirmModal,
   DocumentTitleField,
   FileDrop,
   FilePickButton,
   FormField,
-  Modal,
   Select,
   SheetColumnEditor,
   SheetColumnTypeGlyph,
@@ -629,29 +629,20 @@ export function SheetCreate() {
         </aside>
       </FileDrop>
 
-      <Modal
+      <ConfirmModal
         open={leaving}
-        onClose={() => setLeaving(false)}
+        destructive
         title="Discard this sheet?"
-        size="sm"
-        placement="top"
-        footer={
-          <>
-            <Button size="small" variant="ghost" onClick={() => setLeaving(false)}>
-              Keep editing
-            </Button>
-            <Button size="small" variant="danger" onClick={leave}>
-              Discard
-            </Button>
-          </>
-        }
-      >
-        <p>
-          {brief.trim()
+        message={
+          brief.trim()
             ? "Its title, columns, rows and brief have not been saved, and leaving discards them."
-            : "Its title, columns and rows have not been saved, and leaving discards them."}
-        </p>
-      </Modal>
+            : "Its title, columns and rows have not been saved, and leaving discards them."
+        }
+        cancelLabel="Keep editing"
+        confirmLabel="Discard"
+        onClose={() => setLeaving(false)}
+        onConfirm={leave}
+      />
     </CreateShell>
   );
 }

@@ -19,13 +19,20 @@ import type {
 
 afterEach(cleanup);
 
-function draw(widget: Widget, columns: DashboardColumn[], rows: DashboardRow[], title = "Deploys") {
+function draw(
+  widget: Widget,
+  columns: DashboardColumn[],
+  rows: DashboardRow[],
+  title = "Deploys",
+  source?: Pick<DashboardBoardDataset, "source" | "engine">,
+) {
   const dataset: DashboardBoardDataset = {
     id: "ds",
     title,
     source: "store",
     shape: { columns },
     freshness: { mode: "live", collection: "ds" },
+    ...source,
   };
   render(
     <ToastProvider>
@@ -171,24 +178,78 @@ test("a chart over days labels its axis with dates and no time of day", () => {
   expect(text).toMatch(/Oct/);
 });
 
-test("every widget kind says one phrase when its dataset answered no rows", () => {
+/** An engine source as the catalogue lists it, windowed or not. */
+function engineSource(
+  name: string,
+  windowed: boolean,
+): Pick<DashboardBoardDataset, "source" | "engine"> {
+  return {
+    source: "engine",
+    engine: {
+      name,
+      domain: name.split(".")[0]!,
+      summary: "",
+      access: "",
+      params: [],
+      columns: [],
+      key: "",
+      max_rows: 500,
+      ...(windowed ? { windowed: true } : {}),
+    },
+  };
+}
+
+test("every widget kind says one phrase over no rows, worded by whether its source has a window", () => {
   const columns = [
     { key: "day", type: "date" as const },
     { key: "n", type: "number" as const },
     { key: "label", type: "text" as const },
   ];
-  for (const widget of [
+  const widgets = [
     { id: "t", type: "timeseries" as const, title: "T", x: "day", y: ["n"], w: 6 },
     { id: "c", type: "columns" as const, title: "C", x: "day", y: ["n"], w: 6 },
     { id: "a", type: "activity" as const, title: "A", x: "day", y: ["n"], w: 6 },
     { id: "b", type: "bars" as const, title: "B", label: "label", value: "n", w: 6 },
     { id: "s", type: "share" as const, title: "S", label: "label", value: "n", w: 6 },
     { id: "r", type: "table" as const, title: "R", columns: ["label", "n"], w: 6 },
-  ]) {
-    draw(widget, columns, []);
+  ];
+  // A span of company days: nothing happened in it.
+  for (const widget of widgets) {
+    draw(widget, columns, [], "Spend", engineSource("spend.daily", true));
     expect(screen.getAllByText("Nothing in this window").length).toBeGreaterThan(0);
     cleanup();
   }
+  // What is true now, from the engine or the artifact's own rows: there is
+  // no window to name.
+  for (const source of [engineSource("tracker.workload", false), undefined]) {
+    for (const widget of widgets) {
+      draw(widget, columns, [], "Workload", source);
+      expect(screen.getAllByText("Nothing to show").length).toBeGreaterThan(0);
+      expect(screen.queryByText("Nothing in this window")).toBeNull();
+      cleanup();
+    }
+  }
+});
+
+test("a stat that counts or sums no rows is 0, and one with no value to pick is the empty mark", () => {
+  const columns = [{ key: "open", type: "number" as const }];
+  for (const agg of ["sum", "count"] as const) {
+    draw({ id: "o", type: "stat", title: "Open work", agg, value: "open", w: 3 }, columns, []);
+    expect(screen.getByText("0")).toBeTruthy();
+    cleanup();
+  }
+  // Rows that hold no value, and a fold that picks one, have none to show.
+  draw({ id: "o", type: "stat", title: "Open work", agg: "sum", value: "open", w: 3 }, columns, [
+    { open: null },
+  ]);
+  expect(screen.queryByText("0")).toBeNull();
+  cleanup();
+  draw(
+    { id: "o", type: "stat", title: "Open work", agg: "last", value: "open", w: 3 },
+    columns,
+    [],
+  );
+  expect(screen.queryByText("0")).toBeNull();
 });
 
 test("a widget's table offers no column resizing, its widths being its content's", () => {

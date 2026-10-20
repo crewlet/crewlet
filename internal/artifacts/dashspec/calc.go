@@ -704,11 +704,17 @@ func group(st Step, t Table) []Row {
 	return out
 }
 
-// Fold is agg over column of rows, a column of type t: nil where no row holds
-// a value (a sum over nothing is nil, not zero, except a count, which is a
-// number of rows). The one fold a group and a stat widget both compute, so a
-// stat and the calculated dataset behind it cannot disagree.
+// Fold is agg over column of rows, a column of type t. A count is a number of
+// rows, and a sum over NO ROWS is zero: the source answered, and a total of
+// nothing is a measured nought, not a gap. Every other fold over no rows, and
+// any fold over rows none of which holds a value, is nil: there is nothing to
+// pick or average, and rows whose value nobody recorded total nothing anybody
+// measured. The one fold a group and a stat widget both compute, so a stat
+// and the calculated dataset behind it cannot disagree.
 func Fold(agg Agg, t ColumnType, rows []Row, column string) any {
+	if agg == AggSum && len(rows) == 0 {
+		return 0.0
+	}
 	if agg == AggCount {
 		n := 0
 		for _, r := range rows {

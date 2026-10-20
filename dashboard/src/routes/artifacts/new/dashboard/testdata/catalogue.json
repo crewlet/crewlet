@@ -215,6 +215,7 @@
     ],
     "key": "handle",
     "signal": "tokens",
+    "windowed": true,
     "max_rows": 500
   },
   {
@@ -265,6 +266,7 @@
     ],
     "key": "",
     "signal": "tokens",
+    "windowed": true,
     "max_rows": 450
   },
   {
