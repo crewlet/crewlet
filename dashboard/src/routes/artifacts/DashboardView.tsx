@@ -49,7 +49,7 @@ import {
 import { useBoardData, type BoardDataOptions } from "~/lib/artifacts/useBoardData.ts";
 import { useNarrowerThan } from "~/lib/useNarrowerThan.ts";
 import { useWidth } from "~/lib/useWidth.ts";
-import { DashboardWidget, RowsTable } from "./DashboardWidget.tsx";
+import { DashboardWidget, RowsTable, nothingSaid } from "./DashboardWidget.tsx";
 import type { PresenceReport } from "./presence.ts";
 
 /** The height of one board row, in pixels: the Home board's. */
@@ -242,6 +242,7 @@ export function DashboardView({
                         columns={got.table.columns}
                         shown={got.table.columns.map((c) => c.key)}
                         rows={got.table.rows.slice(0, PREVIEW_ROWS)}
+                        empty={nothingSaid(d)}
                       />
                     ) : null}
                   </DatasetSource>

@@ -123,6 +123,11 @@ and `agents.status` is `GET /agents`, each asked on the viewer's own request.
 A viewer the source refuses sees the figure say so, with the permission that
 would open it; the rest of the board draws.
 
+**The spend sources read a window of company days**, and the catalogue marks
+them `windowed`. A figure over a windowed source that answered no rows says
+"Nothing in this window"; a figure over any other source says "Nothing to
+show", because open work and the agents are read as they stand now.
+
 A parameter is a literal (`"scope": "mine"`, `"limit": 50`) or bound to a
 filter (`"scope": {"param": "scope"}`), in which case every choice of that
 filter must be a value the parameter takes; a choice whose value is empty

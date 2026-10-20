@@ -448,6 +448,23 @@ func TestTheCatalogueIsACopy(t *testing.T) {
 	}
 }
 
+// A SOURCE IS WINDOWED EXACTLY WHEN IT READS A SPAN OF DAYS: the spend
+// sources, whose empty answer a figure words as "nothing in this window",
+// and never a source that reads what is true now, where that wording would
+// promise a window the reader cannot find.
+func TestASourceIsWindowedExactlyWhenItReadsASpanOfDays(t *testing.T) {
+	want := map[string]bool{"spend.seats": true, "spend.daily": true}
+	for _, src := range Catalogue() {
+		if src.Windowed != want[src.Name] {
+			t.Errorf("%s is windowed %v, want %v", src.Name, src.Windowed, want[src.Name])
+		}
+		if _, days := src.Param("days"); days != src.Windowed {
+			t.Errorf("%s is windowed %v and takes days %v: a span is a parameter of the read",
+				src.Name, src.Windowed, days)
+		}
+	}
+}
+
 // A DOMAIN'S IDS ARE DRAWN IN ITS OWN WORDS: the tracker's status, status
 // group and priority, and an agent's activity, carry the vocabulary a reader
 // is shown them in, while their values stay the ids a filter compares.

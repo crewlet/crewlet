@@ -5676,6 +5676,8 @@ export interface DashboardEngineSource {
   columns: DashboardColumn[];
   key: string;
   signal?: "agents" | "tokens";
+  /** The source reads a span of time (spend over company days). */
+  windowed?: boolean;
   max_rows: number;
 }
 
