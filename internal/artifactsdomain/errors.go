@@ -93,7 +93,7 @@ func (e *CarriedObjectGone) Error() string {
 		"of %s; upload them again rather than carrying them", strings.Join(e.Paths, ", "))
 }
 
-// QuotaExceeded is a write the company's plan quota refuses (413
+// QuotaExceeded is a write the company's plan quota refuses (409
 // `quota_exceeded`), naming the Tier A key an operator raises.
 type QuotaExceeded struct {
 	Limit int64

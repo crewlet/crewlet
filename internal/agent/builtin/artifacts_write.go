@@ -457,12 +457,17 @@ func publishFailure(ctx context.Context, tool string, c artifactCaller, err erro
 		errors.Is(err, artifactupload.ErrMediaType), errors.Is(err, artifactupload.ErrCredential),
 		errors.Is(err, artifactupload.ErrCapabilityUnknown),
 		errors.Is(err, artifactupload.ErrContractUnknown),
-		errors.Is(err, artifactupload.ErrInvalid), errors.Is(err, artifactsdomain.ErrInvalid),
-		errors.Is(err, artifactsdomain.ErrLabelTaken):
+		errors.Is(err, artifactupload.ErrInvalid), errors.Is(err, artifactsdomain.ErrInvalid):
 		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused that: %s",
 			tool, said))
+	case errors.Is(err, artifactsdomain.ErrLabelTaken):
+		// THE ARTIFACT'S STATE, as the API's 409 says: another version
+		// holds the label, or the artifact keeps no more labels.
+		return refusedBy(tools.RefusalConflict, err, fmt.Sprintf("%s refused that: %s. "+
+			"Read the artifact's versions with get_artifact and choose another label, "+
+			"or publish without one.", tool, said))
 	case errors.As(err, &quota):
-		return refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s refused that: the "+
+		return refusedBy(tools.RefusalQuotaExceeded, err, fmt.Sprintf("%s refused that: the "+
 			"company's artifact quota is reached (%d in use of %d, `%s`). Nothing was "+
 			"published. Say so: an operator raises the quota, or somebody removes "+
 			"artifacts the company no longer needs.", tool, quota.Usage, quota.Limit, quota.Key))
@@ -483,7 +488,7 @@ func publishFailure(ctx context.Context, tool string, c artifactCaller, err erro
 		return refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s refused that: %s",
 			tool, said))
 	case errors.Is(err, artifactsdomain.ErrTrashed):
-		return refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s: the artifact is "+
+		return refusedBy(tools.RefusalConflict, err, fmt.Sprintf("%s: the artifact is "+
 			"in the trash, and only a person restores it. Nothing was changed.", tool))
 	case errors.Is(err, artifactsdomain.ErrNotFound), errors.Is(err, artifactsdomain.ErrPurged):
 		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("%s: %s", tool, said))

@@ -100,7 +100,10 @@ func (t *writeArtifactData) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return *refusal, nil
 	}
 	if a.head.Status == artifactsdomain.StatusTrashed {
-		return refusedBy(tools.RefusalForbidden, artifactdata.ErrGone, fmt.Sprintf("%s: the "+
+		// THE ARTIFACT'S STATE, under its own sentinel: never the
+		// datastore's ErrGone, which is a purge's and says the data will
+		// not come back.
+		return refusedBy(tools.RefusalConflict, artifactsdomain.ErrTrashed, fmt.Sprintf("%s: the "+
 			"artifact is in the trash, and its data is not written until a person restores "+
 			"it. Nothing was written.", t.Name())), nil
 	}
@@ -210,13 +213,7 @@ func (d dataTools) verdict(ctx context.Context, turn *turnctx.Turn, tool string,
 		}
 		return r, err
 	}
-	class := tools.RefusalInvalid
-	switch res.Verdict {
-	case artifacts.DataForbidden, artifacts.DataQuota:
-		class = tools.RefusalForbidden
-	case artifacts.DataGone:
-		class = tools.RefusalNotFound
-	}
+	class := DataVerdictClass(res.Verdict)
 	return refusedBy(class, fmt.Errorf("artifactdata: %s: %s", res.Verdict, res.Reason),
 		fmt.Sprintf("%s did not write anything: the datastore refused the batch (%s: %s). "+
 			"No op of it landed.", tool, res.Verdict, res.Reason)), nil
@@ -316,7 +313,7 @@ func (t *setArtifactSchema) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return *refusal, nil
 	}
 	if a.head.Status == artifactsdomain.StatusTrashed {
-		return refusedBy(tools.RefusalForbidden, artifactdata.ErrGone, fmt.Sprintf("%s: the "+
+		return refusedBy(tools.RefusalConflict, artifactsdomain.ErrTrashed, fmt.Sprintf("%s: the "+
 			"artifact is in the trash. Nothing was changed.", t.Name())), nil
 	}
 	t.d.touch(a.c, a.head.ID, presence.Editing, presence.Focus{})

@@ -329,8 +329,9 @@ func TestAWritesOutcomeIsAnsweredInTheEnginesVocabulary(t *testing.T) {
 	}
 	data.err = nil
 	w = do(t, mux, person("bob"), "POST", "/artifacts/"+trashed.String()+"/data/writes", tick, true)
-	if w.Code != http.StatusGone || errorOf(t, w) != "data_gone" {
-		t.Fatalf("a trashed artifact: %d %s", w.Code, w.Body.String())
+	if w.Code != http.StatusConflict || errorOf(t, w) != "artifact_trashed" {
+		t.Fatalf("a trashed artifact: %d %s, want the 409 every artifacts route answers "+
+			"for the trash", w.Code, w.Body.String())
 	}
 }
 
@@ -390,7 +391,7 @@ func TestAnExportIsARecordedReadOfLiveContent(t *testing.T) {
 	}
 	w = do(t, mux, person("jane"), "GET", "/artifacts/"+trashed.String()+
 		"/data/export.csv?collection=review", "", false)
-	if w.Code != http.StatusGone || errorOf(t, w) != "data_gone" {
+	if w.Code != http.StatusConflict || errorOf(t, w) != "artifact_trashed" {
 		t.Fatalf("a trashed sheet's export: %d %s", w.Code, w.Body.String())
 	}
 }
