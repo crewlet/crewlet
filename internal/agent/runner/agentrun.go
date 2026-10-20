@@ -352,7 +352,11 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 		r.steerReturn(ctx, Launched{}, fresh)
 		return turn.Work{}, turn.Surface{}, fmt.Errorf("runner: %s: %w", phase.Execute, refused)
 	}
-	continued := carry.continuation()
+	// UNDER THE TURN'S OWN FENCE TOKEN, which the relaunched run's tools fence
+	// what they read with: a reply carried on is somebody's words, fenced as
+	// the message that woke the turn is ([Asked.Continuation]).
+	fence := r.cfg.Turn.Context.FenceBoundary()
+	continued := carry.continuation(fence)
 	if rendered := renderedNotes(fresh); len(rendered) > 0 {
 		continued += "\n\n" + strings.Join(rendered, "\n\n")
 	}
@@ -361,7 +365,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 		// A FRESH RUN'S BRIEF is the round's own, and what became of the run
 		// before it — what it asked and was told, or how it was cut off: it
 		// remembers neither.
-		Brief: user.Text + "\n\n" + carry.reseed(),
+		Brief: user.Text + "\n\n" + carry.reseed(fence),
 		Notes: fresh,
 		Continue: &Continuation{
 			SessionID: carry.session(), Brief: continued,

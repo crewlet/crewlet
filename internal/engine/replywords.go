@@ -6,7 +6,22 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
+
+// replyOf is a delivery offered to a parked run of the seat self as the
+// answer to its question: where it came from, what it says ([replyWords]),
+// and who wrote that and how far the run may rely on it
+// ([replyProvenance]), which the run reads it fenced under.
+func replyOf(prompts notify.Prompts, parties notify.Parties, self string,
+	conv sandbox.ConversationRef, evs []*events.Event) sandbox.Reply {
+
+	src, trust, authors := replyProvenance(prompts, parties, self, evs)
+	return sandbox.Reply{Conv: conv, Text: replyWords(evs), Source: src, Trust: trust,
+		Authors: authors, Events: evs}
+}
 
 // replyWords is what a delivery offered to a parked run as its answer SAYS
 // ([sandbox.Reply.Text]): each event's words as the turn that would otherwise
@@ -68,4 +83,61 @@ func replyWords(evs []*events.Event) string {
 		parts = append(parts, line.words)
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+// replyProvenance is who wrote what a reply says, for the seat self: what the
+// fence around each of the delivery's messages says of it in the trigger it
+// was delivered in ([notify.MessageProvenance]), merged as one reply: every
+// writer once, at the least trust any of them earns, under the surface they
+// share.
+//
+// THE TRIGGER'S OWN LABEL, so the run reads a reply exactly as it would have
+// read the same message waking its turn: a colleague's words as a colleague's,
+// a stranger's as data. ZERO where a message holding words came from a surface
+// that fences none, which hands its trigger's words over unfenced and defused,
+// and so does the run; and where the messages name different surfaces, which
+// one conversation's never do and no one label could name.
+func replyProvenance(prompts notify.Prompts, parties notify.Parties, self string,
+	evs []*events.Event) (provenance.Source, provenance.Trust, []provenance.Author) {
+
+	var (
+		source  provenance.Source
+		trusts  []provenance.Trust
+		authors []provenance.Author
+	)
+	for _, ev := range evs {
+		if ev == nil || strings.TrimSpace(eventAsk(ev)) == "" {
+			continue
+		}
+		n, ok := events.DataAs[*types.ExternalNotification](ev)
+		if !ok || n == nil {
+			return "", "", nil
+		}
+		src, trust, by, labelled := notify.MessageProvenance(prompts, *n, parties, self)
+		if !labelled {
+			return "", "", nil
+		}
+		if source != "" && src != source {
+			return "", "", nil
+		}
+		source = src
+		trusts = append(trusts, trust)
+		for _, a := range by {
+			if !slices.Contains(authors, a) {
+				authors = append(authors, a)
+			}
+		}
+	}
+	if source == "" {
+		return "", "", nil
+	}
+	return source, provenance.Least(trusts...), authors
+}
+
+// parties is [Dispatcher.Parties]' registry, or none.
+func (d *Dispatcher) parties() notify.Parties {
+	if d.Parties == nil {
+		return nil
+	}
+	return d.Parties()
 }

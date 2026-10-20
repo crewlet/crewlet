@@ -3,7 +3,9 @@ package chatlet
 import (
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // Prompt is what a message asks of the seat it reached.
@@ -63,7 +65,39 @@ func NewPrompt() Prompt {
 		Collectives:   "`@channel`",
 		SelfReference: selfReference,
 		MentionHint:   mentionHint,
+		// WHO WROTE THE MESSAGE, as its fence names them: the roster's
+		// seat for the handle the record carries, and otherwise what the
+		// record says they were — see [messageAuthor].
+		Author: messageAuthor,
 	}}
+}
+
+// messageAuthor is who wrote a Chatlet message, as its fence names them.
+//
+// THE ROSTER FIRST, by the handle the record carries, so a colleague is the
+// seat the company holds; and where it no longer names them, THE KIND THE
+// RECORD STATED — a person whose seat has since gone is still a person who
+// wrote this, and the engine's own narration is the engine — rather than the
+// outside party a vendor's unknown id is. Only a record that stated neither
+// is nobody's.
+func messageAuthor(meta map[string]string, parties notify.Parties) provenance.Author {
+	handle := meta[notify.ActorField]
+	if parties != nil && handle != "" {
+		if party, ok := parties.ByHandle(handle); ok {
+			return notify.PartyAuthor(party)
+		}
+	}
+	switch AuthorKind(meta[MetaAuthorKind]) {
+	case AuthorHuman:
+		return provenance.Author{Kind: iam.ActorHuman, Seat: handle}
+	case AuthorAgent:
+		return provenance.Author{Kind: iam.ActorAgent, Seat: handle}
+	case AuthorOperator:
+		return provenance.Author{Kind: iam.ActorOperator}
+	case AuthorSystem:
+		return provenance.Author{Kind: iam.ActorSystem}
+	}
+	return provenance.Author{}
 }
 
 // Source implements [notify.Prompt].

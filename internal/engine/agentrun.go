@@ -309,9 +309,13 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 		// HOW TO WAIT ON A PERSON, with the names the chart gives this
 		// seat, from the pinned epoch (see [askBrief]). Without it the run
 		// holds `ask_and_wait` and nothing tells it when to park on it.
-		Ask:   askBrief(company.Org, l.seat),
-		Task:  l.turn.Task,
-		Label: l.turn.Task,
+		Ask: askBrief(company.Org, l.seat),
+		// THE RUN AS A PERSON READS IT ([turnctx.Turn.Title]): what the
+		// turn was asked, in its trigger's own words. Never the brief's
+		// task, whose fence lines and escapes are a model's, and which a
+		// resume reads off the park ([resumeTask]) and never off the row.
+		Task:  l.turn.Title,
+		Label: l.turn.Title,
 		// A RUN CARRIED ON WITH A PERSON'S ANSWER, continued in its own
 		// session where the launch runs it in the asking run's box — see
 		// [runner.Asked] — or a ROUND CARRIED ON after its job was lost with

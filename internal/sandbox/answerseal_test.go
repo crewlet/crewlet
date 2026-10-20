@@ -3,12 +3,15 @@ package sandbox
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -63,7 +66,7 @@ func TestAnAnswerOpensOnlyAsTheAnswerToTheQuestionItWasSealedFor(t *testing.T) {
 	genuine := sealedOnto(t, seal, run, words, RecordedAnswer{EventIDs: []string{"r1"}})
 	run.Answer = &genuine
 	got, err := seal.Open(run)
-	if err != nil || got != words {
+	if err != nil || !reflect.DeepEqual(got, words) {
 		t.Fatalf("open = %+v, %v; want the words sealed, by who gave them", got, err)
 	}
 
@@ -122,7 +125,8 @@ func TestAnAnswerOpensOnlyAsTheAnswerToTheQuestionItWasSealedFor(t *testing.T) {
 			return r
 		}},
 	} {
-		if got, err := seal.Open(c.row()); !errors.Is(err, ErrAnswerUnopened) || got != (AnswerWords{}) {
+		got, err := seal.Open(c.row())
+		if !errors.Is(err, ErrAnswerUnopened) || !reflect.DeepEqual(got, AnswerWords{}) {
 			t.Errorf("%s: open = %+v, %v; want it refused as no answer to this question", c.name, got, err)
 		}
 	}
@@ -142,7 +146,7 @@ func TestAnAnswerUnderAKeyThisNodeDoesNotHoldIsToldApart(t *testing.T) {
 		RecordedAnswer{EventIDs: []string{"r1"}})
 	run.Answer = &answer
 	got, err := rigAnswers().Open(run)
-	if !errors.Is(err, ErrAnswerKeyUnknown) || got != (AnswerWords{}) {
+	if !errors.Is(err, ErrAnswerKeyUnknown) || !reflect.DeepEqual(got, AnswerWords{}) {
 		t.Fatalf("open = %+v, %v; want it told apart as a key this node does not hold", got, err)
 	}
 	if !strings.Contains(err.Error(), rigAnswerKey) || !strings.Contains(err.Error(), "secrets.keys") {
@@ -387,4 +391,32 @@ func (c *Coordinator) waitingOn(turnID string) Condition {
 		return r.waiting
 	}
 	return ""
+}
+
+// WHO WROTE A REPLY RIDES ITS SEAL WITH THE WORDS. The run a chat reply carries
+// on reads it fenced under who wrote it, so that label is handed to the run out
+// of the seal like the words, never off the row beside it: a row that named a
+// stranger's reply as a colleague's would have the run take a stranger's words
+// as a colleague's request.
+//
+// Mutation: leave the label out of the sealed body and the opened answer names
+// no writer.
+func TestWhoWroteAReplyRidesItsSealWithTheWords(t *testing.T) {
+	t.Parallel()
+	seal := rigAnswers()
+	run := PendingRun{TurnID: "t1", LaunchID: "launch-1"}
+	words := AnswerWords{Text: "Use Postgres", Via: types.AnswerViaChat, By: "ana", ByKind: "human",
+		Source: provenance.SourceChatThread, Trust: provenance.TrustColleague,
+		Authors: []provenance.Author{{Kind: iam.ActorHuman, Seat: "ana"}}}
+	sealed := sealedOnto(t, seal, run, words, RecordedAnswer{EventIDs: []string{"r1"}})
+	run.Answer = &sealed
+	if got := openedOn(t, run); !reflect.DeepEqual(got, words) {
+		t.Errorf("the seal opened to %+v, want the reply and who wrote it, as sealed", got)
+	}
+	asked := askedRun(run, openedOn(t, run))
+	if asked.Source != words.Source || asked.Trust != words.Trust ||
+		!reflect.DeepEqual(asked.Authors, words.Authors) {
+		t.Errorf("the resumed run is handed the reply as %s, %s, by %v; want it as sealed",
+			asked.Source, asked.Trust, asked.Authors)
+	}
 }

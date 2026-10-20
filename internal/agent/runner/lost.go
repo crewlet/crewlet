@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // Lost is a run whose job was LOST with the host it ran on before it finished:
@@ -95,30 +97,31 @@ type carried interface {
 	// session is the run's own CLI session, which the relaunch continues
 	// where it runs in that run's box; "" continues none.
 	session() string
-	// continuation is the prompt the continued session is given.
-	continuation() string
-	// reseed is what a fresh run carrying the round on is told beside its
-	// brief.
-	reseed() string
+	// continuation is the prompt the continued session is given, and
+	// reseed what a fresh run carrying the round on is told beside its
+	// brief, each under the fence token of the turn that relaunches it.
+	continuation(provenance.Boundary) string
+	reseed(provenance.Boundary) string
 	// refusal is why the round may not be carried on, nil where it may.
 	refusal() error
 	// what names the carrying on, for an error that says what failed.
 	what() string
 }
 
-func (a *Asked) session() string      { return a.SessionID }
-func (a *Asked) continuation() string { return a.Continuation() }
-func (a *Asked) reseed() string       { return a.Reseed() }
-func (a *Asked) refusal() error       { return nil }
-func (a *Asked) what() string         { return "carrying on the run with its answer" }
+func (a *Asked) session() string                           { return a.SessionID }
+func (a *Asked) continuation(b provenance.Boundary) string { return a.Continuation(b) }
+func (a *Asked) reseed(b provenance.Boundary) string       { return a.Reseed(b) }
+func (a *Asked) refusal() error                            { return nil }
+func (a *Asked) what() string                              { return "carrying on the run with its answer" }
 
 // A lost job's session is never continued: it was cut off mid-step, and
 // what it last wrote to it — a tool call with no result — is no point a
-// conversation resumes from.
-func (l *Lost) session() string      { return "" }
-func (l *Lost) continuation() string { return "" }
-func (l *Lost) reseed() string       { return l.Reseed() }
-func (l *Lost) what() string         { return "carrying on the round its host lost" }
+// conversation resumes from. What a fresh run is told of it is the engine's
+// own words, which no fence token touches.
+func (l *Lost) session() string                         { return "" }
+func (l *Lost) continuation(provenance.Boundary) string { return "" }
+func (l *Lost) reseed(provenance.Boundary) string       { return l.Reseed() }
+func (l *Lost) what() string                            { return "carrying on the round its host lost" }
 
 func (l *Lost) refusal() error {
 	if l.Losses <= l.Limit {

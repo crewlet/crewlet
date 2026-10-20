@@ -104,6 +104,20 @@ type turnTelemetry struct {
 	// ([types.TurnCompleted.Ask]) and for a suspension to park.
 	ask string
 
+	// task is the trigger as the executor is handed it ([DescribeTrigger]):
+	// the brief of every wake, with what a delivery fenced moved onto
+	// [turnTelemetry.boundary] — here beside the token rather than in the
+	// frame that builds the runner, so the ask and the fences the segment's
+	// tools write cannot be cut under two tokens. Empty on a resume, which
+	// re-reads no trigger and carries the parked task instead.
+	task string
+
+	// title is what a person reads the turn's work by
+	// ([turnctx.Turn.Title]): on a dispatch the ask, or where the trigger
+	// stated none, the line a feed shows the trigger by; on a resume, which
+	// re-reads no trigger, the line its run is already listed under.
+	title string
+
 	// senders is who spoke to this seat ([sendersSpoken] over the
 	// interactions, on every segment), which a tool that re-runs the
 	// turn-start memory filter is judged against ([turnctx.Turn.Senders]).
@@ -309,12 +323,21 @@ func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request
 		t.trigger = types.DescribeTrigger(ev)
 		break
 	}
+	// WHAT A PERSON READS THE TURN'S WORK BY: its ask, or where the trigger
+	// stated none (a message that is only an attachment), the line a feed
+	// shows the trigger by, so a run the turn launches is never listed as
+	// nothing.
+	t.title = t.ask
+	if t.title == "" {
+		t.title = t.trigger.Summary
+	}
 	// THE ITEM, from the same first event the trigger is described from,
 	// and a fresh set for what the turn is about to write.
 	t.workItem, t.workItemBasis = workItemOf(req)
 	t.written = &turnctx.Written{}
 	t.auxSpent = auxspend.NewTally()
 	t.boundary = provenance.NewBoundary()
+	t.task = DescribeTrigger(req.Ask(), t.boundary)
 	rebased, err := rebaseFor(ctx, e.rebases(), builtin.Actor{
 		TurnID: t.runID, WorkKey: t.workKey, WorkSince: t.workSince,
 	}, t.startedAt)
@@ -397,6 +420,10 @@ func (t turnTelemetry) runnerTurn(company *Company,
 			// this frame, so both have to reach the row from here.
 			Task:  task,
 			Reply: reply.String(),
+			// AND WHAT A PERSON READS ITS WORK BY: what a run it launches
+			// is listed under, where the brief above would show a person
+			// its fence lines.
+			Title: t.title,
 			// And who woke it, for a question a run it detaches puts to
 			// "the requester" long after this frame is gone.
 			Requester: t.requester,
@@ -908,6 +935,10 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 		// WHAT IT WAS ASKED, off the park: the event that resumed it is a
 		// collection or a reply, and its ask is not the turn's.
 		ask: in.State.Ask,
+		// And what its run is listed under, off the row its first launch
+		// wrote, for the same reason: a run this segment launches is listed
+		// as that one is.
+		title: in.Run.TaskDescription,
 		// AND WHO SAID IT, off the park for the same reason — and who
 		// asked, read off them as a dispatch reads it.
 		interactions: in.State.Interactions,

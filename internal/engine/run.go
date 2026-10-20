@@ -2135,6 +2135,11 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 		// process.
 		d.Prompts = e.notifyPrompts
 	}
+	if d.Parties == nil {
+		// Read off the LIVE registry for the same reason: a reply offered
+		// to a parked run is labelled by who wrote it, as its trigger was.
+		d.Parties = e.liveParties
+	}
 	if d.Conversation == nil {
 		// Read off the LIVE company on each dispatch, not captured here:
 		// buildDispatcher runs once and a config apply replaces the company.
@@ -3106,7 +3111,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// THE ASK, not the partition: a coalesced conversation reaches the model
 	// as ONE merged digest rather than as its constituents concatenated —
 	// see [Request.Trigger] and internal/engine/coalesce.go.
-	task := DescribeTrigger(req.Ask())
+	task := tel.task
 	// RENDERED BEFORE THE RUNNER, which is what freezes it: the runner
 	// receives strings and has nowhere to re-fetch from, so a self_iterate
 	// loop cannot move the system prompt underneath the executor. Nothing

@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // Prompt is everything the spine needs to know about ONE third-party app.
@@ -197,6 +199,13 @@ type Inbound struct {
 	Body string
 
 	Metadata map[string]string
+
+	// Fence is the token a prompt fences the foreign text it weaves into the
+	// trigger under ([provenance.Fence]): minted by the delivery for this
+	// wake alone and recorded on the notification it publishes, so the turn
+	// that reads the trigger can re-key those fences onto its own. Set by the
+	// service, never by a parser.
+	Fence provenance.Boundary
 
 	// Owes names the CHAT SURFACE the woken seat promised to post on, when
 	// the promise is not simply "answer where you were asked" — which

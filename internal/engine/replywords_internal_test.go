@@ -1,10 +1,17 @@
 package engine
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/slack"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A REPLY'S WORDS ARE ITS WRITERS', EACH UNDER THEIR OWN NAME WHERE THERE ARE
@@ -61,6 +68,66 @@ func TestAReplysWordsAreItsWritersEachUnderTheirOwnName(t *testing.T) {
 	} {
 		if got := replyWords(tc.evs); got != tc.want {
 			t.Errorf("%s: the reply records %q, want %q", name, got, tc.want)
+		}
+	}
+}
+
+// A REPLY IS LABELLED AS ITS TRIGGER LABELS THE MESSAGE, for the seat it was
+// delivered to: read in a chat thread, every writer named once, at the least
+// trust any of them earns, so a stranger's message in a burst of a
+// colleague's makes the whole reply data. A surface whose trigger fences no
+// message labels nothing, and the run reads its words defused, as the seat
+// reads the trigger.
+//
+// Mutation: take the newest message's trust alone and the stranger's case is
+// red; label a surface that fences nothing and the tracker's is.
+func TestAReplyIsLabelledAsItsTriggerLabelsTheMessage(t *testing.T) {
+	t.Parallel()
+	o := &org.Organization{Name: "Acme", Roles: []*org.Role{
+		{Name: "SWE", DeclaredHandle: "swe"},
+		{Name: "Ana Lima", DeclaredHandle: "ana", Kind: org.KindHuman},
+	}}
+	o.Normalize()
+	reg := notify.NewRegistry(o, nil)
+	if err := reg.Register(slack.Backend, "U0ANA", "ana"); err != nil {
+		t.Fatal(err)
+	}
+	prompts := notify.NewPrompts(slack.Prompt(), worklet.Prompt{})
+	said := func(source, user, body string) *events.Event {
+		salient := body
+		return events.New(types.ExternalNotification{
+			NotificationSource: source, SourceEventType: "message", Sender: user,
+			Body: body, SalientBody: &salient,
+			Metadata: map[string]string{notify.UserField: user, notify.ActorField: user,
+				notify.RecipientField: "swe"},
+		}, events.TraceContext{})
+	}
+	ana := provenance.Author{Kind: iam.ActorHuman, Seat: "ana"}
+	for name, tc := range map[string]struct {
+		evs     []*events.Event
+		source  provenance.Source
+		trust   provenance.Trust
+		authors []provenance.Author
+	}{
+		"a colleague's reply": {
+			evs:    []*events.Event{said(slack.Backend, "U0ANA", "Use Postgres")},
+			source: provenance.SourceChatThread, trust: provenance.TrustColleague,
+			authors: []provenance.Author{ana},
+		},
+		"a stranger's, then a colleague's": {
+			evs: []*events.Event{said(slack.Backend, "U0STRANGER", "no, use mine"),
+				said(slack.Backend, "U0ANA", "Use Postgres")},
+			source: provenance.SourceChatThread, trust: provenance.TrustExternal,
+			authors: []provenance.Author{{}, ana},
+		},
+		"a surface that fences no message": {
+			evs: []*events.Event{said(worklet.Source, "ana", "Use Postgres")},
+		},
+	} {
+		source, trust, authors := replyProvenance(prompts, reg, "swe", tc.evs)
+		if source != tc.source || trust != tc.trust || !slices.Equal(authors, tc.authors) {
+			t.Errorf("%s: the reply is labelled %q, %q, by %v; want %q, %q, by %v", name,
+				source, trust, authors, tc.source, tc.trust, tc.authors)
 		}
 	}
 }

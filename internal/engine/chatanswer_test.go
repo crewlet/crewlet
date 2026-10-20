@@ -3,6 +3,7 @@ package engine_test
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -17,8 +18,10 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -26,19 +29,24 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/sandboxtest"
 )
 
-// A PERSON'S CHAT REPLY TO A PARKED RUN IS RECORDED AS WHAT THEY TYPED.
+// A PERSON'S CHAT REPLY TO A PARKED RUN IS RECORDED AS WHAT THEY TYPED, AND THE
+// RUN READS IT UNDER WHO WROTE IT.
 //
 // Ana answers the question swe's coding run stopped on, in the Chatlet thread
 // it asked in, with "Use Postgres". The delivery reaches swe's inbox as the
 // notification service builds every wake: its body is the seat's prompt, the
-// message among the surface's triage guidance and how to reply, and its salient
-// body is the message. What the answer records is read back to Ana among her
-// answered decisions (ADR-0068: `sandbox_run_answered`'s `answer` is the
-// answer's body there), sealed onto the run's row, and handed to the run as her
-// answer, so each must be exactly what she typed and none of the prompt.
+// message fenced under the wake's token among the surface's triage guidance
+// and how to reply, and its salient body is the message. What the answer
+// records is read back to Ana among her answered decisions (ADR-0068:
+// `sandbox_run_answered`'s `answer` is the answer's body there), sealed onto
+// the run's row, and handed to the run as her answer, so each must be exactly
+// what she typed, with none of the prompt and no fence line: a fence is a
+// model's. The run reads it fenced (runner.Asked), labelled as the trigger
+// labels the message: read in a chat thread, written by ana, a colleague's.
 //
 // Mutation: offer the coordinator [engine.DescribeTrigger] of the delivery
-// (as the dispatch did) and every assertion below is red.
+// (as the dispatch did) and every assertion on the words is red; offer it
+// unlabelled and the label's is.
 func TestAChatReplyToAParkedRunIsRecordedAsWhatThePersonTyped(t *testing.T) {
 	t.Parallel()
 	const typed = "Use Postgres"
@@ -67,6 +75,13 @@ func TestAChatReplyToAParkedRunIsRecordedAsWhatThePersonTyped(t *testing.T) {
 	}
 	if answered.AnsweredBy != "ana" {
 		t.Errorf("the answer is recorded as %q's, want ana's", answered.AnsweredBy)
+	}
+	writer := []provenance.Author{{Kind: iam.ActorHuman, Seat: "ana"}}
+	if asked.Source != provenance.SourceChatThread || asked.Trust != provenance.TrustColleague ||
+		!slices.Equal(asked.Authors, writer) {
+		t.Errorf("the run reads the reply as %s, %s, by %v; want it read as the trigger "+
+			"labels the message: %s, %s, by %v", asked.Source, asked.Trust, asked.Authors,
+			provenance.SourceChatThread, provenance.TrustColleague, writer)
 	}
 }
 
@@ -128,13 +143,18 @@ func newChatAnswerRig(t *testing.T) *chatAnswerRig {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
 	t.Cleanup(coordinator.Stop)
+	reg := notify.NewRegistry(o, nil)
 	rig.dispatch = &engine.Dispatcher{
+		// THE NODE'S PROMPTS AND PARTIES, which a reply is labelled by as its
+		// trigger was.
+		Prompts:     func() notify.Prompts { return notify.NewPrompts(chatlet.NewPrompt()) },
+		Parties:     func() notify.Parties { return reg },
 		Ledgered:    func(kind string) bool { return kind == notificationType },
 		Completions: ledgerstore.NewMemoryCompletions(),
 		Answer:      coordinator.TryResumeFromAnswer,
 		Turn: func(_ context.Context, req engine.Request) (turn.Result, error) {
 			t.Errorf("the reply was worked as a turn (%q): it answers the parked run",
-				engine.DescribeTrigger(req.Events))
+				engine.DescribeTrigger(req.Events, ""))
 			return turn.Result{}, nil
 		},
 		Conditions: func(handle string) inbox.Conditions {

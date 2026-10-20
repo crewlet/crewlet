@@ -748,9 +748,10 @@ type PendingRun struct {
 	Owner      string `json:"owner"`
 	OwnerEpoch int64  `json:"owner_epoch"`
 
-	// TaskDescription is the ask the suspended turn was working on, so a
-	// resume days later has the brief even when the trigger that produced
-	// it is long gone.
+	// TaskDescription is what a person reads the run by, in the launching
+	// turn's own words and with no fence: what the turn was asked, or the
+	// line a feed shows its trigger by ([LaunchRequest.Task]). A resume reads
+	// the brief it re-enters with off the turn's park, never off this.
 	TaskDescription string `json:"task_description"`
 
 	// Label is what the run is named by on the running-runs panel — the

@@ -66,6 +66,15 @@ type ExternalNotification struct {
 	// its own scaffolding (for chat, the triage guidance and the seat's
 	// identity) before the actual message.
 	Body string `json:"body"`
+	// FenceBoundary is the token Body's foreign text was fenced under when the
+	// delivery built it (internal/provenance): minted for this wake alone,
+	// because a prompt is built where a delivery is routed, before the turn
+	// that will read it exists. The turn re-keys every such fence onto its own
+	// token and neutralises everything around them, so a message that spells
+	// a closer reads as what somebody said. Empty on a wake no delivery built,
+	// whose Body holds no fence a reader can vouch for — it is neutralised
+	// whole.
+	FenceBoundary string `json:"fence_boundary,omitempty"`
 	// SalientBody is the raw inbound message, stripped of that scaffolding.
 	//
 	// A pointer because nil and "" are different facts and the learning workers

@@ -1378,6 +1378,7 @@ func runnerAsked(asked *sandbox.AskedRun) *runner.Asked {
 	return &runner.Asked{
 		Question: asked.Question, Answer: asked.Answer, By: asked.By,
 		Branch: asked.Branch, SessionID: asked.SessionID, BoxKept: asked.BoxKept,
+		Source: asked.Source, Trust: asked.Trust, Authors: asked.Authors,
 	}
 }
 
@@ -1462,12 +1463,14 @@ func (e *Engine) recordResume(ctx context.Context, in resumeInput, res turn.Resu
 //
 // Taken from the STATE rather than rebuilt from the trigger: the trigger may
 // no longer be readable days later, and the task the turn was working on is a
-// fact the suspension already captured.
+// fact the suspension already captured, as the model read it, with somebody
+// else's words in it fenced. EVERY PARKED RUN'S STATE CARRIES IT
+// (runner.Runner.recordAgentSuspension), so the row's description is never
+// read in its place: that is the turn's ask in a person's words, with no
+// fence ([sandbox.PendingRun.TaskDescription]), and a model handed it as its
+// brief would read somebody else's words bare.
 func resumeTask(in resumeInput) string {
-	if in.State.Task != "" {
-		return in.State.Task
-	}
-	return in.Run.TaskDescription
+	return in.State.Task
 }
 
 // resumeInputFor renders a parked run coming back as the loop's own
