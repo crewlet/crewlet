@@ -1999,6 +1999,42 @@ func TestAChatSearchIsAskedAsTheSeatAndNarrowedAsNamed(t *testing.T) {
 	}
 }
 
+// A CHAT SEARCH'S HITS ARE KEYED AS EVERY OTHER CHAT ANSWER IS. The index's own
+// value has no JSON names, and handed over whole it keyed a hit `MessageID`
+// beside the `message_id` the transcript, the receipts and reply_in_thread's
+// own description use, so the id a seat replies under was spelled two ways.
+//
+// Mutation: answer `answer.Hits` as it was and every key here goes missing.
+func TestAChatSearchHitIsKeyedAsEveryChatAnswerIs(t *testing.T) {
+	t.Parallel()
+	f := newFakeChat()
+	at := time.Unix(1_700_000_000, 0).UTC()
+	f.hits = []search.ChatHit{{MessageID: "m1", ChannelID: chatRoomID, ThreadRoot: "m0",
+		Author: "agent-ceo", Snippet: "the backoff", CreatedAt: at, Score: 2.5}}
+	got := callChat(t, chatRegistry(t, chatDeps(f)), builtin.SearchMessagesTool,
+		turnFor(t, "agent-cto"), map[string]any{"text": "the backoff"})
+	if got.Failed {
+		t.Fatalf("search_messages failed: %s", got.Output)
+	}
+	var answer struct {
+		Messages []map[string]any `json:"messages"`
+	}
+	if err := json.Unmarshal([]byte(got.Output), &answer); err != nil || len(answer.Messages) != 1 {
+		t.Fatalf("the answer is %s (%v)", got.Output, err)
+	}
+	want := map[string]any{"message_id": "m1", "channel_id": chatRoomID, "thread_root": "m0",
+		"author": "agent-ceo", "snippet": "the backoff", "at": at.Format(time.RFC3339), "score": 2.5}
+	for key, value := range want {
+		if answer.Messages[0][key] != value {
+			t.Errorf("the hit's %s is %v, want %v: %v", key, answer.Messages[0][key], value,
+				answer.Messages[0])
+		}
+	}
+	if len(answer.Messages[0]) != len(want) {
+		t.Errorf("the hit carries %v, want exactly %v", answer.Messages[0], want)
+	}
+}
+
 // A SEARCH OF AN INDEX STILL BEING BUILT IS NEVER "NOTHING MATCHED". The index
 // a node answers from may not have reached a message yet, and a seat told
 // nobody said it acts on that — so an empty answer says the index is catching
