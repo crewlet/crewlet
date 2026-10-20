@@ -309,6 +309,8 @@ type pipeline struct {
 	calls2    []artifactsdomain.Call
 	transfers []string
 	upload    artifactupload.Upload
+	checks    [][]artifactupload.CheckFile
+	report    artifactupload.CheckReport
 	err       error
 }
 
@@ -368,6 +370,15 @@ func (p *pipeline) AddAsset(_ context.Context, c artifactsdomain.Call, id artifa
 	defer p.mu.Unlock()
 	p.note("asset", c)
 	return artifactsdomain.Asset{Artifact: id, Name: name}, p.err
+}
+
+func (p *pipeline) Check(_ context.Context, c artifactsdomain.Call, _ artifacts.Kind, _ string,
+	files []artifactupload.CheckFile) (artifactupload.CheckReport, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.note("check", c)
+	p.checks = append(p.checks, files)
+	return p.report, p.err
 }
 
 func (p *pipeline) verbs() []string {
