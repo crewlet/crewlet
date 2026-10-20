@@ -397,7 +397,8 @@ func (c *Custody) send(ctx context.Context, batch *cutBatch) error {
 type CustodyLog interface {
 	WriteCustody(ctx context.Context, b store.CustodyBatch, at time.Time) error
 	SettleCustody(ctx context.Context, batchID string, kept bool) error
-	UnsettledCustody(ctx context.Context, before time.Time, limit int) ([]store.UnsettledBatch, error)
+	UnsettledCustody(ctx context.Context, before time.Time, after store.UnsettledBatch,
+		limit int) ([]store.UnsettledBatch, error)
 }
 
 // CustodyClaims is the coordination half: who keeps a batch ([coord.Custody]).
@@ -673,7 +674,8 @@ func (k *Keeper) Reconcile(ctx context.Context) (int, error) {
 	settled := 0
 	for {
 		now := k.now()
-		batches, err := k.log.UnsettledCustody(ctx, now.Add(-keeperSettleGrace), keeperPassBatches)
+		batches, err := k.log.UnsettledCustody(ctx, now.Add(-keeperSettleGrace), store.UnsettledBatch{},
+			keeperPassBatches)
 		if err != nil {
 			return settled, err
 		}
