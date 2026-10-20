@@ -283,9 +283,13 @@ Every read they make is a preview (`?purpose=preview`, or the outline and the
 datastore's own questions, which record nothing), so scrolling past a card is not seeing
 it. A preview joins no room and publishes no presence, so nobody is shown as
 viewing an artifact a reader only scrolled past, and its frame is granted only
-what drawing needs, for minutes: its assets, and its datastore answered by a
+what drawing needs, for minutes: its assets, its datastore answered by a
 read-only host that answers each read once, so a page that keeps its content
-there draws that content as it stood and can change none of it.
+there draws that content as it stood and can change none of it, and a
+newcomer's state, empty and kept by that host for the frame alone, so a page
+that remembers each viewer's choices draws as somebody opening it for the
+first time sees it. The reader's own state is never read for a preview, and
+nothing a preview sets is kept.
 
 ---
 

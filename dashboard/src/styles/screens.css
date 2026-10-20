@@ -10373,7 +10373,7 @@ a.live-row:focus-visible {
   }
 }
 
-/* MAKE SOMETHING NEW: a quiet heading over the kinds' tray, which lays
+/* START A NEW ARTIFACT: a quiet heading over the kinds' tray, which lays
    itself out by its own width (`ArtifactMakeRow`): every kind in view at
    once, none hidden past an edge a reader has to discover by swiping. */
 .artifacts-make {
@@ -10408,16 +10408,21 @@ a.live-row:focus-visible {
   font-size: var(--font-size-sm);
 }
 
-/* A ROW'S NAME: the kind's glyph, the title cut to its track, and the pin. */
-.artifacts-name {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  min-width: 0;
+/* THE LIST, the grid's second shape: each row the kind's mark and two lines
+   of name (`ArtifactNameCell`), so a row stands a little taller than a
+   ledger's and every row of it stands at one height. The facts after the
+   name are the quieter steps: who can open it and the owner in the
+   secondary, when and the reader's role in the tertiary. */
+.artifacts-list .grid-row {
+  min-height: calc(var(--size-row-md) + var(--spacing-4));
 }
-.artifacts-pin {
-  display: inline-flex;
+.artifacts-list .grid-cell {
+  color: var(--color-text-secondary);
+}
+.artifacts-when,
+.artifacts-role {
   color: var(--color-text-tertiary);
+  white-space: nowrap;
 }
 
 /* A TITLED GROUP of cards or rows: Pinned, then Recent under it. */
