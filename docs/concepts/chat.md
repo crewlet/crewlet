@@ -71,7 +71,8 @@ Each is refused, and the person or seat that wrote it is told exactly as they
 would have been had the earlier change already reached them: the room is
 archived, they are not in it, the message is gone, the message carries all the
 emoji it can. Every node reaches the same decision and records it, so a retry
-of a refused message is refused again rather than reported as said. A gesture answered `pending` — durable, and not
+of a refused message is refused again rather than reported as said, and a
+refused message wakes nobody. A gesture answered `pending` — durable, and not
 yet applied on the node that answered — may still be refused this way when it
 applies. This is recorded as
 [ADR-0045](../../adr/0045-a-message-is-sequenced-on-its-channels-subject.md).

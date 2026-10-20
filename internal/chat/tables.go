@@ -52,9 +52,10 @@ var ReproducibleTables = []string{
 	"chat_deletions",
 
 	// What the applier decided about every message record, which the
-	// writer reads back before it answers ([Verdict]) — the record's own
-	// decision rather than the log's machinery, so a node whose replay
-	// left it out would answer a retry of a refused post with nothing.
+	// writer reads back before it answers and the change feed before it
+	// wakes anybody ([Verdict]) — the record's own decision rather than
+	// the log's machinery, so a node whose replay left it out would answer
+	// a retry of a refused post with nothing and wake a room about it.
 	"chat_verdicts",
 
 	// And the framework's two per-domain tables: the eviction fence,
