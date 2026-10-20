@@ -3,12 +3,17 @@ package artifactsapi_test
 import (
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/artifactsapi"
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 const linkENG12 = `{"work_item":"ENG-12"}`
@@ -147,6 +152,149 @@ func TestALinkNamesALiveWorkItemByItsKey(t *testing.T) {
 	if w := g.do(jane, "POST", at(page, "/work-items"), linkENG12, keyed()...); w.Code !=
 		http.StatusServiceUnavailable {
 		t.Errorf("a link whose tracker could not be reached: %d %s", w.Code, w.Body)
+	}
+}
+
+// trackerAt is a position on the tracker's own log.
+func trackerAt(seq uint64) statelog.Position {
+	return statelog.Position{Stream: tracker.Domain{}.Stream().Name, Generation: 1, Seq: seq}
+}
+
+// linkAfter is a link body naming ENG-12 and the position its create landed at.
+func linkAfter(after string) string {
+	return `{"work_item":"ENG-12","after":"` + after + `"}`
+}
+
+// A LINK SENT RIGHT AFTER THE ITEM WAS FILED WAITS FOR THE CREATE. On a node
+// that has applied the tracker's log through 8, a link naming the create at 9
+// is held at the tracker's own floor rather than answered from a node that
+// cannot see the item yet; nothing is written while it is held, and once the
+// node applies 9 the link lands. A link without `after` on the same node reads
+// at the dashboard's level with no floor, and is not held.
+//
+// Mutation: drop the floor from the read (pass decisionRead whatever the body
+// says) and the link answers before the create is applied, so the held read
+// is never seen; drop `after` from the body and the link is refused
+// `invalid_body`.
+func TestALinkAfterItsCreateWaitsForTheTrackerToApplyIt(t *testing.T) {
+	t.Parallel()
+	g := newRig(t, true)
+	applied := g.work.behind(t, trackerAt(8))
+	jane := person("jane", iam.GrantTracker)
+
+	if w := g.do(jane, "POST", at(page, "/work-items"), linkENG12, keyed()...); w.Code != http.StatusOK {
+		t.Fatalf("a link with no after on a node behind: %d %s", w.Code, w.Body)
+	}
+	if got := g.work.floors(); len(got) != 1 || !got[0].MinPosition.IsZero() ||
+		got[0].Level != statelog.DefaultReadLevel(statelog.SurfaceDashboard) {
+		t.Fatalf("a link with no after read the tracker at %+v, want the dashboard's level and no floor", got)
+	}
+
+	created := trackerAt(9)
+	answered := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		answered <- g.do(jane, "POST", at(page, "/work-items"), linkAfter(created.String()), keyed()...)
+	}()
+	select {
+	case held := <-applied.waiting:
+		if held != created {
+			t.Fatalf("the link's read waited for %v, want the create's %v", held, created)
+		}
+	case w := <-answered:
+		t.Fatalf("the link answered %d %s before the tracker applied the create", w.Code, w.Body)
+	case <-time.After(statelog.ReadBudget):
+		t.Fatal("the link's read never waited for the create")
+	}
+	if calls := g.writes.all(); len(calls) != 1 {
+		t.Fatalf("a link held at the tracker's floor wrote %+v", calls[1:])
+	}
+
+	applied.advance(created)
+	w := <-answered
+	if w.Code != http.StatusOK || fields(t, w)["work_item"] != "ENG-12" {
+		t.Fatalf("the link once the create was applied: %d %s", w.Code, w.Body)
+	}
+	if calls := g.writes.all(); len(calls) != 2 || calls[1].arg != "ENG-12" {
+		t.Fatalf("the held link wrote %+v", calls)
+	}
+	if got := g.work.floors(); len(got) != 2 || got[1].MinPosition != created {
+		t.Errorf("the held link read the tracker at %+v, want floored at %v", got, created)
+	}
+}
+
+// A CREATE THIS NODE NEVER APPLIES IS THE TRACKER'S OWN `behind`. The read
+// waits out the read budget and is refused as every tracker read floored past
+// this node is: `503 unavailable`, naming the refusal, with its Retry-After,
+// and nothing is linked.
+//
+// Mutation: answer the refusal with this surface's fixed sentence and the
+// refusal's code is lost; drop the floor and the link lands on an item the
+// node cannot vouch was filed after the caller's create.
+func TestALinkWhoseCreateNeverAppliesIsRefusedBehind(t *testing.T) {
+	t.Parallel()
+	g := newRig(t, true)
+	g.work.behind(t, trackerAt(8))
+	jane := person("jane", iam.GrantTracker)
+
+	began := time.Now()
+	w := g.do(jane, "POST", at(page, "/work-items"), linkAfter(trackerAt(50).String()), keyed()...)
+	if w.Code != http.StatusServiceUnavailable || errorOf(t, w) != "unavailable" {
+		t.Fatalf("a link whose create never applied: %d %s", w.Code, w.Body)
+	}
+	if f := fields(t, w); f["refusal"] != string(statelog.RefuseBehind) ||
+		!strings.Contains(f["detail"].(string), trackerAt(50).String()) {
+		t.Errorf("the refusal says %v, want `behind` naming the position", f)
+	}
+	if w.Header().Get("Retry-After") == "" {
+		t.Errorf("a `behind` refusal carries no Retry-After: %v", w.Header())
+	}
+	if waited := time.Since(began); waited < statelog.ReadBudget {
+		t.Errorf("the link was refused after %v, before the read budget of %v", waited, statelog.ReadBudget)
+	}
+	if calls := g.writes.all(); len(calls) != 0 {
+		t.Fatalf("a link refused behind wrote %+v", calls)
+	}
+}
+
+// AN `after` THAT IS NOT A TRACKER POSITION IS THE REQUEST'S MISTAKE. One that
+// is not a position at all is refused before the tracker is asked; one on
+// another domain's log is refused by the tracker's own reader before it waits
+// for anything, because every node would refuse it the same however long
+// anybody waited. Both are `422 invalid`, and nothing is linked.
+//
+// Mutation: read a malformed `after` as no floor and the link lands; answer a
+// position on another log as a refusal of this node and it is a `503`.
+func TestALinkRefusesAnAfterThatIsNotATrackerPosition(t *testing.T) {
+	t.Parallel()
+	g := newRig(t, true)
+	g.work.behind(t, trackerAt(8))
+	jane := person("jane", iam.GrantTracker)
+
+	for _, after := range []string{"nine", "CREWLET_TRACKER_LOG@1", "CREWLET_TRACKER_LOG@x:9", "@1:9"} {
+		w := g.do(jane, "POST", at(page, "/work-items"), linkAfter(after), keyed()...)
+		if w.Code != http.StatusUnprocessableEntity || errorOf(t, w) != "invalid" ||
+			!strings.Contains(w.Body.String(), "not a log position") {
+			t.Errorf("a link after %q: %d %s", after, w.Code, w.Body)
+		}
+	}
+	if asked := g.work.reads(); len(asked) != 0 {
+		t.Errorf("a malformed after still asked the tracker %v", asked)
+	}
+
+	// THE ARTIFACT'S OWN POSITION is the likely mix-up: a create answers one
+	// on the artifacts log, and it means nothing on the tracker's.
+	foreign := statelog.Position{Stream: artifactsdomain.Domain{}.Stream().Name, Generation: 1, Seq: 50}
+	began := time.Now()
+	w := g.do(jane, "POST", at(page, "/work-items"), linkAfter(foreign.String()), keyed()...)
+	if w.Code != http.StatusUnprocessableEntity || errorOf(t, w) != "invalid" ||
+		!strings.Contains(w.Body.String(), tracker.Domain{}.Stream().Name) {
+		t.Errorf("a link after a position on another log: %d %s", w.Code, w.Body)
+	}
+	if waited := time.Since(began); waited >= statelog.ReadBudget {
+		t.Errorf("a position on another log was waited for (%v) before it was refused", waited)
+	}
+	if calls := g.writes.all(); len(calls) != 0 {
+		t.Fatalf("refused links wrote %+v", calls)
 	}
 }
 

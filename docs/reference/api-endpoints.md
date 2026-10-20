@@ -6225,7 +6225,7 @@ sign-in, not a seat. Remove it and share with their seat.") and offers Remove as
 its one action, and the listing never counts it toward the login's Shared
 section, where every read of it would be withheld.
 | `POST /artifacts/{id}/transfer` | `artifacts.transfer` | `{"to": "<seat>"}` |
-| `POST /artifacts/{id}/work-items` | `get_artifact` on the artifact and `update_work_item` on the item | `{"work_item": "ENG-12"}`: links the artifact to a work item the tracker holds, so the item's Artifacts panel lists it. See [Linking to a work item](#linking-to-a-work-item) |
+| `POST /artifacts/{id}/work-items` | `get_artifact` on the artifact and `update_work_item` on the item | `{"work_item": "ENG-12", "after"?: "CREWLET_TRACKER_LOG@1:9"}`: links the artifact to a work item the tracker holds, so the item's Artifacts panel lists it. `after` is the `position` the item's create answered with, and the item is read from no earlier than it. See [Linking to a work item](#linking-to-a-work-item) |
 | `DELETE /artifacts/{id}` | `artifacts.trash` | Into the trash: every frame stops loading at once, and it is purged after thirty days |
 | `POST /artifacts/{id}/restore` | `artifacts.restore` | Out of the trash; `409 artifact_purging` once a purge has begun on it |
 | `POST /artifacts/{id}/purge` | `artifacts.purge` | Gone for good, in three steps: the artifact is committed to its purge (into the trash, never restored again), its datastore goes, then its own rows |
@@ -6268,6 +6268,26 @@ curl -X POST -H "Authorization: Bearer $TOKEN" \
   `422 invalid`, as is a company whose work items another tracker keeps. A node
   not yet handed a company answers `503 no_active_revision`. A trashed
   artifact is `409 artifact_trashed`.
+- **A link sent right after the item was filed names its create.** On a fleet
+  the link can reach a node that has not applied the create yet, which would
+  read the item as one nobody filed. So `after` carries the `position` the
+  create answered with (`<stream>@<generation>:<sequence>`, the act answer's
+  `position`), and the item is read through the tracker's read-your-writes
+  floor, the same one `min_position` sets on every tracker read: the read waits
+  up to the read budget for this node to apply the create. A node that does
+  not is refused as every floored tracker read is, `503 unavailable` with
+  `refusal: "behind"`, its `detail` and a `Retry-After`, and nothing is linked;
+  send the link again under the same key. An `after` that is not a position,
+  or one on another log than the tracker's (an artifact's own `position`, for
+  example), is `422 invalid` and is never waited for. Without `after` the item
+  is read at this surface's own level, as before.
+
+```bash
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  -H "Idempotency-Key: $(uuidgen)" -H "Content-Type: application/json" \
+  -d '{"work_item": "ENG-12", "after": "CREWLET_TRACKER_LOG@1:9"}' \
+  "http://localhost:8000/artifacts/$ID/work-items"
+```
 
 The answer is `{"artifact", "work_item", "op_id", "outcome", "position"}`,
 where `work_item` is the item's current key: an id or a former key is linked
