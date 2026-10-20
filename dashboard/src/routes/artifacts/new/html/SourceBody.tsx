@@ -269,7 +269,6 @@ export function SourceBody({ modeSwitch }: { modeSwitch: ReactNode }) {
           key: "update",
           label: "Update preview",
           icon: <RefreshCwGlyph size="sm" />,
-          keys: runKeys,
           labelled: true,
           onSelect: () => void preview(),
           ...(hold
@@ -392,6 +391,11 @@ export function SourceBody({ modeSwitch }: { modeSwitch: ReactNode }) {
                 </div>
               ) : null}
             </FileDrop>
+            {shown?.kind === "text" ? (
+              <p className="html-create-keys html-create-editor-keys">
+                <Kbd keys={[...runKeys]} subtle /> to preview
+              </p>
+            ) : null}
           </div>
 
           <FormField as="fieldset" label="What the page can use">

@@ -110,7 +110,9 @@ test("a refused preview lists the linter's findings and takes the editor to one"
 });
 
 // THE FIRST PREVIEW MAKES THE DRAFT, private, as an HTML page with what it
-// may use; the bar then offers Update preview and Open page.
+// may use; the bar then offers Update preview and Open page. Command+Enter
+// previews from the editor only, so the editor says so and the bar's Update
+// preview claims no key.
 test("a landed preview makes a private draft and frames it", async () => {
   vi.mocked(keyedWrite).mockResolvedValue({
     kind: "done",
@@ -134,6 +136,10 @@ test("a landed preview makes a private draft and frames it", async () => {
   });
   expect(screen.getByText("Private draft, v1")).toBeTruthy();
   expect(screen.getAllByRole("button", { name: "Open page" }).length).toBeGreaterThan(0);
+  expect(document.querySelector(".html-create-editor-keys")?.textContent).toMatch(/to preview$/);
+  for (const update of screen.getAllByRole("button", { name: "Update preview" })) {
+    expect(update.getAttribute("aria-keyshortcuts")).toBeNull();
+  }
 });
 
 // DESCRIBE IT shows the task exactly as it will be filed, and a starting

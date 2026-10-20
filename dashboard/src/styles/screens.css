@@ -11374,6 +11374,12 @@ a.live-row:focus-visible {
   font-size: var(--font-size-2xs);
   color: var(--color-text-tertiary);
 }
+/* The editor's own press, said under it: Command+Enter previews from the
+   editor only, so the bar's Update preview does not claim it. */
+.html-create-editor-keys {
+  align-self: flex-end;
+  margin: 0;
+}
 .html-create-cap {
   display: inline-flex;
   flex-wrap: wrap;
