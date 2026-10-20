@@ -1,7 +1,9 @@
 /**
  * New artifact: a native sheet, blank or from the Review sheet template, or a
  * doc or a slide deck from the engine's starter, made by the person signed in
- * and owned by them. `kind=doc` and `kind=slides` open on those.
+ * and owned by them. `kind=` opens on any kind, as the gallery's Make row
+ * does: a design, a dashboard or a page is an agent's to publish, so New on
+ * one says so and offers to ask an agent in a new task.
  *
  * A PAGE IS PUBLISHED, NOT TYPED HERE: an agent's tool or the CLI publishes
  * one. A sheet's content is its datastore, so it is two engine writes: the
@@ -18,6 +20,7 @@
 import { useState } from "react";
 import { Button, ChoiceList, FormField, Input, SegmentedControl, useToast } from "@crewlethq/ui";
 import { useNavigator, useParam } from "~/app/router.tsx";
+import { useOpenNewTask } from "~/app/newTask.ts";
 import { Section } from "~/components/common.tsx";
 import { utf8Bytes } from "~/lib/format.ts";
 import { keyedWrite, useKeyedGesture } from "~/lib/keyedWrite.ts";
@@ -70,6 +73,37 @@ const STARTS = [
   },
 ] as const;
 
+/**
+ * What an agent makes, and what New says about each: the kind, why a person
+ * does not type it here, and what to ask for.
+ */
+const BY_AGENTS = [
+  {
+    kind: "design",
+    label: KIND_WORDS.design,
+    title: "New design",
+    hint: "Screens and boards laid out on a canvas, made by an agent",
+    ask: "Ask an agent for the screens you need, who they are for and the brand to follow. It publishes the design as boards on a canvas you can comment on and share.",
+  },
+  {
+    kind: "dashboard",
+    label: KIND_WORDS.dashboard,
+    title: "New dashboard",
+    hint: "Live figures from your company's data, made by an agent",
+    ask: "Ask an agent which figures to follow and where they come from. It publishes a board whose every figure is read as whoever opens it.",
+  },
+  {
+    kind: "html",
+    label: KIND_WORDS.html,
+    title: "New HTML page",
+    hint: "Any page, run in a sandboxed frame, made by an agent",
+    ask: "Ask an agent for the page: a calculator, a report, an interactive explainer. It publishes it as a page that runs in a sandbox and can keep its own data.",
+  },
+] as const;
+
+/** The type control's order: the gallery's Make row's. */
+const ORDER = ["doc", "slides", "design", "dashboard", "html", "sheet"] as const;
+
 /** A work item's key, as the engine names one: a project key, a dash, a number. */
 const ITEM_KEY = /^[A-Z][A-Z0-9_]*-\d+$/;
 
@@ -79,7 +113,9 @@ export function NewArtifact() {
   const [item] = useParam("item", "");
   const [templateParam] = useParam("template", "review");
   const [kindParam, setKind] = useParam("kind", "sheet");
+  const byAgent = BY_AGENTS.find((s) => s.kind === kindParam);
   const kind = STARTS.find((s) => s.kind === kindParam) ?? STARTS[0];
+  const openNewTask = useOpenNewTask();
   const [template, setTemplate] = useState<SheetTemplate>(
     templateParam === "blank" ? "blank" : "review",
   );
@@ -128,22 +164,44 @@ export function NewArtifact() {
     }
   };
 
+  const typeField = (
+    // EVERY CONTROL UNDER ITS NAME, as the title is: the switch and the
+    // templates were two unnamed blocks between the heading and the actions.
+    <FormField as="fieldset" label="Type">
+      <SegmentedControl
+        label="Type"
+        semantics="radio"
+        size="sm"
+        options={ORDER.map((k) => ({ value: k, label: KIND_WORDS[k] }))}
+        value={byAgent?.kind ?? kind.kind}
+        onValueChange={(v: string) => setKind(v)}
+      />
+    </FormField>
+  );
+
+  if (byAgent) {
+    return (
+      <Section title={byAgent.title} hint={byAgent.hint}>
+        <div className="artifact-form">
+          {typeField}
+          <p className="artifact-note">{byAgent.ask}</p>
+          <div className="artifact-form-actions">
+            <Button size="small" variant="ghost" onClick={() => nav.back()}>
+              Cancel
+            </Button>
+            <Button size="small" variant="primary" onClick={() => openNewTask()}>
+              Ask an agent
+            </Button>
+          </div>
+        </div>
+      </Section>
+    );
+  }
+
   return (
     <Section title={kind.title} hint={kind.hint}>
       <div className="artifact-form">
-        {/* EVERY CONTROL UNDER ITS NAME, as the title is: the switch and the
-            templates were two unnamed blocks between the heading and the
-            actions. */}
-        <FormField as="fieldset" label="Type">
-          <SegmentedControl
-            label="Type"
-            semantics="radio"
-            size="sm"
-            options={STARTS.map((s) => ({ value: s.kind, label: s.label }))}
-            value={kind.kind}
-            onValueChange={(v: string) => setKind(v)}
-          />
-        </FormField>
+        {typeField}
         <FormField label="Title" error={titleWrong}>
           {(field) => (
             <Input
