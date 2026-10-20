@@ -32,24 +32,30 @@ import {
   Kbd,
   isApplePlatform,
   Menu,
+  SegmentedControl,
   Select,
   Skeleton,
   SlideFilmstrip,
   SlideStage,
+  Textarea,
   ThemeGallery,
   useMediaMatch,
   useShortcut,
+  useToast,
 } from "@crewlethq/ui";
-import { PlusGlyph, PresentationGlyph } from "@crewlethq/icons/glyphs";
-import { useLeaveGuard } from "~/app/router.tsx";
+import { PlusGlyph, PresentationGlyph, WandSparklesGlyph } from "@crewlethq/icons/glyphs";
+import { useLeaveGuard, useNavigator } from "~/app/router.tsx";
+import { artifactPath } from "~/app/routes.ts";
+import { useKeyedGesture } from "~/lib/keyedWrite.ts";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { QueryState } from "~/components/common.tsx";
-import { readSlidesStarters } from "~/lib/artifacts/api.ts";
+import { createFromStarter, readSlidesStarters } from "~/lib/artifacts/api.ts";
 import {
   COVER_LAYOUT,
   addAfter,
   duplicate,
   planHold,
+  planBrief,
   planOf,
   previewSlide,
   remove,
@@ -64,6 +70,14 @@ import { useRest } from "~/lib/useRest.ts";
 import type { DeckLayout, DeckSlide, DeckTheme, SlidesStartersAnswer } from "~/protocol/index.ts";
 import { CreateShell, useLeaveCreate } from "./CreateShell.tsx";
 import { titleHold, titleProblem, useCreateArtifact, useWorkItem } from "./create.ts";
+import { useFileArtifactTask } from "./fileTask.ts";
+import { WhoBuildsIt, useWhoBuildsIt } from "./WhoBuildsIt.tsx";
+
+/** Who drafts the deck: the reader, in the editor, or an agent, in a task. */
+type Drafter = "self" | "agent";
+
+/** The longest brief, in characters: a task's description holds it and the plan. */
+const BRIEF_MAX = 4000;
 
 /**
  * The theme a new deck opens on: Crewlet's own. The engine's default plan
@@ -131,6 +145,7 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
     "";
 
   const [title, setTitle] = useState("");
+  const [brief, setBrief] = useState("");
   const [themeId, setThemeId] = useState(firstTheme);
   const [rows, setRows] = useState<PlanRow[]>(opening);
   const [selected, setSelected] = useState(opening[0]?.key ?? "");
@@ -153,6 +168,7 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
 
   const changed =
     title.trim() !== "" ||
+    brief.trim() !== "" ||
     themeId !== firstTheme ||
     JSON.stringify(planOf("", rows)) !== JSON.stringify(planOf("", opening));
   // WHAT WAS LAID OUT EXISTS NOWHERE ELSE until the deck is made, so leaving
@@ -172,9 +188,38 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
     titleField.current?.focus();
   }, []);
 
-  const hold = titleHold(title) ?? planHold(rows);
+  // ASKING AN AGENT drafts the same deck: the page makes it from the plan,
+  // shared with the agent as an editor so its turns can publish versions of
+  // it, then files the agent a task the deck is linked to, whose description
+  // carries the brief and the slides it starts from. The reader lands on the
+  // task, where the deck is listed and the agent's progress is told.
+  const [drafter, setDrafter] = useState<Drafter>("self");
+  const who = useWhoBuildsIt("slides");
+  const files = useFileArtifactTask();
+  const make = useKeyedGesture();
+  const nav = useNavigator();
+  const toast = useToast();
+  // A DECK MADE FOR A TASK THAT WAS THEN REFUSED is kept, and the next press
+  // files the task for it rather than making a second deck.
+  const [made, setMade] = useState<{ id: string; seat: string } | null>(null);
+  const agent = who.builders.find((b) => b.seat.handle === who.seat)?.seat;
+
+  const hold =
+    titleHold(title) ??
+    planHold(rows) ??
+    (drafter === "agent"
+      ? brief.trim() === ""
+        ? "Tell the agent what the deck is for."
+        : !who.seat
+          ? "Choose an agent."
+          : !who.project
+            ? "Choose a project for the task."
+            : (files.held ?? undefined)
+      : undefined);
+  const busy = create.busy || make.busy || files.busy;
+
   const start = async () => {
-    if (hold || create.busy) return;
+    if (hold || busy) return;
     creating.current = true;
     try {
       await create.fromStarter("slides", title, planOf(theme.id, rows));
@@ -182,7 +227,48 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
       creating.current = false;
     }
   };
-  useShortcut({ keys: [{ key: "Enter", mod: true }], onKey: () => void start() });
+
+  const ask = async () => {
+    if (hold || busy || !agent) return;
+    let id = made && made.seat === agent.handle ? made.id : "";
+    if (!id) {
+      const answer = await make.run(
+        createFromStarter({
+          kind: "slides",
+          title: title.trim(),
+          deck: planOf(theme.id, rows),
+          shares: [{ audience: { kind: "seat", id: agent.handle }, role: "editor" }],
+        }),
+      );
+      id =
+        answer?.kind === "done" && typeof answer.body.artifact === "string"
+          ? answer.body.artifact
+          : "";
+      if (!id) return;
+      setMade({ id, seat: agent.handle });
+    }
+    const filed = await files.fileArtifactTask({
+      kind: "slides",
+      title: title.trim(),
+      brief: `${brief.trim()}\n\n${planBrief(theme, rows, title, layouts)}`,
+      seat: agent.handle,
+      project: who.project,
+      artifact: id,
+    });
+    if (!filed) return;
+    if (typeof filed.linked === "string") {
+      toast.show({
+        variant: "warning",
+        title: "The deck is not on the task yet",
+        message: filed.linked,
+      });
+    }
+    creating.current = true;
+    nav.to(filed.item ? ["work", filed.item] : artifactPath(id));
+  };
+
+  const commit = () => void (drafter === "agent" ? ask() : start());
+  useShortcut({ keys: [{ key: "Enter", mod: true }], onKey: commit });
 
   const add = (layout: string) => {
     const next = addAfter(rows, current?.key ?? "", layout);
@@ -250,14 +336,20 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
         )
       }
       action={{
-        label: "Create deck",
-        icon: <PresentationGlyph size="sm" />,
-        onSelect: () => void start(),
+        label: drafter === "agent" ? (agent ? `Ask ${agent.name}` : "Ask an agent") : "Create deck",
+        icon:
+          drafter === "agent" ? <WandSparklesGlyph size="sm" /> : <PresentationGlyph size="sm" />,
+        onSelect: commit,
         keys: ["Mod", "Enter"],
         ...(hold
           ? { disabledReason: hold }
-          : create.busy
-            ? { disabledReason: "Creating the deck." }
+          : busy
+            ? {
+                disabledReason:
+                  drafter === "agent"
+                    ? "Making the deck and filing the task."
+                    : "Creating the deck.",
+              }
             : {}),
       }}
     >
@@ -295,17 +387,84 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
             </span>
             <span>{layout?.name}</span>
             <span className="slides-create-hint">
-              Every word is yours to change once the deck opens.
+              {drafter === "agent"
+                ? "The agent starts from these slides and writes them from your brief."
+                : "Every word is yours to change once the deck opens."}
             </span>
           </p>
           {phone && strip}
-          {create.refusal && (
+          {drafter === "self" && create.refusal && (
             <Callout variant="danger" title="The deck was not created">
               {create.refusal}
             </Callout>
           )}
+          {drafter === "agent" && make.answer && make.answer.kind !== "done" && (
+            <Callout variant="danger" title="The deck was not created">
+              {make.answer.text}
+            </Callout>
+          )}
+          {drafter === "agent" && files.refusal && (
+            <Callout
+              variant="danger"
+              title={
+                made ? "The deck was made, and the task was not filed" : "The task was not filed"
+              }
+            >
+              {files.refusal.sentence}
+              {files.refusal.hint ? ` ${files.refusal.hint}` : ""}
+              {made && (
+                <>
+                  {" "}
+                  <Button
+                    size="small"
+                    variant="ghost"
+                    onClick={() => nav.to(artifactPath(made.id))}
+                  >
+                    Open the deck
+                  </Button>
+                </>
+              )}
+            </Callout>
+          )}
         </div>
         <aside className="slides-create-side" aria-label="Deck settings">
+          <section className="slides-create-group" aria-labelledby="slides-create-drafter">
+            <h2 id="slides-create-drafter" className="slides-create-heading">
+              Who writes it
+            </h2>
+            <SegmentedControl
+              label="Who writes it"
+              semantics="radio"
+              size="sm"
+              options={[
+                { value: "self", label: "You, in the editor" },
+                { value: "agent", label: "An agent" },
+              ]}
+              value={drafter}
+              onValueChange={(v: string) => setDrafter(v === "agent" ? "agent" : "self")}
+            />
+            {drafter === "agent" && (
+              <>
+                <WhoBuildsIt who={who} />
+                <FormField
+                  label="Brief"
+                  helper="Who it is for, what it should say and where the material is. The agent also reads the slides you laid out."
+                >
+                  {(field) => (
+                    <Textarea
+                      id={field.id}
+                      aria-describedby={field.describedBy}
+                      value={brief}
+                      autoResize
+                      maxLength={BRIEF_MAX}
+                      placeholder="A ten-minute board update on the support desk: what changed this quarter, the numbers, and the one decision we need."
+                      onChange={(e) => setBrief(e.target.value)}
+                    />
+                  )}
+                </FormField>
+              </>
+            )}
+          </section>
           <section className="slides-create-group" aria-labelledby="slides-create-theme">
             <h2 id="slides-create-theme" className="slides-create-heading">
               Theme

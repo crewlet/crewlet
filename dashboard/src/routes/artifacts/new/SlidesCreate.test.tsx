@@ -8,8 +8,13 @@ import { join } from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
+import { FrameReadings } from "~/app/Shell.tsx";
 import { Router } from "~/app/router.tsx";
-import { rest } from "~/protocol/index.ts";
+import { ClientContext } from "~/lib/store-hooks.ts";
+import { reloadForTest } from "~/lib/prefs.ts";
+import { LiveSocket, Store, rest, type WorkProjectRow } from "~/protocol/index.ts";
+import { healthFrame } from "~/test/health.ts";
+import { withDerived } from "~/test/org.ts";
 import { readSlidesStarters } from "~/lib/artifacts/api.ts";
 import type { SlidesStartersAnswer } from "~/protocol/index.ts";
 import { SlidesCreate } from "./SlidesCreate.tsx";
@@ -30,23 +35,106 @@ vi.mock("~/lib/artifacts/api.ts", async () => {
 // THE ENGINE'S ANSWER TO A CREATE, at the transport every keyed write goes through.
 const request = vi.spyOn(rest, "request");
 
+class InertWebSocket {
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSED = 3;
+  readyState = InertWebSocket.CONNECTING;
+  send(): void {}
+  close(): void {}
+}
+
+const JANE = {
+  login: "U0FOUNDER",
+  grants: ["admin", "tracker", "artifacts"],
+  handle: "jane",
+  owner: "jane",
+  name: "Jane Founder",
+  kind: "human",
+  acts: ["create_work_item"],
+  project: "OPS",
+};
+
+const ORG = {
+  name: "Acme",
+  timezone: "UTC",
+  roles: [
+    { name: "Jane Founder", handle: "jane", kind: "human" },
+    {
+      name: "Agent Marketer",
+      handle: "marketer",
+      kind: "agent",
+      goal: "Pitch decks and product marketing",
+    },
+  ],
+  units: [],
+};
+
+const project = (key: string): WorkProjectRow =>
+  ({ key, name: key, unit: { resolved: true }, lead: { handle: "jane" } }) as WorkProjectRow;
+
+/** The tracker acts the page sent (`create_work_item`), as the operator route receives them. */
+let acts: { tool: string; args: Record<string, unknown> }[];
+
 beforeEach(() => {
+  Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
   vi.mocked(readSlidesStarters).mockResolvedValue(starters);
+  acts = [];
   request.mockReset();
-  request.mockResolvedValue({ status: 201, body: { artifact: "a-1" } } as never);
+  request.mockImplementation((async (
+    _method: string,
+    path: string,
+    options?: { body?: unknown },
+  ) => {
+    if (path.startsWith("/operator/act/")) {
+      const tool = decodeURIComponent(path.slice("/operator/act/".length));
+      acts.push({ tool, args: (options?.body as { args: Record<string, unknown> }).args });
+      return {
+        status: 200,
+        body: {
+          tool,
+          outcome: "applied",
+          position: "CREWLET_TRACKER_LOG@1:9",
+          receipt: { id: "0f0f", item: "OPS-7", key: "OPS-7" },
+        },
+      };
+    }
+    if (path.endsWith("/work-items")) return { status: 200, body: {} };
+    return { status: 201, body: { artifact: "a-1" } };
+  }) as never);
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  localStorage.clear();
+  reloadForTest();
+});
 
 function mount() {
   location.hash = "#/artifacts/new/slides";
+  const store = new Store();
+  store.applyHealth(healthFrame({ nodes: 1 }));
+  store.applyOrg(withDerived(ORG) as never);
+  const socket = new LiveSocket(store);
+  socket.query = ((what: string) => {
+    const answers: Record<string, unknown> = {
+      viewer: JANE,
+      work_projects: { projects: [project("OPS")] },
+      work_inbox: { handle: "jane", notices: [], unread: 0, primary: 0 },
+    };
+    return Promise.resolve(answers[what] ?? {});
+  }) as typeof socket.query;
   return render(
-    <Router>
+    <ToastProvider>
       <LayerHost>
-        <ToastProvider>
-          <SlidesCreate />
-        </ToastProvider>
+        <ClientContext.Provider value={{ store, socket }}>
+          <FrameReadings>
+            <Router>
+              <SlidesCreate />
+            </Router>
+          </FrameReadings>
+        </ClientContext.Provider>
       </LayerHost>
-    </Router>,
+    </ToastProvider>,
   );
 }
 
@@ -113,4 +201,37 @@ test("themes that did not load say so and offer to ask again", async () => {
   const retry = await screen.findByRole("button", { name: "Try again" });
   fireEvent.click(retry);
   expect(await title()).toBeTruthy();
+});
+
+test("asking an agent makes the deck shared with it, files its task linked to the deck, and opens the task", async () => {
+  mount();
+  fireEvent.change(await title(), { target: { value: "Board review" } });
+  fireEvent.click(screen.getByRole("radio", { name: "An agent" }));
+  const ask = await screen.findByRole("button", { name: "Ask Agent Marketer" });
+  expect(ask.getAttribute("aria-disabled")).toBe("true");
+  fireEvent.change(screen.getByRole("textbox", { name: "Brief" }), {
+    target: { value: "A ten-minute update for the board." },
+  });
+  await waitFor(() => expect(ask.getAttribute("aria-disabled")).toBeNull());
+  await act(async () => {
+    fireEvent.click(ask);
+  });
+  await waitFor(() => expect(location.hash).toBe("#/work/OPS-7"));
+  const [, path, made] = request.mock.calls[0]!;
+  expect(path).toBe("/artifacts");
+  expect((made as { body: Record<string, unknown> }).body).toMatchObject({
+    kind: "slides",
+    title: "Board review",
+    starter: true,
+    deck: { theme: "nightshade" },
+    shares: [{ audience: { kind: "seat", id: "marketer" }, role: "editor" }],
+  });
+  const filed = acts.find((a) => a.tool === "create_work_item")!;
+  expect(filed.args).toMatchObject({ title: "Board review", assignee: "marketer", project: "OPS" });
+  expect(String(filed.args.body)).toContain("A ten-minute update for the board.");
+  expect(String(filed.args.body)).toContain("1. Cover: Board review");
+  expect(String(filed.args.body)).toContain("artifact a-1");
+  const [, linkPath, link] = request.mock.calls.find(([, p]) => String(p).endsWith("/work-items"))!;
+  expect(linkPath).toBe("/artifacts/a-1/work-items");
+  expect((link as { body: unknown }).body).toEqual({ work_item: "OPS-7" });
 });

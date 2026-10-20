@@ -150,3 +150,27 @@ export function previewSlide(
     root: at ? withText(sample.root, at, title) : sample.root,
   };
 }
+
+/**
+ * What an agent asked to draft the deck is told about the deck it starts
+ * from: its theme and its slides in order, by layout and title, so the turn
+ * reading the task fills in the structure the person laid out rather than
+ * starting a new one.
+ */
+export function planBrief(
+  theme: DeckTheme,
+  rows: readonly PlanRow[],
+  deckTitle: string,
+  layouts: ReadonlyMap<string, DeckLayout>,
+): string {
+  const lines = rows.map((r, i) => {
+    const layout = layouts.get(r.layout);
+    return `${i + 1}. ${layout?.name ?? r.layout}: ${shownTitle(r, deckTitle, layout)}`;
+  });
+  return [
+    `The deck starts with these slides, drawn in the ${theme.name} theme (\`${theme.id}\`):`,
+    ...lines,
+    "",
+    "Keep the theme and write every slide's text from the brief. Add, split or remove slides where the brief needs it, and put what to say aloud in each slide's speaker notes.",
+  ].join("\n");
+}
