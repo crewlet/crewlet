@@ -183,7 +183,7 @@ skill_variables:
   confluence_base_url: "https://nimbus.atlassian.net/wiki"
 ```
 
-A link rule for a company on Jira and Confluence uses them like this (the bundled `platform_mentions` skill links to Worklet and Doclet instead, through `${crewlet_base_url}`, described below):
+A link rule for a company on Jira and Confluence uses them like this (the bundled `platform_mentions` skill links to Worklet, Doclet and Chatlet's rooms instead, through `${crewlet_base_url}`, described below):
 
 ```markdown
 - **Work item:** `${jira_base_url}/browse/{ISSUE-KEY}`
@@ -283,7 +283,7 @@ required: false
 
 Because enforcement derives from the trigger, the per-session cost of an enforced skill is governed by two knobs the author controls:
 
-- **Trigger width** decides *which calls wait*. Prefer **exact tool names**: the tools the practices actually apply to. The bundled `skill:platform_mentions` triggers on the write tools only (posting broken mention markup is visible to humans; *reads* never wait on it): its leaves name Worklet's and Doclet's writes (`comment_on_work_item`, `create_work_item`, `update_work_item`, `comment_on_page`, `write_page`, `save_page`) and the two posting tools of the version-pinned `mcp-server-mattermost==0.6.1` release (`mattermost_post_message`, `mattermost_update_message`), which is exactly why the example org pins that server while it runs every other at its newest release: an unpinned upgrade could rename a tool out from under the gate. `tool:refine_skill` triggers on the single `refine_skill` builtin (no other tool waits on skill-refinement conventions).
+- **Trigger width** decides *which calls wait*. Prefer **exact tool names**: the tools the practices actually apply to. The bundled `skill:platform_mentions` triggers on the write tools only (posting broken mention markup is visible to humans; *reads* never wait on it): its leaves name Chatlet's, Worklet's and Doclet's writes (`post_message`, `reply_in_thread`, `send_dm`, `comment_on_work_item`, `create_work_item`, `update_work_item`, `comment_on_page`, `write_page`, `save_page`, held to the domains' own lists by a test, so a new way to post fails the build until the skill names it) and the two posting tools of the version-pinned `mcp-server-mattermost==0.6.1` release (`mattermost_post_message`, `mattermost_update_message`), which is exactly why the example org pins that server while it runs every other at its newest release: an unpinned upgrade could rename a tool out from under the gate. `tool:refine_skill` triggers on the single `refine_skill` builtin (no other tool waits on skill-refinement conventions).
 - **Body size** decides *what each wait costs*. An enforced `mcp_server` trigger gates every tool on that server, so its body must be a one-pager: the bundled `mcp:github` orientation is ~100 tokens, making the once-per-session load before any GitHub work near-free. If a server-wide skill's body grows past orientation size, split it — keep the tiny server-wide overview and move the detailed practices into a narrow tool-triggered skill.
 
 ### What a trigger covers
