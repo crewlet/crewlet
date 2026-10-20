@@ -229,7 +229,7 @@ func pageClass(err error) (tools.Refusal, bool) {
 	case errors.Is(err, doclet.ErrReserved):
 		return tools.RefusalForbidden, true
 	case errors.Is(err, doclet.ErrInvalid), errors.Is(err, doclet.ErrParent),
-		errors.Is(err, doclet.ErrBadCursor):
+		errors.Is(err, doclet.ErrBadCursor), errors.Is(err, doclet.ErrUnservedOrder):
 		return tools.RefusalInvalid, true
 	}
 	return "", false

@@ -181,7 +181,7 @@ func (a *Applier) applyRename(ctx context.Context, tx *sql.Tx, at applyContext,
 		// when the head write landed: a guard that skipped it is a record
 		// already past this one, whose own apply derived the row.
 		if n > 0 {
-			derived, deriveErr := a.writeSkillRow(ctx, tx, at, head)
+			derived, deriveErr := a.writeSkillRow(ctx, tx, head)
 			if deriveErr != nil {
 				return 0, deriveErr
 			}
@@ -769,7 +769,7 @@ func (a *Applier) writeHead(ctx context.Context, tx *sql.Tx, at applyContext,
 	}
 	rows += watchers
 
-	skills, err := a.writeSkillRow(ctx, tx, at, head)
+	skills, err := a.writeSkillRow(ctx, tx, head)
 	if err != nil {
 		return 0, err
 	}
@@ -829,8 +829,14 @@ func (a *Applier) writeWatchers(ctx context.Context, tx *sql.Tx, at applyContext
 // disagree, which is why the row is in its own table and outside the identity
 // claim. It is recomputed on every apply rather than carried on the record, so
 // a parser fix reaches every page on the next rebuild.
-func (a *Applier) writeSkillRow(ctx context.Context, tx *sql.Tx,
-	at applyContext, head Page) (int, error) {
+//
+// IT CARRIES THE HEAD'S `updated_at`, because the newest-first listing of the
+// skills is ordered by it from this table's own index (replicated 0067): the
+// flag is here and not on the head, so the order has to be here too. Every
+// apply that moves a head's `updated_at` calls this in the same transaction
+// with that head — [Applier.writeHead], and a rename's own write — so the copy
+// is the head's own instant, never a second clock.
+func (a *Applier) writeSkillRow(ctx context.Context, tx *sql.Tx, head Page) (int, error) {
 
 	skill := 0
 	if a.skills != nil && a.skills.IsSkill(head.Body) {
@@ -854,12 +860,12 @@ func (a *Applier) writeSkillRow(ctx context.Context, tx *sql.Tx,
 		a.skillMoved = true
 	}
 	res, err := tx.ExecContext(ctx, `
-		INSERT INTO pages_skills (page_id, skill, onboarding, at)
+		INSERT INTO pages_skills (page_id, skill, onboarding, updated_at)
 		VALUES (?, ?, ?, ?)
 		ON CONFLICT (page_id) DO UPDATE SET
 			skill = excluded.skill, onboarding = excluded.onboarding,
-			at = excluded.at`,
-		head.ID, skill, onboarding, store.EncodeTime(at.brokerAt))
+			updated_at = excluded.updated_at`,
+		head.ID, skill, onboarding, store.EncodeTime(head.UpdatedAt))
 	if err != nil {
 		return 0, fmt.Errorf("doclet: record %s's skill flag: %w", head.ID, err)
 	}

@@ -95,6 +95,7 @@ var sentinels = []sentinel{
 	{"doclet.ErrReserved", doclet.ErrReserved},
 	{"doclet.ErrStaleVersion", doclet.ErrStaleVersion},
 	{"doclet.ErrTitleTaken", doclet.ErrTitleTaken},
+	{"pages.ErrUnservedOrder", doclet.ErrUnservedOrder},
 
 	{"chatlet.ErrArchived", chatlet.ErrArchived},
 	{"chatlet.ErrConflict", chatlet.ErrConflict},
