@@ -859,6 +859,13 @@ func collectOffers(ctx context.Context, nc *nats.Conn, req OfferRequest, window 
 //
 // Every wait in it is bounded by [TransferChunkWait] as well as by ctx, and
 // the two ends are reported differently — see [boundedWaitErr].
+//
+// A FAILURE WRITING THE COPY IS THIS NODE'S, and is marked as one
+// ([nodeFault]): creating, writing, flushing or closing dest fails on this
+// node's own disk, which every other donor's artefact would be written to as
+// well, so a join files it as the end of the join rather than as this donor's
+// refusal. Everything else here — a donor that stopped sending, a verdict it
+// sent, a link that dropped — is about the offer.
 func FetchArtefact(ctx context.Context, nc *nats.Conn, offer Offer, dest string) (int64, error) {
 	return fetchArtefact(ctx, nc, offer, dest, TransferChunkWait)
 }
@@ -927,7 +934,7 @@ func fetchArtefact(ctx context.Context, nc *nats.Conn, offer Offer, dest string,
 
 	file, err := os.OpenFile(dest, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
-		return 0, fmt.Errorf("statelog: create %s: %w", dest, err)
+		return 0, ownFault(fmt.Errorf("statelog: create %s: %w", dest, err))
 	}
 	closed := false
 	defer func() {
@@ -955,7 +962,7 @@ func fetchArtefact(ctx context.Context, nc *nats.Conn, offer Offer, dest string,
 		n, err := file.Write(chunk.Data)
 		if err != nil {
 			_ = os.Remove(dest)
-			return 0, fmt.Errorf("statelog: write %s: %w", dest, err)
+			return 0, ownFault(fmt.Errorf("statelog: write %s: %w", dest, err))
 		}
 		written += int64(n)
 		// THE CREDIT, returned before the next read rather than after
@@ -970,12 +977,12 @@ func fetchArtefact(ctx context.Context, nc *nats.Conn, offer Offer, dest string,
 	}
 	if err := file.Sync(); err != nil {
 		_ = os.Remove(dest)
-		return 0, fmt.Errorf("statelog: flush %s: %w", dest, err)
+		return 0, ownFault(fmt.Errorf("statelog: flush %s: %w", dest, err))
 	}
 	closed = true
 	if err := file.Close(); err != nil {
 		_ = os.Remove(dest)
-		return 0, fmt.Errorf("statelog: close %s: %w", dest, err)
+		return 0, ownFault(fmt.Errorf("statelog: close %s: %w", dest, err))
 	}
 	return written, nil
 }

@@ -50,6 +50,11 @@ type joinHarness struct {
 	closes   atomic.Int64
 	reopens  atomic.Int64
 
+	// holdErr is what every hold reports instead of pinning, nil by
+	// default — a register this node cannot write to. Each attempt still
+	// counts in held.
+	holdErr error
+
 	// began is every start Record was handed, one per call.
 	began []time.Time
 	// record, nil by default, is what Record also does: a case that needs
@@ -223,6 +228,9 @@ func (h *joinHarness) adopter(t *testing.T) *statelog.Adopter {
 		},
 		Hold: func(context.Context, map[string]uint64) (func(), error) {
 			h.held.Add(1)
+			if h.holdErr != nil {
+				return nil, h.holdErr
+			}
 			return func() { h.released.Add(1) }, nil
 		},
 		Close: func(ctx context.Context) error {
@@ -673,6 +681,222 @@ func TestALiveDatabaseThatDidNotComeBackIsNeverAnEmptyFleet(t *testing.T) {
 			if h.held.Load() != h.released.Load() {
 				t.Fatalf("the tail was held %d time(s) and released %d",
 					h.held.Load(), h.released.Load())
+			}
+		})
+	}
+}
+
+// AN INSTALL IS AN ADOPTION, WHATEVER FAILS AFTER IT.
+//
+// The rename is the join's point of no return: from it the artefact is the
+// live database, and once it is open every applier resumes from its
+// checkpoint. What comes after is this node's own HISTORY row of the adoption,
+// in the node estate — a separate file whose write can be refused for reasons
+// of its own. Filed as the donor's refusal, that refusal sent the join on to
+// the next offer, which it fetched and installed OVER the artefact already
+// live — a second transfer landing on an artefact no newer than the first —
+// and with no offer left it reported that nobody could donate while a donor's
+// database was live, so a running node skipped everything an adoption owes.
+//
+// A second donor offers the same artefact, so a join that moved on is seen
+// closing the live database twice; and the write is refused at that phase on
+// every attempt, which is what a store fault looks like.
+func TestAnInstallWhoseRecordFailsIsStillAnAdoption(t *testing.T) {
+	t.Parallel()
+	for _, phase := range []statelog.AdoptionPhase{
+		statelog.AdoptionInstalled, statelog.AdoptionComplete,
+	} {
+		t.Run(string(phase), func(t *testing.T) {
+			t.Parallel()
+			h := newJoinHarness(t)
+			h.addDonor(t, "donor-2")
+			logs := &lockedBuffer{}
+			h.logger = slog.New(slog.NewJSONHandler(logs, nil))
+			refused := errors.New("store: this node's store could not take its write lock in time")
+			h.record = func(_ context.Context, _ time.Time, _ string,
+				_ statelog.Manifest, at statelog.AdoptionPhase) error {
+
+				if at == phase {
+					return refused
+				}
+				return nil
+			}
+
+			m, err := h.adopter(t).Join(t.Context())
+			if !errors.Is(err, statelog.ErrAdoptionUnrecorded) {
+				t.Fatalf("Join = %v, want ErrAdoptionUnrecorded — the artefact is "+
+					"installed and open, and only its record is short", err)
+			}
+			if errors.Is(err, statelog.ErrNoOffer) {
+				t.Fatalf("an installed artefact was reported as no usable offer (%v) "+
+					"— the engine reads that as nobody could donate, while a donor's "+
+					"database is the live one", err)
+			}
+			if !errors.Is(err, refused) {
+				t.Errorf("the error drops why the row could not be advanced: %v", err)
+			}
+			if m.SHA256 != h.manifest.SHA256 {
+				t.Fatalf("Join returned the manifest %q beside the error, want the "+
+					"installed artefact's %q — a caller acts on what was installed",
+					m.SHA256, h.manifest.SHA256)
+			}
+			if n := h.closes.Load(); n != 1 {
+				t.Fatalf("the live database was closed %d time(s), want once — the "+
+					"join installed another offer over the artefact it had installed", n)
+			}
+			if n := h.held.Load(); n != 1 {
+				t.Fatalf("the tail was held %d time(s), want once: a join that moved "+
+					"on fetched another offer", n)
+			}
+			if scrubbed := slices.Index(h.phases[1:], statelog.AdoptionScrubbed); scrubbed >= 0 {
+				t.Fatalf("the adoption recorded %v — a second offer was verified "+
+					"after the first was installed", h.phases)
+			}
+			// THE ARTEFACT IS LIVE, AND OPEN.
+			var seq int64
+			if err := h.joinEstate.Read(t.Context(), func(tx *sql.Tx) error {
+				return tx.QueryRowContext(t.Context(),
+					`SELECT seq FROM statelog_cursor WHERE stream = ?`, probeStream).Scan(&seq)
+			}); err != nil || seq != 4_200 {
+				t.Fatalf("the live estate reads (%d, %v), want the artefact's 4200", seq, err)
+			}
+			// AND THE LOG SAYS IT ONCE EACH: an adoption, and the record it
+			// could not advance — never a donor refused.
+			if n := len(logRecords(t, logs.Bytes(), "statelog_adoption_refused")); n != 0 {
+				t.Fatalf("%d statelog_adoption_refused line(s) — no donor refused anything", n)
+			}
+			if n := len(logRecords(t, logs.Bytes(), "statelog_adopted")); n != 1 {
+				t.Fatalf("%d statelog_adopted line(s) for one adoption, want one", n)
+			}
+			unrecorded := logRecords(t, logs.Bytes(), "statelog_adoption_unrecorded")
+			if len(unrecorded) != 1 || unrecorded[0]["phase"] != string(phase) {
+				t.Fatalf("statelog_adoption_unrecorded = %v, want one line naming "+
+					"the %s phase", unrecorded, phase)
+			}
+		})
+	}
+}
+
+// A FAULT OF THIS NODE'S OWN ENDS THE JOIN, AND BLAMES NO DONOR.
+//
+// Everything a join can fail on before the install is either about the OFFER
+// — its transfer, its bytes, its schema, its positions — or about THIS NODE:
+// the hold register it pins through, its own store, its own disk. Filed as the
+// donor's refusal, the second kind was logged against a peer whose artefact
+// was fine, and every remaining offer was then fetched in full only to meet
+// the same fault — ending in "nobody could donate" for a fleet that donated
+// perfectly well. A second donor offers the same artefact in every case, so a
+// join that moved on is seen holding the tail a second time.
+func TestAFaultOfThisNodesOwnEndsTheJoin(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		stage func(t *testing.T, h *joinHarness)
+		// closed is whether the live database was closed — and so
+		// reopened by the rollback — before the fault.
+		closed bool
+	}{
+		{
+			name: "its trim hold is refused",
+			stage: func(_ *testing.T, h *joinHarness) {
+				h.holdErr = errors.New("the coordination store cannot be reached")
+			},
+		},
+		{
+			name: "an earlier attempt's artefact cannot be cleared",
+			stage: func(t *testing.T, h *joinHarness) {
+				// A DIRECTORY HOLDING A FILE where the copy goes, which
+				// nothing that removes a database's files can remove.
+				part := h.joinPath + statelog.AdoptPartSuffix
+				if err := os.MkdirAll(filepath.Join(part, "held"), 0o700); err != nil {
+					t.Fatalf("stage the debris: %v", err)
+				}
+			},
+		},
+		{
+			name: "its own store refuses the record",
+			stage: func(_ *testing.T, h *joinHarness) {
+				h.record = func(_ context.Context, _ time.Time, _ string,
+					_ statelog.Manifest, at statelog.AdoptionPhase) error {
+
+					if at == statelog.AdoptionScrubbed {
+						return errors.New("store: the node estate's disk is full")
+					}
+					return nil
+				}
+			},
+		},
+		{
+			name: "the close of the live database fails",
+			stage: func(_ *testing.T, h *joinHarness) {
+				h.closeErr = errors.New("the close did not finish")
+			},
+			closed: true,
+		},
+		{
+			name: "the install fails",
+			stage: func(t *testing.T, h *joinHarness) {
+				h.onClose = func() {
+					part := h.joinPath + statelog.AdoptPartSuffix
+					if err := os.Remove(part); err != nil {
+						t.Errorf("remove the prepared file: %v", err)
+					}
+					if err := os.Mkdir(part, 0o700); err != nil {
+						t.Errorf("put a directory in its place: %v", err)
+					}
+				}
+			},
+			closed: true,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			h := newJoinHarness(t)
+			h.addDonor(t, "donor-2")
+			logs := &lockedBuffer{}
+			h.logger = slog.New(slog.NewJSONHandler(logs, nil))
+			c.stage(t, h)
+
+			m, err := h.adopter(t).Join(t.Context())
+			if err == nil {
+				t.Fatal("a join whose node failed it reported an adoption")
+			}
+			// THE ONE ANSWER A CALLER BRANCHES ON: the engine comes up
+			// behind on it, as it does when nobody could donate, rather
+			// than stopping the boot or telling every listener the rows
+			// were replaced.
+			if !errors.Is(err, statelog.ErrJoinerFault) {
+				t.Fatalf("Join = %v, want ErrJoinerFault — a caller cannot tell "+
+					"this node's own fault from any other failure", err)
+			}
+			if errors.Is(err, statelog.ErrNoOffer) {
+				t.Fatalf("a fault of this node's own was reported as no usable "+
+					"offer (%v) — a statement about the fleet, which donated", err)
+			}
+			if errors.Is(err, statelog.ErrEstateNotRestored) ||
+				errors.Is(err, statelog.ErrAdoptionUnrecorded) {
+				t.Fatalf("Join = %v: nothing was installed and the live database "+
+					"is open", err)
+			}
+			if m.SHA256 != "" {
+				t.Fatalf("Join returned the manifest %q for a join that installed "+
+					"nothing — a manifest beside an error means installed", m.SHA256)
+			}
+			if n := h.held.Load(); n != 1 {
+				t.Fatalf("the join tried %d offers, want one — every other offer "+
+					"meets the same fault on this node", n)
+			}
+			if n := len(logRecords(t, logs.Bytes(), "statelog_adoption_refused")); n != 0 {
+				t.Fatalf("%d statelog_adoption_refused line(s) blame a donor for "+
+					"this node's own fault", n)
+			}
+			if c.closed && h.reopens.Load() != 1 {
+				t.Fatalf("the live database was reopened %d time(s) after the "+
+					"failed install, want once", h.reopens.Load())
+			}
+			if err := storetest.ReplicatedDB(t, h.joinEstate).SQL().PingContext(t.Context()); err != nil {
+				t.Fatalf("the live database is not usable after the join: %v", err)
 			}
 		})
 	}
