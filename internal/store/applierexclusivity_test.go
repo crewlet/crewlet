@@ -635,10 +635,11 @@ var allowedReplicatedWriter = []allowance{
 		Prefix: "internal/chatlet/apply", Kind: mechanism,
 		Why: "The chat domain's applier, across the files it is split " +
 			"over: the record and the gate, the channel half and the " +
-			"message half. It is the domain with TWO arbitration " +
-			"disciplines on one stream, and neither of them changes who " +
-			"writes: a message is additive rather than arbitrated, and it " +
-			"still reaches these tables only from a committed record.",
+			"message half and the verdict it writes for every message. It " +
+			"is the domain with TWO disciplines on one stream, and neither " +
+			"of them changes who writes: a message is sequenced rather than " +
+			"arbitrated, and it still reaches these tables only from a " +
+			"committed record.",
 	},
 
 	{

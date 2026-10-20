@@ -16,43 +16,71 @@ import (
 // THE TRANSCRIPT'S CASES: post, edit, delete, react — and the two gestures
 // that destroy what was said, erase and prune.
 //
-// Nothing here arbitrates. A post carries no expectation and decides against
-// nothing, because the records COMMUTE: two people talking in one room are not
-// racing for anything, and paying for arbitration would serialise the single
-// hottest subject in the company behind itself — and turn a lost race into a
-// message somebody typed and lost, which is the one failure a chat system may
-// not have.
+// Nothing here arbitrates, and nothing here commutes either: a message record
+// is SEQUENCED ([statelog.PatternSequenced]). It carries no expectation —
+// paying for arbitration would serialise the single hottest subject in the
+// company behind itself, and turn a lost race into a message somebody typed
+// and lost, which is the one failure a chat system may not have — so the log
+// orders it and this applier DECIDES it, at its position, from the record and
+// the rows it holds there: a post into a room archived ahead of it, a reaction
+// that would be the message's thirty-third emoji, an edit of a message taken
+// back ahead of it. Every node applies the same records in the same order, so
+// every node reaches the same decision, and each is written down
+// ([writeVerdict]) for the writer to read back — see verdict.go.
 //
-// What replaces arbitration is the INSERT'S OWN ID GATE. Every side effect a
-// post has — the room's sequence, the mentions, the thread rows — is issued
-// only when the message row was NEW, exactly as the tracker's turn records
-// spend only when its own insert landed. A redelivery therefore consumes
-// nothing and repairs nothing, which is what makes this idempotent at a
-// position without a version to compare.
+// Beside the verdict, the INSERT'S OWN ID GATE: every side effect a post has —
+// the room's sequence, the mentions, the thread rows — is issued only when the
+// message row was NEW, exactly as the tracker's turn records spend only when
+// its own insert landed. A redelivery therefore consumes nothing and repairs
+// nothing, which is what makes this idempotent at a position without a version
+// to compare.
 
-// applyMessage writes one record on a room's message stream.
+// applyMessage writes one record on a room's message stream, and its verdict.
 //
 // FOUR OPS, AND THE SWITCH IS EXHAUSTIVE. The erase and the prune are NOT here
 // — both destroy rows across a whole room, so both are published on the ROOM's
 // subject where they serialise against its own state, and both are reached
 // through [Applier.applyChannel].
+//
+// A SECOND COPY OF AN OPERATION DOES NOTHING, decided before any case runs:
+// two publishers that each found the operation's ledger silent append it
+// twice, and a copy applied again would re-run an edit over the one made after
+// it, or put back a reaction somebody took back in between. The first copy's
+// verdict is the operation's; the copy's is [VerdictRepeated].
 func (a *Applier) applyMessage(ctx context.Context, tx *sql.Tx, at applyContext) (int, error) {
 	payload, err := DecodeMutation(at.record)
 	if err != nil {
 		return 0, err
 	}
-	switch p := payload.(type) {
-	case MessagePost:
-		return a.applyPost(ctx, tx, at, p)
-	case MessageEdit:
-		return a.applyEdit(ctx, tx, at, p)
-	case MessageDelete:
-		return a.applyDelete(ctx, tx, at, p)
-	case Reaction:
-		return a.applyReact(ctx, tx, at, p)
+	repeated, err := decidedBefore(ctx, tx, at)
+	if err != nil {
+		return 0, err
 	}
-	return 0, fmt.Errorf("chatlet: the %s record at %s carries a %T, which is not "+
-		"a payload a room's message stream carries", at.record.Op, at.position, payload)
+	rows, verdict := 0, VerdictRepeated
+	if !repeated {
+		switch p := payload.(type) {
+		case MessagePost:
+			rows, verdict, err = a.applyPost(ctx, tx, at, p)
+		case MessageEdit:
+			rows, verdict, err = a.applyEdit(ctx, tx, at, p)
+		case MessageDelete:
+			rows, verdict, err = a.applyDelete(ctx, tx, at, p)
+		case Reaction:
+			rows, verdict, err = a.applyReact(ctx, tx, at, p)
+		default:
+			return 0, fmt.Errorf("chatlet: the %s record at %s carries a %T, which is "+
+				"not a payload a room's message stream carries", at.record.Op,
+				at.position, payload)
+		}
+		if err != nil {
+			return 0, err
+		}
+	}
+	written, err := writeVerdict(ctx, tx, at, at.subject().ID, verdict)
+	if err != nil {
+		return 0, err
+	}
+	return rows + written, nil
 }
 
 // applyPost writes one message, the number it landed at, and everything
@@ -62,7 +90,7 @@ func (a *Applier) applyMessage(ctx context.Context, tx *sql.Tx, at applyContext)
 //
 // `channel_seq` comes from the ROOM'S OWN high-water mark, read in this
 // transaction and moved only when the insert was new. A writer cannot carry it
-// — additive records form no expectation, so two writers in one room would
+// — sequenced records form no expectation, so two writers in one room would
 // compute the same number — and every data node can, because every data node
 // applies the same records in the same order.
 //
@@ -71,7 +99,7 @@ func (a *Applier) applyMessage(ctx context.Context, tx *sql.Tx, at applyContext)
 // asks for 42 rather than for the room. That contiguity is also why a post's
 // declared scope is its CHANNEL — see the package doc.
 func (a *Applier) applyPost(ctx context.Context, tx *sql.Tx, at applyContext,
-	p MessagePost) (int, error) {
+	p MessagePost) (int, Verdict, error) {
 
 	// A POST IS THE ONE PATH THAT CAN CREATE A MESSAGE ROW FROM NOTHING,
 	// and therefore the one that could RESURRECT what a compliance erase
@@ -79,16 +107,19 @@ func (a *Applier) applyPost(ctx context.Context, tx *sql.Tx, at applyContext,
 	// So the marker is consulted here, and here only.
 	erased, err := messageErased(ctx, tx, p.MessageID, at.record.OpID)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	if erased {
-		return 0, nil
+		return 0, VerdictGone, nil
 	}
 
-	var seq int64
+	var (
+		seq      int64
+		archived sql.NullInt64
+	)
 	err = tx.QueryRowContext(ctx,
-		`SELECT message_seq FROM chat_channels WHERE id = ?`, at.subject().ID).
-		Scan(&seq)
+		`SELECT message_seq, archived_at FROM chat_channels WHERE id = ?`, at.subject().ID).
+		Scan(&seq, &archived)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		// A POST INTO A ROOM THIS NODE DOES NOT HAVE, under a STRICT
@@ -98,14 +129,31 @@ func (a *Applier) applyPost(ctx context.Context, tx *sql.Tx, at applyContext,
 		// position without the room applied something wrong. Minting a
 		// sequence against a room nobody has is the one mistake this
 		// domain cannot repair afterwards.
-		return 0, fmt.Errorf("chatlet: the post at %s names room %s, which this "+
+		return 0, "", fmt.Errorf("chatlet: the post at %s names room %s, which this "+
 			"node has no row for — under a strict replay the room's create is "+
 			"below this position, so a missing row is a record this build "+
 			"applied incorrectly rather than one that has not arrived",
 			at.position, at.subject().ID)
 	case err != nil:
-		return 0, fmt.Errorf("chatlet: read room %s's sequence at %s: %w",
+		return 0, "", fmt.Errorf("chatlet: read room %s's sequence at %s: %w",
 			at.subject().ID, at.position, err)
+	}
+	// WHAT THE ROOM IS AT THIS POSITION, which the writer's snapshot could
+	// not see: a record ahead of this one archived it, or — in a room that
+	// admits its members only — took the author out. Either is a post into a
+	// room that would refuse it now, and it is refused here exactly as the
+	// writer would have refused it with this record's predecessors in hand.
+	if archived.Valid {
+		return 0, VerdictArchived, nil
+	}
+	if p.MembersOnly {
+		member, mErr := memberAt(ctx, tx, at.subject().ID, p.Author)
+		if mErr != nil {
+			return 0, "", mErr
+		}
+		if !member {
+			return 0, VerdictNotMember, nil
+		}
 	}
 	seq++
 
@@ -117,14 +165,14 @@ func (a *Applier) applyPost(ctx context.Context, tx *sql.Tx, at applyContext,
 	}
 	document, err := EncodeMessage(message)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	links, err := encodeLinks(p.Links)
 	if err != nil {
-		return 0, fmt.Errorf("chatlet: encode the links on message %s at %s: %w",
+		return 0, "", fmt.Errorf("chatlet: encode the links on message %s at %s: %w",
 			p.MessageID, at.position, err)
 	}
-	// THE INSERT IS THE GATE. Additive records have no version to compare,
+	// THE INSERT IS THE GATE. Sequenced records have no version to compare,
 	// so what tells a new post from a redelivery is whether this statement
 	// wrote a row — and every side effect below hangs off that answer, the
 	// room's sequence first among them.
@@ -141,7 +189,7 @@ func (a *Applier) applyPost(ctx context.Context, tx *sql.Tx, at applyContext,
 		at.position.Stream, at.position.Generation, int64(at.position.Seq),
 		at.packed, search.ChatShardOf(message.ID), document)
 	if err != nil {
-		return 0, fmt.Errorf("chatlet: write message %s at %s: %w",
+		return 0, "", fmt.Errorf("chatlet: write message %s at %s: %w",
 			message.ID, at.position, err)
 	}
 	n, _ := res.RowsAffected()
@@ -151,7 +199,10 @@ func (a *Applier) applyPost(ctx context.Context, tx *sql.Tx, at applyContext,
 		// the room's sequence has a hole in it, and a hole is
 		// indistinguishable from a frame a browser missed — so every
 		// viewer refetches a message that does not exist, for ever.
-		return 0, nil
+		// The message is already there: this record applied again, whose
+		// own verdict stands, or an earlier copy of the operation whose
+		// verdict the horizon has let go.
+		return 0, VerdictRepeated, nil
 	}
 	rows := int(n)
 
@@ -171,7 +222,7 @@ func (a *Applier) applyPost(ctx context.Context, tx *sql.Tx, at applyContext,
 		WHERE id = ? AND message_seq < ?`,
 		seq, at.packed, message.ChannelID, seq)
 	if err != nil {
-		return 0, fmt.Errorf("chatlet: move room %s's sequence at %s: %w",
+		return 0, "", fmt.Errorf("chatlet: move room %s's sequence at %s: %w",
 			message.ChannelID, at.position, err)
 	}
 	moved, _ := bump.RowsAffected()
@@ -179,13 +230,13 @@ func (a *Applier) applyPost(ctx context.Context, tx *sql.Tx, at applyContext,
 
 	mentions, err := writeMentions(ctx, tx, at, message)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	rows += mentions
 
 	thread, err := a.writeThreadRows(ctx, tx, at, message)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	rows += thread
 
@@ -196,7 +247,23 @@ func (a *Applier) applyPost(ctx context.Context, tx *sql.Tx, at applyContext,
 	frame.MessageID = message.ID
 	frame.ChannelSeq = seq
 	a.live.note(frame)
-	return rows, nil
+	return rows, VerdictApplied, nil
+}
+
+// memberAt reports whether handle is in the room at this position.
+func memberAt(ctx context.Context, tx *sql.Tx, channelID, handle string) (bool, error) {
+	var one int
+	err := tx.QueryRowContext(ctx,
+		`SELECT 1 FROM chat_members WHERE channel_id = ? AND handle = ?`,
+		channelID, handle).Scan(&one)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("chatlet: read whether %s is in room %s: %w", handle,
+			channelID, err)
+	}
+	return true, nil
 }
 
 // applyEdit rewrites a message's body in place.
@@ -206,11 +273,11 @@ func (a *Applier) applyPost(ctx context.Context, tx *sql.Tx, at applyContext,
 // that named somebody new and left the old set would leave the feed naming —
 // and the thread waking — whoever the first draft named, for ever.
 func (a *Applier) applyEdit(ctx context.Context, tx *sql.Tx, at applyContext,
-	p MessageEdit) (int, error) {
+	p MessageEdit) (int, Verdict, error) {
 
 	message, found, err := readMessage(ctx, tx, p.MessageID)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	if !found {
 		// A MISSING ROW IS LEGITIMATE HERE, which is the opposite of
@@ -220,14 +287,16 @@ func (a *Applier) applyEdit(ctx context.Context, tx *sql.Tx, at applyContext,
 		// a cutoff, and an edit that arrived behind either is ordinary
 		// traffic. Faulting on it would stall every node's log over a
 		// record whose subject the company deliberately removed.
-		return 0, nil
+		// It is refused all the same — the words it would rewrite are
+		// gone — and the writer says so.
+		return 0, VerdictGone, nil
 	}
 	if message.DeletedAt != nil {
 		// AN EDIT OF A TOMBSTONE WRITES NOTHING. The body was removed
 		// on purpose and the row survives only so the thread hung off
 		// it still has its root; restoring text into it would undo a
 		// deletion nobody asked to undo.
-		return 0, nil
+		return 0, VerdictDeleted, nil
 	}
 	message.Body = p.Body
 	message.Links = p.Links
@@ -237,12 +306,14 @@ func (a *Applier) applyEdit(ctx context.Context, tx *sql.Tx, at applyContext,
 	message.EditedBy, message.EditedByKind = p.EditedBy, p.EditedByKind
 
 	rows, err := a.writeMessageBody(ctx, tx, at, message.Message)
-	if err != nil || rows == 0 {
-		// THE VERSION GUARD SKIPPED IT, which is a redelivery or a
-		// record ordered below one already applied. Rewriting the
-		// mentions anyway would replace a newer edit's set with an
-		// older one's.
-		return 0, err
+	if err != nil {
+		return 0, "", err
+	}
+	if rows == 0 {
+		// THE VERSION GUARD SKIPPED IT, which is this record applied
+		// again — its own verdict stands. Rewriting the mentions anyway
+		// would replace a newer edit's set with an older one's.
+		return 0, VerdictRepeated, nil
 	}
 	// THE ROWS ARE BROUGHT TO THE RECORD'S WHOLE SET — which it carries
 	// whole because a delta cannot rebuild them on a replay from zero — and
@@ -266,19 +337,19 @@ func (a *Applier) applyEdit(ctx context.Context, tx *sql.Tx, at applyContext,
 	// changes.
 	before, err := namedBy(ctx, tx, at, message.ID)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	named := sortedHandles(message.Mentions)
 	dropped, err := dropUnnamedMentions(ctx, tx, message.ID, named)
 	if err != nil {
-		return 0, fmt.Errorf("chatlet: clear message %s's dropped mentions at %s: %w",
+		return 0, "", fmt.Errorf("chatlet: clear message %s's dropped mentions at %s: %w",
 			message.ID, at.position, err)
 	}
 	rows += dropped
 
 	mentions, err := writeMentions(ctx, tx, at, message.Message)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	rows += mentions
 
@@ -294,20 +365,20 @@ func (a *Applier) applyEdit(ctx context.Context, tx *sql.Tx, at applyContext,
 	// follow the retention prune took with the thread's root.
 	root, rootAt, _, err := threadRootOf(ctx, tx, at, message.Message)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	followed, err := writeFollows(ctx, tx, at, message.ChannelID, root,
 		rootAt, without(named, before))
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	unfollowed, err := unfollowUnnamed(ctx, tx, at, message.ChannelID, root,
 		without(before, named))
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	a.noteMessage(at, message)
-	return rows + followed + unfollowed, nil
+	return rows + followed + unfollowed, VerdictApplied, nil
 }
 
 // applyDelete tombstones a message: the body goes, the row stays.
@@ -317,22 +388,23 @@ func (a *Applier) applyEdit(ctx context.Context, tx *sql.Tx, at applyContext,
 // different gesture with a different author and a marker that makes it
 // permanent.
 func (a *Applier) applyDelete(ctx context.Context, tx *sql.Tx, at applyContext,
-	p MessageDelete) (int, error) {
+	p MessageDelete) (int, Verdict, error) {
 
 	message, found, err := readMessage(ctx, tx, p.MessageID)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	if !found {
 		// Erased or pruned — see [Applier.applyEdit] for why that is
 		// ordinary traffic rather than a malformed record.
-		return 0, nil
+		return 0, VerdictGone, nil
 	}
 	if message.DeletedAt != nil {
 		// ALREADY A TOMBSTONE. Stamping a second instant would move the
 		// moment somebody's words were removed to whenever the second
-		// record arrived.
-		return 0, nil
+		// record arrived — and what the delete asked for is true: the
+		// words are taken back, so it is applied rather than refused.
+		return 0, VerdictApplied, nil
 	}
 	message.Body = ""
 	message.Links = nil
@@ -342,8 +414,11 @@ func (a *Applier) applyDelete(ctx context.Context, tx *sql.Tx, at applyContext,
 	message.DeletedBy, message.DeletedByKind = p.DeletedBy, p.DeletedByKind
 
 	rows, err := a.writeMessageBody(ctx, tx, at, message.Message)
-	if err != nil || rows == 0 {
-		return 0, err
+	if err != nil {
+		return 0, "", err
+	}
+	if rows == 0 {
+		return 0, VerdictRepeated, nil
 	}
 	// THE MENTIONS GO WITH THE BODY. A mention row IS the mention feed, and
 	// the feed is where a person goes to find what they were asked: a
@@ -360,12 +435,12 @@ func (a *Applier) applyDelete(ctx context.Context, tx *sql.Tx, at applyContext,
 	// WHOM IT NAMED IS READ FIRST, for the follows those names gave.
 	named, err := namedBy(ctx, tx, at, message.ID)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	res, err := tx.ExecContext(ctx,
 		`DELETE FROM chat_mentions WHERE message_id = ?`, message.ID)
 	if err != nil {
-		return 0, fmt.Errorf("chatlet: clear message %s's mentions at %s: %w",
+		return 0, "", fmt.Errorf("chatlet: clear message %s's mentions at %s: %w",
 			message.ID, at.position, err)
 	}
 	gone, _ := res.RowsAffected()
@@ -377,23 +452,23 @@ func (a *Applier) applyDelete(ctx context.Context, tx *sql.Tx, at applyContext,
 	unfollowed, err := unfollowUnnamed(ctx, tx, at, message.ChannelID,
 		threadOf(message.ID, message.ThreadRoot), named)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	a.noteMessage(at, message)
-	return rows + int(gone) + unfollowed, nil
+	return rows + int(gone) + unfollowed, VerdictApplied, nil
 }
 
 // applyReact adds or removes one reaction. It wakes nobody: a reaction carries
 // no text to render, and a wake per thumb would be a turn per thumb.
 func (a *Applier) applyReact(ctx context.Context, tx *sql.Tx, at applyContext,
-	r Reaction) (int, error) {
+	r Reaction) (int, Verdict, error) {
 
 	message, found, err := readMessage(ctx, tx, r.MessageID)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	if !found {
-		return 0, nil
+		return 0, VerdictGone, nil
 	}
 	if r.Removed {
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
@@ -402,29 +477,33 @@ func (a *Applier) applyReact(ctx context.Context, tx *sql.Tx, at applyContext,
 			WHERE message_id = ? AND emoji = ? AND handle = ?`,
 			r.MessageID, r.Emoji, r.By)
 		if err != nil {
-			return 0, fmt.Errorf("chatlet: remove %s's %q from message %s at "+
+			return 0, "", fmt.Errorf("chatlet: remove %s's %q from message %s at "+
 				"%s: %w", r.By, r.Emoji, r.MessageID, at.position, err)
 		}
 		n, _ := res.RowsAffected()
 		if n > 0 {
 			a.noteMessage(at, message)
 		}
-		return int(n), nil
+		// A REACTION TAKEN BACK THAT WAS NEVER ON is applied too: what
+		// was asked — that it is not there — is true.
+		return int(n), VerdictApplied, nil
 	}
-	// [MaxReactionEmoji] IS ENFORCED HERE AND NOWHERE ELSE, and the
-	// record's shape is what forces it: a reaction is a single TOGGLE so
-	// that two people reacting never overwrite each other, and a toggle
-	// cannot see the set it is joining. The applier holds the message's
-	// rows in its own transaction, so it declines the thirty-third
-	// distinct emoji — deterministically, reaching the same answer on
-	// every node, which a write-side cap read from one node's rows could
-	// not promise.
+	// [MaxReactionEmoji] IS DECIDED HERE, and the record's shape is what
+	// forces it: a reaction is a single TOGGLE so that two people reacting
+	// never overwrite each other, and a toggle cannot see the set it is
+	// joining. The applier holds the message's rows in its own
+	// transaction, so it declines the thirty-third distinct emoji —
+	// deterministically, reaching the same answer on every node, which a
+	// write-side cap read from one node's rows could not promise. The
+	// writer refuses only what its own snapshot already shows full, which
+	// saves an append; the race its snapshot could not see is decided here,
+	// and the verdict is how the writer hears of it.
 	full, err := reactionsFull(ctx, tx, r)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	if full {
-		return 0, nil
+		return 0, VerdictReactionsFull, nil
 	}
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO chat_reactions
@@ -438,14 +517,14 @@ func (a *Applier) applyReact(ctx context.Context, tx *sql.Tx, at applyContext,
 		// than a join the planner has to walk.
 		message.ChannelID, store.EncodeTime(message.CreatedAt))
 	if err != nil {
-		return 0, fmt.Errorf("chatlet: add %s's %q to message %s at %s: %w",
+		return 0, "", fmt.Errorf("chatlet: add %s's %q to message %s at %s: %w",
 			r.By, r.Emoji, r.MessageID, at.position, err)
 	}
 	n, _ := res.RowsAffected()
 	if n > 0 {
 		a.noteMessage(at, message)
 	}
-	return int(n), nil
+	return int(n), VerdictApplied, nil
 }
 
 // applyErase destroys message rows and writes the markers that make it

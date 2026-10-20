@@ -11,7 +11,8 @@ import "github.com/crewlet/crewlet/internal/statelog"
 // the only writer of any of them.
 //
 // THE NAMES ARE THE MIGRATION'S, EXACTLY. Nothing in Go connects a string here
-// to `internal/store/schema/replicated/0055_the_chat_domain_lands.sql`, and a
+// to `internal/store/schema/replicated/0055_the_chat_domain_lands.sql` (and
+// `0068_a_chat_message_is_decided_where_it_is_applied.sql`, the verdicts), and a
 // misspelling is silent in the direction that matters: a table left out of the
 // map is scrubbed from no snapshot, compared by no claim and swept by nobody,
 // which looks exactly like a table that behaves. What catches it is the
@@ -49,6 +50,12 @@ var ReproducibleTables = []string{
 	// that never existed from one the company destroyed — and what stops a
 	// redelivered post resurrecting it.
 	"chat_deletions",
+
+	// What the applier decided about every message record, which the
+	// writer reads back before it answers ([Verdict]) — the record's own
+	// decision rather than the log's machinery, so a node whose replay
+	// left it out would answer a retry of a refused post with nothing.
+	"chat_verdicts",
 
 	// And the framework's two per-domain tables: the eviction fence,
 	// whose positions name this stream's own number space, and the

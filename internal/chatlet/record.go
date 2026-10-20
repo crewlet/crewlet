@@ -183,8 +183,8 @@ type MutationRecord struct {
 
 	// Expect is the sequence this mutation was decided against.
 	// PROVENANCE ONLY — the broker is what enforced it, and nothing reads
-	// this to decide anything. Absent on every additive record, which is
-	// every message.
+	// this to decide anything. Absent on every record that carries no
+	// expectation, which is every message.
 	Expect uint64 `json:"expect,omitempty"`
 
 	// Mutation is the typed payload for (Subject.Kind, Op), left as OPAQUE

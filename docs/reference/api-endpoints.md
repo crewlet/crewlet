@@ -7842,6 +7842,20 @@ and [`/operator/mcp`](#operatormcp--your-own-assistant) for an assistant. The
 three gestures that destroy or set a room's horizon are administrator routes on
 [the write surface](#a-chat-erase-prune-or-horizon).
 
+**A message gesture is refused where it is applied, too.** A post, an edit, a
+delete and a reaction are decided again by every data node at the record's
+place in the log ([ADR-0046](../../adr/0046-a-message-is-sequenced-on-its-channels-subject.md)),
+against what landed just ahead of it: a room archived a moment before, an
+author taken out of a private room or a direct conversation a moment before, a
+message taken back or erased a moment before, a message already carrying 32
+distinct emoji. Where the node that answered has applied the record, such a
+gesture is refused exactly as it would have been had that change reached it
+first — `invalid` for the archive and for the emoji, `forbidden` for the
+membership, `not_found` for a message that is gone or taken back — and a retry
+under the same `Idempotency-Key` is refused the same way rather than reported
+as said. An answer of `pending` names a record this node has not applied yet,
+which may still be refused there.
+
 ## Agent Memory
 
 ### `GET /agents/{id}/memory`

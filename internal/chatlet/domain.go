@@ -20,14 +20,15 @@ import (
 //
 // THE FRAMEWORK'S NINTH DOMAIN, and its SEVENTH strictly-ordered,
 // identity-claiming one. What it adds over the eight before it is a single log
-// carrying TWO ARBITRATION DISCIPLINES — a room's state contends on its own
-// subject while the messages in it are additive — and the only place that
+// carrying TWO DISCIPLINES — a room's state contends on its own subject while
+// the messages in it are sequenced and decided by the applier — and the only
+// place that
 // difference can be stated is [statelog.StreamSpec.ArbitratedKinds], because
 // arbitration is a property of the subject kind and a stream has no field for
 // it. A domain that declared its messages arbitrated would serialise the
 // hottest subject in the company behind itself; one that declared its rooms
-// additive would let two writers rename a room to two different names and keep
-// both.
+// unarbitrated would let two writers rename a room to two different names and
+// keep both.
 type Domain struct{}
 
 // Name is the register key, the manifest key and the operator's own column.

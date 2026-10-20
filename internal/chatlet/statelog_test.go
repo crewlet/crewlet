@@ -19,7 +19,7 @@ import (
 //
 // What it exercises that the eight before it could not is a log carrying TWO
 // ARBITRATION DISCIPLINES: the first two records the suite publishes contend
-// on their own subjects, and the third is additive, on a subject that
+// on their own subjects, and the third is sequenced, on a subject that
 // arbitrates nothing and whose apply mints a number from log order. A domain
 // that declared those the same way would pass every case a single-discipline
 // domain has, and diverge the first time two people talked at once.

@@ -78,8 +78,8 @@ const (
 	OpDelete OpKind = "delete"
 
 	// OpReact adds or removes one reaction. A TOGGLE rather than a set,
-	// because the message kind is additive: a whole-set record would let
-	// the later of two simultaneous reactors erase the earlier one.
+	// because the message kind carries no expectation: a whole-set record
+	// would let the later of two simultaneous reactors erase the earlier one.
 	OpReact OpKind = "react"
 
 	// OpErase REMOVES message rows permanently — an admin redacting what
@@ -494,12 +494,12 @@ func (m MemberSet) Validate() error {
 }
 
 // MessagePost is somebody saying something. Its subject is the ROOM's message
-// stream, additively — see [KindMessage].
+// stream, sequenced — see [KindMessage].
 type MessagePost struct {
 	V int `json:"v"`
 
 	// MessageID is the uuid the applier files the message under, MINTED BY
-	// THE WRITER. Additive records race nobody, so there is no lost claim
+	// THE WRITER. Sequenced records race nobody, so there is no lost claim
 	// to worry about — what the writer's id buys is that the caller can
 	// name what it just said without waiting for the apply.
 	MessageID string `json:"message_id"`
@@ -532,6 +532,18 @@ type MessagePost struct {
 
 	Author     string     `json:"author"`
 	AuthorKind AuthorKind `json:"author_kind"`
+
+	// MembersOnly says the room admits its members only, as the writer's
+	// snapshot read the room: the applier refuses the post
+	// ([VerdictNotMember]) when a record ahead of it took the author out.
+	//
+	// THE WRITER'S ANSWER, CARRIED, rather than the applier's reading of
+	// the room's kind: which kinds admit members only is a rule a later
+	// build may change ([privateRoom]), and two builds deciding it at
+	// apply would write different rows from one record. What the applier
+	// decides is only the fact the record cannot carry — whether the
+	// author is still in the room at this position.
+	MembersOnly bool `json:"members_only,omitempty"`
 }
 
 // Validate refuses a post this build will not write.
@@ -718,17 +730,17 @@ func (m MessageErase) Validate() error {
 }
 
 // Reaction adds or removes one reaction. Its subject is the room's message
-// stream, additively.
+// stream, sequenced.
 //
 // A SINGLE TOGGLE rather than a set, and the shape is forced: the message kind
 // carries no expectation, so a record holding the whole reaction set would let
 // the later of two simultaneous reactors overwrite the earlier one's mark with
-// a set that never contained it. A toggle commutes, which is the property the
-// additive kind rests on.
+// a set that never contained it.
 //
-// [MaxReactionEmoji] is therefore the APPLIER's to enforce — a toggle cannot
+// [MaxReactionEmoji] is therefore the APPLIER's to decide — a toggle cannot
 // see the set it joins, and the applier holds the message's rows in its own
-// transaction — which is stated at the constant so nobody looks for it here.
+// transaction — and its verdict ([VerdictReactionsFull]) is how the writer
+// hears of it; stated at the constant so nobody looks for it here.
 type Reaction struct {
 	V int `json:"v"`
 

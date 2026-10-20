@@ -13,8 +13,8 @@ import (
 
 // chatRegistrations is the company's own chat in the register ([register]):
 // the NINTH domain and the SEVENTH strict, identity-claiming one, whose log
-// carries two arbitration disciplines — a room's state on its own subject,
-// its messages additively beside it (ADR-0046). Its declaration, applier,
+// carries two disciplines — a room's state arbitrated on its own subject, its
+// messages sequenced beside it and decided by the applier (ADR-0046). Its declaration, applier,
 // write seams, barrier, read model, generation record, node gate, wake feed
 // and Tier A ceiling (`stream.chat_log_max_bytes`, read through
 // [chatMaxBytes]).
