@@ -66,6 +66,7 @@ import {
   type PlanRow,
 } from "~/lib/artifacts/deckPlan.ts";
 import { renderSlide } from "~/lib/slides.tsx";
+import { useWidth } from "~/lib/useWidth.ts";
 import { useRest } from "~/lib/useRest.ts";
 import type { DeckLayout, DeckSlide, DeckTheme, SlidesStartersAnswer } from "~/protocol/index.ts";
 import { CreateShell, useLeaveCreate } from "./CreateShell.tsx";
@@ -85,6 +86,82 @@ const BRIEF_MAX = 4000;
  */
 const OPENING_THEME = "nightshade";
 
+/**
+ * The composer's width under which the strip leaves its column for a row
+ * under the stage: three columns there would leave the stage under 480px.
+ */
+const SPLIT_BELOW = 960;
+
+/**
+ * How the composer lays out its three parts: in "three" columns (the strip,
+ * the stage, the settings), "split" (the strip a row under the stage, the
+ * settings beside it), or one "column" on a phone.
+ *
+ * THE STAGE IS THE PAGE'S SUBJECT, so a page too narrow for three columns to
+ * leave it a readable width lays the strip out under it, as a phone does. The
+ * composer's own width decides, since the sidebar and a peek take from it and
+ * the window's width says nothing about either. The placeholder drawn while
+ * the themes load asks the same question, so the page does not move when they
+ * arrive.
+ */
+function useComposerArrangement() {
+  const phone = useMediaMatch(`(width < ${PHONE_BREAKPOINT}px)`);
+  const root = useRef<HTMLDivElement>(null);
+  const width = useWidth(root);
+  const arrangement = phone ? "column" : width > 0 && width < SPLIT_BELOW ? "split" : "three";
+  return { root, phone, arrangement, stripInMain: arrangement !== "three" };
+}
+
+/** A slide's placeholder: its hold's whole box, with a slide's corners and none of a box's default margin. */
+const SLIDE_HOLD = {
+  className: "slides-create-skeleton",
+  variant: "box",
+  height: "100%",
+  marginTop: 0,
+  borderRadius: "var(--radius-sm)",
+} as const;
+
+/** The composer's shape while the themes and layouts load: its parts where they will stand. */
+function ComposerSkeleton() {
+  const { root, arrangement, stripInMain } = useComposerArrangement();
+  const strip = (
+    <div
+      className="slides-create-strip slides-create-strip-hold"
+      data-orientation={stripInMain ? "horizontal" : "vertical"}
+    >
+      {[0, 1, 2, 3].map((n) => (
+        <div key={n} className="slides-create-thumb-hold">
+          <Skeleton {...SLIDE_HOLD} />
+        </div>
+      ))}
+    </div>
+  );
+  return (
+    <div ref={root} className="slides-create" data-arrangement={arrangement} aria-busy="true">
+      {!stripInMain && strip}
+      <div className="slides-create-main">
+        <div className="slides-create-title-hold">
+          <Skeleton
+            className="slides-create-skeleton"
+            variant="box"
+            width="40%"
+            height="100%"
+            marginTop={0}
+            label="Loading themes and layouts"
+          />
+        </div>
+        <div className="slides-create-stage-hold">
+          <Skeleton {...SLIDE_HOLD} />
+        </div>
+        {stripInMain && strip}
+      </div>
+      <div className="slides-create-side">
+        <Skeleton variant="grid" rows={3} columns={2} />
+      </div>
+    </div>
+  );
+}
+
 /** Nothing on a starter slide is a file of a version: no image to resolve. */
 const noImage = () => null;
 
@@ -96,31 +173,10 @@ export function SlidesCreate() {
     return (
       <CreateShell kind="slides">
         {starters.loading ? (
-          <div className="slides-create" aria-busy="true">
-            <div className="slides-create-strip slides-create-strip-hold">
-              {[0, 1, 2, 3].map((n) => (
-                <div key={n} className="slides-create-stage-hold">
-                  <Skeleton
-                    className="slides-create-skeleton"
-                    variant="box"
-                    height="100%"
-                    {...(n === 0 ? { label: "Loading themes and layouts" } : {})}
-                  />
-                </div>
-              ))}
-            </div>
-            <div className="slides-create-main">
-              <Skeleton variant="box" height="var(--size-control-md)" />
-              <div className="slides-create-stage-hold">
-                <Skeleton className="slides-create-skeleton" variant="box" height="100%" />
-              </div>
-            </div>
-            <div className="slides-create-side">
-              <Skeleton variant="grid" rows={3} columns={2} />
-            </div>
-          </div>
+          <ComposerSkeleton />
         ) : (
-          <div className="slides-create-state">
+          <div className="slides-create-state" role="alert">
+            <h2 className="slides-create-state-title">The themes and layouts did not load</h2>
             <QueryState error={starters.code} refusal={starters.refusal} loading={false} />
             <Button size="small" variant="secondary" onClick={() => void starters.reload()}>
               Try again
@@ -136,7 +192,7 @@ export function SlidesCreate() {
 function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
   const create = useCreateArtifact();
   const workItem = useWorkItem();
-  const phone = useMediaMatch(`(width < ${PHONE_BREAKPOINT}px)`);
+  const { root, phone, arrangement, stripInMain } = useComposerArrangement();
   const opening = useMemo(() => rowsOf(starters.default), [starters.default]);
   const firstTheme =
     starters.themes.find((t) => t.id === OPENING_THEME)?.id ??
@@ -287,7 +343,7 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
   const strip = (
     <SlideFilmstrip
       className="slides-create-strip"
-      orientation={phone ? "horizontal" : "vertical"}
+      orientation={stripInMain ? "horizontal" : "vertical"}
       slides={slides.map((s) => ({ id: s.id, title: s.title }))}
       selected={current?.key ?? ""}
       onSelect={setSelected}
@@ -346,8 +402,8 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
             : {}),
       }}
     >
-      <div className="slides-create">
-        {!phone && strip}
+      <div ref={root} className="slides-create" data-arrangement={arrangement}>
+        {!stripInMain && strip}
         <div className="slides-create-main">
           <FormField error={titleWrong}>
             {(field) => (
@@ -377,15 +433,15 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
           <p className="slides-create-caption">
             <span className="slides-create-position">
               Slide {position + 1} of {rows.length}
+              {layout ? ` · ${layout.name}` : ""}
             </span>
-            <span>{layout?.name}</span>
             <span className="slides-create-hint">
               {drafter === "agent"
                 ? "The agent starts from these slides and writes them from your brief."
                 : "Every word is yours to change once the deck opens."}
             </span>
           </p>
-          {phone && strip}
+          {stripInMain && strip}
           {drafter === "self" && create.refusal && (
             <Callout variant="danger" title="The deck was not created">
               {create.refusal}

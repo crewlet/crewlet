@@ -195,10 +195,49 @@ test("leaving with a title typed asks first, and keeping on stays", async () => 
   expect(location.hash).toBe("#/artifacts/new/slides");
 });
 
+/** Lay the composer out as if its page were this wide, for the duration of the test. */
+function atWidth(width: number) {
+  const had = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
+  Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, value: width });
+  return () => {
+    if (had) Object.defineProperty(HTMLElement.prototype, "clientWidth", had);
+    else delete (HTMLElement.prototype as unknown as Record<string, unknown>).clientWidth;
+  };
+}
+
+test("a page too narrow for three columns lays the strip out as a row under the stage", async () => {
+  const restore = atWidth(800);
+  try {
+    mount();
+    await title();
+    const strip = screen.getByRole("list", { name: "Slides to start with" });
+    expect(strip.closest(".crewlet-slide-filmstrip--horizontal")).toBeTruthy();
+    expect(strip.closest(".slides-create-main")).toBeTruthy();
+  } finally {
+    restore();
+  }
+});
+
+test("a page wide enough keeps the strip in its own column beside the stage", async () => {
+  const restore = atWidth(1200);
+  try {
+    mount();
+    await title();
+    const strip = screen.getByRole("list", { name: "Slides to start with" });
+    expect(strip.closest(".crewlet-slide-filmstrip--vertical")).toBeTruthy();
+    expect(strip.closest(".slides-create-main")).toBeNull();
+  } finally {
+    restore();
+  }
+});
+
 test("themes that did not load say so and offer to ask again", async () => {
   vi.mocked(readSlidesStarters).mockRejectedValueOnce(new Error("down"));
   mount();
-  const retry = await screen.findByRole("button", { name: "Try again" });
+  expect(
+    await screen.findByRole("heading", { name: "The themes and layouts did not load" }),
+  ).toBeTruthy();
+  const retry = screen.getByRole("button", { name: "Try again" });
   fireEvent.click(retry);
   expect(await title()).toBeTruthy();
 });
