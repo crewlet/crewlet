@@ -235,26 +235,29 @@ func TestMapResolutionReportsPerKey(t *testing.T) {
 // The pre-launch presence check tests the REFERENCES, not the resolved
 // value: an embedded "Bearer ${TOKEN}" with TOKEN unset resolves to a
 // non-empty "Bearer ", so a caller checking the result would miss exactly
-// the composite shapes config allows.
-func TestResolvableTestsTheReferencesNotTheValue(t *testing.T) {
+// the composite shapes config allows. And it names each one once, in the
+// order the value does, because what its caller does next is tell somebody
+// which variable to set.
+func TestMissingTestsTheReferencesNotTheValue(t *testing.T) {
 	t.Parallel()
 	r := NewResolver(MapSource{"SET": "v", "BLANK": ""})
 	cases := []struct {
 		value string
-		want  bool
+		want  []string
 	}{
-		{"literal", true},
-		{"${SET}", true},
-		{"Bearer ${SET}", true},
-		{"Bearer ${MISSING}", false},
+		{"literal", nil},
+		{"${SET}", nil},
+		{"Bearer ${SET}", nil},
+		{"Bearer ${MISSING}", []string{"MISSING"}},
 		// An empty credential is not a credential, even though a source
 		// answered for it — which is where this differs from Expand.
-		{"${BLANK}", false},
-		{"${SET}${MISSING}", false},
+		{"${BLANK}", []string{"BLANK"}},
+		{"${SET}${MISSING}", []string{"MISSING"}},
+		{"${B_MISSING}:${SET}:${A_MISSING}:${B_MISSING}", []string{"B_MISSING", "A_MISSING"}},
 	}
 	for _, tc := range cases {
-		if got := r.Resolvable(tc.value); got != tc.want {
-			t.Fatalf("Resolvable(%q) = %v, want %v", tc.value, got, tc.want)
+		if got := r.Missing(tc.value); !slices.Equal(got, tc.want) {
+			t.Fatalf("Missing(%q) = %q, want %q", tc.value, got, tc.want)
 		}
 	}
 }

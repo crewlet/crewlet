@@ -2980,7 +2980,7 @@ func (e *Engine) nodeStatus(ctx context.Context) coord.NodeStatus {
 	// under a lock and never from a child.
 	status := coord.NodeStatus{
 		StartedAt: e.startedAt, AdminPosture: e.adminPosture,
-		MCP: e.mcpStatus(),
+		MCP: e.mcpStatus(ctx),
 	}
 	if b := e.backends; b != nil && b.Queue != nil {
 		status.InFlight = b.Queue.InFlightCount()

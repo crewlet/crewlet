@@ -708,15 +708,56 @@ in between still lists the old child's tools, and a call to one is refused,
 classed `unavailable`, as a server no longer running on this node; the seat's
 next turn has the new child.
 
+**A seat's child is started only with the identity it is configured to act
+as.** Every `${VAR}` in the seat's own `mcp_env` block for the server — its
+unit's block included — must resolve to a value before the child is started;
+an unresolved one is never handed to the server as an empty string, which a
+vendor's server either refuses or, worse, starts with and acts as nobody. What
+the engine does instead depends on whether anything will fill the variable:
+
+| The variable | The child | Where it shows |
+|---|---|---|
+| Is one a [provisioning pass](../concepts/integration-reconcile.md) mints for this seat — a GitLab or Datadog account's token, an Atlassian account's token or address, or a Mattermost bot's token where `integrations.mattermost.provisioning` is set — and nothing that pass last reported stops it | **Waiting**, not failed. It starts once the seal reaches the node: the pass that sealed it asks the node it ran on for a pass over its seats at once, and re-activates the revision so every other node's apply does the same | `mcp_server_awaiting_credential` (info), naming the variable and the integration that mints it; the node's heartbeat counts it under `waiting` |
+| Is one such a pass mints, and its last report says it cannot until a person acts — its own credential is missing or refused, an administrator has an app or a setting to switch on, or this seat's account could not be made or was switched off by somebody else — or the integration is being disconnected | **Failed**, with the finding that pass recorded: the same finding the integration's card shows. It is a wait with no end until somebody acts, so it is not reported as one | `mcp_server_credential_missing` (error) when the seat's pass meets it; the node's heartbeat counts it under `failed` from the first beat after the integration reports it, whenever that is, and under `waiting` again from the first after it clears |
+| Is one nothing this engine runs mints — a secret nobody stored, a reference to a name nobody holds, or a variable set to an empty value | **Failed**, naming the variable and the remedy: seal it (`crewlet secrets set`, or the integration's own `provision` command where it has one) and `POST /config/reload`, or set it in the engine's own environment and restart the engine — a running engine never reads an `export` made after it started; for one set to an empty value, seal a value and `POST /config/reload`, or take the key out of the seat's `mcp_env` if the server needs none | `mcp_server_credential_missing` (error); the heartbeat counts it under `failed`, with the same sentence |
+
+Which variables a pass mints is read from the plan the pass mints by — each
+provisioning pass's run takes its plan from the one place the engine reads it
+from — so the two cannot disagree. None of these is retried on the restart
+schedule below: nothing about a held-back child changes until the secret
+snapshot does, and every change to the snapshot runs the seat's pass again —
+a revision, the reload a `crewlet secrets set` is followed by, the
+re-activation a provisioning pass makes, and the pass the sealing node asks
+for itself, which does not wait on that re-activation. What a person does at an
+integration is the one change no pass sees, which is why a held-back child's
+row is judged again on every heartbeat against what the integration last
+reported. A child already running whose credential stops resolving — a sealed
+token deleted by a disconnect that removed the seats' accounts, or by hand — is
+stopped by the same rule (`mcp_server_retired`, naming the variable), rather
+than left acting at the vendor on the value it started with. The seat's mailbox
+does not wait for a held-back child: an identity that does not exist at the
+vendor yet, or waits on a person, is nothing the seat's first turn can be asked
+about there.
+
+**The rule covers the seat's block, and not the server's own `env` and
+`headers`.** Those are credential positions too — a shared server's key lives
+there — but they are also where a host value is passed through by name, and a
+reference cannot say it may resolve to nothing: an optional host setting
+(`NPM_CONFIG_REGISTRY` below) is unset on most hosts, and npm reads it empty as
+unset. So a reference there that resolves to nothing is passed on empty, as a
+shell would, with an `empty_env_vars` warning naming the key. A shared server
+carries no seat's identity, so only that half applies to it: one whose own key
+is unset starts, fails to authenticate, and is retried on the restart schedule
+below, as any server that will not start is.
+
 **A credential provisioned after the seat was claimed still reaches its
 child.** A seat is claimed as soon as its node can run it, and an integration
 that mints each agent's identity — a Mattermost bot token, an Atlassian API
-token — can seal it a moment later. The child started in between ran with an
-empty credential, and most vendors' servers refuse to start that way. The pass
-that sealed the token re-activates the revision, and the seat starts the child
-with it as soon as that apply has run. An apply that lands while the seat is
-still being claimed is folded into the claim rather than lost, so the seat's
-mailbox opens only once its children are started from the newest snapshot.
+token — can seal it a moment later. The child waits for it, as above, and
+starts once the seal reaches the node holding the seat. An apply that lands
+while the seat is still being claimed is folded into the claim rather than
+lost, so the seat's mailbox opens only once its children are started from the
+newest snapshot.
 
 **A per-role child belongs to a seat, not to a node.** In a fleet each node
 claims a slice of the company, and it spawns children only for the seats it
@@ -755,7 +796,10 @@ heartbeat and the ceiling the interval a stuck seat's alarm repeats at, so a
 vendor that recovers is noticed within six minutes, and a server that never
 will repeats its failure about as often as that alarm. An apply retries at
 once and starts the series again. A spec that can never launch — no command, no URL —
-is not retried, since nothing about it changes until a revision does. It is
+is not retried, since nothing about it changes until a revision does, and
+neither is a child held back for a seat credential that does not resolve
+(above), since nothing about it changes until the secret snapshot does and
+every change to the snapshot runs a pass of its own. It is
 the schedule every server is retried on: a shared server whose start failed,
 and any child that dies after starting, follow it too (see
 [A server that dies, or will not start](#a-server-that-dies-or-will-not-start)).

@@ -163,7 +163,7 @@ roles:
 		for _, step := range box.Steps {
 			judgedSteps = append(judgedSteps, step.Step.Name)
 		}
-		for _, step := range e.boxSetup(manager.DefaultSetup(), handle, gate) {
+		for _, step := range e.boxSetup(t.Context(), e.Company(), manager.DefaultSetup(), handle, gate) {
 			given = append(given, step.Name)
 		}
 		if !slices.Equal(judgedSteps, given) {

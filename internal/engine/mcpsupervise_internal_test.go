@@ -206,7 +206,7 @@ func TestAPassLeavesADeadSeatChildToItsBridgeAndAnApplyAsksItToTryNow(t *testing
 	if got := seatOutcomes(e, "ceo"); len(got) != 1 || got[0].err != nil {
 		t.Fatalf("the pass concluded %+v, want the child left to its bridge", got)
 	}
-	if rows := e.mcpStatus(); len(rows) != 1 || rows[0].Failed != 1 ||
+	if rows := e.mcpStatus(t.Context()); len(rows) != 1 || rows[0].Failed != 1 ||
 		!strings.Contains(rows[0].Error, "would not restart") {
 		t.Errorf("heartbeat = %+v, want the child reported down with why", rows)
 	}
