@@ -51,13 +51,23 @@ type PlanLine struct {
 // WRITE IS PLANNED IN A WRITE TRANSACTION, because the read path runs
 // query_only, which refuses even the EXPLAIN of one. Nothing is executed either
 // way.
+//
+// A PLAN THAT SAYS NOTHING FAILS, because a gate that passes on an empty plan
+// certified nothing — with one exception, an INSERT: an insert of values reads
+// no table, its conflict probe included, and the planner says nothing about
+// one, so a gate registering a write that must stay that way reads it as the
+// empty plan it is. An insert that reads a table plans that read like any
+// other statement.
 func PlanTree(t testing.TB, db Handle, statement string, args []any) []PlanLine {
 
 	t.Helper()
 	in := db.Read
-	if words := strings.Fields(statement); len(words) > 0 &&
-		(strings.EqualFold(words[0], "UPDATE") || strings.EqualFold(words[0], "DELETE") ||
-			strings.EqualFold(words[0], "INSERT")) {
+	var verb string
+	if words := strings.Fields(statement); len(words) > 0 {
+		verb = strings.ToUpper(words[0])
+	}
+	switch verb {
+	case "UPDATE", "DELETE", "INSERT":
 		in = db.Tx
 	}
 	var plan []PlanLine
@@ -79,7 +89,7 @@ func PlanTree(t testing.TB, db Handle, statement string, args []any) []PlanLine 
 	}); err != nil {
 		t.Fatalf("EXPLAIN QUERY PLAN:\n%s\n%v", statement, err)
 	}
-	if len(plan) == 0 {
+	if len(plan) == 0 && verb != "INSERT" {
 		t.Fatalf("the planner said nothing about:\n%s", statement)
 	}
 	return plan
