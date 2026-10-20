@@ -467,7 +467,7 @@
           ]
         },
         "webhook_name": {
-          "description": "Name of the webhook the engine keeps at Datadog; monitors name it as @webhook-\u003cname\u003e (default crewlet).",
+          "description": "Name of the webhook the engine keeps at Datadog; monitors name it as @webhook-<name> (default crewlet).",
           "type": [
             "string",
             "number",
@@ -1417,7 +1417,7 @@
           ]
         },
         "model": {
-          "description": "Model id, in the CLI's own grammar (OpenCode: \u003cprovider\u003e/\u003cmodel\u003e).",
+          "description": "Model id, in the CLI's own grammar (OpenCode: <provider>/<model>).",
           "type": [
             "string",
             "number",
@@ -1444,7 +1444,7 @@
           ]
         },
         "state_dir": {
-          "description": "Credential + per-seat home directory, each CLI under \u003cstate_dir\u003e/\u003cagent\u003e. Entries sharing one and a CLI share a login.",
+          "description": "Credential + per-seat home directory, each CLI under <state_dir>/<agent>. Entries sharing one and a CLI share a login.",
           "type": [
             "string",
             "number",
@@ -4078,7 +4078,7 @@
           "null"
         ]
       },
-      "description": "name -\u003e value facts substituted into tool-skill text. Keys must be identifiers.",
+      "description": "name -> value facts substituted into tool-skill text. Keys must be identifiers.",
       "type": [
         "object",
         "null"
