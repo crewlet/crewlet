@@ -276,20 +276,221 @@ export function blankSheetSchema(): DataCollection[] {
   ];
 }
 
-/** The templates a new sheet starts from, in the order New offers them. */
+/** One collection people who can edit change, with the columns given. */
+function sharedCollection(name: string, title: string, columns: DataColumn[]): DataCollection {
+  return { name, title, preset: "shared", read: "all", create: "editor", delete: "editor", columns };
+}
+
+/**
+ * The Tracker: one row per piece of work, who owns it, where it stands, how
+ * urgent it is and when it is due.
+ */
+export function trackerSheetSchema(): DataCollection[] {
+  const statuses: string[] = [];
+  const priorities: string[] = [];
+  return [
+    sharedCollection("tasks", "Tracker", [
+      { key: "task", type: "text", label: "Task", primary: true, required: true },
+      { key: "owner", type: "person", label: "Owner" },
+      {
+        key: "status",
+        type: "status",
+        label: "Status",
+        options: [
+          status("Not started", "todo", "neutral", statuses),
+          status("In progress", "in_progress", "info", statuses),
+          status("Done", "done", "success", statuses),
+          status("Blocked", "blocked", "danger", statuses),
+        ],
+        default: "not_started",
+      },
+      {
+        key: "priority",
+        type: "select",
+        label: "Priority",
+        options: [
+          choice("High", "rose", priorities),
+          choice("Medium", "amber", priorities),
+          choice("Low", "blue", priorities),
+        ],
+      },
+      { key: "due", type: "date", label: "Due" },
+      { key: "notes", type: "longtext", label: "Notes" },
+    ]),
+  ];
+}
+
+/** The Budget: one line per cost, its category, the amount, who owns it and whether it is paid. */
+export function budgetSheetSchema(): DataCollection[] {
+  const categories: string[] = [];
+  return [
+    sharedCollection("lines", "Budget", [
+      { key: "item", type: "text", label: "Item", primary: true, required: true },
+      {
+        key: "category",
+        type: "select",
+        label: "Category",
+        options: [
+          choice("Software", "purple", categories),
+          choice("Contractors", "cyan", categories),
+          choice("Travel", "amber", categories),
+          choice("Events", "rose", categories),
+        ],
+      },
+      { key: "amount", type: "number", label: "Amount", min: 0 },
+      { key: "owner", type: "person", label: "Owner" },
+      { key: "paid", type: "checkbox", label: "Paid" },
+      { key: "notes", type: "longtext", label: "Notes" },
+    ]),
+  ];
+}
+
+/** The Roadmap: one row per initiative, its quarter, where it stands, who leads it and how sure the team is. */
+export function roadmapSheetSchema(): DataCollection[] {
+  const quarters: string[] = [];
+  const statuses: string[] = [];
+  return [
+    sharedCollection("initiatives", "Roadmap", [
+      { key: "initiative", type: "text", label: "Initiative", primary: true, required: true },
+      {
+        key: "quarter",
+        type: "select",
+        label: "Quarter",
+        options: [
+          choice("Q1", "cyan", quarters),
+          choice("Q2", "green", quarters),
+          choice("Q3", "amber", quarters),
+          choice("Q4", "purple", quarters),
+        ],
+      },
+      {
+        key: "status",
+        type: "status",
+        label: "Status",
+        options: [
+          status("Exploring", "todo", "neutral", statuses),
+          status("Building", "in_progress", "info", statuses),
+          status("Shipped", "done", "success", statuses),
+          status("Paused", "blocked", "warning", statuses),
+        ],
+        default: "exploring",
+      },
+      { key: "lead", type: "person", label: "Lead" },
+      { key: "target", type: "date", label: "Target date" },
+      { key: "confidence", type: "rating", label: "Confidence", max: 5 },
+    ]),
+  ];
+}
+
+/**
+ * The Sign-up sheet: everyone it is shared with adds their own row and
+ * changes only that one, so a list fills itself in without anybody's row
+ * being rewritten by somebody else.
+ */
+export function signupSheetSchema(): DataCollection[] {
+  const slots: string[] = [];
+  return [
+    {
+      name: "signups",
+      title: "Sign-up",
+      preset: "contribute",
+      read: "all",
+      create: "contributor",
+      delete: "editor",
+      columns: [
+        { key: "name", type: "text", label: "Name", primary: true, required: true },
+        {
+          key: "slot",
+          type: "select",
+          label: "Slot",
+          options: [
+            choice("Morning", "cyan", slots),
+            choice("Afternoon", "amber", slots),
+            choice("Evening", "purple", slots),
+          ],
+        },
+        { key: "notes", type: "longtext", label: "Notes" },
+      ],
+    },
+  ];
+}
+
+/** A calendar date `days` after `from`, in the reader's own calendar, as a date column holds it. */
+function dayAfter(from: Date, days: number): string {
+  const at = new Date(from.getFullYear(), from.getMonth(), from.getDate() + days);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`;
+}
+
+/** A template's example rows, by column key: what a new sheet starts with when the reader keeps them. */
+export type ExampleRows = (today: Date) => Record<string, unknown>[];
+
+/**
+ * The ways a new sheet starts, in the order New offers them: blank, then the
+ * templates. Each names its columns (`schema`) and a few example rows that
+ * show what goes where (`examples`), which the reader may keep or drop.
+ */
 export const SHEET_TEMPLATES = [
   {
-    key: "review",
-    label: "Review sheet",
-    description:
-      "One row per item to review, a reviewer for each, and a status, labels and notes they fill in.",
-    schema: reviewSheetSchema,
+    key: "blank",
+    label: "Blank",
+    description: "One column to start from. Shape the rest in the grid.",
+    schema: blankSheetSchema,
+    examples: (() => []) as ExampleRows,
   },
   {
-    key: "blank",
-    label: "Blank sheet",
-    description: "One column to start from. Add columns in its Data panel.",
-    schema: blankSheetSchema,
+    key: "tracker",
+    label: "Tracker",
+    description: "Work with an owner, a status, a priority and a due date.",
+    schema: trackerSheetSchema,
+    examples: ((today) => [
+      { task: "Draft the launch announcement", status: "in_progress", priority: "high", due: dayAfter(today, 3) },
+      { task: "Review the pricing page", status: "not_started", priority: "medium", due: dayAfter(today, 7) },
+      { task: "Book the customer interviews", status: "done", priority: "low", due: dayAfter(today, -2) },
+    ]) as ExampleRows,
+  },
+  {
+    key: "review",
+    label: "Review",
+    description: "Items to review, a reviewer for each, and the status, labels and notes they fill in.",
+    schema: reviewSheetSchema,
+    examples: (() => [
+      { item: "Single sign-on with SAML", details: "Customers on the Enterprise plan sign in through their identity provider.", status: "pending", labels: ["must_have"] },
+      { item: "Audit log export", details: "A daily export of every admin action as CSV.", status: "changes_requested", labels: ["nice_to_have", "question"] },
+      { item: "Data residency in the EU", status: "approved", labels: ["must_have"], done: true },
+    ]) as ExampleRows,
+  },
+  {
+    key: "budget",
+    label: "Budget",
+    description: "Costs by category, with the amount, an owner and whether each is paid.",
+    schema: budgetSheetSchema,
+    examples: (() => [
+      { item: "Design tool seats", category: "software", amount: 1200, paid: true },
+      { item: "Security audit", category: "contractors", amount: 9000, paid: false },
+      { item: "Launch event venue", category: "events", amount: 4500, paid: false },
+    ]) as ExampleRows,
+  },
+  {
+    key: "roadmap",
+    label: "Roadmap",
+    description: "Initiatives by quarter, with a status, a lead, a target date and a confidence.",
+    schema: roadmapSheetSchema,
+    examples: ((today) => [
+      { initiative: "Self-serve onboarding", quarter: "q1", status: "building", target: dayAfter(today, 30), confidence: 4 },
+      { initiative: "Usage-based billing", quarter: "q2", status: "exploring", target: dayAfter(today, 90), confidence: 3 },
+      { initiative: "Mobile app", quarter: "q3", status: "paused", target: dayAfter(today, 180), confidence: 2 },
+    ]) as ExampleRows,
+  },
+  {
+    key: "signup",
+    label: "Sign-up",
+    description: "Everyone adds their own row and changes only theirs.",
+    schema: signupSheetSchema,
+    examples: (() => [
+      { name: "Ana Lopez", slot: "morning" },
+      { name: "Ben Okafor", slot: "afternoon", notes: "Happy to swap if needed." },
+    ]) as ExampleRows,
   },
 ] as const;
 
