@@ -195,9 +195,10 @@ type stateLog struct {
 	// going, which is what the `floor_unknown` alarm ages.
 	floorReads floorReads
 
-	// floorMemo is the published floors as a READ is served them: the last
-	// read that answered, refreshed off the read's path (servedhealth.go).
-	floorMemo memo[publishedFloors]
+	// floorMemos is each domain's published floor as a READ is served it:
+	// the last read of its key that answered, refreshed off the read's path
+	// (servedhealth.go).
+	floorMemos floorMemos
 
 	// publishing serializes [stateLog.publishPositions], whose reading of
 	// the runners and write of the row must not interleave with another's.
@@ -1400,23 +1401,87 @@ func (s *stateLog) readerFor(domain statelog.Domain, spec statelog.StreamSpec,
 // A READ THAT ANSWERS UNKNOWN MUST REFUSE, which is what the fence does with
 // the error: this is the one check where failing open is a lost update rather
 // than a duplicate.
+//
+// # ONE DOMAIN'S KEY, READ NOW
+//
+// The write fence asks this on every write at an expectation of zero, AFTER
+// the write's own read of its subject — the floor theorem's order (statelog's
+// package doc): a floor read before that read, or held from an earlier one,
+// can miss the floor that licensed purging the subject's last record. So it
+// can be neither moved off the write's path nor served from memory, and what
+// it can be is the cheapest read that answers it: [coord.FloorRegister.Floor],
+// one leader read of the domain's own key. It was a certified listing of the
+// whole register, whose ordered consumer is created and deleted through the
+// metadata group on a clustered broker; on a loaded three-member fleet that
+// create ran past the client's five-second API timeout and a page create was
+// refused `floor_unknown` with the register perfectly readable.
+//
+// The read is noted for the `floor_unknown` alarm like every other, and it
+// speaks for its own domain alone ([stateLog.noteFloors]): a fence's answer
+// for the tracker says nothing about whether the knowledge base's floor can be
+// read.
 func (s *stateLog) trimFloor(ctx context.Context, domain string, generation uint32) (uint64, error) {
-	return s.readFloors(ctx).floor(domain, generation)
+	read := readFloorsOf(ctx, s.fleet, []string{domain})
+	s.noteFloors(read)
+	return read.floor(domain, generation)
 }
 
 // publishedFloors is ONE read of the fleet's published trim floors, for every
-// domain a caller judges at one instant — or why it could not be read.
+// domain a caller judges at one instant — and, for each domain, either its row,
+// no row at all, or why its row could not be read.
 //
-// ONE READ PER PASS, NEVER ONE PER DOMAIN. The register is a certified listing
-// of a coordination bucket — the bucket's own pass, its key index and a leader
-// read of every key the pass lost — so a pass that judges every domain's copy
-// ([stateLog.judgeCopy], ADR-0031) and read it once per domain would pay that
-// listing four times a second on every data node to learn one fact four
-// times. Every domain's floor is a row of the same register, read at the same
-// instant.
+// ONE READ PER PASS, NEVER ONE PER JUDGEMENT. A pass that judges every
+// domain's copy ([stateLog.judgeCopy], ADR-0031) reads each domain's floor
+// once, for all of them, rather than once for each judgement it makes.
+//
+// EACH DOMAIN BY ITS KEY ([readFloorsOf]), never by listing the register:
+// every reader here asks about domains it names, and a listing is a key index
+// read and an ordered consumer created and deleted — on a clustered broker two
+// proposals to the metadata group every stream and consumer in the fleet is
+// placed through. What one of each costs is `BenchmarkAFloorRead`'s
+// (internal/coord/kv), which measures the key read, every registered domain's
+// keys read at once, and the class listing they replaced, on one embedded
+// member and through a leaf. MEASURED (three runs of 2 000 reads each, four
+// cores at a load average of 6 to 7): one key, 1 API request and no consumer,
+// 0.09–0.16 ms a read on a member and 0.19–0.23 ms through a leaf; five keys
+// at once, 5 requests and no consumer, 0.44–0.51 ms and 0.69–0.80 ms; the
+// listing, 4 requests of which 2 are a consumer's create and delete,
+// 1.04–1.16 ms and 1.41–1.81 ms. On one idle member the listing is only a
+// millisecond; what it costs a fleet is those two requests, each a proposal
+// the metadata group must agree to on a clustered broker, which no member
+// arm can show.
+//
+// The incident's own record, which the benchmark does not reproduce because it
+// is a property of a loaded fleet rather than of one read: in four runs of the
+// three-member end-to-end fleet on a four-core machine at a load average of 32
+// to 65, EVERY reader's listing of the register — the read health 43% of
+// them, the write fence 6% — 1 467 of them, at p50 276 ms, p99 4.2 s and the
+// slowest 6.6 s, of which 48 failed, every one at the consumer's create (14
+// at exactly the client's five-second API timeout, 32 at their caller's own
+// deadline, 2 cancelled). Afterwards, in ten runs of the same fleet at a load
+// average of 20 to 40 — a lighter load, and a different population: the write
+// fence's own key reads alone — 402 key reads at p50 6 ms, p99 160 ms and the
+// slowest 0.7 s, none failed.
+//
+// # Each domain on its own
+//
+// A ROW IS ONE DOMAIN'S, and so is its failure. The keys share one stream and
+// one leader, so a store that does not answer fails every key on its own —
+// but a row that does not decode, or that names another domain than its key
+// ([coord.FloorRegister.Floor]), is a fault of that one key, and a request
+// that timed out under load is a fault of that one request. Read as a whole,
+// any of them refused every domain: one bad row stopped the trim of every log,
+// and once the read memo aged, every read of every domain on every node — and
+// a read of five keys fails whenever any one of its five requests does, so
+// every domain's readiness was held to the worst of the five. So each domain
+// answers from its own key alone ([publishedFloors.row]), and only a reader
+// that needs every domain at once (the join) refuses when any of them is
+// unread.
 type publishedFloors struct {
-	floors []coord.TrimFloor
-	err    error
+	// domains is each domain the read asked about, and what its key said.
+	// A domain the read did not ask about is absent, which is NEVER read as
+	// a trim that has never run: [publishedFloors.row] refuses it.
+	domains map[string]domainFloor
 
 	// at is when the read landed — what a health built from it stamps its
 	// floor with ([statelog.Floor.ReadAt]), since that is the instant the
@@ -1424,83 +1489,166 @@ type publishedFloors struct {
 	at time.Time
 }
 
-// readFloors reads the published floors once, notes how the read went
-// ([stateLog.noteFloors]), and keeps a read that answered for the reads served
-// after it ([stateLog.servedFloors]).
+// domainFloor is what one domain's key answered: its row, no row (the trim
+// has never written one for the domain), or why it could not be read.
+type domainFloor struct {
+	row   coord.TrimFloor
+	found bool
+	err   error
+}
+
+// readFloors reads every registered domain's published floor once, notes how
+// each domain's read went ([stateLog.noteFloors]), and keeps every domain's
+// that answered for the reads served after it ([stateLog.servedFloor]).
 func (s *stateLog) readFloors(ctx context.Context) publishedFloors {
-	read := readFloorsOf(ctx, s.fleet)
+	read := readFloorsOf(ctx, s.fleet, registeredNames())
 	s.noteFloors(read)
-	if read.err == nil {
-		s.floorMemo.store(read, read.at)
+	for domain, got := range read.domains {
+		if got.err == nil {
+			s.floorMemos.of(domain).store(read.only(domain), read.at)
+		}
 	}
 	return read
 }
 
-// readFloorsOf reads fleet's published floors once — the one read every
-// caller's [publishedFloors] comes from, whichever handle on the fleet it
-// holds.
-func readFloorsOf(ctx context.Context, fleet coord.Fleet) publishedFloors {
-	floors, err := fleet.Floors(ctx)
-	if err != nil {
-		return publishedFloors{at: time.Now(),
-			err: fmt.Errorf("engine: read the fleet's published trim floors: %w", err)}
+// readFloorsOf reads the published floor of each of domains, ONE KEY READ A
+// DOMAIN and all of them at once — the one read every caller's
+// [publishedFloors] comes from, whichever handle on the fleet it holds. Each
+// domain's answer is its own: one that fails leaves every other domain read.
+func readFloorsOf(ctx context.Context, fleet coord.Fleet, domains []string) publishedFloors {
+	got := make([]domainFloor, len(domains))
+	var wg sync.WaitGroup
+	for i, domain := range domains {
+		wg.Go(func() {
+			row, found, err := fleet.Floor(ctx, domain)
+			if err != nil {
+				err = fmt.Errorf("engine: read %s's published trim floor: %w", domain, err)
+			}
+			got[i] = domainFloor{row: row, found: found, err: err}
+		})
 	}
-	return publishedFloors{floors: floors, at: time.Now()}
+	wg.Wait()
+	out := publishedFloors{domains: make(map[string]domainFloor, len(domains)), at: time.Now()}
+	for i, domain := range domains {
+		out.domains[domain] = got[i]
+	}
+	return out
 }
 
-// floorReads is how this node's reads of the published floors have been going:
-// since when every one has failed, or zero while the last one answered.
+// row is domain's published row out of this read: the row and true, false
+// where the trim has never written one, or the error its key's read failed
+// with — and an error for a domain the read never asked about, which is not a
+// domain without a floor.
+func (p publishedFloors) row(domain string) (coord.TrimFloor, bool, error) {
+	got, asked := p.domains[domain]
+	if !asked {
+		return coord.TrimFloor{}, false, fmt.Errorf("engine: %s's published trim "+
+			"floor was not read — a floor nobody asked for is not one the trim has "+
+			"never written", domain)
+	}
+	return got.row, got.found, got.err
+}
+
+// floor is domain's floor at generation out of this read ([floorFor]); a key
+// nobody could read is the error, which refuses — that domain alone.
+func (p publishedFloors) floor(domain string, generation uint32) (uint64, error) {
+	row, found, err := p.row(domain)
+	if err != nil {
+		return 0, err
+	}
+	return floorFor(row, found, domain, generation)
+}
+
+// unread is why every domain this read could not read failed, joined, in the
+// order of the domains' names — nil when every key answered. For a reader
+// that needs every domain at once, which no single domain's answer can stand
+// in for.
+func (p publishedFloors) unread() error {
+	var errs []error
+	for _, domain := range slices.Sorted(maps.Keys(p.domains)) {
+		if err := p.domains[domain].err; err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// only is this read narrowed to one domain, as the read memo of that domain
+// holds it.
+func (p publishedFloors) only(domain string) publishedFloors {
+	got, asked := p.domains[domain]
+	if !asked {
+		return publishedFloors{at: p.at}
+	}
+	return publishedFloors{domains: map[string]domainFloor{domain: got}, at: p.at}
+}
+
+// floorReads is how this node's reads of each domain's published floor have
+// been going: since when every one has failed, per domain, absent while the
+// last one answered.
 //
 // THE NODE'S OWN EXPERIENCE OF THE REGISTER, not a probe of its own: every
 // read that refuses a request or a verdict over an unread floor is one noted
 // here, so the `floor_unknown` alarm ages exactly the outage those refusals
 // are — and a node nobody asks anything still reads the register on every
 // alarm evaluation, through the report.
+//
+// PER DOMAIN, because the refusals are. A write's fence reads its own
+// domain's key alone, so a node writing the tracker hears the tracker's floor
+// answer several times a second; noted as the register's answer, each of them
+// cleared the clock of a domain whose own key had been failing all along, and
+// `floor_unknown` stayed silent on a node refusing every read of that domain.
 type floorReads struct {
 	mu sync.Mutex
 
-	// failingSince is when the first of the reads that have failed since
-	// the last one answered landed.
-	failingSince time.Time
+	// failingSince is, for each domain whose last read failed, when the
+	// first of the reads that have failed since one last answered landed.
+	failingSince map[string]time.Time
 }
 
 // noteFloors records one read of the published floors, at the instant it
-// landed. Nil-safe, for a report over no state log.
+// landed, for each domain it asked about — and for that domain alone.
+// Nil-safe, for a report over no state log.
 func (s *stateLog) noteFloors(read publishedFloors) {
 	if s == nil {
 		return
 	}
 	s.floorReads.mu.Lock()
 	defer s.floorReads.mu.Unlock()
-	switch {
-	case read.err == nil:
-		s.floorReads.failingSince = time.Time{}
-	case s.floorReads.failingSince.IsZero():
-		s.floorReads.failingSince = read.at
+	for domain, got := range read.domains {
+		if got.err == nil {
+			delete(s.floorReads.failingSince, domain)
+			continue
+		}
+		if _, failing := s.floorReads.failingSince[domain]; failing {
+			continue
+		}
+		if s.floorReads.failingSince == nil {
+			s.floorReads.failingSince = map[string]time.Time{}
+		}
+		s.floorReads.failingSince[domain] = read.at
 	}
 }
 
-// floorsUnreadFor is how long every read of the published floors has failed,
-// as of now — zero while the last one answered.
-func (s *stateLog) floorsUnreadFor(now time.Time) time.Duration {
+// floorsUnread is every domain whose floor is unreadable now, and how long
+// each has been so as of now — each its own age, since a domain that began
+// failing a moment ago is still served from its memo while one failing past
+// [statelog.FloorCacheStale] is refused. Nil while every domain's last read
+// answered.
+func (s *stateLog) floorsUnread(now time.Time) map[string]time.Duration {
 	if s == nil {
-		return 0
+		return nil
 	}
 	s.floorReads.mu.Lock()
 	defer s.floorReads.mu.Unlock()
-	if s.floorReads.failingSince.IsZero() {
-		return 0
+	if len(s.floorReads.failingSince) == 0 {
+		return nil
 	}
-	return max(0, now.Sub(s.floorReads.failingSince))
-}
-
-// floor is domain's floor at generation out of this read ([floorFor]); a
-// register nobody could read is the error, which refuses.
-func (p publishedFloors) floor(domain string, generation uint32) (uint64, error) {
-	if p.err != nil {
-		return 0, p.err
+	out := make(map[string]time.Duration, len(s.floorReads.failingSince))
+	for domain, since := range s.floorReads.failingSince {
+		out[domain] = now.Sub(since)
 	}
-	return floorFor(p.floors, domain, generation)
+	return out
 }
 
 // floorOf is [stateLog.trimFloor] for one domain, as a write fence reads it:
@@ -1520,8 +1668,8 @@ func (s *stateLog) floorOf(domain string) func(context.Context, uint32) (uint64,
 	}
 }
 
-// floorFor is the floor's arithmetic over what the register holds, separated
-// from the register so every branch is reachable in a table test.
+// floorFor is the floor's arithmetic over what one domain's key holds,
+// separated from the register so every branch is reachable in a table test.
 //
 //   - No record for the domain: the trim has never concluded anything about
 //     this log, so nothing has been licensed for removal. Zero.
@@ -1536,23 +1684,17 @@ func (s *stateLog) floorOf(domain string) func(context.Context, uint32) (uint64,
 //     number space. Unknown, which refuses.
 //   - Otherwise the record's Floor — never its TrimTo, which is zero while
 //     the trim is blocked and falls with the counted minimum.
-func floorFor(floors []coord.TrimFloor, domain string, generation uint32) (uint64, error) {
-	for _, f := range floors {
-		if f.Domain != domain {
-			continue
-		}
-		switch {
-		case f.Generation < generation:
-			return 0, nil
-		case f.Generation > generation:
-			return 0, fmt.Errorf("engine: the published floor for %s is at generation "+
-				"%d and this node is on %d — this node's positions name a sequence "+
-				"space the fleet has left, so nothing it holds can be compared "+
-				"against the floor", domain, f.Generation, generation)
-		}
-		return f.Floor, nil
+func floorFor(row coord.TrimFloor, found bool, domain string, generation uint32) (uint64, error) {
+	switch {
+	case !found, row.Generation < generation:
+		return 0, nil
+	case row.Generation > generation:
+		return 0, fmt.Errorf("engine: the published floor for %s is at generation "+
+			"%d and this node is on %d — this node's positions name a sequence "+
+			"space the fleet has left, so nothing it holds can be compared "+
+			"against the floor", domain, row.Generation, generation)
 	}
-	return 0, nil
+	return row.Floor, nil
 }
 
 // logEndsOf is a domain log's two ends, as the write fences read them beside
@@ -1636,10 +1778,10 @@ func (s *stateLog) Readmissible(ctx context.Context, nodeID string) error {
 	if err != nil {
 		return unjudged("", fmt.Errorf("read the positions register: %w", err))
 	}
-	floors, err := s.fleet.Floors(ctx)
-	if err != nil {
-		return unjudged("", fmt.Errorf("read the published trim floors: %w", err))
-	}
+	// EACH LOG'S FLOOR IS ITS OWN, so one that did not read refuses the
+	// readmission naming that log ([ReadmissionUnjudged.Log]) rather than
+	// the register as a whole.
+	floors := s.readFloors(ctx)
 	var bounds []statelog.ReadmissionBound
 	for _, running := range s.running() {
 		if !running.domain.ClaimsIdentity() {
@@ -1658,10 +1800,10 @@ func (s *stateLog) Readmissible(ctx context.Context, nodeID string) error {
 // ([statelog.ReadmissionBound]): the floor published at the generation this
 // node runs the log at, out of floors, and the log's first surviving sequence.
 func (s *stateLog) readmissionBound(ctx context.Context, running *runningLog,
-	floors []coord.TrimFloor) (statelog.ReadmissionBound, error) {
+	floors publishedFloors) (statelog.ReadmissionBound, error) {
 
 	generation := running.runner.Committed().Generation
-	floor, err := floorFor(floors, running.domain.Name(), generation)
+	floor, err := floors.floor(running.domain.Name(), generation)
 	if err != nil {
 		return statelog.ReadmissionBound{}, err
 	}
@@ -1822,9 +1964,9 @@ func (s *stateLog) readHealths(ctx context.Context, runs []*runningLog) []health
 //
 // THE FLOORS ARE READ BESIDE THE LOGS rather than before them, because a
 // health needs its floor only at the end ([floored]): read first, a slow
-// coordination listing left the logs' requests less of the deadline. Every
-// health in the reading is built from that one read of the register — the
-// listing is the costly half, and every domain's floor is a row of it.
+// coordination read left the logs' requests less of the deadline. Every
+// health in the reading is built from that one read of the floors
+// ([readFloorsOf]), every domain's key read at once.
 func readHealthsWith(ctx context.Context, runs []*runningLog,
 	readFloors func(context.Context) publishedFloors,
 	observe func(context.Context, *runningLog) (statelog.Health, error)) []healthRead {
@@ -2843,18 +2985,26 @@ func (s *stateLog) replayable(ctx context.Context, logs map[string]*jetstream.Do
 			above[domain.Name()] = at.Generation
 		}
 	}
-	// THE FLEET'S GENERATIONS, READ ONCE for every domain: two
-	// coordination reads per join rather than two per domain, and one
-	// answer the domains are all judged against.
+	// THE FLEET'S GENERATIONS AND FLOORS, READ ONCE for every domain: the
+	// register's listing and one key read a domain per join rather than per
+	// question, and one answer the domains are all judged against. The
+	// floors are not ordered after any read of a subject here — this is
+	// the join's question about what to adopt, not a write's fence — so the
+	// floor theorem's freshness rule does not ask for a second read.
 	rows, err := s.fleet.Positions(ctx)
 	if err != nil {
 		return nil, nil, statelog.OfferRequest{}, fmt.Errorf("engine: read the "+
 			"fleet's published positions to establish which generation each "+
 			"domain is on: %w", err)
 	}
-	fleet, err := s.fleetGenerations(ctx, rows, logs, above)
-	if err != nil {
-		return nil, nil, statelog.OfferRequest{}, err
+	floors := s.readFloors(ctx)
+	fleet, unread := s.fleetGenerations(ctx, rows, floors, logs, above)
+	// EVERY DOMAIN AT ONCE: an artefact covers them all, so a join with any
+	// domain unanswered cannot say what to ask for.
+	for _, name := range registeredNames() {
+		if err := unread[name]; err != nil {
+			return nil, nil, statelog.OfferRequest{}, err
+		}
 	}
 	for _, domain := range registeredDomains() {
 		name := domain.Name()
@@ -2906,7 +3056,7 @@ func (s *stateLog) replayable(ctx context.Context, logs map[string]*jetstream.Do
 		if !found || reanchored {
 			generation = fleet[name]
 		}
-		floor, err := s.trimFloor(ctx, name, generation)
+		floor, err := floors.floor(name, generation)
 		if err != nil {
 			return nil, nil, statelog.OfferRequest{}, err
 		}
@@ -2999,20 +3149,37 @@ func passedByAReanchor(domain statelog.Domain, at statelog.Position, found bool,
 // the artefact anyway — a hold that went stale while the transfer ran, an
 // operator purging the stream by hand — is one this node must not follow into
 // a hole, and the only moment it can still refuse is before the install.
+//
+// EVERY DOMAIN AT ONCE: the floors in one read of each domain's key, beside
+// every log's own state read concurrently — each log is its own stream with
+// its own leader, so read one after another the re-check took the sum of their
+// round trips where it needs only the slowest.
 func (s *stateLog) stillUsable(ctx context.Context, logs map[string]*jetstream.DomainLog,
 	m statelog.Manifest) error {
 
-	for _, name := range registeredNames() {
-		at, named := m.Domains[name]
-		if !named {
+	names := registeredNames()
+	for _, name := range names {
+		if _, named := m.Domains[name]; !named {
 			return fmt.Errorf("the artefact names no position for %s", name)
 		}
-		stats, err := logs[name].Stats(ctx)
-		if err != nil {
-			return err
+	}
+	floors := make(chan publishedFloors, 1)
+	go func() { floors <- s.readFloors(ctx) }()
+	stats := make([]jetstream.LogStats, len(names))
+	errs := make([]error, len(names))
+	var wg sync.WaitGroup
+	for i, name := range names {
+		wg.Go(func() { stats[i], errs[i] = logs[name].Stats(ctx) })
+	}
+	wg.Wait()
+	read := <-floors
+	for i, name := range names {
+		at := m.Domains[name]
+		if errs[i] != nil {
+			return errs[i]
 		}
-		first := stats.FirstSeq
-		floor, err := s.trimFloor(ctx, name, at.Generation)
+		first := stats[i].FirstSeq
+		floor, err := read.floor(name, at.Generation)
 		if err != nil {
 			return err
 		}
@@ -3022,14 +3189,14 @@ func (s *stateLog) stillUsable(ctx context.Context, logs map[string]*jetstream.D
 		// leaves an artefact whose sequences name a history this node's
 		// stream no longer has. A generation cannot see it — a rebuilt
 		// stream comes back at generation 0 counting from 1.
-		if statelog.IdentityOf(at.StreamCreatedAt, stats.CreatedAt, true) ==
+		if statelog.IdentityOf(at.StreamCreatedAt, stats[i].CreatedAt, true) ==
 			statelog.StreamRecreated {
 
 			return fmt.Errorf("%s's artefact was taken against the stream "+
 				"created at %s and this node's stream was created at %s, so "+
 				"adopting it would install a history this log does not have",
 				name, at.StreamCreatedAt.UTC().Format(time.RFC3339Nano),
-				stats.CreatedAt.UTC().Format(time.RFC3339Nano))
+				stats[i].CreatedAt.UTC().Format(time.RFC3339Nano))
 		}
 		// THE FLOOR IS INCLUDED HERE, unlike the behind test above, and
 		// the asymmetry is the point: this asks whether the artefact is
@@ -4059,18 +4226,37 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 	// whose generations could not be established, that row lifted the write
 	// fence while nothing set the passed verdict that should replace it, and
 	// the node took writes at a generation the fleet had left.
+	//
+	// PER DOMAIN, because a generation is: the register and the floors are
+	// read once for every domain, and a domain whose own floor or evicted
+	// peers could not be read is the one whose verdicts wait, while every
+	// other domain's are judged ([stateLog.fleetGenerations]). The FLOORS
+	// read here are the beat's one read of them, which the gauges below are
+	// built from too.
 	rows, rowsErr := s.fleet.Positions(ctx)
-	generations, genErr := map[string]uint32(nil), rowsErr
+	floors := s.readFloors(ctx)
+	generations, unreadGen := map[string]uint32(nil), map[string]error{}
 	if rowsErr == nil {
-		generations, genErr = s.fleetGenerations(ctx, rows, s.openLogs(), above)
-		if genErr != nil && ctx.Err() == nil {
-			log.WarnContext(ctx, "statelog_generations_unread",
-				"node", s.nodeID, "error", genErr.Error(),
-				"detail", "which generation the fleet is on could not be "+
-					"established this beat, so neither whether a peer re-anchored "+
-					"past this node nor whether a peer's rows hold records a log "+
-					"lost is judged; both verdicts stay where they were until a "+
-					"beat can read them together")
+		generations, unreadGen = s.fleetGenerations(ctx, rows, floors, s.openLogs(), above)
+	}
+	genErr := func(name string) error {
+		if rowsErr != nil {
+			return rowsErr
+		}
+		return unreadGen[name]
+	}
+	if ctx.Err() == nil {
+		for _, running := range held {
+			name := running.domain.Name()
+			if err := genErr(name); err != nil {
+				log.WarnContext(ctx, "statelog_generations_unread",
+					"node", s.nodeID, "domain", name, "error", err.Error(),
+					"detail", "which generation the fleet is on for this log could "+
+						"not be established this beat, so neither whether a peer "+
+						"re-anchored past this node nor whether a peer's rows hold "+
+						"records the log lost is judged; both verdicts stay where "+
+						"they were until a beat can read them together")
+			}
 		}
 	}
 	for _, running := range held {
@@ -4081,7 +4267,7 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 		// the rejoin this requests is one the join then acts on. The
 		// runner is told first, which is what refuses this node's reads
 		// and writes of the domain until the adoption lands.
-		if genErr == nil && passedByAReanchor(running.domain, at, true, generations[name]) {
+		if genErr(name) == nil && passedByAReanchor(running.domain, at, true, generations[name]) {
 			if running.runner.ObserveFleetGeneration(generations[name]) {
 				log.WarnContext(ctx, "statelog_generation_passed",
 					"domain", name, "stream", running.spec.Name,
@@ -4098,7 +4284,7 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 		// reading: the remedy its refusals name moves while it holds — an
 		// operator evicting the peer that opened it leaves nothing to adopt
 		// ([statelog.Runner.RecheckPassed]).
-		if genErr == nil {
+		if genErr(name) == nil {
 			if _, err := running.runner.RecheckPassed(ctx, generations[name]); err != nil &&
 				ctx.Err() == nil {
 				log.WarnContext(ctx, "statelog_generation_holder_unread",
@@ -4196,7 +4382,7 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 			// AND WHETHER A PEER'S ROWS HOLD RECORDS THIS LOG LOST, which
 			// refuses this node's writes of it — against the same end, and
 			// only on the reading the passed verdict above was judged from.
-			if genErr == nil {
+			if genErr(name) == nil {
 				truncation, truncErr := s.truncation(ctx, running, rows, at, stats.LastSeq)
 				switch {
 				case truncErr == nil:
@@ -4240,7 +4426,7 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 		s.requestRejoin(row.At)
 	}
 	stampSnapshot(&row, s.snapshot.Load())
-	s.positionGauges(ctx, row)
+	s.positionGauges(ctx, row, floors)
 	s.deferralGauges(row.At)
 	if err := s.fleet.PutPositions(ctx, row); err != nil {
 		if ctx.Err() != nil {
@@ -4262,11 +4448,15 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 // now", and setting it per applied batch would make the answer a function of
 // how busy the log is — a quiet log would leave the last burst's lag standing
 // for as long as nothing was published.
-func (s *stateLog) positionGauges(ctx context.Context, row coord.NodePositions) {
+//
+// floors is the beat's own read of the published floors, the one the
+// generations were judged from too, rather than a second read of the same
+// keys a round trip later.
+func (s *stateLog) positionGauges(ctx context.Context, row coord.NodePositions,
+	floors publishedFloors) {
 	if s.metrics == nil {
 		return
 	}
-	floors := s.readFloors(ctx)
 	for name, at := range row.Domains {
 		attrs := metrics.Attrs{"domain": name}
 		s.metrics.Set(metrics.StatelogAppliedThrough, float64(at.AppliedThrough), attrs)

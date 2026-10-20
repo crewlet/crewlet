@@ -3,10 +3,13 @@ package statelog_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -232,6 +235,42 @@ func TestTheZeroFenceReadsTheNodesCheckpointBeforeTheLog(t *testing.T) {
 	}
 }
 
+// THE FLOOR AND THE LOG ARE READ AT ONCE, so a write at an expectation of zero
+// waits for the slower of the two round trips rather than their sum. Each read
+// here answers only once the other has begun, which a fence that reads them in
+// turn can never satisfy: it is refused, by the first read's own bound, rather
+// than measured slower — a timing assertion would pass on an idle machine
+// whichever way the fence reads them.
+func TestTheZeroFenceReadsTheFloorBesideTheLog(t *testing.T) {
+	t.Parallel()
+	cursor := statelog.Position{Stream: probeStream, Generation: 1, Seq: 100}
+	// waitFor is the bound each read waits for the other: long enough that a
+	// fence reading both at once never meets it, short enough that one reading
+	// them in turn fails the case rather than hanging it.
+	const waitFor = 10 * time.Second
+	floorBegan, endsBegan := make(chan struct{}), make(chan struct{})
+	beside := func(began, other chan struct{}, what string) error {
+		close(began)
+		select {
+		case <-other:
+			return nil
+		case <-time.After(waitFor):
+			return fmt.Errorf("the %s read waited %s for the other read to begin", what, waitFor)
+		}
+	}
+	fence := zeroReads{}.fence(standingAt(cursor))
+	fence.Floor = func(context.Context, uint32) (uint64, error) {
+		return 40, beside(floorBegan, endsBegan, "floor")
+	}
+	fence.Ends = func(context.Context) (statelog.LogEnds, error) {
+		return statelog.LogEnds{First: 40, Last: 120}, beside(endsBegan, floorBegan, "log")
+	}
+	if err := fence.ClearForZero(t.Context(), cursor); err != nil {
+		t.Fatalf("ClearForZero = %v, want cleared — a fence that reads the floor "+
+			"and the log in turn costs every write at zero both round trips", err)
+	}
+}
+
 // A FENCE MISSING A READ IS A WIRING MISTAKE, and it refuses as one: it cannot
 // establish what an absent anchor means, and clearing on the reads it has is
 // the shape that cleared a node below the log whenever the trim was blocked.
@@ -277,6 +316,68 @@ func TestAZeroFenceAnswersACancelledCallerWithItsOwnError(t *testing.T) {
 		var refusal *statelog.Unavailable
 		if !errors.Is(err, context.Canceled) || errors.As(err, &refusal) {
 			t.Errorf("%s cancelled: ClearForZero = %v, want the context's own error", name, err)
+		}
+	}
+}
+
+// A FLOOR THE FENCE COULD NOT READ IS REFUSED WITH THE REMEDY ITS CAUSE HAS.
+//
+// The two causes clear in opposite ways: a store that does not answer clears
+// by itself, and a row that does not read as its domain's floor stays until
+// somebody removes it. The refusal used to end "it clears when coordination
+// answers" whatever the cause, so a write refused over a misfiled row carried
+// the row's own remedy — remove the key — and the fence's, which waits for
+// coordination that was answering all along. A cause that is neither (a floor
+// published at another generation) gets neither remedy.
+//
+// Mutation: end every floor refusal with the coordination clause, or name the
+// key's removal for a store that did not answer, and a case below fails.
+func TestAZeroFenceFloorRefusalNamesItsCausesRemedy(t *testing.T) {
+	t.Parallel()
+	cursor := statelog.Position{Stream: probeStream, Generation: 1, Seq: 100}
+	for name, c := range map[string]struct {
+		cause   error
+		says    string // the remedy the refusal must name
+		saysNot []string
+	}{
+		"a row that is no floor": {
+			cause: fmt.Errorf("engine: read tracker's published trim floor: %w",
+				fmt.Errorf("%w: the trim floor at floor.tracker does not decode — "+
+					"removed, the next trim publishes it afresh", coord.ErrFloorUnreadable)),
+			says:    "it clears once that row is removed",
+			saysNot: []string{"it clears when coordination answers"},
+		},
+		"a store that does not answer": {
+			cause: fmt.Errorf("engine: read tracker's published trim floor: %w",
+				fmt.Errorf("%w: read the trim floor for tracker: %w",
+					coord.ErrUnavailable, errors.New("nats: timeout"))),
+			says:    "it clears when coordination answers",
+			saysNot: []string{"removed"},
+		},
+		"a floor at another generation": {
+			cause: errors.New("engine: the published floor for tracker is at " +
+				"generation 2 and this node is on 1"),
+			saysNot: []string{"it clears when coordination answers", "removed"},
+		},
+	} {
+		err := zeroReads{floorErr: c.cause, ends: statelog.LogEnds{First: 1, Last: 120}}.
+			fence(standingAt(cursor)).ClearForZero(t.Context(), cursor)
+		var refusal *statelog.Unavailable
+		if !errors.As(err, &refusal) || refusal.Reason != statelog.ReasonFloorUnknown {
+			t.Errorf("%s: ClearForZero = %v, want a floor_unknown refusal", name, err)
+			continue
+		}
+		if !errors.Is(err, c.cause) {
+			t.Errorf("%s: the refusal does not carry its cause %v", name, c.cause)
+		}
+		if c.says != "" && !strings.Contains(refusal.Detail, c.says) {
+			t.Errorf("%s: the refusal says %q, want it to name %q", name, refusal.Detail, c.says)
+		}
+		for _, not := range c.saysNot {
+			if strings.Contains(refusal.Detail, not) {
+				t.Errorf("%s: the refusal says %q, which names %q — a remedy "+
+					"this cause does not have", name, refusal.Detail, not)
+			}
 		}
 	}
 }

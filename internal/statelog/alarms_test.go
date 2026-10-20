@@ -75,8 +75,8 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 		},
 		"a floor nobody can read": {
 			statelog.KindFloorUnknown,
-			statelog.Reading{FloorUnknownFor: 2 * time.Minute},
-			"unreadable",
+			statelog.Reading{FloorUnknown: map[string]time.Duration{"tracker": 2 * time.Minute}},
+			"the trim floor of tracker has been unreadable for 2m",
 		},
 		"a slow prefetch": {
 			statelog.KindPrefetchSlow,
@@ -348,6 +348,53 @@ func TestTheCodeMaintenanceAlarmFiresPastTheNodesBudget(t *testing.T) {
 		_, fired := find(statelog.Evaluate(c.reading), statelog.KindCodeMaintenanceRefused)
 		if fired != c.fires {
 			t.Errorf("%s: fired %v, want %v", name, fired, c.fires)
+		}
+	}
+}
+
+// THE FLOOR ALARM NAMES ONLY THE DOMAINS WHOSE READS IT REFUSES, EACH WITH ITS
+// OWN AGE.
+//
+// A domain whose floor began failing inside [statelog.FloorCacheStale] is still
+// served from its memo. Read as one longest age beside every failing name, the
+// alarm told an operator that domain's reads were refused, with another
+// domain's age as the evidence — and its remedy said so of every name it gave.
+//
+// Mutation: name every unread domain, or print the longest age beside each,
+// and a case below fails.
+func TestTheFloorAlarmNamesOnlyTheDomainsPastTheBound(t *testing.T) {
+	t.Parallel()
+	past := statelog.FloorCacheStale
+	for name, c := range map[string]struct {
+		unread map[string]time.Duration
+		says   string // empty: the alarm stays silent
+	}{
+		"one domain past the bound, one inside it": {
+			unread: map[string]time.Duration{"pages": past + time.Minute, "tracker": time.Second},
+			says:   "the trim floor of pages has been unreadable for 2m",
+		},
+		"two past the bound, each with its own age, the longest first": {
+			unread: map[string]time.Duration{
+				"tracker": past + 30*time.Second, "pages": past + time.Minute,
+				"usage": past + time.Minute,
+			},
+			says: "the trim floor of pages has been unreadable for 2m, usage's for 2m, " +
+				"and tracker's for 1m 30s",
+		},
+		"every domain inside the bound": {
+			unread: map[string]time.Duration{"pages": past, "tracker": time.Second},
+		},
+	} {
+		alarm, fired := find(statelog.Evaluate(statelog.Reading{FloorUnknown: c.unread}),
+			statelog.KindFloorUnknown)
+		switch {
+		case c.says == "" && fired:
+			t.Errorf("%s: fired %q, want silence — every domain's reads are served "+
+				"from its memo", name, alarm.Detail)
+		case c.says != "" && !fired:
+			t.Errorf("%s: silent, want %q", name, c.says)
+		case c.says != "" && alarm.Detail != c.says:
+			t.Errorf("%s: says %q, want %q", name, alarm.Detail, c.says)
 		}
 	}
 }

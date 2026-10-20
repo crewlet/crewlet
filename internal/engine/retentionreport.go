@@ -64,21 +64,16 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 			in.Live = live
 		}
 	}
-	// AN UNREADABLE FLOOR REGISTER IS NOT AN EMPTY ONE: every domain then
-	// reports its trim as unreadable rather than as a trim that has
-	// concluded nothing, which is a different thing to go and look at.
+	// AN UNREADABLE FLOOR IS NOT AN ABSENT ONE: a domain whose floor could
+	// not be read reports its trim as unreadable rather than as a trim that
+	// has concluded nothing, which is a different thing to go and look at —
+	// and only that domain does, since each domain's floor is its own key.
 	//
-	// READ ONCE, for the rows below and for every domain's readiness: the
-	// register is a certified listing, and two reads of it a round trip
-	// apart could disagree about the floor a row prints and the floor its
-	// refusal was judged by.
-	read := readFloorsOf(ctx, r.fleet)
+	// READ ONCE, for the rows below and for every domain's readiness: two
+	// reads of the floors a round trip apart could disagree about the floor
+	// a row prints and the floor its refusal was judged by.
+	read := readFloorsOf(ctx, r.fleet, registeredNames())
 	r.state.noteFloors(read)
-	floors := map[string]coord.TrimFloor{}
-	floorsErr := read.err
-	for _, row := range read.floors {
-		floors[row.Domain] = row
-	}
 	backups, _ := r.fleet.BackupPoints(ctx)
 	// THE POINT THE TRIM COUNTS, under the operator's own policy — not the
 	// newest of every owner. Under `backup_floor: operator` the nodes' own
@@ -116,10 +111,11 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 			ceilings[name] = int64(stats.MaxBytes)
 		}
 		d.FloorState = statelog.TrimFloorNoneAtGeneration
-		if floorsErr != nil {
+		floor, published, floorErr := read.row(name)
+		if floorErr != nil {
 			d.FloorState = statelog.TrimFloorUnreadable
 		}
-		if floor, published := floors[name]; published && floor.Generation == d.Generation {
+		if published && floor.Generation == d.Generation {
 			// THE FLOOR AND THE CONCLUSION ARE TWO FIELDS OF THE ROW,
 			// and the report carries both: filled from one, the two
 			// figures were always equal and a blocked domain reported
@@ -401,7 +397,7 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 	// backup was twenty-five hours old, one line above the trim term
 	// reporting that no backup had been recorded at all.
 	// THE FLOORS ARE READ AT MOST ONCE, and only where a health was not
-	// handed in: one register read answers every domain's floor.
+	// handed in: one read of every domain's key answers every domain's floor.
 	var floors *publishedFloors
 	for _, running := range r.state.running() {
 		name := running.domain.Name()
@@ -437,7 +433,11 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 	// where it was, it was set to exactly the threshold the rule fires
 	// strictly above. `floor_unknown` could not fire on a node every one of
 	// whose reads refused `floor_unknown`.
-	out.FloorUnknownFor = r.state.floorsUnreadFor(now)
+	//
+	// PER DOMAIN, each with its own age: one domain's floor answering says
+	// nothing about another's, and one domain unread past the bound says
+	// nothing about another unread for a moment.
+	out.FloorUnknown = r.state.floorsUnread(now)
 	out.SemanticCoverage = r.semanticCoverage(ctx, now)
 	if r.index != nil {
 		r.index(ctx, &out)

@@ -133,10 +133,12 @@ far along they are:
   deleted, and the hole will never fill. A node that is only below the
   published trim floor, while the log still holds every record it lacks, is
   not here: it is replaying them, which is *behind*. Nor is a floor nobody can
-  read: every read the node serves refuses once it has gone unread for four
-  heartbeats, until it can be read (the `floor_unknown`
-  [alarm](../reference/alarms.md)), and the copy keeps the verdict it last
-  had, because an unread number is not a fault;
+  read: every read of that domain the node serves refuses once its floor has
+  gone unread for four heartbeats, until it can be read (the `floor_unknown`
+  [alarm](../reference/alarms.md), and
+  [An unreadable trim floor](../guides/retention.md#an-unreadable-trim-floor)),
+  and the copy keeps the verdict it last had, because an unread number is not
+  a fault;
 - its checkpoint names **a stream that is not this one**, which is a log
   deleted and rebuilt underneath it (`crewlet retention reanchor` is the
   repair) — or a history that log no longer continues from, because a peer

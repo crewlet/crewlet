@@ -222,9 +222,10 @@ stream — exactly as the write fence and readiness read it. `crewlet retention
 status` prints `-` for its `TRIM FLOOR` and says, under its watermarks, that
 the trim has concluded nothing about that generation yet; the dashboard tags it
 *no conclusion yet* rather than *advancing*; and the retention answer carries
-`trim_floor_state: none_at_generation` with an empty `terms` list. A floor
-register nobody could read is shown as that (`unreadable`), never as an empty
-one. The other domains' rows are unaffected.
+`trim_floor_state: none_at_generation` with an empty `terms` list. A domain
+whose floor nobody could read is shown as that (`unreadable`), never as an
+empty one, and the other domains' rows are unaffected — see
+[An unreadable trim floor](#an-unreadable-trim-floor).
 
 The floor is load-bearing for **writes**, not only for recovery. A write to an
 object whose last record has been deleted from the log cannot compare against
@@ -234,8 +235,14 @@ gone. So every such write first checks, freshly, that the rows it decided
 from — as they stood when it decided, not wherever the node has got to since —
 hold every record up to the one just before the **higher of the floor and the
 log's own first record**, and a write that does not is refused `unavailable`
-rather than allowed to overwrite a change it never saw. The refusal names its
-reason, and makes the same split reads do:
+rather than allowed to overwrite a change it never saw. Freshly means after
+the write has read its object on the log, and never from a floor the node
+remembers: one read before it can miss the floor that licensed deleting the
+object's last record. That read is the write's own domain's floor alone, by
+its key — one request to the coordination store's leader — never a listing
+of every domain's floor, and it is made at the same time as the read of the
+log's ends, so a write waits for the slower of the two rather than both. The
+refusal names its reason, and makes the same split reads do:
 
 - `behind` when the log still holds every record the node lacks — it is
   replaying up to the floor, or it has already applied past the state the
@@ -243,8 +250,9 @@ reason, and makes the same split reads do:
 - `below_floor` when the node's next record is gone from the log itself. No
   replay can supply it, so the node [adopts a snapshot](#the-join-runbook);
   another node can make the write meanwhile.
-- `floor_unknown` when the floor or the log could not be read. An unknown
-  bound refuses rather than guessing.
+- `floor_unknown` when this domain's floor or the log could not be read. An
+  unknown bound refuses rather than guessing, and only for the domain whose
+  bound it is.
 - `evicted` for a node the fleet has removed.
 - `wrong_stream` when the node's own checkpoint is past the log's end — judged
   on where the node's applier stands rather than on the state the write
@@ -264,6 +272,44 @@ object. Reads make the same comparison: a node below the floor whose missing
 records the log still holds refuses them as `behind` while it replays them,
 and a node whose missing records are gone from the log itself refuses them as
 `below_floor` and adopts a snapshot.
+
+### An unreadable trim floor
+
+Each domain's floor is a key of its own, `floor.<domain>` in the
+`crewlet_statelog_positions` bucket, and every reader of it asks that key
+alone. So a floor that cannot be read stops **that domain** and nothing else:
+its reads refuse `floor_unknown` once the floor has gone unread for four
+heartbeats (a minute), its writes at an expectation of zero refuse at once,
+its trim neither publishes nor purges, and the retention answer shows its floor
+`unreadable` — while every other domain reads, writes and trims as before. The
+`floor_unknown` alarm names each domain whose reads it refuses — those whose
+floor has gone unread past the four heartbeats — with how long that domain's
+floor has gone unread; a domain whose floor began failing more recently is not
+named yet, since its reads are still served.
+
+There are two ways a floor cannot be read, and they read differently:
+
+- **Coordination does not answer.** Every domain's floor is unreadable at
+  once, because every key is in the one bucket. Nothing is wrong with the
+  rows; the refusals clear by themselves when the store answers again. Check
+  coordination — the node's connection to the broker, and the bucket's
+  stream having a leader.
+- **The row does not read as its floor.** Its bytes do not decode, or it is
+  filed under one domain's key and names another. Only that domain refuses,
+  and the refusal — on the trim's `retention_trim_failed` line and on every
+  write it refuses — names the key and the bucket, and says it clears once the
+  key is removed rather than when coordination answers. Nothing in the engine
+  rewrites such a row: the trim carries each floor forward from the row it
+  reads, so it never publishes over one it cannot read. The remedy is to
+  remove the key, after which the next trim tick publishes the floor afresh
+  from what every node has applied. On an external NATS cluster
+  (`stream.type: nats`) that is
+  `nats kv purge crewlet_statelog_positions floor.<domain>`. The embedded
+  broker listens on no socket an outside tool can reach, and no `crewlet`
+  command removes the key. Neither shape is one the engine
+  writes — every floor it publishes is validated and filed under its own
+  domain's key — so a row like this was written by something other than the
+  engine, and it stays until a client of the bucket removes it.
 
 ### Anchors below the log are removed by a record
 

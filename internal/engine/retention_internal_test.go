@@ -164,6 +164,19 @@ func floorFleet(t *testing.T) *retention {
 	return &retention{fleet: coordmem.NewFleet(), nodeID: "node-a"}
 }
 
+// fleetFloors is every registered domain's published floor, read as every
+// reader in this package reads them: one key a domain.
+func fleetFloors(ctx context.Context, fleet coord.Fleet) ([]coord.TrimFloor, error) {
+	read := readFloorsOf(ctx, fleet, registeredNames())
+	var out []coord.TrimFloor
+	for _, name := range registeredNames() {
+		if row, published, err := read.row(name); err == nil && published {
+			out = append(out, row)
+		}
+	}
+	return out, read.unread()
+}
+
 // TestABlockedTrimsClockSurvivesTheDutyMovingBetweenNodes is why
 // `blocked_since` is published rather than held in memory.
 //
@@ -187,7 +200,7 @@ func TestABlockedTrimsClockSurvivesTheDutyMovingBetweenNodes(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
-	published, err := r.fleet.Floors(ctx)
+	published, err := fleetFloors(ctx, r.fleet)
 	if err != nil || len(published) != 1 {
 		t.Fatalf("floors = %v (err %v)", published, err)
 	}
@@ -204,7 +217,7 @@ func TestABlockedTrimsClockSurvivesTheDutyMovingBetweenNodes(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("publish from the new holder: %v", err)
 	}
-	published, err = peer.fleet.Floors(ctx)
+	published, err = fleetFloors(ctx, peer.fleet)
 	if err != nil || len(published) != 1 {
 		t.Fatalf("floors = %v (err %v)", published, err)
 	}
@@ -239,7 +252,7 @@ func TestATrimThatAdvancesClearsItsBlockedClock(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
-	published, _ := r.fleet.Floors(ctx)
+	published, _ := fleetFloors(ctx, r.fleet)
 	if len(published) != 1 || published[0].Blocked() {
 		t.Fatalf("an advancing trim published %+v", published)
 	}
@@ -272,7 +285,7 @@ func TestATrimThatAdvancedAndBlockedAgainStartsANewClock(t *testing.T) {
 	}, 0, fleetInputs{at: now, previous: map[string]coord.TrimFloor{"tracker": was}}); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
-	published, _ := r.fleet.Floors(ctx)
+	published, _ := fleetFloors(ctx, r.fleet)
 	if len(published) != 1 || !published[0].BlockedSince.Equal(now) {
 		t.Fatalf("blocked_since = %v after a trim that had been advancing "+
 			"blocked, want %s", published, now)
@@ -300,7 +313,7 @@ func TestABlockedTrimsClockSurvivesTheTermChangingUnderIt(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
-	published, _ := r.fleet.Floors(ctx)
+	published, _ := fleetFloors(ctx, r.fleet)
 	if len(published) != 1 || !published[0].BlockedSince.Equal(first) {
 		t.Fatalf("blocked_since = %v after the blocking term changed, want the "+
 			"original %s", published, first)
@@ -373,7 +386,7 @@ func TestABlockedTickPublishesTheFloorAnEarlierTickLicensed(t *testing.T) {
 	}, 1, fleetInputs{at: now, previous: map[string]coord.TrimFloor{}}); err != nil {
 		t.Fatalf("publish the advance: %v", err)
 	}
-	advanced, err := r.fleet.Floors(ctx)
+	advanced, err := fleetFloors(ctx, r.fleet)
 	if err != nil || len(advanced) != 1 {
 		t.Fatalf("floors = %v (err %v)", advanced, err)
 	}
@@ -385,7 +398,7 @@ func TestABlockedTickPublishesTheFloorAnEarlierTickLicensed(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("publish the block: %v", err)
 	}
-	floors, err := r.fleet.Floors(ctx)
+	floors, err := fleetFloors(ctx, r.fleet)
 	if err != nil || len(floors) != 1 {
 		t.Fatalf("floors = %v (err %v)", floors, err)
 	}
@@ -395,7 +408,7 @@ func TestABlockedTickPublishesTheFloorAnEarlierTickLicensed(t *testing.T) {
 			"that says zero clears every node to publish over them",
 			floors[0].TrimTo, floors[0].Floor)
 	}
-	if got, err := floorFor(floors, "tracker", 1); err != nil || got != 900 {
+	if got, err := readFloorsOf(ctx, r.fleet, []string{"tracker"}).floor("tracker", 1); err != nil || got != 900 {
 		t.Fatalf("the fence reads a floor of %d (err %v) after the block, want 900",
 			got, err)
 	}
@@ -540,11 +553,8 @@ func TestTheFloorIsPublishedBeforeThePurgeItLicenses(t *testing.T) {
 			"register in between cleared nodes the purge had left below the log",
 			fleet.firstAt, to)
 	}
-	floors, err := back.Fleet.Floors(t.Context())
-	if err != nil {
-		t.Fatalf("floors: %v", err)
-	}
-	published, err := floorFor(floors, name, running.runner.Committed().Generation)
+	published, err := readFloorsOf(t.Context(), back.Fleet, []string{name}).floor(name,
+		running.runner.Committed().Generation)
 	if err != nil || published < to {
 		t.Fatalf("the published floor is %d (err %v), want at least the %d it licensed",
 			published, err, to)
@@ -638,7 +648,7 @@ func TestEachLogsTrimWaitsOnItsOwnWakeFeed(t *testing.T) {
 			committed := running.runner.Committed()
 			stream := running.spec.Name
 			now := time.Now().UTC()
-			floors, err := back.Fleet.Floors(t.Context())
+			floors, err := fleetFloors(t.Context(), back.Fleet)
 			if err != nil {
 				t.Fatalf("floors: %v", err)
 			}
@@ -668,7 +678,7 @@ func TestEachLogsTrimWaitsOnItsOwnWakeFeed(t *testing.T) {
 			if err := trimLog(t.Context(), r, running, shared); err != nil {
 				t.Fatalf("the tick on %s: %v", name, err)
 			}
-			floors, err = back.Fleet.Floors(t.Context())
+			floors, err = fleetFloors(t.Context(), back.Fleet)
 			if err != nil {
 				t.Fatalf("floors: %v", err)
 			}
@@ -1500,5 +1510,42 @@ func TestTheReportListsPresenceOnce(t *testing.T) {
 			t.Errorf("a live data node with no row is marked counted %v, live %v; want both",
 				node.Counted, node.Live)
 		}
+	}
+}
+
+// ONE DOMAIN'S UNREADABLE FLOOR STOPS THAT DOMAIN'S TRIM ALONE, on a real
+// node's tick.
+//
+// The trim carries each domain's floor forward from the row it reads, so a
+// domain whose row it cannot read publishes nothing and purges nothing — the
+// floor it would carry is the one the row hides. Read as one listing, that
+// row stopped the tick for EVERY log: no floor was published and no log
+// trimmed anywhere in the fleet, and every log grew toward its ceiling.
+func TestOneDomainsUnreadableFloorStopsThatDomainsTrimAlone(t *testing.T) {
+	t.Parallel()
+	e, back, _ := trimmedTracker(t)
+	unread := pages.Domain{}.Name()
+	fleet := &oneFloorUnread{fleetRegister: back.Fleet, domain: unread}
+	r := &retention{fleet: fleet, state: e.native.Load().log, nodeID: "node-a",
+		cfg: config.TrackerRetention{MinAgeRaw: "1ns"}}
+	before := time.Now().UTC().Add(-time.Second)
+	r.tick(t.Context())
+
+	for _, running := range e.native.Load().log.running() {
+		name := running.domain.Name()
+		if name == unread {
+			continue
+		}
+		row, found, err := back.Fleet.Floor(t.Context(), name)
+		if err != nil || !found || row.At.Before(before) {
+			t.Fatalf("%s's trim published (%+v, found %v, %v) on a tick beside a "+
+				"knowledge base floor that does not read, want a row from this tick",
+				name, row, found, err)
+		}
+	}
+	if row, found, err := back.Fleet.Floor(t.Context(), unread); err != nil ||
+		(found && !row.At.Before(before)) {
+		t.Fatalf("the knowledge base's trim published %+v over a floor it could not "+
+			"read (%v)", row, err)
 	}
 }

@@ -47,11 +47,19 @@ func TestTheRetentionTrimRunsOnANode(t *testing.T) {
 		// twenty seconds of its own.
 		var floors []coord.TrimFloor
 		waitFor(t, "every domain to publish a floor", func() bool {
-			var err error
-			if floors, err = n.engine.Backends().Fleet.Floors(t.Context()); err != nil {
-				t.Fatalf("read the published floors: %v", err)
+			// ONE KEY A REPORTED DOMAIN, as every reader of the register
+			// asks: there is no listing of the class to ask instead.
+			floors = floors[:0]
+			for _, domain := range report.Domains {
+				floor, found, err := n.engine.Backends().Fleet.Floor(t.Context(), domain.Domain)
+				if err != nil {
+					t.Fatalf("read the published floor for %s: %v", domain.Domain, err)
+				}
+				if found {
+					floors = append(floors, floor)
+				}
 			}
-			return len(floors) >= len(report.Domains)
+			return len(floors) == len(report.Domains)
 		}, func() string {
 			var published, reported []string
 			for _, floor := range floors {

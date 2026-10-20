@@ -2,6 +2,7 @@ package coord
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -151,16 +152,53 @@ type FloorRegister interface {
 	// handover fail on a value the new holder is about to recompute.
 	PutFloor(ctx context.Context, f TrimFloor) error
 
-	// Floors reads every domain's row.
+	// Floor reads ONE domain's row, as the store's leader holds it: the row
+	// and true, or false where the trim has never written one for that
+	// domain — an answer, not a failure — or the error of a store that did
+	// not answer, which is unknown and never absent.
 	//
-	// The whole set, because every caller wants it: `crewlet retention
-	// status` prints one line per registered domain, and a per-domain read
-	// would be one round trip per line.
-	Floors(ctx context.Context) ([]TrimFloor, error)
+	// A KEY READ, AND THE REGISTER HAS NO OTHER. Every reader asks about
+	// domains it names — the write fence about one, on every write at an
+	// expectation of zero and only AFTER the write's own read of its subject
+	// (the floor theorem's order, statelog's package doc); the copy's
+	// verdict, the alarm reading, the heartbeat and the trim duty about the
+	// domains this build registers — so a reader asks for each of those keys
+	// and never lists the class. On the KV backend a key read is one request
+	// to the bucket's stream leader, where a listing is a key index read and
+	// an ordered consumer created on the stream and deleted after it, and on
+	// a clustered broker that create and delete are two proposals to the
+	// metadata group every stream and consumer in the fleet is placed
+	// through: the register was a listing, read more than once a second on
+	// every data node, and on a loaded three-member fleet its consumer's
+	// create ran past the client's five-second API timeout and a page create
+	// was refused `floor_unknown` with the register perfectly readable.
+	//
+	// A row whose own domain is not the one its key names is refused, not
+	// read: the key is how [FloorRegister.PutFloor] files a domain's row, so
+	// a row under one domain's key naming another is not that domain's
+	// floor, and comparing a cursor against it would compare two logs'
+	// sequences. So is a row that does not decode. Both refusals match
+	// [ErrFloorUnreadable], and a store that did not answer matches
+	// [ErrUnavailable] — two faults with opposite remedies, which a refusal
+	// built on either has to name apart.
+	Floor(ctx context.Context, domain string) (TrimFloor, bool, error)
 
 	// ForgetFloor removes one, for a domain that no longer exists.
 	ForgetFloor(ctx context.Context, domain string) error
 }
+
+// ErrFloorUnreadable is a domain's floor row that the register holds and
+// cannot read as that domain's floor: its bytes do not decode, or it names
+// another domain than the key it is filed under.
+//
+// A FAULT OF THE ROW, NEVER OF THE STORE, and the two clear in opposite ways:
+// a store that does not answer ([ErrUnavailable]) clears by itself when it
+// answers again, while such a row clears only once somebody removes it, since
+// the trim carries a floor forward from the row it reads and so never
+// publishes over one it cannot. A refusal that told the first remedy for the
+// second sent an operator to wait for coordination that was answering all
+// along.
+var ErrFloorUnreadable = errors.New("coord: the trim floor row does not read as its domain's floor")
 
 // FloorKey is a domain's key in the register.
 func FloorKey(domain string) string { return DocumentKey("floor", domain) }

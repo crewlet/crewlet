@@ -347,11 +347,11 @@ type floorlessFleet struct {
 	failing atomic.Bool
 }
 
-func (f *floorlessFleet) Floors(ctx context.Context) ([]coord.TrimFloor, error) {
+func (f *floorlessFleet) Floor(ctx context.Context, domain string) (coord.TrimFloor, bool, error) {
 	if f.failing.Load() {
-		return nil, errors.New("the trim floors are unreadable")
+		return coord.TrimFloor{}, false, errors.New("the trim floors are unreadable")
 	}
-	return f.wrappedFleet.Floors(ctx)
+	return f.wrappedFleet.Floor(ctx, domain)
 }
 
 // THE TRUNCATION FENCE DOES NOT LIFT BEFORE THE PASSED VERDICT REPLACES IT.

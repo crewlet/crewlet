@@ -486,6 +486,11 @@ type fleetInputs struct {
 	backups   []coord.BackupPoint
 	previous  map[string]coord.TrimFloor
 
+	// floorsUnread is every domain whose published floor could not be read,
+	// and why — a domain whose trim this tick neither publishes nor purges,
+	// since the floor it carries forward is the row it could not read.
+	floorsUnread map[string]error
+
 	// holders is the live data nodes, read once for every log the tick
 	// evaluates — and holdersUnknown why they could not be listed, which
 	// leaves every log's counted set UNKNOWN: its trim blocks, and says so
@@ -515,12 +520,21 @@ func (r *retention) read(ctx context.Context) (fleetInputs, error) {
 	if in.backups, err = r.fleet.BackupPoints(ctx); err != nil {
 		return in, fmt.Errorf("read the backup points: %w", err)
 	}
-	floors, err := r.fleet.Floors(ctx)
-	if err != nil {
-		return in, fmt.Errorf("read the published floors: %w", err)
-	}
-	for _, f := range floors {
-		in.previous[f.Domain] = f
+	// EACH DOMAIN'S FLOOR ON ITS OWN: a domain whose row did not read is
+	// that domain's trim's to refuse ([retention.domain]), while every other
+	// log trims. The register's listings above are every domain's at once,
+	// and so is their failure.
+	floors := readFloorsOf(ctx, r.fleet, registeredNames())
+	r.state.noteFloors(floors)
+	in.floorsUnread = map[string]error{}
+	for _, name := range registeredNames() {
+		row, published, unread := floors.row(name)
+		switch {
+		case unread != nil:
+			in.floorsUnread[name] = unread
+		case published:
+			in.previous[name] = row
+		}
 	}
 	// THE LIVE DATA NODES ARE WHAT CATCH A NODE BETWEEN BOOT AND ITS FIRST
 	// HEARTBEAT — which is exactly a node adopting a snapshot. It counts at
@@ -555,6 +569,15 @@ func (shared fleetInputs) counted(running *runningLog, tombs []statelog.Tombston
 // the log still holds is one its next write uses.
 func (r *retention) domain(ctx context.Context, running *runningLog, shared fleetInputs) (statelog.Position, error) {
 	name := running.domain.Name()
+	if err := shared.floorsUnread[name]; err != nil {
+		// THE FLOOR IS CARRIED FORWARD FROM THE ROW, and never moves down
+		// within a generation ([nextFloor]) — so a tick that cannot read
+		// the row cannot know what it would carry, and a floor published
+		// without it could fall below a purge already licensed. This log
+		// neither publishes nor purges; every other one goes on.
+		return statelog.Position{}, fmt.Errorf("its published floor could not be "+
+			"read, so this tick neither publishes over it nor purges: %w", err)
+	}
 	stats, err := running.log.Stats(ctx)
 	if err != nil {
 		// THE STREAM ITSELF IS UNREADABLE, so there is no ceiling to

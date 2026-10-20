@@ -47,12 +47,39 @@ index.** The pass carries each key together with its value — never a name
 list followed by a fetch per name, which is what it was. That shape costs a
 round trip per key on top of an ephemeral consumer created and destroyed per
 call — paid continuously, since several of a node's fifteen-second duty loops
-read a bucket on every tick, and the state-log write fence lists the trim's
-published floors on every write at an expectation of zero, a subject's first
-write among them. That listing is the floors' own key class in the
-`positions` bucket, not the per-node positions beside it: the fence compares
-this node's checkpoint against the higher of the published floor and the log's
-first surviving sequence, which it reads from the stream itself.
+read a bucket on every tick.
+
+**No state-log read, and no write a seat or a person's tool makes, waits on a
+listing of the register.** The
+state-log write fence reads the trim's published floor on every write at an
+expectation of zero, a subject's first write among them, and it reads it
+fresh, after the write's own read of its subject: a floor read before that, or
+remembered from an earlier read, can miss the floor that licensed deleting the
+subject's last record. So the fence reads its own domain's floor **by its
+key** — one `$JS.API.STREAM.MSG.GET` answered by the `positions` stream's
+leader, and no consumer at all — beside its read of the log's ends, and
+compares this node's checkpoint against the higher of that floor and the log's
+first surviving sequence. Every other reader of the floors names the domains
+it asks about too, each domain's key on its own, so the floor class is never
+listed. It used to be: a listing's consumer is created and deleted through the
+metadata group every stream and consumer in the fleet is placed through, and
+on a loaded three-member fleet that create ran past the client's five-second
+API timeout often enough to refuse a page create `floor_unknown` with the
+register perfectly readable. In four runs of the end-to-end fleet at a load
+average of 32 to 65 on four cores, 48 of the 1,467 listings every reader of
+the register made failed so, every one at the consumer's create. After the
+change, ten runs at a lighter load (20 to 40) made 402 key reads for the write
+fence and none failed — a different load and a different population, so the
+two are not one comparison. What one read of each kind costs is
+`BenchmarkAFloorRead`'s (`internal/coord/kv`): measured at a load average of 6
+to 7, one key is one API request and no consumer, 0.09–0.16 ms on a member and
+0.19–0.23 ms through a leaf; the listing it replaced is four requests, two of
+them a consumer's create and delete, 1.04–1.16 ms and 1.41–1.81 ms — on an
+idle member a millisecond, and on a clustered broker two proposals the
+metadata group must agree to. The register's other classes are still listed —
+by the node's own loops on their own clocks, and by the operator's gestures
+(the retention report, a readmission, a backup, a capacity window), each once
+per gesture rather than once per request.
 
 A pass on its own **cannot tell that it is complete**. The marker that ends it
 is the client's guess from a pending count, and every bucket here keeps one

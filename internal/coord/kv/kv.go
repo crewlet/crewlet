@@ -162,9 +162,11 @@
 // two JetStream metadata proposals on a clustered bucket — and then leaves the
 // caller to spend N more round trips fetching the values it did not carry.
 // Five of this node's fifteen-second duty loops read a bucket on every tick,
-// and the state-log write fence lists the trim floors out of the positions
-// register on every write at an expectation of zero — a subject's first write
-// among them — so that cost is paid continuously rather than at the edges.
+// so that cost is paid continuously rather than at the edges — and no
+// state-log read or seat's write waits on a listing at all: the write fence's
+// trim floor is one key read ([FleetStore.Floor]), because the consumer a
+// listing creates is a metadata proposal a loaded cluster answers late. What
+// still lists does so on a loop's own clock or once per operator gesture.
 //
 // And it could not report a short answer. The client's key lister ends its
 // goroutine on a nil entry, and a receive from the channel its own

@@ -142,8 +142,10 @@ func Catalogue() []Instrument {
 				"newer build serves it), `behind` (it has not applied a position " +
 				"the write needs — clears on its own), `below_floor` (it is below " +
 				"the log and must adopt a snapshot — another node writes " +
-				"meanwhile), `floor_unknown` (the floor or the log's ends could " +
-				"not be read — clears when coordination answers). The log: " +
+				"meanwhile), `floor_unknown` (the domain's floor or the log's " +
+				"ends could not be read — clears when coordination answers, or " +
+				"once a floor row that does not read as its floor is removed). " +
+				"The log: " +
 				"`log_full` (at its ceiling — raise it or unblock the trim), " +
 				"`skew` (a store and a stream restored out of step — restore " +
 				"both from one backup), `wrong_stream` (not the log this node's " +

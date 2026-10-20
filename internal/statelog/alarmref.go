@@ -52,8 +52,9 @@ var alarmMeaning = map[Kind]string{
 		"longer than the deferral grace. It no longer serves its copy of the " +
 		"log holding them; that log's operations are answered by the other data " +
 		"nodes.",
-	KindFloorUnknown: "The trim floor has been unreadable for four " +
-		"heartbeats, so every read on this node refuses.",
+	KindFloorUnknown: "A domain's trim floor has been unreadable for four " +
+		"heartbeats, so this node refuses that domain's reads — every domain's, " +
+		"when coordination does not answer at all.",
 	KindPrefetchSlow: "The knowledge scans this node runs for turns' prefetches " +
 		"are over their budget. Every turn whose prefetch it scans waits for " +
 		"the scan before its first token.",

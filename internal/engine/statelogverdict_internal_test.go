@@ -138,7 +138,16 @@ func TestOneLogsSilenceLeavesNoOtherDomainUnread(t *testing.T) {
 		}
 		return h, nil
 	}
-	floors := func(context.Context) publishedFloors { return publishedFloors{at: time.Now()} }
+	// EVERY DOMAIN'S FLOOR READ AND ABSENT — a fleet whose trim has not
+	// run — so what this case judges is the logs alone: a domain the read
+	// did not ask about is no floor at all, and its copy unread.
+	floors := func(context.Context) publishedFloors {
+		read := publishedFloors{domains: map[string]domainFloor{}, at: time.Now()}
+		for _, name := range registeredNames() {
+			read.domains[name] = domainFloor{}
+		}
+		return read
+	}
 
 	budget := 300 * time.Millisecond
 	ctx, cancel := context.WithTimeout(t.Context(), budget)

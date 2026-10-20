@@ -465,9 +465,13 @@ tries to create.
 **A coordination read costs one ordered pass certified against the stream's
 key index, and an account needs the consumer, stream-info, message-get and
 purge APIs.** A node lists coordination records constantly — several
-fifteen-second duty loops on every tick, and the state-log write fence, which
-lists the published trim floors on every write at an expectation of zero, a
-subject's first write among them. Each listing is one pass over a temporary
+fifteen-second duty loops on every tick, and an operator's gestures such as a
+readmission or the retention report once each — but no state-log read and no
+seat's write waits on a listing: the state-log write fence, which reads the
+published trim floor on every write at an expectation of zero, a subject's
+first write among them, reads its own domain's floor by its key, one
+`$JS.API.STREAM.MSG.GET` to the `positions` stream's leader, and creates no
+consumer. Each listing is one pass over a temporary
 consumer, which on a replicated bucket is two metadata-raft proposals, and
 beside it one stream-info request narrowed to the listing's keys, which names
 every key that has a message. A pass alone cannot tell that it is complete — a

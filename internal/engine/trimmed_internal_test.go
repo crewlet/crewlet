@@ -293,7 +293,7 @@ func TestATickRemovesTheAnchorsBelowWhatItPurged(t *testing.T) {
 	// backup covering the record, no holds, and the feed acknowledged above.
 	r := sweepingRetention(e, back.Fleet)
 	r.cfg = config.TrackerRetention{MinAgeRaw: "1ns"}
-	floors, err := back.Fleet.Floors(t.Context())
+	floors, err := fleetFloors(t.Context(), back.Fleet)
 	if err != nil {
 		t.Fatalf("floors: %v", err)
 	}

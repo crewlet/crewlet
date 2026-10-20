@@ -177,7 +177,7 @@ func TestTheRunningEstateIsTheDeclaredEstate(t *testing.T) {
 	if err := trimLog(t.Context(), r, running, shared); err != nil {
 		t.Fatalf("the tracker's tick: %v", err)
 	}
-	floors, err := e.backends.Fleet.Floors(t.Context())
+	floors, err := fleetFloors(t.Context(), e.backends.Fleet)
 	if err != nil {
 		t.Fatalf("read the floors: %v", err)
 	}

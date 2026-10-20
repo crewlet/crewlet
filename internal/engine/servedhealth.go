@@ -17,21 +17,25 @@ import (
 // a health is this node's own and costs nothing to read: its checkpoint, its
 // applier's stop and fault, what it holds deferred, its eviction row, whether
 // its stream is the one its rows are keyed to. TWO TERMS ARE NOT: the fleet's
-// published trim floors are a certified listing of a coordination bucket — the
-// bucket's own pass, its key index and a leader read of every key the pass lost
-// — and the log's two ends are a stream-info request to that stream's leader,
-// made on a handle whose mutex serialises every caller. Read on every read,
-// they put the company's whole read rate on the coordination stream's leader,
-// N nodes over, and queued every read of a domain on one node behind one
-// stream-info round trip at a time — while the stale level promised a read
-// that "takes no broker call at all".
+// published trim floors are a leader read of each registered domain's key in a
+// coordination bucket, and the log's two ends are a stream-info request to
+// that stream's leader, made on a handle whose mutex serialises every caller.
+// Read on every read, they put the company's whole read rate on the
+// coordination stream's leader, N nodes over, and queued every read of a
+// domain on one node behind one stream-info round trip at a time — while the
+// stale level promised a read that "takes no broker call at all".
 //
 // So a read is served both from memory ([memo]): the last value read, refreshed
 // OFF the read's path, ONE read at a time, once it is older than
 // [servingRecheck] — the request gate's own recheck, so a node pays at most one
-// floors listing and one stream-info request per log a second however many
-// reads it serves — and every fresh read anything else makes (the copy's
-// verdict, admission, the heartbeat's reports) refreshes it too. MEASURED
+// read of each domain's floor and one stream-info request per log a second
+// however many reads it serves — and every fresh read anything else makes (the
+// copy's verdict, admission, the heartbeat's reports) refreshes it too. The
+// floors are memoised PER DOMAIN ([floorMemos]), each refreshed by a read of
+// that domain's key alone, because one domain's floor that cannot be read is
+// that domain's refusal and no other's: memoised together, a row that does not
+// decode under one key held every domain's reads to the age of a read that
+// never answered. MEASURED
 // (BenchmarkAReadsReadiness, one node, the tracker's read authority at the
 // stale level): 1.11 ms and 1.01 broker messages a read when both were asked
 // per read, 0.12 ms and 0.001 served from memory.
@@ -46,9 +50,10 @@ import (
 // past the end that was not one (see [observeWith]). A value nobody could
 // refresh AGES, and each term ages at a bound of its own:
 //
-//   - THE FLOORS at [statelog.FloorCacheStale], four heartbeats: their instant
-//     is the [statelog.Floor] a health carries, so reads refuse `floor_unknown`
-//     exactly when the alarm of that name says they do.
+//   - THE FLOORS at [statelog.FloorCacheStale], four heartbeats, each
+//     domain's on its own: its instant is the [statelog.Floor] a health
+//     carries, so a domain's reads refuse `floor_unknown` exactly when the
+//     alarm of that name says they do, naming that domain.
 //   - THE ENDS at [endsStale], the oldest a WORKING refresh leaves them. The
 //     lag a `max_lag_seq` or `max_lag_seconds` read is checked against is
 //     derived from them, and a lag a minute old is no bound at all: a node
@@ -59,7 +64,11 @@ import (
 //
 // FRESH READS STAY WHERE AN UNREAD VALUE IS A LOST UPDATE: the write fence's
 // expectation of zero reads the floor and the log's ends itself
-// ([stateLog.trimFloor], [stateLog.logEndsOf]), and so does the trim duty.
+// ([stateLog.trimFloor], [stateLog.logEndsOf]), and so does the trim duty. The
+// fence's floor read is on the write's path and stays there — it must follow
+// the write's own read of its subject, the floor theorem's order — so it is
+// the cheapest read that order allows: its own domain's key and no other,
+// never this memo, and never a listing of the register.
 
 // endsStale is how old a log's ends may be and still be served to a read: one
 // [servingRecheck] before a read starts their refresh, plus the [servingRead]
@@ -255,15 +264,47 @@ func servedEnds(ctx context.Context, running *runningLog, at statelog.Position) 
 	})
 }
 
-// servedFloors is the fleet's published floors as a read is served them
-// ([memo.serve]), each refresh noted for the `floor_unknown` alarm as every
-// read of the register is ([stateLog.noteFloors]).
-func (s *stateLog) servedFloors(ctx context.Context) (publishedFloors, error) {
-	return s.floorMemo.serve(ctx, statelog.FloorCacheStale, func(publishedFloors) bool { return true },
+// floorMemos is one [memo] per domain of the fleet's published floors, each
+// holding the last read of that domain's key that answered. The zero value
+// holds none, and a domain's memo is made the first time anything asks for it.
+//
+// ONE A DOMAIN, because each domain's floor is its own key and its own fault
+// ([publishedFloors]): one memo for every domain kept a refresh only when all
+// of them answered, so a read of the tracker refused `floor_unknown` once the
+// knowledge base's key had failed for [statelog.FloorCacheStale], and a read
+// of one domain paid a key read of every other one at each refresh.
+type floorMemos struct {
+	mu sync.Mutex
+	by map[string]*memo[publishedFloors]
+}
+
+// of is domain's memo.
+func (m *floorMemos) of(domain string) *memo[publishedFloors] {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	held, ok := m.by[domain]
+	if !ok {
+		if m.by == nil {
+			m.by = map[string]*memo[publishedFloors]{}
+		}
+		held = &memo[publishedFloors]{}
+		m.by[domain] = held
+	}
+	return held
+}
+
+// servedFloor is domain's published floor as a read is served it
+// ([memo.serve]) — a read of that domain's key alone — each refresh noted for
+// the `floor_unknown` alarm as every read of the floors is
+// ([stateLog.noteFloors]).
+func (s *stateLog) servedFloor(ctx context.Context, domain string) (publishedFloors, error) {
+	return s.floorMemos.of(domain).serve(ctx, statelog.FloorCacheStale,
+		func(publishedFloors) bool { return true },
 		func(ctx context.Context) (publishedFloors, error) {
-			read := readFloorsOf(ctx, s.fleet)
+			read := readFloorsOf(ctx, s.fleet, []string{domain})
 			s.noteFloors(read)
-			return read, read.err
+			_, _, err := read.row(domain)
+			return read, err
 		})
 }
 
@@ -287,7 +328,8 @@ func (s *stateLog) servedFloors(ctx context.Context) (publishedFloors, error) {
 // "never read on this node", and a floor last read two minutes ago read the
 // same.
 func (s *stateLog) servedHealth(ctx context.Context, running *runningLog) (statelog.Health, error) {
-	floors, unread := s.servedFloors(ctx)
+	name := running.domain.Name()
+	floors, unread := s.servedFloor(ctx, name)
 	health, err := s.observeWith(ctx, running, func(ctx context.Context,
 		at statelog.Position) (streamEnds, error) {
 		return servedEnds(ctx, running, at)
@@ -300,10 +342,10 @@ func (s *stateLog) servedHealth(ctx context.Context, running *runningLog) (state
 		// instant handed on is that age back from now — the one clock
 		// the read authority ages a floor by.
 		health.Floor = statelog.Floor{State: statelog.FloorUnknown}
-		if _, age, ok := s.floorMemo.last(); ok {
+		if _, age, ok := s.floorMemos.of(name).last(); ok {
 			health.Floor.ReadAt = time.Now().Add(-age)
 		}
 		return health, nil
 	}
-	return floored(health, running.domain.Name(), floors)
+	return floored(health, name, floors)
 }

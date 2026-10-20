@@ -137,9 +137,9 @@ func strandedByAVanishedPeer(t *testing.T, published bool, stranded string) {
 	if err != nil {
 		t.Fatalf("read the register: %v", err)
 	}
-	gens, err := s.fleetGenerations(t.Context(), rows, s.openLogs(),
-		map[string]uint32{name: own.Generation})
-	if err != nil {
+	gens, unread := s.fleetGenerations(t.Context(), rows, s.readFloors(t.Context()),
+		s.openLogs(), map[string]uint32{name: own.Generation})
+	if err := unread[name]; err != nil {
 		t.Fatalf("fleetGenerations: %v", err)
 	}
 	if gens[name] != own.Generation {

@@ -87,7 +87,7 @@ func TestAnEvictionStopsEveryIdentityLogCountingTheNode(t *testing.T) {
 		t.Helper()
 		shared := fleetInputs{at: at, readable: true, positions: positions(),
 			previous: map[string]coord.TrimFloor{}}
-		floors, err := back.Fleet.Floors(t.Context())
+		floors, err := fleetFloors(t.Context(), back.Fleet)
 		if err != nil {
 			t.Fatalf("floors: %v", err)
 		}
@@ -126,7 +126,7 @@ func TestAnEvictionStopsEveryIdentityLogCountingTheNode(t *testing.T) {
 	}
 	trimTo := func(name string) uint64 {
 		t.Helper()
-		floors, err := back.Fleet.Floors(t.Context())
+		floors, err := fleetFloors(t.Context(), back.Fleet)
 		if err != nil {
 			t.Fatalf("floors: %v", err)
 		}

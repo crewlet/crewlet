@@ -146,7 +146,7 @@ func TestAReadAsksTheBrokerNothing(t *testing.T) {
 	read() // the memos are filled
 
 	const reads = 300
-	floors, ends := s.floorMemo.reads.Load(), running.ends.reads.Load()
+	floors, ends := s.floorMemos.of(trackerName).reads.Load(), running.ends.reads.Load()
 	sent := q.Conn().Stats().OutMsgs
 	started := time.Now()
 	for range reads {
@@ -154,7 +154,7 @@ func TestAReadAsksTheBrokerNothing(t *testing.T) {
 	}
 	rechecks := int64(time.Since(started)/servingRecheck) + 2
 	sent = q.Conn().Stats().OutMsgs - sent
-	if got := s.floorMemo.reads.Load() - floors; got > rechecks {
+	if got := s.floorMemos.of(trackerName).reads.Load() - floors; got > rechecks {
 		t.Errorf("%d reads listed the published floors %d times, want at most %d", reads, got, rechecks)
 	}
 	if got := running.ends.reads.Load() - ends; got > rechecks {
@@ -170,7 +170,7 @@ func TestAReadAsksTheBrokerNothing(t *testing.T) {
 
 // BenchmarkAReadsReadiness measures what one read of the tracker's read
 // authority on a single node costs the broker: the messages its connection
-// sent, the published-floors listings and the stream-info reads, each per
+// sent, the reads of the published floors and the stream-info reads, each per
 // read. All three are near zero — the floors and the ends are served from
 // memory, refreshed at most once a recheck however many reads arrive.
 func BenchmarkAReadsReadiness(b *testing.B) {
@@ -184,7 +184,7 @@ func BenchmarkAReadsReadiness(b *testing.B) {
 	if _, err := running.reader.Read(ctx, query, noop); err != nil {
 		b.Fatal(err)
 	}
-	floors, ends := s.floorMemo.reads.Load(), running.ends.reads.Load()
+	floors, ends := s.floorMemos.of(trackerName).reads.Load(), running.ends.reads.Load()
 	sent := q.Conn().Stats().OutMsgs
 	b.ResetTimer()
 	for b.Loop() {
@@ -195,7 +195,7 @@ func BenchmarkAReadsReadiness(b *testing.B) {
 	b.StopTimer()
 	per := func(n int64) float64 { return float64(n) / float64(b.N) }
 	b.ReportMetric(per(int64(q.Conn().Stats().OutMsgs-sent)), "broker-msgs/op")
-	b.ReportMetric(per(s.floorMemo.reads.Load()-floors), "floor-listings/op")
+	b.ReportMetric(per(s.floorMemos.of(trackerName).reads.Load()-floors), "floor-reads/op")
 	b.ReportMetric(per(running.ends.reads.Load()-ends), "stream-infos/op")
 }
 
@@ -242,7 +242,7 @@ func TestAFloorNobodyCouldRefreshIsRefusedAsUnknownNamingItsAge(t *testing.T) {
 	s := e.native.Load().log
 	running := s.Domain(trackerName)
 
-	refusal := refusedOverAFailedRefresh(t, running, &s.floorMemo, statelog.FloorCacheStale,
+	refusal := refusedOverAFailedRefresh(t, running, s.floorMemos.of(trackerName), statelog.FloorCacheStale,
 		statelog.Query{Level: statelog.ReadStale}, "coordination does not answer")
 	if refusal.Code != statelog.RefuseFloorUnknown {
 		t.Fatalf("a read over a floor nobody could refresh refused %q (%s), want %q",

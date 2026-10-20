@@ -13,6 +13,7 @@ package statelog
 // failure inside one package: one rule, written twice, disagreeing.
 
 import (
+	"cmp"
 	"fmt"
 	"slices"
 	"strings"
@@ -326,8 +327,16 @@ type Reading struct {
 	// is.
 	DeferredAge time.Duration
 
-	// FloorUnknownFor is how long the trim floor has been unreadable.
-	FloorUnknownFor time.Duration
+	// FloorUnknown is every domain whose trim floor is unreadable now, and
+	// for how long it has been so — each domain's floor being its own key,
+	// read, refused and aged on its own.
+	//
+	// A DURATION A DOMAIN, never the longest beside a list of names: a
+	// domain that began failing a moment ago is still served from its memo
+	// ([FloorCacheStale]), and one age printed beside every failing name
+	// told an operator that domain's reads were refused, with another
+	// domain's age as the evidence.
+	FloorUnknown map[string]time.Duration
 
 	// PrefetchP95 and SearchP95 are the knowledge scans this node
 	// coordinated, at p95: those a turn's prefetch ran, which the turn waits
@@ -596,11 +605,20 @@ var table = []rule{
 	{
 		kind: KindFloorUnknown,
 		fires: func(r Reading) (string, bool) {
-			return fmt.Sprintf("the trim floor has been unreadable for %s",
-				spoken(r.FloorUnknownFor)), r.FloorUnknownFor > FloorCacheStale
+			past := floorsPast(r.FloorUnknown)
+			return floorDetail(past), len(past) > 0
 		},
-		remedy: "Coordination cannot be reached from this node. Every read is " +
-			"refused until it can be.",
+		remedy: "This node cannot read the published trim floor of the domains " +
+			"named, each for as long as it says. Either coordination does not " +
+			"answer — every domain at once, when the store is down — or that " +
+			"domain's row in the register does not read as its floor, which the " +
+			"trim's `retention_trim_failed` line and every write it refuses say, " +
+			"naming the key to remove. Each named domain's reads, and its writes " +
+			"at an expectation of zero, are refused until its floor can be read. " +
+			"A domain whose floor has gone unread for less than four heartbeats " +
+			"is not named: its reads are still served from the floor it last " +
+			"read, though its writes at an expectation of zero are already " +
+			"refused. See docs/guides/retention.md, \"An unreadable trim floor\".",
 	},
 	{
 		kind: KindPrefetchSlow,
@@ -922,6 +940,56 @@ func Kinds() []Kind {
 	}
 	slices.Sort(out)
 	return out
+}
+
+// unreadFloor is one domain whose trim floor has gone unread, and for how long.
+type unreadFloor struct {
+	domain string
+	age    time.Duration
+}
+
+// floorsPast is every domain whose trim floor has gone unread for longer than
+// [FloorCacheStale] — those whose reads this node now refuses — the longest
+// unread first and a tie by name, so a detail reads the same at every
+// evaluation.
+//
+// PAST THE BOUND AND NO OTHER: a domain whose floor began failing inside it is
+// still served from its memo, and naming it beside one past the bound told an
+// operator its reads were refused while they were being answered.
+func floorsPast(unread map[string]time.Duration) []unreadFloor {
+	var past []unreadFloor
+	for domain, d := range unread {
+		if d > FloorCacheStale {
+			past = append(past, unreadFloor{domain: domain, age: d})
+		}
+	}
+	slices.SortFunc(past, func(a, b unreadFloor) int {
+		if c := cmp.Compare(b.age, a.age); c != 0 {
+			return c
+		}
+		return strings.Compare(a.domain, b.domain)
+	})
+	return past
+}
+
+// floorDetail is the `floor_unknown` detail: each domain past the bound, with
+// its own age — "the trim floor of pages has been unreadable for 3m, and
+// tracker's for 2m".
+func floorDetail(past []unreadFloor) string {
+	if len(past) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "the trim floor of %s has been unreadable for %s",
+		past[0].domain, spoken(past[0].age))
+	for i, p := range past[1:] {
+		sep := ", "
+		if i == len(past)-2 {
+			sep = ", and "
+		}
+		fmt.Fprintf(&b, "%s%s's for %s", sep, p.domain, spoken(p.age))
+	}
+	return b.String()
 }
 
 // spoken is a duration as an operator reads it rather than as a computer
