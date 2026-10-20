@@ -2394,7 +2394,10 @@ headless token (`-token-stdin`, or the one `-capture-token` mints, unless its
 sign-in also left a login file) signs the entry in without ending the logout. A
 fresh state directory holds no such record and restores the bundle as before,
 so `logout` names the field or secret that retires it when the entry has one —
-even when the CLI's own logout fails, since the login is removed and the logout
+and, since a secret is the fleet's, `crewlet secrets unset NAME -api URL`
+through a node that is up as the way to remove it now: run where the engine is
+stopped, the unset reaches the fleet only at that engine's next start — even
+when the CLI's own logout fails, since the login is removed and the logout
 recorded either way.
 
 The engine also restores a bundle **itself**, at boot and at every apply it

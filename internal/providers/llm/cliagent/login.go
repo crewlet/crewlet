@@ -660,14 +660,24 @@ func (p *Provider) bundleSource() string {
 
 // retireBundle says what removes the entry's configured bundle, which is what
 // a fresh state volume restores.
+//
+// THE FLEET'S STORE, AND HOW TO REACH IT. A bundle in the secret store is the
+// fleet's, and this notice is printed by `crewlet llm logout`, which runs only
+// where no engine holds this node's store: `crewlet secrets unset` there
+// reaches this node's own table and removes the fleet's value only at the
+// engine's next start, so the notice names `-api` too — the way to remove it
+// from a running fleet now.
 func (p *Provider) retireBundle() string {
 	if p.bundleConfigured {
 		return fmt.Sprintf("remove providers.llm.%s.cli.auth.credential_bundle from the company "+
-			"document, or the secret it references", p.key)
+			"document, or the secret it references from the fleet's secret store "+
+			"(`crewlet secrets unset NAME -api URL` through a node that is up)", p.key)
 	}
 	name := BundleVarName(p.key)
-	return fmt.Sprintf("remove %s from the secret store (`crewlet secrets unset %s`) and from "+
-		"the engine's environment", name, name)
+	return fmt.Sprintf("remove %s from the fleet's secret store and from the engine's "+
+		"environment: `crewlet secrets unset %s -api URL` through a node that is up removes "+
+		"it now, and run where this node's engine is stopped it is removed at that "+
+		"engine's next start", name, name)
 }
 
 // ImportBundle is [Provider.RestoreBundle] for an operator who asked for it,

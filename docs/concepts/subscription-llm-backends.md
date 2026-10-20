@@ -1237,7 +1237,10 @@ a container that comes up on an empty volume restores the bundle as it always
 did: to retire a bundle for good, remove `cli.auth.credential_bundle` or the
 `CREWLET_LLM_CLI_<KEY>_CREDENTIALS` secret it was exported to, which `logout`
 reminds you of when the entry has one — even when the CLI's own logout fails,
-since the login is removed and the logout recorded either way.
+since the login is removed and the logout recorded either way. The secret is the
+fleet's: `crewlet secrets unset <NAME> -api URL` through a node that is up
+removes it now, while the same command where the engine is stopped records a
+removal that engine carries onto the fleet at its next start.
 
 `crewlet llm logout` also discards a login a failed export left in the login
 home for the next command
