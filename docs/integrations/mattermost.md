@@ -35,7 +35,8 @@ disconnect needs the same authority that created them.
 On a first boot the engine claims its seats before that pass has minted their
 tokens, so each agent's `mcp-server-mattermost` is not started yet: it is
 **waiting**, not failing, for a token this integration mints
-(`mcp_server_awaiting_credential` in the log, which names it). The pass seals
+(`mcp_server_awaiting_credential` in the log, and *Waiting for credentials* on
+Settings › Tools & MCP, both naming it). The pass seals
 the tokens and re-activates the revision, and once the seal reaches a seat's
 node it starts the seat's server with its token, so the agents get the tools
 they answer through without a restart of the engine. That holds only where

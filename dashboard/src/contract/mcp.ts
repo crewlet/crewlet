@@ -14,11 +14,15 @@
  * every instance launched is serving — it started, listed its tools and was up
  * at its node's last beat. `partial`: some are serving and some are not — a
  * node, one seat's credentials or one child being restarted rather than the
- * server. `failing`: none that was launched is serving. `not_started`: every
+ * server. `failing`: none that was launched is serving. `waiting`: nothing
+ * was launched and nothing failed, and a seat's instance is held back for a
+ * credential a provisioning pass mints for it and has not sealed yet — not a
+ * failure; it starts once the credential is sealed. `not_started`: every
  * reporting node started nothing for it. `unreported`: no live node's latest
  * heartbeat carried the report.
  */
-export type McpServerState = "running" | "partial" | "failing" | "not_started" | "unreported";
+export type McpServerState =
+  "running" | "partial" | "failing" | "waiting" | "not_started" | "unreported";
 
 /** One live node, and whether its latest heartbeat carried its MCP servers. */
 export interface McpStatusNode {
@@ -34,12 +38,19 @@ export interface McpServerNode {
   reported: boolean;
   started: number;
   failed: number;
+  /** Instances held back, unstarted, for a credential still being minted. */
+  waiting: number;
   /** Tools one serving instance serves. */
   tools: number;
   /** One failed instance's reason, cut to 240 bytes, or "". */
   error: string;
   /** The seat that instance was launched for, or "" for a shared server. */
   error_seat: string;
+  /** What one waiting instance waits for — the variables and the integration
+   *  minting them — cut to 240 bytes, or "". */
+  wait: string;
+  /** The seat that waiting instance belongs to, or "". */
+  wait_seat: string;
 }
 
 /** One server. */
@@ -58,6 +69,8 @@ export interface McpServerStatus {
   /** Summed over the nodes that report. */
   started: number;
   failed: number;
+  /** Neither started nor failed: held back for a credential still being minted. */
+  waiting: number;
   /** The most tools one serving instance serves. */
   tools: number;
   /**

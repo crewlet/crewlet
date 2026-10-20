@@ -309,10 +309,12 @@ Those two are the whole grammar. A server that fails to start is visible as a
 and, above the catalogue on the same screen, as a row of its own: every node
 re-publishes its MCP servers as they are at each beat on its presence heartbeat
 (per server, its instances counted), so **MCP servers** shows each server as
-*Running*, *Partly failing*, *Failing*, *Not started* or *Not reported* with one
-cell per live node and the first failure's reason and seat (`GET /mcp-servers`,
-which takes `admin` because it shows each server's configured launch,
-as `/config` does; the heartbeat carries each reason bounded, and the whole
+*Running*, *Partly failing*, *Failing*, *Waiting for credentials*, *Not
+started* or *Not reported* with one cell per live node and the first failure's
+reason and seat, and the first waiting instance's sentence and seat
+(`GET /mcp-servers`, which takes `admin` because it shows each server's
+configured launch, as `/config` does; the heartbeat carries each reason
+bounded, and the whole
 text is the node's `mcp_server_failed` log line, or `server_exited` for one
 that [went down after starting](#a-server-that-dies-or-will-not-start)). Clicking a server opens its own page:
 its state, reach and launch, every node's reason as the node reported it rather
@@ -717,9 +719,9 @@ the engine does instead depends on whether anything will fill the variable:
 
 | The variable | The child | Where it shows |
 |---|---|---|
-| Is one a [provisioning pass](../concepts/integration-reconcile.md) mints for this seat — a GitLab or Datadog account's token, an Atlassian account's token or address, or a Mattermost bot's token where `integrations.mattermost.provisioning` is set — and nothing that pass last reported stops it | **Waiting**, not failed. It starts once the seal reaches the node: the pass that sealed it asks the node it ran on for a pass over its seats at once, and re-activates the revision so every other node's apply does the same | `mcp_server_awaiting_credential` (info), naming the variable and the integration that mints it; the node's heartbeat counts it under `waiting` |
-| Is one such a pass mints, and its last report says it cannot until a person acts — its own credential is missing or refused, an administrator has an app or a setting to switch on, or this seat's account could not be made or was switched off by somebody else — or the integration is being disconnected | **Failed**, with the finding that pass recorded: the same finding the integration's card shows. It is a wait with no end until somebody acts, so it is not reported as one | `mcp_server_credential_missing` (error) when the seat's pass meets it; the node's heartbeat counts it under `failed` from the first beat after the integration reports it, whenever that is, and under `waiting` again from the first after it clears |
-| Is one nothing this engine runs mints — a secret nobody stored, a reference to a name nobody holds, or a variable set to an empty value | **Failed**, naming the variable and the remedy: seal it (`crewlet secrets set`, or the integration's own `provision` command where it has one) and `POST /config/reload`, or set it in the engine's own environment and restart the engine — a running engine never reads an `export` made after it started; for one set to an empty value, seal a value and `POST /config/reload`, or take the key out of the seat's `mcp_env` if the server needs none | `mcp_server_credential_missing` (error); the heartbeat counts it under `failed`, with the same sentence |
+| Is one a [provisioning pass](../concepts/integration-reconcile.md) mints for this seat — a GitLab or Datadog account's token, an Atlassian account's token or address, or a Mattermost bot's token where `integrations.mattermost.provisioning` is set — and nothing that pass last reported stops it | **Waiting**, not failed. It starts once the seal reaches the node: the pass that sealed it asks the node it ran on for a pass over its seats at once, and re-activates the revision so every other node's apply does the same | `mcp_server_awaiting_credential` (info), naming the variable and the integration that mints it; on **Settings › Tools & MCP** the server's row counts it as *waiting* — the server reads *Waiting for credentials* where nothing else is wrong — and its page lists what each node's instance waits for |
+| Is one such a pass mints, and its last report says it cannot until a person acts — its own credential is missing or refused, an administrator has an app or a setting to switch on, or this seat's account could not be made or was switched off by somebody else — or the integration is being disconnected | **Failed**, with the finding that pass recorded: the same finding the integration's card shows. It is a wait with no end until somebody acts, so it is not reported as one | `mcp_server_credential_missing` (error) when the seat's pass meets it; the server's row counts it as failed from the first heartbeat after the integration reports it, whenever that is, and as waiting again from the first after it clears |
+| Is one nothing this engine runs mints — a secret nobody stored, a reference to a name nobody holds, or a variable set to an empty value | **Failed**, naming the variable and the remedy: seal it (`crewlet secrets set`, or the integration's own `provision` command where it has one) and `POST /config/reload`, or set it in the engine's own environment and restart the engine — a running engine never reads an `export` made after it started; for one set to an empty value, seal a value and `POST /config/reload`, or take the key out of the seat's `mcp_env` if the server needs none | `mcp_server_credential_missing` (error); the server's row counts it as failed, with the same sentence |
 
 Which variables a pass mints is read from the plan the pass mints by — each
 provisioning pass's run takes its plan from the one place the engine reads it

@@ -228,6 +228,59 @@ func TestAServerThatStartedNowhereIsFailing(t *testing.T) {
 	}
 }
 
+// A SEAT'S INSTANCE HELD BACK FOR ITS PROVISIONED CREDENTIAL IS WAITING, NOT
+// FAILING, and says what it waits for.
+//
+// On a first boot under provisioning every seat's instance waits for the
+// credential the pass mints, and an operator watching the tools screen while
+// they connect an integration must not read that as a fault: nothing was
+// launched and nothing failed. The waiting count is its own, its sentence and
+// seat reach the cell as a failure's do, and it decides the state only where
+// nothing else does — a server running for one seat is running, and one with
+// a failure is failing whatever waits beside it.
+func TestAServerWaitingForAProvisionedCredentialIsNotFailing(t *testing.T) {
+	t.Parallel()
+	cfg, err := config.ParseCompany([]byte(mcpCompany))
+	if err != nil {
+		t.Fatal(err)
+	}
+	organization, err := cfg.Organization()
+	if err != nil {
+		t.Fatal(err)
+	}
+	backendDev, _ := organization.AgentIDFor(organization.AgentSeatByHandle("backend-dev"))
+	const wait = "not started: waiting for the gitlab integration to mint ${GITLAB_TOKEN_BACKEND_DEV}; " +
+		"it starts once the seal reaches this node"
+
+	backend := coordmemory.New()
+	presentNode(t, backend, "node-a", &coord.NodeStatus{
+		MCP: []coord.MCPServerStatus{{Server: "github", Waiting: 1, Wait: wait, WaitSeat: backendDev}},
+	})
+	github := serverRow(t, askMCPStatus(t, mcpSources(t, backend)), "github")
+	if github.State != queries.MCPWaiting || github.Waiting != 1 || github.Failed != 0 {
+		t.Errorf("github = %+v, want waiting, and not failing", github)
+	}
+	if cell := github.Nodes[0]; cell.Waiting != 1 || cell.Wait != wait || cell.WaitSeat != "backend-dev" ||
+		cell.Error != "" {
+		t.Errorf("node-a's cell = %+v, want the waiting instance, its sentence and its seat", cell)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		status coord.MCPServerStatus
+		want   queries.MCPServerState
+	}{
+		{"one seat served, another waiting", coord.MCPServerStatus{Server: "github", Started: 1, Waiting: 1}, queries.MCPRunning},
+		{"one seat failed, another waiting", coord.MCPServerStatus{Server: "github", Failed: 1, Waiting: 1}, queries.MCPFailing},
+	} {
+		backend := coordmemory.New()
+		presentNode(t, backend, "node-a", &coord.NodeStatus{MCP: []coord.MCPServerStatus{tc.status}})
+		if got := serverRow(t, askMCPStatus(t, mcpSources(t, backend)), "github").State; got != tc.want {
+			t.Errorf("%s: state = %s, want %s", tc.name, got, tc.want)
+		}
+	}
+}
+
 // AN ANNOTATION KEY IS UNLISTED ONLY WHERE NO STARTED INSTANCE LISTS IT,
 // FLEET-WIDE. Each node's row already names the keys none of its own
 // instances lists; a key one node names and another's instances list is a

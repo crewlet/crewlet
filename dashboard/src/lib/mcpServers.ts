@@ -41,6 +41,11 @@ export const SERVER_STATE_WORDS: Record<
     tone: "danger",
     hint: "Every instance failed. Check the command, address or credentials.",
   },
+  waiting: {
+    label: "Waiting for credentials",
+    tone: "neutral",
+    hint: "An integration is minting a seat's credential. The server starts once it is sealed.",
+  },
   not_started: {
     label: "Not started",
     tone: "neutral",
