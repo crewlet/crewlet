@@ -180,7 +180,7 @@ test("the Make row offers every kind on All and Yours, each opening its kind's o
   mount("all");
   const make = screen.getByRole("region", { name: "Make something new" });
   const tiles = within(make).getAllByRole("link");
-  expect(tiles.map((t) => t.textContent)).toEqual([
+  expect(tiles.map((t) => t.getAttribute("aria-label"))).toEqual([
     "Docs",
     "Slides",
     "Design",
@@ -188,6 +188,10 @@ test("the Make row offers every kind on All and Yours, each opening its kind's o
     "HTML",
     "Sheet",
   ]);
+  // WHAT EACH IS FOR is read as the link's description, never run into its name.
+  const described = (t: HTMLElement) =>
+    document.getElementById(t.getAttribute("aria-describedby") ?? "")?.textContent;
+  expect(described(tiles[3]!)).toBe("Live figures");
   expect(tiles[0]!.getAttribute("href")).toBe("#/artifacts/new/doc");
   expect(tiles[5]!.getAttribute("href")).toBe("#/artifacts/new/sheet");
   cleanup();

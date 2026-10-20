@@ -19,8 +19,11 @@
  *
  * Every preview is a design system `LivePreview`: mounted only near the
  * viewport and only while the gallery's live budget grants it a slot, the
- * kind's drawing standing in otherwise (off screen, over the budget, still
- * loading, failed or empty). A version's outline never changes, so each is
+ * kind's drawing standing in otherwise (never yet near, over the budget,
+ * still loading, failed or empty). A preview the reader scrolls past stays
+ * drawn until its slot is needed, and then keeps a still copy, so scrolling
+ * back finds every card as it was. A page and a design's board run in a
+ * frame (`FRAMED`), which the budget caps apart. A version's outline never changes, so each is
  * read once per tab (`outlines`). Every read is a PREVIEW (`ReadOptions`):
  * the engine records no open, so browsing a gallery never fills an
  * artifact's Seen by list or reorders the reader's Recently opened.
@@ -114,6 +117,9 @@ export function previewable(item: Pick<ArtifactListItem, "kind" | "capabilities"
   return !item.capabilities.includes("state");
 }
 
+/** The kinds whose preview runs the artifact's page in a frame. */
+const FRAMED: ReadonlySet<ArtifactKind> = new Set(["html", "design"]);
+
 /** How many rows of a sheet are read and drawn: more than the card shows at any width. */
 const SHEET_ROWS = 14;
 
@@ -138,7 +144,12 @@ export function GalleryPreview({
     (item.kind !== "sheet" && item.head_number <= 0) ||
     !previewable(item);
   return (
-    <LivePreview fallback={fallback} width={LAYOUT_WIDTH[item.kind]} disabled={still}>
+    <LivePreview
+      fallback={fallback}
+      width={LAYOUT_WIDTH[item.kind]}
+      disabled={still}
+      frame={FRAMED.has(item.kind)}
+    >
       <KindPreview item={item} people={people} />
     </LivePreview>
   );
