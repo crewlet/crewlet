@@ -32,7 +32,7 @@ import (
 // Every statement this package issues against the vector tables — the
 // two-stage search in each shape its callers issue it, through the index and
 // through the full scan, built by the function [search.Semantic] calls, and the
-// reads the index's own duty and applier make — run through EXPLAIN QUERY PLAN
+// reads the index's own duty and applier make — planned ([storetest.Plan])
 // on a corpus large enough that the planner has a real choice. Then the
 // inverse: every index the schema declares must appear in at least one of
 // those plans, or it is a copy of the row order nobody reads and a trap the
@@ -155,17 +155,8 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 	}
 
 	plans := map[string][]string{}
-	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
-		for name, q := range registered {
-			steps, err := explain(t, tx, q.statement, q.args...)
-			if err != nil {
-				return fmt.Errorf("%s: %w", name, err)
-			}
-			plans[name] = steps
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
+	for name, q := range registered {
+		plans[name] = storetest.Plan(t, db.Replicated(), q.statement, q.args)
 	}
 	refuseUnnested(t, plans)
 
@@ -235,15 +226,10 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 	// AND RE-FILES THEM DRIVEN BY ITS OWN PAIRS, each seeking its row by
 	// rowid: a plan that walked the table and looked each row up in the
 	// pairs would read the whole corpus per batch, in the one statement that
-	// replaced a thousand. Explained in a write transaction, the only kind
-	// that plans an UPDATE.
-	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
-		steps, err := explain(t, tx, search.RefileStatement, generation, `[[1, 0], [2, 1]]`)
-		plans["a reassign's re-filing"] = steps
-		return err
-	}); err != nil {
-		t.Fatalf("a reassign's re-filing: %v", err)
-	}
+	// replaced a thousand. Planned in a write transaction, the only kind
+	// that plans an UPDATE, which storetest.Plan opens for one.
+	plans["a reassign's re-filing"] = storetest.Plan(t, db.Replicated(),
+		search.RefileStatement, []any{generation, `[[1, 0], [2, 1]]`})
 	if joined := strings.Join(plans["a reassign's re-filing"], "\n"); !strings.Contains(joined,
 		"SCAN json_each AS m") || !strings.Contains(joined,
 		"SEARCH kb_vectors_bin USING INTEGER PRIMARY KEY (rowid=?)") {
@@ -295,32 +281,10 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 			"model index:\n%s", joined)
 	}
 
-	// THE INVERSE: an index no registered plan reaches.
-	var declared []string
-	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(t.Context(), `
-			SELECT name FROM sqlite_master
-			WHERE type = 'index' AND tbl_name IN ('kb_vectors', 'kb_vectors_bin')
-			  AND name NOT LIKE 'sqlite_autoindex%'`)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = rows.Close() }()
-		for rows.Next() {
-			var name string
-			if err := rows.Scan(&name); err != nil {
-				return err
-			}
-			declared = append(declared, name)
-		}
-		return rows.Err()
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if len(declared) == 0 {
-		t.Fatal("no indexes were read back, so this half of the check " +
-			"cannot fail and is not asserting anything")
-	}
+	// THE INVERSE: an index no registered plan reaches. What the schema
+	// declares is read through storetest, which fails on a schema that
+	// declares none, so this half cannot pass having read nothing.
+	declared := storetest.IndexesOn(t, db.Replicated(), []string{"kb_vectors", "kb_vectors_bin"})
 	all := ""
 	for _, steps := range plans {
 		all += strings.Join(steps, "\n") + "\n"
@@ -364,26 +328,6 @@ func refuseUnnested(t *testing.T, plans map[string][]string) {
 				"table (%q):\n%s", name, line, strings.Join(steps, "\n"))
 		}
 	}
-}
-
-// explain runs one statement through EXPLAIN QUERY PLAN.
-func explain(t *testing.T, tx *sql.Tx, statement string, args ...any) ([]string, error) {
-	t.Helper()
-	rows, err := tx.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+statement, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-	var out []string
-	for rows.Next() {
-		var id, parent, notUsed int
-		var detail string
-		if err := rows.Scan(&id, &parent, &notUsed, &detail); err != nil {
-			return nil, err
-		}
-		out = append(out, detail)
-	}
-	return out, rows.Err()
 }
 
 // EVERY INDEX ON THE LEXICAL TABLES SERVES A QUERY THIS PACKAGE ISSUES, and
@@ -478,21 +422,12 @@ func TestEveryLexicalIndexServesARegisteredQuery(t *testing.T) {
 			`DELETE FROM kb_postings WHERE doc_id = ?`, []any{"page:p.0001"}},
 	}
 
-	// IN A WRITE TRANSACTION, because two of the registered statements are
-	// the index's own removals: a read transaction runs with writes refused
-	// (store.DB.Read), and the engine refuses even to plan a DELETE there.
+	// TWO OF THE REGISTERED STATEMENTS ARE the index's own removals, which a
+	// read transaction refuses even to plan (store.DB.Read runs with writes
+	// refused); storetest.Plan plans each in a write transaction.
 	plans := map[string][]string{}
-	if err := db.Tx(t.Context(), func(tx *sql.Tx) error {
-		for name, q := range registered {
-			steps, err := explain(t, tx, q.statement, q.args...)
-			if err != nil {
-				return fmt.Errorf("%s: %w", name, err)
-			}
-			plans[name] = steps
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
+	for name, q := range registered {
+		plans[name] = storetest.Plan(t, db, q.statement, q.args)
 	}
 	refuseUnnested(t, plans)
 
@@ -524,32 +459,9 @@ func TestEveryLexicalIndexServesARegisteredQuery(t *testing.T) {
 	}
 
 	// THE INVERSE: an index no registered plan reaches is a copy of the row
-	// order nobody reads, and one the planner can still choose.
-	var declared []string
-	if err := db.Read(t.Context(), func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(t.Context(), `
-			SELECT name FROM sqlite_master
-			WHERE type = 'index' AND tbl_name IN ('kb_docs', 'kb_postings')
-			  AND name NOT LIKE 'sqlite_autoindex%'`)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = rows.Close() }()
-		for rows.Next() {
-			var name string
-			if err := rows.Scan(&name); err != nil {
-				return err
-			}
-			declared = append(declared, name)
-		}
-		return rows.Err()
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if len(declared) == 0 {
-		t.Fatal("no indexes were read back, so this half of the check " +
-			"cannot fail and is not asserting anything")
-	}
+	// order nobody reads, and one the planner can still choose — read
+	// through storetest, which fails on a schema that declares none.
+	declared := storetest.IndexesOn(t, db, []string{"kb_docs", "kb_postings"})
 	all := ""
 	for _, steps := range plans {
 		all += strings.Join(steps, "\n") + "\n"

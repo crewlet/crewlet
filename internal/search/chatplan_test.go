@@ -1,7 +1,6 @@
 package search_test
 
 import (
-	"database/sql"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -13,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/search"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // EVERY STATEMENT THE CHAT INDEX ISSUES IS PLANNED ONTO THE INDEX IT NAMES, AND
@@ -180,30 +180,16 @@ func TestEveryChatIndexServesARegisteredQuery(t *testing.T) {
 		registered["a rebuild's drop of "+table] = registration{statement: drop, walks: table}
 	}
 
-	// THE PLANS, the node estate's in a WRITE transaction because several of
-	// its statements are the index's own writes, which a read transaction
-	// refuses even to plan.
+	// THE PLANS, each on the estate its statement runs against. Several of
+	// the node estate's are the index's own writes, which a read transaction
+	// refuses even to plan; storetest.Plan plans a write in a write one.
 	plans := map[string][]string{}
-	plan := func(tx *sql.Tx, replicated bool) error {
-		for name, r := range registered {
-			if r.replicated != replicated {
-				continue
-			}
-			steps, err := explain(t, tx, r.statement, r.args...)
-			if err != nil {
-				return fmt.Errorf("%s: %w", name, err)
-			}
-			plans[name] = steps
+	for name, r := range registered {
+		var on storetest.Handle = db
+		if r.replicated {
+			on = db.Replicated()
 		}
-		return nil
-	}
-	if err := db.Tx(ctx, func(tx *sql.Tx) error { return plan(tx, false) }); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Replicated().Reader().Read(ctx, func(tx *sql.Tx) error {
-		return plan(tx, true)
-	}); err != nil {
-		t.Fatal(err)
+		plans[name] = storetest.Plan(t, on, r.statement, r.args)
 	}
 
 	for name, r := range registered {
@@ -252,33 +238,10 @@ func TestEveryChatIndexServesARegisteredQuery(t *testing.T) {
 	}
 
 	// THE INVERSE: an index nothing registered reaches is a copy of the row
-	// order nobody reads, and one a planner can still choose.
-	var declared []string
-	if err := db.Read(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, `
-			SELECT name FROM sqlite_master
-			 WHERE type = 'index' AND name NOT LIKE 'sqlite_autoindex%'
-			   AND tbl_name IN ('chat_docs', 'chat_postings', 'chat_index_rooms',
-			                    'chat_index_terms', 'chat_index_state')`)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = rows.Close() }()
-		for rows.Next() {
-			var name string
-			if err := rows.Scan(&name); err != nil {
-				return err
-			}
-			declared = append(declared, name)
-		}
-		return rows.Err()
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if len(declared) == 0 {
-		t.Fatal("no indexes were read back, so this half of the check cannot " +
-			"fail and is not asserting anything")
-	}
+	// order nobody reads, and one a planner can still choose — read through
+	// storetest, which fails on a schema that declares none.
+	declared := storetest.IndexesOn(t, db, []string{"chat_docs", "chat_postings",
+		"chat_index_rooms", "chat_index_terms", "chat_index_state"})
 	// The transcript's two indexes the replicated schema declares for this
 	// index's walks are held here too: no other reader in the tree reaches
 	// them, so nothing else would notice them go unread.
