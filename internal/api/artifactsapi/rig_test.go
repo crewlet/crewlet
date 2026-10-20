@@ -3,11 +3,13 @@ package artifactsapi_test
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -24,6 +26,9 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
+	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -283,14 +288,31 @@ func (w *writes) all() []call {
 type workItems struct {
 	mu    sync.Mutex
 	asked []string
+	fresh []statelog.Freshness
 	down  error
+
+	// log, when a case installs one ([workItems.behind]), is the tracker's
+	// own read authority every read goes through first, as the tracker's
+	// reader does: the framework's reader over a node whose applied
+	// position the case moves, so a floor it names is waited for and
+	// refused exactly as on a node, rather than as this fake would guess.
+	log *statelog.Reader
 }
 
-func (t *workItems) Task(_ context.Context, ref string, _ tracker.DetailWants, _ statelog.Freshness) (
+func (t *workItems) Task(ctx context.Context, ref string, _ tracker.DetailWants, fresh statelog.Freshness) (
 	tracker.TaskDetail, error) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	t.asked = append(t.asked, ref)
+	t.fresh = append(t.fresh, fresh)
+	log := t.log
+	t.mu.Unlock()
+	// THE WAIT HOLDS NO LOCK, as the reader's own holds nothing.
+	if log != nil {
+		if _, err := log.Read(ctx, fresh.Query(statelog.ScopeSet{}, false),
+			func(*sql.Tx) error { return nil }); err != nil {
+			return tracker.TaskDetail{}, err
+		}
+	}
 	switch ref {
 	case "ENG-12", "OPS-3", "task-12":
 		return tracker.TaskDetail{Task: tracker.Task{ID: "task-12", Key: "ENG-12",
@@ -315,6 +337,86 @@ func (t *workItems) reads() []string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return append([]string(nil), t.asked...)
+}
+
+// floors are the freshness every read of the tracker was asked at, in order.
+func (t *workItems) floors() []statelog.Freshness {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return append([]statelog.Freshness(nil), t.fresh...)
+}
+
+// behind puts the tracker on a node that has applied its log through at, and
+// answers that node's applied position for the case to move.
+func (t *workItems) behind(tb testing.TB, at statelog.Position) *appliedLog {
+	tb.Helper()
+	node, db := storetest.OpenEstate(tb, filepath.Join(tb.TempDir(), "node.db"), store.Options{}, 1)
+	tb.Cleanup(func() { _ = node.Close() })
+	applied := &appliedLog{at: at, moved: make(chan struct{}), waiting: make(chan statelog.Position, 8)}
+	log, err := statelogtest.LocalReaderOver(tracker.Domain{}, db, applied)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.log = log
+	return applied
+}
+
+// appliedLog is a node's applied position on the tracker's log, which only a
+// case moves: a wait for a position past it blocks until the case advances it
+// there, or the wait's own deadline passes.
+type appliedLog struct {
+	mu    sync.Mutex
+	at    statelog.Position
+	moved chan struct{}
+
+	// waiting receives every position a wait began blocking on, so a case
+	// knows a read is held rather than guessing with a sleep.
+	waiting chan statelog.Position
+}
+
+func (l *appliedLog) Committed() statelog.Position {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.at
+}
+
+func (l *appliedLog) WaitCommitted(ctx context.Context, p statelog.Position) error {
+	announced := false
+	for {
+		l.mu.Lock()
+		at, moved := l.at, l.moved
+		l.mu.Unlock()
+		if p.Packed() <= at.Packed() {
+			return nil
+		}
+		if !announced {
+			announced = true
+			select {
+			case l.waiting <- p:
+			default:
+			}
+		}
+		select {
+		case <-moved:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+func (l *appliedLog) WaitApplied(ctx context.Context, _ statelog.ScopeSet, p statelog.Position) error {
+	return l.WaitCommitted(ctx, p)
+}
+
+// advance applies the log through p.
+func (l *appliedLog) advance(p statelog.Position) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.at = p
+	close(l.moved)
+	l.moved = make(chan struct{})
 }
 
 // marks records the reader records a read leaves.

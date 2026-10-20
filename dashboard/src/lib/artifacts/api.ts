@@ -102,9 +102,22 @@ export function transferArtifact(id: string, to: string): Omit<KeyedRequest, "ke
  * caller reads the artifact and may change the item; the engine answers the
  * item's current key as `work_item`, and a link the artifact already has
  * answers success and writes nothing.
+ *
+ * `after` is the `position` the item's create answered with (the act's
+ * `ActResult.position`, such as `CREWLET_TRACKER_LOG@1:9`), for a link sent
+ * right after filing the item: the engine reads the item from no earlier than
+ * that position, waiting for a node that has not applied the create yet, and
+ * answers `503 unavailable` with the `behind` refusal and a `Retry-After` if
+ * the node does not reach it in time. Omit it for an item filed earlier.
  */
-export function linkWorkItem(id: string, workItem: string): Omit<KeyedRequest, "key"> {
-  return { method: "POST", path: `${base(id)}/work-items`, body: { work_item: workItem } };
+export function linkWorkItem(
+  id: string,
+  workItem: string,
+  after?: string,
+): Omit<KeyedRequest, "key"> {
+  const body: { work_item: string; after?: string } = { work_item: workItem };
+  if (after) body.after = after;
+  return { method: "POST", path: `${base(id)}/work-items`, body };
 }
 
 /** Move an artifact to the trash (`DELETE /artifacts/{id}`). */
