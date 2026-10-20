@@ -461,8 +461,8 @@ func (t *Transport) StatusRefresh() time.Duration { return 45 * time.Second }
 func (t *Transport) AddressRule() notify.AddressRule { return AddressRule() }
 
 // SetStatus implements [notify.StatusPoster].
-func (t *Transport) SetStatus(ctx context.Context, handle, channel, thread, status string) bool {
-	return t.setStatus(ctx, handle, channel, thread, status)
+func (t *Transport) SetStatus(ctx context.Context, post notify.StatusPost) bool {
+	return t.setStatus(ctx, post.Handle, post.Channel, post.Thread, post.Text)
 }
 
 // ClearStatus implements [notify.StatusPoster].

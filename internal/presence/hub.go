@@ -73,6 +73,12 @@ type Options struct {
 	// sends the fleet about one room. Zero takes a second divided by
 	// [BroadcastRate].
 	Broadcast time.Duration
+
+	// TypingLapse is how long a chat room's typing member stays typing with
+	// nothing saying so again. Zero takes [TypingLapse], the production
+	// value; a suite sets a shorter one so it waits less, never a different
+	// rule.
+	TypingLapse time.Duration
 }
 
 // Change is what one room's fan-out tells this node's sockets: the members it
@@ -126,6 +132,7 @@ type Hub struct {
 	metrics   Metrics
 	coalesce  time.Duration
 	broadcast time.Duration
+	lapse     time.Duration
 
 	mu      sync.Mutex
 	rooms   map[Room]*room
@@ -173,6 +180,7 @@ func New(opts Options) (*Hub, error) {
 	}
 	h := &Hub{queue: opts.Queue, wire: opts.Wire, node: opts.Node, askBudget: opts.AskBudget,
 		now: opts.Now, metrics: opts.Metrics, coalesce: opts.Coalesce, broadcast: opts.Broadcast,
+		lapse: opts.TypingLapse,
 		rooms: map[Room]*room{}, sinks: map[uint64]func(Change){},
 		listening: map[Room]queue.Unsubscribe{}, wake: make(chan struct{}, 1)}
 	if h.now == nil {
@@ -183,6 +191,9 @@ func New(opts Options) (*Hub, error) {
 	}
 	if h.broadcast <= 0 {
 		h.broadcast = time.Second / BroadcastRate
+	}
+	if h.lapse <= 0 {
+		h.lapse = TypingLapse
 	}
 	return h, nil
 }
@@ -350,6 +361,9 @@ func (h *Hub) Update(id Room, session string, activity Activity, focus Focus) er
 	}
 	now := h.now()
 	m.touched = now
+	// THE LAPSE IS ARMED BY EVERY FRAME SAYING EDITING, a repeat included,
+	// because the repeat is what keeps it from running out.
+	h.armLapseLocked(r, session, m, activity)
 	if m.member.Activity == activity && m.member.Focus == focus {
 		// NOTHING MOVED: a frame saying what the room already shows
 		// changes no member's recency and fans nothing out.
@@ -366,6 +380,50 @@ func (h *Hub) Update(id Room, session string, activity Activity, focus Focus) er
 	return nil
 }
 
+// armLapseLocked arranges for a socket's editing member of a room whose kind
+// types ([RoomKind.typing]) to go back to viewing once nothing has said it is
+// editing for [Options.TypingLapse], and disarms it for any other activity.
+// Caller holds mu.
+//
+// A GENERATION RATHER THAN A STOP ALONE: a timer stopped after it has fired is
+// still running its callback, which would take the lock after this frame and
+// put a member back to viewing that this frame said is editing.
+func (h *Hub) armLapseLocked(r *room, session string, m *localMember, activity Activity) {
+	if !r.id.Kind.typing() {
+		return
+	}
+	m.lapseGen++
+	if m.lapse != nil {
+		m.lapse.Stop()
+		m.lapse = nil
+	}
+	if activity != Editing || h.stopped {
+		return
+	}
+	id, gen := r.id, m.lapseGen
+	m.lapse = time.AfterFunc(h.lapse, func() { h.lapsed(id, session, gen) })
+}
+
+// lapsed is a socket's editing member nothing re-asserted: back to viewing,
+// fanned out and told to the fleet like any other change of what it is doing.
+func (h *Hub) lapsed(id Room, session string, gen uint64) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	r := h.rooms[id]
+	if r == nil || h.stopped {
+		return
+	}
+	m := r.local[session]
+	if m == nil || m.lapseGen != gen || m.member.Activity != Editing {
+		return
+	}
+	m.lapse = nil
+	m.member.Activity = Viewing
+	r.changed(session)
+	h.scheduleLocked(r)
+	h.scheduleSendLocked(r)
+}
+
 // Leave takes one socket out of a room. Leaving a room it is not in is not an
 // error: a socket closing leaves every room it may have been in.
 func (h *Hub) Leave(id Room, session string) {
@@ -375,9 +433,11 @@ func (h *Hub) Leave(id Room, session string) {
 	if r == nil {
 		return
 	}
-	if _, held := r.local[session]; !held {
+	m, held := r.local[session]
+	if !held {
 		return
 	}
+	m.stopLapse()
 	delete(r.local, session)
 	r.left(session)
 	h.scheduleLocked(r)
@@ -385,14 +445,16 @@ func (h *Hub) Leave(id Room, session string) {
 	h.pokeLocked()
 }
 
-// Touch is an agent's tool session reading (viewing) or writing (editing) in a
-// room, in the turn whose run is a.Turn: the seat appears in the room as an
-// agent, naming that turn, and stays there for [agentLinger] after its last
-// touch. One member per seat per room on this node.
+// Touch is an agent working in a room — a tool session reading (viewing) or
+// writing (editing) an artifact, a seat answering in a chat room — in the turn
+// whose run is a.Turn: the seat appears in the room as an agent, naming that
+// turn and its status line, and stays there for [agentLinger] after its last
+// touch unless it is withdrawn first ([Hub.Withdraw]). One member per seat per
+// room on this node, per thread in a chat room ([RoomKind.agentSlot]).
 func (h *Hub) Touch(id Room, a Agent) {
-	seat, turn, activity, focus := a.Seat, a.Turn, a.Activity, a.Focus
+	seat, turn, activity, focus, status := a.Seat, a.Turn, a.Activity, a.Focus, a.Status
 	if id.check() != nil || seat == "" || len(turn) > maxTurnBytes || !activity.Valid() ||
-		CheckFocus(id.Kind, focus) != nil {
+		len(status) > maxStatusBytes || CheckFocus(id.Kind, focus) != nil {
 		// A WIRING FAULT in the tool that touched, never a person's
 		// input: logged and dropped, because presence is a display and a
 		// tool call must not fail over it.
@@ -407,15 +469,17 @@ func (h *Hub) Touch(id Room, a Agent) {
 	}
 	now := h.now()
 	r, created := h.roomLocked(id)
-	m := r.agentMember(seat)
+	slot := id.Kind.agentSlot(focus)
+	m := r.agentMember(seat, slot)
 	if m == nil {
 		m = &localMember{member: Member{Session: newSession(), Seat: seat,
-			Kind: iam.ActorAgent}}
+			Kind: iam.ActorAgent}, slot: slot}
 		r.local[m.member.Session] = m
 	}
 	if m.member.Activity != activity || m.member.Focus != focus || m.member.Turn != turn ||
-		m.member.At.IsZero() {
+		m.member.Status != status || m.member.At.IsZero() {
 		m.member.Activity, m.member.Focus, m.member.Turn, m.member.At = activity, focus, turn, now
+		m.member.Status = status
 		r.changed(m.member.Session)
 		h.scheduleLocked(r)
 		h.scheduleSendLocked(r)
@@ -426,6 +490,30 @@ func (h *Hub) Touch(id Room, a Agent) {
 	if created {
 		h.setRooms(rooms)
 	}
+}
+
+// Withdraw takes an agent's member out of a room at once, rather than
+// [agentLinger] after its last touch: the seat's member for the thread focus
+// names in a chat room, its only one in an artifact's. A chat room's working
+// line ends with the turn that raised it, and a line lingering after the
+// answer landed says the seat is still working on something it has finished.
+// Withdrawing a member the room does not hold is not an error.
+func (h *Hub) Withdraw(id Room, seat string, focus Focus) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	r := h.rooms[id]
+	if r == nil {
+		return
+	}
+	m := r.agentMember(seat, id.Kind.agentSlot(focus))
+	if m == nil {
+		return
+	}
+	delete(r.local, m.member.Session)
+	r.left(m.member.Session)
+	h.scheduleLocked(r)
+	h.scheduleSendLocked(r)
+	h.pokeLocked()
 }
 
 // agentLinger is how long an agent stays in a room after its last touch:

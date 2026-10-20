@@ -4,7 +4,8 @@
  * refusal and a withdrawal said to every listener, an undecided join asked
  * again on the engine's own clock, the pushes routed by the artifact their
  * payload names, and presence said only into a room the engine put this
- * socket in.
+ * socket in — each `presence` frame naming its room's kind, a chat room's
+ * joining the room it names.
  */
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -268,10 +269,44 @@ describe("pushes and presence", () => {
     expect(sock.frames("presence")).toEqual([
       {
         kind: "presence",
+        room: "artifact",
         artifact: A,
         activity: "editing",
         focus: { collection: "vendors", doc: "acme", field: "score" },
       },
+    ]);
+  });
+});
+
+describe("a chat room's presence", () => {
+  // ONE FRAME FOR EVERY ROOM, naming the room's kind (ADR-0038): a chat room
+  // is named by its id as every chat frame names it, and the frame itself
+  // joins, because a tab looks at one chat room at a time.
+  test("looking at a room is viewing it, typing is editing, and an empty room leaves", () => {
+    const { socket, sock } = opened();
+    socket.focus(A, false);
+    socket.focus(A, true);
+    socket.focus("", false);
+    expect(sock.frames("presence")).toEqual([
+      { kind: "presence", room: "chat", channel_id: A, activity: "viewing" },
+      { kind: "presence", room: "chat", channel_id: A, activity: "editing" },
+      { kind: "presence", room: "chat", channel_id: "", activity: "viewing" },
+    ]);
+    // NOTHING THE OLD FOCUS FRAME SPOKE: the engine no longer reads it.
+    expect(sock.frames("chat_focus")).toEqual([]);
+  });
+
+  test("nothing is said while the socket is down, and the open says where the tab is", () => {
+    const { socket, sock } = opened();
+    sock.closeWith(1006);
+    socket.focus(B, true);
+    expect(sock.frames("presence")).toEqual([]);
+    vi.advanceTimersByTime(60_000);
+    const next = dial(1);
+    next.open();
+    // THE NEW SOCKET IS IN NO ROOM, so the open joins the one this tab holds.
+    expect(next.frames("presence")).toEqual([
+      { kind: "presence", room: "chat", channel_id: B, activity: "editing" },
     ]);
   });
 });

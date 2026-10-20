@@ -717,15 +717,16 @@ func (t *Transport) AddressRule() notify.AddressRule { return AddressRule() }
 // [Transport.StatusRefresh]), so on this backend it is the most frequent call
 // the transport makes — which is what `typing_status: addressed` exists to
 // bound, and why a failure here is a DEBUG line rather than anything louder.
-func (t *Transport) SetStatus(ctx context.Context, handle, channel, thread, _ string) bool {
+func (t *Transport) SetStatus(ctx context.Context, post notify.StatusPost) bool {
 	t.mu.Lock()
-	s, ok := t.seats[handle]
+	s, ok := t.seats[post.Handle]
 	t.mu.Unlock()
 	if !ok {
 		return false
 	}
-	if err := s.client.Typing(ctx, s.seat.UserID, channel, thread); err != nil {
-		log.DebugContext(ctx, "mattermost_typing_failed", "handle", handle, "error", err.Error())
+	if err := s.client.Typing(ctx, s.seat.UserID, post.Channel, post.Thread); err != nil {
+		log.DebugContext(ctx, "mattermost_typing_failed", "handle", post.Handle,
+			"error", err.Error())
 		return false
 	}
 	return true

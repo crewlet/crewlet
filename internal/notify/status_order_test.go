@@ -47,7 +47,7 @@ func (w *wire) SupportsStatusText() bool        { return w.text }
 func (w *wire) StatusRefresh() time.Duration    { return w.refresh }
 func (w *wire) AddressRule() notify.AddressRule { return notify.AddressRule{} }
 
-func (w *wire) SetStatus(ctx context.Context, _, _, _, _ string) bool {
+func (w *wire) SetStatus(ctx context.Context, _ notify.StatusPost) bool {
 	if w.hang {
 		<-ctx.Done()
 		return false

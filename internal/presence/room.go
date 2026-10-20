@@ -71,6 +71,24 @@ type localMember struct {
 	// touched is the member's last sign of life here: an agent leaves the
 	// room [agentLinger] after it.
 	touched time.Time
+
+	// slot is which of its seat's members an agent's is ([RoomKind.agentSlot]).
+	slot string
+
+	// lapse takes a socket's editing member back to viewing in a room whose
+	// kind lapses ([Hub.armLapseLocked]), and lapseGen is which arming it
+	// belongs to.
+	lapse    *time.Timer
+	lapseGen uint64
+}
+
+// stopLapse disarms the member's lapse, if one is armed.
+func (m *localMember) stopLapse() {
+	m.lapseGen++
+	if m.lapse != nil {
+		m.lapse.Stop()
+		m.lapse = nil
+	}
 }
 
 // remoteKey names a peer's member: the node that holds it and its session.
@@ -119,10 +137,10 @@ func (r *room) hasSockets() bool {
 	return false
 }
 
-// agentMember is the member seat's tool session holds in the room, or nil.
-func (r *room) agentMember(seat string) *localMember {
+// agentMember is the member seat holds in the room at slot, or nil.
+func (r *room) agentMember(seat, slot string) *localMember {
 	for _, m := range r.local {
-		if !m.socket && m.member.Seat == seat {
+		if !m.socket && m.member.Seat == seat && m.slot == slot {
 			return m
 		}
 	}
@@ -382,8 +400,12 @@ func (r *room) diff(p presentation, now time.Time) (Change, bool, bool) {
 		len(changed) > FrameMembers
 }
 
-// stopTimer cancels a pending fan-out and a pending frame to the fleet.
+// stopTimer cancels a pending fan-out, a pending frame to the fleet and every
+// member's lapse.
 func (r *room) stopTimer() {
+	for _, m := range r.local {
+		m.stopLapse()
+	}
 	if r.timer != nil {
 		r.timer.Stop()
 		r.timer = nil

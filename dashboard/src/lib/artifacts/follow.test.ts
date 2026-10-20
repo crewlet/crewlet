@@ -2,10 +2,10 @@
 /** One entry a seat on the People rail, and what following somebody moves. */
 
 import { describe, expect, test } from "vitest";
-import type { ArtifactPresenceMember } from "~/protocol/index.ts";
+import type { RoomMember } from "~/protocol/index.ts";
 import { bySeat, followMoves, followTarget, moves, type FollowView } from "./follow.ts";
 
-function member(over: Partial<ArtifactPresenceMember>): ArtifactPresenceMember {
+function member(over: Partial<RoomMember>): RoomMember {
   return {
     session: "s-1",
     seat: "maya",
