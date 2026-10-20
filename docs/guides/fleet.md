@@ -587,7 +587,8 @@ guess at yours.
 A node coming up answers both from its first seconds, before it serves:
 `/ready` is `503 starting` until it does, which is what holds the rollout, and
 `/health` is `503` only while the node recovers what it holds — the startup
-probe's window, sized by the store ([Sizing the startup probe](deployment.md#sizing-the-startup-probe))
+probe's window, sized by the store and, on a data node of a fleet, by the
+join it may have to make ([Sizing the startup probe](deployment.md#sizing-the-startup-probe))
 — and `200` while its company's tools come up, so a slow tool server never
 gets a starting node restarted (see
 [While a node is starting](../reference/api-endpoints.md#while-a-node-is-starting)).
@@ -719,7 +720,12 @@ amount of waiting produces it. What it does instead is ask the fleet for a
 **snapshot** — a copy of another member's replicated estate — verify it
 against its own requirements and a checksum, and install it wholesale before
 anything reads from it. That happens automatically, at boot, before the node
-serves anything.
+serves anything — inside the node's recovery, so on an orchestrator the
+startup probe has to allow for it: see
+[Sizing the startup probe](deployment.md#sizing-the-startup-probe), which
+sizes it by `stream.tracker_retention.rejoin_window`. The transfer logs
+`statelog_join_progress` every ten seconds while it runs. A fleet with one data
+node never transfers anything: there is nobody to donate.
 
 Three things make that work, and all three are per data node — a node
 without `data` holds no copy to fall behind with:

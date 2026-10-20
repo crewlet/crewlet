@@ -67,7 +67,7 @@ func TestEveryTransferWaitSaysWhoseEndItReached(t *testing.T) {
 		{
 			name: "the fetch's flush", production: TransferChunkWait,
 			run: func(ctx context.Context, nc *nats.Conn, bound time.Duration, dest string) error {
-				_, err := fetchArtefact(ctx, nc, Offer{Fetch: SubjectFetchPrefix + "donor"}, dest, bound)
+				_, err := fetchArtefact(ctx, nc, Offer{Fetch: SubjectFetchPrefix + "donor"}, dest, waitingFor(bound))
 				return err
 			},
 			step: "flush the fetch", own: "did not confirm the fetch request",
@@ -75,7 +75,7 @@ func TestEveryTransferWaitSaysWhoseEndItReached(t *testing.T) {
 		{
 			name: "the wait for a chunk", confirm: true, production: TransferChunkWait,
 			run: func(ctx context.Context, nc *nats.Conn, bound time.Duration, dest string) error {
-				_, err := fetchArtefact(ctx, nc, Offer{Fetch: SubjectFetchPrefix + "donor"}, dest, bound)
+				_, err := fetchArtefact(ctx, nc, Offer{Fetch: SubjectFetchPrefix + "donor"}, dest, waitingFor(bound))
 				return err
 			},
 			step: "receive a chunk", own: "the donor stopped sending",
@@ -173,7 +173,7 @@ func TestACopyThisNodeCannotWriteIsItsOwnFault(t *testing.T) {
 	offer := Offer{Fetch: SubjectFetchPrefix + "donor"}
 
 	_, err := fetchArtefact(t.Context(), nc, offer,
-		filepath.Join(t.TempDir(), "no-such-directory", "part"), time.Second)
+		filepath.Join(t.TempDir(), "no-such-directory", "part"), waitingFor(time.Second))
 	if fault := (*nodeFault)(nil); !errors.As(err, &fault) {
 		t.Fatalf("a copy this node could not create came back as %v, not as this "+
 			"node's own fault — the join would blame the donor and fetch every "+
@@ -181,7 +181,7 @@ func TestACopyThisNodeCannotWriteIsItsOwnFault(t *testing.T) {
 	}
 
 	_, err = fetchArtefact(t.Context(), nc, offer,
-		filepath.Join(t.TempDir(), "part"), 200*time.Millisecond)
+		filepath.Join(t.TempDir(), "part"), waitingFor(200*time.Millisecond))
 	if err == nil {
 		t.Fatal("a donor that stopped after one chunk reported a complete transfer")
 	}
@@ -189,6 +189,11 @@ func TestACopyThisNodeCannotWriteIsItsOwnFault(t *testing.T) {
 		t.Fatalf("a donor that stopped sending came back as this node's own "+
 			"fault (%v) — the join would end there rather than try the next offer", err)
 	}
+}
+
+// waitingFor is the production pace with each chunk's wait bounded by wait.
+func waitingFor(wait time.Duration) transferPace {
+	return transferPace{wait: wait, report: TransferReportEvery, log: loggerOr(nil)}
 }
 
 // deadlineOnCue is a caller's context whose deadline passes when pass is
