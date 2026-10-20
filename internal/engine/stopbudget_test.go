@@ -84,12 +84,14 @@ func TestAStopAgainstAnUnreachableStoreSpendsOneAllowance(t *testing.T) {
 	if err := e.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	// THE PREMISE IS WAITED FOR, never read once: Start returns before the
-	// seat host's first claim lands — its sweep withholds claims until the
-	// state log is hydrated — so a single read straight after it raced the
-	// claim, and failed the case whenever hydration lagged (alone, under
-	// -race) before anything it is about had happened.
-	waitHeld(t, e, 1)
+	// THE PREMISE IS WAITED FOR, never read once: a node claims its seats
+	// once its appliers are level with their logs, which on a loaded
+	// machine or under -race comes after Start returns. Read straight
+	// after it, the case failed its premise whenever the claim gate opened
+	// a moment late, before anything it is about had happened.
+	waitFor(t, "both seats to be claimed", func() bool {
+		return len(e.Node().Host().Held()) == 2
+	})
 	select {
 	case <-pass.granted:
 	case <-time.After(30 * time.Second):
