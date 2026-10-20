@@ -535,7 +535,8 @@
   min-width: 0;
   min-height: 0;
   overflow: auto;
-  padding: var(--spacing-6);
+  /* The create pages' one inset: 16px under the bar, 20px at the sides. */
+  padding: var(--spacing-4) var(--spacing-5) var(--spacing-5);
 }
 .dashboard-create-head {
   display: flex;
@@ -600,15 +601,17 @@
   color: inherit;
   cursor: pointer;
 }
+/* A starter reads at the body's step, under the empty state that introduces
+   it: at a step above, the cards outranked the heading they answer. */
 .dashboard-create-starter-label {
   color: var(--color-text-primary);
-  font-size: var(--font-size-md);
+  font-size: var(--font-size-sm);
   font-weight: var(--font-weight-medium);
 }
 .dashboard-create-starter-text {
   color: var(--color-text-secondary);
-  font-size: var(--font-size-sm);
-  line-height: 1.45;
+  font-size: var(--font-size-xs);
+  line-height: var(--font-line-height-normal);
 }
 .dashboard-create-data {
   display: flex;
@@ -617,20 +620,22 @@
   min-width: 0;
   min-height: 0;
   overflow: auto;
-  padding: var(--spacing-6) var(--spacing-4);
+  padding: var(--spacing-4) var(--spacing-4) var(--spacing-5);
   border-inline-start: 1px solid var(--color-border-default);
   background: var(--color-surface-subtle);
 }
+/* Inset as a source's own text is (its padding and its hairline), so the
+   heading, the line under it and every source start on one edge. */
 .dashboard-create-data-head {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-1);
-  padding: 0 var(--spacing-1);
+  padding: 0 calc(var(--spacing-3) + 1px);
 }
 .dashboard-create-data-head h2 {
   margin: 0;
   color: var(--color-text-primary);
-  font-size: var(--font-size-lg);
+  font-size: var(--font-size-md);
   font-weight: var(--font-weight-semibold);
 }
 .dashboard-create-data-head p {
@@ -638,6 +643,12 @@
   color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
   line-height: 1.45;
+}
+.dashboard-create-data-note {
+  margin: 0;
+  padding: 0 calc(var(--spacing-3) + 1px);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
 }
 /* An open source: its settings, then its figures, under its entry. */
 .dashboard-create-source {
@@ -667,11 +678,6 @@
 }
 .dashboard-create-suggestion--half {
   grid-column: auto;
-}
-@container dashboard-create (width < 60rem) {
-  .dashboard-create-main {
-    padding: var(--spacing-5);
-  }
 }
 /* NARROW, the board and the Data panel are two tabs over one pane. */
 .dashboard-create[data-narrow] {

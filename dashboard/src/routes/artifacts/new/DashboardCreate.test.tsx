@@ -63,6 +63,8 @@ const project = (key: string): WorkProjectRow =>
 let sent: { method: string; path: string; body: unknown }[] = [];
 /** What the create's write answers: the artifact, or a refusal. */
 let createAnswer: { status: number; body: unknown } = { status: 201, body: { artifact: MADE } };
+/** Whether the catalogue read fails, as an engine that cannot answer it does. */
+let catalogueFails = false;
 
 function rows(name: string): Record<string, unknown>[] {
   switch (name) {
@@ -101,6 +103,7 @@ beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
   sent = [];
   createAnswer = { status: 201, body: { artifact: MADE } };
+  catalogueFails = false;
   location.hash = "#/artifacts/new/dashboard";
   Object.defineProperty(globalThis, "fetch", {
     writable: true,
@@ -115,7 +118,10 @@ beforeEach(() => {
         // A transfer's body is the file's own text.
       }
       sent.push({ method, path: url.pathname, body });
-      if (url.pathname === "/artifacts/sources") return json(200, { sources: catalogue });
+      if (url.pathname === "/artifacts/sources")
+        return catalogueFails
+          ? json(500, { error: "internal", message: "The catalogue could not be read." })
+          : json(200, { sources: catalogue });
       const preview = /^\/artifacts\/sources\/preview\/(.+)$/.exec(url.pathname);
       if (preview) {
         const name = decodeURIComponent(preview[1]!);
@@ -339,4 +345,14 @@ test("a preview that cannot be read says so in a reader's words, never the route
   const panel = data();
   await waitFor(() => expect(within(panel).getAllByText(ROWS_UNREAD).length).toBeGreaterThan(0));
   expect(within(panel).queryByText(/serves nothing/)).toBeNull();
+});
+
+// A CATALOGUE THAT CANNOT BE READ leaves no blank panel: the board says why,
+// and the Data panel says where the sources will be.
+test("a catalogue that cannot be read is said on the board, and the Data panel is not left blank", async () => {
+  catalogueFails = true;
+  mount();
+  const panel = await screen.findByRole("complementary", { name: "Data" });
+  await within(panel).findByText("The sources appear here once they can be read.");
+  expect(within(panel).queryByRole("list", { name: "Data you can use" })).toBeNull();
 });
