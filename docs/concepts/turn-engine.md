@@ -882,11 +882,12 @@ that `integrations.slack.status_phrases` can replace. See
 and [Mattermost § Working status](../integrations/mattermost.md#working-status).
 On the engine's [own chat](chatlet.md) the setting is `chat.chatlet.typing_status`,
 with the same two values and the same default, and the indicator is shown in
-the room on the dashboard: it is raised on the node running the turn and
-carried by the room's presence, never written to the log, because it is true
-for minutes and worthless the moment the turn ends. Every node answers the
-room's presence probe for its own seats, including a node that serves no HTTP
-API. Its wording is the default phrase pools.
+the room on the dashboard: it is raised on the node running the turn as the
+seat's member of the room's [presence](chatlet.md#presence-typing-and-the-working-indicator),
+never written to the log, because it is true for minutes and worthless the
+moment the turn ends. Every node raises it for its own seats, including a node
+that serves no HTTP API, and the room's presence carries it to whichever node
+holds the sockets looking at the room. Its wording is the default phrase pools.
 
 ---
 

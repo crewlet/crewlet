@@ -23,6 +23,7 @@ type poster struct {
 
 	mu      sync.Mutex
 	set     []string
+	turns   []string
 	cleared int
 }
 
@@ -43,11 +44,19 @@ func (p *poster) SupportsStatusText() bool        { return p.text }
 func (p *poster) StatusRefresh() time.Duration    { return p.refresh }
 func (p *poster) AddressRule() notify.AddressRule { return p.rule }
 
-func (p *poster) SetStatus(_ context.Context, _, _, _, status string) bool {
+func (p *poster) SetStatus(_ context.Context, post notify.StatusPost) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.set = append(p.set, status)
+	p.set = append(p.set, post.Text)
+	p.turns = append(p.turns, post.Turn)
 	return !p.fail
+}
+
+// turnsPosted is the turn every post named, in order.
+func (p *poster) turnsPosted() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.turns...)
 }
 
 func (p *poster) ClearStatus(_ context.Context, _, _, _ string) bool {
@@ -298,6 +307,38 @@ func TestTheIndicatorSurvivesUntilTheLastTurnEnds(t *testing.T) {
 	if p.clears() != 1 {
 		t.Fatalf("the indicator was cleared %d times", p.clears())
 	}
+}
+
+// A POST NAMES THE NEWEST TURN HOLDING THE INDICATOR, and the one before it
+// again when the newest ends: a backend that can name a turn links a person to
+// what the agent is doing now, and a turn that already finished is not that.
+// A resumed turn taking its hold back is the newest, since it is the one
+// working.
+//
+// Mutation: name the session's first holder in every post, and the second
+// turn's phase is posted under the first.
+func TestAPostNamesTheNewestTurnHoldingTheIndicator(t *testing.T) {
+	p := quiet()
+	d := driver(t, p, notify.StatusAddressed)
+
+	first := d.Begin(t.Context(), "swe", "run-1", "plan", chatMeta(nil))
+	p.shownAtLeast(t, 1)
+	second := d.Begin(t.Context(), "swe", "run-2", "plan", chatMeta(nil))
+	second.Phase("execute")
+	p.shownAtLeast(t, 2)
+	second.End(t.Context(), true) // suspended into a coding run
+	first.Phase("review")
+	p.shownAtLeast(t, 3)
+	back := d.Rejoin("swe", "run-2")
+	back.Phase("execute")
+	p.shownAtLeast(t, 4)
+	back.End(t.Context(), false)
+	first.Phase("review")
+	p.shownAtLeast(t, 5)
+	if got, want := p.turnsPosted(), []string{"run-1", "run-2", "run-2", "run-2", "run-1"}; !slices.Equal(got, want) {
+		t.Fatalf("the posts named the turns %v, want %v", got, want)
+	}
+	first.End(t.Context(), false)
 }
 
 // A turn that SUSPENDS for a detached coding run holds its session open: the
@@ -582,12 +623,12 @@ type gatedPoster struct {
 	once    sync.Once
 }
 
-func (g *gatedPoster) SetStatus(ctx context.Context, h, c, th, status string) bool {
+func (g *gatedPoster) SetStatus(ctx context.Context, post notify.StatusPost) bool {
 	g.once.Do(func() {
 		close(g.entered)
 		<-g.release
 	})
-	return g.poster.SetStatus(ctx, h, c, th, status)
+	return g.poster.SetStatus(ctx, post)
 }
 
 // The ORDER a teardown keeps — the post in flight finished before the clear,

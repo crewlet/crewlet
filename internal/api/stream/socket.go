@@ -292,10 +292,18 @@ type request struct {
 	Seat string `json:"seat"`
 
 	// Artifact is the artifact an `artifact_join`, `artifact_leave` or
-	// `presence` frame is about, by its id. Since is a join's catch-up
-	// point: the `through` the socket last held, zero for none.
+	// artifact `presence` frame is about, by its id. Since is a join's
+	// catch-up point: the `through` the socket last held, zero for none.
 	Artifact string `json:"artifact"`
 	Since    int64  `json:"since"`
+
+	// Room is the kind of room a `presence` frame is about, which names the
+	// field its room is named by: `artifact` for an artifact's room
+	// (Artifact, joined first with `artifact_join`), and `chat` for a chat
+	// room's (ChannelID, which the frame itself joins: a tab looks at one
+	// room at a time, and an empty ChannelID leaves the one it was in). A
+	// frame naming no kind this build keeps is dropped.
+	Room presence.RoomKind `json:"room"`
 
 	// Activity and Focus are a `presence` frame's: what the socket is doing
 	// in the room and where it is looking. Who is doing it is never the
@@ -303,13 +311,10 @@ type request struct {
 	Activity presence.Activity `json:"activity"`
 	Focus    presence.Focus    `json:"focus"`
 
-	// ChannelID and Typing belong to [ChatFocusKind], which says which room
-	// this tab is looking at and whether its person is composing there.
-	// Fields on the shared request rather than a second decoder, because a
-	// frame is decoded before its kind is known; every other kind leaves
-	// both at their zero value and nothing reads them there.
+	// ChannelID is the chat room a chat `presence` frame is about. A field
+	// on the shared request rather than a second decoder, because a frame
+	// is decoded before its kind is known.
 	ChannelID string `json:"channel_id"`
-	Typing    bool   `json:"typing"`
 }
 
 // THE PER-FRAME CREDENTIAL IS GONE, and it went with `allow_anonymous_read`.
@@ -535,7 +540,7 @@ func serveSocket(ctx context.Context, conn *websocket.Conn,
 	var roomWorker sync.WaitGroup
 	roomWorker.Go(func() {
 		for req := range rooms.ops {
-			svc.roomOp(who.context(ctx), client, req)
+			svc.roomOp(who.context(ctx), client, chat, req)
 		}
 	})
 
@@ -571,7 +576,7 @@ func serveSocket(ctx context.Context, conn *websocket.Conn,
 	})
 	defer deciding.Wait()
 
-	code, reason := readLoop(ctx, conn, seats, client, query, chat, who, svc.interval, rooms)
+	code, reason := readLoop(ctx, conn, seats, client, query, who, svc.interval, rooms)
 
 	// THE ROOM FRAMES FIRST, so no join lands after the leave below.
 	close(rooms.ops)
@@ -608,15 +613,24 @@ func (r *socketRooms) queue(ctx context.Context, req request) {
 }
 
 // roomOp carries out one room frame, as whoever the latest decision of the
-// socket's credential resolved.
-func (s *Service) roomOp(ctx context.Context, client *Client, req request) {
+// socket's credential resolved: an artifact's room on this service, a chat
+// room's on the chat arm, which decides who may be in a chat room as it
+// decides who is shown what is said there.
+func (s *Service) roomOp(ctx context.Context, client *Client, chat *ChatHub, req request) {
 	switch req.Kind {
 	case "artifact_join":
 		s.joinArtifact(ctx, client, req)
 	case "artifact_leave":
 		s.leaveArtifact(client, req)
 	case "presence":
-		s.presenceFrame(ctx, client, req)
+		switch req.Room {
+		case presence.RoomArtifact:
+			s.presenceFrame(ctx, client, req)
+		case presence.RoomChat:
+			if client.Posture().ServesQueries() {
+				chat.presenceFrame(ctx, client, req.ChannelID, req.Activity, req.Focus)
+			}
+		}
 	}
 }
 
@@ -678,7 +692,7 @@ func writeLoop(ctx context.Context, conn *websocket.Conn, client *Client) {
 // healthEvery is the shared tick's cadence, which is when a degraded posture
 // can next change — the hint a query refused on one carries.
 func readLoop(ctx context.Context, conn *websocket.Conn,
-	seats *watching, client *Client, query Query, chat *ChatHub, who *asking,
+	seats *watching, client *Client, query Query, who *asking,
 	healthEvery time.Duration, rooms *socketRooms,
 ) (websocket.StatusCode, string) {
 	// THIS SOCKET'S CONCURRENCY BOUND — see [MaxInFlightQueries] for why
@@ -716,18 +730,12 @@ func readLoop(ctx context.Context, conn *websocket.Conn,
 			rooms.queue(ctx, req)
 		case "presence":
 			// HELD TO ITS ALLOWANCE HERE, on the read loop, so a socket
-			// that does not throttle itself fills no queue.
+			// that does not throttle itself fills no queue — a chat
+			// room's typing frames under the same allowance as an
+			// artifact's cursor, since both are this one frame.
 			if rooms.presence.take(seats.now()) {
 				rooms.queue(ctx, req)
 			}
-		case ChatFocusKind:
-			// WHERE THIS TAB IS LOOKING, which is what bounds the
-			// fleet-wide presence probe to the rooms somebody actually
-			// has open. On the reader's own goroutine because it is a map
-			// write and nothing else: a goroutine per keystroke would be
-			// the cost this frame exists to avoid. A socket not joined to
-			// chat changes nothing.
-			chat.focus(client, req.ChannelID, req.Typing)
 		case "query":
 			// A DEGRADED NODE REFUSES rather than answers. Its copy of
 			// the company is wrong rather than behind, and an answer

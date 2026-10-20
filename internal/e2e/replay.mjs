@@ -247,9 +247,10 @@ const workItems = new Set();
 let sawRoundCap = false;
 const stages = new Set();
 let refusedWindow = null;
-// And who was in the founder's room, read the same way: presence is replaced
-// whole by every frame, so by the last one the seat has long stopped working
-// and only the walk can say the room ever showed it.
+// And who was in the founder's room, read the same way: the room's members
+// move with every push, so by the last one the seat has long stopped working
+// and only the walk can say the room ever showed it — the founder as a person
+// in the room, and the seat as its agent member at work there.
 const talked = JSON.parse(readFileSync(chatFile, "utf8"));
 let sawLooking = false;
 let sawWorkingInRoom = false;
@@ -258,9 +259,11 @@ const probe = new LiveSocket(replay);
 for (const raw of frames) {
   probe.onMessage(raw);
   const present = replay.state.chatPresence.rooms[talked.room];
-  if (present) {
-    if ((present.viewing || []).includes(talked.person)) sawLooking = true;
-    if ((present.working || []).some((w) => w.handle === talked.seat)) sawWorkingInRoom = true;
+  for (const m of (present && present.members) || []) {
+    if (m.seat === talked.person && m.kind === "human") sawLooking = true;
+    if (m.seat === talked.seat && m.kind === "agent" && m.activity === "editing") {
+      sawWorkingInRoom = true;
+    }
   }
   for (const agent of replay.state.agents) {
     if (agent.activity === "working") sawWorking = true;

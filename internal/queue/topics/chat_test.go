@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
@@ -57,8 +59,7 @@ func TestAChatSubjectWithNoKindIsRefusedRatherThanBuilt(t *testing.T) {
 }
 
 // THE INVERSE REFUSES WHAT THE BUILDER COULD NOT HAVE PRODUCED, including
-// every other log's records and chat's OWN presence space, which shares the
-// log's `crewlet.chat.` root.
+// every other log's records and a chat room's presence subject.
 func TestTheChatPathRefusesWhatItDidNotBuild(t *testing.T) {
 	t.Parallel()
 	subjects := []string{
@@ -67,7 +68,7 @@ func TestTheChatPathRefusesWhatItDidNotBuild(t *testing.T) {
 		topics.ChatLogPrefix,
 		topics.ChatLogPrefix + ".",
 		topics.ChatLogPrefix + ".message.",
-		topics.ChatPresence,
+		topics.PresenceSubject("chat", uuid.New()),
 	}
 	// Every other log, read off the one list of them rather than written out
 	// again — a list held to the package's own constants — so a ninth log is
@@ -95,33 +96,5 @@ func TestTheChatWildcardCoversItsOwnGrammar(t *testing.T) {
 	if prefix != topics.ChatLogPrefix+"." {
 		t.Fatalf("the wildcard covers %q and subjects are built under %q",
 			prefix, topics.ChatLogPrefix+".")
-	}
-}
-
-// THE PRESENCE SUBJECT IS OUTSIDE THE LOG'S WILDCARD.
-//
-// This is the assertion that keeps typing off the disk. A presence subject
-// inside `crewlet.chat.log.>` would be captured by a durable, strictly
-// ordered, identity-claiming stream, where every probe is an undecodable
-// record — the one failure that stops an applier and, past the deferral grace,
-// takes the node's copy out of service.
-func TestThePresenceSubjectIsOutsideTheChatLogsWildcard(t *testing.T) {
-	t.Parallel()
-	if strings.HasPrefix(topics.ChatPresence, topics.ChatLogPrefix+".") {
-		t.Errorf("the presence subject %q sits inside the chat log's wildcard %q",
-			topics.ChatPresence, topics.ChatLogWildcard)
-	}
-	if !topics.Match(topics.ChatLogWildcard, topics.ChatLogSubject("message", "c1")) {
-		t.Fatalf("the chat log's wildcard %q does not match its own message "+
-			"subject, so the check below would pass whatever it was handed",
-			topics.ChatLogWildcard)
-	}
-	if topics.Match(topics.ChatLogWildcard, topics.ChatPresence) {
-		t.Errorf("the chat log's wildcard %q captures the presence subject %q",
-			topics.ChatLogWildcard, topics.ChatPresence)
-	}
-	if _, _, ok := topics.ChatLogPath(topics.ChatPresence); ok {
-		t.Errorf("the presence subject %q parses as a record on the chat log",
-			topics.ChatPresence)
 	}
 }

@@ -341,11 +341,12 @@ func TestASeatOnAStatelessNodeWritesThroughADataNode(t *testing.T) {
 // AND THE INDICATOR IS THE TURN'S OWN. The node running a seat's turn is rarely
 // the node a browser is attached to, and here it is a node with no API: what
 // raises the indicator is that node's engine, from the turn
-// ([notify.StatusDriver] over its own hub), and what shows it is the presence
-// probe of the data member Alice's tab is attached to, answered over the
-// broker. So the seat is HELD on the round that answers until her socket has
-// shown it working — [TestAnIndicatorRaisedOnANodeWithNoAPIShowsInARoomOnAnother]
-// raises one by hand and certifies the scatter alone.
+// ([notify.StatusDriver] over its own chat hub, as the seat's member of the
+// room's presence), and what shows it is the presence hub of the data member
+// Alice's tab is attached to, told it over the broker in a sealed frame. So
+// the seat is HELD on the round that answers until her socket has shown it
+// working — [TestAnIndicatorRaisedOnANodeWithNoAPIShowsInARoomOnAnother]
+// raises one by hand and certifies the presence hubs alone.
 func TestASeatOnAStatelessNodeAnswersInARoomTheFleetHolds(t *testing.T) {
 	t.Parallel()
 	p := startStatelessPairSpec(t, pairSpec{company: peopleDoc, dataBoot: withSignIn})
@@ -374,12 +375,7 @@ func TestASeatOnAStatelessNodeAnswersInARoomTheFleetHolds(t *testing.T) {
 	// THE SEAT AT WORK, as her tab is shown it, while its turn is held.
 	awaitFrame(t, conn, stream.KindChatPresence, "ceo working in #"+made.Name,
 		func(data json.RawMessage) bool {
-			var frame stream.ChatPresenceFrame
-			if json.Unmarshal(data, &frame) != nil {
-				return false
-			}
-			return slices.ContainsFunc(frame.Rooms[made.Channel].Working,
-				func(w stream.ChatWorking) bool { return w.Handle == "ceo" })
+			return showsWorking(data, made.Channel, "ceo", "")
 		})
 	release()
 

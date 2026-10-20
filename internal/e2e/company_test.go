@@ -247,8 +247,8 @@ type node struct {
 
 	// chat is the node's chat hub, attached to its engine as `crewlet run`
 	// attaches one ([newEngine]) — on every node, an API or none, because a
-	// seat raises its working indicator wherever its turn runs and every
-	// node answers the fleet's presence probe for the seats it runs.
+	// seat raises its working indicator wherever its turn runs, as its
+	// member of the room's presence on that node's presence hub.
 	chat *api.EngineChatLive
 }
 

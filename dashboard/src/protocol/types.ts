@@ -79,10 +79,10 @@ import type {
   DATA_VERDICTS,
   FIELD_CONDITIONS,
   ORIGIN_MODES,
-  PRESENCE_ACTIVITIES,
   READ_RULES,
   SHAREABLE_ROLES,
 } from "../contract/artifacts.ts";
+import { PRESENCE_ACTIVITIES, PRESENCE_ROOMS } from "../contract/presence.ts";
 import type { InformSurface, WorkViewShape } from "../contract/work.ts";
 import type {
   RetentionGenerationState,
@@ -4159,21 +4159,39 @@ export interface ChatWorking {
   status?: string;
 }
 
-/** Who is in one room right now. None of it is durable and none of it is on
- *  the log. */
+/** Who is in one room right now, as the room's screen draws it — derived from
+ *  the room's members (`chatRoomPresence`, routes/chatlet/live.ts). None of it is
+ *  durable and none of it is on the log. */
 export interface ChatRoomPresence {
   /** The people with this room open. Handles, because a person in chat IS a
    *  seat. */
   viewing?: string[];
-  /** Composing in it — a subset of `viewing` that expires on its own. */
+  /** Composing in it — a subset of `viewing` that lapses on its own. */
   typing?: string[];
   working?: ChatWorking[];
 }
 
-/** The presence push's payload: the rooms this socket asked about, WHOLE —
- *  a tab that reconnects has no starting point to apply a delta against. */
-export interface ChatPresenceFrame {
-  rooms: Record<string, ChatRoomPresence>;
+/**
+ * A `chat_presence` push (`stream.ChatPresence`): one chat room's presence,
+ * as the presence hub fans it out (ADR-0038). With `roster` set it is the
+ * room WHOLE — what the socket is handed as it joins, and a roster naming
+ * nobody when it is taken out — so what was held is replaced; otherwise it is
+ * a change, the members now presented that are new or changed and the
+ * sessions no longer presented.
+ */
+export interface ChatPresencePush {
+  channel_id: string;
+  roster?: boolean;
+  upsert: RoomMember[] | null;
+  leave: string[] | null;
+  counts?: { human: number; agent: number };
+  truncated: boolean;
+}
+
+/** What this tab holds of the chat rooms' presence: per room, its members by
+ *  session, as the pushes left them. */
+export interface ChatPresenceState {
+  rooms: Record<string, RoomRoster>;
 }
 
 /**
@@ -5903,6 +5921,8 @@ export type AudienceKind = (typeof AUDIENCE_KINDS)[number];
 export type OriginMode = (typeof ORIGIN_MODES)[number];
 /** What a present member is doing. */
 export type PresenceActivity = (typeof PRESENCE_ACTIVITIES)[number];
+/** The kind of room a `presence` frame names (`presence.RoomKind`). */
+export type PresenceRoomKind = (typeof PRESENCE_ROOMS)[number];
 /** What a listing is about. */
 export type ArtifactListScope = (typeof ARTIFACT_LIST_SCOPES)[number];
 /** How a listing is ordered. */
@@ -7139,17 +7159,22 @@ export interface DataWriteAnswer {
   conflict?: DataDoc[];
 }
 
-/** Where in an artifact a member is looking (`presence.Focus`). */
+/**
+ * Where in a room a member is looking (`presence.Focus`). An artifact's room
+ * names a version, a region, a record or a field; a chat room names the
+ * thread a member is typing under, or an agent will answer in.
+ */
 export interface PresenceFocus {
   version?: number;
   region?: string;
   collection?: string;
   doc?: string;
   field?: string;
+  thread?: string;
 }
 
-/** One open viewer of one artifact (`presence.Member`). */
-export interface ArtifactPresenceMember {
+/** One open viewer of one room, an artifact's or a chat room's (`presence.Member`). */
+export interface RoomMember {
   session: string;
   /** The seat handle, which the dashboard resolves to a name, or the login of one acting under no seat. */
   seat: string;
@@ -7157,13 +7182,15 @@ export interface ArtifactPresenceMember {
   activity: PresenceActivity;
   focus: PresenceFocus;
   at: string;
-  /** For an agent, the run of the turn whose tool call last put it in the room. */
+  /** For an agent, the run of the turn that last put it in the room. */
   turn?: string;
+  /** For an agent at work in a chat room, the line shown beside its name; empty for the bare indicator. */
+  status?: string;
 }
 
-/** Who is in one artifact's room (`presence.Roster`). */
-export interface ArtifactPresenceRoster {
-  members: ArtifactPresenceMember[] | null;
+/** Who is in one room (`presence.Roster`). */
+export interface RoomRoster {
+  members: RoomMember[] | null;
   counts?: { human: number; agent: number };
   truncated?: boolean;
 }
@@ -7173,7 +7200,7 @@ export interface ArtifactJoined {
   artifact: string;
   session: string;
   role: ArtifactRole;
-  roster: ArtifactPresenceRoster;
+  roster: RoomRoster;
   through: number;
   resync: boolean;
 }
@@ -7220,7 +7247,7 @@ export interface ArtifactDataPush {
 /** An `artifact_presence` push (`stream.ArtifactPresence`). */
 export interface ArtifactPresencePush {
   artifact: string;
-  upsert: ArtifactPresenceMember[] | null;
+  upsert: RoomMember[] | null;
   leave: string[] | null;
   counts?: { human: number; agent: number };
   truncated: boolean;

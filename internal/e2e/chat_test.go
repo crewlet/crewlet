@@ -726,10 +726,10 @@ type chatScript struct {
 	// hold, when set, keeps the round that POSTS waiting until it is
 	// closed, for a case whose subject is what a room shows while a seat
 	// is at work: the working indicator is up for exactly as long as the
-	// turn runs, and a scripted turn runs faster than the presence probe's
-	// own floor between two looks, so without it the indicator can be
-	// raised and lowered between probes and never shown to anybody. The
-	// case closes it once it has seen what it waits for.
+	// turn runs, and a scripted turn runs faster than the presence hub's
+	// fan-out window, so without it the indicator can be raised and
+	// withdrawn inside one window, which presents nothing, and never shown
+	// to anybody. The case closes it once it has seen what it waits for.
 	hold <-chan struct{}
 }
 
@@ -1290,12 +1290,8 @@ func TestACommittedMessageReachesAWatchingSocket(t *testing.T) {
 func namesRoom(kind stream.Kind, data json.RawMessage, channelID string) bool {
 	switch {
 	case kind == stream.KindChatPresence:
-		var frame stream.ChatPresenceFrame
-		if json.Unmarshal(data, &frame) != nil {
-			return false
-		}
-		_, ok := frame.Rooms[channelID]
-		return ok
+		var frame stream.ChatPresence
+		return json.Unmarshal(data, &frame) == nil && frame.ChannelID == channelID
 	case slices.Contains(stream.ChatPushKinds(), kind) && kind != stream.KindChatCursorMoved:
 		var change stream.ChatChange
 		return json.Unmarshal(data, &change) == nil && change.ChannelID == channelID

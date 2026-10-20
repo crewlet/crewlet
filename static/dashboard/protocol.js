@@ -765,9 +765,31 @@ var Store = class {
 		live.dropped = Math.max(live.dropped, rooms[oldest]?.frame ?? 0);
 		delete rooms[oldest];
 	}
-	/** Who is in the rooms this socket is watching, whole. */
-	applyChatPresence(frame) {
-		this.state.chatPresence = frame?.rooms ? frame : { rooms: {} };
+	/**
+	* One chat room's presence push, as the presence hub fanned it out.
+	*
+	* A ROSTER REPLACES and a change MERGES — members upserted by session,
+	* sessions left removed — exactly as an artifact's room is applied, because
+	* it is the same hub's fan-out: the engine hands a socket the room whole as
+	* it joins and every change after, and hands it a roster naming nobody when
+	* it takes the socket out. A room left with nobody in it is FORGOTTEN, so a
+	* tab that moved on holds nothing of the room it was in.
+	*/
+	applyChatPresence(push) {
+		const room = push?.channel_id;
+		if (!push || typeof room !== "string" || room === "") return;
+		const members = new Map(push.roster ? [] : (this.state.chatPresence.rooms[room]?.members ?? []).map((m) => [m.session, m]));
+		for (const session of push.leave ?? []) members.delete(session);
+		for (const member of push.upsert ?? []) if (member && typeof member.session === "string") members.set(member.session, member);
+		const rooms = { ...this.state.chatPresence.rooms };
+		const counted = (push.counts?.human ?? 0) + (push.counts?.agent ?? 0);
+		if (members.size === 0 && counted === 0) delete rooms[room];
+		else rooms[room] = {
+			members: [...members.values()],
+			counts: push.counts,
+			truncated: push.truncated
+		};
+		this.state.chatPresence = { rooms };
 		this.emit("chatPresence");
 	}
 	/**
@@ -2615,18 +2637,23 @@ var LiveSocket = class {
 		} catch {}
 	}
 	/**
-	* Say which room this tab is looking at, and whether it is being typed in.
+	* Say which chat room this tab is looking at, and whether it is being typed
+	* in: the chat room's `presence` frame, which names the room by its kind and
+	* its id like every room's (ADR-0038).
 	*
-	* IT ASKS NOTHING AND IS ANSWERED BY NOTHING. What it buys is that the
-	* fleet-wide presence probe is bounded to the rooms somebody actually has
-	* open — without it a node would have to ask its peers about every room in
-	* the company on every tick.
+	* THE FRAME ITSELF JOINS, unlike an artifact's, because a tab looks at one
+	* chat room at a time: naming a room puts this socket in its presence (once
+	* the engine has decided the room is one this reader may see) and takes it
+	* out of the room it was in, and an empty room id takes it out of the one it
+	* was in. The engine answers with the room's members (`chat_presence`) and
+	* every change after; typing is EDITING, which the engine puts back to
+	* viewing once nothing has re-asserted it inside its lapse.
 	*
 	* It is not delivered while the socket is down and is not queued: presence
-	* is about now, and a probe from ten seconds ago is worse than none. The
-	* reconnect re-sends what this tab is looking at, which is the state above.
-	* Only the chat screen sends it, and the frame mounts that screen only for
-	* a reader holding Chatlet, so a tab without it never names a room.
+	* is about now. The reconnect re-sends what this tab is looking at, which is
+	* the state above, since the new socket is in no room. Only the chat screen
+	* sends it, and the frame mounts that screen only for a reader holding
+	* Chatlet, so a tab without it never names a room.
 	*/
 	focus(channelID, typing) {
 		this.focused = channelID;
@@ -2635,11 +2662,14 @@ var LiveSocket = class {
 	}
 	sendFocus() {
 		if (!this.connected || !this.sock) return;
+		const activity = this.focused !== "" && this.typing ? "editing" : "viewing";
+		const room = "chat";
 		try {
 			this.sock.send(JSON.stringify({
-				kind: "chat_focus",
+				kind: "presence",
+				room,
 				channel_id: this.focused,
-				typing: this.typing
+				activity
 			}));
 		} catch {}
 	}
@@ -2713,6 +2743,7 @@ var LiveSocket = class {
 		try {
 			this.sock.send(JSON.stringify({
 				kind: "presence",
+				room: "artifact",
 				artifact,
 				activity,
 				focus

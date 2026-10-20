@@ -64,9 +64,6 @@ export const AUDIENCE_KINDS = ["seat", "unit", "company"] as const;
 /** How the artifact origin isolates a page (`artifacts.OriginModes`). */
 export const ORIGIN_MODES = ["per_artifact", "shared"] as const;
 
-/** Who is present in an artifact's room is doing what (`presence.Activities`). */
-export const PRESENCE_ACTIVITIES = ["viewing", "editing", "idle"] as const;
-
 /** What a listing is about (`artifactsdomain.ListScopes`). */
 export const ARTIFACT_LIST_SCOPES = ["mine", "shared", "company", "agents", "all"] as const;
 
@@ -241,12 +238,6 @@ export const FIELD_NAME_PATTERN = "^[A-Za-z][A-Za-z0-9_]{0,63}$";
 
 /** The engine's per-viewer state collection (`artifactdata.StateCollection`), which no screen lists. */
 export const STATE_COLLECTION = "_state";
-
-/**
- * The most presence frames one socket sends a second (`presence.ClientRate`).
- * The engine drops the rest, so the viewer coalesces what it says to this.
- */
-export const PRESENCE_FRAMES_PER_SECOND = 10;
 
 /**
  * The agent tools whose answer is a version that landed (`create_artifact`

@@ -227,7 +227,7 @@ type StatusPoster interface {
 	// SetStatus raises or updates the indicator. It never returns an
 	// error: a failed call reports false and the status expires on the
 	// backend's side, which is a cosmetic loss and not a turn's problem.
-	SetStatus(ctx context.Context, handle, channel, thread, status string) bool
+	SetStatus(ctx context.Context, post StatusPost) bool
 
 	// ClearStatus takes the indicator down.
 	//
@@ -243,6 +243,22 @@ type StatusPoster interface {
 	// that ignores its status argument, which is the entire class of
 	// backend this method exists for.
 	ClearStatus(ctx context.Context, handle, channel, thread string) bool
+}
+
+// StatusPost is one raise or re-assertion of an indicator: whose it is, the
+// conversation it sits in, the turn holding it, and the words.
+type StatusPost struct {
+	Handle, Channel, Thread string
+
+	// Turn is the run of the NEWEST turn holding the indicator — the one
+	// that most recently began or took back its hold — which a backend that
+	// can name a turn links to, so a person can open what the agent is
+	// doing. A vendor's indicator names none and reads nothing here.
+	Turn string
+
+	// Text is the phrase, empty on a backend that renders none
+	// ([StatusPoster.SupportsStatusText]).
+	Text string
 }
 
 // statusRequestTimeout bounds every request an indicator makes: the raise,
@@ -264,8 +280,12 @@ type statusKey struct{ handle, channel, thread string }
 
 // session is one live indicator, shared by every turn holding it open.
 type session struct {
-	key   statusKey
-	turns map[string]bool
+	key statusKey
+
+	// holds are the turns holding the indicator open, in the order each
+	// last began or took back its hold, so the newest is the last: the turn
+	// a post names ([StatusPost.Turn]). Guarded by the driver's mutex.
+	holds []string
 
 	// seed fixes which lines this conversation draws, and rotation counts
 	// the phase changes it has been through — together they are what make
@@ -294,6 +314,20 @@ type session struct {
 	// raise can land after the clear. See "Stopped between posts" above.
 	stop chan struct{}
 	done chan struct{}
+}
+
+// hold records turn as the newest holder: appended, or moved to the end if it
+// already holds. Caller holds the driver's mutex.
+func (s *session) hold(turn string) {
+	s.holds = append(slices.DeleteFunc(s.holds, func(t string) bool { return t == turn }), turn)
+}
+
+// newest is the turn a post names. Caller holds the driver's mutex.
+func (s *session) newest() string {
+	if len(s.holds) == 0 {
+		return ""
+	}
+	return s.holds[len(s.holds)-1]
 }
 
 // wake asks the session's goroutine to re-assert, and never blocks. See
@@ -428,13 +462,13 @@ func (d *StatusDriver) Begin(ctx context.Context, handle, turnID, phase string, 
 		// JOIN, do not re-raise. The indicator is already up and its
 		// heartbeat is running; a second raise would reset the text a
 		// reader is watching to this turn's line for no reason.
-		s.turns[turnID] = true
+		s.hold(turnID)
 		d.mu.Unlock()
 		return &StatusSession{driver: d, key: key, turn: turnID}
 	}
 
 	s := &session{
-		key: key, turns: map[string]bool{turnID: true},
+		key: key, holds: []string{turnID},
 		// Seeded on the TURN, not the thread: two turns in one thread
 		// should not read as one long thought, and the seed is what
 		// makes their lines differ.
@@ -485,7 +519,9 @@ func (d *StatusDriver) Rejoin(handle, turnID string) *StatusSession {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	for key, s := range d.sessions {
-		if key.handle == handle && s.turns[turnID] {
+		if key.handle == handle && slices.Contains(s.holds, turnID) {
+			// THE RESUMED TURN IS THE NEWEST: it is the one working now.
+			s.hold(turnID)
 			return &StatusSession{driver: d, key: key, turn: turnID}
 		}
 	}
@@ -574,8 +610,8 @@ func (s *StatusSession) End(ctx context.Context, keepAlive bool) {
 		d.mu.Unlock()
 		return
 	}
-	delete(sess.turns, s.turn)
-	if len(sess.turns) > 0 {
+	sess.holds = slices.DeleteFunc(sess.holds, func(t string) bool { return t == s.turn })
+	if len(sess.holds) > 0 {
 		d.mu.Unlock()
 		return
 	}
@@ -731,11 +767,12 @@ func (s *session) stopped() bool {
 func (d *StatusDriver) repost(ctx context.Context, s *session) {
 	d.mu.Lock()
 	text := d.phrases.Pick(s.phase, s.seed, s.rotation)
+	turn := s.newest()
 	d.mu.Unlock()
-	d.post(ctx, s.key, text)
+	d.post(ctx, s.key, turn, text)
 }
 
-func (d *StatusDriver) post(ctx context.Context, key statusKey, text string) {
+func (d *StatusDriver) post(ctx context.Context, key statusKey, turn, text string) {
 	ctx, cancel := context.WithTimeout(ctx, statusRequestTimeout)
 	defer cancel()
 	if !d.poster.SupportsStatusText() {
@@ -743,7 +780,8 @@ func (d *StatusDriver) post(ctx context.Context, key statusKey, text string) {
 		// backend cannot render.
 		text = ""
 	}
-	if !d.poster.SetStatus(ctx, key.handle, key.channel, key.thread, text) {
+	if !d.poster.SetStatus(ctx, StatusPost{Handle: key.handle, Channel: key.channel,
+		Thread: key.thread, Turn: turn, Text: text}) {
 		log.DebugContext(ctx, "working_status_not_raised", "backend", d.poster.StatusBackend(),
 			"handle", key.handle, "channel", key.channel)
 	}

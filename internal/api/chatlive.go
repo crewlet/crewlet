@@ -10,15 +10,16 @@ import (
 
 // EngineChatLive is the process's chat hub attached to the engine beside it:
 // the live half of the company's own chat — committed frames for the sockets
-// this node serves, the fleet's presence scatter, a person's read state pushed
-// to their own tabs, and the poster a Chatlet seat's working indicator is
-// raised on.
+// this node serves, a chat room's presence on the engine's presence hub, a
+// person's read state pushed to their own tabs, and the poster a Chatlet seat's
+// working indicator is raised on.
 //
 // # One per process, attached on every node, after the engine exists
 //
 // A seat raises its working indicator on whichever node its turn runs on, and
 // a node with the `seats` role alone — no listener, no `ingress` — runs turns
-// too: the presence answer that shows that indicator is served by every node.
+// too: the indicator is the seat's member of the room's presence, which that
+// node's presence hub tells the node a person has the room open on.
 // So the hub is built and attached on EVERY node, whether or not it serves an
 // API, and its lifetime is the process's rather than an App's. [New] mounts
 // the socket over it where one is served ([Options.ChatLive]), which is what
@@ -53,7 +54,7 @@ type EngineChatLive struct {
 // at [EngineChatLive.Stop], which the process calls after the drain.
 func NewEngineChatLive(ctx context.Context, e *engine.Engine) *EngineChatLive {
 	backends := e.Backends()
-	hub := stream.NewChatHub(stream.ChatHubOptions{
+	opts := stream.ChatHubOptions{
 		// RESOLVED PER CALL, never captured: the Chatlet half comes up
 		// with the node's first company, which on a node that booted with
 		// none is after this hub exists — and a company whose chat is not
@@ -64,13 +65,19 @@ func NewEngineChatLive(ctx context.Context, e *engine.Engine) *EngineChatLive {
 			}
 			return nil
 		},
-		Peers: backends.Queue,
 		// THE DURABLE RECORD a person's read state is pushed from, which
 		// every node holds whatever its company runs; the hub follows it
 		// only once a socket surface is mounted over it.
-		Reads:  backends.Fleet,
-		NodeID: e.Node().ID(),
-	})
+		Reads: backends.Fleet,
+	}
+	// THE ENGINE'S OWN PRESENCE HUB, which an artifact's room rides too:
+	// one implementation, one sealed wire. A NIL HUB STAYS A NIL
+	// INTERFACE — an engine with no broker runs none — because a nil
+	// pointer inside the interface would be a hub every join panics on.
+	if p := e.Presence(); p != nil {
+		opts.Presence = p
+	}
+	hub := stream.NewChatHub(opts)
 	hub.Start(context.WithoutCancel(ctx))
 	e.SetChatLive(ctx, hub)
 	return &EngineChatLive{hub: hub, engine: e}

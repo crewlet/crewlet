@@ -29,6 +29,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/period"
+	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -107,7 +108,7 @@ type frame struct {
 	// two below), presence a `chat_presence` frame's and read a
 	// `chat_cursor_moved` frame's.
 	chat     stream.ChatChange
-	presence stream.ChatPresenceFrame
+	presence stream.ChatPresence
 	read     coord.PersonChatRead
 }
 
@@ -381,14 +382,15 @@ func (c *capture) chatChanges(room string) []stream.ChatChange {
 	return out
 }
 
-// sawPresence reports whether any presence frame showed one room as match
-// accepts it.
-func (c *capture) sawPresence(room string, match func(stream.ChatRoomPresence) bool) bool {
+// sawPresence reports whether any presence frame presented, in one room, a
+// member match accepts: the room whole as the socket joined it, or a change.
+func (c *capture) sawPresence(room string, match func(presence.Member) bool) bool {
 	for _, f := range c.snapshot() {
-		if f.kind != string(stream.KindChatPresence) || !f.decoded {
+		if f.kind != string(stream.KindChatPresence) || !f.decoded ||
+			f.presence.ChannelID != room {
 			continue
 		}
-		if p, ok := f.presence.Rooms[room]; ok && match(p) {
+		if slices.ContainsFunc(f.presence.Upsert, match) {
 			return true
 		}
 	}
@@ -1154,8 +1156,9 @@ func captureChat(t *testing.T, n *node, founder *browser, conn *websocket.Conn,
 	})
 	out.Room = made.Channel
 	out.Changes = append(out.Changes, by(chatlet.OpCreate, "", ""))
-	// LOOKED AT, as the room's screen does when it opens: the one frame a
-	// tab sends that asks nothing, and the reason its presence is probed.
+	// LOOKED AT, as the room's screen does when it opens: the chat room's
+	// `presence` frame, which asks nothing and joins the tab to the room's
+	// presence.
 	focusOn(t, conn, made.Channel)
 
 	// SAID, through the composer's route — the exchange the replay holds
@@ -1224,13 +1227,12 @@ func captureChat(t *testing.T, n *node, founder *browser, conn *websocket.Conn,
 	}
 	out.Changes = append(out.Changes, by(chatlet.OpPost, asked.MessageID, first))
 	waitFor(t, "the room's presence to show the founder looking and the seat at work", func() bool {
-		looking := frames.sawPresence(made.Channel, func(p stream.ChatRoomPresence) bool {
-			return slices.Contains(p.Viewing, who.Handle)
+		looking := frames.sawPresence(made.Channel, func(m presence.Member) bool {
+			return m.Seat == who.Handle && m.Kind == iam.ActorHuman
 		})
-		working := frames.sawPresence(made.Channel, func(p stream.ChatRoomPresence) bool {
-			return slices.ContainsFunc(p.Working, func(w stream.ChatWorking) bool {
-				return w.Handle == seat
-			})
+		working := frames.sawPresence(made.Channel, func(m presence.Member) bool {
+			return m.Seat == seat && m.Kind == iam.ActorAgent &&
+				m.Activity == presence.Editing && m.Focus.Thread == first
 		})
 		return looking && working
 	}, func() string {

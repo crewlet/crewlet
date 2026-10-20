@@ -1,7 +1,6 @@
 package topics
 
-// The company's own chat, and the one grammar on this broker that carries two
-// subject spaces rather than one.
+// The company's own chat.
 //
 // The chat domain is the state-log framework's NINTH, and its subject space
 // is the first where a hot path and an arbitration path share a log. Channel
@@ -17,12 +16,13 @@ package topics
 // the applier's kind switch dispatches on the kind inside it, and none of the
 // three can see the others.
 //
-// THE SECOND SPACE IS NOT ON THE LOG. Typing, presence and the working
-// indicator are questions rather than events ("who is doing what in this room
-// right now"), so they ride the queue's ephemeral scatter — no stream, no
-// consumer, no retention — on a subject deliberately OUTSIDE the log's
-// wildcard, because a durable stream created over it would retain every
-// keystroke window for the length of its own age bound.
+// PRESENCE HAS NO SUBJECT HERE. Typing, who is looking and the working
+// indicator are what is true of a room right now rather than events, so they
+// are the presence hub's (internal/presence, ADR-0038): a chat room is one
+// kind of room there, told on [PresenceSubject] under `crewlet.rooms.` —
+// outside every log's wildcard, because a durable stream created over it
+// would retain every keystroke for the length of its own age bound — in
+// frames sealed under the fleet keyring.
 //
 // A person's READ STATE has no subject here at all, and the obvious one — the
 // node that took a cursor write telling its peers to push it — is what it is
@@ -41,31 +41,6 @@ const (
 
 	// ChatLogWildcard is the subject space the stream is created with.
 	ChatLogWildcard = ChatLogPrefix + ".>"
-
-	// ChatPresence is where a node asks its peers what is happening in a
-	// set of rooms right now, and where every node answers from its own
-	// memory.
-	//
-	// ONE SUBJECT FOR THE FLEET, not one per channel, and the reason is
-	// the search fan-out's: a server answers a request/reply on a subject
-	// it is serving EXACTLY, so a per-channel subject would need every
-	// node to serve a wildcard it cannot, and the memory twin every test
-	// runs against matches the string. The rooms a caller is asking about
-	// ride INSIDE the request, where a list belongs.
-	//
-	// It sits under `crewlet.chat.` beside the log rather than inside it,
-	// so the log's wildcard cannot capture it: a presence probe filed as a
-	// mutation would be an undecodable record on a strict, identity-
-	// claiming log, which is the one failure that stops an applier.
-	//
-	// READ-ONLY, AND NOT SIGNED, deliberately. The fleet's ephemeral
-	// channels that are INSTRUCTIONS are signed (internal/signedask): a
-	// node carries the request out as somebody. A presence probe is a
-	// question a node answers about its own sockets, and all the asker does
-	// with the answer is light an indicator, itself filtered by each
-	// reader's own visibility of the room. A forged answer can show
-	// somebody typing and nothing else.
-	ChatPresence = "crewlet.chat.presence"
 )
 
 // The object kinds are NOT constants here, for the reason the other domains'

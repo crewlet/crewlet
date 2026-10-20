@@ -126,9 +126,10 @@ describe("saying it", () => {
   });
 
   test("typing is reported, and withdrawn when the composer goes", () => {
-    // The flag drives a fleet-wide presence probe and expires on its own after
-    // six seconds. A composer that unmounted without withdrawing leaves
-    // somebody typing on everybody else's screen for the rest of that window.
+    // The flag is the person's member of the room's presence editing, which
+    // the engine puts back to viewing on its own after six seconds. A
+    // composer that unmounted without withdrawing leaves somebody typing on
+    // everybody else's screen for the rest of that window.
     const onTyping = vi.fn();
     const view = render(<Composer what="#general" send={vi.fn()} onTyping={onTyping} />);
     fireEvent.change(screen.getByLabelText("Message #general"), { target: { value: "h" } });

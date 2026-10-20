@@ -31,7 +31,7 @@ import { LIVE_REFETCH_MS } from "./live.ts";
 import { SHORTEN_FIRST } from "./Composer.tsx";
 import { DELETE_IN_FLIGHT, EDIT_IN_FLIGHT, NOTHING_CHANGED } from "./Transcript.tsx";
 import { MAX_BODY_BYTES } from "~/contract/chat.ts";
-import { Store, type QueryName } from "~/protocol/index.ts";
+import { Store, type ChatPresencePush, type RoomMember, type QueryName } from "~/protocol/index.ts";
 import { MAX_CHAT_LIVE } from "~/protocol/store.ts";
 import { LoneRoom } from "./testkit.tsx";
 import {
@@ -762,20 +762,42 @@ test("a room this build cannot classify is read-only rather than guessed at", as
   expect(topic.getAttribute("title")).toMatch(/newer version of the engine/i);
 });
 
+/** A `chat_presence` roster for room-1, as the presence hub hands a joining socket one. */
+function present(
+  ...members: (Partial<RoomMember> & Pick<RoomMember, "seat" | "kind" | "activity">)[]
+): ChatPresencePush {
+  return {
+    channel_id: "room-1",
+    roster: true,
+    upsert: members.map((m, i) => ({
+      session: `s-${i}`,
+      focus: {},
+      at: "2026-01-01T00:00:00Z",
+      ...m,
+    })),
+    leave: [],
+    truncated: false,
+  };
+}
+
 test("a seat working on an answer is drawn under the message it is answering", async () => {
   // The frame says WHICH message the reply will land under, and that is the
   // whole point of the field: an indicator at the top of the room would put
   // it somewhere the answer is not going to appear.
   const { store } = mount();
   await screen.findByText("line 2");
-  store.applyChatPresence({
-    rooms: {
-      "room-1": {
-        viewing: ["bo"],
-        working: [{ handle: "bo", thread: "m-2", status: "is drafting a reply" }],
+  store.applyChatPresence(
+    present(
+      { seat: "bo", kind: "human", activity: "viewing" },
+      {
+        seat: "bo",
+        kind: "agent",
+        activity: "editing",
+        focus: { thread: "m-2" },
+        status: "is drafting a reply",
       },
-    },
-  });
+    ),
+  );
   await waitFor(() => expect(screen.getByText(/bo is drafting a reply/)).toBeTruthy());
   const row = document.querySelector('[data-message-id="m-2"]')!;
   expect(row.textContent).toContain("is drafting a reply");
@@ -788,9 +810,9 @@ test("a seat working on an answer is drawn under the message it is answering", a
 test("a seat working on the room rather than a message is drawn in the presence band", async () => {
   const { store } = mount();
   await screen.findByText("line 2");
-  store.applyChatPresence({
-    rooms: { "room-1": { working: [{ handle: "bo", status: "is reading the room" }] } },
-  });
+  store.applyChatPresence(
+    present({ seat: "bo", kind: "agent", activity: "editing", status: "is reading the room" }),
+  );
   const said = await screen.findByText(/bo is reading the room/);
   const mark = said.closest(".crewlet-status");
   expect(mark?.closest(".chat-presence")).not.toBeNull();
@@ -813,7 +835,12 @@ test("who is here is drawn as the chart draws them: a person in a circle, an age
     }) as never,
   );
   await screen.findByText("line 2");
-  store.applyChatPresence({ rooms: { "room-1": { viewing: ["cy", "bo"] } } });
+  store.applyChatPresence(
+    present(
+      { seat: "cy", kind: "human", activity: "viewing" },
+      { seat: "bo", kind: "human", activity: "viewing" },
+    ),
+  );
   const band = await waitFor(() => {
     const found = document.querySelector(".chat-presence");
     expect(found).not.toBeNull();

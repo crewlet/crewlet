@@ -32,10 +32,17 @@ const (
 	// RoomArtifact is an artifact's room: who has it open, what they are
 	// looking at in it and whether they are editing it.
 	RoomArtifact RoomKind = "artifact"
+
+	// RoomChat is a chat room's: who has it open, who is typing in it (a
+	// socket's member editing, under the thread its focus names), and which
+	// seat is working on an answer there (an agent's member, editing under
+	// the thread its answer will land in, its [Member.Status] the line the
+	// room shows beside its name).
+	RoomChat RoomKind = "chat"
 )
 
 // RoomKinds are every kind of room this build keeps.
-var RoomKinds = []RoomKind{RoomArtifact}
+var RoomKinds = []RoomKind{RoomArtifact, RoomChat}
 
 // Valid reports whether k is a kind of room this build keeps.
 func (k RoomKind) Valid() bool { return slices.Contains(RoomKinds, k) }
@@ -53,6 +60,34 @@ type Room struct {
 
 // ArtifactRoom is one artifact's room.
 func ArtifactRoom(id artifacts.ID) Room { return Room{Kind: RoomArtifact, ID: uuid.UUID(id)} }
+
+// ChatRoom is one chat room's, by the room's id (every room's id is a UUID:
+// a named room's minted from its create, a direct one's derived from who is
+// in it).
+func ChatRoom(channel uuid.UUID) Room { return Room{Kind: RoomChat, ID: channel} }
+
+// typing reports whether a SOCKET's editing member of a room of kind k stops
+// editing on its own once nothing has said so for [TypingLapse].
+//
+// A CHAT ROOM'S EDITING IS TYPING, a gesture rather than a state: a tab
+// re-asserts it while somebody types and says `viewing` when they stop, but a
+// lid closed mid-word says nothing, so a typing line nobody re-asserted goes
+// back to viewing on its own. An artifact's editor is editing for as long as
+// the editor is open, which the tab says.
+func (k RoomKind) typing() bool { return k == RoomChat }
+
+// agentSlot is which of a seat's members in a room of kind k a touch focused
+// on f is: one per seat in an artifact's room, where the agent's focus moves
+// with its calls, and one per seat PER THREAD in a chat room's, because a seat
+// can be answering in two threads of one room at once (a turn parked behind a
+// coding run keeps its line up while the seat's next turn answers elsewhere),
+// and taking one down must not take the other with it.
+func (k RoomKind) agentSlot(f Focus) string {
+	if k == RoomChat {
+		return f.Thread
+	}
+	return ""
+}
 
 // String names the room for a log line: its kind and its id.
 func (r Room) String() string { return string(r.Kind) + ":" + r.ID.String() }
@@ -88,15 +123,22 @@ var Activities = []Activity{Viewing, Editing, Idle}
 // Valid reports whether a is an activity this build fans out.
 func (a Activity) Valid() bool { return slices.Contains(Activities, a) }
 
-// Focus is where in its room a member is looking or editing. An artifact's
-// room reads every field: the version on show, a region of a page, and a
-// datastore collection, document and field.
+// Focus is where in its room a member is looking or editing, and which fields
+// a room reads is its kind's ([CheckFocus]): an artifact's room the version on
+// show, a region of a page, and a datastore collection, document and field; a
+// chat room's the thread, the message a member is composing or an agent is
+// answering under, and the room itself while it is empty.
+//
+// ONE TYPE FOR EVERY KIND rather than one per kind, because a member is
+// compared whole to tell a change from a repeat, and a focus that was an
+// interface would compare by the box it came in.
 type Focus struct {
 	Version    int    `json:"version,omitempty"`
 	Region     string `json:"region,omitempty"`
 	Collection string `json:"collection,omitempty"`
 	Doc        string `json:"doc,omitempty"`
 	Field      string `json:"field,omitempty"`
+	Thread     string `json:"thread,omitempty"`
 }
 
 // Member is one open viewer of one room.
@@ -120,6 +162,12 @@ type Member struct {
 	// room: what a person opens to see what the agent is doing there.
 	// Empty for a person.
 	Turn string `json:"turn,omitempty"`
+
+	// Status is, for an agent, the line the room shows beside its name
+	// while it works there ("is reading the thread…"), empty for the bare
+	// indicator. A person's member names none: what a person is doing is
+	// their activity.
+	Status string `json:"status,omitempty"`
 }
 
 // Counts are the members of a large room not presented individually.
@@ -136,14 +184,15 @@ type Roster struct {
 	Truncated bool     `json:"truncated,omitempty"`
 }
 
-// Agent is one seat's tool session in a room, as its node touches it
-// ([Hub.Touch]): the seat, the turn it is working in, and what it is doing
-// there.
+// Agent is one seat working in a room, as its node touches it ([Hub.Touch]):
+// the seat, the turn it is working in, what it is doing there, and the line
+// shown beside it.
 type Agent struct {
 	Seat     string
 	Turn     string
 	Activity Activity
 	Focus    Focus
+	Status   string
 }
 
 // The presence timings, every kind's: how often a node tells the fleet who it
@@ -178,6 +227,15 @@ const (
 	// second bounds that near 20 KiB, and a room whose members are still
 	// settles within a second.
 	FrameMembers = 10
+
+	// TypingLapse is how long a chat room's typing member stays typing with
+	// no frame saying so again ([RoomKind.typing]). SIX SECONDS, and it
+	// is sized against the tab's re-assertion rather than against latency:
+	// a tab re-asserts at most every half of it (the dashboard's
+	// TYPING_THROTTLE_MS, three seconds), so one frame lost on the way
+	// never blinks the line off under somebody still typing, and a lid
+	// closed mid-word takes it down within six.
+	TypingLapse = 6 * time.Second
 )
 
 // checkMember reports why a member cannot be shown in a room of kind k.
@@ -191,6 +249,11 @@ func checkMember(k RoomKind, m Member) error {
 		return fmt.Errorf("presence: a member's turn is %d bytes", len(m.Turn))
 	case m.Turn != "" && m.Kind != iam.ActorAgent:
 		return errors.New("presence: a person's member names a turn, which only an agent's does")
+	case len(m.Status) > maxStatusBytes:
+		return fmt.Errorf("presence: a member's status is %d bytes, over %d", len(m.Status),
+			maxStatusBytes)
+	case m.Status != "" && m.Kind != iam.ActorAgent:
+		return errors.New("presence: a person's member names a status, which only an agent's does")
 	case !m.Kind.Valid():
 		return fmt.Errorf("presence: a member of kind %q", m.Kind)
 	case !m.Activity.Valid():
@@ -200,11 +263,25 @@ func checkMember(k RoomKind, m Member) error {
 }
 
 // CheckFocus reports why a focus a client stated cannot be shown in a room of
-// kind k: a negative version, or a region, collection, document or field longer
+// kind k: a field the kind does not read, a negative version, or a value longer
 // than the vocabulary's own bounds. A focus names where somebody is looking and
 // is shown to everybody else in the room, so it is bounded where it enters.
 func CheckFocus(k RoomKind, f Focus) error {
-	if !k.Valid() {
+	switch k {
+	case RoomArtifact:
+		if f.Thread != "" {
+			return errors.New("presence: an artifact's room has no thread to focus on")
+		}
+	case RoomChat:
+		if f != (Focus{Thread: f.Thread}) {
+			return errors.New("presence: a chat room's focus names a thread and nothing else")
+		}
+		if len(f.Thread) > maxThreadBytes {
+			return fmt.Errorf("presence: focus thread is %d bytes, over %d", len(f.Thread),
+				maxThreadBytes)
+		}
+		return nil
+	default:
 		return fmt.Errorf("presence: a focus in a room of kind %q", k)
 	}
 	switch {
@@ -242,6 +319,14 @@ const (
 
 	// maxTurnBytes bounds an agent's turn: a run id is a few dozen bytes.
 	maxTurnBytes = 128
+
+	// maxThreadBytes bounds a chat focus's thread: a message id is a UUID's
+	// thirty-six characters.
+	maxThreadBytes = 64
+
+	// maxStatusBytes bounds an agent's status line, which is read beside a
+	// name: the shipped phrases are under forty bytes.
+	maxStatusBytes = 256
 
 	// maxFrameMembers bounds one frame's members: a full rebroadcast names
 	// every member a node holds in one room, and a thousand people on one

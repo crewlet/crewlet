@@ -78,11 +78,10 @@ func TestThePagesPathRefusesWhatItDidNotBuild(t *testing.T) {
 	}
 }
 
-// EVERY DOMAIN'S SUBJECT SPACE IS DISJOINT FROM EVERY OTHER'S, and so is each
-// ephemeral space: the presence every kind of room shares, `crewlet.rooms.`,
-// chat's presence, which shares its log's root `crewlet.chat.`, and the
-// Dashboard Assistant's running turns and fleet instructions, which share its
-// log's root `crewlet.assistant.`.
+// EVERY DOMAIN'S SUBJECT SPACE IS DISJOINT FROM EVERY OTHER'S, and so are the
+// ephemeral spaces beside them: the presence every kind of room shares,
+// `crewlet.rooms.`, and the Dashboard Assistant's running turns and fleet
+// instructions, which share its log's root `crewlet.assistant.`.
 //
 // The logs are read off [everyLogPrefix], so a log the package gains is
 // weighed here the day its constants are declared; an ephemeral space is
@@ -95,7 +94,6 @@ func TestNoDomainsSubjectSpaceOverlapsAnothers(t *testing.T) {
 	t.Parallel()
 	prefixes := map[string]string{
 		"presence":        topics.PresencePrefix + ".",
-		"chat presence":   topics.ChatPresence + ".",
 		"assistant turns": topics.AssistantTurnPrefix + ".",
 		"assistant fleet": topics.AssistantFleetPrefix,
 	}

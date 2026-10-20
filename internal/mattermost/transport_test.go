@@ -459,7 +459,8 @@ func TestTheIndicatorIsRaisedAndLapses(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	if !tr.SetStatus(t.Context(), "swe", "C1", "root-1", "ignored") {
+	if !tr.SetStatus(t.Context(), notify.StatusPost{Handle: "swe", Channel: "C1", Thread: "root-1",
+		Text: "ignored"}) {
 		t.Fatal("the indicator was not raised")
 	}
 	if inst.typings() != 1 {
@@ -473,7 +474,7 @@ func TestTheIndicatorIsRaisedAndLapses(t *testing.T) {
 		t.Fatal("clearing an indicator that lapses reported a failure")
 	}
 	// A seat this node does not run cannot be raised for.
-	if tr.SetStatus(t.Context(), "nobody", "C1", "", "") {
+	if tr.SetStatus(t.Context(), notify.StatusPost{Handle: "nobody", Channel: "C1"}) {
 		t.Fatal("an indicator was raised for a seat this node does not run")
 	}
 }

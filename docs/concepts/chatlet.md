@@ -292,10 +292,10 @@ shows it working — "is thinking…", then the phase it is in — and the line 
 when the turn ends. `chat.chatlet.typing_status` decides when: `always` (the
 default) for every turn a message woke, `addressed` only where the message
 obliged an answer, the same two values and meaning as the vendor surfaces'
-setting. It is presence rather than a record: raised on the node running the
-turn and read by the rooms that are watching, because it is true for minutes
-and worthless the moment the turn is over. Every node answers for the
-indicators its own seats raise, whether or not it serves the HTTP API, so a turn
+setting. It is [presence](#presence-typing-and-the-working-indicator) rather
+than a record: raised on the node running the turn, because it is true for
+minutes and worthless the moment the turn is over. Every node raises the
+indicators its own seats hold, whether or not it serves the HTTP API, so a turn
 run on a `seats`-only member or on a node with `api.port: 0` shows in the room
 like any other.
 
@@ -308,6 +308,52 @@ for the inbox
 and every switch between its own applier and a peer's asks every chat screen on
 it to read its rooms again, so a gap in what it heard is a re-read rather than
 a hole in the transcript.
+
+## Presence, typing and the working indicator
+
+Who has a room open, who is typing in it and which seat is working on an answer
+there is the room's **presence**, and it is never a record: none of it is on
+the chat log, none of it is applied, and no backup carries it. A keystroke on
+the log would be a row every data node applies and keeps for as long as the
+room does, to say something nobody will ask about a minute later. A chat room's
+presence rides the one presence hub every kind of room shares
+([ADR-0038](../../adr/0038-presence-is-told-never-stored.md)), as an
+artifact's room does:
+
+- **A tab looks at one room at a time.** The room's screen sends a `presence`
+  frame naming the room (`room: "chat"`, `channel_id`), viewing, and that frame
+  is the join: the engine puts the socket in the room's presence once the
+  room's own visibility admits its reader — the rule every message is filtered
+  by — and takes it out of the room it was in. A room the reader may not see
+  puts them in nobody's presence and shows them nobody's, in the words a room
+  that does not exist gets. Leaving the screen sends an empty `channel_id`.
+- **Typing is editing.** While a person types, the screen re-asserts the frame
+  as editing at most every three seconds, and the engine puts a member nobody
+  re-asserted back to viewing after six, which is what clears the line under a
+  lid closed mid-word.
+- **A seat at work is a member too.** The working indicator is the seat's member
+  of the room's presence: an agent, editing, under the thread its answer will
+  land in, with the phrase the room shows beside its name and the run of the
+  turn, raised and withdrawn by the node running the turn.
+- **Who is told is decided per room and per reader.** A socket hears a room's
+  presence only while it is in the room, so a private room's presence reaches
+  its members and nobody else, and a record that narrows a room (a member
+  removed, a room made private) takes out of it every socket whose reader may
+  no longer see it, with a roster naming nobody so the screen empties rather
+  than standing. A gap in what a node heard — the same one that asks its
+  screens to read their rooms again — decides every socket in a room again,
+  since it may have held such a record.
+- **Between nodes, every frame is sealed.** The node holding a seat's turn and
+  the node holding a reader's socket are rarely the same one. Each node tells
+  its peers its own members' moves, in frames sealed under the fleet keyring in
+  a key domain of their own, and a node shows nobody a frame the fleet did not
+  seal — a frame forged by anybody who can reach the cluster port shows nobody
+  typing. A node that gains a room's first socket asks its peers once who is
+  there, and every node rebroadcasts its members every fifteen seconds, so a
+  member whose node went away is gone within forty-five.
+
+The socket's [`chat_presence`](../reference/api-endpoints.md#pushes) push
+is the room whole as the socket joins it and every change after.
 
 ## People
 
