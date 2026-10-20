@@ -879,9 +879,21 @@ func failErr(w http.ResponseWriter, r *http.Request, err error, key string) {
 // but whoever runs the node can act on it. Both were one 503 carrying the
 // error's text, so a store this node could not read told a client to come
 // back in two seconds, and handed it a database path to read while it waited.
+//
+// AND A FLOOR ON ANOTHER LOG IS THE REQUEST'S: a `min_position` the caller
+// named on another domain's log ([statelog.ErrForeignPosition]) is refused by
+// the reader before it waits for anything, the same on every node, so it is
+// `400 bad_params` as every read surface answers it. It is neither a condition
+// nor a fault, and it reached the fault's arm: a download floored on the wrong
+// log answered `500 internal_error` and logged an error about a request.
 func readFailed(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, tracker.ErrNoTask) || errors.Is(err, pages.ErrNotFound) {
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound,
+			map[string]string{"detail": err.Error()})
+		return
+	}
+	if errors.Is(err, statelog.ErrForeignPosition) {
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams,
 			map[string]string{"detail": err.Error()})
 		return
 	}
