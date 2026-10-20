@@ -56,6 +56,10 @@ type room struct {
 	flushed   time.Time
 	sendTimer *time.Timer
 	sent      time.Time
+
+	// firstSocket is when this node's first socket in the room joined, until
+	// the ask that listening on it makes has been timed ([Hub.joined]).
+	firstSocket time.Time
 }
 
 // localMember is a member this node holds: a socket's, or an agent's tool

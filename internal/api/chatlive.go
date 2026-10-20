@@ -69,6 +69,9 @@ func NewEngineChatLive(ctx context.Context, e *engine.Engine) *EngineChatLive {
 		// every node holds whatever its company runs; the hub follows it
 		// only once a socket surface is mounted over it.
 		Reads: backends.Fleet,
+		// THE NODE'S OBJECTIVE METER, which every push of a committed
+		// record is timed into (change visibility).
+		Objectives: e.Objectives(),
 	}
 	// THE ENGINE'S OWN PRESENCE HUB, which an artifact's room rides too:
 	// one implementation, one sealed wire. A NIL HUB STAYS A NIL

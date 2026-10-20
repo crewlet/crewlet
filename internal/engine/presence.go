@@ -46,6 +46,11 @@ func (e *Engine) armPresence(ctx context.Context) error {
 	if e.metrics != nil {
 		opts.Metrics = e.metrics
 	}
+	// THE NODE'S OBJECTIVE METER, which presence's joins and moves are
+	// timed into.
+	if e.objectives != nil {
+		opts.Objectives = e.objectives
+	}
 	hub, err := presence.New(opts)
 	if err != nil {
 		return fmt.Errorf("engine: presence: %w", err)

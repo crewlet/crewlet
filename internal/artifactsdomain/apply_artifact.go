@@ -278,7 +278,7 @@ func (a *Applier) applyCreate(ctx context.Context, tx *sql.Tx, c applyContext, i
 		return 0, err
 	}
 	rows += n
-	a.move(id, MoveVersion, 0, 1, c.position)
+	a.move(c, id, MoveVersion, 0, 1)
 	return rows, nil
 }
 
@@ -387,7 +387,7 @@ func (a *Applier) applyPublish(ctx context.Context, tx *sql.Tx, c applyContext, 
 		return 0, err
 	}
 	rows += n
-	a.move(id, MoveVersion, head.epoch, v.Number, c.position)
+	a.move(c, id, MoveVersion, head.epoch, v.Number)
 	return rows, nil
 }
 
@@ -515,7 +515,7 @@ func (a *Applier) applyPatch(ctx context.Context, tx *sql.Tx, c applyContext, id
 		return 0, err
 	}
 	rows += n
-	a.move(id, MoveMeta, head.epoch, head.head, c.position)
+	a.move(c, id, MoveMeta, head.epoch, head.head)
 	return rows, nil
 }
 
@@ -566,7 +566,7 @@ func (a *Applier) applyShare(ctx context.Context, tx *sql.Tx, c applyContext, id
 		return 0, err
 	}
 	rows += n
-	a.move(id, MoveShare, epoch, head.head, c.position)
+	a.move(c, id, MoveShare, epoch, head.head)
 	return rows, nil
 }
 
@@ -612,7 +612,7 @@ func (a *Applier) applyUnshare(ctx context.Context, tx *sql.Tx, c applyContext, 
 		return 0, err
 	}
 	rows += n
-	a.move(id, MoveShare, epoch, head.head, c.position)
+	a.move(c, id, MoveShare, epoch, head.head)
 	return rows, nil
 }
 
@@ -674,7 +674,7 @@ func (a *Applier) applyTransfer(ctx context.Context, tx *sql.Tx, c applyContext,
 		return 0, err
 	}
 	rows += n
-	a.move(id, MoveTransfer, epoch, head.head, c.position)
+	a.move(c, id, MoveTransfer, epoch, head.head)
 	return rows, nil
 }
 
@@ -747,7 +747,7 @@ func (a *Applier) applyTrash(ctx context.Context, tx *sql.Tx, c applyContext, id
 	if err != nil {
 		return 0, err
 	}
-	a.move(id, MoveTrash, epoch, head.head, c.position)
+	a.move(c, id, MoveTrash, epoch, head.head)
 	return 1 + n, nil
 }
 
@@ -784,7 +784,7 @@ func (a *Applier) applyRestore(ctx context.Context, tx *sql.Tx, c applyContext, 
 	if err != nil {
 		return 0, err
 	}
-	a.move(id, MoveRestore, head.epoch, head.head, c.position)
+	a.move(c, id, MoveRestore, head.epoch, head.head)
 	return 1 + n, nil
 }
 
@@ -833,7 +833,7 @@ func (a *Applier) applyPurgeBegin(ctx context.Context, tx *sql.Tx, c applyContex
 	if err != nil {
 		return 0, err
 	}
-	a.move(id, MoveTrash, epoch, head.head, c.position)
+	a.move(c, id, MoveTrash, epoch, head.head)
 	return 1 + n, nil
 }
 
@@ -900,7 +900,7 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, c applyContext, id
 		return 0, err
 	}
 	rows += n
-	a.move(id, MovePurge, head.epoch+1, head.head, c.position)
+	a.move(c, id, MovePurge, head.epoch+1, head.head)
 	return rows, nil
 }
 

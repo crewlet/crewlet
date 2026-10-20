@@ -83,8 +83,12 @@ type Moved struct {
 	// committed record to say which (a retained record, an adoption).
 	Reset bool `json:"reset,omitempty"`
 
-	// Through is the position of the batch's last record on the store.
+	// Through is the position of the batch's last record on the store, and
+	// At the broker's own instant for it: when the change was stored, which
+	// every node reads alike and what the socket's push of it is timed from
+	// (internal/objectives' change visibility).
 	Through statelog.Position `json:"through,omitzero"`
+	At      time.Time         `json:"at,omitzero"`
 }
 
 // ResetMove is the movement that names everything.

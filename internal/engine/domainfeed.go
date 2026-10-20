@@ -157,16 +157,9 @@ func (r *domainRecords) Next(ctx context.Context) (*changefeed.Message, error) {
 					"a build that can read it")
 		default:
 			return &changefeed.Message{
-				Record: changefeed.Record{
-					ID:       env.OpID,
-					Position: delivery.Seq,
-					Stream:   r.stream,
-					Gen:      uint64(env.Gen),
-					Key:      delivery.Subject,
-					Payload:  body,
-				},
-				Ack: delivery.Ack,
-				Nak: delivery.Nak,
+				Record: feedRecord(r.stream, env, body, delivery),
+				Ack:    delivery.Ack,
+				Nak:    delivery.Nak,
 			}, nil
 		}
 		if err := delivery.Ack(); err != nil {
@@ -177,6 +170,23 @@ func (r *domainRecords) Next(ctx context.Context) (*changefeed.Message, error) {
 
 // Stop ends this process's consumption; the durable position survives.
 func (r *domainRecords) Stop() error { return r.group.Stop() }
+
+// feedRecord is one verified delivery of a log as the change feed reads it:
+// the envelope's operation id and generation, the delivery's place on stream,
+// its subject, the broker's instant for it — what the wake it becomes is timed
+// from — and the opened body.
+func feedRecord(stream string, env statelog.Envelope, body []byte,
+	delivery *jetstream.DomainDelivery) changefeed.Record {
+	return changefeed.Record{
+		ID:       env.OpID,
+		Position: delivery.Seq,
+		Stream:   stream,
+		Gen:      uint64(env.Gen),
+		Key:      delivery.Subject,
+		StoredAt: delivery.StoredAt,
+		Payload:  body,
+	}
+}
 
 // feedFor is the wake feed one running domain declares: the translator that
 // reads its records and the opener over its own log, or a nil translator for a
