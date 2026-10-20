@@ -200,36 +200,45 @@ func keysAfter(group string, lineBytes int) string {
 
 // A LIVE VIEW OF MANY PASSWORD KEYS COSTS ONE READ OF THEM: [Settled] over
 // lines of password keys, each line's last decided by the line after it,
-// costs what [Secrets] does. Read again in each prefix a hold cut the text at,
+// costs what its bytes cost. Read again in each prefix a hold cut the text at,
 // that key was pending there, so the hold moved up a line, made the key above
-// pending in its turn, and Settled read the text once a line: over 32 KiB in
-// lines of 256 bytes, 47 to 75 times what Secrets costs, with the race detector
-// and without. So the whole text is read once ([valueHolds]). Timed as the
-// tests above are, fastest of three interleaved reads; Settled costs 0.8 to 2.4
-// times what Secrets does over such lines, with the race detector and
-// without — lines that each end in a key and its separator it reads twice, for
-// its holds and back from the text's end across them as prompts ([backHold])
-// — and three times is allowed.
+// pending in its turn, and Settled read the text once a line: its lines times
+// its length, 47 to 75 times what [Secrets] costs over 32 KiB in lines of 256
+// bytes. So the whole text is read once ([valueHolds]).
 //
-// Mutation: read the values of the prefix a hold has cut the text at, and
-// hold from the first one that prefix leaves pending, and this fails.
+// A COMPARISON ACROSS SIZES, NOT ACROSS FUNCTIONS: Settled over 32 KiB against
+// eight times Settled over 4 KiB of the same lines, each timed as the fastest
+// of three interleaved reads, as the tests above are. This used to compare
+// Settled with Secrets over the same text, but that ratio is a constant factor
+// between two different functions, 0.8 to 2.4 on a quiet machine, and the race
+// detector's overhead on a loaded runner moved it past the three times allowed
+// (3.4 to 3.6 in CI) with nothing quadratic in sight. Against itself, the
+// constant cancels: read once, eight times the bytes cost eight times as much
+// (measured 0.9 to 1.4 times the eight, with the race detector and without,
+// and beside the package's other tests); read once a line, they cost eight
+// times that again. Three times is allowed.
+//
+// Mutation: read the holds again in every prefix a line of the text ends, and
+// every group takes 50 to 80 times as long over eight times the bytes, and
+// this fails, with the race detector and without.
 func TestALiveViewOfManyPasswordKeysCostsOneRead(t *testing.T) {
 	t.Parallel()
-	timed := func(f func(string) int, text string) time.Duration {
+	timed := func(text string) time.Duration {
 		start := time.Now()
-		_ = f(text)
+		_ = Settled(text)
 		return time.Since(start)
 	}
-	secrets := func(text string) int { return len(Secrets(text)) }
+	const scale = 8
 	for name, group := range passwordKeyGroups {
-		text := linesOf(group, 32<<10, 256)
-		redacted, settled := time.Duration(1<<62), time.Duration(1<<62)
+		small, large := linesOf(group, 4<<10, 256), linesOf(group, scale*4<<10, 256)
+		smallCost, largeCost := time.Duration(1<<62), time.Duration(1<<62)
 		for range 3 {
-			redacted, settled = min(redacted, timed(secrets, text)), min(settled, timed(Settled, text))
+			smallCost, largeCost = min(smallCost, timed(small)), min(largeCost, timed(large))
 		}
-		if settled > 3*redacted {
-			t.Errorf("%s: Settled took %v against Secrets' %v — it reads the text again for "+
-				"every line it holds", name, settled, redacted)
+		if largeCost > 3*scale*smallCost {
+			t.Errorf("%s: Settled took %v over 32 KiB against %v over 4 KiB, more than %d "+
+				"times as much for %d times the bytes, so it reads the text again for every "+
+				"line it holds", name, largeCost, smallCost, 3*scale, scale)
 		}
 	}
 }
