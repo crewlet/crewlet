@@ -32,7 +32,14 @@
 // declares ([IndexesOn]), and every statement the module's source spells
 // against a table ([StatementLiterals]), which is what holds a gate's
 // registered set COMPLETE. Two gates with a copy each of a plan's spelling are
-// two gates a driver bump can blind one at a time.
+// two gates a driver bump can blind one at a time — and a gate's private
+// reading had already planned a copy of the statement it held — so a walk of
+// every Go file of the module, tests included, refuses an EXPLAIN QUERY PLAN
+// spelled in a literal anywhere but plan.go
+// (TestEveryPlanIsReadThroughStoretest). Package store's own files are the one
+// exemption: its internal tests cannot import this package, which imports
+// theirs, and none of its statements is a correlated aggregate the shared
+// reading would catch.
 package storetest
 
 import (
