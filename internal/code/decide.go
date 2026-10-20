@@ -3,8 +3,10 @@ package code
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -32,10 +34,13 @@ import (
 //  3. the ref already at the new value is a noop;
 //  4. the ref not at the old value is stale;
 //  5. a protection ([ProtectionRefusal]), every matching rule consulted;
-//  6. a create past MaxRefsPerRepo live refs (repo_refs) — judged after
-//     every other command of its push, so the push's own deletions free
-//     their room whatever order git sent them in;
-//  7. otherwise ok.
+//  6. a create beside a live ref above it or with a live ref below it
+//     (ref_conflict, [working.beside]);
+//  7. a create past MaxRefsPerRepo live refs (repo_refs) — this and 6
+//     judged after every other command of its push, so the push's own
+//     deletions free their room and their names whatever order git sent
+//     them in;
+//  8. otherwise ok.
 //
 // Then over the push's ok commands, a pack named longer ago than a write may
 // still name it is refused upload_expired, and one that takes the repository
@@ -63,7 +68,32 @@ import (
 // more, each over its primary key (planner.go) — never a point read a
 // command, which a full batch makes nearly four thousand of. (It holds no write
 // lane; the APPLY does, and reads the same way for that reason,
-// apply_push.go.)
+// apply_push.go.) A batch that may CREATE a ref reads two statements more —
+// the directories its creates would make, and the refs under each create —
+// and one that creates none reads neither.
+//
+// # A ref is never beside a directory of its name
+//
+// Every client keeps a ref as a file — refs/remotes/origin/feature — so
+// refs/heads/feature and refs/heads/feature/x can never both be live: a clone
+// holding one cannot fetch the other ("cannot lock ref"). git's receive-pack
+// refuses the pair in its ref transaction, and here it runs none — every
+// command goes to the hook — so the decide refuses it instead, and it is the
+// only place that can: the pair is a fact about two refs, which one snapshot
+// holds and no receiver sees whole. A create is refused ref_conflict when a
+// ref it would make a directory of is live (refs/heads/feature, under
+// refs/heads/feature/x) or a live ref sits under its name. Both are judged
+// against the working state, so the batch decides as its records would one by
+// one: the push's own deletions free a name — git's own transaction takes a
+// deletion of feature beside a create of feature/v2 — an earlier push's create
+// takes one, and a deleted ref (a tombstone) is in nobody's way, since no
+// client holds it.
+//
+// The cost follows what the batch's creates spell, never what the
+// repository holds: one primary-key seek for every directory a create would
+// make (a ref of n components below its namespace makes n−1, the deepest a
+// ref may spell about 120) and one ranged seek under each create, past the
+// refs the batch itself names, which the working state answers instead.
 //
 // # The protections are asked once a batch, before its publish
 //
@@ -448,9 +478,21 @@ type working struct {
 	name string
 	now  time.Time
 
-	// targets is every ref the batch names that has a ROW: its value, or
-	// "" for a tombstone. A ref absent here has no row at all.
+	// targets is every ref the batch names, every directory its creates would
+	// make and each create's upper bound ([readAround]), that has a ROW: its
+	// value, or "" for a tombstone. A ref absent here has no row at all.
 	targets map[string]string
+	// watched is every ref the working state can hold live, sorted — one a
+	// command names, which the batch may make, keep or delete, and one with a
+	// live row in the snapshot — so the ones under a create are found by a
+	// search; the snapshot is asked only about the live refs between them.
+	watched []string
+	// dirs is, for each ref the batch may create, the directories it would
+	// make that the working state can hold live — those with a row, and
+	// those a command names — and occupied, a live ref under it that nothing
+	// in the batch names: in its way whatever the batch does.
+	dirs     map[string][]string
+	occupied map[string]string
 	// live is the repository's live refs.
 	live int
 	// bytes is the packs the repository holds.
@@ -458,17 +500,25 @@ type working struct {
 }
 
 // newWorking reads the refs every open proposal's commands name, in ONE
-// statement, and sets the counts the bounds are judged on.
+// statement, and sets the counts the bounds are judged on — and, for a batch
+// that may create a ref, what is around each create ([working.readAround]).
 func newWorking(ctx context.Context, tx *sql.Tx, repoID string, repo pushRepo, batch []Proposal,
 	open []int, now time.Time) (*working, error) {
 
 	var names []string
 	seen := map[string]bool{}
+	deleted := map[string]bool{}
 	for _, i := range open {
 		for _, c := range batch[i].Commands {
-			if c.Result != ResultNG && !seen[c.Ref] {
+			if c.Result == ResultNG {
+				continue
+			}
+			if !seen[c.Ref] {
 				seen[c.Ref] = true
 				names = append(names, c.Ref)
+			}
+			if c.New == ZeroOID {
+				deleted[c.Ref] = true
 			}
 		}
 	}
@@ -476,8 +526,199 @@ func newWorking(ctx context.Context, tx *sql.Tx, repoID string, repo pushRepo, b
 	if err != nil {
 		return nil, fmt.Errorf("code: read the refs a batch names: %w", err)
 	}
-	return &working{name: repo.name, now: now, targets: targets, live: repo.refs,
-		bytes: repo.liveBytes}, nil
+	w := &working{name: repo.name, now: now, targets: targets, live: repo.refs, bytes: repo.liveBytes,
+		occupied: map[string]string{}}
+	if err := w.readAround(ctx, tx, repoID, batch, open, seen, deleted); err != nil {
+		return nil, err
+	}
+	return w, nil
+}
+
+// readAround reads what is around every ref the batch may create, so
+// [working.beside] can judge each create against it: the rows of the
+// directories a create would make and of its bound, into targets, what the
+// working state can hold live, into watched, and for each create the first
+// live ref under it that the snapshot holds and the working state does not
+// answer, into occupied. seen is every ref the batch names, which it extends
+// by the directories and the bounds; deleted, every ref a command of it
+// deletes.
+//
+// A ref the batch MAY create is one a command gives a value, that no rule
+// without state refuses, over no live value in the snapshot — or over one a
+// command of the batch deletes, after which a later command creates it again.
+// Every other command is an update, a deletion or a refusal, and moves no
+// name, so a batch of updates reads nothing here.
+func (w *working) readAround(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposal, open []int,
+	seen, deleted map[string]bool) error {
+
+	var creatable []string
+	asked := map[string]bool{}
+	for _, i := range open {
+		for _, c := range batch[i].Commands {
+			if c.Result == ResultNG || c.New == ZeroOID || asked[c.Ref] || StatelessRefusal(c) != "" ||
+				(w.current(c.Ref) != ZeroOID && !deleted[c.Ref]) {
+				continue
+			}
+			asked[c.Ref] = true
+			creatable = append(creatable, c.Ref)
+		}
+	}
+	if len(creatable) == 0 {
+		return nil
+	}
+	named := maps.Clone(seen) // the refs the batch's commands name
+	// THE ROWS AROUND EVERY CREATE: each directory it would make, and — for a
+	// create under another create — its upper bound ref + "0", a name the
+	// gaps below never include and one that lies under every create above it
+	// (refs/heads/x/y0 is under refs/heads/x), so the working state answers
+	// it like a directory. A create under none has its bound under none, so
+	// nothing is asked for it there: a batch of creates beside each other
+	// reads its directories and nothing more.
+	var asks []string
+	ask := func(name string) {
+		if !seen[name] {
+			seen[name] = true
+			asks = append(asks, name)
+		}
+	}
+	of := make([][]string, len(creatable))
+	for i, ref := range creatable {
+		of[i] = directoriesOf(ref)
+		nested := false
+		for _, d := range of[i] {
+			ask(d)
+			nested = nested || asked[d]
+		}
+		if nested {
+			ask(ref + "0")
+		}
+	}
+	if err := inChunks(asks, func(part []string) error {
+		rows, err := refsNamed(ctx, tx, repoID, part)
+		maps.Copy(w.targets, rows)
+		return err
+	}); err != nil {
+		return fmt.Errorf("code: read the directories a batch's creates would make: %w", err)
+	}
+	// WHAT THE WORKING STATE CAN HOLD LIVE: a ref a command names, which the
+	// batch may make, and a name with a live row. A name with neither — a
+	// directory or a bound with no row, or a tombstone — stays no live ref
+	// whatever the batch does, which is nearly every directory a create would
+	// make; so [working.beside] never walks them.
+	for n := range seen {
+		if named[n] || w.targets[n] != "" {
+			w.watched = append(w.watched, n)
+		}
+	}
+	slices.Sort(w.watched)
+	// A DIRECTORY THE WORKING STATE CAN HOLD LIVE, kept for each create: one
+	// with a row, or one a command names. Any other has no row and nothing in
+	// the batch makes it, so it is in nobody's way — which is nearly every
+	// directory, and so nearly every create keeps none.
+	w.dirs = make(map[string][]string, len(creatable))
+	for i, ref := range creatable {
+		for _, d := range of[i] {
+			if _, row := w.targets[d]; row || named[d] {
+				w.dirs[ref] = append(w.dirs[ref], d)
+			}
+		}
+	}
+
+	// THE GAPS: every create's range (ref + "/", ref + "0") cut at the
+	// bounds of every create and at every name with a live row, each gap
+	// asked ONCE for the first live ref in it — a live name being the working
+	// state's to answer, since the batch may delete it, and anything else
+	// live there in the way whatever the batch does. A create's first such
+	// ref is the first answer among the gaps inside its range. Ranges of
+	// refs nest or are apart, so a gap lies inside a range or outside it;
+	// and one gap serves every create whose range holds it, so the gaps are
+	// at most the creates' bounds and the live names — where asking each
+	// create for the gaps between the names under it asked a nested chain of
+	// creates over everything named below it once a create: 3.4–4.5 s a round
+	// and some 600 MB of statements for a record of 118 nested creates over
+	// 2 492 more under the deepest (BenchmarkDecideABatch, fanned).
+	//
+	// ONE SORTED SWEEP over the cuts makes the gaps and, for each create, the
+	// run of them inside its range: its range opens at its lower bound and
+	// closes at its upper, so the gaps made between the two are its own and
+	// those of every create inside it. A lower bound, ending in '/', is no
+	// ref and no other bound; an upper bound, ending in '0', may be a live
+	// name too, and is one cut.
+	type cut struct {
+		at     string
+		create int // the create whose bound it is; -1 for a live name
+		opens  bool
+	}
+	cuts := make([]cut, 0, 2*len(creatable))
+	for i, ref := range creatable {
+		cuts = append(cuts, cut{ref + "/", i, true}, cut{ref + "0", i, false})
+	}
+	for n, target := range w.targets {
+		if target != "" {
+			cuts = append(cuts, cut{n, -1, false})
+		}
+	}
+	slices.SortFunc(cuts, func(a, b cut) int { return strings.Compare(a.at, b.at) })
+	var gaps [][2]string
+	from, to := make([]int, len(creatable)), make([]int, len(creatable))
+	inside := 0 // the ranges holding the gap after the cut at hand
+	for i := 0; i < len(cuts); {
+		at := cuts[i].at
+		for ; i < len(cuts) && cuts[i].at == at; i++ {
+			switch c := cuts[i]; {
+			case c.create < 0:
+			case c.opens:
+				inside++
+				from[c.create] = len(gaps)
+			default:
+				inside--
+				to[c.create] = len(gaps)
+			}
+		}
+		if inside > 0 && i < len(cuts) {
+			gaps = append(gaps, [2]string{at, cuts[i].at})
+		}
+	}
+	found, err := liveIn(ctx, tx, repoID, gaps)
+	if err != nil {
+		return fmt.Errorf("code: read the refs under a batch's creates: %w", err)
+	}
+	// next[g] is the first gap from g on that holds a live ref.
+	next := make([]int, len(gaps)+1)
+	next[len(gaps)] = len(gaps)
+	for g := len(gaps) - 1; g >= 0; g-- {
+		if next[g] = next[g+1]; found[g] != "" {
+			next[g] = g
+		}
+	}
+	for i, ref := range creatable {
+		if g := next[from[i]]; g < to[i] {
+			w.occupied[ref] = found[g]
+		}
+	}
+	return nil
+}
+
+// namesPerStatement is the most names one statement of the decide's lists
+// carries: every ref is at most MaxRefNameBytes, so a list is at most about a
+// mebibyte however deep the refs a batch creates — the directories of a
+// record's worth of the deepest refs are some three hundred thousand, and in
+// one statement they cost several hundred megabytes of encoding (measured,
+// BenchmarkDecideABatch's deepest arm) where in parts they cost the same time
+// and a part's memory.
+const namesPerStatement = 4096
+
+// inChunks calls f with list in consecutive parts of at most
+// [namesPerStatement], stopping at the first error.
+func inChunks[T any](list []T, f func(part []T) error) error {
+	for len(list) > 0 {
+		n := min(len(list), namesPerStatement)
+		if err := f(list[:n]); err != nil {
+			return err
+		}
+		list = list[n:]
+	}
+	return nil
 }
 
 // current is ref's value, ZeroOID where it has none — no row, or a tombstone.
@@ -486,6 +727,164 @@ func (w *working) current(ref string) string {
 		return target
 	}
 	return ZeroOID
+}
+
+// watchedUnder is every watched ref that lies under ref — with ref + "/" as a
+// prefix, which in byte order is every name between ref + "/" and ref + "0"
+// ('0' is the byte after '/').
+func (w *working) watchedUnder(ref string) []string {
+	from, _ := slices.BinarySearch(w.watched, ref+"/")
+	to, _ := slices.BinarySearch(w.watched, ref+"0")
+	return w.watched[from:to]
+}
+
+// beside is the live ref in the way of creating ref, as the working state and
+// the push being decided leave things — made its creates judged ok so far,
+// gone its deletions judged ok — and whether there is one: a directory ref
+// would make that is a live ref, a live ref under ref the batch names
+// nowhere, or a watched one under it that is live by now.
+func (w *working) beside(ref string, made, gone map[string]bool) (string, bool) {
+	live := func(r string) bool {
+		switch {
+		case made[r]:
+			return true
+		case gone[r]:
+			return false
+		}
+		return w.current(r) != ZeroOID
+	}
+	for _, d := range w.dirs[ref] {
+		if live(d) {
+			return d, true
+		}
+	}
+	if other, ok := w.occupied[ref]; ok {
+		return other, true
+	}
+	for _, n := range w.watchedUnder(ref) {
+		if live(n) {
+			return n, true
+		}
+	}
+	return "", false
+}
+
+// directoriesOf is every directory ref would make on a client's disk that
+// another ref could be: each of its prefixes that ends at a '/' past its
+// namespace, shallowest first (refs/heads/a/b/c → refs/heads/a,
+// refs/heads/a/b). refs/heads itself is no ref any rule admits, so it is
+// never one.
+func directoriesOf(ref string) []string {
+	rest, ok := strings.CutPrefix(ref, "refs/")
+	if !ok {
+		return nil
+	}
+	ns := strings.IndexByte(rest, '/')
+	if ns < 0 {
+		return nil
+	}
+	start := len("refs/") + ns + 1
+	var out []string
+	for i := start; i < len(ref); i++ {
+		if ref[i] == '/' {
+			out = append(out, ref[:i])
+		}
+	}
+	return out
+}
+
+// liveIn is, for each gap (lo, hi) — both exclusive — the first live ref of
+// repoID between them in byte order, or "" for none.
+//
+// TWO STATEMENTS, the second only for a gap that holds one: whether a gap holds
+// a live ref ([gapsHoldingSQL], one ranged seek of the live refs' index a gap,
+// stopping at its first row), then which ref it is ([firstLiveInSQL]). Asked
+// as one statement — the first live ref of every gap — it cost about twice as
+// much (9.5 µs a gap against 5.4, three thousand gaps measured over the
+// primary key), and the gap that holds a live ref is the create that is
+// refused, which nearly none is.
+func liveIn(ctx context.Context, tx *sql.Tx, repoID string, gaps [][2]string) ([]string, error) {
+	out := make([]string, len(gaps))
+	var held []int
+	if err := inChunks(gapIndices(len(gaps)), func(part []int) error {
+		found, err := gapsAnswer(ctx, tx, gapsHoldingSQL, repoID, gaps, part, func(rows *sql.Rows) (int, string, error) {
+			var i int
+			err := rows.Scan(&i)
+			return i, "", err
+		})
+		for i := range found {
+			held = append(held, part[i])
+		}
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	if err := inChunks(held, func(part []int) error {
+		found, err := gapsAnswer(ctx, tx, firstLiveInSQL, repoID, gaps, part, func(rows *sql.Rows) (int, string, error) {
+			var i int
+			var ref sql.NullString
+			err := rows.Scan(&i, &ref)
+			return i, ref.String, err
+		})
+		for i, ref := range found {
+			out[part[i]] = ref
+		}
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// gapIndices is 0 … n-1.
+func gapIndices(n int) []int {
+	out := make([]int, n)
+	for i := range out {
+		out[i] = i
+	}
+	return out
+}
+
+// gapsAnswer runs statement over the gaps part names — its list the gaps in
+// part's order — and reads each row it answers with scan: the gap's place in
+// the list and what the statement says of it. The answer is keyed by that
+// place.
+func gapsAnswer(ctx context.Context, tx *sql.Tx, statement, repoID string, gaps [][2]string, part []int,
+	scan func(*sql.Rows) (int, string, error)) (map[int]string, error) {
+
+	asked := make([][2]string, len(part))
+	for i, g := range part {
+		asked[i] = gaps[g]
+	}
+	list, err := json.Marshal(asked)
+	if err != nil {
+		return nil, fmt.Errorf("code: encode the gaps under a batch's creates: %w", err)
+	}
+	rows, err := tx.QueryContext(ctx, statement, repoID, string(list))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[int]string{}
+	for rows.Next() {
+		i, ref, err := scan(rows)
+		if err != nil {
+			return nil, err
+		}
+		if i < 0 || i >= len(part) {
+			return nil, fmt.Errorf("code: the gaps under a batch's creates answered gap %d of %d", i, len(part))
+		}
+		out[i] = ref
+	}
+	return out, rows.Err()
+}
+
+// conflictDetail is the sentence of a create refused ref_conflict: the ref in
+// its way, and what to do. It names that one ref and not the create's own,
+// which git prints beside the reason.
+func conflictDetail(other string) string {
+	return fmt.Sprintf("%s is in the way: a ref is never also a directory of refs, so a clone holding one "+
+		"could not fetch the other; delete it first, or choose another name", other)
 }
 
 // decide is one push's commands with their results, judged against the
@@ -504,6 +903,7 @@ func (w *working) decide(push int, p Proposal, v *verdicts, limits Limits) []Com
 	// while a create it made room for stands.
 	var creating []int
 	var deletes int
+	gone := map[string]bool{}
 	for i := range cmds {
 		c := &cmds[i]
 		if c.Result == ResultNG {
@@ -532,21 +932,31 @@ func (w *working) decide(push int, p Proposal, v *verdicts, limits Limits) []Com
 		}
 		if c.New == ZeroOID {
 			deletes++
+			gone[c.Ref] = true
 		}
 		c.Result = ResultOK
 	}
 	// A PUSH'S OWN CREATES COUNT AGAINST ITS LATER ONES, in the order git
 	// sent them: a thousand creates at the bound's last free ref are one ok
-	// and the rest refused.
+	// and the rest refused — and a create takes its name from every later
+	// one beside it, so of feature and feature/x the first git sent lands.
+	// A create in the way of nothing takes a live ref's place first, so one
+	// refused ref_conflict never counts against the bound.
 	var creates int
+	made := map[string]bool{}
 	for _, i := range creating {
 		c := &cmds[i]
+		if other, ok := w.beside(c.Ref, made, gone); ok {
+			refuse(c, RefusalRefConflict, conflictDetail(other))
+			continue
+		}
 		if held := w.live - deletes + creates; held >= MaxRefsPerRepo {
 			refuse(c, RefusalRepoRefs, fmt.Sprintf("%s holds %d live refs, the most one "+
 				"repository may", w.name, held))
 			continue
 		}
 		creates++
+		made[c.Ref] = true
 		c.Result = ResultOK
 	}
 	if p.Pack != nil && slices.ContainsFunc(cmds, isOK) {
@@ -674,4 +1084,23 @@ const (
 	decideDeletionSQL = `SELECT name FROM code_deletions WHERE repo_id = ?`
 	pushesNamedSQL    = `SELECT ` + pushColumns + ` FROM code_pushes
 		WHERE push_id IN (SELECT CAST(value AS TEXT) FROM json_each(?))`
+	// gapsHoldingSQL is the place of each [lo, hi] gap of its list that
+	// holds a live ref, and firstLiveInSQL the first such ref of each gap:
+	// both driven from the list, each gap one ranged seek of the LIVE refs'
+	// index ([liveRefsKey]) that stops at its first row — a subquery, so a gap
+	// answers one row however many refs lie in it, where a join would answer
+	// every one. The live refs' index, never the key: a gap's range holds the
+	// tombstones under a create too, and over the key the seek stepped over
+	// each of them before its first live row, so a deep chain of creates over
+	// a repository's tombstones read every one once a create (planner.go).
+	// `r.target != ''` is the index's own predicate, repeated so the planner
+	// may use it.
+	gapsHoldingSQL = `SELECT CAST(j.key AS INTEGER) FROM json_each(?2) AS j
+		WHERE EXISTS (SELECT 1 FROM code_refs AS r INDEXED BY ` + liveRefsKey + `
+			WHERE r.repo_id = ?1 AND r.ref > CAST(j.value ->> 0 AS TEXT) AND r.ref < CAST(j.value ->> 1 AS TEXT)
+				AND r.target != '')`
+	firstLiveInSQL = `SELECT CAST(j.key AS INTEGER), (SELECT r.ref FROM code_refs AS r INDEXED BY ` + liveRefsKey + `
+		WHERE r.repo_id = ?1 AND r.ref > CAST(j.value ->> 0 AS TEXT) AND r.ref < CAST(j.value ->> 1 AS TEXT)
+			AND r.target != '' ORDER BY r.ref LIMIT 1)
+		FROM json_each(?2) AS j`
 )

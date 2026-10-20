@@ -333,6 +333,21 @@
 // record no committer of this build forms, whose cost the applier bounds all
 // the same.
 //
+// THE LIVE REFS' INDEX (code_refs_live_idx, replicated 0045, which the push
+// decide's [RefusalRefConflict] probe reads — the decide below) is an entry
+// more for every live ref a record writes, and one moved for every ref it
+// deletes or creates again. Measured interleaved with the build before it,
+// ten counts of five each on four vCPUs of a 2.8 GHz Xeon at a load average
+// of 1.3–2.1: the most ref creations a record carries went from 93–127 ms
+// (median 105) to 100–151 ms (median 125), about 5 µs a created ref; the
+// most deletions from 97–116 ms to 101–154 ms (median +6 ms); the removals
+// from 67–115 ms to 69–93 ms (median +9 ms); and the group, the one push and
+// the sweep of tombstones, which the index holds none of, moved nothing past
+// the noise (four counts). The slowest record measured with the index there,
+// 154 ms, is three fifths of statelog.ApplyTxTimeBudget — and the slowest
+// without it, 150 ms, as much: on that machine the history arms' spread is
+// the machine's, not the index's.
+//
 // A PURGE RECORD (BenchmarkApplyAPurgePart): 56–60 ms for a part of
 // [PurgePartRows] push rows of a kilobyte; 81–88 ms for a part over the
 // widest push rows, which [PurgePartBytes] stops at seventy-three (34 MB) —
@@ -393,6 +408,40 @@
 // [CommitBudget], where forming the verdicts every round cost 28–30 s. A
 // round whose rules differ from those the verdicts were formed under forms
 // them again inside its snapshot: 1.85–2.13 s at that worst.
+//
+// A batch that creates refs pays the round two reads more, for
+// [RefusalRefConflict] — a primary-key seek for every directory its creates
+// would make (and the upper bound of a create under another), and a seek of
+// the LIVE refs' index ([liveRefsKey], replicated 0045) for every gap: the
+// creates' ranges cut at their bounds and at every name with a live row, each
+// gap asked once whichever creates hold it. Measured both ways on four vCPUs
+// of a 2.8 GHz Xeon under other builds' load (a load average of 15–18, which
+// roughly doubles every round above), the three pushes' round went from
+// 19–21 ms to 43–44 ms, the group's from 2.4–2.5 ms to 3.7–4.7 ms, and the
+// costliest rules' from 28–54 ms to 78–81 ms; reading the gaps over the live
+// refs' index, once each, moved none of the three past the noise (43–59 ms
+// against 47–63, 4.4–6.1 against 3.5–8.1, 77–91 against 88–117, interleaved
+// with the build before it under a load average of 3–7). So the reads follow
+// what the batch SPELLS, never what the repository holds — at most a seek a
+// directory, one a create's bound and two a create's gaps, plus one a live
+// name:
+//
+//   - what lies under a create costs its probe one seek: one push of the 118
+//     nested creates of the deepest chain (refs/heads/a, refs/heads/a/a, …)
+//     over [MaxTombstonesPerRepo] tombstones under the deepest is 7–15 ms a
+//     round (BenchmarkDecideABatch's buried arm), where a probe over the key
+//     stepped over every tombstone once for every create above it: 7.7–9.9 s;
+//   - nesting adds a cut, never a gap a create: the 118 nested creates over
+//     2 492 more under the deepest is 155–181 ms (fanned), where asking each
+//     create for the gaps between the names under it was 3.4–4.5 s and some
+//     600 MB of statements;
+//   - the deepest batch a record carries — 2 573 creates of refs of 118
+//     directories each, the most a ref of [MaxRefNameBytes] spells, some
+//     303 000 seeks of the key — takes the first term to its most and is the
+//     worst a record carries: 1.2–1.4 s a round (deepest; 1.2–1.5 s under the
+//     heavier load above), the order of the costliest rules' formation —
+//     twenty such rounds, each forced by a peer's record on the repository,
+//     would spend the whole of [CommitBudget].
 //
 // A READ: one full page of a snapshot's refs ([MaxSnapshotItems]) from a
 // repository of [MaxRefsPerRepo] refs is 57–59 ms to serve, 5.7–5.9 µs a

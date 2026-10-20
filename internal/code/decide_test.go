@@ -396,6 +396,151 @@ func TestAPushsOwnDeletionsMakeRoomForItsCreates(t *testing.T) {
 	}
 }
 
+// A REF IS NEVER BESIDE A DIRECTORY OF ITS NAME. Every ref is a file on every
+// client's disk (refs/remotes/origin/<branch>), so refs/heads/feature and
+// refs/heads/feature/x cannot both be live: a clone that holds one cannot
+// fetch the other ("cannot lock ref"), and the receive-pack that would have
+// refused the pair runs no ref transaction here. So a create beside a live
+// ref above it or below it is refused ref_conflict, naming the ref in the
+// way — judged against what the batch has done by then, in order, as two
+// records would be: the push's own deletions free the name as git's own
+// transaction lets them, an earlier push's create takes it, and a deleted
+// ref (a tombstone) is in nobody's way.
+//
+// Mutations: the ancestor walk skipped → the "below a branch" rows ok; the
+// descendant probe skipped → the "above a branch" rows ok; the probe reading
+// tombstones as live → the tombstone rows refused; the push's own deletions
+// ignored → the rename rows refused; the batch's earlier pushes ignored → the
+// batch rows decided as the snapshot alone says; a nested create's bound not
+// read → "a ref named like a nested create's bound" ok; the ranges holding a
+// gap not counted (a range's close ending every range) → "a ref past a nested
+// create's range" ok; a live name not cutting the gaps → the rows that delete
+// what is under a create ("a directory renamed to a branch", "an earlier
+// push's directory deleted") refused, and "half a directory deleted" naming
+// the deleted topic/a, the snapshot answering for refs the batch deletes.
+func TestARefIsNeverBesideADirectoryOfItsName(t *testing.T) {
+	t.Parallel()
+	// The repository decideEstate holds, and more: topic/a and topic/b,
+	// deep/x/y/z, ring/y0, nest/b, the tag rc, and the tombstones gone/a and
+	// old.
+	seed := func(t *testing.T) *estate {
+		e := decideEstate(t)
+		e.apply(pushOf(t, decideRepo, pushEntry(uuid.Must(uuid.NewV7()).String(),
+			move("refs/heads/topic/a", ZeroOID, oid("TA")), move("refs/heads/topic/b", ZeroOID, oid("TB")),
+			move("refs/heads/deep/x/y/z", ZeroOID, oid("D")), move("refs/tags/rc", ZeroOID, oid("R")),
+			move("refs/heads/ring/y0", ZeroOID, oid("Y")), move("refs/heads/nest/b", ZeroOID, oid("B")),
+			move("refs/heads/gone/a", ZeroOID, oid("G")), move("refs/heads/old", ZeroOID, oid("O")))))
+		e.apply(pushOf(t, decideRepo, pushEntry(uuid.Must(uuid.NewV7()).String(),
+			move("refs/heads/gone/a", oid("G"), ZeroOID), move("refs/heads/old", oid("O"), ZeroOID))))
+		return e
+	}
+	type want struct {
+		reason Refusal
+		names  string // the ref the detail names in the way
+	}
+	ok := want{}
+	conflict := func(ref string) want { return want{RefusalRefConflict, ref} }
+	for name, tc := range map[string]struct {
+		batch [][]Command
+		want  [][]want
+	}{
+		"below a branch": {batch: [][]Command{{cmd("refs/heads/feature/x", ZeroOID, oid("N"))}},
+			want: [][]want{{conflict("refs/heads/feature")}}},
+		"far below a branch": {batch: [][]Command{{cmd("refs/heads/main/a/b/c", ZeroOID, oid("N"))}},
+			want: [][]want{{conflict("refs/heads/main")}}},
+		"above a branch": {batch: [][]Command{{cmd("refs/heads/topic", ZeroOID, oid("N"))}},
+			want: [][]want{{conflict("refs/heads/topic/a")}}},
+		"far above a branch": {batch: [][]Command{{cmd("refs/heads/deep", ZeroOID, oid("N")),
+			cmd("refs/heads/deep/x", ZeroOID, oid("M"))}},
+			want: [][]want{{conflict("refs/heads/deep/x/y/z"), conflict("refs/heads/deep/x/y/z")}}},
+		"below a tag": {batch: [][]Command{{cmd("refs/tags/rc/1", ZeroOID, oid("N"))}},
+			want: [][]want{{conflict("refs/tags/rc")}}},
+		// Nested creates share the snapshot's answers: ring/y0 is the bound
+		// of ring/y's range and under ring's, and nest/b lies in nest's range
+		// past where nest/a's ends.
+		"a ref named like a nested create's bound": {batch: [][]Command{{
+			cmd("refs/heads/ring", ZeroOID, oid("N")), cmd("refs/heads/ring/y", ZeroOID, oid("M"))}},
+			want: [][]want{{conflict("refs/heads/ring/y0"), ok}}},
+		"a ref past a nested create's range": {batch: [][]Command{{
+			cmd("refs/heads/nest", ZeroOID, oid("N")), cmd("refs/heads/nest/a", ZeroOID, oid("M"))}},
+			want: [][]want{{conflict("refs/heads/nest/b"), ok}}},
+		// A branch and a tag are files in different directories.
+		"a branch named like a tag": {batch: [][]Command{{cmd("refs/heads/rc/1", ZeroOID, oid("N")),
+			cmd("refs/heads/v1", ZeroOID, oid("M"))}}, want: [][]want{{ok, ok}}},
+		// Beside a name is not under it: '-' and '.' sort between feature
+		// and feature/, so an order-based shortcut would meet them.
+		"siblings of a name": {batch: [][]Command{{cmd("refs/heads/feature-x", ZeroOID, oid("N")),
+			cmd("refs/heads/feature.x", ZeroOID, oid("M")), cmd("refs/heads/feat", ZeroOID, oid("K")),
+			cmd("refs/heads/topi", ZeroOID, oid("L"))}}, want: [][]want{{ok, ok, ok, ok}}},
+		"over a deleted directory": {batch: [][]Command{{cmd("refs/heads/gone", ZeroOID, oid("N"))}},
+			want: [][]want{{ok}}},
+		"below a deleted branch": {batch: [][]Command{{cmd("refs/heads/old/x", ZeroOID, oid("N"))}},
+			want: [][]want{{ok}}},
+		// One push: its deletions free the name, as git's transaction lets
+		// them, whichever order git sent the commands in.
+		"a branch renamed to a directory": {batch: [][]Command{{cmd("refs/heads/feature/v2", ZeroOID, oid("N")),
+			cmd("refs/heads/feature", oid("F"), ZeroOID)}}, want: [][]want{{ok, ok}}},
+		"a directory renamed to a branch": {batch: [][]Command{{cmd("refs/heads/topic/a", oid("TA"), ZeroOID),
+			cmd("refs/heads/topic/b", oid("TB"), ZeroOID), cmd("refs/heads/topic", ZeroOID, oid("N"))}},
+			want: [][]want{{ok, ok, ok}}},
+		// ...and only those that land: topic/b is still there.
+		"half a directory deleted": {batch: [][]Command{{cmd("refs/heads/topic/a", oid("TA"), ZeroOID),
+			cmd("refs/heads/topic", ZeroOID, oid("N"))}},
+			want: [][]want{{ok, conflict("refs/heads/topic/b")}}},
+		"a stale deletion frees nothing": {batch: [][]Command{{cmd("refs/heads/feature", oid("Z"), ZeroOID),
+			cmd("refs/heads/feature/x", ZeroOID, oid("N"))}},
+			want: [][]want{{{RefusalStale, ""}, conflict("refs/heads/feature")}}},
+		// One push's creates, in the order git sent them.
+		"two creates, the branch first": {batch: [][]Command{{cmd("refs/heads/d", ZeroOID, oid("N")),
+			cmd("refs/heads/d/e", ZeroOID, oid("M"))}}, want: [][]want{{ok, conflict("refs/heads/d")}}},
+		"two creates, the directory first": {batch: [][]Command{{cmd("refs/heads/q/r", ZeroOID, oid("N")),
+			cmd("refs/heads/q", ZeroOID, oid("M"))}}, want: [][]want{{ok, conflict("refs/heads/q/r")}}},
+		// A create refused for another reason takes no name.
+		"a refused create takes no name": {batch: [][]Command{{cmd("refs/heads/locked", ZeroOID, oid("N")),
+			cmd("refs/heads/locked/x", ZeroOID, oid("M"))}},
+			want: [][]want{{{RefusalProtectedDirect, ""}, ok}}},
+		// A batch, push by push, against what the ones before it did.
+		"an earlier push's deletion frees the name": {batch: [][]Command{
+			{cmd("refs/heads/feature", oid("F"), ZeroOID)}, {cmd("refs/heads/feature/x", ZeroOID, oid("N"))}},
+			want: [][]want{{ok}, {ok}}},
+		"an earlier push's create takes the name": {batch: [][]Command{
+			{cmd("refs/heads/n", ZeroOID, oid("N"))}, {cmd("refs/heads/n/m", ZeroOID, oid("M"))},
+			{cmd("refs/heads/p/q", ZeroOID, oid("P"))}, {cmd("refs/heads/p", ZeroOID, oid("Q"))}},
+			want: [][]want{{ok}, {conflict("refs/heads/n")}, {ok}, {conflict("refs/heads/p/q")}}},
+		"an earlier push's directory deleted": {batch: [][]Command{
+			{cmd("refs/heads/topic/a", oid("TA"), ZeroOID), cmd("refs/heads/topic/b", oid("TB"), ZeroOID)},
+			{cmd("refs/heads/topic", ZeroOID, oid("N"))}},
+			want: [][]want{{ok, ok}, {ok}}},
+		// An update or a deletion is never a create, whatever is around it.
+		"updates and deletions": {batch: [][]Command{{cmd("refs/heads/main", oid("A"), oid("B")),
+			cmd("refs/heads/topic/a", oid("TA"), oid("TC"))}}, want: [][]want{{ok, ok}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			e := seed(t)
+			batch := make([]Proposal, len(tc.batch))
+			for i, cmds := range tc.batch {
+				batch[i] = proposalOf(cmds...)
+			}
+			_, answers := decideIn(t, e, DefaultLimits(), batch...)
+			for p, a := range answers {
+				for i, got := range a.commands {
+					w := tc.want[p][i]
+					if got.Reason != w.reason || (w.reason == "") != (got.Result != ResultNG) {
+						t.Errorf("push %d, %s: decided %s %s (%q), want %q", p, got.Ref, got.Result,
+							got.Reason, got.Detail, w.reason)
+						continue
+					}
+					if w.names != "" && !strings.Contains(got.Detail, w.names+" is in the way") {
+						t.Errorf("push %d, %s: the detail %q does not name %s in its way", p, got.Ref,
+							got.Detail, w.names)
+					}
+				}
+			}
+		})
+	}
+}
+
 // seedTombstoneRows writes n tombstones of decideRepo named prefix-<i>, deleted
 // age before the decide, and counts them in the repository's row.
 func (e *estate) seedTombstoneRows(prefix string, n int, age time.Duration) {

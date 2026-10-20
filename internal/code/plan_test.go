@@ -77,6 +77,59 @@ func TestEveryCodeIndexServesARegisteredQuery(t *testing.T) {
 	}
 }
 
+// THE RANGES A ROUND ASKS ABOUT ARE READ OVER THE LIVE REFS ALONE.
+//
+// The push decide asks, under every create, whether a live ref lies in a
+// range of code_refs' key ([gapsHoldingSQL], then [firstLiveInSQL] for a range
+// that holds one) — and a range under a create holds the tombstones under it
+// too. Read over the key, the seek stepped over each tombstone, a lookup of its
+// row apiece, before it reached a live ref or the range's end, and a tombstone
+// was stepped over once for every create above it: one push of the 118 nested
+// creates of the deepest chain over a repository's [MaxTombstonesPerRepo]
+// tombstones held its round 7.7–9.9 s (BenchmarkDecideABatch's buried arm).
+// So each statement reads code_refs through [liveRefsKey] and through nothing
+// else, and that index is PARTIAL on the live refs — the half the plan cannot
+// show, since a rebuild of the index without its predicate would plan the
+// same seek and step over every tombstone again.
+//
+// Mutation: name [refsKey] in either statement, or declare the index without
+// its predicate on the empty target, and this fails.
+func TestTheRefConflictProbesStepOverNoTombstone(t *testing.T) {
+	t.Parallel()
+	db := seededPlanEstate(t)
+	gaps := `[["refs/heads/r/","refs/heads/r0"],["refs/heads/r000001/","refs/heads/r0000010"]]`
+	for name, probe := range map[string]string{"gaps holding": gapsHoldingSQL, "first live in": firstLiveInSQL} {
+		plan := explain(t, db, probe, []any{"repo-1", gaps})
+		reads := 0
+		for _, line := range plan {
+			if !strings.Contains(line, "code_refs") {
+				continue
+			}
+			reads++
+			if !strings.Contains(line, "INDEX "+liveRefsKey+" (repo_id=? AND ref>? AND ref<?)") {
+				t.Errorf("%s reads code_refs other than by a range of the live refs' index:\n%s",
+					name, strings.Join(plan, "\n"))
+			}
+		}
+		if reads == 0 {
+			t.Errorf("%s's plan names no read of code_refs:\n%s", name, strings.Join(plan, "\n"))
+		}
+	}
+
+	var declared string
+	if err := db.Read(context.Background(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(context.Background(),
+			`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?`, liveRefsKey).Scan(&declared)
+	}); err != nil {
+		t.Fatalf("read %s's declaration: %v", liveRefsKey, err)
+	}
+	const want = "CREATE INDEX code_refs_live_idx ON code_refs (repo_id, ref) WHERE target != ''"
+	if got := strings.Join(strings.Fields(declared), " "); got != want {
+		t.Fatalf("%s is declared\n\t%s\nwant\n\t%s\n— the live refs alone, keyed as the probes seek them",
+			liveRefsKey, got, want)
+	}
+}
+
 // statement is one registered statement, arguments that make it plannable,
 // and the seeks its plan must contain — each an index and the columns of it the
 // statement bounds, as the plan prints them.
@@ -169,6 +222,10 @@ func registeredStatements() map[string]statement {
 		"decide repo":         {decideRepoSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"decide deletion":     {decideDeletionSQL, []any{"repo-1"}, []string{deletionKey + " (repo_id=?)"}},
 		"pushes named":        {pushesNamedSQL, []any{ids}, []string{pushKey + " (push_id=?)"}},
+		"gaps holding": {gapsHoldingSQL, []any{"repo-1", `[["refs/heads/r/","refs/heads/r0"],["refs/heads/r000001/","refs/heads/r0000010"]]`},
+			[]string{"SCAN json_each AS j", liveRefsKey + " (repo_id=? AND ref>? AND ref<?)"}},
+		"first live in": {firstLiveInSQL, []any{"repo-1", `[["refs/heads/r/","refs/heads/r0"],["refs/heads/r000001/","refs/heads/r0000010"]]`},
+			[]string{"SCAN json_each AS j", liveRefsKey + " (repo_id=? AND ref>? AND ref<?)"}},
 	}
 	among, err := PackReferences.ObjectsAmong(3)
 	if err != nil {

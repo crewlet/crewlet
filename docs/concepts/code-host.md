@@ -336,6 +336,28 @@ git node serving the repository caches and what a cold sync downloads, so
 size `repo_max_bytes`, the object store and the git nodes' caches for the
 repository as it was pushed, not for the source it came from.
 
+### A ref and a directory of refs
+
+A ref is never created beside a directory of its own name. With a branch
+`feature`, a push creating `feature/x` is refused `ref_conflict`, and so is one
+creating `feature` while any `feature/…` branch is live; the sentence names the
+ref in the way. git keeps a ref as a file under `.git/refs`, and no clone can
+hold a file and a directory of one name: a repository that took both was
+cloned whole — a clone writes its refs into one packed file — but every
+existing clone's `git fetch` then failed (`'refs/remotes/origin/feature'
+exists; cannot create 'refs/remotes/origin/feature/x'`) until somebody deleted
+one of the two. Branches and tags never meet (`refs/heads/v1` and
+`refs/tags/v1/x` are different directories), and siblings never do
+(`feature-x`, `feature.x`).
+
+Like the ref limit, the rule is judged on what the push leaves: a deleted ref
+blocks nothing, so renaming `feature` to `feature/v2` in one push —
+`git push origin :feature HEAD:feature/v2` — goes through. A clone that
+already holds `origin/feature` fetches the rename with `git fetch --prune`,
+which removes the old remote-tracking ref before it writes the new one. Of two
+creates in one push, or in one batch of the [committer](#the-committer), that
+would sit beside each other, the first stands and the second is refused.
+
 ---
 
 ## Retention and history
@@ -1214,6 +1236,7 @@ words, since git does not read the header.
 | A blob over the limit | `(blob_too_large: blob <id> (<path>) is <size>, past code.limits.max_blob_bytes …)` | Remove it from the history you push. |
 | A push that would store more than one push may — the pack it sends completed against the repository, with its index | `(pack_too_large: the push stores <size>, past the <size> one push may store; push fewer commits at once, or without thin packs (git push --no-thin))` | Push fewer commits at once, or with `git push --no-thin`. Nothing was uploaded. |
 | A new ref past the most live refs a repository holds | `(repo_refs: <repo> holds <n> live refs, the most one repository may)` | Delete the refs nobody needs, in the same push as the new ones or before it: a deletion stops counting at once, even against the push that makes it, and the refs a repository deleted never refuse a push. |
+| A new ref beside a live ref of the directory it would make — `feature/x` beside the branch `feature`, or `feature` beside `feature/x` ([a ref and a directory of refs](#a-ref-and-a-directory-of-refs)) | `(ref_conflict: refs/heads/feature is in the way: a ref is never also a directory of refs, so a clone holding one could not fetch the other; delete it first, or choose another name)` | Delete the ref in the way in the same push (`git push origin :feature HEAD:feature/x`), or choose another name. A clone holding the old ref fetches the change with `git fetch --prune`. |
 | A pack that would take the repository past its size | `(repo_size: <repo> would hold <size> of packs, past <limit> (code.limits.repo_max_bytes))` | Raise `code.limits.repo_max_bytes`, or push less. What a repository holds is its packs as they were pushed ([Limits](#limits)). Nothing landed. |
 | The push's pack was uploaded too long before its commit | `(upload_expired: the pack was uploaded at <instant>, 12h0m0s or more before this decision; run git push again)` | Run the push again; nothing landed. |
 | The push is pending | `(pending: durable at <position>, unresolved here; re-run git push …)` | Run the push again. |

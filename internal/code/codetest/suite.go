@@ -103,6 +103,7 @@ func cases() []suiteCase {
 		{"F14_APushOverTheBlobLimitIsRefusedWhole", aPushOverTheBlobLimitIsRefusedWhole},
 		{"F15_ProtectionRulesRefuseByName", protectionRulesRefuseByName},
 		{"F16_AnAtomicPushLandsWholeOrNotAtAll", anAtomicPushLandsWholeOrNotAtAll},
+		{"F25_ARefBesideADirectoryOfItsNameIsRefused", aRefBesideADirectoryOfItsNameIsRefused},
 		{"F17_AnUnboundTokenFetchesAndNeverPushes", anUnboundTokenFetchesAndNeverPushes},
 		{"F18_ADeletedRepositoryIsRestoredByDeclaringItAgain", aDeletedRepositoryIsRestoredByDeclaringItAgain},
 		{"F19_ConcurrentPushesShareRecords", concurrentPushesShareRecords},

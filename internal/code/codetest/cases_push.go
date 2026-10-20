@@ -239,6 +239,55 @@ func protectionRulesRefuseByName(t *testing.T, newFleet NewFleet) {
 	assertConverged(t, c.Fleet)
 }
 
+// F25: a ref beside a directory of its name is refused, and every clone keeps
+// fetching. Each client keeps a ref as a file, so with refs/heads/feature and
+// refs/heads/feature/x both live, a clone that fetched one fails every later
+// fetch ("cannot lock ref") — and nothing but the committer can see the two
+// side by side, since the receive-pack that would refuse the pair runs no ref
+// transaction here. A rename in ONE push — feature deleted, feature/v2 created
+// — lands, as git's own transaction takes it, and a clone that prunes follows
+// it.
+func aRefBesideADirectoryOfItsNameIsRefused(t *testing.T, newFleet NewFleet) {
+	c := newCase(t, newFleet, Shape{}, Settings())
+	p := NewPerson(t, c.Fleet, "ceo")
+	work := p.Init()
+	head := p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
+	c.MustPush(p, work, "main", "HEAD:refs/heads/feature", "HEAD:refs/heads/topic/a")
+	clone := p.Clone(c.URL(0))
+
+	res := p.Push(c.Ctx, work, c.URL(0), "HEAD:refs/heads/feature/x", "HEAD:refs/heads/topic")
+	for ref, inTheWay := range map[string]string{
+		"refs/heads/feature/x": "refs/heads/feature", "refs/heads/topic": "refs/heads/topic/a",
+	} {
+		wantRefused(t, res, ref, "ref_conflict")
+		if reason, _ := res.Rejected(ref); !strings.Contains(reason, inTheWay+" is in the way") {
+			t.Errorf("%s printed %q, want it to name %s in its way", ref, reason, inTheWay)
+		}
+	}
+	rows := c.Rows()
+	for _, ref := range []string{"refs/heads/feature/x", "refs/heads/topic"} {
+		if got, ok := rows.Refs[ref]; ok {
+			t.Errorf("%s is at %s after its push was refused", ref, got)
+		}
+	}
+	if _, stderr, err := p.Git().Try(t, clone, nil, "fetch", "--quiet", "origin"); err != nil {
+		t.Errorf("a clone's fetch after the refused pushes: %v\n%s", err, stderr)
+	}
+
+	renamed := p.Push(c.Ctx, work, c.URL(0), ":refs/heads/feature", "HEAD:refs/heads/feature/v2")
+	if !renamed.OK("refs/heads/feature") || !renamed.OK("refs/heads/feature/v2") {
+		t.Errorf("a rename of feature to feature/v2 in one push: %s", renamed)
+	}
+	if _, stderr, err := p.Git().Try(t, clone, nil, "fetch", "--quiet", "--prune", "origin"); err != nil {
+		t.Errorf("a clone's fetch after the rename: %v\n%s", err, stderr)
+	}
+	got := strings.TrimSpace(p.Git().Run(t, clone, "rev-parse", "refs/remotes/origin/feature/v2"))
+	if got != head {
+		t.Errorf("the clone's origin/feature/v2 is %s, want %s", got, head)
+	}
+	assertConverged(t, c.Fleet)
+}
+
 // wantRefused fails t unless git printed ref rejected by the remote under
 // code.
 func wantRefused(t *testing.T, res Pushed, ref, code string) {

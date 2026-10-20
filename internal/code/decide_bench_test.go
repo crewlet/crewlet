@@ -35,7 +35,21 @@ import (
 //     matching;
 //   - worst-refused: the same, with the last rule in the rules' order matching
 //     every ref with direct_push none, so every command is refused, and the
-//     sentence naming the rule that refused it is formed too.
+//     sentence naming the rule that refused it is formed too;
+//   - deepest: as many creates as one record carries ([filledRecord]) of the
+//     deepest refs ([deepestRef]), each making 118 directories — the most
+//     seeks [RefusalRefConflict] asks of a round;
+//   - buried: one push creating every directory of the deepest chain a ref
+//     can sit under ([buriedChain]: refs/heads/a, refs/heads/a/a, … 118 of
+//     them) at a repository holding [MaxTombstonesPerRepo] tombstones under
+//     the chain's deepest directory, so every create's range under it spans
+//     every tombstone; the first create lands and the rest are refused
+//     ref_conflict, each having asked whether a live ref lies under it;
+//   - fanned: the same 118 creates of the chain, then as many creates under
+//     its deepest directory as the rest of a record carries
+//     ([filledRecord]: 2 492 more), so every create of the chain holds every
+//     name the record spells below it — the most gaps a record's ranges can
+//     be cut into, and the most names a nested create's own walk passes.
 //
 // And what each arm times:
 //
@@ -103,18 +117,55 @@ func BenchmarkDecideABatch(b *testing.B) {
 	}
 	widest := filledRecord(b, worst, widestRef)
 	widestRefused := filledRecord(b, worstRefused, widestRef)
+	deepest := filledRecord(b, typical, deepestRef)
+
+	const buried = "0190f3c4-0000-7000-8000-00000000be04"
+	repository(buried, team)
+	chain := buriedChain()
+	e.exec(`WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i + 1 < ?)
+		INSERT INTO code_refs (repo_id, ref, target, position, at)
+		SELECT ?, printf('%s/t%06d', ?, i), '', 1, 0 FROM k`,
+		MaxTombstonesPerRepo, buried, chain[len(chain)-1])
+	e.exec(`UPDATE code_repos SET tombstones = tombstones + ? WHERE id = ?`, MaxTombstonesPerRepo, buried)
+	nested := make([]Command, len(chain))
+	for i, ref := range chain {
+		nested[i] = Command{Ref: ref, Old: ZeroOID, New: oid(fmt.Sprint("buried", i))}
+	}
+	// THE FIRST CREATE TAKES THE CHAIN and every later one meets it — each
+	// decided all the same, past every read the rule asks of it.
+	firstLands := func(ref string) Refusal {
+		if ref == chain[0] {
+			return ""
+		}
+		return RefusalRefConflict
+	}
 
 	type arm struct {
 		name, repo string
 		batch      []Proposal
-		refused    Refusal
+		// refused is every command's protection verdict, and decided what a
+		// round decides of each ref — the verdict, where nil.
+		refused Refusal
+		decided func(ref string) Refusal
 	}
 	for _, shape := range []arm{
-		{"maximal", typical, maximal, ""},
-		{"group", typical, group, ""},
-		{"worst", worst, widest, ""},
-		{"worst-refused", worstRefused, widestRefused, RefusalProtectedDirect},
+		{"maximal", typical, maximal, "", nil},
+		{"group", typical, group, "", nil},
+		{"worst", worst, widest, "", nil},
+		{"worst-refused", worstRefused, widestRefused, RefusalProtectedDirect, nil},
+		{"deepest", typical, deepest, "", nil},
+		{"buried", buried, []Proposal{benchProposal(buried, nested)}, "", firstLands},
+		{"fanned", typical, filledRecord(b, typical, func(p, c int) string {
+			if i := p*MaxCommandsPerPush + c; i < len(chain) {
+				return chain[i]
+			} else {
+				return chain[len(chain)-1] + fmt.Sprintf("/s%06d", i)
+			}
+		}), "", firstLands},
 	} {
+		if shape.decided == nil {
+			shape.decided = func(string) Refusal { return shape.refused }
+		}
 		ctx := context.Background()
 		commands := 0
 		for _, p := range shape.batch {
@@ -153,9 +204,9 @@ func BenchmarkDecideABatch(b *testing.B) {
 							len(a.commands), len(shape.batch[i].Commands))
 					}
 					for _, c := range a.commands {
-						if c.Reason != shape.refused {
+						if want := shape.decided(c.Ref); c.Reason != want {
 							return fmt.Errorf("%s was decided %s %q, and the arm measures %q",
-								c.Ref, c.Result, c.Reason, shape.refused)
+								c.Ref, c.Result, c.Reason, want)
 						}
 					}
 				}
@@ -218,6 +269,37 @@ const widestComponent = "aaaaaa"
 func widestRef(push, command int) string {
 	return "refs/heads/" + strings.Repeat(widestComponent+"/", 34) + fmt.Sprintf("%02d%04d", push, command)
 }
+
+// deepestRef is the ref whose create asks the most of the snapshot: a first
+// component naming the command, then one-byte components to [MaxRefNameBytes]
+// — 118 directories it would make, each a seek of the key, none of them a
+// directory another command's create would make too.
+func deepestRef(push, command int) string {
+	ref := fmt.Sprintf("refs/heads/d%02d%04d", push, command)
+	for len(ref)+len("/a") <= MaxRefNameBytes {
+		ref += "/a"
+	}
+	return ref
+}
+
+// buriedChain is every directory of the deepest chain a tombstone of the
+// buried arm sits under, shallowest first: refs/heads/a, then one "/a" more
+// each, to the deepest that leaves [buriedLeaf] room in [MaxRefNameBytes] —
+// 118 refs, each an ancestor of every tombstone.
+func buriedChain() []string {
+	out := []string{"refs/heads/a"}
+	for {
+		next := out[len(out)-1] + "/a"
+		if len(next)+len(buriedLeaf) > MaxRefNameBytes {
+			return out
+		}
+		out = append(out, next)
+	}
+}
+
+// buriedLeaf is the spelling of the last component of each of the buried
+// arm's tombstones, as the seeding statement prints its number.
+const buriedLeaf = "/t000000"
 
 // costliestRules are n distinct rules of gitref's costliest shape: a run of
 // four globs between two **s, the first three matching every

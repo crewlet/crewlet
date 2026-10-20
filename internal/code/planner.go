@@ -35,9 +35,21 @@ package code
 // packs is DRIVEN from its list (`json_each … CROSS JOIN`, which fixes the
 // order), one seek of the whole key per element, and a batch deletion deletes
 // the rowids that join found.
+//
+// A RANGE THAT STOPS AT ITS FIRST LIVE REF READS AN INDEX OF LIVE REFS. Over
+// [refsKey], the test of the target is a filter on each row the range walks,
+// so a range holding tombstones stepped over every one of them, a lookup of
+// its row each, before it found a live ref or ran out — the push decide's
+// probe under a create cost 7.7–9.9 s a round where a repository held its
+// [MaxTombstonesPerRepo] under a deep chain of creates. Such a statement
+// names [liveRefsKey] instead, whose rows are the live refs alone, and repeats
+// its predicate verbatim so the planner may use it at all.
 const (
 	// refsKey is code_refs' PRIMARY KEY index, (repo_id, ref).
 	refsKey = "sqlite_autoindex_code_refs_1"
+	// liveRefsKey is code_refs_live_idx, (repo_id, ref) WHERE target != ''
+	// (replicated migration 0045): the live refs alone, in key order.
+	liveRefsKey = "code_refs_live_idx"
 	// packsKey is code_packs' PRIMARY KEY index, (repo_id, pack_id, part).
 	packsKey = "sqlite_autoindex_code_packs_1"
 )

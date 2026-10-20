@@ -15,7 +15,7 @@ import (
 // build does not know is a value rather than a panic.
 type Refusal string
 
-// The codes. The first fifteen may be RECORDED on a command ([Refusal.Recorded]);
+// The codes. The first sixteen may be RECORDED on a command ([Refusal.Recorded]);
 // the last five are answers ABOUT a push, never part of one.
 const (
 	// RefusalStale is a ref that is not where the client thought.
@@ -43,6 +43,11 @@ const (
 	RefusalRepoSize Refusal = "repo_size"
 	// RefusalRepoRefs is a create past MaxRefsPerRepo live refs.
 	RefusalRepoRefs Refusal = "repo_refs"
+	// RefusalRefConflict is a create beside a live ref of the directory it
+	// would make, or with live refs under its own name: refs/heads/feature
+	// and refs/heads/feature/x are never both live, because every client
+	// keeps a ref as a file and a file is never also a directory.
+	RefusalRefConflict Refusal = "ref_conflict"
 	// RefusalUploadExpired is a pack uploaded longer ago than a write may
 	// still name it (objstore.RecordWithin).
 	RefusalUploadExpired Refusal = "upload_expired"
@@ -73,7 +78,7 @@ func Refusals() []Refusal {
 	return []Refusal{
 		RefusalStale, RefusalProtectedForce, RefusalProtectedDelete,
 		RefusalProtectedDirect, RefusalTagMoved, RefusalReservedRef, RefusalBadRef,
-		RefusalRepoArchived, RefusalRepoDeleted, RefusalRepoSize, RefusalRepoRefs,
+		RefusalRepoArchived, RefusalRepoDeleted, RefusalRepoSize, RefusalRepoRefs, RefusalRefConflict,
 		RefusalUploadExpired, RefusalAtomic, RefusalBlobTooLarge, RefusalPackTooLarge,
 		RefusalBusy, RefusalUnavailable, RefusalNotApplied, RefusalUnknown,
 		RefusalPending,
@@ -108,9 +113,11 @@ var sentences = map[Refusal]string{
 	RefusalRepoDeleted:     "the repository is deleted, being purged or gone, and takes no push",
 	RefusalRepoSize:        "the repository would hold more than code.limits.repo_max_bytes",
 	RefusalRepoRefs:        "the repository holds as many live refs as one repository may",
-	RefusalUploadExpired:   "the pack was uploaded too long ago to be committed; run git push again",
-	RefusalAtomic:          "refused with the rest of this --atomic push",
-	RefusalBlobTooLarge:    "a blob is larger than code.limits.max_blob_bytes; keep large binaries in tracker files",
+	RefusalRefConflict: "a ref and a directory of refs never share a name (feature beside feature/x): " +
+		"every clone holding one could not fetch the other",
+	RefusalUploadExpired: "the pack was uploaded too long ago to be committed; run git push again",
+	RefusalAtomic:        "refused with the rest of this --atomic push",
+	RefusalBlobTooLarge:  "a blob is larger than code.limits.max_blob_bytes; keep large binaries in tracker files",
 	RefusalPackTooLarge: "the pack this push stores — completed against the repository and " +
 		"indexed — is larger than one push may store; push fewer commits at once",
 	RefusalBusy:        "the repository is taking pushes faster than they are committed; run git push again",
