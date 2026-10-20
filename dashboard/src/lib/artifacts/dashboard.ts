@@ -337,6 +337,16 @@ export interface DatasetState {
   received: number;
 }
 
+/**
+ * What a figure says when its rows could not be read for a reason the engine
+ * did not answer as the dataset's own status: a node that could not reach
+ * the domain, or a route that answered nothing. One sentence of a reader's,
+ * never the route's detail, which names a path and a node rather than
+ * anything a person can act on. A board's datasets and New dashboard's
+ * previews both say it.
+ */
+export const ROWS_UNREAD = "These rows could not be read right now. Refresh to try again.";
+
 /** A dataset's state as the design system draws it. */
 export function datasetStatus(
   d: Pick<DashboardBoardDataset, "source" | "freshness">,

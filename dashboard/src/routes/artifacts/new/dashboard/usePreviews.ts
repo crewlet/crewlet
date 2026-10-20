@@ -8,19 +8,16 @@
  * page's life: changing a setting back reads nothing again, and the engine's
  * own cache answers a repeat within its life anyway. A read the engine's
  * budget turned away (`429 read_budget`) is asked again once the wait it
- * named is over. Any other failure is said in one sentence of a reader's,
- * never the route's own: what failed is a preview, and its detail names
- * the route and the node rather than anything a person can act on.
+ * named is over. Any other failure is said in a reader's words
+ * (`ROWS_UNREAD`), never the route's own detail.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { DatasetStatus } from "@crewlethq/ui";
 import { RestError, type DashboardSourcePreview } from "~/protocol/index.ts";
 import { previewSource } from "~/lib/artifacts/api.ts";
+import { ROWS_UNREAD } from "~/lib/artifacts/dashboard.ts";
 import type { DraftDataset } from "./model.ts";
-
-/** The sentence a preview that could not be read is drawn with. */
-export const UNREAD = "These rows could not be read right now. Refresh to try again.";
 
 export interface PreviewState {
   answer: DashboardSourcePreview | null;
@@ -94,7 +91,7 @@ export function usePreviews(needed: readonly DraftDataset[]): Previews {
             patch(d.key, (s) => ({ ...s, loading: false }));
             return;
           }
-          patch(d.key, (s) => ({ ...s, loading: false, failure: UNREAD }));
+          patch(d.key, (s) => ({ ...s, loading: false, failure: ROWS_UNREAD }));
         },
       );
     },

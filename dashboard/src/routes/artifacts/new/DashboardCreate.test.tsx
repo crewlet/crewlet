@@ -21,7 +21,7 @@ import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 import catalogue from "./dashboard/testdata/catalogue.json";
 import { DashboardCreate } from "./DashboardCreate.tsx";
-import { UNREAD } from "./dashboard/usePreviews.ts";
+import { ROWS_UNREAD } from "~/lib/artifacts/dashboard.ts";
 
 const MADE = "0192f2c4-3333-7000-8000-000000000003";
 
@@ -337,6 +337,6 @@ test("a preview that cannot be read says so in a reader's words, never the route
   });
   mount();
   const panel = data();
-  await waitFor(() => expect(within(panel).getAllByText(UNREAD).length).toBeGreaterThan(0));
+  await waitFor(() => expect(within(panel).getAllByText(ROWS_UNREAD).length).toBeGreaterThan(0));
   expect(within(panel).queryByText(/serves nothing/)).toBeNull();
 });
