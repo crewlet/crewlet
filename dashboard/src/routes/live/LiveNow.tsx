@@ -75,7 +75,7 @@ import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { mergeRuns, RunStatus, runTitle } from "./Runs.tsx";
 import { RecentPhases } from "./RecentPhases.tsx";
-import { useAgents, useEvents, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
+import { useAgents, useEngineHealth, useEvents, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { ADMIN } from "~/lib/access.ts";
@@ -153,6 +153,7 @@ export function LiveNow() {
   const agents = useAgents();
   const sandboxes = useSandboxes();
   const pushed = useEvents();
+  const engine = useEngineHealth();
   const org = useOrg();
   const viewer = useViewer();
   const index = useMemo(() => indexOrg(org), [org]);
@@ -475,10 +476,16 @@ export function LiveNow() {
               <GrantRequired size="compact" grants={[ADMIN]} reader={viewer.login} />
             ) : (
               <>
-                {/* BOTH READS THIS CARD MAKES OF THE FLEET: the count, and a seat's
-                    own latest events, each of which a node can be missing from. */}
+                {/* EVERY READ THIS CARD MAKES OF THE FLEET: the count, and the
+                    latest events — a seat's own, read at query time, or the
+                    push, which this node seeded at boot from every node it
+                    could reach (`seeded_from`) — each of which a node can be
+                    missing from. */}
                 <CoverageNote
-                  coverage={[series.data?.coverage, seat ? seatEvents.data?.coverage : undefined]}
+                  coverage={[
+                    series.data?.coverage,
+                    seat ? seatEvents.data?.coverage : engine?.seeded_from,
+                  ]}
                   what="this activity"
                 />
                 <div className="live-strip">

@@ -102,14 +102,16 @@ function mount({
   hash = "#/live",
   agents = [],
   answers = {},
+  health = healthFrame(),
 }: {
   hash?: string;
   agents?: Record<string, unknown>[];
   answers?: Record<string, Answer>;
+  health?: ReturnType<typeof healthFrame>;
 } = {}) {
   location.hash = hash;
   const store = new Store();
-  store.applyHealth(healthFrame());
+  store.applyHealth(health);
   store.applyOrg(withDerived(ORG) as never);
   store.applySeats(agents as never);
   const socket = new LiveSocket(store);
@@ -393,6 +395,27 @@ test("the Activity card names a node missing from the seat's events", async () =
   const card = cardOf("Activity");
   const note = await within(card).findByText(/is missing 1 node\./);
   expect(note.closest(".coverage-note")?.textContent).toContain("node-b");
+});
+
+// THE LATEST EVENTS ARE THE PUSH when no seat is chosen, seeded at this node's
+// boot from every node it could reach: a node the seed missed is named.
+//
+// Mutation: hand the note the seat's coverage alone, and node-c is not named.
+test("the Activity card names a node the live feed was seeded without", async () => {
+  mount({
+    health: healthFrame({
+      seeded_from: {
+        complete: false,
+        nodes: [
+          { id: "node-a", answered: true, error: "" },
+          { id: "node-c", answered: false, error: "no answer inside the read budget" },
+        ],
+      },
+    }),
+  });
+  const card = cardOf("Activity");
+  const note = await within(card).findByText(/is missing 1 node\./);
+  expect(note.closest(".coverage-note")?.textContent).toContain("node-c");
 });
 
 // OLDER IS THE ENGINE'S CURSOR. It paged the event LIST and read every row

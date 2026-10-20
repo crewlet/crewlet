@@ -19,7 +19,7 @@ import { useNow } from "~/lib/clock.ts";
 import { fmtDateTime, fmtDuration, plural, relTime } from "~/lib/format.ts";
 import { RUNS_POLL_MS } from "~/lib/runs.ts";
 import { indexOrg, nameOfIn } from "~/lib/seats.ts";
-import { useEvents, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
+import { useEngineHealth, useEvents, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { RunStatus, mergeRuns, runTitle } from "~/routes/live/Runs.tsx";
 import { WidgetCard, WidgetQuery, defineWidgets, gapsOf } from "~/routes/home/board/kit.tsx";
@@ -92,8 +92,11 @@ const SHOW = [
 ] as const;
 
 function LatestEvents({ params }: { params: Readonly<Record<string, string>> }) {
-  // The push the event log and Live now draw from, newest first.
+  // The push the event log and Live now draw from, newest first — seeded at
+  // this node's boot from every node it could reach, which `seeded_from`
+  // says, so a node the seed missed is a gap in what this card lists.
   const pushed = useEvents();
+  const seeded = useEngineHealth()?.seeded_from;
   const failedOnly = params.show === "failed";
   const rows = (failedOnly ? pushed.filter((e) => e.failed) : pushed).slice(0, EVENT_ROWS);
   return (
@@ -101,7 +104,7 @@ function LatestEvents({ params }: { params: Readonly<Record<string, string>> }) 
       <WidgetQuery
         error={null}
         loading={false}
-        gaps={[]}
+        gaps={gapsOf([{ coverage: seeded }])}
         empty={
           rows.length === 0
             ? {
