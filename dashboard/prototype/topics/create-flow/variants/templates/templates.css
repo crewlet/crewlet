@@ -1,0 +1,160 @@
+/*
+ * Templates: a shelf of live starting points on the gallery, and an editor
+ * that opens filled with the strip of the others above it. Every value is a
+ * token.
+ */
+
+.cft-shelf {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  margin-bottom: var(--spacing-2);
+}
+
+.cft-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-3);
+}
+
+.cft-row {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: var(--spacing-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cft-row .crewlet-kind-tile__frame {
+  aspect-ratio: 16 / 11;
+}
+
+@container page (width < 1000px) {
+  .cft-row {
+    display: flex;
+    margin-inline: calc(var(--spacing-4) * -1);
+    padding: 0 var(--spacing-4) var(--spacing-3);
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    scroll-padding-inline: var(--spacing-4);
+    scrollbar-width: none;
+  }
+
+  .cft-row > li {
+    flex: 0 0 13rem;
+    scroll-snap-align: start;
+  }
+}
+
+@container page (width < 560px) {
+  .cft-head > .crewlet-segmented-control,
+  .cft-head > [role="radiogroup"] {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
+  .cft-row > li {
+    flex-basis: 42%;
+  }
+}
+
+/* ---- New, from a start ---- */
+
+.cft-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-5);
+  min-width: 0;
+}
+
+.cft-page-head {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+}
+
+.cft-page-title {
+  margin: 0;
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-semibold);
+}
+
+.cft-strip {
+  display: grid;
+  grid-auto-columns: 12rem;
+  grid-auto-flow: column;
+  gap: var(--spacing-3);
+  margin: 0 calc(var(--spacing-4) * -1);
+  padding: 0 var(--spacing-4) var(--spacing-2);
+  overflow-x: auto;
+  list-style: none;
+  scrollbar-width: thin;
+}
+
+.cft-editor {
+  min-width: 0;
+  padding: var(--spacing-8) var(--spacing-9);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-xl);
+  background: var(--color-surface-background);
+}
+
+.cft-editor--slides {
+  padding: var(--spacing-6);
+}
+
+.cft-editor--sheet {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  padding: var(--spacing-6);
+}
+
+@container page (width < 720px) {
+  .cft-editor,
+  .cft-editor--sheet,
+  .cft-editor--slides {
+    padding: var(--spacing-5) var(--spacing-4);
+  }
+}
+
+.cft-example {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  color: var(--color-text-primary);
+  text-decoration: none;
+}
+
+.cft-example:hover {
+  border-color: var(--color-border-hover);
+}
+
+.cft-example:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.cft-example-preview {
+  display: flex;
+  aspect-ratio: 16 / 10;
+  overflow: hidden;
+  border-bottom: 1px solid var(--color-border-default);
+  background: var(--color-surface-inset);
+}
+
+.cft-example-preview > * {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.cft-example-title {
+  padding: var(--spacing-2) var(--spacing-3);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+}

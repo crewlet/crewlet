@@ -1,0 +1,154 @@
+/*
+ * Composer: one card at the top of the gallery that becomes the create
+ * experience for the kind chosen in it. Every value is a token.
+ */
+
+.cfc-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  margin-bottom: var(--spacing-2);
+  padding: var(--spacing-5);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-xl);
+  background: var(--color-surface-subtle);
+  transition:
+    border-color var(--motion-duration-base) var(--motion-easing-out),
+    box-shadow var(--motion-duration-base) var(--motion-easing-out);
+}
+
+/* OPEN, THE CARD IS WHERE THE PERSON IS WORKING: the accent's soft ring says so. */
+.cfc-card--open {
+  border-color: var(--color-brand-accent-soft-strong);
+  box-shadow: 0 0 0 4px var(--color-brand-accent-soft);
+}
+
+.cfc-card--page {
+  margin-bottom: 0;
+}
+
+.cfc-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-3) var(--spacing-5);
+}
+
+.cfc-title {
+  margin: 0;
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.3;
+}
+
+.cfc-kinds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-2);
+}
+
+.cfc-hint {
+  margin: 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+}
+
+.cfc-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+}
+
+.cfc-starts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-3);
+}
+
+.cfc-starts-label {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+/* THE EDITOR IS THE PAGE IT WILL BE: the page's own ground inside the card. */
+.cfc-editor {
+  min-width: 0;
+  max-height: 30rem;
+  padding: var(--spacing-6) var(--spacing-7);
+  overflow: auto;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-background);
+}
+
+.cfc-card--page .cfc-editor {
+  max-height: none;
+  min-height: 28rem;
+}
+
+.cfc-body--slides .cfc-editor {
+  max-height: none;
+  padding: var(--spacing-5);
+}
+
+.cfc-body--slides .crewlet-slide-stage,
+.cfc-body--slides [class*="slide-stage"] {
+  max-width: 44rem;
+}
+
+.cfc-sheet-title {
+  margin-bottom: var(--spacing-3);
+}
+
+.cfc-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--spacing-2) var(--spacing-3);
+}
+
+.cfc-foot-note {
+  flex: 1 1 16rem;
+  min-width: 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+
+@container page (width < 720px) {
+  .cfc-card {
+    padding: var(--spacing-4);
+  }
+
+  .cfc-kinds {
+    flex-wrap: nowrap;
+    width: 100%;
+    margin-inline: calc(var(--spacing-4) * -1);
+    padding-inline: var(--spacing-4);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .cfc-kinds .crewlet-kind-tile--chip {
+    flex: none;
+  }
+
+  .cfc-editor {
+    padding: var(--spacing-4);
+  }
+
+  .cfc-starts .crewlet-segmented-control,
+  .cfc-starts [role="radiogroup"] {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cfc-card {
+    transition: none;
+  }
+}

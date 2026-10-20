@@ -1,0 +1,277 @@
+/*
+ * What every proposal shares: the gallery's smaller grid, the shipped Make
+ * row stepped aside for the proposal's own, and the four create canvases
+ * (a doc's page, a sheet's grid, a deck's stage, an agent's brief).
+ * Every value is a token.
+ */
+
+/* ---- the gallery ---- */
+
+.cf-gallery {
+  display: contents;
+}
+
+/* THE PROPOSAL'S OWN SECTION STANDS WHERE THE SHIPPED ROW DID. */
+.cf-gallery .artifacts-make {
+  display: none;
+}
+
+/*
+ * A STEP SMALLER: four across a laptop's page, three on a small laptop or a
+ * tablet held flat, two on a tablet held upright, one on a phone. The gaps
+ * come down with the cards so the grid keeps its rhythm.
+ */
+.cf-gallery .artifacts-cards {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--spacing-6) var(--spacing-5);
+}
+
+@container page (width >= 1500px) {
+  .cf-gallery .artifacts-cards {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}
+
+@container page (width < 960px) {
+  .cf-gallery .artifacts-cards {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@container page (width < 720px) {
+  .cf-gallery .artifacts-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--spacing-5) var(--spacing-4);
+  }
+}
+
+@container page (width < 460px) {
+  .cf-gallery .artifacts-cards {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* A section heading every proposal's Make section uses. */
+.cf-section-title {
+  margin: 0;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.3;
+}
+
+.cf-section-hint {
+  margin: 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+}
+
+/* ---- a doc's page ---- */
+
+.cf-doc {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  width: 100%;
+  max-width: 46rem;
+  margin-inline: auto;
+}
+
+.cf-doc .crewlet-rich-editor,
+.cf-doc [class*="crewlet-rich-editor"] {
+  min-height: 18rem;
+}
+
+/* ---- a sheet's grid ---- */
+
+.cf-sheet {
+  min-width: 0;
+}
+
+/* ---- a deck's stage ---- */
+
+.cf-deck {
+  display: grid;
+  grid-template-columns: 10rem minmax(0, 1fr);
+  gap: var(--spacing-5);
+  min-width: 0;
+}
+
+.cf-deck--horizontal {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.cf-deck--horizontal .cf-deck-strip {
+  order: 2;
+}
+
+.cf-deck-strip {
+  min-width: 0;
+}
+
+.cf-deck-stage {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+
+.cf-deck-notes {
+  margin: 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+}
+
+@container page (width < 720px) {
+  .cf-deck {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cf-deck-strip {
+    order: 2;
+  }
+}
+
+/* ---- an agent's brief ---- */
+
+.cf-brief {
+  display: grid;
+  gap: var(--spacing-6);
+  min-width: 0;
+}
+
+.cf-brief--page {
+  grid-template-columns: minmax(0, 1fr) minmax(16rem, 20rem);
+  align-items: start;
+}
+
+@container page (width < 860px) {
+  .cf-brief--page {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.cf-brief-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+}
+
+.cf-brief-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-6);
+  min-width: 0;
+}
+
+.cf-brief-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+}
+
+.cf-brief-heading {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--font-letter-spacing-wide);
+  text-transform: uppercase;
+}
+
+.cf-step-title {
+  display: block;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+}
+
+.cf-step-detail {
+  display: block;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+  line-height: 1.45;
+}
+
+.cf-brief-sent {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--spacing-4);
+  max-width: 32rem;
+  margin: var(--spacing-8) auto;
+  text-align: center;
+}
+
+.cf-brief-sent-title {
+  margin: 0;
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-semibold);
+}
+
+.cf-brief-sent-text {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+}
+
+.cf-brief-sent .cf-brief-steps {
+  align-self: stretch;
+  text-align: start;
+}
+
+.cf-brief-sent-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--spacing-2);
+}
+
+/* ---- starting points drawn small ---- */
+
+.cf-preview {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.cf-preview-page {
+  display: block;
+  min-height: 100%;
+  padding: var(--spacing-8) var(--spacing-9);
+  background: var(--color-surface-background);
+}
+
+.cf-preview--deck {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacing-3);
+  background: var(--color-surface-inset);
+}
+
+.cf-brief-by {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-2);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+}
+
+.cf-brief-by-label {
+  color: var(--color-text-secondary);
+}
+
+.cf-brief-by-note {
+  flex: 1 1 16rem;
+  min-width: 0;
+}
+
+.cf-brief--page .cf-brief-next {
+  margin-top: var(--spacing-4);
+}
