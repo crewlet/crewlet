@@ -231,6 +231,27 @@ test("every widget kind says one phrase over no rows, worded by whether its sour
   }
 });
 
+test("a stat that counts or sums no rows is 0, and one with no value to pick is the empty mark", () => {
+  const columns = [{ key: "open", type: "number" as const }];
+  for (const agg of ["sum", "count"] as const) {
+    draw({ id: "o", type: "stat", title: "Open work", agg, value: "open", w: 3 }, columns, []);
+    expect(screen.getByText("0")).toBeTruthy();
+    cleanup();
+  }
+  // Rows that hold no value, and a fold that picks one, have none to show.
+  draw({ id: "o", type: "stat", title: "Open work", agg: "sum", value: "open", w: 3 }, columns, [
+    { open: null },
+  ]);
+  expect(screen.queryByText("0")).toBeNull();
+  cleanup();
+  draw(
+    { id: "o", type: "stat", title: "Open work", agg: "last", value: "open", w: 3 },
+    columns,
+    [],
+  );
+  expect(screen.queryByText("0")).toBeNull();
+});
+
 test("a widget's table offers no column resizing, its widths being its content's", () => {
   draw(
     { id: "w", type: "table", title: "Open work", columns: ["key"], w: 8 },

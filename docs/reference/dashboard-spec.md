@@ -128,6 +128,13 @@ them `windowed`. A figure over a windowed source that answered no rows says
 "Nothing in this window"; a figure over any other source says "Nothing to
 show", because open work and the agents are read as they stand now.
 
+**A count or a sum of no rows is 0.** The source answered, and a total of
+nothing is a measured nought, so a stat with `agg: count` or `agg: sum` over
+an empty answer draws 0, as a calculated dataset's group does. A fold that
+picks or averages a value (`first`, `last`, `min`, `max`, `avg`) over no
+rows, and any fold over rows none of which holds a value, draws the empty
+mark: there is no value to show, which is not the same as a value of 0.
+
 A parameter is a literal (`"scope": "mine"`, `"limit": 50`) or bound to a
 filter (`"scope": {"param": "scope"}`), in which case every choice of that
 filter must be a value the parameter takes; a choice whose value is empty

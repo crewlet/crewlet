@@ -40,10 +40,15 @@ test("every fold gives the engine's number over the same rows", () => {
   expect(fold("count", "number", deals, "amount")).toBe(3);
   expect(fold("count", "number", deals, "")).toBe(4);
   expect(fold("max", "date", deals, "closed")).toBe("2026-10-12");
-  // A FOLD OVER NOTHING IS NO VALUE, never a zero nobody measured; a count
-  // of nothing is zero, which is a number of rows.
-  expect(fold("sum", "number", [], "amount")).toBeNull();
+  // A COUNT OR A SUM OF NO ROWS IS ZERO: the source answered, and nothing
+  // totals nought. Rows that hold no value total nothing anybody measured,
+  // and a fold that picks or averages has nothing to pick: no value.
+  expect(fold("sum", "number", [], "amount")).toBe(0);
   expect(fold("count", "number", [], "")).toBe(0);
+  expect(fold("sum", "number", [{ _id: "d4", amount: null }], "amount")).toBeNull();
+  for (const agg of ["avg", "min", "max", "first", "last"] as const) {
+    expect(fold(agg, "number", [], "amount")).toBeNull();
+  }
 });
 
 test("values order as the engine orders them, none first", () => {

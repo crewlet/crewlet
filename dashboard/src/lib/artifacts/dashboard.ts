@@ -159,9 +159,10 @@ export function compareValues(
 }
 
 /**
- * `agg` over `column` of `rows`, a column of type `t`: none where no row holds
- * a value, except a count, which is a number of rows (every row when no column
- * is named). The engine's `Fold`.
+ * `agg` over `column` of `rows`, a column of type `t`: a count is a number of
+ * rows (every row when no column is named), a sum of no rows is zero, and
+ * every other fold over no rows, or over rows none of which holds a value, is
+ * none. The engine's `Fold`.
  */
 export function fold(
   agg: DashboardAgg,
@@ -172,6 +173,7 @@ export function fold(
   if (agg === "count") {
     return rows.filter((r) => column === "" || (r[column] ?? null) !== null).length;
   }
+  if (agg === "sum" && rows.length === 0) return 0;
   const present = rows
     .map((r) => r[column] ?? null)
     .filter((v): v is Exclude<DashboardValue, null> => v !== null);

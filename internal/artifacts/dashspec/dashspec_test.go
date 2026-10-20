@@ -525,3 +525,24 @@ func TestSourceArgsHoldsADirectReadToTheCatalogue(t *testing.T) {
 		}
 	}
 }
+
+// A COUNT OR A SUM OF NO ROWS IS ZERO, because the source answered and a
+// total of nothing is a measured nought; rows that hold no value total
+// nothing anybody measured, and a fold that picks or averages has nothing to
+// pick. The dashboard's own fold is held to the same cases.
+func TestAFoldOverNoRowsIsZeroOnlyWhereItCounts(t *testing.T) {
+	if got := Fold(AggSum, ColumnNumber, nil, "amount"); got != 0.0 {
+		t.Errorf("a sum of no rows is %v, want 0", got)
+	}
+	if got := Fold(AggCount, ColumnNumber, nil, ""); got != 0.0 {
+		t.Errorf("a count of no rows is %v, want 0", got)
+	}
+	if got := Fold(AggSum, ColumnNumber, []Row{{"amount": nil}}, "amount"); got != nil {
+		t.Errorf("a sum of rows holding no value is %v, want none", got)
+	}
+	for _, agg := range []Agg{AggAvg, AggMin, AggMax, AggFirst, AggLast} {
+		if got := Fold(agg, ColumnNumber, nil, "amount"); got != nil {
+			t.Errorf("%s of no rows is %v, want none", agg, got)
+		}
+	}
+}
