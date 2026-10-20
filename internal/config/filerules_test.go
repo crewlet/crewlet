@@ -9,7 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 )
 
-// THE FOUR RULES ONLY A WHOLE FILE CAN CHECK.
+// THE THREE RULES ONLY A WHOLE FILE CAN CHECK.
 //
 // Each one is a fault with no run-time symptom: nothing crashes, nothing
 // logs, and the company runs — wrongly, quietly, until somebody notices that
