@@ -200,7 +200,7 @@ func (d ArtifactDeps) audienceArg(o *org.Organization, tool, raw string) (artifa
 	case artifacts.AudienceSeat:
 		if o.SeatByHandle(a.ID) == nil {
 			r := failed(fmt.Sprintf("%s: the company has no seat %q. Find the colleague "+
-				"with lookup_colleague and share with their handle.", tool, a.ID))
+				"with "+LookupColleagueTool+" and share with their handle.", tool, a.ID))
 			return artifacts.Audience{}, &r
 		}
 	case artifacts.AudienceUnit:

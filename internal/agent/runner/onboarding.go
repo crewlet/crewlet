@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -44,21 +45,7 @@ var onboardingLog = logging.Get("agent.onboarding")
 // mark_onboarded is what ENDS the pass, so it is also the terminator: without
 // it the loop asks again after the model has already marked, and the pass
 // spends its remaining budget re-deciding something it has decided.
-var onboardingAlwaysOn = []string{ReflectAndPersistTool, MarkOnboardedTool}
-
-// The builtin names the runner's surfaces and prompts depend on. Named here
-// rather than imported from internal/agent/builtin, which is a leaf the engine
-// wires in: the runner builds the surfaces those tools sit on and must not
-// grow a dependency on every tool to name four of them.
-// TestTheRunnerNamesTheBuiltinsItDependsOn pins them against the builtin
-// package's own constants, so a rename there fails a test here rather than
-// silently emptying a surface or ungating a prompt rule.
-const (
-	ReflectAndPersistTool = "reflect_and_persist"
-	MarkOnboardedTool     = "mark_onboarded"
-	RunSandboxTool        = "run_sandbox"
-	A2AAskTool            = "a2a_ask"
-)
+var onboardingAlwaysOn = []string{toolname.ReflectAndPersist, toolname.MarkOnboarded}
 
 // Markers is what the onboarding pass needs from the learning store.
 type Markers interface {
@@ -244,7 +231,7 @@ func (r *Runner) onboardingPass(ctx context.Context, chain string) (bool, error)
 	// marks the call failed only after the job has started — leaving a run
 	// nothing collects. A tool in the snapshot is one the prompt lists to
 	// discover and activate_tool reaches.
-	snapshot := r.cfg.Registry.Snapshot().Without(RunSandboxTool)
+	snapshot := r.cfg.Registry.Snapshot().Without(toolname.RunSandbox)
 	surface, err := r.surfaceWith(ctx, r.ownMeter(), phase.Onboarding, 0, snapshot, nil,
 		onboardingAlwaysOn)
 	if err != nil {
@@ -269,7 +256,7 @@ func (r *Runner) onboardingPass(ctx context.Context, chain string) (bool, error)
 		// names this tool rather than the whole catalogue the pass carries.
 		// Never forced, like every phase: see phaseRun.terminateAfter for
 		// why a forced tool choice is not asked for as well.
-		terminateAfter: []string{MarkOnboardedTool},
+		terminateAfter: []string{toolname.MarkOnboarded},
 	})
 	if err != nil {
 		return false, fmt.Errorf("runner: onboarding: %w", err)
@@ -279,7 +266,7 @@ func (r *Runner) onboardingPass(ctx context.Context, chain string) (bool, error)
 	// pass that said it was done without calling the tool has not marked,
 	// and treating its claim as the fact would leave a seat permanently
 	// unmarked in the store while never onboarding again in this process.
-	marked := calledSuccessfully(surface, MarkOnboardedTool)
+	marked := calledSuccessfully(surface, toolname.MarkOnboarded)
 	notes := "did not mark (will retry next turn)"
 	decision := ""
 	if marked {

@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // Company is Tier B — founder-owned, live-editable, versioned in the store.
@@ -1509,16 +1510,16 @@ func (c *Company) validateSandboxGates() error {
 						"this seat's executor runs in box mode on providers.llm.%s, "+
 							"which places the one box it works in (its run_in, else "+
 							"providers.sandbox.default_run_in), and such a seat is never "+
-							"offered run_sandbox, so %q here places nothing. Write `self` "+
+							"offered %s, so %q here places nothing. Write `self` "+
 							"or leave it out, and name the cell on providers.llm.%s.run_in",
-						key, gate.RunIn, key)
+						key, toolname.RunSandbox, gate.RunIn, key)
 				}
 				if gate.CodingAgent != "" && string(gate.CodingAgent) != entry.AgentName() {
 					p.add(at(where, "coding_agent"), ErrConflict,
 						"this seat's executor runs in box mode on providers.llm.%s, "+
 							"which is %s's own run, and such a seat is never offered "+
-							"run_sandbox, so %q here drives nothing. Leave it out",
-						key, entry.AgentName(), gate.CodingAgent)
+							"%s, so %q here drives nothing. Leave it out",
+						key, entry.AgentName(), toolname.RunSandbox, gate.CodingAgent)
 				}
 				continue
 			}

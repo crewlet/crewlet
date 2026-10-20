@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -42,7 +43,7 @@ func withSandbox(t *testing.T, reg *tools.Registry) {
 func TestARoundThatCallsSomethingBesideItsSandboxRunParks(t *testing.T) {
 	t.Parallel()
 	sibling := llmtest.Call{Name: "lookup_colleague", Args: `{"name":"ana"}`}
-	run := llmtest.Call{Name: runner.RunSandboxTool, Args: `{"task":"fix the flake"}`}
+	run := llmtest.Call{Name: toolname.RunSandbox, Args: `{"task":"fix the flake"}`}
 	for _, tc := range []struct {
 		name     string
 		response llmtest.Response
@@ -75,14 +76,14 @@ func TestARoundThatCallsSomethingBesideItsSandboxRunParks(t *testing.T) {
 					"nothing would collect the run")
 			}
 			state := parked.State
-			if state.PendingCallName != runner.RunSandboxTool {
+			if state.PendingCallName != toolname.RunSandbox {
 				t.Fatalf("parked on %q, want the sandbox run", state.PendingCallName)
 			}
 			names := callNames(w.Calls)
 			if got := slices.Contains(names, "lookup_colleague"); got != tc.ran {
 				t.Fatalf("the surface ran %v; the sibling ran = %v, want %v", names, got, tc.ran)
 			}
-			if tc.ran && slices.Index(names, "lookup_colleague") > slices.Index(names, runner.RunSandboxTool) {
+			if tc.ran && slices.Index(names, "lookup_colleague") > slices.Index(names, toolname.RunSandbox) {
 				t.Errorf("the surface ran %v: the run went before the call beside it", names)
 			}
 			// THE SIBLING IS ANSWERED, the run is not.
@@ -92,7 +93,7 @@ func TestARoundThatCallsSomethingBesideItsSandboxRunParks(t *testing.T) {
 					answers[m.Name] = m.Content
 				}
 			}
-			if _, open := answers[runner.RunSandboxTool]; open {
+			if _, open := answers[toolname.RunSandbox]; open {
 				t.Error("the parked run was answered, so there is nothing to resume into")
 			}
 			if _, done := answers["lookup_colleague"]; !done {
@@ -131,14 +132,14 @@ func TestARoundThatCallsSomethingBesideItsSandboxRunParks(t *testing.T) {
 			}
 			transcript := sent[0].Messages
 			last := transcript[len(transcript)-1]
-			if last.Role != llm.RoleTool || last.Name != runner.RunSandboxTool ||
+			if last.Role != llm.RoleTool || last.Name != toolname.RunSandbox ||
 				!strings.Contains(last.Content, "fixed the flake") {
 				t.Errorf("the resumed run's transcript ends on %+v, want the run's answer", last)
 			}
 			calls := 0
 			for _, m := range transcript {
 				for _, c := range m.ToolCalls {
-					if c.Name == runner.RunSandboxTool || c.Name == "lookup_colleague" {
+					if c.Name == toolname.RunSandbox || c.Name == "lookup_colleague" {
 						calls++
 					}
 				}
@@ -164,7 +165,7 @@ func TestAParkedPhasesRunsAndCallIDsSurviveTheResume(t *testing.T) {
 	gate := &org.RoleSandbox{Enabled: true}
 	prov := &scriptedProvider{execute: []llmtest.Response{
 		calling(llmtest.Call{Name: "lookup_colleague", Args: `{"name":"ana"}`}),
-		calling(llmtest.Call{Name: runner.RunSandboxTool, Args: `{"task":"fix the flake"}`}),
+		calling(llmtest.Call{Name: toolname.RunSandbox, Args: `{"task":"fix the flake"}`}),
 	}}
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}},
 		buildOpts{sandbox: gate, register: withSandbox})
@@ -207,7 +208,7 @@ func TestAParkedPhasesRunsAndCallIDsSurviveTheResume(t *testing.T) {
 			ids[c.Name] = c.ID
 		}
 	}
-	if ids["lookup_colleague"] == "" || ids[runner.RunSandboxTool] == "" {
+	if ids["lookup_colleague"] == "" || ids[toolname.RunSandbox] == "" {
 		t.Fatalf("the parked conversation names its calls %v, so this case holds nothing", ids)
 	}
 	checked := 0
@@ -235,7 +236,7 @@ func TestTheCallThatParkedThePhaseIsOnTheResumedRecord(t *testing.T) {
 	t.Parallel()
 	gate := &org.RoleSandbox{Enabled: true}
 	prov := &scriptedProvider{execute: []llmtest.Response{
-		calling(llmtest.Call{Name: runner.RunSandboxTool, Args: `{"task":"fix the flake"}`}),
+		calling(llmtest.Call{Name: toolname.RunSandbox, Args: `{"task":"fix the flake"}`}),
 	}}
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}},
 		buildOpts{sandbox: gate, register: withSandbox})
@@ -248,7 +249,7 @@ func TestTheCallThatParkedThePhaseIsOnTheResumedRecord(t *testing.T) {
 	}
 	var row map[string]any
 	for _, ex := range parked.State.ToolExecutions {
-		if ex["name"] == runner.RunSandboxTool {
+		if ex["name"] == toolname.RunSandbox {
 			row = ex
 		}
 	}

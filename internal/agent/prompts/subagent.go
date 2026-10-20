@@ -33,7 +33,7 @@ const subagentDiscoveryRule = "To use one of the tools to discover above, call "
 // beats none, is `submit_result`'s own description, which reaches the worker
 // with the tool. The name stays here because a worker that never learns its
 // answer is a call writes it as prose, and costs a corrective round to be told.
-const SubagentSubmitRule = "End by calling `submit_result` with your answer."
+const SubagentSubmitRule = "End by calling `" + toolname.SubmitResult + "` with your answer."
 
 // SubagentProseRule is how a worker ends when it has no submission tool.
 //

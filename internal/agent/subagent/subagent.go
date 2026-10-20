@@ -84,18 +84,7 @@ var log = logging.Get("agent.subagent")
 // A constant because it is also the first entry of the denylist below: the
 // tool that starts a worker is the tool a worker must never see, and two
 // spellings of that name is one recursion away from a fork bomb.
-const ToolName = "delegate"
-
-// skillLoaderTool is the read-only prompt-fragment loader.
-//
-// Granted to every child that can reach it even when the parent did not name
-// it, because the child's own prompt tells it to call this — the tool-skill
-// catalogue rendered into the system prompt is a list of `key — summary`
-// lines ending in "call load_tool_skill(key)". A child told to call a tool it
-// was not given spends a round discovering that, every time.
-//
-// It cannot widen anything: it returns prompt text and touches nothing.
-const skillLoaderTool = "load_tool_skill"
+const ToolName = toolname.Delegate
 
 // The reasons [stopReason] can give for a context that ended under a child,
 // which [classify] turns into the child's [Status].
@@ -148,7 +137,7 @@ var controlDenylist = map[string]struct{}{
 	// branches other people read, and this one is about a turn that can
 	// never be resumed. Either alone would deny it; only this one survives
 	// somebody deciding a sandbox is private.
-	"run_sandbox": {},
+	toolname.RunSandbox: {},
 
 	// The PARENT's discovery pair. Both close over the parent's surface, so
 	// a child that inherited them would activate tools onto the surface of
@@ -164,7 +153,7 @@ var controlDenylist = map[string]struct{}{
 	// why it is named here as well as annotated open-world. The last three
 	// are not engine tools today; they are denied defensively in case an
 	// extension registers them.
-	"a2a_ask":             {},
+	toolname.A2AAsk:       {},
 	"request_a2a_channel": {},
 	"send_a2a_message":    {},
 	"close_a2a_channel":   {},
@@ -507,10 +496,14 @@ func Permit(universe tools.Snapshot, parent, requested []string) Grant {
 		rejected = append(rejected, name)
 	}
 
-	// The skill loader rides along unrequested when the child can reach it;
-	// see the constant.
-	if reachable[skillLoaderTool] && !seen[skillLoaderTool] {
-		active = append(active, skillLoaderTool)
+	// THE SKILL LOADER RIDES ALONG UNREQUESTED when the child can reach it,
+	// because the child's own prompt tells it to call it: the tool-skill
+	// catalogue rendered into the system prompt is a list of `key — summary`
+	// lines ending in a call to it, and a child told to call a tool it was
+	// not given spends a round discovering that, every time. It cannot widen
+	// anything: it returns prompt text and touches nothing.
+	if reachable[toolname.LoadToolSkill] && !seen[toolname.LoadToolSkill] {
+		active = append(active, toolname.LoadToolSkill)
 	}
 
 	return Grant{Universe: safe, Active: active, Rejected: rejected}

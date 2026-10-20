@@ -17,6 +17,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // Decision is the judge's answer.
@@ -222,14 +223,14 @@ func (p Policy) Grant(d Decision, used int) int {
 func FinishHint(ph phase.Phase) string {
 	switch ph {
 	case phase.Execute:
-		return "If you cannot finish in this window, call `submit_work` with " +
+		return "If you cannot finish in this window, call `" + toolname.SubmitWork + "` with " +
 			"whatever you have — reporting honestly what is done and what is " +
 			"outstanding is better than being cut off mid-round."
 	case phase.Review:
-		return "If you cannot finish in this window, call `submit_review` with " +
+		return "If you cannot finish in this window, call `" + toolname.SubmitReview + "` with " +
 			"the decision the evidence supports so far."
 	case phase.Onboarding:
-		return "If you cannot finish in this window, call `mark_onboarded` " +
+		return "If you cannot finish in this window, call `" + toolname.MarkOnboarded + "` " +
 			"anyway after persisting what you have read — an onboarding pass " +
 			"that never marks itself done runs again on every turn you take."
 	}

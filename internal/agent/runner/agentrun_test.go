@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -168,7 +169,7 @@ func TestABoxModeExecutorIsNotTaughtRunSandbox(t *testing.T) {
 	t.Parallel()
 	gate := &org.RoleSandbox{Enabled: true}
 	withTool := func(t *testing.T, reg *tools.Registry) {
-		if err := reg.Register(stubTool{name: runner.RunSandboxTool}, tools.OriginBuiltin); err != nil {
+		if err := reg.Register(stubTool{name: toolname.RunSandbox}, tools.OriginBuiltin); err != nil {
 			t.Fatalf("Register: %v", err)
 		}
 	}
@@ -215,7 +216,7 @@ func TestABoxModeExecutorIsNotTaughtRunSandbox(t *testing.T) {
 func TestAResumedExecutorReachesOnlyWhatAFreshOneDoes(t *testing.T) {
 	t.Parallel()
 	hidden := func(t *testing.T, reg *tools.Registry) {
-		for _, name := range []string{runner.MarkOnboardedTool, runner.RunSandboxTool} {
+		for _, name := range []string{toolname.MarkOnboarded, toolname.RunSandbox} {
 			if err := reg.Register(stubTool{name: name, out: "ok"}, tools.OriginBuiltin); err != nil {
 				t.Fatalf("Register: %v", err)
 			}
@@ -245,8 +246,8 @@ func TestAResumedExecutorReachesOnlyWhatAFreshOneDoes(t *testing.T) {
 				}
 			} else {
 				prov.execute = []llmtest.Response{
-					activate(runner.MarkOnboardedTool),
-					activate(runner.RunSandboxTool),
+					activate(toolname.MarkOnboarded),
+					activate(toolname.RunSandbox),
 					submitWork(t),
 				}
 				opts.resume = &runner.Resume{State: suspendedAfterTwoRounds(), Answer: "the run succeeded"}
@@ -256,18 +257,18 @@ func TestAResumedExecutorReachesOnlyWhatAFreshOneDoes(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Resume: %v", err)
 			}
-			if slices.Contains(surface.Catalogue, runner.MarkOnboardedTool) {
+			if slices.Contains(surface.Catalogue, toolname.MarkOnboarded) {
 				t.Error("the resumed executor can reach mark_onboarded")
 			}
-			if got := slices.Contains(surface.Catalogue, runner.RunSandboxTool); got != tc.runSandbox {
+			if got := slices.Contains(surface.Catalogue, toolname.RunSandbox); got != tc.runSandbox {
 				t.Errorf("the resumed executor reaches run_sandbox = %v, want %v", got, tc.runSandbox)
 			}
 			offered := prov.offeredFor("execute")
 			for i, names := range offered {
-				if slices.Contains(names, runner.MarkOnboardedTool) {
+				if slices.Contains(names, toolname.MarkOnboarded) {
 					t.Errorf("resumed request %d was offered mark_onboarded, which activate_tool reached", i+1)
 				}
-				if !tc.runSandbox && slices.Contains(names, runner.RunSandboxTool) {
+				if !tc.runSandbox && slices.Contains(names, toolname.RunSandbox) {
 					t.Errorf("resumed request %d was offered run_sandbox, which activate_tool reached", i+1)
 				}
 			}

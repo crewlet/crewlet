@@ -39,7 +39,7 @@ import (
 const ExecutorHeader = "\n## Your turn" +
 	"\nDecide what to do about the task below and do it, in this one pass. " +
 	"Use tool calls for every action — writing about an action does not " +
-	"perform it. End by calling `submit_work` exactly once, reporting what " +
+	"perform it. End by calling `" + toolname.SubmitWork + "` exactly once, reporting what " +
 	"you actually did." +
 	"\n" +
 	"\n**Finish the arc in this pass:** read, decide, then call the tool " +
@@ -72,7 +72,7 @@ const KeyUntrustedText = "untrusted_text"
 // later" and leaving the requester waiting on a run nobody follows up.
 const executorSandboxSection = "\n## Sandbox code work" +
 	"\nReal code work — changing code, running tests, reproducing a bug — " +
-	"goes to `run_sandbox`. This turn pauses while the run works and resumes " +
+	"goes to `" + toolname.RunSandbox + "`. This turn pauses while the run works and resumes " +
 	"with its report as the call's result, so act on it in the SAME turn: " +
 	"report the outcome, link the pull request, update the ticket."
 
@@ -260,7 +260,7 @@ func BuildExecutor(seat Seat, in ExecutorInput) Prompt {
 	// THE LIST ALONE: what a worker is, what it may not do and that it
 	// answers inside this turn is `delegate`'s own description, which
 	// reaches the model with the tool on every round.
-	if in.Workers != "" && slices.Contains(in.AvailableTools, "delegate") {
+	if in.Workers != "" && slices.Contains(in.AvailableTools, toolname.Delegate) {
 		b.Heading("workers", "\n## Your workers", in.Workers)
 	}
 

@@ -9,11 +9,12 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // LoadToolSkillTool is the tool's wire name.
-const LoadToolSkillTool = "load_tool_skill"
+const LoadToolSkillTool = toolname.LoadToolSkill
 
 // ToolSkills is what load_tool_skill needs from the skill registry.
 //
@@ -92,7 +93,7 @@ func (t *loadToolSkill) Call(ctx context.Context, args map[string]any) (tools.Re
 func (t *loadToolSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
 	key := argString(args, "key")
 	if key == "" {
-		return failed("load_tool_skill needs a `key` — one of the keys your " +
+		return failed(LoadToolSkillTool + " needs a `key` — one of the keys your " +
 			"tool-skills catalogue lists."), nil
 	}
 	loaded, ok := t.skills.Load(key)

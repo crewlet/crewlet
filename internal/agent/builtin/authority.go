@@ -226,8 +226,8 @@ var subjectOf = map[string]subject{
 	// [authz.ErrUnresolved], and the tool reads the item, probes its asks
 	// ([worklet.AskedOn]) and decides again. See [getWorkItem.CallForTurn]
 	// and [commentOnWorkItem.CallForTurn].
-	"get_work_item":        {kind: authz.KindTask, inTool: true},
-	"comment_on_work_item": {kind: authz.KindTask, inTool: true},
+	"get_work_item":           {kind: authz.KindTask, inTool: true},
+	worklet.CommentOnWorkTool: {kind: authz.KindTask, inTool: true},
 
 	// THE PERSONAL ONES THAT TAKE NO NAME are about the caller: `my_work`,
 	// `mark_inbox` and `set_pins` take no handle, because a model that

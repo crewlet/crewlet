@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -79,18 +80,18 @@ func TestExecutorSurfaceHidesRunSandboxFromSeatsThatCannotUseIt(t *testing.T) {
 				t.Fatal(err)
 			}
 			snapshot, err := tools.NewRegistry().Snapshot().
-				With(tools.Entry{Tool: stubTool(RunSandboxTool), Origin: tools.OriginBuiltin})
+				With(tools.Entry{Tool: stubTool(toolname.RunSandbox), Origin: tools.OriginBuiltin})
 			if err != nil {
 				t.Fatal(err)
 			}
 			universe := r.executorUniverse(snapshot, tc.agentRun != nil)
-			if got := slices.Contains(executorActive(universe), RunSandboxTool); got != tc.want {
+			if got := slices.Contains(executorActive(universe), toolname.RunSandbox); got != tc.want {
 				t.Errorf("run_sandbox offered = %v, want %v", got, tc.want)
 			}
-			if _, got := universe.Lookup(RunSandboxTool); got != tc.want {
+			if _, got := universe.Lookup(toolname.RunSandbox); got != tc.want {
 				t.Errorf("run_sandbox reachable by activation = %v, want %v", got, tc.want)
 			}
-			if got := strings.Contains(universe.Discoverable(nil), RunSandboxTool); got != tc.want {
+			if got := strings.Contains(universe.Discoverable(nil), toolname.RunSandbox); got != tc.want {
 				t.Errorf("run_sandbox in the catalogue = %v, want %v", got, tc.want)
 			}
 		})
@@ -117,15 +118,15 @@ func TestTheExecutorCannotReachThePhaseScopedTools(t *testing.T) {
 			t.Fatal(err)
 		}
 		snapshot, err := tools.NewRegistry().Snapshot().
-			With(tools.Entry{Tool: stubTool(MarkOnboardedTool), Origin: tools.OriginBuiltin})
+			With(tools.Entry{Tool: stubTool(toolname.MarkOnboarded), Origin: tools.OriginBuiltin})
 		if err != nil {
 			t.Fatal(err)
 		}
 		universe := r.executorUniverse(snapshot, agentRun)
-		if _, held := universe.Lookup(MarkOnboardedTool); held {
+		if _, held := universe.Lookup(toolname.MarkOnboarded); held {
 			t.Errorf("box mode %v: mark_onboarded is in the executor's snapshot, one activation away", agentRun)
 		}
-		if strings.Contains(universe.Discoverable(nil), MarkOnboardedTool) {
+		if strings.Contains(universe.Discoverable(nil), toolname.MarkOnboarded) {
 			t.Errorf("box mode %v: the executor's catalogue lists mark_onboarded", agentRun)
 		}
 	}
@@ -238,7 +239,7 @@ func TestASkillGuardNeedsItsLoaderActive(t *testing.T) {
 		t.Fatalf("PutPage: %v", err)
 	}
 	reg := tools.NewRegistry()
-	for _, name := range []string{"slack_post", skills.LoaderTool} {
+	for _, name := range []string{"slack_post", toolname.LoadToolSkill} {
 		if err := reg.Register(stubTool(name), tools.OriginBuiltin); err != nil {
 			t.Fatalf("Register %s: %v", name, err)
 		}
@@ -249,7 +250,7 @@ func TestASkillGuardNeedsItsLoaderActive(t *testing.T) {
 	if g := r.guardFor(phase.Execute, 1, inactive, nil); g.guard != nil {
 		t.Error("a guard was armed over a loader the phase never activated")
 	}
-	active := tools.NewSurface(phase.Execute.String(), reg.Snapshot(), []string{skills.LoaderTool})
+	active := tools.NewSurface(phase.Execute.String(), reg.Snapshot(), []string{toolname.LoadToolSkill})
 	if g := r.guardFor(phase.Execute, 1, active, nil); g.guard == nil {
 		t.Error("no guard was armed although the loader is active and slack_post is in the universe")
 	}

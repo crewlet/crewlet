@@ -19,13 +19,14 @@ import (
 	"github.com/crewlet/crewlet/internal/tools/argval"
 )
 
-// Doclet's tool names.
+// Doclet's tool names, which the domain owns
+// (internal/doclet/tools.go says why).
 const (
-	ListPagesTool     = "list_pages"
-	GetPageTool       = "get_page"
-	WritePageTool     = "write_page"
-	SavePageTool      = "save_page"
-	CommentOnPageTool = "comment_on_page"
+	ListPagesTool     = doclet.ListPagesTool
+	GetPageTool       = doclet.GetPageTool
+	WritePageTool     = doclet.WritePageTool
+	SavePageTool      = doclet.SavePageTool
+	CommentOnPageTool = doclet.CommentOnPageTool
 )
 
 // PageTools are the five.

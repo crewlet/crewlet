@@ -540,7 +540,7 @@ const chatLinkShape = "Each is an absolute http://, https:// or mailto: address 
 // readers (D09).
 func chatWrite(name string, verb authz.Action, destructive bool, phrase, description string,
 	s *schema) Tool {
-	t := write(name, string(verb), destructive, phrase, description, s)
+	t := write(name, verb, destructive, phrase, description, s)
 	t.ChangesVisibility = true
 	return t
 }

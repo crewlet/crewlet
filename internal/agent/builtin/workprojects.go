@@ -50,7 +50,7 @@ func (t *listProjects) Description() string {
 	return "The projects this company files work into, with how much work " +
 		"each holds — waiting (todo), started (active), done and closed — " +
 		"who leads it and when it is meant to be finished. " +
-		"create_work_item refuses a project that is not here."
+		worklet.CreateWorkItemTool + " refuses a project that is not here."
 }
 
 func (t *listProjects) Parameters() map[string]any {

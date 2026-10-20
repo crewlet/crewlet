@@ -105,7 +105,7 @@ func phaseOffering(offered []string) string {
 	switch {
 	case slices.Contains(offered, runner.SubmitReviewTool):
 		return "review"
-	case slices.Contains(offered, runner.MarkOnboardedTool):
+	case slices.Contains(offered, toolname.MarkOnboarded):
 		// Checked BEFORE the executor, because onboarding is the pass that
 		// offers mark_onboarded and the executor is deliberately denied it:
 		// a seat that could mark itself from inside the executor would
@@ -794,7 +794,7 @@ func TestTheExecutorIsNotOfferedTheOnboardingMarker(t *testing.T) {
 	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if slices.Contains(prov.offeredFor("execute")[0], runner.MarkOnboardedTool) {
+	if slices.Contains(prov.offeredFor("execute")[0], toolname.MarkOnboarded) {
 		t.Error("the executor was offered mark_onboarded")
 	}
 }

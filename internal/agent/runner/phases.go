@@ -31,6 +31,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/toolsession"
 	"github.com/crewlet/crewlet/internal/tracing"
@@ -510,7 +511,7 @@ func (r *Runner) executorPrompt(ctx context.Context, _ int, notes string,
 	history []ledger.Iteration, snapshot tools.Snapshot, built *tools.Surface,
 ) (system, user prompts.Prompt) {
 	offer := r.cfg.Skills.Offer()
-	_, offersSandbox := snapshot.Lookup(RunSandboxTool)
+	_, offersSandbox := snapshot.Lookup(toolname.RunSandbox)
 	system = prompts.BuildExecutor(r.cfg.Seat, prompts.ExecutorInput{
 		// What the universe the surface was built from holds and the
 		// surface does not offer yet: nothing this executor cannot
@@ -657,8 +658,8 @@ func undiscovered(universe tools.Snapshot, active []string) []string {
 // where the registry carries it at all.
 func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []ledger.Iteration) (turn.Review, error) {
 	snapshot := r.cfg.Registry.Snapshot()
-	_, offersSandbox := r.executorUniverse(snapshot, r.cfg.AgentRun != nil).Lookup(RunSandboxTool)
-	_, offersA2A := snapshot.Lookup(A2AAskTool)
+	_, offersSandbox := r.executorUniverse(snapshot, r.cfg.AgentRun != nil).Lookup(toolname.RunSandbox)
+	_, offersA2A := snapshot.Lookup(toolname.A2AAsk)
 	submit := structured.New(SubmitReviewTool, submitReviewDescription, reviewSchema, decodeReview)
 	surface, err := r.surfaceWith(ctx, r.ownMeter(), phase.Review, round, snapshot, submit, nil)
 	if err != nil {
@@ -1593,7 +1594,7 @@ func (r *Runner) guardFor(ph phase.Phase, iteration int, surface *tools.Surface,
 	// THE LOADER MUST BE ACTIVE, not merely in the universe the triggers are
 	// matched over: a guard is armed only where the session can satisfy it,
 	// and a loader the phase never activated is one its model may not reach.
-	if r.cfg.Skills == nil || !slices.Contains(surface.Active(), skills.LoaderTool) {
+	if r.cfg.Skills == nil || !slices.Contains(surface.Active(), toolname.LoadToolSkill) {
 		return armedGuard{}
 	}
 	guard := skills.NewGuard(r.cfg.Skills, promptPhase(ph), catalogueSurface(surface))
@@ -1655,7 +1656,7 @@ func catalogueSurface(surface *tools.Surface) prompts.Surface {
 func (r *Runner) executorUniverse(snapshot tools.Snapshot, agentRun bool) tools.Snapshot {
 	hidden := slices.Clone(phaseScoped)
 	if !r.offersSandbox(agentRun) {
-		hidden = append(hidden, RunSandboxTool)
+		hidden = append(hidden, toolname.RunSandbox)
 	}
 	return snapshot.Without(hidden...)
 }
@@ -1728,7 +1729,7 @@ func (r *Runner) offersSandbox(agentRun bool) bool {
 // query_episodes and refresh_memory are recon, which the executor now does
 // itself; reflect_and_persist is deliberate too — an agent that learns
 // something mid-turn should be able to keep it.
-var phaseScoped = []string{MarkOnboardedTool}
+var phaseScoped = []string{toolname.MarkOnboarded}
 
 // taskFor prefixes the reviewer's correction to the ask.
 //

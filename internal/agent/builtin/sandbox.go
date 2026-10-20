@@ -7,11 +7,12 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // RunSandboxTool is the tool's wire name.
-const RunSandboxTool = "run_sandbox"
+const RunSandboxTool = toolname.RunSandbox
 
 // SandboxLauncher is what this tool needs to start a detached coding run.
 //
@@ -77,7 +78,7 @@ func (t *runSandbox) Parameters() map[string]any {
 // the work was done while the job was still running, and nothing would ever
 // collect its result. Refusing is the only safe answer, and it says why.
 func (t *runSandbox) Call(context.Context, map[string]any) (tools.Result, error) {
-	return refused(tools.RefusalForbidden, "run_sandbox can only be called "+
+	return refused(tools.RefusalForbidden, RunSandboxTool+" can only be called "+
 		"from an Execute phase that can suspend, because the coding job "+
 		"outlives the turn that starts it."), nil
 }
@@ -85,12 +86,12 @@ func (t *runSandbox) Call(context.Context, map[string]any) (tools.Result, error)
 func (t *runSandbox) CallDetached(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.DetachedResult, error) {
 	brief := strings.TrimSpace(argString(args, "brief"))
 	if brief == "" {
-		return tools.DetachedResult{Result: failed("run_sandbox needs a " +
+		return tools.DetachedResult{Result: failed(RunSandboxTool + " needs a " +
 			"non-empty `brief` describing the code task.")}, nil
 	}
 	if turn == nil || turn.RunID == "" {
 		return tools.DetachedResult{Result: refused(tools.RefusalForbidden,
-			"run_sandbox needs an active turn; it can only be called from "+
+			RunSandboxTool+" needs an active turn; it can only be called from "+
 				"within an Execute phase.")}, nil
 	}
 

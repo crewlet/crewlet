@@ -47,3 +47,75 @@ const (
 func Discovery() []string {
 	return []string{Activate, ListMCPServerTools}
 }
+
+// The phase submissions, which the runner implements. The skill guard exempts
+// both (blocking one would brick its phase), and the prompts and the round-cap
+// extension tell a model to call them.
+const (
+	// SubmitWork ends the executor's turn with its account of the work.
+	SubmitWork = "submit_work"
+	// SubmitReview is the reviewer's verdict on that account.
+	SubmitReview = "submit_review"
+)
+
+// The onboarding pass's two tools, which the builtins implement. The runner
+// offers them without discovery, the skill guard exempts the terminator, and
+// the prompts, the learning store's brief and the round-cap extension name
+// them to the model.
+const (
+	// ReflectAndPersist writes a fact into the seat's own memory.
+	ReflectAndPersist = "reflect_and_persist"
+	// MarkOnboarded ends the onboarding pass.
+	MarkOnboarded = "mark_onboarded"
+)
+
+// The builtins a worker is denied, which the worker deny list and the
+// authority table name, and the prompts describe.
+const (
+	// RunSandbox starts a detached coding run.
+	RunSandbox = "run_sandbox"
+	// A2AAsk asks a colleague agent one question.
+	A2AAsk = "a2a_ask"
+)
+
+// LoadToolSkill unlocks a tool skill. The skill guard watches for it, a worker
+// is granted it, and the prompts' skill catalogue tells a model to call it.
+const LoadToolSkill = "load_tool_skill"
+
+// Delegate hands work to short-lived workers. The executor's prompt renders
+// its workers only when the seat holds it.
+//
+// THE ONE NAME HERE THAT IS ALSO AN ENGLISH WORD — "Do not delegate further"
+// is prose about the act, not the tool — so the walk reads it as the tool's
+// name only where the text marks it as code (see the suite).
+const Delegate = "delegate"
+
+// The tracker's two tools the escalation guidance names. The tracker owns its
+// vocabulary; these two are here because the prompts, which import only the
+// org model and the provenance fence, render the guidance only when the seat
+// holds the first.
+const (
+	// CommentOnWorkItem comments on a work item, an ask among them.
+	CommentOnWorkItem = "comment_on_work_item"
+	// CreateWorkItem files a work item, an ask among them.
+	CreateWorkItem = "create_work_item"
+)
+
+// The two names of the engine's own chat that a package below it spells. Chat
+// owns its vocabulary, and these two are here because the prompts offer the
+// first as the way to reach a person, and the search index, which the chat
+// domain imports, names the second in what it logs.
+const (
+	// SendDM is a direct message to one colleague.
+	SendDM = "send_dm"
+	// SearchMessages searches the rooms a seat may read.
+	SearchMessages = "search_messages"
+)
+
+// LookupColleague resolves a name to a seat. The roster and the human
+// colleagues section of a prompt tell a model to call it.
+const LookupColleague = "lookup_colleague"
+
+// SubmitResult is how a delegated worker answers. The worker package owns it
+// and imports the prompts, whose worker preamble tells a model to call it.
+const SubmitResult = "submit_result"

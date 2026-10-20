@@ -1,5 +1,7 @@
 package worklet
 
+import "github.com/crewlet/crewlet/internal/toolname"
+
 // Worklet's tool names.
 //
 // BARE, not prefixed. A first-party tool may be named in a prompt — this build
@@ -18,9 +20,9 @@ package worklet
 const (
 	ListWorkItemsTool  = "list_work_items"
 	GetWorkItemTool    = "get_work_item"
-	CreateWorkItemTool = "create_work_item"
+	CreateWorkItemTool = toolname.CreateWorkItem
 	UpdateWorkItemTool = "update_work_item"
-	CommentOnWorkTool  = "comment_on_work_item"
+	CommentOnWorkTool  = toolname.CommentOnWorkItem
 
 	// MergeWorkItemTool folds one item into another, and it is a SEAT's
 	// for the reason the trash tools are not.

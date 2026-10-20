@@ -10,7 +10,6 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
-	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -101,9 +100,9 @@ func TestARunTakenOverKeepsTheSkillsItLoaded(t *testing.T) {
 	r := guardedRunner(t, &scriptedProvider{}, newCapture())
 	surface, _, err := r.ReopenAgentRun(context.Background(), execstate.State{
 		Version: execstate.Version, AgentRun: true, Round: 1,
-		ActiveTools: []string{"slack_post", skills.LoaderTool},
+		ActiveTools: []string{"slack_post", toolname.LoadToolSkill},
 	}, []runner.BridgedCall{
-		{Call: ledger.Call{Name: skills.LoaderTool, Args: map[string]any{"key": "chat-conventions"},
+		{Call: ledger.Call{Name: toolname.LoadToolSkill, Args: map[string]any{"key": "chat-conventions"},
 			Result: "Always thread your reply."}, Seq: 1},
 	}, runner.Bridged{})
 	if err != nil {

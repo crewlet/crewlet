@@ -1,5 +1,7 @@
 package prompts
 
+import "github.com/crewlet/crewlet/internal/toolname"
+
 // ReviewHeader is the reviewer's contract: the rules that decide its one
 // decision.
 //
@@ -45,7 +47,7 @@ package prompts
 // further delivery — a correction the first answer needs — is a question about
 // the work's merits, which is the reviewer's.
 const ReviewHeader = "\n## REVIEW phase" +
-	"\nJudge the work below, then call `submit_review` exactly once." +
+	"\nJudge the work below, then call `" + toolname.SubmitReview + "` exactly once." +
 	"\n" +
 	"\n`## What the agent did` is the evidence: calls marked `→ success` " +
 	"happened, and `→ error` calls did not take effect. `## What the agent " +
@@ -74,7 +76,7 @@ const ReviewHeader = "\n## REVIEW phase" +
 // can reach somebody, rendered only where the seat holds it
 // ([ReviewInput.OffersA2A]): a reviewer told to send a round to a tool the
 // seat does not have writes notes the next round can only fail to follow.
-const reviewA2ARule = " An agent colleague is reached with `a2a_ask`."
+const reviewA2ARule = " An agent colleague is reached with `" + toolname.A2AAsk + "`."
 
 // reviewBlockedOutcome closes the blocked rule: the two answers past "not
 // yet", and the one obligation no handoff discharges.
@@ -92,7 +94,7 @@ const reviewBlockedOutcome = " Already asked → `done`: their reply " +
 // fabrication — the absence of shell calls is the DESIGN — and looping the
 // turn to max_iterations. Unconditional, it was prose about a tool on every
 // review of every seat in the company, nearly none of which can call it.
-const reviewSandboxRule = "\n**A successful `run_sandbox` call IS the code " +
+const reviewSandboxRule = "\n**A successful `" + toolname.RunSandbox + "` call IS the code " +
 	"work:** a coding agent ran the shell and the tests inside its own " +
 	"sandbox, and its report is in `## What the agent produced`. No " +
 	"`git` / shell / test calls here is not fabrication — judge the report " +
