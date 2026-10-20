@@ -85,6 +85,13 @@ func (s *Service) reportReady(w http.ResponseWriter, r *http.Request) {
 		invalid(w, "frame_url is not a live frame this deployment minted")
 		return
 	}
+	if claims.Purpose == artifacts.TicketPurposePreview {
+		// A PREVIEW IS NOT AN OPEN: a gallery card drawing a page small is
+		// not a reader waiting on it, and counting it would move the ready
+		// objective by what scrolled past.
+		invalid(w, "frame_url is a preview's frame, which reports no ready time")
+		return
+	}
 	err = s.ready.Accept(objectives.ReadyReport{
 		Viewer: claims.Lineage, Frame: claims.Nonce,
 		// THE EARLIEST INSTANT THE FRAME CAN HAVE BEEN MINTED: a ticket

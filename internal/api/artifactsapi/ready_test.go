@@ -106,6 +106,27 @@ func TestAReadyReportIsBoundToTheCallersOwnFrame(t *testing.T) {
 	}
 }
 
+// A PREVIEW'S FRAME FILES NO READY REPORT: a gallery card drawing a page small
+// is not a reader waiting on it, so its frame is refused as one that reports.
+func TestAPreviewsFrameReportsNoReadyTime(t *testing.T) {
+	t.Parallel()
+	g := newRig(t, true)
+	expires := time.Now().Add(4 * time.Minute).Truncate(time.Second)
+	g.mintFor(person("jane"), expires)
+	g.framer.mu.Lock()
+	claims := g.framer.minted[frameURL]
+	claims.Purpose = artifacts.TicketPurposePreview
+	g.framer.minted[frameURL] = claims
+	g.framer.mu.Unlock()
+	w := g.do(person("jane"), http.MethodPost, "/artifacts/ready", readyBody(frameURL, "ready", 300))
+	if w.Code != http.StatusUnprocessableEntity || errorOf(t, w) != "invalid" {
+		t.Errorf("a preview's report: %d %s", w.Code, w.Body.String())
+	}
+	if len(g.ready.taken()) != 0 {
+		t.Error("a preview's ready time was counted")
+	}
+}
+
 // A REPORT THAT IS NO REPORT IS REFUSED BEFORE THE BEACON: no frame, an
 // outcome outside the set, a time past a frame's life, a field the route does
 // not take.

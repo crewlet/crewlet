@@ -31,8 +31,9 @@ import (
 // what was never touched.
 //
 // The company: jane owns `page` (an HTML artifact), `notes` (a doc),
-// `handbook` (a doc of two tabs), `deck` (slides) and `design` (a canvas of
-// two artboards), the last four shared with bob as viewer; the
+// `handbook` (a doc of two tabs), `deck` (slides), `design` (a canvas of
+// two artboards) and `pulse` (a dashboard of one note), the last five shared
+// with bob as viewer; the
 // page is shared with bob as viewer, with the ENG unit as editor and with sam
 // as editor. `scribe` is an agent owning `report`, led by lee. dana relates to
 // nothing, and ada is an administrator who relates to nothing either.
@@ -43,6 +44,7 @@ var (
 	deck     = artifacts.IDFor("jane's deck")
 	handbook = artifacts.IDFor("jane's handbook")
 	design   = artifacts.IDFor("jane's design")
+	pulse    = artifacts.IDFor("jane's pulse")
 	report   = artifacts.IDFor("scribe's report")
 	binned   = artifacts.IDFor("jane's trashed page")
 	unknown  = artifacts.IDFor("nothing at all")
@@ -68,7 +70,10 @@ var (
 		`"title":"Hero"},"mobile.html":{"x":1540,"y":0,"w":390,"h":844}},"order":["hero.html",` +
 		`"mobile.html"],"notes":[{"id":"n1","kind":"title","x":0,"y":-100,"w":600,"h":60,"text":"Launch"}],` +
 		`"cover":"mobile.html"}`)
-	heroHTML   = []byte(`<!doctype html><title>Hero</title><h1>Ship</h1>`)
+	heroHTML  = []byte(`<!doctype html><title>Hero</title><h1>Ship</h1>`)
+	boardJSON = []byte(`{"v":1,"title":"Pulse","datasets":[{"id":"deals","title":"Pipeline","source":"store",` +
+		`"store":{"collection":"deals"},"columns":[{"key":"name","type":"text"}]}],` +
+		`"widgets":[{"id":"hello","type":"note","w":12,"text":"Hello."}]}`)
 	mobileHTML = []byte(`<!doctype html><title>Mobile</title><h1>Go</h1>`)
 )
 
@@ -96,6 +101,7 @@ var (
 	entryCanvas = entry("canvas.json", "application/json", canvasJSON)
 	entryHero   = entry("hero.html", "text/html; charset=utf-8", heroHTML)
 	entryMobile = entry("mobile.html", "text/html; charset=utf-8", mobileHTML)
+	entryBoard  = entry("dashboard.json", "application/json", boardJSON)
 )
 
 func share(kind artifacts.AudienceKind, id string, role artifacts.Role) artifacts.Share {
@@ -130,6 +136,9 @@ func heads() map[artifacts.ID]artifactsdomain.Head {
 			OwnerKind: iam.ActorHuman, HeadNumber: 1, Status: artifactsdomain.StatusLive,
 			Shares: []artifacts.Share{share(artifacts.AudienceSeat, "bob", artifacts.RoleViewer)}},
 		design: {ID: design, Kind: artifacts.KindDesign, Title: "Launch", Owner: "jane",
+			OwnerKind: iam.ActorHuman, HeadNumber: 1, Status: artifactsdomain.StatusLive,
+			Shares: []artifacts.Share{share(artifacts.AudienceSeat, "bob", artifacts.RoleViewer)}},
+		pulse: {ID: pulse, Kind: artifacts.KindDashboard, Title: "Pulse", Owner: "jane",
 			OwnerKind: iam.ActorHuman, HeadNumber: 1, Status: artifactsdomain.StatusLive,
 			Shares: []artifacts.Share{share(artifacts.AudienceSeat, "bob", artifacts.RoleViewer)}},
 		report: {ID: report, Kind: artifacts.KindHTML, Title: "Report", Owner: "scribe",
@@ -172,6 +181,8 @@ func (e *estate) Version(_ context.Context, id artifacts.ID, n int) (artifactsdo
 	case design:
 		v.Manifest = artifacts.Manifest{Entry: "canvas.json",
 			Files: []artifacts.Entry{entryCanvas, entryHero, entryMobile}}
+	case pulse:
+		v.Manifest = artifacts.Manifest{Entry: "dashboard.json", Files: []artifacts.Entry{entryBoard}}
 	default:
 		v.Manifest = artifacts.Manifest{Entry: "index.html",
 			Files: []artifacts.Entry{entryChart, entryLogo, entryIndex}}
@@ -382,7 +393,7 @@ func (o *objects) Open(_ context.Context, obj objstore.Object) (io.ReadCloser, e
 	o.opened++
 	o.mu.Unlock()
 	for _, body := range [][]byte{indexHTML, logoSVG, chartPNG, notesMD, deckJSON, coverHTML, nextHTML,
-		docJSON, startMD, oncallMD, canvasJSON, heroHTML, mobileHTML} {
+		docJSON, startMD, oncallMD, canvasJSON, heroHTML, mobileHTML, boardJSON} {
 		if objstore.HashOf(body) == obj.Hash {
 			return io.NopCloser(bytes.NewReader(body)), nil
 		}

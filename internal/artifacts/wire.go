@@ -90,7 +90,31 @@ type TicketClaims struct {
 
 	// Expires is the claims' own expiry.
 	Expires time.Time `json:"e"`
+
+	// Purpose is why the frame was minted: empty for a viewer opening the
+	// artifact, [TicketPurposePreview] for a gallery card drawing it small.
+	// A preview carries only [PreviewCapabilities], lives at most
+	// [PreviewTicketLifetime] and files no ready report.
+	Purpose TicketPurpose `json:"u,omitempty"`
 }
+
+// TicketPurpose is why a frame was minted.
+type TicketPurpose string
+
+// TicketPurposePreview is a gallery card's live preview: the same read, under
+// the same authorization, of a page drawn small and inert. It records no
+// open, joins no room, writes nothing and reports no ready time.
+const TicketPurposePreview TicketPurpose = "preview"
+
+// Valid reports whether p is a purpose this build mints: none, or a preview.
+func (p TicketPurpose) Valid() bool { return p == "" || p == TicketPurposePreview }
+
+// PreviewCapabilities are the only capabilities a preview's frame is granted:
+// what drawing the page needs (its asset store's pictures) and nothing that
+// reads the viewer, the datastore or the room. A preview has no host on its
+// port anyway; the grant is what keeps the page's runtime from offering
+// anything more, and what the ticket proves.
+var PreviewCapabilities = []Capability{CapabilityAssets}
 
 // OriginMode is how the artifact origin isolates one artifact.
 type OriginMode string
