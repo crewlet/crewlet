@@ -22,6 +22,7 @@ import { describe, expect, test } from "vitest";
 import { canonicalMarkdown, roundTripMarkdown } from "@crewlethq/ui/RichEditorMarkdown";
 import { renderMarkdown } from "./markdown.ts";
 import { TEMPLATES } from "~/routes/knowledge/Composer.tsx";
+import { DOC_TEMPLATES } from "~/lib/artifacts/docTemplates.ts";
 import { repoRoot } from "~/test/engineFiles.ts";
 
 const SKIP = new Set(["node_modules", ".git", "static", "dashboard"]);
@@ -48,6 +49,7 @@ const corpus: { name: string; text: string }[] = [
     text: readFileSync(join(fixtures, name), "utf8"),
   })),
   ...TEMPLATES.map((t) => ({ name: `template ${t.value}`, text: t.body })),
+  ...DOC_TEMPLATES.map((t) => ({ name: `doc template ${t.key}`, text: t.body })),
 ];
 
 /** Elements whose box starts a new line of text. */

@@ -10635,6 +10635,65 @@ a.live-row:focus-visible {
   justify-content: center;
   padding: var(--spacing-5);
 }
+
+/* ---- New doc ------------------------------------------------------------ */
+
+/* THE PAGE AS IT WILL READ: one column at the document's own measure, centred
+   in the body, with the title in the document's title type and the editor
+   under it. The body scrolls; the column keeps the artifact page's inset, and
+   the 16px gutter on a phone. */
+.doc-create {
+  --doc-create-inset: var(--spacing-5);
+  display: flex;
+  flex: 1 1 auto;
+  justify-content: center;
+  padding: var(--spacing-8) var(--doc-create-inset) var(--spacing-10);
+  scrollbar-gutter: stable both-edges;
+}
+@container page (width < 640px) {
+  .doc-create {
+    --doc-create-inset: var(--spacing-4);
+    padding-top: var(--spacing-5);
+  }
+}
+.doc-create-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  width: 100%;
+  max-width: var(--size-measure);
+  min-width: 0;
+}
+/* WHO WILL SEE IT, said once above the title, quietly. */
+.doc-create-where {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+/* THE TEMPLATES: one quiet row of chips under the title, which scrolls in
+   itself on a phone rather than stacking rows above the writing. Its block
+   padding keeps the chips' focus rings inside the scroller. */
+.doc-create-starts {
+  margin-top: calc(-1 * var(--spacing-1));
+}
+@container page (width < 640px) {
+  .doc-create-starts {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    margin-inline: calc(-1 * var(--doc-create-inset));
+    padding: var(--spacing-1) var(--doc-create-inset);
+    scrollbar-width: none;
+  }
+  .doc-create-starts > * {
+    flex: none;
+  }
+}
+.doc-create-editor {
+  min-height: 40vh;
+}
 .artifact-loading,
 .artifact-trashed {
   min-width: 0;

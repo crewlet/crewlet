@@ -52,14 +52,23 @@ export function titleHold(title: string): string | undefined {
   return title.trim() === "" ? "Give it a title." : titleProblem(title);
 }
 
+/** What a starter create carries beyond the kind and the title. */
+export interface StarterPlan {
+  /** A doc's text as its writer wrote it, under the title's heading. */
+  doc?: { body: string };
+}
+
 /** A create page's writes, and what the last one answered. */
 export interface CreateArtifact {
   /** Whether a write is out. */
   busy: boolean;
   /** What the engine said when it refused the last write, or null. */
   refusal: string | null;
-  /** Make a doc or a deck from the engine's starter and open it. */
-  fromStarter: (kind: "doc" | "slides", title: string) => Promise<void>;
+  /**
+   * Make a doc or a deck from the engine's starter and open it; a doc with
+   * the text its writer wrote (`plan.doc`) begins as that text.
+   */
+  fromStarter: (kind: "doc" | "slides", title: string, plan?: StarterPlan) => Promise<void>;
   /** Make a sheet with a template's columns and open it. */
   sheet: (title: string, template: SheetTemplate) => Promise<void>;
 }
@@ -81,13 +90,15 @@ export function useCreateArtifact(): CreateArtifact {
     answer?.kind === "done" && typeof answer.body.artifact === "string" ? answer.body.artifact : "";
 
   const fromStarter = useCallback(
-    async (kind: "doc" | "slides", title: string) => {
+    async (kind: "doc" | "slides", title: string, plan: StarterPlan = {}) => {
       const name = title.trim();
       const id = made(
-        await run(createFromStarter({ kind, title: name, ...(workItem ? { workItem } : {}) })),
+        await run(
+          createFromStarter({ kind, title: name, ...(workItem ? { workItem } : {}), ...plan }),
+        ),
       );
       if (!id) return;
-      toast.ok(`Started “${name}”`);
+      toast.ok(plan.doc ? `Created “${name}”` : `Started “${name}”`);
       nav.to(artifactPath(id));
     },
     [run, workItem, toast, nav],
