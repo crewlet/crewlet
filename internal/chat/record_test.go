@@ -520,7 +520,7 @@ func TestEveryRecordAtEveryCapFitsTheDeclaredBound(t *testing.T) {
 		}, nil},
 		{chat.OpReact, chat.MessageSubject(uuid.NewString()), chat.Reaction{
 			V: 1, MessageID: uuid.NewString(), Emoji: worst(chat.MaxEmoji),
-			By: wide(1)[0],
+			By: wide(1)[0], Cap: chat.MaxReactionEmoji,
 		}, nil},
 		{chat.OpDelete, chat.MessageSubject(uuid.NewString()), chat.MessageDelete{
 			V: 1, MessageID: uuid.NewString(), DeletedBy: wide(1)[0],
@@ -946,10 +946,14 @@ func TestEveryPayloadRefusesWhatItWillNotWriteNamingTheField(t *testing.T) {
 		}},
 		{"a reaction with no emoji", "emoji", chat.Reaction{
 			V: 1, MessageID: uuid.NewString(), By: "sarah-chen",
+			Cap: chat.MaxReactionEmoji,
 		}},
 		{"a reaction over the emoji cap", "emoji", chat.Reaction{
 			V: 1, MessageID: uuid.NewString(), By: "sarah-chen",
-			Emoji: strings.Repeat("e", chat.MaxEmoji+1),
+			Emoji: strings.Repeat("e", chat.MaxEmoji+1), Cap: chat.MaxReactionEmoji,
+		}},
+		{"a reaction added with no cap", "cap", chat.Reaction{
+			V: 1, MessageID: uuid.NewString(), By: "sarah-chen", Emoji: ":shipit:",
 		}},
 		{"a prune with no cutoff", "cutoff", chat.Prune{V: 1}},
 		{"an eviction naming no node", "node_id", chat.Eviction{
@@ -1034,6 +1038,11 @@ func TestTheShapesARealCompanyWritesAreAccepted(t *testing.T) {
 		},
 		chat.Reaction{
 			V: 1, MessageID: uuid.NewString(), Emoji: ":shipit:", By: "amir-haddad",
+			Cap: chat.MaxReactionEmoji,
+		},
+		chat.Reaction{
+			V: 1, MessageID: uuid.NewString(), Emoji: ":shipit:", By: "amir-haddad",
+			Removed: true,
 		},
 		chat.Prune{V: 1, Cutoff: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)},
 		chat.Eviction{

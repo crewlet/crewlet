@@ -259,6 +259,15 @@ func (h *applyHarness) number(query string, args ...any) int64 {
 	return out.Int64
 }
 
+// capOf is the cap a writer of this build stamps on a reaction: its own on an
+// add, none on a take-back.
+func capOf(removed bool) int {
+	if removed {
+		return 0
+	}
+	return chat.MaxReactionEmoji
+}
+
 // lastVerdict is what the applier decided about the latest message record it
 // consumed: the verdict at the highest position.
 func (h *applyHarness) lastVerdict() chat.Verdict {
@@ -877,7 +886,7 @@ func TestAPruneDeletesTheSameRowsInTwoEstates(t *testing.T) {
 		react := applyRecord(chat.MessageSubject("room-1"), chat.OpReact,
 			"op-react-1", chat.Reaction{
 				V: chat.DocumentVersion, MessageID: "msg-1", Emoji: ":eyes:",
-				By: "grace",
+				By: "grace", Cap: chat.MaxReactionEmoji,
 			}, chat.ScopeSet{Subject: true})
 		if _, _, err := h.applyStoredAt(react, old); err != nil {
 			h.t.Fatalf("react: %v", err)
@@ -1096,7 +1105,7 @@ func TestASecondCopyOfAnOperationDoesNothing(t *testing.T) {
 	react := func(opID string, removed bool) chat.MutationRecord {
 		return applyRecord(chat.MessageSubject("room-1"), chat.OpReact, opID,
 			chat.Reaction{V: chat.DocumentVersion, MessageID: "msg-1", Emoji: ":+1:",
-				By: "ada", Removed: removed},
+				By: "ada", Removed: removed, Cap: capOf(removed)},
 			chat.ScopeSet{Subject: true})
 	}
 	add := react("op-react-1", false)
@@ -1159,6 +1168,57 @@ func TestAVerdictIsKeptForTheLedgersHorizonAndPrunedABatchAtATime(t *testing.T) 
 	}
 }
 
+// A REACTION IS DECLINED AT THE CAP ITS WRITER STAMPED, never at the applying
+// node's own: the cap is a rule a later build may change, and two builds
+// deciding one record from their own constants would write different rows.
+// So a record stamped below this build's cap is declined at the stamp, and one
+// stamped above it is taken past it.
+//
+// Mutation: decide reactionsFull from MaxReactionEmoji rather than the
+// record's Cap and both halves go red.
+func TestAReactionIsDeclinedAtTheCapItsWriterStamped(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	if _, _, err := h.apply(applyCreateRoom("room-1", "launch")); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, _, err := h.apply(applyPostRecord("room-1", "msg-1", "ship it", "")); err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	react := func(emoji string, stamped int) chat.MutationRecord {
+		return applyRecord(chat.MessageSubject("room-1"), chat.OpReact, "op-react-"+emoji,
+			chat.Reaction{V: chat.DocumentVersion, MessageID: "msg-1", Emoji: emoji,
+				By: "ada", Cap: stamped}, chat.ScopeSet{Subject: true})
+	}
+	const lower = 2
+	for _, emoji := range []string{":a:", ":b:"} {
+		if _, _, err := h.apply(react(emoji, lower)); err != nil {
+			t.Fatalf("react %s: %v", emoji, err)
+		}
+	}
+	if _, _, err := h.apply(react(":c:", lower)); err != nil {
+		t.Fatalf("react past a stamp of %d: %v", lower, err)
+	}
+	if got := h.lastVerdict(); got != chat.VerdictReactionsFull {
+		t.Errorf("a third emoji under a stamp of %d was decided %q, want %q", lower, got,
+			chat.VerdictReactionsFull)
+	}
+	// TWO ON IT ALREADY, so thirty-one more is one past this build's cap.
+	for i := range chat.MaxReactionEmoji - 1 {
+		if _, _, err := h.apply(react(fmt.Sprintf(":e%d:", i), chat.MaxReactionEmoji+1)); err != nil {
+			t.Fatalf("react %d: %v", i, err)
+		}
+	}
+	if got := h.lastVerdict(); got != chat.VerdictApplied {
+		t.Errorf("an emoji under a stamp above this build's cap was decided %q — the "+
+			"writer's build allows it, so every node takes it", got)
+	}
+	if got := h.number(`SELECT COUNT(DISTINCT emoji) FROM chat_reactions WHERE message_id = ?`,
+		"msg-1"); got != int64(chat.MaxReactionEmoji+1) {
+		t.Errorf("the message carries %d distinct emoji, want %d", got, chat.MaxReactionEmoji+1)
+	}
+}
+
 // TestTheThirtyThirdDistinctReactionIsDeclinedDeterministically.
 //
 // [chat.MaxReactionEmoji] is the applier's to enforce, and the record's shape
@@ -1187,7 +1247,7 @@ func TestTheThirtyThirdDistinctReactionIsDeclinedDeterministically(t *testing.T)
 		return applyRecord(chat.MessageSubject("room-1"), chat.OpReact,
 			verb+emoji+"-"+by, chat.Reaction{
 				V: chat.DocumentVersion, MessageID: "msg-1", Emoji: emoji,
-				By: by, Removed: removed,
+				By: by, Removed: removed, Cap: capOf(removed),
 			}, chat.ScopeSet{Subject: true})
 	}
 	for i := range chat.MaxReactionEmoji {
