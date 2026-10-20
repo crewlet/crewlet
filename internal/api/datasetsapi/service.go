@@ -274,7 +274,7 @@ func (s *Service) dataset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("dataset")
-	if _, ok := b.Spec.Dataset(id); !ok {
+	if _, known := b.Spec.Dataset(id); !known {
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound, map[string]string{
 			"detail": "version's board has no dataset " + id})
 		return
