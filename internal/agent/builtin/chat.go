@@ -1364,13 +1364,38 @@ func (t *searchMessages) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 		return tools.Result{Output: "Nothing in the rooms you can read matches that."}, nil
 	}
-	out := map[string]any{"count": len(answer.Hits), "messages": answer.Hits}
+	rows := make([]chatHitRow, 0, len(answer.Hits))
+	for _, hit := range answer.Hits {
+		rows = append(rows, chatHitRow{
+			MessageID: hit.MessageID, ChannelID: hit.ChannelID, ThreadRoot: hit.ThreadRoot,
+			Author: hit.Author, Snippet: hit.Snippet, At: hit.CreatedAt, Score: hit.Score,
+		})
+	}
+	out := map[string]any{"count": len(rows), "messages": rows}
 	if answer.Building {
 		// SAID BESIDE THE HITS for the same reason: what came back is what
 		// the index had reached, not necessarily all there is.
 		out["building"] = true
 	}
 	return jsonAnswer(out, "Narrow it with `channel`, `author` or a shorter `limit`.")
+}
+
+// chatHitRow is one search hit as this tool renders it.
+//
+// A PROJECTION rather than the index's own value, which carries no JSON
+// names: handed over whole it keyed a hit `MessageID` and `ThreadRoot` beside
+// every other chat answer's `message_id` and `thread_root`, so a seat reading
+// one to reply under it met the id under a key no other tool spells. The keys
+// are the transcript's own — `read_channel` answers a message's room as
+// `channel_id` — and the instant is `at`, as the API's search answers it.
+type chatHitRow struct {
+	MessageID  string    `json:"message_id"`
+	ChannelID  string    `json:"channel_id"`
+	ThreadRoot string    `json:"thread_root,omitempty"`
+	Author     string    `json:"author,omitempty"`
+	Snippet    string    `json:"snippet"`
+	At         time.Time `json:"at"`
+	Score      float64   `json:"score"`
 }
 
 // ---- list_channels ----------------------------------------------------- //
