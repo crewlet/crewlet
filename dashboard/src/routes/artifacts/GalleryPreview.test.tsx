@@ -8,7 +8,7 @@
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-import { GalleryPreview, firstRow } from "./GalleryPreview.tsx";
+import { GalleryPreview, previewWidgets, previewable } from "./GalleryPreview.tsx";
 import type { ArtifactListItem, DashboardWidget } from "~/protocol/index.ts";
 import type { ArtifactPeople } from "~/lib/artifacts/people.ts";
 import { mintFrame, readOutline } from "~/lib/artifacts/api.ts";
@@ -21,6 +21,18 @@ vi.mock("~/lib/artifacts/api.ts", async () => {
     readOutline: vi.fn(),
     mintFrame: vi.fn(() => new Promise(() => {})),
     readBoard: vi.fn(() => new Promise(() => {})),
+  };
+});
+/** The props the last preview frame was mounted with. */
+const framed: { props: Record<string, unknown> | null } = { props: null };
+vi.mock("@crewlethq/ui", async () => {
+  const actual = await vi.importActual<typeof import("@crewlethq/ui")>("@crewlethq/ui");
+  return {
+    ...actual,
+    SandboxedFrame: (props: Record<string, unknown>) => {
+      framed.props = props;
+      return null;
+    },
   };
 });
 vi.mock("~/lib/useQuery.ts", () => ({
@@ -36,6 +48,7 @@ function item(over: Partial<ArtifactListItem>): ArtifactListItem {
     title: "Runbook",
     head_number: 3,
     status: "live",
+    capabilities: [],
     ...over,
   } as ArtifactListItem;
 }
@@ -135,6 +148,47 @@ test("nothing live is drawn for an artifact in the trash", async () => {
   expect(mintFrame).not.toHaveBeenCalled();
 });
 
+// A PREVIEW'S FRAME RUNS WITH NO HOST: nothing is attached to its port, so a
+// page in it can call no datastore, learn no viewer and join no room; it is
+// mounted only to draw, and only its drawn state is heard.
+test("a page's preview frame is mounted with no host on its port", async () => {
+  vi.stubGlobal("IntersectionObserver", SeenObserver);
+  framed.props = null;
+  vi.mocked(mintFrame).mockResolvedValueOnce({
+    frame_url: "https://p2.artifacts.example.net/t/x/index.html#n=abc",
+    origin: "https://p2.artifacts.example.net",
+    mode: "per-artifact",
+    sandbox: "allow-scripts",
+    allow: "",
+    nonce: "abc",
+  } as never);
+  render(<GalleryPreview item={item({ id: "p2", kind: "html" })} people={people} />);
+  await waitFor(() => expect(framed.props).not.toBeNull());
+  for (const host of ["onReady", "onMessage", "onOpenLink", "onFocusExit", "onReload"]) {
+    expect(framed.props, host).not.toHaveProperty(host);
+  }
+  expect(framed.props).toHaveProperty("onStateChange");
+});
+
+test("a page that is an app over its people's data shows the kind's drawing, and reads nothing", async () => {
+  vi.stubGlobal("IntersectionObserver", SeenObserver);
+  expect(previewable({ kind: "html", capabilities: ["db", "identity", "presence"] })).toBe(false);
+  expect(previewable({ kind: "html", capabilities: ["state", "assets"] })).toBe(false);
+  expect(previewable({ kind: "html", capabilities: ["db"] })).toBe(true);
+  expect(previewable({ kind: "html", capabilities: ["assets"] })).toBe(true);
+  expect(previewable({ kind: "sheet", capabilities: [] })).toBe(true);
+  const { container } = render(
+    <GalleryPreview
+      item={item({ id: "p3", kind: "html", capabilities: ["db", "presence"] })}
+      people={people}
+    />,
+  );
+  await act(async () => {});
+  expect(container.querySelector(".crewlet-kind-ground.crewlet-kind--html")).not.toBeNull();
+  expect(container.querySelector(".crewlet-live-preview__live")).toBeNull();
+  expect(mintFrame).not.toHaveBeenCalled();
+});
+
 const widget = (id: string, w: number, more: Partial<DashboardWidget> = {}): DashboardWidget => ({
   id,
   type: "stat",
@@ -142,19 +196,32 @@ const widget = (id: string, w: number, more: Partial<DashboardWidget> = {}): Das
   ...more,
 });
 
-test("a board's first row fills its twelve columns from the top, a leading group's children standing in", () => {
-  expect(
-    firstRow([widget("a", 3), widget("b", 3), widget("c", 6), widget("d", 4)]).map((w) => w.id),
-  ).toEqual(["a", "b", "c"]);
-  expect(firstRow([widget("a", 8), widget("b", 6)]).map((w) => w.id)).toEqual(["a"]);
-  expect(firstRow([widget("a", 12), widget("b", 3)]).map((w) => w.id)).toEqual(["a"]);
-  expect(
-    firstRow([
-      widget("g", 12, { type: "group", children: [widget("x", 6), widget("y", 6)] }),
-      widget("z", 3),
-    ]).map((w) => w.id),
-  ).toEqual(["x", "y"]);
-  expect(firstRow([widget("a", 4), widget("g", 12, { type: "group" })]).map((w) => w.id)).toEqual([
-    "a",
-  ]);
+const ids = (drawn: { widget: DashboardWidget }[]) => drawn.map((d) => d.widget.id);
+
+// THE BOARD FILLS ITS CARD: rows from the top until they reach the box's
+// height, a group's children in its place, within the dataset budget.
+test("a board's preview draws rows from the top until they fill the card", () => {
+  const stats = ["a", "b", "c", "d"].map((id) => widget(id, 3, { h: 6, dataset: id }));
+  // Four stats (96px) and a chart (192px) fill the box; the table under them does not fit.
+  const chart = widget("chart", 12, { type: "timeseries", h: 12, dataset: "series" });
+  const table = widget("table", 12, { type: "table", h: 10, dataset: "rows" });
+  expect(ids(previewWidgets([...stats, chart, table]))).toEqual(["a", "b", "c", "d", "chart"]);
+  expect(ids(previewWidgets([widget("g", 12, { type: "group", children: stats }), chart]))).toEqual(
+    ["a", "b", "c", "d", "chart"],
+  );
+});
+
+test("a board's preview reads at most six datasets", () => {
+  const many = Array.from({ length: 12 }, (_, i) => widget(`w${i}`, 2, { h: 2, dataset: `d${i}` }));
+  const drawn = previewWidgets(many, 10_000);
+  expect(new Set(drawn.map((d) => d.widget.dataset)).size).toBe(6);
+  // A widget on a dataset already read costs nothing more.
+  const shared = Array.from({ length: 8 }, (_, i) => widget(`s${i}`, 3, { h: 2, dataset: "one" }));
+  expect(previewWidgets(shared, 10_000)).toHaveLength(8);
+});
+
+test("a widget too narrow to read at the preview's width is widened", () => {
+  const drawn = previewWidgets([widget("tiny", 1, { h: 4 }), widget("wide", 6, { h: 4 })]);
+  expect(drawn[0]!.span).toBeGreaterThan(1);
+  expect(drawn[1]!.span).toBe(6);
 });

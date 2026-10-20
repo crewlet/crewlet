@@ -531,7 +531,7 @@ function GalleryBar({
   }, [typed, q, onQ]);
   return (
     <PageActions>
-      <span className="artifacts-find">
+      <span className="artifacts-find page-find">
         <Input
           ref={box}
           type="search"

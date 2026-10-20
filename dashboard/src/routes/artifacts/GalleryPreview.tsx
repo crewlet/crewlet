@@ -62,27 +62,57 @@ import { useDensity, usePalette, useTheme } from "~/lib/prefs.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import { renderSlide } from "~/lib/slides.tsx";
 import { mintFrame, readBoard, readDataset, readOutline } from "~/lib/artifacts/api.ts";
-import { datasetStatus } from "~/lib/artifacts/dashboard.ts";
+import { boardSpan, datasetStatus } from "~/lib/artifacts/dashboard.ts";
 import { sheetColumns, sheetRows } from "~/lib/artifacts/sheet.ts";
 import type { ArtifactPeople } from "~/lib/artifacts/people.ts";
 import { DashboardWidget } from "./DashboardWidget.tsx";
 import { sheetCollections } from "./SheetView.tsx";
 
+/** The width a board's preview is laid out at: a laptop's half, so its widgets fill a card's box. */
+const BOARD_WIDTH = 680;
+
+/** The board's own margin in the preview, and the gap between its widgets, in pixels. */
+const BOARD_INSET = 24;
+const BOARD_GAP = 12;
+
 /**
- * The width each kind is laid out at before it is scaled to the card: a doc
- * at a narrow page with its margins, so its opening reads at a card's size
- * as the top of a page does across a room; a sheet and a board at a desktop
- * width, a page at a laptop's. A deck's stage scales itself, and a design's
- * board is laid out at its own size.
+ * The most datasets a board's preview reads: a gallery card is a glimpse, and
+ * six reads cover the stats and the chart a board opens on without a gallery
+ * of boards spending the engine's read budget.
+ */
+const BOARD_DATASETS = 6;
+
+/**
+ * The width each kind is laid out at before it is scaled to the card, chosen
+ * so what it says reads at a card's size: a doc at a narrow page with its
+ * margins, as the top of a page reads across a room; a sheet at a desktop
+ * width; a board at [BOARD_WIDTH]; a page at a small laptop's, where a page
+ * laid out for a wide screen still wraps into lines a card can show. A deck's
+ * stage scales itself, and a design's board is laid out at its own size.
  */
 const LAYOUT_WIDTH: Readonly<Record<ArtifactKind, number | undefined>> = {
   doc: 600,
   slides: undefined,
   sheet: 880,
-  dashboard: 960,
+  dashboard: BOARD_WIDTH,
   design: undefined,
-  html: 1280,
+  html: 880,
 };
+
+/**
+ * Whether a preview can show what the artifact is. A page that declares it
+ * knows its viewer (`identity`), shows who else is here (`presence`) or keeps
+ * each viewer's state (`state`) is an app whose content is its people's data:
+ * a preview is granted none of that and has no host to answer it, so what
+ * remains is the app's empty frame (a sheet's "Add row" bar over no rows),
+ * which reads as broken. Such a page shows the kind's drawing instead. A page
+ * that only reads a datastore (`db`) is drawn live: its own layout and words
+ * are most of what it shows, as a styled report's are.
+ */
+export function previewable(item: Pick<ArtifactListItem, "kind" | "capabilities">): boolean {
+  if (item.kind !== "html") return true;
+  return !item.capabilities.some((c) => c === "identity" || c === "presence" || c === "state");
+}
 
 /** How many rows of a sheet are read and drawn: more than the card shows at any width. */
 const SHEET_ROWS = 14;
@@ -103,7 +133,10 @@ export function GalleryPreview({
   const fallback = <ArtifactKindGround kind={item.kind} />;
   // NOTHING LIVE IN THE TRASH: a trashed artifact's page refuses a frame, and
   // its card is a way to restore it rather than to read it.
-  const still = item.status === "trashed" || (item.kind !== "sheet" && item.head_number <= 0);
+  const still =
+    item.status === "trashed" ||
+    (item.kind !== "sheet" && item.head_number <= 0) ||
+    !previewable(item);
   return (
     <LivePreview fallback={fallback} width={LAYOUT_WIDTH[item.kind]} disabled={still}>
       <KindPreview item={item} people={people} />
@@ -245,27 +278,55 @@ function SheetPreview({ item, people }: { item: ArtifactListItem; people: Artifa
   );
 }
 
+/** A widget the preview draws, with the columns it spans at the preview's width. */
+export interface PreviewWidget {
+  widget: Widget;
+  span: number;
+}
+
 /**
- * A board's first row: the widgets that fill its twelve columns first, from
- * the top, a group's own children standing in for it. A preview draws these
- * and reads only their datasets, so a board of thirty figures costs a gallery
- * a handful of reads.
+ * The widgets a board's preview draws: the board from its top, a group's
+ * children in its place, each spanning what it spans at [BOARD_WIDTH]
+ * ([boardSpan] widens one too narrow to read), row after row until the rows
+ * fill the card's box or the next widget would read a dataset past
+ * [BOARD_DATASETS]. A board that opens on a row of four stats and a chart
+ * draws both, rather than the stats alone over an empty ground.
  */
-export function firstRow(widgets: readonly Widget[]): Widget[] {
-  const out: Widget[] = [];
+export function previewWidgets(
+  widgets: readonly Widget[],
+  height = (BOARD_WIDTH * 9) / 16 - 2 * BOARD_INSET,
+): PreviewWidget[] {
+  const flat = widgets.flatMap((w) => (w.type === "group" ? (w.children ?? []) : [w]));
+  const out: PreviewWidget[] = [];
+  const datasets = new Set<string>();
   let used = 0;
-  for (const w of widgets) {
-    if (w.type === "group") {
-      if (out.length === 0) return firstRow(w.children ?? []);
-      break;
+  let rowHeight = 0;
+  let filled = 0;
+  for (const widget of flat) {
+    if (widget.type === "group") continue;
+    if (widget.dataset && !datasets.has(widget.dataset) && datasets.size >= BOARD_DATASETS) break;
+    const span = boardSpan(widget.w, BOARD_WIDTH - 2 * BOARD_INSET, BOARD_GAP, DASHBOARD_COLUMNS);
+    if (used + span > DASHBOARD_COLUMNS) {
+      filled += rowHeight + BOARD_GAP;
+      used = 0;
+      rowHeight = 0;
+      // A ROW THE BOX WOULD SHOW ONLY A SLIVER OF is not read: its
+      // datasets would cost reads for a strip of chrome at the card's foot.
+      if (filled + ROW_SHOWN > height) break;
     }
-    if (used + w.w > DASHBOARD_COLUMNS && out.length > 0) break;
-    out.push(w);
-    used += w.w;
-    if (used >= DASHBOARD_COLUMNS) break;
+    out.push({ widget, span });
+    if (widget.dataset) datasets.add(widget.dataset);
+    used += span;
+    rowHeight = Math.max(rowHeight, (widget.h ?? DEFAULT_ROWS) * BOARD_ROW);
   }
   return out;
 }
+
+/** The least of a row the box must show for the preview to start it, in pixels. */
+const ROW_SHOWN = 64;
+
+/** The rows a widget with no height of its own is drawn at in a preview. */
+const DEFAULT_ROWS = 6;
 
 function DashboardPreview({ item }: { item: ArtifactListItem }) {
   const board = useRest<DashboardBoardAnswer>(
@@ -273,7 +334,8 @@ function DashboardPreview({ item }: { item: ArtifactListItem }) {
     (signal) => readBoard(item.id, item.head_number, signal, { preview: true }),
   );
   const answer = board.data;
-  const row = useMemo(() => (answer ? firstRow(answer.board.widgets) : []), [answer]);
+  const drawn = useMemo(() => (answer ? previewWidgets(answer.board.widgets) : []), [answer]);
+  const row = useMemo(() => drawn.map((d) => d.widget), [drawn]);
   const [figures, setFigures] = useState<ReadonlyMap<string, DashboardDatasetAnswer | null>>(
     new Map(),
   );
@@ -315,7 +377,7 @@ function DashboardPreview({ item }: { item: ArtifactListItem }) {
     <div className="artifacts-preview-board">
       <ArrangeBoard editing={false} columns={DASHBOARD_COLUMNS}>
         <ArrangeGrid>
-          {row.map((w) => {
+          {drawn.map(({ widget: w, span }) => {
             const d = w.dataset ? byId.get(w.dataset) : undefined;
             const got = w.dataset ? (figures.get(w.dataset) ?? null) : null;
             const failed = w.dataset !== undefined && figures.get(w.dataset) === null;
@@ -333,7 +395,7 @@ function DashboardPreview({ item }: { item: ArtifactListItem }) {
                 name={w.title ?? w.id}
                 editing={false}
                 bare={w.type === "note"}
-                columns={w.w}
+                columns={span}
                 rows={w.h ?? null}
                 rowHeight={BOARD_ROW}
                 className="dashboard-cell"

@@ -10375,9 +10375,9 @@ a.live-row:focus-visible {
 
 /* MAKE SOMETHING NEW: six tiles across, each the kind's drawing on its
    tinted ground, with the room of a section under them before the work.
-   Narrower than six can stand at a readable size, the row scrolls sideways
-   and snaps to a tile, as a shelf does, rather than wrapping into a block
-   that pushes every card down a screen. */
+   Narrower than six can stand at a readable size, they are three across in
+   two rows: every kind in view at once, none hidden past an edge a reader
+   has to discover by swiping. */
 .artifacts-make {
   display: flex;
   flex-direction: column;
@@ -10410,29 +10410,8 @@ a.live-row:focus-visible {
 }
 @container page (width < 720px) {
   .artifacts-make-row {
-    grid-template-columns: none;
-    grid-auto-columns: 7.5rem;
-    grid-auto-flow: column;
-    gap: var(--spacing-3);
-    overflow-x: auto;
-    overscroll-behavior-x: contain;
-    scroll-snap-type: x mandatory;
-    scrollbar-width: none;
-    /* The focus ring of a tile at either end stays inside the scroller. */
-    padding: 4px;
-    margin: -4px;
-  }
-  .artifacts-make-row > li {
-    scroll-snap-align: start;
-  }
-  /* ON THE SHELL'S NARROW LAYOUT the shelf runs to the screen's edges, past
-     the content's gutter, so a tile cut at the edge says there are more. */
-  @media (width < 1024px) {
-    .artifacts-make-row {
-      margin-inline: calc(-1 * var(--spacing-4));
-      padding-inline: var(--spacing-4);
-      scroll-padding-inline: var(--spacing-4);
-    }
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--spacing-4) var(--spacing-3);
   }
 }
 
