@@ -99,6 +99,14 @@ type turnTelemetry struct {
 	// suspension to park beside the conversation.
 	ask string
 
+	// task is the trigger as the executor is handed it ([DescribeTrigger]):
+	// the brief of every wake, with what a delivery fenced moved onto
+	// [turnTelemetry.boundary] — here beside the token rather than in the
+	// frame that builds the runner, so the ask and the fences the segment's
+	// tools write cannot be cut under two tokens. Empty on a resume, which
+	// re-reads no trigger and carries the parked task instead.
+	task string
+
 	// senders is who spoke to this seat ([sendersSpoken] over the
 	// interactions) — read off the trigger on a dispatch and off the parked
 	// conversation on a resume, for the reason ask is: a resumed segment
@@ -270,6 +278,7 @@ func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request
 	t.written = &turnctx.Written{}
 	t.auxSpent = auxspend.NewTally()
 	t.boundary = provenance.NewBoundary()
+	t.task = DescribeTrigger(req.Ask(), t.boundary)
 	rebased, err := rebaseFor(ctx, e.rebases(), builtin.Actor{
 		TurnID: t.runID, WorkKey: t.workKey, WorkSince: t.workSince,
 	}, t.startedAt)

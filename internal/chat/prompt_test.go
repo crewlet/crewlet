@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // WHAT A MESSAGE ASKS OF THE SEAT IT REACHED.
@@ -346,6 +347,50 @@ func TestAnAuthorTheRosterDoesNotNameIsDescribedByKind(t *testing.T) {
 	if built := chat.NewPrompt().Build(in, chatParties{}); !strings.Contains(built,
 		"a credential") {
 		t.Errorf("a credential's line renders it as a colleague:\n%s", built)
+	}
+}
+
+// A NATIVE MESSAGE IS FENCED UNDER WHO WROTE IT, the roster's seat first and the
+// kind the record stated where the roster no longer names them: a person
+// whose seat has gone is still a person who wrote this, and the engine's own
+// narration is the engine — never the outside party a vendor's unknown id is.
+//
+// Mutation: drop NewPrompt's Author and a person the roster lost reads as
+// external; resolve by kind before the roster and a colleague the record
+// called an agent outranks what the roster says she is.
+func TestANativeMessageIsFencedUnderWhoWroteIt(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		author  string
+		kind    chat.AuthorKind
+		parties notify.Parties
+		label   string
+	}{
+		"a colleague the roster names": {"jane", chat.AuthorAgent,
+			chatParties{"jane": {Handle: "jane", Name: "Jane", Human: true}},
+			"trust=colleague authors=human:jane]"},
+		"a person the roster lost": {"jane", chat.AuthorHuman, chatParties{},
+			"trust=colleague authors=human:jane]"},
+		"the engine narrating": {"", chat.AuthorSystem, chatParties{},
+			"trust=colleague authors=system]"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			in := trigger(t, "eng", func(n *chat.Notify) {
+				n.Author, n.AuthorKind = c.author, c.kind
+			})
+			in.Body, in.Fence = "the release slipped", provenance.NewBoundary()
+			built := chat.NewPrompt().Build(in, c.parties)
+			fences := provenance.Fences(built, in.Fence)
+			if len(fences) != 1 {
+				t.Fatalf("the wake carries %d fences, want the message's:\n%s",
+					len(fences), built)
+			}
+			if opening := strings.SplitN(fences[0], "\n", 2)[0]; !strings.HasSuffix(opening,
+				" source=chat_thread "+c.label) {
+				t.Errorf("the message is fenced as %q, want %q", opening, c.label)
+			}
+		})
 	}
 }
 
