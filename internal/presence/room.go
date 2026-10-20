@@ -288,13 +288,30 @@ func (r *room) present() presentation {
 	return presentation{members: shown, counts: counts}
 }
 
-// roster is a presentation as a joining socket is handed it.
-func (r *room) roster(p presentation) Roster {
-	members := p.members
-	if members == nil {
-		members = []Member{}
+// rosterFor is what a socket joining the room is handed: what this node's
+// sockets were last shown, and the joiner's own member beside it.
+//
+// THE BASELINE EVERY FAN-OUT IS TAKEN FROM, never the room as it presents now:
+// a fan-out is the difference from what the sockets were last shown
+// ([room.diff]), so a socket handed anything else holds a screen the next
+// fan-out does not apply to. Handed the room as it presented at the join, a
+// member who arrived since the last fan-out and left before the next was on
+// the joiner's screen and in no fan-out's leave, and stayed there for good.
+// What moved since the last fan-out reaches the joiner in the next one, as it
+// reaches every other socket here.
+func (r *room) rosterFor(joiner Member) Roster {
+	members := make([]Member, 0, len(r.presented)+1)
+	for _, m := range r.presented {
+		if m.Session != joiner.Session {
+			members = append(members, m)
+		}
 	}
-	return Roster{Members: members, Counts: p.counts, Truncated: p.counts != nil}
+	members = append(members, joiner)
+	slices.SortFunc(members, func(a, b Member) int {
+		// MOST RECENT FIRST, as the room presents itself.
+		return cmp.Or(b.At.Compare(a.At), cmp.Compare(a.Session, b.Session))
+	})
+	return Roster{Members: members, Counts: r.counts, Truncated: r.counts != nil}
 }
 
 // diff is what this node's sockets must be told to go from what they were
