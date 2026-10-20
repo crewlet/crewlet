@@ -21,12 +21,32 @@ import type {
   ArtifactHistoryEntry,
   ArtifactKind,
   ArtifactRole,
+  ColumnType,
   DataFieldChange,
   DataHistoryEntry,
   DataVerdict,
   ShareableRole,
 } from "~/protocol/index.ts";
 import { fmtDate, parseUTC, plural } from "../format.ts";
+
+/**
+ * What each column type is called, in the schema editor and in a new sheet's
+ * column settings: a select is a "Choice" and a URL a "Link", the words a
+ * person filling the sheet in uses.
+ */
+export const COLUMN_TYPE_WORDS: Readonly<Record<ColumnType, string>> = {
+  text: "Text",
+  longtext: "Long text",
+  number: "Number",
+  checkbox: "Checkbox",
+  select: "Choice",
+  multiselect: "Choices",
+  status: "Status",
+  person: "Person",
+  date: "Date",
+  url: "Link",
+  rating: "Rating",
+};
 
 /**
  * What each kind is called, in the eyebrow, the gallery's Type column and its
