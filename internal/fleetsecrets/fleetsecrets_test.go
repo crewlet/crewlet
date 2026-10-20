@@ -618,6 +618,68 @@ func TestMigrationKeepsAFleetValueWrittenAfterTheOfflineOne(t *testing.T) {
 	}
 }
 
+// A MIGRATION NEVER UNDOES A LATER WRITE THAT LANDED WHILE IT RAN.
+//
+// It reads the fleet once and judges every local row against that read, and a
+// node boots while its peers keep running: an operator rotating a name through
+// one of them between the read and the write makes the fleet's value the later
+// of the two. Written with a plain put, the older offline value replaced that
+// rotation; written where the fleet held nothing, it replaced a first value
+// somebody set meanwhile. Both are conditioned on the row the read returned,
+// lose, and are judged again on what the fleet holds now — so both later
+// writes are kept, and the local copies still go. The control is a row nobody
+// touched, which is carried over.
+//
+// Mutation: carry with a plain put (or with a create and an update that ignore
+// the version) and the two rotations are overwritten.
+func TestAMigrationNeverUndoesALaterWriteThatLandedWhileItRan(t *testing.T) {
+	t.Parallel()
+	cipher := ring(t, "k1")
+	local := localStore(t, cipher)
+	f := &interleavedFleet{Fleet: coordmem.NewFleet()}
+	fleet := fleetsecrets.New(f, cipher)
+	mustSet(t, fleet, "ROTATED", "the-fleet-token")
+	for _, name := range []string{"ROTATED", "CREATED", "UNTOUCHED"} {
+		if err := local.Set(t.Context(), name, "the-offline-"+strings.ToLower(name), sam,
+			secrets.SourceCLI, clock.Add(time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.between = func() {
+		dana := secrets.Author{Name: "dana", Kind: "operator"}
+		for _, name := range []string{"ROTATED", "CREATED"} {
+			if err := fleet.Set(t.Context(), name, "the-later-token", dana, secrets.SourceAPI,
+				clock.Add(2*time.Hour)); err != nil {
+				t.Errorf("write %s mid-pass: %v", name, err)
+			}
+		}
+	}
+
+	moved, err := fleetsecrets.Migrate(t.Context(), local, fleet)
+	if err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if strings.Join(moved, ",") != "UNTOUCHED" {
+		t.Errorf("moved = %v, want only the row nobody wrote meanwhile", moved)
+	}
+	values, err := fleet.All(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"ROTATED", "CREATED"} {
+		if values[name] != "the-later-token" {
+			t.Errorf("%s = %q, want the write that landed after the pass read the "+
+				"fleet, which is the later one", name, values[name])
+		}
+	}
+	if values["UNTOUCHED"] != "the-offline-untouched" {
+		t.Errorf("UNTOUCHED = %q, want the offline write carried over", values["UNTOUCHED"])
+	}
+	if rows, _ := local.List(t.Context()); len(rows) != 0 {
+		t.Fatalf("the local copies survived: %+v", rows)
+	}
+}
+
 // A ROW THAT COULD NOT BE COPIED IS NOT REMOVED. Deleting it would destroy a
 // credential this node is the only holder of, and the first symptom would be
 // a vendor 401 hours later on a node that never had the value.
