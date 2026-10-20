@@ -471,10 +471,21 @@ func (p *datadogPass) Run(ctx context.Context, in setup.PassInput) ([]integratio
 		return nil, integration.ErrNotConfigured
 	}
 	if cfg.Provisioning == nil {
-		// A FINDING, NOT A FAULT, and not an error either: this company
-		// accepts alerts and asked for no identities, which is a complete
-		// configuration rather than a missing one.
-		return nil, nil
+		// THE KEYS ARE MISSING, which is how config reads it too: an
+		// enabled block with no provisioning is refused, because the
+		// provisioning keys are what register the webhook alerts arrive
+		// by, and a block without them serves a route, reports itself
+		// connected and receives nothing. A validated document never
+		// reaches here; a document that did would be exactly that
+		// block, so it is reported as the finding it is. This returned
+		// nothing — ready — calling it a company that "asked for no
+		// identities", which is the state config exists to refuse.
+		return []integration.Finding{{
+			Kind:    integration.FindingCredentialMissing,
+			Subject: "integrations.datadog.provisioning",
+			Detail: "integrations.datadog.provisioning is unset, so nothing can " +
+				"register the webhook alerts arrive by or make the agents' accounts",
+		}}, nil
 	}
 	env := p.engine.resolver()
 	// ASKED BEFORE BUILDING, so an unset or misspelled region is a
