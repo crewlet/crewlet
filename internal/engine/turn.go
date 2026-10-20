@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	llmchain "github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -1203,7 +1204,7 @@ func (d *Dispatcher) answered(ctx context.Context, handle string, evs []*events.
 		return sandbox.AnswerNotMine, nil
 	}
 	disposition, err := d.Answer(ctx, handle, sandbox.Reply{
-		Conv: conv, Text: DescribeTrigger(evs), Events: evs,
+		Conv: conv, Text: DescribeTrigger(evs, ""), Events: evs,
 	})
 	if err != nil {
 		// BOTH KEYS, for the reason the offer carries both: a line naming
@@ -1410,7 +1411,7 @@ func (d *Dispatcher) recordWorked(ctx context.Context, handle string, req Reques
 		}
 	}
 	d.RecordSession(ctx, handle, req.ConversationKey, req.RunID, req.WorkKey,
-		DescribeTrigger(req.Ask()), res, now)
+		DescribeTrigger(req.Ask(), ""), res, now)
 }
 
 // RecordSession appends what this turn said to the conversation it served.
@@ -1660,11 +1661,26 @@ func partitionKeyOf(evs []*events.Event) string { return notify.KeyOfAll(evs) }
 // turn states its ask through Briefer; the summary and the type name are for a
 // wake that does not — a successor's type this build decodes with no typed
 // payload still names itself rather than reaching a seat as a blank ask.
-func DescribeTrigger(evs []*events.Event) string {
+//
+// A NOTIFICATION'S FENCES ARE MOVED ONTO fence, the turn's own token: its
+// prompt fenced what somebody said under a token minted for the wake, because
+// no turn existed where it was built, and everything around those fences — a
+// display name, a room's name — is neutralised, as a tool answer's other
+// strings are ([provenance.Rekey]). A reader with no turn of its own (the
+// conversation ledger, a parked run's answer) passes no token, which keeps the
+// wake's and still neutralises the rest.
+func DescribeTrigger(evs []*events.Event, fence provenance.Boundary) string {
 	var parts []string
 	for _, ev := range evs {
 		if ev == nil {
 			continue
+		}
+		if n, ok := events.DataAs[*types.ExternalNotification](ev); ok && n != nil {
+			if b := strings.TrimSpace(provenance.Rekey(n.Body,
+				provenance.Boundary(n.FenceBoundary), fence)); b != "" {
+				parts = append(parts, b)
+				continue
+			}
 		}
 		if brief, ok := ev.Data.(events.Briefer); ok {
 			if b := strings.TrimSpace(brief.Brief()); b != "" {

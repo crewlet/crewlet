@@ -1,6 +1,11 @@
 package notify
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/provenance"
+)
 
 // ChatPrompt is the prompt every chat backend shares.
 //
@@ -54,6 +59,13 @@ type ChatPrompt struct {
 
 	// IdentityNote optionally names the agent's own id here.
 	IdentityNote func(metadata map[string]string) string
+
+	// Author is who wrote the message, as its fence names them. Nil resolves
+	// the sender's id on this backend through the party registry, which is a
+	// vendor's whole answer: an id no seat holds is an outside party. A
+	// backend whose record states the author's kind (the engine's own chat)
+	// answers from it for a sender the registry no longer names.
+	Author func(metadata map[string]string, parties Parties) provenance.Author
 }
 
 // Source implements [Prompt].
@@ -298,11 +310,15 @@ func (p ChatPrompt) Build(n Inbound, parties Parties) string {
 		b.WriteString(threadBlock(self))
 	}
 
-	body := n.Body
-	if body == "" {
-		body = "(empty)"
+	if n.Body == "" {
+		b.WriteString("\n\n**Message:** (empty)")
+	} else {
+		// FENCED AS WHAT SOMEBODY SAID (ADR-0040): the message is the one
+		// part of this trigger the engine did not write, and a model reads
+		// every word of it as a possible instruction. Under the wake's own
+		// token, which the turn moves onto its own.
+		b.WriteString("\n\n**Message:**\n" + p.fenceMessage(n, parties))
 	}
-	b.WriteString("\n\n**Message:** " + body)
 	b.WriteString("\n**From:** " + who)
 	if channel := meta[ChannelField]; channel != "" {
 		// The NAME beside the id where the backend supplies one: "eng"
@@ -347,7 +363,40 @@ func (p ChatPrompt) Build(n Inbound, parties Parties) string {
 	return b.String()
 }
 
-// triage is the addressee guidance, identical on every backend, for a message
+// fenceMessage is the message's body inside its fence: written by its author,
+// at the trust that author earns from the seat the wake reached.
+func (p ChatPrompt) fenceMessage(n Inbound, parties Parties) string {
+	meta := n.Metadata
+	author := p.author(meta, parties)
+	authors := []provenance.Author{author}
+	return provenance.Fence(n.Fence, provenance.SourceChatThread,
+		provenance.TrustFor(meta[RecipientField], authors), authors, n.Body)
+}
+
+// author is [ChatPrompt.Author], or the registry's reading of the sender's id.
+func (p ChatPrompt) author(meta map[string]string, parties Parties) provenance.Author {
+	if p.Author != nil {
+		return p.Author(meta, parties)
+	}
+	if parties != nil {
+		if party, ok := parties.ByExternalID(p.Backend, meta[UserField]); ok {
+			return PartyAuthor(party)
+		}
+	}
+	return provenance.Author{}
+}
+
+// PartyAuthor is a colleague as a fence names them: their seat, as a person or
+// an agent.
+func PartyAuthor(party Party) provenance.Author {
+	kind := iam.ActorAgent
+	if party.Human {
+		kind = iam.ActorHuman
+	}
+	return provenance.Author{Kind: kind, Seat: party.Handle}
+}
+
+// triage is the addressee guidance, identical on every backend.// triage is the addressee guidance, identical on every backend, for a message
 // the engine has not already read as addressed to the seat.
 //
 // A PRINCIPLE, NOT A METHOD. It was a numbered procedure with worked examples

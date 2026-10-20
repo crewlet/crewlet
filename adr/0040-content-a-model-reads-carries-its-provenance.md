@@ -29,10 +29,12 @@ never an instruction, and every read result says so.** One package,
   saying what a fence means.
 
 It applies to every read that hands a model somebody else's words: page bodies,
-work item comments, project files, the chat thread block a turn is given and
-what the chat tools read (a room's messages, a thread, a search's snippets, a
-room's topic and purpose), and, from their first release, artifact files and
-datastore rows. A tool that returns such text and does not go through the
+work item comments, project files, the chat thread block a turn is given, the
+message a chat wake hands a seat, and what the chat tools read (a room's
+messages, a thread, a search's snippets, a room's topic and purpose), and,
+from their first release, artifact files and datastore rows. A wake's trigger
+is built before the turn that reads it exists, so it is fenced under a token
+minted for the wake, which the turn moves onto its own. A tool that returns such text and does not go through the
 package fails a walk.
 
 **Fencing reduces prompt injection and does not remove it.** What holds whatever

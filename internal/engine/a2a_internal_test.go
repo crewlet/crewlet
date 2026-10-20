@@ -47,7 +47,7 @@ func askEvent(channelID, brief string) *events.Event {
 // inventing one. Nothing failed; the answer was simply about nothing.
 func TestAColleaguesQuestionReachesTheAnsweringTurn(t *testing.T) {
 	t.Parallel()
-	got := DescribeTrigger([]*events.Event{askEvent("a2a-1", "What broke last night?")})
+	got := DescribeTrigger([]*events.Event{askEvent("a2a-1", "What broke last night?")}, "")
 	if !strings.Contains(got, "What broke last night?") {
 		t.Errorf("the answering turn's task = %q", got)
 	}
@@ -67,7 +67,7 @@ func TestAnAnswerReachesTheSeatThatAsked(t *testing.T) {
 		Content: "the deploy at 02:14 rolled back", Question: "What broke?",
 	}, events.TraceContext{})
 	reply.Source = "cto"
-	got := DescribeTrigger([]*events.Event{reply})
+	got := DescribeTrigger([]*events.Event{reply}, "")
 	if !strings.Contains(got, "the deploy at 02:14 rolled back") {
 		t.Errorf("the woken turn's task = %q", got)
 	}
@@ -85,7 +85,7 @@ func TestATriggerWithNoBodyStillNamesItself(t *testing.T) {
 	// A BODY-LESS ENVELOPE — which is exactly what an event of a type this
 	// build does not know decodes to: no typed payload.
 	bare := &events.Event{ID: uuid.New(), Type: types.A2ARequestType}
-	if got := DescribeTrigger([]*events.Event{bare}); got != "(a2a_request)" {
+	if got := DescribeTrigger([]*events.Event{bare}, ""); got != "(a2a_request)" {
 		t.Errorf("trigger = %q", got)
 	}
 }
@@ -220,7 +220,7 @@ func TestAnAnsweredAskWakesTheAskerAndClosesTheChannel(t *testing.T) {
 	// And both halves reach the woken seat as its ask: the channel is
 	// closed by the time this lands, so a brief without the question leaves
 	// the requester reading a reply with no antecedent.
-	brief := DescribeTrigger([]*events.Event{reply})
+	brief := DescribeTrigger([]*events.Event{reply}, "")
 	if !strings.Contains(brief, "the deploy at 02:14 rolled back") ||
 		!strings.Contains(brief, "What broke last night?") {
 		t.Errorf("the asker's turn is given %q", brief)

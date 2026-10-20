@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -1055,5 +1056,45 @@ func TestTheWakeCarriesTheSurfaceItsRecipientOwes(t *testing.T) {
 		if n.Owes != want {
 			t.Errorf("%s's wake owes %q, want %q", handle, n.Owes, want)
 		}
+	}
+}
+
+// fencingPrompt is the tracker's prompt with its body fenced under the token
+// the delivery hands it, as a prompt that fences what somebody said does.
+type fencingPrompt struct{ tracker }
+
+func (fencingPrompt) Build(n notify.Inbound, _ notify.Parties) string {
+	return "## How to triage this\n\n" + provenance.Fence(n.Fence, provenance.SourceWorkComment,
+		provenance.TrustExternal, nil, n.Body)
+}
+
+// A WAKE NAMES THE TOKEN ITS PROMPT FENCED UNDER. The trigger is built here,
+// where no turn exists to lend one, so the delivery mints a token for the wake
+// alone, hands it to the prompt and records it on the notification — the only
+// way the turn that reads the trigger can tell the prompt's own fences from
+// anything that merely looks like one, and move them onto its token.
+//
+// Mutation: drop the stamp and the wake names no token; mint it after the
+// prompt is built and the body is fenced under another.
+func TestAWakeNamesTheTokenItsPromptFencedUnder(t *testing.T) {
+	h := newService(t, func(o *notify.Options, _ *harness) {
+		o.Prompts = notify.NewPrompts(fencingPrompt{})
+	})
+	h.parser.out = []notify.Routed{to(notify.Recipient{Handle: "engineering-lead"}, "please look")}
+	if got := h.svc.Handle(t.Context(), delivery("tracker")); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("Handle = %+v, want an ack", got)
+	}
+	woken := h.inbox(t, "engineering-lead")
+	if len(woken) != 1 {
+		t.Fatalf("the seat was woken %d times", len(woken))
+	}
+	n, _ := events.DataAs[*types.ExternalNotification](woken[0])
+	b := provenance.Boundary(n.FenceBoundary)
+	if !b.Valid() {
+		t.Fatalf("the wake names fence token %q, want one minted for it", n.FenceBoundary)
+	}
+	if fences := provenance.Fences(n.Body, b); len(fences) != 1 ||
+		provenance.Unfence(b, fences[0]) != "please look" {
+		t.Fatalf("the prompt's fence is not under the token the wake names:\n%s", n.Body)
 	}
 }

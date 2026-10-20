@@ -258,6 +258,97 @@ func Unfence(b Boundary, text string) string {
 	return strings.TrimSuffix(inner, "\n")
 }
 
+// Rekey moves every fence text carries under from onto to, and neutralises
+// everything else in text under to ([Neutralise]).
+//
+// FOR TEXT FENCED BEFORE ITS READER HAD A TOKEN: a wake's prompt is built where
+// a delivery is routed, before the turn that will read it exists, so its
+// foreign text is fenced under a token minted for that wake alone — and the
+// turn re-keys it onto its own, so a model pairing an opening line with its
+// closer meets one token in a turn rather than one per wake. Only a fence
+// [Fence] wrote under from is moved: content inside it can carry neither from
+// nor a marker-shaped run, and from was minted after anything outside it was
+// written, so nothing the text carries can pass for one of its lines. What is
+// outside the fences — a sender's display name, a room's name, every other
+// string a prompt wove in — is neutralised as a tool answer's other strings
+// are, so none of it opens or closes a fence either.
+//
+// An INVALID from moves nothing and neutralises the whole text; an invalid to
+// keeps from, since a fence is never written with a token that is not one.
+func Rekey(text string, from, to Boundary) string {
+	if !to.Valid() {
+		to = from
+	}
+	if !from.Valid() {
+		return Neutralise(to, text)
+	}
+	opening := "[" + markerWord + ":" + string(from) + " "
+	closing := "[/" + markerWord + ":" + string(from) + "]"
+	var out strings.Builder
+	out.Grow(len(text))
+	rest := text
+	for {
+		at, isOpening := nextMarker(rest, opening, closing)
+		if at < 0 {
+			out.WriteString(Neutralise(to, rest))
+			return out.String()
+		}
+		out.WriteString(Neutralise(to, rest[:at]))
+		if isOpening {
+			// THE OPENING LINE'S LABELS ARE THE FENCE'S OWN, already
+			// reduced to a safe set, so the line is carried as written
+			// with its token replaced.
+			end := strings.IndexByte(rest[at:], '\n')
+			if end < 0 {
+				end = len(rest) - at
+			}
+			out.WriteString("[" + markerWord + ":" + string(to) + " ")
+			out.WriteString(rest[at+len(opening) : at+end])
+			rest = rest[at+end:]
+			continue
+		}
+		out.WriteString("[/" + markerWord + ":" + string(to) + "]")
+		rest = rest[at+len(closing):]
+	}
+}
+
+// Fences is every whole fence text carries under b, in the order it carries
+// them: what a reader keeps of a fenced text when it renders the rest of it
+// otherwise. Nothing for an invalid b.
+func Fences(text string, b Boundary) []string {
+	if !b.Valid() {
+		return nil
+	}
+	opening := "[" + markerWord + ":" + string(b) + " "
+	closing := "[/" + markerWord + ":" + string(b) + "]"
+	var out []string
+	for {
+		start := strings.Index(text, opening)
+		if start < 0 {
+			return out
+		}
+		end := strings.Index(text[start:], closing)
+		if end < 0 {
+			return out
+		}
+		out = append(out, text[start:start+end+len(closing)])
+		text = text[start+end+len(closing):]
+	}
+}
+
+// nextMarker is where the next of a fence's two lines starts in s, and
+// whether it is the opening one; -1 when s holds neither.
+func nextMarker(s, opening, closing string) (int, bool) {
+	o, c := strings.Index(s, opening), strings.Index(s, closing)
+	switch {
+	case o < 0 && c < 0:
+		return -1, false
+	case c < 0 || (o >= 0 && o < c):
+		return o, true
+	}
+	return c, false
+}
+
 // Neutralise applies the fence's two escapes without the fence.
 //
 // For a short free-text field read beside fenced ones in the same result (a

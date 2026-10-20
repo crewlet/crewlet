@@ -62,6 +62,15 @@
 // sentence an assistant without the seat prompt needs to read the fences
 // correctly.
 //
+// # Text fenced before its reader had a token
+//
+// A chat wake's trigger is built where the delivery is routed, before the
+// turn that will read it exists, so the message in it is fenced under a token
+// minted for that wake alone; [Rekey] moves such fences onto the turn's own
+// token and applies the two escapes to everything around them, and [Fences]
+// lifts them out whole for a reader that renders the rest otherwise (a merged
+// burst's digest).
+//
 // # Writing back
 //
 // A model that edits what it read is likely to send the fence back with it.

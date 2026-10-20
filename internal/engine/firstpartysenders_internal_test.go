@@ -279,6 +279,28 @@ func deliveredTo(t *testing.T, o *org.Organization, reg *notify.Registry, handle
 	delivery *events.Event) *events.Event {
 
 	t.Helper()
+	return deliveredThrough(t, o, reg, handle, []notify.Parser{
+		worklet.NewParser(worklet.ParserOptions{}),
+		doclet.NewParser(doclet.ParserOptions{}),
+		chatlet.NewParser(),
+	}, notify.NewPrompts(worklet.Prompt{}, doclet.Prompt{}, chatlet.NewPrompt()), delivery)
+}
+
+// deliveredWith is [deliveredTo] through one parser and its prompt.
+func deliveredWith(t *testing.T, o *org.Organization, reg *notify.Registry, handle string,
+	parser notify.Parser, prompt notify.Prompt, delivery *events.Event) *events.Event {
+
+	t.Helper()
+	return deliveredThrough(t, o, reg, handle, []notify.Parser{parser},
+		notify.NewPrompts(prompt), delivery)
+}
+
+// deliveredThrough is the delivery itself, through the parsers and prompts
+// given.
+func deliveredThrough(t *testing.T, o *org.Organization, reg *notify.Registry, handle string,
+	parsers []notify.Parser, prompts notify.Prompts, delivery *events.Event) *events.Event {
+
+	t.Helper()
 	q := memory.New()
 	if err := q.Start(t.Context()); err != nil {
 		t.Fatalf("start the queue: %v", err)
@@ -303,12 +325,8 @@ func deliveredTo(t *testing.T, o *org.Organization, reg *notify.Registry, handle
 	svc, err := notify.New(notify.Options{
 		Queue:    q,
 		Registry: func() *notify.Registry { return reg },
-		Prompts:  notify.NewPrompts(worklet.Prompt{}, doclet.Prompt{}, chatlet.NewPrompt()),
-		Parsers: []notify.Parser{
-			worklet.NewParser(worklet.ParserOptions{}),
-			doclet.NewParser(doclet.ParserOptions{}),
-			chatlet.NewParser(),
-		},
+		Prompts:  prompts,
+		Parsers:  parsers,
 	})
 	if err != nil {
 		t.Fatalf("notify.New: %v", err)

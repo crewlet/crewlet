@@ -495,11 +495,8 @@ func (f *Fetcher) author(r Request, m notify.Message, backend string) provenance
 	if f.src.Parties != nil && backend != "" && m.SenderID != "" {
 		if party, ok := f.src.Parties.ByExternalID(backend, m.SenderID); ok &&
 			strings.TrimSpace(party.Handle) != "" {
-			kind := iam.ActorAgent
-			if party.Human {
-				kind = iam.ActorHuman
-			}
-			return provenance.Author{Kind: kind, Seat: strings.TrimSpace(party.Handle)}
+			party.Handle = strings.TrimSpace(party.Handle)
+			return notify.PartyAuthor(party)
 		}
 	}
 	// AN OUTSIDE PARTY: a person or a bot in a shared channel the company
