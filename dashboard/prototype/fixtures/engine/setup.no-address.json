@@ -1,0 +1,917 @@
+{
+  "external_url": {
+    "config_path": "api.external_url",
+    "value": ""
+  },
+  "revision_id": "733cdeb7-9346-4f6d-821b-7ce264619ae3",
+  "tools": [
+    {
+      "key": "slack",
+      "configured": false,
+      "enabled": false,
+      "requirements": [
+        {
+          "field": "typing_status",
+          "label": "Working indicator",
+          "kind": "choice",
+          "config_path": "integrations.slack.typing_status",
+          "required": false,
+          "default": "always",
+          "help": "Whether an agent shows that it is working before it answers.",
+          "choices": [
+            {
+              "value": "always",
+              "label": "On every message it takes up"
+            },
+            {
+              "value": "addressed",
+              "label": "Only where somebody is waiting on this agent"
+            }
+          ],
+          "present": false,
+          "resolved": false
+        }
+      ],
+      "summary": "Each agent talks in Slack as its own app. Every agent below carries the manifest its app is created from, which sets the scopes, the events and that agent's own delivery address; install it, and its two values are on the app's own pages.",
+      "satisfied": false,
+      "form_complete": false,
+      "can_provision": false,
+      "seats_required": true,
+      "manage_path": "Settings > Basic Information > Delete App",
+      "seats": [
+        {
+          "handle": "pm",
+          "name": "Crewlet-PM",
+          "requirements": [
+            {
+              "field": "bot_token",
+              "label": "Bot token",
+              "kind": "secret",
+              "config_path": "integrations.slack.bot_token",
+              "required": true,
+              "connect": true,
+              "help": "Navigate to [api.slack.com/apps](https://api.slack.com/apps) > `Create New App > From an app manifest` and paste this agent's manifest, then select your Slack workspace > `Next` > `Create and Install` > `Allow` > `Your app credentials` and copy the `Bot token` value here.",
+              "blocks": "identity_missing",
+              "present": false,
+              "resolved": null,
+              "seat": "pm"
+            },
+            {
+              "field": "signing_secret",
+              "label": "Signing secret",
+              "kind": "secret",
+              "config_path": "integrations.slack.signing_secret",
+              "required": true,
+              "connect": true,
+              "help": "Navigate to [api.slack.com/apps](https://api.slack.com/apps) > this agent's app > `Basic Information > App Credentials` and paste the `Signing Secret` here.",
+              "blocks": "credential_missing",
+              "present": false,
+              "resolved": null,
+              "seat": "pm"
+            }
+          ],
+          "satisfied": false,
+          "inbound_path": "/webhooks/slack/pm",
+          "manifest_note": "no manifest yet: set `api.external_url` in this node's Tier A file to the address this agent's app delivers to, and restart the node",
+          "present": false,
+          "detail": "integrations.slack.bot_token"
+        },
+        {
+          "handle": "engineer",
+          "name": "Crewlet-SWE",
+          "requirements": [
+            {
+              "field": "bot_token",
+              "label": "Bot token",
+              "kind": "secret",
+              "config_path": "integrations.slack.bot_token",
+              "required": true,
+              "connect": true,
+              "help": "Navigate to [api.slack.com/apps](https://api.slack.com/apps) > `Create New App > From an app manifest` and paste this agent's manifest, then select your Slack workspace > `Next` > `Create and Install` > `Allow` > `Your app credentials` and copy the `Bot token` value here.",
+              "blocks": "identity_missing",
+              "present": false,
+              "resolved": null,
+              "seat": "engineer"
+            },
+            {
+              "field": "signing_secret",
+              "label": "Signing secret",
+              "kind": "secret",
+              "config_path": "integrations.slack.signing_secret",
+              "required": true,
+              "connect": true,
+              "help": "Navigate to [api.slack.com/apps](https://api.slack.com/apps) > this agent's app > `Basic Information > App Credentials` and paste the `Signing Secret` here.",
+              "blocks": "credential_missing",
+              "present": false,
+              "resolved": null,
+              "seat": "engineer"
+            }
+          ],
+          "satisfied": false,
+          "inbound_path": "/webhooks/slack/engineer",
+          "manifest_note": "no manifest yet: set `api.external_url` in this node's Tier A file to the address this agent's app delivers to, and restart the node",
+          "present": false,
+          "detail": "integrations.slack.bot_token"
+        }
+      ]
+    },
+    {
+      "key": "mattermost",
+      "configured": false,
+      "enabled": false,
+      "requirements": [
+        {
+          "field": "enabled",
+          "label": "Use Mattermost",
+          "kind": "toggle",
+          "config_path": "integrations.mattermost.enabled",
+          "required": true,
+          "hidden": true,
+          "default": "true",
+          "present": false,
+          "resolved": false,
+          "value": "false"
+        },
+        {
+          "field": "url",
+          "label": "Mattermost instance",
+          "kind": "url",
+          "config_path": "integrations.mattermost.url",
+          "required": true,
+          "connect": true,
+          "help": "Your server's address. The engine dials out, so it needs no public address.",
+          "format": "https://chat.example.com",
+          "present": false,
+          "resolved": false
+        },
+        {
+          "field": "team",
+          "label": "Team",
+          "kind": "id",
+          "config_path": "integrations.mattermost.team",
+          "required": true,
+          "connect": true,
+          "help": "The team slug the agent bots belong to and post in.",
+          "present": false,
+          "resolved": false
+        },
+        {
+          "field": "admin_token",
+          "label": "Administrator token",
+          "kind": "secret",
+          "config_path": "integrations.mattermost.provisioning.admin_token",
+          "required": true,
+          "connect": true,
+          "help": "Navigate to `Profile > Security > Personal Access Tokens` and create a token.",
+          "blocks": "credential_missing",
+          "present": false,
+          "resolved": null
+        }
+      ],
+      "summary": "Each agent gets its own bot account and holds an outbound connection, so nothing has to reach this engine from outside. Connecting needs a system administrator token, and it is kept so the bots can be disabled again.",
+      "satisfied": false,
+      "form_complete": false,
+      "can_provision": false,
+      "seats": [
+        {
+          "handle": "pm",
+          "name": "Crewlet-PM",
+          "requirements": [],
+          "satisfied": false,
+          "present": false,
+          "detail": "waiting for Mattermost to be connected: this company declares no Mattermost integration, so nothing reads what this agent holds for it"
+        },
+        {
+          "handle": "engineer",
+          "name": "Crewlet-SWE",
+          "requirements": [],
+          "satisfied": false,
+          "present": false,
+          "detail": "waiting for Mattermost to be connected: this company declares no Mattermost integration, so nothing reads what this agent holds for it"
+        }
+      ]
+    },
+    {
+      "key": "jira",
+      "configured": false,
+      "enabled": false,
+      "requirements": [
+        {
+          "field": "url",
+          "label": "Jira site",
+          "kind": "url",
+          "config_path": "integrations.jira.url",
+          "required": false,
+          "connect": true,
+          "hidden": true,
+          "link_text": "App URLs",
+          "help": "Find the Jira site value under",
+          "vendor_url": "https://admin.atlassian.com/o/{org_id}/product-urls",
+          "blocks": "credential_missing",
+          "present": false,
+          "resolved": null
+        },
+        {
+          "field": "cloud_id",
+          "label": "Cloud id",
+          "kind": "id",
+          "config_path": "integrations.jira.cloud_id",
+          "required": false,
+          "connect": true,
+          "shared": true,
+          "hidden": true,
+          "help": "The alternative to the site address, through the API gateway.",
+          "present": false,
+          "resolved": null
+        },
+        {
+          "field": "email",
+          "label": "Atlassian user account email",
+          "kind": "email",
+          "config_path": "integrations.jira.email",
+          "required": true,
+          "connect": true,
+          "shared": true,
+          "link_text": "Profile and visibility page",
+          "help": "Find the value at the end of the",
+          "vendor_url": "https://id.atlassian.com/manage-profile/profile-and-visibility",
+          "present": false,
+          "resolved": null
+        },
+        {
+          "field": "token",
+          "label": "Atlassian user API token",
+          "kind": "secret",
+          "config_path": "integrations.jira.token",
+          "secret_name": "JIRA_TOKEN",
+          "required": true,
+          "connect": true,
+          "shared": true,
+          "where": "Create an API token on your Atlassian account, or a personal access token on Data Center.",
+          "vendor_url": "https://id.atlassian.com/manage-profile/security/api-tokens",
+          "blocks": "credential_missing",
+          "present": false,
+          "resolved": null
+        },
+        {
+          "field": "webhook_secret",
+          "label": "Webhook secret",
+          "kind": "secret",
+          "config_path": "integrations.jira.webhook_secret",
+          "secret_name": "JIRA_WEBHOOK_SECRET",
+          "required": false,
+          "mintable": true,
+          "help": "Signs every delivery, on both deployments.",
+          "blocks": "ingress_blocked",
+          "present": false,
+          "resolved": null
+        },
+        {
+          "field": "site_url",
+          "label": "Link address",
+          "kind": "url",
+          "config_path": "integrations.jira.site_url",
+          "required": false,
+          "shared": true,
+          "hidden": true,
+          "help": "Only alongside a cloud id: the address a person's links open.",
+          "present": false,
+          "resolved": null
+        }
+      ],
+      "satisfied": false,
+      "form_complete": false,
+      "inbound_path": "/webhooks/jira",
+      "can_provision": false,
+      "seats": [
+        {
+          "handle": "pm",
+          "name": "Crewlet-PM",
+          "requirements": [],
+          "satisfied": false,
+          "present": false,
+          "detail": "waiting for Jira to be connected: this company declares no Jira integration, so nothing reads what this agent holds for it"
+        },
+        {
+          "handle": "engineer",
+          "name": "Crewlet-SWE",
+          "requirements": [],
+          "satisfied": false,
+          "present": false,
+          "detail": "waiting for Jira to be connected: this company declares no Jira integration, so nothing reads what this agent holds for it"
+        }
+      ]
+    },
+    {
+      "key": "confluence",
+      "configured": false,
+      "enabled": false,
+      "requirements": [
+        {
+          "field": "url",
+          "label": "Confluence site",
+          "kind": "url",
+          "config_path": "integrations.confluence.url",
+          "required": false,
+          "connect": true,
+          "hidden": true,
+          "link_text": "App URLs",
+          "help": "Find the Confluence site value under",
+          "vendor_url": "https://admin.atlassian.com/o/{org_id}/product-urls",
+          "blocks": "credential_missing",
+          "present": false,
+          "resolved": null
+        },
+        {
+          "field": "cloud_id",
+          "label": "Cloud id",
+          "kind": "id",
+          "config_path": "integrations.confluence.cloud_id",
+          "required": false,
+          "connect": true,
+          "shared": true,
+          "hidden": true,
+          "help": "The alternative to the site address, through the API gateway.",
+          "present": false,
+          "resolved": null
+        },
+        {
+          "field": "email",
+          "label": "Atlassian user account email",
+          "kind": "email",
+          "config_path": "integrations.confluence.email",
+          "required": true,
+          "connect": true,
+          "shared": true,
+          "link_text": "Profile and visibility page",
+          "help": "Find the value at the end of the",
+          "vendor_url": "https://id.atlassian.com/manage-profile/profile-and-visibility",
+          "present": false,
+          "resolved": null
+        },
+        {
+          "field": "token",
+          "label": "Atlassian user API token",
+          "kind": "secret",
+          "config_path": "integrations.confluence.token",
+          "secret_name": "CONFLUENCE_TOKEN",
+          "required": true,
+          "connect": true,
+          "shared": true,
+          "where": "Create an API token on your Atlassian account, or a personal access token on Data Center.",
+          "vendor_url": "https://id.atlassian.com/manage-profile/security/api-tokens",
+          "blocks": "credential_missing",
+          "present": false,
+          "resolved": null
+        },
+        {
+          "field": "webhook_token",
+          "label": "Cloud webhook token",
+          "kind": "secret",
+          "config_path": "integrations.confluence.webhook_token",
+          "secret_name": "CONFLUENCE_WEBHOOK_TOKEN",
+          "required": false,
+          "mintable": true,
+          "help": "Cloud signs nothing, so this token in the URL is the whole check.",
+          "blocks": "ingress_blocked",
+          "present": false,
+          "resolved": null
+        },
+        {
+          "field": "site_url",
+          "label": "Link address",
+          "kind": "url",
+          "config_path": "integrations.confluence.site_url",
+          "required": false,
+          "shared": true,
+          "hidden": true,
+          "help": "Only alongside a cloud id: the address a person's links open.",
+          "present": false,
+          "resolved": null
+        }
+      ],
+      "satisfied": false,
+      "form_complete": false,
+      "inbound_path": "/webhooks/confluence",
+      "can_provision": false,
+      "seats": [
+        {
+          "handle": "pm",
+          "name": "Crewlet-PM",
+          "requirements": [],
+          "satisfied": false,
+          "present": false,
+          "detail": "waiting for Confluence to be connected: this company declares no Confluence integration, so nothing reads what this agent holds for it"
+        },
+        {
+          "handle": "engineer",
+          "name": "Crewlet-SWE",
+          "requirements": [],
+          "satisfied": false,
+          "present": false,
+          "detail": "waiting for Confluence to be connected: this company declares no Confluence integration, so nothing reads what this agent holds for it"
+        }
+      ]
+    },
+    {
+      "key": "github",
+      "configured": false,
+      "enabled": false,
+      "requirements": [
+        {
+          "field": "enabled",
+          "label": "Accept GitHub deliveries",
+          "kind": "toggle",
+          "config_path": "integrations.github.enabled",
+          "required": true,
+          "hidden": true,
+          "default": "true",
+          "present": false,
+          "resolved": false,
+          "value": "false"
+        },
+        {
+          "field": "webhook_secret",
+          "label": "Webhook secret",
+          "kind": "secret",
+          "config_path": "integrations.github.webhook_secret",
+          "secret_name": "GITHUB_WEBHOOK_SECRET",
+          "required": true,
+          "mintable": true,
+          "help": "Signs every delivery. Without it the route refuses all of them.",
+          "blocks": "ingress_blocked",
+          "present": false,
+          "resolved": null
+        },
+        {
+          "field": "url",
+          "label": "GitHub instance",
+          "kind": "url",
+          "config_path": "integrations.github.url",
+          "required": false,
+          "help": "Leave this empty unless you run GitHub Enterprise Server.",
+          "format": "https://github.example.com",
+          "present": false,
+          "resolved": false
+        },
+        {
+          "field": "provisioning.org",
+          "label": "Organization",
+          "kind": "id",
+          "config_path": "integrations.github.provisioning.org",
+          "required": true,
+          "connect": true,
+          "help": "The organization whose repositories these agents work in.",
+          "blocks": "ingress_blocked",
+          "present": false,
+          "resolved": false
+        },
+        {
+          "field": "provisioning.org_webhook",
+          "label": "Which GitHub activity should reach your agents",
+          "kind": "choice",
+          "config_path": "integrations.github.provisioning.org_webhook",
+          "required": false,
+          "default": "false",
+          "help": "Each agent's own app already delivers what happens in the repositories it is installed on.",
+          "choices": [
+            {
+              "value": "false",
+              "label": "Repositories where an agent's app is installed",
+              "hint": "Recommended. Nothing else to set up: each agent hears about its own repositories."
+            },
+            {
+              "value": "true",
+              "label": "Every repository in your organization, including new ones",
+              "hint": "Needs a user token with admin:org_hook."
+            }
+          ],
+          "present": false,
+          "resolved": false
+        },
+        {
+          "field": "token",
+          "label": "Organization token",
+          "kind": "secret",
+          "config_path": "integrations.github.token",
+          "secret_name": "GITHUB_TOKEN",
+          "required_when": {
+            "field": "provisioning.org_webhook",
+            "equals": "true"
+          },
+          "required": false,
+          "help": "GitHub only lets a user token register an organization-wide hook, and it needs the admin:org_hook scope. No app can carry this, however it is installed.",
+          "blocks": "ingress_blocked",
+          "present": false,
+          "resolved": null
+        }
+      ],
+      "summary": "Each agent gets its own GitHub App, so it reads, reviews and comments as itself. Name the organization the repositories live in and this engine registers the webhook that carries GitHub's events to those agents.",
+      "satisfied": false,
+      "form_complete": false,
+      "inbound_path": "/webhooks/github",
+      "can_provision": false,
+      "seats_required": true,
+      "manage_path": "Delete GitHub App",
+      "seats": [
+        {
+          "handle": "pm",
+          "name": "Crewlet-PM",
+          "requirements": [],
+          "satisfied": false,
+          "present": false,
+          "tier_label": "Read-only",
+          "tier_hint": "Reads code and issues, changes nothing.",
+          "detail": "no app of its own yet, so this agent acts as nobody on GitHub",
+          "tier": "read_only",
+          "step": "create_app"
+        },
+        {
+          "handle": "engineer",
+          "name": "Crewlet-SWE",
+          "requirements": [],
+          "satisfied": false,
+          "present": false,
+          "tier_label": "Read-only",
+          "tier_hint": "Reads code and issues, changes nothing.",
+          "detail": "no app of its own yet, so this agent acts as nobody on GitHub",
+          "tier": "read_only",
+          "step": "create_app"
+        }
+      ]
+    },
+    {
+      "key": "gitlab",
+      "configured": false,
+      "enabled": false,
+      "requirements": [
+        {
+          "field": "enabled",
+          "label": "Accept GitLab deliveries",
+          "kind": "toggle",
+          "config_path": "integrations.gitlab.enabled",
+          "required": true,
+          "hidden": true,
+          "default": "true",
+          "present": false,
+          "resolved": false,
+          "value": "false"
+        },
+        {
+          "field": "url",
+          "label": "GitLab instance",
+          "kind": "url",
+          "config_path": "integrations.gitlab.url",
+          "required": true,
+          "connect": true,
+          "default": "https://gitlab.com",
+          "help": "Leave this as https://gitlab.com unless you run GitLab yourself.",
+          "format": "https://gitlab.example.com",
+          "blocks": "ingress_blocked",
+          "present": false,
+          "resolved": false
+        },
+        {
+          "field": "signing_secret",
+          "label": "Webhook signing secret",
+          "kind": "secret",
+          "config_path": "integrations.gitlab.signing_secret",
+          "secret_name": "GITLAB_SIGNING_SECRET",
+          "required": true,
+          "mintable": true,
+          "shape": "signing_key",
+          "help": "Signs every delivery, and has a shape, so the engine generates it.",
+          "format": "whsec_ then standard base64 of a 32-byte key",
+          "blocks": "credential_missing",
+          "present": false,
+          "resolved": null
+        },
+        {
+          "field": "provisioning.group",
+          "label": "Top-level group",
+          "kind": "id",
+          "config_path": "integrations.gitlab.provisioning.group",
+          "required": true,
+          "connect": true,
+          "help": "Find your [top-level group](https://gitlab.com/dashboard/groups). Each Crewlet agent becomes a service account inside it.",
+          "blocks": "ingress_blocked",
+          "present": false,
+          "resolved": false
+        },
+        {
+          "field": "token",
+          "label": "Read-only routing token",
+          "kind": "secret",
+          "config_path": "integrations.gitlab.token",
+          "secret_name": "GITLAB_ROUTING_TOKEN",
+          "required": false,
+          "help": "A read-only [personal access token](https://gitlab.com/-/user_settings/personal_access_tokens) with the `read_api` scope. Without it, thread activity reaches only the people a payload names.",
+          "format": "glpat-…",
+          "present": false,
+          "resolved": null
+        },
+        {
+          "field": "admin_token",
+          "label": "Access token",
+          "kind": "secret",
+          "config_path": "integrations.gitlab.provisioning.admin_token",
+          "required": true,
+          "connect": true,
+          "help": "[Create a legacy personal token](https://gitlab.com/-/user_settings/personal_access_tokens/legacy/new) with the full `api` scope, belonging to somebody who owns the group.",
+          "blocks": "credential_missing",
+          "present": false,
+          "resolved": null
+        }
+      ],
+      "summary": "Each agent gets its own service account in your group, so it owns what it builds. Connecting needs a token from somebody who owns that group, and it is kept so the accounts can be removed again.",
+      "satisfied": false,
+      "form_complete": false,
+      "inbound_path": "/webhooks/gitlab",
+      "can_provision": false,
+      "seats": [
+        {
+          "handle": "pm",
+          "name": "Crewlet-PM",
+          "requirements": [],
+          "satisfied": false,
+          "present": false,
+          "detail": "waiting for GitLab to be connected: this company declares no GitLab integration, so nothing reads what this agent holds for it"
+        },
+        {
+          "handle": "engineer",
+          "name": "Crewlet-SWE",
+          "requirements": [],
+          "satisfied": false,
+          "present": false,
+          "detail": "waiting for GitLab to be connected: this company declares no GitLab integration, so nothing reads what this agent holds for it"
+        }
+      ]
+    },
+    {
+      "key": "datadog",
+      "configured": false,
+      "enabled": false,
+      "requirements": [
+        {
+          "field": "site",
+          "label": "Datadog region",
+          "kind": "choice",
+          "config_path": "integrations.datadog.provisioning.site",
+          "required": true,
+          "connect": true,
+          "default": "datadoghq.com",
+          "help": "The region your organization is in.",
+          "choices": [
+            {
+              "value": "datadoghq.com",
+              "label": "datadoghq.com"
+            },
+            {
+              "value": "us3.datadoghq.com",
+              "label": "us3.datadoghq.com"
+            },
+            {
+              "value": "us5.datadoghq.com",
+              "label": "us5.datadoghq.com"
+            },
+            {
+              "value": "datadoghq.eu",
+              "label": "datadoghq.eu"
+            },
+            {
+              "value": "ap1.datadoghq.com",
+              "label": "ap1.datadoghq.com"
+            },
+            {
+              "value": "ap2.datadoghq.com",
+              "label": "ap2.datadoghq.com"
+            },
+            {
+              "value": "ddog-gov.com",
+              "label": "ddog-gov.com"
+            }
+          ],
+          "present": false,
+          "resolved": false
+        },
+        {
+          "field": "api_key",
+          "label": "API key",
+          "kind": "secret",
+          "config_path": "integrations.datadog.provisioning.api_key",
+          "secret_name": "DATADOG_API_KEY",
+          "required": true,
+          "connect": true,
+          "link_text": "API keys page",
+          "help": "Create one on your",
+          "vendor_url": "https://app.datadoghq.com/organization-settings/api-keys",
+          "present": false,
+          "resolved": null
+        },
+        {
+          "field": "app_key",
+          "label": "Application key",
+          "kind": "secret",
+          "config_path": "integrations.datadog.provisioning.app_key",
+          "secret_name": "DATADOG_APP_KEY",
+          "required": true,
+          "connect": true,
+          "link_text": "application keys page",
+          "help": "Create one on your",
+          "vendor_url": "https://app.datadoghq.com/organization-settings/application-keys",
+          "present": false,
+          "resolved": null
+        },
+        {
+          "field": "enabled",
+          "label": "Accept Datadog deliveries",
+          "kind": "toggle",
+          "config_path": "integrations.datadog.enabled",
+          "required": true,
+          "hidden": true,
+          "default": "true",
+          "present": false,
+          "resolved": false,
+          "value": "false"
+        },
+        {
+          "field": "webhook_token",
+          "label": "Shared token",
+          "kind": "secret",
+          "config_path": "integrations.datadog.webhook_token",
+          "secret_name": "DATADOG_WEBHOOK_TOKEN",
+          "required": true,
+          "mintable": true,
+          "help": "Datadog signs nothing, so this token is the whole check on a delivery. The engine attaches it to the webhook it registers; nothing has to be pasted anywhere.",
+          "vendor_url": "https://app.datadoghq.com/integrations/webhooks",
+          "blocks": "credential_missing",
+          "present": false,
+          "resolved": null
+        },
+        {
+          "field": "webhook_name",
+          "label": "Webhook name",
+          "kind": "text",
+          "config_path": "integrations.datadog.webhook_name",
+          "required": false,
+          "default": "crewlet",
+          "help": "The engine registers this webhook at Datadog. Add \"@webhook-{webhook_name}\" to any monitor whose alerts an agent should see.",
+          "vendor_url": "https://app.datadoghq.com/integrations/webhooks",
+          "present": false,
+          "resolved": false
+        },
+        {
+          "field": "handle_tag",
+          "label": "Monitor tag key",
+          "kind": "text",
+          "config_path": "integrations.datadog.handle_tag",
+          "required": false,
+          "default": "crewlet",
+          "help": "The monitor tag key that names an owner. A monitor tagged \"{handle_tag}:<seat handle>\" wakes that seat.",
+          "present": false,
+          "resolved": false
+        },
+        {
+          "field": "route_to",
+          "label": "Fallback seat",
+          "kind": "handle",
+          "config_path": "integrations.datadog.route_to",
+          "required": true,
+          "default": "none",
+          "help": "The seat an alert wakes when no monitor tag names an owner.",
+          "choices": [
+            {
+              "value": "none",
+              "label": "None: dismiss alerts nobody owns",
+              "hint": "Only monitors tagged with a seat wake an agent."
+            },
+            {
+              "value": "pm",
+              "label": "Crewlet-PM (pm)"
+            },
+            {
+              "value": "engineer",
+              "label": "Crewlet-SWE (engineer)"
+            }
+          ],
+          "blocks": "ingress_blocked",
+          "present": false,
+          "resolved": false
+        }
+      ],
+      "summary": "Crewlet registers a webhook at Datadog and gives each agent its own account, so alerts arrive and every agent owns what it builds. Connecting takes keys from someone who can manage users and roles.",
+      "satisfied": false,
+      "form_complete": false,
+      "inbound_path": "/webhooks/datadog",
+      "can_provision": false,
+      "seats": [
+        {
+          "handle": "pm",
+          "name": "Crewlet-PM",
+          "requirements": [],
+          "satisfied": false,
+          "present": false,
+          "tier_label": "Read-only",
+          "tier_hint": "Reads monitors, dashboards and logs, changes nothing.",
+          "detail": "waiting for Datadog to be connected: this company declares no Datadog integration, so nothing reads what this agent holds for it",
+          "tier": "read_only"
+        },
+        {
+          "handle": "engineer",
+          "name": "Crewlet-SWE",
+          "requirements": [],
+          "satisfied": false,
+          "present": false,
+          "tier_label": "Read-only",
+          "tier_hint": "Reads monitors, dashboards and logs, changes nothing.",
+          "detail": "waiting for Datadog to be connected: this company declares no Datadog integration, so nothing reads what this agent holds for it",
+          "tier": "read_only"
+        }
+      ]
+    },
+    {
+      "key": "atlassian",
+      "configured": false,
+      "enabled": false,
+      "requirements": [
+        {
+          "field": "deployment",
+          "label": "Atlassian deployment",
+          "kind": "choice",
+          "config_path": "integrations.atlassian.deployment",
+          "required": true,
+          "connect": true,
+          "default": "cloud",
+          "help": "Cloud is read from your organization. Data Center is addressed directly.",
+          "choices": [
+            {
+              "value": "cloud",
+              "label": "Atlassian Cloud",
+              "hint": "Crewlet reads your sites and creates each agent's account."
+            },
+            {
+              "value": "data_center",
+              "label": "Atlassian Data Center",
+              "hint": "Self-hosted. Give each product's address and its own token."
+            }
+          ],
+          "present": true,
+          "resolved": true,
+          "value": "cloud"
+        },
+        {
+          "field": "org_id",
+          "label": "Atlassian organization ID",
+          "kind": "id",
+          "config_path": "integrations.atlassian.org_id",
+          "required": true,
+          "connect": true,
+          "shared": true,
+          "link_text": "Open the admin console",
+          "help": "In your admin console's own address, after /o/.",
+          "vendor_url": "https://admin.atlassian.com",
+          "blocks": "credential_missing",
+          "present": false,
+          "resolved": null
+        },
+        {
+          "field": "api_key",
+          "label": "Atlassian organization API Key",
+          "kind": "secret",
+          "config_path": "integrations.atlassian.api_key",
+          "secret_name": "ATLASSIAN_ORG_API_KEY",
+          "required": true,
+          "connect": true,
+          "link_text": "API keys",
+          "help": "Create it without scopes: a scoped key cannot create accounts.",
+          "vendor_url": "https://admin.atlassian.com/o/{org_id}/api-keys",
+          "blocks": "credential_missing",
+          "present": false,
+          "resolved": null
+        }
+      ],
+      "summary": "This engine uses these details to give each agent its own Atlassian account and to register webhooks on your Jira and Confluence sites.",
+      "satisfied": false,
+      "form_complete": false,
+      "can_provision": false,
+      "seats": [
+        {
+          "handle": "pm",
+          "name": "Crewlet-PM",
+          "requirements": [],
+          "satisfied": false,
+          "present": false,
+          "detail": "waiting for Atlassian to be connected: this company declares no Atlassian integration, so nothing reads what this agent holds for it"
+        },
+        {
+          "handle": "engineer",
+          "name": "Crewlet-SWE",
+          "requirements": [],
+          "satisfied": false,
+          "present": false,
+          "detail": "waiting for Atlassian to be connected: this company declares no Atlassian integration, so nothing reads what this agent holds for it"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,85 @@
+/* A screen's blocks, as the Design type's demo pages draw them: on the canvas and on an artboard. */
+
+.b-title {
+  margin: 0;
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+}
+
+.b-text {
+  margin: 0;
+  color: var(--color-text-secondary);
+}
+
+.b-amount {
+  font-family: var(--font-family-display);
+  font-size: var(--font-size-3xl);
+  font-weight: var(--font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+}
+
+.b-row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--spacing-3);
+  padding: var(--spacing-2) 0;
+  border-bottom: 1px solid var(--color-border-default);
+}
+
+.b-row span:last-child {
+  font-variant-numeric: tabular-nums;
+}
+
+.b-input {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+
+.b-input span:first-child {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+
+.b-input span:last-child {
+  padding: var(--spacing-2) var(--spacing-3);
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius-md);
+}
+
+.b-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-2);
+}
+
+.b-chips span {
+  padding: var(--spacing-1) var(--spacing-3);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-inset);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.b-chips span:first-child {
+  background: var(--color-brand-accent-soft);
+  color: var(--color-brand-accent-ink);
+}
+
+.b-button {
+  margin-top: auto;
+  padding: var(--spacing-3);
+  border-radius: var(--radius-md);
+  background: var(--color-brand-accent);
+  color: var(--color-text-on-accent);
+  font-weight: var(--font-weight-semibold);
+  text-align: center;
+}
+
+.b-note {
+  padding: var(--spacing-3);
+  border-radius: var(--radius-md);
+  background: var(--color-feedback-info-soft);
+  color: var(--color-feedback-info-ink);
+  font-size: var(--font-size-xs);
+}

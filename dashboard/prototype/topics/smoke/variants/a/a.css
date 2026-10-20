@@ -1,0 +1,4 @@
+/* The smoke topic's one rule: a gap above the shipped screen, from the kit's own spacing. */
+.smoke-swapped > :first-child {
+  margin-block-end: var(--spacing-6);
+}

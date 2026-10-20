@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en" data-presence="on">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Add expense</title>
+    <script src="_crewlet/runtime/1.0.0/runtime.js"></script>
+    <script src="_crewlet/kit/0.20.0/theme.js"></script>
+    <link rel="stylesheet" href="_crewlet/tokens/tokens.css" />
+    <link rel="stylesheet" href="_crewlet/tokens/themes.css" />
+    <link rel="stylesheet" href="_crewlet/tokens/base.css" />
+    <link rel="stylesheet" href="lib/frame.css" />
+    <link rel="stylesheet" href="lib/blocks.css" />
+    <link rel="stylesheet" href="lib/artboard.css" />
+  </head>
+  <body>
+    <script type="application/json" id="content">
+      {
+        "title": "Add expense",
+        "blocks": [
+          {
+            "kind": "title",
+            "text": "Add an expense"
+          },
+          {
+            "kind": "input",
+            "label": "What for",
+            "value": "Sunset boat tour"
+          },
+          {
+            "kind": "input",
+            "label": "Amount",
+            "value": "€150.00"
+          },
+          {
+            "kind": "input",
+            "label": "Paid by",
+            "value": "Ana"
+          },
+          {
+            "kind": "chips",
+            "items": ["Everyone", "By share", "By item"]
+          },
+          {
+            "kind": "button",
+            "text": "Next: split it"
+          }
+        ]
+      }
+    </script>
+    <script src="lib/page.js"></script>
+    <script src="lib/artboard.js"></script>
+  </body>
+</html>

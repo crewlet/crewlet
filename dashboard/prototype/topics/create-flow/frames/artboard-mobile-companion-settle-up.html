@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en" data-presence="on">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Settle up</title>
+    <script src="_crewlet/runtime/1.0.0/runtime.js"></script>
+    <script src="_crewlet/kit/0.20.0/theme.js"></script>
+    <link rel="stylesheet" href="_crewlet/tokens/tokens.css" />
+    <link rel="stylesheet" href="_crewlet/tokens/themes.css" />
+    <link rel="stylesheet" href="_crewlet/tokens/base.css" />
+    <link rel="stylesheet" href="lib/frame.css" />
+    <link rel="stylesheet" href="lib/blocks.css" />
+    <link rel="stylesheet" href="lib/artboard.css" />
+  </head>
+  <body>
+    <script type="application/json" id="content">
+      {
+        "title": "Settle up",
+        "blocks": [
+          {
+            "kind": "title",
+            "text": "Settle up"
+          },
+          {
+            "kind": "text",
+            "text": "3 payments settle the group."
+          },
+          {
+            "kind": "row",
+            "label": "Ben pays Ana",
+            "value": "€182.40"
+          },
+          {
+            "kind": "row",
+            "label": "Dita pays Ana",
+            "value": "€96.20"
+          },
+          {
+            "kind": "row",
+            "label": "Femi pays Chen",
+            "value": "€41.00"
+          },
+          {
+            "kind": "note",
+            "text": "Chen takes the leftover cent: first names in order."
+          },
+          {
+            "kind": "button",
+            "text": "Mark as paid"
+          }
+        ]
+      }
+    </script>
+    <script src="lib/page.js"></script>
+    <script src="lib/artboard.js"></script>
+  </body>
+</html>

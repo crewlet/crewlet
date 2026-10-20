@@ -1,0 +1,55 @@
+/*
+ * What every demo page shares beyond the artifact kit: the page fills its
+ * frame, on the reader's ground, in the reader's type. Colours and spacing are
+ * the kit's tokens, as an author's page writes them.
+ */
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--color-surface-background);
+  color: var(--color-text-primary);
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-sm);
+  line-height: var(--font-line-height-body);
+}
+
+button {
+  font: inherit;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-1);
+  min-height: var(--size-control-md);
+  padding: 0 var(--spacing-3);
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-elevated);
+  color: var(--color-text-primary);
+  cursor: pointer;
+}
+
+.btn:hover {
+  background: var(--color-surface-hover);
+}
+
+.btn:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.btn[disabled] {
+  color: var(--color-text-muted);
+  cursor: default;
+}
+
+.muted {
+  color: var(--color-text-tertiary);
+}
