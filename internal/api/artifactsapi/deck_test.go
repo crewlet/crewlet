@@ -149,3 +149,61 @@ func TestADocsOutlineCarriesItsOpeningAlone(t *testing.T) {
 		t.Error("a gallery cover recorded an opening")
 	}
 }
+
+// A DECK'S PLAN REACHES THE PIPELINE AS SENT: the theme and the slides a
+// slides starter opens with, decoded from `deck`.
+func TestACreateCarriesItsDeckPlan(t *testing.T) {
+	t.Parallel()
+	g := newRig(t, true)
+	body := `{"kind":"slides","title":"Plan","starter":true,` +
+		`"deck":{"theme":"grove","slides":[{"layout":"cover"},{"layout":"points","title":"Risks"}]}}`
+	if w := g.do(person("dana"), "POST", "/artifacts", body, keyed()...); w.Code != http.StatusCreated {
+		t.Fatalf("a create with a plan: %d %s", w.Code, w.Body)
+	}
+	req := g.pipeline.creates[0]
+	if !req.Starter || req.Deck == nil || req.Deck.Theme != "grove" || len(req.Deck.Slides) != 2 ||
+		req.Deck.Slides[1].Title != "Risks" {
+		t.Errorf("the pipeline was asked %+v (plan %+v)", req, req.Deck)
+	}
+}
+
+// WHAT A DECK CAN BEGIN FROM is answered to anyone who may list artifacts,
+// the same for every caller:
+// every theme with its sample drawn as the canonical tree, never markup, every
+// layout, and the plan a starter opens with when it names none.
+func TestTheSlidesStartersAreAnsweredAsTrees(t *testing.T) {
+	t.Parallel()
+	g := newRig(t, true)
+	w := g.do(person("bob"), "GET", "/artifacts/starters/slides", ``)
+	if w.Code != http.StatusOK {
+		t.Fatalf("the starters: %d %s", w.Code, w.Body)
+	}
+	var got struct {
+		Themes []struct {
+			ID, Name, Tag string
+			Sample        struct {
+				Theme  string
+				Slides []struct{ ID, Title string }
+			}
+		}
+		Layouts []struct{ ID, Name, Description, Heading string }
+		Default struct {
+			Theme  string
+			Slides []struct{ Layout string }
+		}
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Themes) < 2 || len(got.Layouts) < 4 || got.Default.Theme == "" || len(got.Default.Slides) == 0 {
+		t.Fatalf("the starters answered %+v", got)
+	}
+	for _, th := range got.Themes {
+		if th.Name == "" || th.Tag == "" || th.Sample.Theme != th.ID || len(th.Sample.Slides) != len(got.Layouts) {
+			t.Errorf("theme %s answered %+v", th.ID, th)
+		}
+	}
+	if strings.Contains(w.Body.String(), "<section") || strings.Contains(w.Body.String(), `"Feature"`) {
+		t.Errorf("the answer carries markup or a theme's palette fields: %.300s", w.Body)
+	}
+}

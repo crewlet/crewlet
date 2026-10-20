@@ -6206,7 +6206,7 @@ for. The domain's applier decides from the record alone.
 | `POST /artifacts/uploads` | `create_artifact` | An upload intent for a new artifact |
 | `POST /artifacts/{id}/uploads` | `publish_artifact`, or `upload_artifact_asset` with `asset: true` | An upload intent for the next version, or into the asset store |
 | `PUT /artifacts/uploads/{upload}/files/{path}` | the intent's own verb, decided again | One file's bytes, streamed through the engine |
-| `POST /artifacts` | `create_artifact` | A new artifact and its first version, owned by the caller. `"starter": true` begins it from its kind's starter content, which the engine holds and publishes inline (a deck's four example slides), naming no upload, files or entry; a kind with no starter is `422 invalid` |
+| `POST /artifacts` | `create_artifact` | A new artifact and its first version, owned by the caller. `"starter": true` begins it from its kind's starter content, which the engine holds and publishes inline, naming no upload, files or entry; a kind with no starter is `422 invalid`. A `slides` starter takes an optional `"deck": {"theme": "<id>", "slides": [{"layout": "<id>", "title": "..."}]}`, the theme it is drawn in and the slides it opens with (at most 60, each title at most 200 bytes); absent, it opens with a cover, an agenda, two columns and a closing slide in the `ink` theme. A plan naming a theme or layout there is not, or sent without a slides starter, is `422 invalid` |
 | `POST /artifacts/{id}/versions` | `publish_artifact`; `artifacts.publish.force` beside it when forced | The next version, based on `If-Match: "<n>"` |
 | `POST /artifacts/{id}/versions/{n}/restore` | `publish_artifact` | Version `n` again as a new version, every file carried, based on `If-Match` |
 | `PATCH /artifacts/{id}` | `update_artifact` | The title, the description or the icon |
@@ -6357,7 +6357,7 @@ The API origin **never renders an artifact**:
   Reading a design's source records that the caller opened it (its canvas is
   drawn whether or not any artboard is framed).
 - `GET /artifacts/{id}/versions/{n}/deck` answers a deck's version (a
-  `slides` artifact) as its **canonical tree**: the title, the cover, the
+  `slides` artifact) as its **canonical tree**: the title, the theme, the cover, the
   outline's sections, the typefaces and every slide in order, each its id,
   title, notes, transition, hidden flag and the `<section>` as elements,
   attributes and canonical style declarations, read through the same
@@ -6365,6 +6365,15 @@ The API origin **never renders an artifact**:
   dashboard draws, presents and prints a deck from this answer alone and never
   parses a slide's markup. Reading it records that the caller opened the deck,
   as a frame's ticket does for a page. Any other kind is `409 content_refused`.
+- `GET /artifacts/starters/slides` (`list_artifacts`, everybody's) answers
+  what a deck can begin from: `themes`, each its `id`, `name`, `tag` and
+  `sample` (a deck of every layout once, drawn in that theme, as the same
+  canonical tree a version's deck is answered as), `layouts`, each its `id`,
+  `name`, `description` and `heading` (the title a slide of it opens with), and
+  `default`, the plan a starter opens with when it names none. The create page
+  draws its theme picker and preview from it, and the deck editor adds a slide
+  from the sample of the theme its deck's index names (see
+  [Slide Format](slide-format.md#the-index)).
 - `GET /artifacts/{id}/versions/{n}/doc` answers a doc's version (a `doc`
   artifact) **tab by tab**: `indexed` (whether it opens on a `doc.json` index
   rather than one Markdown file) and every tab in the index's order, each its

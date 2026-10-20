@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
+	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/artifactupload/edits"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -116,8 +117,12 @@ type CreateRequest struct {
 	Capabilities []artifacts.Capability `json:"capabilities,omitempty"`
 
 	// Starter begins the artifact from its kind's starter content (a deck's
-	// four example slides), which the engine holds; it names no files.
+	// example slides), which the engine holds; it names no files.
 	Starter bool `json:"starter,omitempty"`
+
+	// Deck is the plan a slides starter is composed from: its theme and the
+	// slides it opens with. Nil is the default plan; a slides starter only.
+	Deck *slideformat.Plan `json:"deck,omitempty"`
 }
 
 // StageNamespace scopes the derivation of a publish's own reservation from the
@@ -141,12 +146,16 @@ func (s *Service) create(ctx context.Context, c artifactsdomain.Call, req Create
 		return artifactsdomain.Published{}, Report{}, fmt.Errorf("%w: kind %q is not one of %v",
 			ErrInvalid, req.Kind, artifacts.Kinds)
 	}
+	if req.Deck != nil && (!req.Starter || req.Kind != artifacts.KindSlides) {
+		return artifactsdomain.Published{}, Report{}, fmt.Errorf("%w: a deck plan begins a slides "+
+			"artifact from its starter: send it with starter and kind slides", ErrInvalid)
+	}
 	if req.Starter {
 		if req.Upload != "" || len(req.Files) > 0 || req.Entry != "" {
 			return artifactsdomain.Published{}, Report{}, fmt.Errorf("%w: a create from the "+
 				"kind's starter names no upload, files or entry: the starter is all of them", ErrInvalid)
 		}
-		files, entry, err := starter(req.Kind, req.Title)
+		files, entry, err := starter(req.Kind, req.Title, req.Deck)
 		if err != nil {
 			return artifactsdomain.Published{}, Report{}, err
 		}

@@ -20,6 +20,7 @@ silently dropped: a deck that publishes is a deck that draws.
 - [Images and typefaces](#images-and-typefaces)
 - [Bounds](#bounds)
 - [What is refused, and what to write instead](#what-is-refused-and-what-to-write-instead)
+- [Themes and layouts](#themes-and-layouts)
 - [How a deck is drawn](#how-a-deck-is-drawn)
 
 ## The files
@@ -57,6 +58,7 @@ is accepted.
 | `order` | Required: the slide ids in deck order, each once, 1 to 500 |
 | `cover` | Optional: the slide the gallery draws as the card's cover, else the first |
 | `sections` | Optional: the outline, any key to a run's one sentence (at most 300 bytes) and the slide it starts at. No two start at one slide |
+| `theme` | Optional: the look the deck began in, one of `nightshade`, `ink`, `paper`, `signal`, `studio`, `grove`. Crewlet's own key, written by the starter; the slides hold their own styles, so a deck naming none draws the same. The deck editor adds a slide from that theme's layouts, and duplicates a slide in a deck naming none. See [Themes and layouts](#themes-and-layouts) |
 | `faces` | Optional, at most 4: a typeface keyed by its family lowercased with spaces as `-`, its `family` and the font file of the version it loads from (`src`). See [Images and typefaces](#images-and-typefaces) |
 | `v`, `createdOnFiles`, `lists` | Claude's own bookkeeping: accepted and kept as written, never read. `lists` may only be `css` |
 | `designSystems` | Must be empty or absent: a Crewlet deck installs no design system |
@@ -282,6 +284,44 @@ A version's own bounds apply too: 511 files, and each file's size by its type.
 
 A refusal lists every finding at once (up to 50), each as
 `file:line: rule: message`, under the code `slide_format`.
+
+## Themes and layouts
+
+A deck begun in the dashboard is composed by the engine from a **plan**: the
+theme it is drawn in and the slides it opens with, each a layout and its
+title. The engine writes ordinary slides, held to this format like any
+version, and names the theme in the index so a slide added later is drawn
+from the same theme's layouts. `GET /artifacts/starters/slides` answers every
+theme and layout (see [API Endpoints](api-endpoints.md)).
+
+| Theme | Look |
+|---|---|
+| `nightshade` | Periwinkle on blue-black, set in Inter |
+| `ink` | Navy and paper, set in Georgia (the default) |
+| `paper` | White, quiet and exact, set in Helvetica Neue |
+| `signal` | Yellow on black, for a big room |
+| `studio` | Warm cream and terracotta, Palatino over Avenir Next |
+| `grove` | Deep green and mint, set in the system face |
+
+| Layout | Holds |
+|---|---|
+| `cover` | The deck's title and who it is for; its title is the deck's |
+| `agenda` | A numbered list of the parts to come |
+| `section` | Opens a part of the deck; it starts a section of the outline under its title |
+| `points` | A title and a short list |
+| `columns` | Two cards side by side |
+| `number` | One figure, large, and what it measures |
+| `quote` | A quote, large, and who said it |
+| `closing` | The one decision or ask to end on |
+
+A slide's id is its layout's, numbered from two when a layout is used again
+(`points`, `points-2`).
+
+### Changes to the format
+
+- **`theme` in the index.** Added as an optional key, so every deck written
+  before it is still in the format. A deck that names a theme outside the
+  list above is refused, naming the themes there are.
 
 ## How a deck is drawn
 

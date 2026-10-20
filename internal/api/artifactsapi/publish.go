@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/artifacts/mediatype"
+	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/artifactupload"
 	"github.com/crewlet/crewlet/internal/artifactupload/edits"
@@ -259,6 +260,10 @@ type createBody struct {
 	// engine holds (a deck's example slides); it names no upload or files.
 	Starter bool `json:"starter,omitempty"`
 
+	// Deck is the plan a slides starter is composed from: its theme and the
+	// slides it opens with ([slideformat.Plan]). Absent is the default plan.
+	Deck *slideformat.Plan `json:"deck,omitempty"`
+
 	// WorkItem is the tracker item the artifact is made for, which lists it
 	// there. It confers nothing.
 	WorkItem string `json:"work_item,omitempty"`
@@ -344,6 +349,7 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 		Owner: actor.Name, OwnerKind: actor.Kind, SourceKey: body.SourceKey, Shares: shares,
 		Upload: body.Upload, Files: body.Files, Entry: body.Entry, Label: body.Label,
 		Contract: body.Contract, Capabilities: body.Capabilities, Starter: body.Starter,
+		Deck: body.Deck,
 	})
 	if err != nil {
 		writeFailed(w, r, key, "create the artifact", err)

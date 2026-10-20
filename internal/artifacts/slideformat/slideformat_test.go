@@ -238,7 +238,7 @@ func TestTheIndexAndTheFilesAgree(t *testing.T) {
 			d.files["deck.json"] = []byte(`{"title":"T","order":["agenda"],"designSystems":[{"title":"x"}]}`)
 		}, "installs none"},
 		{"unknown key", func(d dirSource) {
-			d.files["deck.json"] = []byte(`{"title":"T","order":["agenda"],"theme":"dark"}`)
+			d.files["deck.json"] = []byte(`{"title":"T","order":["agenda"],"palette":"dark"}`)
 		}, "unknown field"},
 		{"no title", func(d dirSource) { d.files["deck.json"] = []byte(`{"order":["agenda"]}`) }, "name the deck"},
 		{"twice", func(d dirSource) { d.files["deck.json"] = []byte(`{"title":"T","order":["agenda","agenda"]}`) }, "twice"},
@@ -320,23 +320,130 @@ func FuzzParseSlide(f *testing.F) {
 	})
 }
 
-// THE STARTER IS IN THE FORMAT, whatever its title: it reads whole with no
-// finding, its title escaped as text on the cover and as JSON in the index.
-func TestTheStarterDeckIsInTheFormat(t *testing.T) {
-	t.Parallel()
-	const title = `Q3 <plan> & "more"`
-	src := dirSource{files: map[string][]byte{}}
-	for p, b := range Starter(title) {
-		src.files[p] = b
-	}
-	deck, err := Read(src)
+// composedSource is a starter's files as a deck to read.
+func composedSource(t *testing.T, title string, plan Plan) dirSource {
+	t.Helper()
+	files, err := Compose(title, plan)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if deck.Title != title || len(deck.Slides) != 4 || deck.Slides[0].Title != title ||
-		len(deck.Sections) != 3 || deck.Slides[1].Notes == "" {
-		t.Errorf("the starter read as %q with %d slides, cover %q", deck.Title, len(deck.Slides),
-			deck.Slides[0].Title)
+	return dirSource{files: files}
+}
+
+// THE DEFAULT STARTER IS IN THE FORMAT, whatever its title: it reads whole
+// with no finding, its title escaped as text on the cover and as JSON in the
+// index, and it names the theme it was drawn in.
+func TestTheStarterDeckIsInTheFormat(t *testing.T) {
+	t.Parallel()
+	const title = `Q3 <plan> & "more"`
+	deck, err := Read(composedSource(t, title, Plan{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deck.Title != title || deck.Theme != DefaultTheme || len(deck.Slides) != 4 ||
+		deck.Slides[0].Title != title || deck.Cover != "cover" || deck.Slides[1].Notes == "" {
+		t.Errorf("the starter read as %q (%s) with %d slides, cover %q", deck.Title, deck.Theme,
+			len(deck.Slides), deck.Slides[0].Title)
+	}
+}
+
+// EVERY THEME DRAWS EVERY LAYOUT IN THE FORMAT: a theme's colour or family the
+// format refuses, or a layout's markup, fails here rather than at a person's
+// first create.
+func TestEveryThemeDrawsEveryLayout(t *testing.T) {
+	t.Parallel()
+	for _, theme := range Themes() {
+		deck, err := Sample(theme)
+		if err != nil {
+			t.Fatalf("theme %s: %v", theme.ID, err)
+		}
+		if deck.Theme != theme.ID || len(deck.Slides) != len(Layouts()) {
+			t.Errorf("theme %s sampled as %q with %d slides", theme.ID, deck.Theme, len(deck.Slides))
+		}
+		for i, s := range deck.Slides {
+			want := Layouts()[i].Heading
+			if i == 0 {
+				want = theme.Name
+			}
+			if s.Title != want || s.Notes == "" {
+				t.Errorf("theme %s, slide %s: title %q (want %q), notes %q", theme.ID, s.ID, s.Title,
+					want, s.Notes)
+			}
+		}
+	}
+}
+
+// A PLAN'S SLIDES ARE ITS OWN: in order, a layout used again numbered from two,
+// each titled as the plan says (escaped), and each section slide starting a
+// section of the outline under its title.
+func TestAPlanComposesItsSlides(t *testing.T) {
+	t.Parallel()
+	deck, err := Read(composedSource(t, "Board review", Plan{Theme: "studio", Slides: []PlanSlide{
+		{Layout: "cover"}, {Layout: "section", Title: "Where <we> are"}, {Layout: "points"},
+		{Layout: "points", Title: "Risks"}, {Layout: "section", Title: "Next"}, {Layout: "closing"},
+	}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids, titles []string
+	for _, s := range deck.Slides {
+		ids, titles = append(ids, s.ID), append(titles, s.Title)
+	}
+	if got := strings.Join(ids, " "); got != "cover section points points-2 section-2 closing" {
+		t.Errorf("ids %s", got)
+	}
+	if got := strings.Join(titles, "|"); got != "Board review|Where <we> are|Three points|Risks|Next|What we need" {
+		t.Errorf("titles %s", got)
+	}
+	if deck.Theme != "studio" || len(deck.Sections) != 2 {
+		t.Errorf("theme %q, sections %+v", deck.Theme, deck.Sections)
+	}
+	starts := map[string]string{}
+	for _, s := range deck.Sections {
+		starts[s.Start] = s.Description
+	}
+	if starts["section"] != "Where <we> are" || starts["section-2"] != "Next" {
+		t.Errorf("sections %+v", deck.Sections)
+	}
+}
+
+// A PLAN OUTSIDE WHAT THE STARTER HOLDS IS REFUSED, naming what to write
+// instead, before anything is composed.
+func TestAPlanOutsideTheStarterIsRefused(t *testing.T) {
+	t.Parallel()
+	many := make([]PlanSlide, MaxPlanSlides+1)
+	for i := range many {
+		many[i] = PlanSlide{Layout: "points"}
+	}
+	for name, plan := range map[string]Plan{
+		"theme":  {Theme: "neon"},
+		"layout": {Slides: []PlanSlide{{Layout: "timeline"}}},
+		"many":   {Slides: many},
+		"title":  {Slides: []PlanSlide{{Layout: "points", Title: strings.Repeat("x", MaxSlideTitleBytes+1)}}},
+	} {
+		if _, err := Compose("Deck", plan); !errors.Is(err, ErrPlan) {
+			t.Errorf("%s: answered %v", name, err)
+		}
+	}
+}
+
+// AN INDEX'S THEME IS OPTIONAL AND CLOSED: a deck that names none reads, one
+// that names a theme there is reads it back, and one naming any other is
+// refused naming the themes there are.
+func TestAnIndexNamesOneOfTheThemes(t *testing.T) {
+	t.Parallel()
+	src := composedSource(t, "Deck", Plan{Theme: "grove"})
+	deck, err := Read(src)
+	if err != nil || deck.Theme != "grove" {
+		t.Fatalf("a grove deck read as %q, %v", deck.Theme, err)
+	}
+	src.files[IndexPath] = []byte(strings.Replace(string(src.files[IndexPath]), `"grove"`, `"neon"`, 1))
+	found := refusal(t, src)
+	if len(found) != 1 || !strings.Contains(found[0].Message, "nightshade") {
+		t.Errorf("an unknown theme was refused with %v", found)
+	}
+	if _, err := Read(testDeck(t)); err != nil {
+		t.Errorf("a deck naming no theme: %v", err)
 	}
 }
 

@@ -17,14 +17,25 @@ import (
 // THE ENGINE'S RATHER THAN THE CLIENT'S because a create from the dashboard
 // carries no upload, and a deployment whose object store presigns transfers
 // sends them to an origin the dashboard's own policy does not let it reach.
-func starter(kind artifacts.Kind, title string) ([]FileSpec, string, error) {
+//
+// A deck's starter is composed from plan (nil is [slideformat.DefaultPlan]); a
+// plan the format does not hold is refused as invalid, naming what it holds.
+func starter(kind artifacts.Kind, title string, plan *slideformat.Plan) ([]FileSpec, string, error) {
 	var (
 		files map[string][]byte
 		entry string
 	)
 	switch spec, _ := kind.Spec(); spec.Format {
 	case artifacts.FormatSlides:
-		files, entry = slideformat.Starter(title), slideformat.IndexPath
+		var p slideformat.Plan
+		if plan != nil {
+			p = *plan
+		}
+		composed, err := slideformat.Compose(title, p)
+		if err != nil {
+			return nil, "", fmt.Errorf("%w: %w", ErrInvalid, err)
+		}
+		files, entry = composed, slideformat.IndexPath
 	case artifacts.FormatDoc:
 		files, entry = docindex.Starter(title), docindex.StarterEntry
 	default:

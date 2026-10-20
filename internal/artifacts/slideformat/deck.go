@@ -62,6 +62,12 @@ type Index struct {
 	Cover    string                  `json:"cover,omitempty"`
 	Faces    map[string]IndexFace    `json:"faces,omitempty"`
 
+	// Theme is the look the deck began in ([Themes]): Crewlet's own key, not
+	// Claude's. Optional: a deck that names none is drawn just the same, since
+	// every slide holds its own styles, and the editor adds a slide to it by
+	// duplicating one rather than from a theme's layouts.
+	Theme string `json:"theme,omitempty"`
+
 	// DesignSystems is Claude's record of installed design systems. A
 	// Crewlet deck installs none: its look is the company's artifact kit.
 	DesignSystems []json.RawMessage `json:"designSystems,omitempty"`
@@ -88,6 +94,7 @@ type IndexFace struct {
 // every slide read, in order.
 type Deck struct {
 	Title    string    `json:"title"`
+	Theme    string    `json:"theme,omitempty"`
 	Cover    string    `json:"cover"`
 	Sections []Section `json:"sections"`
 	Faces    []Face    `json:"faces"`
@@ -210,7 +217,7 @@ func Read(src Source) (Deck, error) {
 	if idx == nil {
 		return Deck{}, &Refused{Findings: found}
 	}
-	deck := Deck{Title: idx.Title, Cover: idx.Cover}
+	deck := Deck{Title: idx.Title, Theme: idx.Theme, Cover: idx.Cover}
 	if deck.Cover == "" && len(idx.Order) > 0 {
 		deck.Cover = idx.Order[0]
 	}
@@ -300,6 +307,9 @@ func ParseIndex(raw []byte) (*Index, []Finding) {
 		bad("title is empty: name the deck")
 	case len(idx.Title) > MaxTitleBytes || !utf8.ValidString(idx.Title):
 		bad("title is longer than %d bytes", MaxTitleBytes)
+	}
+	if _, ok := ThemeByID(idx.Theme); idx.Theme != "" && !ok {
+		bad("theme is %q, and a deck's theme is one of %s", idx.Theme, strings.Join(themeIDs(), ", "))
 	}
 	if idx.Lists != "" && idx.Lists != "css" {
 		bad("lists is %q, and the only list style is css", idx.Lists)

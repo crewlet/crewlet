@@ -332,8 +332,11 @@ style and bound; the short version:
   of the version named by their path (`images/team.png`), never URLs.
 - **Publish it** with `crewlet artifacts publish <dir>` (a `deck.json` makes it
   `slides`), or from an agent with `create_artifact`, `kind: "slides"` and
-  `files`. In the dashboard, New › Deck starts one from four example slides
-  you edit in place. Revise one slide at a time with `edits` on its file against your
+  `files`. In the dashboard, New › Slides starts one from a theme and the
+  slides you choose to open with (see
+  [Themes and layouts](../reference/slide-format.md#themes-and-layouts)), which
+  you edit in place. An agent's deck may name one of those themes as `theme` in
+  `deck.json`, so a person adds slides to it from that theme's layouts. Revise one slide at a time with `edits` on its file against your
   base version; `get_artifact` with `view: "outline"` lists the slides first.
 
 ## Writing a dashboard
