@@ -63,6 +63,15 @@ export interface RestOptions {
    * option of the same name for why `visibilitychange` rather than focus.
    */
   refetchOnFocus?: boolean;
+  /**
+   * Re-read, quietly, when the socket reconnects. Default true: an answer
+   * read before a reconnect is about a company that has since moved. Off
+   * only for a read whose answer is used once and then let go, where a
+   * second answer would redo work rather than correct it: a gallery
+   * preview's ticket, read again, reloads the page already drawn in its
+   * frame.
+   */
+  refetchOnReconnect?: boolean;
 }
 
 export interface RestResult<T> {
@@ -157,7 +166,7 @@ export function useRest<T>(
   read: (signal: AbortSignal) => Promise<T>,
   options: RestOptions = {},
 ): RestResult<T> {
-  const { pollMs, refetchOnFocus = false } = options;
+  const { pollMs, refetchOnFocus = false, refetchOnReconnect = true } = options;
   const [state, setState] = useState<State<T>>({
     key,
     data: null,
@@ -263,7 +272,7 @@ export function useRest<T>(
   // there would make every REST read depend on a transport it does not use.
   const client = useContext(ClientContext);
   useEffect(() => {
-    if (!client || key === null) return;
+    if (!client || key === null || !refetchOnReconnect) return;
     const { store } = client;
     let was = store.state.connected;
     // A RECONNECT, NOT THE FIRST CONNECT. The page's socket opens a moment
@@ -278,7 +287,7 @@ export function useRest<T>(
       if (now) seen = true;
       was = now;
     });
-  }, [client, key, run]);
+  }, [client, key, run, refetchOnReconnect]);
 
   const current = state.key === key;
   const error = current ? state.error : null;
