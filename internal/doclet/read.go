@@ -1,6 +1,7 @@
 package doclet
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/base64"
@@ -96,6 +97,10 @@ type Filter struct {
 	// Onboarding narrows to the pages a seat's reading chain starts at.
 	Onboarding bool
 
+	// Order is the order the listing is read in: [OrderTitle], the knowledge
+	// base's own, when empty.
+	Order ListOrder
+
 	Limit int
 
 	// After is the [Listing.After] of the page before this one, or empty for
@@ -108,6 +113,38 @@ type Filter struct {
 
 // ErrBadCursor refuses an [Filter.After] this reader did not mint.
 var ErrBadCursor = errors.New("doclet: that cursor is not one this listing minted")
+
+// ListOrder is the order a listing is read in.
+type ListOrder string
+
+const (
+	// OrderTitle is the knowledge base's own order — container, title, id
+	// ([listOrder]) — which every tree and space is drawn in, and the order
+	// an empty [Filter.Order] reads.
+	OrderTitle ListOrder = "title"
+
+	// OrderNewest is the most recently changed first ([newestOrder]),
+	// served for the tool-skill pages alone ([ErrUnservedOrder]).
+	OrderNewest ListOrder = "newest"
+)
+
+// ListOrders is every order a listing is read in.
+func ListOrders() []ListOrder { return []ListOrder{OrderTitle, OrderNewest} }
+
+// Valid reports whether this build reads a listing in o.
+func (o ListOrder) Valid() bool { return o == OrderTitle || o == OrderNewest }
+
+// ErrUnservedOrder refuses [OrderNewest] on a listing that is not of the
+// tool-skill pages alone.
+//
+// AN ORDER IS SERVED ONLY WHERE AN INDEX HOLDS IT. The newest-first order is
+// held by the skill rows' own index (replicated 0067), because the skill flag
+// is a derived row of its own and not a column of the head; read over any
+// other listing it would sort every page that listing matches to return a
+// window, which is the cost the listing's own order exists to avoid. So it is
+// refused rather than served slowly, naming what it is served for.
+var ErrUnservedOrder = errors.New("doclet: a newest-first listing is served for " +
+	"the tool-skill pages alone (skills=true)")
 
 // DefaultLimit and MaxLimit bound a listing.
 const (
@@ -231,6 +268,15 @@ func (r *Reader) List(ctx context.Context, f Filter, fresh statelog.Freshness) (
 			"surface resolves an absent read_level to its own default (a seat " +
 			"tool linearizable, a dashboard poll stale) before it reads")
 	}
+	if f.Order == "" {
+		f.Order = OrderTitle
+	}
+	if !f.Order.Valid() {
+		return Listing{}, fmt.Errorf("doclet: no listing is read in the order %q", f.Order)
+	}
+	if f.Order == OrderNewest && (f.Skills == nil || !*f.Skills) {
+		return Listing{}, ErrUnservedOrder
+	}
 	spec, child := compileListing(f)
 	limit := f.Limit
 	if limit <= 0 {
@@ -241,11 +287,11 @@ func (r *Reader) List(ctx context.Context, f Filter, fresh statelog.Freshness) (
 	}
 	resume := listFromStart
 	if f.After != "" {
-		c, err := parseListCursor(f.After)
+		c, err := parseListCursor(f.After, f.Order)
 		if err != nil {
 			return Listing{}, err
 		}
-		resume = listResumes(c, f.Container != "")
+		resume = listResumes(c, f.Container != "", f.Order)
 	}
 	var out listPage
 	served, err := r.log.Read(ctx, fresh.Query(ReadScope(f.Container), true), func(tx *sql.Tx) error {
@@ -327,10 +373,17 @@ func compileListing(f Filter) (spec, child listSpec) {
 		child.where = append(child.where, "c.status IN ("+strings.Join(marks, ",")+")")
 	}
 	if f.Skills != nil {
-		if *f.Skills {
+		switch {
+		case *f.Skills && f.Order == OrderNewest:
+			// THE NEWEST-FIRST LISTING IS DRIVEN FROM THE SKILL ROWS'
+			// index, which is partial on exactly this term: stated as
+			// the index states it, so the planner can use it.
+			where = append(where, "k.skill = 1")
+			child.where = append(child.where, "COALESCE(ck.skill, 0) = 1")
+		case *f.Skills:
 			where = append(where, "COALESCE(k.skill, 0) = 1")
 			child.where = append(child.where, "COALESCE(ck.skill, 0) = 1")
-		} else {
+		default:
 			where = append(where, "COALESCE(k.skill, 0) = 0")
 			child.where = append(child.where, "COALESCE(ck.skill, 0) = 0")
 		}
@@ -341,14 +394,23 @@ func compileListing(f Filter) (spec, child listSpec) {
 	if f.Roots {
 		where = append(where, "p.parent_id = ''")
 	}
-	return listSpec{where: where, args: args}, child
+	return listSpec{where: where, args: args, order: f.Order}, child
 }
 
 // listSpec is one set of predicates and the arguments they bind, in order.
 type listSpec struct {
 	where []string
 	args  []any
+
+	// order is the order a LISTING is read in, empty being [OrderTitle].
+	// Only a listing's own predicate carries one: an arm of a resume and a
+	// child count are read in the listing's.
+	order ListOrder
 }
+
+// newest reports whether the listing is read newest first, from the skill
+// rows' own index rather than the heads'.
+func (s listSpec) newest() bool { return s.order == OrderNewest }
 
 // listPage is one window of a listing: its rows, how many the predicate
 // matches in all, and where the next window starts.
@@ -359,12 +421,18 @@ type listPage struct {
 }
 
 // listCursor is where a listing window stopped: the ORDER's own columns
-// ([listOrder]), so the next window is everything strictly after it in that
-// order.
+// ([listOrder], or [newestOrder]'s instant and id), so the next window is
+// everything strictly after it in that order.
+//
+// IT NAMES ITS ORDER, because a cursor is a place in ONE order: a title
+// listing's place handed to a newest-first listing names no row of it, and
+// read as one it would resume from wherever the zero instant falls.
 type listCursor struct {
-	Container string `json:"c"`
-	Title     string `json:"t"`
-	ID        string `json:"i"`
+	Order     ListOrder `json:"o,omitempty"`
+	Container string    `json:"c,omitempty"`
+	Title     string    `json:"t,omitempty"`
+	Updated   int64     `json:"u,omitempty"`
+	ID        string    `json:"i"`
 }
 
 func (c listCursor) String() string {
@@ -375,7 +443,7 @@ func (c listCursor) String() string {
 	return base64.RawURLEncoding.EncodeToString(body)
 }
 
-func parseListCursor(raw string) (listCursor, error) {
+func parseListCursor(raw string, order ListOrder) (listCursor, error) {
 	body, err := base64.RawURLEncoding.DecodeString(raw)
 	if err != nil {
 		return listCursor{}, fmt.Errorf("%w: %w", ErrBadCursor, err)
@@ -383,6 +451,10 @@ func parseListCursor(raw string) (listCursor, error) {
 	var c listCursor
 	if err := json.Unmarshal(body, &c); err != nil || c.ID == "" {
 		return listCursor{}, fmt.Errorf("%w: it decodes to no position", ErrBadCursor)
+	}
+	if minted := cmp.Or(c.Order, OrderTitle); minted != order {
+		return listCursor{}, fmt.Errorf("%w: it is a place in the %s order, and "+
+			"this listing is read in the %s order", ErrBadCursor, minted, order)
 	}
 	return c, nil
 }
@@ -412,6 +484,18 @@ var listOrder = []keyset.Term{
 	{Column: "p.id", NeverNull: true},
 }
 
+// newestOrder is [OrderNewest] as the terms a later window resumes through:
+// the instant the page last changed, newest first, and its id, which keeps the
+// order total — two pages changed by one batch share an instant. Both are the
+// SKILL ROW's (`pages_skills`), the copy of the head's `updated_at` its apply
+// writes beside the flag, because replicated 0067's `pages_skills_newest_idx`
+// (updated_at, page_id) — partial on the flag — is what holds the order: a
+// window is a backward walk of it that its LIMIT stops. Both NOT NULL.
+var newestOrder = []keyset.Term{
+	{Column: "k.updated_at", Descending: true, NeverNull: true},
+	{Column: "k.page_id", Descending: true, NeverNull: true},
+}
+
 // listFromStart is a listing's first window: the listing itself, from its
 // first row.
 var listFromStart = []listSpec{{}}
@@ -437,9 +521,15 @@ var listFromStart = []listSpec{{}}
 // out. A tree level under one parent keeps all three terms, because there
 // the container is no equality of the listing's and its arm is an empty
 // range of the parent index.
-func listResumes(after listCursor, pinned bool) []listSpec {
+func listResumes(after listCursor, pinned bool, by ListOrder) []listSpec {
 	order, keys := listOrder, []any{after.Container, after.Title, after.ID}
-	if pinned {
+	switch {
+	case by == OrderNewest:
+		// NOTHING TO PIN: the newest-first order does not lead with the
+		// container, so a listing pinned to one resumes on the same two
+		// terms as any other.
+		order, keys = newestOrder, []any{after.Updated, after.ID}
+	case pinned:
 		order, keys = order[1:], keys[1:]
 	}
 	arms := keyset.After(order, keys)
@@ -487,7 +577,13 @@ func (r *Reader) list(ctx context.Context, tx *sql.Tx, spec, child listSpec,
 	if len(out) > limit {
 		out = out[:limit]
 		last := out[len(out)-1]
-		page.after = listCursor{Container: last.Container, Title: last.Title, ID: last.ID}.String()
+		after := listCursor{Container: last.Container, Title: last.Title, ID: last.ID}
+		if spec.newest() {
+			// THE ROW'S OWN PLACE IN THE ORDER: its row's instant, which
+			// the window read from the skill row the order is held on.
+			after = listCursor{Order: OrderNewest, Updated: store.EncodeTime(last.Updated), ID: last.ID}
+		}
+		page.after = after.String()
 	}
 	page.rows = out
 	if err := r.attachLabels(ctx, tx, out); err != nil {
@@ -499,13 +595,32 @@ func (r *Reader) list(ctx context.Context, tx *sql.Tx, spec, child listSpec,
 	return page, r.attachSaves(ctx, tx, out)
 }
 
-// listTotalStatement counts what the listing matches, and its arguments.
+// listTotalStatement counts what the listing matches, and its arguments —
+// from the skill rows for a newest-first listing, which reads nothing but
+// skills ([listRowsStatement] says why).
 func listTotalStatement(spec listSpec) (string, []any) {
 	return `
 		SELECT COUNT(*)
-		  FROM pages_heads p
-		  LEFT JOIN pages_skills k ON k.page_id = p.id
+		  FROM ` + listFrom(spec) + `
 		 WHERE ` + strings.Join(spec.where, " AND "), spec.args
+}
+
+// listFrom is the tables a listing reads, in the order the planner should
+// drive them: the heads, with each page's skill row beside it where it has
+// one; or, for a newest-first listing, the skill rows and the head each names.
+//
+// INNER, AND THE SKILL ROWS FIRST, for the newest order: every row it lists is
+// a skill, so a page with no skill row is no row of it, and the order is held
+// on the skill rows' index ([newestOrder]), which a walk can only follow from
+// the table it indexes. CROSS JOIN is what keeps them first: joined plainly,
+// the planner is free to drive on the heads, and with no statistics it does —
+// measured, every window read every page from the heap, looked each one's
+// skill row up and sorted what matched.
+func listFrom(spec listSpec) string {
+	if spec.newest() {
+		return "pages_skills k CROSS JOIN pages_heads p ON p.id = k.page_id"
+	}
+	return "pages_heads p LEFT JOIN pages_skills k ON k.page_id = p.id"
 }
 
 // listRowsStatement is one read of a window — the listing narrowed by from,
@@ -523,18 +638,25 @@ func listTotalStatement(spec listSpec) (string, []any) {
 // internal/store/storetest, states the rule) — measured, it did on the
 // workspace's listing. So the count is read for the window's rows after them
 // ([attachChildren]).
+//
+// A NEWEST-FIRST LISTING is read from the skill rows' own index
+// ([newestOrder]), and its instant is the skill row's copy of the head's, so
+// the cursor a window mints is the very value the next window resumes from.
 func listRowsStatement(spec, from listSpec, limit int) (string, []any) {
 	where := strings.Join(append(slices.Clip(spec.where), from.where...), " AND ")
 	args := append(slices.Clip(spec.args), from.args...)
+	updated, order := "p.updated_at", "p.container, p.title, p.id"
+	if spec.newest() {
+		updated, order = "k.updated_at", "k.updated_at DESC, k.page_id DESC"
+	}
 	return `
 		SELECT p.id, p.container, p.parent_id, p.title, p.status, p.author,
 		       p.edit_version, COALESCE(k.skill, 0), COALESCE(k.onboarding, 0),
-		       p.updated_at, MAX(p.version, p.scoped_through),
+		       ` + updated + `, MAX(p.version, p.scoped_through),
 		       p.body = '',` + summarySaved + `
-		  FROM pages_heads p
-		  LEFT JOIN pages_skills k ON k.page_id = p.id
+		  FROM ` + listFrom(spec) + `
 		 WHERE ` + where + `
-		 ORDER BY p.container, p.title, p.id
+		 ORDER BY ` + order + `
 		 LIMIT ?`, append(args, limit)
 }
 

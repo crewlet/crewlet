@@ -796,6 +796,41 @@ func TestAPageListingCarriesItsTotalAndCursor(t *testing.T) {
 	}
 }
 
+// A LISTING'S ORDER REACHES THE READER, AND ONE IT DOES NOT SERVE IS THE
+// CALLER'S MISTAKE.
+//
+// Agent skills asks for the newest tool skills, which the reader serves from
+// the skill rows' own index and nowhere else. So `order` reaches it as asked,
+// an order nobody reads is refused naming the set, and the reader's refusal of
+// the newest order over any other listing is bad params naming what it is
+// served beside — never a 500 for a question the caller can correct.
+func TestAPageListingsOrderReachesTheReader(t *testing.T) {
+	t.Parallel()
+	p := &stubPages{}
+	if _, err := askNative(t, queries.Sources{Pages: p}, "pages",
+		map[string]any{"skills": true, "order": "newest"}); err != nil {
+		t.Fatalf("pages: %v", err)
+	}
+	if p.filter.Order != doclet.OrderNewest {
+		t.Errorf("order=newest reached the reader as %q", p.filter.Order)
+	}
+	if _, err := askNative(t, queries.Sources{Pages: p}, "pages", nil); err != nil {
+		t.Fatalf("pages: %v", err)
+	}
+	if p.filter.Order != "" {
+		t.Errorf("an absent order reached the reader as %q, want the reader's own", p.filter.Order)
+	}
+	_, err := askNative(t, queries.Sources{Pages: p}, "pages", map[string]any{"order": "oldest"})
+	if !errors.Is(err, queries.ErrBadParams) || !strings.Contains(err.Error(), "newest") {
+		t.Errorf("an unknown order answered %v, want bad params naming the orders", err)
+	}
+	p.err = fmt.Errorf("wrapped: %w", doclet.ErrUnservedOrder)
+	_, err = askNative(t, queries.Sources{Pages: p}, "pages", map[string]any{"order": "newest"})
+	if !errors.Is(err, queries.ErrBadParams) || !strings.Contains(err.Error(), "skills=true") {
+		t.Errorf("an unserved order answered %v, want bad params naming skills=true", err)
+	}
+}
+
 // A BAD ENUM IS REFUSED NAMING THE CLOSED SET, rather than silently matching
 // nothing: a board that answered empty for `status=done` (which is not a
 // status here) would send somebody looking for the missing items.

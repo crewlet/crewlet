@@ -667,6 +667,14 @@ Two properties differ from the vendor path and both are visible:
   NODE'S OWN COPY (the rows, the lexical index and the replicated vectors), and
   the screen says so: it is as current as this node's place on the pages log.
   See [the dashboard's Doclet](../reference/dashboard-design.md#doclet-the-spaces-a-landing-and-search-with-real-modes).
+- **THE NEWEST TOOL SKILLS ARE READ IN THEIR OWN ORDER.** `pages{skills:
+  true, order: "newest"}` lists the tool skills by when each last changed,
+  newest first, from an index of the skill rows' own (replicated migration
+  0067), and pages by a cursor in that order — so the first window is the
+  skills that really changed last, however many the company keeps. Whether a
+  page is a skill is derived from its body on every node rather than stored on
+  the page, so no other listing has an index in that order and `newest` is
+  refused anywhere but beside `skills=true`.
 - **A PAGE KNOWS WHO READ IT AND WHO LINKS TO IT.** Every read a seat makes
   is a recorded `knowledge_read`, and the replicated `usage` domain keeps it
   per company day, so `page_reads` names each seat, how the page reached it

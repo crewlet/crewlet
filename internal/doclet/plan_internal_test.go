@@ -185,15 +185,21 @@ func seedPageHistory(ctx context.Context, tx *sql.Tx, maxVariables int) error {
 // saves, which `pages_history_page_idx` holds in log order, where ordered by
 // anything else it sorted that page's whole history once per row.
 //
+// THE NEWEST TOOL SKILLS ARE THE OTHER ORDER ([newestOrder]), held by the
+// skill rows' own `pages_skills_newest_idx` (replicated 0067): the first window
+// walks it from the newest and the arms of a later one seek it, each row's head
+// then read by its key.
+//
 // Mutation: resume through the nested disjunction again, or order a listing by
 // a column its indexes do not lead with, and the plans sort; resume a listing
 // pinned to one container on its container as well, and the last arm reads
 // the whole container to find nothing; order a page's saves by their broker
-// instant, and every row sorts its history.
+// instant, and every row sorts its history; join the skill rows to the heads
+// plainly rather than across, and the newest skills are read from the heap
+// and sorted.
 func TestAListingIsReadInItsOrder(t *testing.T) {
 	t.Parallel()
 	db := pagePlanStore(t)
-	cursor := listCursor{Container: "ENG", Title: "Page 5", ID: "p-0005"}
 	shapes := listingShapes()
 	for name, shape := range shapes {
 		if shape.drivenBy != "" {
@@ -204,8 +210,14 @@ func TestAListingIsReadInItsOrder(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			reads := map[string]listSpec{"the first window": {}}
-			for i, arm := range listResumes(cursor, shape.pinned) {
+			for i, arm := range listResumes(shape.cursor(), shape.pinned, shape.spec.order) {
 				reads[fmt.Sprintf("arm %d of a later window", i)] = arm
+			}
+			// THE ORDER'S OWN INDEX: the heads' for the knowledge base's
+			// order, the skill rows' for the newest first.
+			alias, indexes := "p", []string{"pages_heads_container_idx", "pages_heads_parent_idx"}
+			if shape.spec.newest() {
+				alias, indexes = "k", []string{"pages_skills_newest_idx"}
 			}
 			for read, from := range reads {
 				statement, args := listRowsStatement(shape.spec, from, DefaultLimit+1)
@@ -217,6 +229,10 @@ func TestAListingIsReadInItsOrder(t *testing.T) {
 					case strings.HasPrefix(line.Detail, "SCAN pages_heads AS p") &&
 						!strings.Contains(line.Detail, "INDEX"):
 						t.Errorf("%s reads every page from the heap:\n%s", read, shown)
+					case strings.HasPrefix(line.Detail, "SCAN pages_skills AS k") &&
+						!strings.Contains(line.Detail, "INDEX pages_skills_newest_idx"):
+						t.Errorf("%s reads every page's skill row rather than "+
+							"walking the skills newest first:\n%s", read, shown)
 					case strings.Contains(line.Detail, "FOR ORDER BY") && line.Parent == 0:
 						t.Errorf("%s sorts what it read, where an index is in the "+
 							"listing's order:\n%s", read, shown)
@@ -227,18 +243,23 @@ func TestAListingIsReadInItsOrder(t *testing.T) {
 					}
 				}
 				if len(from.where) == 0 {
+					if shape.spec.newest() && !storetest.Walks(details, indexes[0]) {
+						t.Errorf("%s does not walk %s, so it reads every skill "+
+							"to find the newest:\n%s", read, indexes[0], shown)
+					}
 					continue
 				}
 				// THE ARM'S OWN BOUND, in the plan's spelling: the last
 				// conjunct of the arm, `p.title > ?` read as `title>?`.
 				conjuncts := strings.Split(strings.Trim(from.where[0], "()"), " AND ")
 				bound := strings.ReplaceAll(strings.TrimPrefix(
-					conjuncts[len(conjuncts)-1], "p."), " ", "")
+					conjuncts[len(conjuncts)-1], alias+"."), " ", "")
 				sought := false
 				for _, line := range details {
-					sought = sought || (strings.HasPrefix(line, "SEARCH p USING ") &&
-						(strings.Contains(line, "INDEX pages_heads_container_idx (") ||
-							strings.Contains(line, "INDEX pages_heads_parent_idx (")) &&
+					sought = sought || (strings.HasPrefix(line, "SEARCH "+alias+" USING ") &&
+						slices.ContainsFunc(indexes, func(index string) bool {
+							return strings.Contains(line, "INDEX "+index+" (")
+						}) &&
 						strings.Contains(line, bound+")"))
 				}
 				if !sought {
@@ -324,9 +345,18 @@ type listingShape struct {
 	drivenBy    string
 }
 
+// cursor is a place in the shape's own order for its later windows to resume
+// after.
+func (s listingShape) cursor() listCursor {
+	if s.spec.newest() {
+		return listCursor{Order: OrderNewest, Updated: 5, ID: "p-0005"}
+	}
+	return listCursor{Container: "ENG", Title: "Page 5", ID: "p-0005"}
+}
+
 // listingShapes is every shape of listing the plan tests hold, by name: the
 // workspace, a container, a tree level, a narrowing by status, by skill and by
-// title, and a page's own children.
+// title, the newest tool skills, and a page's own children.
 func listingShapes() map[string]listingShape {
 	skills, ordinary := true, false
 	live := []Status{StatusPublished, StatusDraft}
@@ -344,6 +374,10 @@ func listingShapes() map[string]listingShape {
 		"a label's pages in a container": {Container: "ENG", Label: "runbook",
 			Status: live},
 		"one person's watched pages": {Watcher: "jane", Status: live},
+		"the newest tool skills": {Skills: &skills, Status: []Status{StatusPublished},
+			Order: OrderNewest},
+		"the newest tool skills in a container": {Container: "skills", Skills: &skills,
+			Status: []Status{StatusPublished}, Order: OrderNewest},
 	} {
 		spec, child := compileListing(f)
 		shape := listingShape{spec: spec, child: child, pinned: f.Container != ""}
@@ -377,7 +411,6 @@ func listingShapes() map[string]listingShape {
 func TestAFilterIsReadFromItsOwnRows(t *testing.T) {
 	t.Parallel()
 	db := pagePlanStore(t)
-	cursor := listCursor{Container: "ENG", Title: "Page 5", ID: "p-0005"}
 	held := 0
 	for name, shape := range listingShapes() {
 		if shape.drivenBy == "" {
@@ -391,7 +424,7 @@ func TestAFilterIsReadFromItsOwnRows(t *testing.T) {
 				args []any
 			}{"the total": {total, totalArgs}}
 			for i, from := range append(slices.Clone(listFromStart),
-				listResumes(cursor, shape.pinned)...) {
+				listResumes(shape.cursor(), shape.pinned, shape.spec.order)...) {
 				statement, args := listRowsStatement(shape.spec, from, DefaultLimit+1)
 				reads[fmt.Sprintf("window read %d", i)] = struct {
 					sql  string

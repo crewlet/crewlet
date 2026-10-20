@@ -834,6 +834,15 @@ func (s Sources) pageList(ctx context.Context, p Params) (any, error) {
 		f.Skills = &skills
 	}
 	f.Onboarding = p.Bool("onboarding", false)
+	// THE ORDER IS THE READER'S to serve, so a value it does not read is
+	// refused here naming the set, and an order it does not serve for this
+	// narrowing is refused below naming what it is served for.
+	if order := strings.TrimSpace(p.String("order")); order != "" {
+		f.Order = doclet.ListOrder(order)
+		if !f.Order.Valid() {
+			return nil, badParams("order", order, names(doclet.ListOrders()))
+		}
+	}
 
 	// THE CALLER'S OWN, defaulting to `stale` like every other dashboard
 	// poll: a screen that redraws every twenty seconds and took a quorum
@@ -851,6 +860,10 @@ func (s Sources) pageList(ctx context.Context, p Params) (any, error) {
 	list, err := s.Pages.List(ctx, f, fresh)
 	if errors.Is(err, doclet.ErrBadCursor) {
 		return nil, badParams("after", f.After, []string{"the after of a previous answer"})
+	}
+	if errors.Is(err, doclet.ErrUnservedOrder) {
+		return nil, fmt.Errorf("%w: order=%s is served beside skills=true alone",
+			ErrBadParams, f.Order)
 	}
 	if err != nil {
 		return nil, err
