@@ -314,7 +314,12 @@ export interface DirectoryFinding {
   detail: string;
 }
 
-interface DirectoryCheck {
+/**
+ * `GET /iam/check`, as every screen that reads it takes it: this page's
+ * Needs attention card and Home's People & access widget read ONE type, so a
+ * field one of them reads is a field the other cannot lose.
+ */
+export interface DirectoryCheck {
   findings: DirectoryFinding[] | null;
   /**
    * Active, enrolled PERSONS holding Admin — never a service account, whose
@@ -322,6 +327,10 @@ interface DirectoryCheck {
    * reads.
    */
   people_with_admin: number;
+  /**
+   * Bindings this node could not check against its own chart just now, which
+   * is "could not say" and never "no dangling binding".
+   */
   bindings_unchecked: number;
 }
 

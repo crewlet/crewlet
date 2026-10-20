@@ -44,7 +44,7 @@ import { useRetentionReport } from "~/routes/settings/Retention.tsx";
 import { useModels } from "~/routes/settings/Models.tsx";
 import {
   FINDING_WORDS,
-  type DirectoryFinding,
+  type DirectoryCheck,
   type DirectoryRow,
 } from "~/routes/settings/Access.tsx";
 import { FINDING_KINDS } from "~/contract/identity.ts";
@@ -579,11 +579,6 @@ function AuditLog() {
 
 // ---- People ---------------------------------------------------------------------------------
 
-interface DirectoryCheck {
-  findings: DirectoryFinding[] | null;
-  people_with_admin: number;
-}
-
 const findingWords = (kind: string) =>
   (FINDING_KINDS as readonly string[]).includes(kind)
     ? FINDING_WORDS[kind as (typeof FINDING_KINDS)[number]]
@@ -610,13 +605,22 @@ function PeopleWidget() {
   const active = people.filter((p) => p.stage === "active").length;
   const invited = (seats.data ?? []).filter((s) => !s.holder && s.invitation).length;
   const findings = check.data?.findings ?? [];
+  // A BINDING THIS NODE COULD NOT CHECK is "could not say", which the
+  // directory's own page says as well, never "no access problems found".
+  const unchecked = check.data?.bindings_unchecked ?? 0;
   return (
     <WidgetCard title="People" from="settings-people">
       <WidgetQuery
         error={directory.code}
         refusal={directory.refusal}
         loading={directory.loading && !directory.data}
-        gaps={[]}
+        gaps={
+          unchecked > 0
+            ? [
+                `${plural(unchecked, "binding")} couldn’t be checked just now, so this may be incomplete.`,
+              ]
+            : []
+        }
       >
         <StatGroup flush columns={3} className="home-admin-stats">
           <StatCard
@@ -637,7 +641,9 @@ function PeopleWidget() {
         </StatGroup>
         {check.data &&
           (findings.length === 0 ? (
-            <WidgetNote>No access problems found.</WidgetNote>
+            unchecked > 0 ? null : (
+              <WidgetNote>No access problems found.</WidgetNote>
+            )
           ) : (
             <>
               <List className="home-admin-list">
