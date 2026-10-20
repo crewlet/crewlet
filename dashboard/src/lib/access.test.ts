@@ -99,7 +99,12 @@ describe("the words", () => {
   });
 
   test("a lock names its access and who can give it", () => {
+    expect(accessNames(["tracker"])).toBe("Tracker");
     expect(accessNames(["tracker", "knowledge"])).toBe("Tracker or Knowledge");
+    // THREE OR MORE AS THE ENGINE SAYS THEM, commas and "or" before the last.
+    expect(accessNames(["tracker", "knowledge", "artifacts"])).toBe(
+      "Tracker, Knowledge or Artifacts",
+    );
     expect(needsWords("Work", ["tracker"])).toBe(
       "Work needs Tracker access. An admin can give it to you.",
     );
