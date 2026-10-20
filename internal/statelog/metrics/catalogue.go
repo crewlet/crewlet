@@ -788,8 +788,10 @@ func Catalogue() []Instrument {
 				"named (`commit-graph`, `multi-pack-index`, `chunk`: a " +
 				"derived file of either, dropped by a repair round with no " +
 				"request waiting and written again at once; `pack`, " +
-				"`object`: stored damage, and `hint`, a pack git named in " +
-				"words alone, each making the copy's scrub due at once, " +
+				"`object`: stored damage, and `hint`, a pack git named as " +
+				"holding a corrupt object — git 2.56's bare message, or the " +
+				"pack git 2.55's report of that damage names — each making " +
+				"the copy's scrub due at once, " +
 				"which holds every file it holds to its checksum and fetches " +
 				"again what fails; `crash`, a git process dying of a signal " +
 				"the node did not send — what a damaged reverse index or " +
@@ -834,31 +836,52 @@ func Catalogue() []Instrument {
 			Name: CodeCacheHints, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"outcome"},
 			Shows: "Packs of this node's git cache that a git process named " +
-				"as holding a corrupt object in words alone — git 2.56 and " +
-				"later report a packed object's damage through a bare " +
-				"message, which nothing reads as damage — one a naming, by " +
-				"the verdict that answered it (`outcome`): `confirmed`, the " +
-				"pack's bytes are not its row's and the repository is rebuilt " +
-				"(counted under `crewlet.code.cache.rebuilds{reason=corrupt}`); " +
-				"`sound`, its bytes are the row's and nothing is repaired; " +
+				"as holding a corrupt object, held to the row that names " +
+				"them, one a naming, by the verdict that answered it " +
+				"(`outcome`). git 2.56 reports a packed object's damage " +
+				"through a bare message, which nothing reads as damage, and " +
+				"git 2.55 through a report of its own, read as a pack's " +
+				"damage. A naming is hashed and counted here only where a " +
+				"repair waits on its verdict: a request's git in the copy " +
+				"that failed before its first byte, with no damage it " +
+				"repairs other than a pack's or an object's, on either git; " +
+				"and, on 2.56 only, a sync's own git — the peel of the tags " +
+				"it sets — when the pack is all it named. Any other naming — " +
+				"by a run that did not fail on it, a request that failed " +
+				"past its first byte, or a push's own throwaway repository — " +
+				"is hashed by nobody: it makes the copy's scrub due, counted " +
+				"only as `crewlet.code.cache.reports{part=hint}`. " +
+				"`confirmed`, the pack's bytes are not its row's: named by a " +
+				"request's git, that pack is fetched again IN PLACE with one " +
+				"download (counted under " +
+				"`crewlet.code.cache.rebuilds{reason=stored}`), the " +
+				"repository read whole into a new directory (`corrupt`) only " +
+				"when that repair and a scrub of the copy find nothing to " +
+				"fetch again; named by a sync's own git, the repository is " +
+				"read whole into a new directory at once (`corrupt`), as any " +
+				"pack's damage a sync's own git names is; `sound`, its bytes " +
+				"are the row's — after 2.56's message nothing is repaired, " +
+				"and after 2.55's report the damage it names is repaired as " +
+				"any pack's is, with no pack named to the repair; " +
 				"`unknown`, no row names the pack at the log's head; " +
 				"`unread`, no verdict — the rows or the pack could not be " +
 				"read in time, or its files moved under the hash; `gone`, " +
 				"the request left before the verdict, the hash going on for " +
 				"the next. `confirmed` rising is disk damage a verify of the " +
 				"repository names; `sound` rising is git naming damage the " +
-				"pack does not hold — a git bug, or a request that made git " +
-				"print the sentence — which costs one hash of the pack's " +
-				"files and never a rebuild; `unread` and `gone` rising is a " +
-				"node too busy or a disk too slow to decide a hash inside its " +
-				"bound. Beside `crewlet.code.cache.hint.hashes`, the namings " +
-				"one hash answered.",
+				"pack does not hold — a git bug, or, on 2.56, a request that " +
+				"made git print the sentence — which costs one hash of the " +
+				"pack's files and, on 2.56, no repair at all; `unread` and " +
+				"`gone` rising is a node too busy or a disk too slow to " +
+				"decide a hash inside its bound. Beside " +
+				"`crewlet.code.cache.hint.hashes`, the namings one hash " +
+				"answered.",
 		},
 		{
 			Name: CodeCacheHintHashes, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"outcome"},
 			Shows: "Hashes of a pack of this node's git cache that git named " +
-				"corrupt in words alone (`crewlet.code.cache.hints`), by what " +
+				"as holding a corrupt object (`crewlet.code.cache.hints`), by what " +
 				"each decided (`outcome`): `confirmed`, `sound`, `unknown` and " +
 				"`unread`, as there. One a pack's files however many namings " +
 				"wait on it — a naming of a pack being hashed waits for that " +

@@ -130,7 +130,9 @@ const (
 	// reportCrash: a process of the run's tree died of a signal the pool
 	// did not send (gitproc.Result.Crashed).
 	reportCrash reportPart = "crash"
-	// reportHint: a pack a run named in words alone (gitproc.Hint).
+	// reportHint: a pack a run named as holding a corrupt object
+	// (gitproc.Hint) — 2.56's bare message, or the pack 2.55's report of
+	// the same damage names, beside its pack part.
 	reportHint reportPart = "hint"
 )
 

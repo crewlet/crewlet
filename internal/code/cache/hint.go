@@ -24,7 +24,11 @@ import (
 // hashes the pack the hint names, as a verify does, against the row that
 // names it, and answers a repair only when they differ. A sound pack answers
 // none whatever the message said; a pack no row names is no damage of the
-// copy.
+// copy. On 2.55 the same sentence is a format of git's table (gitproc), a
+// pack's damage the request's repair answers whatever a hash says, and the
+// pool records the pack its message names as a hint beside it: confirmed the
+// same way, it is named to that repair (Failure.Packs), which then fetches
+// that pack again rather than hash every pack the copy holds to find it.
 //
 // ONE HASH A PACK, on the CACHE'S lifetime, never a request's. Damage that
 // fails a hot repository fails every request in flight on it at once, and a
