@@ -132,7 +132,7 @@ test("a landed preview makes a private draft and frames it", async () => {
     path: "/artifacts",
     body: { kind: "html", title: "Venue poll", entry: "index.html", capabilities: ["db"] },
   });
-  expect(screen.getByText("Draft, version 1. Only you can see it")).toBeTruthy();
+  expect(screen.getByText("Private draft, v1")).toBeTruthy();
   expect(screen.getAllByRole("button", { name: "Open page" }).length).toBeGreaterThan(0);
 });
 

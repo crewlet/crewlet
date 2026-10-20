@@ -285,8 +285,8 @@ export function SourceBody({ modeSwitch }: { modeSwitch: ReactNode }) {
     ? "Publishing the preview…"
     : draft.draft
       ? dirty
-        ? `Draft, version ${draft.draft.head}. Changes not previewed`
-        : `Draft, version ${draft.draft.head}. Only you can see it`
+        ? `Private draft, v${draft.draft.head}, edited`
+        : `Private draft, v${draft.draft.head}`
       : null;
 
   return (
