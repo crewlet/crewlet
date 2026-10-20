@@ -5339,6 +5339,12 @@ export interface ArtifactFrame {
   nonce: string;
   /** The page the frame opens: the entry of a page, one artboard of a design. */
   document: string;
+  /**
+   * What the frame's ticket grants, in the canonical order, `[]` for none:
+   * what the page's runtime is told as it loads, and so the one list its host
+   * may tell it at the handshake.
+   */
+  capabilities: ArtifactCapability[];
 }
 
 /** How one declared file's bytes reach the store (`artifacts.Transfer`). */

@@ -129,7 +129,6 @@ async function mount(onPublished = vi.fn()) {
         <DesignView
           detail={detail}
           version={3}
-          versions={[]}
           room={{} as never}
           presence={{ at: () => {} }}
           bridgeStores={new Set()}

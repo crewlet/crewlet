@@ -181,7 +181,6 @@ export function HistoryTab({
             against={against}
             lens={drawnSideBySide(detail.kind) ? lens : "source"}
             onLens={setLens}
-            versions={versions}
             room={room}
             presence={presence}
             bridgeStores={bridgeStores}

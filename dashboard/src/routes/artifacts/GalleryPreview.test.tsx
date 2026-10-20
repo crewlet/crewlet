@@ -170,9 +170,10 @@ test("a page's preview frame carries no host, or for a datastore the read-only o
     sandbox: "allow-scripts",
     allow: "",
     nonce: "abc",
-  } as never;
+    capabilities: [],
+  };
   framed.props = null;
-  vi.mocked(mintFrame).mockResolvedValueOnce(minted);
+  vi.mocked(mintFrame).mockResolvedValueOnce(minted as never);
   render(<GalleryPreview item={item({ id: "p2", kind: "html" })} people={people} />);
   await waitFor(() => expect(framed.props).not.toBeNull());
   for (const host of ["onReady", "onMessage", "onOpenLink", "onFocusExit", "onReload"]) {
@@ -181,7 +182,7 @@ test("a page's preview frame carries no host, or for a datastore the read-only o
   cleanup();
 
   framed.props = null;
-  vi.mocked(mintFrame).mockResolvedValueOnce(minted);
+  vi.mocked(mintFrame).mockResolvedValueOnce({ ...minted, capabilities: ["db"] } as never);
   render(
     <GalleryPreview
       item={item({ id: "p4", kind: "html", capabilities: ["db"] })}
@@ -199,6 +200,54 @@ test("a page's preview frame carries no host, or for a datastore the read-only o
   onMessage({ type: "bridge.call", id: 1, method: "data.write", params: { ops: [] } }, port);
   await waitFor(() => expect(sent).toHaveLength(1));
   expect(sent[0]).toMatchObject({ ok: false, error: { code: "forbidden" } });
+});
+
+// THE FRAME'S GRANT IS WHAT THE PAGE IS TOLD, never the gallery item's
+// declaration: the origin tells the page's runtime the grant as it loads, so
+// a host telling it more at the handshake answered a page that asked before
+// the handshake differently from one that asked after (a sheet said for good
+// that its page declared no datastore).
+test("the preview host tells the page the frame's grant, never the item's declaration", async () => {
+  vi.stubGlobal("IntersectionObserver", SeenObserver);
+  const minted = {
+    frame_url: "https://p5.artifacts.example.net/t/x/index.html#n=abc",
+    origin: "https://p5.artifacts.example.net",
+    mode: "per-artifact",
+    sandbox: "allow-scripts",
+    allow: "",
+    nonce: "abc",
+  };
+  // An engine that grants a preview no datastore: no host, whatever the item declares.
+  framed.props = null;
+  vi.mocked(mintFrame).mockResolvedValueOnce({ ...minted, capabilities: ["assets"] } as never);
+  render(
+    <GalleryPreview
+      item={item({ id: "p5", kind: "html", capabilities: ["db", "identity", "presence"] })}
+      people={people}
+    />,
+  );
+  await waitFor(() => expect(framed.props).not.toBeNull());
+  expect(framed.props).not.toHaveProperty("onReady");
+  expect(framed.props).not.toHaveProperty("onMessage");
+  cleanup();
+
+  // Granted a datastore: the handshake names exactly the grant this host answers.
+  framed.props = null;
+  vi.mocked(mintFrame).mockResolvedValueOnce({
+    ...minted,
+    capabilities: ["assets", "db"],
+  } as never);
+  render(
+    <GalleryPreview
+      item={item({ id: "p6", kind: "html", capabilities: ["db", "identity", "presence"] })}
+      people={people}
+    />,
+  );
+  await waitFor(() => expect(framed.props).not.toBeNull());
+  const sent: Record<string, unknown>[] = [];
+  const port = { postMessage: (m: Record<string, unknown>) => sent.push(m) } as never;
+  (framed.props!["onReady"] as (port: MessagePort) => void)(port);
+  expect(sent[0]).toMatchObject({ type: "bridge.init", capabilities: ["assets", "db"] });
 });
 
 test("a page that keeps each viewer's own state shows the kind's drawing, and reads nothing", async () => {

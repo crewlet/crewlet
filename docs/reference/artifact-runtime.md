@@ -98,8 +98,10 @@ call on it rejects with `capability_not_declared`.
 frame's grant on the runtime's own element, so a page may branch on
 `capabilities.has` before `ready` resolves. Calls made before then wait for
 the handshake, and the host's answer at the handshake is the authority from
-then on. What the viewer is, and who is in the room, are known only once
-`ready` has resolved.
+then on. The dashboard's host answers with that same grant, as the engine
+minted it for the frame, so a question asked before the handshake and the
+same question asked after it get the same answer. What the viewer is, and
+who is in the room, are known only once `ready` has resolved.
 
 ### Connection
 

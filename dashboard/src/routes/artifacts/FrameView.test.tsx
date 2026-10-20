@@ -12,6 +12,16 @@ import { mintFrame } from "~/lib/artifacts/api.ts";
 import { FrameView } from "./FrameView.tsx";
 
 vi.mock("~/lib/artifacts/api.ts", () => ({ mintFrame: vi.fn(), reportReady: vi.fn() }));
+// The frame itself is the design system's: what matters here is what this
+// view hands it, so the minted page's frame is caught rather than loaded.
+const framed: { props: Record<string, unknown> | null } = { props: null };
+vi.mock("@crewlethq/ui", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@crewlethq/ui")>()),
+  SandboxedFrame: (props: Record<string, unknown>) => {
+    framed.props = props;
+    return null;
+  },
+}));
 // Each hook answers the same object every render, as the real ones do while
 // nothing moves: the host is rebuilt for a new socket, so a fresh one per
 // render would rebuild it forever.
@@ -52,7 +62,6 @@ function mount(className?: string) {
     <FrameView
       detail={detail}
       version={2}
-      versions={[]}
       room={room}
       presence={{ at: () => {} }}
       bridgeStores={new Set()}
@@ -115,4 +124,33 @@ test("an engine nobody heard from is said in the reader's words, not the transpo
     ),
   ).toBeDefined();
   expect(screen.queryByText(/did not answer within/)).toBeNull();
+});
+
+// THE HANDSHAKE TELLS THE PAGE ITS FRAME'S GRANT, which the origin told its
+// runtime as it loaded: never a list this tab worked out from the version or
+// the head it had read, which may not be loaded yet or may not name the
+// version, so a page that asks before the handshake and one that asks after
+// are told the same.
+test("the page's host tells it the frame's grant, not the head's declaration", async () => {
+  framed.props = null;
+  vi.mocked(mintFrame).mockResolvedValue({
+    frame_url: "https://a3.artifacts.example.net/t/x/index.html#n=abc",
+    origin: "https://a3.artifacts.example.net",
+    version: 2,
+    expires_at: "2026-10-20T12:00:00Z",
+    sandbox: "allow-scripts",
+    allow: "",
+    mode: "per_artifact",
+    nonce: "abc",
+    document: "index.html",
+    capabilities: ["assets", "identity"],
+  });
+  mount();
+  await waitFor(() => expect(framed.props).not.toBeNull());
+  const sent: Record<string, unknown>[] = [];
+  const port = {
+    postMessage: (m: Record<string, unknown>) => sent.push(m),
+  } as unknown as MessagePort;
+  (framed.props!["onReady"] as (port: MessagePort) => void)(port);
+  expect(sent[0]).toMatchObject({ type: "bridge.init", capabilities: ["assets", "identity"] });
 });
