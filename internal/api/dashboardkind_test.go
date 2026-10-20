@@ -170,7 +170,8 @@ func newBoardRig(t *testing.T) *boardRig {
 	surface, err := artifactsapi.New(artifactsapi.Options{Gate: gate, Reads: estate, Writes: estate,
 		Objects: estate, Ready: ready, Uploads: func() (artifactsapi.Pipeline, error) {
 			return nil, artifactupload.ErrInvalid
-		}})
+		},
+		WorkItems: func() (artifactsapi.WorkItems, error) { return nil, artifactsapi.ErrTrackerNotUp }})
 	if err != nil {
 		t.Fatal(err)
 	}

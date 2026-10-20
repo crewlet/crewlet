@@ -1,7 +1,8 @@
 // Package artifactsapi is the HTTP surface for artifacts on the API listener:
 // upload intents and the engine-streamed transfer, creates and publishes,
 // rollbacks, renames and labels, the share dialog (grant, revoke, transfer and
-// the effective access), trash, restore and purge, assets, pins, the frames the
+// the effective access), links to tracker work items, trash, restore and
+// purge, assets, pins, the frames the
 // dashboard embeds a page in, a doc's source and the raw bytes of
 // a version's files; and the one admission ([Gate]) the read questions in
 // internal/api/queries take too.
