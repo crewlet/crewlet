@@ -54,15 +54,15 @@ import (
 // held before would push documents, judged on a share that may just have been
 // withdrawn, to a reader nobody vouched for.
 //
-// # Every data node pushes from its own appliers
+// # Every data node pushes from the appliers it hears
 //
 // Every node serving the API is a data node and applies both artifact logs, so
-// each pushes to its own sockets from its own appliers after each commit, and
-// nothing is forwarded between nodes. A node whose copy is OUT OF SERVICE
-// withholds its appliers' pushes (they describe a copy nobody vouches for) and
-// tells every room to re-read when it leaves service and again when it
-// returns, while the reads themselves are answered by a sound data node through
-// the estate router.
+// each pushes to its own sockets from its own appliers after each commit. A
+// node whose copy is OUT OF SERVICE hears a sound peer's appliers instead,
+// relayed (the engine's live relay, one source at a time for every domain),
+// while the reads themselves are answered by a sound data node through the
+// estate router; and every switch of source reaches the rooms as the domains'
+// own reset, which re-reads and decides again every room on the node.
 //
 // # A datastore push is shaped per reader
 //
@@ -478,7 +478,7 @@ func (s *Service) PresenceChanged(c presence.Change) {
 // the pushes and the suspension are in memory, and every decision runs on the
 // service's own goroutine.
 func (s *Service) ArtifactsMoved(moved []artifactsdomain.Moved) {
-	if !s.rooms.serves() || s.withholding.Load() {
+	if !s.rooms.serves() {
 		return
 	}
 	now := s.now()
@@ -518,7 +518,7 @@ func narrows(what artifactsdomain.MoveKind) bool {
 // artifact's room, shaped per reader. Called on the apply loop's goroutine;
 // never blocks.
 func (s *Service) ArtifactDataMoved(moved []artifactdata.Moved) {
-	if !s.rooms.serves() || s.withholding.Load() {
+	if !s.rooms.serves() {
 		return
 	}
 	now := s.now()
@@ -567,25 +567,6 @@ func (s *Service) rereadData(now time.Time) {
 		s.hub.Broadcast(PushArtifact(KindArtifactData, id,
 			ArtifactData{Artifact: id, Resync: true}, now))
 	}
-}
-
-// ArtifactsCopy is this node's artifact copies going out of service (false) or
-// back into it (true). While out, its appliers' pushes are withheld; at each
-// switch every room is told to re-read, because what moved across it is not
-// replayed and the reads are answered by a sound data node meanwhile.
-func (s *Service) ArtifactsCopy(serving bool) {
-	if !s.rooms.serves() {
-		return
-	}
-	if s.withholding.Swap(!serving) == !serving {
-		return
-	}
-	now := s.now()
-	for _, id := range s.hub.RoomsHeld() {
-		s.hub.Broadcast(PushArtifact(KindArtifactChanged, id, ArtifactChange{
-			Artifact: id, What: artifactsdomain.MoveReset}, now))
-	}
-	s.rereadData(now)
 }
 
 // queueDecision asks the decider to decide id's room again.

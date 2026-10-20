@@ -10,7 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/artifactdata"
+	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/chatlet"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -19,17 +23,23 @@ import (
 )
 
 // heardLive is what one node's sockets were handed, per domain: every inbox
-// movement and every chat effect, and how many times each domain was told to
-// read again. Its working-indicator half raises nothing ([quietPoster]): the
-// relay never touches it.
+// movement, every chat effect and every artifact and datastore movement, and
+// how many times each domain was told to read again — for the artifact
+// domains, how many resets they were handed, which is how a gap reaches them.
+// Its working-indicator half raises nothing ([quietPoster]): the relay never
+// touches it.
 type heardLive struct {
 	quietPoster
-	mu        sync.Mutex
-	moved     []worklet.InboxMovement
-	chat      []chatlet.Applied
-	inboxGaps int
-	chatGaps  int
-	ping      chan struct{}
+	mu         sync.Mutex
+	moved      []worklet.InboxMovement
+	chat       []chatlet.Applied
+	artifacts  []artifactsdomain.Moved
+	data       []artifactdata.Moved
+	inboxGaps  int
+	chatGaps   int
+	artifactRs int
+	dataResets int
+	ping       chan struct{}
 	// socketless is a hub attached for the working indicator alone, on a
 	// node that serves no API ([ChatLive.ServesSockets]).
 	socketless bool
@@ -68,6 +78,34 @@ func (h *heardLive) Reread() {
 
 func (h *heardLive) ServesSockets() bool { return !h.socketless }
 
+// artifactsMoved and dataMoved make heardLive the socket's artifact rooms, as
+// [Engine.OnArtifactsMoved] and [Engine.OnArtifactDataMoved] hand them.
+func (h *heardLive) artifactsMoved(moved []artifactsdomain.Moved) {
+	h.mu.Lock()
+	for _, m := range moved {
+		if m.What == artifactsdomain.MoveReset {
+			h.artifactRs++
+			continue
+		}
+		h.artifacts = append(h.artifacts, m)
+	}
+	h.mu.Unlock()
+	h.ping <- struct{}{}
+}
+
+func (h *heardLive) dataMoved(moved []artifactdata.Moved) {
+	h.mu.Lock()
+	for _, m := range moved {
+		if m.Reset {
+			h.dataResets++
+			continue
+		}
+		h.data = append(h.data, m)
+	}
+	h.mu.Unlock()
+	h.ping <- struct{}{}
+}
+
 // quietPoster is a [notify.StatusPoster] that shows nothing.
 type quietPoster struct{}
 
@@ -80,9 +118,17 @@ func (quietPoster) ClearStatus(context.Context, string, string, string) bool    
 
 // heard is one snapshot of what a node's sockets were handed.
 type heard struct {
-	moved               []worklet.InboxMovement
-	chat                []chatlet.Applied
-	inboxGaps, chatGaps int
+	moved                  []worklet.InboxMovement
+	chat                   []chatlet.Applied
+	artifacts              []artifactsdomain.Moved
+	data                   []artifactdata.Moved
+	inboxGaps, chatGaps    int
+	artifactRs, dataResets int
+}
+
+// rereadEverywhere reports whether every domain was told to read again n times.
+func (h heard) rereadEverywhere(n int) bool {
+	return h.inboxGaps == n && h.chatGaps == n && h.artifactRs == n && h.dataResets == n
 }
 
 func (h *heardLive) snapshot() heard {
@@ -90,7 +136,10 @@ func (h *heardLive) snapshot() heard {
 	defer h.mu.Unlock()
 	return heard{moved: append([]worklet.InboxMovement(nil), h.moved...),
 		chat:      append([]chatlet.Applied(nil), h.chat...),
-		inboxGaps: h.inboxGaps, chatGaps: h.chatGaps}
+		artifacts: append([]artifactsdomain.Moved(nil), h.artifacts...),
+		data:      append([]artifactdata.Moved(nil), h.data...),
+		inboxGaps: h.inboxGaps, chatGaps: h.chatGaps,
+		artifactRs: h.artifactRs, dataResets: h.dataResets}
 }
 
 // waitFor waits until cond holds of what was heard, or fails naming what.
@@ -105,8 +154,11 @@ func (h *heardLive) waitFor(t *testing.T, what string, cond func(heard) bool) {
 		case <-h.ping:
 		case <-deadline:
 			got := h.snapshot()
-			t.Fatalf("%s never happened: heard %v, chat %v, %d inbox and %d chat gaps",
-				what, handles(got.moved), messages(got.chat), got.inboxGaps, got.chatGaps)
+			t.Fatalf("%s never happened: heard %v, chat %v, %d artifact and %d "+
+				"datastore movements, %d inbox and %d chat gaps, %d artifact and %d "+
+				"datastore resets", what, handles(got.moved), messages(got.chat),
+				len(got.artifacts), len(got.data), got.inboxGaps, got.chatGaps,
+				got.artifactRs, got.dataResets)
 		}
 	}
 }
@@ -140,13 +192,37 @@ func posted(message string) []chatlet.Applied {
 	}}
 }
 
+// versioned is one committed artifact version, as its applier announces it.
+func versioned(id string) []artifactsdomain.Moved {
+	return []artifactsdomain.Moved{{Artifact: artifacts.IDFor(id),
+		What: artifactsdomain.MoveVersion, AccessEpoch: 2, Head: 3,
+		Position: statelog.Position{Stream: topics.ArtifactsLogStream, Generation: 1, Seq: 7}}}
+}
+
+// written is one committed datastore write, as its applier announces it: a
+// document whole, which is what a room's readers are shown.
+func written(doc string) []artifactdata.Moved {
+	at := time.Date(2026, 10, 17, 9, 0, 0, 0, time.UTC)
+	return []artifactdata.Moved{{Artifact: artifacts.IDFor("sheet"),
+		Docs: []artifactdata.DocDelta{{Collection: "rows", Doc: doc, Version: 4,
+			Body: json.RawMessage(`{"status":"done"}`), Read: artifacts.ReadAll,
+			CreatedBy: "ada", UpdatedBy: iam.Actor{Name: "ada", Kind: iam.ActorHuman},
+			UpdatedAt: at}},
+		Writes: []artifactdata.WriteSummary{{Seq: 4, OpID: "op-" + doc,
+			Op: artifactdata.OpWrite, Verdict: artifacts.DataApplied,
+			Actor: iam.Actor{Name: "ada", Kind: iam.ActorHuman}, At: at}},
+		Through: statelog.Position{Stream: topics.ArtifactDataLogStream, Generation: 1, Seq: 4}}}
+}
+
 // relayNode is one data node's relay over a shared in-memory broker, with its
-// copy's verdict a switch the case holds.
+// copy's verdict a switch the case holds, and the stops of its artifact
+// listeners for a case about a node that has none.
 type relayNode struct {
-	relay   *liveRelay
-	engine  *Engine
-	heard   *heardLive
-	faulted atomic.Bool
+	relay         *liveRelay
+	engine        *Engine
+	heard         *heardLive
+	faulted       atomic.Bool
+	stopArtifacts func()
 }
 
 func newRelayNode(t *testing.T, broker *memory.Broker, self string,
@@ -161,6 +237,9 @@ func newRelayNode(t *testing.T, broker *memory.Broker, self string,
 	n.engine.SetOnInboxMoved(n.heard.deliver)
 	n.engine.SetOnInboxGap(n.heard.gap)
 	n.engine.SetChatLive(t.Context(), n.heard)
+	stopMoved := n.engine.OnArtifactsMoved(n.heard.artifactsMoved)
+	stopData := n.engine.OnArtifactDataMoved(n.heard.dataMoved)
+	n.stopArtifacts = func() { stopMoved(); stopData() }
 	n.relay = newLiveRelay(self, q,
 		func(context.Context) ([]string, error) { return fleet, nil },
 		func(context.Context) bool { return n.faulted.Load() },
@@ -186,17 +265,19 @@ func (n *relayNode) follow(t *testing.T) {
 }
 
 // A NODE WHOSE OWN COPY IS OUT OF SERVICE STILL TELLS ITS SOCKETS WHAT ITS
-// APPLIERS WOULD HAVE — WHOSE INBOX MOVED AND WHAT WAS SAID IN A ROOM.
+// APPLIERS WOULD HAVE — WHOSE INBOX MOVED, WHAT WAS SAID IN A ROOM, AND WHAT
+// MOVED ON AN ARTIFACT AND IN ITS DATASTORE.
 //
 // A copy that is wrong goes out of service and its node stays in rotation, its
 // dashboards reading through a sound peer; its appliers commit nothing anybody
 // vouches for, and they were the only thing those dashboards heard from — so
 // every socket on it went silent until it reconnected somewhere else, which
 // nothing told it to. Here node b's copy is out of service: what a's appliers
-// announce — an inbox movement and a chat post — reaches b's sockets, what b's
-// own announce is withheld (one source at a time), each switch of source tells
-// BOTH domains' screens to read again, and once b's copy is back its own
-// appliers are heard again.
+// announce — an inbox movement, a chat post, an artifact's new version and a
+// datastore write — reaches b's sockets, what b's own announce is withheld
+// (one source at a time), each switch of source tells EVERY domain's screens
+// to read again (the artifact domains as their own reset), and once b's copy
+// is back its own appliers are heard again.
 //
 // Mutation: make the follower never follow (or let announce ignore whether it
 // is being relayed), and the relayed batches never arrive (or b's own arrive
@@ -214,18 +295,22 @@ func TestAnOutOfServiceNodeHearsAPeersAppliers(t *testing.T) {
 	// THE SWITCH TO A PEER IS A RE-READ IN EVERY DOMAIN, once the follower
 	// knows where the peer stands.
 	b.heard.waitFor(t, "b switching to a's appliers", func(h heard) bool {
-		return h.inboxGaps == 1 && h.chatGaps == 1
+		return h.rereadEverywhere(1)
 	})
 
 	// b's own appliers — halted, wrong, or simply not the ones being heard
 	// — are withheld; a's are relayed.
 	b.engine.inboxMoved([]worklet.InboxMovement{{Handle: "from-b-own-applier", UnreadDelta: 1}})
 	b.engine.chatApplied(posted("m-from-b-own-applier"))
+	b.engine.artifactsMoved(versioned("from-b-own-applier"))
+	b.engine.artifactDataMoved(written("from-b-own-applier"))
 	a.engine.inboxMoved([]worklet.InboxMovement{{Handle: "ana", UnreadDelta: 1,
 		Subject: "t-1", Reason: worklet.ReasonAssignee}})
 	a.engine.chatApplied(posted("m-1"))
+	a.engine.artifactsMoved(versioned("plan"))
+	a.engine.artifactDataMoved(written("row-1"))
 	b.heard.waitFor(t, "a's batches reaching b's sockets", func(h heard) bool {
-		return len(h.moved) > 0 && len(h.chat) > 0
+		return len(h.moved) > 0 && len(h.chat) > 0 && len(h.artifacts) > 0 && len(h.data) > 0
 	})
 	got := b.heard.snapshot()
 	if h := handles(got.moved); len(h) != 1 || h[0] != "ana" {
@@ -242,18 +327,30 @@ func TestAnOutOfServiceNodeHearsAPeersAppliers(t *testing.T) {
 		t.Errorf("the relayed chat effect lost its fields:\n got %+v\nwant %+v",
 			got.chat[0], want)
 	}
+	// AN ARTIFACT ROOM ON b HEARS a's APPLIERS TOO, every field a room's
+	// push and a verdict cache read arriving as the applier announced it.
+	if want := versioned("plan"); !reflect.DeepEqual(got.artifacts, want) {
+		t.Errorf("b's artifact rooms heard %+v, want a's movement alone:\n%+v",
+			got.artifacts, want)
+	}
+	if want := written("row-1"); !reflect.DeepEqual(got.data, want) {
+		t.Errorf("b's artifact rooms heard the datastore move %+v, want a's write "+
+			"alone:\n%+v", got.data, want)
+	}
 	// a's own sockets heard a's appliers, as ever.
-	if own := a.heard.snapshot(); len(own.moved) != 1 || len(own.chat) != 1 {
-		t.Errorf("a's own sockets heard %v and %v, want its own appliers' batches",
-			handles(own.moved), messages(own.chat))
+	if own := a.heard.snapshot(); len(own.moved) != 1 || len(own.chat) != 1 ||
+		len(own.artifacts) != 1 || len(own.data) != 1 {
+		t.Errorf("a's own sockets heard %v, %v, %d artifact and %d datastore "+
+			"movements, want its own appliers' batches", handles(own.moved),
+			messages(own.chat), len(own.artifacts), len(own.data))
 	}
 
 	// BACK IN SERVICE: b's sockets hear b's own appliers again, after a
-	// re-read in both domains covering whatever the switch skipped.
+	// re-read in every domain covering whatever the switch skipped.
 	b.faulted.Store(false)
 	a.engine.inboxMoved([]worklet.InboxMovement{{Handle: "bo", UnreadDelta: 1}})
 	b.heard.waitFor(t, "b switching back to its own appliers", func(h heard) bool {
-		return h.inboxGaps == 2 && h.chatGaps == 2
+		return h.rereadEverywhere(2)
 	})
 	if b.relay.relaying.Load() {
 		t.Fatal("b is still relaying a peer's batches with its own copy back in service")
@@ -262,6 +359,10 @@ func TestAnOutOfServiceNodeHearsAPeersAppliers(t *testing.T) {
 	b.heard.waitFor(t, "b's own chat applier being heard again", func(h heard) bool {
 		m := messages(h.chat)
 		return len(m) > 0 && m[len(m)-1] == "m-from-b-own-applier"
+	})
+	b.engine.artifactsMoved(versioned("from-b-own-applier"))
+	b.heard.waitFor(t, "b's own artifacts applier being heard again", func(h heard) bool {
+		return len(h.artifacts) == 2 && h.artifacts[1].Artifact == artifacts.IDFor("from-b-own-applier")
 	})
 }
 
@@ -405,32 +506,48 @@ func sizeOf(t *testing.T, b liveBatch) int {
 // that serves no socket: the process attaches its hub on EVERY node, for the
 // working indicator, and a data node without `ingress` is one of them. But a
 // node whose only listener is a chat hub serving its sockets is one whose
-// rooms would otherwise go quiet.
+// rooms would otherwise go quiet, and so is one whose only listener hears the
+// artifacts — the artifact origin's verdict cache, on a data node serving that
+// origin and no API.
 //
 // Mutation: drop the listening check from follow, and b starts relaying; drop
-// chat from liveListening, and c never does; let chatListening take any
-// attached hub, and d starts relaying.
+// chat from liveListening, and c never does; drop the artifact domains from
+// it, and e never does; let chatListening take any attached hub, and d starts
+// relaying.
 func TestANodeNobodyListensOnRelaysNothing(t *testing.T) {
 	t.Parallel()
 	broker := memory.NewBroker()
-	fleet := []string{"a", "b", "c", "d"}
+	fleet := []string{"a", "b", "c", "d", "e"}
 	newRelayNode(t, broker, "a", fleet)
 	b := newRelayNode(t, broker, "b", fleet)
 	b.engine.onInbox.Store(nil)
 	b.engine.SetChatLive(t.Context(), nil)
+	b.stopArtifacts()
 	b.faulted.Store(true)
 	b.follow(t)
 	d := newRelayNode(t, broker, "d", fleet)
 	d.engine.onInbox.Store(nil)
 	d.heard.socketless = true
+	d.stopArtifacts()
 	d.faulted.Store(true)
 	d.follow(t)
 	c := newRelayNode(t, broker, "c", fleet)
 	c.engine.onInbox.Store(nil)
+	c.stopArtifacts()
 	c.faulted.Store(true)
 	c.follow(t)
 	c.heard.waitFor(t, "c, whose only listener is chat, relaying",
 		func(h heard) bool { return h.chatGaps == 1 })
+	e := newRelayNode(t, broker, "e", fleet)
+	e.engine.onInbox.Store(nil)
+	e.engine.SetChatLive(t.Context(), nil)
+	stop := e.engine.OnArtifactsMoved(e.heard.artifactsMoved)
+	e.stopArtifacts()
+	t.Cleanup(stop)
+	e.faulted.Store(true)
+	e.follow(t)
+	e.heard.waitFor(t, "e, whose only listener hears the artifacts, relaying",
+		func(h heard) bool { return h.artifactRs == 1 })
 	time.Sleep(3 * servingRecheck)
 	if b.relay.relaying.Load() {
 		t.Fatal("a node with nothing listening for what its appliers announce is " +

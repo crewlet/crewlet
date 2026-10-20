@@ -847,12 +847,6 @@ type Engine struct {
 	// ([builtin.FolderTurns]).
 	folderTurns *builtin.FolderTurns
 
-	// onArtifactsServing is told whenever this node's artifact copies leave
-	// or return to service, and stopArtifactWatchFn ends the watcher that
-	// tells it. See presence.go.
-	onArtifactsServing  atomic.Pointer[func(bool)]
-	stopArtifactWatchFn func()
-
 	// memoryReads answers a seat's memory from the node holding it, and
 	// stopMemoryServe withdraws this node as one of its answerers. See
 	// memoryread.go.
@@ -1492,19 +1486,17 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		return nil, fmt.Errorf("engine: serve notes to running turns: %w", err)
 	}
 	// AND FOR WHAT ITS APPLIERS ANNOUNCE — whose inbox moved, what landed in
-	// a room — which a peer whose own copy is out of service relays to its
-	// dashboards, and the follower that does the same for this node's
+	// a room, what moved on an artifact and in its datastore — which a peer
+	// whose own copy is out of service relays to its dashboards, and the follower that does the same for this node's
 	// dashboards while its own copy is. See liverelay.go.
 	if err = e.armLiveRelay(ctx); err != nil {
 		return nil, err
 	}
 	// AND FOR WHO IS IN EACH ARTIFACT'S ROOM, which every node holds for its
-	// own sockets and agents and tells its peers (see presence.go), and the
-	// watch on its artifact copies' service that the rooms follow.
+	// own sockets and agents and tells its peers (see presence.go).
 	if err = e.armPresence(ctx); err != nil {
 		return nil, err
 	}
-	e.armArtifactWatch(ctx)
 
 	// THE ADMISSION HANDSHAKE, BEFORE ANY PUBLISHER — and this is the
 	// earliest point at which it can run, because it needs the
@@ -2604,8 +2596,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	// node that is tearing down is a note no round will read.
 	e.stopSteer(ctx)
 	// And presence, whose leaves must reach the fleet while the broker is
-	// still there, and the watch the rooms follow.
-	e.stopArtifactWatch()
+	// still there.
 	e.stopPresence(ctx)
 	// And the live relay's follower and answerer, which ask and answer on
 	// the same broker.
