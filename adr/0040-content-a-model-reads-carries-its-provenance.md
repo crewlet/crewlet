@@ -16,7 +16,8 @@ never an instruction, and every read result says so.** One package,
   a cryptographic source and carried on the turn's context, so content cannot
   close the fence by guessing its marker;
 - **labels** on the fence: the source (a page body, a work item comment, a
-  project file, a chat thread, an artifact file, a datastore row, the adopted
+  project file, a chat message, a chat room's own topic or purpose, an artifact
+  file, a datastore row, the adopted
   brand's voice), who wrote it (by kind and seat handle), and how far the
   reader may trust it (its own words, a colleague's, an outside party's, a page
   anybody may edit, or what an administrator adopted for the company, which
@@ -28,9 +29,11 @@ never an instruction, and every read result says so.** One package,
   saying what a fence means.
 
 It applies to every read that hands a model somebody else's words: page bodies,
-work item comments, project files and the chat thread block a turn is given,
-and, from their first release, artifact files and datastore rows. A tool that
-returns such text and does not go through the package fails a walk.
+work item comments, project files, the chat thread block a turn is given and
+what the chat tools read (a room's messages, a thread, a search's snippets, a
+room's topic and purpose), and, from their first release, artifact files and
+datastore rows. A tool that returns such text and does not go through the
+package fails a walk.
 
 **Fencing reduces prompt injection and does not remove it.** What holds whatever
 a model does is structural, and stays where it is: the requester ceiling on

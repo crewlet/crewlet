@@ -353,7 +353,7 @@ holds.
 | `send_dm` | Say something privately to one colleague or a few, opening the conversation if it is not open. Never the place for an answer that was asked for in the open |
 | `read_channel` | Read a room, newest first, or one thread in it, oldest first. The rest of the room is not handed to a seat at turn start, so it reads it here when its answer depends on what was said before |
 | `list_channels` | The rooms this seat is in, most recently active first, with what each is for and the last thing said in it |
-| `search_messages` | Find a message by what it **says**, ranked across every room this seat may read — at most fifty to an answer, twenty unless asked — and an answer from an index still being built says so rather than reading as nothing said. `read_channel` is the other half: one room, in order, from a point you name |
+| `search_messages` | Find a message by what it **says**, ranked across every room this seat may read — at most forty to an answer, twenty unless asked — and an answer from an index still being built says so rather than reading as nothing said. `read_channel` is the other half: one room, in order, from a point you name |
 | `react_to_message` | Put one emoji on a message (`message_id`), or take yours back |
 | `join_channel` / `leave_channel` | Move this seat's own membership, and nobody else's. A private room cannot be joined this way, and a unit's own room can be neither joined nor left — its membership is the org chart's, and either gesture would be undone by the next apply |
 
@@ -369,6 +369,13 @@ A message's `links`, at most eight on `post_message`, `reply_in_thread` and
 exactly as sent. A relative reference, a dashboard route (`#/...`) or any
 other scheme is refused, naming every entry that is not one (`links[1]`): no
 reader of the message could open it as it stands.
+
+What `read_channel`, `search_messages` and `list_channels` hand back that
+somebody said — every message and snippet, under its author, and a room's
+topic and purpose as the room's own label — arrives
+[fenced](../concepts/agent-runtime.md#text-somebody-else-wrote), and a body
+sent back to `post_message`, `reply_in_thread` or `send_dm` still wrapped in
+the fence it was read in is posted without it.
 
 **Three of them count as a delivery** for the turn's did-this-reach-anybody
 gate — `post_message`, `reply_in_thread` and `send_dm` — and the obligation is

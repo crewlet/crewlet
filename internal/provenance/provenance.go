@@ -80,13 +80,20 @@ const (
 	// what it did: a coding CLI's own words, written after it read web pages
 	// and files nobody in the company wrote (ADR-0054).
 	SourceDeepWork Source = "deep_work"
+
+	// SourceChatRoom is what a chat room says about itself — its topic and
+	// its purpose — as against what was said in it, which is
+	// [SourceChatThread]: a person writes both, but a room's settings are
+	// read beside every room a seat is in, and a reader auditing a
+	// transcript has to tell the room's label from a message.
+	SourceChatRoom Source = "chat_room"
 )
 
 // Sources are every surface.
 var Sources = []Source{
 	SourcePageBody, SourcePageComment, SourceWorkDescription, SourceWorkComment,
-	SourceProjectFile, SourceChatThread, SourceArtifactFile, SourceArtifactRow,
-	SourceBrandVoice, SourceAPIAnswer, SourcePageContext, SourceDeepWork,
+	SourceProjectFile, SourceChatThread, SourceChatRoom, SourceArtifactFile,
+	SourceArtifactRow, SourceBrandVoice, SourceAPIAnswer, SourcePageContext, SourceDeepWork,
 }
 
 // Valid reports whether s is one of [Sources].
