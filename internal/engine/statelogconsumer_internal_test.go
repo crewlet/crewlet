@@ -114,11 +114,23 @@ func TestANodeWhoseRowsWentBackwardsReplaysWhatItsReaderAcknowledged(t *testing.
 		"again — its consumers had acknowledged every record it is missing, and "+
 		"a consumer the broker was told is done never hands them over",
 		hydrated(t, second))
-	for name, head := range heads {
-		running := second.core.Load().log.Domain(name)
-		if got := running.runner.Committed().Seq; got < head {
-			t.Errorf("%s's rows are at %d after the replay, below the %d the "+
-				"first run had applied", name, got, head)
+
+	// EVERY LOG REPLAYS, not only the ones hydration waits for. Hydration
+	// gates seat admission, so it reads only the domains whose health is a
+	// readiness input; a log that is not one (artifacts, IAM, usage,
+	// search) may still be applying when it reports true, so this waits
+	// for each to reach the head the first run applied, under the same
+	// bound as above rather than reading it at one instant.
+	behind := map[string]uint64{}
+	waitUntil(t, 10*time.Second, "every log to replay to the head the first run "+
+		"had applied", func() bool {
+		clear(behind)
+		for name, head := range heads {
+			running := second.core.Load().log.Domain(name)
+			if got := running.runner.Committed().Seq; got < head {
+				behind[name] = got
+			}
 		}
-	}
+		return len(behind) == 0
+	})
 }
