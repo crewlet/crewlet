@@ -222,7 +222,7 @@ export function SourceBody({ modeSwitch }: { modeSwitch: ReactNode }) {
 
   const preview = async () => {
     if (hold) return null;
-    const landed = await draft.run({
+    const outcome = await draft.run({
       files,
       entry,
       title: title.trim(),
@@ -230,8 +230,10 @@ export function SourceBody({ modeSwitch }: { modeSwitch: ReactNode }) {
       fingerprint: print,
       ...(workItem ? { workItem } : {}),
     });
-    setSide(landed ? "preview" : "checks");
-    return landed;
+    // A REFUSAL IS READ IN CHECKS, where its findings are; a preview that
+    // landed, or failed for any other reason, is said in Preview.
+    setSide(outcome.kind === "refused" ? "checks" : "preview");
+    return outcome.kind === "landed" ? outcome.draft : null;
   };
 
   const open = async () => {
@@ -253,12 +255,14 @@ export function SourceBody({ modeSwitch }: { modeSwitch: ReactNode }) {
   const action: CreateAction = draft.draft
     ? {
         label: dirty ? "Save and open" : "Open page",
+        short: "Open",
         icon: <ArrowUpRightGlyph size="sm" />,
         onSelect: () => void open(),
         ...(dirty && hold ? { disabledReason: hold } : {}),
       }
     : {
         label: "Preview privately",
+        short: "Preview",
         icon: <EyeGlyph size="sm" />,
         onSelect: () => void preview(),
         ...(hold ? { disabledReason: hold } : {}),
@@ -467,29 +471,25 @@ export function SourceBody({ modeSwitch }: { modeSwitch: ReactNode }) {
               ) : (
                 <div className="html-create-first">
                   <EmptyState
-                    icon={<EyeGlyph />}
+                    icon={<EyeGlyph size={32} />}
                     title="Preview publishes a private draft"
                     description="The page runs on its own isolated origin, so previewing saves it as a draft only you can see, and shows it here. Nothing is shared until you share it."
                     action={
-                      <div className="html-create-first-action">
-                        <Button
-                          size="small"
-                          variant="primary"
-                          leadingIcon={<EyeGlyph size="sm" />}
-                          loading={running}
-                          disabledReason={hold}
-                          onClick={() => void preview()}
-                        >
-                          Preview privately
-                        </Button>
-                        <span className="html-create-keys">
-                          <Kbd keys={[...runKeys]} subtle /> from the editor
-                        </span>
-                      </div>
+                      // ITS KEY IS SAID ONCE, under the editor it is pressed in.
+                      <Button
+                        size="small"
+                        variant="primary"
+                        leadingIcon={<EyeGlyph size="sm" />}
+                        loading={running}
+                        disabledReason={hold}
+                        onClick={() => void preview()}
+                      >
+                        Preview privately
+                      </Button>
                     }
                   />
                   {draft.state.kind === "failed" ? (
-                    <Callout variant="danger" title="The preview was not saved">
+                    <Callout variant="danger" title="The preview was not saved" live="polite">
                       {draft.state.text}
                     </Callout>
                   ) : null}
@@ -499,7 +499,7 @@ export function SourceBody({ modeSwitch }: { modeSwitch: ReactNode }) {
               <ChecksPane checks={checks} refused={refused !== null} findings={findings} />
             )}
             {side === "preview" && draft.draft && draft.state.kind === "failed" ? (
-              <Callout variant="danger" title="The preview was not updated">
+              <Callout variant="danger" title="The preview was not updated" live="polite">
                 {draft.state.text}
               </Callout>
             ) : null}
@@ -541,7 +541,7 @@ function ChecksPane({
           ? "Add an HTML page and it is checked as you write."
           : findings.length === 0
             ? "No problems. The page passes the checks a publish makes."
-            : "The checks a publish makes, as you write.";
+            : "Checked as you write, by the rules a publish uses.";
   return (
     <div className="html-create-checks">
       <p className="html-create-checks-said" role="status">

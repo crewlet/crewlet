@@ -89,6 +89,7 @@ export function DescribeBody({ modeSwitch }: { modeSwitch: ReactNode }) {
       kind="html"
       action={{
         label: agent ? `Ask ${agent.name}` : "Ask an agent",
+        short: "Ask",
         icon: <SendGlyph size="sm" />,
         onSelect: () => void ask(),
         ...(hold ? { disabledReason: hold } : {}),
@@ -168,10 +169,13 @@ export function DescribeBody({ modeSwitch }: { modeSwitch: ReactNode }) {
         <aside className="html-create-side html-create-ask" aria-label="The task">
           <section>
             <h2 className="html-create-side-title">What will be sent</h2>
-            <p className="html-create-sent-title">{taskTitle(asked)}</p>
-            <pre className="html-create-sent-body">
-              {brief.trim() ? sent : "Describe the page to see the task."}
-            </pre>
+            {/* THE TASK AS IT IS FILED, one card: its title over its body. */}
+            <div className="html-create-sent">
+              <p className="html-create-sent-title">{taskTitle(asked)}</p>
+              <pre className="html-create-sent-body">
+                {brief.trim() ? sent : "Describe the page to see the task."}
+              </pre>
+            </div>
             {agent && who.project ? (
               <p className="html-create-sent-to">{`Filed to ${agent.name} in ${project?.name ?? who.project}.`}</p>
             ) : null}

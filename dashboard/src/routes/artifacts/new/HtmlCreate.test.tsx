@@ -156,6 +156,38 @@ test("a starting point fills an empty brief and the task is shown as it is sent"
   expect(screen.getByText(/the `presence` capability/)).toBeTruthy();
 });
 
+// A PREVIEW THAT FAILS FOR ANY OTHER REASON IS SAID IN PREVIEW, where its
+// callout is: flipped to Checks, the reader was told the page had no problems.
+test("a preview that failed, not refused, stays on Preview and says why", async () => {
+  vi.mocked(keyedWrite).mockResolvedValue({
+    kind: "refused",
+    text: "The engine could not save the draft.",
+    stale: false,
+    error: new RestError(503, { error: "unavailable" }),
+  });
+  mount("#/artifacts/new/html?mode=source");
+  await act(async () => {
+    fireEvent.click(screen.getAllByRole("button", { name: "Preview privately" })[0]!);
+  });
+  await screen.findByText("The engine could not save the draft.");
+  expect(screen.getByRole("tab", { name: "Preview" }).getAttribute("aria-selected")).toBe("true");
+  expect(screen.getByText("The preview was not saved")).toBeTruthy();
+});
+
+// LEAVING ASKS AS EVERY CREATE PAGE ASKS: unsaved words are discarded or kept
+// in the same prompt, worded alike.
+test("leaving with unsaved words asks to discard them, as every create page does", () => {
+  mount("#/artifacts/new/html?mode=source");
+  fireEvent.change(screen.getByRole("textbox", { name: "Source of index.html" }), {
+    target: { value: page("") },
+  });
+  fireEvent.click(screen.getAllByRole("button", { name: "Cancel" })[0]!);
+  const dialog = screen.getByRole("alertdialog", { name: "Discard this page?" });
+  expect(dialog.textContent).toContain("What you wrote is not saved anywhere.");
+  fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+});
+
 test("the checks speak while the page is written", async () => {
   vi.useFakeTimers();
   try {

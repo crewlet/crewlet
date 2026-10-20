@@ -54,6 +54,14 @@ export type RunState =
   /** Anything else that kept the preview from landing, in the reader's words. */
   | { kind: "failed"; text: string };
 
+/**
+ * What one run came to: the draft it landed, or why it did not. A caller
+ * steers by it (a refusal shows the checks, any other failure stays where its
+ * callout is), which the state alone could not say before the next render.
+ */
+export type RunOutcome =
+  { kind: "landed"; draft: Draft } | Extract<RunState, { kind: "refused" } | { kind: "failed" }>;
+
 export interface PageRun {
   files: readonly PageFile[];
   entry: string;
@@ -90,7 +98,7 @@ export function useDraft() {
   const [discarding, setDiscarding] = useState(false);
 
   const run = useCallback(
-    async (page: PageRun): Promise<Draft | null> => {
+    async (page: PageRun): Promise<RunOutcome> => {
       setState({ kind: "running" });
       try {
         const up = await uploadFiles(draft?.id ?? null, uploads(page.files), newActOpID());
@@ -116,14 +124,16 @@ export function useDraft() {
         if (answer.kind !== "done") {
           const error = answer.kind === "refused" ? answer.error : undefined;
           const findings = findingsOf(error);
-          if (findings) setState({ kind: "refused", findings, fingerprint: page.fingerprint });
-          else if (error?.code === "version_moved") {
-            setState({
-              kind: "failed",
-              text: "This draft changed in another window, so this preview was not saved. Open the draft to continue there.",
-            });
-          } else setState({ kind: "failed", text: answer.text });
-          return null;
+          const outcome: RunOutcome = findings
+            ? { kind: "refused", findings, fingerprint: page.fingerprint }
+            : error?.code === "version_moved"
+              ? {
+                  kind: "failed",
+                  text: "This draft changed in another window, so this preview was not saved. Open the draft to continue there.",
+                }
+              : { kind: "failed", text: answer.text };
+          setState(outcome);
+          return outcome;
         }
         const id =
           draft?.id ?? (typeof answer.body.artifact === "string" ? answer.body.artifact : "");
@@ -148,10 +158,11 @@ export function useDraft() {
         };
         setDraft(next);
         setState({ kind: "idle" });
-        return next;
+        return { kind: "landed", draft: next };
       } catch (err) {
-        setState({ kind: "failed", text: refusalText(err) });
-        return null;
+        const outcome: RunOutcome = { kind: "failed", text: refusalText(err) };
+        setState(outcome);
+        return outcome;
       }
     },
     [draft],
