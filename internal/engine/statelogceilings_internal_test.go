@@ -613,20 +613,26 @@ func TestARestartSizingFromFreeSpaceSizesTheLogsAsTheFirstBootDid(t *testing.T) 
 // AN OPERATOR'S SERVER THAT STATES NO LIMIT HOLDS THE BUCKET AND EVERY LOG.
 //
 // Such a server's own cap is three quarters of its volume's free space, which
-// this node cannot read, so it stands its own free space in for the limit. The
-// object bucket is reserved first, a quarter of that figure, and the logs were
-// then sized as half of the whole of it: three quarters between them, the
-// server's entire cap, so the last log created (the artifact datastore's,
-// appended last to the register) was refused on a CI runner with 86 GB free.
-// Sized from what the bucket leaves, as under a stated limit, the bucket, every
-// log and the coordination remainder fit the cap on every volume large enough
-// to hold the logs' floors.
+// this node cannot read, so it stands the same share of its own free space in
+// for the limit ([unstatedLimit]). The object bucket is reserved first, a
+// quarter of that figure, and the logs were once sized as half of the whole of
+// it: three quarters between them, the server's entire cap, so the last log
+// created (the artifact datastore's) was refused on a CI runner with 86 GB
+// free. Sized from what the bucket leaves, as under a stated limit, they still
+// overran the cap while the WHOLE free space stood in for it: at 16 GiB the
+// bucket took 4 GiB of a 12 GiB cap, so the logs' floors and the coordination
+// remainder had 8 GiB between them, which one more log at its floor would
+// have overrun. Against the cap itself, the bucket, every log and the remainder
+// fit on every volume large enough to hold the floors.
+//
+// Mutation: stand the whole free space in for the limit again and the 16 GiB
+// case fails.
 func TestAnUnstatedServerHoldsTheBucketAndEveryLog(t *testing.T) {
 	t.Parallel()
 	for _, free := range []int64{16 * gib, 86104199168, 1 << 40} {
 		t.Run(strconv.FormatInt(free, 10), func(t *testing.T) {
 			t.Parallel()
-			bucket := derivedObjectsReservation(free, 0)
+			bucket := derivedObjectsReservation(unstatedLimit(free), 0)
 			host := sizingHost{budget: jetstream.StorageBudget{Limit: -1, Committed: bucket,
 				Source: jetstream.BudgetUnstated}}
 			sized, err := sizeCeilings(t.Context(), host, config.Stream{}, free, "/var/lib/crewlet/stream")
