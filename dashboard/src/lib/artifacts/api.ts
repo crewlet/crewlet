@@ -637,9 +637,13 @@ export async function uploadFiles(
   };
 }
 
-/** Bring text files into an artifact's next version: [uploadFiles] for a doc's tabs. */
+/**
+ * Bring text files into an artifact's next version, or into a new artifact's
+ * first (`id` null): [uploadFiles] for a doc's tabs, a deck's slides or a
+ * composed dashboard's spec.
+ */
 export function uploadTexts(
-  id: string,
+  id: string | null,
   files: readonly { path: string; text: string }[],
   key: string,
 ): Promise<{ upload: string; files: PublishFile[] }> {
