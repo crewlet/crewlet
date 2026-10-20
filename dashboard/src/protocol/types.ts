@@ -6377,14 +6377,6 @@ export interface DesignOutline {
   notes: number;
 }
 
-/** One finding of the publish linter (`lint.Finding`). */
-export interface ArtifactLintFinding {
-  path: string;
-  line?: number;
-  code: string;
-  message: string;
-}
-
 /** A create's or a publish's answer (`artifactsapi.publishedAnswer`). */
 export interface ArtifactPublished {
   artifact: string;
