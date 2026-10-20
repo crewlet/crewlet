@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -195,8 +196,16 @@ func (r *foreignRead) answer(ctx context.Context, tool string, v any, narrowWith
 
 // render is [foreignRead.answer]'s encoding, kept apart so its refusals are
 // errors a caller can wrap.
+//
+// EVERY STRING IT WRITES IS WRITTEN AS [encodeAnswer] WRITES ONE, through
+// [plainjson]: a fenced answer is the same tool answer as any other, and the
+// encoder it is finally handed to compacts a raw value rather than decoding
+// it, so a body written here with `json.Marshal`'s `\u003c` reached the model
+// as the escape — a fenced page of markup read as escape soup, and weighed
+// against [ToolAnswerBytes] at six bytes a bracket, exactly what the plain
+// encoding exists to stop.
 func (r *foreignRead) render(v any) (json.RawMessage, error) {
-	data, err := json.Marshal(v)
+	data, err := plainjson.Marshal(v, "")
 	if err != nil {
 		return nil, fmt.Errorf("builtin: encode a read answer: %w", err)
 	}
@@ -326,7 +335,7 @@ func (w *fenceWriter) object(path fieldPath, top bool) error {
 	}
 	if top {
 		if env, ok := w.read.envelope(); ok {
-			label, err := json.Marshal(env)
+			label, err := plainjson.Marshal(env, "")
 			if err != nil {
 				return fmt.Errorf("builtin: encode a read answer's provenance: %w", err)
 			}
@@ -362,7 +371,7 @@ func (w *fenceWriter) array(path fieldPath) error {
 }
 
 func (w *fenceWriter) str(s string) error {
-	data, err := json.Marshal(s)
+	data, err := plainjson.Marshal(s, "")
 	if err != nil {
 		return fmt.Errorf("builtin: encode a string in a read answer: %w", err)
 	}
