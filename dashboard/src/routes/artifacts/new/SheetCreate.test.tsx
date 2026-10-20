@@ -24,6 +24,22 @@ vi.mock("~/lib/store-hooks.ts", async () => {
   const actual = await vi.importActual<typeof import("~/lib/store-hooks.ts")>("~/lib/store-hooks.ts");
   return { ...actual, useOrg: () => null };
 });
+const fileArtifactTask = vi.hoisted(() => vi.fn());
+vi.mock("./fileTask.ts", () => ({
+  useFileArtifactTask: () => ({ fileArtifactTask, busy: false, refusal: null, held: null }),
+}));
+vi.mock("./WhoBuildsIt.tsx", () => ({
+  useWhoBuildsIt: () => ({
+    builders: [{ seat: { handle: "analyst", name: "Analyst" }, suggested: true }],
+    seat: "analyst",
+    setSeat: () => {},
+    project: "ENG",
+    setProject: () => {},
+    projects: [],
+    projectsLoading: false,
+  }),
+  WhoBuildsIt: () => <p>Agent: Analyst</p>,
+}));
 vi.mock("~/lib/artifacts/access.ts", async () => {
   const actual = await vi.importActual<typeof import("~/lib/artifacts/access.ts")>(
     "~/lib/artifacts/access.ts",
@@ -157,6 +173,7 @@ test("a CSV is read in the browser, typed by its values, and titles the sheet", 
     type: "text/csv",
   });
   const input = document.querySelector<HTMLInputElement>('input[type="file"]')!;
+  expect(screen.getByText("Choose a CSV file, or drop one here")).toBeTruthy();
   await act(async () => {
     fireEvent.change(input, { target: { files: [file] } });
   });
@@ -185,4 +202,31 @@ test("Cancel with something typed asks before discarding it", () => {
   expect(screen.getByRole("dialog", { name: "Discard this sheet?" })).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Discard" }));
   expect(location.hash).toBe("#/artifacts");
+});
+
+test("Ask an agent files a real task to the agent with the brief, and lands on it", async () => {
+  fileArtifactTask.mockResolvedValue({ item: "ENG-42", key: "ENG-42", linked: null });
+  mount();
+  fireEvent.change(screen.getByRole("textbox", { name: "Sheet title" }), {
+    target: { value: "Hiring pipeline" },
+  });
+  fireEvent.click(screen.getByRole("radio", { name: /Ask an agent/ }));
+  expect(screen.queryByRole("grid")).toBeNull();
+  expect(screen.queryByText("Who can change rows")).toBeNull();
+  const ask = screen.getByRole("button", { name: /Ask Analyst/ });
+  fireEvent.click(ask);
+  expect(fileArtifactTask).not.toHaveBeenCalled();
+  expect(screen.getByText("Say what the sheet should hold.")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "A hiring pipeline" }));
+  expect(screen.getByText(/Analyst gets a task to set up “Hiring pipeline”/)).toBeTruthy();
+  fireEvent.click(ask);
+  await waitFor(() => expect(location.hash).toBe("#/work/ENG-42"));
+  expect(fileArtifactTask).toHaveBeenCalledWith({
+    kind: "sheet",
+    title: "Hiring pipeline",
+    brief: "A hiring pipeline: each candidate's role, stage, interviewer and next step.",
+    seat: "analyst",
+    project: "ENG",
+  });
+  expect(sent).toEqual([]);
 });

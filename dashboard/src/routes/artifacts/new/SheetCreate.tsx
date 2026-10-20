@@ -13,34 +13,48 @@
  * in keeps its own draft, so trying a template and coming back to Blank loses
  * nothing typed into either.
  *
+ * OR AN AGENT SETS IT UP. The last way in trades the grid for a brief: what
+ * the sheet should hold, and which agent builds it (`WhoBuildsIt`). Create
+ * files a real task to that agent (`useFileArtifactTask`) and lands on it,
+ * where the reader follows the work; the agent publishes the sheet.
+ *
  * NOTHING EXISTS UNTIL CREATE. The writes are the shared ones (`create.ts`):
  * the sheet, its schema, then its rows in keyed batches, and the page lands
  * on the new sheet. Cancel asks first when there is something to lose.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import {
   ArtifactKindGlyph,
   Button,
   Callout,
   Checkbox,
   ChoiceList,
+  FileDrop,
+  FilePickButton,
   FormField,
   Modal,
   Select,
   SheetColumnEditor,
   SheetColumnTypeGlyph,
   SheetGrid,
+  Textarea,
   parseCsv,
   type SheetColumn,
   type SheetColumnType,
 } from "@crewlethq/ui";
-import { PlusGlyph, UploadGlyph } from "@crewlethq/icons/glyphs";
+import { BotGlyph, PlusGlyph, UploadGlyph } from "@crewlethq/icons/glyphs";
+import { useNavigator } from "~/app/router.tsx";
 import { COLLECTION_PRESETS } from "~/contract/artifacts.ts";
 import { plural } from "~/lib/format.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { useArtifactPeople } from "~/lib/artifacts/people.ts";
-import { PRESET_WORDS, SHEET_TEMPLATES, optionID, type SheetTemplate } from "~/lib/artifacts/schema.ts";
+import {
+  PRESET_WORDS,
+  SHEET_TEMPLATES,
+  optionID,
+  type SheetTemplate,
+} from "~/lib/artifacts/schema.ts";
 import {
   IMPORT_BYTES_MAX,
   IMPORT_ROWS_MAX,
@@ -68,9 +82,21 @@ import { COLUMN_TYPE_WORDS } from "~/lib/artifacts/words.ts";
 import type { CollectionPreset } from "~/protocol/index.ts";
 import { CreateShell, useLeaveCreate } from "./CreateShell.tsx";
 import { titleHold, titleProblem, useCreateArtifact, useWorkItem } from "./create.ts";
+import { useFileArtifactTask } from "./fileTask.ts";
+import { WhoBuildsIt, useWhoBuildsIt } from "./WhoBuildsIt.tsx";
 
-/** A way in: a template, or a CSV the reader brings. */
-type Start = SheetTemplate | "import";
+/** A way in: a template, a CSV the reader brings, or an agent that sets it up. */
+type Start = SheetTemplate | "import" | "agent";
+
+/** The files an import reads. */
+const CSV_TYPES = ".csv,.tsv,.txt,text/csv,text/tab-separated-values,text/plain";
+
+/** Briefs a reader can start from, one press each. */
+const BRIEFS = [
+  "A hiring pipeline: each candidate's role, stage, interviewer and next step.",
+  "A vendor comparison: price, contract length, security review and a score for each.",
+  "A content calendar: each post's channel, owner, publish date and status.",
+] as const;
 
 /** A template's draft, with its example rows or without. */
 function templateDraft(key: SheetTemplate, examples: boolean): SheetDraft {
@@ -115,8 +141,11 @@ export function SheetCreate() {
   const [settingsColumn, setSettingsColumn] = useState<string | null>(null);
   const [touched, setTouched] = useState(false);
   const [leaving, setLeaving] = useState(false);
-  const [dropping, setDropping] = useState(false);
-  const fileInput = useRef<HTMLInputElement>(null);
+  const [brief, setBrief] = useState("");
+  const nav = useNavigator();
+  const who = useWhoBuildsIt("sheet");
+  const task = useFileArtifactTask();
+  const agentName = who.builders.find((b) => b.seat.handle === who.seat)?.seat.name ?? "";
   const titleInput = useRef<HTMLInputElement>(null);
   const body = useRef<HTMLDivElement>(null);
 
@@ -143,8 +172,14 @@ export function SheetCreate() {
   const choose = (next: Start) => {
     setSettingsColumn(null);
     setStart(next);
-    if (next !== "import" && !drafts[next]) {
+    if (next !== "import" && next !== "agent" && !drafts[next]) {
       setDrafts((all) => ({ ...all, [next]: templateDraft(next, examples[next] ?? true) }));
+    }
+    // BELOW A LAPTOP'S WIDTH the rail stands under the grid, so what a choice
+    // changes is above it, out of view: the page goes back up to show it.
+    if (window.matchMedia?.("(width < 1024px)").matches) {
+      const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      body.current?.scrollIntoView({ block: "start", behavior: still ? "auto" : "smooth" });
     }
   };
 
@@ -200,25 +235,45 @@ export function SheetCreate() {
     takeTable(file.name, parsed.rows, imported?.header ?? true);
   };
 
-  const onDrop = (event: DragEvent) => {
-    if (!event.dataTransfer.types.includes("Files")) return;
-    event.preventDefault();
-    setDropping(false);
-    const file = event.dataTransfer.files[0];
-    if (file) void readFile(file);
+  /** The first file brought, dropped anywhere on the page or picked. */
+  const takeFiles = (files: readonly { file: File }[]) => {
+    const first = files[0];
+    if (first) void readFile(first.file);
   };
 
-  const hold = !access.can
-    ? access.reason
-    : create.busy
-      ? "Creating the sheet…"
-      : !draft
-        ? "Choose a CSV file to start from."
-        : (titleHold(title) ?? draftProblem(draft));
+  const asking = start === "agent";
+  const hold = asking
+    ? (task.held ??
+      (task.busy
+        ? "Filing the task…"
+        : (titleHold(title) ??
+          (brief.trim() === ""
+            ? "Say what the sheet should hold."
+            : who.seat === ""
+              ? "Add an agent to the chart first, in Edit org."
+              : undefined))))
+    : !access.can
+      ? access.reason
+      : create.busy
+        ? "Creating the sheet…"
+        : !draft
+          ? "Choose a CSV file to start from."
+          : (titleHold(title) ?? draftProblem(draft));
 
-  const make = () => {
-    if (hold || !draft) return;
-    void create.sheet(title, draftWrites(draft, preset));
+  const make = async () => {
+    if (hold) return;
+    if (asking) {
+      const filed = await task.fileArtifactTask({
+        kind: "sheet",
+        title: title.trim(),
+        brief,
+        seat: who.seat,
+        project: who.project || undefined,
+      });
+      if (filed?.item) nav.to(["work", filed.item]);
+      return;
+    }
+    if (draft) await create.sheet(title, draftWrites(draft, preset));
   };
 
   // MOD+ENTER CREATES from anywhere in the page's body, as a composer's send
@@ -228,10 +283,10 @@ export function SheetCreate() {
     if (event.defaultPrevented || event.key !== "Enter" || event.altKey || event.shiftKey) return;
     if (!(event.metaKey || event.ctrlKey)) return;
     event.preventDefault();
-    make();
+    void make();
   };
 
-  const dirty = touched || title.trim() !== "";
+  const dirty = touched || title.trim() !== "" || brief.trim() !== "";
   const cancel = () => (dirty ? setLeaving(true) : leave());
 
   // WHAT THE PAGE IS DOING, and only that: the grid already shows its columns and rows.
@@ -239,7 +294,9 @@ export function SheetCreate() {
     ? `Writing rows: ${create.progress.done.toLocaleString()} of ${create.progress.total.toLocaleString()}`
     : create.busy
       ? "Creating…"
-      : undefined;
+      : task.busy
+        ? "Filing the task…"
+        : undefined;
 
   const columnEditor = (column: SheetColumn, close: () => void) => {
     if (!draft) return null;
@@ -314,14 +371,16 @@ export function SheetCreate() {
       separated: true,
       panel: (
         <div className="sheet-create-import">
-          <Button
+          <FilePickButton
             size="small"
             variant="secondary"
             leadingIcon={<UploadGlyph size="sm" />}
-            onClick={() => fileInput.current?.click()}
+            accept={CSV_TYPES}
+            multiple={false}
+            onFiles={takeFiles}
           >
             {imported ? "Choose another file" : "Choose a file"}
-          </Button>
+          </FilePickButton>
           <span className="sheet-create-import-hint">or drop it anywhere on this page</span>
           {imported && (
             <Checkbox
@@ -334,6 +393,15 @@ export function SheetCreate() {
         </div>
       ),
     },
+    {
+      value: "agent",
+      label: (
+        <span className="sheet-create-start">
+          <span>Ask an agent</span>
+        </span>
+      ),
+      detail: "Describe the sheet. An agent sets up its columns and publishes it.",
+    },
   ];
 
   return (
@@ -342,26 +410,27 @@ export function SheetCreate() {
       status={status}
       onCancel={cancel}
       action={{
-        label: create.busy ? "Creating…" : "Create sheet",
-        icon: <PlusGlyph size="sm" />,
-        onSelect: make,
+        label: asking
+          ? task.busy
+            ? "Filing…"
+            : agentName
+              ? `Ask ${agentName}`
+              : "Ask an agent"
+          : create.busy
+            ? "Creating…"
+            : "Create sheet",
+        icon: asking ? <BotGlyph size="sm" /> : <PlusGlyph size="sm" />,
+        onSelect: () => void make(),
         keys: ["Mod", "Enter"],
         disabledReason: hold,
       }}
     >
-      <div
+      <FileDrop
         ref={body}
         className="sheet-create"
-        data-dropping={dropping || undefined}
-        onDragOver={(event) => {
-          if (!event.dataTransfer.types.includes("Files")) return;
-          event.preventDefault();
-          setDropping(true);
-        }}
-        onDragLeave={(event) => {
-          if (!body.current?.contains(event.relatedTarget as Node | null)) setDropping(false);
-        }}
-        onDrop={onDrop}
+        title="Drop the file to start from it"
+        hint="A CSV or TSV file. Its columns are typed from their values."
+        onFiles={takeFiles}
         onKeyDown={onBodyKey}
       >
         <div className="sheet-create-main">
@@ -412,8 +481,51 @@ export function SheetCreate() {
               {create.refusal}
             </Callout>
           )}
+          {asking && task.refusal && (
+            <Callout variant="danger" title="The task was not filed">
+              {task.refusal.sentence}
+              {task.refusal.hint ? ` ${task.refusal.hint}` : ""}
+            </Callout>
+          )}
 
-          {draft ? (
+          {asking ? (
+            <div className="sheet-create-ask">
+              <FormField
+                label="What should the sheet hold?"
+                helper="Name its columns, the choices they offer, and any rows to start with."
+              >
+                {(field) => (
+                  <Textarea
+                    id={field.id}
+                    aria-describedby={field.describedBy}
+                    autoResize
+                    rows={5}
+                    value={brief}
+                    placeholder="A launch checklist: each gate's owner, due date and status, with the security review and pricing page as the first rows."
+                    onChange={(event) => setBrief(event.target.value)}
+                  />
+                )}
+              </FormField>
+              <div className="sheet-create-briefs" role="group" aria-label="Start from an example">
+                {BRIEFS.map((example) => (
+                  <Button
+                    key={example}
+                    size="small"
+                    variant="outline"
+                    onClick={() => setBrief(example)}
+                  >
+                    {example.slice(0, example.indexOf(":"))}
+                  </Button>
+                ))}
+              </div>
+              <WhoBuildsIt who={who} />
+              <p className="sheet-create-next">
+                {agentName
+                  ? `${agentName} gets a task to set up “${title.trim() || "the sheet"}”. They make its columns and rows from your brief and publish it to Artifacts. You land on the task, where you can follow the work and answer their questions.`
+                  : "The agent you pick gets a task to set up the sheet from your brief and publish it to Artifacts. You land on the task, where you can follow the work."}
+              </p>
+            </div>
+          ) : draft ? (
             <>
               <SheetGrid
                 className="sheet-create-grid"
@@ -441,24 +553,29 @@ export function SheetCreate() {
                 labels={{ types: COLUMN_TYPE_WORDS }}
               />
               <p className="sheet-create-hint">
-                Press a column's name to set its type and choices. What you type becomes the
-                sheet's first rows; empty rows are left out.
+                Press a column's name to set its type and choices. What you type becomes the sheet's
+                first rows; empty rows are left out.
               </p>
             </>
           ) : (
-            <button
-              type="button"
+            <FileDrop
               className="sheet-create-drop"
-              onClick={() => fileInput.current?.click()}
-            >
-              <UploadGlyph size="md" />
-              <span className="sheet-create-drop-title">Choose a CSV file, or drop one here</span>
-              <span className="sheet-create-drop-detail">
-                A comma, semicolon or tab separated file of up to{" "}
-                {IMPORT_ROWS_MAX.toLocaleString()} rows. Nothing is sent until you create the
-                sheet.
-              </span>
-            </button>
+              title="Choose a CSV file, or drop one here"
+              hint={`A comma, semicolon or tab separated file of up to ${IMPORT_ROWS_MAX.toLocaleString()} rows. Nothing is sent until you create the sheet.`}
+              onFiles={takeFiles}
+              actions={
+                <FilePickButton
+                  size="small"
+                  variant="secondary"
+                  leadingIcon={<UploadGlyph size="sm" />}
+                  accept={CSV_TYPES}
+                  multiple={false}
+                  onFiles={takeFiles}
+                >
+                  Choose a file
+                </FilePickButton>
+              }
+            />
           )}
         </div>
 
@@ -473,48 +590,38 @@ export function SheetCreate() {
               />
             </FormField>
           </section>
-          <section className="sheet-create-section">
-            <FormField label="Who can change rows" helper={PRESET_WORDS[preset].description}>
-              {(field) => (
-                <Select
-                  id={field.id}
-                  aria-describedby={field.describedBy}
-                  size="sm"
-                  width="full"
-                  value={preset}
-                  onChange={(value) => {
-                    setTouched(true);
-                    setPresets((all) => ({ ...all, [start]: value as CollectionPreset }));
-                  }}
-                  options={COLLECTION_PRESETS.map((p) => ({
-                    value: p,
-                    label: PRESET_WORDS[p].label,
-                  }))}
-                />
-              )}
-            </FormField>
-            <p className="sheet-create-note">
-              Finer rules, such as who may write each column, are in the sheet's Data panel once it
-              is made.
-            </p>
-          </section>
-          {workItem && (
+          {!asking && (
+            <section className="sheet-create-section">
+              <FormField label="Who can change rows" helper={PRESET_WORDS[preset].description}>
+                {(field) => (
+                  <Select
+                    id={field.id}
+                    aria-describedby={field.describedBy}
+                    size="sm"
+                    width="full"
+                    value={preset}
+                    onChange={(value) => {
+                      setTouched(true);
+                      setPresets((all) => ({ ...all, [start]: value as CollectionPreset }));
+                    }}
+                    options={COLLECTION_PRESETS.map((p) => ({
+                      value: p,
+                      label: PRESET_WORDS[p].label,
+                    }))}
+                  />
+                )}
+              </FormField>
+              <p className="sheet-create-note">
+                Finer rules, such as who may write each column, are in the sheet's Data panel once
+                it is made.
+              </p>
+            </section>
+          )}
+          {workItem && !asking && (
             <p className="sheet-create-note">It will be listed on {workItem}.</p>
           )}
         </aside>
-
-        <input
-          ref={fileInput}
-          type="file"
-          hidden
-          accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values,text/plain"
-          onChange={(event) => {
-            const file = event.target.files?.[0];
-            event.target.value = "";
-            if (file) void readFile(file);
-          }}
-        />
-      </div>
+      </FileDrop>
 
       <Modal
         open={leaving}
@@ -533,7 +640,11 @@ export function SheetCreate() {
           </>
         }
       >
-        <p>Its title, columns and rows have not been saved, and leaving discards them.</p>
+        <p>
+          {asking
+            ? "Its title and brief have not been sent, and leaving discards them."
+            : "Its title, columns and rows have not been saved, and leaving discards them."}
+        </p>
       </Modal>
     </CreateShell>
   );

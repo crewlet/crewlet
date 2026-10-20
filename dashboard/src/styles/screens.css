@@ -10767,56 +10767,34 @@ a.live-row:focus-visible {
   color: var(--color-text-tertiary);
   font-size: var(--font-size-xs);
 }
-/* Import, before a file: the grid's place is the target to choose or drop one. */
+/* Import, before a file: the grid's place is the shared drop target, as tall
+   as the grid it stands in for. */
 .sheet-create-drop {
+  min-height: 240px;
+  align-content: center;
+}
+/* Ask an agent: the brief, a few examples to start from, who builds it, and
+   what happens next, in the grid's column at a reading measure. */
+.sheet-create-ask {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
+  gap: var(--spacing-4);
+  max-width: 640px;
+}
+.sheet-create-briefs {
+  display: flex;
+  flex-wrap: wrap;
   gap: var(--spacing-2);
-  min-height: 240px;
-  padding: var(--spacing-6);
-  border: 1px dashed var(--color-border-strong);
-  border-radius: var(--radius-lg);
+  margin-top: calc(var(--spacing-2) * -1);
+}
+.sheet-create-next {
+  margin: 0;
+  padding: var(--spacing-3) var(--spacing-4);
+  border-radius: var(--radius-md);
   background: var(--color-surface-subtle);
   color: var(--color-text-secondary);
-  font: inherit;
-  text-align: center;
-  cursor: pointer;
-}
-.sheet-create-drop:hover {
-  border-color: var(--color-border-strong-hover);
-  background: var(--color-surface-hover);
-}
-.sheet-create-drop:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: 2px;
-}
-.sheet-create-drop-title {
-  color: var(--color-text-primary);
-  font-size: var(--font-size-md);
-  font-weight: var(--font-weight-medium);
-}
-.sheet-create-drop-detail {
-  max-width: 44ch;
   font-size: var(--font-size-sm);
-}
-/* A file held over the page: the whole body says it will take it. */
-.sheet-create[data-dropping]::after {
-  content: "Drop the file to start from it";
-  position: absolute;
-  inset: var(--spacing-3);
-  z-index: var(--z-index-sticky);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 2px dashed var(--color-focus);
-  border-radius: var(--radius-lg);
-  background: var(--color-surface-veil);
-  color: var(--color-text-primary);
-  font-size: var(--font-size-md);
-  font-weight: var(--font-weight-medium);
-  pointer-events: none;
+  line-height: var(--font-line-height-normal);
 }
 @media (width < 1024px) {
   .sheet-create {
