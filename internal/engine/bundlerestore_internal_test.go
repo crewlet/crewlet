@@ -351,8 +351,8 @@ func TestAnEpochDoesNotUndoALogout(t *testing.T) {
 	if provider == nil {
 		t.Fatal("the premise: the epoch holds no cli-agent provider for the entry")
 	}
-	if !provider.Workspace().HasLogin() {
-		t.Fatal("the premise: the epoch restored no login")
+	if has, err := provider.Workspace().HasLogin(t.Context()); err != nil || !has {
+		t.Fatalf("the premise: the epoch restored no login (%v)", err)
 	}
 	if err := provider.Logout(t.Context(), io.Discard, io.Discard); err != nil {
 		t.Fatalf("Logout: %v", err)
@@ -363,8 +363,8 @@ func TestAnEpochDoesNotUndoALogout(t *testing.T) {
 		t.Fatalf("NewCompany: %v", err)
 	}
 	next.restoreBundles(t.Context())
-	if files := provider.Workspace().LoginFiles(); len(files) != 0 {
-		t.Errorf("the next epoch restored the login a logout removed: %v", files)
+	if login, err := provider.Workspace().Login(t.Context()); err != nil || len(login) != 0 {
+		t.Errorf("the next epoch restored the login a logout removed: %d files (%v)", len(login), err)
 	}
 	got := logs.String()
 	for _, want := range []string{"cli_agent_bundle_withheld", "crewlet llm logout", "crewlet llm login subscription"} {

@@ -321,7 +321,7 @@ func listLLMProviders(ctx context.Context, providers []cliAgentProvider, stdout,
 		}
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
 			p.key, p.provider.Agent(), model,
-			p.provider.SignInState(), p.provider.Workspace().Root())
+			p.provider.SignInState(ctx), p.provider.Workspace().Root())
 	}
 	return w.Flush()
 }
@@ -641,7 +641,7 @@ func exportLLM(ctx context.Context, environ config.Source, providers []cliAgentP
 		return fmt.Errorf("the entry's configured credential bundle did not restore, so there is "+
 			"no login the engine would run with to export: %w", err)
 	}
-	bundle, err := p.ExportBundle()
+	bundle, err := p.ExportBundle(ctx)
 	if err != nil {
 		return err
 	}
@@ -723,7 +723,11 @@ func importLLM(ctx context.Context, providers []cliAgentProvider, key string, st
 				"(`crewlet llm logout %s`) if you mean to replace it",
 			key, p.Workspace().CredentialsDir(), key)
 	}
-	if p.Workspace().HasLogin() {
+	has, err := p.Workspace().HasLogin(ctx)
+	if err != nil {
+		return err
+	}
+	if has {
 		return present()
 	}
 	// +1 SO THE OVERRUN IS VISIBLE. io.LimitReader stops at the cap and

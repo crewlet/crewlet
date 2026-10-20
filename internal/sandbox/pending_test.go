@@ -18,8 +18,15 @@ import (
 // TestMain silences the engine logger. Every Open logs a line per applied
 // schema file and the suite opens a database per subtest — several hundred
 // lines of successful boot ahead of the one that says what failed.
+//
+// It also runs a box's teardown in a loop, when this binary was re-executed
+// as one ([runWriteBackWriter]), rather than the suite.
 func TestMain(m *testing.M) {
 	logging.Configure(slog.LevelError, logging.FormatText, io.Discard)
+	if dir := os.Getenv(writeBackWriterEnv); dir != "" {
+		runWriteBackWriter(dir)
+		os.Exit(0)
+	}
 	os.Exit(m.Run())
 }
 

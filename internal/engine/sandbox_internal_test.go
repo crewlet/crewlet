@@ -376,8 +376,11 @@ roles:
 }
 
 // A LOGIN OPENCODE KEEPS IN ITS OWN DATABASE FOLLOWS A RUN INTO A LOCAL BOX: the
-// entry's exported login, mapped where the runner imports it from — and an
-// entry nobody has signed in maps nothing, rather than a path that is not there.
+// entry's exported login, mapped where the runner imports it from — mapped
+// whether or not anybody has signed the entry in yet, because the box reads
+// the login as it stands when it is seeded and is given only what it holds
+// then. A map of what was there when the run was resolved named a login the
+// shared directory may have moved past by the time the box was seeded.
 func TestAnOpenCodeLoginTravelsAsItsExportedDocument(t *testing.T) {
 	t.Setenv(config.CLIHomeEnv, t.TempDir())
 	c := companyFor(t, `
@@ -397,33 +400,29 @@ roles:
     llm: oc
 `)
 	seat := seatNamed(t, c, "Engineer")
-	run, err := newCodingRun(c, seat, phase.Execute, codingagent.OpenCodeName, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(run.files) != 0 {
-		t.Errorf("an entry nobody signed in mapped %v into the box", run.files)
-	}
-
 	member, err := c.Models.Head(seat, phase.Execute)
 	if err != nil {
 		t.Fatal(err)
 	}
 	shared := member.Provider.(*cliagent.Provider).Workspace().CredentialsDir()
 	doc := filepath.Join(shared, cliprofile.CredentialStoreDocument)
-	if err := os.MkdirAll(shared, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(doc, []byte(`[{"id":"cred_1"}]`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	run, err = newCodingRun(c, seat, phase.Execute, codingagent.OpenCodeName, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := run.files[codingagent.CredentialDocument]; got != doc {
-		t.Errorf("the box is seeded with %q at %s, want the shared login %q (files %v)",
-			got, codingagent.CredentialDocument, doc, run.files)
+	for _, signedIn := range []bool{false, true} {
+		if signedIn {
+			if err := os.MkdirAll(shared, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(doc, []byte(`[{"id":"cred_1"}]`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		run, err := newCodingRun(c, seat, phase.Execute, codingagent.OpenCodeName, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := run.files[codingagent.CredentialDocument]; got != doc || len(run.files) != 1 {
+			t.Errorf("signed in %v: the box is seeded from %q at %s, want the shared login %q "+
+				"and nothing else (files %v)", signedIn, got, codingagent.CredentialDocument, doc, run.files)
+		}
 	}
 }
 
@@ -586,9 +585,14 @@ roles:
 	}
 }
 
-// Seeding files that do not exist would fail inside the run with a puzzling
-// error instead of the CLI's plain "not authenticated".
-func TestNoLoginOffersNoCredentialFiles(t *testing.T) {
+// A BOX IS OFFERED EVERY FILE OF THE LOGIN, signed in or not: the map names
+// where the login is kept, and the box is seeded with whatever the login holds
+// when it is seeded — nothing at all for an entry nobody signed in, so the CLI
+// inside says its own plain "not authenticated" rather than failing on a file
+// that is not there. A map of only the files present when the run was
+// resolved named a login the shared directory may have moved past by the
+// time the box was seeded, and a box given half of a newer sign-in.
+func TestEveryLoginFileIsOfferedWhetherOrNotItIsHeld(t *testing.T) {
 	t.Setenv(config.CLIHomeEnv, t.TempDir())
 	c := companyFor(t, `
 name: Acme
@@ -604,9 +608,15 @@ roles:
     handle: eng
     llm: subscription
 `)
-	files := runOn(t, c, seatNamed(t, c, "Engineer"), codingagent.ClaudeCodeName, nil).files
-	if len(files) != 0 {
-		t.Errorf("files that do not exist were offered to the box: %v", files)
+	seat := seatNamed(t, c, "Engineer")
+	files := runOn(t, c, seat, codingagent.ClaudeCodeName, nil).files
+	member, err := c.Models.Head(seat, phase.Execute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shared := member.Provider.(*cliagent.Provider).Workspace().CredentialsDir()
+	if want := filepath.Join(shared, ".credentials.json"); files[".claude/.credentials.json"] != want || len(files) != 1 {
+		t.Errorf("an entry nobody signed in offered %v, want its one login file at %s", files, want)
 	}
 }
 

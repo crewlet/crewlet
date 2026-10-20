@@ -2083,7 +2083,11 @@ engine's answer.
 restore the entry's configured bundle first, as the engine does:
 `credentials` (files a login wrote), `token` (a headless token), `api key`
 (under `auth.mode: api-key`), `inherited token` or `inherited key` (forwarded
-by `auth.mode: inherit-env`), `environment` (a `cli.env` key), or `none`.
+by `auth.mode: inherit-env`), `environment` (a `cli.env` key), or `none` —
+and `unknown` where nothing else signs the entry in and its credential
+directory holds a [login write that cannot be
+finished](../concepts/subscription-llm-backends.md#a-login-of-several-files-is-written-whole),
+which `doctor` reports as a problem naming why.
 
 On an **`anthropic` entry** `doctor` checks the two things that make every
 call on it a 400 while the config validates clean. The request is
@@ -2116,8 +2120,8 @@ others. `openai` entries are not examined.
 
 | Shape | When |
 |---|---|
-| *(no flag)* | Broker the vendor's own interactive login and keep the result |
-| `-from-host` | Adopt a login this machine already has, e.g. from running the CLI by hand — copied for a login kept in files, exported by the CLI itself (`opencode auth export --standalone`) for one kept in its own database |
+| *(no flag)* | Broker the vendor's own interactive login and keep the result — written **whole** over whatever landed while it ran, so a file the sign-in left as it was goes back as it was and a file it never held is removed rather than kept beside the new token |
+| `-from-host` | Adopt a login this machine already has, e.g. from running the CLI by hand — copied for a login kept in files, exported by the CLI itself (`opencode auth export --standalone`) for one kept in its own database. The adopted login replaces the old one **whole**: a file your home does not hold is removed rather than left beside the adopted ones |
 | `-capture-token` | Mint a **headless token** into the secret store — the only shape a remote [code sandbox](../concepts/code-sandbox.md) can use, because a token is one scoped revocable variable and a login (credential files, an exported login) never leaves the engine host |
 | `-capture-token -print-token` | The same mint, written to **stdout** and stored nowhere — for an operator whose secrets live in somebody else's manager. It **refuses to run on a terminal**: this is a credential, and a token in a scrollback outlives the command, while a screen-share or a shell history outlives the scrollback. Pipe it or redirect it. The two-step alternative (`-capture-token`, then `secrets get -reveal`) writes the token into the store on the way past, which is precisely what this avoids. |
 | `-token-stdin` / `-username U -password-stdin` | Store a credential you already hold, where the CLI genuinely has one |
@@ -2140,7 +2144,8 @@ seats](../concepts/subscription-llm-backends.md#token-refresh-across-seats). A
 document from another build, say), saying so, where `status` keeps refusing it.
 
 **`export`** packs a login into one portable blob so another host can come up
-already authenticated. `-secret-store` writes it to the [secret
+already authenticated — read whole, so a bundle never packs a write that
+stopped part way. `-secret-store` writes it to the [secret
 store](../concepts/secret-store.md) instead of stdout; without it the blob goes
 to stdout in the clear, which is what you want when piping into your own
 secret manager and never what you want in a shell history.
@@ -2159,7 +2164,9 @@ it is how a fleet logs itself out. `crewlet llm logout <KEY>` first if you
 mean to replace it.
 
 **`logout`** removes the login (and revokes it with the vendor where the CLI
-has a logout of its own), and **records the logout** in the state directory,
+has a logout of its own) in one write of the empty login — every file at
+once, discarding a login write left standing rather than finishing it — and
+**records the logout** in the state directory,
 so the configured bundle below is not restored into the directory it emptied —
 not by the engine's next boot or apply, and not by `list`, `status`, `export`
 or `doctor`, which each say why instead — until a login is written into that

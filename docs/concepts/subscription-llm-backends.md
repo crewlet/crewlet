@@ -64,6 +64,8 @@ its own place to run:
 ```
 <state_dir>/
 ├── credentials/                  # the subscription login — ONE per provider
+├── credentials.lock              # taken by every writer and reader of it
+├── credentials.pending           # a write of the login, while one is in progress
 └── seats/
     ├── sarah-chen/
     │   ├── cache/                # XDG_CACHE_HOME — warm, holds no conversation
@@ -1328,8 +1330,10 @@ through `providers.llm[].auth.credential_bundle`. The blob is validated on the w
 profile's own credential paths, files only, size-capped — because an
 archive is an execution surface if it is unpacked on trust.
 
-Only the credential files — and a CLI's exported login document — travel.
-Sessions, history, and caches never go into a bundle.
+Only the credential files — and a CLI's exported login document — travel,
+read as [one login](#a-login-of-several-files-is-written-whole), so a bundle
+never packs a write that stopped part way. Sessions, history, and caches never
+go into a bundle.
 
 **Between two hosts that share no database**, pipe it instead:
 
@@ -1394,6 +1398,46 @@ that does not read its key from the environment — `kimi-code` reads its
 metered key only from `config.toml` in the credential directory — does not
 declare `env_sign_in`, and a key in its `cli.env` is not counted.
 
+### A login of several files is written whole
+
+Four CLIs keep one login in two files — `gemini-cli` (`oauth_creds.json` beside
+`google_accounts.json`), `cursor-agent` (`cli-config.json` and `auth.json`),
+`kimi-code` (its OAuth token beside the `config.toml` that names its provider)
+and `hermes` (`.env` and `auth.json`) — and the two are a login only while they
+come from the same sign-in. So Crewlet writes the shared login **as one unit**.
+Every writer — the bundle restore, `crewlet llm import`, `-from-host`,
+`logout`, a seat's or a command's carry of a refreshed login, and a [local
+coding box](code-sandbox.md)'s write-back — first records the whole new login
+in a journal beside the credential directory (`credentials.pending`), then puts
+each file in place, then removes the journal. Every reader — a seat's seed,
+`doctor`, `list`, `export`, a restore looking for a login already there, a
+local box's seed — takes the same lock (`credentials.lock`) and finishes a
+journal it finds standing before it reads.
+
+So a writer killed between two files, or refused by the disk part way, leaves
+the login it was replacing or the one it was writing, never half of each: the
+next reader puts the new one in place. A write whose journal landed is the
+login of record from that moment, so one that could not put every file in
+place at once is reported as written, with a `cli_agent_login_unapplied`
+warning naming why (`local_sandbox_credential_unapplied` from a box's
+teardown), and the next reader finishes it. A journal that cannot be finished — the
+disk still refusing it — is never read as a login: `doctor` reports the
+credentials as unknown and why, `crewlet llm list` shows `unknown`, and a seat
+is refused rather than seeded with the file that landed. A journal this build
+cannot read is refused by everything that touches the login, naming the file;
+removing it discards that write, after which sign the entry in again.
+
+**Any one file is a login.** `hermes` keeps API keys in `.env` and an OAuth
+pool in `auth.json`, and an entry may use either alone; `gemini-cli` signs in
+without `google_accounts.json`. What makes one file a whole login rather than
+half of two is that the directory is only ever written a login at a time.
+
+**A write states the whole login.** `-from-host` adopts your login as it is: a
+file your home does not hold is removed from the shared login rather than left
+beside the adopted one from an older sign-in. `logout` writes the empty login,
+discarding a write left standing rather than finishing it, so a login that was
+never put in place does not come back at the next seat's start.
+
 ### Token refresh across seats
 
 OAuth access tokens expire in hours, and the CLI refreshes them
@@ -1413,8 +1457,10 @@ refreshed — and writing it back would put the refresh token the vendor had jus
 rotated away in front of every seat.
 
 **And a refresh is a compare-and-swap.** A seat whose CLI did refresh writes
-only while the shared login is still exactly what that seat started from. If
-anything else wrote in between — another seat's refresh, your `crewlet llm
+only while the shared login is still exactly what that seat started from —
+every file of it, and the absence of every file it did not hold, so a refresh
+of one file is never written beside another writer's newer copy of the other.
+If anything else wrote in between — another seat's refresh, your `crewlet llm
 login` or `-from-host` while seats were mid-call, a `crewlet llm logout` — the
 newer login is kept and the seat's is dropped, with a `cli_agent_login_superseded`
 warning naming the provider and the file (never what either holds) and how the
@@ -1428,7 +1474,27 @@ login. The commands that *make* a login are the one exception: what your
 sign-in stored is written whenever it differs from what the command started
 with, over whatever landed while it ran — a refresh a seat made during a
 browser flow that took minutes, or even your own `-from-host` in another
-terminal — because the later of two sign-ins is the one you asked for.
+terminal — because the later of two sign-ins is the one you asked for. It is
+written as the **whole** login the sign-in left: a file the CLI left as the
+command found it goes back as it was rather than staying as the other writer
+left it, and a file the sign-in never held is removed rather than kept beside
+your new token, so the result is not one sign-in's token beside another's
+`config.toml`. A file the CLI itself removed during the sign-in is not
+removed, because no CLI's removal reaches the shared directory — a CLI that
+dropped a credential it could not use is no reason to log the fleet out of the
+login it started from. It stays as the shared directory holds it for as long
+as that is still the login the command started from: as the command found it,
+or as a seat or a local coding box refreshed it while you signed in, which is
+the same login, newer. Once one of *your* writes has replaced the login
+instead — a `-from-host` in another terminal, or a `crewlet llm logout`
+followed by a `crewlet llm import` — its copy is another sign-in's, so it is
+removed like a file the sign-in never held, and what is left is the login your
+sign-in left, without that file. A refreshed copy and another sign-in's look
+alike — neither is the copy the command started from — so they are told apart
+by a counter in the state directory (`login-epoch`), which a refresh never
+moves and every `-from-host`, `import` and `logout` moves before it writes the
+login. A `-from-host` or an `import` that cannot move it writes nothing; a
+`logout` that cannot still removes the login, and reports the failure.
 
 **A refreshed login that cannot be carried out is kept, not pruned.** If the
 export fails — a host too busy to finish it inside its 30-second bound, a CLI
@@ -1459,10 +1525,15 @@ after you finished the browser flow keeps the login there
 runs the CLI for that state directory carries it out before anything else —
 over a refresh a seat made meanwhile, since it is your sign-in, but never over
 a login of record you replaced after it finished: a `-from-host`, a `crewlet
-llm import` or a `crewlet llm logout` since then wins, and the kept login is
-dropped with `cli_agent_login_superseded` (`shared=replaced`). A bundle the
-engine restores at boot into the empty directory the failed login left is not
-one of those, so your sign-in still lands over it. A `status` or a vendor's
+llm import` or a `crewlet llm logout` since then wins — one that stopped before
+its write landed included, since each moves `login-epoch` first — and the
+kept login is dropped with `cli_agent_login_superseded` (`shared=replaced`).
+It counts as finished when its command, once the export has failed, reads
+`login-epoch` under the lock those writes take, so a write part way through at
+that moment counts wholly before it or wholly after; where it cannot be read
+then, a write since the sign-in began wins too. A
+bundle the engine restores at boot into the empty directory the failed login
+left is not one of those, so your sign-in still lands over it. A `status` or a vendor's
 own logout that cannot carry the kept login out is refused, naming the way
 out: `crewlet llm login` itself replaces a kept login it cannot carry out and
 says so on your terminal (`cli_agent_login_discarded`), and `crewlet llm
