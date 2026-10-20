@@ -172,7 +172,11 @@ function mount(
   base: Record<string, unknown> = QUIET,
 ) {
   const store = new Store();
-  store.applyHealth(healthFrame({ nodes: 1 }));
+  // A SHORT ANSWER'S HEALTH IS SHORT TOO: the live push this node seeded at
+  // boot missed the node every other short answer missed.
+  store.applyHealth(
+    healthFrame({ nodes: 1, ...(base === PARTIAL ? { seeded_from: SHORT_A_NODE } : {}) }),
+  );
   store.applyOrg(ORG as never);
   store.applySeats([] as never);
   const socket = new LiveSocket(store);
@@ -447,7 +451,6 @@ const NO_GAP: Record<string, string> = {
     "its first choice is the agents working now, the live push; the tracker's figures are held in Kpis.test.tsx",
   "home.shortcut": "a link, which reads nothing",
   "live.runs": "the runs' answer and the push carry no flag",
-  "live.events": "the push; what its seed could not account for is health's, not a question's",
   "settings.nodes": "the fleet's answer carries no flag",
   "integrations.connected": "its coverage is the traffic counts', which the card does not draw",
   "settings.mcp-servers": "the servers' answer carries no flag",

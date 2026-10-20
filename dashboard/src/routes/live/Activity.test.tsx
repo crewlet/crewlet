@@ -24,6 +24,8 @@ import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
+import { healthFrame } from "~/test/health.ts";
+import type { EngineHealth } from "~/contract/health.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -346,10 +348,12 @@ async function mountAt(
     what === "events"
       ? { events: [], next: null, exhausted: true }
       : { bucket: "hour", bars: [], total: 0, failed: 0, by_category: {} },
+  health?: EngineHealth,
 ) {
   location.hash = hash;
   const asked: { what: string; params: Record<string, unknown> }[] = [];
   const store = new Store();
+  if (health) store.applyHealth(health);
   for (const row of live) store.applyEvent(row as never);
   const socket = new LiveSocket(store);
   (
@@ -450,6 +454,26 @@ test("failures only is a filter the engine applies", async () => {
   });
   expect(screen.getByText("No older event in this window matches these filters.")).toBeTruthy();
   expect(screen.queryByText(/retained history/)).toBeNull();
+  location.hash = "#/";
+});
+
+// THE LIVE ROWS ARE THE PUSH, seeded at this node's boot from every node it
+// could reach: a node the seed missed is a node this log is missing too.
+//
+// Mutation: leave `seeded_from` out of the note, and node-c is not named.
+test("a live log seeded without a node names it", async () => {
+  await mountAt("#/live/events", [], undefined, {
+    ...healthFrame(),
+    seeded_from: {
+      complete: false,
+      nodes: [
+        { id: "node-a", answered: true, error: "" },
+        { id: "node-c", answered: false, error: "no answer inside the read budget" },
+      ],
+    },
+  });
+  expect(screen.getByText("node-c")).toBeTruthy();
+  expect(screen.getByText(/This log is missing 1 node\./)).toBeTruthy();
   location.hash = "#/";
 });
 
