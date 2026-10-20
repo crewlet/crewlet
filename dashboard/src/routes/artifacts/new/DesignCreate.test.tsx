@@ -198,7 +198,7 @@ test("Cancel asks before discarding what was laid out", () => {
   pickLanding();
   fireEvent.click(screen.getAllByRole("button", { name: "Cancel" })[0]!);
   expect(screen.getByRole("alertdialog", { name: "Discard this design?" })).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Keep working" }));
+  fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
   expect(location.hash).toBe("#/artifacts/new/design");
 });
 
@@ -228,4 +228,13 @@ test("a task refused after the design was made keeps the page, and the next pres
   expect(run).toHaveBeenCalledOnce();
   expect(fileArtifactTask).toHaveBeenCalledTimes(2);
   expect(location.hash).toBe(`#/artifacts/${ID}`);
+});
+
+// ADD BOARD IS ALWAYS IN REACH: beside the list of boards, and beside the
+// panel's heading for the widths where that list is folded away.
+test("the design's panel carries Add board, for widths where the list of boards is folded away", () => {
+  mount();
+  pickLanding();
+  const head = screen.getByRole("heading", { name: "Design" }).parentElement!;
+  expect(within(head).getByRole("button", { name: "Add board" })).toBeTruthy();
 });

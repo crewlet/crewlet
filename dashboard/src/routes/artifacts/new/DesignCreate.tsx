@@ -44,7 +44,6 @@ import {
   Menu,
   Select,
   Textarea,
-  useMediaMatch,
   useToast,
   type CanvasBoardSelection,
   type CanvasHandle,
@@ -174,9 +173,6 @@ export function DesignCreate() {
       (builder ? undefined : "Add an agent to the chart to build it.") ??
       (briefBudget.over ? "Shorten the brief." : hold));
   const busy = create.busy || ask.busy;
-  // A PHONE'S BAR HOLDS THE VERB ALONE: the agent's name is in the panel, and
-  // beside the page's title it pushed the title out of the bar.
-  const narrow = useMediaMatch("(width < 40rem)");
 
   const submit = useCallback(async () => {
     if (!draft || blocked || busy || !builder) return;
@@ -271,15 +267,14 @@ export function DesignCreate() {
       tools={tools}
       onCancel={() => (dirty ? setConfirmLeave(true) : leave())}
       action={{
-        label: narrow
-          ? made
-            ? "Ask"
-            : "Create"
-          : made
-            ? `Ask ${builder?.seat.name ?? "the agent"}`
-            : builder
-              ? `Create and ask ${builder.seat.name}`
-              : "Create design",
+        label: made
+          ? `Ask ${builder?.seat.name ?? "the agent"}`
+          : builder
+            ? `Create and ask ${builder.seat.name}`
+            : "Create design",
+        // A PHONE'S BAR HOLDS THE VERB ALONE: the agent's name is in the
+        // panel, and beside the page's title it pushed the title out.
+        short: made ? "Ask" : "Create",
         icon: <PlusGlyph size="sm" />,
         onSelect: () => void submit(),
         disabledReason: busy ? "Creating the design." : blocked,
@@ -402,15 +397,25 @@ export function DesignCreate() {
                   }}
                   linkError={linkError}
                   who={who}
+                  addBoard={
+                    <AddBoardMenu
+                      disabled={draft.boards.length >= DESIGN_MAX_BOARDS}
+                      onAdd={addPreset}
+                    />
+                  }
                 />
               )}
               {create.answer && create.answer.kind !== "done" && (
-                <Callout variant="danger" title="The design was not created">
+                <Callout variant="danger" title="The design was not created" live="polite">
                   <p>{create.answer.text}</p>
                 </Callout>
               )}
               {made && ask.refusal && (
-                <Callout variant="warning" title="The design is made, and its task was not filed">
+                <Callout
+                  variant="warning"
+                  title="The design is made, and its task was not filed"
+                  live="polite"
+                >
                   <p>{ask.refusal.sentence}</p>
                   <p>
                     Press Ask again to file it, or{" "}
@@ -428,7 +433,7 @@ export function DesignCreate() {
           destructive
           title="Discard this design?"
           message="The boards and brief you laid out are not kept."
-          cancelLabel="Keep working"
+          cancelLabel="Keep editing"
           confirmLabel="Discard"
           onClose={() => setConfirmLeave(false)}
           onConfirm={leave}
@@ -567,6 +572,7 @@ function DesignPanel({
   onLinks,
   linkError,
   who,
+  addBoard,
 }: {
   title: string;
   onTitle: (v: string) => void;
@@ -577,10 +583,15 @@ function DesignPanel({
   onLinks: (next: string[]) => void;
   linkError: string | undefined;
   who: WhoBuildsItState;
+  /** Add board, drawn here where the list of boards that carries it is folded away. */
+  addBoard: ReactNode;
 }) {
   return (
     <div className="design-create-fields">
-      <h2 className="design-create-panel-title">Design</h2>
+      <div className="design-create-panel-head">
+        <h2 className="design-create-panel-title">Design</h2>
+        <span className="design-create-panel-add">{addBoard}</span>
+      </div>
       <FormField label="Name" required error={titleProblem(title)}>
         {(field) => (
           <Input

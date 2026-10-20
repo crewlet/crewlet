@@ -363,6 +363,16 @@
   font-size: var(--font-size-md);
   font-weight: var(--font-weight-semibold);
 }
+/* A SECOND SECTION in the panel (Who builds it) stands apart from the fields
+   above it, by a step more than the fields' own gap. */
+.design-create-fields > .design-create-panel-title:not(:first-child) {
+  margin-top: var(--spacing-3);
+}
+/* Add board beside the panel's heading, for the widths where the list of
+   boards that carries it is folded away. */
+.design-create-panel-add {
+  display: none;
+}
 .design-create-size {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -483,6 +493,9 @@
   }
   .design-create-layers {
     display: none;
+  }
+  .design-create-panel-add {
+    display: contents;
   }
 }
 /* A phone: the canvas over the panel, and the page scrolls. */
