@@ -233,3 +233,43 @@ func TestADesignThatIgnoresTheThemeIsWarnedOnItsFirstBoard(t *testing.T) {
 		t.Errorf("theme warnings %+v, want one on hero.html", found)
 	}
 }
+
+// A DESIGN BEGUN FROM A LAYOUT is published by the engine from the boards the
+// person laid out, each a placeholder page linted as any board, opening on
+// its canvas; a layout on another kind, a design starter with none, and a
+// layout without the starter are refused before a byte moves.
+func TestADesignBeginsFromItsLayout(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, options{})
+	c := h.person("ada", h.opKey("start"))
+	layout := &canvasformat.Layout{Boards: []canvasformat.LayoutBoard{
+		{Title: "Home", W: 1440, H: 1024, Brief: "Hero with a sign-up form"},
+		{Title: "Home", X: 1560, W: 390, H: 844},
+	}}
+	got, _, err := h.svc.Create(t.Context(), c, artifactupload.CreateRequest{
+		Kind: artifacts.KindDesign, Title: "Launch site", Owner: "ada",
+		OwnerKind: c.Authority.Actor.Kind, Starter: true, Layout: layout,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := h.version(got.Artifact, 1)
+	if v.Manifest.Entry != canvasformat.Path || len(v.Manifest.Files) != 3 {
+		t.Fatalf("the starter published %d files opening on %q", len(v.Manifest.Files), v.Manifest.Entry)
+	}
+	if !strings.Contains(h.file(v, "boards/home.html"), "Hero with a sign-up form") ||
+		!strings.Contains(h.file(v, "boards/home-2.html"), "390 by 844") {
+		t.Errorf("the placeholders do not say what each board is for:\n%s", h.file(v, "boards/home.html"))
+	}
+	for _, req := range []artifactupload.CreateRequest{
+		{Kind: artifacts.KindSlides, Title: "Deck", Starter: true, Layout: layout},
+		{Kind: artifacts.KindDesign, Title: "Design", Starter: true},
+		{Kind: artifacts.KindDesign, Title: "Design", Layout: layout},
+		{Kind: artifacts.KindDesign, Title: "Design", Starter: true, Layout: &canvasformat.Layout{}},
+	} {
+		req.Owner, req.OwnerKind = "ada", c.Authority.Actor.Kind
+		if _, _, err := h.svc.Create(t.Context(), h.person("ada", h.opKey("again")), req); !errors.Is(err, artifactupload.ErrInvalid) {
+			t.Errorf("a %s create (starter %v, layout %v) answered %v", req.Kind, req.Starter, req.Layout != nil, err)
+		}
+	}
+}

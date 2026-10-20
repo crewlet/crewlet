@@ -813,6 +813,25 @@ func TestACreateIsOwnedByItsCreator(t *testing.T) {
 	}
 }
 
+// A DESIGN'S LAYOUT REACHES THE PIPELINE AS IT WAS SENT: the boards the
+// person laid out, with their briefs, and the notes beside them.
+func TestADesignLayoutReachesThePipeline(t *testing.T) {
+	t.Parallel()
+	g := newRig(t, true)
+	body := `{"kind":"design","title":"Launch","starter":true,"layout":{` +
+		`"boards":[{"title":"Home","x":0,"y":0,"w":1440,"h":1024,"brief":"Hero"}],` +
+		`"notes":[{"id":"s1","kind":"sticky","x":0,"y":1100,"w":240,"h":160,"text":"Brand"}]}}`
+	if w := g.do(person("dana"), "POST", "/artifacts", body, keyed()...); w.Code != http.StatusCreated {
+		t.Fatalf("a design from a layout: %d %s", w.Code, w.Body)
+	}
+	req := g.pipeline.creates[0]
+	if !req.Starter || req.Layout == nil || len(req.Layout.Boards) != 1 ||
+		req.Layout.Boards[0].Brief != "Hero" || req.Layout.Boards[0].W != 1440 ||
+		len(req.Layout.Notes) != 1 || req.Layout.Notes[0].Text != "Brand" {
+		t.Errorf("the pipeline was asked %+v (layout %+v)", req, req.Layout)
+	}
+}
+
 // EVERY REFUSAL OF THE PIPELINE AND THE DOMAIN HAS ITS OWN ANSWER, so a client
 // branches on a code, and none of them reads as the node failing.
 func TestEveryRefusalOfAPublishHasItsOwnAnswer(t *testing.T) {

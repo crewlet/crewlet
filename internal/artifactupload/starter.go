@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/canvasformat"
 	"github.com/crewlet/crewlet/internal/artifacts/docindex"
 	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
 )
@@ -12,17 +13,29 @@ import (
 // starter is the content a create that asks for its kind's starter publishes:
 // the files, inline, and the entry they open on. A kind's starter is its
 // format's, so the engine holds it and holds it to that format like any
-// version; a kind whose format has none is refused.
+// version; a kind whose format has none is refused. A design's starter is the
+// layout the person drew (its boards as placeholder pages), which only a
+// design names, and a design always names.
 //
 // THE ENGINE'S RATHER THAN THE CLIENT'S because a create from the dashboard
 // carries no upload, and a deployment whose object store presigns transfers
 // sends them to an origin the dashboard's own policy does not let it reach.
-func starter(kind artifacts.Kind, title string) ([]FileSpec, string, error) {
+func starter(kind artifacts.Kind, title string, layout *canvasformat.Layout) ([]FileSpec, string, error) {
 	var (
 		files map[string][]byte
 		entry string
 	)
-	switch spec, _ := kind.Spec(); spec.Format {
+	spec, _ := kind.Spec()
+	if (layout != nil) != (spec.Format == artifacts.FormatDesign) {
+		return nil, "", fmt.Errorf("%w: a layout is a design's starter, and a design starts from one", ErrInvalid)
+	}
+	switch spec.Format {
+	case artifacts.FormatDesign:
+		var err error
+		if files, err = canvasformat.Starter(title, *layout); err != nil {
+			return nil, "", fmt.Errorf("%w: %w", ErrInvalid, err)
+		}
+		entry = canvasformat.Path
 	case artifacts.FormatSlides:
 		files, entry = slideformat.Starter(title), slideformat.IndexPath
 	case artifacts.FormatDoc:

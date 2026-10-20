@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/canvasformat"
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/artifactupload/edits"
@@ -118,6 +119,11 @@ type CreateRequest struct {
 	// Starter begins the artifact from its kind's starter content (a deck's
 	// four example slides), which the engine holds; it names no files.
 	Starter bool `json:"starter,omitempty"`
+
+	// Layout is a design's starter: the boards and notes the person laid
+	// out, published as placeholder pages. Only with Starter, and only for a
+	// design.
+	Layout *canvasformat.Layout `json:"layout,omitempty"`
 }
 
 // StageNamespace scopes the derivation of a publish's own reservation from the
@@ -141,12 +147,16 @@ func (s *Service) create(ctx context.Context, c artifactsdomain.Call, req Create
 		return artifactsdomain.Published{}, Report{}, fmt.Errorf("%w: kind %q is not one of %v",
 			ErrInvalid, req.Kind, artifacts.Kinds)
 	}
+	if req.Layout != nil && !req.Starter {
+		return artifactsdomain.Published{}, Report{}, fmt.Errorf("%w: a layout is a design's "+
+			"starter: send it with starter", ErrInvalid)
+	}
 	if req.Starter {
 		if req.Upload != "" || len(req.Files) > 0 || req.Entry != "" {
 			return artifactsdomain.Published{}, Report{}, fmt.Errorf("%w: a create from the "+
 				"kind's starter names no upload, files or entry: the starter is all of them", ErrInvalid)
 		}
-		files, entry, err := starter(req.Kind, req.Title)
+		files, entry, err := starter(req.Kind, req.Title, req.Layout)
 		if err != nil {
 			return artifactsdomain.Published{}, Report{}, err
 		}

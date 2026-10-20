@@ -422,6 +422,12 @@ body background.
   edits and deletes notes in the dashboard, and each save is a version that changes `canvas.json`
   alone. Read the head before you publish, and merge onto a layout a person
   changed rather than restoring your own.
+- **Building a design a person laid out.** A design begun on the dashboard's
+  New design page already holds the person's boards, each a placeholder page
+  under `boards/` that says the board's size and what it is for. Read the
+  outline, keep each board's path, place and size, and publish each board's
+  real page over its placeholder (an `edits` or a `files` publish on that
+  path), so the canvas the person drew is the one that fills in.
 - **Publish it** with `crewlet artifacts publish <dir>` (a `canvas.json` makes
   it a `design`), or from an agent with `create_artifact`, `kind: "design"`
   and `source: {sandbox: "dist"}` for a build, or `files`. The entry is
