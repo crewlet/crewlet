@@ -1,0 +1,80 @@
+/*
+ * Where the variant bar sits, and nothing else: every surface, colour, border
+ * and type in it is the kit's own component. It floats at the bottom of the
+ * window, centred, above the shell and below any dialog the app raises, and it
+ * folds to a pill. It never takes pointer events outside its own controls.
+ */
+
+.proto-bar {
+  position: fixed;
+  inset-inline: var(--spacing-4);
+  inset-block-end: var(--spacing-4);
+  z-index: var(--z-index-sticky);
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.proto-bar > * {
+  pointer-events: auto;
+  max-inline-size: 100%;
+}
+
+/*
+ * ONE WIDTH, whatever the summary says: a card sized to its content moved
+ * every variant sideways between pages, and the next click landed on the
+ * wrong one. It is the window less the bar's own inset, up to a bound that
+ * holds six short variant labels ("A · One list") on one row and, centred,
+ * clears the sidebar's foot from a 1200px window up.
+ */
+.proto-bar-card {
+  inline-size: min(100%, 720px);
+}
+
+.proto-bar-head,
+.proto-bar-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-3);
+}
+
+/* The title gives way to the controls rather than pushing them onto a row of
+   their own: it is the one thing on the bar a reader already knows. */
+.proto-bar-title {
+  flex: 1 1 0;
+  min-inline-size: 0;
+}
+
+.proto-bar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--spacing-1);
+  margin-inline-start: auto;
+}
+
+.proto-bar-foot {
+  margin-block-start: var(--spacing-2);
+}
+
+.proto-bar-variants {
+  margin-block-start: var(--spacing-1);
+}
+
+.proto-bar-summary {
+  flex: 1 1 18rem;
+  margin: 0;
+}
+
+.proto-bar-keys {
+  white-space: nowrap;
+}
+
+/* No keyboard to press them on, and no room to say so. */
+@media (width < 640px) {
+  .proto-bar-keys {
+    display: none;
+  }
+}

@@ -1,0 +1,84 @@
+/* The hand-written pages: a tool on one column, its inputs then its answer. */
+
+.tool {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  max-width: 720px;
+  margin: 0 auto;
+  padding: var(--spacing-6) var(--spacing-4);
+}
+
+.tool h1 {
+  margin: 0;
+  font-size: var(--font-size-xl);
+}
+
+.tool p {
+  margin: 0;
+  color: var(--color-text-secondary);
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  padding: var(--spacing-4);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-elevated);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+
+.field span {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+
+.field input,
+.field select {
+  min-height: var(--size-control-md);
+  padding: 0 var(--spacing-2);
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-background);
+  color: var(--color-text-primary);
+  font: inherit;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: var(--spacing-3);
+}
+
+.result {
+  display: flex;
+  flex-direction: column;
+}
+
+.result div {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--spacing-3);
+  padding: var(--spacing-2) 0;
+  border-bottom: 1px solid var(--color-border-default);
+}
+
+.result div:last-child {
+  border-bottom: 0;
+}
+
+.result b {
+  font-variant-numeric: tabular-nums;
+}
+
+.hint {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}

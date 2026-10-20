@@ -1,0 +1,10 @@
+/* One artboard of a design: a single screen filling its frame. */
+
+body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  box-sizing: border-box;
+  padding: var(--spacing-5) var(--spacing-4);
+  overflow: auto;
+}
