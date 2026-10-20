@@ -182,7 +182,7 @@ the engine mirrors no state it would have to keep in step. See
 
 ### Artifacts
 
-Twelve more, registered on every node that takes artifact uploads (one with an
+Thirteen more, registered on every node that takes artifact uploads (one with an
 object store, a coordination store and a data node to reach), whatever tracker
 or knowledge base the company runs: nine for the artifact and four for its
 datastore. Each tool is named for its authority row, and the operator catalogue

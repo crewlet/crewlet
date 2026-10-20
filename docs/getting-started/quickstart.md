@@ -556,10 +556,10 @@ what the company has done. With no company activity yet each card says so, and
 a condition the engine itself raised takes over the sentence under the
 greeting.
 
-The sidebar is the product in ten rows — Home, Inbox, My work, Work, Agents,
-Chat, Live, Knowledge, Spend, Settings — and each workspace's sections are tabs
-in its page header, or Chat's rail beside its rooms. `g` then a letter jumps
-between them, and `?` lists every key.
+The sidebar is the product in eleven rows — Home, Inbox, My work, Work,
+Agents, Chat, Live, Knowledge, Artifacts, Spend, Settings — and each
+workspace's sections are tabs in its page header, or Chat's rail beside its
+rooms. `g` then a letter jumps between them, and `?` lists every key.
 While an agent is working, the Live row counts the seats at work and a
 **Running** group under the sidebar's shortcuts (after Projects, Pinned and
 Starred) lists up to four running turns. Press one to watch it — its

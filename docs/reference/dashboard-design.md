@@ -395,7 +395,7 @@ share does not move.
 ## Information architecture
 
 **One sidebar, and three nouns that keep it one.** The sidebar lists where a
-reader can go — ten **workspaces** — and the few objects they keep coming back
+reader can go — eleven **workspaces** — and the few objects they keep coming back
 to: the views and artifacts they pinned and the pages they starred. A
 workspace's own **sections** are paths drawn as tabs in its page header
 (Settings draws its eleven, and cross-links to the reader's Account and to
