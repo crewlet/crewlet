@@ -367,10 +367,20 @@ buildx run as a release does, twice in alternating order): 187–191 s with
 Debian's git, 246–248 s with the pin's, so **about a minute more a release** —
 the two git stages compile beside the arm64 runtime stage's emulated
 `apt-get` and slow it from 175 s to 214 s — where a stage built under QEMU
-would add about fourteen minutes. These are that machine's figures; the
-release runner's is the image step of the snapshot job, which every pull
-request touching the pin or the recipe runs. With the pin and the recipe
-unchanged, a builder that keeps its layer cache pays none of it.
+would add about fourteen minutes. Those are that development machine's
+figures. On the release runner — GitHub's `ubuntu-latest`, in the snapshot
+job of `release.yml`, whose goreleaser step builds the four binaries, their
+archives and both platforms' images — that step took 10 min 31 s with the
+pin's git ([run 39377818703](https://github.com/crewlet/crewlet/actions/runs/39377818703),
+commit `5ccb7d89a`) against 9 min 46 s with Debian's
+([run 39258293385](https://github.com/crewlet/crewlet/actions/runs/39258293385),
+the newest successful snapshot run of a head without the git stage): 45 s
+more, the same minute. Each is one run on a shared runner, whose speed moves
+from run to run, and the two heads differ in more than the git stage, so read
+the difference as about a minute and no finer. Every pull request touching the
+pin or the recipe runs the snapshot job again, and its goreleaser step is where
+a later figure is read. With the pin and the recipe unchanged, a builder that
+keeps its layer cache pays none of it.
 The image checks its own git as it is built (see
 [What CI already guards](#what-ci-already-guards)), and it carries git's licence
 texts, its source tarball, the recipe and a `SOURCE` file under
