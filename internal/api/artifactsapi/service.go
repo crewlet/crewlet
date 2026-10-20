@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactserve"
 	"github.com/crewlet/crewlet/internal/artifactupload"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/costlimit"
 	"github.com/crewlet/crewlet/internal/objectives"
 	"github.com/crewlet/crewlet/internal/objstore"
 )
@@ -69,6 +70,8 @@ type Pipeline interface {
 		artifactsdomain.Published, artifactupload.Report, error)
 	AddAsset(ctx context.Context, c artifactsdomain.Call, id artifacts.ID, upload, name string) (
 		artifactsdomain.Asset, error)
+	Check(ctx context.Context, c artifactsdomain.Call, kind artifacts.Kind, entry string,
+		files []artifactupload.CheckFile) (artifactupload.CheckReport, error)
 }
 
 // Objects is the object store a version's bytes are read back through, each
@@ -148,6 +151,9 @@ type Service struct {
 	ready     Beacon
 	pace      func() time.Time
 
+	// checks is the node's budget for page checks ([Service.check]).
+	checks *costlimit.Limiter
+
 	// decks, docs, boards and canvases are what this node read of each
 	// version for the dashboard, through the kind's format.
 	decks    *formatCache[slideformat.Deck]
@@ -185,7 +191,8 @@ func New(opts Options) (*Service, error) {
 	}
 	return &Service{gate: opts.Gate, reads: opts.Reads, writes: opts.Writes, uploads: opts.Uploads,
 		objects: opts.Objects, workItems: opts.WorkItems, frames: opts.Frames, ready: opts.Ready, pace: pace,
-		decks: newDeckCache(opts.Objects), docs: newDocCache(opts.Objects),
+		checks: newCheckLimiter(pace),
+		decks:  newDeckCache(opts.Objects), docs: newDocCache(opts.Objects),
 		boards: newBoardCache(opts.Objects), canvases: newCanvasCache(opts.Objects)}, nil
 }
 
@@ -235,6 +242,7 @@ func (s *Service) Routes(mux authz.Mux) error {
 		{patternTransfer, pre, s.transfer},
 		{"POST /artifacts", create, s.create},
 		{"GET /artifacts/starters/slides", pre, s.slidesStarters},
+		{"POST /artifacts/checks", create, s.check},
 		{"POST /artifacts/{id}/versions", pre, s.publish},
 		{"POST /artifacts/{id}/versions/{n}/restore", pre, s.restoreVersion},
 		{"PATCH /artifacts/{id}", pre, s.patch},

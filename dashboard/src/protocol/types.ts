@@ -5359,6 +5359,24 @@ export interface ArtifactUploadIntent {
   transfers?: ArtifactTransfer[];
 }
 
+/**
+ * One thing the publish linter found in a page (`lint.Finding`): a refusal
+ * that refuses the publish, or a warning it lands with. `line` is 0 where the
+ * finding is about the version rather than one line of it.
+ */
+export interface ArtifactLintFinding {
+  path: string;
+  line?: number;
+  code: string;
+  message: string;
+}
+
+/** `POST /artifacts/checks` (`artifactupload.CheckReport`): what a publish of the files would say. */
+export interface ArtifactCheckAnswer {
+  refusals: ArtifactLintFinding[];
+  warnings: ArtifactLintFinding[];
+}
+
 /** One tab of a doc, with its Markdown (`docindex.Tab`). */
 export interface DocTab {
   path: string;

@@ -99,6 +99,12 @@ export const ARTIFACT_ICON_MAX_BYTES = 40;
 /** The longest version label, in UTF-8 bytes (`artifacts.MaxLabelBytes`). */
 export const ARTIFACT_LABEL_MAX_BYTES = 60;
 
+/** The most files one page check reads (`artifactupload.MaxCheckFiles`). */
+export const ARTIFACT_CHECK_MAX_FILES = 64;
+
+/** The most text one page check reads, in bytes across its files (`artifactupload.MaxCheckBytes`). */
+export const ARTIFACT_CHECK_MAX_BYTES = 2097152;
+
 /** The most tabs one doc holds (`docindex.MaxTabs`). */
 export const DOC_MAX_TABS = 32;
 

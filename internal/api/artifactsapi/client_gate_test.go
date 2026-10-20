@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts/docindex"
 	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/artifactupload"
 	"github.com/crewlet/crewlet/internal/clientsource"
 )
 
@@ -112,6 +113,8 @@ func TestTheDashboardBoundsArtifactTextAtTheEnginesCaps(t *testing.T) {
 		"ARTIFACT_ICON_MAX_BYTES":        artifacts.MaxIconBytes,
 		"ARTIFACT_LABEL_MAX_BYTES":       artifacts.MaxLabelBytes,
 		"PRESENCE_FRAMES_PER_SECOND":     artifacts.PresenceClientRate,
+		"ARTIFACT_CHECK_MAX_FILES":       artifactupload.MaxCheckFiles,
+		"ARTIFACT_CHECK_MAX_BYTES":       artifactupload.MaxCheckBytes,
 		"DOC_MAX_TABS":                   docindex.MaxTabs,
 		"DOC_TAB_TITLE_MAX_BYTES":        docindex.MaxTitleBytes,
 		"DECK_PLAN_MAX_SLIDES":           slideformat.MaxPlanSlides,

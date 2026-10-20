@@ -11295,6 +11295,215 @@ a.live-row:focus-visible {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* NEW HTML PAGE (`routes/artifacts/new/html/`): two panes under the bar,
+   what the person brings on the left and what becomes of it on the right
+   (the draft's live page, the checks, or the task an agent is sent). Each
+   pane scrolls inside itself and the editor takes the height left; under
+   900px the panes stack and the body scrolls as one. */
+.html-create {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-columns: minmax(0, 11fr) minmax(0, 9fr);
+  min-width: 0;
+  min-height: 0;
+}
+.html-create-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+  min-height: 0;
+  padding: var(--spacing-4) var(--spacing-5) var(--spacing-5);
+  overflow: auto;
+  border-right: 1px solid var(--color-border-default);
+}
+.html-create-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2);
+}
+.html-create-pick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-1);
+}
+.html-create-source {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  min-height: 22rem;
+}
+.html-create-drop {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+.html-create-binary {
+  display: grid;
+  flex: 1 1 auto;
+  place-content: center;
+  justify-items: center;
+  gap: var(--spacing-2);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+.html-create-binary p {
+  margin: 0;
+}
+.html-create-caps {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
+  gap: var(--spacing-3) var(--spacing-4);
+  min-width: 0;
+}
+/* The starting points as a grid of tiles rather than a column of rows: six
+   short answers read at a glance side by side. */
+.html-create-starters {
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+}
+.html-create-first-action {
+  display: grid;
+  justify-items: center;
+  gap: var(--spacing-2);
+}
+.html-create-keys {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
+}
+.html-create-cap {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+.html-create-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+  min-height: 0;
+  padding: var(--spacing-3) var(--spacing-5) var(--spacing-5);
+  overflow: auto;
+}
+.html-create-pane {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-height: 0;
+}
+.html-create-pane > .artifact-frame-box {
+  flex: 1 1 auto;
+  min-height: 0;
+  gap: 0;
+}
+.html-create-pane .artifact-frame {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 24rem;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+}
+.html-create-preview-wait {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 24rem;
+}
+.html-create-preview-wait > * {
+  flex: 1 1 auto;
+}
+.html-create-first {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  justify-content: center;
+  gap: var(--spacing-3);
+  min-height: 20rem;
+}
+.html-create-checks {
+  display: grid;
+  gap: var(--spacing-2);
+}
+.html-create-checks-said {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.html-create-leave {
+  margin: 0;
+}
+.html-create-ask {
+  gap: var(--spacing-5);
+  padding-top: var(--spacing-4);
+}
+.html-create-side-title {
+  margin: 0 0 var(--spacing-2);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+}
+.html-create-sent-title {
+  margin: 0 0 var(--spacing-2);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+}
+.html-create-sent-to {
+  margin: var(--spacing-2) 0 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.html-create-sent-body {
+  margin: 0;
+  padding: var(--spacing-3);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-inset);
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  line-height: var(--font-line-height-normal);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+@media (width < 900px) {
+  /* STACKED, THE PAGE GROWS WITH WHAT IT HOLDS and the body scrolls it:
+     held to the body's height, the two rows were squeezed over each other. */
+  .html-create {
+    flex: none;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .html-create-main,
+  .html-create-side {
+    min-height: auto;
+    overflow: visible;
+  }
+  .html-create-main {
+    border-right: 0;
+    border-bottom: 1px solid var(--color-border-default);
+  }
+}
+@media (width < 640px) {
+  .html-create-main,
+  .html-create-side {
+    padding-right: var(--spacing-4);
+    padding-left: var(--spacing-4);
+  }
+  /* A phone has no Command+Enter to hint at. */
+  .html-create-keys {
+    display: none;
+  }
+}
 .artifact-loading,
 .artifact-trashed {
   min-width: 0;
