@@ -10642,6 +10642,190 @@ a.live-row:focus-visible {
   justify-content: center;
   padding: var(--spacing-5);
 }
+/* A NEW SHEET (`routes/artifacts/new/SheetCreate.tsx`): the title and the
+   live grid in the main column, the ways in and the row policy in a rail
+   beside it, stacked under it below a laptop's width. The grid is as tall as
+   its rows, up to what the window leaves, so Add row sits under the last. */
+.sheet-create {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(272px, 24vw, 320px);
+  align-items: start;
+  gap: clamp(var(--spacing-6), 3vw, var(--spacing-8));
+  box-sizing: border-box;
+  min-height: 100%;
+  padding: var(--spacing-7) var(--spacing-8) var(--spacing-8);
+}
+.sheet-create-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+  --crewlet-sheet-max-height: calc(100vh - 280px);
+  --crewlet-sheet-min-height: 160px;
+}
+.sheet-create-head {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+.sheet-create-head > :first-child {
+  flex: none;
+}
+.sheet-create-title {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.sheet-create-title-input {
+  box-sizing: border-box;
+  width: 100%;
+  margin: 0;
+  padding: var(--spacing-1) var(--spacing-2);
+  margin-inline-start: calc(var(--spacing-2) * -1);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: var(--font-size-2xl);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--font-line-height-tight);
+}
+.sheet-create-title-input::placeholder {
+  color: var(--color-text-tertiary);
+}
+.sheet-create-title-input:hover {
+  background: var(--color-surface-hover);
+}
+/* FOCUSED, THE TITLE IS UNDERLINED in the focus ink rather than boxed: it
+   is the page's heading being written, and a ring round it read as a form. */
+.sheet-create-title-input:focus-visible {
+  outline: none;
+  background: transparent;
+  box-shadow: inset 0 -2px 0 var(--color-focus);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+}
+.sheet-create-source,
+.sheet-create-hint,
+.sheet-create-note {
+  margin: 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+  line-height: var(--font-line-height-normal);
+}
+.sheet-create-source {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+.sheet-create-source strong {
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-medium);
+}
+.sheet-create-rail {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-6);
+  min-width: 0;
+}
+.sheet-create-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+/* A way in: its name, and its columns as their type glyphs, in a quiet ink. */
+.sheet-create-start {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+.sheet-create-start-columns {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  color: var(--color-text-tertiary);
+}
+.sheet-create-import {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-3);
+}
+.sheet-create-import > .crewlet-checkbox,
+.sheet-create-import > :last-child:not(button):not(.sheet-create-import-hint) {
+  flex-basis: 100%;
+}
+.sheet-create-import-hint {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+/* Import, before a file: the grid's place is the target to choose or drop one. */
+.sheet-create-drop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-2);
+  min-height: 240px;
+  padding: var(--spacing-6);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-subtle);
+  color: var(--color-text-secondary);
+  font: inherit;
+  text-align: center;
+  cursor: pointer;
+}
+.sheet-create-drop:hover {
+  border-color: var(--color-border-strong-hover);
+  background: var(--color-surface-hover);
+}
+.sheet-create-drop:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+.sheet-create-drop-title {
+  color: var(--color-text-primary);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
+}
+.sheet-create-drop-detail {
+  max-width: 44ch;
+  font-size: var(--font-size-sm);
+}
+/* A file held over the page: the whole body says it will take it. */
+.sheet-create[data-dropping]::after {
+  content: "Drop the file to start from it";
+  position: absolute;
+  inset: var(--spacing-3);
+  z-index: var(--z-index-sticky);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed var(--color-focus);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-veil);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
+  pointer-events: none;
+}
+@media (width < 1024px) {
+  .sheet-create {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--spacing-7);
+    padding: var(--spacing-5) var(--spacing-4) var(--spacing-7);
+  }
+  .sheet-create-rail {
+    position: static;
+  }
+  .sheet-create-title-input {
+    font-size: var(--font-size-xl);
+  }
+}
 .artifact-loading,
 .artifact-trashed {
   min-width: 0;
