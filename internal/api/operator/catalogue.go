@@ -299,10 +299,10 @@ func New(opts Options) (*Server, error) {
 	case opts.Audit == nil:
 		return nil, ErrNoAudit
 	case opts.Runs.Desk == nil:
-		return nil, fmt.Errorf("%w: Options.Runs.Desk (answer_run) is nil", ErrNoSeatControls)
+		return nil, fmt.Errorf("%w: Options.Runs.Desk (%s) is nil", ErrNoSeatControls, builtin.AnswerRunTool)
 	case opts.Pauses.Pauses == nil:
-		return nil, fmt.Errorf("%w: Options.Pauses.Pauses (pause_seat, resume_seat) is nil",
-			ErrNoSeatControls)
+		return nil, fmt.Errorf("%w: Options.Pauses.Pauses (%s, %s) is nil",
+			ErrNoSeatControls, builtin.PauseSeatTool, builtin.ResumeSeatTool)
 	case opts.Pauses.Announce == nil:
 		return nil, fmt.Errorf("%w: Options.Pauses.Announce (seat_paused, seat_resumed) is nil",
 			ErrNoSeatControls)
@@ -310,10 +310,10 @@ func New(opts Options) (*Server, error) {
 		return nil, fmt.Errorf("%w: Options.Pauses.Org (the chart a pause names a seat of) is nil",
 			ErrNoSeatControls)
 	case opts.Steer.Asker == nil:
-		return nil, fmt.Errorf("%w: Options.Steer.Asker (steer_turn) is nil", ErrNoSeatControls)
+		return nil, fmt.Errorf("%w: Options.Steer.Asker (%s) is nil", ErrNoSeatControls, builtin.SteerTurnTool)
 	case opts.Steer.Wire == nil:
-		return nil, fmt.Errorf("%w: Options.Steer.Wire (steer_turn's signed envelopes) is nil",
-			ErrNoSeatControls)
+		return nil, fmt.Errorf("%w: Options.Steer.Wire (%s's signed envelopes) is nil",
+			ErrNoSeatControls, builtin.SteerTurnTool)
 	case opts.Steer.Runs == nil:
 		return nil, fmt.Errorf("%w: Options.Steer.Runs (the run records %s files a note on) is nil",
 			ErrNoSeatControls, builtin.SteerTurnTool)

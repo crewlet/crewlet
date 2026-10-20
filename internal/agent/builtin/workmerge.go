@@ -57,7 +57,7 @@ func (t *mergeWorkItem) Description() string {
 		"and the duplicate stays readable, so the history of both is intact. " +
 		"Use this rather than closing by hand — a cancelled item with " +
 		"subtasks still under it hides work nobody will find. Say what you " +
-		"folded and why with comment_on_work_item."
+		"folded and why with " + worklet.CommentOnWorkTool + "."
 }
 
 func (t *mergeWorkItem) Parameters() map[string]any {

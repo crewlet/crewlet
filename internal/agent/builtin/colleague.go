@@ -79,13 +79,14 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
 var log = logging.Get("agent.builtin")
 
 // LookupColleagueTool is the tool's wire name.
-const LookupColleagueTool = "lookup_colleague"
+const LookupColleagueTool = toolname.LookupColleague
 
 // lookupColleague resolves a free-text query to one colleague, or to the list
 // it might be.
@@ -109,11 +110,11 @@ func (t *lookupColleague) Description() string {
 		"handle, the seat kind (agent | human), and every known " +
 		"cross-platform identity; human results add what they own and how " +
 		"to reach them (a mention and an asynchronous reply — never " +
-		"a2a_ask, which addresses agents only). Matching is " +
+		A2AAskTool + ", which addresses agents only). Matching is " +
 		"case-insensitive and falls back to partial and fuzzy matching, so " +
 		"'ceo' finds the role 'Agent CEO'; when more than one colleague " +
 		"matches, the candidate list is returned instead of a guess. Use " +
-		"this before a2a_ask or before @mentioning anyone."
+		"this before " + A2AAskTool + " or before @mentioning anyone."
 }
 
 func (t *lookupColleague) Parameters() map[string]any {
@@ -140,7 +141,7 @@ func (t *lookupColleague) Call(ctx context.Context, args map[string]any) (tools.
 func (t *lookupColleague) CallForTurn(_ context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
 	query := strings.TrimSpace(argString(args, "query"))
 	if query == "" {
-		return failed("lookup_colleague needs a `query`: a handle, a role name, or an id on any connected platform."), nil
+		return failed(LookupColleagueTool + " needs a `query`: a handle, a role name, or an id on any connected platform."), nil
 	}
 	if turn == nil || turn.Org == nil {
 		return refused(tools.RefusalUnavailable,
@@ -168,7 +169,7 @@ func (t *lookupColleague) CallForTurn(_ context.Context, turn *turnctx.Turn, arg
 	// AMBIGUOUS. The list, and the word "ambiguous", so the model asks
 	// again with a handle rather than picking the first row.
 	var b strings.Builder
-	fmt.Fprintf(&b, "%q is ambiguous — %d colleagues match. Call lookup_colleague "+
+	fmt.Fprintf(&b, "%q is ambiguous — %d colleagues match. Call "+LookupColleagueTool+" "+
 		"again with one of these handles:\n", safe, len(found))
 	// EVERY candidate. This message's whole job is to let the model retry
 	// with an exact handle, and a handle it cannot see is one it cannot
@@ -262,11 +263,11 @@ func describe(s colleague.Seat) string {
 		b.WriteString("  reach them: they cannot be reached on any chat or " +
 			"code-host account right now, so there is nobody to mention or " +
 			"message. Work for this seat goes in the PM tool, assigned to " +
-			"the seat. a2a_ask addresses AGENTS only and will not reach them.\n")
+			"the seat. " + A2AAskTool + " addresses AGENTS only and will not reach them.\n")
 	case s.Kind == string(org.KindHuman):
 		b.WriteString("  reach them: mention them on a shared surface and " +
 			"continue without waiting — a person answers asynchronously. " +
-			"a2a_ask addresses AGENTS only and will not reach them.\n")
+			A2AAskTool + " addresses AGENTS only and will not reach them.\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

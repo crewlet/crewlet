@@ -553,7 +553,7 @@ func stated(tool string, written chatlet.Written, look string,
 // `why` is what made it unknown, already said, `opID` the open's operation and
 // `unvouched` whether this node's ledger is what cannot tell.
 func directUnknown(to []string, why, opID string, unvouched bool, again string) tools.Result {
-	next := "Call send_dm again"
+	next := "Call " + SendDMTool + " again"
 	if again != "" {
 		next = capitalize(again)
 	}
@@ -563,7 +563,7 @@ func directUnknown(to []string, why, opID string, unvouched bool, again string) 
 		next += " Until the open reaches this node the same call answers the " +
 			"same way, so if it keeps doing so, say you could not send it."
 	}
-	return failedUnknown(opID, unvouched, fmt.Sprintf("send_dm: whether the "+
+	return failedUnknown(opID, unvouched, fmt.Sprintf(SendDMTool+": whether the "+
 		"conversation with %s could be opened is unknown (%s), so the message "+
 		"was NOT sent — nothing was said. %s", clip(strings.Join(to, ", ")), why, next))
 }
@@ -1061,10 +1061,10 @@ func (t *sendDM) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	to := argStrings(args, "to")
 	switch {
 	case body == "":
-		return failed("send_dm needs a `body`."), nil
+		return failed(SendDMTool + " needs a `body`."), nil
 	case len(to) == 0:
-		return failed("send_dm needs a `to` — the handle of the colleague you " +
-			"are writing to. Use lookup_colleague if you are unsure of it."), nil
+		return failed(SendDMTool + " needs a `to` — the handle of the colleague you " +
+			"are writing to. Use " + LookupColleagueTool + " if you are unsure of it."), nil
 	}
 	// ONE KEY FOR BOTH APPENDS, read once: the open and the post are two
 	// gestures with two verbs, so the store derives two operations from it,
@@ -1312,7 +1312,7 @@ func (t *searchMessages) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	text := strings.TrimSpace(argString(args, "text"))
 	if text == "" {
-		return failed("search_messages needs a `text` — what was said, in " +
+		return failed(SearchMessagesTool + " needs a `text` — what was said, in " +
 			"plain words."), nil
 	}
 	if knowledge.CheckQuery(text) != nil {
@@ -1321,7 +1321,7 @@ func (t *searchMessages) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// index's own refusal crosses to this node as words alone and would
 		// read as chat being unreadable; this says what to send instead.
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
-		return failed(fmt.Sprintf("search_messages' `text` is %d bytes and takes at "+
+		return failed(fmt.Sprintf(SearchMessagesTool+"' `text` is %d bytes and takes at "+
 			"most %d — search on a few words somebody would have said, not a "+
 			"pasted passage.", len(text), knowledge.MaxQueryBytes)), nil
 	}

@@ -117,17 +117,17 @@ func TestTheExecutorsPromptTravelsInItsTwoHalves(t *testing.T) {
 func TestACollectedRunReachesOnlyWhatItsLaunchDid(t *testing.T) {
 	t.Parallel()
 	marker := func(t *testing.T, reg *tools.Registry) {
-		if err := reg.Register(stubTool{name: runner.MarkOnboardedTool, out: "ok"}, tools.OriginBuiltin); err != nil {
+		if err := reg.Register(stubTool{name: toolname.MarkOnboarded, out: "ok"}, tools.OriginBuiltin); err != nil {
 			t.Fatalf("Register: %v", err)
 		}
 	}
 	got := executeRound(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
 		buildOpts{register: marker}, 1, "", nil,
 		run{calls: []llm.ToolCall{{ID: "s", Name: "slack_post"}}, text: "done"}, runner.RunRecord{})
-	if slices.Contains(got.surface.Catalogue, runner.MarkOnboardedTool) {
+	if slices.Contains(got.surface.Catalogue, toolname.MarkOnboarded) {
 		t.Error("the collected executor can reach mark_onboarded")
 	}
-	if slices.Contains(toolNames(got.launch.Surface.ToolDefs()), runner.MarkOnboardedTool) {
+	if slices.Contains(toolNames(got.launch.Surface.ToolDefs()), toolname.MarkOnboarded) {
 		t.Error("the launched run was offered mark_onboarded")
 	}
 }

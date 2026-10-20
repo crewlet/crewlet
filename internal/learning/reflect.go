@@ -18,16 +18,8 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
-
-// ReflectTool is the in-flight builtin an agent calls to write its own memory.
-//
-// The dispatcher reads it as "the LLM already handled persistence this turn".
-// It is an executor builtin, so a call lands in the whole-turn
-// [types.TurnCompleted.AllToolNames], which [Turn.SelfPersisted] reads — never
-// the final-iteration [types.TurnCompleted.ToolSequence], which forgets a call
-// an earlier self_iterate attempt made.
-const ReflectTool = "reflect_and_persist"
 
 // ReflectSeen bounds the dispatcher's memory of turns it has already handled.
 //
@@ -189,7 +181,9 @@ func Settled(outcome string) bool {
 // Settled reports whether the turn reached a terminal outcome.
 func (t Turn) Settled() bool { return Settled(t.Event.ReviewOutcome) }
 
-// SelfPersisted reports whether the turn already wrote its own memory.
+// SelfPersisted reports whether the turn already wrote its own memory: whether
+// it called the executor builtin that writes it, which the dispatcher reads as
+// "the model already handled persistence this turn".
 //
 // It reads EVERY executor iteration's calls. A call in an iteration the
 // reviewer sent back with self_iterate still wrote the memory, and a later
@@ -197,7 +191,7 @@ func (t Turn) Settled() bool { return Settled(t.Event.ReviewOutcome) }
 // final iteration alone, such a turn ran the persist decision a second time
 // over a fact the agent had already written.
 func (t Turn) SelfPersisted() bool {
-	return slices.Contains(t.Event.AllToolNames, ReflectTool)
+	return slices.Contains(t.Event.AllToolNames, toolname.ReflectAndPersist)
 }
 
 // Engaged reports whether the agent actually acted on the trigger.

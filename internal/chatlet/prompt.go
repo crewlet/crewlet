@@ -287,7 +287,7 @@ func handling(meta map[string]string) string {
 	}
 	b.WriteString(readFirst(meta))
 	b.WriteString("\n3. **Take it out of the room only when it belongs out of it.** " +
-		"`send_dm` reaches one person privately; use it for something that " +
+		"`" + SendDMTool + "` reaches one person privately; use it for something that " +
 		"is genuinely between the two of you, never to answer a question " +
 		"that was asked in the open.\n")
 	return b.String()

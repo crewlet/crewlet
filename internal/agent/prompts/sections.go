@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // The shared section builders. Each returns the section's lines, or nil when
@@ -311,7 +312,7 @@ func planRoster(s Seat, a *rosterAllowance) roster {
 // name, a handle or a platform id, so an omission is one call away instead of
 // a dead end.
 func rosterGapLine(n int) string {
-	return "and " + strconv.Itoa(n) + " more — `lookup_colleague` names them"
+	return "and " + strconv.Itoa(n) + " more — `" + toolname.LookupColleague + "` names them"
 }
 
 // rosterHead is the ladder's SECOND rung: the one line that names a report
@@ -505,7 +506,7 @@ func BuildHumanColleaguesNote(s Seat) []string {
 		return nil
 	}
 	note := "Seats marked (human) or **human teammate** — `kind: human` in " +
-		"`lookup_colleague` — are held by people. Reach them with an " +
+		"`" + toolname.LookupColleague + "` — are held by people. Reach them with an " +
 		"@-mention on the team's chat or a comment where the work lives, " +
 		"never over A2A, and hand them work by assigning it in the PM " +
 		"tool. They reply asynchronously: give them the full context, " +
@@ -515,7 +516,7 @@ func BuildHumanColleaguesNote(s Seat) []string {
 		// profile gives, and a direct message is a tool of its own: said
 		// once, here, rather than in every profile.
 		note += " On the company's own chat, mention a person by the @handle " +
-			"their profile gives, or message them directly with `send_dm`."
+			"their profile gives, or message them directly with `" + toolname.SendDM + "`."
 	}
 	return []string{"\n## Human colleagues", note}
 }
@@ -680,7 +681,7 @@ func BuildUnitContextSection(s Seat) []string {
 
 // escalationTool is the tool the escalation guidance names — the one a seat
 // asks a decision through. The guidance renders only when the seat holds it.
-const escalationTool = "comment_on_work_item"
+const escalationTool = toolname.CommentOnWorkItem
 
 // BuildEscalationSection is how a seat asks for a decision it cannot make.
 //
@@ -721,7 +722,7 @@ func BuildEscalationSection(availableTools []string) []string {
 			"off something your role does not own, or one you are genuinely " +
 			"torn on, ask the person who decides with an `ask` and a " +
 			"`decision` — on the work item with `" + escalationTool + "`, or " +
-			"with `create_work_item` when there is no item yet.",
+			"with `" + toolname.CreateWorkItem + "` when there is no item yet.",
 		"Then END THIS TURN BLOCKED ON THAT BRANCH. Do not pick an option " +
 			"yourself and do not wait or poll: finish whatever does not depend " +
 			"on the answer, and stop. Their answer wakes you with the option " +

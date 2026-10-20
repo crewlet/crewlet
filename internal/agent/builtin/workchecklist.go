@@ -47,7 +47,7 @@ func assignmentReason(args map[string]any) (string, string) {
 	if _, assigning := args["assignee"]; !assigning {
 		return "", "`reason` explains an ASSIGNMENT and this call sets no " +
 			"`assignee`. To explain any other change, comment on the item " +
-			"with comment_on_work_item."
+			"with " + worklet.CommentOnWorkTool + "."
 	}
 	if n := utf8.RuneCountInString(reason); n > MaxAssignmentReason {
 		return "", fmt.Sprintf("`reason` is %d characters and an assignment "+

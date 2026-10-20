@@ -1,6 +1,10 @@
 package chatlet
 
-import "slices"
+import (
+	"slices"
+
+	"github.com/crewlet/crewlet/internal/toolname"
+)
 
 // Chatlet's tool names.
 //
@@ -52,7 +56,7 @@ const (
 	// addressed by its id — one call takes handles and the other takes a
 	// room, and a single tool would have to decide which of two arguments
 	// it was given.
-	SendDMTool = "send_dm"
+	SendDMTool = toolname.SendDM
 
 	// ReadChannelTool is a page of a room, or of one thread in it.
 	//
@@ -70,7 +74,7 @@ const (
 	// one beside the board: a transcript is a position in one room and
 	// keeps that room's order, and this ranks a corpus so its answer IS
 	// the order.
-	SearchMessagesTool = "search_messages"
+	SearchMessagesTool = toolname.SearchMessages
 
 	// ListChannelsTool is the rooms this seat is in.
 	ListChannelsTool = "list_channels"

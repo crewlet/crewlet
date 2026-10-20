@@ -106,7 +106,7 @@ func phaseOffering(offered []string) string {
 	switch {
 	case slices.Contains(offered, runner.SubmitReviewTool):
 		return "review"
-	case slices.Contains(offered, runner.MarkOnboardedTool):
+	case slices.Contains(offered, toolname.MarkOnboarded):
 		return "onboarding"
 	default:
 		// Nothing else runs a CLI through the engine's loop on a seat's
@@ -601,14 +601,14 @@ func TestTheExecutorIsNotOfferedTheOnboardingMarker(t *testing.T) {
 	launcher := &playLauncher{}
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
 		buildOpts{launcher: launcher, register: func(t *testing.T, reg *tools.Registry) {
-			if err := reg.Register(stubTool{name: runner.MarkOnboardedTool}, tools.OriginBuiltin); err != nil {
+			if err := reg.Register(stubTool{name: toolname.MarkOnboarded}, tools.OriginBuiltin); err != nil {
 				t.Fatalf("Register: %v", err)
 			}
 		}})
 	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if slices.Contains(toolNames(launcher.last(t).Surface.ToolDefs()), runner.MarkOnboardedTool) {
+	if slices.Contains(toolNames(launcher.last(t).Surface.ToolDefs()), toolname.MarkOnboarded) {
 		t.Error("the executor's run was offered mark_onboarded")
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -91,7 +92,7 @@ func (t *askAndWait) Description() string {
 		fmt.Sprintf("%d", decision.MaxOptions) + " `options`, the one you " +
 		"`recommended` and your `rationale`, never options written into the " +
 		"context. After it is recorded, END YOUR TURN at once: do not call " +
-		"`submit_work`. Their answer arrives as your next prompt in this session, " +
+		"`" + toolname.SubmitWork + "`. Their answer arrives as your next prompt in this session, " +
 		"or, if this machine is gone by then, a fresh run starts from your branch " +
 		"with your question and their answer."
 }
@@ -183,7 +184,7 @@ func (t *askAndWait) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"nothing can wait on a question here. End your turn."), nil
 	}
 	return tools.Result{Output: "Your question is recorded and has been put to a person. " +
-		"END YOUR TURN NOW: stop working and do not call `" + "submit_work" + "`. Their " +
+		"END YOUR TURN NOW: stop working and do not call `" + toolname.SubmitWork + "`. Their " +
 		"answer arrives as your next prompt in this session, or, if this machine is gone " +
 		"by then, a fresh run starts from your branch with your question and their answer."}, nil
 }

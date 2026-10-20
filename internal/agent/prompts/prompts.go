@@ -87,6 +87,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // Phase names the pass a prompt is built for. The values are the ones an
@@ -250,7 +251,7 @@ type SkillCatalogue interface {
 
 const skillCatalogueHeader = "\n## Tool skills" +
 	"\nHow this company uses specific tools and MCP servers, one line per " +
-	"skill. `load_tool_skill(key)` fetches a skill's full body when the " +
+	"skill. `" + toolname.LoadToolSkill + "(key)` fetches a skill's full body when the " +
 	"summary is not enough."
 
 // skillCatalogueReviewHeader is the catalogue's header in Review, which has no
@@ -263,7 +264,7 @@ const skillCatalogueReviewHeader = "\n## Tool skills" +
 
 const skillCatalogueRequiredNote = "\nThe engine rejects calls to the tools " +
 	"an entry marked `(required — load before use)` covers until you have " +
-	"loaded that skill with `load_tool_skill` in this session."
+	"loaded that skill with `" + toolname.LoadToolSkill + "` in this session."
 
 const requiredMarker = " (required — load before use)"
 

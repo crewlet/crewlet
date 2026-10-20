@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // The verbs this engine authorizes.
@@ -37,7 +38,7 @@ const (
 	ActionPageRead      Action = "get_page"
 	ActionPageList      Action = "list_pages"
 	ActionKnowledgeRead Action = "search_knowledge"
-	ActionColleagueRead Action = "lookup_colleague"
+	ActionColleagueRead Action = toolname.LookupColleague
 	// A PROJECT'S FILES are its work's output — reports, specs, notes —
 	// so reading one is reading the board, asked of the PROJECT the file
 	// is kept in (the object is that project, by its key).
@@ -46,22 +47,22 @@ const (
 
 	// --- the caller's own working state ----------------------------- //
 	ActionSkillUse      Action = "use_skill"
-	ActionSkillLoad     Action = "load_tool_skill"
+	ActionSkillLoad     Action = toolname.LoadToolSkill
 	ActionSkillRefine   Action = "refine_skill"
 	ActionEpisodesQuery Action = "query_episodes"
 	ActionMemoryRefresh Action = "refresh_memory"
-	ActionMemoryPersist Action = "reflect_and_persist"
-	ActionOnboardedMark Action = "mark_onboarded"
+	ActionMemoryPersist Action = toolname.ReflectAndPersist
+	ActionOnboardedMark Action = toolname.MarkOnboarded
 
 	// --- a colleague's ordinary work -------------------------------- //
 	//
 	// AN ASK IS AN AGENT'S, and the only one in this block: a seat whose
 	// role offers it puts a question to a colleague seat, spending that
 	// seat's turn — see [rule.seatOnly].
-	ActionColleagueAsk Action = "a2a_ask"
-	ActionWorkCreate   Action = "create_work_item"
+	ActionColleagueAsk Action = toolname.A2AAsk
+	ActionWorkCreate   Action = toolname.CreateWorkItem
 	ActionWorkUpdate   Action = "update_work_item"
-	ActionWorkComment  Action = "comment_on_work_item"
+	ActionWorkComment  Action = toolname.CommentOnWorkItem
 	ActionWorkMerge    Action = "merge_work_item"
 	ActionPageCreate   Action = "write_page"
 	ActionPageSave     Action = "save_page"
@@ -199,10 +200,10 @@ const (
 	// own membership. Named after the tools, which internal/chatlet declares.
 	ActionChatList   Action = "list_channels"
 	ActionChatRead   Action = "read_channel"
-	ActionChatSearch Action = "search_messages"
+	ActionChatSearch Action = toolname.SearchMessages
 	ActionChatPost   Action = "post_message"
 	ActionChatReply  Action = "reply_in_thread"
-	ActionChatDirect Action = "send_dm"
+	ActionChatDirect Action = toolname.SendDM
 	ActionChatReact  Action = "react_to_message"
 	ActionChatJoin   Action = "join_channel"
 	ActionChatLeave  Action = "leave_channel"

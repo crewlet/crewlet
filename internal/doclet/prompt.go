@@ -195,7 +195,7 @@ func promptGetContext(b *strings.Builder, meta map[string]string) {
 		return
 	}
 	b.WriteString("\n## Get full context" +
-		"\nRead the page with `get_page` before deciding whether anything is " +
+		"\nRead the page with `" + GetPageTool + "` before deciding whether anything is " +
 		"needed of you: this notice carries what changed, not the page.\n")
 	if url := meta["url"]; url != "" {
 		b.WriteString("Link: " + url + "\n")
@@ -220,9 +220,9 @@ func promptHandling(b *strings.Builder, meta map[string]string) {
 	}
 	if meta[RoutedViaField] == ViaMention {
 		b.WriteString("\n## How to handle this" +
-			"\nAnswer on the page with `comment_on_page`, so the answer sits " +
+			"\nAnswer on the page with `" + CommentOnPageTool + "`, so the answer sits " +
 			"beside the question. If the answer is a change to the page, make " +
-			"it with `save_page`, passing the `version` you read as " +
+			"it with `" + SavePageTool + "`, passing the `version` you read as " +
 			"`base_version`, and say in your comment what you changed.\n")
 		return
 	}

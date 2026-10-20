@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -34,8 +35,8 @@ const (
 	UseSkillTool          = "use_skill"
 	QueryEpisodesTool     = "query_episodes"
 	RefreshMemoryTool     = "refresh_memory"
-	ReflectAndPersistTool = "reflect_and_persist"
-	MarkOnboardedTool     = "mark_onboarded"
+	ReflectAndPersistTool = toolname.ReflectAndPersist
+	MarkOnboardedTool     = toolname.MarkOnboarded
 )
 
 // Memory is what the memory tools need from the learning subsystem.
@@ -663,7 +664,7 @@ func (t *reflectAndPersist) Call(ctx context.Context, args map[string]any) (tool
 func (t *reflectAndPersist) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
 	agentID, why := seatAgentID(turn)
 	if why != "" {
-		return refused(tools.RefusalForbidden, "reflect_and_persist "+why), nil
+		return refused(tools.RefusalForbidden, ReflectAndPersistTool+" "+why), nil
 	}
 	if t.diary == nil {
 		return refused(tools.RefusalUnavailable, "Durable memory is not configured on this deployment."), nil
@@ -671,7 +672,7 @@ func (t *reflectAndPersist) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	content := strings.TrimSpace(argString(args, "content"))
 	switch {
 	case content == "":
-		return failed("reflect_and_persist needs `content`: the fact to keep."), nil
+		return failed(ReflectAndPersistTool + " needs `content`: the fact to keep."), nil
 	case len(content) > diaryNoteMax:
 		return failed(fmt.Sprintf(
 			"That note is %d characters and the limit is %d. A note is re-read "+
@@ -736,7 +737,7 @@ func (t *markOnboarded) Call(ctx context.Context, args map[string]any) (tools.Re
 func (t *markOnboarded) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
 	agentID, why := seatAgentID(turn)
 	if why != "" {
-		return refused(tools.RefusalForbidden, "mark_onboarded "+why), nil
+		return refused(tools.RefusalForbidden, MarkOnboardedTool+" "+why), nil
 	}
 	if t.onboarding == nil {
 		return refused(tools.RefusalUnavailable, "Onboarding is not configured on this deployment."), nil

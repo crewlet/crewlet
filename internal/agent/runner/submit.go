@@ -27,13 +27,14 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/structured"
 	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // The names of the two structured-output tools. A phase ENDS by calling its
 // own; that is what turns free prose into a decision the engine can act on.
 const (
-	SubmitWorkTool   = "submit_work"
-	SubmitReviewTool = "submit_review"
+	SubmitWorkTool   = toolname.SubmitWork
+	SubmitReviewTool = toolname.SubmitReview
 )
 
 // workPayload is the wire shape of a submitted piece of work.

@@ -23,6 +23,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // Decision is the judge's answer.
@@ -225,7 +226,7 @@ func (p Policy) Grant(d Decision, used int) int {
 // sentence nothing tests against a run.
 func FinishHint(ph phase.Phase) string {
 	if ph == phase.Onboarding {
-		return "If you cannot finish in this window, call `mark_onboarded` " +
+		return "If you cannot finish in this window, call `" + toolname.MarkOnboarded + "` " +
 			"anyway after persisting what you have read — an onboarding pass " +
 			"that never marks itself done runs again on every turn you take."
 	}

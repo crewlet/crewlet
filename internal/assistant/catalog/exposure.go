@@ -3,6 +3,8 @@ package catalog
 import (
 	"fmt"
 	"slices"
+
+	"github.com/crewlet/crewlet/internal/authz"
 )
 
 // The exposure table: which surface each CURATED tool is built on, one row per
@@ -18,8 +20,10 @@ func asked(question, tool string) Exposure {
 	return Exposure{Question: question, As: AsReadTool, Name: tool}
 }
 
-func proposed(tool, name string) Exposure {
-	return Exposure{Tool: tool, As: AsWriteTool, Name: name}
+// proposed is a curated write executing as verb's operator tool, which the
+// row names by the verb, as [write] does.
+func proposed(verb authz.Action, name string) Exposure {
+	return Exposure{Tool: string(verb), As: AsWriteTool, Name: name}
 }
 
 func routed(route, tool string) Exposure {
@@ -76,30 +80,30 @@ var questionExposures = []Exposure{
 
 // toolExposures are the operator catalogue tools a curated write executes as.
 var toolExposures = []Exposure{
-	proposed("create_work_item", "create_task"),
-	proposed("update_work_item", "update_task"),
+	proposed(authz.ActionWorkCreate, "create_task"),
+	proposed(authz.ActionWorkUpdate, "update_task"),
 	// ONE ROW, TWO TOOLS: comment_on_task and answer_decision both
 	// execute as this one, an answer being a comment that closes a
 	// question.
-	proposed("comment_on_work_item", "comment_on_task"),
-	proposed("set_priorities", "set_my_priorities"),
-	proposed("mark_inbox", "mark_inbox"),
-	proposed("write_page", "create_page"),
-	proposed("save_page", "edit_page"),
-	proposed("answer_run", "answer_coding_run"),
-	proposed("pause_seat", "pause_agent"),
-	proposed("resume_seat", "resume_agent"),
-	proposed("steer_turn", "steer_turn"),
-	proposed("share_artifact", "share_artifact"),
-	proposed("unshare_artifact", "unshare_artifact"),
-	proposed("post_message", "post_chat_message"),
-	proposed("reply_in_thread", "reply_in_chat_thread"),
-	proposed("send_dm", "send_direct_message"),
-	proposed("edit_message", "edit_chat_message"),
-	proposed("delete_message", "delete_chat_message"),
-	proposed("update_channel", "update_chat_room"),
-	proposed("set_channel_members", "set_chat_room_members"),
-	proposed("leave_channel", "leave_chat_room"),
+	proposed(authz.ActionWorkComment, "comment_on_task"),
+	proposed(authz.ActionPrioritiesSet, "set_my_priorities"),
+	proposed(authz.ActionInboxMark, "mark_inbox"),
+	proposed(authz.ActionPageCreate, "create_page"),
+	proposed(authz.ActionPageSave, "edit_page"),
+	proposed(authz.ActionRunAnswer, "answer_coding_run"),
+	proposed(authz.ActionSeatPause, "pause_agent"),
+	proposed(authz.ActionSeatResume, "resume_agent"),
+	proposed(authz.ActionTurnSteer, "steer_turn"),
+	proposed(authz.ActionArtifactShare, "share_artifact"),
+	proposed(authz.ActionArtifactUnshare, "unshare_artifact"),
+	proposed(authz.ActionChatPost, "post_chat_message"),
+	proposed(authz.ActionChatReply, "reply_in_chat_thread"),
+	proposed(authz.ActionChatDirect, "send_direct_message"),
+	proposed(authz.ActionChatEdit, "edit_chat_message"),
+	proposed(authz.ActionChatDelete, "delete_chat_message"),
+	proposed(authz.ActionChatUpdate, "update_chat_room"),
+	proposed(authz.ActionChatMembers, "set_chat_room_members"),
+	proposed(authz.ActionChatLeave, "leave_chat_room"),
 }
 
 // routeExposures are the routes a curated tool reads or proposes on directly,

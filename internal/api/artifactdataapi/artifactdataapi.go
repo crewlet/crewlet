@@ -590,7 +590,7 @@ func writeFailed(w http.ResponseWriter, r *http.Request, key string, err error) 
 	case errors.Is(err, artifactdata.ErrInvalid):
 		httpjson.FailWith(w, http.StatusUnprocessableEntity, httpjson.CodeInvalid, detail)
 	case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
-		operator.Interrupted(w, r, key, "write_artifact_data", err)
+		operator.Interrupted(w, r, key, string(authz.ActionArtifactDataWrite), err)
 	default:
 		unavailable(w, err, "this node could not write the artifact's data")
 	}

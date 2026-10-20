@@ -48,7 +48,7 @@ func (t *getWorkCatalogue) Name() string { return worklet.GetWorkCatalogueTool }
 
 func (t *getWorkCatalogue) Description() string {
 	return "The task types this company declares and the custom fields a task " +
-		"may carry. create_work_item refuses a type that is not here, so read " +
+		"may carry. " + worklet.CreateWorkItemTool + " refuses a type that is not here, so read " +
 		"this before inventing one."
 }
 

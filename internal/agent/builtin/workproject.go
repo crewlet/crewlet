@@ -62,7 +62,7 @@ func (t *writeProject) Name() string { return worklet.WriteProjectTool }
 func (t *writeProject) Description() string {
 	return "Change a project's own settings. `tags` is the one part any seat " +
 		"may add to — declare a label before filing work under it, because " +
-		"create_work_item refuses one this project does not have. Renaming or " +
+		worklet.CreateWorkItemTool + " refuses one this project does not have. Renaming or " +
 		"archiving a tag, declaring project fields, setting the default " +
 		"assignee and setting the target date are the project lead's; archiving " +
 		"the project itself takes a person. A project's name, purpose and " +
