@@ -119,8 +119,8 @@ function UnreadRooms() {
         <WidgetNote>{home.note}</WidgetNote>
       ) : rail.data && !measured ? (
         <WidgetNote>
-          Where you have read to could not be read, so this can&rsquo;t tell which rooms have
-          something new.
+          Unread counts couldn&rsquo;t be read, so this can&rsquo;t tell which rooms have something
+          new.
         </WidgetNote>
       ) : (
         <QueryState

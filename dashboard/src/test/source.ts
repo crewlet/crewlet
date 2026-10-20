@@ -190,3 +190,39 @@ export function memberName(node: Node): string | null {
 export function isLocalSource(source: string): boolean {
   return source.startsWith("./") || source.startsWith("../") || source.startsWith("~/");
 }
+
+/** One piece of text a module ships, and the line it starts on. */
+export interface ShippedText {
+  text: string;
+  line: number;
+}
+
+/**
+ * Every piece of text a module SHIPS: each string literal, each constant part
+ * of a template and each run of JSX text, in source order — and no comment,
+ * which is free to say anything.
+ *
+ * ONE WALK FOR EVERY COPY GATE. Each workspace that holds its sentences to a
+ * rule (no em dash, say) reads them through this rather than through a node
+ * switch of its own, so two gates cannot disagree about what counts as copy:
+ * one that forgot JSX text, or read a template's cooked value where the other
+ * read its raw one, would pass a sentence the other refused.
+ */
+export function shippedText(module: Module): ShippedText[] {
+  const line = lineOf(module.text);
+  const out: ShippedText[] = [];
+  walk(parse(module.text, module.lang), (node: Node) => {
+    const text =
+      node.type === "Literal"
+        ? typeof node.value === "string"
+          ? node.value
+          : ""
+        : node.type === "TemplateElement"
+          ? String((node.value as { raw: string }).raw)
+          : node.type === "JSXText"
+            ? String(node.value)
+            : "";
+    if (text !== "") out.push({ text, line: line(node.start) });
+  });
+  return out;
+}

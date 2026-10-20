@@ -47,9 +47,9 @@ export function PendingMessage({
     row.state === "sending"
       ? "Sending…"
       : row.state === "accepted"
-        ? "Said — waiting for this node to catch up"
+        ? "Sent. Waiting for this node to catch up"
         : row.state === "unknown"
-          ? "Nobody can say whether this landed. It may already be in the room."
+          ? "Couldn’t confirm this was sent. It may already be in the room."
           : row.detail || "Refused.";
   const retryable = row.state === "unknown" || (row.state === "refused" && row.retryable);
   return (
@@ -72,7 +72,7 @@ export function PendingMessage({
               title={blocked || undefined}
               onClick={() => onRetry(row.opId)}
             >
-              {row.state === "unknown" ? "Ask again under the same id" : "Try again"}
+              {row.state === "unknown" ? "Send again" : "Try again"}
             </Button>
           )}
           <Button variant="ghost" size="small" onClick={() => onDiscard(row.opId)}>

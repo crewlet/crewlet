@@ -107,7 +107,7 @@ test("an outcome nobody can establish does not open a conversation", async () =>
   await ready();
   fireEvent.click(open());
 
-  await waitFor(() => expect(screen.getByText(/nobody can say whether/i)).toBeTruthy());
+  await waitFor(() => expect(screen.getByText(/couldn’t confirm/i)).toBeTruthy());
   expect(location.hash).toBe("#/");
   expect(onClose).not.toHaveBeenCalled();
   // The repeat is safe and says why: the same people derive the same room.

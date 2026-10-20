@@ -126,7 +126,7 @@ export function StartRoom({
       // applied from pending from unknown — which is the distinction the
       // report below exists to draw.
       dismissable={!busy}
-      closeDisabledReason="Waiting for the log to acknowledge."
+      closeDisabledReason="Waiting for the engine to answer."
       size="md"
       stackBody
       onSubmit={() => void submit()}
@@ -150,7 +150,7 @@ export function StartRoom({
       <FormField
         label="Name"
         required
-        helper={`Lower-case letters, digits, hyphens and underscores, at most ${MAX_CHANNEL_NAME}. It is the address the create claims, and there is no rename.`}
+        helper={`Lower-case letters, digits, hyphens and underscores, at most ${MAX_CHANNEL_NAME}. A room can’t be renamed.`}
         // THE GRAMMAR FIRST, THEN THE ENGINE. The typed value is refused here
         // before a round trip; a name the engine refused for a reason this
         // client cannot know — somebody else holds it — is the report's.
@@ -184,7 +184,7 @@ export function StartRoom({
 
       <FormField
         label="Who can read it"
-        helper="A public room is readable by every seat in the company, joined or not. A private one is readable only by its members — and its membership is the only way in, so nobody can join it later on their own."
+        helper="Anyone in the company can read a public room, joined or not. Only members can read a private one, and nobody can join it on their own."
       >
         {(field) => (
           <Select
@@ -208,7 +208,7 @@ export function StartRoom({
           topicBudget.over
             ? undefined
             : (topicBudget.line ??
-              "One line saying what is being talked about. It can be changed from the room itself.")
+              "One line saying what’s being talked about. You can change it from the room.")
         }
         error={topicBudget.over ? topicBudget.line : ""}
       >
@@ -232,8 +232,8 @@ export function StartRoom({
         as="fieldset"
         helper={
           kind === "private"
-            ? "You are in it either way. A private room refuses a join, so anybody not named here has to be added by somebody who is already in."
-            : "You are in it either way, and anybody else in the company can join a public room themselves."
+            ? "You’re in it either way. Anyone not named here has to be added by someone already in it."
+            : "You’re in it either way, and anyone in the company can join a public room."
         }
       >
         <TagsInput
@@ -259,9 +259,8 @@ export function StartRoom({
       <StartNote report={report?.taken ? null : report} />
 
       <p className="t-caption muted">
-        A unit’s own room is made by the org chart rather than here: give the unit a channel and the
-        engine creates the room, puts every seat in its subtree in it, and keeps that membership
-        reconciled.
+        A team&rsquo;s own room comes from the org chart. Give the team a channel there, and its
+        room is made with everyone in the team in it.
       </p>
     </Modal>
   );

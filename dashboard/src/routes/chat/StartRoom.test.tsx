@@ -91,7 +91,7 @@ test("a name the grammar refuses is refused here, before anything is sent", asyn
   fireEvent.change(nameField(), { target: { value: "Product Launch!" } });
   // The first illegal character, named — and a space names the hyphen that
   // replaces it, because "invalid name" says nothing a person can act on.
-  expect(screen.getByText(/space is not part of an address/i)).toBeTruthy();
+  expect(screen.getByText(/can’t hold a space/i)).toBeTruthy();
   fireEvent.click(create());
   await new Promise((r) => setTimeout(r, 20));
   expect(presses).toHaveLength(0);
@@ -112,7 +112,7 @@ test("a name somebody else holds comes back as a name to change", async () => {
   await named("launch");
   fireEvent.click(create());
 
-  await waitFor(() => expect(screen.getByText(/already a room/i)).toBeTruthy());
+  await waitFor(() => expect(screen.getByText(/already has that name/i)).toBeTruthy());
   // THE DIALOG STAYS OPEN ON THE FIELD SOMEBODY HAS TO CHANGE, with what they
   // typed still in it, and nothing is navigated to.
   expect(onClose).not.toHaveBeenCalled();
@@ -128,7 +128,7 @@ test("an outcome nobody can establish does not open a room that may not exist", 
   await named("launch");
   fireEvent.click(create());
 
-  await waitFor(() => expect(screen.getByText(/nobody can say whether/i)).toBeTruthy());
+  await waitFor(() => expect(screen.getByText(/couldn’t confirm/i)).toBeTruthy());
   expect(location.hash).toBe("#/");
   expect(onClose).not.toHaveBeenCalled();
   // And it says how to ask again: the create arbitrates on the name, so a
@@ -142,7 +142,7 @@ test("a record this node has not applied is not drawn as a room to walk into", a
   await named("launch");
   fireEvent.click(create());
 
-  await waitFor(() => expect(screen.getByText(/has not applied it yet/i)).toBeTruthy());
+  await waitFor(() => expect(screen.getByText(/not shown here yet/i)).toBeTruthy());
   expect(location.hash).toBe("#/");
 });
 

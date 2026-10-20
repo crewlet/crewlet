@@ -73,22 +73,22 @@ export function nameRefusal(typed: string): string {
   if (bad !== undefined) {
     const what =
       bad === " "
-        ? "a space is not part of an address — a hyphen is how a name is spaced"
-        : `“${bad}” is not part of an address`;
-    return `${what}. A name is lower-case letters, digits, hyphens and underscores: it is claimed at the broker as an address, so it holds nothing else.`;
+        ? "A name can’t hold a space. Use a hyphen instead"
+        : `A name can’t hold “${bad}”`;
+    return `${what}. Use lower-case letters, digits, hyphens and underscores.`;
   }
   if (name.startsWith("-") || name.startsWith("_")) {
-    return "a name starts with a letter or a digit. A leading hyphen or underscore reads as punctuation everywhere the name is rendered, and the engine refuses it.";
+    return "A name starts with a letter or a digit.";
   }
   if (name.length > MAX_CHANNEL_NAME) {
-    return `that is ${name.length} characters and the most a name may be is ${MAX_CHANNEL_NAME}. It is an address people type, so it is bounded rather than cut to fit.`;
+    return `That’s ${name.length} characters, and a name holds at most ${MAX_CHANNEL_NAME}.`;
   }
   // UNREACHABLE THROUGH THE THREE CHECKS ABOVE, and stated rather than left to
   // fall through as "this is fine": the pattern is the authority, so anything
   // it refuses that the sentences above did not explain is still a refusal.
   return validName(name)
     ? ""
-    : `“${name}” is not a channel name: lower-case letters, digits, hyphens and underscores, starting with a letter or a digit, at most ${MAX_CHANNEL_NAME} characters.`;
+    : `“${name}” isn’t a room name. Use lower-case letters, digits, hyphens and underscores, starting with a letter or a digit, at most ${MAX_CHANNEL_NAME} characters.`;
 }
 
 /** Whether this is enough to press Create with: a name, and no refusal. */

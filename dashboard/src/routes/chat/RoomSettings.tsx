@@ -110,7 +110,7 @@ export function RoomSettings({
       icon={<PencilGlyph size="md" />}
       onClose={onClose}
       dismissable={!busy}
-      closeDisabledReason="Waiting for the log to acknowledge."
+      closeDisabledReason="Waiting for the engine to answer."
       size="md"
       stackBody
       onSubmit={() => void submit()}
@@ -160,8 +160,7 @@ export function RoomSettings({
         helper={
           purposeBudget.over
             ? undefined
-            : (purposeBudget.line ??
-              "What the room is for, for somebody deciding whether to be in it. Longer than a topic and read far less often.")
+            : (purposeBudget.line ?? "What the room is for, for someone deciding whether to join.")
         }
         error={purposeBudget.over ? purposeBudget.line : ""}
       >
@@ -182,13 +181,10 @@ export function RoomSettings({
 
       {note && <p className="t-caption muted">{note}</p>}
       <p className="t-caption muted">
-        A room’s name is the address its create claimed, and there is no rename — so it is not on
-        this form. Archiving a room and changing how long its messages are kept are not here either,
-        and nowhere else in the dashboard: both decide what survives on every data node, so they are
-        made deliberately — archiving as <InlineCode>update_channel</InlineCode>’s{" "}
-        <InlineCode>archived</InlineCode> from your own assistant over{" "}
-        <InlineCode>/operator/mcp</InlineCode>, by the room’s creator, its unit’s lead or an admin,
-        and a room’s horizon by an admin, at{" "}
+        A room can&rsquo;t be renamed. Archiving it and how long it keeps messages aren&rsquo;t set
+        in the dashboard. The room&rsquo;s creator, its team&rsquo;s lead or an admin archives it
+        with <InlineCode>update_channel</InlineCode> from your own assistant over{" "}
+        <InlineCode>/operator/mcp</InlineCode>. An admin sets how long it keeps messages with{" "}
         <InlineCode>PUT /chat/channels/{"{id}"}/retention</InlineCode>.
       </p>
     </Modal>

@@ -91,7 +91,7 @@ describe("unread rooms", () => {
       answers: { chat_channels: { ...RAIL, read_state: false } },
     });
     await settle();
-    expect(screen.getByText(/could not be read/)).toBeTruthy();
+    expect(screen.getByText(/couldn’t be read/)).toBeTruthy();
     expect(screen.queryByText("You are caught up")).toBeNull();
     expect(screen.queryByText("#general")).toBeNull();
   });
