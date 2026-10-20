@@ -862,13 +862,13 @@ func Catalogue() []Instrument {
 		{
 			Name: ArtifactsPushLag, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: []string{"kind"},
-			Shows: "How long after the broker stored a committed datastore batch's newest " +
-				"record its `artifact_data` push was handed to this node's sockets " +
-				"(`kind` `data`): the applier's lag plus the fan-out. A datastore " +
-				"change is held to reach the socket within a second. An artifacts " +
-				"movement carries no broker instant, so `artifact_changed` is not " +
-				"measured here; its lag is the artifacts applier's own, in the state " +
-				"log's apply instruments.",
+			Shows: "How long after the broker stored a committed record its push was " +
+				"handed to this node's sockets, by `kind`: `changed` for an artifact's " +
+				"movement (`artifact_changed`) and `data` for a datastore's documents " +
+				"(`artifact_data`) — the applier's lag plus the fan-out, measured " +
+				"whether or not a socket is in the room. A change is held to reach " +
+				"the sockets watching it within a second (the `change_visibility` " +
+				"objective, which counts only the pushes some socket was handed).",
 		},
 		// ---- service objectives -------------------------------------------
 		{

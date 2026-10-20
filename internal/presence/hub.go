@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/objectives"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/signedask"
@@ -34,6 +35,26 @@ type Queue interface {
 type Metrics interface {
 	Add(name string, n uint64, attrs metrics.Attrs)
 	Set(name string, v float64, attrs metrics.Attrs)
+}
+
+// Objectives is the node's service objective meter, as the hub records into
+// it: presence's two best-effort indicators, measured where only the hub can
+// see them.
+//
+//   - PRESENCE JOIN, one event per room a node starts listening on: from the
+//     room's first socket on the node to its peers' members shown — the last
+//     answer to the node's ask applied, or the ask sent where nobody answers,
+//     which is when the room is whole. A join into a room the node already
+//     listens on is shown everybody at once, and is no event.
+//   - PRESENCE CURSOR, one event per member a peer's frame says moved: from
+//     the move, by the instant the peer stamped it, to the frame heard here.
+//     A full roster (a rebroadcast, an answer to an ask) restates members
+//     rather than moving them, and is no event.
+//
+// Satisfied by [*objectives.Meter]; nil records nothing.
+type Objectives interface {
+	Record(n objectives.Name, elapsed time.Duration, answered bool)
+	RecordSince(n objectives.Name, stamp time.Time, answered bool)
 }
 
 // Options configure a hub.
@@ -62,6 +83,9 @@ type Options struct {
 
 	// Metrics records frames and rooms; nil records nothing.
 	Metrics Metrics
+
+	// Objectives times joins and moves ([Objectives]); nil records nothing.
+	Objectives Objectives
 
 	// Coalesce is the shortest interval between two fan-outs of one room
 	// to this node's sockets. Zero takes a second divided by
@@ -130,6 +154,7 @@ type Hub struct {
 	askBudget time.Duration
 	now       func() time.Time
 	metrics   Metrics
+	judge     Objectives
 	coalesce  time.Duration
 	broadcast time.Duration
 	lapse     time.Duration
@@ -179,8 +204,8 @@ func New(opts Options) (*Hub, error) {
 			"newly opened room waits for its peers")
 	}
 	h := &Hub{queue: opts.Queue, wire: opts.Wire, node: opts.Node, askBudget: opts.AskBudget,
-		now: opts.Now, metrics: opts.Metrics, coalesce: opts.Coalesce, broadcast: opts.Broadcast,
-		lapse: opts.TypingLapse,
+		now: opts.Now, metrics: opts.Metrics, judge: opts.Objectives,
+		coalesce: opts.Coalesce, broadcast: opts.Broadcast, lapse: opts.TypingLapse,
 		rooms: map[Room]*room{}, sinks: map[uint64]func(Change){},
 		listening: map[Room]queue.Unsubscribe{}, wake: make(chan struct{}, 1)}
 	if h.now == nil {
@@ -324,6 +349,11 @@ func (h *Hub) Join(id Room, who Local) (string, Roster, error) {
 	now := h.now()
 	member.At = now
 	r, created := h.roomLocked(id)
+	if !r.hasSockets() {
+		// THE ROOM'S FIRST SOCKET HERE, which makes this node listen and
+		// ask its peers: what its join is timed from ([Hub.ask]).
+		r.firstSocket = now
+	}
 	r.local[member.Session] = &localMember{member: member, socket: true, touched: now}
 	r.changed(member.Session)
 	roster := r.rosterFor(member)
@@ -418,7 +448,12 @@ func (h *Hub) lapsed(id Room, session string, gen uint64) {
 		return
 	}
 	m.lapse = nil
-	m.member.Activity = Viewing
+	// STAMPED AT THE LAPSE, which is when the member's state changed: a
+	// peer times the move by this instant (presence cursor), and left at the
+	// typing's it would read every lapse as six seconds late. The room's
+	// recency order reads the same instant, and moves the member by the
+	// lapse at most.
+	m.member.Activity, m.member.At = Viewing, h.now()
 	r.changed(session)
 	h.scheduleLocked(r)
 	h.scheduleSendLocked(r)
@@ -683,6 +718,11 @@ func (h *Hub) heard(_ string, payload []byte) {
 		return
 	}
 	h.count("peer")
+	if h.judge != nil && !f.Full {
+		for _, m := range f.Upsert {
+			h.judge.RecordSince(objectives.PresenceCursor, m.At, true)
+		}
+	}
 	h.apply(f)
 }
 
@@ -753,10 +793,15 @@ func (h *Hub) ask(ctx context.Context, id Room) {
 	sealed, err := h.wire.Seal(req)
 	if err != nil {
 		log.ErrorContext(ctx, "presence_ask_not_sealed", "error", err.Error())
+		h.joined(id, h.now(), false)
 		return
 	}
 	asked, cancel := context.WithTimeout(ctx, h.askBudget)
 	defer cancel()
+	// SHOWN is when the room was last made whole: the ask going out, which
+	// is the room's members as far as a fleet that answers nothing has any,
+	// and then each answer as it lands.
+	shown := h.now()
 	// EACH ANSWER IS APPLIED AS IT ARRIVES. A scatter has no roster, so the
 	// ask runs out its budget to hear whoever answers; applying the
 	// answers only then showed a join everywhere after the whole budget
@@ -767,6 +812,7 @@ func (h *Hub) ask(ctx context.Context, id Room) {
 		if ok && f.Node != h.node && f.Kind == FrameState && f.Room == id {
 			h.count("peer")
 			h.apply(f)
+			shown = h.now()
 		}
 		return true
 	})
@@ -775,6 +821,24 @@ func (h *Hub) ask(ctx context.Context, id Room) {
 			"error", err.Error(),
 			"detail", "the room fills from the peers' next rebroadcast instead")
 	}
+	h.joined(id, shown, err == nil)
+}
+
+// joined records the presence join of the room a node just asked about: from
+// its first socket here to shown, answered when the ask reached the fleet. A
+// room whose sockets all left before its ask finished has nobody to have
+// shown, and is no event.
+func (h *Hub) joined(id Room, shown time.Time, answered bool) {
+	h.mu.Lock()
+	var since time.Time
+	if r := h.rooms[id]; r != nil {
+		since, r.firstSocket = r.firstSocket, time.Time{}
+	}
+	h.mu.Unlock()
+	if h.judge == nil || since.IsZero() {
+		return
+	}
+	h.judge.Record(objectives.PresenceJoin, shown.Sub(since), answered)
 }
 
 // ticker runs the rebroadcast and the expiry every [Rebroadcast]

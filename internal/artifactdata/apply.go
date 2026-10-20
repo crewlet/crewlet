@@ -403,7 +403,7 @@ func (a *Applier) note(c applyContext, artifact string, deltas []DocDelta, h his
 		return
 	}
 	a.moved = append(a.moved, Moved{
-		Artifact: id, Docs: deltas, Schema: schema, Through: c.position,
+		Artifact: id, Docs: deltas, Schema: schema, Through: c.position, At: c.brokerAt,
 		Writes: []WriteSummary{{
 			Seq: c.packed, OpID: c.record.OpID, Op: h.op, Verdict: h.verdict,
 			Actor:    iam.Actor{Name: c.record.Actor, Kind: c.record.ActorKind, OperatorID: c.record.OperatorID},
@@ -656,7 +656,8 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, c applyContext, ar
 		return 0, err
 	}
 	if id, err := artifacts.ParseID(artifact); err == nil {
-		a.moved = append(a.moved, Moved{Artifact: id, Purged: true, Through: c.position})
+		a.moved = append(a.moved, Moved{Artifact: id, Purged: true, Through: c.position,
+			At: c.brokerAt})
 	}
 	return rows + n, nil
 }

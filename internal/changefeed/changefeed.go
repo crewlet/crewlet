@@ -66,6 +66,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/objectives"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -191,6 +192,12 @@ type Record struct {
 	// a translator that parses it.
 	Key string
 
+	// StoredAt is the broker's own instant for the record — when the change
+	// that may wake somebody was stored, which every node reads alike — and
+	// what the wake it becomes is timed from ([Options.Objectives]). Zero
+	// from an estate that cannot say, which times nothing.
+	StoredAt time.Time
+
 	// Payload is the record's bytes, verbatim.
 	Payload []byte
 }
@@ -264,6 +271,27 @@ type Feed struct {
 	// is a legal deployment — an embedded engine and every test — and
 	// leaves the log line as the only surface, which is where it was.
 	metrics *metrics.Recorder
+
+	// judge is the node's objective meter; nil records nothing.
+	judge Objectives
+}
+
+// Objectives is the node's service objective meter, as the feed records into
+// it: one WAKE LATENCY event for every wake this node publishes, timed from
+// the broker's instant for the record that wakes somebody to the wake on the
+// inbound edge.
+//
+// HERE, because every domain that wakes anybody wakes them through this feed,
+// so one recording site times the tracker's, the knowledge base's and chat's
+// alike — and the wake is derived from the durable record, so from its storing
+// to the inbound edge is the engine's whole share of a wake before the
+// notification service routes it. ONE EVENT PER PUBLISHED WAKE: a record that
+// wakes nobody is a decision and no wake; a record another node already
+// claimed was that node's event; and a publish that failed is no event of its
+// own, since the redelivery that publishes it is timed from the same stored
+// instant and so carries the delay. Satisfied by [*objectives.Meter].
+type Objectives interface {
+	RecordSince(n objectives.Name, stamp time.Time, answered bool)
 }
 
 // Options configure a feed.
@@ -275,6 +303,10 @@ type Options struct {
 
 	// Metrics is where an untranslatable record is counted. Optional.
 	Metrics *metrics.Recorder
+
+	// Objectives is where every published wake is timed ([Objectives]).
+	// Optional.
+	Objectives Objectives
 
 	// Now is the clock the claim is taken on. Nil takes the wall clock.
 	Now func() time.Time
@@ -302,7 +334,7 @@ func New(opts Options) (*Feed, error) {
 	f := &Feed{
 		opener: opts.Opener, publisher: opts.Publisher,
 		claims: opts.Claims, translator: opts.Translator, now: opts.Now,
-		metrics: opts.Metrics,
+		metrics: opts.Metrics, judge: opts.Objectives,
 	}
 	if f.now == nil {
 		f.now = func() time.Time { return time.Now().UTC() }
@@ -387,6 +419,9 @@ func (f *Feed) handle(ctx context.Context, msg *Message) {
 			"error", err.Error())
 		f.nak(ctx, msg)
 		return
+	}
+	if f.judge != nil {
+		f.judge.RecordSince(objectives.WakeLatency, msg.StoredAt, true)
 	}
 	f.ack(ctx, msg)
 }

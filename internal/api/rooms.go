@@ -35,6 +35,10 @@ type Rooms struct {
 
 	// Metrics records the rooms' push lag; nil records nothing.
 	Metrics stream.Metrics
+
+	// Objectives records the change visibility of what the rooms are pushed
+	// (the node's objective meter); nil records nothing.
+	Objectives stream.Objectives
 }
 
 // StoreCatalogue is one artifact's datastore catalogue row, read through the
@@ -58,6 +62,14 @@ func (r *Rooms) metrics() stream.Metrics {
 		return nil
 	}
 	return r.Metrics
+}
+
+// objectives is r's objective meter, nil for no rooms.
+func (r *Rooms) objectives() stream.Objectives {
+	if r == nil {
+		return nil
+	}
+	return r.Objectives
 }
 
 // streamRooms is r as the socket's service takes it.

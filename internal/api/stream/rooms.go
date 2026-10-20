@@ -514,8 +514,10 @@ func (s *Service) ArtifactsMoved(moved []artifactsdomain.Moved) {
 			}
 			continue
 		}
-		s.hub.Broadcast(PushArtifact(KindArtifactChanged, m.Artifact, ArtifactChange{
-			Artifact: m.Artifact, What: m.What, Head: m.Head, Position: m.Position}, now))
+		visible(s.judge, s.hub.Broadcast(PushArtifact(KindArtifactChanged, m.Artifact,
+			ArtifactChange{Artifact: m.Artifact, What: m.What, Head: m.Head, Position: m.Position},
+			now)), m.At)
+		s.observeLag("changed", m.At, now)
 		if narrows(m.What) {
 			s.hub.Suspend(m.Artifact)
 			s.queueDecision(m.Artifact)
@@ -548,37 +550,28 @@ func (s *Service) ArtifactDataMoved(moved []artifactdata.Moved) {
 			s.rereadData(now)
 			continue
 		case m.Purged:
-			s.hub.Broadcast(PushArtifact(KindArtifactData, m.Artifact,
-				ArtifactData{Artifact: m.Artifact, Gone: true}, now))
+			visible(s.judge, s.hub.Broadcast(PushArtifact(KindArtifactData, m.Artifact,
+				ArtifactData{Artifact: m.Artifact, Gone: true}, now)), m.At)
 			continue
 		case len(m.Docs) == 0 && !m.Schema:
 			continue
 		}
-		s.hub.Broadcast(PushArtifact(KindArtifactData, m.Artifact, dataPush{
+		visible(s.judge, s.hub.Broadcast(PushArtifact(KindArtifactData, m.Artifact, dataPush{
 			artifact: m.Artifact, deltas: m.Docs, schema: m.Schema,
-			through: m.Through.Packed()}, now))
-		s.observeLag(m, now)
+			through: m.Through.Packed()}, now)), m.At)
+		s.observeLag("data", m.At, now)
 	}
 }
 
-// observeLag records how long after the broker stored the batch's newest record
-// its push was fanned out: the commit-to-socket lag the datastore's live view
-// is held to.
-func (s *Service) observeLag(m artifactdata.Moved, now time.Time) {
-	if s.metrics == nil {
+// observeLag records how long after the broker stored a record its push of
+// kind (`changed`, an artifact's movement; `data`, a datastore's documents)
+// was fanned out: the commit-to-socket lag a room's live view is held to.
+func (s *Service) observeLag(kind string, stored, now time.Time) {
+	if s.metrics == nil || stored.IsZero() {
 		return
 	}
-	var newest time.Time
-	for _, w := range m.Writes {
-		if w.At.After(newest) {
-			newest = w.At
-		}
-	}
-	if newest.IsZero() {
-		return
-	}
-	s.metrics.Observe(metrics.ArtifactsPushLag, max(0, now.Sub(newest)),
-		metrics.Attrs{"kind": "data"})
+	s.metrics.Observe(metrics.ArtifactsPushLag, max(0, now.Sub(stored)),
+		metrics.Attrs{"kind": kind})
 }
 
 // rereadData tells every room on this node its datastore pushes may have gaps.

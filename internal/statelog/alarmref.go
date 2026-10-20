@@ -138,9 +138,10 @@ var alarmMeaning = map[Kind]string{
 		"more than four fifths of the bytes it reserves. A full bucket refuses every " +
 		"upload, though nothing else on the broker is affected.",
 	KindObjectiveBurn: "A service objective this node measures (publishing, serving a " +
-		"document, a frame becoming ready in a viewer's browser, a datastore verdict) " +
-		"is failing fast enough to spend its month's error budget early: in both the " +
-		"long and the short window of one of the two burn-rate pairs.",
+		"document, a frame becoming ready in a viewer's browser, a datastore verdict, " +
+		"a committed change reaching the sockets watching it, a wake leaving the " +
+		"change feed) is failing fast enough to spend its month's error budget early: " +
+		"in both the long and the short window of one of the two burn-rate pairs.",
 }
 
 const alarmHeader = `# Alarms

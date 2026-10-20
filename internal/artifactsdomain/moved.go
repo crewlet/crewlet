@@ -1,6 +1,8 @@
 package artifactsdomain
 
 import (
+	"time"
+
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -85,8 +87,12 @@ type Moved struct {
 	// Head is the artifact's head version after the record.
 	Head int `json:"head,omitempty"`
 
-	// Position is the record's position on the log.
+	// Position is the record's position on the log, and At the broker's
+	// own instant for it: when the change was stored, which every node
+	// reads alike and what the socket's push of it is timed from
+	// (internal/objectives' change visibility).
 	Position statelog.Position `json:"position,omitzero"`
+	At       time.Time         `json:"at,omitzero"`
 }
 
 // Reset is the movement that names everything.

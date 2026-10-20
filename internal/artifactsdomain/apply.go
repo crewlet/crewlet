@@ -262,8 +262,9 @@ func (a *Applier) Retained(context.Context, int) {
 	a.moved = append(a.moved, Reset())
 }
 
-// move notes one movement for the post-commit half.
-func (a *Applier) move(id string, what MoveKind, epoch int64, head int, at statelog.Position) {
+// move notes one movement for the post-commit half, at the record c is
+// applying: its position and the broker's instant for it.
+func (a *Applier) move(c applyContext, id string, what MoveKind, epoch int64, head int) {
 	parsed, err := artifacts.ParseID(id)
 	if err != nil {
 		// An id that does not parse names no artifact anybody can open,
@@ -271,7 +272,8 @@ func (a *Applier) move(id string, what MoveKind, epoch int64, head int, at state
 		return
 	}
 	a.moved = append(a.moved, Moved{
-		Artifact: parsed, What: what, AccessEpoch: epoch, Head: head, Position: at,
+		Artifact: parsed, What: what, AccessEpoch: epoch, Head: head, Position: c.position,
+		At: c.brokerAt,
 	})
 }
 
