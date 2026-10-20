@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/artifactupload"
 	"github.com/crewlet/crewlet/internal/clientsource"
+	"github.com/crewlet/crewlet/internal/presence"
 )
 
 // THE DASHBOARD SPEAKS THE ARTIFACTS' VOCABULARY, IN THE ENGINE'S ORDER.
@@ -53,7 +54,7 @@ func TestTheDashboardSpeaksTheArtifactsVocabulary(t *testing.T) {
 		"SHAREABLE_ROLES":       names(artifacts.ShareableRoles),
 		"AUDIENCE_KINDS":        names(artifacts.AudienceKinds),
 		"ORIGIN_MODES":          names(artifacts.OriginModes),
-		"PRESENCE_ACTIVITIES":   names(artifacts.PresenceActivities),
+		"PRESENCE_ACTIVITIES":   names(presence.Activities),
 		"ARTIFACT_LIST_SCOPES":  names(artifactsdomain.ListScopes),
 		"ARTIFACT_LIST_SORTS":   names(artifactsdomain.ListSorts),
 		"ARTIFACT_HISTORY_OPS":  names(artifactsdomain.HistoryOps),
@@ -131,7 +132,7 @@ func TestTheDashboardBoundsArtifactTextAtTheEnginesCaps(t *testing.T) {
 		"ARTIFACT_DESCRIPTION_MAX_BYTES": artifacts.MaxDescriptionBytes,
 		"ARTIFACT_ICON_MAX_BYTES":        artifacts.MaxIconBytes,
 		"ARTIFACT_LABEL_MAX_BYTES":       artifacts.MaxLabelBytes,
-		"PRESENCE_FRAMES_PER_SECOND":     artifacts.PresenceClientRate,
+		"PRESENCE_FRAMES_PER_SECOND":     presence.ClientRate,
 		"ARTIFACT_CHECK_MAX_FILES":       artifactupload.MaxCheckFiles,
 		"ARTIFACT_CHECK_MAX_BYTES":       artifactupload.MaxCheckBytes,
 		"DOC_MAX_TABS":                   docindex.MaxTabs,

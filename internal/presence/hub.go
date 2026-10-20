@@ -10,9 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
-
-	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -68,13 +65,13 @@ type Options struct {
 
 	// Coalesce is the shortest interval between two fan-outs of one room
 	// to this node's sockets. Zero takes a second divided by
-	// [artifacts.PresenceCoalesceRate], the production value; a suite sets
+	// [CoalesceRate], the production value; a suite sets
 	// a shorter one so it waits less, never a different rule.
 	Coalesce time.Duration
 
 	// Broadcast is the shortest interval between two frames this node
 	// sends the fleet about one room. Zero takes a second divided by
-	// [artifacts.PresenceBroadcastRate].
+	// [BroadcastRate].
 	Broadcast time.Duration
 }
 
@@ -82,12 +79,16 @@ type Options struct {
 // presents that are new or changed, the sessions it no longer presents, and,
 // for a room presenting only its most recent members, how many of each kind
 // it counts beside them.
+//
+// NO WIRE SHAPE OF ITS OWN: the socket names each kind's room by that kind's
+// own field (an artifact's push says `artifact`, as every other artifact frame
+// does), so it builds the frame a client reads from this.
 type Change struct {
-	Artifact  artifacts.ID               `json:"artifact"`
-	Upsert    []artifacts.PresenceMember `json:"upsert"`
-	Leave     []string                   `json:"leave"`
-	Counts    *artifacts.PresenceCounts  `json:"counts,omitempty"`
-	Truncated bool                       `json:"truncated"`
+	Room      Room
+	Upsert    []Member
+	Leave     []string
+	Counts    *Counts
+	Truncated bool
 }
 
 // Local is who a socket joining a room is, as its node resolved them: the
@@ -124,16 +125,16 @@ type Hub struct {
 	broadcast time.Duration
 
 	mu      sync.Mutex
-	rooms   map[artifacts.ID]*room
+	rooms   map[Room]*room
 	sinks   map[uint64]func(Change)
 	sinkSeq uint64
 	running bool
 	stopped bool
 
-	// listening is the rooms this node is a listener for, by artifact:
+	// listening is the rooms this node is a listener for:
 	// listened and withdrawn by the reconciler alone ([Hub.reconcile]),
 	// read and written under mu.
-	listening map[artifacts.ID]queue.Unsubscribe
+	listening map[Room]queue.Unsubscribe
 
 	// lifetime is the hub's own context, cancelled by Stop; wake asks the
 	// reconciler to look again; loops counts the hub's own goroutines.
@@ -160,16 +161,16 @@ func New(opts Options) (*Hub, error) {
 	}
 	h := &Hub{queue: opts.Queue, wire: opts.Wire, node: opts.Node, askBudget: opts.AskBudget,
 		now: opts.Now, metrics: opts.Metrics, coalesce: opts.Coalesce, broadcast: opts.Broadcast,
-		rooms: map[artifacts.ID]*room{}, sinks: map[uint64]func(Change){},
-		listening: map[artifacts.ID]queue.Unsubscribe{}, wake: make(chan struct{}, 1)}
+		rooms: map[Room]*room{}, sinks: map[uint64]func(Change){},
+		listening: map[Room]queue.Unsubscribe{}, wake: make(chan struct{}, 1)}
 	if h.now == nil {
 		h.now = func() time.Time { return time.Now().UTC() }
 	}
 	if h.coalesce <= 0 {
-		h.coalesce = time.Second / artifacts.PresenceCoalesceRate
+		h.coalesce = time.Second / CoalesceRate
 	}
 	if h.broadcast <= 0 {
-		h.broadcast = time.Second / artifacts.PresenceBroadcastRate
+		h.broadcast = time.Second / BroadcastRate
 	}
 	return h, nil
 }
@@ -211,7 +212,7 @@ func (h *Hub) Start(ctx context.Context) error {
 	lifetime := h.lifetime
 	h.mu.Unlock()
 
-	stop, err := h.queue.Serve(ctx, topics.ArtifactPresenceAsk, h.answer)
+	stop, err := h.queue.Serve(ctx, topics.PresenceAsk, h.answer)
 	if err != nil {
 		h.mu.Lock()
 		h.running = false
@@ -244,7 +245,7 @@ func (h *Hub) Stop(ctx context.Context) {
 		}
 		r.stopTimer()
 	}
-	h.rooms = map[artifacts.ID]*room{}
+	h.rooms = map[Room]*room{}
 	h.mu.Unlock()
 
 	// THE LEAVES FIRST, while the broker is still there: a peer told now
@@ -260,11 +261,11 @@ func (h *Hub) Stop(ctx context.Context) {
 	h.loops.Wait()
 	h.mu.Lock()
 	listening := h.listening
-	h.listening = map[artifacts.ID]queue.Unsubscribe{}
+	h.listening = map[Room]queue.Unsubscribe{}
 	h.mu.Unlock()
 	for id, unsub := range listening {
 		if err := unsub(context.WithoutCancel(ctx)); err != nil {
-			log.WarnContext(ctx, "presence_listen_not_withdrawn", "artifact", id.String(),
+			log.WarnContext(ctx, "presence_listen_not_withdrawn", "room", id.String(),
 				"error", err.Error())
 		}
 	}
@@ -276,20 +277,23 @@ func (h *Hub) Stop(ctx context.Context) {
 	h.setRooms(0)
 }
 
-// Join puts one socket in an artifact's room and answers the session it is
-// known by there and the room as it presents now, the socket's own member
-// included. The caller has decided the socket may read the artifact; the hub
-// decides nothing about who may be in a room.
-func (h *Hub) Join(id artifacts.ID, who Local) (string, artifacts.PresenceRoster, error) {
-	member := artifacts.PresenceMember{Session: newSession(), Seat: who.Seat, Kind: who.Kind,
-		Activity: artifacts.PresenceViewing}
-	if err := checkMember(member); err != nil {
-		return "", artifacts.PresenceRoster{}, err
+// Join puts one socket in a room and answers the session it is known by there
+// and the room as it presents now, the socket's own member included. The
+// caller has decided the socket may be in the room (for an artifact's, that it
+// may read the artifact); the hub decides nothing about who may be in a room.
+func (h *Hub) Join(id Room, who Local) (string, Roster, error) {
+	member := Member{Session: newSession(), Seat: who.Seat, Kind: who.Kind,
+		Activity: Viewing}
+	if err := id.check(); err != nil {
+		return "", Roster{}, err
+	}
+	if err := checkMember(id.Kind, member); err != nil {
+		return "", Roster{}, err
 	}
 	h.mu.Lock()
 	if h.stopped {
 		h.mu.Unlock()
-		return "", artifacts.PresenceRoster{}, ErrStopped
+		return "", Roster{}, ErrStopped
 	}
 	now := h.now()
 	member.At = now
@@ -312,13 +316,11 @@ func (h *Hub) Join(id artifacts.ID, who Local) (string, artifacts.PresenceRoster
 // Update is a socket's presence frame: what it is doing in the room and where
 // it is looking. It moves the member's recency, which is what a room
 // presenting only its most recent members orders by.
-func (h *Hub) Update(id artifacts.ID, session string, activity artifacts.PresenceActivity,
-	focus artifacts.Focus) error {
-
+func (h *Hub) Update(id Room, session string, activity Activity, focus Focus) error {
 	if !activity.Valid() {
 		return fmt.Errorf("presence: %q is not an activity (viewing, editing or idle)", activity)
 	}
-	if err := CheckFocus(focus); err != nil {
+	if err := CheckFocus(id.Kind, focus); err != nil {
 		return err
 	}
 	h.mu.Lock()
@@ -351,7 +353,7 @@ func (h *Hub) Update(id artifacts.ID, session string, activity artifacts.Presenc
 
 // Leave takes one socket out of a room. Leaving a room it is not in is not an
 // error: a socket closing leaves every room it may have been in.
-func (h *Hub) Leave(id artifacts.ID, session string) {
+func (h *Hub) Leave(id Room, session string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	r := h.rooms[id]
@@ -368,18 +370,18 @@ func (h *Hub) Leave(id artifacts.ID, session string) {
 	h.pokeLocked()
 }
 
-// Touch is an agent's tool session reading (viewing) or writing (editing) an
-// artifact, in the turn whose run is turn: the seat appears in the room as an
+// Touch is an agent's tool session reading (viewing) or writing (editing) in a
+// room, in the turn whose run is a.Turn: the seat appears in the room as an
 // agent, naming that turn, and stays there for [agentLinger] after its last
-// call. One member per seat per room on this node.
-func (h *Hub) Touch(id artifacts.ID, seat, turn string, activity artifacts.PresenceActivity,
-	focus artifacts.Focus) {
-
-	if seat == "" || len(turn) > maxTurnBytes || !activity.Valid() || CheckFocus(focus) != nil {
+// touch. One member per seat per room on this node.
+func (h *Hub) Touch(id Room, a Agent) {
+	seat, turn, activity, focus := a.Seat, a.Turn, a.Activity, a.Focus
+	if id.check() != nil || seat == "" || len(turn) > maxTurnBytes || !activity.Valid() ||
+		CheckFocus(id.Kind, focus) != nil {
 		// A WIRING FAULT in the tool that touched, never a person's
 		// input: logged and dropped, because presence is a display and a
 		// tool call must not fail over it.
-		log.Warn("presence_touch_refused", "artifact", id.String(), "seat", seat,
+		log.Warn("presence_touch_refused", "room", id.String(), "seat", seat,
 			"activity", string(activity))
 		return
 	}
@@ -392,7 +394,7 @@ func (h *Hub) Touch(id artifacts.ID, seat, turn string, activity artifacts.Prese
 	r, created := h.roomLocked(id)
 	m := r.agentMember(seat)
 	if m == nil {
-		m = &localMember{member: artifacts.PresenceMember{Session: newSession(), Seat: seat,
+		m = &localMember{member: Member{Session: newSession(), Seat: seat,
 			Kind: iam.ActorAgent}}
 		r.local[m.member.Session] = m
 	}
@@ -411,11 +413,10 @@ func (h *Hub) Touch(id artifacts.ID, seat, turn string, activity artifacts.Prese
 	}
 }
 
-// agentLinger is how long an agent stays in a room after its last tool call on
-// the artifact: [artifacts.PresenceExpiry], three missed heartbeats, because an
-// agent's tool calls are its heartbeats and a turn between two calls is still
-// working on the artifact.
-const agentLinger = artifacts.PresenceExpiry
+// agentLinger is how long an agent stays in a room after its last touch:
+// [Expiry], three missed heartbeats, because an agent's touches are its
+// heartbeats and a turn between two calls is still working in the room.
+const agentLinger = Expiry
 
 // newSession is a socket's or an agent's session id in one room: random, so it
 // says nothing about the credential behind it and two tabs of one person are
@@ -423,7 +424,7 @@ const agentLinger = artifacts.PresenceExpiry
 func newSession() string { return rand.Text() }
 
 // roomLocked is id's room, made if this node held none. Caller holds mu.
-func (h *Hub) roomLocked(id artifacts.ID) (*room, bool) {
+func (h *Hub) roomLocked(id Room) (*room, bool) {
 	if r, ok := h.rooms[id]; ok {
 		return r, false
 	}
@@ -434,7 +435,7 @@ func (h *Hub) roomLocked(id artifacts.ID) (*room, bool) {
 
 // scheduleLocked arranges r's next fan-out to this node's sockets: at once
 // when the last one is at least [Options.Coalesce] old, and otherwise when it
-// will be, so a room fans out at most [artifacts.PresenceCoalesceRate] times a
+// will be, so a room fans out at most [CoalesceRate] times a
 // second however fast its members move. Caller holds mu.
 func (h *Hub) scheduleLocked(r *room) {
 	if r.timer != nil || h.stopped {
@@ -460,9 +461,9 @@ func (h *Hub) scheduleSendLocked(r *room) {
 }
 
 // flush fans one room out to this node's sockets: what changed of its
-// presentation, at most [artifacts.PresenceFrameMembers] members re-presented,
+// presentation, at most [FrameMembers] members re-presented,
 // and another fan-out arranged for the rest.
-func (h *Hub) flush(id artifacts.ID) {
+func (h *Hub) flush(id Room) {
 	h.mu.Lock()
 	r := h.rooms[id]
 	if r == nil || h.stopped {
@@ -488,7 +489,7 @@ func (h *Hub) flush(id artifacts.ID) {
 
 // flushSend tells the fleet what changed of this node's own members in one
 // room, and forgets the room once the last of them left.
-func (h *Hub) flushSend(id artifacts.ID) {
+func (h *Hub) flushSend(id Room) {
 	h.mu.Lock()
 	r := h.rooms[id]
 	if r == nil || h.stopped {
@@ -499,7 +500,7 @@ func (h *Hub) flushSend(id artifacts.ID) {
 	r.sent = h.now()
 	var out *Frame
 	if len(r.outUpsert)+len(r.outLeave) > 0 {
-		upsert := make([]artifacts.PresenceMember, 0, len(r.outUpsert))
+		upsert := make([]Member, 0, len(r.outUpsert))
 		for _, s := range slices.Sorted(maps.Keys(r.outUpsert)) {
 			if m, ok := r.local[s]; ok {
 				upsert = append(upsert, m.member)
@@ -532,11 +533,11 @@ func (h *Hub) flushSend(id artifacts.ID) {
 }
 
 // frameLocked is a frame from this node about room id. Caller holds mu.
-func (h *Hub) frameLocked(id artifacts.ID, kind FrameKind, upsert []artifacts.PresenceMember,
+func (h *Hub) frameLocked(id Room, kind FrameKind, upsert []Member,
 	leave []string, full bool) Frame {
 
-	return Frame{V: frameVersion, Kind: kind, Node: h.node, Artifact: id, Upsert: upsert,
-		Leave: leave, Full: full, Until: h.now().Add(artifacts.PresenceFrameValidity)}
+	return Frame{V: frameVersion, Kind: kind, Node: h.node, Room: id, Upsert: upsert,
+		Leave: leave, Full: full, Until: h.now().Add(FrameValidity)}
 }
 
 // sendBudget bounds one broadcast. A core publish is a write into the
@@ -550,15 +551,14 @@ const sendBudget = time.Second
 func (h *Hub) send(ctx context.Context, f Frame) {
 	sealed, err := h.wire.Seal(f)
 	if err != nil {
-		log.ErrorContext(ctx, "presence_frame_not_sealed", "artifact", f.Artifact.String(),
+		log.ErrorContext(ctx, "presence_frame_not_sealed", "room", f.Room.String(),
 			"error", err.Error())
 		return
 	}
 	ctx, cancel := context.WithTimeout(ctx, sendBudget)
 	defer cancel()
-	subject := topics.ArtifactPresenceSubject(uuid.UUID(f.Artifact))
-	if err := h.queue.Broadcast(ctx, subject, sealed); err != nil {
-		log.DebugContext(ctx, "presence_frame_not_sent", "artifact", f.Artifact.String(),
+	if err := h.queue.Broadcast(ctx, f.Room.subject(), sealed); err != nil {
+		log.DebugContext(ctx, "presence_frame_not_sent", "room", f.Room.String(),
 			"error", err.Error(),
 			"detail", "the next rebroadcast carries this node's members again")
 	}
@@ -601,7 +601,7 @@ func (h *Hub) open(payload []byte) (Frame, bool) {
 func (h *Hub) apply(f Frame) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	r := h.rooms[f.Artifact]
+	r := h.rooms[f.Room]
 	if r == nil || !r.hasSockets() {
 		// A ROOM NOBODY HERE IS WATCHING: nothing to show, and an
 		// agent-only room never listens anyway.
@@ -624,20 +624,20 @@ func (h *Hub) answer(_ context.Context, request []byte) ([]byte, error) {
 		return nil, errors.New("presence: this node's own ask")
 	}
 	h.mu.Lock()
-	r := h.rooms[f.Artifact]
+	r := h.rooms[f.Room]
 	if r == nil || len(r.local) == 0 {
 		h.mu.Unlock()
 		return nil, errors.New("presence: nobody of this node's is in that room")
 	}
 	members := r.localMembers()
-	out := h.frameLocked(f.Artifact, FrameState, members, nil, true)
+	out := h.frameLocked(f.Room, FrameState, members, nil, true)
 	h.mu.Unlock()
 	return h.wire.Seal(out)
 }
 
 // ask fills a room this node just started listening on from its peers, once,
 // rather than leaving a newcomer to wait a rebroadcast interval.
-func (h *Hub) ask(ctx context.Context, id artifacts.ID) {
+func (h *Hub) ask(ctx context.Context, id Room) {
 	h.mu.Lock()
 	req := h.frameLocked(id, FrameAsk, nil, nil, false)
 	h.mu.Unlock()
@@ -653,26 +653,26 @@ func (h *Hub) ask(ctx context.Context, id artifacts.ID) {
 	// answers only then showed a join everywhere after the whole budget
 	// (two seconds, spike S6), past the second presence allows for it,
 	// where a peer on the same broker answers in milliseconds.
-	err = h.queue.AskEach(asked, topics.ArtifactPresenceAsk, sealed, func(reply []byte) bool {
+	err = h.queue.AskEach(asked, topics.PresenceAsk, sealed, func(reply []byte) bool {
 		f, ok := h.open(reply)
-		if ok && f.Node != h.node && f.Kind == FrameState && f.Artifact == id {
+		if ok && f.Node != h.node && f.Kind == FrameState && f.Room == id {
 			h.count("peer")
 			h.apply(f)
 		}
 		return true
 	})
 	if err != nil {
-		log.DebugContext(ctx, "presence_ask_failed", "artifact", id.String(),
+		log.DebugContext(ctx, "presence_ask_failed", "room", id.String(),
 			"error", err.Error(),
 			"detail", "the room fills from the peers' next rebroadcast instead")
 	}
 }
 
-// ticker runs the rebroadcast and the expiry every [artifacts.PresenceRebroadcast]
+// ticker runs the rebroadcast and the expiry every [Rebroadcast]
 // until the hub stops.
 func (h *Hub) ticker(ctx context.Context) {
 	defer h.loops.Done()
-	t := time.NewTicker(artifacts.PresenceRebroadcast)
+	t := time.NewTicker(Rebroadcast)
 	defer t.Stop()
 	for {
 		select {
@@ -688,7 +688,7 @@ func (h *Hub) ticker(ctx context.Context) {
 }
 
 // tick is one rebroadcast: every room's local members to the fleet, in full,
-// after dropping the peers' members not heard for [artifacts.PresenceExpiry]
+// after dropping the peers' members not heard for [Expiry]
 // and the agents not touched for [agentLinger].
 func (h *Hub) tick(ctx context.Context, now time.Time) {
 	h.mu.Lock()
@@ -742,7 +742,7 @@ func (h *Hub) reconciler(ctx context.Context) {
 // written under it, so a reader elsewhere sees a listen only once it is held.
 func (h *Hub) reconcile(ctx context.Context) {
 	h.mu.Lock()
-	var drop []artifacts.ID
+	var drop []Room
 	var unsubs []queue.Unsubscribe
 	for id, unsub := range h.listening {
 		if r := h.rooms[id]; r == nil || !r.hasSockets() {
@@ -751,7 +751,7 @@ func (h *Hub) reconcile(ctx context.Context) {
 			delete(h.listening, id)
 		}
 	}
-	var add []artifacts.ID
+	var add []Room
 	for id, r := range h.rooms {
 		if _, held := h.listening[id]; !held && r.hasSockets() {
 			add = append(add, id)
@@ -761,16 +761,16 @@ func (h *Hub) reconcile(ctx context.Context) {
 
 	for i, id := range drop {
 		if err := unsubs[i](ctx); err != nil {
-			log.WarnContext(ctx, "presence_listen_not_withdrawn", "artifact", id.String(),
+			log.WarnContext(ctx, "presence_listen_not_withdrawn", "room", id.String(),
 				"error", err.Error())
 		}
 	}
 	for _, id := range add {
-		unsub, err := h.queue.Listen(ctx, topics.ArtifactPresenceSubject(uuid.UUID(id)), h.heard)
+		unsub, err := h.queue.Listen(ctx, id.subject(), h.heard)
 		if err != nil {
 			// RETRIED ON THE NEXT POKE, the rebroadcast's at the latest:
 			// until then the room shows this node's own members only.
-			log.InfoContext(ctx, "presence_listen_failed", "artifact", id.String(),
+			log.InfoContext(ctx, "presence_listen_failed", "room", id.String(),
 				"error", err.Error())
 			continue
 		}

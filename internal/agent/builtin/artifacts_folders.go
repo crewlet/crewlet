@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tools/argval"
@@ -643,7 +644,7 @@ func (t *moveArtifact) moveOne(ctx context.Context, c artifactCaller, ref, dest 
 		res["outcome"] = "unchanged"
 		return res, nil
 	}
-	t.deps.present(c, h.ID, artifacts.PresenceEditing, artifacts.Focus{})
+	t.deps.present(c, h.ID, presence.Editing, presence.Focus{})
 	written, err := t.deps.Writer.Move(ctx, t.deps.call(c, dec.Standing.Role, dec.Elevated), h.ID, dest)
 	switch {
 	case err != nil:

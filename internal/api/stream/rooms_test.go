@@ -678,16 +678,16 @@ func TestPresenceFramesAreHeldToTheirAllowance(t *testing.T) {
 	n := &roomNode{svc: svc, url: "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/stream"}
 	dana := n.open(t, "dana")
 	join(t, dana, sheet, 0)
-	for range 5 * artifacts.PresenceClientRate {
+	for range 5 * presence.ClientRate {
 		write(t, dana, map[string]any{"kind": "presence", "artifact": sheet.String(),
 			"activity": "editing"})
 	}
 	write(t, dana, map[string]any{"kind": "ping"})
 	nextOf(t, dana, stream.KindPong)
 	time.Sleep(50 * time.Millisecond)
-	if got := counting.updates(); got > artifacts.PresenceClientRate+1 {
+	if got := counting.updates(); got > presence.ClientRate+1 {
 		t.Fatalf("a burst of %d presence frames reached the hub %d times, over the "+
-			"allowance of %d", 5*artifacts.PresenceClientRate, got, artifacts.PresenceClientRate)
+			"allowance of %d", 5*presence.ClientRate, got, presence.ClientRate)
 	}
 	if counting.updates() == 0 {
 		t.Fatal("no presence frame reached the hub, so the allowance was never asked")
@@ -717,13 +717,13 @@ func dataBatch(id artifacts.ID, docs ...artifactdata.DocDelta) artifactdata.Move
 // nopPresence is a hub that holds nobody, for a case about the datastore.
 type nopPresence struct{}
 
-func (nopPresence) Join(id artifacts.ID, who presence.Local) (string, artifacts.PresenceRoster, error) {
-	return "s", artifacts.PresenceRoster{Artifact: id}, nil
+func (nopPresence) Join(presence.Room, presence.Local) (string, presence.Roster, error) {
+	return "s", presence.Roster{}, nil
 }
-func (nopPresence) Update(artifacts.ID, string, artifacts.PresenceActivity, artifacts.Focus) error {
+func (nopPresence) Update(presence.Room, string, presence.Activity, presence.Focus) error {
 	return nil
 }
-func (nopPresence) Leave(artifacts.ID, string)                   {}
+func (nopPresence) Leave(presence.Room, string)                  {}
 func (nopPresence) OnChange(func(presence.Change)) (stop func()) { return func() {} }
 
 // countingPresence counts the presence frames that reached it.
@@ -733,7 +733,7 @@ type countingPresence struct {
 	n  int
 }
 
-func (c *countingPresence) Update(artifacts.ID, string, artifacts.PresenceActivity, artifacts.Focus) error {
+func (c *countingPresence) Update(presence.Room, string, presence.Activity, presence.Focus) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.n++

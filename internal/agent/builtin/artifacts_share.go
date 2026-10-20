@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -308,7 +309,7 @@ func (t *uploadArtifactAsset) CallForTurn(ctx context.Context, turn *turnctx.Tur
 	if refusal != nil {
 		return *refusal, nil
 	}
-	t.deps.present(c, h.ID, artifacts.PresenceEditing, artifacts.Focus{})
+	t.deps.present(c, h.ID, presence.Editing, presence.Focus{})
 	if !slices.Contains(h.Capabilities, artifacts.CapabilityAssets) {
 		return failed(fmt.Sprintf("upload_artifact_asset: artifact %s does not declare "+
 			"the `assets` capability, so its page cannot reference an asset. Publish a "+

@@ -556,13 +556,13 @@ it.
    arrives, and the hub applies each answer then
    (`TestAJoinShowsThePeersMembersAsTheyAnswer`); a room's fan-out to its
    sockets runs at ten a second and its frames to the fleet at twenty, on
-   timers of their own (`PresenceCoalesceRate`, `PresenceBroadcastRate`;
+   timers of their own (`presence.CoalesceRate`, `presence.BroadcastRate`;
    `TestAMoveCrossesNodesInOneShortWindowOnEachSide`). Joins now show within
    half a second and cursors in ordinary rooms within 150 ms.
 10. **A busy large room sent large frames (fixed, `internal/presence`).** At
     200 viewers moving ten times a second, each socket received about 50 KiB a
     second, because each frame re-presented most of the fifty. A fan-out now
-    re-presents at most ten members (`PresenceFrameMembers`), the change that
+    re-presents at most ten members (`presence.FrameMembers`), the change that
     has waited longest first so nobody starves
     (`TestAFanOutRePresentsAtMostItsBoundOfMembers`,
     `TestAHeldBackMemberIsToldWithinAFewFanOuts`): about 23 KiB a second a

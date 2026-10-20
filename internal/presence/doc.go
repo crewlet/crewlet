@@ -1,5 +1,15 @@
-// Package presence is the node's presence hub: who is in each artifact's room,
-// what they are looking at, and whether they are editing.
+// Package presence is the node's presence hub: who is in each room, what they
+// are looking at, and whether they are editing.
+//
+// # A room is named by its kind and its id
+//
+// [Room] is the KIND of thing a room is the presence of and that thing's id,
+// and everything below holds for every kind alike: the frames, the sealing,
+// the coalescing, the expiry, the large-room bound and the agents. What a kind
+// owns is where its members can be looking ([Focus], checked per kind by
+// [CheckFocus]), and the decision of who may be in one of its rooms, which is
+// never this package's. An artifact's room is the only kind this build keeps
+// ([RoomArtifact]).
 //
 // # Presence is told, never stored
 //
@@ -17,31 +27,30 @@
 //
 // A forged frame would put somebody in a room they are not in, so every frame
 // a node sends is sealed one way under the fleet keyring ([Wire], the key
-// domain [Channel]) with [artifacts.PresenceFrameValidity] inside the seal, and
-// a frame the fleet did not seal shows nobody. Identity is the node's: a socket
-// says only what it is doing and where; the seat and kind beside its session
-// are what its node resolved its credential to.
+// domain [Channel]) with [FrameValidity] inside the seal, and a frame the
+// fleet did not seal shows nobody. The room a frame is about is inside the seal
+// too, so a frame about one room can never be shown as another's. Identity is
+// the node's: a socket says only what it is doing and where; the seat and kind
+// beside its session are what its node resolved its credential to.
 //
 // # How a room stays right
 //
-//   - A NODE LISTENS on an artifact's subject only while one of its sockets is
-//     in that room, so a fleet with an artifact open on two nodes moves its
-//     presence between those two. One goroutine (the reconciler) listens and
+//   - A NODE LISTENS on a room's subject only while one of its sockets is in
+//     that room, so a fleet with a room open on two nodes moves its presence
+//     between those two. One goroutine (the reconciler) listens and
 //     withdraws, so the two never race for one room.
 //   - CHANGES COALESCE, on two clocks: a room fans out to this node's
-//     sockets at most [artifacts.PresenceCoalesceRate] times a second (the
-//     difference between what they were shown and what the room presents
-//     now, at most [artifacts.PresenceFrameMembers] members re-presented a
-//     frame, the most recent first), and this node tells the fleet what its
-//     own members did there at most [artifacts.PresenceBroadcastRate] times
-//     a second. Apart, so a cursor crossing nodes waits one short window on
-//     each side rather than two long ones.
-//   - EVERY [artifacts.PresenceRebroadcast] each node broadcasts every member
-//     it holds in every room, in full, and a peer replaces what it held from
-//     that node with it, so a lost leave costs one rebroadcast. A member not
-//     heard for [artifacts.PresenceExpiry] (three missed rebroadcasts) is
-//     dropped: a node that dies takes its viewers with it, with nothing to
-//     clean up.
+//     sockets at most [CoalesceRate] times a second (the difference between
+//     what they were shown and what the room presents now, at most
+//     [FrameMembers] members re-presented a frame, the most recent first),
+//     and this node tells the fleet what its own members did there at most
+//     [BroadcastRate] times a second. Apart, so a cursor crossing nodes waits
+//     one short window on each side rather than two long ones.
+//   - EVERY [Rebroadcast] each node broadcasts every member it holds in every
+//     room, in full, and a peer replaces what it held from that node with it,
+//     so a lost leave costs one rebroadcast. A member not heard for [Expiry]
+//     (three missed rebroadcasts) is dropped: a node that dies takes its
+//     viewers with it, with nothing to clean up.
 //   - A NODE GAINING ITS FIRST SOCKET in a room asks its peers once, within the
 //     fleet's read budget, rather than leaving a newcomer to wait a rebroadcast
 //     interval to see who is there. Each answer is applied as it arrives
@@ -55,28 +64,27 @@
 //
 // # Large rooms present the most recent fifty
 //
-// Past [artifacts.PresenceRoomTop] members a room presents the fifty most
-// recently active (by the instant each last changed what it is doing or where)
-// and counts the rest by kind; it presents everybody again only below
-// [artifacts.PresenceRoomFull]. The hysteresis keeps a room hovering at the
-// threshold from flipping on every join, and the bound keeps a room of five
-// hundred from sending every diff to every socket. Nobody is invisible: every
+// Past [RoomTop] members a room presents the fifty most recently active (by the
+// instant each last changed what it is doing or where) and counts the rest by
+// kind; it presents everybody again only below [RoomFull]. The hysteresis
+// keeps a room hovering at the threshold from flipping on every join, and the
+// bound keeps a room of five hundred from sending every diff to every socket. Nobody is invisible: every
 // viewer is a member, presented or counted.
 //
 // # Agents are present too
 //
 // An agent's tool session reading or writing an artifact touches its room
 // ([Hub.Touch]): the seat appears as an agent, viewing or editing, focused on
-// the collection and document the call named, and leaves the room
-// [artifacts.PresenceExpiry] after its last call, since an agent's calls are
-// its heartbeats. An agent's member is broadcast like a socket's, but a node
-// whose only members in a room are agents does not listen on it: an agent has
-// no screen to show the room on.
+// the collection and document the call named, and leaves the room [Expiry]
+// after its last call, since an agent's calls are its heartbeats. An agent's
+// member is broadcast like a socket's, but a node whose only members in a room
+// are agents does not listen on it: an agent has no screen to show the room
+// on.
 //
 // # Who may be in a room is not decided here
 //
-// The socket decides a join (reading the artifact is the rule) and decides it
-// again whenever access to the artifact narrows; the hub keeps who is present
+// The socket decides a join (reading the artifact is an artifact room's rule)
+// and decides it again whenever access narrows; the hub keeps who is present
 // and nothing about who may be.
 //
 // Presence is told, never stored: ADR-0038, whose authority this package is.

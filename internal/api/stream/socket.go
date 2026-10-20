@@ -14,9 +14,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
-	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/presence"
 )
 
 // The close codes this socket ends a connection with, on top of the ones the
@@ -300,8 +300,8 @@ type request struct {
 	// Activity and Focus are a `presence` frame's: what the socket is doing
 	// in the room and where it is looking. Who is doing it is never the
 	// frame's to say: it is the principal the socket resolved.
-	Activity artifacts.PresenceActivity `json:"activity"`
-	Focus    artifacts.Focus            `json:"focus"`
+	Activity presence.Activity `json:"activity"`
+	Focus    presence.Focus    `json:"focus"`
 
 	// ChannelID and Typing belong to [ChatFocusKind], which says which room
 	// this tab is looking at and whether its person is composing there.
@@ -585,7 +585,7 @@ func serveSocket(ctx context.Context, conn *websocket.Conn,
 // roomOpsDepth is how many room frames one socket may have waiting for its room
 // goroutine before its read loop waits for room.
 //
-// SIXTEEN: presence frames are held to [artifacts.PresenceClientRate] a second
+// SIXTEEN: presence frames are held to [presence.ClientRate] a second
 // before they are queued and joins are rare, so this is more than a second of
 // an honest tab's frames, and the read loop waits only behind a join that is
 // slow to decide, which is backpressure on that one socket.

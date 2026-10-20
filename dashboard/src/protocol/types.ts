@@ -7139,7 +7139,7 @@ export interface DataWriteAnswer {
   conflict?: DataDoc[];
 }
 
-/** Where in an artifact a member is looking (`artifacts.Focus`). */
+/** Where in an artifact a member is looking (`presence.Focus`). */
 export interface PresenceFocus {
   version?: number;
   region?: string;
@@ -7148,7 +7148,7 @@ export interface PresenceFocus {
   field?: string;
 }
 
-/** One open viewer of one artifact (`artifacts.PresenceMember`). */
+/** One open viewer of one artifact (`presence.Member`). */
 export interface ArtifactPresenceMember {
   session: string;
   /** The seat handle, which the dashboard resolves to a name, or the login of one acting under no seat. */
@@ -7161,9 +7161,8 @@ export interface ArtifactPresenceMember {
   turn?: string;
 }
 
-/** Who is in one artifact's room (`artifacts.PresenceRoster`). */
+/** Who is in one artifact's room (`presence.Roster`). */
 export interface ArtifactPresenceRoster {
-  artifact: string;
   members: ArtifactPresenceMember[] | null;
   counts?: { human: number; agent: number };
   truncated?: boolean;
@@ -7218,7 +7217,7 @@ export interface ArtifactDataPush {
   through?: number;
 }
 
-/** An `artifact_presence` push (`presence.Change`). */
+/** An `artifact_presence` push (`stream.ArtifactPresence`). */
 export interface ArtifactPresencePush {
   artifact: string;
   upsert: ArtifactPresenceMember[] | null;

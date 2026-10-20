@@ -112,10 +112,10 @@ type DataStores interface {
 
 // Presence is this node's presence hub as the socket uses it.
 type Presence interface {
-	Join(id artifacts.ID, who presence.Local) (string, artifacts.PresenceRoster, error)
-	Update(id artifacts.ID, session string, activity artifacts.PresenceActivity,
-		focus artifacts.Focus) error
-	Leave(id artifacts.ID, session string)
+	Join(room presence.Room, who presence.Local) (string, presence.Roster, error)
+	Update(room presence.Room, session string, activity presence.Activity,
+		focus presence.Focus) error
+	Leave(room presence.Room, session string)
 	OnChange(fn func(presence.Change)) (stop func())
 }
 
@@ -134,12 +134,23 @@ const (
 // (`through`), with `resync` set when the socket's `since` cannot be caught up
 // incrementally and the collections must be read whole.
 type ArtifactJoined struct {
-	Artifact artifacts.ID             `json:"artifact"`
-	Session  string                   `json:"session"`
-	Role     artifacts.Role           `json:"role"`
-	Roster   artifacts.PresenceRoster `json:"roster"`
-	Through  int64                    `json:"through"`
-	Resync   bool                     `json:"resync"`
+	Artifact artifacts.ID    `json:"artifact"`
+	Session  string          `json:"session"`
+	Role     artifacts.Role  `json:"role"`
+	Roster   presence.Roster `json:"roster"`
+	Through  int64           `json:"through"`
+	Resync   bool            `json:"resync"`
+}
+
+// ArtifactPresence is an `artifact_presence` push: one artifact room's
+// fan-out ([presence.Change]), the room named by its artifact as every other
+// artifact frame names it.
+type ArtifactPresence struct {
+	Artifact  artifacts.ID      `json:"artifact"`
+	Upsert    []presence.Member `json:"upsert"`
+	Leave     []string          `json:"leave"`
+	Counts    *presence.Counts  `json:"counts,omitempty"`
+	Truncated bool              `json:"truncated"`
 }
 
 // ArtifactChange is an `artifact_changed` push: which artifact, what moved,
@@ -376,7 +387,7 @@ func (s *Service) joinArtifact(ctx context.Context, client *Client, req request)
 	}
 	resync := storeErr != nil || req.Since <= 0 || req.Since < floor
 
-	session, roster, err := s.rooms.Presence.Join(id, presence.Local{
+	session, roster, err := s.rooms.Presence.Join(presence.ArtifactRoom(id), presence.Local{
 		Seat: presenceSeat(principal), Kind: presenceKind(principal)})
 	if err != nil {
 		log.WarnContext(ctx, "stream_room_presence_refused", "artifact", id.String(),
@@ -389,11 +400,11 @@ func (s *Service) joinArtifact(ctx context.Context, client *Client, req request)
 	_, replaced, ok := s.hub.JoinArtifact(client, id, role, session)
 	if !ok {
 		// THE SOCKET LEFT while the join was being decided.
-		s.rooms.Presence.Leave(id, session)
+		s.rooms.Presence.Leave(presence.ArtifactRoom(id), session)
 		return
 	}
 	if replaced != "" {
-		s.rooms.Presence.Leave(id, replaced)
+		s.rooms.Presence.Leave(presence.ArtifactRoom(id), replaced)
 	}
 	client.Reply(Envelope{Kind: KindResult, ID: req.ID, What: artifactJoinWhat,
 		Data: ArtifactJoined{Artifact: id, Session: session, Role: role, Roster: roster,
@@ -425,7 +436,7 @@ func (s *Service) leaveArtifact(client *Client, req request) {
 		return
 	}
 	if session, ok := s.hub.LeaveArtifact(client, id); ok {
-		s.rooms.Presence.Leave(id, session)
+		s.rooms.Presence.Leave(presence.ArtifactRoom(id), session)
 	}
 }
 
@@ -445,7 +456,8 @@ func (s *Service) presenceFrame(ctx context.Context, client *Client, req request
 	if !ok {
 		return
 	}
-	if err := s.rooms.Presence.Update(id, session, req.Activity, req.Focus); err != nil {
+	if err := s.rooms.Presence.Update(presence.ArtifactRoom(id), session, req.Activity,
+		req.Focus); err != nil {
 		log.DebugContext(ctx, "stream_presence_refused", "artifact", id.String(),
 			"error", err.Error())
 	}
@@ -457,17 +469,25 @@ func (s *Service) leave(client *Client) {
 	if s.rooms.serves() {
 		for id, m := range s.hub.Artifacts(client) {
 			if session, ok := s.hub.LeaveArtifactIf(client, id, m.Join); ok {
-				s.rooms.Presence.Leave(id, session)
+				s.rooms.Presence.Leave(presence.ArtifactRoom(id), session)
 			}
 		}
 	}
 	s.hub.Unregister(client)
 }
 
-// PresenceChanged pushes one room's presence fan-out to the sockets in it.
-// Called on the presence hub's goroutine; never blocks.
+// PresenceChanged pushes one artifact room's presence fan-out to the sockets in
+// it. A room of any other kind is not this socket surface's: the hub's every
+// sink hears every room and keeps the kind it serves. Called on the presence
+// hub's goroutine; never blocks.
 func (s *Service) PresenceChanged(c presence.Change) {
-	s.hub.Broadcast(PushArtifact(KindArtifactPresence, c.Artifact, c, s.now()))
+	if c.Room.Kind != presence.RoomArtifact {
+		return
+	}
+	id := artifacts.ID(c.Room.ID)
+	s.hub.Broadcast(PushArtifact(KindArtifactPresence, id, ArtifactPresence{
+		Artifact: id, Upsert: c.Upsert, Leave: c.Leave, Counts: c.Counts,
+		Truncated: c.Truncated}, s.now()))
 }
 
 // ArtifactsMoved pushes what one committed artifacts batch moved to each
@@ -718,7 +738,7 @@ func (s *Service) decideMember(ctx context.Context, p iam.Principal, id artifact
 		if !ok {
 			return nil
 		}
-		s.rooms.Presence.Leave(id, session)
+		s.rooms.Presence.Leave(presence.ArtifactRoom(id), session)
 		log.InfoContext(ctx, "stream_room_withdrawn", "login", p.Login, "artifact", id.String())
 		m.Client.Reply(Envelope{Kind: KindError, What: artifactJoinWhat, Error: CodeNotFound,
 			Artifact: id.String()})
