@@ -805,6 +805,19 @@ holds two kinds of entry:
   new registry instead: they are facts about a server rather than about the
   company.
 
+The engine's **own surfaces hold no entry at all**, and need none: on its
+[work tracker](task-engine.md), its [knowledge base](knowledge-system.md) and
+its [chat](chatlet.md) the actor a record names is the seat's handle, so the id a
+wake names its sender by IS that handle. The engine declares those three
+sources to every registry it builds as namespaces whose ids are handles, and
+`ByExternalID` on one answers `ByHandle`. That is what makes a person's comment
+on a Worklet task, a remark on a Doclet page or a message in the engine's chat
+come from their seat everywhere a sender is read — the
+[learning](agent-learning.md) profile it is filed under, the
+[requester](artifacts.md#sharing) an agent's artifact tools act for,
+and the colleague a [thread block](agent-runtime.md#text-somebody-else-wrote)
+fences them as — rather than from an outside party nobody can name.
+
 ### A suspended holder is withdrawn with no configuration change
 
 A human seat's `contact` block is company configuration, but whether the person

@@ -271,6 +271,24 @@ func TestAKnownColleagueIsAnnotated(t *testing.T) {
 	}
 }
 
+// A SENDER WHOSE ID IS THEIR HANDLE IS NAMED ONCE. On a surface whose ids are
+// seat handles the colleague's label already carries the handle, so the id the
+// annotation adds for a vendor's chat tools would be the same word twice.
+func TestASenderWhoseIDIsTheirHandleIsNamedOnce(t *testing.T) {
+	o := company()
+	o.Normalize()
+	r := notify.NewRegistry(o, nil, "chat")
+	got := chatPrompt.Build(chatNote(func(m map[string]string) {
+		m["user"] = "dana-founder"
+	}), r)
+	if !strings.Contains(got, "posted by **Dana Founder (dana-founder, human colleague)**") {
+		t.Fatalf("a colleague on a handle namespace is not named as one:\n%s", got)
+	}
+	if strings.Contains(got, "`dana-founder`") {
+		t.Errorf("the handle is repeated beside the label that carries it:\n%s", got)
+	}
+}
+
 // The transport always writes the sender key, so an absent sender arrives as
 // an empty string — a lookup default would never fire and the prompt would
 // say "posted by ****".

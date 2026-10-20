@@ -36,6 +36,56 @@ func TestAnExternalIDResolvesToItsSeat(t *testing.T) {
 	}
 }
 
+// AN ENGINE SURFACE'S ID IS THE SEAT'S HANDLE. A namespace the registry is
+// built with as one whose ids are handles answers every question about an id
+// the way the seat index answers the handle: a person's comment on the
+// engine's own tracker comes from the seat they write as, wherever a reader
+// asks who sent it — and nothing can be registered there to answer first.
+func TestAHandleNamespaceAnswersByTheHandleItsIDIs(t *testing.T) {
+	o := company()
+	o.Normalize()
+	r := notify.NewRegistry(o, nil, "work")
+
+	p, ok := r.ByExternalID("work", "dana-founder")
+	if !ok || p.Handle != "dana-founder" || !p.Human {
+		t.Fatalf("a person's handle on a handle namespace resolved to %+v, %v, "+
+			"want the person's seat — read as an outside party, a turn they "+
+			"woke acts for nobody", p, ok)
+	}
+	if !r.Knows("work", "engineering-lead") {
+		t.Error("Knows missed a seat's handle on a handle namespace")
+	}
+	if got := r.ExternalID("work", "backend-engineer"); got != "backend-engineer" {
+		t.Errorf("a seat's id on a handle namespace is %q, want its handle", got)
+	}
+
+	// A HANDLE THE ORG DOES NOT HOLD is nobody, as it is by handle.
+	if _, ok := r.ByExternalID("work", "left-the-company"); ok {
+		t.Error("a handle no seat holds resolved to somebody")
+	}
+	if r.Knows("work", "left-the-company") || r.ExternalID("work", "left-the-company") != "" {
+		t.Error("a handle no seat holds is known on a handle namespace")
+	}
+
+	// ONLY THE NAMESPACES DECLARED: a vendor's id that happens to spell a
+	// handle is not that seat, and a registry declaring none answers none.
+	if _, ok := r.ByExternalID("slack", "dana-founder"); ok {
+		t.Error("an undeclared namespace answered an id by the handle it spells")
+	}
+	if _, ok := registry(t).ByExternalID("work", "dana-founder"); ok {
+		t.Error("a registry declaring no handle namespace answered one")
+	}
+
+	// AND NOTHING IS REGISTERED THERE, which would be a second name for a
+	// seat answering before the handle it contradicts.
+	if err := r.Register("work", "someone-else", "engineering-lead"); err == nil {
+		t.Fatal("an id was registered on a handle namespace")
+	}
+	if p, _ := r.ByExternalID("work", "someone-else"); p.Handle != "" {
+		t.Errorf("a refused registration resolves to %q", p.Handle)
+	}
+}
+
 // The bot companion namespace: an inbound payload names an agent poster by
 // bot id, while a human typing a mention uses the member id. Both must
 // resolve, or a fellow agent's message gets annotated as a stranger while a

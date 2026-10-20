@@ -128,13 +128,14 @@ func (Prompt) Addressed(n notify.Inbound) bool {
 // domain can say: the routing reason the verdict has no words for, and what
 // to do about it with the tools it has.
 func (p Prompt) Build(n notify.Inbound, parties notify.Parties) string {
-	// RESOLVED BEFORE DELEGATING, because the shared prompt annotates a
-	// sender through [notify.Parties.ByExternalID] — the vendor rule,
-	// which misses here by construction: a Chatlet seat holds no external
-	// id in any namespace, and asking for one would mean registering
-	// every handle as its own external id in a namespace that exists
-	// only to satisfy the call. The label it would have produced is
-	// produced here instead, from the handle the record carries.
+	// RESOLVED BEFORE DELEGATING, for the author the roster does NOT
+	// name. The shared prompt annotates a sender it resolves through
+	// [notify.Parties.ByExternalID] — which answers this source by the
+	// handle its ids are — and leaves any other as the id it arrived
+	// with: here a bare handle, which an agent would answer as a
+	// colleague. What such an author IS is the record's kind, which only
+	// this domain reads, so the sender the shared prompt falls back to is
+	// rendered here ([AuthorLabel]).
 	n.Sender = senderLabel(n, parties)
 
 	var b strings.Builder
