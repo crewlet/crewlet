@@ -1667,7 +1667,11 @@ function BuilderScreen({
               <Menu label="More builder actions" items={more} />
             </span>
             <Menu
-              label={selectedView ? `Actions for ${selectedName}` : "Add to the organization"}
+              // THE SELECTION'S OWN NAME, apart from its row's Actions menu,
+              // which a screen reader would otherwise meet twice by one name.
+              label={
+                selectedView ? `Actions for ${selectedName}, selected` : "Add to the organization"
+              }
               icon={selectedView ? <EllipsisVerticalGlyph /> : <PlusGlyph />}
               items={toolbarItems}
               trigger={selectedView ? selectedName : "Add"}
@@ -2072,7 +2076,8 @@ function LeadUnit({
   if (tops.length < 2) return <Tag variant="neutral">{label}</Tag>;
   return (
     <Menu
-      label="Units you lead"
+      // THE NAME KEEPS THE WORDS ON THE BUTTON, then says what it opens.
+      label={`${label}, choose another unit you lead`}
       trigger={label}
       items={tops.map((top) => {
         const held = locked && top.key !== scope;

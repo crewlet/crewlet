@@ -457,7 +457,7 @@ describe("the section tabs fold what does not fit into More", () => {
       const folded = strip().querySelector("a[data-folded]")!;
       expect(folded.getAttribute("aria-hidden")).toBe("true");
       expect(screen.queryByRole("link", { name: /Checklist/ })).toBeNull();
-      fireEvent.click(screen.getByRole("button", { name: "More" }));
+      fireEvent.click(screen.getByRole("button", { name: "More sections of My work" }));
       const item = await screen.findByRole("menuitem", { name: /Checklist/ });
       expect(item.textContent).toContain("0");
       fireEvent.click(item);
@@ -476,7 +476,7 @@ describe("the section tabs fold what does not fit into More", () => {
       lay(2000);
       mount(["me"]);
       await waitFor(() => expect(drawn()).toHaveLength(7));
-      expect(screen.queryByRole("button", { name: "More" })).toBeNull();
+      expect(screen.queryByRole("button", { name: /^More sections of / })).toBeNull();
     });
   });
 });

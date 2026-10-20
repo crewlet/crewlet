@@ -112,7 +112,7 @@ describe("a lead's draft", () => {
     // The unit is read once to open it, and checked once: the transport its
     // scope brings starts the check, and nothing asks for it again.
     expect(engine.sent("GET", "/config/units/engineering")).toHaveLength(1);
-    expect(screen.getByRole("button", { name: "Editing Engineering as its lead" })).toBeDefined();
+    expect(screen.getByRole("button", { name: /^Editing Engineering as its lead/ })).toBeDefined();
     // The draft holds no settings, so it says nothing about the providers.
     expect(screen.queryByText(/No model provider is set/)).toBeNull();
 
@@ -156,7 +156,7 @@ describe("a lead's draft", () => {
     expect(engine.checks()).toHaveLength(1);
 
     // The toolbar's Add at the company's top level is drawn unavailable.
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add to the organization" }));
     const menu = await screen.findByRole("menu", { name: "Add to the organization" });
     expect(
       within(menu)
@@ -300,8 +300,8 @@ describe("a lead's draft", () => {
     await screen.findByText("No problems");
 
     fireEvent.click(screen.getByRole("button", { name: "Edit Dev" }));
-    fireEvent.click(screen.getByRole("button", { name: "Editing Engineering as its lead" }));
-    let menu = await screen.findByRole("menu", { name: "Units you lead" });
+    fireEvent.click(screen.getByRole("button", { name: /^Editing Engineering as its lead/ }));
+    let menu = await screen.findByRole("menu", { name: /choose another unit you lead$/ });
     expect(
       within(menu).getByRole("menuitemradio", { name: /Ops/ }).getAttribute("aria-disabled"),
     ).toBe("true");
@@ -309,12 +309,12 @@ describe("a lead's draft", () => {
 
     // With the change undone there is nothing to lose, and Ops opens.
     fireEvent.click(screen.getByRole("button", { name: "Undo" }));
-    fireEvent.click(screen.getByRole("button", { name: "Editing Engineering as its lead" }));
-    menu = await screen.findByRole("menu", { name: "Units you lead" });
+    fireEvent.click(screen.getByRole("button", { name: /^Editing Engineering as its lead/ }));
+    menu = await screen.findByRole("menu", { name: /choose another unit you lead$/ });
     fireEvent.click(within(menu).getByRole("menuitemradio", { name: /Ops/ }));
     expect(await screen.findByText("SRE")).toBeDefined();
     expect(screen.queryByText("Dev")).toBeNull();
-    expect(screen.getByRole("button", { name: "Editing Ops as its lead" })).toBeDefined();
+    expect(screen.getByRole("button", { name: /^Editing Ops as its lead/ })).toBeDefined();
   });
 
   // A NEW SEAT AVOIDS EVERY HANDLE IN THE COMPANY, not only the unit's: the
@@ -325,8 +325,10 @@ describe("a lead's draft", () => {
     mountLead(engine, "#/agents/edit?view=table");
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Select Engineering" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Engineering" }));
-    const menu = await screen.findByRole("menu", { name: "Actions for Engineering" });
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Actions for Engineering, selected" }),
+    );
+    const menu = await screen.findByRole("menu", { name: "Actions for Engineering, selected" });
     fireEvent.click(within(menu).getByRole("menuitem", { name: "Add agent seat" }));
     const dialog = await screen.findByRole("dialog", { name: "Add to Engineering" });
     fireEvent.change(within(dialog).getByLabelText("Name"), { target: { value: "Seller" } });
@@ -342,8 +344,8 @@ describe("a lead's draft", () => {
     const engine = new Engine(leadCompany());
     mountLead(engine);
     await screen.findByText("No problems");
-    fireEvent.click(screen.getByRole("button", { name: "Editing Engineering as its lead" }));
-    const menu = await screen.findByRole("menu", { name: "Units you lead" });
+    fireEvent.click(screen.getByRole("button", { name: /^Editing Engineering as its lead/ }));
+    const menu = await screen.findByRole("menu", { name: /choose another unit you lead$/ });
     fireEvent.click(within(menu).getByRole("menuitemradio", { name: /Ops/ }));
     await screen.findByText("SRE");
     fireEvent.click(screen.getByRole("button", { name: "Edit SRE" }));
