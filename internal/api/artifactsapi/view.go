@@ -39,8 +39,9 @@ type ticketBody struct {
 // the caller's credential and to the one page it opens (a design's artboard is
 // a frame of its own, with a ticket of its own), the artifact origin's URL
 // under it, and the sandbox and allow attributes the dashboard sets verbatim. It records that the caller
-// opened the artifact and, for a read only the admin path admitted, the
-// elevated read, before the frame is handed over.
+// opened the artifact (unless it is a gallery's preview, [previewed]) and, for
+// a read only the admin path admitted, the elevated read, before the frame is
+// handed over.
 func (s *Service) ticket(w http.ResponseWriter, r *http.Request) {
 	if _, ok := pathID(w, r); !ok {
 		return
@@ -112,8 +113,22 @@ func (s *Service) ticket(w http.ResponseWriter, r *http.Request) {
 		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
 		return
 	}
-	s.gate.markOpened(r.Context(), a)
+	if !previewed(r) {
+		s.gate.markOpened(r.Context(), a)
+	}
 	httpjson.Write(w, http.StatusCreated, frame)
+}
+
+// previewed reports whether a content read is a gallery card's preview
+// (`?preview=1`): answered exactly as any other read, with no open recorded.
+// A gallery draws a dozen artifacts small as the reader scrolls past them, and
+// recording each as opened would fill every Seen by list with people who only
+// browsed and reorder the reader's Recently opened by what scrolled by. The
+// elevated read an administrator's preview of a private artifact makes is
+// still recorded (admitContent), since that record is an audit, not a
+// courtesy.
+func previewed(r *http.Request) bool {
+	return r.URL.Query().Get("preview") == "1"
 }
 
 // versionEntry is the version the path names and one of its files, for a

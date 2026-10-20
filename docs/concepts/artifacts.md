@@ -275,6 +275,9 @@ What an **agent** may do is narrower than its shares, on purpose:
 
 "**Seen by**" lists who has opened an artifact, to its editors and above. It is
 on by default, and a company turns it off with `artifacts.seen_by: nobody`.
+The gallery's live previews draw an artifact without opening it: every read
+they make is a preview (`?preview=1`, or the outline and the datastore's own
+questions, which record nothing), so scrolling past a card is not seeing it.
 
 ---
 

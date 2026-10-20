@@ -290,6 +290,35 @@ func TestAFrameOpensOneVersionOfAPageForOneCredential(t *testing.T) {
 	}
 }
 
+// A GALLERY'S PREVIEW OPENS NOTHING: a frame minted with `?preview=1` is the
+// same frame, and no open is recorded, so browsing a gallery fills nobody's
+// Seen by list; an administrator's preview of a private page is still
+// recorded as the elevated read it is.
+func TestAPreviewsFrameRecordsNoOpening(t *testing.T) {
+	t.Parallel()
+	g := newRig(t, true)
+	if w := g.do(person("bob"), "POST", at(page, "/tickets?preview=1"), ``); w.Code != http.StatusCreated {
+		t.Fatalf("a preview's frame: %d %s", w.Code, w.Body)
+	}
+	if len(g.framer.requests) != 1 || g.framer.requests[0].Head.ID != page {
+		t.Errorf("the preview's frame was asked for %+v", g.framer.requests)
+	}
+	if len(g.marks.opened) != 0 {
+		t.Errorf("a preview recorded %d openings", len(g.marks.opened))
+	}
+	if w := g.do(person("bob"), "POST", at(page, "/tickets?preview=0"), ``); w.Code != http.StatusCreated ||
+		len(g.marks.opened) != 1 {
+		t.Errorf("a frame that is not a preview recorded %d openings", len(g.marks.opened))
+	}
+	ada := person("ada", iam.GrantAdmin)
+	if w := g.do(ada, "POST", at(page, "/tickets?preview=1"), ``); w.Code != http.StatusCreated {
+		t.Fatalf("an administrator's preview: %d %s", w.Code, w.Body)
+	}
+	if len(g.marks.elevated) != 1 {
+		t.Errorf("an administrator's preview recorded %d elevated reads, want 1", len(g.marks.elevated))
+	}
+}
+
 // OPENING AN ARTIFACT TWICE IN ONE WINDOW IS ONE OPENING: the operation key is
 // the window's, so the second collapses on the ledger.
 func TestAnOpeningIsRecordedOncePerWindow(t *testing.T) {
