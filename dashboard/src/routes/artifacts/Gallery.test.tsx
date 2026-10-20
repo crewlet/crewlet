@@ -1,9 +1,12 @@
 /**
- * The Artifacts gallery: who a row names, which columns a section draws, what
- * a row in the trash offers, and where the listing's controls stand.
+ * The Artifacts gallery: its three sections and the earlier sections'
+ * addresses, the Make row, the grid by default and the list remembered, who a
+ * card and a row name, which columns a section draws, what a row in the trash
+ * offers, and where the listing's controls stand.
  *
  * WHAT IS HELD HERE IS THE GALLERY: the engine's answers are stood in for by
- * `useQuery`, and every kind's cover by nothing, since each has its own suite.
+ * `useQuery`, and every live preview draws its stand-in, since jsdom has no
+ * IntersectionObserver and `GalleryPreview` has its own suite.
  */
 
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
@@ -15,6 +18,7 @@ import { Router } from "~/app/router.tsx";
 import type { ArtifactSection } from "~/app/routes.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import type { ArtifactListItem } from "~/protocol/index.ts";
+import { STORAGE_KEYS } from "~/lib/storage.ts";
 
 vi.mock("~/lib/useQuery.ts", () => ({ useQuery: vi.fn() }));
 vi.mock("~/lib/useRest.ts", () => ({ useRest: () => ({ data: null }) }));
@@ -33,14 +37,9 @@ vi.mock("~/lib/artifacts/access.ts", async () => {
   );
   return { ...actual, useArtifactAccess: () => ({ can: true, as: "token:review", acts: [] }) };
 });
-vi.mock("~/lib/artifacts/pins.ts", async () => {
-  const actual =
-    await vi.importActual<typeof import("~/lib/artifacts/pins.ts")>("~/lib/artifacts/pins.ts");
-  return {
-    ...actual,
-    usePinToggle: () => ({ label: "Pin to your sidebar", toggle: vi.fn(), pinned: false }),
-  };
-});
+vi.mock("~/lib/artifacts/pinToggle.ts", () => ({
+  usePinToggle: () => ({ label: "Pin to your sidebar", toggle: vi.fn(), pinned: false }),
+}));
 
 function row(over: Partial<ArtifactListItem>): ArtifactListItem {
   return {
@@ -78,7 +77,15 @@ beforeEach(() => {
   }) as never);
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  localStorage.clear();
+});
+
+/** The list shape, as a reader who chose it on this browser before. */
+function asList() {
+  localStorage.setItem(STORAGE_KEYS.artifactsShape, "list");
+}
 
 function mount(section: ArtifactSection, hash = "#/artifacts") {
   location.hash = hash;
@@ -98,7 +105,8 @@ function headers(): string[] {
 }
 
 test("the reader's own artifact is owned by You, and anybody else's by their name", () => {
-  mount("for-you");
+  asList();
+  mount("all");
   const grid = document.body;
   // It said "token:review", the credential's spelling, on every row.
   expect(within(grid).queryByText("token:review")).toBeNull();
@@ -109,32 +117,117 @@ test("the reader's own artifact is owned by You, and anybody else's by their nam
   expect(within(theirs).getByText("Can edit")).toBeTruthy();
 });
 
-test("Mine draws no owner and no role, which would say You and Owner on every row", () => {
-  mount("mine", "#/artifacts/mine");
-  expect(headers()).toEqual(["Name", "Type", "Updated", ""]);
+test("Yours draws no owner and no role, which would say You and Owner on every row", () => {
+  asList();
+  mount("yours", "#/artifacts/yours");
+  expect(headers()).toEqual(["Name", "Type", "Edited", ""]);
 });
 
-test("the trash says when each went in and when it goes for good, and offers no pin", () => {
+test("the trash says when each went in and when it goes for good, and offers a restore and no pin", () => {
+  asList();
   items = [row({ status: "trashed", trashed_at: "2026-10-18T10:00:00Z", title: "Old draft" })];
-  mount("mine", "#/artifacts/mine?status=trashed");
+  mount("yours", "#/artifacts/yours?status=trashed");
   expect(headers()).toEqual(["Name", "Type", "Trashed", "Deleted for good", ""]);
+  expect(screen.getByText(/Only you see your trash/)).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "More for “Old draft”" }));
   expect(screen.queryByRole("menuitem", { name: "Pin to your sidebar" })).toBeNull();
+  expect(screen.getByRole("menuitem", { name: "Restore" })).toBeTruthy();
   expect(screen.getByRole("menuitem", { name: "Copy link" })).toBeTruthy();
 });
 
 // THE TOGGLE SAYS IT IS ONE: the kit's Button takes `pressed`, and an
 // `aria-pressed` passed beside it was overwritten with nothing.
 test("the type, the order, the trash and the shape are the toolbar's, and the bar keeps the field and New", () => {
-  mount("mine", "#/artifacts/mine");
+  mount("yours", "#/artifacts/yours");
   const toolbar = document.querySelector(".toolbar") as HTMLElement;
   expect(within(toolbar).getByRole("button", { name: "Trash" }).getAttribute("aria-pressed")).toBe(
     "false",
   );
+  expect(within(toolbar).getByRole("radio", { name: "Grid" })).toBeTruthy();
   expect(within(toolbar).getByRole("radio", { name: "List" })).toBeTruthy();
-  expect(within(toolbar).getByRole("radio", { name: "Cards" })).toBeTruthy();
   expect(within(toolbar).queryByRole("searchbox")).toBeNull();
   expect(screen.getByRole("searchbox", { name: "Search artifacts" })).toBeTruthy();
+});
+
+test("the trash is Yours alone", () => {
+  mount("all");
+  expect(screen.queryByRole("button", { name: "Trash" })).toBeNull();
+  cleanup();
+  mount("shared", "#/artifacts/shared");
+  expect(screen.queryByRole("button", { name: "Trash" })).toBeNull();
+});
+
+// THE GRID IS THE DEFAULT, and the list a choice this browser remembers: the
+// address does not carry it, so a pasted link opens in the reader's own shape.
+test("the gallery opens as a grid, and a reader's choice of the list is remembered here", () => {
+  mount("all");
+  expect(screen.getByRole("radio", { name: "Grid" }).getAttribute("aria-checked")).toBe("true");
+  expect(
+    screen.getByRole("link", { name: "Architecture notes" }).closest(".artifacts-cards"),
+  ).not.toBeNull();
+  fireEvent.click(screen.getByRole("radio", { name: "List" }));
+  expect(localStorage.getItem(STORAGE_KEYS.artifactsShape)).toBe("list");
+  expect(location.hash).not.toContain("shape");
+  cleanup();
+  mount("all");
+  expect(screen.getByRole("radio", { name: "List" }).getAttribute("aria-checked")).toBe("true");
+  expect(headers()[0]).toBe("Name");
+  fireEvent.click(screen.getByRole("radio", { name: "Grid" }));
+  expect(localStorage.getItem(STORAGE_KEYS.artifactsShape)).toBeNull();
+});
+
+test("the Make row offers every kind on All and Yours, each opening New on it", () => {
+  mount("all");
+  const make = screen.getByRole("region", { name: "Make something new" });
+  const tiles = within(make).getAllByRole("link");
+  expect(tiles.map((t) => t.textContent)).toEqual([
+    "Docs",
+    "Slides",
+    "Design",
+    "Dashboard",
+    "HTML",
+    "Sheet",
+  ]);
+  expect(tiles[0]!.getAttribute("href")).toBe("#/artifacts/new?kind=doc");
+  expect(tiles[5]!.getAttribute("href")).toBe("#/artifacts/new?kind=sheet");
+  cleanup();
+  mount("yours", "#/artifacts/yours");
+  expect(screen.getByRole("region", { name: "Make something new" })).toBeTruthy();
+});
+
+test("the Make row steps aside on Shared with you, in the trash and for a search", () => {
+  mount("shared", "#/artifacts/shared");
+  expect(screen.queryByRole("region", { name: "Make something new" })).toBeNull();
+  cleanup();
+  mount("yours", "#/artifacts/yours?status=trashed");
+  expect(screen.queryByRole("region", { name: "Make something new" })).toBeNull();
+  cleanup();
+  mount("all", "#/artifacts?q=vendor");
+  expect(screen.queryByRole("region", { name: "Make something new" })).toBeNull();
+});
+
+test("an earlier gallery's address is rewritten in place to the section it became", () => {
+  mount("yours", "#/artifacts/mine?kind=sheet");
+  expect(location.hash).toBe("#/artifacts/yours?kind=sheet");
+  cleanup();
+  mount("all", "#/artifacts/company");
+  expect(location.hash).toBe("#/artifacts");
+});
+
+test("pins stand above the rest on All, as a group of their own", () => {
+  vi.mocked(useQuery).mockImplementation(((what: string, params?: { pinned?: boolean }) => {
+    const data =
+      what === "artifacts"
+        ? { items: params?.pinned ? [items[1]!] : items, total: items.length }
+        : null;
+    return { data, loading: false, error: null, refusal: null, refetch: vi.fn() };
+  }) as never);
+  mount("all");
+  const pinned = screen.getByRole("region", { name: "Pinned" });
+  expect(within(pinned).getByRole("link", { name: "Vendor scorecard" })).toBeTruthy();
+  const recent = screen.getByRole("region", { name: "Recent" });
+  expect(within(recent).queryByRole("link", { name: "Vendor scorecard" })).toBeNull();
+  expect(within(recent).getByRole("link", { name: "Architecture notes" })).toBeTruthy();
 });
 
 test("a card names no owner on the reader's own, and its changer only when that is somebody else", () => {
@@ -147,13 +240,70 @@ test("a card names no owner on the reader's own, and its changer only when that 
       updated_by: { name: "token:review", kind: "operator" },
     }),
   ];
-  mount("for-you", "#/artifacts?shape=cards");
+  mount("all");
   const own = screen.getByRole("link", { name: "Architecture notes" });
   expect(own.textContent).not.toContain("token:review");
   expect(own.textContent).not.toContain(" by ");
   const theirs = screen.getByRole("link", { name: "Vendor scorecard" });
   expect(theirs.textContent).toContain("maya");
   expect(theirs.textContent).toContain("by you");
+});
+
+test("a card says who can open it, and its menu stands beside its link", () => {
+  items = [
+    row({}),
+    row({
+      id: "a2",
+      title: "Company handbook",
+      share_count: 1,
+      shares: [
+        {
+          audience: { kind: "company" },
+          role: "viewer",
+          granted_by: { name: "token:review", kind: "operator" },
+          granted_at: "2026-10-18T10:00:00Z",
+        },
+      ],
+    }),
+    row({ id: "a3", title: "Team plan", share_count: 2 }),
+  ];
+  mount("all");
+  expect(screen.getByRole("link", { name: "Architecture notes" }).textContent).toContain("Private");
+  expect(screen.getByRole("link", { name: "Company handbook" }).textContent).toContain(
+    "Shared with the company",
+  );
+  expect(screen.getByRole("link", { name: "Team plan" }).textContent).toContain("Shared");
+  const link = screen.getByRole("link", { name: "Architecture notes" });
+  const more = screen.getByRole("button", { name: "More for “Architecture notes”" });
+  expect(link.contains(more)).toBe(false);
+  fireEvent.click(more);
+  for (const name of ["Pin to your sidebar", "Copy link", "Rename", "Move to the trash"]) {
+    expect(screen.getByRole("menuitem", { name })).toBeTruthy();
+  }
+});
+
+test("the grid's placeholder is the card's own shape while the first page loads", () => {
+  vi.mocked(useQuery).mockImplementation((() => ({
+    data: null,
+    loading: true,
+    error: null,
+    refusal: null,
+    refetch: vi.fn(),
+  })) as never);
+  mount("all");
+  expect(document.querySelectorAll(".crewlet-artifact-card--skeleton").length).toBeGreaterThan(0);
+  expect(
+    screen.getAllByRole("status").filter((s) => s.textContent === "Loading artifacts"),
+  ).toHaveLength(1);
+});
+
+test("an empty section says what fills it, and a search that found nothing says what it looked for", () => {
+  items = [];
+  mount("shared", "#/artifacts/shared");
+  expect(screen.getByText("Nothing is shared with you")).toBeTruthy();
+  cleanup();
+  mount("all", "#/artifacts?q=zzz");
+  expect(screen.getByText("Nothing matches “zzz”")).toBeTruthy();
 });
 
 // IT SAID "Change the phrase or the type" with no type chosen.

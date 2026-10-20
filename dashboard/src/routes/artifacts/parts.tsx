@@ -1,7 +1,8 @@
 /**
  * What the Artifacts screens share: copying an artifact's address, a listed
- * artifact as the design system's card, the card an artifact's place shows
- * when the reader may not open it, and the state a refusal maps to.
+ * artifact as the design system's card and who can open it, the card an
+ * artifact's place shows when the reader may not open it, and the state a
+ * refusal maps to.
  */
 
 import type { ReactNode } from "react";
@@ -10,59 +11,59 @@ import {
   ArtifactCard,
   ButtonLink,
   type AccessDeniedReason,
+  type ArtifactAccess,
   type ArtifactCardSize,
   type ToastApi,
 } from "@crewlethq/ui";
 import { href } from "~/app/router.tsx";
-import { queryErrorCode, type ArtifactKind, type ArtifactListItem } from "~/protocol/index.ts";
+import { queryErrorCode, type ArtifactListItem } from "~/protocol/index.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { artifactPath } from "~/lib/artifacts/api.ts";
+import { artifactPath } from "~/app/routes.ts";
 import type { ArtifactPeople } from "~/lib/artifacts/people.ts";
-import { DashboardCardCover } from "./DashboardCardCover.tsx";
-import { DocCover } from "./DocCover.tsx";
-import { SheetCover } from "./SheetCover.tsx";
-import { SlidesCover } from "./SlidesCover.tsx";
-import { DesignCover } from "./DesignCover.tsx";
+import { GalleryPreview } from "./GalleryPreview.tsx";
 
 /**
- * The native cover each kind draws on its gallery card (D64), from the kind's
- * own structure and never a screenshot; a kind with none shows its glyph, and
- * so does a cover with nothing to draw (its outline still loading, a sheet
- * with no columns), which the card cannot tell from a picture.
+ * Who can open an artifact, as its card draws it: the whole company when a
+ * company share is among the shares this reader is shown, people when it
+ * carries any share at all, else its owner alone. A reader below editor is
+ * shown no share list, only the count, so a company-wide artifact reads as
+ * shared to them, which is true.
  */
-const KIND_COVERS: Partial<Record<ArtifactKind, (item: ArtifactListItem) => ReactNode>> = {
-  doc: (item) => <DocCover item={item} />,
-  slides: (item) => <SlidesCover item={item} />,
-  dashboard: (item) => <DashboardCardCover item={item} />,
-  sheet: (item) => <SheetCover item={item} />,
-  design: (item) => <DesignCover item={item} />,
-};
+export function accessOf(item: Pick<ArtifactListItem, "shares" | "share_count">): ArtifactAccess {
+  if (item.shares?.some((s) => s.audience.kind === "company")) return "company";
+  return item.share_count > 0 ? "shared" : "private";
+}
 
 /**
- * A listed artifact as the design system's card: a gallery's card, or a row
- * in a task's rail (`compact`). One mapping, so an artifact reads the same
- * wherever it is listed.
+ * A listed artifact as the design system's card: a gallery's card, with its
+ * live preview and its own menu, or a row in a task's rail (`compact`). One
+ * mapping, so an artifact reads the same wherever it is listed.
  *
  * WHO, ONCE. The owner is named unless it is the reader, whose own card says
  * nothing it would repeat on every one of theirs; the change is "by" somebody
  * only when that is not the owner already named: "by you" for the reader's
- * own change to somebody else's. It drew the owner and then the same name
- * again before the time.
+ * own change to somebody else's.
  */
 export function ListedArtifactCard({
   item,
   people,
   now,
   size = "card",
+  actions,
 }: {
   item: ArtifactListItem;
   people: ArtifactPeople;
   now: number;
   size?: ArtifactCardSize;
+  /** The card's own menu, drawn beside its link. */
+  actions?: ReactNode;
 }) {
   const reader = useViewer().owner;
   const mine = reader !== "" && item.owner === reader;
-  const changer = item.updated_by.name;
+  // A CARD IN THE TRASH says when it went in, which is what its owner reads
+  // a trash by, not when it was last edited.
+  const trashed = item.status === "trashed";
+  const changer = trashed ? "" : item.updated_by.name;
   const updatedBy =
     !changer || changer === item.owner
       ? undefined
@@ -75,14 +76,20 @@ export function ListedArtifactCard({
       kind={item.kind}
       href={href(artifactPath(item.id))}
       owner={mine ? undefined : people.seatPrincipal(item.owner)}
-      updatedAt={item.updated_at}
+      updatedAt={trashed ? item.trashed_at : item.updated_at}
       updatedBy={updatedBy}
+      {...(trashed ? { labels: { updated: "Trashed" } } : {})}
       pinned={item.pinned ?? false}
       version={item.head_number > 0 ? item.head_number : undefined}
       size={size}
       now={now}
-      {...(size !== "compact" && KIND_COVERS[item.kind]
-        ? { preview: KIND_COVERS[item.kind]!(item) }
+      {...(size === "card"
+        ? {
+            access: accessOf(item),
+            trashed,
+            preview: <GalleryPreview item={item} people={people} />,
+            actions,
+          }
         : {})}
     />
   );

@@ -584,7 +584,9 @@ export const WORKSPACES: WorkspaceRow[] = [
     renderer: "tabs",
     // THE GALLERY'S OWN QUESTION travels between its sections: the kind, the
     // phrase and the order a reader chose are the same question on every one.
-    keep: ["kind", "q", "sort", "shape"],
+    // The shape (grid or list) is the browser's own preference, not the
+    // address's: see `routes/artifacts/Gallery.tsx`.
+    keep: ["kind", "q", "sort"],
     // NO PERMISSION FOR THE WORKSPACE: the artifacts app gates AUTHORING only
     // (D01). A share alone admits a person to open, comment on and fill in
     // what was shared with them, so the gallery and an artifact's page are
@@ -592,18 +594,19 @@ export const WORKSPACES: WorkspaceRow[] = [
     // Starting a sheet is the app's, and says so on its own row.
     sections: [
       {
-        key: "for-you",
-        label: "For you",
+        key: "all",
+        label: "All",
         icon: "layers",
         path: ["artifacts"],
-        hint: "What you opened lately and what was shared with you, pinned first",
+        hint: "Every artifact you can open, the latest activity first, your pins above",
       },
       {
-        key: "mine",
-        label: "Mine",
+        key: "yours",
+        label: "Yours",
         icon: "user",
-        path: ["artifacts", "mine"],
-        hint: "Artifacts you own",
+        path: ["artifacts", "yours"],
+        hint: "Artifacts you own, and your trash",
+        keywords: ["mine", "my artifacts", "trash"],
       },
       {
         key: "shared",
@@ -611,20 +614,7 @@ export const WORKSPACES: WorkspaceRow[] = [
         icon: "share-2",
         path: ["artifacts", "shared"],
         hint: "Artifacts somebody shared with you, your team or the whole company",
-      },
-      {
-        key: "company",
-        label: "Company",
-        icon: "building-complex",
-        path: ["artifacts", "company"],
-        hint: "Every artifact shared with the whole company",
-      },
-      {
-        key: "agents",
-        label: "By agents",
-        icon: "bot",
-        path: ["artifacts", "agents"],
-        hint: "What agent seats made that you can open",
+        keywords: ["company", "by agents"],
       },
       {
         // AN ADDRESS AND A BUTTON, not a tab: the gallery's New starts it, and
@@ -918,10 +908,8 @@ export const RESERVED_SEGMENTS: string[] = [
   "backups",
   "audit",
   "appearance",
-  "mine",
+  "yours",
   "shared",
-  "company",
-  "agents",
   "new",
 ];
 

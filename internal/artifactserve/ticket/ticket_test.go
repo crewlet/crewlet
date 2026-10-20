@@ -207,6 +207,23 @@ func TestAMintRefusesClaimsNoTicketMayCarry(t *testing.T) {
 		"document past the path bound": func(cl *artifacts.TicketClaims) {
 			cl.Document = strings.Repeat("a", artifacts.MaxPathBytes+1)
 		},
+		"unknown purpose": func(cl *artifacts.TicketClaims) { cl.Purpose = "embed" },
+		// A PREVIEW IS GRANTED WHAT DRAWING NEEDS, and lives minutes.
+		"preview with the viewer's state": func(cl *artifacts.TicketClaims) {
+			cl.Purpose = artifacts.TicketPurposePreview
+			cl.Capabilities = []artifacts.Capability{artifacts.CapabilityDB, artifacts.CapabilityState}
+			cl.Expires = c.at.Add(artifacts.PreviewTicketLifetime)
+		},
+		"preview with presence": func(cl *artifacts.TicketClaims) {
+			cl.Purpose = artifacts.TicketPurposePreview
+			cl.Capabilities = []artifacts.Capability{artifacts.CapabilityPresence}
+			cl.Expires = c.at.Add(artifacts.PreviewTicketLifetime)
+		},
+		"preview past its lifetime": func(cl *artifacts.TicketClaims) {
+			cl.Purpose = artifacts.TicketPurposePreview
+			cl.Capabilities = nil
+			cl.Expires = c.at.Add(artifacts.PreviewTicketLifetime + time.Minute)
+		},
 	}
 	for name, mutate := range cases {
 		cl := claims(c)
@@ -214,6 +231,29 @@ func TestAMintRefusesClaimsNoTicketMayCarry(t *testing.T) {
 		if _, err := codec.Mint(cl); !errors.Is(err, ticket.ErrInvalidClaims) {
 			t.Errorf("%s: Mint = %v, want ErrInvalidClaims", name, err)
 		}
+	}
+}
+
+// TestAPreviewsTicketOpensAsAPreview: a preview's claims round trip with their
+// purpose, so a serving node and the ready route read the ticket as a preview.
+func TestAPreviewsTicketOpensAsAPreview(t *testing.T) {
+	t.Parallel()
+	c := start()
+	codec := codec(t, c, runtoken.OneKey(k1.ID, k1.Material))
+	in := claims(c)
+	in.Purpose = artifacts.TicketPurposePreview
+	in.Capabilities = []artifacts.Capability{artifacts.CapabilityAssets, artifacts.CapabilityDB}
+	in.Expires = c.at.Add(artifacts.PreviewTicketLifetime)
+	tok, err := codec.Mint(in)
+	if err != nil {
+		t.Fatalf("Mint: %v", err)
+	}
+	out, verdict, err := codec.Open(tok)
+	if err != nil || verdict != ticket.Valid {
+		t.Fatalf("Open: %v %v", verdict, err)
+	}
+	if out.Purpose != artifacts.TicketPurposePreview || len(out.Capabilities) != 2 {
+		t.Errorf("the preview opened as %+v", out)
 	}
 }
 

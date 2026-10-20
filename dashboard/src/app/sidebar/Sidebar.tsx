@@ -88,7 +88,7 @@ import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import type { AgentRow } from "~/protocol/index.ts";
 import { pageCount, viewRun } from "~/lib/work.ts";
 import { useStarred } from "~/lib/starred.ts";
-import { artifactPath } from "~/lib/artifacts/api.ts";
+import { artifactPath } from "~/app/routes.ts";
 import { usePins } from "~/lib/artifacts/pins.ts";
 import { capsOf, keyRow, useKeymap } from "../keymap.ts";
 import { inboxFigure, useInboxCounts } from "~/lib/useInboxCounts.ts";

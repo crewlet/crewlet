@@ -143,7 +143,7 @@ import type {
   SecretRow,
   WorkActivityRecord,
 } from "~/protocol/index.ts";
-import { artifactPath } from "~/lib/artifacts/api.ts";
+import { artifactPath } from "~/app/routes.ts";
 import { audienceName, useArtifactPeople } from "~/lib/artifacts/people.ts";
 import { historyOpTag, historyRefusalWords, historyWords } from "~/lib/artifacts/words.ts";
 import { itemPath, subjectItem } from "~/lib/work.ts";

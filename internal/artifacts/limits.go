@@ -299,6 +299,12 @@ const (
 	// host for a fresh one.
 	TicketLifetime = time.Hour
 
+	// PreviewTicketLifetime bounds a preview's ticket ([TicketPurposePreview]):
+	// a gallery card mounts its frame as it scrolls into view and mints a new
+	// one when it comes back, so a preview needs only the minutes its page
+	// takes to load and settle, and a leaked one opens nothing for long.
+	PreviewTicketLifetime = 5 * time.Minute
+
 	// TicketExpiredGrace is how long past its claims' expiry a ticket is
 	// still recognised as one this fleet minted, so it is answered "expired,
 	// mint another" rather than "unknown".

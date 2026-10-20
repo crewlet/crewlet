@@ -84,6 +84,12 @@ type FrameRequest struct {
 	// Granted are the capabilities the viewer is granted in this frame, a
 	// subset of what the version declares, as the API decided them.
 	Granted []artifacts.Capability
+
+	// Purpose is why the frame is minted: empty for an open, or a preview
+	// ([artifacts.TicketPurposePreview]), whose grant is held to
+	// [artifacts.PreviewCapabilities] and whose ticket lives at most
+	// [artifacts.PreviewTicketLifetime].
+	Purpose artifacts.TicketPurpose
 }
 
 // Frames mints frames.
@@ -110,8 +116,9 @@ func NewFrames(tickets *ticket.Codec, origins Origins, now func() time.Time) (*F
 // For mints one frame: a ticket for the viewer, the version and the grant, and
 // everything the dashboard sets on the iframe.
 //
-// THE LIFETIME IS [artifacts.TicketLifetime], capped by the credential's own
-// end, and cut to whole seconds (the precision a ticket carries).
+// THE LIFETIME IS [artifacts.TicketLifetime] ([artifacts.PreviewTicketLifetime]
+// for a preview), capped by the credential's own end, and cut to whole
+// seconds (the precision a ticket carries).
 //
 // THE URL NAMES THE VERSION'S ENTRY under the ticket, so every relative URL in
 // the page resolves under the same ticket and a page never handles it, and its
@@ -136,10 +143,19 @@ func (f *Frames) For(r FrameRequest) (artifacts.Frame, error) {
 	if err != nil {
 		return artifacts.Frame{}, err
 	}
+	if !r.Purpose.Valid() {
+		return artifacts.Frame{}, fmt.Errorf("artifactserve: %q is not a purpose a frame is "+
+			"minted for", r.Purpose)
+	}
+	preview := r.Purpose == artifacts.TicketPurposePreview
 	for _, c := range r.Granted {
 		if !c.Valid() || !slices.Contains(v.Capabilities, c) {
 			return artifacts.Frame{}, fmt.Errorf("artifactserve: capability %q is not one "+
 				"version %d declares", c, v.Number)
+		}
+		if preview && !slices.Contains(artifacts.PreviewCapabilities, c) {
+			return artifacts.Frame{}, fmt.Errorf("artifactserve: capability %q is not one a "+
+				"preview is granted", c)
 		}
 	}
 	owner := iam.RecordOwner(r.Principal)
@@ -147,7 +163,11 @@ func (f *Frames) For(r FrameRequest) (artifacts.Frame, error) {
 		return artifacts.Frame{}, fmt.Errorf("%w (record %q)", ErrNoLineage, owner)
 	}
 	now := f.now()
-	expires := now.Add(artifacts.TicketLifetime)
+	lifetime := artifacts.TicketLifetime
+	if preview {
+		lifetime = artifacts.PreviewTicketLifetime
+	}
+	expires := now.Add(lifetime)
 	if !r.Until.IsZero() && r.Until.Before(expires) {
 		expires = r.Until
 	}
@@ -169,6 +189,7 @@ func (f *Frames) For(r FrameRequest) (artifacts.Frame, error) {
 		Document:     doc,
 		Nonce:        nonce,
 		Expires:      expires,
+		Purpose:      r.Purpose,
 	})
 	if err != nil {
 		return artifacts.Frame{}, fmt.Errorf("artifactserve: mint the ticket: %w", err)

@@ -30,11 +30,6 @@ import type {
 import type { KeyedRequest } from "../keyedWrite.ts";
 import { audienceKey } from "./words.ts";
 
-/** An artifact's own address in the dashboard. */
-export function artifactPath(id: string): string[] {
-  return ["artifacts", id];
-}
-
 const base = (id: string) => `/artifacts/${encodeURIComponent(id)}`;
 
 /** A publish names the head it was based on as `If-Match: "<n>"`, the form an artifact's head takes as an ETag. */
@@ -253,11 +248,40 @@ export async function mintFrame(
   id: string,
   version: number,
   document?: string,
+  options: ReadOptions = {},
 ): Promise<ArtifactFrame> {
-  return (await rest.post(`/artifacts/${encodeURIComponent(id)}/tickets`, {
-    ...(version > 0 ? { version } : {}),
-    ...(document ? { document } : {}),
-  })) as ArtifactFrame;
+  const res = await rest.request("POST", `/artifacts/${encodeURIComponent(id)}/tickets`, {
+    body: {
+      ...(version > 0 ? { version } : {}),
+      ...(document ? { document } : {}),
+    },
+    ...previewQuery(options),
+  });
+  return res.body as ArtifactFrame;
+}
+
+/** How a content read is made. */
+export interface ReadOptions {
+  /**
+   * A gallery's preview, not the reader opening the artifact
+   * (`?purpose=preview`): the engine answers the same read under the same
+   * authorization and records no open, so browsing a gallery never fills an
+   * artifact's Seen by list or reorders the reader's Recently opened. A
+   * preview's frame is granted only what drawing needs, for minutes, and
+   * files no ready report.
+   */
+  preview?: boolean;
+  signal?: AbortSignal;
+}
+
+function previewQuery(options: ReadOptions): {
+  query?: Record<string, string>;
+  signal?: AbortSignal;
+} {
+  return {
+    ...(options.preview ? { query: { purpose: "preview" } } : {}),
+    ...(options.signal ? { signal: options.signal } : {}),
+  };
 }
 
 /** One text file of a version, read as text: a slide's source an edit replaces whole. */
@@ -299,11 +323,14 @@ export async function readBoard(
   id: string,
   version: number,
   signal: AbortSignal,
+  options: Omit<ReadOptions, "signal"> = {},
 ): Promise<DashboardBoardAnswer> {
-  return (await rest.get(
+  const res = await rest.request(
+    "GET",
     `/artifacts/${encodeURIComponent(id)}/versions/${version}/dashboard`,
-    signal,
-  )) as DashboardBoardAnswer;
+    previewQuery({ ...options, signal }),
+  );
+  return res.body as DashboardBoardAnswer;
 }
 
 /**

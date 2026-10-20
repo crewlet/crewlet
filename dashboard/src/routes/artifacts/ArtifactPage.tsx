@@ -78,6 +78,7 @@ import {
   TrashGlyph,
   UsersGlyph,
 } from "@crewlethq/icons/glyphs";
+import { artifactSectionPath } from "~/app/routes.ts";
 import { href, useNavigator, useParam, useRoute } from "~/app/router.tsx";
 import { useFillScreen } from "~/app/fill.tsx";
 import { useKeymap } from "~/app/keymap.ts";
@@ -90,7 +91,8 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { keyedWrite, useKeyedGesture } from "~/lib/keyedWrite.ts";
 import { ARTIFACT_TITLE_MAX_BYTES } from "~/contract/artifacts.ts";
 import { patchArtifact, untrashArtifact } from "~/lib/artifacts/api.ts";
-import { usePinToggle, usePins } from "~/lib/artifacts/pins.ts";
+import { usePins } from "~/lib/artifacts/pins.ts";
+import { usePinToggle } from "~/lib/artifacts/pinToggle.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import {
   isViewRegion,
@@ -246,7 +248,7 @@ function Trashed({ detail, onChanged }: { detail: ArtifactDetail; onChanged: () 
           kindLabel={KIND_WORDS[detail.kind]}
           start={<FrameNavToggle />}
           back={{
-            href: href(["artifacts", "mine"], { status: "trashed" }),
+            href: href(artifactSectionPath("yours"), { status: "trashed" }),
             label: "Back to the trash",
           }}
           version={<span className="artifact-trashed-chip">In the trash</span>}

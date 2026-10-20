@@ -90,7 +90,33 @@ type TicketClaims struct {
 
 	// Expires is the claims' own expiry.
 	Expires time.Time `json:"e"`
+
+	// Purpose is why the frame was minted: empty for a viewer opening the
+	// artifact, [TicketPurposePreview] for a gallery card drawing it small.
+	// A preview carries only [PreviewCapabilities], lives at most
+	// [PreviewTicketLifetime] and files no ready report.
+	Purpose TicketPurpose `json:"u,omitempty"`
 }
+
+// TicketPurpose is why a frame was minted.
+type TicketPurpose string
+
+// TicketPurposePreview is a gallery card's live preview: the same read, under
+// the same authorization, of a page drawn small and inert. It records no
+// open, joins no room, writes nothing and reports no ready time.
+const TicketPurposePreview TicketPurpose = "preview"
+
+// Valid reports whether p is a purpose this build mints: none, or a preview.
+func (p TicketPurpose) Valid() bool { return p == "" || p == TicketPurposePreview }
+
+// PreviewCapabilities are the only capabilities a preview's frame is granted:
+// what drawing the page needs, its asset store's pictures and its datastore
+// READ, and nothing that names the viewer, keeps their state or shows the
+// room. The datastore is answered by the dashboard's preview host, which
+// answers reads (a document, a page, a query, the schema, a subscription
+// once) and refuses every write, so a page draws its real content and can
+// change none of it; the engine decides every read again as the reader.
+var PreviewCapabilities = []Capability{CapabilityAssets, CapabilityDB}
 
 // OriginMode is how the artifact origin isolates one artifact.
 type OriginMode string

@@ -751,6 +751,28 @@
     flex: none;
   }
 
+  /* A SCREEN WHOSE BAR LEADS WITH ITS FIND FIELD (`page-find`, a gallery's
+     search) gives the field the line: the controls take the whole row under
+     the trail from the content's own gutter, the field grows into it, and
+     the primary action and "More" end it. Right-aligned at its own width, the
+     field stood indented behind a band of nothing. The line no longer needs to
+     scroll, since the field is what gives way. */
+  .page-controls:has(.page-find) {
+    flex: 1 1 100%;
+    margin-left: 0;
+    padding-inline: calc(var(--spacing-4) - var(--spacing-3));
+    overflow-x: visible;
+  }
+
+  .page-controls:has(.page-find) .page-actions {
+    flex: 1 1 auto;
+  }
+
+  .page-find {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
   /* THE LENSES TAKE A ROW OF THEIR OWN under the bar's line, which keeps the
      drawer toggle, the trail and the one action: four chips beside them cut
      a scope's name to a stub. The row scrolls sideways if it must, as the

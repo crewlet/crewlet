@@ -6333,6 +6333,24 @@ The API origin **never renders an artifact**:
   a deployment with no `api.artifacts.external_url` is
   `409 artifact_origin_unset`. Minting a frame records that the caller opened
   the artifact, at most once in fifteen minutes.
+
+  **`?purpose=preview`** mints a gallery card's live preview: the same read
+  under the same authorization as an open (a reader who may not open the
+  artifact may not preview it, and an administrator's preview of an artifact
+  only the admin path admits is still recorded as the elevated read it is),
+  and nothing more than a read. A preview records no open and changes no Seen
+  by list; its ticket carries the purpose, is granted only `assets` and `db`
+  of what the version declares (never `state`, `identity` or `presence`, so
+  the page's runtime offers no viewer, no per-viewer state and no room), and
+  lives at most five minutes. The dashboard answers a preview's `db` with a
+  read-only host: a document, a page, a query, the schema, and a
+  subscription answered once with the collection as it stands, each read as
+  the reader through the datastore's own questions; every write, undo and
+  state change is refused, nothing is pushed after a subscription's answer,
+  and no viewer is named;
+  and its frame files no ready report (`POST /artifacts/ready` refuses one as
+  `422 invalid`). A purpose this build does not know is `422 invalid`, never
+  read as an open.
 - `GET /artifacts/{id}/versions/{n}/source` answers a version's entry as JSON
   (`text`, `content_type`, `size`), read back and checked against its digest:
   how the dashboard reads a design's `canvas.json`, which it draws natively.
@@ -6380,7 +6398,9 @@ The API origin **never renders an artifact**:
   the interval it follows) and, for an engine dataset, the catalogue's words
   for what it reads and who may read it. It carries **no row**: every reader is
   answered the same board. Reading it records that the caller opened the
-  dashboard. Any other kind is `409 content_refused`.
+  dashboard, unless the request carries `?purpose=preview` (a gallery card's
+  preview, as for a frame: the same board, the same authorization, no open
+  recorded). Any other kind is `409 content_refused`.
 - `GET /artifacts/{id}/versions/{n}/sources/{dataset}` answers one dataset of
   a dashboard **as its viewer** ([ADR-0043](../../adr/0043-a-dashboards-live-data-is-read-as-its-viewer.md)):
   the query string is the board's filters, each refused unless the board offers

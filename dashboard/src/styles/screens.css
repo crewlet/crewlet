@@ -10373,6 +10373,48 @@ a.live-row:focus-visible {
   }
 }
 
+/* MAKE SOMETHING NEW: six tiles across, each the kind's drawing on its
+   tinted ground, with the room of a section under them before the work.
+   Narrower than six can stand at a readable size, they are three across in
+   two rows: every kind in view at once, none hidden past an edge a reader
+   has to discover by swiping. */
+.artifacts-make {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  /* With the content column's own gap, the room of a section before the
+     work starts. */
+  margin-bottom: var(--spacing-2);
+}
+.artifacts-make-title,
+.artifacts-group-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.4;
+}
+.artifacts-make-title {
+  font-size: var(--font-size-lg);
+}
+.artifacts-make-row {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: var(--spacing-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+@container page (width < 720px) {
+  .artifacts-make-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--spacing-4) var(--spacing-3);
+  }
+}
+
 /* THE TOOLBAR'S END: the trash and the shape, kept together at the far end
    of whichever line they land on. */
 .artifacts-bar-end {
@@ -10380,6 +10422,12 @@ a.live-row:focus-visible {
   align-items: center;
   gap: var(--spacing-2);
   margin-inline-start: auto;
+}
+
+.artifacts-trash-note {
+  margin: calc(-1 * var(--spacing-3)) 0 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
 }
 
 /* A ROW'S NAME: the kind's glyph, the title cut to its track, and the pin. */
@@ -10394,22 +10442,136 @@ a.live-row:focus-visible {
   color: var(--color-text-tertiary);
 }
 
-/* THE CARDS SHAPE: as many columns as fit at a card's measure, one on a phone. */
+/* A TITLED GROUP of cards or rows: Pinned, then Recent under it. */
+.artifacts-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+.artifacts-group + .artifacts-group,
+.artifacts-group + * > .artifacts-group {
+  margin-top: var(--spacing-5);
+}
+.artifacts-group-title > svg {
+  color: var(--color-text-tertiary);
+}
+
+/* THE GRID: three cards across a desktop, two on a tablet's width, one on a
+   phone, four only on a screen wide enough that three would be posters. A
+   column count by the page's width rather than auto-fill, so a card's size
+   moves in steps a reader recognises rather than with every pixel. */
 .artifacts-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(16rem, 100%), 1fr));
-  gap: var(--spacing-4);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--spacing-7) var(--spacing-6);
   margin: 0;
   padding: 0;
   list-style: none;
+}
+@container page (width >= 1600px) {
+  .artifacts-cards {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+@container page (width < 880px) {
+  .artifacts-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--spacing-6) var(--spacing-5);
+  }
+}
+@container page (width < 560px) {
+  .artifacts-cards {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 .artifacts-more {
   display: flex;
   align-items: center;
   gap: var(--spacing-3);
-  margin-top: var(--spacing-3);
+  margin-top: var(--spacing-6);
 }
 .artifacts-more-note {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+
+/* A CARD'S LIVE PREVIEW, each kind on the ground its own page draws it on:
+   a doc's page and a sheet's grid on the sheet, a board inside the board's
+   own margin, a page's frame edge to edge. */
+.artifacts-preview-doc,
+.artifacts-preview-sheet,
+.artifacts-preview-board {
+  box-sizing: border-box;
+  min-height: 100%;
+  background: var(--color-surface-background);
+}
+.artifacts-preview-doc {
+  padding: var(--spacing-8) var(--spacing-8) 0;
+}
+.artifacts-preview-board {
+  padding: var(--spacing-6);
+}
+.artifacts-preview-slide {
+  position: absolute;
+  inset: 0;
+  display: flex;
+}
+.artifacts-preview-frame {
+  position: absolute;
+  inset: 0;
+}
+
+/* COMPANY STORAGE, an administrator's line at the foot of All: three quotas
+   in a row, each a figure over a thin bar, under a hairline that says the
+   gallery has ended. */
+.artifacts-storage {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  margin-top: var(--spacing-8);
+  padding-top: var(--spacing-6);
+  border-top: 1px solid var(--color-border-default);
+}
+.artifacts-storage-title {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+}
+.artifacts-storage-quotas {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 14rem));
+  gap: var(--spacing-3) var(--spacing-8);
+  margin: 0;
+}
+@container page (width < 640px) {
+  .artifacts-storage-quotas {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.artifacts-storage-quota {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+.artifacts-storage-quota > dt {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+.artifacts-storage-quota > dd {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin: 0;
+}
+.artifacts-storage-figure {
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+}
+.artifacts-storage-note {
+  margin: 0;
   color: var(--color-text-tertiary);
   font-size: var(--font-size-xs);
 }
@@ -11477,32 +11639,6 @@ a.live-row:focus-visible {
   body:has(> .design-print-view) > :not(.design-print-view) {
     visibility: hidden;
   }
-}
-
-/* A DESIGN'S GALLERY COVER: its boards as a schematic, at card size. */
-.design-cover {
-  display: block;
-  width: 100%;
-  height: 100%;
-  padding: var(--spacing-2);
-  box-sizing: border-box;
-}
-
-/* A DECK'S GALLERY COVER: its cover slide at card size, and how many slides. */
-.slides-cover {
-  position: relative;
-  display: block;
-  width: 100%;
-}
-.slides-cover-count {
-  position: absolute;
-  right: var(--spacing-1);
-  bottom: var(--spacing-1);
-  padding: 0 var(--spacing-1);
-  border-radius: var(--radius-xs);
-  background: var(--color-surface-elevated);
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-2xs);
 }
 
 /* A DASHBOARD: its filters, its board of widgets and the Sources rail beside

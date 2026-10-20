@@ -290,6 +290,94 @@ func TestAFrameOpensOneVersionOfAPageForOneCredential(t *testing.T) {
 	}
 }
 
+// A GALLERY'S PREVIEW OPENS NOTHING AND GRANTS ONLY A READ: a frame minted
+// with `?purpose=preview` is decided as any open is, records no open, and is
+// asked of the framer as a preview granted only what drawing needs (its
+// assets and its datastore, which the dashboard's preview host answers with
+// reads alone), so its page is offered no viewer, no state and no room, and
+// it files no ready report. An open still records its opening, and an
+// administrator's preview of a private page is still recorded as the
+// elevated read it is. A purpose this build does not know is refused.
+func TestAPreviewsFrameRecordsNoOpeningAndGrantsOnlyARead(t *testing.T) {
+	t.Parallel()
+	g := newRig(t, true)
+	if w := g.do(person("bob"), "POST", at(page, "/tickets?purpose=preview"), ``); w.Code != http.StatusCreated {
+		t.Fatalf("a preview's frame: %d %s", w.Code, w.Body)
+	}
+	if len(g.framer.requests) != 1 {
+		t.Fatalf("the framer was asked %d times", len(g.framer.requests))
+	}
+	r := g.framer.requests[0]
+	if r.Purpose != artifacts.TicketPurposePreview || r.Head.ID != page {
+		t.Errorf("the preview was asked for as %q of %s", r.Purpose, r.Head.ID)
+	}
+	// The page declares the datastore, and the preview may read it (the
+	// dashboard's preview host answers reads alone); nothing past what the
+	// preview capabilities name is granted.
+	for _, c := range r.Granted {
+		if !slices.Contains(artifacts.PreviewCapabilities, c) {
+			t.Errorf("the preview was granted %q", c)
+		}
+	}
+	if !slices.Contains(r.Granted, artifacts.CapabilityDB) {
+		t.Errorf("the preview of a page declaring the datastore was granted %v", r.Granted)
+	}
+	if len(g.marks.opened) != 0 {
+		t.Errorf("a preview recorded %d openings", len(g.marks.opened))
+	}
+	// AN OPEN STILL RECORDS ITS OPENING, granted what the version declares.
+	if w := g.do(person("bob"), "POST", at(page, "/tickets"), ``); w.Code != http.StatusCreated ||
+		len(g.marks.opened) != 1 {
+		t.Errorf("an open recorded %d openings: %d %s", len(g.marks.opened), w.Code, w.Body)
+	}
+	if got := g.framer.requests[1]; got.Purpose != "" || !slices.Contains(got.Granted, artifacts.CapabilityDB) {
+		t.Errorf("an open was asked for as %q with %v", got.Purpose, got.Granted)
+	}
+	// THE SAME AUTHORIZATION: a stranger's preview is refused as their open is.
+	if w := g.do(person("dana"), "POST", at(page, "/tickets?purpose=preview"), ``); w.Code != http.StatusNotFound {
+		t.Errorf("a stranger's preview: %d %s", w.Code, w.Body)
+	}
+	ada := person("ada", iam.GrantAdmin)
+	if w := g.do(ada, "POST", at(page, "/tickets?purpose=preview"), ``); w.Code != http.StatusCreated {
+		t.Fatalf("an administrator's preview: %d %s", w.Code, w.Body)
+	}
+	if len(g.marks.elevated) != 1 || len(g.marks.opened) != 1 {
+		t.Errorf("an administrator's preview recorded %d elevated reads and %d openings, want 1 and 1",
+			len(g.marks.elevated), len(g.marks.opened))
+	}
+	if w := g.do(person("bob"), "POST", at(page, "/tickets?purpose=embed"), ``); w.Code != http.StatusUnprocessableEntity ||
+		errorOf(t, w) != "invalid" {
+		t.Errorf("an unknown purpose: %d %s", w.Code, w.Body)
+	}
+}
+
+// A BOARD READ AS A PREVIEW IS THE SAME BOARD and records no open; read as an
+// open it records one, and a purpose this build does not know is refused.
+func TestABoardReadAsAPreviewRecordsNoOpening(t *testing.T) {
+	t.Parallel()
+	g := newRig(t, true)
+	preview := g.do(person("bob"), "GET", at(pulse, "/versions/1/dashboard?purpose=preview"), ``)
+	if preview.Code != http.StatusOK {
+		t.Fatalf("a board's preview: %d %s", preview.Code, preview.Body)
+	}
+	if len(g.marks.opened) != 0 {
+		t.Errorf("a board's preview recorded %d openings", len(g.marks.opened))
+	}
+	open := g.do(person("bob"), "GET", at(pulse, "/versions/1/dashboard"), ``)
+	if open.Code != http.StatusOK || open.Body.String() != preview.Body.String() {
+		t.Errorf("an open answered %d, and not the preview's board: %s", open.Code, open.Body)
+	}
+	if len(g.marks.opened) != 1 {
+		t.Errorf("an open of the board recorded %d openings", len(g.marks.opened))
+	}
+	if w := g.do(person("dana"), "GET", at(pulse, "/versions/1/dashboard?purpose=preview"), ``); w.Code != http.StatusNotFound {
+		t.Errorf("a stranger's preview of the board: %d %s", w.Code, w.Body)
+	}
+	if w := g.do(person("bob"), "GET", at(pulse, "/versions/1/dashboard?purpose=embed"), ``); w.Code != http.StatusUnprocessableEntity {
+		t.Errorf("an unknown purpose: %d %s", w.Code, w.Body)
+	}
+}
+
 // OPENING AN ARTIFACT TWICE IN ONE WINDOW IS ONE OPENING: the operation key is
 // the window's, so the second collapses on the ledger.
 func TestAnOpeningIsRecordedOncePerWindow(t *testing.T) {

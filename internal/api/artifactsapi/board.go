@@ -45,9 +45,14 @@ type BoardDataset struct {
 }
 
 // board answers a version's board, decided by `get_artifact`, recording the
-// open as reading a native kind's content does.
+// open as reading a native kind's content does, unless it is a gallery's
+// preview ([purposeOf]).
 func (s *Service) board(w http.ResponseWriter, r *http.Request) {
 	n, ok := pathVersion(w, r)
+	if !ok {
+		return
+	}
+	purpose, ok := purposeOf(w, r)
 	if !ok {
 		return
 	}
@@ -59,7 +64,9 @@ func (s *Service) board(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	s.gate.markOpened(r.Context(), a)
+	if purpose != artifacts.TicketPurposePreview {
+		s.gate.markOpened(r.Context(), a)
+	}
 	httpjson.Write(w, http.StatusOK, boardAnswer(a.Head.ID, n, b))
 }
 

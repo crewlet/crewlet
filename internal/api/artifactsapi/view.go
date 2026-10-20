@@ -7,6 +7,7 @@ import (
 	"mime"
 	"net/http"
 	"path"
+	"slices"
 	"strconv"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
@@ -39,14 +40,19 @@ type ticketBody struct {
 // the caller's credential and to the one page it opens (a design's artboard is
 // a frame of its own, with a ticket of its own), the artifact origin's URL
 // under it, and the sandbox and allow attributes the dashboard sets verbatim. It records that the caller
-// opened the artifact and, for a read only the admin path admitted, the
-// elevated read, before the frame is handed over.
+// opened the artifact (unless it is a gallery's preview, [purposeOf]) and, for
+// a read only the admin path admitted, the elevated read, before the frame is
+// handed over.
 func (s *Service) ticket(w http.ResponseWriter, r *http.Request) {
 	if _, ok := pathID(w, r); !ok {
 		return
 	}
 	var body ticketBody
 	if !decode(w, r, &body, true) {
+		return
+	}
+	purpose, ok := purposeOf(w, r)
+	if !ok {
 		return
 	}
 	if body.Version < 0 {
@@ -88,7 +94,8 @@ func (s *Service) ticket(w http.ResponseWriter, r *http.Request) {
 	until, _ := auth.Lifetime(r.Context())
 	frame, err := s.frames.For(artifactserve.FrameRequest{
 		Principal: a.Principal, Lineage: lineage, Until: until, Head: a.Head,
-		Version: v, Document: body.Document, Granted: v.Capabilities,
+		Version: v, Document: body.Document, Granted: grant(v.Capabilities, purpose),
+		Purpose: purpose,
 	})
 	switch {
 	case errors.Is(err, artifactserve.ErrCredentialEnding):
@@ -112,8 +119,49 @@ func (s *Service) ticket(w http.ResponseWriter, r *http.Request) {
 		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
 		return
 	}
-	s.gate.markOpened(r.Context(), a)
+	if purpose != artifacts.TicketPurposePreview {
+		s.gate.markOpened(r.Context(), a)
+	}
 	httpjson.Write(w, http.StatusCreated, frame)
+}
+
+// grant is what a frame minted for purpose is granted of what its version
+// declares: all of it for an open, and for a preview only what drawing the
+// page needs ([artifacts.PreviewCapabilities]: its assets and a datastore the
+// dashboard's preview host answers with reads alone), so a preview's page
+// offers no viewer, no state and no room, whatever the version declares.
+func grant(declared []artifacts.Capability, purpose artifacts.TicketPurpose) []artifacts.Capability {
+	if purpose != artifacts.TicketPurposePreview {
+		return declared
+	}
+	out := make([]artifacts.Capability, 0, len(artifacts.PreviewCapabilities))
+	for _, c := range declared {
+		if slices.Contains(artifacts.PreviewCapabilities, c) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// purposeOf is why a content read is made (`?purpose=`), and whether it names
+// one this build knows: none, for a viewer opening the artifact, or
+// `preview`, for a gallery card drawing it small. A purpose this build does
+// not know is refused as invalid rather than read as an open, so a client is
+// never recorded, granted or reported as something it did not ask to be.
+//
+// A PREVIEW IS THE SAME READ under the same authorization (admitContent
+// decides it before this is asked, and an administrator's elevated read
+// through a preview is recorded as any other is), and it records no open: a
+// gallery draws a dozen artifacts small as the reader scrolls past them, and
+// recording each would fill every Seen by list with people who only browsed
+// and reorder the reader's Recently opened.
+func purposeOf(w http.ResponseWriter, r *http.Request) (artifacts.TicketPurpose, bool) {
+	purpose := artifacts.TicketPurpose(r.URL.Query().Get("purpose"))
+	if !purpose.Valid() {
+		invalid(w, "purpose is preview, or absent for a viewer opening the artifact")
+		return "", false
+	}
+	return purpose, true
 }
 
 // versionEntry is the version the path names and one of its files, for a

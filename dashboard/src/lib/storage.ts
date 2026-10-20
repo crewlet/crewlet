@@ -74,6 +74,8 @@ export const STORAGE_KEYS = {
   peekWidth: "crewlet.peek.width",
   /** An org draft not yet saved (`routes/org/builder/model/persistence.ts`). */
   orgDraft: "crewlet_org_draft",
+  /** How the Artifacts gallery is drawn, `grid` or `list` (`routes/artifacts/Gallery.tsx`). */
+  artifactsShape: "crewlet.artifacts.shape",
 } as const;
 
 export type StorageKey = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS];

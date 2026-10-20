@@ -101,7 +101,8 @@ func New(m runtoken.Material, now func() time.Time) (*Codec, error) {
 // capabilities are sorted and de-duplicated, so what [Codec.Open] answers is
 // byte for byte what was signed, and two mints of one grant are one value.
 //
-// A MINT NEVER OUTLIVES [artifacts.TicketLifetime], whatever the caller asks:
+// A MINT NEVER OUTLIVES [artifacts.TicketLifetime] ([artifacts.PreviewTicketLifetime]
+// for a preview), whatever the caller asks:
 // an expiry already past, or one more than a lifetime away, is refused rather
 // than clamped, because either is a caller that computed the wrong deadline and
 // a silent clamp would hide it.
@@ -115,10 +116,10 @@ func (c *Codec) Mint(claims artifacts.TicketClaims) (string, error) {
 	case !claims.Expires.After(now):
 		return "", fmt.Errorf("%w: expires %s, which is not after now (%s)",
 			ErrInvalidClaims, claims.Expires.Format(time.RFC3339), now.Format(time.RFC3339))
-	case claims.Expires.Sub(now) > artifacts.TicketLifetime+time.Second:
+	case claims.Expires.Sub(now) > lifetimeOf(claims.Purpose)+time.Second:
 		return "", fmt.Errorf("%w: expires %s, more than the ticket lifetime of %s "+
 			"from now", ErrInvalidClaims, claims.Expires.Format(time.RFC3339),
-			artifacts.TicketLifetime)
+			lifetimeOf(claims.Purpose))
 	}
 	subject, err := encode(claims)
 	if err != nil {
@@ -128,6 +129,14 @@ func (c *Codec) Mint(claims artifacts.TicketClaims) (string, error) {
 	// the claims by the grace, so a ticket that simply ran out still
 	// verifies and is answered Expired rather than Invalid.
 	return c.signer.Mint(subject, claims.Expires.Sub(now)+artifacts.TicketExpiredGrace), nil
+}
+
+// lifetimeOf is the longest a ticket minted for purpose may live.
+func lifetimeOf(purpose artifacts.TicketPurpose) time.Duration {
+	if purpose == artifacts.TicketPurposePreview {
+		return artifacts.PreviewTicketLifetime
+	}
+	return artifacts.TicketLifetime
 }
 
 // Open verifies a ticket and answers its claims and verdict. The claims are
@@ -200,9 +209,21 @@ func check(claims artifacts.TicketClaims) error {
 	case claims.Expires.IsZero():
 		return fmt.Errorf("%w: carries no expiry", ErrInvalidClaims)
 	}
+	if !claims.Purpose.Valid() {
+		return fmt.Errorf("%w: purpose %q is not one this build mints", ErrInvalidClaims,
+			claims.Purpose)
+	}
 	for _, c := range claims.Capabilities {
 		if !c.Valid() {
 			return fmt.Errorf("%w: capability %q is not one this build serves",
+				ErrInvalidClaims, c)
+		}
+		// A PREVIEW NEVER CARRIES MORE THAN DRAWING NEEDS, on a mint and on
+		// every open, so no ticket proves a preview granted the viewer, their
+		// state or the room.
+		if claims.Purpose == artifacts.TicketPurposePreview &&
+			!slices.Contains(artifacts.PreviewCapabilities, c) {
+			return fmt.Errorf("%w: capability %q is not one a preview is granted",
 				ErrInvalidClaims, c)
 		}
 	}
