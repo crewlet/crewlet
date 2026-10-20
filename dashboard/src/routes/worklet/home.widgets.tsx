@@ -24,6 +24,7 @@ import type { WorkView } from "~/protocol/index.ts";
 import {
   ChoiceNote,
   WidgetCard,
+  WidgetNote,
   WidgetQuery,
   defineWidgets,
   gapsOf,
@@ -144,27 +145,50 @@ function useProjectChoices(): WidgetChoices {
     loading: read.loading && !read.data,
     options: projects.map((p) => ({ value: p.key, label: `${p.key} · ${p.name}` })),
     empty: "No projects yet. Add one with New project in Worklet.",
+    partial: read.data?.truncated
+      ? `Only the first ${PROJECTS_PAGE} projects are offered.`
+      : undefined,
   };
 }
 
+/**
+ * One project, read BY ITS KEY, as the project's own page reads it
+ * (`work_project`).
+ *
+ * NEVER LOOKED UP IN THE PICKER'S LIST. The picker offers one page of the
+ * company's projects, and the widget used to find its project in that page: a
+ * project chosen while it was on the page, and pushed past it as the company
+ * grew, was not in it, so the widget said "Choose a project" for a project
+ * that was there all along. The question that answers one project answers
+ * this one.
+ */
 function Project({ params }: { params: Readonly<Record<string, string>> }) {
-  const { read, projects } = useProjects();
-  const project = projects.find((p) => p.key === params.project);
+  const viewer = useViewer();
+  const key = params.project ?? "";
+  const read = useQuery("work_project", key ? { key } : undefined, {
+    pollMs: 120_000,
+    enabled: key !== "" && viewer.worklet,
+  });
+  const project = read.data;
   const now = useNow();
   const open = useQuery(
     "work_items",
     project
       ? { container: `project:${project.key}`, subtasks: "separate", limit: ROWS }
       : undefined,
-    { pollMs: POLL_MS, enabled: project !== undefined },
+    { pollMs: POLL_MS, enabled: project !== null },
   );
   if (!project) {
     return (
       <WidgetCard title="Project" from="worklet">
-        {read.error ? (
-          <WidgetQuery error={read.error} refusal={read.refusal} loading={false} gaps={[]} />
-        ) : read.loading && !read.data ? null : (
+        {key === "" ? (
           <ChoiceNote thing="project" />
+        ) : read.error === "not_found" ? (
+          // A KEY NOTHING ANSWERS TO is a project removed since it was chosen,
+          // said with its key, which is the half a reader can act on.
+          <WidgetNote>{`There’s no project ${key} any more. Choose another in Edit Home.`}</WidgetNote>
+        ) : (
+          <WidgetQuery error={read.error} refusal={read.refusal} loading={read.loading} gaps={[]} />
         )}
       </WidgetCard>
     );

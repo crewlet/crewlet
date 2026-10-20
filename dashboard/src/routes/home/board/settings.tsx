@@ -296,16 +296,19 @@ function ParamField({
             {choices.empty ?? "Nothing to choose from yet."}
           </p>
         ) : (
-          <Select
-            id={field.id}
-            aria-describedby={field.describedBy}
-            value={value === "" ? undefined : value}
-            placeholder={`Choose a ${param.label.toLowerCase()}`}
-            options={choices.options.map((o) => ({ value: o.value, label: o.label }))}
-            onChange={(v) =>
-              onChange({ ...widget, params: { ...widget.params, [param.key]: String(v) } })
-            }
-          />
+          <>
+            <Select
+              id={field.id}
+              aria-describedby={field.describedBy}
+              value={value === "" ? undefined : value}
+              placeholder={`Choose a ${param.label.toLowerCase()}`}
+              options={choices.options.map((o) => ({ value: o.value, label: o.label }))}
+              onChange={(v) =>
+                onChange({ ...widget, params: { ...widget.params, [param.key]: String(v) } })
+              }
+            />
+            {choices.partial && <p className="home-card-note">{choices.partial}</p>}
+          </>
         )
       }
     </FormField>
