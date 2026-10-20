@@ -129,14 +129,63 @@ func (x *Indexer) Search(ctx context.Context, q LexicalQuery) ([]LexicalHit, err
 	return x.hydrateHits(ctx, scores, terms, limit)
 }
 
+// The lexical index's reads, named so its plan gate holds each to the index
+// it was written for (TestEveryLexicalIndexServesARegisteredQuery): the text
+// planned is the text run, where a gate registering a copy of each passed
+// whatever the indexer came to issue.
+const (
+	// lexicalCorpusStatement is the collection statistics BM25 needs.
+	lexicalCorpusStatement = `SELECT COUNT(*), COALESCE(AVG(length), 0) FROM kb_docs`
+
+	// lexicalTermDocsStatement is how many documents hold one term, across
+	// the whole corpus — see [Indexer.postings].
+	lexicalTermDocsStatement = `SELECT COUNT(*) FROM kb_postings WHERE term = ?`
+)
+
+// lexicalPostingScanStatement is one term's posting list, filtered to as many
+// containers and sources as the query names and, where shards is set, to a
+// bucket range; its arguments are the term, the containers, the sources, the
+// range's two ends and the scan's cap, in that order.
+//
+// THE SHARD IS ON THE DOCUMENT, not the posting. A posting belongs to its
+// document, so a term's list is filtered through the join rather than by a
+// column of its own — which is also why kb_postings has no shard: it would be
+// the document's own value written once per term it contains.
+func lexicalPostingScanStatement(containers, sources int, shards bool) string {
+	where := []string{"p.term = ?"}
+	if containers > 0 {
+		where = append(where, "d.container IN ("+binds(containers)+")")
+	}
+	if sources > 0 {
+		where = append(where, "d.source IN ("+binds(sources)+")")
+	}
+	if shards {
+		where = append(where, "d.search_shard >= ? AND d.search_shard < ?")
+	}
+	return `
+		SELECT p.doc_id, p.freq, d.length
+		  FROM kb_postings p
+		  JOIN kb_docs d ON d.id = p.doc_id
+		 WHERE ` + strings.Join(where, " AND ") + `
+		 ORDER BY p.freq DESC
+		 LIMIT ?`
+}
+
+// lexicalHydrateStatement reads n documents' hit fields by their keys: the
+// ranked answer's top and a fused answer's documents alike.
+func lexicalHydrateStatement(n int) string {
+	return `
+		SELECT id, source, source_id, container, title, excerpt
+		  FROM kb_docs WHERE id IN (` + binds(n) + `)`
+}
+
 // corpus reads the collection statistics BM25 needs.
 func (x *Indexer) corpus(ctx context.Context) (textindex.Corpus, error) {
 	var (
 		docs int
 		avg  float64
 	)
-	err := x.db.SQL().QueryRowContext(ctx,
-		`SELECT COUNT(*), COALESCE(AVG(length), 0) FROM kb_docs`).Scan(&docs, &avg)
+	err := x.db.SQL().QueryRowContext(ctx, lexicalCorpusStatement).Scan(&docs, &avg)
 	if err != nil {
 		return textindex.Corpus{}, fmt.Errorf("search: read index statistics: %w", err)
 	}
@@ -153,46 +202,28 @@ func (x *Indexer) corpus(ctx context.Context) (textindex.Corpus, error) {
 // be in rather than on how well it matched.
 func (x *Indexer) postings(ctx context.Context, term string, q LexicalQuery) ([]textindex.Posting, int, error) {
 	var total int
-	if err := x.db.SQL().QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM kb_postings WHERE term = ?`, term).Scan(&total); err != nil {
+	if err := x.db.SQL().QueryRowContext(ctx, lexicalTermDocsStatement,
+		term).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("search: count postings for %q: %w", term, err)
 	}
 	if total == 0 {
 		return nil, 0, nil
 	}
 
-	where := []string{"p.term = ?"}
 	args := []any{term}
-	if len(q.Containers) > 0 {
-		where = append(where, "d.container IN ("+binds(len(q.Containers))+")")
-		for _, c := range q.Containers {
-			args = append(args, c)
-		}
+	for _, c := range q.Containers {
+		args = append(args, c)
 	}
-	if len(q.Sources) > 0 {
-		where = append(where, "d.source IN ("+binds(len(q.Sources))+")")
-		for _, s := range q.Sources {
-			args = append(args, s)
-		}
+	for _, s := range q.Sources {
+		args = append(args, s)
 	}
 	if q.Shards.Covers() {
-		// THE SHARD IS ON THE DOCUMENT, not the posting. A posting
-		// belongs to its document, so a term's list is filtered through
-		// the join rather than by a column of its own — which is also
-		// why kb_postings has no shard: it would be the document's own
-		// value written once per term it contains.
-		where = append(where, "d.search_shard >= ? AND d.search_shard < ?")
 		args = append(args, q.Shards.From, q.Shards.To)
 	}
 	args = append(args, maxPostingScan)
 
-	rows, err := x.db.SQL().QueryContext(ctx, `
-		SELECT p.doc_id, p.freq, d.length
-		  FROM kb_postings p
-		  JOIN kb_docs d ON d.id = p.doc_id
-		 WHERE `+strings.Join(where, " AND ")+`
-		 ORDER BY p.freq DESC
-		 LIMIT ?`, args...)
+	rows, err := x.db.SQL().QueryContext(ctx, lexicalPostingScanStatement(
+		len(q.Containers), len(q.Sources), q.Shards.Covers()), args...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("search: read postings for %q: %w", term, err)
 	}
@@ -225,9 +256,7 @@ func (x *Indexer) hydrateHits(ctx context.Context, scores map[string]float64, te
 	for _, id := range top {
 		ids = append(ids, id)
 	}
-	rows, err := x.db.SQL().QueryContext(ctx, `
-		SELECT id, source, source_id, container, title, excerpt
-		  FROM kb_docs WHERE id IN (`+binds(len(ids))+`)`, ids...)
+	rows, err := x.db.SQL().QueryContext(ctx, lexicalHydrateStatement(len(ids)), ids...)
 	if err != nil {
 		return nil, fmt.Errorf("search: read index hits: %w", err)
 	}
@@ -357,9 +386,7 @@ func (x *Indexer) Hydrate(ctx context.Context, keys []string, text string) ([]Fu
 	for _, key := range keys {
 		ids = append(ids, key)
 	}
-	rows, err := x.db.SQL().QueryContext(ctx, `
-		SELECT id, source, source_id, container, title, excerpt
-		  FROM kb_docs WHERE id IN (`+binds(len(ids))+`)`, ids...)
+	rows, err := x.db.SQL().QueryContext(ctx, lexicalHydrateStatement(len(ids)), ids...)
 	if err != nil {
 		return nil, fmt.Errorf("search: read fused hits: %w", err)
 	}

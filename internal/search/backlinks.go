@@ -121,6 +121,15 @@ const BacklinksLimit = 50
 var ErrIndexBuilding = errors.New("search: this node's index has not finished its first " +
 	"build, so it cannot yet say what links to a page")
 
+// linkedFromStatement is every document linking to one page, by the page's
+// lowered id: named for the lexical plan gate, which holds every reader of
+// kb_docs to the plan it runs under ([lexicalCorpusStatement]).
+const linkedFromStatement = `
+		SELECT d.source, d.source_id
+		  FROM page_links l
+		  JOIN kb_docs d ON d.id = l.doc_id
+		 WHERE l.target_id = ?`
+
 // LinkedFrom answers which pages and tasks link to one page, by the page's id,
 // or [ErrIndexBuilding] while this node's index is still on its first lap.
 func (x *Indexer) LinkedFrom(ctx context.Context, pageID string) (Backlinks, error) {
@@ -134,11 +143,7 @@ func (x *Indexer) LinkedFrom(ctx context.Context, pageID string) (Backlinks, err
 	if target == "" {
 		return out, nil
 	}
-	rows, err := x.db.SQL().QueryContext(ctx, `
-		SELECT d.source, d.source_id
-		  FROM page_links l
-		  JOIN kb_docs d ON d.id = l.doc_id
-		 WHERE l.target_id = ?`, target)
+	rows, err := x.db.SQL().QueryContext(ctx, linkedFromStatement, target)
 	if err != nil {
 		return out, fmt.Errorf("search: read the links to page %s: %w", pageID, err)
 	}

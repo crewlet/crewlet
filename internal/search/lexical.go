@@ -264,8 +264,7 @@ func (x *Indexer) upsertOne(ctx context.Context, tx *sql.Tx, doc Doc, now int64,
 	if err := x.writeLinks(ctx, tx, doc, id, maxVariables); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM kb_postings WHERE doc_id = ?`, id); err != nil {
+	if _, err := tx.ExecContext(ctx, lexicalClearPostingsStatement, id); err != nil {
 		return fmt.Errorf("search: clear postings for %s: %w", id, err)
 	}
 	// ONE STATEMENT PER CHUNK, not one per term. This was the hottest
@@ -326,6 +325,33 @@ func (x *Indexer) writeLinks(ctx context.Context, tx *sql.Tx, doc Doc, id string
 	return nil
 }
 
+// The index's own maintenance statements over kb_docs and kb_postings, named
+// for the plan gate's reason ([lexicalCorpusStatement]).
+const (
+	// lexicalClearPostingsStatement clears one document's list before it is
+	// written again.
+	lexicalClearPostingsStatement = `DELETE FROM kb_postings WHERE doc_id = ?`
+
+	// lexicalRemoveDocStatement drops one document; its postings cascade.
+	lexicalRemoveDocStatement = `DELETE FROM kb_docs WHERE source = ? AND source_id = ?`
+
+	// lexicalOrphanWalkStatement is the next batch of one source's index
+	// rows past the orphan walk's cursor, in the order the walk resumes in.
+	lexicalOrphanWalkStatement = `SELECT source_id FROM kb_docs WHERE source = ? AND source_id > ?
+		  ORDER BY source_id LIMIT ?`
+
+	// lexicalIndexedCountStatement is how many of one source's documents
+	// the index holds.
+	lexicalIndexedCountStatement = `SELECT COUNT(*) FROM kb_docs WHERE source = ?`
+)
+
+// lexicalHeldStatement reads what the index holds for n documents by their
+// keys: the version and the derivation each was indexed at.
+func lexicalHeldStatement(n int) string {
+	return `SELECT source_id, source_rev, derivation FROM kb_docs WHERE id IN (` +
+		binds(n) + `)`
+}
+
 // posting is one row of the inverted list, held while a document's terms are
 // turned from a map into something a multi-row insert can index into.
 type posting struct {
@@ -368,8 +394,7 @@ func (x *Indexer) Remove(ctx context.Context, source, id string) error {
 		// are in the replicated one, which no statement joins across. The
 		// applier deletes a source row, and the indexer's orphan pass
 		// removes the index row after it.
-		_, err := tx.ExecContext(ctx,
-			`DELETE FROM kb_docs WHERE source = ? AND source_id = ?`, source, id)
+		_, err := tx.ExecContext(ctx, lexicalRemoveDocStatement, source, id)
 		return err
 	})
 }
@@ -558,9 +583,7 @@ func (x *Indexer) versions(ctx context.Context, source string,
 	for _, at := range scan {
 		ids = append(ids, docKey(source, at.ID))
 	}
-	rows, err := x.db.SQL().QueryContext(ctx,
-		`SELECT source_id, source_rev, derivation FROM kb_docs WHERE id IN (`+
-			binds(len(ids))+`)`, ids...)
+	rows, err := x.db.SQL().QueryContext(ctx, lexicalHeldStatement(len(ids)), ids...)
 	if err != nil {
 		return nil, fmt.Errorf("search: read what the index holds: %w", err)
 	}
@@ -614,9 +637,7 @@ func (x *Indexer) orphansOf(ctx context.Context, source LexicalSource,
 	// THE SAME ESTATE BOUNDARY as [Indexer.Stale], and the same answer: a
 	// batch of index rows read here, and their sources checked against the
 	// replicated estate in a second read.
-	rows, err := x.db.SQL().QueryContext(ctx,
-		`SELECT source_id FROM kb_docs WHERE source = ? AND source_id > ?
-		  ORDER BY source_id LIMIT ?`,
+	rows, err := x.db.SQL().QueryContext(ctx, lexicalOrphanWalkStatement,
 		source.Source(), x.orphanCursor[source.Source()], limit)
 	if err != nil {
 		return nil, fmt.Errorf("search: read the next index rows to check: %w", err)
@@ -693,8 +714,7 @@ func (x *Indexer) Pending(ctx context.Context) (int, error) {
 	}
 	for _, source := range x.sources {
 		var n int
-		if err := x.db.SQL().QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM kb_docs WHERE source = ?`,
+		if err := x.db.SQL().QueryRowContext(ctx, lexicalIndexedCountStatement,
 			source.Source()).Scan(&n); err != nil {
 			return 0, fmt.Errorf("search: count the indexed %s documents: %w",
 				source.Source(), err)
