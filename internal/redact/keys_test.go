@@ -1986,7 +1986,11 @@ func TestAKeyABlockTakesNamesNoValuePastIt(t *testing.T) {
 // there, reads back further than the first; read a key that is the value of
 // a key before it as a prompt, or one a token takes, and the line a first
 // pass never read back from, its key replaced, is a line of a key's text to
-// the second.
+// the second; read a prompt's key bare — no quote or markup closing it, no
+// operator after it — and the key above three prompts so written is
+// published; read a string that ends in the key's word as a prompt, and the
+// END reads back across three of them, which name no value a block could
+// take.
 func TestAnEndReadsBackAcrossPasswordPrompts(t *testing.T) {
 	t.Parallel()
 	key := redact.Marker + "private-key]"
@@ -2008,9 +2012,21 @@ func TestAnEndReadsBackAcrossPasswordPrompts(t *testing.T) {
 		"three prompts each after another password and its value": {
 			keyLine + "\n" + keyLine + "\npwd=x password:\npwd=y password:\npwd=z password:\n" + end + "\n", key + "\n",
 		},
+		"three prompts a quote closes": {
+			keyLine + "\n" + keyLine + "\n\"password\":\n'password' =>\n**Password**:\n" + end + "\n", key + "\n",
+		},
+		"three prompts an operator separates": {
+			keyLine + "\n" + keyLine + "\npassword :=\npassword ==\npassword =>\n" + end + "\n", key + "\n",
+		},
 		"three prompts under a diff's marks": {
 			// The `+` is base64, so read back the block starts with it.
 			"+" + keyLine + "\n+" + keyLine + "\n+password:\n+Password :\n+pwd=\n+" + end + "\n", key + "\n",
+		},
+		// A string ending in the key's word is no key and no prompt, so
+		// three of them part a key as any three lines do.
+		"still published: three strings that end in the key's word": {
+			keyLine + "\n" + keyLine + "\n" + strings.Repeat("\"POST /auth/password\":\n", 3) + end + "\n",
+			keyLine + "\n" + keyLine + "\n" + strings.Repeat("\"POST /auth/password\":\n", 3) + end + "\n",
 		},
 		"still published: three lines holding a password beside its value": {
 			keyLine + "\n" + keyLine + "\npassword: a1\npassword: a2\npassword: a3\n" + end + "\n",
@@ -2141,7 +2157,8 @@ func TestAKeyWaitsWithTheValueTheKeysWereReadBeside(t *testing.T) {
 // below; read the next key from the end of the key rather than of its value,
 // and a key inside a value is held; read the values off the
 // text as written rather than as the rule reads it, and the key a token runs
-// into holds its line.
+// into holds its line; hold a key a quote closes whatever string the quote
+// closes, and a route that ends in the key's word waits for the next line.
 func TestAPasswordKeyIsHeldUntilItsValueIsWritten(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
@@ -2177,6 +2194,12 @@ func TestAPasswordKeyIsHeldUntilItsValueIsWritten(t *testing.T) {
 			[]string{"     1\u21921. Password:", "     2\u2192839201"}, []int{1, 0},
 		},
 		"a key inside a value": {[]string{"pwd=password:"}, []int{0}},
+		// A quote closes a key only where it closes the key's own string:
+		// a route ending in the word is no key, and holds nothing.
+		"a string that ends in the key's word": {[]string{`"POST /auth/password"`, "next"}, []int{0, 0}},
+		// An operator's second character is the separator's, so the value
+		// is the word after it, on the key's own line.
+		"Go's short declaration": {[]string{"\tpassword := hunter2x9", "next"}, []int{0, 0}},
 		// Punctuation before another key on the rest of the line an
 		// escaped break ended the key's on is the value, as it is on the
 		// key's own line, and no line after decides anything.

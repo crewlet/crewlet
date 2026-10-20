@@ -145,6 +145,150 @@ func TestAPasswordsValueIsAllItsRuleReplaces(t *testing.T) {
 	}
 }
 
+// A PASSWORD'S KEY IS READ AS THE TEXT WRITES IT: closed by the quote or the
+// markup it is written in, and separated from its value by the operator the
+// language assigns or compares with. A JSON object's key is quoted, a
+// Markdown label bold, Go declares with `:=` and PHP maps with `=>`, and read
+// with a bare `:` or `=` straight after the key, the quoted key and the bold
+// one were no key at all and their values published, and an operator's second
+// character was taken for the value. The markup that closes what the key's
+// line opened before its label — a bold label's `**`, a code span's backtick,
+// a table cell's `|` — is the key's, and the value is read after it: on its
+// line, or where nothing follows it, on a line below, as after a separator;
+// read as the value, it was replaced and the value beside it or under it
+// published. A quote is no such markup, since a logged string closes with
+// one and what follows it is the next field. And a quote closes the key only
+// where it closes the key's own string, a name ending in the key: a longer
+// string ending in the key's word is a string, and what follows it no value.
+// Each comes out as given, redacting it again changes nothing, and shown as
+// it settles, a byte at a time or in pieces, it is the same.
+//
+// Mutation: read no quote or markup closing the key, and the JSON, PHP and
+// bold-key cases publish their values; read the operators as their first
+// character, or try the one character before the two, and `:=`, `==` and
+// `=>` lose their second character to the marker; read no markup past the
+// separator, and the bold label's and the table cell's values are published;
+// take a quote for markup, and the logged prompt's next field is redacted;
+// take any markup after the separator, whatever the key's line opened, and
+// the word after a prompt's pipe is; read the opening only where it stands
+// against the key, and the value of a label of two words is published, or
+// read it past a word's own `_`, and an identifier's `_` after its
+// separator is passed over, or past any `_`, and an underscored bold label's
+// value is published, or over letters and spaces alone, and so is a label's
+// with a parenthesis in it; read punctuation after the markup from the
+// markup's own start — the value where no line repeats it, before another
+// key on its line, or before one past an escaped break — and the markup is
+// replaced and the punctuation kept; take any key on an echoed line for one
+// that names its value, a string ending in the key's word too, and the echo's
+// quote is taken for the value and the value published; read past markup that is a word's start only
+// where the whole word is markup, and the value under a list's bold label is
+// published; read the markup past the separator before the key's own
+// close has taken its opening, and a bold value after a bold key keeps its
+// opening `**`; read the opening as written rather than as the rule leaves
+// it, and a second pass reads a table row's last pipe as a value; take the
+// markup alone as no suffix, and a compact table row loses its closing pipe,
+// or as the suffix every line must end in, and the value under a bold label
+// is published, or the whole of it as the suffix rather than its outermost
+// closing, and a table's blank row under a bold label in a cell is read as
+// the value's; take any quote after the key for its own, and the string
+// after a route's and a choice's is; hold the name before a quoted key to
+// letters alone, and the `db_password` key's value is published; read a key
+// at the end of a text whose separator is still to come as only a bare key,
+// and shown in pieces, an arrow on the line below publishes its value.
+func TestAPasswordsKeyIsReadAsTheTextWritesIt(t *testing.T) {
+	t.Parallel()
+	m := redact.Marker + "password]"
+	for name, c := range map[string]struct{ text, want string }{
+		"a JSON object's key":           {"{\"password\": \"hunter2x9\", \"user\": \"bob\"}\n", "{\"password\": " + m + " \"user\": \"bob\"}\n"},
+		"a quoted key a name runs into": {"{\"db_password\": \"hunter2x9\"}\n", "{\"db_password\": " + m + "\n"},
+		"a quoted key and PHP's arrow":  {"'password' => 'hunter2x9',\n", "'password' => " + m + "\n"},
+		"Go's short declaration":        {"\tpassword := \"hunter2x9\"\n", "\tpassword := " + m + "\n"},
+		"a make variable":               {"DB_PASSWORD := hunter2x9\n", "DB_PASSWORD := " + m + "\n"},
+		"a comparison":                  {"if password == \"hunter2x9\":\n", "if password == " + m + "\n"},
+		"a bold key":                    {"**Password**: hunter2x9\n", "**Password**: " + m + "\n"},
+		"a bold label":                  {"**Password:** hunter2x9\n", "**Password:** " + m + "\n"},
+		"a code span":                   {"`password:` hunter2x9\n", "`password:` " + m + "\n"},
+		"a table's cell":                {"| Password: | hunter2x9 |\n", "| Password: | " + m + " |\n"},
+		"a quoted key on the next line": {"{\n  \"password\":\n    \"hunter2x9\"\n}\n", "{\n  \"password\":\n    \"" + m + "\n}\n"},
+		"a quoted key and its arrow on the next line": {
+			"    'password'\n        => 'hunter2x9',\n", "    'password'\n        => " + m + "\n",
+		},
+		"a bold label of two words":      {"**Root password:** hunter2x9\n", "**Root password:** " + m + "\n"},
+		"a bold label in a table's cell": {"| **Password:** | hunter2x9 |\n", "| **Password:** | " + m + " |\n"},
+		"a bold label and its value on the next line": {
+			"**Password:**\nhunter2x9\n", "**Password:**\n" + m + "\n",
+		},
+		"a list item's bold label and its value indented under it": {
+			"- **Root password:**\n  hunter2x9\n", "- **Root password:**\n  " + m + "\n",
+		},
+		"a code span and its value on the next line": {"`password:`\n\nhunter2x9\n", "`password:`\n\n" + m + "\n"},
+		"a bold label in a list of strings": {
+			"\"**Password:**\",\n\"hunter2x9\",\n", "\"**Password:**\",\n\"" + m + "\",\n",
+		},
+		"a bold label echoed into a file": {
+			"echo \"**Password:** \" >> notes.md\necho \"hunter2x9\" >> notes.md\n",
+			"echo \"**Password:** \" >> notes.md\necho \"" + m + "\" >> notes.md\n",
+		},
+		"a compact table's rows": {"|Password:|\n|hunter2x9|\n", "|Password:|\n|" + m + "|\n"},
+		"a bold label in a table's cell over a blank row": {
+			"| **Password:** |\n|  |\n| hunter2x9 |\n", "| **Password:** |\n|  |\n| " + m + " |\n",
+		},
+		"a bold key and a bold value":                {"**Root password**: **hunter2x9**\n", "**Root password**: " + m + "\n"},
+		"a key a name's underscore opens":            {"**db_password:** hunter2x9\n", "**db_password:** " + m + "\n"},
+		"a bold label in underscores":                {"__Root password:__ hunter2x9\n", "__Root password:__ " + m + "\n"},
+		"a label with a parenthesis":                 {"* **Root (prod) password:** hunter2x9\n", "* **Root (prod) password:** " + m + "\n"},
+		"punctuation for a value after a bold label": {"**Password:** ****\n", "**Password:** " + m + "\n"},
+		"punctuation for a value and another key on its line": {
+			"**Password:** -- Retype password: x\n", "**Password:** " + m + " Retype password: " + m + "\n",
+		},
+		"a bold label and another key after an escaped break": {
+			"\"**Password:**\\n-- password: hunter2x9\"", "\"**Password:**\\n-- password: " + m,
+		},
+		"an identifier's underscore and an underscore after it": {
+			"DB_PASSWORD: _\nnext\n", "DB_PASSWORD: " + m + "\nnext\n",
+		},
+		"a table row under a key that took its first pipe": {
+			"password:\n| Password: |\nnext\n", "password:\n" + m + " Password: " + m + "\nnext\n",
+		},
+		// The row below holds a key of its own, whose value may be the pipe
+		// that said the row was the table's: the key above takes its own
+		// cell's closing, as it takes punctuation.
+		"a table of prompts, the second's key after punctuation": {
+			"| Password: |\n| > Retype password: |\n", "| Password: " + m + "\n| > Retype password: " + m + "\n",
+		},
+		"a logged prompt and the field after it": {
+			"msg=\"password:\" level=info\n", "msg=\"password:" + m + " level=info\n",
+		},
+		"a pipe after a prompt that opened nothing": {"echo Password: | tee -a log\n", "echo Password: " + m + " tee -a log\n"},
+		"a string that ends in the key's word": {
+			"\"POST /auth/password\": () => ok,\n", "\"POST /auth/password\": () => ok,\n",
+		},
+		"echoed beside a string that ends in the key's word": {
+			"echo \"Password:\" # see \"the password\": below\necho \"hunter2x9\" # see \"the password\": below\n",
+			"echo \"Password:\" # see \"the password\": below\necho \"" + m + "\" # see \"the password\": below\n",
+		},
+		"still published: a quoted key whose name has a space in it": {
+			"{\"Admin Password\": \"hunter2x9\"}\n", "{\"Admin Password\": \"hunter2x9\"}\n",
+		},
+		"a choice between two strings": {
+			"x ? \"Choose your password\" : \"Choose a new one\"\n", "x ? \"Choose your password\" : \"Choose a new one\"\n",
+		},
+	} {
+		got := redact.Secrets(c.text)
+		if got != c.want {
+			t.Errorf("%s:\n got %q\nwant %q", name, got, c.want)
+		}
+		if again := redact.Secrets(got); again != got {
+			t.Errorf("%s: a second pass changed %q to %q", name, got, again)
+		}
+		for _, sizes := range [][]int{{1}, {5, 400}} {
+			if shown, _ := settle(c.text, sizes); shown != c.want {
+				t.Errorf("%s in pieces of %v: shown as it settled\n%q\nwant\n%q", name, sizes, shown, c.want)
+			}
+		}
+	}
+}
+
 // This pass runs at more than one layer and a transcript can cross both.
 func TestRedactionIsIdempotent(t *testing.T) {
 	text := "token " + strings.Repeat("k", 40) + " and sk-" + strings.Repeat("q", 40)

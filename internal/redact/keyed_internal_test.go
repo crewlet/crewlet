@@ -45,6 +45,9 @@ func TestAKeyedScanFindsWhatItsPatternFinds(t *testing.T) {
 			t.Parallel()
 			pieces := []string{
 				":", "=", " ", "\t", "\n", "\r\n", `\n`, `\r`, `\`, "x", "日", "\xff", "hunter2", Marker + "password]",
+				// What closes a key and what its separator is written with,
+				// and the names and the words a quote can close it after.
+				`"`, "'", "`", "*", "_", ">", "-", "/", "db",
 			}
 			for _, word := range k.words {
 				pieces = append(pieces, spellings(word)...)
@@ -62,7 +65,7 @@ func TestAKeyedScanFindsWhatItsPatternFinds(t *testing.T) {
 				}
 				text := b.String()
 
-				want := k.pattern.FindAllStringIndex(text, -1)
+				want := found(k, text)
 				var got [][]int
 				for start, end, found := k.next(text, 0); found; start, end, found = k.next(text, end) {
 					got = append(got, []int{start, end})
@@ -82,15 +85,48 @@ func TestAKeyedScanFindsWhatItsPatternFinds(t *testing.T) {
 					t.Fatalf("trial %d, %q: the scan at the end finds a match at %d, the pattern at %d",
 						trial, text, got, wantIndex)
 				}
-				if got, want := r.apply(text), k.pattern.ReplaceAllLiteralString(text, r.with); got != want {
+				if got, want := r.apply(text), replaced(text, want, r.with); got != want {
 					t.Fatalf("trial %d, %q: the scan replaced to %q, the pattern to %q", trial, text, got, want)
 				}
-				if got, want := r.in(text), k.pattern.MatchString(text); got != want {
+				if got, want := r.in(text), len(want) > 0; got != want {
 					t.Fatalf("trial %d, %q: the scan says a match is there %v, the pattern %v", trial, text, got, want)
 				}
 			}
 		})
 	}
+}
+
+// found is every match k's pattern finds in text, leftmost first and taken one
+// after another from each one's end: the pattern's own scan, or, where k
+// refuses some ([keyed.refuses]), the pattern held to begin at every place in
+// turn, a refused match no match.
+func found(k *keyed, text string) [][]int {
+	if k.refuses == nil {
+		return k.pattern.FindAllStringIndex(text, -1)
+	}
+	var matches [][]int
+	for i := 0; i < len(text); {
+		if loc := k.anchored.FindStringIndex(text[i:]); loc != nil && !k.refuses(text, i) {
+			matches = append(matches, []int{i, i + loc[1]})
+			i += loc[1]
+			continue
+		}
+		i = beyond(text, i)
+	}
+	return matches
+}
+
+// replaced is text with each of matches replaced by with.
+func replaced(text string, matches [][]int, with string) string {
+	var b strings.Builder
+	at := 0
+	for _, m := range matches {
+		b.WriteString(text[at:m[0]])
+		b.WriteString(with)
+		at = m[1]
+	}
+	b.WriteString(text[at:])
+	return b.String()
 }
 
 // spellings is word as (?i) reads it in several hands: as written, in capitals,

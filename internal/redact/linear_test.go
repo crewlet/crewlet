@@ -118,8 +118,9 @@ func TestALineAWrappingsPrefixRunsAcrossIsLinear(t *testing.T) {
 }
 
 // A LINE OF MANY PASSWORD KEYS COSTS WHAT ITS BYTES COST, however long the line
-// goes on after them: reading where each one's value is ([readValue]) on a line
-// that goes on for 256 KiB costs what it does on one that goes on for 2 KiB. A
+// goes on after them or before them: reading where each one's value is
+// ([readValue]) on a line that goes on for 256 KiB costs what it does on one
+// that goes on for 2 KiB. A
 // key whose first word is punctuation asks what the rest of its line is — the
 // wrapping's suffix, if no key follows on the line — and asked as the line's
 // end and then whether a key lies before it, every key on the line scanned the
@@ -133,10 +134,16 @@ func TestALineAWrappingsPrefixRunsAcrossIsLinear(t *testing.T) {
 // have to run for megabytes before the scans showed. Read linearly the two
 // cost the same (measured 0.75 to 1.6 times); a scan per key to its line's end
 // costs 26 to 29 times as much on the long line, and five times under the race
-// detector.
+// detector. Every key reads back over its label for the markup its line
+// opened before it ([pastMarkup]), no further than the value before it; read
+// back to the line's start, every key read the line before it again: on a
+// line that opens with 256 KiB, 43 to 58 times what the keys cost after 2 KiB,
+// and 37 to 52 times under the race detector.
 //
 // Mutation: read a key's suffix as the rest of its line and only then ask it
-// for another key, and this fails.
+// for another key, and this fails; read a key's label back to the line's
+// start, past the values before it, and every group fails, with the race
+// detector and without.
 func TestALineOfManyPasswordKeysIsLinear(t *testing.T) {
 	t.Parallel()
 	read := func(text string) time.Duration {
@@ -146,14 +153,19 @@ func TestALineOfManyPasswordKeysIsLinear(t *testing.T) {
 		return time.Since(start)
 	}
 	for name, group := range passwordKeyGroups {
-		short, long := keysBefore(group, 2<<10), keysBefore(group, 256<<10)
-		shortCost, longCost := time.Duration(1<<62), time.Duration(1<<62)
-		for range 3 {
-			shortCost, longCost = min(shortCost, read(short)), min(longCost, read(long))
-		}
-		if longCost > 3*shortCost {
-			t.Errorf("%s: %v on a line of 256 KiB against %v on lines of 2 KiB — every key "+
-				"reads the rest of its line", name, longCost, shortCost)
+		for _, line := range []struct {
+			where string
+			of    func(group string, lineBytes int) string
+		}{{"after", keysBefore}, {"before", keysAfter}} {
+			short, long := line.of(group, 2<<10), line.of(group, 256<<10)
+			shortCost, longCost := time.Duration(1<<62), time.Duration(1<<62)
+			for range 3 {
+				shortCost, longCost = min(shortCost, read(short)), min(longCost, read(long))
+			}
+			if longCost > 3*shortCost {
+				t.Errorf("%s: %v on a line that goes on for 256 KiB %s them against %v for 2 KiB — "+
+					"every key reads the line %s it", name, longCost, line.where, shortCost, line.where)
+			}
 		}
 	}
 }
@@ -171,6 +183,21 @@ func keysBefore(group string, lineBytes int) string {
 	return b.String()
 }
 
+// keysAfter is 256 KiB of filler in lines of lineBytes and group written 1024
+// times at the end of the last of them: the keys' own line opens with
+// lineBytes of it.
+func keysAfter(group string, lineBytes int) string {
+	var b strings.Builder
+	for written := lineBytes; written < 256<<10; written += lineBytes {
+		b.WriteString(strings.Repeat("~", lineBytes))
+		b.WriteByte('\n')
+	}
+	b.WriteString(strings.Repeat("~", lineBytes))
+	b.WriteString(strings.Repeat(group, 1024))
+	b.WriteByte('\n')
+	return b.String()
+}
+
 // A LIVE VIEW OF MANY PASSWORD KEYS COSTS ONE READ OF THEM: [Settled] over
 // lines of password keys, each line's last decided by the line after it,
 // costs what [Secrets] does. Read again in each prefix a hold cut the text at,
@@ -178,7 +205,7 @@ func keysBefore(group string, lineBytes int) string {
 // pending in its turn, and Settled read the text once a line: over 32 KiB in
 // lines of 256 bytes, 47 to 75 times what Secrets costs, with the race detector
 // and without. So the whole text is read once ([valueHolds]). Timed as the
-// tests above are, fastest of three interleaved reads; Settled costs 0.8 to 2.3
+// tests above are, fastest of three interleaved reads; Settled costs 0.8 to 2.4
 // times what Secrets does over such lines, with the race detector and
 // without — lines that each end in a key and its separator it reads twice, for
 // its holds and back from the text's end across them as prompts ([backHold])
@@ -216,6 +243,10 @@ var passwordKeyGroups = map[string]string{
 	// The line's last key reads the line before it as the rule leaves it,
 	// every value before it a marker ([keyPrefix]): once, not once a key.
 	"a key and the value after it, over and over": `x pwd=`,
+	// Each key reads back over its label for the markup its line opened
+	// ([pastMarkup]), no further than the value before it.
+	"a bold label and its value, over and over": `**pwd:** x `,
+	"a table's cells, over and over":            `| pwd: | x `,
 }
 
 // linesOf is size bytes of group, written over and over, in lines of

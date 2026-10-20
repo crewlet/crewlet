@@ -33,11 +33,10 @@
 // wrapping every line of the text shares puts it (readValue). What neither
 // reading finds is published:
 //
-//   - on the key's own line, a value after punctuation its separator is
-//     written with — `password := x`, `password == x`, `**Password:** x`, a
-//     table's `| Password: | x |` — which is read as that punctuation, and a
-//     key whose closing quote stands before its separator
-//     (`{"password": "x"}`), which is read as no key at all;
+//   - a value under a quoted key whose name is more than a name — letters,
+//     digits, `_`, `-` and `.` — such as `{"Admin Password": "x"}`: a quote
+//     closes the key only where it closes the key's own string
+//     ([quotedElsewhere]);
 //   - a value `printf '%s\n'` writes a line at a time, every line broken at
 //     the escaped break in its own prefix;
 //   - a value under a blank line of a wrapping that lost the tab or the space
@@ -52,7 +51,9 @@
 //     `- hunter2x9`), the first line of a string
 //     (`{"text": "> Password:\n> hunter2x9"}`) — which is read as the value:
 //     the gutter is read from the line's start, and ends where the two lines'
-//     words part;
+//     words part; and where the markup that closes the key ends its piece of
+//     a string (`{"text": "| Password: |\n| hunter2x9 |"}`), no value is read
+//     at all;
 //   - a value written over several lines — a YAML block scalar, a YAML
 //     sequence under the key, a heredoc — of which the first word at most is
 //     read, and a diff whose key is on a context line and whose value
@@ -64,9 +65,11 @@
 //   - under a wrapping's suffix, a value on a line that holds a password's key
 //     of its own (`echo "hunter2 password:" >> f` under
 //     `echo "Password:" >> f`), the key's line taking its own punctuation for
-//     its value instead: redacted, the value's line would no longer end as
-//     the wrapping's does when the second key's value is replaced, and a
-//     second pass would read the first key's value elsewhere;
+//     its value instead, or the closing of the markup that alone ends it
+//     (`| Password: |` over `| > Retype password: |`): redacted, the value's
+//     line would no longer end as the wrapping's does when the second key's
+//     value is replaced, and a second pass would read the first key's value
+//     elsewhere;
 //   - the part of a value after an escaped break inside it when that part is
 //     punctuation alone (`pwd=abc\n!!`), which reads as the string's;
 //   - and a key's piece on the line of a value read below a password's key
@@ -367,6 +370,80 @@ const passwordMarker = Marker + "password]"
 // to drift from it.
 var passwordKeys = []string{"password", "passwd", "pwd"}
 
+// passwordClose is what closes a password's key before its separator, and
+// passwordSeparator the separator: the quote or the markup a key is written
+// in, and the operator a language assigns or compares it with.
+//
+// THE SEPARATOR IS WHAT THE TEXT WRITES, and a key and its value are written
+// with more than a colon or an equals sign. A JSON object's key is quoted
+// (`{"password": "x"}`), a Markdown label bold (`**Password**: x`), and Go
+// declares with `:=`, a comparison is `==` and PHP and Ruby map with `=>`.
+// Read with a bare `:` or `=` straight after the key, the quoted key and the
+// bold one were no key at all, and the value was published; and the second
+// character of an operator was taken for the value — `password :=
+// "hunter2"` became `password :[REDACTED:password] "hunter2"`. Each operator
+// is tried before the one character it opens with, so `==` is never `=`
+// followed by a value `=`.
+const (
+	passwordClose     = "[\"'`*_]{0,2}"
+	passwordSeparator = `(?::=|==|=>|[:=])`
+)
+
+// quotedOwn is k, a password's pattern, refusing a key closed by a quote that
+// does not close the key's own string ([quotedElsewhere]).
+func quotedOwn(k *keyed) *keyed {
+	k.refuses = quotedElsewhere
+	return k
+}
+
+// quotedElsewhere reports whether the password's key at at is closed by a
+// quote that is not the end of the key's own string: one whose opening quote
+// does not stand before the key, or before a name run into it — letters,
+// digits, `_`, `-` and `.`, as `"db_password"` and `'reset-password'` are.
+//
+// A QUOTED KEY IS A STRING THAT IS A NAME. Read wherever a quote closed it,
+// every string ending in the key's word was one, so a separator after it named
+// the next word as its value: `"POST /auth/password": () =>` lost its `()`,
+// `x ? "Choose your password" : "Choose a new password"` the string after it,
+// and a translation table every translation of `"... without a password":`.
+// Markup is not held to it: `**Admin password**:` is a label with a space in
+// it, and so are most. What it costs is a name in a string, or in a code
+// span, that is no key where it stands: a choice between two strings that
+// opens with one (`masked ? "password" : "text"`) has the other redacted, and
+// a shell's pwd in backquotes before a colon, a container's mount, the path
+// after it.
+func quotedElsewhere(text string, at int) bool {
+	i := at
+	for i < len(text) {
+		r, size := utf8.DecodeRuneInString(text[i:])
+		if !unicode.IsLetter(r) {
+			break
+		}
+		i += size
+	}
+	q := byte(0)
+	for j := i; j < len(text) && j < i+2 && strings.IndexByte("\"'`*_", text[j]) >= 0; j++ {
+		if text[j] == '"' || text[j] == '\'' {
+			q = text[j]
+			break
+		}
+	}
+	if q == 0 {
+		return false
+	}
+	j := at
+	for j > 0 && keyName(text[j-1]) {
+		j--
+	}
+	return j == 0 || text[j-1] != q
+}
+
+// keyName reports whether b is a byte of a name a quoted key may run into:
+// an ASCII letter or digit, `_`, `-` or `.`.
+func keyName(b byte) bool {
+	return 'a' <= b && b <= 'z' || 'A' <= b && b <= 'Z' || '0' <= b && b <= '9' || b == '_' || b == '-' || b == '.'
+}
+
 // passwordRule is a password's key and the separator after it: what names the
 // value its rule replaces ([passwordValue]). It is the one rule besides a
 // private key whose match can cross a line break — `\s` is a newline too, and
@@ -378,16 +455,17 @@ var passwordKeys = []string{"password", "passwd", "pwd"}
 // they were, line breaks and all. The rule used to replace the whole match,
 // so a value on the next line took the break with it: two lines became one,
 // and a second pass read a key across them that the first had read apart.
-var passwordRule = keyedOn(passwordKeys, `\s*[:=](?:\s|\\[nr])*`)
+var passwordRule = quotedOwn(keyedOn(passwordKeys, passwordClose+`\s*`+passwordSeparator+`(?:\s|\\[nr])*`))
 
 // pendingKey is a password key at the very END of a text with nothing but
-// whitespace after it: a [passwordRule] match whose separator may still be
-// written, across the line break (`Enter password` and then `= swordfish`).
-var pendingKey = keyedOn(passwordKeys, `\s*\z`)
+// what closes it and whitespace after it: a [passwordRule] match whose
+// separator may still be written, across the line break (`Enter password`
+// and then `= swordfish`).
+var pendingKey = quotedOwn(keyedOn(passwordKeys, passwordClose+`\s*\z`))
 
 // passwordPrompt is a password key and its separator at the very end of a line
 // ([promptAt]).
-var passwordPrompt = keyedOn(passwordKeys, `\s*[:=]\s*\z`)
+var passwordPrompt = quotedOwn(keyedOn(passwordKeys, passwordClose+`\s*`+passwordSeparator+`\s*\z`))
 
 // passwordValue is where the value a [passwordRule] match names begins and
 // ends, the match beginning at start and ending at end and prior being every
@@ -414,17 +492,23 @@ func passwordValue(text string, start, end int, prior [][2]int) (int, int) {
 // with no key anywhere in the text. So the value is read as the key reader
 // reads a key's line, by its machinery ([lineAt], [shapeAt]):
 //
-//   - What follows the separator on its line is the value when its first
-//     word holds a letter or a digit, in any script, or opens with an empty
-//     quoted string (`password=""`), which is a value. Punctuation alone is
-//     the wrapping's SUFFIX — what it writes after every line's content: `"`,
-//     `",`, `" >> key.pem`, ` |` — when the first line after it that is not
-//     blank ends in the same text, or in what a list's or a concatenation's
-//     last line ends in instead ([closingOf]); and the value is on that line,
+//   - What follows the separator on its line — past the markup that closes
+//     what the key's line opened before the key, which is the key's
+//     ([pastMarkup]) — is the value when its first word holds a letter or a
+//     digit, in any script, or opens with an empty quoted string
+//     (`password=""`), which is a value. Punctuation alone is the wrapping's
+//     SUFFIX — what it writes after every line's content: `"`, `",`,
+//     `" >> key.pem`, ` |` — when the first line after it that is not blank
+//     ends in the same text, or in what a list's or a concatenation's last
+//     line ends in instead ([closingOf]); and the value is on that line,
 //     before it. Otherwise the punctuation is the value, as `***` is. Nothing,
 //     or an escaped break, sends the read to the lines after, and the rest of
 //     a line an escaped break left that opens with punctuation is the suffix
-//     too (`"password:\n" >> key.pem`).
+//     too (`"password:\n" >> key.pem`). Markup alone, closing the key's line,
+//     is the suffix of a line that ends in its outermost closing too ([outermost])
+//     — the rows of a table that closes every cell, `|Password:|` over
+//     `|hunter2x9|` — and a line that does not end in it is read as though
+//     nothing had followed the key.
 //   - The read passes over a blank line, a blank line of the wrapping — its
 //     gutter and its suffix alone, `    10→`, `echo "" >> key.pem` — and the
 //     punctuation that closes a real line after an escaped break, the `" +` of
@@ -449,24 +533,29 @@ func passwordValue(text string, start, end int, prior [][2]int) (int, int) {
 // where the value was.
 func readValue(text string, start, end int, prior [][2]int) aValue {
 	sep := start + strings.IndexAny(text[start:end], ":=") + 1
-	r := valueRead{text: text, start: start, end: end, prior: prior}
+	r := valueRead{text: text, start: start, end: end, from: end, prior: prior}
 	if !strings.Contains(text[sep:end], "\n") && !strings.Contains(text[sep:end], `\n`) {
-		// The separator's line goes on: what follows it there, its first
-		// word read as the rule's `\S+` read it.
-		word := end
-		for word < len(text) && !valueSpace(text[word]) && !strings.HasPrefix(text[word:], `\n`) {
-			word++
-		}
-		if text[end:word] != "" {
-			if isValue(text[end:word]) {
-				return aValue{from: end, to: valueEnd(text, end), decided: end}
-			}
+		// The separator's line goes on: what follows it there, past the
+		// markup that closes what the line opened, its first word read as
+		// the rule's `\S+` read it.
+		r.from = pastMarkup(text, start, sep-1, end, prior)
+		word := wordEnd(text, r.from)
+		switch {
+		case word > r.from && isValue(text[r.from:word]):
+			return aValue{from: r.from, to: valueEnd(text, r.from), decided: end}
+		case word > r.from:
 			lineEnd, named := lineEndUnnamed(text, word)
 			if named {
 				// Another key on the line: a suffix holds none.
-				return aValue{from: end, to: valueEnd(text, end), decided: end}
+				return aValue{from: r.from, to: valueEnd(text, r.from), decided: end}
 			}
-			r.setSuffix(trimLine(text[end:lineEnd]))
+			r.setSuffix(trimLine(text[r.from:lineEnd]))
+		case r.from > end && !strings.HasPrefix(text[r.from:], `\n`):
+			// The markup alone ends the key's line.
+			markup := strings.TrimRight(text[end:r.from], " \t")
+			r.setSuffix(outermost(trimLine(markup)))
+			r.markupOnly = true
+			r.closer = [2]int{end + len(markup) - len(r.suffix), end + len(markup)}
 		}
 	}
 	lineEnd, next := lineAt(text, sep)
@@ -475,10 +564,135 @@ func readValue(text string, start, end int, prior [][2]int) aValue {
 		var named bool
 		if next, escaped, named = r.restOfLine(next); named {
 			// Another key on the rest of the line: a suffix holds none.
-			return aValue{from: end, to: valueEnd(text, end), decided: end}
+			return aValue{from: r.from, to: valueEnd(text, r.from), decided: end}
 		}
 	}
 	return r.lines(next, escaped)
+}
+
+// outermost is the last closing of markup, the run of its last byte: the
+// table cell's `|` of `** |`, or `**` alone. It is what closes the first thing
+// the key's line opened, and so the one closing a line of the same wrapping
+// writes whatever its content: read as the whole of the markup, the suffix of
+// `| **Password:** |` was `** |`, so a table's blank row `|  |` was no blank
+// line of it, its pipe was taken for the value and the value on the row
+// below published.
+func outermost(markup string) string {
+	last := markup[len(markup)-1]
+	return markup[len(strings.TrimRight(markup, string(last))):]
+}
+
+// wordEnd is where the word that begins at from ends, as the rule's `\S+` read
+// it: at the next space, or at an escaped break.
+func wordEnd(text string, from int) int {
+	for from < len(text) && !valueSpace(text[from]) && !strings.HasPrefix(text[from:], `\n`) {
+		from++
+	}
+	return from
+}
+
+// pastMarkup is where what follows a password's separator, which begins at
+// sep, is read from, the match beginning at start and ending at end: past the
+// markup that closes what the key's line opened before the key's label — a
+// bold label's `**`, a code span's backtick, a table cell's `|` — and the
+// spaces after it, or end where none does. The label is the words the key
+// ends ([labelStart]), so `**Root password:**` closes the `**` before Root;
+// what closes the key before its separator closes the innermost of what the
+// line opened, so `**Root password**: **x**` leaves the value its own; the
+// closing mirrors the opening, so `| **Password:** |` closes both; and it ends
+// where the markup does, so `"**Password:**",` closes its `**` and its quote
+// is what follows.
+//
+// THE MARKUP IS THE KEY'S, as the quote or the markup closing it before its
+// separator is ([passwordClose]): it is what the line says closes around the
+// key, not what stands for its value. Read as the value, `**Password:**
+// hunter2` and `| Password: | hunter2 |` had the markup replaced and the value
+// published; read as the value only where the opening stood straight before
+// the key, so did `**Root password:** hunter2`; and read as the line's suffix
+// where nothing followed it, the value under `**Password:**`,
+// `- **Password:**` or a code span of `password:` was on a line that did not
+// end in it, the markup was taken for the value, and the value on the next
+// line published. Markup alone, and only the markup the key's own line
+// opened: a quote is no markup here even where one opens the key's line —
+// `msg="Enter password:" level=info` closes a logged string, and what follows
+// it is the next field — and a pipe the line did not open is the shell's
+// (`echo Password: | tee -a log`).
+//
+// The opening is read back from the key over its label alone, and from there
+// a byte for each byte of the closing, and not from the start of its line:
+// read from the line's start, every key read again all of the line before it,
+// so 1,024 keys on a line that opens with 256 KiB cost 43 to 58 times what
+// they do after 2 KiB. And it is read as the rule leaves it, the last value
+// replaced before the key, prior's, a marker that opens nothing: read as
+// written, `| Password: |` under `password:` closed the pipe the first key
+// took for its value, and a second pass, a marker where the pipe was, read
+// the line's last pipe as the second key's value instead.
+func pastMarkup(text string, start, sep, end int, prior [][2]int) int {
+	floor := 0
+	if len(prior) > 0 {
+		floor = prior[len(prior)-1][1]
+	}
+	j := labelStart(text, floor, start)
+	closed := strings.TrimRight(text[start:sep], " \t\r\n")
+	k := len(closed)
+	for k > 0 && strings.IndexByte("\"'`*_", closed[k-1]) >= 0 {
+		k--
+	}
+	for ; k < len(closed); k++ {
+		// The key's own close, innermost first, takes the opening nearest
+		// its label.
+		for j > floor && isSpace(text[j-1]) {
+			j--
+		}
+		if j == floor || text[j-1] != closed[k] {
+			break
+		}
+		j--
+	}
+	from := end
+	for i := end; ; {
+		for i < len(text) && isSpace(text[i]) {
+			i++
+		}
+		for j > floor && isSpace(text[j-1]) {
+			j--
+		}
+		if i == len(text) || j == floor || text[i] != text[j-1] || strings.IndexByte("*_`|", text[i]) < 0 {
+			break
+		}
+		i, j = i+1, j-1
+		from = i
+	}
+	if from == end {
+		return end
+	}
+	for from < len(text) && isSpace(text[from]) {
+		from++
+	}
+	return from
+}
+
+// labelStart is where the label a password's key at start ends begins: back
+// over the words of it — letters and digits in any script, the spaces between
+// them, and the `-`, `'`, `.`, `(`, `)` and `/` a name is written with, and
+// `_` inside a word — to floor at most. `**Root password:**` is one label, and
+// `db_password` one word, whose `_` opens nothing.
+//
+// Every key reads back no further than the punctuation before its label, and
+// a key's separator is punctuation, so a line of many keys is read back once.
+func labelStart(text string, floor, start int) int {
+	j := start
+	for j > floor {
+		r, size := utf8.DecodeLastRuneInString(text[floor:j])
+		switch {
+		case r == ' ' || r == '\t' || unicode.IsLetter(r) || unicode.IsDigit(r) || strings.ContainsRune("-'.()/", r):
+		case r == '_' && wordRune(utf8.DecodeLastRuneInString(text[floor:j-size])) && wordRune(utf8.DecodeRuneInString(text[j:])):
+		default:
+			return j
+		}
+		j -= size
+	}
+	return j
 }
 
 // aValue is where the value a [passwordRule] match names begins and ends — or
@@ -498,10 +712,11 @@ type aValue struct {
 // valueRead is a [readValue] in progress.
 type valueRead struct {
 	text string
-	// start and end are where the password's match begins and ends, and
-	// prior the values the rule replaced before it.
-	start, end int
-	prior      [][2]int
+	// start and end are where the password's match begins and ends, from
+	// where what follows its separator is read ([pastMarkup]), and prior the
+	// values the rule replaced before it.
+	start, end, from int
+	prior            [][2]int
 	// suffix is the wrapping's suffix, or "": a line that does not end in it
 	// is none of the wrapping's lines, and what the key's line holds after its
 	// separator is the value, `***` as much as any. closing is what a list's
@@ -509,6 +724,12 @@ type valueRead struct {
 	// appending what a line after the first of a file written a line at a
 	// time ends in ([appendingOf]), each or "".
 	suffix, closing, appending string
+	// markupOnly is whether the suffix is the markup that closes the key's
+	// line ([outermost]) and nothing else: the suffix of a line that ends in
+	// it, and of no other, which is read as though nothing had followed the
+	// key. closer is where that closing stands on the key's line.
+	markupOnly bool
+	closer     [2]int
 	// gutters are what the key's line has before the key ([valueRead.gutter]),
 	// read once each: from its piece's start and from its real line's.
 	gutters [2]string
@@ -617,6 +838,10 @@ func (r *valueRead) lines(pos int, escaped bool) aValue {
 		line := r.text[pos:lineEnd]
 		trimmed := trimLine(line)
 		key := passwordRule.index(line)
+		suffixed := r.suffix != ""
+		if suffixed && r.markupOnly && trimmed != "" {
+			_, suffixed = r.ending(trimmed, lineEnd, next)
+		}
 		switch {
 		case trimmed == "":
 		case escaped && wordless(trimmed) && (next < 0 || !escapedOnly(lineEnd, next)):
@@ -628,20 +853,28 @@ func (r *valueRead) lines(pos int, escaped bool) aValue {
 			// wrapping because it ended there, and once a pass had replaced
 			// the `"`, that line ended in no suffix, and a second pass took
 			// the key's own `+`.
-		case key >= 0 && r.suffix != "":
+		case key >= 0 && suffixed && r.markupOnly:
+			// So may it here, and the key's line takes the markup's
+			// closing for its value, as it takes punctuation. The markup
+			// is the key's, but taken for no value, the key named none:
+			// once a pass had replaced the line's own closing, the line
+			// below no longer ended as the key's did, and a second pass
+			// read the key's value in it, the first word after the
+			// gutter (`|Password:|` over `= pwd:|` lost its `=`).
+			return r.decided(r.closer[0], r.closer[1], pos, false)
+		case key >= 0 && suffixed:
 			// The key on the line may replace the word its end begins
 			// with, which is what said the line was the wrapping's.
 			return r.decided(r.end, r.end, pos, true)
 		default:
 			lead := leadingSpace(line)
 			at := pos + lead
-			content, suffixed := trimDebris(line[lead:]), false
-			if r.suffix != "" {
+			content := trimDebris(line[lead:])
+			if suffixed {
 				var ok bool
 				if content, ok = r.ending(trimmed, lineEnd, next); !ok {
 					return r.decided(r.end, r.end, pos, true)
 				}
-				suffixed = true
 			}
 			rest := strings.TrimLeft(content[gutterLen(content, r.gutter(crossed)):], " \t")
 			blank := strings.TrimSpace(rest) == ""
@@ -794,7 +1027,7 @@ func (r *valueRead) unread() (int, int) {
 	if r.suffix == "" {
 		return r.end, r.end
 	}
-	return r.end, valueEnd(r.text, r.end)
+	return r.from, valueEnd(r.text, r.from)
 }
 
 // isValue reports whether word, the first after a password's separator, is a
@@ -829,6 +1062,12 @@ func wordless(s string) bool {
 	return true
 }
 
+// wordRune reports whether r, a rune and its size as utf8 decodes one, is a
+// letter or a digit in any script.
+func wordRune(r rune, _ int) bool {
+	return unicode.IsLetter(r) || unicode.IsDigit(r)
+}
+
 // isAlnum reports whether r is an ASCII letter or digit.
 func isAlnum(r rune) bool {
 	return 'A' <= r && r <= 'Z' || 'a' <= r && r <= 'z' || '0' <= r && r <= '9'
@@ -859,7 +1098,7 @@ func lineEndUnnamed(text string, from int) (int, bool) {
 		switch {
 		case k < 0:
 			return len(text), false
-		case passwordRule.anchored.MatchString(text[k:]):
+		case passwordRule.matchesAt(text, k):
 			return k, true
 		}
 		i = beyond(text, k)
@@ -1265,6 +1504,10 @@ type keyed struct {
 	widest   int            // the most bytes a word takes, written in any case
 	pattern  *regexp.Regexp // the pattern, as it reads anywhere in a text
 	anchored *regexp.Regexp // the same pattern, held to begin where it is tried
+	// refuses, where it is set, is whether a match the pattern finds at a
+	// place is no match all the same — what a regular expression cannot say,
+	// since it is about what stands before the match ([quotedElsewhere]).
+	refuses func(text string, at int) bool
 }
 
 // keyedOn is the pattern that opens with one of words, in any case, followed by
@@ -1353,20 +1596,31 @@ func (k *keyed) begins(text string, from int) int {
 // next is the first match of k beginning at or after from: leftmost first, as
 // k.pattern's own scan finds it, so matches taken one after another from each
 // one's end are exactly the non-overlapping matches ReplaceAllLiteralString
-// replaces.
+// replaces — less any it refuses ([keyed.refuses]), after which the scan goes
+// on from the next place, as it does from a place no match begins at.
 func (k *keyed) next(text string, from int) (start, end int, found bool) {
 	for i := k.begins(text, from); i >= 0; i = k.begins(text, beyond(text, i)) {
-		if loc := k.anchored.FindStringIndex(text[i:]); loc != nil {
+		if loc := k.anchored.FindStringIndex(text[i:]); loc != nil && !k.refused(text, i) {
 			return i, i + loc[1], true
 		}
 	}
 	return 0, 0, false
 }
 
+// matchesAt reports whether k's match begins at i in text, allocating nothing.
+func (k *keyed) matchesAt(text string, i int) bool {
+	return k.anchored.MatchString(text[i:]) && !k.refused(text, i)
+}
+
+// refused reports whether k refuses a match the pattern finds at i.
+func (k *keyed) refused(text string, i int) bool {
+	return k.refuses != nil && k.refuses(text, i)
+}
+
 // index is where k's leftmost match in text begins, or -1, allocating nothing.
 func (k *keyed) index(text string) int {
 	for i := k.begins(text, 0); i >= 0; i = k.begins(text, beyond(text, i)) {
-		if k.anchored.MatchString(text[i:]) {
+		if k.matchesAt(text, i) {
 			return i
 		}
 	}
@@ -1394,7 +1648,7 @@ func (k *keyed) indexAtEnd(text string) int {
 		from--
 	}
 	for i := k.begins(text, from); i >= 0 && i <= last; i = k.begins(text, beyond(text, i)) {
-		if k.anchored.MatchString(text[i:]) {
+		if k.matchesAt(text, i) {
 			return i
 		}
 	}
