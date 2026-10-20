@@ -268,10 +268,12 @@ export async function mintFrame(
 /** How a content read is made. */
 export interface ReadOptions {
   /**
-   * A gallery's preview, not the reader opening the artifact: the engine
-   * answers the same and records no open (`?preview=1`), so browsing a
-   * gallery never fills an artifact's Seen by list or reorders the reader's
-   * Recently opened.
+   * A gallery's preview, not the reader opening the artifact
+   * (`?purpose=preview`): the engine answers the same read under the same
+   * authorization and records no open, so browsing a gallery never fills an
+   * artifact's Seen by list or reorders the reader's Recently opened. A
+   * preview's frame is granted only what drawing needs, for minutes, and
+   * files no ready report.
    */
   preview?: boolean;
   signal?: AbortSignal;
@@ -282,7 +284,7 @@ function previewQuery(options: ReadOptions): {
   signal?: AbortSignal;
 } {
   return {
-    ...(options.preview ? { query: { preview: "1" } } : {}),
+    ...(options.preview ? { query: { purpose: "preview" } } : {}),
     ...(options.signal ? { signal: options.signal } : {}),
   };
 }
