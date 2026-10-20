@@ -152,9 +152,10 @@ describe("what the strip says", () => {
 
 describe("in the builder", () => {
   async function save(engine: Engine, query: (what: string) => unknown) {
-    const { store } = mountBuilder({ engine, query });
+    const { store, checkChange } = mountBuilder({ engine, query });
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
+    await checkChange();
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
     const dialog = await screen.findByRole("dialog", { name: "Review and save" });

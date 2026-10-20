@@ -2,9 +2,10 @@
  * Fixtures for the Builder's component suites. Imported by tests only.
  *
  * A SCRIPTED ENGINE BEHIND A STUBBED FETCH, in the Secrets suite's idiom: the
- * Builder runs its real transport, its real clock and real session storage,
- * so what a suite asserts is the request that left the page and what the page
- * did with the answer. The engine's derivation of a sent document is the
+ * Builder runs its real transport and real session storage, so what a suite
+ * asserts is the request that left the page and what the page did with the
+ * answer. Its clock is the suite's own (see [mountBuilder]). The engine's
+ * derivation of a sent document is the
  * model's fixture derivation (`model/testkit.ts`), which is fixture data for
  * ASCII names and not a port of the engine.
  *
@@ -13,8 +14,8 @@
  * Builder rather than any one view.
  */
 
-import { render } from "@testing-library/react";
-import { vi } from "vitest";
+import { act, render, waitFor } from "@testing-library/react";
+import { expect, vi } from "vitest";
 import type { ReactNode } from "react";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -31,7 +32,8 @@ import { useBuilder, type ChartKind } from "./BuilderContext.tsx";
 import { allSeats, allUnits } from "./model/draft.ts";
 import { COMPANY_KEY, type KeySource } from "./model/keys.ts";
 import type { DraftStorage } from "./model/persistence.ts";
-import { fixtureDerived } from "./model/testkit.ts";
+import { CHECK_DEBOUNCE_MS } from "./model/scheduler.ts";
+import { fixtureDerived, ManualClock } from "./model/testkit.ts";
 import { builderSurfaces } from "./surfaces.ts";
 import { healthFrame } from "~/test/health.ts";
 
@@ -404,13 +406,28 @@ export const fakeSurfaces: BuilderSurfaces = {
   table: FakeView,
 };
 
-/** Mounts the builder against the scripted engine. */
 /**
  * Who is reading, as the engine's `viewer` question answers: somebody signed
  * in who holds the grants the configuration is read and written under.
  */
 export const EDITOR = { login: "ops", owner: "ops", grants: ["admin", "tracker", "knowledge"] };
 
+/**
+ * Mounts the builder against the scripted engine.
+ *
+ * THE CHECK'S TIMERS RUN ON THE SUITE'S CLOCK. A load is checked at once, but
+ * a change waits out the 300 ms debounce and a refused check its backoff. On
+ * the browser's clock every case that changed the draft and then read the
+ * answer slept that long in real time, inside a wait bound that a loaded
+ * machine stretches toward it. The clock is a [ManualClock] rather than one
+ * that fires at once, because the suites hold the check's timers: a case
+ * scripts a refused check and reads the unreachable state before it lets the
+ * retry go, and a case asserting that a change sent nothing asserts it once
+ * the debounce has run out. On a clock that fired at once the retry would
+ * race that read, and "nothing was sent yet" would hold of every change. A
+ * case moves the clock with `advance`, inside `act` because a timer that
+ * fires is a state change React has to render, or awaits `checkChange`.
+ */
 export function mountBuilder({
   engine,
   org,
@@ -419,6 +436,7 @@ export function mountBuilder({
   surfaces = fakeSurfaces,
   storage,
   keys,
+  clock = new ManualClock(),
   query = () => null,
   viewer = () => EDITOR,
   wrap = (tree) => tree,
@@ -437,6 +455,8 @@ export function mountBuilder({
   storage?: DraftStorage | null;
   /** Where the builder mints keys and write ids; the browser's random source otherwise. */
   keys?: KeySource;
+  /** The clock the check's debounce and backoff run on. */
+  clock?: ManualClock;
   /** What the socket's query channel answers, by name. */
   query?: (what: string) => unknown;
   /**
@@ -465,10 +485,30 @@ export function mountBuilder({
           is managed (ADR-0030). It answers through the `viewer` option. */}
       <ViewerProvider>
         <Router>
-          {wrap(<Builder surfaces={surfaces} storage={storage} {...(keys ? { keys } : {})} />)}
+          {wrap(
+            <Builder
+              surfaces={surfaces}
+              storage={storage}
+              clock={clock}
+              {...(keys ? { keys } : {})}
+            />,
+          )}
         </Router>
       </ViewerProvider>
     </ClientContext.Provider>,
   );
-  return { store, socket, view };
+  /** Moves the check's clock forward by `ms`, firing every timer that falls due. */
+  const advance = (ms: number) => act(() => clock.advance(ms));
+  /**
+   * Waits for the change just made to arm the check's debounce, then lets it
+   * run out, so the change's check goes out. Awaited rather than assumed: a
+   * change a dialog applies, or a kept draft the builder gives back, reaches
+   * the check after a render the case cannot see, and the debounce run out
+   * before it is armed would leave the change unchecked for good.
+   */
+  const checkChange = async () => {
+    await waitFor(() => expect(clock.pending).toBeGreaterThan(0));
+    advance(CHECK_DEBOUNCE_MS);
+  };
+  return { store, socket, view, clock, advance, checkChange };
 }

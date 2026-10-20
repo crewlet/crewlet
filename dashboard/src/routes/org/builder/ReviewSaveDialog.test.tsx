@@ -32,21 +32,25 @@ afterEach(() => {
 const isWrite = (r: SentRequest) =>
   r.path === "/config" && (r.method === "PATCH" || r.method === "PUT") && !r.query.has("dry_run");
 
-/** Opens the builder, edits the CEO, and opens the review once the check is clean. */
+/**
+ * Opens the builder, edits the CEO, and opens the review once the check is
+ * clean. Answers the review and the mount, whose clock the check runs on.
+ */
 async function reviewEdit(engine: Engine) {
-  mountBuilder({ engine });
+  const mounted = mountBuilder({ engine });
   await screen.findByText("No problems");
   fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
+  await mounted.checkChange();
   await waitFor(() => expect(engine.checks()).toHaveLength(2));
   await screen.findByText("No problems");
   fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
-  return screen.findByRole("dialog", { name: "Review and save" });
+  return { ...mounted, dialog: await screen.findByRole("dialog", { name: "Review and save" }) };
 }
 
 describe("the save", () => {
   test("sends the checked merge patch with If-Match and a signed summary, then loads the revision", async () => {
     const engine = new Engine(company());
-    const dialog = await reviewEdit(engine);
+    const { dialog } = await reviewEdit(engine);
     expect(within(dialog).getByText("Edits CEO: goal.")).toBeDefined();
     fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
 
@@ -84,7 +88,7 @@ describe("the save", () => {
   // edit made then already stands on the saved revision.
   test("an edit made while the saved revision is read back is kept", async () => {
     const engine = new Engine(company());
-    const dialog = await reviewEdit(engine);
+    const { dialog, checkChange } = await reviewEdit(engine);
     let readBack: () => void = () => {};
     engine.script = (r, e) =>
       r.method === "GET" && r.path === "/config" && engine.requests.some(isWrite)
@@ -96,6 +100,7 @@ describe("the save", () => {
     await waitFor(() => expect(toastText()).toContain("Saved. The engine is applying it."));
     await screen.findByText("editable");
     fireEvent.click(screen.getByRole("button", { name: "Edit Designer" }));
+    await checkChange();
     await waitFor(() =>
       expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toContain("Design and more"),
     );
@@ -114,7 +119,7 @@ describe("the save", () => {
 
   test("a revision saved first by somebody else leads into update my draft, then back to the review", async () => {
     const engine = new Engine(company());
-    const dialog = await reviewEdit(engine);
+    const { dialog } = await reviewEdit(engine);
     const next = company();
     next.roles![1]!.goal = "Design things";
     engine.document = next;
@@ -141,7 +146,7 @@ describe("the save", () => {
             },
           ])
         : null;
-    const dialog = await reviewEdit(engine);
+    const { dialog } = await reviewEdit(engine);
     fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
 
     expect(
@@ -167,7 +172,7 @@ describe("a save whose answer never arrives", () => {
       }
       return null;
     };
-    const dialog = await reviewEdit(engine);
+    const { dialog } = await reviewEdit(engine);
     fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(toastText()).toContain("Saved. The engine is applying it."));
     expect(engine.sent("GET", "/config/revisions/r-saved")).toHaveLength(1);
@@ -188,7 +193,7 @@ describe("a save whose answer never arrives", () => {
       }
       return null;
     };
-    const dialog = await reviewEdit(engine);
+    const { dialog } = await reviewEdit(engine);
     fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
     expect(
       await within(dialog).findByText("The save didn’t reach the engine. Try again."),
@@ -208,9 +213,10 @@ describe("a save whose answer never arrives", () => {
         answer = () => resolve(json({ revision_id: revision, epoch: 2, warnings: [] }, 201));
       });
     };
-    mountBuilder({ engine });
+    const { checkChange } = mountBuilder({ engine });
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
+    await checkChange();
     await waitFor(() => expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).not.toBeNull());
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
@@ -243,7 +249,7 @@ describe("a save whose answer never arrives", () => {
           };
         });
       };
-      const dialog = await reviewEdit(engine);
+      const { dialog } = await reviewEdit(engine);
       fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
       await waitFor(() => expect(engine.requests.filter(isWrite)).toHaveLength(1));
       // Marked before it went, so a reload now would find it too.
@@ -293,7 +299,7 @@ describe("a save whose answer never arrives", () => {
               answerWrite = () => resolve(e.answer(r));
             })
           : null;
-      const dialog = await reviewEdit(engine);
+      const { dialog } = await reviewEdit(engine);
       fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
       await waitFor(() => expect(engine.requests.filter(isWrite)).toHaveLength(1));
       cleanup();
@@ -355,10 +361,13 @@ describe("a save whose answer never arrives", () => {
       expect(engine.revision).toBe("r1");
       const before = engine.checks().length;
 
-      mountBuilder({ engine });
+      const { checkChange } = mountBuilder({ engine });
       await waitFor(() =>
         expect(JSON.parse(sessionStorage.getItem(DRAFT_STORAGE_KEY)!).write).toBeUndefined(),
       );
+      // The log given back is a change to the draft, checked once its
+      // debounce runs out.
+      await checkChange();
       await waitFor(() =>
         expect(
           engine
@@ -385,12 +394,13 @@ describe("a save whose answer never arrives", () => {
         body: { mission: "Somebody else's", _summary: "A colleague's save" },
       });
 
-      mountBuilder({ engine });
+      const { checkChange } = mountBuilder({ engine });
       const update = await screen.findByRole("dialog", { name: "Restore the kept draft" });
       expect(within(update).getByText("Every change still applies.")).toBeDefined();
       expect(JSON.parse(sessionStorage.getItem(DRAFT_STORAGE_KEY)!).write).toBeUndefined();
       const before = engine.checks().length;
       fireEvent.click(within(update).getByRole("button", { name: "Restore the draft" }));
+      await checkChange();
       // Replayed onto the colleague's revision, and checked there.
       await waitFor(() => {
         const after = engine.checks().slice(before);
@@ -439,7 +449,7 @@ describe("a save whose answer never arrives", () => {
       }
       return null;
     };
-    const dialog = await reviewEdit(engine);
+    const { dialog } = await reviewEdit(engine);
     fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
     expect(await within(dialog).findByText(/Couldn’t confirm the save\./)).toBeDefined();
     // Nothing can be edited while the outcome is unknown.
@@ -462,9 +472,10 @@ describe("a save whose answer never arrives", () => {
 describe("the review", () => {
   test("a company rename cannot be saved until its consequence is acknowledged", async () => {
     const engine = new Engine(company());
-    mountBuilder({ engine });
+    const { checkChange } = mountBuilder({ engine });
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Rename the company" }));
+    await checkChange();
     await waitFor(() => expect(engine.checks()).toHaveLength(2));
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
@@ -492,9 +503,10 @@ describe("the review", () => {
   // again" is the kind of copy an operator reads as a draft nobody proofread.
   test("a consequence about a single seat agrees with its count", async () => {
     const engine = new Engine(company());
-    mountBuilder({ engine });
+    const { checkChange } = mountBuilder({ engine });
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Rename Engineering" }));
+    await checkChange();
     await waitFor(() => expect(engine.checks()).toHaveLength(2));
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
@@ -536,7 +548,7 @@ describe("the review", () => {
 
   test("an empty audit summary cannot be saved", async () => {
     const engine = new Engine(company());
-    const dialog = await reviewEdit(engine);
+    const { dialog } = await reviewEdit(engine);
     fireEvent.change(within(dialog).getByLabelText("Audit summary"), { target: { value: "  " } });
     expect(
       (within(dialog).getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled,

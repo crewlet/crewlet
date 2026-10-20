@@ -87,13 +87,14 @@ test("an edit is kept as its operation log and nothing of the document", async (
 test("a kept draft of the same revision waits for Keep or Discard, and Keep restores it", async () => {
   keep({});
   const engine = new Engine(company());
-  mountBuilder({ engine });
+  const { checkChange } = mountBuilder({ engine });
   expect(await screen.findByText(/This tab kept a draft with 1 change/)).toBeDefined();
   // Nothing is recorded, and nothing is cleared, while the offer stands.
   expect(screen.getByText("read only")).toBeDefined();
   expect(kept()).not.toBeNull();
 
   fireEvent.click(screen.getByRole("button", { name: "Keep the draft" }));
+  await checkChange();
   await waitFor(() =>
     expect(JSON.stringify(engine.checks().at(-1)!.body)).toContain("Lead and more"),
   );
@@ -148,10 +149,11 @@ test("discarding a kept draft removes it and starts from the saved configuration
 test("a kept draft of an older revision is restored through the update flow", async () => {
   keep({ baseRevision: "r0" });
   const engine = new Engine(company());
-  mountBuilder({ engine });
+  const { checkChange } = mountBuilder({ engine });
   const dialog = await screen.findByRole("dialog", { name: "Restore the kept draft" });
   expect(within(dialog).getByText("Every change still applies.")).toBeDefined();
   fireEvent.click(within(dialog).getByRole("button", { name: "Restore the draft" }));
+  await checkChange();
   await waitFor(() =>
     expect(JSON.stringify(engine.checks().at(-1)!.body)).toContain("Lead and more"),
   );
@@ -239,9 +241,10 @@ test("storage that refuses says the draft will not survive a reload", async () =
     removeItem: () => {},
   };
   const engine = new Engine(company());
-  mountBuilder({ engine, storage: refusing });
+  const { checkChange } = mountBuilder({ engine, storage: refusing });
   await screen.findByText("No problems");
   fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
+  await checkChange();
   expect(
     await screen.findByText("This browser can’t keep drafts. Unsaved changes are lost on reload."),
   ).toBeDefined();
@@ -255,9 +258,10 @@ test("storage that refuses says the draft will not survive a reload", async () =
 // draft on a reload exactly as a refusing one does, so it says so too.
 test("no storage at all says the draft will not survive a reload", async () => {
   const engine = new Engine(company());
-  mountBuilder({ engine, storage: null });
+  const { checkChange } = mountBuilder({ engine, storage: null });
   await screen.findByText("No problems");
   fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
+  await checkChange();
   await waitFor(() =>
     expect(JSON.stringify(engine.checks().at(-1)!.body)).toContain("Lead and more"),
   );
@@ -332,7 +336,10 @@ test("coming back to the builder restores this page's own draft without asking",
   await waitFor(() => expect(kept()).not.toBeNull());
   first.view.unmount();
 
-  mountBuilder({ engine });
+  // Restored as a change to the draft the page opened on, so its check
+  // waits out the debounce.
+  const second = mountBuilder({ engine });
+  await second.checkChange();
   await waitFor(() =>
     expect(JSON.stringify(engine.checks().at(-1)!.body)).toContain("Lead and more"),
   );

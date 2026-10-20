@@ -34,11 +34,12 @@ function upstream(change: (doc: CompanyDocument) => void): CompanyDocument {
 /** Opens the builder, lets a colleague save `next` as r2, and edits the CEO. */
 async function editAfterUpstreamSave(next: CompanyDocument) {
   const engine = new Engine(company());
-  mountBuilder({ engine });
+  const { checkChange } = mountBuilder({ engine });
   await screen.findByText("No problems");
   engine.document = next;
   engine.revision = "r2";
   fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
+  await checkChange();
   expect(await screen.findByText("The configuration changed")).toBeDefined();
   return engine;
 }
@@ -109,11 +110,12 @@ test("a node still serving the draft's base is not updated onto", async () => {
 
 test("a draft of a configuration that is no longer active offers to discard and reload", async () => {
   const engine = new Engine(company());
-  mountBuilder({ engine });
+  const { checkChange } = mountBuilder({ engine });
   await screen.findByText("No problems");
   engine.script = (r) =>
     r.query.get("dry_run") === "true" ? json({ error: "no_active_revision" }, 412) : null;
   fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
+  await checkChange();
   expect(
     await screen.findByText(
       "This draft’s configuration is no longer active, so it can’t be saved.",
@@ -213,9 +215,13 @@ describe("a conflict's values", () => {
 
 test("a removal somebody else edited first names what they changed", async () => {
   const engine = new Engine(company());
-  const { store } = mountBuilder({ engine, org: { name: "Acme", roles: [], units: [] } });
+  const { store, checkChange } = mountBuilder({
+    engine,
+    org: { name: "Acme", roles: [], units: [] },
+  });
   await screen.findByText("No problems");
   fireEvent.click(screen.getByRole("button", { name: "Remove Designer" }));
+  await checkChange();
   await waitFor(() => expect(engine.checks()).toHaveLength(2));
   await screen.findByText("No problems");
   engine.document = upstream((doc) => {

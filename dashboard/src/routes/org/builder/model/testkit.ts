@@ -20,6 +20,58 @@ import type {
 } from "~/protocol/index.ts";
 import { mintHandle, mintUnitKey } from "./identity.ts";
 import type { KeySource } from "./keys.ts";
+import type { CancelTimer, Clock } from "./transport.ts";
+
+/**
+ * A clock that moves only when a test moves it.
+ *
+ * THE BUILDER'S TIMERS ARE THE CHECK'S DEBOUNCE AND ITS BACKOFF. A suite that
+ * left them on the real clock waited 300 ms of wall time after every edit and
+ * a whole second after every refused check, inside a query budget a loaded
+ * machine stretches past both. On this clock a timer fires only inside
+ * [advance], in due order, with [now] reading its due time, and a timer that a
+ * firing callback arms fires in the same advance when it falls due within it.
+ * Nothing fires on its own, so a case that asserts nothing was sent asserts it
+ * after advancing past the moment it would have been.
+ */
+export class ManualClock implements Clock {
+  private time = 0;
+  private timers: { readonly at: number; readonly fn: () => void; readonly id: number }[] = [];
+  private nextId = 0;
+
+  now(): number {
+    return this.time;
+  }
+
+  /** How many timers are armed and have neither fired nor been cancelled. */
+  get pending(): number {
+    return this.timers.length;
+  }
+
+  setTimer(fn: () => void, ms: number): CancelTimer {
+    const id = ++this.nextId;
+    this.timers.push({ at: this.time + ms, fn, id });
+    return () => {
+      this.timers = this.timers.filter((t) => t.id !== id);
+    };
+  }
+
+  /** Moves time forward by `ms`, firing every timer that falls due on the way. */
+  advance(ms: number): void {
+    const until = this.time + ms;
+    for (;;) {
+      // Due order, and arming order among timers due at one instant, as a
+      // browser's timer queue runs them.
+      this.timers.sort((a, b) => a.at - b.at || a.id - b.id);
+      const next = this.timers[0];
+      if (!next || next.at > until) break;
+      this.timers.shift();
+      this.time = next.at;
+      next.fn();
+    }
+    this.time = until;
+  }
+}
 
 /** A key source that counts: `k1`, `k2`, and so on, with a prefix per source. */
 export function countingKeys(prefix = "k"): KeySource {

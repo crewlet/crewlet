@@ -29,11 +29,15 @@ const isWrite = (r: SentRequest) =>
   r.path === "/config" && r.method === "PUT" && !r.query.has("dry_run");
 
 /**
- * Fills the create form and starts the company from a template. The form
- * offers the operator's own seat ticked, named "Founder": `seat: false`
+ * Fills the create form and starts the company from a template, then lets the
+ * check's debounce run out on the mount's clock, so the start is checked. The
+ * form offers the operator's own seat ticked, named "Founder": `seat: false`
  * unticks it, and `seat: true` gives it a contact identity besides.
  */
-async function startCompany(options: { template?: string; seat?: boolean } = {}) {
+async function startCompany(
+  checkChange: () => Promise<void>,
+  options: { template?: string; seat?: boolean } = {},
+) {
   fireEvent.change(await screen.findByLabelText("Company name"), {
     target: { value: "Nimbus" },
   });
@@ -49,12 +53,13 @@ async function startCompany(options: { template?: string; seat?: boolean } = {})
     });
   }
   fireEvent.click(screen.getByRole("button", { name: "Start the company" }));
+  await checkChange();
 }
 
 test("the form starts the company from a template, and the check is create-only", async () => {
   const engine = new Engine(null);
-  mountBuilder({ engine });
-  await startCompany({ seat: true });
+  const { checkChange } = mountBuilder({ engine });
+  await startCompany(checkChange, { seat: true });
 
   await waitFor(() => expect(engine.checks().length).toBeGreaterThan(1));
   const check = engine.checks().at(-1)!;
@@ -88,12 +93,12 @@ test("the form starts the company from a template, and the check is create-only"
 // offered ticked and named, and leaving it out is a choice made by unticking.
 test("the operator's own seat is offered from the start, ticked and named", async () => {
   const engine = new Engine(null);
-  mountBuilder({ engine });
+  const { checkChange } = mountBuilder({ engine });
   const own = await screen.findByRole("checkbox", { name: /^Add a seat for yourself/ });
   expect((own as HTMLInputElement).checked).toBe(true);
   expect((screen.getByLabelText("Your seat's name") as HTMLInputElement).value).toBe("Founder");
   screen.getByText(/invite or create yourself on it from the org chart/);
-  await startCompany({});
+  await startCompany(checkChange);
   await waitFor(() => expect(engine.checks().length).toBeGreaterThan(1));
   expect((engine.checks().at(-1)!.body as CompanyDocument).roles?.[0]).toMatchObject({
     name: "Founder",
@@ -103,8 +108,8 @@ test("the operator's own seat is offered from the start, ticked and named", asyn
 
 test("a company started with the own seat unticked has no human seat", async () => {
   const engine = new Engine(null);
-  mountBuilder({ engine });
-  await startCompany({ seat: false });
+  const { checkChange } = mountBuilder({ engine });
+  await startCompany(checkChange, { seat: false });
   await waitFor(() => expect(engine.checks().length).toBeGreaterThan(1));
   const roles = (engine.checks().at(-1)!.body as CompanyDocument).roles ?? [];
   expect(roles.length).toBeGreaterThan(0);
@@ -116,11 +121,11 @@ test("a company started with the own seat unticked has no human seat", async () 
 // `display: flex` outranks the user agent's rule for the attribute.
 test("the create form carries no builder toolbar until a template is recorded", async () => {
   const engine = new Engine(null);
-  mountBuilder({ engine });
+  const { checkChange } = mountBuilder({ engine });
   await screen.findByLabelText("Company name");
   expect(screen.queryByRole("toolbar", { name: "Organization builder" })).toBeNull();
   expect(document.querySelector(".org-builder-toolbar")).toBeNull();
-  await startCompany({});
+  await startCompany(checkChange);
   expect(await screen.findByRole("toolbar", { name: "Organization builder" })).toBeDefined();
 });
 
@@ -128,8 +133,8 @@ test("the create form carries no builder toolbar until a template is recorded", 
 // builder, in place, rather than sent to a page that has nothing to show.
 test("the company a draft is creating is renamed in the builder", async () => {
   const engine = new Engine(null);
-  mountBuilder({ engine });
-  await startCompany({});
+  const { checkChange } = mountBuilder({ engine });
+  await startCompany(checkChange);
   await screen.findByText("No problems");
   const before = location.hash;
   fireEvent.click(screen.getByRole("button", { name: "Open the company's name form" }));
@@ -150,8 +155,8 @@ test("a company with no name is refused by the form, not by the engine", async (
 
 test("the save is a create-only PUT, and says what is left to do", async () => {
   const engine = new Engine(null);
-  mountBuilder({ engine });
-  await startCompany({});
+  const { checkChange } = mountBuilder({ engine });
+  await startCompany(checkChange);
   await screen.findByText("No problems");
   fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
   const dialog = await screen.findByRole("dialog", { name: "Review and create the company" });
@@ -202,11 +207,11 @@ test("the save is a create-only PUT, and says what is left to do", async () => {
 // import the document refuses.
 test("a create on a managed document says the model is added there, with no steps", async () => {
   const engine = new Engine(null);
-  mountBuilder({
+  const { checkChange } = mountBuilder({
     engine,
     viewer: () => ({ ...EDITOR, config_writer: true, config_managed_by: ["gitops"] }),
   });
-  await startCompany({});
+  await startCompany(checkChange);
   await screen.findByText("No problems");
   fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
   const dialog = await screen.findByRole("dialog", { name: "Review and create the company" });
@@ -224,13 +229,14 @@ test("a create on a managed document says the model is added there, with no step
 
 test("a company created while the draft is open is found by the check, before any save", async () => {
   const engine = new Engine(null);
-  mountBuilder({ engine });
-  await startCompany({});
+  const { checkChange } = mountBuilder({ engine });
+  await startCompany(checkChange);
   await screen.findByText("No problems");
   engine.document = company();
   engine.revision = "r1";
   // The next check of the draft is refused as already configured.
   fireEvent.click(screen.getByRole("button", { name: "Edit Chief Executive" }));
+  await checkChange();
   expect(
     await screen.findByRole("dialog", { name: "A company already exists on this engine" }),
   ).toBeDefined();
@@ -243,8 +249,8 @@ test("a company another node creates is reported by the org push, with no edit",
   const engine = new Engine(null);
   // The tab already holds the snapshot of a node running no company: the
   // push below REPLACES it, which is what an apply looks like.
-  const { store } = mountBuilder({ engine, org: {} });
-  await startCompany({});
+  const { store, checkChange } = mountBuilder({ engine, org: {} });
+  await startCompany(checkChange);
   await screen.findByText("No problems");
   engine.document = company();
   engine.revision = "r1";
@@ -259,8 +265,8 @@ test("a company another node creates is reported by the org push, with no edit",
 // company somebody else created, and never replayed onto it.
 test("a company created meanwhile is offered instead of the draft, never written over", async () => {
   const engine = new Engine(null);
-  mountBuilder({ engine });
-  await startCompany({});
+  const { checkChange } = mountBuilder({ engine });
+  await startCompany(checkChange);
   await screen.findByText("No problems");
   engine.document = company();
   engine.revision = "r1";
@@ -286,12 +292,13 @@ test("a company created meanwhile is offered instead of the draft, never written
 // the dialog is closed: without it the only way out was a reload.
 test("a create draft kept after a company appeared still offers the company", async () => {
   const engine = new Engine(null);
-  mountBuilder({ engine });
-  await startCompany({});
+  const { checkChange } = mountBuilder({ engine });
+  await startCompany(checkChange);
   await screen.findByText("No problems");
   engine.document = company();
   engine.revision = "r1";
   fireEvent.click(screen.getByRole("button", { name: "Edit Chief Executive" }));
+  await checkChange();
   const refused = await screen.findByRole("dialog", {
     name: "A company already exists on this engine",
   });

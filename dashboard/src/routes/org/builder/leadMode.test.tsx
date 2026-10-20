@@ -91,7 +91,7 @@ function mountLead(engine: Engine, hash?: string) {
 describe("a lead's draft", () => {
   test("opens the first unit they lead, read and checked at its own address", async () => {
     const engine = new Engine(leadCompany());
-    mountLead(engine);
+    const { checkChange } = mountLead(engine);
     expect(await screen.findByText("Dev")).toBeDefined();
     expect(screen.queryByText("CEO")).toBeNull();
     expect(screen.queryByText("Seller")).toBeNull();
@@ -117,6 +117,7 @@ describe("a lead's draft", () => {
     expect(screen.queryByText(/No model provider is set/)).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Edit Dev" }));
+    await checkChange();
     await waitFor(() => expect(engine.checks()).toHaveLength(2));
     const check = engine.checks()[1]!;
     expect(check.method).toBe("PUT");
@@ -197,9 +198,10 @@ describe("a lead's draft", () => {
         400,
       );
     };
-    mountLead(engine);
+    const { checkChange } = mountLead(engine);
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Edit Dev" }));
+    await checkChange();
     await waitFor(() => expect(screen.getByTestId("problems QA").textContent).toBe("1"));
     expect(screen.getByTestId("problems Dev").textContent).toBe("0");
     expect(await screen.findByText("units[0].roles[0].goal: missing")).toBeDefined();
@@ -228,9 +230,10 @@ describe("a lead's draft", () => {
             403,
           )
         : null;
-    mountLead(engine);
+    const { checkChange } = mountLead(engine);
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Edit QA" }));
+    await checkChange();
     await waitFor(() => expect(screen.getByTestId("problems QA").textContent).toBe("1"));
     // A problem with the draft, not a refusal of the person: editing goes on.
     expect(screen.getByText("editable")).toBeDefined();
@@ -238,9 +241,10 @@ describe("a lead's draft", () => {
 
   test("saves the unit whole under the revision it read", async () => {
     const engine = new Engine(leadCompany());
-    mountLead(engine);
+    const { checkChange } = mountLead(engine);
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Edit Dev" }));
+    await checkChange();
     await waitFor(() => expect(engine.checks()).toHaveLength(2));
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
@@ -265,13 +269,14 @@ describe("a lead's draft", () => {
 
   test("a colleague's save is updated onto from the unit, never from the company's history", async () => {
     const engine = new Engine(leadCompany());
-    mountLead(engine);
+    const { checkChange } = mountLead(engine);
     await screen.findByText("No problems");
     const next = leadCompany();
     next.units![1]!.roles![1]!.goal = "Test well";
     engine.document = next;
     engine.revision = "r2";
     fireEvent.click(screen.getByRole("button", { name: "Edit Dev" }));
+    await checkChange();
     expect(await screen.findByText("The configuration changed")).toBeDefined();
     // What changed is a diff of the company, which a lead may not read.
     expect(screen.queryByRole("link", { name: "Show what changed" })).toBeNull();
