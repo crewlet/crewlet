@@ -8,8 +8,9 @@
  * page's life: changing a setting back reads nothing again, and the engine's
  * own cache answers a repeat within its life anyway. A read the engine's
  * budget turned away (`429 read_budget`) is asked again once the wait it
- * named is over; any other failure is said, in the engine's words, on the
- * figure that needed it.
+ * named is over. Any other failure is said in one sentence of a reader's,
+ * never the route's own: what failed is a preview, and its detail names
+ * the route and the node rather than anything a person can act on.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -18,8 +19,8 @@ import { RestError, type DashboardSourcePreview } from "~/protocol/index.ts";
 import { previewSource } from "~/lib/artifacts/api.ts";
 import type { DraftDataset } from "./model.ts";
 
-/** The sentence a read that failed for no reason the engine named is drawn with. */
-const UNREAD = "These rows could not be read right now. Refresh to ask again.";
+/** The sentence a preview that could not be read is drawn with. */
+export const UNREAD = "These rows could not be read right now. Refresh to try again.";
 
 export interface PreviewState {
   answer: DashboardSourcePreview | null;
@@ -93,8 +94,7 @@ export function usePreviews(needed: readonly DraftDataset[]): Previews {
             patch(d.key, (s) => ({ ...s, loading: false }));
             return;
           }
-          const sentence = err instanceof RestError ? err.detail || err.sentence || UNREAD : UNREAD;
-          patch(d.key, (s) => ({ ...s, loading: false, failure: sentence }));
+          patch(d.key, (s) => ({ ...s, loading: false, failure: UNREAD }));
         },
       );
     },

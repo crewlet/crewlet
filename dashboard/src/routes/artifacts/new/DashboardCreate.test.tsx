@@ -21,6 +21,7 @@ import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 import catalogue from "./dashboard/testdata/catalogue.json";
 import { DashboardCreate } from "./DashboardCreate.tsx";
+import { UNREAD } from "./dashboard/usePreviews.ts";
 
 const MADE = "0192f2c4-3333-7000-8000-000000000003";
 
@@ -322,4 +323,20 @@ test("an agent asked with figures on the board refines it: the board is made, th
   expect(task).toBeGreaterThan(made);
   expect(link).toBeGreaterThan(task);
   expect(filed()?.args.body).toContain(`artifact ${MADE}`);
+});
+
+test("a preview that cannot be read says so in a reader's words, never the route's", async () => {
+  const real = globalThis.fetch;
+  Object.defineProperty(globalThis, "fetch", {
+    writable: true,
+    value: vi.fn(async (input: RequestInfo | URL, init?: RequestInit) =>
+      String(input).includes("/sources/preview/")
+        ? json(404, { error: "not_found", detail: "this node serves nothing at GET /artifacts/x" })
+        : real(input, init),
+    ),
+  });
+  mount();
+  const panel = data();
+  await waitFor(() => expect(within(panel).getAllByText(UNREAD).length).toBeGreaterThan(0));
+  expect(within(panel).queryByText(/serves nothing/)).toBeNull();
 });
