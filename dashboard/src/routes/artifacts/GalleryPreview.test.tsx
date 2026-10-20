@@ -35,6 +35,11 @@ vi.mock("@crewlethq/ui", async () => {
     },
   };
 });
+vi.mock("~/lib/store-hooks.ts", async () => {
+  const actual =
+    await vi.importActual<typeof import("~/lib/store-hooks.ts")>("~/lib/store-hooks.ts");
+  return { ...actual, useClient: () => ({ socket: { query: vi.fn() } }) };
+});
 vi.mock("~/lib/useQuery.ts", () => ({
   useQuery: () => ({ data: null, loading: true, error: null, refusal: null, refetch: () => {} }),
 }));
@@ -148,38 +153,59 @@ test("nothing live is drawn for an artifact in the trash", async () => {
   expect(mintFrame).not.toHaveBeenCalled();
 });
 
-// A PREVIEW'S FRAME RUNS WITH NO HOST: nothing is attached to its port, so a
-// page in it can call no datastore, learn no viewer and join no room; it is
-// mounted only to draw, and only its drawn state is heard.
-test("a page's preview frame is mounted with no host on its port", async () => {
+// A PREVIEW'S FRAME HOLDS AT MOST THE READ-ONLY HOST: a page that declares no
+// datastore has nothing on its port; one that does is answered by the
+// preview host, which refuses every write, so neither can change anything,
+// learn a viewer or join a room.
+test("a page's preview frame carries no host, or for a datastore the read-only one", async () => {
   vi.stubGlobal("IntersectionObserver", SeenObserver);
-  framed.props = null;
-  vi.mocked(mintFrame).mockResolvedValueOnce({
+  const minted = {
     frame_url: "https://p2.artifacts.example.net/t/x/index.html#n=abc",
     origin: "https://p2.artifacts.example.net",
     mode: "per-artifact",
     sandbox: "allow-scripts",
     allow: "",
     nonce: "abc",
-  } as never);
+  } as never;
+  framed.props = null;
+  vi.mocked(mintFrame).mockResolvedValueOnce(minted);
   render(<GalleryPreview item={item({ id: "p2", kind: "html" })} people={people} />);
   await waitFor(() => expect(framed.props).not.toBeNull());
   for (const host of ["onReady", "onMessage", "onOpenLink", "onFocusExit", "onReload"]) {
     expect(framed.props, host).not.toHaveProperty(host);
   }
-  expect(framed.props).toHaveProperty("onStateChange");
+  cleanup();
+
+  framed.props = null;
+  vi.mocked(mintFrame).mockResolvedValueOnce(minted);
+  render(
+    <GalleryPreview
+      item={item({ id: "p4", kind: "html", capabilities: ["db"] })}
+      people={people}
+    />,
+  );
+  await waitFor(() => expect(framed.props).not.toBeNull());
+  for (const host of ["onOpenLink", "onFocusExit", "onReload"]) {
+    expect(framed.props, host).not.toHaveProperty(host);
+  }
+  // The port is answered by the preview host: a write is refused.
+  const sent: Record<string, unknown>[] = [];
+  const port = { postMessage: (m: Record<string, unknown>) => sent.push(m) } as never;
+  const onMessage = framed.props!["onMessage"] as (data: unknown, port: MessagePort) => void;
+  onMessage({ type: "bridge.call", id: 1, method: "data.write", params: { ops: [] } }, port);
+  await waitFor(() => expect(sent).toHaveLength(1));
+  expect(sent[0]).toMatchObject({ ok: false, error: { code: "forbidden" } });
 });
 
-test("a page that is an app over its people's data shows the kind's drawing, and reads nothing", async () => {
+test("a page that keeps each viewer's own state shows the kind's drawing, and reads nothing", async () => {
   vi.stubGlobal("IntersectionObserver", SeenObserver);
-  expect(previewable({ kind: "html", capabilities: ["db", "identity", "presence"] })).toBe(false);
   expect(previewable({ kind: "html", capabilities: ["state", "assets"] })).toBe(false);
+  expect(previewable({ kind: "html", capabilities: ["db", "identity", "presence"] })).toBe(true);
   expect(previewable({ kind: "html", capabilities: ["db"] })).toBe(true);
-  expect(previewable({ kind: "html", capabilities: ["assets"] })).toBe(true);
   expect(previewable({ kind: "sheet", capabilities: [] })).toBe(true);
   const { container } = render(
     <GalleryPreview
-      item={item({ id: "p3", kind: "html", capabilities: ["db", "presence"] })}
+      item={item({ id: "p3", kind: "html", capabilities: ["db", "state"] })}
       people={people}
     />,
   );

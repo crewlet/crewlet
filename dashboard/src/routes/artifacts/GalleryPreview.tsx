@@ -65,7 +65,9 @@ import { mintFrame, readBoard, readDataset, readOutline } from "~/lib/artifacts/
 import { boardSpan, datasetStatus } from "~/lib/artifacts/dashboard.ts";
 import { sheetColumns, sheetRows } from "~/lib/artifacts/sheet.ts";
 import type { ArtifactPeople } from "~/lib/artifacts/people.ts";
+import { useClient } from "~/lib/store-hooks.ts";
 import { DashboardWidget } from "./DashboardWidget.tsx";
+import { PREVIEW_HOST_CAPABILITIES, PreviewHost } from "./previewHost.ts";
 import { sheetCollections } from "./SheetView.tsx";
 
 /** The width a board's preview is laid out at: a laptop's half, so its widgets fill a card's box. */
@@ -100,18 +102,16 @@ const LAYOUT_WIDTH: Readonly<Record<ArtifactKind, number | undefined>> = {
 };
 
 /**
- * Whether a preview can show what the artifact is. A page that declares it
- * knows its viewer (`identity`), shows who else is here (`presence`) or keeps
- * each viewer's state (`state`) is an app whose content is its people's data:
- * a preview is granted none of that and has no host to answer it, so what
- * remains is the app's empty frame (a sheet's "Add row" bar over no rows),
- * which reads as broken. Such a page shows the kind's drawing instead. A page
- * that only reads a datastore (`db`) is drawn live: its own layout and words
- * are most of what it shows, as a styled report's are.
+ * Whether a preview can show what the artifact is. A page that keeps each
+ * viewer's own state (`state`) draws the state of nobody in a preview, which
+ * is handed no viewer: it shows the kind's drawing instead. Every other page
+ * is drawn live, a page that reads its datastore answered its reads by the
+ * preview host, and a page that would name its viewer or the people present
+ * drawn as it is before it knows them.
  */
 export function previewable(item: Pick<ArtifactListItem, "kind" | "capabilities">): boolean {
   if (item.kind !== "html") return true;
-  return !item.capabilities.some((c) => c === "identity" || c === "presence" || c === "state");
+  return !item.capabilities.includes("state");
 }
 
 /** How many rows of a sheet are read and drawn: more than the card shows at any width. */
@@ -443,9 +443,11 @@ function PagePreview({ item }: { item: ArtifactListItem }) {
 
 /**
  * A page framed for a preview: a ticket minted as a preview (no open is
- * recorded), the design system's frame embedding it exactly as minted, and
- * no host on its port: a preview answers no call a page makes, so a page that
- * reads its data draws as it does before the data arrives.
+ * recorded, and it grants only what drawing needs), the design system's frame
+ * embedding it exactly as minted, and on its port at most the READ-ONLY
+ * preview host (`previewHost.ts`): a page that declares a datastore is
+ * answered its reads, so it draws its real content, and every other call is
+ * refused. A page that declares none has nothing on its port at all.
  */
 function PreviewFrame({
   item,
@@ -459,6 +461,16 @@ function PreviewFrame({
   const frame = useRest<ArtifactFrame>(
     `gallery-frame:${item.id}:${item.head_number}:${document ?? ""}`,
     () => mintFrame(item.id, item.head_number, document, { preview: true }),
+  );
+  const { socket } = useClient();
+  const granted = useMemo(
+    () =>
+      PREVIEW_HOST_CAPABILITIES.filter((c) => (item.capabilities as readonly string[]).includes(c)),
+    [item.capabilities],
+  );
+  const host = useMemo(
+    () => (granted.includes("db") ? new PreviewHost({ artifact: item.id, socket, granted }) : null),
+    [granted, item.id, socket],
   );
   const [mode] = useTheme();
   const [palette] = usePalette();
@@ -484,6 +496,12 @@ function PreviewFrame({
         title={title}
         theme={theme}
         nonce={minted.nonce}
+        {...(host
+          ? {
+              onReady: (port: MessagePort) => host.attach(port),
+              onMessage: (data: unknown, port: MessagePort) => void host.receive(data, port),
+            }
+          : {})}
         onStateChange={(next) => {
           if (next === "ready") preview.ready();
           else if (next !== "loading") preview.fail();
