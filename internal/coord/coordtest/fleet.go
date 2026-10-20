@@ -2452,6 +2452,59 @@ var secretCases = []fleetCase{{
 			h.t.Fatal("an update at version zero created the row")
 		}
 	},
+}, {
+	// A CONDITIONAL DELETE IS REFUSED OVER A ROW THAT MOVED. An operator
+	// removed a credential while a node's engine was stopped, and the next
+	// start removes the fleet's value only when that removal is the later
+	// write: a rotation that landed through a running peer after the start
+	// read the row is the later one, and a delete of the row as it was read
+	// must not take it away.
+	name: "a conditional delete removes a row only while it is at the version read",
+	fn: func(h *fleetHarness) {
+		h.putSecret("GITLAB_TOKEN", "v1:old", "key-1")
+		read, _ := h.secret("GITLAB_TOKEN")
+		h.putSecret("GITLAB_TOKEN", "v2:rotated", "key-1")
+		removed, err := h.f.DeleteSecretAt(h.ctx, "GITLAB_TOKEN", read.Version)
+		if err != nil || removed {
+			h.t.Fatalf("a delete at a version the row moved past = (%v, %v), "+
+				"want it refused", removed, err)
+		}
+		if rec, found := h.secret("GITLAB_TOKEN"); !found || rec.Value != "v2:rotated" {
+			h.t.Fatalf("the refused delete took the rotation away: %+v (held %v)",
+				rec, found)
+		}
+		// NOR IS ZERO A VERSION, and nothing is removed on one.
+		removed, err = h.f.DeleteSecretAt(h.ctx, "GITLAB_TOKEN", 0)
+		if err != nil || removed {
+			h.t.Fatalf("a delete at version zero = (%v, %v), want nothing removed",
+				removed, err)
+		}
+		current, _ := h.secret("GITLAB_TOKEN")
+		removed, err = h.f.DeleteSecretAt(h.ctx, "GITLAB_TOKEN", current.Version)
+		if err != nil || !removed {
+			h.t.Fatalf("a delete at the current version = (%v, %v), want it removed",
+				removed, err)
+		}
+		if _, found := h.secret("GITLAB_TOKEN"); found {
+			h.t.Fatal("the removed row is still there")
+		}
+		// GONE IS NOT A VERSION EITHER, and a create after it is a create.
+		removed, err = h.f.DeleteSecretAt(h.ctx, "GITLAB_TOKEN", current.Version)
+		if err != nil || removed {
+			h.t.Fatalf("a second delete of the removed row = (%v, %v), want nothing removed",
+				removed, err)
+		}
+		if _, err = h.f.DeleteSecretAt(h.ctx, "", current.Version); err == nil {
+			h.t.Fatal("a conditional delete of an empty name was accepted")
+		}
+		created, err := h.f.CreateSecret(h.ctx, coord.SecretRecord{
+			Name: "GITLAB_TOKEN", Value: "v3:fresh", KeyID: "key-1", UpdatedAt: h.now(),
+		})
+		if err != nil || !created {
+			h.t.Fatalf("a create after the conditional delete = (%v, %v), want it written",
+				created, err)
+		}
+	},
 }}
 
 // ---- the integration reconcile status ---------------------------------- //

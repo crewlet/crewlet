@@ -9,13 +9,16 @@ import (
 
 // LocalStore is the node-local secret table this package migrates rows off.
 //
-// Declared here rather than imported, because this is the CONSUMER: three
-// methods is all a migration needs, and a store handle that could reach the
-// whole database would eventually be used for something else.
+// Declared here rather than imported, because this is the CONSUMER: the five
+// methods a migration needs — this node's values and its dated removals, each
+// read and then let go — and a store handle that could reach the whole
+// database would eventually be used for something else.
 type LocalStore interface {
 	List(ctx context.Context) ([]secrets.Record, error)
 	Get(ctx context.Context, name string) (string, error)
 	Unset(ctx context.Context, name string) (bool, error)
+	Removals(ctx context.Context) ([]secrets.Removal, error)
+	ForgetRemoval(ctx context.Context, name string) error
 }
 
 // Migrate moves a node's own secret rows onto the fleet and removes them.
@@ -48,6 +51,17 @@ type LocalStore interface {
 // write at all. Either outcome is logged by name, because both are a value an
 // operator set that the fleet does or does not now hold.
 //
+// # A removal travels the same way
+//
+// An operator who removed a secret while this node's engine was stopped left a
+// DATED REMOVAL here ([secrets.Removal]), because deleting this node's own row
+// was all the stopped node could do and it left the fleet's value standing.
+// Each is carried under the same rule: the fleet's value is removed when the
+// removal is the later write, and kept — logged by name — when somebody wrote
+// the name through a running node after it. A name the fleet does not hold has
+// nothing to remove. The removal is forgotten here either way, once decided,
+// and kept when the fleet could not be written, for the next start.
+//
 // # Decided at the version it was judged against
 //
 // The fleet is read once, and the write that carries a later local row onto
@@ -79,7 +93,11 @@ func Migrate(ctx context.Context, from LocalStore, to *Store) ([]string, error) 
 		// rows where no peer can see them with nothing said.
 		return nil, fmt.Errorf("fleetsecrets: read this node's secrets: %w", err)
 	}
-	if len(local) == 0 {
+	removals, err := from.Removals(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("fleetsecrets: read this node's secret removals: %w", err)
+	}
+	if len(local) == 0 && len(removals) == 0 {
 		return nil, nil
 	}
 	// READ ONCE, not per name: the pass runs at boot on a node that may
@@ -117,6 +135,46 @@ func Migrate(ctx context.Context, from LocalStore, to *Store) ([]string, error) 
 				row.Name, err)
 		}
 	}
+	var removed, absent, kept []string
+	for _, r := range removals {
+		at, held := fleetAt[r.Name]
+		outcome, err := to.remove(ctx, r, at, held)
+		if err != nil {
+			return moved, err
+		}
+		switch outcome {
+		case removedFrom:
+			removed = append(removed, r.Name)
+		case nothingHeld:
+			absent = append(absent, r.Name)
+		case supersededBy:
+			kept = append(kept, r.Name)
+		}
+		if err := from.ForgetRemoval(ctx, r.Name); err != nil {
+			return moved, fmt.Errorf(
+				"fleetsecrets: forget this node's removal of %s after carrying it: %w",
+				r.Name, err)
+		}
+	}
+	if len(removed) > 0 || len(absent) > 0 {
+		// NAMES ONLY, at info, as a migrated value is: an operator who
+		// removed a secret on a stopped node reads here that the fleet
+		// no longer holds it — or that it never did.
+		log.InfoContext(ctx, "secrets_offline_removals_applied", "names", removed,
+			"already_absent", absent,
+			"detail", "these were removed on this node while its engine was stopped; no "+
+				"node resolves them from the secret store now, and the already absent "+
+				"ones the fleet did not hold")
+	}
+	if len(kept) > 0 {
+		// A WARNING, for the superseded write's reason: an operator
+		// removed these and the fleet still holds them, because somebody
+		// wrote them through a running node after the removal.
+		log.WarnContext(ctx, "secrets_offline_removals_superseded", "names", kept,
+			"detail", "these were removed on this node while its engine was stopped, and the "+
+				"fleet holds a value written after the removal, which is kept; unset them "+
+				"again through a running node if the removal is the one meant")
+	}
 	if len(moved) > 0 {
 		// NAMES ONLY, and at info: this happens once per node and an
 		// operator reading the boot log needs to see that a value they
@@ -138,7 +196,8 @@ func Migrate(ctx context.Context, from LocalStore, to *Store) ([]string, error) 
 	return moved, nil
 }
 
-// carried is what [Store.carry] did with one local row.
+// carried is what the migration did with one local row ([Store.carry]) or one
+// dated removal ([Store.remove]).
 type carried int
 
 const (
@@ -146,8 +205,13 @@ const (
 	carriedOnto carried = iota + 1
 	// carriedOver is a row written after the fleet's, which replaced it.
 	carriedOver
-	// supersededBy is a row the fleet holds a later write of, left alone.
+	// supersededBy is a row or a removal the fleet holds a later write of,
+	// left alone.
 	supersededBy
+	// removedFrom is a removal later than the fleet's write, which removed it.
+	removedFrom
+	// nothingHeld is a removal of a name the fleet does not hold.
+	nothingHeld
 )
 
 // carriedRowAttempts bounds how many times a migration judges a row again
@@ -229,6 +293,46 @@ func (s *Store) carry(ctx context.Context, from LocalStore, row secrets.Record,
 		current, found, err := s.fleet.Secret(ctx, row.Name)
 		if err != nil {
 			return 0, fmt.Errorf("fleetsecrets: re-read %s to migrate it: %w", row.Name, err)
+		}
+		onFleet, held = record(current), found
+	}
+}
+
+// remove carries one dated removal onto the fleet: the fleet's value goes when
+// the removal is the later write, conditioned on the row as it was judged —
+// onFleet, which held says is there — and judged again on what the fleet
+// holds now whenever that delete loses, for [Store.carry]'s reason.
+func (s *Store) remove(ctx context.Context, r secrets.Removal, onFleet secrets.Record,
+	held bool) (carried, error) {
+
+	if s == nil {
+		return 0, fmt.Errorf("fleetsecrets: remove %s: %w", r.Name, secrets.ErrNoKeyring)
+	}
+	if err := operatorName(r.Name); err != nil {
+		return 0, fmt.Errorf("fleetsecrets: remove %s: %w", r.Name, err)
+	}
+	for attempt := 1; ; attempt++ {
+		switch {
+		case !held:
+			return nothingHeld, nil
+		case !r.RemovedAt.After(onFleet.UpdatedAt):
+			return supersededBy, nil
+		}
+		gone, err := s.fleet.DeleteSecretAt(ctx, r.Name, onFleet.Version)
+		if err != nil {
+			return 0, fmt.Errorf("fleetsecrets: remove %s: %w", r.Name, err)
+		}
+		if gone {
+			return removedFrom, nil
+		}
+		if attempt == carriedRowAttempts {
+			return 0, fmt.Errorf("fleetsecrets: %s was rewritten on the fleet %d "+
+				"times while this node carried its removal; the removal is kept and "+
+				"the next start tries again", r.Name, carriedRowAttempts)
+		}
+		current, found, err := s.fleet.Secret(ctx, r.Name)
+		if err != nil {
+			return 0, fmt.Errorf("fleetsecrets: re-read %s to remove it: %w", r.Name, err)
 		}
 		onFleet, held = record(current), found
 	}

@@ -301,6 +301,13 @@ var nodeEstatePlacements = []placement{
 			"migrates onto the coordination store at the next start. The " +
 			"company's live credentials are not here.",
 	},
+	{
+		Table: "secret_removals",
+		Why: "The other direction of the same bootstrap half: secrets an " +
+			"operator removed while the engine was stopped, each dated, which " +
+			"internal/fleetsecrets carries onto the coordination store at the " +
+			"next start when the removal is the later write and then forgets.",
+	},
 
 	// -----------------------------------------------------------------
 	// A per-node OBSERVATION about shared infrastructure. Two nodes

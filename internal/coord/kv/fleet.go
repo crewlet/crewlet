@@ -2279,6 +2279,32 @@ func (f *FleetStore) DeleteSecret(ctx context.Context, name string) (bool, error
 	return true, nil
 }
 
+// DeleteSecretAt removes a value only while it is still at version.
+//
+// PURGED, as [FleetStore.DeleteSecret] is and for its reason, with the purge
+// conditioned on the key's last revision — SETTLED like every conditional
+// write here (settle.go), so a removal at the very revision just read is never
+// answered lost while the leader is still deciding another write to the key.
+// A zero version names no row, for [FleetStore.UpdateSecret]'s reason: the
+// client reads an expected revision of zero as "never written".
+func (f *FleetStore) DeleteSecretAt(ctx context.Context, name string, version uint64) (bool, error) {
+	if name == "" {
+		return false, errors.New("coord/kv: a secret needs a name")
+	}
+	if version == 0 {
+		return false, nil
+	}
+	err := f.secrets.Purge(ctx, encodeKey(name), jetstream.LastRevision(version))
+	switch {
+	case err == nil:
+		return true, nil
+	case lostUpdateRace(err):
+		return false, nil
+	default:
+		return false, unavailable("delete the secret", err)
+	}
+}
+
 // decodeSecret reads one stored record.
 func decodeSecret(raw []byte) (coord.SecretRecord, bool) {
 	var rec secretRecord

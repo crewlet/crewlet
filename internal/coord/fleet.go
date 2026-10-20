@@ -1192,6 +1192,18 @@ type Secrets interface {
 	// moved or went away since the caller read it — and the caller
 	// re-reads and re-decides rather than writing over what it never saw.
 	UpdateSecret(ctx context.Context, rec SecretRecord, version uint64) (bool, error)
+
+	// DeleteSecretAt removes a sealed value only while the row is still at
+	// version, reporting whether it removed it. False is a LOST RACE, as
+	// UpdateSecret's is — the row moved or went away since the caller read
+	// it — and a zero version names no row and removes nothing.
+	//
+	// The removal an operator made while a node's engine was stopped needs
+	// it: the next start removes the fleet's value only when the removal is
+	// the later of the two writes, and a plain delete of a value judged
+	// earlier would remove a rotation that landed through a running peer in
+	// between, which is the later write.
+	DeleteSecretAt(ctx context.Context, name string, version uint64) (bool, error)
 }
 
 // Integrations is the fleet's record of where each external surface got to.

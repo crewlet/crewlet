@@ -52,7 +52,7 @@ subcommand below is served by it.
 | `crewlet secrets keygen [-key-id ID]` | Generate a fresh encryption-keyring key + the `crewlet.yaml` snippet to install it |
 | `crewlet secrets set <NAME>` | Store an encrypted secret in the [secret store](../concepts/secret-store.md); the engine resolves `${NAME}` from it ahead of the environment. Takes `admin` |
 | `crewlet secrets list` | List stored secret names + metadata (never values). Takes `admin` |
-| `crewlet secrets unset <NAME>` | Remove a stored secret. Takes `admin` |
+| `crewlet secrets unset <NAME>` | Remove a stored secret — on a stopped node, a dated removal the engine carries onto the fleet at its next start. Takes `admin` |
 | `crewlet secrets get <NAME> -reveal` | Print one stored value to stdout — break-glass, audited, CLI-only. Takes `admin`, and a person present: a machine token is refused it whatever it carries, so the token this command reads is a Tier A one |
 | `crewlet secrets rekey [-dry-run]` | Re-encrypt stored secrets under the active keyring key. Takes `admin` |
 | `crewlet search eval [-store PATH]` | Measure the two-stage semantic search against the exact scan, on the vectors a store file actually holds. Ground truth is the exact scan's own top-K, so nobody authors a judgement; exits non-zero below the floor for that corpus size |
@@ -656,7 +656,7 @@ Prints a fresh base64 32-byte encryption key plus a copy-pasteable `crewlet.yaml
 
 The remaining subcommands operate on the [secret store](../concepts/secret-store.md) — the company's encrypted credentials, one sealed value per `${VAR}` name, which the engine consults **ahead of** the process environment. All of them read the Tier A bootstrap (`-config`, default `./crewlet.yaml`) for the keyring, and all of them need one: the store has no plaintext mode, so a config declaring no `secrets.keys` is refused with a pointer at `keygen` rather than silently storing plaintext.
 
-**Which store they reach depends on whether the engine is running**, and the command says which it used. The rows live on the coordination KV so every node reads them, and on the default topology that KV is inside the engine's own process — so a running node is written through its authenticated `/secrets` API, and a stopped one falls back to its own local table, which the engine migrates onto the fleet at its next start — replacing a name the fleet already holds only when the fleet's value was written earlier (see [Secret Store](../concepts/secret-store.md#operational-notes)). The engine's exclusive database lock is what tells the two apart, with a pid attached.
+**Which store they reach depends on whether the engine is running**, and the command says which it used. The rows live on the coordination KV so every node reads them, and on the default topology that KV is inside the engine's own process — so a running node is written through its authenticated `/secrets` API, and a stopped one falls back to its own local table, which the engine migrates onto the fleet at its next start — replacing a name the fleet already holds only when the fleet's value was written earlier, and carrying an `unset` made there as a dated removal under the same rule (see [Secret Store](../concepts/secret-store.md#operational-notes)). The engine's exclusive database lock is what tells the two apart, with a pid attached.
 
 `-api URL` names the node to write through, for running the command from a machine that is not the node. The bearer token comes from `CREWLET_API_TOKEN` and from nowhere else — `api.auth.tokens` is what a node **accepts** rather than a wallet the CLI helps itself from — and the credential's own identity is recorded as the author of the write.
 
@@ -688,7 +688,10 @@ The engine's own key — the identity directory's blind-index key — shares the
 crewlet secrets unset <NAME> [-config PATH] [-api URL]
 ```
 
-Removes the record and says whether one was there — "was not set" is the outcome a cleanup script wanted on its second run, not a failure. Afterwards `${NAME}` falls back to the environment.
+Removes the secret, and says which store it reached and what that store does next, as `set` does.
+
+- **Through a running node** (the engine holds the database, or `-api` names one) it removes the record from the fleet's store and says whether one was there — "was not set" is the outcome a cleanup script wanted on its second run, not a failure. Every node stops resolving the value at its next configuration activation, and afterwards `${NAME}` falls back to the environment.
+- **On a stopped node** the fleet's store is out of reach, so it records a **dated removal** in the node's own database (`recorded the removal of NAME`) and deletes the node's own value of the name, if any. The engine carries the removal onto the fleet at its next start: the fleet's value is removed when the removal is the later write, and kept — logged as `secrets_offline_removals_superseded` — when somebody set the name through a running node afterwards. `crewlet secrets list` shows a removal that is still waiting. A later `set` of the same name on the stopped node replaces the removal. To remove a secret from a running fleet now, run the command with `-api` naming a node that is up.
 
 ### `crewlet secrets get`
 

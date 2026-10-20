@@ -680,6 +680,133 @@ func TestAMigrationNeverUndoesALaterWriteThatLandedWhileItRan(t *testing.T) {
 	}
 }
 
+// AN OFFLINE REMOVAL REACHES THE FLEET. `crewlet secrets unset` on a stopped
+// node used to delete that node's own row and nothing else, so the fleet's
+// value — the one every node resolves — survived it, and the next start had
+// nothing to migrate because a deleted row is not one a migration can see.
+// The unset leaves a dated removal instead, and a removal later than the
+// fleet's write removes the fleet's value; one of a name the fleet does not
+// hold removes nothing and fails nothing. Either way the removal is forgotten.
+//
+// Mutation: skip the removals in Migrate and GL survives.
+func TestAnOfflineRemovalReachesTheFleet(t *testing.T) {
+	t.Parallel()
+	cipher := ring(t, "k1")
+	local := localStore(t, cipher)
+	fleet, _ := fleetStore(t, cipher)
+	mustSet(t, fleet, "GL", "the-fleet-token")
+	for _, name := range []string{"GL", "NEVER_SET"} {
+		if _, err := local.Remove(t.Context(), name, sam, secrets.SourceCLI,
+			clock.Add(time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := fleetsecrets.Migrate(t.Context(), local, fleet); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if _, err := fleet.Get(t.Context(), "GL"); !errors.Is(err, secrets.ErrNotFound) {
+		t.Fatalf("GL after the migration answers %v, want it removed: the removal was "+
+			"written after the fleet's value", err)
+	}
+	if pending, err := local.Removals(t.Context()); err != nil || len(pending) != 0 {
+		t.Fatalf("the removals left are %+v (%v), want every one forgotten once carried",
+			pending, err)
+	}
+}
+
+// A WRITE THE FLEET TOOK AFTER THE OFFLINE REMOVAL IS KEPT, and so is one that
+// landed while the migration ran. The removal is then the older act —
+// somebody set the name through a running node after this one stopped, or
+// while it was starting — and removing the fleet's value would take away a
+// credential an operator had chosen since. The delete is conditioned on the
+// row the pass read, so the write that lands between the read and the delete
+// is judged again and kept. The control is a removal nobody wrote after,
+// which removes.
+//
+// Mutation: delete the fleet's value without its version and RACED is taken
+// away; drop the comparison of instants and LATER is.
+func TestAnOfflineRemovalKeepsAFleetValueWrittenAfterIt(t *testing.T) {
+	t.Parallel()
+	cipher := ring(t, "k1")
+	local := localStore(t, cipher)
+	f := &interleavedFleet{Fleet: coordmem.NewFleet()}
+	fleet := fleetsecrets.New(f, cipher)
+	dana := secrets.Author{Name: "dana", Kind: "operator"}
+	for _, name := range []string{"RACED", "REMOVED"} {
+		mustSet(t, fleet, name, "the-old-token")
+	}
+	if err := fleet.Set(t.Context(), "LATER", "the-later-token", dana, secrets.SourceAPI,
+		clock.Add(2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"RACED", "REMOVED", "LATER"} {
+		if _, err := local.Remove(t.Context(), name, sam, secrets.SourceCLI,
+			clock.Add(time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.between = func() {
+		if err := fleet.Set(t.Context(), "RACED", "the-later-token", dana, secrets.SourceAPI,
+			clock.Add(2*time.Hour)); err != nil {
+			t.Errorf("rotate mid-pass: %v", err)
+		}
+	}
+
+	if _, err := fleetsecrets.Migrate(t.Context(), local, fleet); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	values, err := fleet.All(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"RACED", "LATER"} {
+		if values[name] != "the-later-token" {
+			t.Errorf("%s = %q, want the write made after the removal kept", name, values[name])
+		}
+	}
+	if value, held := values["REMOVED"]; held {
+		t.Errorf("REMOVED = %q, want it removed: nobody wrote it after the removal", value)
+	}
+	if pending, err := local.Removals(t.Context()); err != nil || len(pending) != 0 {
+		t.Fatalf("the removals left are %+v (%v), want every one forgotten once decided",
+			pending, err)
+	}
+}
+
+// refusingFleet is a fleet whose conditional delete does not answer.
+type refusingFleet struct{ coord.Fleet }
+
+func (refusingFleet) DeleteSecretAt(context.Context, string, uint64) (bool, error) {
+	return false, errors.New("the broker did not answer")
+}
+
+// A REMOVAL THE FLEET COULD NOT TAKE IS KEPT, for the reason a value that
+// could not be copied is: the next start tries again, and forgetting it would
+// leave a credential the operator removed resolving on every node with nothing
+// left to say they removed it.
+func TestAnOfflineRemovalTheFleetCouldNotTakeIsKept(t *testing.T) {
+	t.Parallel()
+	cipher := ring(t, "k1")
+	local := localStore(t, cipher)
+	f := refusingFleet{coordmem.NewFleet()}
+	fleet := fleetsecrets.New(f, cipher)
+	mustSet(t, fleet, "GL", "the-fleet-token")
+	if _, err := local.Remove(t.Context(), "GL", sam, secrets.SourceCLI,
+		clock.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := fleetsecrets.Migrate(t.Context(), local, fleet); err == nil {
+		t.Fatal("a migration whose removal could not be written reported success")
+	}
+	pending, err := local.Removals(t.Context())
+	if err != nil || len(pending) != 1 || pending[0].Name != "GL" {
+		t.Fatalf("the removals left are %+v (%v), want GL kept for the next start",
+			pending, err)
+	}
+}
+
 // A ROW THAT COULD NOT BE COPIED IS NOT REMOVED. Deleting it would destroy a
 // credential this node is the only holder of, and the first symptom would be
 // a vendor 401 hours later on a node that never had the value.

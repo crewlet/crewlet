@@ -52,6 +52,36 @@ type Record struct {
 	Version uint64
 }
 
+// Removal is a secret an operator removed while this node's engine was
+// stopped: the name, when, by whom and through which path — a DATED REMOVAL,
+// which the engine carries onto the fleet at its next start exactly as it
+// carries a value written then.
+//
+// # Why a removal is a row and not just a missing one
+//
+// A stopped node cannot reach the fleet's store (on the default topology its
+// broker is inside the engine's process), so `crewlet secrets unset` there can
+// only change this node's own table — and deleting a row the fleet's value
+// never came from changes nothing the fleet reads. The removal has to be
+// RECORDED, with the instant it was made, so that the next start can remove
+// the fleet's value when the removal is the later write and keep it when it
+// is not: the same later-wins rule an offline write is carried by. A table of
+// values alone can say what was set, never what was taken away.
+type Removal struct {
+	Name string
+
+	// RemovedAt is when the operator removed it, on the writing node's own
+	// clock, which is what the fleet's write is compared against.
+	RemovedAt time.Time
+
+	// RemovedBy, RemovedByKind, OperatorID and Source are the provenance a
+	// value's row carries ([Record]), for the removal.
+	RemovedBy     string
+	RemovedByKind string
+	OperatorID    string
+	Source        Source
+}
+
 // Source is the write path a stored secret arrived by, stamped by that path.
 //
 // # A fact of the write path, never a claim of the request

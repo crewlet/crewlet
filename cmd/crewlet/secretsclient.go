@@ -154,6 +154,27 @@ func (c *secretsClient) Unset(ctx context.Context, name string) (bool, error) {
 	return body.Removed, nil
 }
 
+// Remove deletes a secret from the fleet's store, now.
+func (c *secretsClient) Remove(ctx context.Context, name string, _ secrets.Author,
+	_ time.Time) (unsetOutcome, error) {
+
+	gone, err := c.Unset(ctx, name)
+	switch {
+	case err != nil:
+		return 0, err
+	case gone:
+		return unsetRemoved, nil
+	default:
+		return unsetAbsent, nil
+	}
+}
+
+// Removals is none: a removal through a running node is made at once, and
+// only a stopped node's own table holds one for later.
+func (c *secretsClient) Removals(context.Context) ([]secrets.Removal, error) {
+	return nil, nil
+}
+
 // Rekey re-seals every stale row on the node.
 //
 // The key id travels so the NODE can refuse a mismatch. A CLI whose Tier A

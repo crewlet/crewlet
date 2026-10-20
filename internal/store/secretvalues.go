@@ -26,7 +26,9 @@ import (
 // The engine MIGRATES these rows onto the fleet at its next start and removes
 // them here, which is what stops a stale local row shadowing a rotation
 // forever. Until that start they are this node's alone, and no peer can see
-// them.
+// them. A secret REMOVED here is migrated too, as a dated removal
+// ([SecretValues.Remove]), because a removal that only deleted this node's own
+// row left the fleet's value standing.
 //
 // # It is the companion to company_config, not a duplicate of it
 //
@@ -113,12 +115,21 @@ func (s *SecretValues) Set(ctx context.Context, name, value string,
 	if !ok {
 		return fmt.Errorf("store: seal %s: the cipher produced no key id", name)
 	}
-	_, err = s.db.sql.ExecContext(ctx, secretUpsertSQL, name, sealed, keyID,
-		EncodeTime(now), by.Name, by.Kind, by.OperatorID, string(source))
-	if err != nil {
-		return fmt.Errorf("store: write secret %s: %w", name, err)
-	}
-	return nil
+	// AND ANY REMOVAL OF THE NAME GOES, in the same transaction: the write is
+	// the later of the two, so it is the one the next start carries onto the
+	// fleet ([SecretValues.Remove] says why a name is in one table or the
+	// other, never both).
+	return s.db.Tx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, secretUpsertSQL, name, sealed, keyID,
+			EncodeTime(now), by.Name, by.Kind, by.OperatorID, string(source)); err != nil {
+			return fmt.Errorf("store: write secret %s: %w", name, err)
+		}
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM secret_removals WHERE name = ?`, name); err != nil {
+			return fmt.Errorf("store: write secret %s: %w", name, err)
+		}
+		return nil
+	})
 }
 
 // Get unseals one secret.
@@ -179,7 +190,13 @@ func (s *SecretValues) List(ctx context.Context) ([]secrets.Record, error) {
 	return out, rows.Err()
 }
 
-// Unset removes a secret, reporting whether a row went.
+// Unset removes this node's own row for a secret, reporting whether one went.
+//
+// THIS NODE'S ROW AND NOTHING ELSE: it is how a value this node holds is taken
+// back — the boot migration's removal of a row it carried, a provisioning
+// run's rollback of what it recorded — and it leaves the fleet's value, if
+// there is one, where it is. An operator removing a SECRET from a stopped node
+// records a removal instead ([SecretValues.Remove]), which reaches the fleet.
 func (s *SecretValues) Unset(ctx context.Context, name string) (bool, error) {
 	res, err := s.db.sql.ExecContext(ctx,
 		`DELETE FROM secret_values WHERE name = ?`, name)
@@ -191,6 +208,99 @@ func (s *SecretValues) Unset(ctx context.Context, name string) (bool, error) {
 		return false, fmt.Errorf("store: unset secret %s: %w", name, err)
 	}
 	return n > 0, nil
+}
+
+const removalUpsertSQL = `
+INSERT INTO secret_removals (name, removed_at, removed_by, removed_by_kind,
+                             operator_id, source)
+VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT (name) DO UPDATE SET
+    removed_at = excluded.removed_at, removed_by = excluded.removed_by,
+    removed_by_kind = excluded.removed_by_kind,
+    operator_id = excluded.operator_id, source = excluded.source`
+
+// Remove records a DATED REMOVAL of a secret — see [secrets.Removal] — and
+// deletes this node's own value of it, reporting whether one was there.
+//
+// # Why this is not [SecretValues.Unset]
+//
+// A stopped node's table is not where the company's value lives: the fleet's
+// store is, and this node cannot reach it until its engine starts. Deleting a
+// local row was all `crewlet secrets unset` used to do there, so the fleet's
+// value survived the unset and every node went on resolving it. The removal
+// is kept instead, with the instant it was made, for the next start to carry
+// onto the fleet under the later-wins rule a value written now is carried by.
+//
+// ONE TRANSACTION, and a name ends in one table or the other: the removal is
+// the later act, so this node's value of the name — written before it — is
+// not one the next start may carry, and a value written AFTER a removal
+// deletes the removal ([SecretValues.Set]) for the same reason.
+func (s *SecretValues) Remove(ctx context.Context, name string, by secrets.Author,
+	source secrets.Source, now time.Time) (bool, error) {
+
+	if err := secrets.CheckName(name); err != nil {
+		return false, err
+	}
+	if err := secrets.CheckSource(source); err != nil {
+		return false, err
+	}
+	var held bool
+	err := s.db.Tx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `DELETE FROM secret_values WHERE name = ?`, name)
+		if err != nil {
+			return fmt.Errorf("store: remove secret %s: %w", name, err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("store: remove secret %s: %w", name, err)
+		}
+		held = n > 0
+		if _, err := tx.ExecContext(ctx, removalUpsertSQL, name, EncodeTime(now),
+			by.Name, by.Kind, by.OperatorID, string(source)); err != nil {
+			return fmt.Errorf("store: record the removal of %s: %w", name, err)
+		}
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return held, nil
+}
+
+// Removals reports every removal this node holds for the fleet, name-ordered.
+//
+// NO KEYRING NEEDED: a removal carries no value, so what is pending can be
+// read by a node that cannot open anything.
+func (s *SecretValues) Removals(ctx context.Context) ([]secrets.Removal, error) {
+	rows, err := s.db.sql.QueryContext(ctx,
+		`SELECT name, removed_at, removed_by, removed_by_kind, operator_id, source
+		 FROM secret_removals ORDER BY name`)
+	if err != nil {
+		return nil, fmt.Errorf("store: list secret removals: %w", err)
+	}
+	defer rows.Close()
+	var out []secrets.Removal
+	for rows.Next() {
+		var r secrets.Removal
+		var micros int64
+		var source string
+		if err := rows.Scan(&r.Name, &micros, &r.RemovedBy, &r.RemovedByKind,
+			&r.OperatorID, &source); err != nil {
+			return nil, fmt.Errorf("store: scan secret removal: %w", err)
+		}
+		r.RemovedAt, r.Source = DecodeTime(micros), secrets.Source(source)
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// ForgetRemoval drops one removal, once the boot migration has carried it.
+func (s *SecretValues) ForgetRemoval(ctx context.Context, name string) error {
+	if _, err := s.db.sql.ExecContext(ctx,
+		`DELETE FROM secret_removals WHERE name = ?`, name); err != nil {
+		return fmt.Errorf("store: forget the removal of %s: %w", name, err)
+	}
+	return nil
 }
 
 // All unseals every secret, for the boot snapshot the resolver reads.

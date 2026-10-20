@@ -66,7 +66,7 @@ Usage:
   crewlet secrets list                     What is set, and when it was last written
   crewlet secrets set NAME [-value V]      Store or rotate one secret (reads stdin without -value)
   crewlet secrets get NAME -reveal         Print one secret to stdout (break-glass; logged)
-  crewlet secrets unset NAME               Remove one secret
+  crewlet secrets unset NAME               Remove one secret (from a stopped node, at its next start)
   crewlet secrets keygen [-key-id ID]      A fresh keyring key, with the config snippet to install it
   crewlet secrets rekey [-dry-run]         Re-seal every row, and every person's values, under the active key
 
@@ -200,7 +200,21 @@ type secretBackend interface {
 	Set(ctx context.Context, name, value string, by secrets.Author,
 		source secrets.Source, now time.Time) (secrets.Author, error)
 	Get(ctx context.Context, name string) (string, error)
+
+	// Unset deletes the row this store holds for a name, reporting whether
+	// one went: how a provisioning run takes back what it recorded.
 	Unset(ctx context.Context, name string) (bool, error)
+
+	// Remove is `crewlet secrets unset`: the secret removed from the
+	// company, as far as this store can take it. The fleet's store deletes
+	// it; this node's own table cannot reach the fleet's value, so it
+	// records a dated removal the engine carries there at its next start.
+	Remove(ctx context.Context, name string, by secrets.Author, now time.Time) (unsetOutcome, error)
+
+	// Removals are the dated removals this store holds for the fleet, which
+	// only this node's own table has.
+	Removals(ctx context.Context) ([]secrets.Removal, error)
+
 	Rekey(ctx context.Context, activeKeyID string) (rotation, error)
 
 	// EngineKeys counts what the keyring seals that no command names —
@@ -209,6 +223,20 @@ type secretBackend interface {
 	// see moved before the old key can go.
 	EngineKeys(ctx context.Context) (engineHeld, error)
 }
+
+// unsetOutcome is what `crewlet secrets unset` did, in the store it reached.
+type unsetOutcome int
+
+const (
+	// unsetRemoved is a secret the store held and no longer does.
+	unsetRemoved unsetOutcome = iota + 1
+	// unsetAbsent is a secret the store did not hold.
+	unsetAbsent
+	// unsetRecorded is a stopped node's dated removal, which the engine
+	// carries onto the fleet at its next start; whether the fleet holds the
+	// name is not something this node can see.
+	unsetRecorded
+)
 
 // rotation is what one rekey moved: the store's rows, and the identity
 // estate's personal values, counted.
@@ -243,6 +271,19 @@ func (l localSecrets) Set(ctx context.Context, name, value string, by secrets.Au
 	source secrets.Source, now time.Time) (secrets.Author, error) {
 
 	return by, l.SecretValues.Set(ctx, name, value, by, source, now)
+}
+
+// Remove records a dated removal, which reaches the fleet at the engine's next
+// start ([store.SecretValues.Remove]): deleting this node's own row was all an
+// unset did here, and the fleet's value — the one every node resolves —
+// survived it. THIS COMMAND'S OWN WORD, as a write here records it.
+func (l localSecrets) Remove(ctx context.Context, name string, by secrets.Author,
+	now time.Time) (unsetOutcome, error) {
+
+	if _, err := l.SecretValues.Remove(ctx, name, by, secrets.SourceCLI, now); err != nil {
+		return 0, err
+	}
+	return unsetRecorded, nil
 }
 
 func (l localSecrets) Rekey(ctx context.Context, activeKeyID string) (rotation, error) {
@@ -442,6 +483,25 @@ func listSecrets(ctx context.Context, sv *secretTarget, stdout io.Writer) error 
 			return err
 		}
 	}
+	removals, err := sv.Removals(ctx)
+	if err != nil {
+		return err
+	}
+	if len(removals) > 0 {
+		// SAID, because an unset on a stopped node changes nothing this
+		// listing would otherwise show: the value it removes is the fleet's,
+		// which this node cannot read, and the removal waits for the start.
+		fmt.Fprintf(stdout, "\nremoved here, for the fleet at this node's next start:\n")
+		w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "NAME\tREMOVED\tBY")
+		for _, r := range removals {
+			fmt.Fprintf(w, "%s\t%s\t%s\n", r.Name, r.RemovedAt.Format(time.RFC3339),
+				describeAuthor(r.RemovedBy, r.OperatorID))
+		}
+		if err = w.Flush(); err != nil {
+			return err
+		}
+	}
 	held, err := sv.EngineKeys(ctx)
 	if err != nil {
 		return err
@@ -522,6 +582,28 @@ func (t *secretTarget) reportWrite(stdout io.Writer) {
 	}
 }
 
+// reportRemoval is [secretTarget.reportWrite] for an unset.
+func (t *secretTarget) reportRemoval(stdout io.Writer) {
+	fmt.Fprintf(stdout, "written to %s\n", t.where)
+	if !t.fleet {
+		fmt.Fprintln(stdout, secretsLocalRemovalNote)
+	} else {
+		fmt.Fprintln(stdout, secretsFleetRemovalNote)
+	}
+}
+
+// secretsFleetRemovalNote is [secretsFleetNote] for an unset: the running
+// fleet goes on resolving the value it read until its next apply.
+const secretsFleetRemovalNote = "The running fleet stops resolving it at its next " +
+	"configuration apply; POST /config/reload to a node that is up re-activates the " +
+	"current revision now."
+
+// secretsLocalRemovalNote is [secretsLocalNote] for an unset, which this node
+// cannot make on the fleet's store and so records for its next start.
+const secretsLocalRemovalNote = "This node will remove it from the fleet at its next " +
+	"start, unless the fleet holds a value written after this removal. " +
+	"To remove it from a RUNNING fleet now, re-run with -api naming a node that is up."
+
 // secretsFleetNote is what a write to the FLEET's store does not do yet.
 //
 // The engine resolves a `${VAR}` through a snapshot of the store taken at each
@@ -579,19 +661,29 @@ func getSecret(ctx context.Context, sv *secretTarget, name string, reveal bool, 
 	return err
 }
 
+// unsetSecret removes a secret from the company, and says which store it
+// reached and what that store does next — the line every write prints
+// ([secretTarget.reportWrite]), because the two stores do opposite things with
+// an unset: the fleet's deletes the value now, and a stopped node's own table
+// records a removal its engine carries onto the fleet at the next start.
 func unsetSecret(ctx context.Context, sv *secretTarget, name string, stdout io.Writer) error {
 	if name == "" {
 		return errors.New("secrets unset needs a name")
 	}
-	gone, err := sv.Unset(ctx, name)
+	outcome, err := sv.Remove(ctx, name, hostAuthor(), time.Now().UTC())
 	if err != nil {
 		return err
 	}
-	if !gone {
-		fmt.Fprintf(stdout, "%s was not set\n", name)
+	switch outcome {
+	case unsetAbsent:
+		fmt.Fprintf(stdout, "%s was not set in %s\n", name, sv.where)
 		return nil
+	case unsetRecorded:
+		fmt.Fprintf(stdout, "recorded the removal of %s\n", name)
+	default:
+		fmt.Fprintf(stdout, "removed %s\n", name)
 	}
-	fmt.Fprintf(stdout, "removed %s\n", name)
+	sv.reportRemoval(stdout)
 	return nil
 }
 

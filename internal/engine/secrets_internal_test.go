@@ -320,6 +320,12 @@ func (refusingFleet) UpdateSecret(context.Context, coord.SecretRecord, uint64) (
 	return false, errors.New("the bucket refused the write")
 }
 
+// DeleteSecretAt refuses as well: an offline removal is carried onto the fleet
+// by the same migration, conditionally.
+func (refusingFleet) DeleteSecretAt(context.Context, string, uint64) (bool, error) {
+	return false, errors.New("the bucket refused the write")
+}
+
 // A FAILED MIGRATION DOES NOT FAIL THE BOOT, and the node keeps serving from
 // its own rows. Taking a working node down over a store blip is worse than
 // running one more boot on values only it can see — and the rows it could not
