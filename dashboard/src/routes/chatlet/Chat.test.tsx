@@ -226,7 +226,7 @@ test("a count with no read state behind it is not drawn as nothing unread", asyn
       channels: [room({ unread: 0 })],
     },
   });
-  await waitFor(() => expect(screen.getByText(/could not be read/i)).toBeTruthy());
+  await waitFor(() => expect(screen.getByText(/couldn’t be read/i)).toBeTruthy());
 });
 
 test("a muted room says so in the rail", async () => {
@@ -525,7 +525,7 @@ test("an unanswered message and its same-id retry survive a look at another room
   const send = screen.getByRole("button", { name: /^send$/i });
   await waitFor(() => expect(send.getAttribute("aria-disabled")).not.toBe("true"));
   fireEvent.submit(box.closest("form")!);
-  await screen.findByRole("button", { name: /same id/i });
+  await screen.findByRole("button", { name: /send again/i });
 
   fireEvent.click(screen.getByRole("button", { name: /switch rooms/i }));
   await screen.findByLabelText(/^Message #launch/);
@@ -535,7 +535,7 @@ test("an unanswered message and its same-id retry survive a look at another room
   fireEvent.click(screen.getByRole("button", { name: /switch rooms/i }));
   await screen.findByLabelText(/^Message #general/);
   expect(screen.getByText("did that land?")).toBeTruthy();
-  const retry = await screen.findByRole("button", { name: /same id/i });
+  const retry = await screen.findByRole("button", { name: /send again/i });
   await waitFor(() => expect(retry.getAttribute("aria-disabled")).not.toBe("true"));
   fireEvent.click(retry);
   await waitFor(() => expect(presses.filter((p) => p.tool === "post_message")).toHaveLength(2));
@@ -703,7 +703,7 @@ describe("a tab handed to another reader, or a seat that moves", () => {
     const send = screen.getByRole("button", { name: /^send$/i });
     await waitFor(() => expect(send.getAttribute("aria-disabled")).not.toBe("true"));
     fireEvent.submit(box.closest("form")!);
-    await screen.findByRole("button", { name: /same id/i });
+    await screen.findByRole("button", { name: /send again/i });
     fireEvent.change(box, { target: { value: "half a thought of ada's" } });
 
     // THE DIRECTORY BINDS THE PERSON ELSEWHERE: the engine closes the socket,
@@ -712,7 +712,7 @@ describe("a tab handed to another reader, or a seat that moves", () => {
     flush(() => store.setConnected(false));
     flush(() => store.setConnected(true));
     await waitFor(() => expect(screen.queryByText("said as ada")).toBeNull());
-    expect(screen.queryByRole("button", { name: /same id/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /send again/i })).toBeNull();
     const fresh = (await screen.findByLabelText(/^Message/)) as HTMLTextAreaElement;
     expect(fresh.value).toBe("");
   });

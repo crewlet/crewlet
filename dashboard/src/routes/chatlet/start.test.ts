@@ -67,7 +67,7 @@ describe("an outcome nobody can establish", () => {
     // arbitration itself: the name comes back taken if the first one landed.
     expect(create.note).toMatch(/same name/i);
     expect(reportFor("direct", lost()).note).toMatch(/same people/i);
-    expect(reportFor("join", lost()).note).toMatch(/membership is a set/i);
+    expect(reportFor("join", lost()).note).toMatch(/changes nothing/i);
   });
 
   test("says why nobody can tell, in the transport's own words", () => {
@@ -83,7 +83,7 @@ describe("a record this node has not applied", () => {
     // the one that would serve the read, and it has not applied the record.
     const report = reportFor("channel", answered("pending"));
     expect(report.go).toBe("");
-    expect(report.note).toMatch(/has not applied it yet/i);
+    expect(report.note).toMatch(/not shown here yet/i);
   });
 
   test("is drawn as information and never as success", () => {
@@ -132,7 +132,7 @@ describe("a refusal", () => {
     expect(report.go).toBe("");
     // THE FIELD IS NAMED: the transport's "That already exists" says nothing
     // about which value a person has to change.
-    expect(report.note).toMatch(/name is already a room/i);
+    expect(report.note).toMatch(/already has that name/i);
   });
 
   test("every other refusal keeps the engine's sentence and is drawn as one", () => {
@@ -161,7 +161,7 @@ describe("a refusal", () => {
     // yours" answer identically — and the transport's own "not there any more"
     // would say the first of the two as though it were known.
     expect(reportFor("direct", refused("not_found", "It is not there any more.")).note).toMatch(
-      /no such room, or it is not one you can read/i,
+      /no such room, or you can’t read it/i,
     );
   });
 });

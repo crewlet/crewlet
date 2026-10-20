@@ -152,7 +152,7 @@ export function Browse({ onClose }: { onClose: () => void }) {
       icon={<CompassGlyph size="md" />}
       onClose={onClose}
       dismissable={!join.busy}
-      closeDisabledReason="Waiting for the log to acknowledge."
+      closeDisabledReason="Waiting for the engine to answer."
       size="lg"
       stackBody
       onSubmit={() => setQ(draft.trim())}
@@ -167,7 +167,7 @@ export function Browse({ onClose }: { onClose: () => void }) {
             onChange={(event) => setDraft(event.target.value)}
             aria-label="Find a room by what is said in it"
             leading={<SearchGlyph size="sm" />}
-            placeholder="What is talked about there — words, not a room name"
+            placeholder="What’s talked about there, not the room’s name"
           />
         </div>
         <Button variant="primary" onClick={() => setQ(draft.trim())}>
@@ -177,14 +177,14 @@ export function Browse({ onClose }: { onClose: () => void }) {
 
       {mineAnswer.data?.truncated && (
         <Callout variant="warning">
-          You are in more rooms than one list holds, so a room you are already in may appear below.
-          Joining it again writes nothing — membership is a set.
+          You&rsquo;re in more rooms than one list holds, so a room you&rsquo;re already in may show
+          up below. Joining it again changes nothing.
         </Callout>
       )}
       {found.error === "unknown_query" ? (
         <Callout variant="neutral">
-          This node has no chat index, so nothing can be searched for here. The rooms below are the
-          ones you may read and are not in.
+          Chat search isn&rsquo;t available on this node. The rooms below are the ones you can read
+          and aren&rsquo;t in.
         </Callout>
       ) : (
         // ANY OTHER FAILURE IS NO ANSWER, said in the words every refused read
@@ -207,7 +207,7 @@ export function Browse({ onClose }: { onClose: () => void }) {
         // here may simply not be indexed yet — said rather than drawn as "no
         // room came back".
         <Callout variant="warning">
-          This node&rsquo;s chat index is still building, so a room may not be found here yet.
+          Still indexing, so a room may be missing. Try again shortly.
         </Callout>
       )}
 
@@ -223,8 +223,8 @@ export function Browse({ onClose }: { onClose: () => void }) {
             </Button>
           }
         >
-          {details.unreadable.size} room{details.unreadable.size === 1 ? "" : "s"} could not be read
-          just now, so {details.unreadable.size === 1 ? "it is" : "they are"} not listed.
+          {details.unreadable.size} room{details.unreadable.size === 1 ? "" : "s"} couldn&rsquo;t be
+          read just now, so {details.unreadable.size === 1 ? "it isn’t" : "they aren’t"} listed.
         </Callout>
       )}
 
@@ -249,11 +249,11 @@ export function Browse({ onClose }: { onClose: () => void }) {
           <EmptyState
             size="compact"
             icon={<CompassGlyph size="xl" />}
-            title={q ? "No room to join came back" : "Search for a room"}
+            title={q ? "No room to join" : "Search for a room"}
             description={
               q
-                ? "Every room that matched is one you are already in, or nothing matched at all. A room is found here by something said in it, so one nobody has spoken in is not findable this way."
-                : "Type what a room talks about. This searches every room you may read — which includes the public and unit rooms you have not joined — and lists the ones you are not in."
+                ? "You’re in every room that matched, or nothing matched. A room is found by what’s said in it, so a quiet room won’t show up."
+                : "Type what a room talks about. This searches every room you can read, including public and team rooms you haven’t joined, and lists the ones you’re not in."
             }
           />
         )
@@ -276,7 +276,7 @@ export function Browse({ onClose }: { onClose: () => void }) {
                   <span className="t-caption muted">
                     {(detail.members ?? []).length} member
                     {(detail.members ?? []).length === 1 ? "" : "s"}
-                    {note ? ` — ${note}` : ""}
+                    {note ? ` · ${note}` : ""}
                   </span>
                 </span>
                 {canJoin(standing) && (
@@ -300,14 +300,14 @@ export function Browse({ onClose }: { onClose: () => void }) {
         <p className="t-caption muted">
           {offered.more} more room{offered.more === 1 ? "" : "s"}{" "}
           {q
-            ? "matched than this list reads at once. Narrow the search, and the ones you want will be in it."
-            : "than this list reads at once. Search for what is said in the one you want."}
+            ? "matched than fit here. Narrow the search to find the one you want."
+            : "than fit here. Search for what’s said in the one you want."}
         </p>
       )}
 
       <p className="t-caption muted measure">
-        These are the rooms you may read and are not in, the busiest first. A search finds a room by
-        what has been said in it.
+        These are the rooms you can read and aren&rsquo;t in, the busiest first. A search finds a
+        room by what&rsquo;s been said in it.
       </p>
     </Modal>
   );

@@ -137,7 +137,7 @@ test("an outcome this node has not applied is not drawn as saved", async () => {
   await pressable();
   fireEvent.click(save());
 
-  await waitFor(() => expect(screen.getByText(/has not applied it yet/i)).toBeTruthy());
+  await waitFor(() => expect(screen.getByText(/not shown here yet/i)).toBeTruthy());
   // THE DIALOG STAYS, because closing it would be the screen saying the change
   // is on the room when this node cannot yet read it back.
   expect(onClose).not.toHaveBeenCalled();

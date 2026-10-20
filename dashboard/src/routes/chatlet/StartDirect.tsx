@@ -84,7 +84,7 @@ export function StartDirect({
       icon={<UserPlusGlyph size="md" />}
       onClose={onClose}
       dismissable={!busy}
-      closeDisabledReason="Waiting for the log to acknowledge."
+      closeDisabledReason="Waiting for the engine to answer."
       size="md"
       stackBody
       onSubmit={() => void submit()}
@@ -109,10 +109,10 @@ export function StartDirect({
         label="Who with"
         required
         as="fieldset"
-        helper="You are in it — the server adds you, because a caller may never name a seat. Anybody in the company can be addressed directly, seats included: that is what the company runs on."
+        helper="You’re in it too. You can message anyone in the company, agents included."
         error={
           tooMany
-            ? `That is ${handles.length + 1} people counting you, and a conversation holds at most ${MAX_DIRECT_PARTICIPANTS}. Past that a conversation is a room, and a room has a name somebody can join by.`
+            ? `That’s ${handles.length + 1} people counting you, and a conversation holds at most ${MAX_DIRECT_PARTICIPANTS}. For more, start a room.`
             : ""
         }
       >
@@ -132,9 +132,8 @@ export function StartDirect({
       <StartNote report={report} />
 
       <p className="t-caption muted">
-        A conversation IS the people in it: its address is derived from their handles, so opening
-        one that already exists takes you straight to it. Adding somebody later is not an edit to
-        this conversation — it is a different one, opened the same way.
+        A conversation is the people in it, so opening one that already exists takes you straight to
+        it. Adding someone later starts a different conversation.
       </p>
     </Modal>
   );

@@ -205,7 +205,7 @@ test("a room the engine will not describe leaves the list rather than erroring",
   search("launch");
   await waitFor(() => expect(screen.getByText("#launch")).toBeTruthy());
   expect(screen.queryByText(/secret/)).toBeNull();
-  expect(screen.queryByText(/could not be read/)).toBeNull();
+  expect(screen.queryByText(/couldn’t be read/)).toBeNull();
 });
 
 test("a search that failed says why, never that no room came back", async () => {
@@ -217,7 +217,7 @@ test("a search that failed says why, never that no room came back", async () => 
   mount(["open-1"]);
   search("launch");
   expect(await screen.findByText(/still catching up/i)).toBeTruthy();
-  expect(screen.queryByText(/No room to join came back/i)).toBeNull();
+  expect(screen.queryByText(/No room to join/i)).toBeNull();
 });
 
 test("a room that could not be read just now is said, and offered once it can be", async () => {
@@ -227,13 +227,13 @@ test("a room that could not be read just now is said, and offered once it can be
   roomFails = { "open-1": new QueryError("unavailable") };
   const { query } = mount(["open-1"]);
   search("launch");
-  expect(await screen.findByText(/1 room could not be read just now/)).toBeTruthy();
+  expect(await screen.findByText(/1 room couldn’t be read just now/)).toBeTruthy();
   expect(screen.queryByText("#launch")).toBeNull();
-  expect(screen.queryByText(/No room to join came back/i)).toBeNull();
+  expect(screen.queryByText(/No room to join/i)).toBeNull();
 
   fireEvent.click(screen.getByRole("button", { name: /ask again/i }));
   await waitFor(() => expect(screen.getByText("#launch")).toBeTruthy());
-  expect(screen.queryByText(/could not be read/)).toBeNull();
+  expect(screen.queryByText(/couldn’t be read/)).toBeNull();
   expect(
     query.mock.calls.filter(
       ([what, params]) =>
@@ -251,7 +251,7 @@ test("a room the engine said to ask about again is asked again after its wait", 
   };
   mount(["open-1"]);
   search("launch");
-  expect(await screen.findByText(/1 room could not be read just now/)).toBeTruthy();
+  expect(await screen.findByText(/1 room couldn’t be read just now/)).toBeTruthy();
   await waitFor(() => expect(screen.getByText("#launch")).toBeTruthy(), { timeout: 3_000 });
 });
 
@@ -264,7 +264,7 @@ test("a unit's room offers no join, and says the org chart is the way in", async
   await waitFor(() => expect(screen.getByText("#engineering")).toBeTruthy());
   expect(within(rowFor("engineering")).queryByRole("button", { name: /join/i })).toBeNull();
   expect(
-    within(rowFor("engineering")).getByText(/engineering unit's own room.*org chart/i),
+    within(rowFor("engineering")).getByText(/engineering team’s own room.*org chart/i),
   ).toBeTruthy();
 });
 
@@ -276,7 +276,7 @@ test("a room this build cannot classify offers no join, and says why", async () 
   search("future");
   await waitFor(() => expect(screen.getByText("#future")).toBeTruthy());
   expect(within(rowFor("future")).queryByRole("button", { name: /join/i })).toBeNull();
-  expect(screen.getByText(/newer build/i)).toBeTruthy();
+  expect(screen.getByText(/newer version of the engine/i)).toBeTruthy();
 });
 
 /** The row's Join, once the viewer read has made it pressable. */
@@ -305,7 +305,7 @@ test("a join nobody can establish does not walk into the room", async () => {
   await waitFor(() => expect(screen.getByText("#launch")).toBeTruthy());
   fireEvent.click(await joinButton("launch"));
 
-  await waitFor(() => expect(screen.getByText(/nobody can say whether/i)).toBeTruthy());
+  await waitFor(() => expect(screen.getByText(/couldn’t confirm/i)).toBeTruthy());
   expect(location.hash).toBe("#/");
 });
 
@@ -333,7 +333,7 @@ test("a room still being read is not reported as no room at all", async () => {
     ).toBe(true),
   );
 
-  expect(screen.queryByText(/No room to join came back/i)).toBeNull();
+  expect(screen.queryByText(/No room to join/i)).toBeNull();
 
   // AND THE VERDICT ARRIVES once there is nothing left out there. The second
   // search matches only a room this person is already in, and the lookup the
@@ -341,7 +341,7 @@ test("a room still being read is not reported as no room at all", async () => {
   hits.length = 0;
   hits.push("mine");
   search("second");
-  await waitFor(() => expect(screen.getByText(/No room to join came back/i)).toBeTruthy());
+  await waitFor(() => expect(screen.getByText(/No room to join/i)).toBeTruthy());
 });
 
 test("a room seen live is offered once it is read, whenever the viewer's own rooms answered", async () => {
@@ -403,7 +403,7 @@ test("a phrase past the search bound is not asked, and the panel says why", asyn
   ).toBeTruthy();
   expect(searched(query)).toEqual([]);
   // NOT A VERDICT ON THE COMPANY'S ROOMS: nothing was asked.
-  expect(screen.queryByText(/No room to join came back/i)).toBeNull();
+  expect(screen.queryByText(/No room to join/i)).toBeNull();
 });
 
 // ONE WAVE OF LOOKUPS, AND THE REST SAID. Every candidate row is a
@@ -415,14 +415,14 @@ test("a search that matched many rooms looks up one wave of them and says how ma
   const many = Array.from({ length: MAX_IN_FLIGHT_QUERIES + 3 }, (_, n) => `far-${n}`);
   const { query } = mount(many);
   search("launch");
-  const more = await screen.findByText(/3 more rooms matched than this list reads at once/);
+  const more = await screen.findByText(/3 more rooms matched than fit here/);
   expect(more).toBeTruthy();
   // COUNTED ONCE THE WAVE HAS SETTLED, not when the caption appears: the
   // caption renders with the search's answer and the lookups are issued by an
   // effect after that render commits, so a count taken there can read none of
   // them. Every `far-` room is refused, so the empty answer is the panel
   // having heard back from each lookup it asked.
-  expect(await screen.findByText("No room to join came back")).toBeTruthy();
+  expect(await screen.findByText("No room to join")).toBeTruthy();
   const looked = query.mock.calls.filter(([what]) => what === "chat_channel");
   expect(looked).toHaveLength(MAX_IN_FLIGHT_QUERIES);
 });

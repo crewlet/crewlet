@@ -110,10 +110,10 @@ test("a hit whose room could not be read just now says so, and asks again", asyn
       return {};
     },
   });
-  expect(await screen.findByText(/could not be read just now/)).toBeTruthy();
+  expect(await screen.findByText(/couldn’t be read just now/)).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: /ask again/i }));
   await waitFor(() => expect(screen.getByText("#launch")).toBeTruthy());
-  expect(screen.queryByText(/could not be read just now/)).toBeNull();
+  expect(screen.queryByText(/couldn’t be read just now/)).toBeNull();
 });
 
 test("a re-search that keeps a room still being read names it when the read lands", async () => {
@@ -240,6 +240,6 @@ test("an empty ranking from an index still building says so, not that nothing ma
         ? { hits: [], searched: 3, building: true, read_level: "session", position }
         : {},
   });
-  expect(await screen.findByText(/chat index is still building/)).toBeTruthy();
+  expect(await screen.findByText(/Still indexing/)).toBeTruthy();
   expect(screen.queryByText(/Nothing matched/)).toBeNull();
 });

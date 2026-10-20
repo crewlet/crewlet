@@ -466,7 +466,7 @@ function Row({
     (unchanged
       ? NOTHING_CHANGED
       : !rewrite
-        ? "Write the message first — to take it back, delete it."
+        ? "Write the message first. To take it back, delete it."
         : budget.over
           ? SHORTEN_FIRST
           : "");

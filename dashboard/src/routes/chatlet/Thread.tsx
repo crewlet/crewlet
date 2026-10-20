@@ -156,8 +156,8 @@ export function ThreadPane({
           root
             ? undefined
             : {
-                title: "That message is not here",
-                hint: "A thread hangs off one message. If it was erased or pruned below the room's horizon there is nothing left to hang off — a deleted message would still be here, as a tombstone.",
+                title: "That message isn’t here",
+                hint: "It was erased, or it’s older than the room keeps messages for.",
               }
         }
       >
@@ -190,8 +190,8 @@ export function ThreadPane({
             )}
             {participants.length > 0 && (
               <p className="t-caption muted">
-                {participants.map((handle) => nameOf(handle)).join(", ")} have spoken here. Taking
-                part in a thread means a reply reaches you — it obliges nothing.
+                {participants.map((handle) => nameOf(handle)).join(", ")} have spoken here, so each
+                reply reaches them.
               </p>
             )}
           </div>
@@ -219,8 +219,7 @@ function ThreadMessage({
       <AuthorLine message={message} nameOf={nameOf} />
       {deleted ? (
         <p className="chat-body muted">
-          Deleted{message.deleted_by ? ` by ${nameOf(message.deleted_by)}` : ""}. The row stays so
-          the thread keeps the message it hangs off.
+          Deleted{message.deleted_by ? ` by ${nameOf(message.deleted_by)}` : ""}. The thread stays.
         </p>
       ) : (
         <p className="chat-body">{message.body}</p>

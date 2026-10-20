@@ -122,7 +122,7 @@ export function Search({
             onChange={(event) => setDraft(event.target.value)}
             aria-label="Search the company's chat"
             leading={<SearchGlyph size="sm" />}
-            placeholder="Search what has been said — words, not a query language"
+            placeholder="Search what’s been said"
           />
         </div>
         <Select
@@ -157,11 +157,9 @@ export function Search({
       <div className="chat-list-body">
         {!q && (
           <p className="t-caption muted measure">
-            This searches every room you may read — which includes the public and unit rooms you
-            have not joined — and nothing you may not. It is the engine's own keyword index over
-            chat, separate from the knowledge base's: a remark about work is not a statement of it,
-            and mixing the two would let one busy conversation outrank every page written on
-            purpose.
+            This searches every room you can read, including public and team rooms you haven&rsquo;t
+            joined. Chatlet is searched apart from the knowledge base, so a busy conversation never
+            outranks a page.
           </p>
         )}
 
@@ -173,8 +171,7 @@ export function Search({
           // index had not caught up with its transcript, so the ranking is
           // over part of it — said once, above whatever it did find.
           <Callout variant="warning">
-            This node&rsquo;s chat index is still building, so these results are from part of what
-            has been said. Search again in a moment for the rest.
+            Still indexing, so these results may be missing some messages. Search again shortly.
           </Callout>
         )}
 
@@ -185,9 +182,9 @@ export function Search({
           // this reader may not see answers over nothing at all, and so does a
           // reader who may genuinely read nothing.
           <Callout variant="neutral">
-            This search ran over no rooms
-            {room ? " — the room it was narrowed to is not one you can read" : ""}. There is nothing
-            here to have matched.
+            {room
+              ? "You can’t read the room this search is narrowed to, so nothing was searched."
+              : "There are no rooms you can read, so nothing was searched."}
           </Callout>
         )}
 
@@ -204,7 +201,7 @@ export function Search({
               !answer.data.building
                 ? {
                     title: `Nothing matched “${q}”`,
-                    hint: `Ranked over ${answer.data.searched} room${answer.data.searched === 1 ? "" : "s"} you can read, on this node's own index.`,
+                    hint: `Searched ${answer.data.searched} room${answer.data.searched === 1 ? "" : "s"} you can read.`,
                   }
                 : undefined
             }
@@ -234,17 +231,17 @@ export function Search({
             </div>
             {answer.data && answer.data.hits.length > 0 && (
               <p className="t-caption muted">
-                Ranked over {answer.data.searched} room
-                {answer.data.searched === 1 ? "" : "s"}, as this node's index held them.
+                Searched {answer.data.searched} room
+                {answer.data.searched === 1 ? "" : "s"}.
               </p>
             )}
             {resolved.unreadable.size > 0 && (
               // A NAME THAT COULD NOT BE READ JUST NOW IS SAID, and asked for
               // again, rather than left as "a room" as if that were the answer.
               <p className="row wrap gap-2 t-caption muted">
-                {resolved.unreadable.size} room{resolved.unreadable.size === 1 ? "'s" : "s'"} name
-                could not be read just now, so{" "}
-                {resolved.unreadable.size === 1 ? "it is" : "they are"} titled “a room”.
+                {resolved.unreadable.size} room{resolved.unreadable.size === 1 ? "’s" : "s’"} name
+                couldn&rsquo;t be read just now, so{" "}
+                {resolved.unreadable.size === 1 ? "it shows" : "they show"} as “a room”.
                 <Button size="small" variant="ghost" onClick={resolved.retry}>
                   Ask again
                 </Button>

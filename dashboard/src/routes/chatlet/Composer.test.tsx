@@ -18,6 +18,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { keyRow } from "~/app/keymap.ts";
 import { MAX_BODY_BYTES } from "~/contract/chat.ts";
 import { Composer } from "./Composer.tsx";
+import { SHORTEN } from "./start.ts";
 
 afterEach(cleanup);
 
@@ -101,8 +102,7 @@ describe("saying it", () => {
     fireEvent.change(box, { target: { value: "x".repeat(MAX_BODY_BYTES + 1) } });
     expect(
       screen.getByText(
-        `${MAX_BODY_BYTES + 1} bytes, but a message holds at most ${MAX_BODY_BYTES}. ` +
-          "Nothing is cut to fit — shorten it, or put the long part somewhere with an address.",
+        `${MAX_BODY_BYTES + 1} bytes, but a message holds at most ${MAX_BODY_BYTES}. ` + SHORTEN,
       ),
     ).toBeTruthy();
   });

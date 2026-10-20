@@ -7388,11 +7388,11 @@ and asks nothing.
   then offers to join it; a unit's room offers neither Join nor Leave, because
   its membership is the org chart's — a seat is in it by being in the unit — and
   says so instead. A message is not drawn until the engine has it: what you sent
-  waits beneath the transcript until a read carries it — with **Ask again under
-  the same id** where nobody can say whether it landed (the engine derives the
-  message's id from the request's operation key, so a fresh key would say it
-  twice), **Try again** where the node refused it, and **Take it off the
-  screen**, which unsays nothing. It waits there while you look at another
+  waits beneath the transcript until a read carries it — with **Send again**
+  where nobody can say whether it landed (asked under the same operation key,
+  because the engine derives the message's id from it and a fresh key would
+  say it twice), **Try again** where the node refused it, and **Take it off
+  the screen**, which unsays nothing. It waits there while you look at another
   room, and is there when you come back.
 - **A thread** is `thread=` on its room, opened beside the transcript, or
   under it on a screen too narrow for both (see [The frame](#the-frame)). It
