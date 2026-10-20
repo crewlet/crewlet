@@ -424,6 +424,11 @@ type stateLog struct {
 	// snapshotNudge is.
 	heartbeatNudge chan struct{}
 
+	// admit tells the engine's seat-claim gate that a log whose health
+	// gates admission has come level ([stateLog.levelHook]); nil tells
+	// nobody.
+	admit func()
+
 	// run is the context the runtime's loops run under — the heartbeat,
 	// the snapshot loop, the donor — and stop is what ends them. HELD
 	// rather than re-derived, for the reason the core runtime states: a
@@ -835,6 +840,7 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 		snapshotNudge:  make(chan struct{}, 1),
 		heartbeatNudge: make(chan struct{}, 1),
 		tailHoldEvery:  statelog.TrimHoldHeartbeat,
+		admit:          e.nudgeAdmission,
 	}
 	// PROVISION EVERY LOG FIRST, and only then decide whether this node
 	// can replay from where it is.
@@ -1324,6 +1330,9 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 		// skip — `unhydrated` — it is the end of ([stateLog.snapshotNudge]),
 		// and the usage publisher for the usage log ([stateLog.onDrained]).
 		OnDrained: s.onDrained(domain),
+		// AND EVERY TIME THE LOOP COMES LEVEL, the seat-claim gate's watch,
+		// for a log whose health gates admission ([stateLog.levelHook]).
+		OnLevel: s.levelHook(domain),
 		// NO LOGGER, here or at any other statelog constructor: an absent
 		// one is the framework's own `component=statelog` logger. The
 		// engine's own labelled those lines `component=engine`, and the
@@ -3917,6 +3926,17 @@ func clearsAtBoot(reason statelog.SkipReason) bool {
 // implementation.
 type snapshotTaker interface {
 	Take(ctx context.Context) (statelog.Manifest, error)
+}
+
+// levelHook is what a domain's apply loop tells each time it comes level with
+// its log ([statelog.RunnerDeps.OnLevel]): the seat-claim gate's watch for a
+// domain whose health gates admission, and nobody for one whose health does
+// not, whose level the gate never asks about — see admission.go.
+func (s *stateLog) levelHook(domain statelog.Domain) func() {
+	if s.admit == nil || !domain.ReadinessInput() {
+		return nil
+	}
+	return s.admit
 }
 
 // nudgeSnapshot wakes the snapshot loop, without waiting for it — see

@@ -167,8 +167,17 @@ type Config struct {
 	// the company's records going stale is a reason to stop taking work,
 	// never a reason to drop the work already in hand.
 	//
-	// It runs on the sweep path and must not block: read a flag, do not
-	// query a store.
+	// IT RUNS ON THE SWEEP PATH, [Host.Start]'s first pass included, and
+	// must never wait without a bound: it may make a request — the engine's
+	// asks a data node whether its copy admits a seat, bounded by a budget
+	// of its own and cached between sweeps — and its context is the sweep's,
+	// which a stop cancels. A read of a store that can hang is not a gate.
+	//
+	// THE HOST CANNOT SEE IT CHANGE, so whoever owns it asks for a pass
+	// when it opens ([Host.Resweep]): only it knows which events can open
+	// it. A refusal is otherwise answered by the next tick, up to
+	// [SweepInterval] of a node holding nothing it could have held — the
+	// whole of a node's company when the refusal was [Host.Start]'s.
 	Ready func(ctx context.Context) bool
 
 	// Serviceable reports whether this node may KEEP the seats it holds,
@@ -697,9 +706,14 @@ func (h *Host) stampBeat() {
 //
 // Presence is announced BEFORE the first sweep: capacity divides by the live
 // node count, and a node that has not registered itself would compute a
-// share that excludes itself. The first sweep runs synchronously, so boot is
-// not eventually-consistent — a node is useful the moment it reports
-// started.
+// share that excludes itself. The first sweep runs synchronously, so a node
+// whose claim gate admits as it starts holds its share the moment it reports
+// started. One whose gate does not — a data node still catching up with its
+// logs, the commonest boot — claims nothing yet and keeps renewing its
+// presence, and its seats wait for the pass the gate's owner asks for as the
+// gate opens ([Config.Ready], [Host.Resweep]). A boot is therefore not
+// synchronous in general, and a caller that needs the seats held waits for
+// them.
 //
 // It reports no error because none of its work has a failure a caller could
 // act on: an unreachable store means this node claims nothing yet and

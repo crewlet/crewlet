@@ -1,6 +1,7 @@
 package seat
 
 import (
+	"context"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -168,4 +169,123 @@ func TestAnAskedForPassRestartsTheInterval(t *testing.T) {
 			"interval after it: the tick it stood in for came as well",
 			got-asked)
 	}
+}
+
+// AN ASK WHOSE PASS THE CLAIM GATE WITHHELD SPENDS NOTHING OF THE INTERVAL.
+//
+// The gate's owner asks for a pass the moment the gate opens ([Config.Ready]),
+// and an ask honoured a moment before — an apply's, made while the node was
+// still catching up with its logs — had claimed nothing: counted against the
+// interval, it left the ask that would have claimed to wait for the tick, an
+// hour away here. The second ask comes well inside the interval of the first,
+// so only the rule can be what honours it.
+func TestAnAskTheGateWithheldDoesNotSpendTheInterval(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	set := &changingSeats{}
+	gate := &countedGate{}
+	h := f.newHost("node-a", Config{
+		Seats: set.seats, SweepInterval: time.Hour, HeartbeatInterval: time.Hour,
+		Ready: gate.ready,
+	})
+	h.Start(f.ctx)
+	t.Cleanup(func() { h.Stop(f.ctx) })
+
+	set.add("ceo")
+	h.Resweep()
+	// THE ASKED PASS HAS DECIDED once it has asked the gate, after the
+	// start's own pass did: a pass that asked it and was refused claims
+	// nothing, whenever it finishes.
+	gate.waitAsked(t, 2)
+	gate.open.Store(true)
+	h.Resweep()
+	waitHolds(t, h, "ceo")
+}
+
+// AN ASK WHOSE WITHHELD PASS GAVE A SEAT BACK SPENDS THE INTERVAL ALL THE SAME.
+//
+// The gate withholds claims and never give-backs — a node behind its logs
+// still sheds what it holds past its share — and give-backs are rate-limited
+// per pass like claims. So only a pass that changed NOTHING is free: one that
+// shed a seat counts, and the next ask inside its interval waits for the tick.
+func TestAWithheldAskThatGaveASeatBackSpendsTheInterval(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	setA := &changingSeats{handles: []string{"ceo", "eng"}}
+	gate := &countedGate{}
+	gate.open.Store(true)
+	a := f.newHost("node-a", Config{
+		Seats: setA.seats, SweepInterval: time.Hour, HeartbeatInterval: time.Hour,
+		Ready: gate.ready,
+	})
+	a.Start(f.ctx)
+	t.Cleanup(func() { a.Stop(f.ctx) })
+	wantHeld(t, a, "ceo", "eng")
+
+	// A PEER JOINS, so node-a's share is one and its next pass sheds one —
+	// with the gate closed, which withholds the claims and not the shed.
+	gate.open.Store(false)
+	setB := &changingSeats{handles: []string{"ceo", "eng"}}
+	b := f.newHost("node-b", Config{
+		Seats: setB.seats, SweepInterval: time.Hour, HeartbeatInterval: time.Hour,
+	})
+	b.Start(f.ctx)
+	t.Cleanup(func() { b.Stop(f.ctx) })
+
+	a.Resweep()
+	last := waitWithheld(t, a, "the pass the first ask brought forward")
+	if len(last.Lost) != 1 {
+		t.Fatalf("the premise: the first asked pass gave one seat back, got %+v", last)
+	}
+
+	shed := setA.reads.Load()
+	a.Resweep()
+	// The loop is given time to misbehave, as the cases above give it.
+	time.Sleep(300 * time.Millisecond)
+	if got := setA.reads.Load(); got != shed {
+		t.Fatalf("an ask inside the interval of a pass that gave a seat back "+
+			"ran %d pass(es) at once", got-shed)
+	}
+}
+
+// countedGate is a claim gate a case opens, counting how often it was asked.
+type countedGate struct {
+	open  atomic.Bool
+	asked atomic.Int64
+}
+
+// ready is the gate as [Config.Ready]: the answer is read before the ask is
+// counted, so a count a case has seen is an answer already given.
+func (g *countedGate) ready(context.Context) bool {
+	admits := g.open.Load()
+	g.asked.Add(1)
+	return admits
+}
+
+// waitAsked waits until the gate has been asked n times.
+func (g *countedGate) waitAsked(t *testing.T, n int64) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if g.asked.Load() >= n {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("waited 10s for the gate to be asked %d times; asked %d", n, g.asked.Load())
+}
+
+// waitWithheld waits until the host's last pass is one the gate withheld, and
+// returns it.
+func waitWithheld(t *testing.T, h *Host, what string) SweepResult {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if last, ok := h.LastSweep(); ok && last.Withheld {
+			return last
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("waited 10s for %s to be withheld", what)
+	return SweepResult{}
 }
