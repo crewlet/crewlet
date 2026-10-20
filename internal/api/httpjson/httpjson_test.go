@@ -871,3 +871,31 @@ func TestThePackagePrefixesAreTheModulesPackages(t *testing.T) {
 		}
 	}
 }
+
+// THE WIRE ESCAPES MARKUP AT ITS ONE WRITER, uniformly: a plain string and the
+// bytes a json.RawMessage embeds come out spelled alike, and every decoder
+// reads them back as written. The escaping protects nothing behind nosniff
+// and a `default-src 'none'` policy, but turned off at Write alone the wire
+// would be spelled however each producer chose — so it stays on, and a reader
+// that shows an answer as text decodes it first. Mutation: Write through
+// internal/plainjson leaves the embedded `<b>&` raw and is red.
+func TestTheWireEscapesMarkupAtItsOneWriter(t *testing.T) {
+	t.Parallel()
+	rec := httptest.NewRecorder()
+	httpjson.Write(rec, http.StatusOK, map[string]any{
+		"text":     "a < b & c > d",
+		"embedded": json.RawMessage(`"<b>&</b>"`),
+	})
+	body := rec.Body.String()
+	if strings.ContainsAny(body, "<>&") {
+		t.Errorf("the wire carried markup unescaped, so it is spelled by whichever "+
+			"producer made each value: %s", body)
+	}
+	var back map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &back); err != nil {
+		t.Fatal(err)
+	}
+	if back["text"] != "a < b & c > d" || back["embedded"] != "<b>&</b>" {
+		t.Errorf("a decoder read back %q, want the text as written", back)
+	}
+}
