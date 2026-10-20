@@ -25,7 +25,6 @@ import {
   FormField,
   Input,
   Kbd,
-  Modal,
   SourceEditor,
   TabPanel,
   Tabs,
@@ -45,13 +44,13 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { useNavigator } from "~/app/router.tsx";
 import { artifactPath } from "~/app/routes.ts";
-import { ARTIFACT_TRASH_RETENTION_DAYS } from "~/contract/artifacts.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { asSentence } from "~/lib/format.ts";
 import type { ArtifactCapability, ArtifactLintFinding } from "~/protocol/index.ts";
 import { CreateShell, useLeaveCreate, type CreateAction } from "../CreateShell.tsx";
 import { titleHold, titleProblem, useWorkItem } from "../create.ts";
 import { DraftPreview } from "./DraftPreview.tsx";
+import { LeaveDialog } from "./LeaveDialog.tsx";
 import {
   PAGE_ACCEPT,
   capabilitiesUsed,
@@ -549,61 +548,5 @@ function ChecksPane({
         <FindingList label="Findings in the page" findings={findings} />
       ) : null}
     </div>
-  );
-}
-
-/** Leaving with something made: a draft kept or discarded, or unsaved text lost. */
-function LeaveDialog({
-  title,
-  hasDraft,
-  discarding,
-  onStay,
-  onLeave,
-  onDiscard,
-}: {
-  title: string;
-  hasDraft: boolean;
-  discarding: boolean;
-  onStay: () => void;
-  onLeave: () => void;
-  onDiscard: () => void;
-}) {
-  return (
-    <Modal
-      open
-      onClose={onStay}
-      size="sm"
-      title={hasDraft ? "Keep this draft?" : "Leave without saving?"}
-      footer={
-        hasDraft ? (
-          <>
-            <Button size="small" variant="ghost" onClick={onStay}>
-              Stay
-            </Button>
-            <Button size="small" variant="danger" loading={discarding} onClick={onDiscard}>
-              Discard draft
-            </Button>
-            <Button size="small" variant="primary" onClick={onLeave}>
-              Keep draft
-            </Button>
-          </>
-        ) : (
-          <>
-            <Button size="small" variant="ghost" onClick={onStay}>
-              Stay
-            </Button>
-            <Button size="small" variant="danger" onClick={onLeave}>
-              Leave
-            </Button>
-          </>
-        )
-      }
-    >
-      <p className="html-create-leave">
-        {hasDraft
-          ? `“${title || "Untitled page"}” is saved as a private draft only you can see. Keep it to find it under Mine in Artifacts, or discard it to the trash, where it is kept for ${ARTIFACT_TRASH_RETENTION_DAYS} days.`
-          : "Nothing has been saved yet, so the page written here will be lost."}
-      </p>
-    </Modal>
   );
 }

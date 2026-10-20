@@ -16,6 +16,7 @@ import { CreateShell, useLeaveCreate } from "../CreateShell.tsx";
 import { titleProblem } from "../create.ts";
 import { taskBody, taskTitle } from "./brief.ts";
 import { CAPABILITY_CHOICES, STARTERS } from "./words.ts";
+import { LeaveDialog } from "./LeaveDialog.tsx";
 
 /** The longest brief, in characters: a page's whole description, never a document. */
 const BRIEF_MAX = 4000;
@@ -38,7 +39,6 @@ export function DescribeBody({ modeSwitch }: { modeSwitch: ReactNode }) {
     setCaps((held) => new Set([...held, ...starter.capabilities]));
   };
 
-  void leaving;
   return (
     <CreateShell
       kind="html"
@@ -134,6 +134,16 @@ export function DescribeBody({ modeSwitch }: { modeSwitch: ReactNode }) {
           </section>
         </aside>
       </div>
+      {leaving ? (
+        <LeaveDialog
+          title={title}
+          hasDraft={false}
+          discarding={false}
+          onStay={() => setLeaving(false)}
+          onLeave={leave}
+          onDiscard={leave}
+        />
+      ) : null}
     </CreateShell>
   );
 }
