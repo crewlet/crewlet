@@ -612,13 +612,17 @@ rewrite fails there before it blinds a gate. The tracker's and the knowledge
 base's index gates, search's vector and lexical gates and the chat prune's room
 read each refuse what `Decorrelated` flags.
 
-`Decorrelated` sits beside the one vocabulary the tracker's and the knowledge
-base's plan tests read a plan through: `PlanTree`, `Plan` and `Details`;
-`IndexesIn`, `Seeks`, `Walks`, `Sorts` and `ScansHeap`; `IndexesOn`; and
-`StatementLiterals`, the walk of the module's source a gate's completeness
-check makes, which fails when it read nothing outside the gate's own package.
-Two copies of how a plan is spelled are two gates a driver bump blinds one at a
-time.
+`Decorrelated` sits beside the one vocabulary every plan gate reads a plan
+through, over either estate's handle (`Handle`: the node's own file as much as
+the replicated estate): `PlanTree`, `Plan` and `Details`; `IndexesIn`, `Seeks`,
+`Walks`, `Sorts` and `ScansHeap`; `IndexesOn`; and `StatementLiterals`, the
+walk of the module's source a gate's completeness check makes, which fails when
+it read nothing outside the gate's own package. Two copies of how a plan is
+spelled are two gates a driver bump blinds one at a time, and a gate's private
+reading had already planned a copy of the statement it held, so a walk of every
+Go file of the module, tests included, refuses an `EXPLAIN QUERY PLAN` spelled
+in a literal anywhere but `storetest/plan.go`. Package `store`'s own files
+alone are exempt, since they cannot import the package that imports them.
 
 ### The end-to-end gates
 
