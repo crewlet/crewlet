@@ -28,17 +28,23 @@ import {
 } from "./fileTask.ts";
 import { WhoBuildsIt, useWhoBuildsIt, type WhoBuildsItState } from "./WhoBuildsIt.tsx";
 
-const linked: { id: string; workItem: string }[] = [];
+const linked: { id: string; workItem: string; after?: string }[] = [];
 let linkAnswer: { kind: "done"; body: Record<string, unknown> } | { kind: "refused"; text: string };
 
 vi.mock("~/lib/keyedWrite.ts", async () => {
   const actual = await vi.importActual<typeof import("~/lib/keyedWrite.ts")>("~/lib/keyedWrite.ts");
   return {
     ...actual,
-    keyedWrite: vi.fn(async (req: { path: string; body?: { work_item?: string } }) => {
-      linked.push({ id: req.path.split("/")[2] ?? "", workItem: req.body?.work_item ?? "" });
-      return linkAnswer;
-    }),
+    keyedWrite: vi.fn(
+      async (req: { path: string; body?: { work_item?: string; after?: string } }) => {
+        linked.push({
+          id: req.path.split("/")[2] ?? "",
+          workItem: req.body?.work_item ?? "",
+          ...(req.body?.after ? { after: req.body.after } : {}),
+        });
+        return linkAnswer;
+      },
+    ),
   };
 });
 
@@ -246,7 +252,8 @@ test("an artifact already made is linked to the new task by its key", async () =
     project: "DES",
     artifact: "a1",
   });
-  expect(linked).toEqual([{ id: "a1", workItem: "DES-4" }]);
+  // AT THE CREATE'S POSITION, so the engine reads the task the create made.
+  expect(linked).toEqual([{ id: "a1", workItem: "DES-4", after: "CREWLET_TRACKER_LOG@1:9" }]);
   expect(filed?.linked).toBe(true);
 });
 

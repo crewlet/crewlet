@@ -122,7 +122,10 @@ export function useFileArtifactTask(): FileArtifactTask {
       setLinking(true);
       try {
         const link = await keyedWrite({
-          ...linkWorkItem(request.artifact, key),
+          // AT THE CREATE'S OWN POSITION: the engine waits for the tracker
+          // to hold the new task before it checks it, so a node that has not
+          // applied the create yet does not answer that there is no task.
+          ...linkWorkItem(request.artifact, key, result.position ?? undefined),
           key: newActOpID(),
         });
         return { item, key, linked: link.kind === "done" ? true : notAttached(request.kind) };
