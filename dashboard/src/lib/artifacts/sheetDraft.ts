@@ -647,3 +647,49 @@ export function titleFromFile(name: string): string {
     .trim();
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
+
+/** The most rows a hand-off to an agent spells out; the rest are counted. */
+export const BRIEF_ROWS_MAX = 50;
+
+/**
+ * The draft as an agent is handed it with a brief: every column with its type,
+ * its choices and whether it is required, then the rows typed so far, one line
+ * each in the columns' order, choices by their labels. Said in words rather
+ * than as the schema, since the agent reads it in a task's description and
+ * builds the sheet from it with its own tools.
+ */
+export function draftBrief(draft: SheetDraft, types: Readonly<Record<ColumnType, string>>): string {
+  const columns = (draft.collection.columns ?? []).filter((c) => !c.hidden);
+  if (columns.length === 0) return "";
+  const lines = ["Start from these columns:"];
+  for (const c of columns) {
+    const facts = [types[c.type] ?? c.type];
+    if (c.required || c.primary) facts.push("required");
+    const options = (c.options ?? []).filter((o) => !o.archived).map((o) => o.label);
+    lines.push(
+      `- ${c.label || c.key} (${facts.join(", ")})${options.length > 0 ? `: ${options.join(", ")}` : ""}`,
+    );
+  }
+  const rows = draft.rows.filter((row) => !isBlankRow(row));
+  if (rows.length > 0) {
+    const said = (c: DataColumn, value: unknown): string => {
+      const label = (id: unknown) => c.options?.find((o) => o.id === id)?.label ?? String(id);
+      if (value === null || value === undefined || value === "") return "";
+      if (Array.isArray(value)) return value.map(label).join(", ");
+      if (hasOptions(c.type)) return label(value);
+      return typeof value === "object" ? JSON.stringify(value) : String(value);
+    };
+    lines.push("", rows.length === 1 ? "And this first row:" : "And these first rows:");
+    for (const row of rows.slice(0, BRIEF_ROWS_MAX)) {
+      const cells = columns
+        .map((c) => [c.label || c.key, said(c, row.values[c.key])] as const)
+        .filter(([, v]) => v !== "")
+        .map(([k, v]) => `${k}: ${v}`);
+      lines.push(`- ${cells.join("; ")}`);
+    }
+    if (rows.length > BRIEF_ROWS_MAX) {
+      lines.push(`- and ${(rows.length - BRIEF_ROWS_MAX).toLocaleString()} more rows like these`);
+    }
+  }
+  return lines.join("\n");
+}
