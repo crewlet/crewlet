@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/canvasformat"
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
@@ -127,6 +128,11 @@ type CreateRequest struct {
 	// Deck is the plan a slides starter is composed from: its theme and the
 	// slides it opens with. Nil is the default plan; a slides starter only.
 	Deck *slideformat.Plan `json:"deck,omitempty"`
+
+	// Layout is a design's starter: the boards and notes the person laid
+	// out, published as placeholder pages. Only with Starter, and only for a
+	// design.
+	Layout *canvasformat.Layout `json:"layout,omitempty"`
 }
 
 // StageNamespace scopes the derivation of a publish's own reservation from the
@@ -150,9 +156,10 @@ func (s *Service) create(ctx context.Context, c artifactsdomain.Call, req Create
 		return artifactsdomain.Published{}, Report{}, fmt.Errorf("%w: kind %q is not one of %v",
 			ErrInvalid, req.Kind, artifacts.Kinds)
 	}
-	if (req.Doc != nil || req.Deck != nil) && !req.Starter {
-		return artifactsdomain.Published{}, Report{}, fmt.Errorf("%w: a doc's written text or a "+
-			"deck plan begins the artifact from its kind's starter: send it with \"starter\": true", ErrInvalid)
+	if (req.Doc != nil || req.Deck != nil || req.Layout != nil) && !req.Starter {
+		return artifactsdomain.Published{}, Report{}, fmt.Errorf("%w: a doc's written text, a "+
+			"deck plan or a design's layout begins the artifact from its kind's starter: "+
+			"send it with \"starter\": true", ErrInvalid)
 	}
 	if req.Starter {
 		if req.Upload != "" || len(req.Files) > 0 || req.Entry != "" {

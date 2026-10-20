@@ -725,6 +725,12 @@ holds titles and stickies beside them, and one `.html` file per board with its
 own scripts and styles. [Authoring Artifacts](../guides/artifact-authoring.md#writing-a-design)
 has the format.
 
+- **Begun from a layout in the dashboard.** A person lays out the boards a
+  design needs (their names, sizes, places and what each is for) on its
+  create page, and the engine publishes that layout as the design's first
+  version: `canvas.json` and one placeholder page per board under `boards/`,
+  saying the board's size and brief, until an agent publishes the board's
+  real page over it (`canvasformat.Starter`).
 - **Held to its format at publish.** The canvas is read strictly
   (`internal/artifacts/canvasformat`): a field it does not know, a bound
   passed, a board naming no page of the version, or a page no board frames

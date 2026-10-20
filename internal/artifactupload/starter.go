@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/canvasformat"
 	"github.com/crewlet/crewlet/internal/artifacts/docindex"
 	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
 )
@@ -18,12 +19,13 @@ type DocStarter struct {
 // starter is the content a create that asks for its kind's starter publishes:
 // the files, inline, and the entry they open on. A kind's starter is its
 // format's, so the engine holds it and holds it to that format like any
-// version; a kind whose format has none is refused. A doc's may carry the
-// text its writer wrote (req.Doc), held to the inline bound of a call. A
-// deck's is composed from its plan (req.Deck; nil is
-// [slideformat.DefaultPlan]), and a plan the format does not hold is refused
-// as invalid, naming what it holds. Each kind's field is refused on any other
-// kind.
+// version; a kind whose format has none is refused. Each kind's own field
+// is refused on any other kind. A doc's may carry the text its writer wrote
+// (req.Doc), held to the inline bound of a call. A deck's is composed from
+// its plan (req.Deck; nil is [slideformat.DefaultPlan]), and a plan the
+// format does not hold is refused as invalid, naming what it holds. A
+// design's is the layout the person drew (req.Layout, its boards as
+// placeholder pages), which a design always names.
 //
 // THE ENGINE'S RATHER THAN THE CLIENT'S because a create from the dashboard
 // carries no upload, and a deployment whose object store presigns transfers
@@ -41,7 +43,16 @@ func starter(req CreateRequest) ([]FileSpec, string, error) {
 	if req.Deck != nil && spec.Format != artifacts.FormatSlides {
 		return nil, "", fmt.Errorf("%w: a %s artifact does not begin from a deck plan", ErrInvalid, kind)
 	}
+	if (req.Layout != nil) != (spec.Format == artifacts.FormatDesign) {
+		return nil, "", fmt.Errorf("%w: a layout is a design's starter, and a design starts from one", ErrInvalid)
+	}
 	switch spec.Format {
+	case artifacts.FormatDesign:
+		var err error
+		if files, err = canvasformat.Starter(title, *req.Layout); err != nil {
+			return nil, "", fmt.Errorf("%w: %w", ErrInvalid, err)
+		}
+		entry = canvasformat.Path
 	case artifacts.FormatSlides:
 		var p slideformat.Plan
 		if req.Deck != nil {

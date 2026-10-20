@@ -30,6 +30,7 @@ import type {
   ShareableRole,
 } from "~/protocol/index.ts";
 import type { KeyedRequest } from "../keyedWrite.ts";
+import type { DesignLayout } from "./designLayout.ts";
 import { audienceKey } from "./words.ts";
 
 const base = (id: string) => `/artifacts/${encodeURIComponent(id)}`;
@@ -172,6 +173,32 @@ export function createFromStarter(fields: {
       ...(fields.kind === "doc" && fields.doc ? { doc: { body: fields.doc.body } } : {}),
       ...(fields.kind === "slides" && fields.deck ? { deck: fields.deck } : {}),
       ...(fields.shares && fields.shares.length > 0 ? { shares: fields.shares } : {}),
+    },
+  };
+}
+
+/**
+ * Make a design from the boards a person laid out (`POST /artifacts` with the
+ * design layout starter): the engine publishes each board as a placeholder
+ * page of its size, and `shares` grant who builds it (an agent's seat) its
+ * role before the first draft.
+ */
+export function createDesign(fields: {
+  title: string;
+  layout: DesignLayout;
+  shares?: { audience: ArtifactAudience; role: ShareableRole }[];
+  workItem?: string;
+}): Omit<KeyedRequest, "key"> {
+  return {
+    method: "POST",
+    path: "/artifacts",
+    body: {
+      kind: "design",
+      title: fields.title,
+      starter: true,
+      layout: fields.layout,
+      ...(fields.shares?.length ? { shares: fields.shares } : {}),
+      ...(fields.workItem ? { work_item: fields.workItem } : {}),
     },
   };
 }

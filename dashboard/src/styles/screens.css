@@ -10890,6 +10890,223 @@ a.live-row:focus-visible {
   }
   .sheet-create-title-input {
     font-size: var(--font-size-xl);
+
+/* A NEW DESIGN (`routes/artifacts/new/DesignCreate.tsx`): the starting
+   layouts, then the canvas a person lays out between the list of its boards
+   and the panel that follows the selection. The page is the container its
+   columns answer to, so the sidebar's width is accounted for. */
+.design-create {
+  container: design-create / inline-size;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.design-create-grid {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-columns: fit-content(13rem) minmax(0, 1fr) 20rem;
+  grid-template-rows: minmax(0, 1fr);
+  gap: var(--spacing-4);
+  min-height: 0;
+  padding: var(--spacing-4) var(--spacing-5) var(--spacing-5);
+}
+.design-create-layers {
+  display: flex;
+  flex-direction: column;
+  min-width: 9rem;
+  min-height: 0;
+}
+.design-create-layers-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-compact);
+}
+.design-create-canvas {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+}
+.design-create-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacing-5);
+  margin: 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-compact);
+  text-align: center;
+  pointer-events: none;
+}
+.design-create-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  /* Room for the fields' focus rings inside the scroll. */
+  padding: 2px;
+}
+.design-create-fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+.design-create-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2);
+}
+.design-create-panel-title {
+  margin: 0;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+}
+.design-create-size {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--spacing-3);
+}
+.design-create-board-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+.design-create-board-actions > :last-child {
+  margin-left: auto;
+}
+/* A board before it is drawn, set at the board's own scale (its width is the
+   container), as the placeholder page the engine publishes is. */
+.design-create-board {
+  container-type: inline-size;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  padding: 6cqi;
+  background: var(--color-surface-elevated);
+}
+.design-create-board-card {
+  display: flex;
+  flex-direction: column;
+  gap: max(6px, 1.4cqi);
+  width: 100%;
+  max-width: 72cqi;
+  max-height: 100%;
+  overflow: hidden;
+  padding: max(16px, 4cqi);
+  border: 1px dashed var(--color-border-default);
+  border-radius: max(8px, 1cqi);
+}
+.design-create-board-size {
+  color: var(--color-text-tertiary);
+  font-size: max(11px, 2.2cqi);
+}
+.design-create-board-title {
+  overflow-wrap: anywhere;
+  color: var(--color-text-primary);
+  font-size: max(20px, 6cqi);
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.15;
+}
+.design-create-board-brief,
+.design-create-board-wait {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  font-size: max(13px, 3cqi);
+  line-height: 1.45;
+}
+.design-create-board-brief {
+  color: var(--color-text-secondary);
+}
+.design-create-board-wait {
+  color: var(--color-text-tertiary);
+}
+/* The starting layouts: the gallery's tiles, each a design's schematic. */
+.design-create-start {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-5);
+  width: 100%;
+  max-width: 64rem;
+  margin: 0 auto;
+  padding: var(--spacing-7) var(--spacing-5);
+}
+.design-create-start-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+.design-create-start-head h2 {
+  margin: 0;
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-semibold);
+}
+.design-create-start-head p {
+  margin: 0;
+  color: var(--color-text-secondary);
+}
+.design-create-start-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  gap: var(--spacing-5) var(--spacing-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.design-create-start-face {
+  width: 100%;
+  height: 100%;
+}
+.design-create-start-blank {
+  width: 46%;
+  aspect-ratio: 4 / 3;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-sm);
+}
+.design-create-start-back {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-3);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-compact);
+}
+/* A laptop beside a wide sidebar: the list of boards folds away, and the
+   canvas and the panel keep the room. The panel's board name is the list's
+   job then, with the canvas's own selection. */
+@container design-create (width < 62rem) {
+  .design-create-grid {
+    grid-template-columns: minmax(0, 1fr) 18rem;
+  }
+  .design-create-layers {
+    display: none;
+  }
+}
+/* A phone: the canvas over the panel, and the page scrolls. */
+@container design-create (width < 40rem) {
+  .design-create-grid {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 26rem auto;
+    padding: var(--spacing-3) var(--spacing-4) var(--spacing-5);
+  }
+  .design-create-panel {
+    overflow: visible;
+  }
+  .design-create-start {
+    padding: var(--spacing-5) var(--spacing-4);
+  }
+  .design-create-start-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 .artifact-loading,
