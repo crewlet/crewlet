@@ -90,7 +90,7 @@ import { sheetColumns, sheetRows } from "~/lib/artifacts/sheet.ts";
 import type { ArtifactPeople } from "~/lib/artifacts/people.ts";
 import { useClient } from "~/lib/store-hooks.ts";
 import { DashboardWidget } from "./DashboardWidget.tsx";
-import { PREVIEW_HOST_CAPABILITIES, PreviewHost } from "./previewHost.ts";
+import { PreviewHost } from "./previewHost.ts";
 import { sheetCollections } from "./SheetView.tsx";
 
 /** The width a board's preview is laid out at: a laptop's half, so its widgets fill a card's box. */
@@ -499,9 +499,15 @@ function PagePreview({ item }: { item: ArtifactListItem }) {
  * A page framed for a preview: a ticket minted as a preview (no open is
  * recorded, and it grants only what drawing needs), the design system's frame
  * embedding it exactly as minted, and on its port at most the READ-ONLY
- * preview host (`previewHost.ts`): a page that declares a datastore is
- * answered its reads, so it draws its real content, and every other call is
- * refused. A page that declares none has nothing on its port at all.
+ * preview host (`previewHost.ts`): a page whose frame is granted a datastore
+ * is answered its reads, so it draws its real content, and every other call
+ * is refused. A page granted none has nothing on its port at all.
+ *
+ * THE HOST IS BUILT FROM THE MINTED FRAME'S GRANT, never from the gallery
+ * item: the origin tells the page's runtime that grant as it loads, so a
+ * host that told it the item's declaration at the handshake (more than an
+ * engine granting a preview no datastore, say) answered a page that asked
+ * after the handshake differently from one that asked before it.
  */
 function PreviewFrame({
   item,
@@ -518,14 +524,13 @@ function PreviewFrame({
     ONCE,
   );
   const { socket } = useClient();
-  const granted = useMemo(
-    () =>
-      PREVIEW_HOST_CAPABILITIES.filter((c) => (item.capabilities as readonly string[]).includes(c)),
-    [item.capabilities],
-  );
+  const minted = frame.data;
   const host = useMemo(
-    () => (granted.includes("db") ? new PreviewHost({ artifact: item.id, socket, granted }) : null),
-    [granted, item.id, socket],
+    () =>
+      minted?.capabilities.includes("db")
+        ? new PreviewHost({ artifact: item.id, socket, granted: minted.capabilities })
+        : null,
+    [minted, item.id, socket],
   );
   const [mode] = useTheme();
   const [palette] = usePalette();
@@ -538,8 +543,7 @@ function PreviewFrame({
   useEffect(() => {
     if (frame.error) preview.fail();
   }, [frame.error, preview]);
-  if (!frame.data) return null;
-  const minted = frame.data;
+  if (!minted) return null;
   return (
     <div className="artifacts-preview-frame">
       <SandboxedFrame

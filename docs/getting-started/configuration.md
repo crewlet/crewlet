@@ -1603,7 +1603,8 @@ runs may share an origin with the dashboard's session. It serves four routes:
 one file of a version under a view ticket (`/t/{ticket}/...`), one asset of
 the ticket's artifact (`/t/{ticket}/_assets/{asset}`), and the embedded
 runtime and kit (`/_crewlet/runtime/{contract}/...`, `/_crewlet/kit/{version}/...`),
-public and cached for a year. Every other path, `/health` included, is an empty
+public, and cached for a year under a name that is never reused (a kit
+release, or the runtime named by its bytes). Every other path, `/health` included, is an empty
 `404`; it never reads a cookie and never sets one. A ticket is minted by the
 dashboard for the signed-in viewer, lives an hour (never past the credential it
 was minted through), and every document request is authorized again: a share

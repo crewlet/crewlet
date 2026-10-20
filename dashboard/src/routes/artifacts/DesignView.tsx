@@ -49,7 +49,7 @@ import {
   type CanvasBoardSelection,
   type CanvasHandle,
 } from "@crewlethq/ui";
-import type { ArtifactDetail, ArtifactSource, ArtifactVersionSummary } from "~/protocol/index.ts";
+import type { ArtifactDetail, ArtifactSource } from "~/protocol/index.ts";
 import { QueryState } from "~/components/common.tsx";
 import { useRest } from "~/lib/useRest.ts";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
@@ -82,7 +82,6 @@ export const boardRegion = (path: string): string => `board:${path}`;
 interface DesignViewProps {
   detail: ArtifactDetail;
   version: number;
-  versions: ArtifactVersionSummary[];
   room: ArtifactRoom;
   presence: PresenceReport;
   bridgeStores: Set<ArtifactDataStore>;
@@ -126,7 +125,6 @@ export function DesignView(props: DesignViewProps) {
 function Design({
   detail,
   version,
-  versions,
   room,
   presence,
   bridgeStores,
@@ -259,7 +257,6 @@ function Design({
     <FrameView
       detail={detail}
       version={version}
-      versions={versions}
       room={room}
       presence={presence}
       bridgeStores={bridgeStores}

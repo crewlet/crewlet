@@ -56,6 +56,10 @@ func TestAFrameIsWhatTheDashboardSetsVerbatim(t *testing.T) {
 		!claims.Expires.Equal(want.Expires) || !f.ExpiresAt.Equal(want.Expires) {
 		t.Errorf("the ticket says %+v, want %+v", claims, want)
 	}
+	if !slices.Equal(f.Capabilities, claims.Capabilities) {
+		t.Errorf("the frame says it grants %v, its ticket grants %v", f.Capabilities,
+			claims.Capabilities)
+	}
 	if f.Sandbox != "allow-scripts allow-forms allow-same-origin" || f.Allow != "" ||
 		f.Mode != artifacts.OriginPerArtifact || f.Version != 2 {
 		t.Errorf("frame attributes: %+v", f)
@@ -83,6 +87,11 @@ func TestAFrameNeverOutlivesItsCredential(t *testing.T) {
 	if !f.ExpiresAt.Equal(r.clock.now().Add(10 * time.Minute)) {
 		t.Errorf("the frame expires %s, want the credential's end cut to the second", f.ExpiresAt)
 	}
+	// Granted nothing, the frame says so: an empty list on the wire, never an
+	// absent one a host would fill in for itself.
+	if f.Capabilities == nil || len(f.Capabilities) != 0 {
+		t.Errorf("a frame granted nothing says it grants %#v, want []", f.Capabilities)
+	}
 	_, err = r.frames.For(artifactserve.FrameRequest{Principal: r.person, Lineage: r.lineage,
 		Until: r.clock.now().Add(500 * time.Millisecond), Head: r.reads.head,
 		Version: r.reads.versions[2]})
@@ -100,10 +109,16 @@ func TestAPreviewsFrameIsShortLivedAndDrawsOnly(t *testing.T) {
 	r := newRig(t)
 	f, err := r.frames.For(artifactserve.FrameRequest{Principal: r.person, Lineage: r.lineage,
 		Head: r.reads.head, Version: r.reads.versions[2],
-		Granted: []artifacts.Capability{artifacts.CapabilityAssets, artifacts.CapabilityDB},
+		Granted: []artifacts.Capability{artifacts.CapabilityDB, artifacts.CapabilityAssets},
 		Purpose: artifacts.TicketPurposePreview})
 	if err != nil {
 		t.Fatalf("For: %v", err)
+	}
+	// What the preview's host tells the page is the frame's own grant, in the
+	// order the runtime element carries it, whatever order it was asked in.
+	want := []artifacts.Capability{artifacts.CapabilityAssets, artifacts.CapabilityDB}
+	if !slices.Equal(f.Capabilities, want) {
+		t.Errorf("the preview's frame says it grants %v, want %v", f.Capabilities, want)
 	}
 	if !f.ExpiresAt.Equal(r.clock.now().Add(artifacts.PreviewTicketLifetime)) {
 		t.Errorf("the preview expires %s, want a preview's lifetime from now", f.ExpiresAt)

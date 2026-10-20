@@ -207,7 +207,23 @@ func (f *Frames) For(r FrameRequest) (artifacts.Frame, error) {
 		Mode:     f.origins.Mode(),
 		Nonce:    nonce,
 		Document: doc,
+		// The grant as the ticket carries it, never nil, so a frame granted
+		// nothing says so rather than leaving its host to guess.
+		Capabilities: canonicalGrant(r.Granted),
 	}, nil
+}
+
+// canonicalGrant is a grant in the canonical order, each capability once, and
+// an empty list rather than nil for none: the order the runtime element
+// carries it in ([runtimeCapabilities]), so the frame and the page agree.
+func canonicalGrant(granted []artifacts.Capability) []artifacts.Capability {
+	out := make([]artifacts.Capability, 0, len(granted))
+	for _, c := range artifacts.Capabilities {
+		if slices.Contains(granted, c) {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // frameDocument is the page a frame of kind opens in version v: the entry
