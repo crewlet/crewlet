@@ -755,12 +755,30 @@ type Reaction struct {
 	Removed bool `json:"removed,omitempty"`
 
 	By string `json:"by"`
+
+	// Cap is the most distinct emoji the WRITER's build lets a message
+	// carry — [MaxReactionEmoji], stamped on every reaction added, and
+	// absent on one taken back, which no cap bounds.
+	//
+	// THE WRITER'S CAP, CARRIED, rather than each applier's constant: the
+	// cap is a rule a later build may change, and a record decided by the
+	// applying node's own constant would be declined on a node built with
+	// one cap and applied on a node built with another, so their rows
+	// would differ for good. Stamped, every node declines the same record
+	// at the same count ([VerdictReactionsFull]), as [MessagePost.MembersOnly]
+	// carries the writer's answer about who a room admits.
+	Cap int `json:"cap,omitempty"`
 }
 
 // Validate refuses a reaction this build will not write.
 func (r Reaction) Validate() error {
 	if r.MessageID == "" {
 		return invalid("message_id", "a reaction names no message")
+	}
+	if !r.Removed && r.Cap < 1 {
+		return invalid("cap", "a reaction added carries no cap, so no applier "+
+			"could say whether it is one emoji too many — the writer stamps "+
+			"its own (%d)", MaxReactionEmoji)
 	}
 	if r.Emoji == "" {
 		return invalid("emoji", "a reaction carries no emoji, so there is "+

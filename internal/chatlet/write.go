@@ -2345,6 +2345,10 @@ func (s *Store) react(ctx context.Context, actor Actor, channelID, messageID,
 		V: DocumentVersion, MessageID: messageID,
 		Emoji: strings.TrimSpace(emoji), Removed: removed, By: actor.Name(),
 	}
+	if !removed {
+		// THIS BUILD'S CAP, STAMPED, so every applier declines at it.
+		payload.Cap = MaxReactionEmoji
+	}
 	if err := payload.Validate(); err != nil {
 		return Written{}, err
 	}

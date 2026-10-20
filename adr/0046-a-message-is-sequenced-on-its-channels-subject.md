@@ -35,8 +35,9 @@ Three decisions, and they hold each other up:
   decided by the applier, identically on every node because every node applies
   the same records in the same order with the same code. The record carries the
   writer's answer to any RULE a later build might change — whether the room
-  admits its members only travels on the post — so the applier decides only the
-  facts at its position. A second copy of an operation (two publishers that
+  admits its members only travels on the post, and the most distinct emoji a
+  message may carry on the reaction — so the applier decides only the facts at
+  its position. A second copy of an operation (two publishers that
   each found its ledger silent) does nothing and is decided `repeated`, because
   a copy applied again lands after whatever happened in between. One verdict
   per record: `applied`, or refused and why — `archived`, `not_member`, `gone`,

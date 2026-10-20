@@ -157,7 +157,7 @@ func TestAReactionPastTheCapIsRefusedAndTheWriterIsTold(t *testing.T) {
 		return peerOn(t, chatlet.MessageSubject(room.Channel.ID), chatlet.OpReact,
 			fmt.Sprintf("5e2c1b90-0000-7000-8000-%012d", i), chatlet.Reaction{
 				V: chatlet.DocumentVersion, MessageID: said.Message.ID, Emoji: emoji,
-				By: "grace",
+				By: "grace", Cap: chatlet.MaxReactionEmoji,
 			})
 	}
 	for i := range chatlet.MaxReactionEmoji - 1 {

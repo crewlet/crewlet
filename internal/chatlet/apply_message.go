@@ -1165,8 +1165,9 @@ func readMessage(ctx context.Context, tx *sql.Tx, id string) (storedMessage, boo
 	return storedMessage{Message: message, Seq: seq}, true, nil
 }
 
-// reactionsFull reports whether this message already carries
-// [MaxReactionEmoji] DISTINCT emoji and this one is not among them.
+// reactionsFull reports whether this message already carries the reaction's
+// own cap of DISTINCT emoji ([Reaction.Cap], the writer's [MaxReactionEmoji])
+// and this one is not among them.
 //
 // THE COUNT IS OF DISTINCT EMOJI, not of rows: the cap is on how many marks a
 // message carries, and a hundred people agreeing with one thumb is one mark.
@@ -1181,7 +1182,7 @@ func reactionsFull(ctx context.Context, tx *sql.Tx, r Reaction) (bool, error) {
 		return false, fmt.Errorf("chatlet: count message %s's reactions: %w",
 			r.MessageID, err)
 	}
-	return mine == 0 && distinct >= MaxReactionEmoji, nil
+	return mine == 0 && distinct >= r.Cap, nil
 }
 
 // noteMessage records a live frame for a record that changed an existing
