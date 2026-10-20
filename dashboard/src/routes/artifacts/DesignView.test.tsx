@@ -270,6 +270,16 @@ test("a board's print shows that board alone at its own size, prints, and goes a
       .map((sheet) => written.get(sheet) ?? "")
       .filter((t) => t.includes("@page"));
   expect(sizes().join()).toContain("1440px 900px");
+  // THE PAGE SIZE GOES WITH THE VIEW, in the commit that removes it: read at
+  // the instant the view leaves the document, not after whatever task runs
+  // next, which may or may not have run an effect's cleanup by then.
+  let atRemoval: string[] | undefined;
+  const removal = new MutationObserver(() => {
+    if (atRemoval === undefined && !document.querySelector(".design-print-view")) {
+      atRemoval = sizes();
+    }
+  });
+  removal.observe(document.body, { childList: true });
   act(() => {
     window.dispatchEvent(new Event("afterprint"));
   });
@@ -278,7 +288,8 @@ test("a board's print shows that board alone at its own size, prints, and goes a
   await waitFor(() => expect(document.querySelector(".design-print-view")).toBeNull(), {
     timeout: 3000,
   });
-  expect(sizes()).toEqual([]);
+  removal.disconnect();
+  expect(atRemoval).toEqual([]);
   printed.mockRestore();
   globalThis.CSSStyleSheet = realSheet;
 });
