@@ -565,6 +565,9 @@ flowchart LR
 - Each node rebroadcasts its roster every 15 seconds; an entry expires 45
   seconds after the last frame naming it. A node gaining its first member of a
   room asks its peers once, so a newcomer sees the room at once.
+- A tab joining a room is handed the room as the node's other tabs are being
+  shown it, with itself beside them, and every change after that in the order
+  the node took it, so no tab goes on showing somebody who has left.
 - Every frame between nodes is sealed under the fleet keyring with a
   60-second validity; a frame the fleet did not seal shows nobody.
 - Past 50 members a room shows the 50 most recently active plus counts of
