@@ -93,13 +93,14 @@ func TestAFrameNeverOutlivesItsCredential(t *testing.T) {
 
 // TestAPreviewsFrameIsShortLivedAndDrawsOnly: a preview's frame carries its
 // purpose, lives at most a preview's lifetime and is granted nothing past what
-// drawing needs, so its page offers no datastore, viewer or room.
+// drawing needs (its assets and its datastore, read by the preview host), so
+// its page offers no viewer, no state and no room.
 func TestAPreviewsFrameIsShortLivedAndDrawsOnly(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
 	f, err := r.frames.For(artifactserve.FrameRequest{Principal: r.person, Lineage: r.lineage,
 		Head: r.reads.head, Version: r.reads.versions[2],
-		Granted: []artifacts.Capability{artifacts.CapabilityAssets},
+		Granted: []artifacts.Capability{artifacts.CapabilityAssets, artifacts.CapabilityDB},
 		Purpose: artifacts.TicketPurposePreview})
 	if err != nil {
 		t.Fatalf("For: %v", err)
@@ -115,20 +116,13 @@ func TestAPreviewsFrameIsShortLivedAndDrawsOnly(t *testing.T) {
 	if err != nil || verdict != ticket.Valid || claims.Purpose != artifacts.TicketPurposePreview {
 		t.Errorf("the preview's ticket opened %v %+v: %v", verdict, claims, err)
 	}
-	for _, more := range []artifacts.Capability{artifacts.CapabilityDB, artifacts.CapabilityPresence,
+	for _, more := range []artifacts.Capability{artifacts.CapabilityPresence,
 		artifacts.CapabilityIdentity, artifacts.CapabilityState} {
 		if _, err := r.frames.For(artifactserve.FrameRequest{Principal: r.person,
 			Lineage: r.lineage, Head: r.reads.head, Version: r.reads.versions[2],
 			Granted: []artifacts.Capability{more}, Purpose: artifacts.TicketPurposePreview}); err == nil {
 			t.Errorf("a preview was granted %q", more)
 		}
-	}
-	// The version declares the datastore; a preview is refused it all the same.
-	_, err = r.frames.For(artifactserve.FrameRequest{Principal: r.person, Lineage: r.lineage,
-		Head: r.reads.head, Version: r.reads.versions[2],
-		Granted: []artifacts.Capability{artifacts.CapabilityDB}, Purpose: artifacts.TicketPurposePreview})
-	if err == nil || !strings.Contains(err.Error(), "preview") {
-		t.Errorf("a preview of a version declaring the datastore was answered %v", err)
 	}
 	if _, err := r.frames.For(artifactserve.FrameRequest{Principal: r.person, Lineage: r.lineage,
 		Head: r.reads.head, Version: r.reads.versions[2], Purpose: "embed"}); err == nil {

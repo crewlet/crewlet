@@ -110,11 +110,13 @@ const TicketPurposePreview TicketPurpose = "preview"
 func (p TicketPurpose) Valid() bool { return p == "" || p == TicketPurposePreview }
 
 // PreviewCapabilities are the only capabilities a preview's frame is granted:
-// what drawing the page needs (its asset store's pictures) and nothing that
-// reads the viewer, the datastore or the room. A preview has no host on its
-// port anyway; the grant is what keeps the page's runtime from offering
-// anything more, and what the ticket proves.
-var PreviewCapabilities = []Capability{CapabilityAssets}
+// what drawing the page needs, its asset store's pictures and its datastore
+// READ, and nothing that names the viewer, keeps their state or shows the
+// room. The datastore is answered by the dashboard's preview host, which
+// answers reads (a document, a page, a query, the schema, a subscription
+// once) and refuses every write, so a page draws its real content and can
+// change none of it; the engine decides every read again as the reader.
+var PreviewCapabilities = []Capability{CapabilityAssets, CapabilityDB}
 
 // OriginMode is how the artifact origin isolates one artifact.
 type OriginMode string

@@ -127,8 +127,9 @@ func (s *Service) ticket(w http.ResponseWriter, r *http.Request) {
 
 // grant is what a frame minted for purpose is granted of what its version
 // declares: all of it for an open, and for a preview only what drawing the
-// page needs ([artifacts.PreviewCapabilities]), so a preview's page offers no
-// datastore, no viewer and no room, whatever the version declares.
+// page needs ([artifacts.PreviewCapabilities]: its assets and a datastore the
+// dashboard's preview host answers with reads alone), so a preview's page
+// offers no viewer, no state and no room, whatever the version declares.
 func grant(declared []artifacts.Capability, purpose artifacts.TicketPurpose) []artifacts.Capability {
 	if purpose != artifacts.TicketPurposePreview {
 		return declared

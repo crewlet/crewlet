@@ -6339,10 +6339,15 @@ The API origin **never renders an artifact**:
   artifact may not preview it, and an administrator's preview of an artifact
   only the admin path admits is still recorded as the elevated read it is),
   and nothing more than a read. A preview records no open and changes no Seen
-  by list; its ticket carries the purpose, is granted only `assets` of what
-  the version declares (no `db`, `state`, `identity` or `presence`, so the
-  page's runtime offers no datastore, no viewer and no room, and the
-  dashboard attaches no host to its port), and lives at most five minutes;
+  by list; its ticket carries the purpose, is granted only `assets` and `db`
+  of what the version declares (never `state`, `identity` or `presence`, so
+  the page's runtime offers no viewer, no per-viewer state and no room), and
+  lives at most five minutes. The dashboard answers a preview's `db` with a
+  read-only host: a document, a page, a query, the schema, and a
+  subscription answered once with the collection as it stands, each read as
+  the reader through the datastore's own questions; every write, undo and
+  state change is refused, nothing is pushed after a subscription's answer,
+  and no viewer is named;
   and its frame files no ready report (`POST /artifacts/ready` refuses one as
   `422 invalid`). A purpose this build does not know is `422 invalid`, never
   read as an open.
