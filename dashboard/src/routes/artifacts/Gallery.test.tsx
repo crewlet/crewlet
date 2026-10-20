@@ -37,14 +37,9 @@ vi.mock("~/lib/artifacts/access.ts", async () => {
   );
   return { ...actual, useArtifactAccess: () => ({ can: true, as: "token:review", acts: [] }) };
 });
-vi.mock("~/lib/artifacts/pins.ts", async () => {
-  const actual =
-    await vi.importActual<typeof import("~/lib/artifacts/pins.ts")>("~/lib/artifacts/pins.ts");
-  return {
-    ...actual,
-    usePinToggle: () => ({ label: "Pin to your sidebar", toggle: vi.fn(), pinned: false }),
-  };
-});
+vi.mock("~/lib/artifacts/pinToggle.ts", () => ({
+  usePinToggle: () => ({ label: "Pin to your sidebar", toggle: vi.fn(), pinned: false }),
+}));
 
 function row(over: Partial<ArtifactListItem>): ArtifactListItem {
   return {

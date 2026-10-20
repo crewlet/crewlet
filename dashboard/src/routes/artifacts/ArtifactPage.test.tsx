@@ -79,6 +79,8 @@ vi.mock("~/lib/artifacts/access.ts", async () => {
 });
 vi.mock("~/lib/artifacts/pins.ts", () => ({
   usePins: () => ({ data: { items: [] } }),
+}));
+vi.mock("~/lib/artifacts/pinToggle.ts", () => ({
   usePinToggle: () => ({ label: "Pin", toggle: vi.fn(), pinned: false, busy: false }),
 }));
 // THE PANELS' OWN BODIES, stood in for by their names.

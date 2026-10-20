@@ -30,11 +30,6 @@ import type {
 import type { KeyedRequest } from "../keyedWrite.ts";
 import { audienceKey } from "./words.ts";
 
-/** An artifact's own address in the dashboard. */
-export function artifactPath(id: string): string[] {
-  return ["artifacts", id];
-}
-
 const base = (id: string) => `/artifacts/${encodeURIComponent(id)}`;
 
 /** A publish names the head it was based on as `If-Match: "<n>"`, the form an artifact's head takes as an ETag. */
