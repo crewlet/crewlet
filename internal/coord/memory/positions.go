@@ -48,14 +48,6 @@ func (f *Fleet) Positions(_ context.Context) ([]coord.NodePositions, error) {
 	return out, nil
 }
 
-// ForgetPositions removes a node's row.
-func (f *Fleet) ForgetPositions(_ context.Context, nodeID string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	delete(f.positions, nodeID)
-	return nil
-}
-
 // PutHold writes or renews a trim hold. See the KV backend for why it lives
 // in the same register as a node's positions.
 func (f *Fleet) PutHold(_ context.Context, h coord.TrimHold) error {
