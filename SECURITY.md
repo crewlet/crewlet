@@ -194,8 +194,8 @@ A few things worth knowing when deploying Crewlet:
   answers to anyone.
 - **`admin` is host access: it runs code on every engine host.** It is
   deliberately one permission over the whole company — its configuration, its
-  credentials, its people and its deployment — and the configuration
-  configuration runs code: a stdio `mcp_servers` entry is a `command` the
+  credentials, its people and its deployment — and the configuration it
+  writes runs code: a stdio `mcp_servers` entry is a `command` the
   engine starts as its own user on every node that runs seats; a
   `providers.llm` entry names a coding CLI it runs, and every agent seat's
   executor is that CLI's own fully permissioned run, which a `run_in: direct`

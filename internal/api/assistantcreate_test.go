@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
@@ -154,19 +155,23 @@ func TestEveryPUTAPreviewCanFindEmptyDeclaresWhatItDoes(t *testing.T) {
 // A POST's method says nothing of what it does, so the assistant titled every
 // POST a create: a person approving a purge read "Create purge" under "Approve
 // and create", in the ordinary tone. Walked over every guarded POST the App
-// mounts, the ones the assistant never names included, each declares what it
-// does ([authz.Effect]), and the act route, mounted outside every router, is
-// declared a call where the table binds it. Over every POST the assistant may
-// name, the card says it: a destruction destructive with what goes said first,
-// and nothing else; a create titled as one, and nothing that does not create.
-// Mutation: mount a POST that declares nothing, declare an erase a rewrite, or
-// rate a POST by its method, and this names the route.
+// mounts on a path a grant can reach, the ones the assistant never names
+// included, each declares what it does ([authz.Effect]), and the act route,
+// mounted outside every router, is declared a call where the table binds it.
+// A path the edge refuses every grant ([auth.AssistRefusedPath], the
+// assistant's own routes among them) is never previewed, so what a POST there
+// does has no reader. Over every POST the assistant may name, the card says
+// it: a destruction destructive with what goes said first, and nothing else; a
+// create titled as one, and nothing that does not create. Mutation: mount a
+// POST that declares nothing, declare an erase a rewrite, or rate a POST by
+// its method, and this names the route.
 func TestEveryPOSTSaysWhatItDoes(t *testing.T) {
 	t.Parallel()
 	app := everySurfaceApp(t)
 	posts := 0
 	for pattern, p := range app.Policies() {
-		if !strings.HasPrefix(pattern, http.MethodPost+" ") {
+		method, path, _ := strings.Cut(pattern, " ")
+		if method != http.MethodPost || auth.AssistRefusedPath(path) {
 			continue
 		}
 		posts++

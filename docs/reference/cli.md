@@ -17,7 +17,7 @@ subcommand below is served by it.
 | `crewlet retention status [config]` | Every `retention` command that talks to a node takes `admin`, the reads included. What each domain's log is holding, what the trim concluded and which of the six terms is stopping it, every data node's position, and what this node costs to replace. **Exits non-zero when any alarm is active**, printing each one's measurement and remedy on stderr — the hook for your own cron |
 | `crewlet retention snapshots [config]` | The per-node snapshot inventory: what each machine holds, per domain, how old and how large — or why it holds none. The question you ask when a join fails |
 | `crewlet retention ack -stream NAME -position N` | Publish an operator backup floor, for `backup_floor: operator`. It exists because the engine cannot see a copy that has left the host |
-| `crewlet retention evict <node> -confirm <node> [-op-id ID] [-force]` | Stop a node's records applying on every log the trim counts nodes on — the tracker's, the knowledge base's, the identity estate's, the Dashboard Assistant's and chat's — so the trim can pass a floor an absent machine is pinning. Refused, with nothing written, while the node still holds a live presence lease, or while its lease cannot be read (`-force` overrides both). Prints one line per log with its outcome and the watermark before and after; **exits non-zero when not every log holds the record**, printing under each unfinished log what finishes it — the command with `-op-id` where running it again can, and what to do instead where it cannot |
+| `crewlet retention evict <node> -confirm <node> [-op-id ID] [-force]` | Stop a node's records applying on every log the trim counts nodes on — the tracker's, the knowledge base's, the identity estate's, the artifacts log's, the artifact datastore's, the Dashboard Assistant's and chat's — so the trim can pass a floor an absent machine is pinning. Refused, with nothing written, while the node still holds a live presence lease, or while its lease cannot be read (`-force` overrides both). Prints one line per log with its outcome and the watermark before and after; **exits non-zero when not every log holds the record**, printing under each unfinished log what finishes it — the command with `-op-id` where running it again can, and what to do instead where it cannot |
 | `crewlet retention readmit <node> -confirm <node> [-op-id ID]` | The inverse commit, on the same logs. Refused while the node has not applied every record up to the one just before the higher of the trim floor and the first surviving sequence of any one of those logs, and the refusal prints the numbers. Nothing is written to any log on a refusal; a partial readmission is finished like an eviction |
 | `crewlet retention set-capacity <stream> <bytes> -confirm <bytes>` | Change a log's byte ceiling, up or down. Runs inside a fleet-wide maintenance window and costs three restarts, because a log's Tier A ceiling is only the value its stream is created with. A raise the broker has no room for is refused **before** the window opens, and one it refuses at the apply is reported as a refusal rather than as an unknown outcome |
 | `crewlet retention maintenance status\|abandon\|exclude -stream NAME` | Where that window stands, who has not acknowledged, and the two gestures that act on it |
@@ -2006,15 +2006,16 @@ generation (`GEN`), and a position from a generation the log has left prints
 with nothing the log holds now; a node that reported its log diverged at its
 checkpoint is marked `LOG DIVERGED`. `RESERVE` is the top of the ceiling every
 identity-claiming log — the tracker's, the knowledge base's, the identity
-estate's, the Dashboard Assistant's and chat's — keeps for gate records ([the gate
-reserve](../guides/retention.md#the-gate-reserve)), `-` on the vector
-changelog and the usage log, which keep none; `HEADROOM` is what is left of
-the rest, the ceiling ordinary writes are refused at — so a log at `0%` still
-takes an eviction.
+estate's, the artifacts log's, the artifact datastore's, the Dashboard
+Assistant's and chat's — keeps for
+gate records ([the gate reserve](../guides/retention.md#the-gate-reserve)), `-`
+on the vector changelog and the usage log, which keep none; `HEADROOM` is what
+is left of the rest, the ceiling ordinary writes are refused at — so a log at
+`0%` still takes an eviction.
 
 A term that does not apply to a domain prints `n/a` rather than `0`: the
-vector log, the identity estate's, the Dashboard Assistant's and the usage log
-have no wake feed, and an
+vector log, the identity estate's, the artifacts log's, the artifact
+datastore's, the Dashboard Assistant's and the usage log have no wake feed, and an
 absent term is a different fact from one that permits nothing. Where a log does
 have one, its `feed_ack_floor` is that log's own feed — never another domain's.
 `PER DAY` prints `-` for the same reason where nothing was measured — a
@@ -2078,9 +2079,11 @@ coming back; eviction is the gesture for one that is not.
 `-confirm` repeats the node id, the same shape the other destructive gestures
 use. The trim counts nodes per log, so the eviction is a record on every log it
 counts nodes on — the tracker's, the knowledge base's, the identity estate's,
-the Dashboard Assistant's and chat's — and each answers on its
-own line with its [three-valued outcome](../guides/replication.md#a-write-has-three-outcomes),
-or `not written` and the reason that stopped it:
+the artifacts log's, the artifact datastore's, the Dashboard Assistant's and
+chat's — and each answers on
+its own line with its
+[three-valued outcome](../guides/replication.md#a-write-has-three-outcomes), or
+`not written` and the reason that stopped it:
 
 ```
 $ crewlet retention evict node-4 -confirm node-4
@@ -2088,12 +2091,16 @@ evict node-4 (operation 01a0cd85-735a-7294-9d3e-38998abd698c.evict-node-4)
   tracker: applied at CREWLET_TRACKER_LOG 918280002
   pages: applied at CREWLET_PAGES_LOG 4410
   iam: applied at CREWLET_IAM_LOG 58311
+  artifacts: applied at CREWLET_ARTIFACTS_LOG 30552
+  artifactdata: applied at CREWLET_ARTIFACT_DATA_LOG 112940
   assistant: applied at CREWLET_ASSISTANT_LOG 15734
   chat: applied at CREWLET_CHAT_LOG 207714
   node-4 stays COUNTED for about a minute, so a live node is certain to have read its own tombstone before the trim passes it.
   tracker trim floor 918100000 → 918100000
   pages trim floor 4100 → 4100
   iam trim floor 57000 → 57000
+  artifacts trim floor 30100 → 30100
+  artifactdata trim floor 112000 → 112000
   assistant trim floor 15200 → 15200
   chat trim floor 206900 → 206900
 ```
@@ -2191,8 +2198,8 @@ crewlet: the node answered 409: readmission_refused
 
 The comparison is the one the node's own write fence makes: its **last
 published position** in each log that claims identity — the tracker's, the
-knowledge base's, the identity estate's, the Dashboard Assistant's and chat's —
-against the **higher of
+knowledge base's, the identity estate's, the artifacts log's, the artifact
+datastore's, the Dashboard Assistant's and chat's — against the **higher of
 the published floor and the log's first
 surviving sequence**, and the node must have applied every record up to the
 one just before it. A node that has never published a position is judged as
@@ -2282,8 +2289,9 @@ sixteenth of it and seven of the log's largest records with a mebibyte beside
 them; on the vector changelog and the usage log, which hold no gate, it is the
 whole target. A target under the floor Tier A holds the log's own field to is
 refused too, naming the field — a gibibyte on the tracker's, the knowledge
-base's, the vector changelog's and chat's, 64 MiB on the identity estate's, the
-usage log's and the Dashboard Assistant's. A target under the
+base's, the vector changelog's, the artifacts log's, the artifact datastore's
+and chat's, 64 MiB on the identity estate's, the usage log's and the Dashboard
+Assistant's. A target under the
 current ceiling and above the usage is accepted, and is how a log gives a
 reservation back. A raise the broker cannot
 reserve is refused before the window opens too, naming what it reserves and
@@ -2377,7 +2385,8 @@ used, an evicted peer's included — every other domain's stays where it is, and
 the domain's applier resumes on the node with no restart.
 
 For every log that keeps a generation record — the tracker's, the knowledge
-base's and the identity estate's — it refuses while any peer
+base's, the identity estate's, the artifacts log's, the artifact datastore's,
+the Dashboard Assistant's and chat's — it refuses while any peer
 has already re-anchored the stream, **naming the peer** — that peer's rows are the fleet's
 history in the new generation, and this node adopts its snapshot instead. A
 peer that is gone for good is released by evicting it first

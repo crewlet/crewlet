@@ -182,13 +182,13 @@ the engine mirrors no state it would have to keep in step. See
 
 ### Artifacts
 
-Sixteen more, registered on every node that takes artifact uploads (one with
-an object store, a coordination store and a data node to reach), whatever
-tracker or knowledge base the company runs: twelve for artifacts, their folders
-and the company's brand, and four for an artifact's datastore. Each tool is
-named for its authority row, and the operator catalogue serves the same
-sixteen, so an operator's own assistant publishes, files and writes rows exactly
-as a seat does.
+Seventeen more, registered on every node that takes artifact uploads (one
+with an object store, a coordination store and a data node to reach), whatever
+tracker or knowledge base the company runs: thirteen for artifacts, their
+folders and the company's brand, and four for an artifact's datastore. Each tool
+is named for its authority row, and the operator catalogue serves the same
+seventeen, so an operator's own assistant publishes, files and writes rows
+exactly as a seat does.
 
 | Tool | Description |
 |------|-------------|

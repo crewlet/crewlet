@@ -124,9 +124,10 @@ one JSON object, and it always has the same three parts in the same places:
   (`log_full`), a record larger than the broker takes in one message
   (`record_too_large`), one the broker refused for a reason of its own
   (`broker_refused`), a deleted object — on every surface that answers one
-  with a `503` (`/worklet`, `/doclet/pages`, `/chatlet`, `/iam`, `/auth`, and every
-  question the query registry answers, `/query/{what}` and its named read
-  routes): the same request is
+  with a `503` (`/worklet`, `/doclet/pages`, `/chatlet`, `/artifacts` with its
+  datastore's `/artifacts/{id}/data`, `/artifact-folders`, `/brand`,
+  `/operator/act`, `/iam`, `/auth`, and every question the query registry
+  answers, `/query/{what}` and its named read routes): the same request is
   refused however often it is sent, so the answer is to ask another node, to
   split the change, or for an operator to readmit, upgrade or resize, never to
   poll this one. The reason is in the detail; [Read
@@ -136,7 +137,9 @@ one JSON object, and it always has the same three parts in the same places:
   A `503` about a write this node cannot account for — its outcome is
   `unknown` — carries **`"outcome": "unknown"`** and the **`op_id`** to retry
   under, on every surface that writes through a state log (`/worklet`,
-  `/doclet/pages`, `/iam`, `/auth`); a `503` without `outcome` is a refusal, and
+  `/doclet/pages`, `/chatlet`, `/artifacts` with its datastore's
+  `/artifacts/{id}/data`, `/artifact-folders`, `/brand`, `/operator/act`, `/iam`,
+  `/auth`); a `503` without `outcome` is a refusal, and
   what it refused was not written — a gesture refused partway lists what did
   land before it as `landed`, and a `/setup` submission the credentials it
   sealed first (below). The two send a client opposite ways — the
@@ -355,7 +358,7 @@ node means nothing was done.
 | `GET` | `/worklet` | Worklet: a filtered listing of work items, plus the last key number minted per project. Served only where `tracker.backend` is `worklet`; a company on Jira gets `404 unknown_query`, not an empty board (see [below](#worklet-and-doclet)) |
 | `GET` | `/worklet/retention` | What the state log is holding, what the trim concluded and which term is stopping it, every data node's position, and what this node costs to replace. **Takes `admin`, reads included** (see [below](#get-workletretention-what-the-log-is-holding)) |
 | `POST` | `/worklet/retention/ack` | Publish an operator backup floor, for `backup_floor: operator` |
-| `POST` | `/worklet/retention/evict/{node}` | Install the eviction gate on a node on every log the trim counts nodes on (Worklet's, Doclet's, the identity estate's, the Dashboard Assistant's and Chatlet's), so the trim can pass a floor it is pinning. Refused `409` while the node holds a live presence lease; answers per log (see [below](#the-three-retention-gestures-that-write)) |
+| `POST` | `/worklet/retention/evict/{node}` | Install the eviction gate on a node on every log the trim counts nodes on (Worklet's, Doclet's, the identity estate's, the artifacts log's, the artifact datastore's, the Dashboard Assistant's and Chatlet's), so the trim can pass a floor it is pinning. Refused `409` while the node holds a live presence lease; answers per log (see [below](#the-three-retention-gestures-that-write)) |
 | `POST` | `/worklet/retention/readmit/{node}` | Lift it on every one of those logs: the inverse commit rather than a delete. Refused `409` while the node still lacks records a trim floor lets the log delete |
 | `POST` | `/worklet/retention/capacity` | Drive a log's byte-ceiling change as far as this node's mode allows |
 | `GET` | `/worklet/retention/maintenance` | Where that window stands and what is holding it |
@@ -815,7 +818,7 @@ told they lead nobody goes looking for an authority they already hold.
 | `worklet` | The reads under `/worklet/*`, the [write surface's](#the-human-write-surface) item routes, a project's files (`GET`/`PUT /worklet/files/…`; removing one is the project lead's), every `work_*` question, the socket's `inbox_changed` push, and `/operator/mcp`'s Worklet half. Some verbs also ask a RELATION beside the app: re-routing, a project's policy and taking an item out of circulation are its project lead's, and a person's inbox, queue and person view are their own and their lead's |
 | `doclet` | The reads under `/doclet/pages/*` and `/containers`, the page questions, and writing Doclet's pages. A rename, the trash and a restore are also the container's lead's or the page's creator's; see [the write surface](#the-human-write-surface) |
 | `chatlet` | The reads under `/chatlet/*`, every `chat_*` question, the socket's eight `chat_*` pushes, and the chat tools of `/operator/mcp` and `/operator/act` — each made **as a seat**, so a principal acting as itself is refused them `unseated` whatever else it holds, and which room it reaches is the chat domain's own rule rather than a permission (see [Chatlet](#chatlet)). A room's horizon, an erase and a prune are `admin`'s instead, with a recent proof; see [A chat erase, prune or horizon](#a-chat-erase-prune-or-horizon) |
-| `admin` | Running the company and the engine, and **host access**, conferred like it: the configuration it writes runs commands on every engine host (an `mcp_servers` entry, a seat's `mcp_env`, a `providers.llm` model — a coding CLI the host runs — and a `direct` cell, an entry's `run_in` or `providers.sandbox.default_run_in`, which runs agent seats' executors there as fully permissioned coding CLIs), so a holder can run anything there and read whatever a process there can, the keyring included (see [Identity and Access](../concepts/identity-and-access.md#what-admin-runs)). Every route under `/config*` (the org chart's leads may also read and write what is inside the units they lead: [A lead edits their own team](#a-lead-edits-their-own-team)), `/integrations`, `/mcp-servers`, `/setup`, every `/secrets` route, every `/iam/*` route about anybody but the caller, the deployment's own controls (`/fleet`, `/fleet/broker*`, every `/worklet/retention*` route, `/backup`, `/backups`), the company-wide trail (`/events*`, the socket's `event` push and the snapshot's `events` section, the turn, phase, trace and A2A-channel questions, `/iam/audit`, `/artifacts/trail`), a seat's resolved model chain and tool sources on `/org`, the workspace catalogue's writes, a page in the tool-skills container, and the two purges (`/worklet/items/{key}/purge`, `/doclet/pages/{id}/purge`). It **includes every app**, and it is the **admin path** of every relation rule: a holder is admitted where a lead or an owner would be |
+| `admin` | Running the company and the engine, and **host access**, conferred like it: the configuration it writes runs commands on every engine host (an `mcp_servers` entry, a seat's `mcp_env`, a `providers.llm` model — a coding CLI the host runs — and a `direct` cell, an entry's `run_in` or `providers.sandbox.default_run_in`, which runs agent seats' executors there as fully permissioned coding CLIs), so a holder can run anything there and read whatever a process there can, the keyring included (see [Identity and Access](../concepts/identity-and-access.md#what-admin-runs)). Every route under `/config*` (the org chart's leads may also read and write what is inside the units they lead: [A lead edits their own team](#a-lead-edits-their-own-team)), `/integrations`, `/mcp-servers`, `/setup`, every `/secrets` route, every `/iam/*` route about anybody but the caller, the deployment's own controls (`/fleet`, `/fleet/broker*`, every `/worklet/retention*` route, `/backup`, `/backups`), the company-wide trail (`/events*`, the socket's `event` push and the snapshot's `events` section, the turn, phase, trace and A2A-channel questions, `/iam/audit`, `/artifacts/trail`), a seat's resolved model chain and tool sources on `/org`, the workspace catalogue's writes, a page in the tool-skills container, the artifacts' quota counters (`GET /artifacts/usage`), the three purges (`/worklet/items/{key}/purge`, `/doclet/pages/{id}/purge`, `/artifacts/{id}/purge`) and chat's three destructions (`/chatlet/channels/{channel_id}/erase`, `/prune` and `/retention`). It **includes every app**, and it is the **admin path** of every relation rule: a holder is admitted where a lead or an owner would be |
 | `audit.seat.read` | One seat's own trail — `/agents/{id}/memory`, `/agents/{id}/memory/episodes/{episode}`, `/agents/{id}/conversations`, `memory_overview` (filtered to the seats the caller may read), `turns?seat=` and `phases?seat=`, and a coding run's tail (`/sandbox-runs/{turn_id}/tail`) — decided per seat: **its lead**, or `admin` |
 
 A question asked on the socket is decided by the same declaration the REST
@@ -851,8 +854,8 @@ is told what they lack, not sent to confirm who they are first.
 
 | Window | Setting (default) | What asks for it |
 |---|---|---|
-| `step_up` | `api.auth.session.step_up` (1 hour) | Every write under `/config*` (a [dry run](#dry-runs) excepted, which changes nothing), `/setup`'s writes, `PUT`/`DELETE /secrets/{name}`, `POST /secrets/rekey` and revealing a value (`GET /secrets/{name}?reveal=true`, `POST /secrets/reveal`), the deployment's own controls (`POST /backup`, `POST /objects/migrate`, every `POST /worklet/retention*` and both `POST /fleet/broker/remove*`), the two purges (`POST /worklet/items/{key}/purge`, `POST /doclet/pages/{id}/purge`), chat's three destructions (`POST /chatlet/channels/{channel_id}/erase` and `/prune`, `PUT /chatlet/channels/{channel_id}/retention`), and every `/iam` write: `POST /iam/people`, `PATCH /iam/people/{id}`, `DELETE /iam/people/{id}`, `POST /iam/invitations`, `DELETE /iam/invitations/{id}`, `POST /iam/people/{id}/mfa/reset`, `POST /iam/people/{id}/password-reset`, `POST /iam/credentials`, `DELETE /iam/credentials/{id}`, ending somebody else's sessions and `POST /iam/invalidate-all`; and your own `POST /auth/totp` and `POST /auth/totp/recovery` |
-| none | | Every read, the two deployment reads (`GET /worklet/retention/maintenance`, `GET /worklet/retention/reanchor`) included; ending your own sessions (`DELETE /iam/people/{id}/sessions` naming yourself), which is the first thing to do on finding somebody else in your account, while an administrator ending somebody else's asks `step_up`; changing your own password (`POST /auth/password`), whose current password (and code, from somebody who holds a second factor) is itself the proof; and every work, knowledge and chat verb but the two purges and chat's three destructions: the tools, `/operator/mcp`, `/operator/act` and the rest of the human write surface |
+| `step_up` | `api.auth.session.step_up` (1 hour) | Every write under `/config*` (a [dry run](#dry-runs) excepted, which changes nothing), `/setup`'s writes, `PUT`/`DELETE /secrets/{name}`, `POST /secrets/rekey` and revealing a value (`GET /secrets/{name}?reveal=true`, `POST /secrets/reveal`), the deployment's own controls (`POST /backup`, `POST /objects/migrate`, every `POST /worklet/retention*` and both `POST /fleet/broker/remove*`), the three purges (`POST /worklet/items/{key}/purge`, `POST /doclet/pages/{id}/purge`, `POST /artifacts/{id}/purge`), chat's three destructions (`POST /chatlet/channels/{channel_id}/erase` and `/prune`, `PUT /chatlet/channels/{channel_id}/retention`), and every `/iam` write: `POST /iam/people`, `PATCH /iam/people/{id}`, `DELETE /iam/people/{id}`, `POST /iam/invitations`, `DELETE /iam/invitations/{id}`, `POST /iam/people/{id}/mfa/reset`, `POST /iam/people/{id}/password-reset`, `POST /iam/credentials`, `DELETE /iam/credentials/{id}`, ending somebody else's sessions and `POST /iam/invalidate-all`; and your own `POST /auth/totp` and `POST /auth/totp/recovery` |
+| none | | Every read, the two deployment reads (`GET /worklet/retention/maintenance`, `GET /worklet/retention/reanchor`) included; ending your own sessions (`DELETE /iam/people/{id}/sessions` naming yourself), which is the first thing to do on finding somebody else in your account, while an administrator ending somebody else's asks `step_up`; changing your own password (`POST /auth/password`), whose current password (and code, from somebody who holds a second factor) is itself the proof; and every work, knowledge, artifact and chat verb but the three purges and chat's three destructions: the tools, `/operator/mcp`, `/operator/act` and the rest of the human write surface |
 
 A proof that is too old is **`403 step_up_required`**, the code the sign-in
 surface answers for the same fact, carrying the window it needs so a client can
@@ -899,8 +902,9 @@ signed in, because `unauthorized`'s is about a missing permission: revealing a s
 changes who may do anything, ending every session in the company, changing how
 somebody proves who they are (`POST /auth/totp`, `POST /auth/totp/recovery`,
 and revoking a password, a second factor or the recovery codes through
-`DELETE /iam/credentials/{id}`) and — about anybody but the token's own owner
-— minting or revoking a token and ending sessions. A token may still revoke its
+`DELETE /iam/credentials/{id}`), an artifact's forced publish, transfer and
+purge, and — about anybody but the token's own owner — minting or revoking a
+token and ending sessions. A token may still revoke its
 owner's tokens, itself included, and end its owner's sessions, which ends it
 too: that is what somebody who finds one leaked reaches for. And the identity
 domain refuses every administrative record — an enrolment, an invitation, an
@@ -5319,10 +5323,12 @@ The **same tools a seat holds**, not a parallel implementation: `list_work_items
 `task_activity`, `my_work`,
 `list_pages`, `get_page`, `write_page`, `save_page`, `comment_on_page`,
 `search_knowledge`; wherever the node takes artifact uploads,
-`list_artifacts`, `get_artifact`, `get_company_brand`, `create_artifact`,
-`publish_artifact`, `update_artifact`, `share_artifact`, `unshare_artifact`,
-`upload_artifact_asset`, `create_artifact_folder`, `move_artifact`,
-`read_artifact_data`, `query_artifact_data`,
+`list_artifacts`, `get_artifact`, `list_dashboard_sources`,
+`get_artifact_format`, `get_company_brand`, `create_artifact`,
+`publish_artifact`, `update_artifact`,
+`share_artifact`, `unshare_artifact`, `upload_artifact_asset`,
+`create_artifact_folder`, `move_artifact`, `read_artifact_data`,
+`query_artifact_data`,
 `write_artifact_data` and `set_artifact_schema` (see
 [Artifacts](../guides/tools-and-mcp.md#artifacts)), each artifact write
 answering its `op_id` here as Worklet's do; and, where the company runs
@@ -6780,7 +6786,7 @@ controls, and a caller without it is refused `403` naming it.
 | Route | What it does |
 |---|---|
 | `POST /worklet/retention/ack?stream=NAME&position=N` | Publishes an operator backup floor. Refused `400` naming both when either is missing, and `404` when the stream is not one this node runs, which on a node running no state log is every stream. The point is stamped with **that stream's own generation**, read from the running log: a bare sequence at another log's generation names a number space the copy does not cover. It is **filed under that stream**: acknowledging another log writes another point and leaves this one standing, and each log's trim reads its own — under `backup_floor: operator` that is one acknowledgement per log. |
-| `POST /worklet/retention/evict/{node}?confirm={node}` | Installs the eviction gate on every identity-claiming log: Worklet's, Doclet's, the identity estate's, the Dashboard Assistant's and Chatlet's; the vector log and the usage log count no node and get none. **Refused `409 eviction_refused`**, with nothing written to any log, while the node still holds a live presence lease: it is still reaching the fleet, and an eviction would drop everything it writes. The body carries `detail`, `hint`, `op_id` and `actions`, `["wait", "force"]`: stop the node and let its lease lapse, or force it. `force=true` overrides that refusal for a node wedged in a way that still renews its lease. A node that cannot read the presence leases at all answers **`503 eviction_unjudged`** (a judgement nobody could make is not one that came back clear), with a `hint` and `actions` `["retry_same_op", "force"]`; `force=true` takes the eviction past that too, since the leases are the judgement's only input, and the node logs `retention_eviction_forced_unjudged`. A node in a [capacity window](../guides/retention.md#changing-a-logs-ceiling) answers **`409 not_publishing`**, before anything is judged, with `detail`, `hint` and `actions` `["wait"]`: a gate record is an append, and the window's mode appends nothing; readmission answers the same. |
+| `POST /worklet/retention/evict/{node}?confirm={node}` | Installs the eviction gate on every identity-claiming log: Worklet's, Doclet's, the identity estate's, the artifacts log's, the artifact datastore's, the Dashboard Assistant's and Chatlet's; the vector log and the usage log count no node and get none. **Refused `409 eviction_refused`**, with nothing written to any log, while the node still holds a live presence lease: it is still reaching the fleet, and an eviction would drop everything it writes. The body carries `detail`, `hint`, `op_id` and `actions`, `["wait", "force"]`: stop the node and let its lease lapse, or force it. `force=true` overrides that refusal for a node wedged in a way that still renews its lease. A node that cannot read the presence leases at all answers **`503 eviction_unjudged`** (a judgement nobody could make is not one that came back clear), with a `hint` and `actions` `["retry_same_op", "force"]`; `force=true` takes the eviction past that too, since the leases are the judgement's only input, and the node logs `retention_eviction_forced_unjudged`. A node in a [capacity window](../guides/retention.md#changing-a-logs-ceiling) answers **`409 not_publishing`**, before anything is judged, with `detail`, `hint` and `actions` `["wait"]`: a gate record is an append, and the window's mode appends nothing; readmission answers the same. |
 | `POST /worklet/retention/readmit/{node}?confirm={node}` | The inverse commit, on every one of those logs. **Refused `409 readmission_refused`**, with nothing written to any log, when in any one of those logs the node has not applied every record up to the one just before the higher of that log's published floor (at the log's current generation) and its first surviving sequence (its last published position is more than one below that bound), or its last published position is from a generation the log has since left. The body carries the sentence (`detail`), what to do (`hint`, and `actions` `["wait"]`), and the numbers: `domain`, `position`, `generation`, `floor`, `first_seq`, `floor_generation`, and `published`: false for a node that has never published a position and is judged as holding nothing. A judgement that could not be made at all refuses too, with nothing written, as **`503 readmission_unjudged`**: the register or a floor unreadable, a log's first surviving sequence unreadable, or this node behind a reanchor the fleet has made. The body carries `detail`, `hint`, `actions` `["retry_same_op", "other_node"]` and, where one log could not be judged, that `log`. `force` has no effect here and nothing overrides this refusal: the floor is a fact about what the node holds, not a lease it might be wedged into renewing. |
 
 `confirm` echoes the node id, and a mismatch is `400`. A node id no node could
@@ -6824,6 +6830,14 @@ other. A `200` answers **per log**:
      "op_id": "01a0cd85-735a-7294-9d3e-38998abd698c.evict-node-4.evict.iam:node-4",
      "outcome": "applied",
      "position": {"stream": "CREWLET_IAM_LOG", "generation": 0, "seq": 58311}},
+    {"domain": "artifacts", "stream": "CREWLET_ARTIFACTS_LOG",
+     "op_id": "01a0cd85-735a-7294-9d3e-38998abd698c.evict-node-4.evict.artifacts:node-4",
+     "outcome": "applied",
+     "position": {"stream": "CREWLET_ARTIFACTS_LOG", "generation": 0, "seq": 30552}},
+    {"domain": "artifactdata", "stream": "CREWLET_ARTIFACT_DATA_LOG",
+     "op_id": "01a0cd85-735a-7294-9d3e-38998abd698c.evict-node-4.evict.artifactdata:node-4",
+     "outcome": "applied",
+     "position": {"stream": "CREWLET_ARTIFACT_DATA_LOG", "generation": 0, "seq": 112940}},
     {"domain": "assistant", "stream": "CREWLET_ASSISTANT_LOG",
      "op_id": "01a0cd85-735a-7294-9d3e-38998abd698c.evict-node-4.evict.assistant:node-4",
      "outcome": "applied",
@@ -7520,7 +7534,7 @@ dashboard follow the adopted brand live, drawn by the dashboard.
 | `422` | `capability_unknown` / `contract_unknown` / `credential_refused` / `invalid` | A capability or runtime this build does not serve, a credential in what an agent published, or a value the domain refuses |
 | `429` | `uploads_outstanding` | The pending-upload budget is spent; `Retry-After` is when the earliest hold lapses |
 | `429` | `throttled` | Ready reports past one credential's rate; `Retry-After` is when the next is admitted |
-| `503` | `unavailable` | This node could not decide or reach the estate; the `Retry-After` says when to come back |
+| `503` | `unavailable` | This node could not decide or reach the estate, or the log refused the write; a `Retry-After` says when to come back, and comes only where waiting clears it |
 
 ## The Dashboard Assistant
 
