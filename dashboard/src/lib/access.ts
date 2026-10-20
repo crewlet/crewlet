@@ -192,9 +192,18 @@ export function youNeedWords(needs: readonly string[]): string {
   return `You need ${accessNames(needs)} access for this.`;
 }
 
-/** The permissions a lock names, as words: "Worklet", or "Worklet or Doclet". */
+/**
+ * The permissions a lock names, as words: "Worklet", "Worklet or Doclet",
+ * "Worklet, Doclet or Artifacts": commas, and "or" before the last, the
+ * way the engine names them in a refusal's own sentence (httpjson's
+ * grantWords), so a screen and the message beside it never list one set two
+ * ways. Joined by "or" alone, three permissions read as "Worklet or Doclet
+ * or Artifacts" on the screen while the engine wrote the comma form.
+ */
 export function accessNames(needs: readonly string[]): string {
-  return needs.map(accessLabel).join(" or ");
+  const words = needs.map(accessLabel);
+  if (words.length < 3) return words.join(" or ");
+  return `${words.slice(0, -1).join(", ")} or ${words[words.length - 1]}`;
 }
 
 /**

@@ -101,7 +101,10 @@ describe("the words", () => {
   });
 
   test("a lock names its access and who can give it", () => {
+    expect(accessNames(["worklet"])).toBe("Worklet");
     expect(accessNames(["worklet", "doclet"])).toBe("Worklet or Doclet");
+    // THREE OR MORE AS THE ENGINE SAYS THEM, commas and "or" before the last.
+    expect(accessNames(["worklet", "doclet", "artifacts"])).toBe("Worklet, Doclet or Artifacts");
     expect(needsWords("Search", ["doclet"])).toBe(
       "Search needs Doclet access. An admin can give it to you.",
     );
