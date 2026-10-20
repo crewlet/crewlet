@@ -1,0 +1,1 @@
+async function e(){if(!navigator.clipboard)return`Blocked`;try{return await navigator.clipboard.writeText(location.href),`Copied`}catch{return`Blocked`}}export{e as t};
