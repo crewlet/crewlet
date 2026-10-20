@@ -616,8 +616,10 @@ func (c *Company) codeWarnings() []Warning {
 		}
 		branch := r.ResolvedDefaultBranch()
 		ref := "refs/heads/" + branch
-		if !gitref.ValidRef(ref) {
-			continue // refused by validation, which is the line to read first
+		if !gitref.ValidBranch(branch) {
+			// Refused by validation, which is the line to read first: a
+			// branch no push can create is no branch anybody force-pushes.
+			continue
 		}
 		if slices.ContainsFunc(r.Protect, func(rule CodeProtection) bool {
 			return gitref.MatchPattern(rule.Pattern(), ref)

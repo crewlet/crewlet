@@ -450,6 +450,29 @@ func TestAnUnprotectedDefaultBranchIsWarned(t *testing.T) {
 	}
 }
 
+// A DEFAULT BRANCH VALIDATION REFUSES IS NEVER ALSO WARNED ABOUT: the refusal is
+// the line to read, and a warning that a branch no push can ever create is
+// unprotected would send a person to protect it. Read off the decoded document
+// with its validation's refusal beside it, as `crewlet validate` prints both.
+func TestARefusedDefaultBranchIsNotWarned(t *testing.T) {
+	t.Parallel()
+	for _, branch := range []string{"HEAD", "-x", "@"} {
+		c, err := config.ParseCompanyDocument([]byte(codeRepos(
+			"    - name: web\n      owner: {seat: swe}\n      default_branch: '" + branch + "'\n")))
+		if err != nil {
+			t.Fatalf("%s: not decoded: %v", branch, err)
+		}
+		if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "code.repos[0].default_branch") {
+			t.Errorf("%s: validation answered %v, want a refusal of the field", branch, err)
+		}
+		for _, w := range c.Warnings() {
+			if strings.HasPrefix(w.Path, "code.") {
+				t.Errorf("%s: a default branch validation refuses warned: %s: %s", branch, w.Path, w.Message)
+			}
+		}
+	}
+}
+
 // THE SCHEMA ADMITS THE RETENTION THE VALIDATOR DOES: 0 is unset, which the
 // decoder reads like an absent key, and a year is the most.
 func TestTheDeletedRetentionIsTheSchemasBounds(t *testing.T) {
