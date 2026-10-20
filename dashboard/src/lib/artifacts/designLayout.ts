@@ -93,7 +93,7 @@ export const STARTER_LAYOUTS: readonly StarterLayout[] = [
   {
     id: "landing",
     label: "Landing page",
-    detail: "Desktop and phone, 3 boards",
+    detail: "Desktop and phone",
     boards: [
       { title: "Home", preset: "desktop" },
       { title: "Pricing", preset: "desktop" },
@@ -103,7 +103,7 @@ export const STARTER_LAYOUTS: readonly StarterLayout[] = [
   {
     id: "app",
     label: "App screens",
-    detail: "Phone, 4 boards",
+    detail: "Four phone screens",
     boards: [
       { title: "Sign in", preset: "phone" },
       { title: "Home", preset: "phone" },
@@ -114,7 +114,7 @@ export const STARTER_LAYOUTS: readonly StarterLayout[] = [
   {
     id: "responsive",
     label: "Responsive screen",
-    detail: "One screen at three sizes",
+    detail: "Desktop, tablet and phone",
     boards: [
       { title: "Desktop", preset: "desktop" },
       { title: "Tablet", preset: "tablet" },
@@ -124,7 +124,7 @@ export const STARTER_LAYOUTS: readonly StarterLayout[] = [
   {
     id: "presentation",
     label: "Presentation",
-    detail: "4 slides at 1920 by 1080",
+    detail: "Four 16 by 9 slides",
     boards: [
       { title: "Cover", preset: "presentation" },
       { title: "The problem", preset: "presentation" },

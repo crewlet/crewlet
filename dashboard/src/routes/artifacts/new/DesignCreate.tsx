@@ -403,8 +403,13 @@ function LayoutPicker({
                       className="design-create-start-face"
                       label={layout.label}
                       boards={drawn.map((b) => ({ id: b.id, x: b.x, y: b.y, w: b.w, h: b.h }))}
+                      cover={drawn[0]!.id}
                     />
-                  ) : undefined
+                  ) : (
+                    // AN EMPTY CANVAS, drawn as one: a dashed slot where the
+                    // first board will go, not the kind's own picture.
+                    <span className="design-create-start-blank" />
+                  )
                 }
                 onSelect={() => onPick(layout)}
               />
@@ -506,7 +511,7 @@ function DesignPanel({
             aria-describedby={field.describedBy}
             aria-invalid={field.invalid || undefined}
             value={title}
-            placeholder="Launch landing page"
+            placeholder="Name this design"
             autoComplete="off"
             onChange={(event) => onTitle(event.currentTarget.value)}
           />
@@ -520,7 +525,6 @@ function DesignPanel({
             autoResize
             rows={5}
             value={brief}
-            placeholder="A launch page for FairSplit 1.0 that turns visitors into sign-ups. Follow the Nightshade brand."
             onChange={(event) => onBrief(event.currentTarget.value)}
           />
         )}
@@ -655,7 +659,6 @@ function BoardPanel({
             autoResize
             rows={4}
             value={board.brief}
-            placeholder="A hero with the sign-up form, and a pricing teaser below the fold."
             onChange={(event) => onChange({ brief: event.currentTarget.value })}
           />
         )}
