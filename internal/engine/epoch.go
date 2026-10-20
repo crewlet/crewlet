@@ -110,6 +110,9 @@ func (e *Engine) installEpoch(c *Company, activatedAt time.Time) {
 		// retention — carried over the epoch this one replaces where it
 		// hosts no code of its own.
 		c.codeInForce = carriedCode(c, e.epoch.current.Load())
+		// And its chart as the code host judges a seat by, built at the
+		// first agent read that asks rather than at every apply.
+		c.roster = rosterOf(c)
 	}
 	if c != nil && !e.indexes(c) {
 		e.refreshParties(c)

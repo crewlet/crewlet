@@ -835,6 +835,7 @@ func TestCodeStatusReadsTheNode(t *testing.T) {
 	for _, want := range []string{
 		"web — active, owned by seat:founder, default branch main\n",
 		"  description:  The customer-facing web app.\n",
+		"  visibility:   company — every seat reads it\n",
 		"  protections:  refs/heads/main (no force, no delete)\n",
 		"  refs:         2 branches, 0 tags; main at " + first + "\n",
 		"  pushes:       2 ever",

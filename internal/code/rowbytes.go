@@ -182,6 +182,7 @@ func (r RepoRef) members() int {
 		field("managed_by", stringBytes(string(r.ManagedBy)), false) +
 		field("owner", 2+field("kind", stringBytes(string(r.Owner.Kind)), true)+
 			field("ref", stringBytes(r.Owner.Ref), false), false) +
+		field("visibility", stringBytes(string(r.Visibility)), false) +
 		field("default_branch", stringBytes(r.DefaultBranch), false)
 	if r.Description != "" {
 		n += field("description", stringBytes(r.Description), false)
@@ -206,6 +207,9 @@ func (r RepoRef) members() int {
 // encodedBytes is the length of the listing row's JSON encoding.
 func (s RepoSummary) encodedBytes() int {
 	n := 2 + s.RepoRef.members()
+	if s.Access != "" {
+		n += field("access", stringBytes(s.Access), false)
+	}
 	if s.Head != "" {
 		n += field("head", stringBytes(s.Head), false)
 	}

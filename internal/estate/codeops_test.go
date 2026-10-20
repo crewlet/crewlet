@@ -123,7 +123,7 @@ func codeReads(ctx context.Context, seam CodeSeam) []struct {
 			return err
 		}},
 		{opCodeRead.spec.name, func() error {
-			_, err := seam.Read(ctx, code.ReadQuery{Kind: code.ReadRepos})
+			_, err := seam.Read(ctx, code.ReadQuery{Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"}, Kind: code.ReadRepos})
 			return err
 		}},
 	}
@@ -367,7 +367,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		t.Errorf("push outcome asked %+v, want %+v", got, outcomeQ)
 	}
 
-	readQ := code.ReadQuery{Kind: code.ReadRepos, Status: []code.RepoStatus{code.RepoStatusArchived},
+	readQ := code.ReadQuery{Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"}, Kind: code.ReadRepos, Status: []code.RepoStatus{code.RepoStatusArchived},
 		Cursor: "c-1", Limit: 10, Fresh: statelog.Freshness{Level: statelog.ReadStale}}
 	if got, err := seam.Read(ctx, readQ); err != nil || !reflect.DeepEqual(got, d.read) {
 		t.Errorf("read = (%+v, %v), want %+v", got, err, d.read)

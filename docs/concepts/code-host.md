@@ -70,6 +70,7 @@ code:
   repos:
     - name: nimbus-web             # the address it is cloned by
       owner: { unit: Engineering } # a unit (id or name) or a seat (handle) — exactly one
+      visibility: unit             # company (unset) or unit: which seats read it
       default_branch: main         # unset is main
       description: The customer-facing web app.
       protect:
@@ -90,6 +91,10 @@ code:
   or `seat` (a handle), resolved against the same document's chart. An owner
   the chart does not have refuses the revision, naming the units or seats it
   does have.
+- **`visibility`** — which **seats** may read it: `company` (unset), every
+  seat, or `unit`, only the seats the chart relates to its owner (see
+  [Visibility](#visibility)). It narrows seats and nobody else: a person reads
+  every repository whatever it says. Any other value refuses the revision.
 - **`default_branch`** — what a clone checks out; any branch name git would
   take but `seats` and `seats/<one name>`, which hold the seats' own
   namespaces (see [Who may read and push](#who-may-read-and-push)), and unset
@@ -988,7 +993,8 @@ repository by, the first row that holds:
 | a unit | leads a unit above it | read |
 | a seat | is that seat | maintain |
 | a seat | leads that seat's unit or a unit above it | read |
-| anyone | any other seat | read |
+| a `visibility: company` repository | any other seat | read |
+| a `visibility: unit` repository | any other seat | **none** |
 
 So a `full_access` seat in the owning unit writes — creates and fast-forwards
 branches, creates tags — and only the unit's lead, at `full_access`, also
@@ -1014,11 +1020,42 @@ The [protection rules](#protection-rules) are judged after the grant and are
 never skipped for one: a grant decides who may move a ref, a protection what
 any push may do to it.
 
+### Visibility
+
+A repository's `visibility` decides one row of that table — the last, for a
+seat the chart relates to the repository in no other way — and nothing else:
+
+- **`company`** (unset): every seat reads it. A seat outside the owning unit
+  reads its code and pushes to its own branches there.
+- **`unit`**: only the seats the rows above relate to it read it — the owning
+  unit's members and the leads above them, or the owning seat and the leads
+  above its unit. Every other seat reads **nothing**: the repository is
+  absent from its listing, and its detail and its push history are refused
+  `not_permitted`, naming the visibility and who does read it. That a
+  `visibility: unit` repository exists is no secret — its name is in the
+  company document, so asking for one that does not exist is still answered
+  "not found" — and what it holds is.
+
+**Visibility narrows seats only.** A person reads every repository whatever it
+says, through a bound token or an unbound one: the people who run the company
+are never shut out of its code by a setting that exists to keep one team's
+seats out of another's. A seat's own branches are only on the repositories it
+may read, so a `full_access` seat outside the unit has none on a `unit`
+repository.
+
+A `unit` repository owned by a unit with **no lead** — neither its own nor one
+above it — is read only by persons and the unit's members, and `crewlet
+validate` warns about it at its `visibility`. Changing a repository's
+visibility is a settings change like any other: one record at its activation,
+and every listing and read after it judged by the new one.
+
 A person's standing reads no chart at all. A seat's is judged from the chart of
-the node that answers or decides, so two nodes on different activations may
-decide one command differently while one of them has not yet applied the
-other's; in this release no seat pushes or reads a repository yet ([What it
-does not do yet](#what-it-does-not-do-yet)).
+the node that answers or decides — the data node serving a listing or a read
+holds the asker to its own epoch's chart — so two nodes on different
+activations may decide one command differently while one of them has not yet
+applied the other's; in this release no seat pushes or reads a repository yet
+([What it does not do yet](#what-it-does-not-do-yet)), so every read is a
+person's.
 
 ---
 

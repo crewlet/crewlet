@@ -659,8 +659,9 @@ func declaredRepo(o *org.Index, r config.CodeRepo) (code.Declared, error) {
 	}
 	slices.SortFunc(protections, func(a, b code.Protection) int { return cmp.Compare(a.Pattern, b.Pattern) })
 	return code.Declared{Name: r.Name, Settings: code.RepoSettings{
-		ManagedBy: code.ManagedConfig, Owner: owner, DefaultBranch: r.ResolvedDefaultBranch(),
-		Description: r.Description, Archived: r.Archived, Protections: protections,
+		ManagedBy: code.ManagedConfig, Owner: owner, Visibility: code.Visibility(r.Visibility.Resolved()),
+		DefaultBranch: r.ResolvedDefaultBranch(), Description: r.Description, Archived: r.Archived,
+		Protections: protections,
 	}}, nil
 }
 

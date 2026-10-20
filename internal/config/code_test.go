@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"cmp"
 	"fmt"
 	"math"
 	"reflect"
@@ -620,6 +621,55 @@ func BenchmarkValidatingTheMostRepositories(b *testing.B) {
 	}
 }
 
+// BenchmarkWarningAboutTheMostUnitRepositories is what the advisory warnings
+// cost a document at the largest code.repos admits — [config.CodeMaxRepos]
+// repositories, each owned by one of 300 teams of three seats that name no
+// lead and inherit their division's (30 divisions led by a seat of their own:
+// 330 units and 930 seats) — once with every repository `visibility: unit`,
+// which asks each one's owning unit for its effective lead, and once with the
+// visibility unset, which asks nothing. It is paid on every PATCH /config
+// answer and every `crewlet validate`.
+func BenchmarkWarningAboutTheMostUnitRepositories(b *testing.B) {
+	for _, visibility := range []string{"unit", ""} {
+		var doc strings.Builder
+		doc.WriteString("name: Acme\nunits:\n")
+		for d := range 30 {
+			fmt.Fprintf(&doc, "  - name: Division %d\n    lead: Lead %d\n    roles:\n      - {name: Lead %d}\n"+
+				"    children:\n", d, d, d)
+			for t := range 10 {
+				fmt.Fprintf(&doc, "      - name: Team %d %d\n        roles:\n", d, t)
+				for s := range 3 {
+					fmt.Fprintf(&doc, "          - {name: Seat %d %d %d}\n", d, t, s)
+				}
+			}
+		}
+		doc.WriteString("code:\n  native: true\n  repos:\n")
+		field := ""
+		if visibility != "" {
+			field = ", visibility: " + visibility
+		}
+		for i := range config.CodeMaxRepos {
+			fmt.Fprintf(&doc, "    - {name: r%d, owner: {unit: Team %d %d}, protect: [{branch: main}]%s}\n",
+				i, i%30, (i/30)%10, field)
+		}
+		c, err := config.ParseCompanyDocument([]byte(doc.String()))
+		if err != nil {
+			b.Fatalf("decode: %v", err)
+		}
+		name := "visibility=" + cmp.Or(visibility, "unset")
+		b.Run(name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				for _, w := range c.AdvisoryWarnings() {
+					if strings.Contains(w.Message, "has no lead") {
+						b.Fatalf("warned of a unit with a lead: %s", w.Message)
+					}
+				}
+			}
+		})
+	}
+}
+
 // A RETENTION NO DURATION HOLDS IS REFUSED TO RUN, however it was admitted:
 // one day past the longest a duration holds, DeletedRetention overflows to a
 // negative duration — a retention every deleted repository has outlived, which
@@ -685,5 +735,187 @@ func TestAProtectionsPatternIsItsNamespacedName(t *testing.T) {
 	if config.CodeDirectPush("").Resolved() != config.CodeDirectPersons ||
 		config.CodeDirectNone.Resolved() != config.CodeDirectNone {
 		t.Error("an unset direct_push does not read as persons, or a set one moved")
+	}
+}
+
+// A VISIBILITY THIS BUILD DOES NOT KNOW IS REFUSED at the field, naming the
+// closed set, as one problem: read as `company` it would hand every seat what
+// its author meant to narrow, and read as `unit` it would shut seats out that
+// the author meant to let in — so it is neither. Unset reads as company, and
+// each known value as itself.
+func TestAnUnknownVisibilityIsRefused(t *testing.T) {
+	t.Parallel()
+	web := "    - name: web\n      owner: {unit: Engineering}\n"
+	for _, v := range []string{"team", "Unit", "private", " company"} {
+		_, err := config.ParseCompany([]byte(codeRepos(web + fmt.Sprintf("      visibility: %q\n", v))))
+		problems := config.Problems(err)
+		if len(problems) != 1 || problems[0].Path != "code.repos[0].visibility" ||
+			problems[0].Kind != "unknown_value" || !strings.Contains(problems[0].Message, "company, unit") {
+			t.Errorf("visibility %q: problems = %+v, want one unknown value at code.repos[0].visibility "+
+				"naming company, unit", v, problems)
+		}
+	}
+	for written, want := range map[string]config.CodeVisibility{
+		"":                            config.CodeVisibilityCompany,
+		"      visibility: company\n": config.CodeVisibilityCompany,
+		"      visibility: unit\n":    config.CodeVisibilityUnit,
+	} {
+		c, err := config.ParseCompany([]byte(codeRepos(web + written)))
+		if err != nil {
+			t.Errorf("%q: refused: %v", written, err)
+			continue
+		}
+		if got := c.Code.Repos[0].Visibility.Resolved(); got != want {
+			t.Errorf("%q resolves to %q, want %q", written, got, want)
+		}
+	}
+}
+
+// A `visibility: unit` REPOSITORY OWNED BY A UNIT WITH NO LEAD IS WARNED,
+// NEVER REFUSED: valid, and read by no lead's seat, because there is none — so
+// only persons and the unit's own members read it, which is rarely what
+// narrowing it meant. The lead is the EFFECTIVE one, so a lead inherited from
+// a parent unit reads the repository and nothing is warned; the warning sits
+// at the repository's visibility and names the repository and the unit as its
+// author wrote it.
+//
+// Mutation: the declared lead read instead of the effective one → the child
+// unit under a led parent warns.
+func TestAUnitRepositoryWithNoLeadWarns(t *testing.T) {
+	t.Parallel()
+	const chart = `name: Acme
+roles:
+  - name: CEO
+    handle: ceo
+units:
+  - name: Engineering
+    lead: CTO
+    roles:
+      - name: CTO
+        handle: cto
+    children:
+      - name: Platform
+        roles:
+          - name: SRE
+            handle: sre
+  - name: Sales
+    roles:
+      - name: Rep
+        handle: rep
+`
+	for name, tc := range map[string]struct {
+		repo  string
+		warns bool
+	}{
+		"a unit repository of a unit with no lead": {repo: "owner: {unit: Sales}\n      visibility: unit", warns: true},
+		"named by the unit's other spelling":       {repo: "owner: {unit: sales}\n      visibility: unit", warns: true},
+		"an archived one, which is still read": {
+			repo: "owner: {unit: Sales}\n      visibility: unit\n      archived: true", warns: true},
+		"a unit repository of a led unit":                {repo: "owner: {unit: Engineering}\n      visibility: unit"},
+		"one of a unit that inherits its lead":           {repo: "owner: {unit: Platform}\n      visibility: unit"},
+		"a company repository of a unit with no lead":    {repo: "owner: {unit: Sales}"},
+		"a unit repository a seat owns":                  {repo: "owner: {seat: rep}\n      visibility: unit"},
+		"an owner the chart does not have, refused only": {repo: "owner: {unit: Marketing}\n      visibility: unit"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			c, err := config.ParseCompanyDocument([]byte(chart + "code:\n  native: true\n  repos:\n" +
+				"    - name: web\n      " + tc.repo + "\n      protect: [{branch: main}]\n"))
+			if err != nil {
+				t.Fatalf("not decoded: %v", err)
+			}
+			var found []config.Warning
+			for _, w := range c.Warnings() {
+				if strings.HasPrefix(w.Path, "code.") {
+					found = append(found, w)
+				}
+			}
+			switch {
+			case !tc.warns && len(found) != 0:
+				t.Fatalf("warned: %+v", found)
+			case !tc.warns:
+			case len(found) != 1:
+				t.Fatalf("warnings = %+v, want one about the unit with no lead", found)
+			case found[0].Path != "code.repos[0].visibility" || found[0].Kind != config.WarningAdvisory:
+				t.Errorf("warned at %s (%s), want code.repos[0].visibility, an advisory",
+					found[0].Path, found[0].Kind)
+			case !strings.Contains(found[0].Message, "web is visibility: unit") ||
+				!strings.Contains(found[0].Message, "which has no lead") || found[0].Unit != "Sales":
+				t.Errorf("warning = %+v, want it to name web and its unit Sales", found[0])
+			}
+		})
+	}
+}
+
+// A CODE ACCESS TIER NO CODE HOST READS IS WARNED, NEVER REFUSED: on a company
+// that hosts no code of its own, a seat has a host that caps anything by its
+// tier only where it has a GitHub App of its own AND the company's GitHub
+// integration is enabled — the only place the engine reconciles that app and
+// mints its tokens — so anywhere else `code.access` reads as a grant and
+// grants nothing, and the warning says which of the two is missing. Every
+// tier, read_only included; not where the company sets code.native or the seat
+// has an app the enabled integration reads; and not on a human seat, whose
+// tier is an admission refusal of its own, nor for a tier validation refuses.
+//
+// Mutation: read only the seat's own app (the company's integration ignored),
+// and both rows without an enabled integration go silent.
+func TestATierNoCodeHostReadsWarns(t *testing.T) {
+	t.Parallel()
+	const ownApp = "    code: {access: review}\n    integrations:\n      github: {repos: [acme/api]}\n"
+	on := func(github, extra string) string {
+		return "name: Acme\n" + github + "roles:\n  - name: Dev\n    handle: dev\n" + extra
+	}
+	seat := func(extra string) string {
+		return on("integrations:\n  github: {enabled: true, webhook_secret: s}\n", extra)
+	}
+	for name, tc := range map[string]struct {
+		doc   string
+		warns string
+		why   string
+	}{
+		"full_access on no host": {doc: seat("    code: {access: full_access}\n"), warns: "full_access",
+			why: "no GitHub App of its own"},
+		"read_only on no host": {doc: seat("    code: {access: read_only}\n"), warns: "read_only",
+			why: "no GitHub App of its own"},
+		"no tier at all":          {doc: seat("")},
+		"a seat with its own app": {doc: seat(ownApp)},
+		// THE SEAT'S APP IS READ ONLY WHERE THE COMPANY'S INTEGRATION IS:
+		// the engine reconciles a seat's app and mints its tokens only
+		// under an enabled integrations.github, so an app of its own on a
+		// company without one is a tier nothing reads.
+		"its own app, no github integration": {doc: on("", ownApp), warns: "review",
+			why: "no GitHub integration enabled"},
+		"its own app, the integration off": {doc: on("integrations:\n  github: {enabled: false}\n", ownApp),
+			warns: "review", why: "no GitHub integration enabled"},
+		"the native host": {doc: seat("    code: {access: full_access}\n") + "code:\n  native: true\n"},
+		"a human seat, refused instead": {doc: "name: Acme\nroles:\n  - name: Founder\n    kind: human\n" +
+			"    contact: {slack_user_id: U0FOUNDER}\n    code: {access: full_access}\n"},
+		"a tier validation refuses": {doc: seat("    code: {access: admin}\n")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			c, err := config.ParseCompanyDocument([]byte(tc.doc))
+			if err != nil {
+				t.Fatalf("not decoded: %v", err)
+			}
+			var found []config.Warning
+			for _, w := range c.Warnings() {
+				if strings.HasSuffix(w.Path, "code.access") && w.Kind == config.WarningAdvisory {
+					found = append(found, w)
+				}
+			}
+			switch {
+			case tc.warns == "" && len(found) != 0:
+				t.Fatalf("warned: %+v", found)
+			case tc.warns == "":
+			case len(found) != 1:
+				t.Fatalf("warnings = %+v, want one about a tier that grants nothing", found)
+			case found[0].Path != "roles[0].code.access" || found[0].Seat != "dev" ||
+				!strings.Contains(found[0].Message, tc.warns+" grants nothing") ||
+				!strings.Contains(found[0].Message, tc.why):
+				t.Errorf("warning = %+v, want dev's code.access %s, granting nothing: %s", found[0], tc.warns,
+					tc.why)
+			}
+		})
 	}
 }

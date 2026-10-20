@@ -438,7 +438,7 @@ func objectNames(t *testing.T, b objstore.Backend) []string {
 func pushRows(t *testing.T, c *Case) []code.PushRow {
 	t.Helper()
 	var rows []code.PushRow
-	q := code.ReadQuery{Kind: code.ReadPushes, Repo: RepoName, Limit: 200, Fresh: Linearizable}
+	q := code.ReadQuery{Asker: Reader, Kind: code.ReadPushes, Repo: RepoName, Limit: 200, Fresh: Linearizable}
 	for {
 		a, err := c.Fleet.Nodes()[0].Read(c.Ctx, q)
 		if err != nil {

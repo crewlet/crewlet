@@ -334,7 +334,7 @@ func ReposOf(ctx context.Context,
 	read func(context.Context, code.ReadQuery) (code.ReadAnswer, error)) ([]string, error) {
 
 	var names []string
-	q := code.ReadQuery{Kind: code.ReadRepos, Limit: 500, Fresh: Linearizable}
+	q := code.ReadQuery{Asker: Reader, Kind: code.ReadRepos, Limit: 500, Fresh: Linearizable}
 	for {
 		a, err := read(ctx, q)
 		if err != nil {

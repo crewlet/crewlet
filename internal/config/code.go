@@ -174,6 +174,7 @@ func (c Code) DeletedRetention() time.Duration {
 type CodeRepo struct {
 	Name          string           `yaml:"name" json:"name" js:"pattern=^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$" desc:"The repository's name: lowercase letters, digits and hyphens, starting and ending with a letter or a digit, at most 63. It is the address a repository is cloned by, so renaming one deletes it and creates another."`
 	Owner         CodeOwner        `yaml:"owner" json:"owner"`
+	Visibility    CodeVisibility   `yaml:"visibility,omitempty" json:"visibility,omitempty" js:"enum=company|unit" desc:"Who may read it besides persons: company (unset) — every seat — or unit — the owning unit's members, its leads and the owning seat."`
 	DefaultBranch string           `yaml:"default_branch,omitempty" json:"default_branch,omitempty" desc:"The branch a clone checks out; unset is main."`
 	Description   string           `yaml:"description,omitempty" json:"description,omitempty" desc:"One paragraph, at most 1024 bytes."`
 	Archived      bool             `yaml:"archived,omitempty" json:"archived,omitempty" desc:"Read-only: still fetched and cloned, and takes no push."`
@@ -193,6 +194,41 @@ func (r CodeRepo) ResolvedDefaultBranch() string {
 // DefaultCodeBranch is a declared repository's default branch where it sets
 // none.
 const DefaultCodeBranch = "main"
+
+// CodeVisibility is who among the SEATS may read a repository. A person — a
+// bound or unbound API token — reads every repository whatever it says
+// (ADR-0040): visibility narrows the seats an AI company runs, never the
+// people who run it.
+type CodeVisibility string
+
+const (
+	// CodeVisibilityCompany lets every seat read it — what unset reads as.
+	CodeVisibilityCompany CodeVisibility = "company"
+	// CodeVisibilityUnit lets only the seats the chart relates to its owner
+	// read it: the owning unit's members, the leads above them, and the
+	// owning seat.
+	CodeVisibilityUnit CodeVisibility = "unit"
+)
+
+// CodeVisibilities is the closed set: the one list the validator and the
+// schema read. The code domain's own set is held to it in both directions by
+// the engine's TestEveryDeclaredVisibilityIsOneTheDomainRecords, because
+// config cannot import the domain that imports it.
+var CodeVisibilities = []CodeVisibility{CodeVisibilityCompany, CodeVisibilityUnit}
+
+// Valid reports a value this build knows. Unset is valid: it reads as company
+// ([CodeVisibility.Resolved]).
+func (v CodeVisibility) Valid() bool { return v == "" || slices.Contains(CodeVisibilities, v) }
+
+// Resolved is the value with its default applied: unset is company — THE ONE
+// PLACE the default is applied, read by the warnings and by the engine's
+// reconcile alike, so the visibility warned about is the visibility recorded.
+func (v CodeVisibility) Resolved() CodeVisibility {
+	if v == "" {
+		return CodeVisibilityCompany
+	}
+	return v
+}
 
 // CodeOwner is who owns a repository: exactly one of a unit or a seat.
 type CodeOwner struct {
@@ -445,10 +481,10 @@ func validateCodeRepos(path Path, repos []CodeRepo, o *org.Organization) error {
 }
 
 // validate holds one declared repository at path, against the document's
-// chart: its name, its one owner resolving on the chart, its default branch,
-// its description and its protection rules — at most [CodeMaxProtections],
-// each naming exactly one of a branch or a tag pattern in gitref's grammar,
-// each pattern protected once, and no force on a tag.
+// chart: its name, its one owner resolving on the chart, its visibility, its
+// default branch, its description and its protection rules — at most
+// [CodeMaxProtections], each naming exactly one of a branch or a tag pattern
+// in gitref's grammar, each pattern protected once, and no force on a tag.
 func (r CodeRepo) validate(path Path, owners *codeOwners) error {
 	var p problems
 	switch {
@@ -462,6 +498,10 @@ func (r CodeRepo) validate(path Path, owners *codeOwners) error {
 			r.Name, gitref.MaxRepoNameBytes)
 	}
 	r.Owner.validate(&p, at(path, "owner"), owners)
+	if !r.Visibility.Valid() {
+		p.add(at(path, "visibility"), ErrUnknownValue, "%q (want %s, or unset for %s)",
+			r.Visibility, names(CodeVisibilities), CodeVisibilityCompany)
+	}
 	switch {
 	case r.DefaultBranch == "":
 	case !gitref.ValidBranch(r.DefaultBranch):
@@ -604,22 +644,35 @@ func (rule CodeProtection) validate(p *problems, path Path) bool {
 	return ok
 }
 
-// codeWarnings is every declared repository whose default branch no rule
-// protects: valid, and a person who may push to it may force-push it or
-// delete it. Through gitref's own matcher — the one a push's decide asks — so
-// `release/*` warns about main and `**` does not. Located at the field to
-// ADD, the repository's protect.
+// codeWarnings is what is valid about the company's code and still worth
+// knowing, against its chart o: every seat's code access tier that grants
+// nothing ([Company.roleCodeWarnings]), and, where the engine hosts code,
+// every declared repository that
 //
-// NOT AN ARCHIVED REPOSITORY: it takes no push at all — the decide refuses the
-// whole push — so nobody can force-push or delete its branch, and saying so
-// would be false. Unarchiving one that still has no rule brings the warning
-// back with the revision that does it.
-func (c *Company) codeWarnings() []Warning {
+//   - is `visibility: unit` and owned by a unit with no lead — effective, so
+//     inherited counts — which only persons and the unit's own members read:
+//     no lead's seat reads it, because there is none, and every other seat is
+//     what the visibility shuts out. Located at the visibility;
+//   - has a default branch no rule protects: a person who may push to it may
+//     force-push it or delete it. Through gitref's own matcher — the one a
+//     push's decide asks — so `release/*` warns about main and `**` does not.
+//     Located at the field to ADD, the repository's protect.
+//
+// NOT AN ARCHIVED REPOSITORY'S BRANCH: it takes no push at all — the decide
+// refuses the whole push — so nobody can force-push or delete its branch, and
+// saying so would be false. Unarchiving one that still has no rule brings the
+// warning back with the revision that does it. Its visibility still warns:
+// an archived repository is still read.
+func (c *Company) codeWarnings(o *org.Organization) []Warning {
+	out := c.roleCodeWarnings()
 	if !c.Code.Native {
-		return nil
+		return out
 	}
-	var out []Warning
+	units := o.Index()
 	for i, r := range c.Code.Repos {
+		if w, ok := unitWithNoLead(units, i, r); ok {
+			out = append(out, w)
+		}
 		if r.Archived {
 			continue
 		}
@@ -638,6 +691,96 @@ func (c *Company) codeWarnings() []Warning {
 		out = append(out, advisory(at(idx(field("code.repos"), i), "protect"), fmt.Sprintf(
 			"%s's default branch %s is unprotected: a person can force-push or delete it "+
 				"(add {branch: %s} to its protect list)", r.Name, branch, branch)))
+	}
+	return out
+}
+
+// unitWithNoLead is the warning about code.repos[i], r, when it is
+// `visibility: unit` and owned by a unit that has no effective lead — the unit
+// and its lead both found through units, the chart's index. An owner the chart
+// does not resolve is validation's refusal, which is the line to read, and is
+// not warned about too.
+//
+// THE LEAD THROUGH THE INDEX, never [org.Organization.EffectiveLead]: a team's
+// lead is usually inherited from its division, which the chart's own method
+// finds by searching the team's subtree and then walking every seat of the
+// chart, so asked of every repository's owner it cost the warnings repositories
+// × seats. Measured (BenchmarkWarningAboutTheMostUnitRepositories, ten thousand
+// `visibility: unit` repositories owned by 300 teams inheriting their 30
+// divisions' leads, 930 seats; four vCPUs of a 2.8 GHz Xeon under a load
+// average near 14): 166–184 ms, 85 MB and 3.4 million allocations a call
+// through the chart, 16–18 ms and 6.9 MB through the index — against
+// 14–17 ms and 6.7 MB for the same document with the visibility unset.
+func unitWithNoLead(units *org.Index, i int, r CodeRepo) (Warning, bool) {
+	ref := strings.TrimSpace(r.Owner.Unit)
+	if r.Visibility.Resolved() != CodeVisibilityUnit || ref == "" {
+		return Warning{}, false
+	}
+	u := units.UnitByRef(ref)
+	if u == nil || units.EffectiveLead(u) != nil {
+		return Warning{}, false
+	}
+	w := advisory(at(idx(field("code.repos"), i), "visibility"), fmt.Sprintf(
+		"%s is visibility: unit and owned by %s, which has no lead: only persons and "+
+			"%s's members read it (set a lead on %s, or the owner)", r.Name, ref, ref, ref))
+	w.Unit = u.Name
+	return w, true
+}
+
+// roleCodeWarnings is every agent seat whose `code.access` no code host
+// reads: the company hosts no code of its own (`code.native` unset), and the
+// seat has no GitHub App the engine drives — the company enables no GitHub
+// integration (`integrations.github.enabled`), or it does and the seat has no
+// app of its own (the seat's `integrations.github`). Those are the only two
+// things a tier caps. Valid — a company may write its seats' tiers before it
+// turns on its code host — and worth knowing, because the line reads as a
+// grant. Located at the field, the seat's code.access, and naming which of the
+// two is missing, since each is remedied differently.
+//
+// THE SEAT'S APP COUNTS ONLY UNDER THE COMPANY'S ENABLED INTEGRATION: the
+// engine reconciles a seat's app, and mints the tokens its tier scopes, only
+// while `integrations.github` is enabled (it unregisters GitHub on an apply
+// that disables it), so an app recorded on a seat of a company with the
+// integration off or absent is a tier nothing reads.
+//
+// EVERY TIER, NOT ONLY full_access: read_only and review read as grants as
+// much, and grant as little. NOT A HUMAN SEAT: a tier there is an admission
+// refusal of its own ([Company.validateHumanSeatCode]), the line to read — as
+// is a tier validation refuses.
+func (c *Company) roleCodeWarnings() []Warning {
+	if c.Code.Native {
+		return nil
+	}
+	integration := c.Integrations.GitHub != nil && c.Integrations.GitHub.Enabled
+	var out []Warning
+	for role, path := range c.EachRole() {
+		if role.Kind == org.KindHuman || role.Code.IsZero() ||
+			!slices.Contains(CodeAccessTiers, role.Code.Access) {
+			continue
+		}
+		ownApp := role.Integrations.GitHub != nil
+		var why string
+		switch {
+		case integration && ownApp:
+			continue
+		case integration:
+			why = "and this seat has no GitHub App of its own (integrations.github), the only two " +
+				"places a tier caps what a seat may do (set code.native, give the seat an app, " +
+				"or remove code)"
+		case ownApp:
+			why = "and has no GitHub integration enabled (integrations.github.enabled), so nothing " +
+				"drives this seat's own GitHub App: the only two places a tier caps what a seat may " +
+				"do (set code.native, enable integrations.github, or remove code)"
+		default:
+			why = "and has no GitHub integration enabled (integrations.github.enabled), the only two " +
+				"places a tier caps what a seat may do (set code.native, or enable integrations.github " +
+				"and give the seat an app, or remove code)"
+		}
+		w := advisory(at(path, "code.access"), fmt.Sprintf(
+			"code.access %s grants nothing: this company hosts no code (code.native is unset) %s",
+			role.Code.Access, why))
+		w.Seat = role.Seat().Handle()
+		out = append(out, w)
 	}
 	return out
 }

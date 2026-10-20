@@ -255,6 +255,7 @@ type codeRepoView struct {
 		Kind string `json:"kind"`
 		Ref  string `json:"ref"`
 	} `json:"owner"`
+	Visibility    string               `json:"visibility"`
 	DefaultBranch string               `json:"default_branch"`
 	Description   string               `json:"description"`
 	Protections   []codeProtectionView `json:"protections"`
@@ -642,6 +643,7 @@ func renderCodeRepo(w io.Writer, r codeRepoView, pushes []codePushLine) error {
 	if r.Description != "" {
 		fmt.Fprintf(&b, "  description:  %s\n", r.Description)
 	}
+	fmt.Fprintf(&b, "  visibility:   %s\n", visibilityLine(r.Visibility))
 	fmt.Fprintf(&b, "  protections:  %s\n", protectionsLine(r.Protections))
 	refs := fmt.Sprintf("%d branches, %d tags", r.Branches, r.Tags)
 	if other := r.Refs - r.Branches - r.Tags; other > 0 {
@@ -674,6 +676,19 @@ func renderCodeRepo(w io.Writer, r codeRepoView, pushes []codePushLine) error {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\n", p.at, p.by, p.node, p.refs, p.results)
 	}
 	return tw.Flush()
+}
+
+// visibilityLine is a repository's visibility as `status` prints it: which
+// seats read it, since a person reads every repository whatever it says. A
+// value this build does not know is printed as the node sent it.
+func visibilityLine(v string) string {
+	switch code.Visibility(v) {
+	case code.VisibilityCompany:
+		return v + " — every seat reads it"
+	case code.VisibilityUnit:
+		return v + " — only the seats the chart relates to its owner read it"
+	}
+	return v
 }
 
 // protectionsLine is a repository's rules, each with what it forbids.

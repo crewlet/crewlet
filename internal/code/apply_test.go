@@ -224,7 +224,7 @@ func oid(s string) string {
 // settingsFor are a declared repository's settings with one rule per pattern.
 func settingsFor(description string, patterns ...string) RepoSettings {
 	s := RepoSettings{
-		ManagedBy: ManagedConfig, Owner: Owner{Kind: OwnerUnit, Ref: "ENG"},
+		ManagedBy: ManagedConfig, Owner: Owner{Kind: OwnerUnit, Ref: "ENG"}, Visibility: VisibilityCompany,
 		DefaultBranch: "main", Description: description, ConfigEpoch: 1,
 	}
 	for _, p := range patterns {
@@ -546,7 +546,9 @@ func TestSettingsReplaceProtectionsWhole(t *testing.T) {
 }
 
 // A RESTORE BRINGS BACK THE SETTINGS IT CARRIES AND THE REFS THE DELETE NEVER
-// TOUCHED.
+// TOUCHED — the visibility among them, which the repository was created
+// without: a restore that kept the row's own would reopen a unit repository to
+// every seat.
 func TestARestoreBringsBackSettingsAndRefs(t *testing.T) {
 	t.Parallel()
 	e := openApplyEstate(t)
@@ -555,7 +557,7 @@ func TestARestoreBringsBackSettingsAndRefs(t *testing.T) {
 		rec(t, RepoSubject("repo-a"), OpDelete, Scope{RepoPath("repo-a")},
 			LifecycleRecord{RepoID: "repo-a", ConfigEpoch: 1}))
 	back := settingsFor("back")
-	back.ConfigEpoch = 2
+	back.ConfigEpoch, back.Visibility = 2, VisibilityUnit
 	e.apply(rec(t, RepoSubject("repo-a"), OpRestore, Scope{RepoPath("repo-a")},
 		LifecycleRecord{RepoID: "repo-a", ConfigEpoch: 2, Settings: &back}))
 	if s := e.str(`SELECT status FROM code_repos WHERE id = 'repo-a'`); s != string(RepoStatusActive) {
@@ -563,6 +565,9 @@ func TestARestoreBringsBackSettingsAndRefs(t *testing.T) {
 	}
 	if d := e.one(`SELECT deleted_at FROM code_repos WHERE id = 'repo-a'`); d != nil {
 		t.Fatalf("deleted_at is %v after the restore", d)
+	}
+	if v := e.str(`SELECT visibility FROM code_repos WHERE id = 'repo-a'`); v != string(VisibilityUnit) {
+		t.Fatalf("visibility %q after the restore, want the restore's own %q", v, VisibilityUnit)
 	}
 	if got := e.str(`SELECT target FROM code_refs WHERE ref = 'refs/heads/main'`); got != oid("A") {
 		t.Fatalf("main is %q after the restore", got)

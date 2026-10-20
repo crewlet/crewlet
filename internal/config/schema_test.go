@@ -135,6 +135,7 @@ func TestSchemaEnumsMatchTheValidators(t *testing.T) {
 		// today and drift on the next value.
 		{"GitHubProvisioning", "org_webhook", strs(ContainerWebhookModes)},
 		{"CodeProtection", "direct_push", strs(CodeDirectPushes)},
+		{"CodeRepo", "visibility", strs(CodeVisibilities)},
 		// The three tiers, each in its one spelling: the validator reads
 		// exactly these, so an editor underlines exactly what the engine
 		// refuses.

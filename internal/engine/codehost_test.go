@@ -389,7 +389,7 @@ func serveWeb(t *testing.T, b *config.Bootstrap, e *engine.Engine) string {
 		t.Fatal("the node serves no code operations")
 	}
 	waitFor(t, "the declared repository to exist", func() bool {
-		answer, err := seam.Read(t.Context(), code.ReadQuery{Kind: code.ReadRepos,
+		answer, err := seam.Read(t.Context(), code.ReadQuery{Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-1", Seat: "ceo"}, Kind: code.ReadRepos,
 			Fresh: statelog.Freshness{Level: statelog.ReadStale}})
 		if err != nil {
 			return false

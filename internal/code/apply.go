@@ -372,12 +372,12 @@ func (a *Applier) applyCreate(ctx context.Context, tx *sql.Tx, at applyContext) 
 	}
 	s := p.Settings
 	res, err := tx.ExecContext(ctx, `INSERT INTO code_repos
-			(id, name, status, managed_by, owner_kind, owner, default_branch, description,
+			(id, name, status, managed_by, owner_kind, owner, visibility, default_branch, description,
 			 config_epoch, created_at, version)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO NOTHING`,
 		p.RepoID, p.Name, string(s.status()), string(s.ManagedBy), string(s.Owner.Kind), s.Owner.Ref,
-		s.DefaultBranch, s.Description, s.ConfigEpoch, at.at(), at.packed)
+		string(s.Visibility), s.DefaultBranch, s.Description, s.ConfigEpoch, at.at(), at.packed)
 	if err != nil {
 		return 0, fmt.Errorf("code: create repository %s at %s: %w", p.RepoID, at.position, err)
 	}
@@ -502,8 +502,8 @@ func (a *Applier) applySettings(ctx context.Context, tx *sql.Tx, at applyContext
 		return 0, err
 	}
 	res, err := tx.ExecContext(ctx, settingsSQL,
-		string(s.ManagedBy), string(s.Owner.Kind), s.Owner.Ref, s.DefaultBranch, s.Description,
-		string(s.status()), s.ConfigEpoch, at.packed, p.RepoID)
+		string(s.ManagedBy), string(s.Owner.Kind), s.Owner.Ref, string(s.Visibility), s.DefaultBranch,
+		s.Description, string(s.status()), s.ConfigEpoch, at.packed, p.RepoID)
 	if err != nil {
 		return 0, fmt.Errorf("code: settle %s's settings at %s: %w", p.RepoID, at.position, err)
 	}
@@ -564,8 +564,8 @@ func (a *Applier) applyRestore(ctx context.Context, tx *sql.Tx, at applyContext,
 		return 0, err
 	}
 	res, err := tx.ExecContext(ctx, restoreRepoSQL,
-		string(s.ManagedBy), string(s.Owner.Kind), s.Owner.Ref, s.DefaultBranch, s.Description,
-		string(s.status()), p.ConfigEpoch, at.packed, p.RepoID)
+		string(s.ManagedBy), string(s.Owner.Kind), s.Owner.Ref, string(s.Visibility), s.DefaultBranch,
+		s.Description, string(s.status()), p.ConfigEpoch, at.packed, p.RepoID)
 	if err != nil {
 		return 0, fmt.Errorf("code: restore %s at %s: %w", p.RepoID, at.position, err)
 	}
@@ -601,7 +601,7 @@ const (
 	purgedSQL      = `SELECT COUNT(*) FROM code_deletions WHERE repo_id = ?`
 	repoVersionSQL = `SELECT version, managed_by FROM code_repos WHERE id = ?`
 	settingsSQL    = `UPDATE code_repos SET
-			managed_by = ?, owner_kind = ?, owner = ?, default_branch = ?, description = ?,
+			managed_by = ?, owner_kind = ?, owner = ?, visibility = ?, default_branch = ?, description = ?,
 			status = CASE WHEN status IN ('active', 'archived') THEN ? ELSE status END,
 			config_epoch = ?, version = ?
 		WHERE id = ?`
@@ -610,7 +610,7 @@ const (
 			status = 'deleted', deleted_at = ?, config_epoch = ?, version = ?
 		WHERE id = ? AND status IN ('active', 'archived')`
 	restoreRepoSQL = `UPDATE code_repos SET
-			managed_by = ?, owner_kind = ?, owner = ?, default_branch = ?, description = ?,
+			managed_by = ?, owner_kind = ?, owner = ?, visibility = ?, default_branch = ?, description = ?,
 			status = ?, deleted_at = NULL, config_epoch = ?, version = ?
 		WHERE id = ? AND status = 'deleted'`
 )

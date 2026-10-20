@@ -38,6 +38,7 @@ import (
 type Reader struct {
 	log    *statelog.Reader
 	limits func() Limits
+	roster func() Roster
 
 	// pageRows and pageBytes bound one page: MaxSnapshotItems and
 	// MaxPageBytes, and a test's smaller values (export_test.go).
@@ -54,6 +55,13 @@ type ReaderOptions struct {
 	// Limits are the epoch's code.limits, for RepoDetail alone; nil reads as
 	// [DefaultLimits].
 	Limits func() Limits
+
+	// Roster is the SERVING node's current epoch's chart (the engine's
+	// codeRoster), read once a read: an agent asker is judged by it
+	// ([GrantOf]). Nil holds every agent to [AccessNone] — what a reader built
+	// with no chart has, never "every seat reads" — and asks nothing of it
+	// for a person, whose standing no chart decides.
+	Roster func() Roster
 }
 
 // NewReader builds the code host's read side.
@@ -62,11 +70,22 @@ func NewReader(o ReaderOptions) (*Reader, error) {
 		return nil, errors.New("code: a reader needs the code log's read authority — " +
 			"without it every read level is a label rather than a guarantee")
 	}
-	r := &Reader{log: o.Log, limits: o.Limits, pageRows: MaxSnapshotItems, pageBytes: MaxPageBytes}
+	r := &Reader{log: o.Log, limits: o.Limits, roster: o.Roster, pageRows: MaxSnapshotItems,
+		pageBytes: MaxPageBytes}
 	if r.limits == nil {
 		r.limits = DefaultLimits
 	}
 	return r, nil
+}
+
+// chartFor is the roster an asker is judged by: the serving node's current
+// chart for a seat, read ONCE a read so every row of a listing is judged by
+// one chart, and none for anybody else.
+func (r *Reader) chartFor(asker Principal) Roster {
+	if asker.Kind != PrincipalAgent || r.roster == nil {
+		return nil
+	}
+	return r.roster()
 }
 
 // inTx is one open transaction as a statelog.ReadEstate, so the checkpoint is
@@ -161,12 +180,12 @@ func (v repoView) summary(head string) RepoSummary {
 // repoViewIn reads one repository and its rules in tx, at the checkpoint cp.
 func repoViewIn(ctx context.Context, tx *sql.Tx, id string, cp statelog.Position) (repoView, bool, error) {
 	var (
-		v                       repoView
-		status, managed, owners string
-		deleted                 sql.NullInt64
+		v                                   repoView
+		status, managed, owners, visibility string
+		deleted                             sql.NullInt64
 	)
 	err := tx.QueryRowContext(ctx, repoViewSQL, id).Scan(&v.ref.ID, &v.ref.Name, &status, &managed,
-		&owners, &v.ref.Owner.Ref, &v.ref.DefaultBranch, &v.ref.Description, &deleted, &v.ref.Refs,
+		&owners, &v.ref.Owner.Ref, &visibility, &v.ref.DefaultBranch, &v.ref.Description, &deleted, &v.ref.Refs,
 		&v.branches, &v.tags, &v.tombstones, &v.ref.LivePacks, &v.ref.LiveBytes, &v.ref.LiveObjects,
 		&v.tombstonesThrough, &v.pushes, &v.lastPushAt, &v.createdAt)
 	switch {
@@ -176,6 +195,7 @@ func repoViewIn(ctx context.Context, tx *sql.Tx, id string, cp statelog.Position
 		return repoView{}, false, fmt.Errorf("code: read repository %s: %w", id, err)
 	}
 	v.ref.Status, v.ref.ManagedBy, v.ref.Owner.Kind = RepoStatus(status), ManagedBy(managed), OwnerKind(owners)
+	v.ref.Visibility = Visibility(visibility)
 	if deleted.Valid {
 		v.ref.DeletedAt = store.DecodeTime(deleted.Int64)
 	}
@@ -797,17 +817,23 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 		out   ReadAnswer
 		query statelog.Query
 		serve func(*sql.Tx, statelog.Position) error
+		// THE ONE CHART every row of this answer is judged by, read before
+		// the transaction: a listing judged row by row against a chart an
+		// apply swapped mid-page would answer a page no epoch ever held.
+		chart = r.chartFor(q.Asker)
 	)
 	switch q.Kind {
 	case ReadRepos:
 		query = fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
-		serve = func(tx *sql.Tx, cp statelog.Position) error { return r.repos(ctx, tx, q, cp, &out) }
+		serve = func(tx *sql.Tx, cp statelog.Position) error { return r.repos(ctx, tx, q, chart, cp, &out) }
 	case ReadRepo:
 		query = fresh.Resolved(resolver(q.Repo), false)
-		serve = func(tx *sql.Tx, cp statelog.Position) error { return r.repo(ctx, tx, q.Repo, cp, &out) }
+		serve = func(tx *sql.Tx, cp statelog.Position) error {
+			return r.repo(ctx, tx, q.Repo, q.Asker, chart, cp, &out)
+		}
 	case ReadPushes:
 		query = fresh.Resolved(resolver(q.Repo), true)
-		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.pushes(ctx, tx, q, &out) }
+		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.pushes(ctx, tx, q, chart, &out) }
 	}
 	answer, err := r.log.Read(ctx, query, func(tx *sql.Tx) error {
 		out = ReadAnswer{}
@@ -825,12 +851,18 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 	return out, nil
 }
 
-// validate refuses a query naming no kind this build reads, a repository that
-// cannot be one, a limit past its bound — refused naming it, never clamped —
-// or a status filter outside a listing.
+// validate refuses a query naming no kind this build reads, no asker or one no
+// principal can be, a repository that cannot be one, a limit past its bound —
+// refused naming it, never clamped — or a status filter outside a listing.
 func (q ReadQuery) validate() error {
 	if !q.Kind.Valid() {
 		return fmt.Errorf("%w: kind: %q is not one of %v", ErrInvalid, q.Kind, ReadKinds())
+	}
+	// WHO ASKS IS NAMED, or nothing is read: an answer is held to the
+	// asker's grant, and an absent asker would be judged as somebody nobody
+	// named.
+	if why := q.Asker.invalid(); why != "" {
+		return fmt.Errorf("%w: asker: %s", ErrInvalid, why)
 	}
 	if q.Kind != ReadRepos {
 		if !ValidName(q.Repo) {
@@ -866,8 +898,18 @@ func limitOr(limit, fallback int) int {
 	return limit
 }
 
-// repos serves a listing of repositories, by name.
-func (r *Reader) repos(ctx context.Context, tx *sql.Tx, q ReadQuery, cp statelog.Position, out *ReadAnswer) error {
+// repos serves a listing of repositories, by name, of those the asker may
+// read, each carrying the asker's access to it.
+//
+// THE PAGE IS WHAT WAS SCANNED, NOT WHAT WAS KEPT: a repository the asker may
+// not read is left out, and the cursor is still the last row the statement
+// scanned — so a page can be shorter than its limit, or empty with a Next,
+// and a caller pages until no Next comes back. Cut at the kept rows instead,
+// a page of repositories the asker may not read would end the listing early,
+// or a filter run until the page filled would scan without bound for a seat
+// that reads little.
+func (r *Reader) repos(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, cp statelog.Position,
+	out *ReadAnswer) error {
 	statuses := q.Status
 	if len(statuses) == 0 {
 		statuses = []RepoStatus{RepoStatusActive, RepoStatusArchived}
@@ -885,26 +927,37 @@ func (r *Reader) repos(ctx context.Context, tx *sql.Tx, q ReadQuery, cp statelog
 	if err != nil {
 		return fmt.Errorf("code: list repositories: %w", err)
 	}
-	var ids []string
+	var (
+		ids         []string
+		scanned     int
+		lastScanned string
+	)
 	for rows.Next() {
 		var (
-			v                       repoView
-			status, managed, owners string
-			deleted                 sql.NullInt64
-			head                    sql.NullString
+			v                                   repoView
+			status, managed, owners, visibility string
+			deleted                             sql.NullInt64
+			head                                sql.NullString
 		)
 		if err := rows.Scan(&v.ref.ID, &v.ref.Name, &status, &managed, &owners, &v.ref.Owner.Ref,
-			&v.ref.DefaultBranch, &v.ref.Description, &deleted, &v.ref.Refs, &v.ref.LivePacks,
+			&visibility, &v.ref.DefaultBranch, &v.ref.Description, &deleted, &v.ref.Refs, &v.ref.LivePacks,
 			&v.ref.LiveBytes, &v.ref.LiveObjects, &v.pushes, &v.lastPushAt, &head); err != nil {
 			_ = rows.Close()
 			return fmt.Errorf("code: list repositories: %w", err)
 		}
+		scanned, lastScanned = scanned+1, v.ref.Name
 		v.ref.Status, v.ref.ManagedBy, v.ref.Owner.Kind = RepoStatus(status), ManagedBy(managed), OwnerKind(owners)
+		v.ref.Visibility = Visibility(visibility)
+		g := GrantOf(q.Asker, v.ref, chart)
+		if !g.MayRead() {
+			continue
+		}
 		if deleted.Valid {
 			v.ref.DeletedAt = store.DecodeTime(deleted.Int64)
 		}
 		v.ref.Position = cp
 		s := v.summary(head.String)
+		s.Access = g.Access.String()
 		out.Repos = append(out.Repos, s)
 		ids = append(ids, s.ID)
 	}
@@ -920,14 +973,19 @@ func (r *Reader) repos(ctx context.Context, tx *sql.Tx, q ReadQuery, cp statelog
 	// whole page and are most of a row's bytes when a repository has many:
 	// counted before them, a page of 500 repositories at 64 long rules each
 	// was ten megabytes past a budget it believed it kept. The page is cut at
-	// the row that fills it, and the cursor is that row's name.
+	// the row that fills it, and the cursor is that row's name; a page cut at
+	// no kept row is full when the statement filled its limit, and its cursor
+	// the last row scanned.
 	pg := page{maxRows: limit, maxB: r.pageBytes}
 	for i, s := range out.Repos {
 		if pg.add(s.encodedBytes()) {
 			out.Next = s.Name
 			out.Repos = out.Repos[:i+1]
-			break
+			return nil
 		}
+	}
+	if scanned == limit {
+		out.Next = lastScanned
 	}
 	return nil
 }
@@ -963,8 +1021,14 @@ func protectionsOf(ctx context.Context, tx *sql.Tx, ids []string, repos []RepoSu
 	return rows.Err()
 }
 
-// repo serves one repository in detail.
-func (r *Reader) repo(ctx context.Context, tx *sql.Tx, name string, cp statelog.Position, out *ReadAnswer) error {
+// repo serves one repository in detail, to an asker that may read it.
+//
+// A REPOSITORY THE ASKER MAY NOT READ IS [ErrNotPermitted], judged after its
+// row is read, and one that does not exist is still [ErrRepoNotFound]: that a
+// `visibility: unit` repository exists is no secret — its name is in the
+// company's document — and what it holds is.
+func (r *Reader) repo(ctx context.Context, tx *sql.Tx, name string, asker Principal, chart Roster,
+	cp statelog.Position, out *ReadAnswer) error {
 	id, found, err := claimIn(ctx, tx, name)
 	if err != nil {
 		return err
@@ -979,6 +1043,10 @@ func (r *Reader) repo(ctx context.Context, tx *sql.Tx, name string, cp statelog.
 	if !found {
 		return fmt.Errorf("%w: %s", ErrRepoNotFound, name)
 	}
+	g := GrantOf(asker, v.ref, chart)
+	if !g.MayRead() {
+		return fmt.Errorf("%w: %s", ErrNotPermitted, g.ReadRefusal())
+	}
 	var head sql.NullString
 	err = tx.QueryRowContext(ctx, headSQL, id, branchPrefix+v.ref.DefaultBranch).Scan(&head)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -987,7 +1055,9 @@ func (r *Reader) repo(ctx context.Context, tx *sql.Tx, name string, cp statelog.
 	// THE COUNTS ARE THE ROW'S, kept by the applier as it moves the refs:
 	// counted here they were a walk of every ref the namespace holds,
 	// tombstones included, on every detail read.
-	out.Repo = &RepoDetail{RepoSummary: v.summary(head.String),
+	summary := v.summary(head.String)
+	summary.Access = g.Access.String()
+	out.Repo = &RepoDetail{RepoSummary: summary,
 		Branches: v.branches, Tags: v.tags, Tombstones: v.tombstones,
 		CreatedAt: store.DecodeTime(v.createdAt), Limits: r.limits()}
 	return nil
@@ -997,13 +1067,18 @@ func (r *Reader) repo(ctx context.Context, tx *sql.Tx, name string, cp statelog.
 // (at, position, push_id) — the push id because group commit puts up to 64
 // pushes in one record, sharing its position and its instant, so a cursor
 // without it skips or repeats the pushes of a record a page boundary splits.
-func (r *Reader) pushes(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
+// The history is the repository's contents, so an asker that may not read the
+// repository is answered [ErrNotPermitted], as [Reader.repo] answers it.
+func (r *Reader) pushes(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, out *ReadAnswer) error {
 	id, found, err := claimIn(ctx, tx, q.Repo)
 	if err != nil {
 		return err
 	}
 	if !found {
 		return fmt.Errorf("%w: %s", ErrRepoNotFound, q.Repo)
+	}
+	if err = mayReadIn(ctx, tx, id, q.Asker, chart); err != nil {
+		return err
 	}
 	limit := limitOr(q.Limit, defaultPushLimit)
 	var rows *sql.Rows
@@ -1033,6 +1108,28 @@ func (r *Reader) pushes(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadA
 		}
 	}
 	return rows.Err()
+}
+
+// mayReadIn refuses an asker that may not read repository id, judged from
+// what a grant reads of its row in tx — its name, its owner and its
+// visibility — by one primary-key read.
+func mayReadIn(ctx context.Context, tx *sql.Tx, id string, asker Principal, chart Roster) error {
+	var (
+		ref                = RepoRef{ID: id}
+		owners, visibility string
+	)
+	err := tx.QueryRowContext(ctx, repoGrantSQL, id).Scan(&ref.Name, &owners, &ref.Owner.Ref, &visibility)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return fmt.Errorf("%w: %s", ErrRepoNotFound, id)
+	case err != nil:
+		return fmt.Errorf("code: read repository %s's grant: %w", id, err)
+	}
+	ref.Owner.Kind, ref.Visibility = OwnerKind(owners), Visibility(visibility)
+	if g := GrantOf(asker, ref, chart); !g.MayRead() {
+		return fmt.Errorf("%w: %s", ErrNotPermitted, g.ReadRefusal())
+	}
+	return nil
 }
 
 // pushCursor is "<at micros>/<packed position>/<push_id>".
@@ -1261,7 +1358,7 @@ func (r *Reader) purgedAt(ctx context.Context, id string, at statelog.Position) 
 // The reader's statements, each registered in plan_test.go so the pinned
 // driver's planner is held to the index each is written for.
 const (
-	repoViewSQL = `SELECT id, name, status, managed_by, owner_kind, owner, default_branch,
+	repoViewSQL = `SELECT id, name, status, managed_by, owner_kind, owner, visibility, default_branch,
 		description, deleted_at, refs, branches, tags, tombstones, live_packs, live_bytes,
 		live_objects, tombstones_through, pushes, last_push_at, created_at FROM code_repos WHERE id = ?`
 	packColumns       = `pack_id, part, object, hash, size, index_bytes, reverse_bytes, git_checksum, objects, kind, state, added_position`
@@ -1297,7 +1394,7 @@ const (
 	pushesAfterSQL = `SELECT ` + pushColumns + ` FROM code_pushes WHERE repo_id = ?
 		AND at <= ? AND (at < ? OR position < ? OR (position = ? AND push_id < ?))
 		ORDER BY at DESC, position DESC, push_id DESC LIMIT ?`
-	reposSQL = `SELECT r.id, r.name, r.status, r.managed_by, r.owner_kind, r.owner,
+	reposSQL = `SELECT r.id, r.name, r.status, r.managed_by, r.owner_kind, r.owner, r.visibility,
 		r.default_branch, r.description, r.deleted_at, r.refs, r.live_packs, r.live_bytes,
 		r.live_objects, r.pushes, r.last_push_at, h.target
 		FROM code_repos r LEFT JOIN code_refs h INDEXED BY ` + refsKey + `
@@ -1307,7 +1404,9 @@ const (
 	protectionsOfSQL = `SELECT repo_id, pattern, allow_force, allow_delete, direct_push
 		FROM code_protections WHERE repo_id IN (SELECT CAST(value AS TEXT) FROM json_each(?))
 		ORDER BY repo_id, pattern`
-	headSQL = `SELECT target FROM code_refs INDEXED BY ` + refsKey + `
+	// repoGrantSQL is what a grant reads of one repository's row.
+	repoGrantSQL = `SELECT name, owner_kind, owner, visibility FROM code_repos WHERE id = ?`
+	headSQL      = `SELECT target FROM code_refs INDEXED BY ` + refsKey + `
 		WHERE repo_id = ? AND ref = ? AND target != ''`
 	// THE RETENTION PASS'S TWO PHASES, each on its own partial index, the
 	// predicate repeated verbatim, and keyset on (deleted_at, id): the >=

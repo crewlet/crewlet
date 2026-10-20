@@ -57,7 +57,7 @@ const apiRepo = "    - name: api\n      owner: {seat: swe}\n      protect: [{bra
 func repoNamed(t *testing.T, e *Engine, name string) (*code.RepoDetail, error) {
 	t.Helper()
 	answer, err := e.router.Code().Read(t.Context(), code.ReadQuery{
-		Kind: code.ReadRepo, Repo: name,
+		Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-1", Seat: "ceo"}, Kind: code.ReadRepo, Repo: name,
 		Fresh: statelog.Freshness{Level: statelog.ReadLinearizable},
 	})
 	if err != nil {
@@ -459,6 +459,34 @@ func TestEveryDeclaredDirectPushIsOneTheDomainRecords(t *testing.T) {
 	}
 }
 
+// EVERY VISIBILITY A DOCUMENT MAY DECLARE IS ONE THE CODE DOMAIN RECORDS, and
+// the other way round: config cannot import the domain that imports it, so the
+// two closed sets are spelled twice and held to each other here. One the
+// domain refused would fail every reconcile of the repository; one it records
+// that no document may declare would be a repository nobody can narrow or
+// widen back by configuration. Unset resolves to one the domain records — the
+// domain itself takes no unset value.
+func TestEveryDeclaredVisibilityIsOneTheDomainRecords(t *testing.T) {
+	t.Parallel()
+	for _, v := range config.CodeVisibilities {
+		if !code.Visibility(v.Resolved()).Valid() {
+			t.Errorf("code.repos may declare visibility %q, which the code domain refuses", v)
+		}
+	}
+	if !code.Visibility(config.CodeVisibility("").Resolved()).Valid() {
+		t.Error("an unset visibility resolves to a value the code domain refuses")
+	}
+	for _, v := range code.Visibilities() {
+		if !config.CodeVisibility(v).Valid() {
+			t.Errorf("the code domain records visibility %q, which no document may declare", v)
+		}
+	}
+	if len(config.CodeVisibilities) != len(code.Visibilities()) {
+		t.Errorf("config declares %v, the code domain records %v", config.CodeVisibilities,
+			code.Visibilities())
+	}
+}
+
 // A DECLARATION IS RECORDED IN ONE CANONICAL FORM, whichever order its rules
 // were written in — every node deciding it forms one record — and an owner the
 // chart does not resolve is named rather than recorded empty.
@@ -486,6 +514,18 @@ func TestADeclarationIsRecordedInOneCanonicalForm(t *testing.T) {
 	api, err := declaredRepo(c.Org.Index(), c.Config.Code.Repos[1])
 	if err != nil || api.Settings.Owner != (code.Owner{Kind: code.OwnerSeat, Ref: "swe"}) {
 		t.Errorf("api's owner is %+v (%v), want the seat swe", api.Settings.Owner, err)
+	}
+	// AN UNSET VISIBILITY IS RECORDED AS company, and a declared one as
+	// itself: the domain takes no unset value, so the default is applied
+	// here, by config's own Resolved.
+	if web.Settings.Visibility != code.VisibilityCompany {
+		t.Errorf("web, declaring no visibility, is recorded at %q, want company", web.Settings.Visibility)
+	}
+	narrowed := c.Config.Code.Repos[0]
+	narrowed.Visibility = config.CodeVisibilityUnit
+	if unit, err := declaredRepo(c.Org.Index(), narrowed); err != nil ||
+		unit.Settings.Visibility != code.VisibilityUnit {
+		t.Errorf("web at visibility: unit is declared as %+v (%v), want unit", unit.Settings, err)
 	}
 	stray := c.Config.Code.Repos[0]
 	stray.Owner = config.CodeOwner{Unit: "Marketing"}

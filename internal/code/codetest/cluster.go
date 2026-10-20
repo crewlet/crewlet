@@ -233,7 +233,7 @@ func (rc *repoCase) converged() {
 func (rc *repoCase) pushRows() []code.PushRow {
 	rc.t.Helper()
 	var rows []code.PushRow
-	q := code.ReadQuery{Kind: code.ReadPushes, Repo: rc.name, Limit: 200, Fresh: Linearizable}
+	q := code.ReadQuery{Asker: Reader, Kind: code.ReadPushes, Repo: rc.name, Limit: 200, Fresh: Linearizable}
 	for {
 		a, err := rc.c.Nodes()[0].Read(rc.ctx, q)
 		if err != nil {

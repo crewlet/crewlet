@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -136,15 +137,25 @@ func agent(handle string) code.Principal {
 	return code.Principal{Kind: code.PrincipalAgent, Seat: handle}
 }
 
+// ownedBy is a `visibility: company` repository named name, owned by ref of
+// kind.
 func ownedBy(name string, kind code.OwnerKind, ref string) code.RepoRef {
-	return code.RepoRef{ID: "id-" + name, Name: name, Owner: code.Owner{Kind: kind, Ref: ref}}
+	return code.RepoRef{ID: "id-" + name, Name: name, Owner: code.Owner{Kind: kind, Ref: ref},
+		Visibility: code.VisibilityCompany}
+}
+
+// unitOnly is repo at `visibility: unit`.
+func unitOnly(repo code.RepoRef) code.RepoRef {
+	repo.Name, repo.ID, repo.Visibility = repo.Name+"-private", repo.ID+"-private", code.VisibilityUnit
+	return repo
 }
 
 // A GRANT FOLLOWS THE CHART: a seat's relation to a repository is the first of
 // §2.3's rows that holds — the owning unit's effective lead maintains, its
 // subtree writes, the lead chain above it reads, the owning seat maintains and
-// its unit's leads read, any other seat reads — and what it may do is the
-// minimum of that and its tier. Each unit is named as the repository wrote
+// its unit's leads read, any other seat reads a `visibility: company`
+// repository and nothing of a `visibility: unit` one — and what it may do is
+// the minimum of that and its tier. Each unit is named as the repository wrote
 // it, so a grant that compared the owner's reference with a seat's unit as
 // strings would lose Platform's members their write (the unit is "Platform"
 // on the repository and "plat" on the seat).
@@ -152,7 +163,8 @@ func ownedBy(name string, kind code.OwnerKind, ref string) code.RepoRef {
 // Mutations: Within replaced by a string compare of the two references → the
 // Platform rows of dev and unset read; a seat's access left at its relation
 // (no tier cap) → plat-lead maintains Platform; a human seat granted as a
-// seat → founder reads.
+// seat → founder reads; the last row ignoring the visibility → vp-sales and
+// root-bot read the unit repositories.
 func TestGrantsFollowTheChart(t *testing.T) {
 	t.Parallel()
 	r := testChart()
@@ -190,6 +202,27 @@ func TestGrantsFollowTheChart(t *testing.T) {
 		// A unit the chart no longer holds has no lead and no members.
 		{orphan, "cto", code.AccessRead, code.AccessRead},
 		{orphan, "dev", code.AccessRead, code.AccessRead},
+
+		// VISIBILITY: UNIT keeps every row above the last and takes the
+		// last away: the owning unit's lead, its subtree and the lead chain
+		// above it read as before, and every other seat reads nothing.
+		{unitOnly(platform), "plat-lead", code.AccessMaintain, code.AccessReview},
+		{unitOnly(platform), "dev", code.AccessWrite, code.AccessWrite},
+		{unitOnly(platform), "reader", code.AccessWrite, code.AccessRead},
+		{unitOnly(platform), "cto", code.AccessRead, code.AccessRead},
+		{unitOnly(platform), "vp-sales", code.AccessNone, code.AccessNone},
+		{unitOnly(platform), "root-bot", code.AccessNone, code.AccessNone},
+		{unitOnly(infra), "unset", code.AccessNone, code.AccessNone},
+		// A seat's own: the seat and the leads above its unit, and not the
+		// seats beside it in that unit.
+		{unitOnly(notes), "dev", code.AccessMaintain, code.AccessMaintain},
+		{unitOnly(notes), "plat-lead", code.AccessRead, code.AccessRead},
+		{unitOnly(notes), "cto", code.AccessRead, code.AccessRead},
+		{unitOnly(notes), "reader", code.AccessNone, code.AccessNone},
+		{unitOnly(rootOwned), "cto", code.AccessNone, code.AccessNone},
+		// A unit the chart no longer holds, at unit visibility, is read by
+		// no seat at all — persons only.
+		{unitOnly(orphan), "cto", code.AccessNone, code.AccessNone},
 	} {
 		g := code.GrantOf(agent(tc.seat), tc.repo, r)
 		if g.Relation != tc.relation || g.Access != tc.access {
@@ -199,8 +232,22 @@ func TestGrantsFollowTheChart(t *testing.T) {
 		if got := code.AccessOf(agent(tc.seat), tc.repo, r); got != g.Access {
 			t.Errorf("%s on %s: AccessOf %s, GrantOf's access %s", tc.seat, tc.repo.Name, got, g.Access)
 		}
-		if !g.MayRead() {
-			t.Errorf("%s on %s: a seat that reads is told it may not", tc.seat, tc.repo.Name)
+		if g.MayRead() != (tc.access >= code.AccessRead) {
+			t.Errorf("%s on %s: MayRead %v at access %s", tc.seat, tc.repo.Name, g.MayRead(), g.Access)
+		}
+		if tc.access == code.AccessNone {
+			// TOLD WHY, AND WHO DOES READ IT: the visibility and the owner,
+			// so the seat — or a person reading its turn — knows whom to ask.
+			refusal := g.ReadRefusal()
+			if !strings.Contains(refusal, "visibility: unit") || !strings.Contains(refusal, tc.repo.Owner.Ref) ||
+				!strings.Contains(refusal, strconv.Quote(tc.repo.Name)) {
+				t.Errorf("%s on %s: read refusal %q, want it to name the visibility, the owner %q and "+
+					"the repository", tc.seat, tc.repo.Name, refusal, tc.repo.Owner.Ref)
+			}
+			if g.MayPush() {
+				t.Errorf("%s on %s: a seat that reads nothing may push (its namespace needs a read "+
+					"relation)", tc.seat, tc.repo.Name)
+			}
 		}
 	}
 
@@ -225,16 +272,51 @@ func TestGrantsFollowTheChart(t *testing.T) {
 		}
 	}
 
-	// A PERSON'S STANDING READS NO CHART: a bound credential maintains, one
-	// bound to nobody reads — with a roster and without one.
+	// A PERSON'S STANDING READS NO CHART, AND NO VISIBILITY: a bound
+	// credential maintains, one bound to nobody reads — with a roster and
+	// without one, on a company repository and on a unit one (ADR-0040:
+	// visibility narrows seats only).
 	for _, roster := range []code.Roster{r, nil} {
-		bound := code.GrantOf(code.Principal{Kind: code.PrincipalOperator, OperatorID: "tok", Seat: "founder"},
-			orphan, roster)
-		unbound := code.GrantOf(code.Principal{Kind: code.PrincipalOperator, OperatorID: "ci"}, orphan, roster)
-		if bound.Access != code.AccessMaintain || unbound.Access != code.AccessRead {
-			t.Errorf("roster %v: a bound person holds %s and an unbound token %s; want maintain, read",
-				roster != nil, bound.Access, unbound.Access)
+		for _, repo := range []code.RepoRef{orphan, unitOnly(orphan), unitOnly(platform)} {
+			bound := code.GrantOf(code.Principal{Kind: code.PrincipalOperator, OperatorID: "tok",
+				Seat: "founder"}, repo, roster)
+			unbound := code.GrantOf(code.Principal{Kind: code.PrincipalOperator, OperatorID: "ci"}, repo, roster)
+			if bound.Access != code.AccessMaintain || unbound.Access != code.AccessRead {
+				t.Errorf("roster %v, %s: a bound person holds %s and an unbound token %s; want maintain, read",
+					roster != nil, repo.Name, bound.Access, unbound.Access)
+			}
 		}
+	}
+}
+
+// A VISIBILITY THIS BUILD DOES NOT KNOW NARROWS, NEVER WIDENS: the domain
+// records none it does not know, so such a row is a newer build's, and reading
+// it as `company` would guess that build meant every seat. The rows above the
+// last still hold — the owning unit's members and leads read as before — and
+// the seat it shuts out is told the visibility the row carries, never `unit`
+// as though the repository said so.
+//
+// Mutations: the last row reading only `unit` as narrow (any other value read)
+// → vp-sales reads; the refusal spelling `unit` → the value is not named.
+func TestAVisibilityThisBuildDoesNotKnowNarrows(t *testing.T) {
+	t.Parallel()
+	r := testChart()
+	repo := ownedBy("platform", code.OwnerUnit, "Platform")
+	repo.Visibility = "team"
+	if g := code.GrantOf(agent("dev"), repo, r); g.Access != code.AccessWrite {
+		t.Errorf("dev, in the owning unit, holds %s on a %q repository, want write", g.Access, repo.Visibility)
+	}
+	g := code.GrantOf(agent("vp-sales"), repo, r)
+	if g.MayRead() {
+		t.Fatalf("vp-sales reads a %q repository at %s, want nothing", repo.Visibility, g.Access)
+	}
+	if refusal := g.ReadRefusal(); !strings.Contains(refusal, `visibility: "team", which this build reads as unit`) {
+		t.Errorf("the refusal %q does not name the row's own visibility and how it is read", refusal)
+	}
+	if bound := code.GrantOf(code.Principal{Kind: code.PrincipalOperator, OperatorID: "tok", Seat: "founder"},
+		repo, r); bound.Access != code.AccessMaintain {
+		t.Errorf("a bound person holds %s on a %q repository, want maintain: a visibility narrows seats only",
+			bound.Access, repo.Visibility)
 	}
 }
 
@@ -561,7 +643,7 @@ func TestARepositorysDefaultBranchIsNoReservedSeatBranch(t *testing.T) {
 	} {
 		s := code.RepoSettings{
 			ManagedBy: code.ManagedConfig, Owner: code.Owner{Kind: code.OwnerUnit, Ref: "ENG"},
-			DefaultBranch: branch,
+			Visibility: code.VisibilityCompany, DefaultBranch: branch,
 		}
 		err := s.Validate()
 		switch {

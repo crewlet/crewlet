@@ -16,7 +16,7 @@ func TestSettingsEqualReadsEveryFieldButTheActivation(t *testing.T) {
 	t.Parallel()
 	base := RepoSettings{
 		ManagedBy: ManagedConfig, Owner: Owner{Kind: OwnerUnit, Ref: "ENG"},
-		DefaultBranch: "main", Description: "one",
+		DefaultBranch: "main", Description: "one", Visibility: VisibilityCompany,
 		Protections: []Protection{{Pattern: "refs/heads/main", DirectPush: DirectPersons}},
 		ConfigEpoch: 1,
 	}
@@ -26,6 +26,7 @@ func TestSettingsEqualReadsEveryFieldButTheActivation(t *testing.T) {
 		"DefaultBranch": func(s *RepoSettings) { s.DefaultBranch = "trunk" },
 		"Description":   func(s *RepoSettings) { s.Description = "two" },
 		"Archived":      func(s *RepoSettings) { s.Archived = true },
+		"Visibility":    func(s *RepoSettings) { s.Visibility = VisibilityUnit },
 		"Protections": func(s *RepoSettings) {
 			s.Protections = []Protection{{Pattern: "refs/heads/main", DirectPush: DirectNone}}
 		},

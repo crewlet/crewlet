@@ -150,7 +150,11 @@ bound to a human seat pushes **as that person**, while a token bound to nobody
 only, and a push with it is refused at its first request saying so. Every
 push is recorded as one `operator_acted` event with transport `git`: the token
 as the actor, the person it is bound to beside it, the repository and what
-became of the push. A fetch is a read and is not recorded. The [Code
+became of the push. A fetch is a read and is not recorded. A person reads
+**every** repository, through a bound token or an unbound one: a repository's
+`visibility` narrows which **seats** read it and never a person, so nobody
+who runs the company is shut out of its code by a setting meant to keep one
+team's seats out of another's ([Visibility](code-host.md#visibility)). The [Code
 guide](../guides/code.md) is how to set it up, and
 [ADR-0037](https://github.com/crewlet/crewlet/blob/main/adr/0037-a-person-reaches-git-with-their-own-bound-token.md)
 why there is no second credential for git.

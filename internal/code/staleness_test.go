@@ -49,15 +49,15 @@ func TestEveryCodeReaderRefusesPastTheCallersOwnStalenessBound(t *testing.T) {
 			return err
 		}},
 		{"Read(repos)", func(f statelog.Freshness) error {
-			_, err := reader.Read(ctx, code.ReadQuery{Kind: code.ReadRepos, Fresh: f})
+			_, err := reader.Read(ctx, code.ReadQuery{Asker: asker, Kind: code.ReadRepos, Fresh: f})
 			return err
 		}},
 		{"Read(repo)", func(f statelog.Freshness) error {
-			_, err := reader.Read(ctx, code.ReadQuery{Kind: code.ReadRepo, Repo: "app", Fresh: f})
+			_, err := reader.Read(ctx, code.ReadQuery{Asker: asker, Kind: code.ReadRepo, Repo: "app", Fresh: f})
 			return err
 		}},
 		{"Read(pushes)", func(f statelog.Freshness) error {
-			_, err := reader.Read(ctx, code.ReadQuery{Kind: code.ReadPushes, Repo: "app", Fresh: f})
+			_, err := reader.Read(ctx, code.ReadQuery{Asker: asker, Kind: code.ReadPushes, Repo: "app", Fresh: f})
 			return err
 		}},
 	} {
@@ -101,7 +101,7 @@ func TestACodeReadWaitsForTheFloorTheCallerNamed(t *testing.T) {
 			return err
 		},
 		"Read(repo)": func() error {
-			_, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadRepo, Repo: "app", Fresh: ask})
+			_, err := n.reader.Read(t.Context(), code.ReadQuery{Asker: asker, Kind: code.ReadRepo, Repo: "app", Fresh: ask})
 			return err
 		},
 		"Resolve": func() error {

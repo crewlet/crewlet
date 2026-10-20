@@ -71,6 +71,7 @@ code:
   repos:
     - name: web                      # the address: /git/web.git
       owner: { unit: Engineering }
+      visibility: unit               # only Engineering's seats and leads read it; unset is company
       default_branch: main           # what a clone checks out; unset is main
       description: The customer-facing web app.
       protect:
@@ -92,6 +93,12 @@ branch cannot be moved to a commit that does not descend from it, without
 protects, since anybody who may push could then force-push or delete it. Every
 field, the pattern grammar and what each change does at its activation are in
 [Declaring repositories](../concepts/code-host.md#declaring-repositories).
+
+`visibility` decides which of the company's **seats** read a repository:
+`company`, the default, is every seat, and `unit` only the seats the chart
+relates to its owner — the owning unit's members and the leads above them.
+It never narrows a person: you, and everyone with a token, read every
+repository whatever it says ([Visibility](../concepts/code-host.md#visibility)).
 
 ## Give each person a token
 

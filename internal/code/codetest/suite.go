@@ -18,8 +18,8 @@ const RepoName = "acme"
 func Settings() code.RepoSettings {
 	return code.RepoSettings{
 		ManagedBy: code.ManagedConfig, Owner: code.Owner{Kind: code.OwnerUnit, Ref: "ENG"},
-		DefaultBranch: "main",
-		Protections:   []code.Protection{{Pattern: "refs/heads/main", DirectPush: code.DirectPersons}},
+		Visibility: code.VisibilityCompany, DefaultBranch: "main",
+		Protections: []code.Protection{{Pattern: "refs/heads/main", DirectPush: code.DirectPersons}},
 	}
 }
 

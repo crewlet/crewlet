@@ -29,6 +29,12 @@ import (
 // carry.
 var harnessAt = time.Date(2031, 4, 2, 3, 14, 0, 0, time.UTC)
 
+// asker is who every read a case makes asks as, where the case is not about
+// who asks: a person, bound to their human seat, whom no chart and no
+// visibility narrows (ADR-0040) — so no case's own check of the rows is
+// filtered by the grant it is not about.
+var asker = code.Principal{Kind: code.PrincipalOperator, OperatorID: "founder-token", Seat: "founder"}
+
 // node is one data node on the code log: its own estate, applier, publisher,
 // lifecycle store and reader.
 type node struct {
@@ -41,6 +47,11 @@ type node struct {
 	store   *code.Store
 	reader  *code.Reader
 	waiter  *testWaiter
+
+	// chart is the roster the reader judges a seat by — set by a case about
+	// grants before it reads, and nil otherwise: no chart, as a reader built
+	// without one has.
+	chart code.Roster
 
 	// mu SERIALISES the drain: a write's wait drains on the writing
 	// goroutine, and two writes waiting at once — two repositories
@@ -156,14 +167,16 @@ func nodeOn(t testing.TB, log *js.DomainLog, id string) *node {
 	if err != nil {
 		t.Fatalf("build the read authority: %v", err)
 	}
-	reader, err := code.NewReader(code.ReaderOptions{Log: authority})
+	n := &node{
+		t: t, id: id, db: db, log: log, applier: code.NewApplier(), pub: pub,
+		store: lifecycle, waiter: waiter,
+	}
+	reader, err := code.NewReader(code.ReaderOptions{Log: authority,
+		Roster: func() code.Roster { return n.chart }})
 	if err != nil {
 		t.Fatalf("build the reader: %v", err)
 	}
-	n := &node{
-		t: t, id: id, db: db, log: log, applier: code.NewApplier(), pub: pub,
-		store: lifecycle, reader: reader, waiter: waiter,
-	}
+	n.reader = reader
 	waiter.advance = n.drain
 	return n
 }

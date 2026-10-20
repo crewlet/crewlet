@@ -391,7 +391,8 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		// THE CURRENT EPOCH'S LIMITS, read per call: a repository's detail
 		// reports what a push to it is held to now, which is what an
 		// import chunks its pushes by.
-		reader, err := code.NewReader(code.ReaderOptions{Log: running.reader, Limits: e.codeLimits})
+		reader, err := code.NewReader(code.ReaderOptions{Log: running.reader, Limits: e.codeLimits,
+			Roster: e.codeRoster})
 		if err != nil {
 			return fmt.Errorf("engine: code reader: %w", err)
 		}

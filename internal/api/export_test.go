@@ -4,7 +4,15 @@ import (
 	"net/http"
 	"slices"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/code"
 )
+
+// CodeRead is the handler of one kind of code read with no guard in front of
+// it, for the case that holds what a request carrying no operator identity is
+// answered — a request no route the app mounts lets through, since the guard
+// stamps every caller it admits.
+func (a *App) CodeRead(kind code.ReadKind) http.Handler { return a.serveCodeRead(kind, "code read") }
 
 // Routes is every pattern the app mounted, in mount order, for the listener
 // cases to walk whole. See [routeTable].

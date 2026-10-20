@@ -20,11 +20,14 @@ type ResolveQuery struct {
 
 // RepoRef is a repository as one read found it.
 type RepoRef struct {
-	ID            string       `json:"id"`
-	Name          string       `json:"name"`
-	Status        RepoStatus   `json:"status"`
-	ManagedBy     ManagedBy    `json:"managed_by"`
-	Owner         Owner        `json:"owner"`
+	ID        string     `json:"id"`
+	Name      string     `json:"name"`
+	Status    RepoStatus `json:"status"`
+	ManagedBy ManagedBy  `json:"managed_by"`
+	Owner     Owner      `json:"owner"`
+	// Visibility is who besides persons reads it — with Owner, all a grant
+	// reads of the repository ([GrantOf]).
+	Visibility    Visibility   `json:"visibility"`
 	DefaultBranch string       `json:"default_branch"`
 	Description   string       `json:"description,omitempty"`
 	Protections   []Protection `json:"protections,omitempty"`
@@ -187,6 +190,13 @@ func (k ReadKind) Valid() bool { return slices.Contains(ReadKinds(), k) }
 // ReadQuery is a person's or a surface's read of the code host.
 type ReadQuery struct {
 	Kind ReadKind `json:"kind"`
+	// Asker is who reads, REQUIRED — a zero or invalid one is [ErrInvalid] —
+	// and the answer is held to its grant on the node that serves it: a
+	// listing leaves out every repository the asker may not read, and a read
+	// of one answers [ErrNotPermitted]. Required rather than defaulted,
+	// because a default would be a reader nobody named, and an optional asker
+	// is a hole any caller that forgot it opens.
+	Asker Principal `json:"asker"`
 	// Repo is the repository's NAME, for repo and pushes.
 	Repo string `json:"repo,omitempty"`
 	// Status filters a repos listing; empty is active and archived.
@@ -210,6 +220,10 @@ type ReadAnswer struct {
 // RepoSummary is a repository as a listing renders it.
 type RepoSummary struct {
 	RepoRef
+	// Access is the asker's standing on it ([Grant.Access] by name: read,
+	// review, write or maintain) — never none, since a repository the asker
+	// may not read is not listed at all.
+	Access string `json:"access,omitempty"`
 	// Head is the default branch's oid; empty for an empty repository.
 	Head string `json:"head,omitempty"`
 	// Pushes is pushes EVER.

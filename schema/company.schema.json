@@ -392,6 +392,15 @@
             "array",
             "null"
           ]
+        },
+        "visibility": {
+          "description": "Who may read it besides persons: company (unset) — every seat — or unit — the owning unit's members, its leads and the owning seat.",
+          "enum": [
+            "company",
+            "unit",
+            "",
+            null
+          ]
         }
       },
       "type": [

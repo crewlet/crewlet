@@ -40,7 +40,7 @@ roles:
 
 // staleRepos is the code host's repository listing at the cheapest level —
 // what proves a node serves the code half at all.
-var staleRepos = code.ReadQuery{Kind: code.ReadRepos, Fresh: statelog.Freshness{Level: statelog.ReadStale}}
+var staleRepos = code.ReadQuery{Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-1", Seat: "ceo"}, Kind: code.ReadRepos, Fresh: statelog.Freshness{Level: statelog.ReadStale}}
 
 // servesCodeReads waits until e's code half answers a listing through its own
 // router, and answers it: a node's copy serves only once it has drained its

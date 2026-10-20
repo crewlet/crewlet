@@ -4063,7 +4063,7 @@ What a route answers before git is reached:
 
 | Route | What it answers |
 |---|---|
-| `GET /code/repos` | The repositories, by name, a page at a time: `?status=` a comma list of `active`, `archived`, `deleted` and `purging` (unset is `active,archived`), `?limit=` (1–500, unset or `0` is 100) and `?cursor=` (the `next` of the page before). Each carries its id, name, status, owner, default branch, protection rules, ref and pack counts and bytes, the default branch's head, and how many pushes it has ever had |
+| `GET /code/repos` | The repositories the caller may read, by name, a page at a time: `?status=` a comma list of `active`, `archived`, `deleted` and `purging` (unset is `active,archived`), `?limit=` (1–500, unset or `0` is 100) and `?cursor=` (the `next` of the page before). Each carries its id, name, status, owner, `visibility`, default branch, protection rules, ref and pack counts and bytes, the default branch's head, how many pushes it has ever had, and `access`, what the caller may do to it (`maintain` for a token bound to a person, `read` for one bound to nobody). A page counts the repositories it **scanned**, so one may hold fewer than its limit — even none — and still carry a `next`: page until no `next` comes back |
 | `GET /code/repos/{name}` | One repository in detail: the listing's fields, its branch, tag and ref-tombstone counts, when it was created, and the `code.limits` of the node that served the read |
 | `GET /code/repos/{name}/pushes` | Its push history, newest first: `?limit=` (1–200, unset or `0` is 50) and `?cursor=`. Each push names its id, the token that pushed it (`actor`) and the person it is bound to (`actor_seat`), the node that received it, every ref it moved or was refused with the reason, its pack, and the position its record landed at. A ref the engine refused for being longer than 255 bytes or not UTF-8 is named in a bounded form: as much of it as fits in 255 bytes, then its length and a digest of the whole |
 
@@ -4078,16 +4078,27 @@ a script about to create one — asks `read_level=linearizable`: at `stale`, a
 repository declared a moment ago may not have reached this node's copy, and is
 answered `404`.
 
-A refusal is the read surface's: `404 not_found` for a repository that is not
-declared, with `"reason": "not_declared"`, and for a company that hosts no
-code, with `"reason": "not_hosted"` — told apart by the `reason` rather than
-the sentence, because they are remedied differently: a repository is declared
-in `code.repos`, and declaring one changes nothing until the company sets
-`code.native` — `400 bad_params` naming the parameter or the level refused,
-`503 unavailable` with
-`Retry-After` for what clears by waiting — this node behind the code log, no
-quorum, no data node serving the read — and `500 query_failed` for anything
-else. A company that hosts code on a node that serves none of it now — or a
+A refusal is the read surface's:
+
+- `404 not_found` for a repository that is not declared, with `"reason":
+  "not_declared"`, and for a company that hosts no code, with `"reason":
+  "not_hosted"` — told apart by the `reason` rather than the sentence, because
+  they are remedied differently: a repository is declared in `code.repos`, and
+  declaring one changes nothing until the company sets `code.native`;
+- `403 not_permitted` for a repository the caller's grant does not cover, the
+  `detail` naming who asked, the repository and why — for a seat a
+  `visibility: unit` repository shuts out, that visibility and who among the
+  seats does read it ([Visibility](../concepts/code-host.md#visibility)). A
+  person's token reads every repository, so a person is never answered it;
+- `403 operator_required` for a request that carries no operator identity at
+  all — which only a route mounted past the guard could meet, since the guard
+  stamps every caller it admits, a disabled guard's as the anonymous operator;
+- `400 bad_params` naming the parameter or the level refused;
+- `503 unavailable` with `Retry-After` for what clears by waiting — this node
+  behind the code log, no quorum, no data node serving the read;
+- and `500 query_failed` for anything else.
+
+A company that hosts code on a node that serves none of it now — or a
 node that has not read whether it does — is the `503 unavailable` the git
 routes answer above, with a `reason` beside the `detail` a script or a
 balancer can act on — `applying` (with `Retry-After: 5`),

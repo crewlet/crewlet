@@ -110,9 +110,9 @@ func (n *node) settingsOf(name string) code.RepoSettings {
 	err := n.db.Reader().Read(n.t.Context(), func(tx *sql.Tx) error {
 		var id, status string
 		if err := tx.QueryRowContext(n.t.Context(), `
-			SELECT id, managed_by, owner_kind, owner, default_branch, description, status
+			SELECT id, managed_by, owner_kind, owner, visibility, default_branch, description, status
 			FROM code_repos WHERE name = ?`, name).Scan(&id, &s.ManagedBy, &s.Owner.Kind,
-			&s.Owner.Ref, &s.DefaultBranch, &s.Description, &status); err != nil {
+			&s.Owner.Ref, &s.Visibility, &s.DefaultBranch, &s.Description, &status); err != nil {
 			return err
 		}
 		s.Archived = status == string(code.RepoStatusArchived)
@@ -188,6 +188,11 @@ func TestEveryDeclaredSettingsChangeWritesOneRecord(t *testing.T) {
 			return s
 		}(),
 		"the description changed": described("changed"),
+		"the visibility changed": func() code.RepoSettings {
+			s := suiteSettings()
+			s.Visibility = code.VisibilityUnit
+			return s
+		}(),
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -688,4 +693,52 @@ func TestAPurgeIsBoundedPerRecord(t *testing.T) {
 	if _, err := late.PurgeStep(t.Context(), "never-was", retention); !errors.Is(err, code.ErrRepoNotFound) {
 		t.Fatalf("PurgeStep of a repository nobody made = %v, want ErrRepoNotFound", err)
 	}
+}
+
+// A VISIBILITY CHANGE IS A SETTINGS RECORD LIKE ANY OTHER: narrowing a
+// repository writes one record, the rows and both reads then answer the new
+// visibility, and widening it again writes one more — so no reconcile ever
+// finds a narrowed repository "unchanged" and leaves every seat reading it.
+//
+// Mutation: the settings comparison skipping Visibility → the narrowing
+// writes nothing and the rows still say company.
+func TestAVisibilityChangeIsASettingsRecord(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.ensure("app", suiteSettings(), t1)
+	visible := func(want code.Visibility) {
+		t.Helper()
+		if got := n.settingsOf("app").Visibility; got != want {
+			t.Fatalf("the rows hold visibility %q, want %q", got, want)
+		}
+		one, err := n.reader.Read(t.Context(), code.ReadQuery{Asker: asker, Kind: code.ReadRepo, Repo: "app"})
+		if err != nil || one.Repo == nil || one.Repo.Visibility != want {
+			t.Fatalf("Read(repo app) = %+v, %v; want visibility %q", one.Repo, err, want)
+		}
+		all, err := n.reader.Read(t.Context(), code.ReadQuery{Asker: asker, Kind: code.ReadRepos})
+		if err != nil || len(all.Repos) != 1 || all.Repos[0].Visibility != want {
+			t.Fatalf("Read(repos) = %+v, %v; want app at visibility %q", all.Repos, err, want)
+		}
+	}
+	visible(code.VisibilityCompany)
+
+	narrowed := suiteSettings()
+	narrowed.Visibility = code.VisibilityUnit
+	before := n.end()
+	if got := n.ensure("app", narrowed, t1); !got.Changed || n.end() != before+1 {
+		t.Fatalf("narrowing the repository = %+v (log %d → %d), want one settings record",
+			got, before, n.end())
+	}
+	visible(code.VisibilityUnit)
+	if got := n.ensure("app", narrowed, t1); got.Changed || n.end() != before+1 {
+		t.Fatalf("the narrowed declaration again = %+v (log %d → %d), want nothing written",
+			got, before, n.end())
+	}
+
+	// A later activation writes its fence beside the settings record.
+	if got := n.ensure("app", suiteSettings(), t2); !got.Changed || n.end() != before+3 {
+		t.Fatalf("widening it at a later activation = %+v (log %d → %d), want its fence and "+
+			"one settings record", got, before, n.end())
+	}
+	visible(code.VisibilityCompany)
 }

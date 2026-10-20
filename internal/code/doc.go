@@ -265,6 +265,30 @@
 // seats would block every seat's namespace, and one named seats/<x> the
 // namespace of the seat x ([gitref.ReservedSeatBranch]).
 //
+// A repository's [Visibility] is one row of that relation and no other: a
+// seat the chart relates to the repository in no other way reads a
+// `company` repository and holds nothing of a `unit` one. It narrows SEATS
+// ONLY — a person's standing reads no visibility, as it reads no chart — so
+// the people who run the company are never shut out of its code by a setting
+// that exists to keep one team's seats out of another's. It is a setting like
+// any other, carried whole by every create, settings and restore record, so
+// changing it is one settings record and the reconcile's comparison sees it.
+//
+// # Reads are held to who asks
+//
+// Every read a principal makes names its ASKER ([ReadQuery.Asker], refused
+// absent), and the reader judges it by the grant on the serving node, from
+// the chart its [ReaderOptions.Roster] answers — read once a read, so every
+// row of one answer is judged by one chart. A listing leaves out what the
+// asker may not read and still pages by the rows it SCANNED, so a page may be
+// short, or empty with a cursor, rather than end the listing early or scan
+// without bound for a seat that reads little; a detail or a history of a
+// repository the asker may not read is [ErrNotPermitted], judged after the
+// row is read, while one that does not exist is still [ErrRepoNotFound] — a
+// unit repository's name is in the company document, and its contents are
+// what the grant guards. A reader with no roster holds every seat to none,
+// never "every seat reads".
+//
 // # What this package does not do
 //
 // It runs no git, moves no object bytes and serves no HTTP. It decides and

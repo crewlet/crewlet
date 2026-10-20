@@ -51,7 +51,7 @@ var suiteAt = time.Unix(1_700_000_000, 0).UTC()
 func suiteSettings() code.RepoSettings {
 	return code.RepoSettings{
 		ManagedBy: code.ManagedConfig, Owner: code.Owner{Kind: code.OwnerUnit, Ref: "ENG"},
-		DefaultBranch: "main",
+		Visibility: code.VisibilityCompany, DefaultBranch: "main",
 		Protections: []code.Protection{
 			{Pattern: "refs/heads/main", DirectPush: code.DirectPersons},
 		},
@@ -221,11 +221,17 @@ func TestTheCodeGateReaderKeepsTheSharedRule(t *testing.T) {
 			Reader:       func(db store.ReplicatedReader) statelog.Gates { return code.NewGates(db) },
 			Kind:         string(code.KindRepo),
 			SubjectKinds: suiteKinds(),
+			// A UNIT REPOSITORY, so the family's deferrals and replays carry
+			// the narrow visibility a row must keep whatever the order...
 			Create: func(id, writer, opID string) ([]byte, error) {
 				subject, op, payload, scope := suitePayload(code.KindName, id)
-				return gateSuiteRecord(subject, op, writer, opID, payload, scope)
+				create := payload.(code.CreateRepo)
+				create.Settings.Visibility = code.VisibilityUnit
+				return gateSuiteRecord(subject, op, writer, opID, create, scope)
 			},
-			// AN ORDINARY WRITE ON THE REPOSITORY'S OWN SUBJECT.
+			// AN ORDINARY WRITE ON THE REPOSITORY'S OWN SUBJECT — and
+			// one that widens it to the company, so a settings record
+			// moving the visibility goes through every gate too.
 			Write: func(id, writer, opID string) ([]byte, error) {
 				settings := suiteSettings()
 				settings.Description = opID

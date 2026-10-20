@@ -24,7 +24,10 @@ import (
 // (role.code.access, [Tier.Cap]) and what the chart relates it to this
 // repository by (its RELATION: the owning unit's effective lead maintains, the
 // owning unit's subtree writes, the lead chain above reads, and every other
-// seat reads). A full_access seat also owns a namespace of its own on every
+// seat reads a `visibility: company` repository and nothing of a `visibility:
+// unit` one). VISIBILITY NARROWS SEATS ONLY: it is read in the last row of a
+// seat's relation and nowhere else, so a person's standing never depends on it.
+// A full_access seat also owns a namespace of its own on every
 // repository it may read, [SeatNamespace], which is where it pushes when its
 // relation is below write — the seat's own branches replace forks. M2's
 // protection rules are judged AFTER the grant, by their own code, and a grant
@@ -177,6 +180,9 @@ type Grant struct {
 	// Owner is the repository's owner, which a refusal's remedy names the
 	// kind of: who to ask for more is whoever leads it.
 	Owner Owner
+	// Visibility is the repository's — read for an agent only, the one kind
+	// it narrows, and kept so a read refusal can say why a seat reads nothing.
+	Visibility Visibility
 	// Tier is the seat's tier — an agent's only.
 	Tier Tier
 	// Relation is what the principal is related to the repository by: a
@@ -232,7 +238,8 @@ func GrantOf(p Principal, repo RepoRef, r Roster) Grant {
 		return g
 	}
 	g.Tier = s.Tier
-	g.Relation = relation(s, repo.Owner, r)
+	g.Visibility = repo.Visibility
+	g.Relation = relation(s, repo, r)
 	g.Access = min(g.Tier.Cap(), g.Relation)
 	return g
 }
@@ -240,20 +247,29 @@ func GrantOf(p Principal, repo RepoRef, r Roster) Grant {
 // AccessOf is GrantOf(p, repo, r).Access.
 func AccessOf(p Principal, repo RepoRef, r Roster) Access { return GrantOf(p, repo, r).Access }
 
-// relation is what the chart relates seat s to a repository owned by o — the
-// FIRST row that holds, top to bottom:
+// relation is what the chart relates seat s to repo by — the FIRST row that
+// holds, top to bottom:
 //
 //	owner unit U:  s is U's effective lead              maintain
 //	               s sits in U or a unit below it        write
 //	               s leads a unit above U                read
 //	owner seat H:  s is H                                maintain
 //	               s leads H's unit or a unit above it   read
-//	any other seat                                       read
+//	any other seat, visibility company                   read
+//	any other seat, visibility unit                      none
 //
 // Every unit comparison is the roster's — [Roster.Within] and the lead chain —
-// never a string compared here, because o's Ref is a durable reference that
-// may spell the unit another way than the seat's Unit does.
-func relation(s RosterSeat, o Owner, r Roster) Access {
+// never a string compared here, because the owner's Ref is a durable reference
+// that may spell the unit another way than the seat's Unit does.
+//
+// THE LAST ROW IS VISIBILITY'S, AND ONLY IT: a `unit` repository is read by the
+// rows above it and by no other seat. A visibility this build does not know
+// reads as `unit` — the narrow direction, as an unknown tier caps at nothing —
+// since the domain refuses to record one ([RepoSettings.Validate]), so a row
+// carries one only from a newer build, and widening it to every seat would be
+// guessing that build meant `company`.
+func relation(s RosterSeat, repo RepoRef, r Roster) Access {
+	o := repo.Owner
 	switch o.Kind {
 	case OwnerUnit:
 		switch {
@@ -272,7 +288,10 @@ func relation(s RosterSeat, o Owner, r Roster) Access {
 			return AccessRead
 		}
 	}
-	return AccessRead
+	if repo.Visibility == VisibilityCompany {
+		return AccessRead
+	}
+	return AccessNone
 }
 
 // MayRead reports whether the principal reads the repository at all.
@@ -313,13 +332,40 @@ func (g Grant) ownsNamespace() bool {
 // ReadRefusal is the sentence a read below read is refused with
 // ([ErrNotPermitted]): who asked, which repository, and why the principal
 // stands nowhere on it.
+//
+// A seat the visibility shuts out is told so, and told who among the seats
+// does read the repository — the people a person would move the seat beside,
+// or ask on its behalf. It names the owner as the repository's row records
+// it: a read refusal answers whoever asked and is never carried into a
+// proposal, so nothing bounds its length the way RefRule's sentences are.
 func (g Grant) ReadRefusal() string {
 	why := g.none
-	if why == "" {
+	switch {
+	case why != "":
+	case g.Principal.Kind == PrincipalAgent && g.Relation == AccessNone:
+		// THE ROW'S OWN VISIBILITY, never the word unit spelled here: one
+		// this build does not know is read as unit, and the sentence says
+		// so rather than claim the repository says what it does not.
+		v := string(g.Visibility)
+		if g.Visibility != VisibilityUnit {
+			v = fmt.Sprintf("%q, which this build reads as %s", g.Visibility, VisibilityUnit)
+		}
+		why = "it is visibility: " + v + ", read by " + g.unitReaders() + " and by persons"
+	default:
 		why = fmt.Sprintf("the chart relates it to this repository by %s, and its tier %s allows %s",
 			g.Relation, g.Tier, g.Access)
 	}
 	return fmt.Sprintf("%s holds no access to repository %q: %s", g.who(), g.RepoName, why)
+}
+
+// unitReaders names who among the seats reads a `visibility: unit` repository
+// of the grant's owner: the members of the owning unit and the leads above it,
+// or the owning seat and the leads above its unit.
+func (g Grant) unitReaders() string {
+	if g.Owner.Kind == OwnerSeat {
+		return fmt.Sprintf("seat %q, its owner, and the leads above that seat", g.Owner.Ref)
+	}
+	return fmt.Sprintf("the seats of unit %q and the leads above it", g.Owner.Ref)
 }
 
 // who names the principal in a sentence about it.

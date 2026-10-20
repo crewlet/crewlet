@@ -550,7 +550,7 @@ func TestAPageEndsAtItsByteBudget(t *testing.T) {
 	}
 
 	seen := map[string]bool{}
-	q := code.ReadQuery{Kind: code.ReadPushes, Repo: "app", Limit: 200}
+	q := code.ReadQuery{Asker: asker, Kind: code.ReadPushes, Repo: "app", Limit: 200}
 	for range 100 {
 		answer, err := n.reader.Read(t.Context(), q)
 		if err != nil {
@@ -603,7 +603,7 @@ func TestAListingPageCountsItsRules(t *testing.T) {
 	code.SetPageLimits(n.reader, code.MaxSnapshotItems, budget)
 
 	listed := map[string]bool{}
-	q := code.ReadQuery{Kind: code.ReadRepos}
+	q := code.ReadQuery{Asker: asker, Kind: code.ReadRepos}
 	for range repos + 1 {
 		answer, err := n.reader.Read(t.Context(), q)
 		if err != nil {
@@ -651,7 +651,7 @@ func TestPushesPageAcrossOneRecordWithoutLosingAny(t *testing.T) {
 	}
 	n.push(id, entries...)
 	var got []string
-	q := code.ReadQuery{Kind: code.ReadPushes, Repo: "app", Limit: 10}
+	q := code.ReadQuery{Asker: asker, Kind: code.ReadPushes, Repo: "app", Limit: 10}
 	pages := 0
 	// BOUNDED: a cursor that loses its place pages for ever, and that is
 	// this case's failure rather than its timeout's.
@@ -701,7 +701,7 @@ func TestACodeReadStatesItsFreshness(t *testing.T) {
 			return err
 		},
 		"Read at session": func() error {
-			_, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadRepos,
+			_, err := n.reader.Read(t.Context(), code.ReadQuery{Asker: asker, Kind: code.ReadRepos,
 				Fresh: statelog.Freshness{Level: statelog.ReadSession, MinPosition: n.waiter.Committed()}})
 			return err
 		},
@@ -722,13 +722,13 @@ func TestARefusedLevelNamesEveryLevelTheReadServes(t *testing.T) {
 	// Each level listed passes the reader's rule: this node has no read
 	// index, so a linearizable read is refused by the LOG, never as a level.
 	for _, level := range code.ReadLevels {
-		if _, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadRepos,
+		if _, err := n.reader.Read(t.Context(), code.ReadQuery{Asker: asker, Kind: code.ReadRepos,
 			Fresh: statelog.Freshness{Level: level}}); errors.Is(err, code.ErrBadLevel) {
 			t.Errorf("Read at %s = %v, want the level served", level, err)
 		}
 	}
 	for _, level := range []statelog.ReadLevel{statelog.ReadSession, "eventual"} {
-		_, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadRepos,
+		_, err := n.reader.Read(t.Context(), code.ReadQuery{Asker: asker, Kind: code.ReadRepos,
 			Fresh: statelog.Freshness{Level: level, MinPosition: n.waiter.Committed()}})
 		if !errors.Is(err, code.ErrBadLevel) {
 			t.Fatalf("Read at %s = %v, want ErrBadLevel", level, err)
@@ -784,7 +784,7 @@ func TestTheListingFollowsTheName(t *testing.T) {
 	}
 	var listed []string
 	heads := map[string]string{}
-	q := code.ReadQuery{Kind: code.ReadRepos, Limit: 2}
+	q := code.ReadQuery{Asker: asker, Kind: code.ReadRepos, Limit: 2}
 	for {
 		answer, err := n.reader.Read(t.Context(), q)
 		if err != nil {
@@ -805,12 +805,12 @@ func TestTheListingFollowsTheName(t *testing.T) {
 	if heads["app"] != oidOf("head") || heads["api"] != "" {
 		t.Fatalf("the heads are %v, want app's main and none for an empty repository", heads)
 	}
-	deleted, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadRepos,
+	deleted, err := n.reader.Read(t.Context(), code.ReadQuery{Asker: asker, Kind: code.ReadRepos,
 		Status: []code.RepoStatus{code.RepoStatusDeleted}})
 	if err != nil || len(deleted.Repos) != 1 || deleted.Repos[0].Name != "docs" {
 		t.Fatalf("the deleted listing = %+v, %v", deleted.Repos, err)
 	}
-	if _, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadRepos, Limit: 501}); !errors.Is(err, code.ErrInvalid) {
+	if _, err := n.reader.Read(t.Context(), code.ReadQuery{Asker: asker, Kind: code.ReadRepos, Limit: 501}); !errors.Is(err, code.ErrInvalid) {
 		t.Fatalf("a limit of 501 = %v, want ErrInvalid", err)
 	}
 	// ONE BRANCH, TWO TAGS AND THREE TOMBSTONES, so no count can stand in
@@ -824,7 +824,7 @@ func TestTheListingFollowsTheName(t *testing.T) {
 	}
 	n.push(ids["app"], entry("p2", made...))
 	n.push(ids["app"], entry("p3", gone...))
-	detail, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadRepo, Repo: "app"})
+	detail, err := n.reader.Read(t.Context(), code.ReadQuery{Asker: asker, Kind: code.ReadRepo, Repo: "app"})
 	if err != nil || detail.Repo == nil || detail.Repo.Branches != 1 || detail.Repo.Tags != 2 ||
 		detail.Repo.Tombstones != 3 || detail.Repo.Refs != 3 || detail.Repo.Pushes != 3 ||
 		detail.Repo.Limits != code.DefaultLimits() {
@@ -859,5 +859,132 @@ func TestPushOutcomeIsFinalOnlyAtItsPosition(t *testing.T) {
 	}
 	if _, err := b.reader.PushOutcome(context.Background(), code.OutcomeQuery{RepoID: id, PushID: "p1"}); !errors.Is(err, code.ErrInvalid) {
 		t.Fatalf("an outcome with no position = %v, want ErrInvalid", err)
+	}
+}
+
+// A `VISIBILITY: UNIT` REPOSITORY IS READ ONLY BY ITS READERS: a seat lists,
+// details and pages the history of exactly the repositories its grant reads,
+// each listed with its access; a seat the visibility shuts out is refused the
+// detail and the history by a sentence naming why and who does read it, while
+// a repository that does not exist is still not found; a person, bound or
+// not, reads every repository whatever its visibility; and a listing page of
+// repositories the asker may not read is an empty page with a cursor, never
+// the listing's end.
+//
+// Mutations: the listing not filtering → vp-sales lists plat-private; the
+// detail or the history not judging the grant → vp-sales reads them; the
+// cursor taken from the kept rows → vp-sales's one-row listing ends at its
+// first, empty, page; the visibility read for a person → the bound person
+// and the unbound token list two.
+func TestAUnitRepositoryIsReadOnlyByItsReaders(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	declare := func(name, unit string, v code.Visibility) string {
+		t.Helper()
+		s := suiteSettings()
+		s.Owner, s.Visibility = code.Owner{Kind: code.OwnerUnit, Ref: unit}, v
+		return n.ensure(name, s, t1).RepoID
+	}
+	private := declare("plat-private", "Platform", code.VisibilityUnit)
+	declare("platform", "Platform", code.VisibilityCompany)
+	declare("sales-private", "Sales", code.VisibilityUnit)
+	n.push(private, entry("p1", set("refs/heads/main", code.ZeroOID, oidOf("secret"))))
+
+	// listing is every repository who lists, by name, at its access, paged
+	// limit rows at a time; and how many pages that took.
+	listing := func(who code.Principal, limit int) (map[string]string, int) {
+		t.Helper()
+		got := map[string]string{}
+		q := code.ReadQuery{Asker: who, Kind: code.ReadRepos, Limit: limit}
+		for pages := 1; pages <= 10; pages++ {
+			answer, err := n.reader.Read(t.Context(), q)
+			if err != nil {
+				t.Fatalf("Read(repos) as %+v: %v", who, err)
+			}
+			for _, r := range answer.Repos {
+				got[r.Name] = r.Access
+			}
+			if answer.Next == "" {
+				return got, pages
+			}
+			q.Cursor = answer.Next
+		}
+		t.Fatalf("the listing as %+v did not end in ten pages", who)
+		return nil, 0
+	}
+	unbound := code.Principal{Kind: code.PrincipalOperator, OperatorID: "ci"}
+	everything := "map[plat-private:%[1]s platform:%[1]s sales-private:%[1]s]"
+	for _, c := range []struct {
+		who  code.Principal
+		want string
+	}{
+		{agent("dev"), "map[plat-private:write platform:write]"},
+		{agent("cto"), "map[plat-private:read platform:read]"},
+		{agent("vp-sales"), "map[platform:read sales-private:maintain]"},
+		{agent("root-bot"), "map[platform:read]"},
+		{asker, fmt.Sprintf(everything, "maintain")},
+		{unbound, fmt.Sprintf(everything, "read")},
+	} {
+		if got, _ := listing(c.who, 0); fmt.Sprint(got) != c.want {
+			t.Errorf("%+v lists %v, want %s", c.who, got, c.want)
+		}
+	}
+
+	// ONE ROW A PAGE: vp-sales's first page scans plat-private and keeps
+	// nothing, and the listing goes on past it.
+	first, err := n.reader.Read(t.Context(), code.ReadQuery{Asker: agent("vp-sales"), Kind: code.ReadRepos, Limit: 1})
+	if err != nil || len(first.Repos) != 0 || first.Next != "plat-private" {
+		t.Fatalf("vp-sales's first one-row page = %+v, %v; want no repository and the cursor past "+
+			"plat-private", first, err)
+	}
+	if got, pages := listing(agent("vp-sales"), 1); fmt.Sprint(got) != "map[platform:read sales-private:maintain]" ||
+		pages != 4 {
+		t.Fatalf("vp-sales's one-row listing is %v in %d pages, want platform and sales-private "+
+			"in four", got, pages)
+	}
+
+	for _, kind := range []code.ReadKind{code.ReadRepo, code.ReadPushes} {
+		_, err := n.reader.Read(t.Context(), code.ReadQuery{Asker: agent("vp-sales"), Kind: kind, Repo: "plat-private"})
+		if !errors.Is(err, code.ErrNotPermitted) || !strings.Contains(err.Error(), "visibility: unit") ||
+			!strings.Contains(err.Error(), `unit "Platform"`) {
+			t.Errorf("vp-sales's %s of plat-private = %v, want ErrNotPermitted naming the visibility "+
+				"and who reads it", kind, err)
+		}
+		_, err = n.reader.Read(t.Context(), code.ReadQuery{Asker: agent("vp-sales"), Kind: kind, Repo: "nope"})
+		if !errors.Is(err, code.ErrRepoNotFound) {
+			t.Errorf("vp-sales's %s of a repository nobody declared = %v, want ErrRepoNotFound", kind, err)
+		}
+	}
+	for who, want := range map[string]string{"dev": "write", "cto": "read"} {
+		detail, err := n.reader.Read(t.Context(), code.ReadQuery{Asker: agent(who), Kind: code.ReadRepo, Repo: "plat-private"})
+		if err != nil || detail.Repo == nil || detail.Repo.Access != want || detail.Repo.Head != oidOf("secret") {
+			t.Errorf("%s's detail of plat-private = %+v, %v; want its head at %s", who, detail.Repo, err, want)
+		}
+		pushes, err := n.reader.Read(t.Context(), code.ReadQuery{Asker: agent(who), Kind: code.ReadPushes, Repo: "plat-private"})
+		if err != nil || len(pushes.Pushes) != 1 {
+			t.Errorf("%s's history of plat-private = %+v, %v; want its one push", who, pushes.Pushes, err)
+		}
+	}
+
+	// NO CHART, NO SEAT READS: a reader with no roster holds every agent to
+	// nothing, and a person still to everything.
+	n.chart = nil
+	if got, _ := listing(agent("dev"), 0); len(got) != 0 {
+		t.Errorf("with no chart dev lists %v, want nothing", got)
+	}
+	if got, _ := listing(asker, 0); len(got) != 3 {
+		t.Errorf("with no chart the person lists %v, want all three", got)
+	}
+
+	for name, who := range map[string]code.Principal{
+		"no asker":                {},
+		"a seat naming no handle": {Kind: code.PrincipalAgent},
+		"an unknown kind":         {Kind: "robot", Seat: "dev"},
+	} {
+		_, err := n.reader.Read(t.Context(), code.ReadQuery{Asker: who, Kind: code.ReadRepos})
+		if !errors.Is(err, code.ErrInvalid) || !strings.Contains(err.Error(), "asker") {
+			t.Errorf("%s: Read = %v, want ErrInvalid naming the asker", name, err)
+		}
 	}
 }

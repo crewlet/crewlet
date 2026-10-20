@@ -402,7 +402,7 @@ func demux(s string) (data, progress string, err error) {
 // pushRows is every push row of RepoName.
 func pushRows(t *testing.T, c *codetest.Case) []code.PushRow {
 	t.Helper()
-	a, err := c.Fleet.Nodes()[0].Read(c.Ctx, code.ReadQuery{Kind: code.ReadPushes, Repo: codetest.RepoName,
+	a, err := c.Fleet.Nodes()[0].Read(c.Ctx, code.ReadQuery{Asker: codetest.Reader, Kind: code.ReadPushes, Repo: codetest.RepoName,
 		Limit: 200, Fresh: codetest.Linearizable})
 	if err != nil {
 		t.Fatalf("read the pushes: %v", err)

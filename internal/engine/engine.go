@@ -101,6 +101,14 @@ type Company struct {
 	// one with no hosting epoch before it, which is held to its own
 	// configuration's ([Engine.codeInForce]).
 	codeInForce *config.Code
+
+	// roster is this epoch's chart as the code host reads a seat's grant
+	// ([codeRoster]), built at its first question — stamped when the epoch is
+	// installed ([Engine.installEpoch], [rosterOf]). Nil on an epoch never
+	// installed, which [Engine.codeRoster] answers as no chart: every seat
+	// stands nowhere. A function rather than the value, so an epoch copied
+	// whole copies no lock.
+	roster func() codeRoster
 }
 
 // NewCompany builds an epoch from a validated config.

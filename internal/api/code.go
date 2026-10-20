@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	apiOperator "github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/code"
@@ -282,7 +283,21 @@ func (a *App) serveCodeRead(kind code.ReadKind, what string) http.Handler {
 			codeNotServed(w, why)
 			return
 		}
-		q, err := codeReadQuery(kind, r)
+		asker, ok := a.codeAsker(r)
+		if !ok {
+			// THE GUARD STAMPS EVERY CALLER IT ADMITS — a disabled
+			// guard's as the anonymous operator — so this is a request
+			// that reached the route past no guard at all. A code read is
+			// held to who asks, and a read asked for nobody is refused
+			// rather than judged as somebody.
+			writeJSON(w, http.StatusForbidden, map[string]string{
+				"error": "operator_required",
+				"detail": "a code read is answered to the person who asks it, and this request " +
+					"carries no operator identity",
+			})
+			return
+		}
+		q, err := codeReadQuery(kind, asker, r)
 		if err != nil {
 			writeQueryError(w, what, err)
 			return
@@ -296,15 +311,33 @@ func (a *App) serveCodeRead(kind code.ReadKind, what string) http.Handler {
 	})
 }
 
-// codeReadQuery is a read's request, refused [queries.ErrBadParams] naming the
-// parameter that is not one this read takes.
-func codeReadQuery(kind code.ReadKind, r *http.Request) (code.ReadQuery, error) {
+// codeAsker is who a REST code read asks as: the operator credential the
+// guard admitted — a disabled guard's every caller is the anonymous operator,
+// whom no seat binds — bound to the human seat the current chart binds it to,
+// or to nobody. Every principal a person presents reads every repository
+// (ADR-0040), so the answer a person gets is the whole listing; what the asker
+// buys here is that the reader judges every read by who asked it, so a seat's
+// read, when one asks, cannot be answered as a person's. False where the
+// request carries no operator at all.
+func (a *App) codeAsker(r *http.Request) (code.Principal, bool) {
+	id, ok := auth.OperatorFrom(r.Context())
+	if !ok || id == "" {
+		return code.Principal{}, false
+	}
+	return code.Principal{Kind: code.PrincipalOperator, OperatorID: id,
+		Seat: apiOperator.BoundSeat(a.chart, a.contacts, id)}, true
+}
+
+// codeReadQuery is a read's request, asked as asker, refused
+// [queries.ErrBadParams] naming the parameter that is not one this read takes.
+func codeReadQuery(kind code.ReadKind, asker code.Principal, r *http.Request) (code.ReadQuery, error) {
 	p := queries.FromQuery(r.URL.Query())
 	fresh, err := queries.Freshness(p)
 	if err != nil {
 		return code.ReadQuery{}, err
 	}
-	q := code.ReadQuery{Kind: kind, Repo: r.PathValue("name"), Cursor: p.String("cursor"), Fresh: fresh}
+	q := code.ReadQuery{Asker: asker, Kind: kind, Repo: r.PathValue("name"), Cursor: p.String("cursor"),
+		Fresh: fresh}
 	for v := range strings.SplitSeq(p.String("status"), ",") {
 		if v = strings.TrimSpace(v); v == "" {
 			continue
@@ -333,16 +366,31 @@ func codeReadQuery(kind code.ReadKind, r *http.Request) (code.ReadQuery, error) 
 
 // codeRefusal answers a code read's failure in the read surface's ONE
 // vocabulary ([writeQueryError]): a repository that is not declared is
-// `not_found`, naming it; a level, a cursor or a parameter the reader refuses
-// is `bad_params` with the reader's own sentence; and anything that clears by
-// waiting — a read refusal that is retryable, no data node serving — is
-// `unavailable` with its own Retry-After, by [queries.ClassifyUnavailable], the
-// registry's own classification rather than a second list here.
+// `not_found`, naming it; a repository the asker's grant does not cover is
+// `not_permitted` with the reader's own sentence; a level, a cursor or a
+// parameter the reader refuses is `bad_params` with the reader's own sentence;
+// and anything that clears by waiting — a read refusal that is retryable, no
+// data node serving — is `unavailable` with its own Retry-After, by
+// [queries.ClassifyUnavailable], the registry's own classification rather than
+// a second list here.
+//
+// NOT PERMITTED IS 403 AND NEVER THE 500 everything unnamed falls into: it is
+// a refusal of the CALLER ([code.ErrNotPermitted]) that every node judging the
+// same grant from the same chart makes alike, so no retry and no other node
+// answers it otherwise, and its sentence — who asked, which repository, the
+// visibility that shut the asker out and who does read it — is the whole of
+// what the caller can act on. The code is the domain's own refusal class,
+// the word a refused push prints, so one refusal has one spelling on every
+// surface that names it.
 func codeRefusal(w http.ResponseWriter, what, repo string, err error) {
 	switch {
 	case errors.Is(err, code.ErrRepoNotFound):
 		writeJSON(w, http.StatusNotFound, map[string]string{
 			"error": stream.CodeNotFound, "reason": reasonNotDeclared, "detail": notDeclared(repo),
+		})
+	case errors.Is(err, code.ErrNotPermitted):
+		writeJSON(w, http.StatusForbidden, map[string]string{
+			"error": string(code.RefusalNotPermitted), "detail": refusalSentence(err, code.ErrNotPermitted),
 		})
 	case errors.Is(err, code.ErrBadLevel), errors.Is(err, code.ErrBadCursor),
 		errors.Is(err, code.ErrInvalid):
@@ -350,6 +398,18 @@ func codeRefusal(w http.ResponseWriter, what, repo string, err error) {
 	default:
 		writeQueryError(w, what, queries.ClassifyUnavailable(err))
 	}
+}
+
+// refusalSentence is the sentence err carries past its sentinel's own Go text
+// — `code: the caller's grant does not cover this: <sentence>` read as the
+// sentence — wherever in the chain the sentinel was wrapped, since a refusal
+// answered by another data node arrives wrapped by the estate router as well.
+// A sentinel carrying no sentence of its own is answered with err's text whole.
+func refusalSentence(err, sentinel error) string {
+	if _, sentence, ok := strings.Cut(err.Error(), sentinel.Error()+": "); ok && sentence != "" {
+		return sentence
+	}
+	return err.Error()
 }
 
 // verificationView is a verification as the API answers it: the operation's

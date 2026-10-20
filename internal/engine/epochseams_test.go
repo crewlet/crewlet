@@ -24,10 +24,15 @@ const (
 	// one sound: told to answer anyway, a node behind would judge it by the
 	// chart the fleet replaced, which may be the revision that revoked it.
 	// So a grant field is judged only where a node behind the
-	// configuration REFUSES it rather than answers it last. None exists in
-	// this build: no serving decide judges a grant from this node's chart,
-	// and the tracker's own permission checks read an authority the ASKING
-	// node forms from its own.
+	// configuration REFUSES it rather than answers it last. ONE exists:
+	// code.ReaderOptions.Roster, the chart a SEAT's read of a repository is
+	// judged by on the serving node. Nothing in this build asks a code read
+	// as a seat — every principal a REST route or the code host's git
+	// carries is a person, whom no chart judges ([code.GrantOf]) — so no
+	// node behind the configuration judges one from the chart it replaced
+	// yet; the refusal it owes such a read is the first seat reader's to
+	// bring (M3-O8). The tracker's own permission checks read an authority
+	// the ASKING node forms from its own.
 	seamGrant seamClass = "grant"
 
 	// seamValue is a value or a routing read from the serving node's
@@ -143,6 +148,8 @@ var classified = map[string]struct {
 
 	"code.ReaderOptions.Log":    {seamNone, "the code log's read authority"},
 	"code.ReaderOptions.Limits": {seamValue, "the limits a repository's detail reports"},
+	"code.ReaderOptions.Roster": {seamGrant, "the chart a seat's read of a repository is " +
+		"judged by: which repositories it lists, and whether it reads one"},
 
 	"pages.SearcherOptions.Index":  {seamNone, "the node's lexical index"},
 	"pages.SearcherOptions.Node":   {seamNone, "this node's name in the fan-out's assignment table"},

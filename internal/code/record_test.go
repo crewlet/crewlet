@@ -109,6 +109,8 @@ func TestRepoSettingsRefuseWhatADeclarationCannotMean(t *testing.T) {
 		"an unknown manager":       func(s *code.RepoSettings) { s.ManagedBy = "tools" },
 		"an unknown owner kind":    func(s *code.RepoSettings) { s.Owner.Kind = "team" },
 		"no owner":                 func(s *code.RepoSettings) { s.Owner.Ref = " " },
+		"no visibility":            func(s *code.RepoSettings) { s.Visibility = "" },
+		"an unknown visibility":    func(s *code.RepoSettings) { s.Visibility = "team" },
 		"a default branch no ref":  func(s *code.RepoSettings) { s.DefaultBranch = "a..b" },
 		"a description too long":   func(s *code.RepoSettings) { s.Description = strings.Repeat("x", code.MaxDescriptionBytes+1) },
 		"a description not UTF-8":  func(s *code.RepoSettings) { s.Description = "\xff" },

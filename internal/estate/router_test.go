@@ -2978,7 +2978,7 @@ func TestAKeyedOpAsksTheKeysRendezvousOrder(t *testing.T) {
 	// NO STICKY NODE: a code read answered by one node leaves it the node
 	// asked first for READS, and a push to a repository it is not the
 	// committer of still goes to that repository's committer.
-	if _, err := r.Code().Read(t.Context(), code.ReadQuery{Kind: code.ReadRepos}); err != nil {
+	if _, err := r.Code().Read(t.Context(), code.ReadQuery{Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"}, Kind: code.ReadRepos}); err != nil {
 		t.Fatalf("read: %v", err)
 	}
 	sticky := r.order(opCodeRead.spec, holders)[0]
@@ -3324,7 +3324,7 @@ func TestTheCodeOpsCarryTheCodeFloor(t *testing.T) {
 	if _, err := seam.PushOutcome(ctx, code.OutcomeQuery{RepoID: "repo-1", PushID: "p"}); err != nil {
 		t.Fatalf("push outcome: %v", err)
 	}
-	if _, err := seam.Read(ctx, code.ReadQuery{Kind: code.ReadRepos}); err != nil {
+	if _, err := seam.Read(ctx, code.ReadQuery{Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"}, Kind: code.ReadRepos}); err != nil {
 		t.Fatalf("read: %v", err)
 	}
 	if _, err := seam.Propose(ctx, proposalTo("repo-1", "push-floor")); err != nil {

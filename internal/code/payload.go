@@ -76,6 +76,33 @@ func DirectPushes() []DirectPush { return []DirectPush{DirectPersons, DirectNone
 // Valid reports a value this build knows.
 func (d DirectPush) Valid() bool { return slices.Contains(DirectPushes(), d) }
 
+// Visibility is who may read a repository besides persons and the tokens of
+// Tier A (ADR-0040): a SEAT'S standing narrows by it, and a person's never
+// does — a credential presented by a person, or a token bound to nobody, reads
+// every repository, because a CI token that could not read a unit repository
+// breaks its builds and a Tier A token is the operator's own credential.
+type Visibility string
+
+const (
+	// VisibilityCompany is read by every seat.
+	VisibilityCompany Visibility = "company"
+	// VisibilityUnit is read only by the seats the chart relates to the
+	// owner: an owning unit's subtree and the leads above it, or an owning
+	// seat and the leads of its unit and above — and by no other seat.
+	VisibilityUnit Visibility = "unit"
+)
+
+// Visibilities is the closed set: the one list a validator and the
+// configuration's own (config.CodeVisibilities, held to it by the engine's
+// TestEveryDeclaredVisibilityIsOneTheDomainRecords) are read against.
+func Visibilities() []Visibility { return []Visibility{VisibilityCompany, VisibilityUnit} }
+
+// Valid reports a value this build knows. EMPTY IS NOT ONE: a record carries a
+// repository's settings whole, and a settings record that named no visibility
+// would be a reader's guess at which one it meant — the configuration applies
+// its default (company) before the record is formed.
+func (v Visibility) Valid() bool { return slices.Contains(Visibilities(), v) }
+
 // PrincipalKind is who acts on a repository.
 type PrincipalKind string
 
@@ -162,6 +189,8 @@ type RepoSettings struct {
 	DefaultBranch string `json:"default_branch"`
 	Description   string `json:"description,omitempty"`
 	Archived      bool   `json:"archived,omitempty"`
+	// Visibility is who may read it besides persons and Tier A tokens.
+	Visibility Visibility `json:"visibility"`
 	// Protections are sorted by Pattern and unique — the canonical order,
 	// so two nodes deciding one declaration form byte-identical records.
 	Protections []Protection `json:"protections,omitempty"`
@@ -183,6 +212,8 @@ func (s RepoSettings) Validate() error {
 		return fmt.Errorf("%w: owner.kind: %q is not one of %v", ErrInvalid, s.Owner.Kind, OwnerKinds())
 	case strings.TrimSpace(s.Owner.Ref) == "":
 		return fmt.Errorf("%w: owner.ref: a repository's owner names a unit or a seat", ErrInvalid)
+	case !s.Visibility.Valid():
+		return fmt.Errorf("%w: visibility: %q is not one of %v", ErrInvalid, s.Visibility, Visibilities())
 	case !gitref.ValidBranch(s.DefaultBranch):
 		return fmt.Errorf("%w: default_branch: %q is not a branch name", ErrInvalid, s.DefaultBranch)
 	case gitref.ReservedSeatBranch(s.DefaultBranch):
@@ -223,7 +254,8 @@ func (s RepoSettings) Validate() error {
 func (s RepoSettings) equal(o RepoSettings) bool {
 	return s.ManagedBy == o.ManagedBy && s.Owner == o.Owner &&
 		s.DefaultBranch == o.DefaultBranch && s.Description == o.Description &&
-		s.Archived == o.Archived && slices.Equal(s.Protections, o.Protections)
+		s.Archived == o.Archived && s.Visibility == o.Visibility &&
+		slices.Equal(s.Protections, o.Protections)
 }
 
 // status is the status settings put an active repository in.
