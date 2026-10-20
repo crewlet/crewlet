@@ -226,7 +226,7 @@ func (h *joinHarness) adopter(t *testing.T) *statelog.Adopter {
 				Generations: map[string]uint32{"probe": 1},
 			}, nil
 		},
-		Hold: func(context.Context, map[string]uint64) (func(), error) {
+		Hold: func(context.Context, map[string]statelog.DomainPosition) (func(), error) {
 			h.held.Add(1)
 			if h.holdErr != nil {
 				return nil, h.holdErr

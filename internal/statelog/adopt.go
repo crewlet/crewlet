@@ -76,7 +76,16 @@ type AdoptDeps struct {
 	// WITHOUT IT THE TRIM CAN PASS THE ARTEFACT while it is in flight, and
 	// the node installs a snapshot whose tail is already gone — which is
 	// the state it was adopting to escape.
-	Hold func(ctx context.Context, at map[string]uint64) (release func(), err error)
+	//
+	// at is the ARTEFACT'S OWN POSITIONS, by domain, each with the
+	// generation its sequence belongs to — the manifest's, which
+	// [Offer.Usable] has held equal to the live stream's. The pin must be
+	// stated in that number space and no other: a hold at a generation
+	// below the log's is read by the trim as an unknown term and blocks the
+	// whole log, and a joiner's own checkpoint is exactly such a
+	// generation — none at all for a node that never ran, the old one for a
+	// node a reanchor passed.
+	Hold func(ctx context.Context, at map[string]DomainPosition) (release func(), err error)
 
 	// Close and Reopen bracket the install: both databases must be CLOSED
 	// when the rename happens, because this process's own claim is on the
@@ -469,15 +478,11 @@ func (a *Adopter) Join(ctx context.Context) (Manifest, error) {
 // is marked as one ([ownFault]), which is how [Adopter.Join] tells the two
 // apart.
 func (a *Adopter) adopt(ctx context.Context, offer Offer, began time.Time) (installed bool, err error) {
-	at := make(map[string]uint64, len(offer.Manifest.Domains))
-	for name, pos := range offer.Manifest.Domains {
-		at[name] = pos.Seq
-	}
 	// 1. THE HOLD, BEFORE THE FETCH. Without it the trim can pass the
 	// artefact's own position while it is in flight, and this node
 	// installs a snapshot whose replay tail is already gone — which is
 	// exactly the state it is adopting to escape.
-	release, err := a.deps.Hold(ctx, at)
+	release, err := a.deps.Hold(ctx, offer.Manifest.Domains)
 	if err != nil {
 		return false, ownFault(fmt.Errorf("statelog: pin the replay tail: %w", err))
 	}
