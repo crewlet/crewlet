@@ -180,7 +180,7 @@ export function DocCreate() {
   };
 
   // Command+Enter is the shell's (`create.start`): it passes through here.
-  const onTitleKey = (event: KeyboardEvent<HTMLInputElement>) => {
+  const onTitleKey = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) return;
     if (event.key === "Enter" || event.key === "ArrowDown") {
       event.preventDefault();
