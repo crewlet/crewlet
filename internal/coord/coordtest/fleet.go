@@ -1577,12 +1577,22 @@ var custodyCases = []fleetCase{{
 		}
 	},
 }, {
+	// The caller's mistake, never coord.ErrCustodyUndecidable: that is the
+	// one DEFINITE claim error, a fact about a record the store holds, and
+	// a keeper acknowledges the delivery and steps over the batch on it —
+	// so a backend that spent it on a malformed claim would have a batch
+	// nobody claimed left unsettled as though the fleet had a record of it.
 	name: "an unnamed batch or claimant is an error, not a keeper",
 	fn: func(h *fleetHarness) {
 		for _, c := range [][2]string{{"", "data-a"}, {"batch-5", ""}} {
-			if keeper, err := h.f.ClaimCustody(h.ctx, c[0], c[1]); err == nil || keeper != "" {
+			keeper, err := h.f.ClaimCustody(h.ctx, c[0], c[1])
+			if err == nil || keeper != "" {
 				h.t.Errorf("ClaimCustody(%q, %q) = (%q, %v), want an error and no keeper",
 					c[0], c[1], keeper, err)
+			}
+			if errors.Is(err, coord.ErrCustodyUndecidable) {
+				h.t.Errorf("ClaimCustody(%q, %q) = %v, which says the store holds a "+
+					"record of the batch's keeper nothing can read — it holds none", c[0], c[1], err)
 			}
 		}
 	},
