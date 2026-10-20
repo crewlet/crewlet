@@ -48,8 +48,8 @@ func TestARoomCrossesTheFleet(t *testing.T) {
 	b.seen.waitFor(t, "node-b", room1, "dana:viewing", "erin:viewing")
 	a.seen.waitFor(t, "node-a", room1, "dana:viewing", "erin:viewing")
 
-	focus := artifacts.Focus{Collection: "review", Doc: "row-12", Field: "status"}
-	if err := a.hub.Update(room1, danaSession, artifacts.PresenceEditing, focus); err != nil {
+	focus := Focus{Collection: "review", Doc: "row-12", Field: "status"}
+	if err := a.hub.Update(room1, danaSession, Editing, focus); err != nil {
 		t.Fatal(err)
 	}
 	b.seen.waitFor(t, "node-b", room1, "dana:editing", "erin:viewing")
@@ -103,7 +103,7 @@ func TestAJoinShowsThePeersMembersAsTheyAnswer(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = silent.Stop(context.Background()) })
-	if _, err := silent.Serve(t.Context(), topics.ArtifactPresenceAsk,
+	if _, err := silent.Serve(t.Context(), topics.PresenceAsk,
 		func(ctx context.Context, _ []byte) ([]byte, error) {
 			<-ctx.Done()
 			return nil, ctx.Err()
@@ -115,7 +115,7 @@ func TestAJoinShowsThePeersMembersAsTheyAnswer(t *testing.T) {
 	if _, _, err := b.hub.Join(room1, erin); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.After(artifacts.PresenceRebroadcast)
+	deadline := time.After(Rebroadcast)
 	for {
 		if _, shown := b.seen.member(room1, "dana"); shown {
 			break
@@ -169,10 +169,10 @@ func TestAPresenceFrameTheFleetDidNotSealShowsNobody(t *testing.T) {
 	// THE LISTEN IS THE RECONCILER'S, so wait for it before speaking.
 	waitListening(t, a.hub, room1)
 
-	mallory := artifacts.PresenceMember{Session: "mallory-session", Seat: "mallory",
-		Kind: iam.ActorHuman, Activity: artifacts.PresenceEditing, At: c.Now()}
-	forged := Frame{V: frameVersion, Kind: FrameState, Node: "node-x", Artifact: room1,
-		Upsert: []artifacts.PresenceMember{mallory}, Until: c.Now().Add(time.Minute)}
+	mallory := Member{Session: "mallory-session", Seat: "mallory",
+		Kind: iam.ActorHuman, Activity: Editing, At: c.Now()}
+	forged := Frame{V: frameVersion, Kind: FrameState, Node: "node-x", Room: room1,
+		Upsert: []Member{mallory}, Until: c.Now().Add(time.Minute)}
 	elsewhere, err := signedask.NewOneWay[Frame]("artifacts.other", fleetRing)
 	if err != nil {
 		t.Fatal(err)
@@ -184,7 +184,7 @@ func TestAPresenceFrameTheFleetDidNotSealShowsNobody(t *testing.T) {
 	expired := forged
 	expired.Until = c.Now().Add(-time.Second)
 	malformed := forged
-	malformed.Upsert = []artifacts.PresenceMember{{Session: "m", Seat: "mallory",
+	malformed.Upsert = []Member{{Session: "m", Seat: "mallory",
 		Kind: iam.ActorHuman, Activity: "dancing"}}
 	unsealed := []byte(`{"v":1,"kind":"state","node":"node-x","artifact":"` + room1.String() +
 		`","upsert":[{"session":"mallory-session","seat":"mallory","kind":"human",` +
@@ -220,7 +220,7 @@ func TestAPresenceFrameTheFleetDidNotSealShowsNobody(t *testing.T) {
 
 // PRESENCE EXPIRES AFTER THREE MISSED HEARTBEATS: a peer's member heard once
 // is still shown at forty-four seconds, a rebroadcast renews it, and once
-// nothing has been heard for [artifacts.PresenceExpiry] it is gone, with
+// nothing has been heard for [Expiry] it is gone, with
 // nothing to clean up anywhere. A node's own members never expire this way:
 // they leave when their socket does.
 func TestPresenceExpiresAfterThreeMissedHeartbeats(t *testing.T) {
@@ -232,13 +232,13 @@ func TestPresenceExpiresAfterThreeMissedHeartbeats(t *testing.T) {
 	}
 	waitListening(t, b.hub, room1)
 
-	ghost := artifacts.PresenceMember{Session: "ghost-session", Seat: "ghost",
-		Kind: iam.ActorHuman, Activity: artifacts.PresenceViewing, At: c.Now()}
+	ghost := Member{Session: "ghost-session", Seat: "ghost",
+		Kind: iam.ActorHuman, Activity: Viewing, At: c.Now()}
 	heartbeat := func() {
 		t.Helper()
-		f := Frame{V: frameVersion, Kind: FrameState, Node: "node-gone", Artifact: room1,
-			Upsert: []artifacts.PresenceMember{ghost}, Full: true,
-			Until: c.Now().Add(artifacts.PresenceFrameValidity)}
+		f := Frame{V: frameVersion, Kind: FrameState, Node: "node-gone", Room: room1,
+			Upsert: []Member{ghost}, Full: true,
+			Until: c.Now().Add(FrameValidity)}
 		if err := b.queue.Broadcast(t.Context(), subject(room1), sealedFrom(t, fleetRing, f)); err != nil {
 			t.Fatal(err)
 		}
@@ -247,10 +247,10 @@ func TestPresenceExpiresAfterThreeMissedHeartbeats(t *testing.T) {
 	b.seen.waitFor(t, "node-b", room1, "erin:viewing", "ghost:viewing")
 
 	// A REBROADCAST RENEWS IT: heard again at fifteen seconds.
-	c.Advance(artifacts.PresenceRebroadcast)
+	c.Advance(Rebroadcast)
 	heartbeat()
 	settle()
-	c.Advance(artifacts.PresenceExpiry - time.Second)
+	c.Advance(Expiry - time.Second)
 	b.hub.tick(t.Context(), c.Now())
 	settle()
 	b.seen.waitFor(t, "node-b", room1, "erin:viewing", "ghost:viewing")
@@ -273,8 +273,8 @@ func TestABroadcastIsNeverRetained(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := range 5 {
-		focus := artifacts.Focus{Region: "section-" + strconv.Itoa(i)}
-		if err := a.hub.Update(room1, session, artifacts.PresenceEditing, focus); err != nil {
+		focus := Focus{Region: "section-" + strconv.Itoa(i)}
+		if err := a.hub.Update(room1, session, Editing, focus); err != nil {
 			t.Fatal(err)
 		}
 		settle()
@@ -333,9 +333,9 @@ func TestPresenceWritesNoRowAnywhere(t *testing.T) {
 	if _, _, err := b.hub.Join(room1, erin); err != nil {
 		t.Fatal(err)
 	}
-	b.hub.Touch(room1, "agent-cto", "run-1", artifacts.PresenceEditing, artifacts.Focus{Collection: "review"})
+	b.hub.Touch(room1, Agent{Seat: "agent-cto", Turn: "run-1", Activity: Editing, Focus: Focus{Collection: "review"}})
 	a.seen.waitFor(t, "node-a", room1, "dana:viewing", "erin:viewing", "agent-cto:editing")
-	if err := a.hub.Update(room1, session, artifacts.PresenceIdle, artifacts.Focus{}); err != nil {
+	if err := a.hub.Update(room1, session, Idle, Focus{}); err != nil {
 		t.Fatal(err)
 	}
 	a.hub.tick(t.Context(), c.Now())
@@ -406,10 +406,10 @@ func TestALargeRoomPresentsTheMostRecentFifty(t *testing.T) {
 		}
 		sessions = append(sessions, s)
 	}
-	waitCounts(t, a.seen, room1, &artifacts.PresenceCounts{Human: 9, Agent: 1})
+	waitCounts(t, a.seen, room1, &Counts{Human: 9, Agent: 1})
 	// THE FIFTY ARRIVE OVER SEVERAL FAN-OUTS, at most
-	// [artifacts.PresenceFrameMembers] members each.
-	waitMembers(t, a.seen, room1, artifacts.PresenceRoomTop)
+	// [FrameMembers] members each.
+	waitMembers(t, a.seen, room1, RoomTop)
 	if _, shown := a.seen.member(room1, "seat-00"); shown {
 		t.Fatal("the least recent member is presented in a room past the threshold")
 	}
@@ -420,7 +420,7 @@ func TestALargeRoomPresentsTheMostRecentFifty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !roster.Truncated || roster.Counts == nil || len(roster.Members) != artifacts.PresenceRoomTop {
+	if !roster.Truncated || roster.Counts == nil || len(roster.Members) != RoomTop {
 		t.Fatalf("a joiner of a large room was handed %d members, counts %+v, truncated %v",
 			len(roster.Members), roster.Counts, roster.Truncated)
 	}
@@ -429,7 +429,7 @@ func TestALargeRoomPresentsTheMostRecentFifty(t *testing.T) {
 	for _, s := range sessions[:16] {
 		a.hub.Leave(room1, s)
 	}
-	waitCounts(t, a.seen, room1, &artifacts.PresenceCounts{})
+	waitCounts(t, a.seen, room1, &Counts{})
 	// AND BELOW 40: everybody again, with no counts at all.
 	for _, s := range sessions[16:22] {
 		a.hub.Leave(room1, s)
@@ -438,7 +438,7 @@ func TestALargeRoomPresentsTheMostRecentFifty(t *testing.T) {
 	waitMembers(t, a.seen, room1, 39)
 }
 
-// A FAN-OUT RE-PRESENTS AT MOST [artifacts.PresenceFrameMembers] MEMBERS, the
+// A FAN-OUT RE-PRESENTS AT MOST [FrameMembers] MEMBERS, the
 // most recently active first, and the rest follow in the next fan-outs: a large
 // room whose members all move does not send each socket every one of them in
 // every frame.
@@ -466,8 +466,8 @@ func TestAFanOutRePresentsAtMostItsBoundOfMembers(t *testing.T) {
 	})
 	c.Advance(time.Second)
 	for i, s := range sessions {
-		if err := a.hub.Update(room1, s, artifacts.PresenceEditing,
-			artifacts.Focus{Region: fmt.Sprintf("r%d", i)}); err != nil {
+		if err := a.hub.Update(room1, s, Editing,
+			Focus{Region: fmt.Sprintf("r%d", i)}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -490,9 +490,9 @@ func TestAFanOutRePresentsAtMostItsBoundOfMembers(t *testing.T) {
 	}
 	a.seen.mu.Lock()
 	defer a.seen.mu.Unlock()
-	if largest > artifacts.PresenceFrameMembers {
+	if largest > FrameMembers {
 		t.Fatalf("one fan-out re-presented %d members, past the bound of %d", largest,
-			artifacts.PresenceFrameMembers)
+			FrameMembers)
 	}
 }
 
@@ -509,7 +509,7 @@ func TestAHeldBackMemberIsToldWithinAFewFanOuts(t *testing.T) {
 	broker, c := memory.NewBroker(), newClock()
 	a := startNode(t, broker, "node-a", c)
 	var busy []string
-	for i := range 2 * artifacts.PresenceFrameMembers {
+	for i := range 2 * FrameMembers {
 		s, _, err := a.hub.Join(room1, Local{Seat: fmt.Sprintf("busy-%02d", i), Kind: iam.ActorHuman})
 		if err != nil {
 			t.Fatal(err)
@@ -533,14 +533,14 @@ func TestAHeldBackMemberIsToldWithinAFewFanOuts(t *testing.T) {
 			}
 			c.Advance(time.Millisecond)
 			for _, s := range busy {
-				_ = a.hub.Update(room1, s, artifacts.PresenceEditing, artifacts.Focus{Region: strconv.Itoa(i)})
+				_ = a.hub.Update(room1, s, Editing, Focus{Region: strconv.Itoa(i)})
 			}
 			time.Sleep(time.Millisecond)
 		}
 	}()
 	defer func() { close(stop); <-done }()
 	time.Sleep(5 * testCoalesce)
-	if err := a.hub.Update(room1, probe, artifacts.PresenceEditing, artifacts.Focus{Region: "here"}); err != nil {
+	if err := a.hub.Update(room1, probe, Editing, Focus{Region: "here"}); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.After(100 * testCoalesce)
@@ -570,8 +570,8 @@ func TestAnAgentIsPresentWhileItWorks(t *testing.T) {
 	}
 	waitListening(t, viewer.hub, room1)
 
-	focus := artifacts.Focus{Collection: "review", Doc: "row-3"}
-	worker.hub.Touch(room1, "agent-cto", "run-1", artifacts.PresenceEditing, focus)
+	focus := Focus{Collection: "review", Doc: "row-3"}
+	worker.hub.Touch(room1, Agent{Seat: "agent-cto", Turn: "run-1", Activity: Editing, Focus: focus})
 	viewer.seen.waitFor(t, "the viewer's node", room1, "agent-cto:editing", "erin:viewing")
 	if m, _ := viewer.seen.member(room1, "agent-cto"); m.Kind != iam.ActorAgent || m.Focus != focus ||
 		m.Turn != "run-1" {
@@ -585,7 +585,7 @@ func TestAnAgentIsPresentWhileItWorks(t *testing.T) {
 	}
 
 	c.Advance(agentLinger - time.Second)
-	worker.hub.Touch(room1, "agent-cto", "run-1", artifacts.PresenceViewing, focus)
+	worker.hub.Touch(room1, Agent{Seat: "agent-cto", Turn: "run-1", Activity: Viewing, Focus: focus})
 	viewer.seen.waitFor(t, "the viewer's node", room1, "agent-cto:viewing", "erin:viewing")
 	c.Advance(agentLinger - time.Second)
 	worker.hub.tick(t.Context(), c.Now())
@@ -621,8 +621,8 @@ func TestARoomFansOutAtMostItsCoalescedRate(t *testing.T) {
 	}
 	started := time.Now()
 	for i := 0; time.Since(started) < 3*interval; i++ {
-		if err := h.Update(room1, session, artifacts.PresenceEditing,
-			artifacts.Focus{Region: strconv.Itoa(i)}); err != nil {
+		if err := h.Update(room1, session, Editing,
+			Focus{Region: strconv.Itoa(i)}); err != nil {
 			t.Fatal(err)
 		}
 		time.Sleep(time.Millisecond)
@@ -690,7 +690,7 @@ func TestAMoveCrossesNodesInOneShortWindowOnEachSide(t *testing.T) {
 				return
 			case <-time.After(7 * time.Millisecond):
 			}
-			_ = viewer.Update(room1, busy, artifacts.PresenceEditing, artifacts.Focus{Region: strconv.Itoa(i)})
+			_ = viewer.Update(room1, busy, Editing, Focus{Region: strconv.Itoa(i)})
 		}
 	}()
 	defer func() { close(stop); <-done }()
@@ -710,7 +710,7 @@ func TestAMoveCrossesNodesInOneShortWindowOnEachSide(t *testing.T) {
 				return
 			case <-time.After(7 * time.Millisecond):
 			}
-			_ = mover.Update(room1, other, artifacts.PresenceEditing, artifacts.Focus{Region: strconv.Itoa(i)})
+			_ = mover.Update(room1, other, Editing, Focus{Region: strconv.Itoa(i)})
 		}
 	}()
 	defer func() { close(stopOther); <-doneOther }()
@@ -718,8 +718,8 @@ func TestAMoveCrossesNodesInOneShortWindowOnEachSide(t *testing.T) {
 	for probe := range 16 {
 		region := "probe-" + strconv.Itoa(probe)
 		started := time.Now()
-		if err := mover.Update(room1, moving, artifacts.PresenceViewing,
-			artifacts.Focus{Region: region}); err != nil {
+		if err := mover.Update(room1, moving, Viewing,
+			Focus{Region: region}); err != nil {
 			t.Fatal(err)
 		}
 		for {
@@ -751,17 +751,17 @@ func TestAPresenceFrameIsHeldToItsSessionAndBounds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := a.hub.Update(room1, "not-a-session", artifacts.PresenceEditing, artifacts.Focus{}); !errors.Is(err, ErrNotJoined) {
+	if err := a.hub.Update(room1, "not-a-session", Editing, Focus{}); !errors.Is(err, ErrNotJoined) {
 		t.Fatalf("a frame for a session never joined answered %v, want ErrNotJoined", err)
 	}
-	if err := a.hub.Update(artifacts.IDFor("elsewhere"), session, artifacts.PresenceViewing, artifacts.Focus{}); !errors.Is(err, ErrNotJoined) {
+	if err := a.hub.Update(ArtifactRoom(artifacts.IDFor("elsewhere")), session, Viewing, Focus{}); !errors.Is(err, ErrNotJoined) {
 		t.Fatalf("a frame for another room answered %v, want ErrNotJoined", err)
 	}
-	if err := a.hub.Update(room1, session, "dancing", artifacts.Focus{}); err == nil {
+	if err := a.hub.Update(room1, session, "dancing", Focus{}); err == nil {
 		t.Fatal("an activity outside the vocabulary was taken")
 	}
-	if err := a.hub.Update(room1, session, artifacts.PresenceViewing,
-		artifacts.Focus{Region: strings.Repeat("r", maxRegionBytes+1)}); err == nil {
+	if err := a.hub.Update(room1, session, Viewing,
+		Focus{Region: strings.Repeat("r", maxRegionBytes+1)}); err == nil {
 		t.Fatal("a focus region past its bound was taken")
 	}
 	// A FRAME SAYING WHAT THE ROOM ALREADY SHOWS fans nothing out.
@@ -769,7 +769,7 @@ func TestAPresenceFrameIsHeldToItsSessionAndBounds(t *testing.T) {
 	settle()
 	before := a.seen.pushCount()
 	for range 5 {
-		if err := a.hub.Update(room1, session, artifacts.PresenceViewing, artifacts.Focus{}); err != nil {
+		if err := a.hub.Update(room1, session, Viewing, Focus{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -779,13 +779,13 @@ func TestAPresenceFrameIsHeldToItsSessionAndBounds(t *testing.T) {
 	}
 	a.hub.Leave(room1, session)
 	a.hub.Leave(room1, session)
-	if err := a.hub.Update(room1, session, artifacts.PresenceViewing, artifacts.Focus{}); !errors.Is(err, ErrNotJoined) {
+	if err := a.hub.Update(room1, session, Viewing, Focus{}); !errors.Is(err, ErrNotJoined) {
 		t.Fatalf("a frame after leaving answered %v, want ErrNotJoined", err)
 	}
 }
 
 // waitListening waits until the hub's reconciler listens on the room.
-func waitListening(t *testing.T, h *Hub, id artifacts.ID) {
+func waitListening(t *testing.T, h *Hub, id Room) {
 	t.Helper()
 	deadline := time.After(10 * time.Second)
 	for {
@@ -804,7 +804,7 @@ func waitListening(t *testing.T, h *Hub, id artifacts.ID) {
 }
 
 // waitMembers waits until the room shows n members.
-func waitMembers(t *testing.T, s *screen, id artifacts.ID, n int) {
+func waitMembers(t *testing.T, s *screen, id Room, n int) {
 	t.Helper()
 	deadline := time.After(10 * time.Second)
 	for {
@@ -821,7 +821,7 @@ func waitMembers(t *testing.T, s *screen, id artifacts.ID, n int) {
 }
 
 // waitCounts waits until the room's last fan-out carried want.
-func waitCounts(t *testing.T, s *screen, id artifacts.ID, want *artifacts.PresenceCounts) {
+func waitCounts(t *testing.T, s *screen, id Room, want *Counts) {
 	t.Helper()
 	deadline := time.After(10 * time.Second)
 	for {

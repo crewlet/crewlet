@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -642,7 +643,7 @@ func (t *publishArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	t.deps.present(c, h.ID, artifacts.PresenceEditing, artifacts.Focus{Version: h.HeadNumber})
+	t.deps.present(c, h.ID, presence.Editing, presence.Focus{Version: h.HeadNumber})
 
 	files := newFileSources(t.deps, c, t.Name())
 	mode := manifest.ModePatch
@@ -964,7 +965,7 @@ func (t *updateArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	t.deps.present(c, h.ID, artifacts.PresenceEditing, artifacts.Focus{})
+	t.deps.present(c, h.ID, presence.Editing, presence.Focus{})
 	written, err := t.deps.Writer.Patch(ctx, t.deps.call(c, dec.Standing.Role, dec.Elevated), h.ID, p)
 	if err != nil {
 		return publishFailure(ctx, t.Name(), c, err), nil

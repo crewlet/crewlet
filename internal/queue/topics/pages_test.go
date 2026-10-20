@@ -77,8 +77,8 @@ func TestThePagesPathRefusesWhatItDidNotBuild(t *testing.T) {
 }
 
 // EVERY DOMAIN'S SUBJECT SPACE IS DISJOINT FROM EVERY OTHER'S, and so is each
-// ephemeral presence space, which shares its own log's root — an artifact's
-// `crewlet.artifacts.`, chat's `crewlet.chat.`.
+// ephemeral presence space — the one every kind of room shares,
+// `crewlet.rooms.`, and chat's, which shares its log's root `crewlet.chat.`.
 //
 // They share one broker, and a stream created over a wildcard that overlapped
 // another's would take deliveries meant for it — silently, because both
@@ -86,16 +86,16 @@ func TestThePagesPathRefusesWhatItDidNotBuild(t *testing.T) {
 func TestNoDomainsSubjectSpaceOverlapsAnothers(t *testing.T) {
 	t.Parallel()
 	prefixes := map[string]string{
-		"tracker":           topics.TrackerLogPrefix + ".",
-		"vectors":           topics.TrackerVectorsPrefix + ".",
-		"pages":             topics.PagesLogPrefix + ".",
-		"iam":               topics.IamLogPrefix + ".",
-		"usage":             topics.UsageLogPrefix + ".",
-		"artifacts":         topics.ArtifactsLogPrefix + ".",
-		"artifact presence": topics.ArtifactPresencePrefix + ".",
-		"artifactdata":      topics.ArtifactDataLogPrefix + ".",
-		"chat":              topics.ChatLogPrefix + ".",
-		"presence":          topics.ChatPresence + ".",
+		"tracker":       topics.TrackerLogPrefix + ".",
+		"vectors":       topics.TrackerVectorsPrefix + ".",
+		"pages":         topics.PagesLogPrefix + ".",
+		"iam":           topics.IamLogPrefix + ".",
+		"usage":         topics.UsageLogPrefix + ".",
+		"artifacts":     topics.ArtifactsLogPrefix + ".",
+		"presence":      topics.PresencePrefix + ".",
+		"artifactdata":  topics.ArtifactDataLogPrefix + ".",
+		"chat":          topics.ChatLogPrefix + ".",
+		"chat presence": topics.ChatPresence + ".",
 	}
 	for a, pa := range prefixes {
 		for b, pb := range prefixes {

@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -83,7 +84,7 @@ type ArtifactDataStore interface {
 
 // ArtifactPresence is this node's presence hub as these tools touch it.
 type ArtifactPresence interface {
-	Touch(id artifacts.ID, seat, turn string, activity artifacts.PresenceActivity, focus artifacts.Focus)
+	Touch(room presence.Room, a presence.Agent)
 }
 
 // ArtifactDataDeps are what the datastore tools act through beyond the
@@ -311,8 +312,8 @@ func requesterRecord(c artifactCaller) string {
 
 // touch puts a seat calling on id in the artifact's room, through the
 // artifacts half's presence ([ArtifactDeps.present]).
-func (d dataTools) touch(c artifactCaller, id artifacts.ID, activity artifacts.PresenceActivity,
-	focus artifacts.Focus) {
+func (d dataTools) touch(c artifactCaller, id artifacts.ID, activity presence.Activity,
+	focus presence.Focus) {
 
 	d.art.present(c, id, activity, focus)
 }

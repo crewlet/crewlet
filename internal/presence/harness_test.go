@@ -7,12 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue/memory"
-	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -94,23 +91,23 @@ func startNodeAsking(t *testing.T, broker *memory.Broker, name string, c *clock,
 // in order, as a dashboard applies them.
 type screen struct {
 	mu      sync.Mutex
-	rooms   map[artifacts.ID]map[string]artifacts.PresenceMember
-	counts  map[artifacts.ID]*artifacts.PresenceCounts
+	rooms   map[Room]map[string]Member
+	counts  map[Room]*Counts
 	pushes  int
 	changed chan struct{}
 }
 
 func newScreen() *screen {
-	return &screen{rooms: map[artifacts.ID]map[string]artifacts.PresenceMember{},
-		counts: map[artifacts.ID]*artifacts.PresenceCounts{}, changed: make(chan struct{}, 1)}
+	return &screen{rooms: map[Room]map[string]Member{},
+		counts: map[Room]*Counts{}, changed: make(chan struct{}, 1)}
 }
 
 func (s *screen) apply(c Change) {
 	s.mu.Lock()
-	room := s.rooms[c.Artifact]
+	room := s.rooms[c.Room]
 	if room == nil {
-		room = map[string]artifacts.PresenceMember{}
-		s.rooms[c.Artifact] = room
+		room = map[string]Member{}
+		s.rooms[c.Room] = room
 	}
 	for _, m := range c.Upsert {
 		room[m.Session] = m
@@ -118,7 +115,7 @@ func (s *screen) apply(c Change) {
 	for _, session := range c.Leave {
 		delete(room, session)
 	}
-	s.counts[c.Artifact] = c.Counts
+	s.counts[c.Room] = c.Counts
 	s.pushes++
 	s.mu.Unlock()
 	select {
@@ -128,7 +125,7 @@ func (s *screen) apply(c Change) {
 }
 
 // members is the room as shown: each member's seat and activity, sorted.
-func (s *screen) members(id artifacts.ID) []string {
+func (s *screen) members(id Room) []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []string
@@ -139,7 +136,7 @@ func (s *screen) members(id artifacts.ID) []string {
 	return out
 }
 
-func (s *screen) member(id artifacts.ID, seat string) (artifacts.PresenceMember, bool) {
+func (s *screen) member(id Room, seat string) (Member, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, m := range s.rooms[id] {
@@ -147,7 +144,7 @@ func (s *screen) member(id artifacts.ID, seat string) (artifacts.PresenceMember,
 			return m, true
 		}
 	}
-	return artifacts.PresenceMember{}, false
+	return Member{}, false
 }
 
 func (s *screen) pushCount() int {
@@ -157,7 +154,7 @@ func (s *screen) pushCount() int {
 }
 
 // waitFor waits until the room shows exactly want.
-func (s *screen) waitFor(t *testing.T, who string, id artifacts.ID, want ...string) {
+func (s *screen) waitFor(t *testing.T, who string, id Room, want ...string) {
 	t.Helper()
 	slices.Sort(want)
 	if want == nil {
@@ -186,7 +183,7 @@ func (s *screen) waitFor(t *testing.T, who string, id artifacts.ID, want ...stri
 func settle() { time.Sleep(30 * testCoalesce) }
 
 var (
-	room1 = artifacts.IDFor("presence-suite-room-1")
+	room1 = ArtifactRoom(artifacts.IDFor("presence-suite-room-1"))
 	dana  = Local{Seat: "dana", Kind: iam.ActorHuman}
 	erin  = Local{Seat: "erin", Kind: iam.ActorHuman}
 )
@@ -203,4 +200,4 @@ func sealedFrom(t *testing.T, ring statelog.Keyring, f Frame) []byte {
 }
 
 // subject is a room's presence subject.
-func subject(id artifacts.ID) string { return topics.ArtifactPresenceSubject(uuid.UUID(id)) }
+func subject(id Room) string { return id.subject() }

@@ -6,17 +6,16 @@ import (
 	"slices"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// room is one artifact's presence on this node: the members this node holds
+// room is one room's presence on this node: the members this node holds
 // itself (its sockets and its agents), what its peers last told it, and what
 // its sockets were last shown.
 //
 // Every method is called with the hub's lock held.
 type room struct {
-	id artifacts.ID
+	id Room
 
 	local  map[string]*localMember
 	remote map[remoteKey]*remoteMember
@@ -32,16 +31,16 @@ type room struct {
 	// the fan-out is the difference between it and what the room presents
 	// now. counts is the large-room count they were last shown, nil while
 	// the room presents everybody.
-	presented map[string]artifacts.PresenceMember
-	counts    *artifacts.PresenceCounts
+	presented map[string]Member
+	counts    *Counts
 
 	// waiting is when each member whose change the sockets have not been
 	// told yet was first held back ([room.diff]).
 	waiting map[string]time.Time
 
 	// truncated is the hysteresis: a room presents only its most recent
-	// members once it passes [artifacts.PresenceRoomTop], and everybody
-	// again only once it falls below [artifacts.PresenceRoomFull], so a room
+	// members once it passes [RoomTop], and everybody
+	// again only once it falls below [RoomFull], so a room
 	// hovering around the threshold does not flip on every join.
 	truncated bool
 
@@ -62,7 +61,7 @@ type room struct {
 // localMember is a member this node holds: a socket's, or an agent's tool
 // session.
 type localMember struct {
-	member artifacts.PresenceMember
+	member Member
 
 	// socket says a socket's session, which is what makes this node a
 	// listener on the room; an agent's tool session sees nothing and so
@@ -82,7 +81,7 @@ type remoteKey struct {
 
 // remoteMember is a member a peer holds, as it last said.
 type remoteMember struct {
-	member artifacts.PresenceMember
+	member Member
 	heard  time.Time
 
 	// told is the instant of the frame that last said it (the frame's
@@ -91,10 +90,10 @@ type remoteMember struct {
 	told time.Time
 }
 
-func newRoom(id artifacts.ID) *room {
+func newRoom(id Room) *room {
 	return &room{id: id, local: map[string]*localMember{}, remote: map[remoteKey]*remoteMember{},
 		departed:  map[remoteKey]time.Time{},
-		presented: map[string]artifacts.PresenceMember{}, waiting: map[string]time.Time{},
+		presented: map[string]Member{}, waiting: map[string]time.Time{},
 		outUpsert: map[string]struct{}{}, outLeave: map[string]struct{}{}}
 }
 
@@ -131,8 +130,8 @@ func (r *room) agentMember(seat string) *localMember {
 }
 
 // localMembers is every member this node holds in the room, by session.
-func (r *room) localMembers() []artifacts.PresenceMember {
-	out := make([]artifacts.PresenceMember, 0, len(r.local))
+func (r *room) localMembers() []Member {
+	out := make([]Member, 0, len(r.local))
 	for _, s := range slices.Sorted(maps.Keys(r.local)) {
 		out = append(out, r.local[s].member)
 	}
@@ -151,7 +150,7 @@ func (r *room) localMembers() []artifacts.PresenceMember {
 // broadcasts can overtake it and say what changed since. Applied as a
 // replacement, that answer deleted every member the peer gained in between,
 // and the room showed them again only at the peer's next rebroadcast,
-// [artifacts.PresenceRebroadcast] later: measured (internal/artifactspike,
+// [Rebroadcast] later: measured (internal/artifactspike,
 // S6), a room of fifty joined at once across three nodes took fifteen seconds
 // to show everybody everywhere, against the second the join objective allows.
 // So every member carries the instant of the frame that last said it, and a
@@ -200,14 +199,14 @@ func (r *room) hear(f Frame, now time.Time) bool {
 	return moved
 }
 
-// expire drops the peers' members not heard for [artifacts.PresenceExpiry]
+// expire drops the peers' members not heard for [Expiry]
 // (three missed rebroadcasts: their node went away without saying so) and this
 // node's agents not touched for [agentLinger], reporting whether the room
 // changed.
 func (r *room) expire(now time.Time) bool {
 	moved := false
 	for key, m := range r.remote {
-		if now.Sub(m.heard) >= artifacts.PresenceExpiry {
+		if now.Sub(m.heard) >= Expiry {
 			delete(r.remote, key)
 			moved = true
 		}
@@ -233,9 +232,9 @@ func (r *room) expire(now time.Time) bool {
 // everybody is every member in the room, most recent first: what a large room
 // takes its top from. A session two sources both name (a node restarted under
 // another id, a frame racing a leave) is shown once, the most recent wins.
-func (r *room) everybody() []artifacts.PresenceMember {
-	bySession := make(map[string]artifacts.PresenceMember, len(r.local)+len(r.remote))
-	keep := func(m artifacts.PresenceMember) {
+func (r *room) everybody() []Member {
+	bySession := make(map[string]Member, len(r.local)+len(r.remote))
+	keep := func(m Member) {
 		if held, ok := bySession[m.Session]; !ok || m.At.After(held.At) {
 			bySession[m.Session] = m
 		}
@@ -247,7 +246,7 @@ func (r *room) everybody() []artifacts.PresenceMember {
 		keep(m.member)
 	}
 	out := slices.Collect(maps.Values(bySession))
-	slices.SortFunc(out, func(a, b artifacts.PresenceMember) int {
+	slices.SortFunc(out, func(a, b Member) int {
 		// MOST RECENT FIRST, and the session breaks a tie so two nodes
 		// present one room in one order.
 		return cmp.Or(b.At.Compare(a.At), cmp.Compare(a.Session, b.Session))
@@ -258,27 +257,27 @@ func (r *room) everybody() []artifacts.PresenceMember {
 // presentation is what a room shows: its members, and for a large room the
 // count of those it does not show.
 type presentation struct {
-	members []artifacts.PresenceMember
-	counts  *artifacts.PresenceCounts
+	members []Member
+	counts  *Counts
 }
 
 // present is what the room shows now, moving the hysteresis.
 func (r *room) present() presentation {
 	all := r.everybody()
 	switch {
-	case !r.truncated && len(all) > artifacts.PresenceRoomTop:
+	case !r.truncated && len(all) > RoomTop:
 		r.truncated = true
-	case r.truncated && len(all) < artifacts.PresenceRoomFull:
+	case r.truncated && len(all) < RoomFull:
 		r.truncated = false
 	}
 	if !r.truncated {
 		return presentation{members: all}
 	}
-	counts := &artifacts.PresenceCounts{}
+	counts := &Counts{}
 	shown := all
-	if len(all) > artifacts.PresenceRoomTop {
-		shown = all[:artifacts.PresenceRoomTop]
-		for _, m := range all[artifacts.PresenceRoomTop:] {
+	if len(all) > RoomTop {
+		shown = all[:RoomTop]
+		for _, m := range all[RoomTop:] {
 			if m.Kind == iam.ActorAgent {
 				counts.Agent++
 			} else {
@@ -290,20 +289,19 @@ func (r *room) present() presentation {
 }
 
 // roster is a presentation as a joining socket is handed it.
-func (r *room) roster(p presentation) artifacts.PresenceRoster {
+func (r *room) roster(p presentation) Roster {
 	members := p.members
 	if members == nil {
-		members = []artifacts.PresenceMember{}
+		members = []Member{}
 	}
-	return artifacts.PresenceRoster{Artifact: r.id, Members: members, Counts: p.counts,
-		Truncated: p.counts != nil}
+	return Roster{Members: members, Counts: p.counts, Truncated: p.counts != nil}
 }
 
 // diff is what this node's sockets must be told to go from what they were
 // shown to p, whether there is anything to tell, and whether members were
 // held back for the next fan-out.
 //
-// AT MOST [artifacts.PresenceFrameMembers] MEMBERS ARE RE-PRESENTED, the one
+// AT MOST [FrameMembers] MEMBERS ARE RE-PRESENTED, the one
 // whose change has waited longest first (then the most recently active), so
 // every changed member is told within a few fan-outs however many others keep
 // moving: ordered by recency alone, a member who moved once in a room where
@@ -313,10 +311,10 @@ func (r *room) roster(p presentation) artifacts.PresenceRoster {
 // once: a leave is a session id, and a socket showing somebody gone is the one
 // error presence must not make.
 func (r *room) diff(p presentation, now time.Time) (Change, bool, bool) {
-	c := Change{Artifact: r.id, Upsert: []artifacts.PresenceMember{}, Leave: []string{},
+	c := Change{Room: r.id, Upsert: []Member{}, Leave: []string{},
 		Counts: p.counts, Truncated: p.counts != nil}
-	next := make(map[string]artifacts.PresenceMember, len(p.members))
-	var changed []artifacts.PresenceMember
+	next := make(map[string]Member, len(p.members))
+	var changed []Member
 	for _, m := range p.members {
 		if held, ok := r.presented[m.Session]; ok && held == m {
 			next[m.Session] = m
@@ -329,11 +327,11 @@ func (r *room) diff(p presentation, now time.Time) (Change, bool, bool) {
 	}
 	// p's order is most recent first, which a stable sort keeps among
 	// changes that have waited equally long.
-	slices.SortStableFunc(changed, func(a, b artifacts.PresenceMember) int {
+	slices.SortStableFunc(changed, func(a, b Member) int {
 		return r.waiting[a.Session].Compare(r.waiting[b.Session])
 	})
 	for i, m := range changed {
-		if i < artifacts.PresenceFrameMembers {
+		if i < FrameMembers {
 			c.Upsert = append(c.Upsert, m)
 			next[m.Session] = m
 			delete(r.waiting, m.Session)
@@ -351,7 +349,7 @@ func (r *room) diff(p presentation, now time.Time) (Change, bool, bool) {
 	// A WAIT ENDS WITH ITS MEMBER'S CHANGE: told above, or gone from the
 	// presentation, or moved back to what the sockets were shown.
 	still := make(map[string]bool, len(changed))
-	for _, m := range changed[min(len(changed), artifacts.PresenceFrameMembers):] {
+	for _, m := range changed[min(len(changed), FrameMembers):] {
 		still[m.Session] = true
 	}
 	for s := range r.waiting {
@@ -364,7 +362,7 @@ func (r *room) diff(p presentation, now time.Time) (Change, bool, bool) {
 	r.presented = next
 	r.counts = p.counts
 	return c, len(c.Upsert)+len(c.Leave) > 0 || countsMoved,
-		len(changed) > artifacts.PresenceFrameMembers
+		len(changed) > FrameMembers
 }
 
 // stopTimer cancels a pending fan-out and a pending frame to the fleet.

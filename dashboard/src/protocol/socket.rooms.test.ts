@@ -89,7 +89,7 @@ function joinedAnswer(id: unknown, through = 7) {
       artifact: A,
       session: "s1",
       role: "contributor",
-      roster: { artifact: A, members: [] },
+      roster: { members: [] },
       through,
       resync: true,
     },

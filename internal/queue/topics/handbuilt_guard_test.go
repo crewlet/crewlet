@@ -12,6 +12,8 @@ import (
 	"go/parser"
 	"go/token"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
@@ -97,7 +99,7 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 		"crewlet.agent", "crewlet.events", "crewlet.notifications",
 		"crewlet.config", "dlq.", ".inbox", ".control", ".reflect", "agent-",
 		"crewlet.tracker.log", "crewlet.pages.log", "crewlet.iam.log",
-		"crewlet.chat.log", "crewlet.chat.presence",
+		"crewlet.chat.log", "crewlet.chat.presence", "crewlet.rooms",
 	} {
 		if !markers[want] {
 			t.Errorf("marker %q was not derived from topics.go's constants; the "+
@@ -116,6 +118,7 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 		"crewlet.iam.log.>",
 		"crewlet.chat.log.message.x", "crewlet.chat.log.%s.%s",
 		"crewlet.chat.presence",
+		"crewlet.rooms.artifact.0f3c", "crewlet.rooms.ask",
 	} {
 		if _, hit := violation(markers, positive); !hit {
 			t.Errorf("control: %q is a hand-built name and the matcher did not flag it", positive)
@@ -133,6 +136,8 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 		topics.ChatLogSubject("message", "x"),
 		topics.ChatLogWildcard,
 		topics.ChatPresence,
+		topics.PresenceSubject("artifact", uuid.New()),
+		topics.PresenceAsk,
 	} {
 		if _, hit := violation(markers, built); !hit {
 			t.Errorf("control: the builder's own output %q is not flagged when "+
@@ -159,6 +164,10 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 		"crewlet.iam_people",
 		"crewlet.chat.log_lag",
 		"crewlet.chat.presence_probes",
+		// The presence hub's own metrics, which share no head with its
+		// subjects: what the subject space was moved off for.
+		"crewlet.presence.frames",
+		"crewlet.presence.rooms",
 		// Names that begin like a log's subject and are not one: the
 		// engine's own environment variables, and words.
 		"CREWLET_LOG_LEVEL",

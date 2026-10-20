@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactdata/query"
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -86,8 +87,8 @@ func (t *readArtifactData) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	collection := strings.TrimSpace(argString(args, "collection"))
 	doc := strings.TrimSpace(argString(args, "doc"))
-	t.d.touch(a.c, a.head.ID, artifacts.PresenceViewing,
-		artifacts.Focus{Collection: collection, Doc: doc})
+	t.d.touch(a.c, a.head.ID, presence.Viewing,
+		presence.Focus{Collection: collection, Doc: doc})
 	schema, err := t.d.data.Store.Schema(ctx, a.head.ID)
 	if err != nil {
 		return dataFailure(ctx, t.Name(), err), nil
@@ -221,7 +222,7 @@ func (t *queryArtifactData) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	t.d.touch(a.c, a.head.ID, artifacts.PresenceViewing, artifacts.Focus{Collection: collection})
+	t.d.touch(a.c, a.head.ID, presence.Viewing, presence.Focus{Collection: collection})
 	schema, err := t.d.data.Store.Schema(ctx, a.head.ID)
 	if err != nil {
 		return dataFailure(ctx, t.Name(), err), nil

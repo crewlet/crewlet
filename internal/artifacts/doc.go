@@ -17,9 +17,10 @@
 // One definition per shared shape is the point (one implementation of a shared
 // rule): the role ladder the authority table compares, the share an applier
 // stores, the manifest a publish names, the authority a datastore write is
-// stamped with, the claims a view ticket carries and the frame a presence
-// broadcast fans out are each written once, here, and every package that
-// speaks them imports this one rather than declaring a look-alike.
+// stamped with and the claims a view ticket carries are each written once,
+// here, and every package that speaks them imports this one rather than
+// declaring a look-alike. What a presence room says is internal/presence's,
+// because an artifact is no longer the only thing with a room.
 //
 // # What lives here, and what does not
 //
@@ -27,8 +28,7 @@
 // audiences and shares, manifest entries and the script policy a linter
 // derives for them, the plan quotas and every bound with its reason, the
 // authority stamp, the upload intent, the view ticket's claims and the frame
-// the dashboard embeds, the datastore's op and schema shapes, and presence
-// frames.
+// the dashboard embeds, and the datastore's op and schema shapes.
 //
 // Behaviour does not: the label codec and id derivation belong to the domain
 // that mints ids, the ladder's ordering to the authority table that compares
