@@ -83,6 +83,8 @@ func (a *Applier) applyArtifact(ctx context.Context, tx *sql.Tx, c applyContext)
 		return a.applyUnshare(ctx, tx, c, id, p)
 	case TransferPayload:
 		return a.applyTransfer(ctx, tx, c, id, p)
+	case LinkPayload:
+		return a.applyLinkWorkItem(ctx, tx, c, id, p)
 	case StatusPayload:
 		switch c.record.Op {
 		case OpTrash:
@@ -674,6 +676,41 @@ func (a *Applier) applyTransfer(ctx context.Context, tx *sql.Tx, c applyContext,
 	rows += n
 	a.move(id, MoveTransfer, epoch, head.head, c.position)
 	return rows, nil
+}
+
+// applyLinkWorkItem links an artifact to a work item: its history row, filed
+// under the item, and nothing else. No artifact row moves, so a link touches
+// neither the head's version guard nor its access epoch, and tells nobody a
+// movement: the artifact a room holds open is the same artifact.
+//
+// A link the rows refuse (an artifact gone or trashed since the decide, or a
+// record naming no item) writes its refused row WITH the item, so the history
+// says what was tried, and a refused row lists the artifact under nothing
+// ([ListQuery.WorkItem] reads applied rows alone).
+func (a *Applier) applyLinkWorkItem(ctx context.Context, tx *sql.Tx, c applyContext, id string,
+	p LinkPayload) (int, error) {
+
+	done, err := applied(ctx, tx, c, id)
+	if err != nil || done {
+		return 0, err
+	}
+	no := func(reason Refusal) (int, error) {
+		return refuse(ctx, tx, c, id, OpLinkWorkItem, reason, 0, HistorySummary{}, &p.Authority)
+	}
+	head, found, err := readHead(ctx, tx, id)
+	switch {
+	case err != nil:
+		return 0, err
+	case !found:
+		return no(RefusedNotFound)
+	case head.status == string(StatusTrashed):
+		return no(RefusedTrashed)
+	case strings.TrimSpace(p.Authority.WorkItem) == "":
+		return no(RefusedInvalid)
+	}
+	return writeHistory(ctx, tx, c, historyEntry{
+		artifact: id, op: OpLinkWorkItem, outcome: OutcomeApplied,
+	}, &p.Authority)
 }
 
 // applyTrash stamps an artifact trashed: its rows stay, its source address stays

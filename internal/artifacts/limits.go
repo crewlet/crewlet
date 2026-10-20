@@ -107,6 +107,7 @@ const (
 	MaxIconBytes         = 40        // one short word
 	MaxLabelBytes        = 60        // a version label
 	MaxSourceKeyBytes    = 256       // the republish-in-place address
+	MaxWorkItemBytes     = 64        // a tracker key a write is made for or a link names
 	MaxPreflightBytes    = 8 * kiB   // the reserved preflight.js at the root
 	MaxSearchTextBytes   = 64 * kiB  // text extracted at publish for the gallery index
 	MaxConflictEntryText = 1 * miB   // the live entry's text a version_moved answer inlines

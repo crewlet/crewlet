@@ -52,6 +52,7 @@ func TestACallerWithNoRelationIsToldTheArtifactIsNotFound(t *testing.T) {
 		{"DELETE", "", ``},
 		{"POST", "/restore", ``},
 		{"POST", "/transfer", `{"to":"@dana"}`},
+		{"POST", "/work-items", `{"work_item":"ENG-12"}`},
 		{"PUT", "/pin", ``},
 	} {
 		for who, p := range map[string]iam.Principal{"a person": person("dana"),

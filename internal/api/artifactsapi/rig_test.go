@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // THE RIG: the surface over fakes of everything it reads and writes, each
@@ -36,7 +37,8 @@ import (
 // with bob as viewer; the
 // page is shared with bob as viewer, with the ENG unit as editor and with sam
 // as editor. `scribe` is an agent owning `report`, led by lee. dana relates to
-// nothing, and ada is an administrator who relates to nothing either.
+// nothing, and ada is an administrator who relates to nothing either. The
+// tracker holds ENG-12, live, and ENG-9, removed.
 
 var (
 	page     = artifacts.IDFor("jane's page")
@@ -247,6 +249,10 @@ func (w *writes) Transfer(_ context.Context, c artifactsdomain.Call, id artifact
 	artifactsdomain.Written, error) {
 	return w.record("transfer", c, id, to)
 }
+func (w *writes) LinkWorkItem(_ context.Context, c artifactsdomain.Call, id artifacts.ID, item string) (
+	artifactsdomain.Written, error) {
+	return w.record("link", c, id, item)
+}
 func (w *writes) Trash(_ context.Context, c artifactsdomain.Call, id artifacts.ID) (artifactsdomain.Written, error) {
 	return w.record("trash", c, id, nil)
 }
@@ -269,6 +275,46 @@ func (w *writes) all() []call {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return append([]call(nil), w.calls...)
+}
+
+// workItems is the company's tracker: ENG-12 (formerly OPS-3, and by its id
+// `task-12`) is live, and ENG-9 was removed. down, when set, is what asking
+// for the tracker answers.
+type workItems struct {
+	mu    sync.Mutex
+	asked []string
+	down  error
+}
+
+func (t *workItems) Task(_ context.Context, ref string, _ tracker.DetailWants, _ statelog.Freshness) (
+	tracker.TaskDetail, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.asked = append(t.asked, ref)
+	switch ref {
+	case "ENG-12", "OPS-3", "task-12":
+		return tracker.TaskDetail{Task: tracker.Task{ID: "task-12", Key: "ENG-12",
+			FormerKeys: []string{"OPS-3"}}}, nil
+	case "ENG-9":
+		return tracker.TaskDetail{Task: tracker.Task{ID: "task-9", Key: "ENG-9",
+			Removed: &tracker.Tombstone{By: "jane", At: time.Unix(1_700_000_000, 0)}}}, nil
+	}
+	return tracker.TaskDetail{}, tracker.ErrNoTask
+}
+
+func (t *workItems) tracker() (artifactsapi.WorkItems, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.down != nil {
+		return nil, t.down
+	}
+	return t, nil
+}
+
+func (t *workItems) reads() []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return append([]string(nil), t.asked...)
 }
 
 // marks records the reader records a read leaves.
@@ -484,19 +530,22 @@ type rig struct {
 	objects  *objects
 	framer   *framer
 	ready    *ready
+	work     *workItems
 	company  config.CompanyArtifacts
 }
 
 func newRig(t *testing.T, framed bool) *rig {
 	t.Helper()
 	g := &rig{t: t, estate: &estate{}, writes: &writes{}, marks: &marks{}, pipeline: &pipeline{},
-		objects: &objects{}, framer: &framer{minted: map[string]artifacts.TicketClaims{}}, ready: &ready{}}
+		objects: &objects{}, framer: &framer{minted: map[string]artifacts.TicketClaims{}}, ready: &ready{},
+		work: &workItems{}}
 	opts := artifactsapi.Options{
 		Gate: artifactsapi.Gate{Heads: g.estate, Chart: chart{}, Limits: limits, Marks: g.marks,
 			Roster: roster{}, Company: func() config.CompanyArtifacts { return g.company }},
 		Reads: g.estate, Writes: g.writes, Objects: g.objects,
-		Uploads: func() (artifactsapi.Pipeline, error) { return g.pipeline, nil },
-		Ready:   g.ready,
+		Uploads:   func() (artifactsapi.Pipeline, error) { return g.pipeline, nil },
+		WorkItems: g.work.tracker,
+		Ready:     g.ready,
 	}
 	if framed {
 		opts.Frames = g.framer

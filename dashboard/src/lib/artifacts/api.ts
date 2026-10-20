@@ -92,6 +92,17 @@ export function transferArtifact(id: string, to: string): Omit<KeyedRequest, "ke
   return { method: "POST", path: `${base(id)}/transfer`, body: { to } };
 }
 
+/**
+ * Link an artifact that already exists to a tracker work item (`POST
+ * /artifacts/{id}/work-items`), so the item's Artifacts panel lists it. The
+ * caller reads the artifact and may change the item; the engine answers the
+ * item's current key as `work_item`, and a link the artifact already has
+ * answers success and writes nothing.
+ */
+export function linkWorkItem(id: string, workItem: string): Omit<KeyedRequest, "key"> {
+  return { method: "POST", path: `${base(id)}/work-items`, body: { work_item: workItem } };
+}
+
 /** Move an artifact to the trash (`DELETE /artifacts/{id}`). */
 export function trashArtifact(id: string): Omit<KeyedRequest, "key"> {
   return { method: "DELETE", path: base(id) };

@@ -154,6 +154,15 @@ type TransferPayload struct {
 	ToKind iam.ActorKind `json:"to_kind"`
 }
 
+// LinkPayload links an existing artifact to one tracker work item: the item is
+// the authority's [artifacts.Authority.WorkItem], stamped at the API with who
+// linked it and how, so the history row it writes is filed under the item the
+// way a create or a publish made for it is.
+type LinkPayload struct {
+	V         int                 `json:"v"`
+	Authority artifacts.Authority `json:"authority"`
+}
+
 // StatusPayload is a trash, a restore, a purge's beginning, a purge, or an
 // asset's removal.
 //
@@ -228,6 +237,8 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 		return decodePayload[UnsharePayload](rec)
 	case k == KindArtifact && op == OpTransfer:
 		return decodePayload[TransferPayload](rec)
+	case k == KindArtifact && op == OpLinkWorkItem:
+		return decodePayload[LinkPayload](rec)
 	case k == KindArtifact && (op == OpTrash || op == OpRestore || op == OpPurgeBegin || op == OpPurge):
 		return decodePayload[StatusPayload](rec)
 	case k == KindAsset && op == OpCreate:

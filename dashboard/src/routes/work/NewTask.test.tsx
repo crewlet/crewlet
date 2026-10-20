@@ -14,7 +14,8 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { ReactNode } from "react";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
-import { NewTaskSheet, blockedBy, createArgs, startingProject } from "./NewTask.tsx";
+import { NewTaskSheet, blockedBy, createArgs } from "./NewTask.tsx";
+import { startingProject } from "~/lib/startingProject.ts";
 import { textBudget } from "~/lib/format.ts";
 import { TASK_BODY_MAX_BYTES, TASK_TITLE_MAX_BYTES } from "~/contract/work.ts";
 import { presetForLane } from "~/app/newTask.ts";
@@ -336,6 +337,31 @@ test("a lane's status reaches the wire and applied opens the new task", async ()
   ]);
   expect(closed).toBe(1);
   expect(location.hash).toBe("#/work/ENG-9");
+});
+
+// A DOOR THAT KNOWS THE TASK fills its title and description, which the
+// person can still change before Create, and both reach the wire.
+test("a door's title and description open in the sheet and reach the wire", async () => {
+  mount(
+    <NewTaskSheet
+      preset={{ project: "ENG", title: "Onboarding screens", description: "Three screens." }}
+      onClose={() => {}}
+    />,
+  );
+  await settle();
+  expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe("Onboarding screens");
+  expect((screen.getByLabelText(/^Description/) as HTMLTextAreaElement).value).toBe(
+    "Three screens.",
+  );
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Create task" }));
+  });
+  await settle();
+  expect(posted[0]?.args).toEqual({
+    title: "Onboarding screens",
+    project: "ENG",
+    body: "Three screens.",
+  });
 });
 
 // A KEY A RESTORED COUNTER HANDED OUT AGAIN is one another task already

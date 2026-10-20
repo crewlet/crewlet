@@ -671,13 +671,13 @@ test("artifactDetail: a refusal says why in words, and an override says it was o
 test("a trail row whose artifact is gone names it as an artifact, unlinked", async () => {
   serving({
     artifact_trail: {
-      entries: [trailRow({ title: "", op: "purge", number: 0, elevated: false })],
+      entries: [trailRow({ title: "", op: "purge_begin", number: 0, elevated: false })],
       complete: true,
     },
   });
   mount();
   await waitFor(() => expect(screen.getByText("artifact 0192f00e")).toBeTruthy());
-  expect(screen.getByText("Deleted it for good")).toBeTruthy();
+  expect(screen.getByText("Began deleting it for good")).toBeTruthy();
   expect(screen.queryByRole("link", { name: "artifact 0192f00e" })).toBeNull();
 });
 
