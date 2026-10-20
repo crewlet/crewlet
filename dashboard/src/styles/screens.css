@@ -10456,30 +10456,37 @@ a.live-row:focus-visible {
   color: var(--color-text-tertiary);
 }
 
-/* THE GRID: three cards across a desktop, two on a tablet's width, one on a
-   phone, four only on a screen wide enough that three would be posters. A
-   column count by the page's width rather than auto-fill, so a card's size
-   moves in steps a reader recognises rather than with every pixel. */
+/* THE GRID: four cards across a laptop's page, three on a narrower one (a
+   1024 window, or a tablet whose sidebar is a drawer), two on a small tablet
+   and one on a phone, five only on a screen wide enough that four would be
+   posters. A column count by the page's width rather than auto-fill, so a
+   card's size moves in steps a reader recognises rather than with every
+   pixel. */
 .artifacts-cards {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--spacing-7) var(--spacing-6);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--spacing-6) var(--spacing-5);
   margin: 0;
   padding: 0;
   list-style: none;
 }
-@container page (width >= 1600px) {
+@container page (width >= 1500px) {
   .artifacts-cards {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
   }
 }
-@container page (width < 880px) {
+@container page (width < 1000px) {
+  .artifacts-cards {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--spacing-5) var(--spacing-4);
+  }
+}
+@container page (width < 640px) {
   .artifacts-cards {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: var(--spacing-6) var(--spacing-5);
   }
 }
-@container page (width < 560px) {
+@container page (width < 440px) {
   .artifacts-cards {
     grid-template-columns: minmax(0, 1fr);
   }
