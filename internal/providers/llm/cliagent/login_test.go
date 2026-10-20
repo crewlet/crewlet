@@ -73,7 +73,7 @@ func TestAdoptingAHostLoginCopiesRatherThanMoves(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(home, ".fake", "creds.json")); err != nil {
 		t.Errorf("the operator's own login was moved, not copied: %v", err)
 	}
-	if !p.Workspace().HasLogin() {
+	if !hasLogin(t, p.Workspace()) {
 		t.Error("the adopted login is not where seats read it from")
 	}
 }
@@ -108,7 +108,7 @@ func TestACredentialBundleRoundTrips(t *testing.T) {
 		t.Fatalf("AdoptHostLogin: %v", err)
 	}
 
-	blob, err := source.ExportBundle()
+	blob, err := source.ExportBundle(t.Context())
 	if err != nil {
 		t.Fatalf("ExportBundle: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestARestoredBundleCannotEscapeTheCredentialDirectory(t *testing.T) {
 			t.Errorf("error for %q does not name it: %v", name, err)
 		}
 	}
-	if p.Workspace().HasLogin() {
+	if hasLogin(t, p.Workspace()) {
 		t.Error("a refused bundle still wrote a credential")
 	}
 }
@@ -171,7 +171,7 @@ func TestAnOversizedBundleIsRefusedRatherThanPartlyRestored(t *testing.T) {
 	if !strings.Contains(err.Error(), "`crewlet llm export sub`") {
 		t.Errorf("the refusal does not name the export that replaces it: %v", err)
 	}
-	if p.Workspace().HasLogin() {
+	if hasLogin(t, p.Workspace()) {
 		t.Error("a refused bundle still wrote a credential")
 	}
 }
@@ -242,7 +242,7 @@ func TestABundleRestoresOnlyIntoTheCLIItNames(t *testing.T) {
 				want[file] = fmt.Sprintf(`{"cli":%q,"file":%q}`, from, file)
 				writeFile(t, filepath.Join(source.ws.CredentialsDir(), file), want[file])
 			}
-			blob, err := source.ExportBundle()
+			blob, err := source.ExportBundle(t.Context())
 			if err != nil {
 				t.Fatalf("ExportBundle: %v", err)
 			}
@@ -439,7 +439,7 @@ func TestABundleDoesNotOverwriteALiveLogin(t *testing.T) {
 func TestExportingWithNoLoginRefuses(t *testing.T) {
 	t.Parallel()
 	p := loginProvider(t)
-	_, err := p.ExportBundle()
+	_, err := p.ExportBundle(t.Context())
 	if err == nil {
 		t.Fatal("an empty credential directory exported cleanly")
 	}
@@ -466,7 +466,7 @@ func TestLogoutRemovesTheCredentialEvenIfTheVendorCommandFails(t *testing.T) {
 	if err == nil {
 		t.Error("a failing vendor logout was reported as success")
 	}
-	if p.Workspace().HasLogin() {
+	if hasLogin(t, p.Workspace()) {
 		t.Error("the credential survived a logout the operator was told about")
 	}
 }
@@ -749,7 +749,7 @@ func TestAConfiguredBundleIsRestoredOnlyWhenAsked(t *testing.T) {
 		t.Fatalf("an entry with no bundle: %v", err)
 	}
 	p := build(bundleOf(t, "custom", "creds.json", `{"token":"configured"}`))
-	if p.Workspace().HasLogin() {
+	if hasLogin(t, p.Workspace()) {
 		t.Fatal("building the entry restored its bundle — `crewlet validate` would write a login onto the host")
 	}
 	if err := p.RestoreConfiguredBundle(t.Context()); err != nil {
@@ -789,7 +789,7 @@ func TestALogoutIsNotUndoneByTheConfiguredBundle(t *testing.T) {
 	if err := p.RestoreConfiguredBundle(t.Context()); err != nil {
 		t.Fatalf("the boot's restore: %v", err)
 	}
-	if !p.Workspace().HasLogin() {
+	if !hasLogin(t, p.Workspace()) {
 		t.Fatal("the premise: the bundle restored nothing")
 	}
 	if err := p.Logout(t.Context(), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
@@ -800,8 +800,8 @@ func TestALogoutIsNotUndoneByTheConfiguredBundle(t *testing.T) {
 	if !errors.Is(err, ErrLoggedOut) {
 		t.Errorf("the restore after a logout = %v, want ErrLoggedOut", err)
 	}
-	if p.Workspace().HasLogin() {
-		t.Fatalf("the restore after a logout brought the login back: %v", p.Workspace().LoginFiles())
+	if hasLogin(t, p.Workspace()) {
+		t.Fatalf("the restore after a logout brought the login back: %v", loginOnDisk(t, p.Workspace()))
 	}
 	for _, want := range []string{"`crewlet llm login sub -from-host`", "`crewlet llm import sub`",
 		"a headless token signs the entry in without ending the logout",
@@ -921,8 +921,8 @@ func TestTheLogoutNoticeSpeaksForTheRecord(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "did not finish") {
 		t.Fatalf("the premise: Logout = %v, want the vendor's logout reported unfinished", err)
 	}
-	if p.Workspace().HasLogin() {
-		t.Fatalf("the premise: a failed vendor logout left the login: %v", p.Workspace().LoginFiles())
+	if hasLogin(t, p.Workspace()) {
+		t.Fatalf("the premise: a failed vendor logout left the login: %v", loginOnDisk(t, p.Workspace()))
 	}
 	if notice := logoutNotice(t, p); !strings.Contains(notice, cliprofile.BundleVarName("sub")) {
 		t.Errorf("after a logout whose vendor half failed, the notice says nothing of the bundle "+
@@ -960,8 +960,8 @@ func TestAHeadlessTokenDoesNotEndALogout(t *testing.T) {
 	if err := p.RestoreConfiguredBundle(t.Context()); !errors.Is(err, ErrLoggedOut) {
 		t.Errorf("a token-only capture ended the logout: the restore = %v, want ErrLoggedOut", err)
 	}
-	if p.Workspace().HasLogin() {
-		t.Fatalf("a token-only capture brought the bundle back: %v", p.Workspace().LoginFiles())
+	if hasLogin(t, p.Workspace()) {
+		t.Fatalf("a token-only capture brought the bundle back: %v", loginOnDisk(t, p.Workspace()))
 	}
 
 	p.profile.CaptureTokenArgs = []string{"-c",
@@ -1032,7 +1032,7 @@ func TestALoginOfRecordEndsALogout(t *testing.T) {
 			}
 			// The directory empties some other way — an operator clearing it
 			// by hand — and the bundle restores into it as it always did.
-			for _, path := range p.ws.LoginFiles() {
+			for _, path := range loginOnDisk(t, p.ws) {
 				if err := os.Remove(path); err != nil {
 					t.Fatal(err)
 				}

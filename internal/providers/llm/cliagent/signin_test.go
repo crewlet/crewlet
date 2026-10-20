@@ -170,7 +170,7 @@ func checkSignIn(t *testing.T, p *Provider, c signInCase) {
 			problem = line
 		}
 	}
-	state := p.SignInState()
+	state := p.SignInState(t.Context())
 
 	// THE TWO SURFACES CANNOT DISAGREE: they did, because each kept its
 	// own idea of what "logged in" meant.
@@ -230,7 +230,7 @@ func TestAnInheritedTokenIsASignInOnlyWhenThisProcessHasOne(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "inherited")
 	c.signedIn, c.line = true, "ANTHROPIC_API_KEY from this process's environment"
 	checkSignIn(t, newSignInProvider(t, c), c)
-	if got := newSignInProvider(t, c).SignInState(); got != "inherited key" {
+	if got := newSignInProvider(t, c).SignInState(t.Context()); got != "inherited key" {
 		t.Errorf("SignInState = %q, want inherited key", got)
 	}
 
@@ -238,7 +238,7 @@ func TestAnInheritedTokenIsASignInOnlyWhenThisProcessHasOne(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "inherited")
 	c.line = "CLAUDE_CODE_OAUTH_TOKEN from this process's environment"
 	checkSignIn(t, newSignInProvider(t, c), c)
-	if got := newSignInProvider(t, c).SignInState(); got != "inherited token" {
+	if got := newSignInProvider(t, c).SignInState(t.Context()); got != "inherited token" {
 		t.Errorf("SignInState = %q, want inherited token", got)
 	}
 }

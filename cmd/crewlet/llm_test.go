@@ -46,7 +46,7 @@ func TestALoginBundleRoundTripsThroughTheCLI(t *testing.T) {
 	if err := os.WriteFile(creds, []byte(`{"token":"moved"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	blob, err := source[0].provider.ExportBundle()
+	blob, err := source[0].provider.ExportBundle(t.Context())
 	if err != nil {
 		t.Fatalf("ExportBundle: %v", err)
 	}
