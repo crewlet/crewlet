@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/artifactdata"
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -19,25 +21,29 @@ import (
 )
 
 // THE LIVE RELAY: how a node whose own copy is OUT OF SERVICE still tells its
-// open dashboards what its appliers would have — whose inbox moved, and what
-// was said in a room.
+// open dashboards what its appliers would have — whose inbox moved, what was
+// said in a room, and what moved on an artifact and in its datastore.
 //
 // # Why one is needed at all
 //
 // A node's sockets learn what changed from its OWN appliers, after every
 // committed batch: the tracker's says whose inbox moved
 // ([Engine.SetOnInboxMoved]), chat's what landed in a room
-// ([Engine.SetChatLive]). That is complete only while those appliers apply
-// every record. A copy that is WRONG — an applier halted at a record it cannot
+// ([Engine.SetChatLive]), the artifacts' and the datastore's what moved on an
+// artifact and which documents changed ([Engine.OnArtifactsMoved],
+// [Engine.OnArtifactDataMoved]). That is complete only while those appliers
+// apply every record. A copy that is WRONG — an applier halted at a record it cannot
 // decode, a stalled prefix, an estate file shut, rows below the log — goes out
 // of service and the node STAYS in rotation ([localEstate.For]): its seats'
 // calls and its dashboards' reads go to a sound data node through the estate's
 // router, and /ready follows whether it can route rather than whether its copy
 // is sound. So its dashboards keep reading correct data — and an applier that
 // commits nothing announces nothing, so every socket on that node stopped
-// receiving `inbox_changed`, and every room open on it went quiet, until it
-// reconnected somewhere else, which a node still in rotation gives it no
-// reason to do.
+// receiving `inbox_changed`, and every room open on it, a chat room's or an
+// artifact's, went quiet, until it reconnected somewhere else, which a node
+// still in rotation gives it no reason to do. The artifact origin's verdict
+// cache on that node hears the same appliers, and a share withdrawn on a
+// sound peer was forgotten by nothing there until the verdict aged out.
 //
 // # ONE relay for every domain that announces, not one per domain
 //
@@ -49,7 +55,12 @@ import (
 // inbox already a peer's and its room still this node's halted applier's. So
 // there is one ring, one sequence, one follower and one switch, and a batch in
 // the ring is EXACTLY ONE domain's — one applier's commit ([liveBatch]) —
-// handed on to that domain's listener by [Engine.deliverLive].
+// handed on to that domain's listeners by [Engine.deliverLive]. The artifact
+// copies once had a follower of their own, which withheld this node's artifact
+// pushes while its copy was out of service and told every room to read again
+// at each switch: a second reader of the one verdict, on its own clock, that
+// relayed nothing, so an artifact room on an out-of-service node heard nobody's
+// appliers at all.
 //
 // # One source at a time, and a switch is a re-read
 //
@@ -58,10 +69,11 @@ import (
 // node's own — whatever an out-of-service applier still commits — are
 // withheld: two sources would push one movement or one message twice, and the
 // one being withheld is the one nobody vouches for. Every SWITCH, either way,
-// tells every screen to read again ([Engine.liveGap]: every watched inbox and
-// every chat screen), because what was committed between the last batch one
-// source delivered and the first the other does is not replayed: the rows are
-// the truth, and a screen re-reads them.
+// tells every screen to read again ([Engine.liveGap]: every watched inbox,
+// every chat screen and every artifact room, which is a reset of every artifact
+// and every datastore to their listeners), because what was committed between
+// the last batch one source delivered and the first the other does is not
+// replayed: the rows are the truth, and a screen re-reads them.
 //
 // # A follower reads ONE server, by that server's own sequence
 //
@@ -89,11 +101,14 @@ import (
 // hand it to its own sockets' filters, which decide what each is shown: an
 // inbox movement through the `work_inbox` question and its own authority, a
 // chat batch through the room's own visibility for each viewer
-// ([chatlet.Visible]). It is the scatters that only read (ADR-0031): a forged
-// inbox answer causes a re-read and nothing else, and a forged chat answer
-// shows a viewer the rooms admit a frame until their screen reads the room —
-// what a party on the broker can do on any subject it reaches, and why keeping
-// the broker's ports private is the operator's half (SECURITY.md).
+// ([chatlet.Visible]), and an artifact's batch through the room's own join and
+// each reader's role and the collection's read rule ([artifactdata.Readable]).
+// It is the scatters that only read (ADR-0031): a forged inbox or artifacts
+// answer causes a re-read and nothing else, and a forged chat or datastore
+// answer shows a viewer what the room admits them until their screen reads
+// the room again — what a forged history or search slice shows too, what a
+// party on the broker can do on any subject it reaches, and why keeping the
+// broker's ports private is the operator's half (SECURITY.md).
 
 // liveRelaySubject is the one subject a node serves its relay on —
 // [topics.LiveRelayPrefix] and the node, one node per subject, because a
@@ -107,14 +122,15 @@ func liveRelaySubject(node string) string {
 // liveRelayRingBytes is how much of what its appliers announced a server keeps
 // for its followers, ENCODED.
 //
-// BOUNDED BY BYTES AND NOT BY BATCHES, because the two domains' batches differ
-// by orders of magnitude: an inbox movement is identifiers and a count
-// (worklet.InboxMovement), while a chat batch carries each record's routing
-// snapshot — an excerpt of up to [chatlet.MaxExcerpt] bytes and up to
-// [chatlet.MaxRecipients] recipients — and one applier commit can hold a thousand
-// messages ([statelog.ApplyTxRowBudget] rows at about four a message). The
-// thousand-batch ring the inbox alone had held tens of kilobytes of movements
-// and would hold gigabytes of a catching-up room.
+// BOUNDED BY BYTES AND NOT BY BATCHES, because the domains' batches differ by
+// orders of magnitude: an inbox movement is identifiers and a count
+// (worklet.InboxMovement), and so is an artifact's movement, while a chat batch
+// carries each record's routing snapshot — an excerpt of up to
+// [chatlet.MaxExcerpt] bytes and up to [chatlet.MaxRecipients] recipients — and one
+// applier commit can hold a thousand messages ([statelog.ApplyTxRowBudget]
+// rows at about four a message), and a datastore batch carries every document
+// it changed, whole. The thousand-batch ring the inbox alone had held tens of
+// kilobytes of movements and would hold gigabytes of a catching-up room.
 //
 // HALF OF [queue.MaxPayloadBytes], the rule a chat transcript page is bounded
 // by and for the same reason: an answer is a SUFFIX of the ring, so a ring
@@ -152,16 +168,19 @@ const liveRelayRetry = servingRecheck
 //
 // EXACTLY ONE FIELD IS SET, because a batch is one applier's commit and each
 // applier is one domain's. The fields are the domains whose appliers announce
-// at all — the tracker's inbox movements and chat's committed effects — and a
-// domain that starts announcing is one more field here and one more arm in
-// [Engine.deliverLive] and [Engine.liveGap].
+// at all — the tracker's inbox movements, chat's committed effects, and what
+// the artifacts' and the datastore's commits moved — and a domain that starts
+// announcing is one more field here and one more arm in [Engine.deliverLive],
+// [Engine.liveGap] and [Engine.liveListening].
 //
 // ADDITIVE ON THE WIRE: a newer server's batch of a domain this build does not
 // know decodes as a batch with none of these fields set, and is delivered to
 // nobody — which is all this build's sockets could do with it anyway.
 type liveBatch struct {
-	Inbox []worklet.InboxMovement `json:"inbox,omitempty"`
-	Chat  []chatlet.Applied       `json:"chat,omitempty"`
+	Inbox        []worklet.InboxMovement `json:"inbox,omitempty"`
+	Chat         []chatlet.Applied       `json:"chat,omitempty"`
+	Artifacts    []artifactsdomain.Moved `json:"artifacts,omitempty"`
+	ArtifactData []artifactdata.Moved    `json:"artifact_data,omitempty"`
 }
 
 // relayedBatch is one batch a server's appliers announced, numbered by the
@@ -426,8 +445,8 @@ func (r *liveRelay) follow(ctx context.Context) {
 			log.WarnContext(ctx, "live_relay_started",
 				"detail", "this node's copy is out of service, so its appliers "+
 					"announce nothing its dashboards can trust; their inbox "+
-					"movements and chat are relayed from a data node whose copy "+
-					"serves")
+					"movements, chat and artifact rooms are relayed from a data "+
+					"node whose copy serves")
 		}
 		if source == "" {
 			source = r.pick(ctx, tried)
@@ -588,22 +607,37 @@ func (e *Engine) deliverLive(b liveBatch) {
 	if len(b.Chat) > 0 {
 		e.deliverChat(b.Chat)
 	}
+	if len(b.Artifacts) > 0 {
+		e.artifactsListeners.tell(b.Artifacts)
+	}
+	if len(b.ArtifactData) > 0 {
+		e.artifactDataListeners.tell(b.ArtifactData)
+	}
 }
 
 // liveGap tells whatever this node registered, for EVERY domain, that what it
 // hears has a gap: a switch of source is one fact about the whole copy, so it
-// is a gap in every domain at once.
+// is a gap in every domain at once. An artifact's and a datastore's listeners
+// are told it as their domains' own reset — a movement naming nothing, which
+// they already read as "everything decided from these rows may have moved":
+// every room re-read and decided again, and every remembered verdict on the
+// artifact origin forgotten.
 func (e *Engine) liveGap() {
 	e.inboxGap()
 	e.chatGap()
+	e.artifactsListeners.tell([]artifactsdomain.Moved{artifactsdomain.Reset()})
+	e.artifactDataListeners.tell([]artifactdata.Moved{artifactdata.ResetMove()})
 }
 
 // liveListening reports whether anything on this node hears what any of its
 // appliers announce: the API's inbox listener, registered wherever it serves,
-// or a chat hub that serves sockets here — never a hub attached only for the
-// working indicator ([ChatLive.ServesSockets]).
+// a chat hub that serves sockets here — never a hub attached only for the
+// working indicator ([ChatLive.ServesSockets]) — or an artifact or datastore
+// listener: the socket's rooms where the API serves, and the artifact origin's
+// verdict cache where it does.
 func (e *Engine) liveListening() bool {
-	return e.inboxListening() || e.chatListening()
+	return e.inboxListening() || e.chatListening() ||
+		e.artifactsListeners.listening() || e.artifactDataListeners.listening()
 }
 
 // armLiveRelay makes this data node a server of its live relay and starts the

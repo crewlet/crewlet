@@ -574,41 +574,41 @@ func TestALargeDatastorePushNamesItsDocuments(t *testing.T) {
 	}
 }
 
-// A NODE WHOSE COPY LEAVES SERVICE withholds its appliers' pushes and tells
-// every room to read again, and does so again when the copy returns.
-func TestACopyOutOfServiceWithholdsAndTellsRoomsToReread(t *testing.T) {
+// A RESET OF BOTH ARTIFACT DOMAINS TELLS EVERY ROOM TO READ AGAIN, and is all a
+// node's rooms are told when what they hear has a gap: the engine's live relay
+// hands every switch of source to these two listeners as their own domains'
+// reset (a movement naming nothing), so a room is pushed the reset, decided
+// again, and told its datastore may have gaps — and keeps hearing what its
+// datastore commits afterwards once the decision keeps it.
+//
+// Mutation: drop the reset arm from ArtifactsMoved and the room is pushed no
+// reset; drop it from ArtifactDataMoved and the datastore is never re-read.
+func TestAResetTellsEveryRoomToReadAgain(t *testing.T) {
 	t.Parallel()
-	svc := buildService(t, stream.Options{Rooms: stream.Rooms{Access: newAccess(),
-		Stores: stores{}, Presence: nopPresence{}}})
-	c := stream.NewClient(roomReader("dana"))
-	svc.Hub().Register(c)
-	if _, _, ok := svc.Hub().JoinArtifact(c, sheet, artifacts.RoleEditor, "s"); !ok {
-		t.Fatal("the client did not join")
+	acc := newAccess()
+	acc.set("dana", sheet, artifacts.RoleEditor)
+	n := newRoomNode(t, memory.NewBroker(), "node-a", acc, people)
+	dana := n.open(t, "dana")
+	join(t, dana, sheet, 0)
+
+	n.svc.ArtifactsMoved([]artifactsdomain.Moved{artifactsdomain.Reset()})
+	n.svc.ArtifactDataMoved([]artifactdata.Moved{artifactdata.ResetMove()})
+	changed := nextOf(t, dana, stream.KindArtifactChanged)
+	if data, _ := changed["data"].(map[string]any); data["what"] != "reset" ||
+		data["artifact"] != sheet.String() {
+		t.Fatalf("the room was pushed %v, want its artifact reset", changed)
 	}
-	rereadOnce := func(why string) {
-		t.Helper()
-		got := drain(c)
-		if kinds := kindsIn(got); !slices.Equal(kinds, []stream.Kind{stream.KindArtifactChanged,
-			stream.KindArtifactData}) {
-			t.Fatalf("%s: the room was sent %v, want a reset and a resync", why, kinds)
-		}
-		var data stream.ArtifactData
-		decodeData(t, got[1], &data)
-		if !data.Resync {
-			t.Fatalf("%s: the datastore hint is %+v, want resync", why, data)
-		}
+	reread := nextOf(t, dana, stream.KindArtifactData)
+	if data, _ := reread["data"].(map[string]any); data["resync"] != true {
+		t.Fatalf("the datastore was pushed %v, want a resync", reread)
 	}
-	svc.ArtifactsCopy(false)
-	rereadOnce("leaving service")
-	svc.ArtifactsCopy(false)
-	svc.ArtifactDataMoved([]artifactdata.Moved{dataBatch(sheet,
-		delta("notes", "a", artifacts.ReadAll, "dana", `{}`))})
-	svc.ArtifactsMoved([]artifactsdomain.Moved{{Artifact: sheet, What: artifactsdomain.MoveVersion}})
-	if got := drain(c); len(got) != 0 {
-		t.Fatalf("an out-of-service copy pushed %v", kindsIn(got))
+
+	n.svc.ArtifactDataMoved([]artifactdata.Moved{dataBatch(sheet,
+		delta("notes", "a", artifacts.ReadAll, "dana", `{"done":true}`))})
+	if got := nextOf(t, dana, stream.KindArtifactData, stream.KindError); kindOf(got) !=
+		stream.KindArtifactData {
+		t.Fatalf("the room decided again after the reset received %v", got)
 	}
-	svc.ArtifactsCopy(true)
-	rereadOnce("returning to service")
 }
 
 // A SOCKET IS IN A BOUNDED NUMBER OF ROOMS: past [stream.MaxRoomsPerSocket] a

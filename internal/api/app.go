@@ -783,13 +783,13 @@ func New(opts Options) (*App, error) {
 		return nil, fmt.Errorf("api: %w", err)
 	}
 	// AND WHAT EACH ARTIFACT'S APPLIERS COMMITTED, pushed to the sockets in
-	// its room, with every room told to re-read whenever this node's copies
-	// leave or return to service.
+	// its room: this node's own appliers while its copy serves and a sound
+	// peer's, relayed, while it does not, with every room told to re-read at
+	// each switch (the engine's live relay).
 	if r := opts.Rooms; r != nil && r.Feed != nil {
 		a.stopRooms = append(a.stopRooms,
 			r.Feed.OnArtifactsMoved(a.stream.ArtifactsMoved),
 			r.Feed.OnArtifactDataMoved(a.stream.ArtifactDataMoved))
-		r.Feed.SetOnArtifactsServing(a.stream.ArtifactsCopy)
 	}
 	// AND WHOSE INBOX MOVED, pushed to the sockets watching each seat —
 	// and when what this node hears has a gap, every watched inbox read
