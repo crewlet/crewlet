@@ -239,7 +239,20 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	// only thing that can have is what its ${VAR} references resolve to.
 	// Rebuilding the epoch without re-reading the store would make that
 	// gesture a no-op and rotation impossible without a restart.
-	e.refreshSecrets(ctx)
+	//
+	// A FAILED READ BUILDS ON THE PREVIOUS SNAPSHOT, and never on none: an
+	// engine holding a store that has never read it would resolve every
+	// ${VAR} from the environment alone and record that epoch as applied.
+	// [New] does not return without a snapshot ([Engine.bootSecrets]), so
+	// this refuses only an engine built some other way, and refuses it
+	// before anything changed.
+	if !e.refreshSecrets(ctx) && e.holdsSecretStore() && e.env.Load() == nil {
+		err := errors.New("this node has never read its secret store, so the " +
+			"revision's ${VAR} references would resolve from the environment alone")
+		log.WarnContext(ctx, "config_apply_failed", "error", err,
+			"detail", "the revision was refused before anything changed")
+		return configplane.StatusError, applied, fmt.Errorf("engine: apply: %w", err)
+	}
 	applied = append(applied, "secrets")
 	next, err := NewCompanyWith(cfg, e.resolver())
 	if err != nil {
