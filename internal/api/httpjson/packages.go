@@ -29,7 +29,7 @@ var goPackages = map[string]bool{
 	"engine": true, "envfile": true, "envref": true, "estate": true,
 	"eventfan": true, "eventfantest": true, "events": true, "execstate": true,
 	"extension": true, "externaltest": true, "fleetsecrets": true,
-	"github": true, "gitlab": true, "hostbox": true, "httpapi": true,
+	"github": true, "gitlab": true, "hostbox": true, "httpapi": true, "httpapitest": true,
 	"httpjson": true, "httpx": true, "httpxtest": true, "iam": true,
 	"iamapi": true, "iamdomain": true, "inbox": true, "integration": true,
 	"integrationtest": true, "jetstream": true, "jetstreamtest": true,
