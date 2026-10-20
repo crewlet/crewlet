@@ -38,11 +38,13 @@ import {
   FormField,
   IconButton,
   Input,
+  Link,
   LayersList,
   ListInput,
   Menu,
   Select,
   Textarea,
+  useMediaMatch,
   useToast,
   type CanvasBoardSelection,
   type CanvasHandle,
@@ -61,7 +63,7 @@ import {
   TrashGlyph,
   WandSparklesGlyph,
 } from "@crewlethq/icons/glyphs";
-import { useNavigator } from "~/app/router.tsx";
+import { href, useNavigator } from "~/app/router.tsx";
 import { artifactPath } from "~/app/routes.ts";
 import { plural, textBudget } from "~/lib/format.ts";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
@@ -87,6 +89,7 @@ import {
   reorderBoard,
   retypeNote,
   sizeWords,
+  taskBrief,
   tidy,
   type DesignDraft,
   type DraftBoard,
@@ -95,6 +98,8 @@ import {
 } from "~/lib/artifacts/designLayout.ts";
 import { CreateShell, useLeaveCreate } from "./CreateShell.tsx";
 import { titleHold, titleProblem, useWorkItem } from "./create.ts";
+import { useFileArtifactTask } from "./fileTask.ts";
+import { WhoBuildsIt, useWhoBuildsIt, type WhoBuildsItState } from "./WhoBuildsIt.tsx";
 
 /** Each frame preset's glyph. */
 const PRESET_GLYPHS: Record<FramePreset["id"], ReactNode> = {
@@ -118,6 +123,11 @@ export function DesignCreate() {
   const workItem = useWorkItem();
   const access = useArtifactAccess({ app: true });
   const create = useKeyedGesture();
+  const who = useWhoBuildsIt("design");
+  const ask = useFileArtifactTask();
+  // THE DESIGN ONCE IT IS MADE: a task refused after it was made is filed
+  // again on its own, so a second press never makes a second design.
+  const [made, setMade] = useState<string | null>(null);
 
   const [title, setTitle] = useState("");
   const [brief, setBrief] = useState("");
@@ -157,18 +167,72 @@ export function DesignCreate() {
 
   const hold = titleHold(title) ?? (draft ? draftHold(draft) : "Pick a layout.");
   const briefBudget = textBudget(brief, DESIGN_BRIEF_MAX_BYTES, "a design's brief");
-  const blocked = access.can ? (briefBudget.over ? "Shorten the brief." : hold) : access.reason;
+  const builder = who.builders.find((b) => b.seat.handle === who.seat);
+  const blocked = !access.can
+    ? access.reason
+    : (ask.held ??
+      (builder ? undefined : "Add an agent to the chart to build it.") ??
+      (briefBudget.over ? "Shorten the brief." : hold));
+  const busy = create.busy || ask.busy;
+  // A PHONE'S BAR HOLDS THE VERB ALONE: the agent's name is in the panel, and
+  // beside the page's title it pushed the title out of the bar.
+  const narrow = useMediaMatch("(width < 40rem)");
 
   const submit = useCallback(async () => {
-    if (!draft || blocked) return;
+    if (!draft || blocked || busy || !builder) return;
     const name = title.trim();
-    const answer = await create.run(
-      createDesign({ title: name, layout: layoutOf(draft), ...(workItem ? { workItem } : {}) }),
-    );
-    if (answer?.kind !== "done" || typeof answer.body.artifact !== "string") return;
-    toast.ok(`Started “${name}”`);
-    nav.replace(artifactPath(answer.body.artifact));
-  }, [draft, blocked, title, create, workItem, toast, nav]);
+    let id = made;
+    if (!id) {
+      const answer = await create.run(
+        createDesign({
+          title: name,
+          layout: layoutOf(draft),
+          // WHO BUILDS IT MAY: the agent publishes each board over its
+          // placeholder, which takes the editor's role on the design.
+          shares: [{ audience: { kind: "seat", id: builder.seat.handle }, role: "editor" }],
+          ...(workItem ? { workItem } : {}),
+        }),
+      );
+      if (answer?.kind !== "done" || typeof answer.body.artifact !== "string") return;
+      id = answer.body.artifact;
+      setMade(id);
+    }
+    const filed = await ask.fileArtifactTask({
+      kind: "design",
+      title: name,
+      brief: taskBrief({ brief, draft, links }),
+      seat: builder.seat.handle,
+      project: who.project || undefined,
+      artifact: id,
+    });
+    // REFUSED, THE PAGE STAYS: the refusal is drawn in the panel, and the
+    // next press files the task for the design already made.
+    if (!filed) return;
+    if (typeof filed.linked === "string") {
+      toast.show({
+        variant: "warning",
+        title: "The task was filed, and the design is not on its Artifacts card",
+        message: filed.linked,
+        action: { label: "Open the task", href: href(["work", filed.item]) },
+      });
+    }
+    nav.replace(artifactPath(id));
+  }, [
+    draft,
+    blocked,
+    busy,
+    builder,
+    title,
+    made,
+    create,
+    workItem,
+    ask,
+    brief,
+    links,
+    who.project,
+    toast,
+    nav,
+  ]);
 
   // COMMAND ENTER CREATES FROM ANYWHERE on the page, as a composer sends.
   useEffect(() => {
@@ -209,15 +273,29 @@ export function DesignCreate() {
   return (
     <CreateShell
       kind="design"
-      status={create.busy ? "Creating…" : undefined}
+      status={
+        create.busy
+          ? "Creating the design…"
+          : ask.busy
+            ? `Asking ${builder?.seat.name ?? "the agent"}…`
+            : undefined
+      }
       tools={tools}
       onCancel={() => (dirty ? setConfirmLeave(true) : leave())}
       action={{
-        label: "Create design",
+        label: narrow
+          ? made
+            ? "Ask"
+            : "Create"
+          : made
+            ? `Ask ${builder?.seat.name ?? "the agent"}`
+            : builder
+              ? `Create and ask ${builder.seat.name}`
+              : "Create design",
         icon: <PlusGlyph size="sm" />,
         keys: ["Mod", "Enter"],
         onSelect: () => void submit(),
-        disabledReason: create.busy ? "Creating the design." : blocked,
+        disabledReason: busy ? "Creating the design." : blocked,
       }}
     >
       {picking || !draft ? (
@@ -336,11 +414,21 @@ export function DesignCreate() {
                     if (!wrong) setLinks(next.map((l) => l.trim()));
                   }}
                   linkError={linkError}
+                  who={who}
                 />
               )}
               {create.answer && create.answer.kind !== "done" && (
                 <Callout variant="danger" title="The design was not created">
                   <p>{create.answer.text}</p>
+                </Callout>
+              )}
+              {made && ask.refusal && (
+                <Callout variant="warning" title="The design is made, and its task was not filed">
+                  <p>{ask.refusal.sentence}</p>
+                  <p>
+                    Press Ask again to file it, or{" "}
+                    <Link href={href(artifactPath(made))}>open the design</Link>.
+                  </p>
                 </Callout>
               )}
             </div>
@@ -491,6 +579,7 @@ function DesignPanel({
   links,
   onLinks,
   linkError,
+  who,
 }: {
   title: string;
   onTitle: (v: string) => void;
@@ -500,6 +589,7 @@ function DesignPanel({
   links: string[];
   onLinks: (next: string[]) => void;
   linkError: string | undefined;
+  who: WhoBuildsItState;
 }) {
   return (
     <div className="design-create-fields">
@@ -540,6 +630,8 @@ function DesignPanel({
         helper="Sites, files or other artifacts to look at."
         enterHint
       />
+      <h2 className="design-create-panel-title">Who builds it</h2>
+      <WhoBuildsIt who={who} />
     </div>
   );
 }

@@ -14,6 +14,28 @@ import { DesignCreate } from "./DesignCreate.tsx";
 vi.mock("~/lib/artifacts/access.ts", () => ({
   useArtifactAccess: () => ({ can: true }),
 }));
+const fileArtifactTask = vi.fn();
+const refusal = { current: null as { sentence: string } | null };
+vi.mock("./fileTask.ts", () => ({
+  useFileArtifactTask: () => ({
+    fileArtifactTask,
+    busy: false,
+    refusal: refusal.current,
+    held: null,
+  }),
+}));
+vi.mock("./WhoBuildsIt.tsx", () => ({
+  useWhoBuildsIt: () => ({
+    builders: [{ seat: { handle: "ava", name: "Ava Lindqvist" }, suggested: true }],
+    seat: "ava",
+    setSeat: () => {},
+    project: "DES",
+    setProject: () => {},
+    projects: [],
+    projectsLoading: false,
+  }),
+  WhoBuildsIt: () => <p>Ava builds it</p>,
+}));
 vi.mock("~/lib/keyedWrite.ts", async () => {
   const actual = await vi.importActual<typeof import("~/lib/keyedWrite.ts")>("~/lib/keyedWrite.ts");
   return { ...actual, useKeyedGesture: vi.fn() };
@@ -43,6 +65,9 @@ beforeEach(() => {
   run.mockReset();
   run.mockResolvedValue({ kind: "done", pending: false, body: { artifact: ID } });
   vi.mocked(useKeyedGesture).mockReturnValue({ run, busy: false, answer: null } as never);
+  fileArtifactTask.mockReset();
+  fileArtifactTask.mockResolvedValue({ item: "DES-1", key: "DES-1", linked: true });
+  refusal.current = null;
 });
 
 afterEach(() => {
@@ -86,9 +111,11 @@ test("the page opens on the starting layouts, the first one focused", () => {
   ];
   for (const name of names) expect(screen.getByRole("button", { name })).toBeTruthy();
   expect(document.activeElement).toBe(screen.getByRole("button", { name: "Landing page" }));
-  expect(screen.getByRole("button", { name: "Create design" }).getAttribute("aria-disabled")).toBe(
-    "true",
-  );
+  expect(
+    screen
+      .getByRole("button", { name: "Create and ask Ava Lindqvist" })
+      .getAttribute("aria-disabled"),
+  ).toBe("true");
 });
 
 test("a layout lays its boards on the canvas and the list beside it", () => {
@@ -113,16 +140,16 @@ test("the panel follows the selection: a board's frame preset sets its size", ()
   expect(screen.getByRole("heading", { name: "Design" })).toBeTruthy();
 });
 
-test("Create is held until the design is named, then sends the layout and opens the design", async () => {
+test("Create is held until the design is named, then makes it, asks the agent and opens the design", async () => {
   mount("#/artifacts/new/design?item=ENG-7");
   pickLanding();
-  const create = screen.getByRole("button", { name: "Create design" });
+  const create = screen.getByRole("button", { name: "Create and ask Ava Lindqvist" });
   expect(create.getAttribute("aria-disabled")).toBe("true");
   fireEvent.change(screen.getByRole("textbox", { name: /^Name/ }), {
     target: { value: " Launch " },
   });
   await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: "Create design" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create and ask Ava Lindqvist" }));
   });
   expect(run).toHaveBeenCalledOnce();
   const req = run.mock.calls[0]![0];
@@ -138,6 +165,18 @@ test("Create is held until the design is named, then sends the layout and opens 
     "Pricing",
     "Home on phone",
   ]);
+  // THE AGENT MAY PUBLISH OVER THE PLACEHOLDERS, and its task names the design.
+  expect(req.body.shares).toEqual([{ audience: { kind: "seat", id: "ava" }, role: "editor" }]);
+  expect(fileArtifactTask).toHaveBeenCalledWith(
+    expect.objectContaining({
+      kind: "design",
+      title: "Launch",
+      seat: "ava",
+      project: "DES",
+      artifact: ID,
+    }),
+  );
+  expect(fileArtifactTask.mock.calls[0]![0].brief).toContain("1. Home (1440 by 1024, Desktop)");
   expect(location.hash).toBe(`#/artifacts/${ID}`);
 });
 
@@ -170,4 +209,23 @@ test("a reference that is not a web address is refused on the field", () => {
   fireEvent.change(field, { target: { value: "javascript:alert(1)" } });
   fireEvent.keyDown(field, { key: "Enter" });
   expect(screen.getByText("A reference is a web address starting with https://.")).toBeTruthy();
+});
+
+test("a task refused after the design was made keeps the page, and the next press files only the task", async () => {
+  fileArtifactTask.mockResolvedValueOnce(null);
+  mount();
+  pickLanding();
+  fireEvent.change(screen.getByRole("textbox", { name: /^Name/ }), { target: { value: "Launch" } });
+  refusal.current = { sentence: "The project DES does not take new tasks." };
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Create and ask Ava Lindqvist" }));
+  });
+  expect(location.hash).toBe("#/artifacts/new/design");
+  expect(screen.getByText("The project DES does not take new tasks.")).toBeTruthy();
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Ask Ava Lindqvist" }));
+  });
+  expect(run).toHaveBeenCalledOnce();
+  expect(fileArtifactTask).toHaveBeenCalledTimes(2);
+  expect(location.hash).toBe(`#/artifacts/${ID}`);
 });
