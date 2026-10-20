@@ -53,6 +53,13 @@ export interface WidgetChoices {
   loading: boolean;
   /** Said when there is nothing to choose from: "No saved views yet." */
   empty?: string;
+  /**
+   * Said beside the choices when they are not every one there is: the
+   * question that lists them stopped at its page ("Only the first 200
+   * projects are offered."). A reader looking for one that is not offered is
+   * told why rather than left to conclude it does not exist.
+   */
+  partial?: string;
 }
 
 /**

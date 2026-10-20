@@ -22,6 +22,8 @@ import { FrameReadings } from "~/app/Shell.tsx";
 import { SessionReading } from "~/lib/frameSession.ts";
 import { healthFrame } from "~/test/health.ts";
 import { emptyDay } from "~/test/myWork.ts";
+import { noteReader } from "~/lib/reader.ts";
+import { resetForTest as resetStars, starsKey } from "~/lib/starred.ts";
 import { HomeDataProvider, useHomeData } from "../useHomeData.ts";
 import { WIDGETS, canUse } from "./registry.tsx";
 import { NOTHING_TO_LIST, destinationOf, type WidgetDef } from "./kit.tsx";
@@ -335,6 +337,21 @@ describe("a reader whose access no longer opens a widget's page", () => {
 // An answer that could not account for everything
 // ---------------------------------------------------------------------------
 
+/** One project, as `work_project` answers it. */
+const PROJECT = {
+  key: "LEAD",
+  name: "Launch",
+  unit: { key: "", name: "" },
+  lead: { handle: "cto" },
+  task_counts: { todo: 2, active: 1, done: 1 },
+  version: 1,
+  statuses: [],
+  types: [],
+  fields: [],
+  policy_stamp: 1,
+  complete: true,
+};
+
 /** A fleet read one node did not answer. */
 const SHORT_A_NODE = {
   complete: false,
@@ -357,6 +374,7 @@ const PARTIAL: Record<string, unknown> = {
   work_flow: { ...(QUIET.work_flow as object), complete: false },
   company_feed: { rows: [], complete: false },
   work_projects: { ...(QUIET.work_projects as object), complete: false },
+  work_project: { ...PROJECT, complete: false },
   work_inbox: { handle: "jane", notices: [], primary_reasons: [], complete: false },
   work_my_work: emptyDay("jane", { complete: false }),
   work_items: { items: [], total_hint: 0, total_capped: false, complete: false },
@@ -407,7 +425,7 @@ const NO_GAP: Record<string, string> = {
   "org.seat": "a seat's state is the live push",
   "org.roster": "the roster is the live push",
   "schedules.upcoming": "the schedules' answer carries no flag",
-  "home.pinned": "the reader's own stars, kept in this browser",
+  "home.pinned": "the reader's own stars, kept in this browser; a pinned project says its own gap",
   "home.live": "who is working is the live push",
   "home.tokens": "a window's spend carries no flag",
   "home.figure":
@@ -535,5 +553,65 @@ describe("the Inbox widget", () => {
     await settle();
     expect(screen.getByText("Inbox · 50+ unread")).toBeTruthy();
     expect(screen.getByText("All 50+ unread")).toBeTruthy();
+  });
+});
+
+describe("the Project widget", () => {
+  const def = () => WIDGETS.get("worklet.project")!;
+
+  // BY ITS KEY, never found in the picker's page: a project past the page the
+  // picker read is still the project the reader chose.
+  test("draws its project from the project's own answer, past the picker's page", async () => {
+    mount(<LeafView widget={leaf(def(), { project: "ENG" })} />, ADMIN, {
+      work_projects: { ...(QUIET.work_projects as object), truncated: true },
+      work_project: { ...PROJECT, key: "ENG", name: "Engineering" },
+      work_items: { items: [], total_hint: 0, total_capped: false, complete: true },
+    });
+    await settle();
+    expect(screen.getByText("ENG · Engineering")).toBeTruthy();
+    expect(screen.queryByText(/^Choose a .+ in Edit Home\.$/)).toBeNull();
+  });
+
+  test("a key the engine no longer answers to is said with its key", async () => {
+    mount(<LeafView widget={leaf(def(), { project: "GONE" })} />, ADMIN, {
+      work_project: () => Promise.reject(new QueryError("not_found")),
+    });
+    await settle();
+    expect(screen.getByText(/^There’s no project GONE any more\./)).toBeTruthy();
+  });
+
+  test("its picker says when the engine cut the list it offers", async () => {
+    function Choices() {
+      const choices = def().params![0]!.useChoices();
+      return <p>{choices.loading ? "…" : (choices.partial ?? "whole")}</p>;
+    }
+    mount(<Choices />, ADMIN, {
+      work_projects: { ...(QUIET.work_projects as object), truncated: true },
+    });
+    await settle();
+    expect(screen.getByText("Only the first 200 projects are offered.")).toBeTruthy();
+  });
+});
+
+describe("a pinned project", () => {
+  afterEach(() => resetStars());
+
+  test("draws its census from its own answer, however many projects the company has", async () => {
+    noteReader("p-1");
+    localStorage.setItem(
+      starsKey("p-1"),
+      JSON.stringify([
+        { path: ["worklet", "ENG"], label: "Engineering", workspace: "worklet", at: 1 },
+      ]),
+    );
+    resetStars();
+    mount(<LeafView widget={leaf(WIDGETS.get("home.pinned")!, {})} />, ADMIN, {
+      // THE FIRST PAGE OF PROJECTS DOES NOT HOLD IT.
+      work_projects: { ...(QUIET.work_projects as object), truncated: true },
+      work_project: { ...PROJECT, key: "ENG", name: "Engineering" },
+    });
+    await settle();
+    expect(screen.getByText("Engineering")).toBeTruthy();
+    expect(screen.getByText("25%")).toBeTruthy();
   });
 });

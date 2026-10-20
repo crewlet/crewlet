@@ -2922,7 +2922,11 @@ widgets, Cancel and Done. New task steps aside until Done.
   a count that stopped at its ceiling is written as the floor it is ("50+").
   A count another surface already says is read from that surface's reading,
   never from the widget's own page: the Inbox card's is the sidebar badge's
-  (`useInboxCounts`), so the two never name different numbers.
+  (`useInboxCounts`), so the two never name different numbers. And a widget
+  that follows one thing reads it by its key, as its own page does, never by
+  finding it in a page of a listing: the Project widget and a pinned project
+  ask `work_project`, so a project past the listing's first page is still the
+  one the reader chose, and a picker whose list the engine cut says so.
   Every widget module, and every card Home's own widgets draw, goes through
   `WidgetQuery` rather than `QueryState` or `EmptyState`, which
   `board/kit.test.tsx` holds, and `board/widgets.render.test.tsx` answers every
