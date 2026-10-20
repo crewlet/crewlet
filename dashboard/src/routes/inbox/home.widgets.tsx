@@ -12,7 +12,6 @@ import { useMemo } from "react";
 import { List, ListItem } from "@crewlethq/ui";
 import { InboxGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
-import { QueryState } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
@@ -27,7 +26,13 @@ import {
   rowWho,
   shortWhen,
 } from "~/routes/inbox/model.ts";
-import { WidgetCard, WidgetNote, defineWidgets } from "~/routes/home/board/kit.tsx";
+import {
+  WidgetCard,
+  WidgetNote,
+  WidgetQuery,
+  defineWidgets,
+  gapsOf,
+} from "~/routes/home/board/kit.tsx";
 import { ROWS, countLabel } from "~/routes/worklet/taskRows.tsx";
 
 function Updates() {
@@ -51,10 +56,11 @@ function Updates() {
       {!viewer.loading && owner === "" ? (
         <WidgetNote>This sign-in has no inbox.</WidgetNote>
       ) : (
-        <QueryState
+        <WidgetQuery
           error={read.error}
           refusal={read.refusal}
           loading={read.loading && !read.data}
+          gaps={gapsOf([read.data])}
           empty={
             read.data && rows.length === 0
               ? { title: "You are caught up", hint: "New updates that need you will land here." }
@@ -93,7 +99,7 @@ function Updates() {
               {`All ${countLabel(unread)} unread`}
             </a>
           ) : null}
-        </QueryState>
+        </WidgetQuery>
       )}
     </WidgetCard>
   );

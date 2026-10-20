@@ -14,7 +14,6 @@ import {
   BanGlyph,
 } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
-import { QueryState } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { companyDateLabel, relTime } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -25,7 +24,9 @@ import type { WorkView } from "~/protocol/index.ts";
 import {
   ChoiceNote,
   WidgetCard,
+  WidgetQuery,
   defineWidgets,
+  gapsOf,
   type WidgetChoices,
 } from "~/routes/home/board/kit.tsx";
 import { MoreLink, ROWS, TaskList, countLabel } from "~/routes/worklet/taskRows.tsx";
@@ -64,7 +65,7 @@ function SavedView({ params }: { params: Readonly<Record<string, string>> }) {
     return (
       <WidgetCard title="Saved view" from="worklet-views">
         {read.error ? (
-          <QueryState error={read.error} refusal={read.refusal} loading={false} />
+          <WidgetQuery error={read.error} refusal={read.refusal} loading={false} gaps={[]} />
         ) : read.loading && !read.data ? null : (
           <ChoiceNote thing="saved view" />
         )}
@@ -93,10 +94,11 @@ function ViewRows({ view }: { view: WorkView }) {
         </a>
       }
     >
-      <QueryState
+      <WidgetQuery
         error={read.error}
         refusal={read.refusal}
         loading={read.loading && !read.data}
+        gaps={gapsOf([read.data])}
         empty={
           read.data && rows.length === 0
             ? { title: "Nothing in this view", hint: "No task matches its filters right now." }
@@ -113,7 +115,7 @@ function ViewRows({ view }: { view: WorkView }) {
           query={run.query}
           noun="task"
         />
-      </QueryState>
+      </WidgetQuery>
     </WidgetCard>
   );
 }
@@ -160,7 +162,7 @@ function Project({ params }: { params: Readonly<Record<string, string>> }) {
     return (
       <WidgetCard title="Project" from="worklet">
         {read.error ? (
-          <QueryState error={read.error} refusal={read.refusal} loading={false} />
+          <WidgetQuery error={read.error} refusal={read.refusal} loading={false} gaps={[]} />
         ) : read.loading && !read.data ? null : (
           <ChoiceNote thing="project" />
         )}
@@ -204,7 +206,12 @@ function Project({ params }: { params: Readonly<Record<string, string>> }) {
             .join(" · ")}
         </p>
       </div>
-      <QueryState error={open.error} refusal={open.refusal} loading={open.loading && !open.data}>
+      <WidgetQuery
+        error={open.error}
+        refusal={open.refusal}
+        loading={open.loading && !open.data}
+        gaps={gapsOf([read.data, open.data])}
+      >
         {rows.length > 0 ? <TaskList rows={rows} /> : null}
         <MoreLink
           shown={rows.length}
@@ -214,7 +221,7 @@ function Project({ params }: { params: Readonly<Record<string, string>> }) {
           to={projectPath(project.key)}
           noun="open task"
         />
-      </QueryState>
+      </WidgetQuery>
     </WidgetCard>
   );
 }
@@ -252,15 +259,16 @@ function Filtered({
       from="worklet-tasks"
       query={query}
     >
-      <QueryState
+      <WidgetQuery
         error={read.error}
         refusal={read.refusal}
         loading={read.loading && !read.data}
+        gaps={gapsOf([read.data])}
         empty={read.data && rows.length === 0 ? empty : undefined}
       >
         <TaskList rows={rows} />
         <MoreLink shown={rows.length} total={total} to={to} query={query} noun="task" />
-      </QueryState>
+      </WidgetQuery>
     </WidgetCard>
   );
 }

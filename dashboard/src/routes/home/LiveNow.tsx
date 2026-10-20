@@ -11,7 +11,7 @@
  */
 
 import { useMemo } from "react";
-import { Card, EmptyState, Tag } from "@crewlethq/ui";
+import { Card, Tag } from "@crewlethq/ui";
 import { href } from "~/app/router.tsx";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { plural } from "~/lib/format.ts";
@@ -19,6 +19,7 @@ import { indexOrg } from "~/lib/seats.ts";
 import { runningShortList } from "~/lib/turns.ts";
 import { LiveDot, LiveTurnRow } from "~/components/LiveTurnRow.tsx";
 import type { AgentRow } from "~/protocol/index.ts";
+import { WidgetQuery } from "./board/kit.tsx";
 
 export function LiveNow({ agents, now }: { agents: readonly AgentRow[]; now: number }) {
   const org = useOrg();
@@ -49,23 +50,33 @@ export function LiveNow({ agents, now }: { agents: readonly AgentRow[]; now: num
         </Card.Title>
       </Card.Header>
       {working.length === 0 ? (
-        // THE KIT'S COMPACT EMPTY STATE, saying what the card is for: the
-        // greeting already says nobody is working.
-        <EmptyState
-          size="compact"
-          headingLevel="none"
-          title="No agent is working"
-          description="A running turn appears here with its steps and the way to watch it."
+        // THE KIT'S CLAIM, saying what the card is for: the greeting already
+        // says nobody is working. Drawn through WidgetQuery, as every Home
+        // card's claim of nothing is; the agents push says nothing it could
+        // not account for, so there is no gap to say.
+        <WidgetQuery
+          error={null}
+          loading={false}
+          gaps={[]}
+          empty={{
+            headingLevel: "none",
+            title: "No agent is working",
+            hint: "A running turn appears here with its steps and the way to watch it.",
+          }}
         />
       ) : shown.length === 0 ? (
         // WORKING, AND NOT YET ON A TURN THIS VIEW CAN NAME: a coding run is
         // out for a seat whose turn record has not reached the projection. An
         // empty list under a count of them would read as a list that failed.
-        <EmptyState
-          size="compact"
-          headingLevel="none"
-          title={`${plural(working.length, "seat")} working`}
-          description="Their turns are not named yet. They appear here once they are."
+        <WidgetQuery
+          error={null}
+          loading={false}
+          gaps={[]}
+          empty={{
+            headingLevel: "none",
+            title: `${plural(working.length, "seat")} working`,
+            hint: "Their turns are not named yet. They appear here once they are.",
+          }}
         />
       ) : (
         <ul className="live-list">

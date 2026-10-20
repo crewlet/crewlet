@@ -2907,6 +2907,21 @@ widgets, Cancel and Done. New task steps aside until Done.
   questions its page asks and only reads; every write stays on the page. A
   contribution that names no such page is left out and reported, and a suite
   (`board/registry.test.ts`) fails the build on it.
+- **A widget never says "nothing" over an answer that could not account for
+  everything.** An answer says when it is short: a record this build cannot
+  read met the read (`complete: false`), or a node did not answer a fleet read
+  (`coverage`). `WidgetQuery` in `routes/home/board/kit.tsx` is the one place
+  that is decided, over the gaps `gapsOf` reads from every answer a widget
+  draws and the widget's own lines (a muted room, a list cut at its bound): a
+  widget's claim ("You're caught up", "No turn failed in the last 24 hours")
+  is drawn only over an answer with no gap; with a gap and no rows the card
+  says there is nothing to list and why it may be wrong, and with rows it says
+  the gap under them. A figure says "May be incomplete" on its second line, and
+  a count that stopped at its ceiling is written as the floor it is ("50+").
+  Every widget module, and every card Home's own widgets draw, goes through
+  `WidgetQuery` rather than `QueryState` or `EmptyState`, which
+  `board/kit.test.tsx` holds, and `board/widgets.render.test.tsx` answers every
+  widget's questions short and holds each to saying so.
 - **Per reader, per browser**, as stars are (`STORAGE_KEYS.homeBoard`), and
   read back as untrusted input: every field is checked, every string capped,
   and every link held to a `#/` address or an `https://` one. A widget whose
@@ -7379,9 +7394,10 @@ and asks nothing.
   its page asks and re-reading on the frames its page re-reads on: **Unread
   rooms**, the rail's rooms with something unread and the engine's count on
   each — a muted room left out and counted, a rail cut at the engine's bound
-  said to count only the reader's most recently active rooms, and where the
-  cursors could not be read a sentence saying so, none of them ever drawn as
-  "caught up" — and **Mentions**, the feed's newest page, a mention in a
+  said to count only the reader's most recently active rooms, a room a newer
+  engine made counted as left out, a rail that met a record this build cannot
+  read said to be incomplete, and where the cursors could not be read a
+  sentence saying so, none of them ever drawn as "caught up" — and **Mentions**, the feed's newest page, a mention in a
   thread opening the thread. Neither marks anything read. Like every chat page
   they are the Chatlet app's, and a credential acting as no seat, or a company
   whose chat is a vendor's or none, is told so in a line and asked nothing.

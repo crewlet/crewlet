@@ -14,7 +14,6 @@ import { useMemo } from "react";
 import { Card, SegmentedMeter, StatusDot } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { href } from "~/app/router.tsx";
-import { QueryState } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { WORKLET, needsWords } from "~/lib/access.ts";
@@ -24,6 +23,7 @@ import { indexOrg } from "~/lib/seats.ts";
 import { companyDateLabel, plural } from "~/lib/format.ts";
 import type { WorkProjectRow } from "~/protocol/index.ts";
 import { projectPath } from "~/lib/work.ts";
+import { WidgetQuery, gapsOf } from "./board/kit.tsx";
 
 /** How many projects the card draws before "All projects". */
 export const PROJECT_ROWS = 3;
@@ -72,10 +72,20 @@ export function Projects() {
       {!viewer.loading && !viewer.worklet ? (
         <p className="home-card-note">{needsWords("Projects", [WORKLET])}</p>
       ) : (
-        <QueryState
+        <WidgetQuery
           error={read.error}
           refusal={read.refusal}
           loading={read.loading && !read.data}
+          gaps={[
+            ...gapsOf([read.data]),
+            // THE BUSIEST ARE CHOSEN FROM WHAT WAS READ, so past the page a
+            // busier project may be one this card never saw.
+            ...(read.data?.truncated
+              ? [
+                  `Only the first ${PROJECTS_PAGE} projects were read, so a busier one may be missing.`,
+                ]
+              : []),
+          ]}
           empty={
             read.data && rows.length === 0
               ? {
@@ -101,10 +111,12 @@ export function Projects() {
           </ul>
           {rows.length > PROJECT_ROWS && (
             <a className="home-card-more t-link" href={href(["worklet"])}>
-              {`All ${plural(rows.length, "project")}`}
+              {read.data?.truncated
+                ? `All ${rows.length.toLocaleString()}+ projects`
+                : `All ${plural(rows.length, "project")}`}
             </a>
           )}
-        </QueryState>
+        </WidgetQuery>
       )}
     </Card>
   );

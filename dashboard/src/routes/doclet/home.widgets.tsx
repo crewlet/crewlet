@@ -18,7 +18,6 @@ import {
   WandSparklesGlyph,
 } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
-import { QueryState } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { plural, relTime, tsKey } from "~/lib/format.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
@@ -40,7 +39,9 @@ import {
   ChoiceNote,
   WidgetCard,
   WidgetNote,
+  WidgetQuery,
   defineWidgets,
+  gapsOf,
   type WidgetProps,
 } from "~/routes/home/board/kit.tsx";
 
@@ -73,10 +74,11 @@ function Written({ container }: { container?: string }) {
     [feed.data, zone],
   );
   return (
-    <QueryState
+    <WidgetQuery
       error={feed.error}
       refusal={feed.refusal}
       loading={feed.loading && !feed.data}
+      gaps={gapsOf([feed.data])}
       empty={
         feed.data && runs.length === 0
           ? {
@@ -113,7 +115,7 @@ function Written({ container }: { container?: string }) {
           );
         })}
       </Rows>
-    </QueryState>
+    </WidgetQuery>
   );
 }
 
@@ -146,7 +148,7 @@ function SpaceActivity({ params }: WidgetProps) {
     return (
       <WidgetCard title="Space activity" from="doclet">
         {error ? (
-          <QueryState error={error} refusal={refusal} loading={false} />
+          <WidgetQuery error={error} refusal={refusal} loading={false} gaps={[]} />
         ) : read ? (
           <ChoiceNote thing="space" />
         ) : (
@@ -187,10 +189,11 @@ function Watching() {
       {viewer.unbound ? (
         <WidgetNote>This sign-in has no seat, so it watches no pages.</WidgetNote>
       ) : (
-        <QueryState
+        <WidgetQuery
           error={watched.error}
           refusal={watched.refusal}
           loading={watched.loading && !watched.data}
+          gaps={gapsOf([watched.data])}
           empty={
             watched.data && rows.length === 0
               ? { title: "No pages watched", hint: "Watch a page in Doclet to follow it." }
@@ -217,7 +220,7 @@ function Watching() {
               </ListItem>
             ))}
           </Rows>
-        </QueryState>
+        </WidgetQuery>
       )}
     </WidgetCard>
   );
@@ -239,10 +242,11 @@ function Skills() {
   );
   return (
     <WidgetCard title={total ? `Agent skills · ${total}` : "Agent skills"} from="doclet-skills">
-      <QueryState
+      <WidgetQuery
         error={listing.error}
         refusal={listing.refusal}
         loading={listing.loading && !listing.data}
+        gaps={gapsOf([listing.data])}
         empty={
           listing.data && newest.length === 0
             ? {
@@ -266,7 +270,7 @@ function Skills() {
             </ListItem>
           ))}
         </Rows>
-      </QueryState>
+      </WidgetQuery>
     </WidgetCard>
   );
 }
@@ -284,12 +288,25 @@ function Diaries() {
     [overview.data],
   );
   const total = overview.data?.seats.length ?? 0;
+  // A SEAT WHOSE HOLDER DID NOT ANSWER HAS NO COUNT, which is not a seat with
+  // nothing written: it is said beside the list, as the Diaries page lists
+  // it without a count, rather than dropped from it in silence.
+  const unread = (overview.data?.seats ?? []).filter((s) => uncounted(s)).length;
+  const gaps = [
+    ...gapsOf([overview.data]),
+    ...(unread === 1
+      ? ["1 agent’s diary couldn’t be read, so it isn’t listed."]
+      : unread > 1
+        ? [`${unread} agents’ diaries couldn’t be read, so they aren’t listed.`]
+        : []),
+  ];
   return (
     <WidgetCard title="Agent diaries" from="doclet-diaries">
-      <QueryState
+      <WidgetQuery
         error={overview.error}
         refusal={overview.refusal}
         loading={overview.loading && !overview.data}
+        gaps={gaps}
         empty={
           overview.data && seats.length === 0
             ? {
@@ -318,7 +335,7 @@ function Diaries() {
             </ListItem>
           ))}
         </Rows>
-      </QueryState>
+      </WidgetQuery>
     </WidgetCard>
   );
 }

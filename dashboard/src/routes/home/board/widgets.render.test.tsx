@@ -21,9 +21,10 @@ import { LiveSocket, QueryError, Store } from "~/protocol/index.ts";
 import { FrameReadings } from "~/app/Shell.tsx";
 import { SessionReading } from "~/lib/frameSession.ts";
 import { healthFrame } from "~/test/health.ts";
+import { emptyDay } from "~/test/myWork.ts";
 import { HomeDataProvider, useHomeData } from "../useHomeData.ts";
 import { WIDGETS, canUse } from "./registry.tsx";
-import { destinationOf, type WidgetDef } from "./kit.tsx";
+import { NOTHING_TO_LIST, destinationOf, type WidgetDef } from "./kit.tsx";
 import { LeafView } from "./widgets.tsx";
 import type { ContribWidget } from "./model.ts";
 
@@ -151,6 +152,7 @@ function mount(
   children: ReactNode,
   viewer: Record<string, unknown> = ADMIN,
   answers: Record<string, unknown> = {},
+  base: Record<string, unknown> = QUIET,
 ) {
   const store = new Store();
   store.applyHealth(healthFrame({ nodes: 1 }));
@@ -158,7 +160,7 @@ function mount(
   store.applySeats([] as never);
   const socket = new LiveSocket(store);
   socket.query = ((what: string) => {
-    const all: Record<string, unknown> = { ...QUIET, viewer, ...answers };
+    const all: Record<string, unknown> = { ...base, viewer, ...answers };
     return what in all
       ? Promise.resolve(all[what])
       : Promise.reject(new QueryError("unknown_query"));
@@ -323,5 +325,168 @@ describe("a reader whose access no longer opens a widget's page", () => {
     expect(
       screen.getByText("This widget is no longer available. Remove it in Edit Home."),
     ).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// An answer that could not account for everything
+// ---------------------------------------------------------------------------
+
+/** A fleet read one node did not answer. */
+const SHORT_A_NODE = {
+  complete: false,
+  nodes: [
+    { id: "node-1", answered: true, error: "" },
+    { id: "node-2", answered: false, error: "timeout" },
+  ],
+};
+
+/**
+ * Every question a widget reads whose answer can say it is short, answered
+ * EMPTY and saying so: a record this build cannot decode met the read
+ * (`complete: false`), or a node did not answer it (`coverage`). Each widget's
+ * choice is still offered (a saved view, a project, a space), so a widget is
+ * held to what it draws over its answer rather than to its picker.
+ */
+const PARTIAL: Record<string, unknown> = {
+  ...QUIET,
+  decisions: { handle: "jane", items: [], total: 0, capped: false, complete: false },
+  work_flow: { ...(QUIET.work_flow as object), complete: false },
+  company_feed: { rows: [], complete: false },
+  work_projects: { ...(QUIET.work_projects as object), complete: false },
+  work_inbox: { handle: "jane", notices: [], primary_reasons: [], complete: false },
+  work_my_work: emptyDay("jane", { complete: false }),
+  work_items: { items: [], total_hint: 0, total_capped: false, complete: false },
+  work_saved_views: {
+    complete: true,
+    views: [
+      {
+        id: "v-1",
+        key: "mine",
+        name: "Mine",
+        type: "list",
+        container: { kind: "workspace", id: "" },
+        builtin: false,
+      },
+    ],
+  },
+  page_activity: { changes: [], complete: false },
+  pages: { pages: [], total: 0, complete: false },
+  containers: { containers: [{ key: "ENG", name: "Engineering" }] },
+  memory_overview: { seats: [], coverage: SHORT_A_NODE },
+  turns: { turns: [], coverage: SHORT_A_NODE },
+  events: { events: [], coverage: SHORT_A_NODE },
+  config_audit: [],
+  backups: { policy: {}, points: [], history: [], more: false, coverage: SHORT_A_NODE },
+  chat_channels: {
+    read_level: "local",
+    complete: false,
+    position: { stream: "CREWLET_CHAT_LOG", generation: 1, seq: 1 },
+    channels: [],
+    read_state: true,
+    member: true,
+  },
+  chat_mentions: {
+    read_level: "local",
+    complete: false,
+    position: { stream: "CREWLET_CHAT_LOG", generation: 1, seq: 1 },
+    mentions: [],
+  },
+};
+
+/**
+ * The widgets whose answers carry NO flag saying what they could not account
+ * for, each with why. Every widget not named here is held to the gap rule
+ * below, so a widget added tomorrow is held to it until somebody writes down
+ * why it is not — and an entry naming a widget nobody offers fails.
+ */
+const NO_GAP: Record<string, string> = {
+  "org.seat": "a seat's state is the live push",
+  "org.roster": "the roster is the live push",
+  "schedules.upcoming": "the schedules' answer carries no flag",
+  "home.pinned": "the reader's own stars, kept in this browser",
+  "home.live": "who is working is the live push",
+  "home.tokens": "a window's spend carries no flag",
+  "home.figure":
+    "its first choice is the agents working now, the live push; the tracker's figures are held in Kpis.test.tsx",
+  "home.shortcut": "a link, which reads nothing",
+  "live.runs": "the runs' answer and the push carry no flag",
+  "live.events": "the push; what its seed could not account for is health's, not a question's",
+  "settings.nodes": "the fleet's answer carries no flag",
+  "integrations.connected": "its coverage is the traffic counts', which the card does not draw",
+  "settings.mcp-servers": "the servers' answer carries no flag",
+  "settings.models": "the company document carries no flag",
+  "settings.secrets": "the secret store's listing carries no flag",
+  "settings.config": "the revisions and the fleet carry no flag",
+  "settings.people": "its reads are the directory's REST routes, held in their own case",
+  "settings.spend": "a window's spend carries no flag",
+  "budgets.month": "the budget counter carries no flag",
+  "budgets.near-limit": "an unread counter is the answer's own `durable`, said as its empty state",
+  "settings.spend-by-model": "a window's spend carries no flag",
+  "settings.expensive-tasks": "a window's spend carries no flag",
+};
+
+/** Every sentence a gap is said in ends by saying the answer may be wrong. */
+const GAP = /may be (incomplete|short)/i;
+
+const CHATLET = { ...ADMIN, chat_backend: "chatlet" };
+
+describe("a widget over an answer that could not account for everything", () => {
+  test("every widget the list names is offered", () => {
+    expect(Object.keys(NO_GAP).filter((key) => !WIDGETS.has(key))).toEqual([]);
+  });
+
+  const held = defs.filter((d) => !(d.key in NO_GAP));
+
+  test("holds most of them to it", () => {
+    expect(held.length).toBeGreaterThan(20);
+  });
+
+  test.each(held.map((d) => [d.key, d] as const))(
+    "%s says what its answer missed, and never its own claim of nothing",
+    async (_key, def) => {
+      const { container } = mount(<Chosen def={def} />, CHATLET, {}, PARTIAL);
+      await settle();
+      const text = container.textContent ?? "";
+      expect(text).not.toMatch(BOUNDARY);
+      expect(text).toMatch(GAP);
+      // AN EMPTY STATE OVER A GAP IS THE KIT'S, never the widget's claim.
+      const titles = [...container.querySelectorAll(".crewlet-empty-state__title")].map(
+        (el) => el.textContent,
+      );
+      expect(titles.filter((title) => title !== NOTHING_TO_LIST)).toEqual([]);
+    },
+  );
+});
+
+describe("what a widget counts over a page", () => {
+  test("Projects says the busiest were chosen from a page the engine cut", async () => {
+    mount(<LeafView widget={leaf(WIDGETS.get("home.projects")!, {})} />, ADMIN, {
+      work_projects: { ...(QUIET.work_projects as object), truncated: true },
+    });
+    await settle();
+    expect(screen.getByText(/^Only the first 200 projects were read/)).toBeTruthy();
+  });
+
+  test("Backups counts failed runs over the newest runs when the history was cut", async () => {
+    const run = (outcome: string, i: number) => ({
+      id: `run-${i}`,
+      at: `2026-10-0${i + 1}T09:00:00Z`,
+      outcome,
+      summary: "",
+    });
+    const history = [run("failed", 0), run("succeeded", 1)];
+    const backups = { policy: {}, points: [], history, coverage: { complete: true, nodes: [] } };
+    mount(<LeafView widget={leaf(WIDGETS.get("settings.backups")!, {})} />, ADMIN, {
+      backups: { ...backups, more: true },
+    });
+    await settle();
+    expect(screen.getByText("in the newest 2")).toBeTruthy();
+    cleanup();
+    mount(<LeafView widget={leaf(WIDGETS.get("settings.backups")!, {})} />, ADMIN, {
+      backups: { ...backups, more: false },
+    });
+    await settle();
+    expect(screen.getByText("in the recent history")).toBeTruthy();
   });
 });

@@ -20,7 +20,6 @@ import { useEffect, useMemo } from "react";
 import { Count, List, ListItem } from "@crewlethq/ui";
 import { BellGlyph, MessageSquareGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
-import { QueryState } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { plural, relTime } from "~/lib/format.ts";
 import { indexOrg } from "~/lib/seats.ts";
@@ -28,7 +27,13 @@ import { useClient, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
-import { WidgetCard, WidgetNote, defineWidgets } from "~/routes/home/board/kit.tsx";
+import {
+  WidgetCard,
+  WidgetNote,
+  WidgetQuery,
+  defineWidgets,
+  gapsOf,
+} from "~/routes/home/board/kit.tsx";
 import { useChatActivity, useChatFrames, useChatRead, useCoalesced } from "./live.ts";
 import { badgesAreMeasured, isDirect, roomMark, roomTitle, unreadLabel } from "./rooms.ts";
 import { vendorChatName } from "./vendors.ts";
@@ -77,10 +82,13 @@ function useNameOf(): (handle: string) => string {
  * room is left out — the reader asked it not to call for them — and counted in
  * a line under the list, so a muted room is never silently missing; and a
  * reader in more rooms than the rail lists (`truncated`, the engine's bound) is
- * told only its most recently active are counted. WHAT IS LEFT OUT IS SAID IN
- * PLACE OF "CAUGHT UP" TOO: with nothing else to list, the empty state is
- * where those lines go, because "you are caught up" over a muted room with
- * messages waiting, or over rooms past the bound, is the claim they correct.
+ * told only its most recently active are counted. A room this build cannot
+ * present (`unreadable`) may hold unread messages too, and a read that met a
+ * record this build cannot decode (`complete: false`) may be missing rooms, so
+ * both are said beside the list as well. WHAT IS LEFT OUT IS SAID IN PLACE OF
+ * "CAUGHT UP" TOO: those lines are the widget's gaps (the kit's
+ * `WidgetQuery`), because "you're caught up" over a muted room with messages
+ * waiting, or over rooms past the bound, is the claim they correct.
  */
 function UnreadRooms() {
   const home = useChatHome();
@@ -104,10 +112,15 @@ function UnreadRooms() {
   const unread = (rail.data?.channels ?? []).filter((room) => room.unread > 0);
   const rooms = unread.filter((room) => !room.muted);
   const muted = unread.length - rooms.length;
+  const unreadable = rail.data?.unreadable ?? 0;
   const leftOut = [
+    ...gapsOf([rail.data]),
     muted > 0 ? `${plural(muted, "muted room")} with unread messages left out.` : "",
     rail.data?.truncated
-      ? `You are in more rooms than Chatlet lists, so only your ${rail.data.channels.length} most recently active are counted here.`
+      ? `You’re in more rooms than Chatlet lists, so only your ${rail.data.channels.length} most recently active are counted here.`
+      : "",
+    unreadable > 0
+      ? `${plural(unreadable, "room")} came from a newer version of the engine and ${unreadable === 1 ? "isn’t" : "aren’t"} counted.`
       : "",
   ].filter(Boolean);
   return (
@@ -123,19 +136,18 @@ function UnreadRooms() {
           new.
         </WidgetNote>
       ) : (
-        <QueryState
+        <WidgetQuery
           error={rail.error}
           refusal={rail.refusal}
           detail={rail.detail}
           loading={rail.loading && !rail.data}
+          gaps={leftOut}
           empty={
             rail.data && rooms.length === 0
-              ? leftOut.length > 0
-                ? { title: "Nothing unread to list", hint: leftOut.join(" ") }
-                : {
-                    title: "You are caught up",
-                    hint: "A room with something you have not read lands here.",
-                  }
+              ? {
+                  title: "You’re caught up",
+                  hint: "A room with something you haven’t read lands here.",
+                }
               : undefined
           }
         >
@@ -183,12 +195,7 @@ function UnreadRooms() {
               {`All ${plural(rooms.length, "unread room")}`}
             </a>
           ) : null}
-          {leftOut.map((line) => (
-            <p key={line} className="home-card-note">
-              {line}
-            </p>
-          ))}
-        </QueryState>
+        </WidgetQuery>
       )}
     </WidgetCard>
   );
@@ -209,11 +216,12 @@ function NewestMentions() {
       {home.note ? (
         <WidgetNote>{home.note}</WidgetNote>
       ) : (
-        <QueryState
+        <WidgetQuery
           error={first.error}
           refusal={first.refusal}
           detail={first.detail}
           loading={first.loading && !first.data}
+          gaps={gapsOf([first.data])}
           empty={
             first.data && mentions.length === 0
               ? {
@@ -248,7 +256,7 @@ function NewestMentions() {
               </ListItem>
             ))}
           </List>
-        </QueryState>
+        </WidgetQuery>
       )}
     </WidgetCard>
   );
