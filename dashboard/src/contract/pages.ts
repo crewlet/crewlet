@@ -131,6 +131,20 @@ export const PAGE_LABELS_MAX = 32;
 export const PAGE_LABEL_MAX_BYTES = 64;
 
 /**
+ * The orders a `pages` listing is read in — `internal/doclet`' `ListOrders`:
+ * `title`, the knowledge base's own (by space, title and id, the order every
+ * tree is drawn in), and `newest`, by when each page last changed, which the
+ * engine serves beside `skills: true` alone. Agent skills offers both, and
+ * Home's Agent skills widget asks for the newest.
+ *
+ * Held against the engine's list in both directions by
+ * `internal/doclet/client_gate_test.go`: an order the engine does not read is
+ * a `bad_params` refusal of the whole listing, and one it grew that nothing
+ * here names is an order nobody can ask for.
+ */
+export const PAGE_LIST_ORDERS = ["title", "newest"] as const;
+
+/**
  * What each change to a page reads as, in the two places a change is drawn:
  * `verb` before the page's title on the company's feed ("Ana saved Deploy
  * runbook"), and `phrase` on the page's own history, where the page goes

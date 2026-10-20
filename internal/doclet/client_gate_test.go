@@ -84,3 +84,38 @@ func TestEveryPageChangeTheEngineWritesReadsAsASentence(t *testing.T) {
 		}
 	}
 }
+
+// THE DASHBOARD ASKS FOR A LISTING IN EXACTLY THE ORDERS THE ENGINE READS.
+//
+// Agent skills offers the tool skills by name and newest first, and Home's
+// Agent skills widget asks for the newest, each as the `order` a `pages`
+// question carries, from `PAGE_LIST_ORDERS`. An order the dashboard sends that
+// the engine does not read is no mis-sorted list: the question refuses it as
+// bad params and the whole screen goes with it. An order the engine grew that
+// the dashboard does not name is one nobody can ask for. Both directions are
+// held.
+func TestTheDashboardAsksForExactlyTheOrdersAListingIsReadIn(t *testing.T) {
+	t.Parallel()
+	body, err := clientsource.Literal(clientsource.Tree(t), "PAGE_LIST_ORDERS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := clientsource.Strings(body)
+	if len(client) == 0 {
+		t.Fatal("the dashboard names no listing order at all, so this gate certifies nothing")
+	}
+	for _, name := range client {
+		if !doclet.ListOrder(name).Valid() {
+			t.Errorf("the dashboard asks for a listing in the order %q, which the engine "+
+				"does not read: the question is refused and the screen with it. The "+
+				"engine reads %v", name, doclet.ListOrders())
+		}
+	}
+	for _, order := range doclet.ListOrders() {
+		if !slices.Contains(client, string(order)) {
+			t.Errorf("the engine reads a listing in the order %q and the dashboard does "+
+				"not name it, so nobody can ask for it. The dashboard names %v",
+				order, client)
+		}
+	}
+}

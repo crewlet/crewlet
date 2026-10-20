@@ -671,7 +671,8 @@ Two properties differ from the vendor path and both are visible:
   true, order: "newest"}` lists the tool skills by when each last changed,
   newest first, from an index of the skill rows' own (replicated migration
   0067), and pages by a cursor in that order — so the first window is the
-  skills that really changed last, however many the company keeps. Whether a
+  skills that really changed last, however many the company keeps; Agent
+  skills' **Newest** and Home's Agent skills widget read it. Whether a
   page is a skill is derived from its body on every node rather than stored on
   the page, so no other listing has an index in that order and `newest` is
   refused anywhere but beside `skills=true`.

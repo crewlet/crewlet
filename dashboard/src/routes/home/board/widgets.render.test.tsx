@@ -581,6 +581,59 @@ describe("the Inbox widget", () => {
   });
 });
 
+describe("the Agent skills widget", () => {
+  const def = () => WIDGETS.get("doclet.skills")!;
+  const skill = (id: string, title: string, updated_at: string) => ({
+    id,
+    container: "SKILLS",
+    title,
+    status: "published",
+    version: 1,
+    skill: true,
+    updated_at,
+    revision: 1,
+  });
+
+  // THE NEWEST ARE THE ENGINE'S, read newest first across every skill the
+  // company keeps, and drawn in the order answered. It asked for fifty in the
+  // knowledge base's own order and sorted them here, so past fifty skills the
+  // newest was the newest of the alphabetically first fifty. Here the
+  // title-ordered answer holds none of the newest, and the newest skill's
+  // title sorts last.
+  //
+  // Mutation: ask without `order`, and the widget lists the title window;
+  // sort the answer here by title, and "Zeta" is drawn last.
+  test("lists the newest skills the engine read, in its order", async () => {
+    const asked: Record<string, unknown>[] = [];
+    mount(<LeafView widget={leaf(def(), {})} />, ADMIN, {
+      pages: (params: Record<string, unknown>) => {
+        asked.push(params);
+        return params.order === "newest"
+          ? {
+              pages: [
+                skill("s-9", "Zeta", "2026-10-19T10:00:00Z"),
+                skill("s-8", "Kappa", "2026-10-18T10:00:00Z"),
+              ],
+              total: 64,
+              limit: params.limit,
+            }
+          : {
+              pages: [skill("s-1", "Alpha", "2026-09-01T10:00:00Z")],
+              total: 64,
+              limit: params.limit,
+            };
+      },
+    });
+    await settle();
+    expect(asked.at(-1)).toMatchObject({ skills: true, status: "published", order: "newest" });
+    expect(screen.getByText("Agent skills · 64")).toBeTruthy();
+    expect(screen.queryByText("Alpha")).toBeNull();
+    const zeta = screen.getByText("Zeta");
+    const kappa = screen.getByText("Kappa");
+    expect(zeta.compareDocumentPosition(kappa)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+});
+
 describe("the Project widget", () => {
   const def = () => WIDGETS.get("worklet.project")!;
 
