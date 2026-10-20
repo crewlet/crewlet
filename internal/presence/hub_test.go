@@ -417,13 +417,21 @@ func TestALargeRoomPresentsTheMostRecentFifty(t *testing.T) {
 	if _, shown := a.seen.member(room1, "seat-59"); !shown {
 		t.Fatal("the most recent member is not presented")
 	}
-	_, roster, err := a.hub.Join(room1, Local{Seat: "late", Kind: iam.ActorHuman})
+	// A JOINER IS HANDED WHAT THE NODE'S SOCKETS ARE SHOWN — the fifty and
+	// their counts — and its own member beside them, until the next fan-out
+	// takes the least recent out as it does for every socket here.
+	lateSession, roster, err := a.hub.Join(room1, Local{Seat: "late", Kind: iam.ActorHuman})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !roster.Truncated || roster.Counts == nil || len(roster.Members) != RoomTop {
-		t.Fatalf("a joiner of a large room was handed %d members, counts %+v, truncated %v",
-			len(roster.Members), roster.Counts, roster.Truncated)
+	holdsItself := slices.ContainsFunc(roster.Members, func(m Member) bool {
+		return m.Session == lateSession
+	})
+	if !roster.Truncated || roster.Counts == nil || len(roster.Members) != RoomTop+1 ||
+		!holdsItself {
+		t.Fatalf("a joiner of a large room was handed %d members (itself among them: %v), "+
+			"counts %+v, truncated %v", len(roster.Members), holdsItself, roster.Counts,
+			roster.Truncated)
 	}
 
 	// DOWN TO 45: still the large-room shape, counting nobody hidden.
@@ -886,4 +894,66 @@ func TestARoomsFanOutsReachItsSinksInTheOrderTheyWereTaken(t *testing.T) {
 	close(release)
 	<-out
 	shown.waitFor(t, "the held sink", room1, "erin:viewing")
+}
+
+// A JOINER IS HANDED WHAT EVERY FAN-OUT AFTER ITS JOIN IS TAKEN FROM: what this
+// node's sockets were last shown, and itself.
+//
+// A fan-out is the difference from what the sockets were last shown, so a
+// joiner handed the room as it presented at the join holds a screen the next
+// fan-out does not apply to: erin, who arrived after the last fan-out and left
+// before the next, was in its roster and in no fan-out's leave, and stayed on
+// its screen for good.
+//
+// Mutation: hand the joiner r.present() rather than the baseline, and the
+// joiner's screen ends showing erin.
+func TestAJoinersScreenIsRightFromItsRoster(t *testing.T) {
+	t.Parallel()
+	broker, c := memory.NewBroker(), newClock()
+	n := startNode(t, broker, "node-a", c)
+	joiner := newScreen()
+	var joined atomic.Bool
+	inSink, release, out := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var first atomic.Bool
+	n.hub.OnChange(func(ch Change) {
+		if ch.Room != room1 {
+			return
+		}
+		if first.CompareAndSwap(false, true) {
+			// THE FIRST FAN-OUT IS HELD in this sink, so nothing is fanned
+			// out between erin's arrival and her leave.
+			close(inSink)
+			<-release
+			defer close(out)
+		}
+		if joined.Load() {
+			joiner.apply(ch)
+		}
+	})
+
+	if _, _, err := n.hub.Join(room1, dana); err != nil {
+		t.Fatal(err)
+	}
+	<-inSink
+	erinSession, _, err := n.hub.Join(room1, erin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, roster, err := n.hub.Join(room1, Local{Seat: "late", Kind: iam.ActorHuman})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joiner.apply(Change{Room: room1, Upsert: roster.Members, Leave: []string{},
+		Counts: roster.Counts, Truncated: roster.Truncated})
+	joined.Store(true)
+	n.hub.Leave(room1, erinSession)
+	close(release)
+	<-out
+
+	want := []string{"dana:viewing", "late:viewing"}
+	joiner.waitFor(t, "the joiner", room1, want...)
+	settle()
+	if got := joiner.members(room1); !slices.Equal(got, want) {
+		t.Fatalf("the joiner shows %v once the room settled, want %v", got, want)
+	}
 }

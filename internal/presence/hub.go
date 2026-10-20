@@ -291,7 +291,9 @@ func (h *Hub) Stop(ctx context.Context) {
 }
 
 // Join puts one socket in a room and answers the session it is known by there
-// and the room as it presents now, the socket's own member included. The
+// and the room as this node's sockets were last shown it, the socket's own
+// member included ([room.rosterFor]): every fan-out after it is the difference
+// from that, so the socket's screen is right from the first. The
 // caller has decided the socket may be in the room (for an artifact's, that it
 // may read the artifact); the hub decides nothing about who may be in a room.
 func (h *Hub) Join(id Room, who Local) (string, Roster, error) {
@@ -313,7 +315,7 @@ func (h *Hub) Join(id Room, who Local) (string, Roster, error) {
 	r, created := h.roomLocked(id)
 	r.local[member.Session] = &localMember{member: member, socket: true, touched: now}
 	r.changed(member.Session)
-	roster := r.roster(r.present())
+	roster := r.rosterFor(member)
 	h.scheduleLocked(r)
 	h.scheduleSendLocked(r)
 	rooms := len(h.rooms)
