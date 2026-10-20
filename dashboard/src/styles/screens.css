@@ -10373,18 +10373,13 @@ a.live-row:focus-visible {
   }
 }
 
-/* MAKE SOMETHING NEW: six tiles across, each the kind's drawing on its
-   tinted ground, with the room of a section under them before the work.
-   Narrower than six can stand at a readable size, they are three across in
-   two rows: every kind in view at once, none hidden past an edge a reader
-   has to discover by swiping. */
+/* MAKE SOMETHING NEW: a quiet heading over the kinds' tray, which lays
+   itself out by its own width (`ArtifactMakeRow`): every kind in view at
+   once, none hidden past an edge a reader has to discover by swiping. */
 .artifacts-make {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-4);
-  /* With the content column's own gap, the room of a section before the
-     work starts. */
-  margin-bottom: var(--spacing-2);
+  gap: var(--spacing-3);
 }
 .artifacts-make-title,
 .artifacts-group-title {
@@ -10396,23 +10391,6 @@ a.live-row:focus-visible {
   font-size: var(--font-size-md);
   font-weight: var(--font-weight-medium);
   line-height: 1.4;
-}
-.artifacts-make-title {
-  font-size: var(--font-size-lg);
-}
-.artifacts-make-row {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: var(--spacing-4);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-@container page (width < 720px) {
-  .artifacts-make-row {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: var(--spacing-4) var(--spacing-3);
-  }
 }
 
 /* THE TOOLBAR'S END: the trash and the shape, kept together at the far end
