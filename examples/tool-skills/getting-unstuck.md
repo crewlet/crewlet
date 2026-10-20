@@ -2,6 +2,9 @@
 key: skill:getting_unstuck
 trigger:
   any_of:
+    - tool: post_message
+    - tool: reply_in_thread
+    - tool: send_dm
     - tool: mattermost_post_message
     - tool: comment_on_work_item
     - tool: comment_on_page
@@ -52,6 +55,7 @@ Hand off on the surface where the problem already lives. The audit trail belongs
 | Where the problem lives | Where to hand off | How |
 |---|---|---|
 | Work item | Comment on the work item | `comment_on_work_item` + @-mention your manager via the `platform_mentions` skill |
+| Chatlet thread (the company's own chat) | Reply in the thread | `reply_in_thread` with `reply_to` set to the message you are answering + `@manager-handle` |
 | Mattermost thread | Reply in the thread | `mattermost_post_message` with `root_id` set to the thread root + `@manager-username` |
 | Page review | Comment on the page | `comment_on_page` + @-mention them by handle — a page does not subscribe its commenters, so a mention is the only thing that reaches anybody |
 | Merge request | Comment on the MR / request review | Your code-host MCP comment tool + mention |
@@ -72,7 +76,7 @@ A handoff message must include all four:
 # Anti-patterns
 
 - ❌ Asking for help without saying what you tried.
-- ❌ Asking the same person on multiple surfaces (Mattermost DM + work-item comment) — pick one.
+- ❌ Asking the same person on multiple surfaces (a chat DM + a work-item comment) — pick one.
 - ❌ Pinging the team channel for a question only one person can answer — DM that person.
 - ❌ Using A2A for a complex / strategic question — the conversation disappears from any human surface.
 - ❌ Reaching for a colleague because you don't want to think harder.  Re-plan first.

@@ -72,3 +72,49 @@ func TestTheBundledMentionsSkillGatesEveryNativeWrite(t *testing.T) {
 		t.Fatalf("a seat holding only reads (%v) is gated on the mentions skill", reads)
 	}
 }
+
+// THE CHAT PRACTICE SKILLS REACH A SEAT ON THE COMPANY'S OWN CHAT. Each was
+// written for Mattermost and triggered on its tools alone, so a company on
+// Chatlet — the default when no vendor block is declared — posted,
+// replied, opened a DM, listed its rooms and joined one without ever being
+// offered how to hand a problem to its manager, where to share a standing
+// rule or which room to choose. Each must be catalogued on a surface holding
+// one Chatlet tool and nothing else.
+func TestTheBundledChatPracticeSkillsFireOnChatlet(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		file, key string
+		tools     []string
+	}{
+		// A handoff is said where the problem lives, and on chat that is
+		// any of the three ways a seat says something.
+		{"getting-unstuck.md", "skill:getting_unstuck", chatlet.WriteTools()},
+		// A standing rule is shared by saying it, wherever it is said.
+		{"observed-directives.md", "skill:observed_directives", chatlet.WriteTools()},
+		// Choosing a room is listing the rooms, joining one, or posting in
+		// one; a DM or a reply has already chosen its conversation.
+		{"channel-discovery.md", "skill:channel_discovery",
+			[]string{chatlet.ListChannelsTool, chatlet.JoinChannelTool, chatlet.PostMessageTool}},
+	} {
+		s := bundled(t, tc.file)
+		if s.Key != tc.key {
+			t.Fatalf("%s: key = %q, want %q", tc.file, s.Key, tc.key)
+		}
+		catalogue := registry(t, s)
+		for _, tool := range tc.tools {
+			t.Run(tc.key+"/"+tool, func(t *testing.T) {
+				t.Parallel()
+				if len(catalogue.Matching(prompts.PhaseExecute, surface([]string{tool}))) != 1 {
+					t.Fatalf("a seat holding only %s is never offered %s (trigger %+v)",
+						tool, tc.key, s.Trigger)
+				}
+			})
+		}
+	}
+	// ADVISORY, as the tool-skills doc says: practice prose on the
+	// commonest calls a seat makes, which enforced would make every one of
+	// them wait on judgement rather than on markup a call can get wrong.
+	if bundled(t, "getting-unstuck.md").Required {
+		t.Fatal("the getting-unstuck skill is enforced; it ships advisory")
+	}
+}
