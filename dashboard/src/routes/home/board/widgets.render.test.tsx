@@ -120,21 +120,36 @@ const QUIET: Record<string, unknown> = {
   work_inbox: { handle: "jane", notices: [], primary_reasons: [] },
 };
 
+/**
+ * Answer REST reads from `served`, a path's own answer, and refuse every
+ * other one, as the default does. A path is matched as the read names it,
+ * query and all.
+ */
+function serveRest(served: Record<string, unknown> = {}) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input instanceof Request ? input.url : input);
+      const path = Object.keys(served).find((p) => url.endsWith(p));
+      return path !== undefined
+        ? new Response(JSON.stringify(served[path]), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          })
+        : new Response(JSON.stringify({ code: "not_found", message: "Not here." }), {
+            status: 404,
+            headers: { "Content-Type": "application/json" },
+          });
+    }),
+  );
+}
+
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
   location.hash = "#/home";
   // EVERY REST READ IS REFUSED: a widget that reads over REST draws the
   // refusal, never a crash.
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(
-      async () =>
-        new Response(JSON.stringify({ code: "not_found", message: "Not here." }), {
-          status: 404,
-          headers: { "Content-Type": "application/json" },
-        }),
-    ),
-  );
+  serveRest();
 });
 
 afterEach(() => {
@@ -439,7 +454,6 @@ const NO_GAP: Record<string, string> = {
   "settings.models": "the company document carries no flag",
   "settings.secrets": "the secret store's listing carries no flag",
   "settings.config": "the revisions and the fleet carry no flag",
-  "settings.people": "its reads are the directory's REST routes, held in their own case",
   "settings.spend": "a window's spend carries no flag",
   "budgets.month": "the budget counter carries no flag",
   "budgets.near-limit": "an unread counter is the answer's own `durable`, said as its empty state",
@@ -451,6 +465,13 @@ const NO_GAP: Record<string, string> = {
 const GAP = /may be (incomplete|short)/i;
 
 const CHATLET = { ...ADMIN, chat_backend: "chatlet" };
+
+/** The REST reads a widget makes, answered short as [PARTIAL] answers the socket's. */
+const PARTIAL_REST: Record<string, unknown> = {
+  "/iam/people?limit=200": { people: [] },
+  // A BINDING THIS NODE COULD NOT CHECK is the directory check's gap.
+  "/iam/check": { findings: [], people_with_admin: 1, bindings_unchecked: 2 },
+};
 
 describe("a widget over an answer that could not account for everything", () => {
   test("every widget the list names is offered", () => {
@@ -466,6 +487,7 @@ describe("a widget over an answer that could not account for everything", () => 
   test.each(held.map((d) => [d.key, d] as const))(
     "%s says what its answer missed, and never its own claim of nothing",
     async (_key, def) => {
+      serveRest(PARTIAL_REST);
       const { container } = mount(<Chosen def={def} />, CHATLET, {}, PARTIAL);
       await settle();
       const text = container.textContent ?? "";
@@ -613,5 +635,29 @@ describe("a pinned project", () => {
     await settle();
     expect(screen.getByText("Engineering")).toBeTruthy();
     expect(screen.getByText("25%")).toBeTruthy();
+  });
+});
+
+describe("the People & access widget", () => {
+  const check = (unchecked: number) => ({
+    "/iam/people?limit=200": { people: [] },
+    "/iam/check": { findings: [], people_with_admin: 1, bindings_unchecked: unchecked },
+  });
+
+  // "NO DANGLING BINDING" AND "THIS NODE COULD NOT SAY" ARE DIFFERENT ANSWERS,
+  // as the directory's own page draws them.
+  test("never says no access problems were found over bindings it could not check", async () => {
+    serveRest(check(2));
+    mount(<LeafView widget={leaf(WIDGETS.get("settings.people")!, {})} />);
+    await settle();
+    expect(await screen.findByText(/^2 bindings couldn’t be checked just now/)).toBeTruthy();
+    expect(screen.queryByText("No access problems found.")).toBeNull();
+  });
+
+  test("says no access problems were found when every binding was checked", async () => {
+    serveRest(check(0));
+    mount(<LeafView widget={leaf(WIDGETS.get("settings.people")!, {})} />);
+    await settle();
+    expect(await screen.findByText("No access problems found.")).toBeTruthy();
   });
 });
