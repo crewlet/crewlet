@@ -6467,6 +6467,21 @@ The API origin **never renders an artifact**:
   dashboard's `engine` datasets may read: each source's name, domain, purpose,
   who may read it, its typed parameters, its columns and key, the push that
   announces a change and the most rows it answers. Any resolved caller.
+- `GET /artifacts/sources/preview/{name}` answers one catalogue source's rows
+  **as the caller**, before any board exists: what the dashboard's New
+  dashboard builder draws its suggested figures from. Decided by
+  `create_artifact`, then answered by the very read a board's `engine`
+  dataset over the source is: the same question on the caller's own request,
+  the same 30 second per-principal cache, and at most the source's most rows.
+  The query string is the source's parameters, each held to the catalogue's
+  type and bounds and every one left out at its default; a parameter the source
+  does not take, a value outside its type or a key sent twice is
+  `400 bad_params`, and a name the catalogue does not list is `404 not_found`.
+  The answer is `{source, status}` with `table` and `as_of`, or `refusal` and
+  `detail`, exactly as a dataset's. It reads no artifact and records nothing.
+  One caller's previews are budgeted as their reads of one board are (two a
+  second, a burst of 64), past which it is `429 read_budget` with a
+  `Retry-After`.
 - `GET /artifacts/{id}/versions/{n}/files/{path}` streams one file as an
   **attachment**, any text and anything a browser could run (HTML, SVG, a
   script) as `text/plain`, under the API's own `default-src 'none'` policy and

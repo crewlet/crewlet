@@ -104,6 +104,9 @@ more.
 
 `list_dashboard_sources`, `crewlet artifacts sources` and
 `GET /artifacts/sources` list it, with each parameter's type and bounds.
+`GET /artifacts/sources/preview/{name}` reads one source's rows as the caller
+before any board exists, which is how the dashboard's New dashboard page draws
+its suggested figures.
 
 | Source | Reads | Who may read it | Parameters | Columns | Refreshes on |
 |---|---|---|---|---|---|

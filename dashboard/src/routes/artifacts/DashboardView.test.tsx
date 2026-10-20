@@ -15,6 +15,7 @@ import { ToastProvider } from "@crewlethq/ui";
 
 import { DashboardView } from "./DashboardView.tsx";
 import { ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
+import { ROWS_UNREAD } from "~/lib/artifacts/dashboard.ts";
 import type {
   ArtifactDetail,
   DashboardBoardAnswer,
@@ -108,6 +109,8 @@ let amounts: number[];
 let reads: Record<string, number>;
 /** Whether the next spend read is refused by the read budget. */
 let budgetSpent: boolean;
+/** Whether the spend read fails as a node that could not reach its domain. */
+let spendUnreadable: boolean;
 
 const ready = (dataset: string, rows: DashboardDatasetAnswer["table"]): DashboardDatasetAnswer => ({
   artifact: ID,
@@ -153,6 +156,12 @@ function answer(dataset: string): {
         },
       };
     case "spend":
+      if (spendUnreadable) {
+        return {
+          status: 503,
+          body: { error: "unavailable", detail: "this node could not read spend right now" },
+        };
+      }
       if (budgetSpent) {
         budgetSpent = false;
         return {
@@ -176,6 +185,7 @@ beforeEach(() => {
   amounts = [100, 250];
   reads = {};
   budgetSpent = false;
+  spendUnreadable = false;
   Object.defineProperty(globalThis, "fetch", {
     writable: true,
     value: vi.fn(async (input: RequestInfo | URL) => {
@@ -291,6 +301,16 @@ test("a read the budget refused is asked again once the wait it named is over", 
     timeout: 3000,
   });
   expect(reads.spend).toBe(2);
+});
+
+// A READ THAT FAILED OUTSIDE THE ANSWER'S STATUSES is said in a reader's
+// words: the route's detail names a node and a domain, not anything a person
+// can act on.
+test("a dataset that could not be read says so in a reader's words, never the route's", async () => {
+  spendUnreadable = true;
+  mount(dataStore());
+  await waitFor(() => expect(within(widget("seats")).getByText(ROWS_UNREAD)).toBeTruthy());
+  expect(document.body.textContent).not.toContain("this node could not read");
 });
 
 test("the Sources rail lists every dataset with how it is kept current", async () => {

@@ -117,9 +117,6 @@ test("a dataset's status is what the engine answered, live for a store and stale
 
 test("a widget's CSV is its dataset's rows, every formula-led text cell guarded and every number bare", () => {
   const { header, rows } = csvOf({
-    artifact: "a",
-    version: 1,
-    dataset: "deals",
     status: "ready",
     table: {
       columns: [

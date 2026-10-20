@@ -1,0 +1,596 @@
+{
+  "every_figure": {
+    "v": 1,
+    "title": "Every figure",
+    "datasets": [
+      {
+        "id": "tracker_items",
+        "title": "Work items",
+        "source": "engine",
+        "engine": {
+          "name": "tracker.items"
+        }
+      },
+      {
+        "id": "tracker_items_overdue",
+        "title": "Work items, overdue",
+        "source": "engine",
+        "engine": {
+          "name": "tracker.items",
+          "params": {
+            "scope": "overdue"
+          }
+        }
+      },
+      {
+        "id": "tracker_items_blocked",
+        "title": "Work items, blocked",
+        "source": "engine",
+        "engine": {
+          "name": "tracker.items",
+          "params": {
+            "scope": "blocked"
+          }
+        }
+      },
+      {
+        "id": "tracker_workload",
+        "title": "Workload",
+        "source": "engine",
+        "engine": {
+          "name": "tracker.workload"
+        }
+      },
+      {
+        "id": "spend_seats",
+        "title": "Spend by seat",
+        "source": "engine",
+        "engine": {
+          "name": "spend.seats"
+        }
+      },
+      {
+        "id": "spend_daily",
+        "title": "Spend by day",
+        "source": "engine",
+        "engine": {
+          "name": "spend.daily"
+        }
+      },
+      {
+        "id": "agents_status",
+        "title": "Agent status",
+        "source": "engine",
+        "engine": {
+          "name": "agents.status"
+        }
+      }
+    ],
+    "widgets": [
+      {
+        "type": "stat",
+        "w": 3,
+        "agg": "count",
+        "format": "integer",
+        "id": "tracker_items_count",
+        "title": "Work items",
+        "dataset": "tracker_items"
+      },
+      {
+        "type": "stat",
+        "w": 3,
+        "agg": "count",
+        "format": "integer",
+        "id": "tracker_items_overdue",
+        "title": "Overdue",
+        "dataset": "tracker_items_overdue"
+      },
+      {
+        "type": "stat",
+        "w": 3,
+        "agg": "count",
+        "format": "integer",
+        "id": "tracker_items_blocked",
+        "title": "Blocked",
+        "dataset": "tracker_items_blocked"
+      },
+      {
+        "type": "table",
+        "w": 12,
+        "columns": [
+          "key",
+          "title",
+          "status",
+          "assignee",
+          "due"
+        ],
+        "limit": 10,
+        "id": "tracker_items_table",
+        "title": "Work items",
+        "dataset": "tracker_items"
+      },
+      {
+        "type": "table",
+        "w": 6,
+        "columns": [
+          "key",
+          "title",
+          "assignee",
+          "due"
+        ],
+        "limit": 10,
+        "id": "tracker_items_overdue_table",
+        "title": "Overdue work",
+        "dataset": "tracker_items_overdue"
+      },
+      {
+        "type": "stat",
+        "w": 3,
+        "value": "open",
+        "agg": "sum",
+        "format": "integer",
+        "id": "tracker_workload_open",
+        "title": "Open work",
+        "dataset": "tracker_workload"
+      },
+      {
+        "type": "stat",
+        "w": 3,
+        "value": "blocked",
+        "agg": "sum",
+        "format": "integer",
+        "id": "tracker_workload_blocked",
+        "title": "Blocked",
+        "dataset": "tracker_workload"
+      },
+      {
+        "type": "stat",
+        "w": 3,
+        "value": "overdue",
+        "agg": "sum",
+        "format": "integer",
+        "id": "tracker_workload_overdue",
+        "title": "Overdue",
+        "dataset": "tracker_workload"
+      },
+      {
+        "type": "bars",
+        "w": 6,
+        "label": "handle",
+        "value": "open",
+        "limit": 10,
+        "format": "integer",
+        "id": "tracker_workload_by_assignee",
+        "title": "Open work by assignee",
+        "dataset": "tracker_workload"
+      },
+      {
+        "type": "table",
+        "w": 6,
+        "columns": [
+          "handle",
+          "open",
+          "points",
+          "blocked",
+          "overdue"
+        ],
+        "limit": 20,
+        "id": "tracker_workload_table",
+        "title": "Workload",
+        "dataset": "tracker_workload"
+      },
+      {
+        "type": "stat",
+        "w": 3,
+        "value": "total_tokens",
+        "agg": "sum",
+        "format": "compact",
+        "id": "spend_seats_total",
+        "title": "Tokens used",
+        "dataset": "spend_seats"
+      },
+      {
+        "type": "bars",
+        "w": 6,
+        "label": "name",
+        "value": "total_tokens",
+        "limit": 10,
+        "format": "compact",
+        "id": "spend_seats_by_seat",
+        "title": "Tokens by seat",
+        "dataset": "spend_seats"
+      },
+      {
+        "type": "share",
+        "w": 6,
+        "label": "name",
+        "value": "total_tokens",
+        "format": "compact",
+        "id": "spend_seats_share",
+        "title": "Share of tokens",
+        "dataset": "spend_seats"
+      },
+      {
+        "type": "table",
+        "w": 6,
+        "columns": [
+          "name",
+          "total_tokens",
+          "input_tokens",
+          "output_tokens",
+          "calls"
+        ],
+        "limit": 20,
+        "id": "spend_seats_table",
+        "title": "Spend by seat",
+        "dataset": "spend_seats"
+      },
+      {
+        "type": "stat",
+        "w": 3,
+        "value": "total_tokens",
+        "agg": "sum",
+        "format": "compact",
+        "id": "spend_daily_total",
+        "title": "Tokens in the window",
+        "dataset": "spend_daily"
+      },
+      {
+        "type": "columns",
+        "w": 8,
+        "x": "day",
+        "y": [
+          "total_tokens"
+        ],
+        "by": "band",
+        "format": "compact",
+        "id": "spend_daily_columns",
+        "title": "Tokens per day",
+        "dataset": "spend_daily"
+      },
+      {
+        "type": "timeseries",
+        "w": 8,
+        "x": "day",
+        "y": [
+          "total_tokens"
+        ],
+        "by": "band",
+        "format": "compact",
+        "id": "spend_daily_trend",
+        "title": "Token trend",
+        "dataset": "spend_daily"
+      },
+      {
+        "type": "stat",
+        "w": 3,
+        "agg": "count",
+        "format": "integer",
+        "id": "agents_status_count",
+        "title": "Agents",
+        "dataset": "agents_status"
+      },
+      {
+        "type": "table",
+        "w": 12,
+        "columns": [
+          "name",
+          "activity",
+          "phase",
+          "last_turn_at",
+          "last_outcome"
+        ],
+        "limit": 20,
+        "id": "agents_status_table",
+        "title": "Agents now",
+        "dataset": "agents_status"
+      }
+    ]
+  },
+  "workload": {
+    "v": 1,
+    "title": "Team workload",
+    "datasets": [
+      {
+        "id": "tracker_workload",
+        "title": "Workload",
+        "source": "engine",
+        "engine": {
+          "name": "tracker.workload"
+        }
+      },
+      {
+        "id": "tracker_items_overdue",
+        "title": "Work items, overdue",
+        "source": "engine",
+        "engine": {
+          "name": "tracker.items",
+          "params": {
+            "scope": "overdue"
+          }
+        }
+      }
+    ],
+    "widgets": [
+      {
+        "type": "stat",
+        "w": 4,
+        "value": "open",
+        "agg": "sum",
+        "format": "integer",
+        "id": "tracker_workload_open",
+        "title": "Open work",
+        "dataset": "tracker_workload"
+      },
+      {
+        "type": "stat",
+        "w": 4,
+        "value": "blocked",
+        "agg": "sum",
+        "format": "integer",
+        "id": "tracker_workload_blocked",
+        "title": "Blocked",
+        "dataset": "tracker_workload"
+      },
+      {
+        "type": "stat",
+        "w": 4,
+        "value": "overdue",
+        "agg": "sum",
+        "format": "integer",
+        "id": "tracker_workload_overdue",
+        "title": "Overdue",
+        "dataset": "tracker_workload"
+      },
+      {
+        "type": "bars",
+        "w": 6,
+        "label": "handle",
+        "value": "open",
+        "limit": 10,
+        "format": "integer",
+        "id": "tracker_workload_by_assignee",
+        "title": "Open work by assignee",
+        "dataset": "tracker_workload"
+      },
+      {
+        "type": "table",
+        "w": 6,
+        "columns": [
+          "key",
+          "title",
+          "assignee",
+          "due"
+        ],
+        "limit": 10,
+        "id": "tracker_items_overdue_table",
+        "title": "Overdue work",
+        "dataset": "tracker_items_overdue"
+      }
+    ]
+  },
+  "spend": {
+    "v": 1,
+    "title": "Token spend",
+    "datasets": [
+      {
+        "id": "spend_daily",
+        "title": "Spend by day",
+        "source": "engine",
+        "engine": {
+          "name": "spend.daily"
+        }
+      },
+      {
+        "id": "spend_seats",
+        "title": "Spend by seat",
+        "source": "engine",
+        "engine": {
+          "name": "spend.seats"
+        }
+      }
+    ],
+    "widgets": [
+      {
+        "type": "stat",
+        "w": 4,
+        "value": "total_tokens",
+        "agg": "sum",
+        "format": "compact",
+        "id": "spend_daily_total",
+        "title": "Tokens in the window",
+        "dataset": "spend_daily"
+      },
+      {
+        "type": "columns",
+        "w": 8,
+        "x": "day",
+        "y": [
+          "total_tokens"
+        ],
+        "by": "band",
+        "format": "compact",
+        "id": "spend_daily_columns",
+        "title": "Tokens per day",
+        "dataset": "spend_daily"
+      },
+      {
+        "type": "bars",
+        "w": 6,
+        "label": "name",
+        "value": "total_tokens",
+        "limit": 10,
+        "format": "compact",
+        "id": "spend_seats_by_seat",
+        "title": "Tokens by seat",
+        "dataset": "spend_seats"
+      },
+      {
+        "type": "share",
+        "w": 6,
+        "label": "name",
+        "value": "total_tokens",
+        "format": "compact",
+        "id": "spend_seats_share",
+        "title": "Share of tokens",
+        "dataset": "spend_seats"
+      }
+    ]
+  },
+  "agents": {
+    "v": 1,
+    "title": "Agent activity",
+    "datasets": [
+      {
+        "id": "agents_status",
+        "title": "Agent status",
+        "source": "engine",
+        "engine": {
+          "name": "agents.status"
+        }
+      },
+      {
+        "id": "tracker_workload",
+        "title": "Workload",
+        "source": "engine",
+        "engine": {
+          "name": "tracker.workload"
+        }
+      },
+      {
+        "id": "spend_seats",
+        "title": "Spend by seat",
+        "source": "engine",
+        "engine": {
+          "name": "spend.seats"
+        }
+      }
+    ],
+    "widgets": [
+      {
+        "type": "stat",
+        "w": 4,
+        "agg": "count",
+        "format": "integer",
+        "id": "agents_status_count",
+        "title": "Agents",
+        "dataset": "agents_status"
+      },
+      {
+        "type": "stat",
+        "w": 4,
+        "value": "open",
+        "agg": "sum",
+        "format": "integer",
+        "id": "tracker_workload_open",
+        "title": "Open work",
+        "dataset": "tracker_workload"
+      },
+      {
+        "type": "stat",
+        "w": 4,
+        "value": "total_tokens",
+        "agg": "sum",
+        "format": "compact",
+        "id": "spend_seats_total",
+        "title": "Tokens used",
+        "dataset": "spend_seats"
+      },
+      {
+        "type": "table",
+        "w": 12,
+        "columns": [
+          "name",
+          "activity",
+          "phase",
+          "last_turn_at",
+          "last_outcome"
+        ],
+        "limit": 20,
+        "id": "agents_status_table",
+        "title": "Agents now",
+        "dataset": "agents_status"
+      }
+    ]
+  },
+  "work": {
+    "v": 1,
+    "title": "Work overview",
+    "datasets": [
+      {
+        "id": "tracker_items",
+        "title": "Work items",
+        "source": "engine",
+        "engine": {
+          "name": "tracker.items"
+        }
+      },
+      {
+        "id": "tracker_items_overdue",
+        "title": "Work items, overdue",
+        "source": "engine",
+        "engine": {
+          "name": "tracker.items",
+          "params": {
+            "scope": "overdue"
+          }
+        }
+      },
+      {
+        "id": "tracker_items_blocked",
+        "title": "Work items, blocked",
+        "source": "engine",
+        "engine": {
+          "name": "tracker.items",
+          "params": {
+            "scope": "blocked"
+          }
+        }
+      }
+    ],
+    "widgets": [
+      {
+        "type": "stat",
+        "w": 4,
+        "agg": "count",
+        "format": "integer",
+        "id": "tracker_items_count",
+        "title": "Work items",
+        "dataset": "tracker_items"
+      },
+      {
+        "type": "stat",
+        "w": 4,
+        "agg": "count",
+        "format": "integer",
+        "id": "tracker_items_overdue",
+        "title": "Overdue",
+        "dataset": "tracker_items_overdue"
+      },
+      {
+        "type": "stat",
+        "w": 4,
+        "agg": "count",
+        "format": "integer",
+        "id": "tracker_items_blocked",
+        "title": "Blocked",
+        "dataset": "tracker_items_blocked"
+      },
+      {
+        "type": "table",
+        "w": 12,
+        "columns": [
+          "key",
+          "title",
+          "status",
+          "assignee",
+          "due"
+        ],
+        "limit": 10,
+        "id": "tracker_items_table",
+        "title": "Work items",
+        "dataset": "tracker_items"
+      }
+    ]
+  }
+}

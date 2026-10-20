@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/artifactdataapi"
 	"github.com/crewlet/crewlet/internal/api/artifactsapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifacts"
@@ -135,14 +136,21 @@ func New(opts Options) (*Service, error) {
 // precondition, as every artifact route does, and the handler decides the
 // read on the artifact through the artifacts' own gate before anything is
 // read. The catalogue is the engine's own vocabulary, any resolved caller's.
+// A source's preview is a builder's, so it asks what making a board asks
+// (`create_artifact`); the rows themselves are decided by the source's own
+// question, as the viewer, exactly as a board's dataset over it is.
 func (s *Service) Routes(mux authz.Mux) error {
 	router := authz.NewRouter(mux, authz.ContextGuard(s.chart))
 	pre := authz.Policy{Action: authz.ActionArtifactList, Object: func(*http.Request) authz.Object {
 		return authz.Object{Kind: authz.KindArtifact}
 	}}
+	create := authz.Policy{Action: authz.ActionArtifactCreate, Object: func(*http.Request) authz.Object {
+		return authz.Object{Kind: authz.KindArtifact}
+	}}
 	return errors.Join(
 		router.Handle("GET /artifacts/{id}/versions/{n}/sources/{dataset}", pre, http.HandlerFunc(s.dataset)),
 		router.Handle("GET /artifacts/sources", pre, http.HandlerFunc(s.catalogue)),
+		router.Handle("GET /artifacts/sources/preview/{name}", create, http.HandlerFunc(s.preview)),
 	)
 }
 
@@ -175,7 +183,21 @@ type Answer struct {
 	Artifact artifacts.ID `json:"artifact"`
 	Version  int          `json:"version"`
 	Dataset  string       `json:"dataset"`
-	Status   string       `json:"status"`
+	Reading
+}
+
+// Preview is one engine source read directly, as its viewer may read it
+// (`GET /artifacts/sources/preview/{name}`): what a builder draws suggested
+// figures from before any board exists.
+type Preview struct {
+	Source string `json:"source"`
+	Reading
+}
+
+// Reading is what one read of a dataset or a source answered: its rows, or
+// why the viewer is not handed any.
+type Reading struct {
+	Status string `json:"status"`
 
 	// AsOf is when the rows were true: when the domain answered (a cached
 	// answer keeps the instant it was read at), when the datastore was
@@ -257,51 +279,121 @@ func (s *Service) dataset(w http.ResponseWriter, r *http.Request) {
 			"detail": "version's board has no dataset " + id})
 		return
 	}
-	sent := map[string]string{}
-	for key, values := range r.URL.Query() {
-		if len(values) != 1 {
-			httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams, map[string]string{
-				"detail": "the filter " + key + " takes one value"})
-			return
-		}
-		sent[key] = values[0]
+	sent, ok := singleValues(w, r, "filter")
+	if !ok {
+		return
 	}
 	params, err := b.Spec.ResolveParams(sent)
 	if err != nil {
-		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams, map[string]string{
-			"detail": strings.TrimPrefix(err.Error(), dashspec.ErrInvalid.Error()+": ")})
+		badParams(w, err)
 		return
 	}
 	rd := &read{ctx: r.Context(), a: a, board: b, params: params, done: map[string]result{}}
 	res := s.read(rd, id)
 	out := Answer{Artifact: a.Head.ID, Version: n, Dataset: id}
+	if !settle(w, r, res, &out.Reading, id, "this board's live data was read too often; it "+
+		"refreshes once the budget refills", "artifact", a.Head.ID.String(), "dataset", id) {
+		return
+	}
+	httpjson.Write(w, http.StatusOK, out)
+}
+
+// preview answers one engine source read directly, as its viewer, for a
+// builder drawing figures before any board exists. It is the very read a
+// board's dataset over the source is (the same question on the request's own
+// context, the same per-principal cache, the viewer's own budget) and touches
+// no artifact: nothing is opened, recorded or kept but the cached answer.
+func (s *Service) preview(w http.ResponseWriter, r *http.Request) {
+	p, how := iam.From(r.Context())
+	if how != iam.Resolved {
+		operator.RefuseDecision(w, r, authz.ActionArtifactCreate, authz.Decision{Err: iam.Reason(r.Context())})
+		return
+	}
+	src, ok := dashspec.Source(r.PathValue("name"))
+	if !ok {
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound, map[string]string{
+			"detail": "the catalogue has no engine source " + r.PathValue("name")})
+		return
+	}
+	sent, ok := singleValues(w, r, "parameter")
+	if !ok {
+		return
+	}
+	args, err := dashspec.SourceArgs(src, sent)
+	if err != nil {
+		badParams(w, err)
+		return
+	}
+	res := s.engineRows(r.Context(), p, previewScope(p), src.Name, src, args)
+	out := Preview{Source: src.Name}
+	if !settle(w, r, res, &out.Reading, src.Name, "your previews read live data too often; they "+
+		"refresh once the budget refills", "source", src.Name) {
+		return
+	}
+	httpjson.Write(w, http.StatusOK, out)
+}
+
+// previewScope is the budget's scope for one principal's previews: a preview
+// has no artifact whose readers share a bucket, so a principal's previews are
+// a scope of their own, held to a viewer's rate on one board.
+func previewScope(p iam.Principal) string { return "preview\x00" + principalKey(p) }
+
+// singleValues is the query string as one value per key, refusing a key sent
+// twice; `what` names a key in the refusal ("filter", "parameter").
+func singleValues(w http.ResponseWriter, r *http.Request, what string) (map[string]string, bool) {
+	sent := map[string]string{}
+	for key, values := range r.URL.Query() {
+		if len(values) != 1 {
+			httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams, map[string]string{
+				"detail": "the " + what + " " + key + " takes one value"})
+			return nil, false
+		}
+		sent[key] = values[0]
+	}
+	return sent, true
+}
+
+// badParams answers a query string the spec or the catalogue refused.
+func badParams(w http.ResponseWriter, err error) {
+	httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams, map[string]string{
+		"detail": strings.TrimPrefix(err.Error(), dashspec.ErrInvalid.Error()+": ")})
+}
+
+// settle writes res into out, or answers the request's failure itself and
+// reports false: a spent budget (`spent` is its sentence) and a node that
+// could not read are the request's, while a refusal and a source this node
+// does not answer are the reading's own status. `what` names the read in a
+// failure's sentence and `logged` its fields in the log.
+func settle(w http.ResponseWriter, r *http.Request, res result, out *Reading, what, spent string,
+	logged ...any) bool {
+
 	var refused *closed
 	var absent *unanswered
-	var spent *overBudget
+	var budget *overBudget
 	switch {
 	case res.err == nil:
 		at := res.asOf
-		out.Status, out.Table, out.AsOf = StatusReady, &res.table, &at
+		table := res.table
+		out.Status, out.Table, out.AsOf = StatusReady, &table, &at
 	case errors.As(res.err, &refused):
 		out.Status, out.Refusal, out.Detail = StatusRefused, &refused.refusal, refused.detail
 	case errors.As(res.err, &absent):
 		out.Status, out.Detail = StatusUnanswered, absent.detail
-	case errors.As(res.err, &spent):
-		httpjson.ThrottledWith(w, httpjson.CodeReadBudget, spent.refusal.RetryAfter, httpjson.Detail{
-			"detail": "this board's live data was read too often; it refreshes once the budget refills"})
-		return
+	case errors.As(res.err, &budget):
+		httpjson.ThrottledWith(w, httpjson.CodeReadBudget, budget.refusal.RetryAfter,
+			httpjson.Detail{"detail": spent})
+		return false
 	case errors.Is(res.err, queries.ErrUnavailable):
 		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, httpjson.RetrySeconds(statelog.ElectionRetryHint),
-			httpjson.Detail{"detail": "this node could not read " + id + " right now"})
-		return
+			httpjson.Detail{"detail": "this node could not read " + what + " right now"})
+		return false
 	default:
-		log.WarnContext(r.Context(), "dashboard_dataset_failed", "artifact", a.Head.ID.String(),
-			"dataset", id, "error", res.err.Error())
+		log.WarnContext(r.Context(), "dashboard_dataset_failed", append(logged, "error", res.err.Error())...)
 		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, httpjson.RetrySeconds(statelog.ElectionRetryHint),
-			httpjson.Detail{"detail": "this node could not read " + id + " right now"})
-		return
+			httpjson.Detail{"detail": "this node could not read " + what + " right now"})
+		return false
 	}
-	httpjson.Write(w, http.StatusOK, out)
+	return true
 }
 
 // read answers dataset id of rd's board, memoised for the request.
@@ -335,9 +427,10 @@ func (s *Service) read(rd *read, id string) result {
 	return res
 }
 
-// charge takes one read from the viewer's and the artifact's buckets.
-func (s *Service) charge(rd *read) error {
-	if refusal := s.budget.Take(rd.a.Head.ID.String(), principalKey(rd.a.Principal), 1); refusal != nil {
+// charge takes one read from the viewer's bucket and the scope's: the
+// artifact's, which every viewer of it shares, or a principal's previews.
+func (s *Service) charge(scope string, p iam.Principal) error {
+	if refusal := s.budget.Take(scope, principalKey(p), 1); refusal != nil {
 		return &overBudget{refusal: refusal}
 	}
 	return nil
@@ -350,7 +443,7 @@ const storePage = 500
 // readStore reads a store dataset's collection under its read rule for the
 // admitted reader, every page up to [artifacts.MaxDatasetRows].
 func (s *Service) readStore(rd *read, d dashspec.Dataset) result {
-	if err := s.charge(rd); err != nil {
+	if err := s.charge(rd.a.Head.ID.String(), rd.a.Principal); err != nil {
 		return result{err: err}
 	}
 	shape := rd.board.Shapes[d.ID]
@@ -415,17 +508,28 @@ func (s *Service) readEngine(rd *read, d dashspec.Dataset) result {
 	if err != nil {
 		return result{err: err}
 	}
-	key := cacheKey(rd.a.Principal, src.Name, args)
+	return s.engineRows(rd.ctx, rd.a.Principal, rd.a.Head.ID.String(), d.ID, src, args)
+}
+
+// engineRows is src's rows with args, read as viewer: from the cache where
+// this principal read it with these arguments within the cache's life, else
+// charged to the viewer's and the scope's buckets and asked of the bound
+// question. `dataset` names the read in a refusal. The one engine read path,
+// a board's dataset's and a builder's preview alike.
+func (s *Service) engineRows(ctx context.Context, viewer iam.Principal, scope, dataset string,
+	src dashspec.EngineSource, args map[string]string) result {
+
+	key := cacheKey(viewer, src.Name, args)
 	now := s.now().UTC()
 	if hit, ok := s.cache.get(key, now); ok {
 		return hit
 	}
-	if err = s.charge(rd); err != nil {
+	if err := s.charge(scope, viewer); err != nil {
 		return result{err: err}
 	}
-	raw, err := s.ask(rd.ctx, src, args, rd.a.Principal)
+	raw, err := s.ask(ctx, src, args, viewer)
 	if err != nil {
-		return result{err: sourceFailure(d.ID, src, err)}
+		return result{err: sourceFailure(dataset, src, err)}
 	}
 	t, err := project(src, raw)
 	if err != nil {

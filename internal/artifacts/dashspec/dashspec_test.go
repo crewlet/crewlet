@@ -492,3 +492,19 @@ func TestADeclaredVocabularyIsHeldToTheClosedSetAndToText(t *testing.T) {
 		t.Errorf("a store column declared in the tracker's words keeps them: %+v", b.Shapes["deals"].Columns)
 	}
 }
+
+// A SOURCE READ DIRECTLY takes only the catalogue's parameters, each held to
+// its type, and the source's defaults for the rest.
+func TestSourceArgsHoldsADirectReadToTheCatalogue(t *testing.T) {
+	src, _ := Source("spend.daily")
+	got, err := SourceArgs(src, map[string]string{"group": "model"})
+	if err != nil || got["group"] != "model" || got["days"] != "14" {
+		t.Errorf("args = %v, %v; want the sent group and the default days", got, err)
+	}
+	for _, sent := range []map[string]string{{"owner": "cto"}, {"group": "everyone"}, {"days": "0"},
+		{"days": "1.5"}} {
+		if _, err := SourceArgs(src, sent); !errors.Is(err, ErrInvalid) {
+			t.Errorf("SourceArgs(%v) = %v, want a refusal", sent, err)
+		}
+	}
+}

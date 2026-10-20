@@ -34,9 +34,6 @@ function draw(widget: Widget, columns: DashboardColumn[], rows: DashboardRow[], 
         widget={{ ...widget, dataset: widget.type === "note" ? undefined : "ds" }}
         dataset={widget.type === "note" ? undefined : dataset}
         answer={{
-          artifact: "a",
-          version: 1,
-          dataset: "ds",
           status: "ready",
           as_of: "2026-10-18T10:00:00Z",
           table: { columns, rows },
@@ -259,9 +256,6 @@ test("in a row, a stat's and a meter's frame hold their title at two lines", () 
           freshness: { mode: "live", collection: "ds" },
         }}
         answer={{
-          artifact: "a",
-          version: 1,
-          dataset: "ds",
           status: "ready",
           table: { columns: [], rows: [{}] },
         }}

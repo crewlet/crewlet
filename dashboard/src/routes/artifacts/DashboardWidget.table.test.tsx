@@ -55,9 +55,6 @@ test("every column is held at the width its content needs but the prose, which i
           freshness: { mode: "live", collection: "ds" },
         }}
         answer={{
-          artifact: "a",
-          version: 1,
-          dataset: "ds",
           status: "ready",
           table: {
             columns,

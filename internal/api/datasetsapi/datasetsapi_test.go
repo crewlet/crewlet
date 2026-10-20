@@ -209,17 +209,28 @@ func TestAViewersLiveReadsAreBudgeted(t *testing.T) {
 		t.Fatal(err)
 	}
 	rd := &read{a: admission(iam.Principal{ID: uuid.New(), Login: "ana.lee"})}
+	board := rd.a.Head.ID.String()
 	for range artifacts.DatasetReadsViewerBurst {
-		if err := s.charge(rd); err != nil {
+		if err := s.charge(board, rd.a.Principal); err != nil {
 			t.Fatalf("a read inside the burst was refused: %v", err)
 		}
 	}
 	var spent *overBudget
-	if err := s.charge(rd); !errors.As(err, &spent) || spent.refusal.RetryAfter <= 0 {
+	if err := s.charge(board, rd.a.Principal); !errors.As(err, &spent) || spent.refusal.RetryAfter <= 0 {
 		t.Errorf("the read past the burst = %v, want a budget refusal with a wait", err)
 	}
+	preview := previewScope(rd.a.Principal)
+	for range artifacts.DatasetReadsViewerBurst {
+		if err := s.charge(preview, rd.a.Principal); err != nil {
+			t.Fatalf("a preview inside its own burst was refused: %v", err)
+		}
+	}
+	if err := s.charge(preview, rd.a.Principal); !errors.As(err, &spent) {
+		t.Errorf("the preview past the burst = %v, want a budget refusal: a principal's previews "+
+			"are budgeted as their reads of one board are", err)
+	}
 	other := &read{a: admission(iam.Principal{ID: uuid.New(), Login: "bo.k"})}
-	if err := s.charge(other); err != nil {
+	if err := s.charge(board, other.a.Principal); err != nil {
 		t.Errorf("one viewer's spent budget refused another's read: %v", err)
 	}
 }

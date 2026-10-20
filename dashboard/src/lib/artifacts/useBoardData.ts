@@ -32,7 +32,7 @@ import { useRest, type RestResult } from "~/lib/useRest.ts";
 import { useAgents, useTokens } from "~/lib/store-hooks.ts";
 import { readBoard, readDataset } from "./api.ts";
 import type { ArtifactDataStore } from "./datastore.ts";
-import { intervalMs, withDependents, type DatasetState } from "./dashboard.ts";
+import { ROWS_UNREAD, intervalMs, withDependents, type DatasetState } from "./dashboard.ts";
 
 /** How long pushes naming a live dataset's collection are gathered before it is read again. */
 export const LIVE_GATHER_MS = 500;
@@ -43,9 +43,6 @@ export const LIVE_GATHER_MS = 500;
  * source from its cache for thirty seconds anyway.
  */
 export const SIGNAL_WINDOW_MS = 15_000;
-
-/** The sentence a dataset that could not be read is drawn with. */
-const UNREAD = "This dataset could not be read right now. It is asked again on the next refresh.";
 
 export interface BoardData {
   board: RestResult<DashboardBoardAnswer>;
@@ -145,8 +142,7 @@ export function useBoardData(
             patch(dataset, (s) => ({ ...s, loading: false }));
             return;
           }
-          const sentence = err instanceof RestError ? err.detail || err.sentence || UNREAD : UNREAD;
-          patch(dataset, (s) => ({ ...s, loading: false, failure: sentence }));
+          patch(dataset, (s) => ({ ...s, loading: false, failure: ROWS_UNREAD }));
         },
       );
     },

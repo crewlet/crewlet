@@ -213,7 +213,10 @@ func TestTheDashboardDrawsTheBoardFormat(t *testing.T) {
 		}
 	}
 	for name, want := range map[string]int{"DASHBOARD_COLUMNS": artifacts.DashboardColumns,
-		"DASHBOARD_MIN_REFRESH_SECONDS": artifacts.MinRefreshSeconds} {
+		"DASHBOARD_MIN_REFRESH_SECONDS": artifacts.MinRefreshSeconds,
+		"DASHBOARD_MAX_WIDGETS":         artifacts.MaxDashboardWidgets,
+		"DASHBOARD_MAX_DATASETS":        artifacts.MaxDashboardDatasets,
+		"DASHBOARD_MAX_TABLE_COLUMNS":   artifacts.MaxTableColumns} {
 		got, err := clientsource.Scalar(tree, name)
 		if err != nil || got != strconv.Itoa(want) {
 			t.Errorf("%s is %q (%v), want %d", name, got, err, want)
