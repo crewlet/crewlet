@@ -143,7 +143,8 @@ export function PeekBoundary({ resetKey, children }: { resetKey: string; childre
  * sight, with the layer's own focus trap gone. The dialog closes the way the
  * layer does, and the next press opens a fresh one.
  *
- * A LAYER'S CODE CAN ARRIVE IN A CHUNK (the sheet is the Work workspace's), so
+ * A LAYER'S CODE CAN ARRIVE IN A CHUNK (the sheet is the Work workspace's, the
+ * palette a chunk of its own), so
  * a load in flight draws nothing — the layer is not on screen until it is —
  * and a chunk that never came is this dialog, carrying the chunk's own
  * sentence about reloading.

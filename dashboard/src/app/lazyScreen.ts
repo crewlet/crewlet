@@ -13,7 +13,7 @@
  * workspace a reader opens is usually already in memory, so the round trip
  * the old comment worried about is spent while nobody is waiting on it.
  *
- * # One chunk per workspace, plus the org editor, the sign-in screens and each create page
+ * # One chunk per workspace, plus the org editor, the sign-in screens, each create page and the palette
  *
  * Each `routes/<workspace>/index.ts` is the whole of what this file imports
  * from that workspace, and it is imported ONLY here, by `import()` — a static
@@ -26,6 +26,12 @@
  * a reader who needs it is already on it. Each kind's create page
  * (`routes/artifacts/new/`) is a chunk of its own too, and neither is it
  * prefetched: a reader who opens Artifacts to look never needs an editor.
+ *
+ * The command palette (`palette/Palette.tsx`) is the one chunk of the frame's
+ * own. It is a layer mounted only while open, as the New task sheet is, and
+ * the largest single piece of the frame, so the first paint does not carry it.
+ * Every screen opens it with a key, so it is the FIRST chunk the idle prefetch
+ * fetches, and by the time a reader presses ⌘K it is usually in memory.
  *
  * # A failed load is a ChunkLoadError, and it can be retried
  *
@@ -74,7 +80,11 @@ const LOADERS = {
   "new-design": () => import("~/routes/artifacts/new/DesignCreate.tsx"),
   "new-dashboard": () => import("~/routes/artifacts/new/DashboardCreate.tsx"),
   "new-html": () => import("~/routes/artifacts/new/HtmlCreate.tsx"),
-} satisfies Record<Workspace | "org" | "signin" | NewArtifactChunk, () => Promise<unknown>>;
+  palette: () => import("./palette/Palette.tsx"),
+} satisfies Record<
+  Workspace | "org" | "signin" | NewArtifactChunk | "palette",
+  () => Promise<unknown>
+>;
 
 /**
  * A kind's create page, a chunk of its own: a doc's editor, a deck's composer
@@ -83,7 +93,7 @@ const LOADERS = {
  */
 type NewArtifactChunk = `new-${ArtifactKind}`;
 
-/** A chunk: a workspace, the org editor, or the sign-in screens. */
+/** A chunk: a workspace, the org editor, the sign-in screens, a create page or the palette. */
 export type Chunk = keyof typeof LOADERS;
 
 /** What a chunk's `index.ts` exports. */
@@ -91,14 +101,15 @@ export type ChunkModule<C extends Chunk> = Awaited<ReturnType<(typeof LOADERS)[C
 
 /**
  * Every chunk the idle prefetch fetches, in the order it fetches them: the
- * sidebar's. NOT `signin` — see the note above.
+ * palette, then the sidebar's. NOT `signin` or a create page; see the note above.
  */
-export const CHUNKS: readonly Chunk[] = [...WORKSPACES.map((ws) => ws.key), "org"];
+export const CHUNKS: readonly Chunk[] = ["palette", ...WORKSPACES.map((ws) => ws.key), "org"];
 
 /** What a chunk is called in a sentence a reader sees. */
 export function chunkLabel(chunk: Chunk): string {
   if (chunk === "org") return "Edit org";
   if (chunk === "signin") return "sign-in";
+  if (chunk === "palette") return "Search";
   if (chunk.startsWith("new-")) return NEW_KIND_TITLES[chunk.slice(4) as ArtifactKind];
   return WORKSPACES.find((ws) => ws.key === chunk)?.label ?? chunk;
 }
@@ -126,9 +137,12 @@ export class ChunkLoadError extends Error {
   /** What to do about it: the fallback's sentence. */
   readonly advice: string;
   constructor(chunk: Chunk, cause: unknown) {
-    const title = chunk.startsWith("new-")
-      ? `The ${chunkLabel(chunk)} page could not be loaded`
-      : `The ${chunkLabel(chunk)} screens could not be loaded`;
+    const title =
+      chunk === "palette"
+        ? `${chunkLabel(chunk)} could not be loaded`
+        : chunk.startsWith("new-")
+          ? `The ${chunkLabel(chunk)} page could not be loaded`
+          : `The ${chunkLabel(chunk)} screens could not be loaded`;
     const advice = "The engine was updated. Reload to continue.";
     super(`${title}. ${advice}`, { cause });
     this.chunk = chunk;
