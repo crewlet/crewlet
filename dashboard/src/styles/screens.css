@@ -10634,6 +10634,11 @@ a.live-row:focus-visible {
   min-height: 0;
   overflow: auto;
 }
+/* WHO BUILDS IT: the agent, then the project, one field under the other. */
+.artifact-who {
+  display: grid;
+  gap: var(--spacing-4);
+}
 /* A kind whose page has not landed yet: the empty state, centred in the body. */
 .artifact-create-pending {
   display: flex;

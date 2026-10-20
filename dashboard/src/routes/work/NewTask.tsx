@@ -90,12 +90,12 @@ import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { handleLabel, indexOrg, type OrgIndex, type Seat } from "~/lib/seats.ts";
-import { projectsByUnit } from "~/lib/orgchart.ts";
+import { handleLabel, indexOrg, type Seat } from "~/lib/seats.ts";
+import { projectOptions, startingProject } from "~/lib/startingProject.ts";
 import { DEFAULT_TYPE, PRIORITIES, STATUSES, statusLabel, typeName } from "~/lib/work.ts";
 import { humanize, textBudget } from "~/lib/format.ts";
 import { TASK_BODY_MAX_BYTES, TASK_TITLE_MAX_BYTES } from "~/contract/work.ts";
-import type { WorkProjectDetail, WorkProjectRow } from "~/protocol/index.ts";
+import type { WorkProjectDetail } from "~/protocol/index.ts";
 
 /** How many seats the assignee field offers at once. */
 const SEAT_CHOICES = 8;
@@ -212,44 +212,6 @@ export function createArgs(draft: NewTaskDraft): Record<string, unknown> {
   return args;
 }
 
-/**
- * Which project the sheet opens on: the door's, else the ASSIGNEE's (the
- * project filed under the preset seat's own unit, or the nearest unit above it
- * that has one), else the person's own (where their create lands when it names
- * none — the engine's answer, `viewer`), else the first active project. ""
- * while none is known, and the create refuses naming the field rather than
- * guessing.
- *
- * THE ASSIGNEE'S UNIT OUTRANKS THE PERSON'S OWN because a door that names a
- * seat and no project — a seat's Message, a board lane grouped by assignee
- * across every project — is filing work FOR that seat: the Agent CEO's ask
- * belongs on the board its unit works from, not on whichever project the asker
- * happens to sit in or the first one in the list.
- */
-export function startingProject(
-  preset: NewTaskPreset,
-  own: string,
-  projects: readonly WorkProjectRow[],
-  index?: OrgIndex,
-): string {
-  const known = (key: string | undefined) => !!key && projects.some((p) => p.key === key);
-  // BEFORE THE LIST HAS ANSWERED, a named project is trusted as given: a
-  // project page's door knows its key, and blanking it until a second read
-  // lands would draw the sheet empty and then fill it.
-  if (projects.length === 0) return preset.project || own;
-  if (known(preset.project)) return preset.project!;
-  const chain = preset.assignee ? (index?.byHandle.get(preset.assignee)?.unit?.chain ?? []) : [];
-  if (chain.length) {
-    const byUnit = projectsByUnit(projects);
-    for (const unit of [...chain].reverse()) {
-      const key = byUnit.get(unit.id)?.[0];
-      if (key) return key;
-    }
-  }
-  if (known(own)) return own;
-  return projects[0]!.key;
-}
-
 export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClose: () => void }) {
   const nav = useNavigator();
   const viewer = useViewer();
@@ -262,8 +224,8 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
 
   const [draft, setDraft] = useState<NewTaskDraft>(() => ({
     project: startingProject(preset, viewer.project, []),
-    title: "",
-    body: "",
+    title: preset.title ?? "",
+    body: preset.description ?? "",
     type: preset.type ?? "",
     status: preset.status ?? "",
     assignee: preset.assignee ?? "",
@@ -612,21 +574,6 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
       </div>
     </Modal>
   );
-}
-
-/** The projects as the Project field offers them: key and name, archived ones out. */
-function projectOptions(rows: readonly WorkProjectRow[], chosen: string): SelectOption[] {
-  const options: SelectOption[] = rows.map((p) => ({
-    value: p.key,
-    label: p.name ? `${p.key} · ${p.name}` : p.key,
-    text: `${p.key} ${p.name}`,
-  }));
-  // A PROJECT THE DOOR NAMED BEFORE THE LIST ANSWERED is still a value the
-  // field holds, and a select whose value is not among its options draws a
-  // blank — so it is offered as itself until the list says otherwise.
-  if (chosen && !rows.some((p) => p.key === chosen))
-    options.unshift({ value: chosen, label: chosen });
-  return options;
 }
 
 /** The project's types, its catalogue's words, the archived ones out. */

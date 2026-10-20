@@ -25,6 +25,10 @@ import { STATUSES } from "~/lib/work.ts";
 
 /** What a door knows about the task it opens the sheet for. */
 export interface NewTaskPreset {
+  /** The title it starts with: what the door already knows the task is. */
+  title?: string;
+  /** The description it starts with, such as a create page's brief. */
+  description?: string;
   /** The project key it lands in: the page or the lane it was opened from. */
   project?: string;
   /** The status it starts in — a board lane's own. */
