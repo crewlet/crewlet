@@ -5,8 +5,9 @@
  *
  * A SAVE IS A VERSION, based on the version the draft started from: a patch
  * whose edits replace each changed slide's file (and the index, where the
- * order, the title or the cover changed) and whose removes drop a deleted
- * slide's file. The engine refuses a save whose base moved (`412
+ * order, the title or the cover changed), whose upload brings each added
+ * slide's file (a new slide, or a copy of one), and whose removes drop a
+ * deleted slide's file. The engine refuses a save whose base moved (`412
  * version_moved`) before a byte is written, and the draft is then merged onto
  * the newer version slide by slide: a slide only one side changed takes that
  * side's version; a slide both changed the same way is one change; a slide
@@ -19,6 +20,7 @@
 import type { ArtifactDeck, DeckSlide, SlideNode } from "~/protocol/index.ts";
 import { slideSource, titleOf } from "../slides.tsx";
 import { mergeOrder, placeAfter } from "./orderMerge.ts";
+import type { PublishFile } from "./api.ts";
 
 /** The index's path, and where slide id's file is (`slideformat.IndexPath`, `slideformat.SlidePath`). */
 export const DECK_INDEX = "deck.json";
@@ -80,8 +82,10 @@ export function sameSlide(a: DraftSlide | undefined, b: DraftSlide | undefined):
 
 /** What a draft changed against its base. */
 export interface DraftChanges {
-  /** Slides whose file is rewritten, in the draft's order. */
+  /** Slides of the base whose file is rewritten, in the draft's order. */
   slides: string[];
+  /** Slides the base does not hold, whose file is brought new, in the draft's order. */
+  added: string[];
   /** Slides deleted. */
   removed: string[];
   /** Whether the index changes: the order, or the title. */
@@ -90,15 +94,78 @@ export interface DraftChanges {
 
 /** What draft changed against base, the deck it started from. */
 export function changesOf(base: DeckDraft, draft: DeckDraft): DraftChanges {
-  const slides = draft.order.filter((id) => !sameSlide(base.slides[id], draft.slides[id]));
+  const held = new Set(base.order);
+  const slides = draft.order.filter(
+    (id) => held.has(id) && !sameSlide(base.slides[id], draft.slides[id]),
+  );
+  const added = draft.order.filter((id) => !held.has(id));
   const removed = base.order.filter((id) => !draft.order.includes(id));
   const index = draft.title !== base.title || draft.order.join("\n") !== base.order.join("\n");
-  return { slides, removed, index };
+  return { slides, added, removed, index };
 }
 
 /** Whether a draft changed anything. */
 export function changed(c: DraftChanges): boolean {
-  return c.slides.length > 0 || c.removed.length > 0 || c.index;
+  return c.slides.length > 0 || c.added.length > 0 || c.removed.length > 0 || c.index;
+}
+
+// ---- adding a slide ------------------------------------------------------- //
+
+/**
+ * An id for a new slide from stem, the way the engine's starter names one
+ * (`points`, `points-2`): stem itself when free, else numbered from two. Free
+ * of the draft's slides and of every slide the base held, so a slide deleted
+ * in this draft does not lend its id (and its file's history) to a new one.
+ */
+export function freeSlideId(draft: DeckDraft, base: DeckDraft, stem: string): string {
+  const root = stem.replace(/-\d+$/, "") || "slide";
+  const taken = (id: string) => id in draft.slides || base.order.includes(id);
+  if (!taken(root)) return root;
+  let n = 2;
+  while (taken(`${root}-${n}`)) n++;
+  return `${root}-${n}`;
+}
+
+/**
+ * draft with slide added after the slide after (at the end when it is not in
+ * the order), under a free id from stem; and that id.
+ */
+export function insertSlide(
+  draft: DeckDraft,
+  base: DeckDraft,
+  after: string,
+  stem: string,
+  slide: Omit<DraftSlide, "id">,
+): { draft: DeckDraft; id: string } {
+  const id = freeSlideId(draft, base, stem);
+  const at = draft.order.indexOf(after);
+  const order =
+    at < 0
+      ? [...draft.order, id]
+      : [...draft.order.slice(0, at + 1), id, ...draft.order.slice(at + 1)];
+  return { draft: { ...draft, order, slides: { ...draft.slides, [id]: { ...slide, id } } }, id };
+}
+
+/** draft with a copy of slide id right after it, and the copy's id. */
+export function duplicateSlide(
+  draft: DeckDraft,
+  base: DeckDraft,
+  id: string,
+): { draft: DeckDraft; id: string } {
+  const from = draft.slides[id];
+  if (!from) return { draft, id };
+  const { id: _, ...rest } = from;
+  return insertSlide(draft, base, id, id, rest);
+}
+
+/** draft without slide id, and the slide to show after it: the next, else the one before. */
+export function removeSlide(draft: DeckDraft, id: string): { draft: DeckDraft; select: string } {
+  const at = draft.order.indexOf(id);
+  const order = draft.order.filter((x) => x !== id);
+  return {
+    draft: { ...draft, order },
+    select: order[Math.min(Math.max(at, 0), order.length - 1)] ?? "",
+  };
 }
 
 /**
@@ -130,21 +197,37 @@ export function indexSource(raw: string, base: DeckDraft, draft: DeckDraft): str
 export interface DeckPublish {
   mode: "patch";
   edits: { path: string; old_str: string; new_str: string }[];
-  files: { path: string; remove: true }[];
+  files: PublishFile[];
+  /** The upload the new slides' files arrived through ([addedFiles]). */
+  upload?: string;
   label?: string;
+}
+
+/**
+ * The files of the slides a draft adds, as text: what a save brings through
+ * an upload ([uploadTexts]) before it publishes, since an edit changes a file
+ * the base holds and never makes one.
+ */
+export function addedFiles(base: DeckDraft, draft: DeckDraft): { path: string; text: string }[] {
+  return changesOf(base, draft).added.map((id) => ({
+    path: slidePath(id),
+    text: slideSource(draft.slides[id]!),
+  }));
 }
 
 /**
  * The publish that saves draft against base, given the base version's source
  * of every file it rewrites (`sources`, by path). Each changed file is one
  * edit replacing its whole text, so the engine applies it to exactly the bytes
- * the draft was read from and refuses it if they moved.
+ * the draft was read from and refuses it if they moved; each added slide's
+ * file is `brought`, through the upload [addedFiles] was sent with.
  */
 export function publishOf(
   base: DeckDraft,
   draft: DeckDraft,
   sources: Readonly<Record<string, string>>,
   label = "",
+  brought: { upload: string; files: PublishFile[] } | null = null,
 ): DeckPublish {
   const c = changesOf(base, draft);
   const edits: DeckPublish["edits"] = [];
@@ -162,10 +245,19 @@ export function publishOf(
     if (old === undefined) throw new Error("the deck's index was not read");
     edits.push({ path: DECK_INDEX, old_str: old, new_str: indexSource(old, base, draft) });
   }
+  if (c.added.length > 0 && !brought) {
+    throw new Error(
+      "the new slides' files were not brought, so the index would name slides it lacks",
+    );
+  }
   return {
     mode: "patch",
     edits,
-    files: c.removed.map((id) => ({ path: slidePath(id), remove: true })),
+    files: [
+      ...(brought?.files ?? []),
+      ...c.removed.map((id) => ({ path: slidePath(id), remove: true as const })),
+    ],
+    ...(brought ? { upload: brought.upload } : {}),
     ...(label ? { label } : {}),
   };
 }

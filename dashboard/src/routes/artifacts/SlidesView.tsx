@@ -36,6 +36,7 @@ import {
   FormField,
   IconButton,
   Input,
+  Menu,
   PresenterView,
   Skeleton,
   SlideFilmstrip,
@@ -56,21 +57,33 @@ import type {
   ArtifactDetail,
   DeckSlide,
 } from "~/protocol/index.ts";
+import { newActOpID } from "~/protocol/index.ts";
 import { QueryState } from "~/components/common.tsx";
 import { PrintOnly } from "~/components/PrintOnly.tsx";
 import { useParam } from "~/app/router.tsx";
 import { useRest } from "~/lib/useRest.ts";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
-import { publishVersion, readDeck, versionText } from "~/lib/artifacts/api.ts";
+import {
+  publishVersion,
+  readDeck,
+  readSlidesStarters,
+  uploadTexts,
+  versionText,
+} from "~/lib/artifacts/api.ts";
+import { sampleSlide } from "~/lib/artifacts/deckPlan.ts";
 import { useDeckAssets } from "~/lib/artifacts/deckAssets.ts";
 import {
+  addedFiles,
   changed,
   changesOf,
   deckSlide,
   draftOf,
+  duplicateSlide,
+  insertSlide,
   mergeDeck,
   publishOf,
+  removeSlide,
   resolve,
   sourcesNeeded,
   type DeckConflict,
@@ -85,6 +98,7 @@ import {
   MaximizeGlyph,
   MinimizeGlyph,
   MonitorGlyph,
+  PlusGlyph,
 } from "@crewlethq/icons/glyphs";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import type { PresenceReport } from "./presence.ts";
@@ -235,6 +249,7 @@ function Deck({
       {mode === "" && (
         <DeckEditor
           detail={detail}
+          theme={deck.theme ?? ""}
           base={base}
           shown={shown}
           slides={slides}
@@ -346,6 +361,7 @@ function useShowChannel(
 
 function DeckEditor({
   detail,
+  theme,
   base,
   shown,
   slides,
@@ -361,6 +377,8 @@ function DeckEditor({
   onPublished,
 }: {
   detail: ArtifactDetail;
+  /** The theme the deck's index names, whose layouts New slide adds from; "" for none. */
+  theme: string;
   base: DeckDraft;
   shown: DeckDraft;
   slides: readonly DeckSlide[];
@@ -406,6 +424,80 @@ function DeckEditor({
       }
     : undefined;
 
+  // A DECK GROWS IN THE STRIP, as a presentation editor's does: New slide at
+  // its end adds one from the layouts of the theme the deck's index names,
+  // drawn by the engine (`GET /artifacts/starters/slides`) as the slides it
+  // began with were; a deck that names none (written by hand or by an agent)
+  // adds a copy of the slide on the stage, as Keynote adds from the current
+  // slide's master. Command+D copies and Delete removes, on a thumbnail.
+  const starters = useRest(editable && theme ? "slides-starters" : null, (signal) =>
+    readSlidesStarters(signal),
+  );
+  const themed = starters.data?.themes.find((t) => t.id === theme);
+  const nameOf = (id: string) => {
+    const i = shown.order.indexOf(id);
+    return `slide ${i + 1}`;
+  };
+  // FROM THE DRAFT THIS RENDER SHOWS, since the new slide's id is the one the
+  // stage moves to: a press is never a stale callback the way a kept one is.
+  const grow = (fn: (d: DeckDraft) => { draft: DeckDraft; id: string }, said: string) => {
+    const out = fn(shown);
+    change(() => out.draft);
+    onSelect(out.id);
+    announce(said);
+  };
+  const deleteSlide = (id: string) => {
+    if (shown.order.length <= 1) {
+      announce("A deck keeps at least one slide.");
+      return;
+    }
+    const { select } = removeSlide(shown, id);
+    onSelect(select);
+    change((d) => removeSlide(d, id).draft);
+    announce(`Deleted ${nameOf(id)}.`);
+  };
+  const newSlide = themed ? (
+    <Menu
+      label="New slide"
+      trigger="New slide"
+      icon={<PlusGlyph size="sm" />}
+      triggerVariant="ghost"
+      items={(starters.data?.layouts ?? []).map((l) => ({
+        key: l.id,
+        label: l.name,
+        description: l.description,
+        onSelect: () => {
+          const sample = sampleSlide(themed.sample, l.id);
+          if (!sample) return;
+          grow(
+            (d) =>
+              insertSlide(d, base, current.id, l.id, {
+                root: sample.root,
+                notes: sample.notes ?? "",
+                hidden: false,
+                transition: "",
+              }),
+            `Added a ${l.name} slide after ${nameOf(current.id)}.`,
+          );
+        },
+      }))}
+    />
+  ) : (
+    <Button
+      size="small"
+      variant="ghost"
+      leadingIcon={<PlusGlyph size="sm" />}
+      onClick={() =>
+        grow(
+          (d) => duplicateSlide(d, base, current.id),
+          `Added a copy of ${nameOf(current.id)}, to change in place.`,
+        )
+      }
+    >
+      New slide
+    </Button>
+  );
+
   const saveNow = async () => {
     const against = merge?.live ?? base;
     setSaving(true);
@@ -416,8 +508,14 @@ function DeckEditor({
           sources[path] = await versionText(detail.id, against.base, path);
         }),
       );
+      const added = addedFiles(against, shown);
+      const brought = added.length > 0 ? await uploadTexts(detail.id, added, newActOpID()) : null;
       const answer = await save.run(
-        publishVersion(detail.id, against.base, publishOf(against, shown, sources, label.trim())),
+        publishVersion(
+          detail.id,
+          against.base,
+          publishOf(against, shown, sources, label.trim(), brought),
+        ),
       );
       if (answer?.kind === "done") {
         const n = Number(answer.body.number ?? against.base + 1);
@@ -467,7 +565,15 @@ function DeckEditor({
           { prefix: `${prefix}-t-${id}-`, image },
         )
       }
-      {...(editable ? { onReorder: (order: string[]) => change((d) => ({ ...d, order })) } : {})}
+      {...(editable
+        ? {
+            onReorder: (order: string[]) => change((d) => ({ ...d, order })),
+            onDuplicate: (id: string) =>
+              grow((d) => duplicateSlide(d, base, id), `Added a copy of ${nameOf(id)}.`),
+            onDelete: deleteSlide,
+            footer: newSlide,
+          }
+        : {})}
     />
   );
 
@@ -546,12 +652,7 @@ function DeckEditor({
                 {...(slides.length <= 1
                   ? { disabledReason: "A deck keeps at least one slide." }
                   : {})}
-                onClick={() => {
-                  const gone = current.id;
-                  const rest = shown.order.filter((id) => id !== gone);
-                  onSelect(rest[Math.min(position, rest.length - 1)] ?? rest[0]!);
-                  change((d) => ({ ...d, order: d.order.filter((id) => id !== gone) }));
-                }}
+                onClick={() => deleteSlide(current.id)}
               >
                 Delete slide
               </Button>
@@ -589,8 +690,10 @@ function DeckEditor({
               )}
             </div>
             <p className="artifact-note">
-              Click any text on the slide to change it. Drag a slide in the strip, or use the arrow
-              keys on its handle, to move it. Saving publishes a new version.
+              Click any text on the slide to change it. New slide, at the end of the strip, adds one
+              after this slide; on a thumbnail, Command or Control+D copies it and Delete removes
+              it. Drag a slide, or use the arrow keys on its handle, to move it. Saving publishes a
+              new version.
             </p>
           </div>
         ) : (
