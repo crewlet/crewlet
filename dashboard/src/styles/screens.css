@@ -10635,6 +10635,176 @@ a.live-row:focus-visible {
   justify-content: center;
   padding: var(--spacing-5);
 }
+/* NEW DASHBOARD (`routes/artifacts/new/DashboardCreate.tsx`): the board being
+   composed, and beside it the Data panel it is composed from. Each scrolls
+   on its own, so the panel's open source stays in reach while the board
+   grows; under a tablet's width the panel follows the board. */
+.dashboard-create {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-columns: minmax(0, 1fr) minmax(20rem, 24rem);
+  min-width: 0;
+  min-height: 0;
+  container: dashboard-create / inline-size;
+}
+.dashboard-create-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-5);
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--spacing-6);
+}
+.dashboard-create-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--spacing-4);
+}
+.dashboard-create-title {
+  flex: 1 1 22rem;
+  max-width: 40rem;
+}
+.dashboard-create-board {
+  display: flex;
+  flex: 1 0 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+.dashboard-create-empty {
+  display: flex;
+  flex: 1 0 auto;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-5);
+  padding: var(--spacing-8) var(--spacing-4);
+  border: 1px dashed var(--color-border-default);
+  border-radius: var(--radius-lg);
+}
+.dashboard-create-starters {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--spacing-3);
+  width: 100%;
+  max-width: 40rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dashboard-create-starter {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  width: 100%;
+  height: 100%;
+  text-align: start;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.dashboard-create-starter-label {
+  color: var(--color-text-primary);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
+}
+.dashboard-create-starter-text {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  line-height: 1.45;
+}
+.dashboard-create-data {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--spacing-5) var(--spacing-4) var(--spacing-6);
+  border-inline-start: 1px solid var(--color-border-default);
+  background: var(--color-surface-subtle);
+}
+.dashboard-create-data-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  padding: 0 var(--spacing-1);
+}
+.dashboard-create-data-head h2 {
+  margin: 0;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+}
+.dashboard-create-data-head p {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  line-height: 1.45;
+}
+/* An open source: its settings, then its figures, under its entry. */
+.dashboard-create-source {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  padding: var(--spacing-2) var(--spacing-1) var(--spacing-3);
+}
+.dashboard-create-settings {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: var(--spacing-2) var(--spacing-3);
+}
+.dashboard-create-suggestions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--spacing-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dashboard-create-suggestion {
+  display: flex;
+  grid-column: 1 / -1;
+  flex-direction: column;
+  min-width: 0;
+}
+.dashboard-create-suggestion--half {
+  grid-column: auto;
+}
+@container dashboard-create (width < 60rem) {
+  .dashboard-create-main {
+    padding: var(--spacing-5);
+  }
+}
+/* NARROW, the board and the Data panel are two tabs over one pane. */
+.dashboard-create[data-narrow] {
+  display: flex;
+  flex-direction: column;
+}
+.dashboard-create[data-narrow] .dashboard-create-main,
+.dashboard-create[data-narrow] .dashboard-create-data {
+  flex: 1 1 auto;
+}
+.dashboard-create[data-narrow] .dashboard-create-data {
+  border-inline-start: 0;
+}
+.dashboard-create-tabs {
+  flex: 0 0 auto;
+  padding: var(--spacing-3) var(--spacing-4);
+  border-block-end: 1px solid var(--color-border-default);
+}
+.dashboard-create [hidden] {
+  display: none;
+}
+@media (width < 40rem) {
+  .dashboard-create-main {
+    padding: var(--spacing-4);
+  }
+  .dashboard-create-starters {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
 .artifact-loading,
 .artifact-trashed {
   min-width: 0;
