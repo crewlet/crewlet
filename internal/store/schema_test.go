@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/usage"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -278,7 +279,7 @@ func TestTheDirectoryLookupsSearchAnIndex(t *testing.T) {
 		   ORDER BY seat_id, created_at DESC, id`,
 			[]any{1}, "SCAN iam_invites USING INDEX iam_invites_open_idx"},
 	} {
-		plan := planOf(t, db, tc.query, tc.args...)
+		plan := strings.Join(storetest.Plan(t, db, tc.query, tc.args), "\n")
 		if !strings.Contains(plan, tc.want) {
 			t.Errorf("%s\nplans as %q, want %q — a directory read that scans "+
 				"reads every person in the company", tc.query, plan, tc.want)
