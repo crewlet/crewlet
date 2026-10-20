@@ -3,10 +3,12 @@ package runner
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
+	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -20,7 +22,11 @@ import (
 // by calling it: a round spent, on a tool the catalogue vouched for, and
 // sometimes a whole turn planned around a box that was never coming.
 //
-// Mutate `offersSandbox` to return true and the first two cases go red.
+// Out of the UNIVERSE, not only the active list: a surface activates anything
+// in its snapshot by name, and the catalogue is read off the same snapshot, so
+// a tool kept off the active list alone was still listed and one call away.
+//
+// Mutate `offersSandbox` to return true and the first three cases go red.
 func TestExecutorSurfaceHidesRunSandboxFromSeatsThatCannotUseIt(t *testing.T) {
 	t.Parallel()
 
@@ -76,11 +82,50 @@ func TestExecutorSurfaceHidesRunSandboxFromSeatsThatCannotUseIt(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			got := slices.Contains(r.executorActive(snapshot), RunSandboxTool)
-			if got != tc.want {
+			universe := r.executorUniverse(snapshot, tc.agentRun != nil)
+			if got := slices.Contains(executorActive(universe), RunSandboxTool); got != tc.want {
 				t.Errorf("run_sandbox offered = %v, want %v", got, tc.want)
 			}
+			if _, got := universe.Lookup(RunSandboxTool); got != tc.want {
+				t.Errorf("run_sandbox reachable by activation = %v, want %v", got, tc.want)
+			}
+			if got := strings.Contains(universe.Catalogue(), RunSandboxTool); got != tc.want {
+				t.Errorf("run_sandbox in the catalogue = %v, want %v", got, tc.want)
+			}
 		})
+	}
+}
+
+// THE EXECUTOR NEVER REACHES mark_onboarded, by activation or by catalogue.
+//
+// A seat that marked itself onboarded from inside the executor would skip
+// orientation for ever. It was kept off the executor's active list only, so
+// the catalogue the prompt rendered listed it and activate_tool reached it.
+// Every executor, gated or not and on either runtime, is held to it.
+func TestTheExecutorCannotReachThePhaseScopedTools(t *testing.T) {
+	t.Parallel()
+	for _, agentRun := range []bool{false, true} {
+		r, err := New(Config{
+			Registry: tools.NewRegistry(),
+			Models:   &phase.Registry{},
+			Seat: prompts.Seat{Org: &org.Organization{Name: "Acme"},
+				Role: &org.Role{Name: "Engineer", Sandbox: &org.RoleSandbox{Enabled: true}}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		snapshot, err := tools.NewRegistry().Snapshot().
+			With(tools.Entry{Tool: stubTool(MarkOnboardedTool), Origin: tools.OriginBuiltin})
+		if err != nil {
+			t.Fatal(err)
+		}
+		universe := r.executorUniverse(snapshot, agentRun)
+		if _, held := universe.Lookup(MarkOnboardedTool); held {
+			t.Errorf("agent run %v: mark_onboarded is in the executor's snapshot, one activation away", agentRun)
+		}
+		if strings.Contains(universe.Catalogue(), MarkOnboardedTool) {
+			t.Errorf("agent run %v: the executor's catalogue lists mark_onboarded", agentRun)
+		}
 	}
 }
 
@@ -170,5 +215,40 @@ func TestTheSurfaceHandedToTheTurnSaysWhichToolsSitBehindDiscovery(t *testing.T)
 	if slices.Contains(got.Discoverable, "comment_on_work_item") {
 		t.Error("a first-party tool the executor already holds was reported as one " +
 			"it has to discover")
+	}
+}
+
+// A GUARD IS ARMED ONLY WHERE ITS LOADER IS ACTIVE. The triggers are matched
+// over the surface's whole universe, so the catalogue and the guard agree on
+// an MCP tool the executor activates later — but a loader that sits in the
+// universe without being active is one the phase's model may never reach, and
+// a guard armed there would refuse a covered tool it had no way to unlock.
+//
+// Drop the active-list check in guardFor and the first case goes red.
+func TestASkillGuardNeedsItsLoaderActive(t *testing.T) {
+	t.Parallel()
+	registry := skills.NewRegistry()
+	if _, err := registry.PutPage(skills.Skill{
+		Key: "chat-conventions", Title: "Chat conventions", Summary: "how to post",
+		Trigger: skills.Trigger{Tool: "slack_post"}, Required: true,
+		SourcePageID: "chat-conventions-page",
+	}); err != nil {
+		t.Fatalf("PutPage: %v", err)
+	}
+	reg := tools.NewRegistry()
+	for _, name := range []string{"slack_post", skills.LoaderTool} {
+		if err := reg.Register(stubTool(name), tools.OriginBuiltin); err != nil {
+			t.Fatalf("Register %s: %v", name, err)
+		}
+	}
+	r := &Runner{cfg: Config{Skills: registry, Seat: prompts.Seat{Role: &org.Role{Name: "CTO", DeclaredHandle: "cto"}}}}
+
+	inactive := tools.NewSurface(phase.Execute.String(), reg.Snapshot(), []string{"slack_post"})
+	if g := r.guardFor(phase.Execute, inactive, nil); g.guard != nil {
+		t.Error("a guard was armed over a loader the phase never activated")
+	}
+	active := tools.NewSurface(phase.Execute.String(), reg.Snapshot(), []string{skills.LoaderTool})
+	if g := r.guardFor(phase.Execute, active, nil); g.guard == nil {
+		t.Error("no guard was armed although the loader is active and slack_post is in the universe")
 	}
 }

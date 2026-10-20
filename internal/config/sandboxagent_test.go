@@ -62,8 +62,12 @@ func TestASeatsCodeWorkMustRunOnItsEntrysOwnCLI(t *testing.T) {
 		// it, so its default is no pairing at all.
 		{"code work that rides the executor's own run", "",
 			"    llm: agent\n    sandbox: {enabled: true, run_in: self}\n", false},
-		{"the same entry in a box of its own", "",
-			"    llm: agent\n    sandbox: {enabled: true}\n", true},
+		// Nor does an enabled gate on that seat with no `self`: a seat
+		// whose executor runs in agent mode is never offered run_sandbox,
+		// so the gate hands nobody's code work to any runner. Refused, it
+		// was a pairing the engine never makes.
+		{"an agent-mode seat's enabled gate, which offers it no box", "",
+			"    llm: agent\n    sandbox: {enabled: true}\n", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

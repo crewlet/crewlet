@@ -1,0 +1,1 @@
+import{t as e}from"./react-DlYQp10C.js";import{Dr as t}from"./chunk-6QFAK2WV-D8MIDiCw.js";var n=e();function r({columns:e=4,flush:r=!1,className:i,children:a,...o}){return(0,n.jsx)(`div`,{...o,className:t(`crewlet-stat-group`,r&&`crewlet-stat-group--flush`,i),style:{"--crewlet-stat-group-cols":e,...o.style},children:a})}export{r as t};

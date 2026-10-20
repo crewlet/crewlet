@@ -252,20 +252,22 @@ func TestNoPieceOfARealKeySurvivesAnyWrapping(t *testing.T) {
 	}
 }
 
-// A PASSWORD AFTER A REAL KEY WITH NO END IS REDACTED AS IT IS WITH NONE: in
-// every wrapping, under every encoder's last line, a label and its value on the
-// next line (or after a blank one) redact the value wherever the same lines
-// from the label on do, since the key's block never takes the word the
-// password's rule keys on, and nothing of the key survives — a label whose
-// separator is an `=` ending its line too. Where the label's lines alone keep
-// their value (an echo's quote stands where a value would be), so do these:
-// that is the password's rule, not the key's read.
+// A PASSWORD AFTER A REAL KEY WITH NO END IS NEVER PUBLISHED: in every
+// wrapping, under every encoder's last line, a label and its value on the next
+// line (or after a blank one) redact the value, since the key's block never
+// takes the word the password's rule keys on, the value is read where the
+// wrapping puts it, and nothing of the key survives — a label whose separator
+// is an `=` ending its line too. It used to hold only where the label's lines
+// alone redacted the value, and they did not where the wrapping's syntax
+// stood where the value would be (an echo's quote, a concatenation's, a
+// numbered blank line): there the value was published with no key above it.
 //
 // Mutation: drop the label from bodyLine, and the value is published under
 // most of these keys in most wrappings; read a password's key only where its
 // separator is past the run, and it is published after `pwd=` and
-// `PASSWORD=`.
-func TestAPasswordAfterARealKeyWithNoEndIsRedactedAsWithNone(t *testing.T) {
+// `PASSWORD=`; take the value from the first word past the separator, and it
+// is published in the echoed, concatenated and numbered wrappings.
+func TestAPasswordAfterARealKeyWithNoEndIsNeverPublished(t *testing.T) {
 	t.Parallel()
 	const value = "hunter2x9"
 	for kname, key := range realKeys() {
@@ -286,16 +288,13 @@ func TestAPasswordAfterARealKeyWithNoEndIsRedactedAsWithNone(t *testing.T) {
 						lines = append(lines, "")
 					}
 					text := w.wrap(append(lines, value)).text
-					word := strings.TrimSpace(strings.TrimRight(label, ":= "))
-					alone := text[strings.LastIndexByte(text[:strings.LastIndex(text, word)], '\n')+1:]
 					name := kname + ", " + wname + ", " + label
 					got := redact.Secrets(text)
 					if leak := survivor(got, body); leak != "" {
 						t.Errorf("%s: %q survived in\n%s", name, leak, got)
 					}
-					if strings.Contains(got, value) && !strings.Contains(redact.Secrets(alone), value) {
-						t.Errorf("%s (blank line between: %v): the value was published under the key "+
-							"and redacted without it:\n%s", name, gap, got)
+					if strings.Contains(got, value) {
+						t.Errorf("%s (blank line between: %v): the value was published:\n%s", name, gap, got)
 					}
 					if again := redact.Secrets(got); again != got {
 						t.Errorf("%s: a second pass changed the text", name)

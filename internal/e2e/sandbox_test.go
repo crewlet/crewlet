@@ -851,8 +851,10 @@ func TestAnEngineRestartMidRunStillFinishesTheSameTurn(t *testing.T) {
 }
 
 // THE CONTAINER LEG. Same protocol, real host isolation — and the mode whose
-// in-box paths match a remote backend's, so a setup step that provisions a
-// system path works there and is refused in `direct`.
+// in-box paths match a remote backend's, so a path a step or a brief names
+// under the home reads the same in both. (A setup FILE at a system path is
+// refused here exactly as in `direct`: a container box writes files only
+// under its home mount.)
 //
 // Skipped where no container runtime is usable rather than dropped: it is the
 // half of the gate a workstation cannot always run, and a suite that quietly

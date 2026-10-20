@@ -274,8 +274,13 @@ supports `${ENV_VAR}`. Put the reference in the YAML and the value in
 even a draft, even one you expect to be deleted. The schema says where
 they go: every position that holds a credential carries
 `"x-crewlet-secret": true` (on a list's `items` and a map's
-`additionalProperties` for the members), and each of those takes a
-`${VAR}`.
+`additionalProperties` for the members), and a credential in one of
+them is a `${VAR}`. Some of them are maps that carry settings beside the
+credentials — a tool server's `env`, a seat's `mcp_env` — and a setting
+there that is no secret is written as itself: `GITLAB_HOST: gitlab.com`,
+`GLAB_CHECK_UPDATE: "false"`. A read of the stored company masks it, as it
+masks everything in such a position that is not exactly one reference,
+and writing the masked value back keeps the stored one.
 
 **Seats you will provision need a *whole-value* `${VAR}`.**
 `crewlet mattermost provision` / `crewlet gitlab provision` mint per-agent

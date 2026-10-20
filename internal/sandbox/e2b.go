@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -253,24 +254,61 @@ func (s *E2BSandbox) Home() string { return DefaultHome }
 // A NON-ZERO EXIT IS DATA, NOT AN ERROR. Callers depend on it: the liveness
 // probe reads a failed `kill -0` as "the process is gone", and setup turns a
 // failed provisioning command into a reportable failure. An error return is
-// reserved for not reaching the box at all.
+// reserved for a command the box gave no status for at all.
+//
+// A STATUS IS READ AS A LOCAL BOX REPORTS ONE, so a setup failure says the
+// same thing whichever cell ran it: a command that outlived its timeout is
+// 124, its timeout named on stderr before whatever it printed, and one a
+// signal ended — the shell the command runs as killed, an out-of-memory kill
+// of a program it exec'd into — is 128 plus the signal's number, the signal
+// named after what it printed. envd reports the second as an exit code of -1
+// beside the signal's name, and the first as a stream it closed with
+// `deadline_exceeded`, usually before any end event: read as a missing
+// verdict, both said the box had gone away while it was still there.
 func (s *E2BSandbox) Exec(ctx context.Context, cmd string, opts ExecOptions) (ExecResult, error) {
 	res, err := s.envd.start(ctx, cmd, opts, false)
 	if err != nil {
 		return ExecResult{}, err
 	}
-	if res.ExitCode < 0 {
-		// The stream ended without a verdict — the box was paused or
-		// reclaimed mid-command. Reported as a failure with what was
-		// captured, because claiming exit 0 would have the caller treat
-		// an abandoned command as a successful one.
-		return ExecResult{ExitCode: 1, Stdout: res.Stdout, Stderr: res.Stderr},
-			fmt.Errorf("e2b: the command's stream ended before it reported an "+
-				"exit code, so the box went away mid-command (sandbox %s)", s.id)
+	failed := ExecResult{ExitCode: 1, Stdout: res.Stdout, Stderr: res.Stderr}
+	switch {
+	case res.Ended && res.ExitCode >= 0:
+		return ExecResult{
+			ExitCode: res.ExitCode, Stdout: res.Stdout, Stderr: res.Stderr,
+		}, nil
+	case res.Trailer != nil && res.Trailer.Code == connectDeadline && opts.TimeoutSec > 0:
+		// Checked BEFORE the signal: envd kills the process when the
+		// timeout runs out, so an end event reporting that kill can
+		// arrive beside the deadline — and the timeout is the cause.
+		detail := fmt.Sprintf("timed out after %s",
+			time.Duration(opts.TimeoutSec*float64(time.Second)))
+		if said := strings.TrimSpace(res.Stderr); said != "" {
+			detail += "\n" + said
+		}
+		return ExecResult{ExitCode: 124, Stdout: res.Stdout, Stderr: detail}, nil
+	case res.Signal > 0:
+		note := fmt.Sprintf("killed by signal %d (%s)", res.Signal, res.SignalName)
+		if said := strings.TrimRight(res.Stderr, "\n"); said != "" {
+			note = said + "\n" + note
+		}
+		return ExecResult{ExitCode: 128 + res.Signal, Stdout: res.Stdout, Stderr: note}, nil
+	case res.Ended:
+		// An end event with no exit code and no signal this can read: say
+		// what envd said rather than invent a status.
+		return failed, fmt.Errorf("e2b: the command ended as %q, which names "+
+			"no exit status (sandbox %s)", res.Status, s.id)
+	case res.Trailer != nil:
+		return failed, fmt.Errorf("e2b: the box's agent ended the command's "+
+			"stream with %s (%s) before it reported an exit code (sandbox %s)",
+			res.Trailer.Code, res.Trailer.Message, s.id)
+	default:
+		// The stream ended without a verdict or a reason — the box was
+		// paused or reclaimed mid-command. Reported as a failure with what
+		// was captured, because claiming exit 0 would have the caller
+		// treat an abandoned command as a successful one.
+		return failed, fmt.Errorf("e2b: the command's stream ended before it "+
+			"reported an exit code, so the box went away mid-command (sandbox %s)", s.id)
 	}
-	return ExecResult{
-		ExitCode: res.ExitCode, Stdout: res.Stdout, Stderr: res.Stderr,
-	}, nil
 }
 
 // StartBackground implements [Sandbox].

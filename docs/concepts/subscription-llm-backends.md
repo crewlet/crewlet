@@ -346,11 +346,13 @@ collected, so the task can fall short of the turn's cost and never exceed it.
 
 A seat whose executor already holds a shell has no use for a second box
 beside it — two filesystems, with the work in the one the turn cannot
-see. That is what [`role.sandbox.run_in: self`](code-sandbox.md#where-code-work-runs)
-names: code work rides the executor's own run, `run_sandbox` refuses with
-a message saying to use the shell it already has, and no second box is
-provisioned. `self` is refused on any other runtime, and is not offerable
-as a company-wide default.
+see. So such a seat is never offered `run_sandbox`: the tool is not on
+its surface, not in its catalogue and not one `activate_tool` reaches,
+and no second box is provisioned.
+[`role.sandbox.run_in: self`](code-sandbox.md#where-code-work-runs)
+documents that code work rides the executor's own run; leaving `run_in`
+empty, or naming no gate at all, behaves the same. `self` is refused on
+any other runtime, and is not offerable as a company-wide default.
 
 ## The system prompt in text mode
 

@@ -29,7 +29,7 @@ services:
     # exactly like a line with nothing to update, and a green run named a
     # GitLab nobody could identify afterwards. Multi-arch incl. arm64 since
     # 18.1.
-    image: gitlab/gitlab-ee:19.4.1-ee.0
+    image: gitlab/gitlab-ee:19.5.0-ee.0
     profiles: [gitlab]
     hostname: gitlab.local
     shm_size: "256m"                         # image default 64 MB is too small
@@ -285,7 +285,7 @@ services:
   # ---------------------------------------------------------------------------
   seaweedfs:
     # PINNED EXACTLY, for the reason every service here is.
-    image: chrislusf/seaweedfs:3.80
+    image: chrislusf/seaweedfs:4.48
     profiles: [s3]
     command: ["server", "-dir=/data", "-s3", "-s3.port=8333", "-ip.bind=0.0.0.0"]
     ports:

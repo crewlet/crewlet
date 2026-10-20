@@ -30,7 +30,15 @@ import (
 // and prose holding what reads like a piece of a key at the start of its line,
 // at its end and in its middle, or in brackets; and what another rule claims
 // that reads like such a piece: a password's key holding a digit, a value that
-// does, an indented one, and a token after a `_`.
+// does, an indented one, and a token after a `_` — and a password's key and its
+// value a line or two apart in every wrapping a line is written in, with the
+// wrapping's blank lines between: echoed into a file, concatenated in a
+// string, under a reader's line numbers, a grep's context marks, a diff's
+// `+`, a log's timestamps and nl's, in a list of strings, a table's row, a
+// JSON line and a YAML string, a key nested under another, digits under a key
+// whose line opens with a number, a token on every line, an escaped break
+// written at a line's end, a value with one in it and another key after it,
+// and a key beside a value naming its own further down.
 var transcriptLines = []string{
 	"-----BEGIN RSA PRIVATE KEY-----",
 	"-----END RSA PRIVATE KEY-----",
@@ -127,6 +135,66 @@ var transcriptLines = []string{
 	"  Kk55Lm66NN-secretpart",
 	"pwd=Ab12cdEF34gh",
 	"OPENAI_API_KEY=sk-abcdefghij_Ab12CdEf34GhIjKlMnOpQr",
+	`echo "Password:" >> key.pem`,
+	`echo "hunter2x9" >> key.pem`,
+	"\t\"password:\\n\" +",
+	"\t\"\\n\" +",
+	"\t\"hunter2x9\\n\"",
+	"     9\u2192Password:",
+	"    10\u2192",
+	"    11\u2192hunter2x9",
+	"a.pem:12:Enter the password:",
+	"a.pem-11-hunter2x9",
+	"+Password:",
+	"+",
+	"+hunter2x9",
+	"2026-10-06T09:00:00.121Z Password:",
+	"2026-10-06T09:00:00.122Z ",
+	"2026-10-06T09:00:00.122Z",
+	"2026-10-06T09:00:00.123Z hunter2x9",
+	`  - "PWD:"`,
+	`  - ""`,
+	`  - "hunter2x9"`,
+	`  - "pwd:\n"`,
+	"| Password: |",
+	"|  |",
+	"| hunter2x9 |",
+	`{"log": "password:\n"}`,
+	`{"log": "hunter2x9"}`,
+	`password: "`,
+	`  hunter2x9"`,
+	"  password: hunter2x9",
+	"    31\tEnter the password:",
+	"    32\t",
+	"3 password:",
+	"4567x9",
+	"sk-" + strings.Repeat("Q", 24) + " password:",
+	"sk-" + strings.Repeat("Q", 24),
+	"sk-" + strings.Repeat("Q", 24) + " hunter2x9",
+	`+password:\n`,
+	`"password:\n" + pwd: x`,
+	`export PASSWORD=Xk9\nQ2#vL8 pwd=abc`,
+	"hunter2x9 Retype password:",
+	"- password:",
+	"Password: *** Retype password:",
+	"***",
+	`    change_password(old_password="hunter2", new_password=`,
+	`                    "hunter3x9")`,
+	"hunter2x9  # rotate the password:",
+	"+hunter2x9 Retype password:",
+	"1. Password:",
+	"     1\u21921. Password:",
+	"     2\u2192839201",
+	"   2024.Summer!",
+	`pwd=ab\ncd pwd="`,
+	"+u1SU1Lf= fAt0gun+",
+	"+-----END RSA PRIVATE KEY-----|passwd:",
+	"+- hunter2x9",
+	"Enter password:",
+	"\ttext := \"Enter password:\\n\"",
+	"\tfmt.Fprintf(w, \"done\\n\")",
+	`  "Password:",`,
+	`  "hunter2x9"`,
 }
 
 // WHAT IS SHOWN AS IT SETTLES IS THE WHOLE TEXT REDACTED, over transcripts no

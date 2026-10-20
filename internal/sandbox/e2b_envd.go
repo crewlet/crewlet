@@ -11,6 +11,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"path"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -207,12 +208,51 @@ const connectEnvelope = 5
 // the trailer rather than a message.
 const connectEndFlag = 0x02
 
-// e2bProcessResult is one command's outcome, folded from the frames.
+// e2bProcessResult is one command's outcome, folded from the frames: what
+// envd SAID about how it ended, each fact apart, so the caller reads a status
+// off them rather than off a sentinel standing for every way of not having
+// one.
 type e2bProcessResult struct {
-	PID      int
+	PID int
+	// Ended is whether envd sent the command's `end` event. A stream that
+	// closes without one carries no account of the process at all.
+	Ended bool
+	// ExitCode is the status the process exited with, and -1 when it
+	// reported none: no `end` event, or a process a signal ended.
 	ExitCode int
-	Stdout   string
-	Stderr   string
+	// Signal is the number of the signal that ended the process, read off
+	// the end event's status, and 0 when none did. SignalName is how the box
+	// names it.
+	Signal     int
+	SignalName string
+	// Status is envd's own account of how the process ended, kept for an
+	// end event that carries neither an exit code nor a signal this reads.
+	Status string
+	// Trailer is the error envd closed the stream with, nil when it closed
+	// it cleanly. A command that outlived its timeout_seconds ends here, as
+	// a `deadline_exceeded` with no end event before it.
+	Trailer *connectError
+	Stdout  string
+	Stderr  string
+}
+
+// connectError is the error a Connect stream's last frame carries — its code
+// is one of Connect's own (`deadline_exceeded`, `unavailable`, …).
+type connectError struct {
+	Code    string `json:"code"`
+	Message string `json:"message,omitempty"`
+}
+
+// connectDeadline is the code envd's stream closes with when the command's
+// timeout runs out: the handler's own context carries the request's
+// Connect-Timeout-Ms, and that context ending is what stops the stream —
+// usually before the end event of the process it then kills, and at best
+// beside one that reports the kill.
+const connectDeadline = "deadline_exceeded"
+
+// connectEnd is the payload of a Connect stream's last frame.
+type connectEnd struct {
+	Error *connectError `json:"error,omitempty"`
 }
 
 // startRequest is envd's Process/Start body.
@@ -316,7 +356,9 @@ func (c *envdClient) start(ctx context.Context, cmd string, opts ExecOptions, ba
 // A STREAM THAT ENDS WITHOUT AN `end` EVENT IS NOT AN ERROR HERE. envd closes
 // the connection when a box is paused or reclaimed mid-command, and the
 // engine's own completion model already handles a job whose box went away —
-// raising instead would turn an ordinary pause into a failed run.
+// raising instead would turn an ordinary pause into a failed run. What the
+// stream did say — an end event, the trailer's error — is kept apart in the
+// result, and the caller decides what the command's status is.
 func foldStream(r io.Reader, background bool) (e2bProcessResult, error) {
 	var (
 		out    e2bProcessResult
@@ -346,9 +388,15 @@ func foldStream(r io.Reader, background bool) (e2bProcessResult, error) {
 			return out, fmt.Errorf("e2b: read stream: %w", err)
 		}
 		if header[0]&connectEndFlag != 0 {
-			// The trailer. A stream that ends here without an `end`
-			// event leaves ExitCode at -1, which the caller reads as
+			// The trailer, whose error is how a stream envd ended on a
+			// deadline says so. A stream that ends here without an
+			// `end` event leaves Ended false, which the caller reads as
 			// "no verdict" rather than as success.
+			var end connectEnd
+			if err := json.Unmarshal(payload, &end); err != nil {
+				return out, fmt.Errorf("e2b: decode stream trailer: %w", err)
+			}
+			out.Trailer = end.Error
 			break
 		}
 
@@ -369,14 +417,70 @@ func foldStream(r io.Reader, background bool) (e2bProcessResult, error) {
 			stdout.Write(frame.Event.Data.Stdout)
 			stderr.Write(frame.Event.Data.Stderr)
 		case frame.Event.End != nil:
-			out.ExitCode = frame.Event.End.ExitCode
-			if e := frame.Event.End.Error; e != "" && stderr.Len() == 0 {
-				stderr.WriteString(e)
+			end := frame.Event.End
+			out.Ended = true
+			out.ExitCode = end.ExitCode
+			if end.ExitCode >= 0 {
+				if end.Error != "" && stderr.Len() == 0 {
+					stderr.WriteString(end.Error)
+				}
+				continue
 			}
+			// NO EXIT CODE: the process the box waited on — the shell
+			// a command runs as — was ended by a signal, which envd
+			// reports as os.ProcessState does: -1 beside a status naming
+			// the signal. Its Error is that same status, so it is not
+			// copied in; the caller names the signal.
+			out.Signal, out.SignalName = boxSignal(end.Status)
+			out.Status = end.Status
 		}
 	}
 	out.Stdout, out.Stderr = stdout.String(), stderr.String()
 	return out, nil
+}
+
+// boxSignal is the signal a box's end event names in its status — the number
+// and the box's own name for it — and 0 for a status that names none.
+//
+// envd describes a process a signal ended as os.ProcessState.String does:
+// "signal: " and the signal's description, "(core dumped)" after it where one
+// was, or "signal: signal 34" for a number Go has no description for.
+func boxSignal(status string) (int, string) {
+	name, ok := strings.CutPrefix(status, "signal: ")
+	if !ok {
+		return 0, ""
+	}
+	name = strings.TrimSuffix(name, " (core dumped)")
+	if n, known := boxSignals[name]; known {
+		return n, name
+	}
+	if digits, numbered := strings.CutPrefix(name, "signal "); numbered {
+		if n, err := strconv.Atoi(digits); err == nil && n > 0 {
+			return n, name
+		}
+	}
+	return 0, ""
+}
+
+// boxSignals is each Linux signal's description, as Go — and so envd — names
+// it, by the description: the only form an end event carries.
+//
+// The BOX's table rather than this process's syscall.Signal: a box is Linux
+// whatever the engine host runs, and the two disagree off Linux — on darwin
+// signal 10 is "bus error", in the box "user defined signal 1". A test built
+// only on Linux holds this to Go's own table there, so the two cannot drift.
+var boxSignals = map[string]int{
+	"hangup": 1, "interrupt": 2, "quit": 3, "illegal instruction": 4,
+	"trace/breakpoint trap": 5, "aborted": 6, "bus error": 7,
+	"floating point exception": 8, "killed": 9, "user defined signal 1": 10,
+	"segmentation fault": 11, "user defined signal 2": 12, "broken pipe": 13,
+	"alarm clock": 14, "terminated": 15, "stack fault": 16, "child exited": 17,
+	"continued": 18, "stopped (signal)": 19, "stopped": 20,
+	"stopped (tty input)": 21, "stopped (tty output)": 22,
+	"urgent I/O condition": 23, "CPU time limit exceeded": 24,
+	"file size limit exceeded": 25, "virtual timer expired": 26,
+	"profiling timer expired": 27, "window changed": 28, "I/O possible": 29,
+	"power failure": 30, "bad system call": 31,
 }
 
 // maxEnvdFrame caps one streamed message.
@@ -667,6 +771,7 @@ func keepLast(r io.Reader, n int) ([]byte, int64, error) {
 
 // writeFile puts a file into the box.
 func (c *envdClient) writeFile(ctx context.Context, path string, content []byte) error {
+	path = envdPath(path)
 	var body bytes.Buffer
 	form := multipart.NewWriter(&body)
 	// THE PART NAME IS THE PATH'S BASENAME and envd reads the destination
@@ -716,6 +821,39 @@ func (c *envdClient) authorize(req *http.Request) {
 	// and a file call without it or a signature; a header is the form both
 	// accept, and the one E2B's SDKs send.
 	req.Header.Set("X-Access-Token", c.token)
+}
+
+// envdPath is a path to write as every other cell writes it: an absolute one
+// lexically clean, and every other form as envd itself reads it.
+//
+// ONE MEANING IN EVERY CELL. envd joins a relative or `~/` path onto the
+// account's home, which cleans it, but takes an absolute path VERBATIM: it
+// creates the path's parent and then writes the path, so `/home/user/.npmrc/`
+// made `/home/user/.npmrc` a directory and was refused as one ("path is a
+// directory"), while both local cells clean the same key through
+// hostbox.InHome and write the file. The setup-file rule in internal/config
+// cleans before it judges, so it admitted a key every e2b box then failed on.
+// Cleaned here, an absolute key lands where the other forms do, and the
+// upload's part is named for the file rather than for the empty element after
+// a trailing slash.
+//
+// NEVER CLEANED ACROSS THE TILDE. To a lexical clean `~` is an ordinary
+// element a following `..` removes: `~/../user/.npmrc` cleans to
+// `user/.npmrc`, which envd joins onto the home as `/home/user/user/.npmrc`,
+// where envd's own expansion — and the config rule, which resolves `~/` the
+// same way — put it at `/home/user/.npmrc`. So a `~/` path keeps its prefix and
+// only what follows it is cleaned, and any other form (a relative path, `~`,
+// `~name`) goes to envd as written: its join cleans a relative path itself,
+// and cleaning one here could even MAKE a tilde form, `a/../~/x` becoming the
+// `~/x` envd would read as the home.
+func envdPath(p string) string {
+	if path.IsAbs(p) {
+		return path.Clean(p)
+	}
+	if rest, ok := strings.CutPrefix(p, "~/"); ok {
+		return "~/" + path.Clean(rest)
+	}
+	return p
 }
 
 // baseName is the last path element, without importing path/filepath for a

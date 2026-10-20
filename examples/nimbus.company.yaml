@@ -102,11 +102,13 @@ providers:
     model: text-embedding-3-large
     api_key: "${OPENAI_API_KEY}"
   # Code-runtime sandbox — lets a sandbox-enabled role run its Execute
-  # phase as a coding agent (Claude Code / OpenCode) inside an isolated
-  # E2B sandbox that implements the work and opens a merge request under
-  # the agent's OWN GitLab identity (the service-account PAT each seat
-  # declares as GITLAB_TOKEN in role.sandbox.env below — same PAT as its
-  # mcp_env.gitlab GITLAB_TOKEN).  The per-role gate is
+  # phase as a coding agent (Claude Code / OpenCode) in a sandbox box that
+  # implements the work and opens a merge request under the agent's OWN
+  # GitLab identity (the service-account PAT each seat declares as
+  # GITLAB_TOKEN in role.sandbox.env below — same PAT as its
+  # mcp_env.gitlab GITLAB_TOKEN).  Here every box is a `direct` box on the
+  # engine host, which keeps each run's state apart but does not isolate
+  # the host: see the catalogue below.  The per-role gate is
   # role.sandbox (enabled on the three Engineering seats below); this
   # block is the engine-wide provider.  See
   # docs/concepts/code-sandbox.md and docs/integrations/gitlab.md.
@@ -135,6 +137,11 @@ providers:
     #
     # For anything shared, add `e2b:` with its `api_key` (and `domain` for a
     # self-hosted cluster) and point the seats that need it at `run_in: e2b`.
+    # A `template` there must carry the coding agent (opencode here) as well
+    # as the toolchains those seats' setup steps check for (Go, Node with
+    # corepack, uv): naming one replaces E2B's prebuilt per-agent template
+    # for every e2b box in the company, and a step only checks for its tool,
+    # so nothing installs either into the template.
     # Don't want code work at all? Remove this block and the engineers fall
     # back to the native executor. (`fake: true` is in-process stubs for a
     # demonstration — it runs no real coding agent and no real MCP.)
@@ -143,7 +150,11 @@ providers:
     # be installed on that machine, since `direct` runs it as a child
     # process. `opencode` here — OpenCode 2, the @opencode/cli package; a
     # 1.x install is refused by name — and `claude-code` is the other
-    # supported one.
+    # supported one.  So must each engineering seat's toolchain (Go; Node
+    # with corepack; uv): a `direct` box's setup commands run on that
+    # machine as the engine's user, so the seats' steps below CHECK for
+    # their tools and name what is missing, rather than install anything
+    # on the host.
     local:
       # The local backend serves both local cells, chosen per seat:
       #
@@ -201,8 +212,31 @@ providers:
         # under the agent's identity). Setup commands also see the run env,
         # which is how the identity lines below read the engine-provided
         # $CREWLET_AGENT_HANDLE / $CREWLET_AGENT_EMAIL facts.
-        files:
-          /usr/local/bin/git-credential-crewlet: |
+        #
+        # The helper lives in the BOX'S HOME, not /usr/local/bin: neither
+        # local cell writes a setup FILE anywhere else.  Every seat here
+        # runs `direct` (default_run_in above), and a direct box has no
+        # filesystem of its own, so a path outside its home would be the
+        # engine host itself; a container box mounts only its home.  A
+        # system path would fail every seat's box at setup, so validation
+        # refuses this document if a file names one.  A setup COMMAND is
+        # not confined the same way — under `direct` it runs on the engine
+        # host, as the engine's user.
+        #
+        # A `files:` entry named relative to the home (.local/bin/...)
+        # would land in the same place; the helper is written by a command
+        # because git has to be given its ABSOLUTE path, which only the
+        # box's shell knows ("$HOME", expanded), and it has to be made
+        # executable.  It is registered as a quoted shell snippet
+        # ("!'...'") because git runs a helper's value through the shell,
+        # and a direct box's home, under local.state_dir above, holds a
+        # space wherever the engine was started from a directory that
+        # does.  The same step works unchanged in a container or an E2B
+        # box, where $HOME is /home/user.
+        commands:
+          - mkdir -p "$HOME/.local/bin"
+          - |
+            cat > "$HOME/.local/bin/git-credential-crewlet" <<'SH'
             #!/bin/sh
             # Supply this seat's GitLab token for gitlab.com credential
             # requests ONLY. Reads $GITLAB_TOKEN from the environment
@@ -217,9 +251,9 @@ providers:
             [ -n "$ok" ] || exit 0
             echo "username=oauth2"
             echo "password=$GITLAB_TOKEN"
-        commands:
-          - chmod +x /usr/local/bin/git-credential-crewlet
-          - 'git config --global credential."https://gitlab.com".helper /usr/local/bin/git-credential-crewlet'
+            SH
+          - chmod +x "$HOME/.local/bin/git-credential-crewlet"
+          - 'git config --global credential."https://gitlab.com".helper "!''$HOME/.local/bin/git-credential-crewlet''"'
           # insteadOf is multi-valued: --add on both, or the second REPLACES
           # the first and scp-style git@gitlab.com: remotes stay SSH.
           - 'git config --global --add url."https://gitlab.com/".insteadOf "git@gitlab.com:"'
@@ -462,9 +496,10 @@ integrations:
   # one, and GitLab's own "Generate signing token" button produces the same
   # shape.  ``token`` below is a read-only PAT that enables
   # participants-based routing (comments + state changes reach everyone
-  # participating in an issue/MR, GitLab's own notification reach) — the
-  # provisioner mints a dedicated read-only ``crewlet-engine`` account for
-  # it.  The ``provisioning`` sub-block is read by the engine's own
+  # participating in an issue/MR, GitLab's own notification reach).
+  # Nothing provisions it: supply a ``read_api`` PAT yourself, or leave it
+  # unresolved and thread activity reaches only the people a payload
+  # names.  The ``provisioning`` sub-block is read by the engine's own
   # reconcile loop AND by ``crewlet gitlab provision`` — both create one
   # service account per engineering seat, memberships, per-agent PATs and
   # project webhooks from it.  See docs/integrations/gitlab.md.
@@ -562,15 +597,32 @@ mcp_servers:
     # `glab mcp serve` (stdio): the engine's MCP bridge spawns one glab
     # process PER ROLE with that role's GITLAB_TOKEN — so the per-role
     # mcp_env.gitlab below IS the per-agent identity, and there is no
-    # separate server to run/host.  Requires the `glab` CLI on the engine
-    # host.  The
-    # served surface is the full glab command tree (MR approve/diff/notes,
-    # issue CRUD, CI, glab_api for anything else).  Alternative:
-    # @zereight/mcp-gitlab as a shared streamable-HTTP server — see
+    # separate server to run/host.  Requires the `glab` CLI on the PATH of
+    # every engine host that runs seats.  The served surface is the full
+    # glab command tree (MR approve/diff/notes, issue CRUD, CI, glab_api
+    # for anything else).  Alternative: @zereight/mcp-gitlab as a shared
+    # streamable-HTTP server — see
     # docs/integrations/gitlab.md § MCP tool server.
     shared: false
     command: glab
     args: ["mcp", "serve"]
+    # glab answers a tool call with everything its command wrote, standard
+    # error included, so what it prints there unasked reaches the agent
+    # and breaks the JSON: the daily update notice (or the failed check,
+    # where gitlab.com is unreachable) and the "What's new" banner after
+    # an upgrade, which GLAB_CHECK_UPDATE does not cover.  The third stops
+    # a usage event to the instance on every call, naming the command and
+    # the project it ran against, sent under the seat's token and waited
+    # on for up to two seconds; leave it out and GitLab's usage statistics
+    # count the agents' commands.  Here, not in each seat's mcp_env — none
+    # is a credential — and never in the engine's own environment (a
+    # sourced .env, an image's ENV): a stdio server is handed only an
+    # allowlist of it.  "false" exactly; glab warns into every result on a
+    # spelling it cannot parse.
+    env:
+      GLAB_CHECK_UPDATE: "false"
+      GLAB_SHOW_WHATS_NEW: "false"
+      GLAB_SEND_TELEMETRY: "false"
   - name: tavily
     # The newest release: a file somebody copies is run long after it was
     # written and nothing moves a pin in it, so an example fetches
@@ -985,9 +1037,15 @@ units:
               # `run_in:` picks this seat's cell from providers.sandbox
               # above — direct | container | e2b. Omitted here, so it
               # inherits providers.sandbox.default_run_in (direct). A seat
-              # whose work must not touch this host names `container` (or
-              # `e2b`, once that backend is in the catalogue) here and
-              # nothing else changes.
+              # whose work must not touch this host names `container` or
+              # `e2b` here, and the catalogue then has to serve it:
+              # `container` needs providers.sandbox.local.image, an image
+              # carrying the coding agent AND this seat's toolchain (the go
+              # step below checks for Go inside it), and `e2b` needs an
+              # `e2b:` block with its api_key and a `template` carrying the
+              # same — Go 1.21 or later here: the engine installs nothing
+              # into a template, and E2B's prebuilt per-agent one is built
+              # for the coding agent rather than for this seat's repos.
               mcp:                                # MCP surface inside the sandbox
                 servers: [mattermost, tavily]
                 # No tracker in the box: the engine's builtins stay with the
@@ -1016,22 +1074,35 @@ units:
               # nimbus-conventions steps above) → these role steps.
               setup:
                 - name: go
-                  # nimbuscore / nimbusk0s are Go repos.  Ensure a Go toolchain
-                  # exists (the E2B base image is Ubuntu; the distro Go is
-                  # fine as a bootstrap), then let GOTOOLCHAIN=auto fetch the
-                  # EXACT toolchain each repo's go.mod pins — so the box
-                  # always builds with the version the repo expects.
+                  # nimbuscore / nimbusk0s are Go repos.  This seat's box
+                  # runs `direct`, where a setup command runs on the engine
+                  # host as the engine's user, so the step CHECKS for Go
+                  # rather than installing one there (an apt-get would need
+                  # root, and would change the host).  Go 1.21 or later will
+                  # do as a bootstrap: with GOTOOLCHAIN=auto, a local Go
+                  # older than what a repo's go.mod asks for fetches that
+                  # toolchain into the box's own module cache, so the box
+                  # builds with at least the version each go.mod's
+                  # go/toolchain line requires.  An older Go ignores GOTOOLCHAIN and refuses a
+                  # go.mod written for a newer one, so the step refuses it,
+                  # reading GOVERSION (an older `go env` prints an empty
+                  # line for it and exits 0).
                   commands:
-                    - "command -v go >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq golang-go)"
+                    - |
+                      case "$(go env GOVERSION 2>/dev/null)" in
+                        go1.2[1-9]*|go1.[3-9][0-9]*|devel*) ;;
+                        *) echo 'no Go 1.21 or later on PATH: install one on the engine host (run_in direct), in the image (container) or in the E2B template (e2b)' >&2; exit 1 ;;
+                      esac
                   env:
                     GOTOOLCHAIN: auto
                   brief: >-
                     Go workspace: you own gitlab.com/nimbus-hq/nimbuscore (the Go
                     HTTP/REST control-plane service) and
                     gitlab.com/nimbus-hq/nimbusk0s (the worker image). A Go
-                    toolchain is installed and GOTOOLCHAIN=auto fetches the
-                    exact version each repo's go.mod pins. Run `go build ./...`
-                    and `go test ./...` before pushing.
+                    toolchain (1.21 or later) is installed and GOTOOLCHAIN=auto
+                    fetches at least the version each repo's go.mod go/toolchain
+                    line requires. Run `go build ./...` and `go test ./...`
+                    before pushing.
             integrations:
               mattermost:
                 bot_token: "${MATTERMOST_TOKEN_SWE}"
@@ -1095,24 +1166,32 @@ units:
                 # tool the listed servers expose (there is no per-tool allowlist:
                 # OpenCode has none, and claude-code runs bypassPermissions).
               env:
-                GITLAB_TOKEN: "${GITLAB_TOKEN_FE}"   # this seat's own PAT (git-auth step + glab)
+                GITLAB_TOKEN: "${GITLAB_TOKEN_FE}"   # this seat's own PAT, for the git-auth step and the coding agent
               setup:
                 - name: node
                   # console / website are Node repos (React + Vite + TS).
-                  # corepack (bundled with Node) activates the pnpm/yarn shim
-                  # for whatever `packageManager` each repo pins; CI=1 keeps
-                  # installs/tests non-interactive (no watch modes, no
-                  # prompts) for a headless coding agent.
+                  # This seat's box runs `direct`, where a setup command runs
+                  # on the engine host as the engine's user, so the step
+                  # CHECKS for Node and corepack rather than installing
+                  # them, and does not run `corepack enable`: that writes
+                  # its pnpm/yarn shims beside the host's Node, a directory
+                  # the engine's user often cannot write.  Called directly
+                  # instead, `corepack pnpm …` runs the exact manager each
+                  # repo's `packageManager` pins, cached in the box's home.
+                  # CI=1 keeps installs/tests non-interactive (no watch
+                  # modes, no prompts) for a headless coding agent.
                   commands:
-                    - "corepack enable"
+                    - "command -v node >/dev/null 2>&1 && command -v corepack >/dev/null 2>&1 || { echo 'no node or corepack on PATH: install Node with corepack on the engine host (run_in direct), in the image (container) or in the E2B template (e2b)' >&2; exit 1; }"
                   env:
                     CI: "1"
                   brief: >-
                     Node workspace: you own gitlab.com/nimbus-hq/console (the
                     React + Vite + TypeScript management dashboard) and
-                    gitlab.com/nimbus-hq/website (the marketing site). corepack
-                    is enabled — use each repo's pinned package manager (its
-                    packageManager field, e.g. `pnpm install`). Run the repo's
+                    gitlab.com/nimbus-hq/website (the marketing site). Run
+                    each repo's pinned package manager through corepack, as
+                    its packageManager field names it — `corepack pnpm
+                    install`, `corepack pnpm test` — never a bare `pnpm`,
+                    which may be missing or another version. Run the repo's
                     lint and test scripts before pushing; every new page needs
                     empty/loading/error states.
             integrations:
@@ -1182,14 +1261,18 @@ units:
                 # tool the listed servers expose (there is no per-tool allowlist:
                 # OpenCode has none, and claude-code runs bypassPermissions).
               env:
-                GITLAB_TOKEN: "${GITLAB_TOKEN_AI}"   # this seat's own PAT (git-auth step + glab)
+                GITLAB_TOKEN: "${GITLAB_TOKEN_AI}"   # this seat's own PAT, for the git-auth step and the coding agent
               setup:
                 - name: python
-                  # The Phase-2 framework repo is Python-first; uv gives the
-                  # coding agent fast env + dependency management without
-                  # touching the box's system Python.
+                  # The Phase-2 framework repo is Python-first, managed with
+                  # uv.  This seat's box runs `direct`, where a setup command
+                  # runs on the engine host as the engine's user, so the
+                  # step CHECKS for uv rather than installing it: a
+                  # `pip install` there writes the host's own Python, or is
+                  # refused for it.  uv keeps each project's environment in
+                  # its checkout and its cache in the box's home.
                   commands:
-                    - "command -v uv >/dev/null 2>&1 || pip install --quiet uv"
+                    - "command -v uv >/dev/null 2>&1 || { echo 'no uv on PATH: install uv on the engine host (run_in direct), in the image (container) or in the E2B template (e2b)' >&2; exit 1; }"
                   brief: >-
                     Python workspace: you own the Phase-2 framework repo
                     (gitlab.com/nimbus-hq/nimbusflow once created). uv is

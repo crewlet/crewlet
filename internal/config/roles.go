@@ -350,15 +350,9 @@ func (s *RoleSandbox) validate(path Path) error {
 			"%d (a round cap cannot be negative; omit the field to inherit "+
 				"the provider default, or set 0 for uncapped)", *s.MaxTurns)
 	}
-	if !s.Enabled {
-		// A gate that is off with provisioning under it is an operator who
-		// configured a sandbox and will watch nothing happen.
-		if len(s.Setup) > 0 || len(s.Env) > 0 || len(s.MCP.Servers) > 0 || s.RunIn != "" {
-			p.add(at(path, "enabled"), ErrConflict,
-				"this seat's sandbox is configured but not enabled, so none of "+
-					"it is read. Set enabled: true, or remove the block")
-		}
-	}
+	// A gate that is off with provisioning under it is refused by the
+	// company ([Company.validateSandboxGates]), not here: whether any of it
+	// is read turns on how the seat's executor runs, which a gate cannot see.
 	for i := range s.Setup {
 		p.wrap(s.Setup[i].validate(idx(at(path, "setup"), i)))
 	}
