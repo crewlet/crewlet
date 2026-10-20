@@ -250,7 +250,7 @@ describe("the tree", () => {
 
     // The lead chip is drawn in the same hidden strip. It says the word
     // itself, as the chart this is drawn from does: see `leadChipLabel`.
-    pointerPress("Lead: VP Engineering");
+    pointerPress("Lead: VP Engineering for Engineering");
     press("Escape");
     expect(document.activeElement).toBe(item("Engineering"));
   });
@@ -259,7 +259,9 @@ describe("the tree", () => {
   // lead and offers no change, while a unit inside it offers one.
   test("in a lead's draft the unit's own lead chip offers no change", () => {
     mount(scopedState(fixtureCompany(), "engineering"));
-    expect(screen.queryByRole("button", { name: "Lead: VP Engineering", hidden: true })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Lead: VP Engineering for Engineering", hidden: true }),
+    ).toBeNull();
     expect(screen.getByText("Lead: VP Engineering")).toBeDefined();
     // Platform's chip, inside the unit, still offers its lead.
     expect(
@@ -674,7 +676,7 @@ describe("what a node offers a pointer", () => {
       // The lead along the bottom edge, which stays drawn: it is a fact about
       // the organization rather than a tool for changing it. The X inside it
       // is the tool, and it is quiet with the rest of them.
-      "Lead: VP Engineering",
+      "Lead: VP Engineering for Engineering",
       "Clear the lead of Engineering",
       // And the branch below is the Add, alone.
       "Add to Engineering",
@@ -983,7 +985,7 @@ describe("menus", () => {
       }),
     );
     const chip = screen.getByRole("button", {
-      name: /^Lead: VP Engineering \(inherited\)$/,
+      name: /^Lead: VP Engineering \(inherited\) for /,
       hidden: true,
     });
     fireEvent.click(chip);
@@ -1000,7 +1002,7 @@ describe("menus", () => {
     // Engineering's own lead is unchanged, and so is what the check said of it.
     expect(within(item("Engineering")).getByText("Lead: VP Engineering.")).toBeDefined();
     // Now declared, the choice says so, and No lead offers the parent's lead.
-    fireEvent.click(screen.getByRole("button", { name: "Lead: SRE", hidden: true }));
+    fireEvent.click(screen.getByRole("button", { name: /^Lead: SRE for /, hidden: true }));
     expect(
       screen
         .getAllByRole("menuitemradio")
@@ -1022,7 +1024,7 @@ describe("menus", () => {
     );
     expect(within(item("Engineering")).getByText("Lead after the check.")).toBeDefined();
     expect(
-      screen.getByRole("button", { name: "Lead after the check", hidden: true }),
+      screen.getByRole("button", { name: /^Lead after the check for /, hidden: true }),
     ).toBeDefined();
   });
 
@@ -1073,7 +1075,7 @@ describe("menus", () => {
     doc.units![1]!.lead = "CEO";
     const { spies } = mount(checkedEdit(doc));
     const sales = within(chartCard(item("Sales")));
-    fireEvent.click(sales.getByRole("button", { name: "Lead: CEO", hidden: true }));
+    fireEvent.click(sales.getByRole("button", { name: /^Lead: CEO for /, hidden: true }));
     expect(
       screen
         .getAllByRole("menuitemradio")
@@ -1091,12 +1093,14 @@ describe("menus", () => {
   test("choosing the answer already chosen records nothing and is refused nowhere", () => {
     const { probe, spies } = mount();
     // Engineering declares VP Engineering; Sales declares no lead.
-    fireEvent.click(screen.getByRole("button", { name: "Lead: VP Engineering", hidden: true }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Lead: VP Engineering for Engineering", hidden: true }),
+    );
     fireEvent.click(screen.getByRole("menuitemradio", { name: "VP Engineering" }));
     expect(screen.queryByRole("menu")).toBeNull();
     const sales = within(chartCard(item("Sales")));
     // An empty pill still says the word: "Lead", as that chart writes it.
-    fireEvent.click(sales.getByRole("button", { name: "Lead", hidden: true }));
+    fireEvent.click(sales.getByRole("button", { name: "Lead for Sales", hidden: true }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: "No lead" }));
     expect(spies.dispatched).toEqual([]);
     expect(probe.state.refusal).toBeNull();

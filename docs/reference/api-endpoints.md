@@ -6206,7 +6206,8 @@ for. The domain's applier decides from the record alone.
 | `POST /artifacts/uploads` | `create_artifact` | An upload intent for a new artifact |
 | `POST /artifacts/{id}/uploads` | `publish_artifact`, or `upload_artifact_asset` with `asset: true` | An upload intent for the next version, or into the asset store |
 | `PUT /artifacts/uploads/{upload}/files/{path}` | the intent's own verb, decided again | One file's bytes, streamed through the engine |
-| `POST /artifacts` | `create_artifact` | A new artifact and its first version, owned by the caller. `"starter": true` begins it from its kind's starter content, which the engine holds and publishes inline (a deck's four example slides), naming no upload, files or entry; a kind with no starter is `422 invalid` |
+| `POST /artifacts` | `create_artifact` | A new artifact and its first version, owned by the caller. `"starter": true` begins it from its kind's starter content, which the engine holds and publishes inline, naming no upload, files or entry; a kind with no starter is `422 invalid`. A `slides` starter takes an optional `"deck": {"theme": "<id>", "slides": [{"layout": "<id>", "title": "..."}]}`, the theme it is drawn in and the slides it opens with (at most 60, each title at most 200 bytes); absent, it opens with a cover, an agenda, two columns and a closing slide in the `ink` theme. A plan naming a theme or layout there is not is `422 invalid`. A doc's starter may carry the text its writer already wrote, `"doc": {"body": "<markdown>"}`: the engine writes the title as the tab's heading and the body under it, held to the doc format, at most 1 MiB in all. A design's starter is the `layout` sent with it: its `boards` (each a `title`, `x`, `y`, `w`, `h` and an optional `brief`, the first the cover) and `notes` (as `canvas.json` holds them), published as `canvas.json` and one placeholder page per board under `boards/`, every typed word escaped as text; a design starter with no layout, and a layout outside the canvas format's bounds, are `422 invalid`, each problem named at its place in the layout (`boards[2].w`). `deck`, `doc` or `layout` without `starter`, or on any kind but its own, is `422 invalid` |
+| `POST /artifacts/checks` | `create_artifact` | A page's text files judged as a publish of its kind would judge them, writing nothing: `{"kind": "html", "entry": "index.html", "files": [{"path": "index.html", "text": "..."}]}`, answered `200` with every `refusals` and `warnings` finding (path, line, code, message). Framed kinds only, 1 to 64 text files and at most 2 MiB of text. An allowlisted CDN file is named where its copy would be served and never fetched, so a CDN that refuses the file is found only at publish. Held to a budget per node (two checks a second for one person, a burst of ten): `429 check_budget` with a `Retry-After` |
 | `POST /artifacts/{id}/versions` | `publish_artifact`; `artifacts.publish.force` beside it when forced | The next version, based on `If-Match: "<n>"` |
 | `POST /artifacts/{id}/versions/{n}/restore` | `publish_artifact` | Version `n` again as a new version, every file carried, based on `If-Match` |
 | `PATCH /artifacts/{id}` | `update_artifact` | The title, the description or the icon |
@@ -6225,6 +6226,7 @@ sign-in, not a seat. Remove it and share with their seat.") and offers Remove as
 its one action, and the listing never counts it toward the login's Shared
 section, where every read of it would be withheld.
 | `POST /artifacts/{id}/transfer` | `artifacts.transfer` | `{"to": "<seat>"}` |
+| `POST /artifacts/{id}/work-items` | `get_artifact` on the artifact and `update_work_item` on the item | `{"work_item": "ENG-12", "after"?: "CREWLET_TRACKER_LOG@1:9"}`: links the artifact to a work item the tracker holds, so the item's Artifacts panel lists it. `after` is the `position` the item's create answered with, and the item is read from no earlier than it. See [Linking to a work item](#linking-to-a-work-item) |
 | `DELETE /artifacts/{id}` | `artifacts.trash` | Into the trash: every frame stops loading at once, and it is purged after thirty days |
 | `POST /artifacts/{id}/restore` | `artifacts.restore` | Out of the trash; `409 artifact_purging` once a purge has begun on it |
 | `POST /artifacts/{id}/purge` | `artifacts.purge` | Gone for good, in three steps: the artifact is committed to its purge (into the trash, never restored again), its datastore goes, then its own rows |
@@ -6240,6 +6242,59 @@ record id is derived, so a retry under the same key is the same operation
 again under the same key, never a fresh one. The transfer needs no key: the
 upload claims each file before a byte is read, and a second put of it is
 refused `409 upload_consumed`.
+
+### Linking to a work item
+
+`POST /artifacts/{id}/work-items` puts an artifact that already exists on a
+tracker work item's Artifacts panel, the way a create or a publish carrying
+`work_item` does for what it makes. It records one `link_work_item` row in the
+artifact's history, filed under the item, and changes nothing else.
+
+```bash
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  -H "Idempotency-Key: $(uuidgen)" -H "Content-Type: application/json" \
+  -d '{"work_item": "ENG-12"}' \
+  "http://localhost:8000/artifacts/$ID/work-items"
+```
+
+- **The artifact is decided as a read** (`get_artifact`): any role on it,
+  viewer and above. A caller with no relation is `404 not_found` like any
+  other artifact route, and an administrator with none is admitted on the
+  admin path, recorded as an elevated read first.
+- **The item is decided as a write** (`update_work_item`), by the same rule
+  `PATCH /work/items/{key}` takes: a caller who does not use the tracker is
+  `403 unauthorized`.
+- **The item must be live.** `work_item` is a key or an item id, at most 64
+  bytes of visible ASCII; one the tracker does not hold, or holds removed, is
+  `422 invalid`, as is a company whose work items another tracker keeps. A node
+  not yet handed a company answers `503 no_active_revision`. A trashed
+  artifact is `409 artifact_trashed`.
+- **A link sent right after the item was filed names its create.** On a fleet
+  the link can reach a node that has not applied the create yet, which would
+  read the item as one nobody filed. So `after` carries the `position` the
+  create answered with (`<stream>@<generation>:<sequence>`, the act answer's
+  `position`), and the item is read through the tracker's read-your-writes
+  floor, the same one `min_position` sets on every tracker read: the read waits
+  up to the read budget for this node to apply the create. A node that does
+  not is refused as every floored tracker read is, `503 unavailable` with
+  `refusal: "behind"`, its `detail` and a `Retry-After`, and nothing is linked;
+  send the link again under the same key. An `after` that is not a position,
+  or one on another log than the tracker's (an artifact's own `position`, for
+  example), is `422 invalid` and is never waited for. Without `after` the item
+  is read at this surface's own level, as before.
+
+```bash
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  -H "Idempotency-Key: $(uuidgen)" -H "Content-Type: application/json" \
+  -d '{"work_item": "ENG-12", "after": "CREWLET_TRACKER_LOG@1:9"}' \
+  "http://localhost:8000/artifacts/$ID/work-items"
+```
+
+The answer is `{"artifact", "work_item", "op_id", "outcome", "position"}`,
+where `work_item` is the item's current key: an id or a former key is linked
+under it, so the panel finds it. A link the artifact's history already makes
+(an earlier link, or a write made for the item) answers `200` and writes
+nothing.
 
 ### Publishing a version
 
@@ -6297,12 +6352,12 @@ a person present, and the version is marked forced.
 | `GET /artifacts/{id}` | `artifact` | The head, the caller's `role`, whether they may publish (`writer`), and the shares to the owner and editors (`share_count` below) |
 | `GET /artifacts/{id}/versions` | `artifact_versions` | The retained versions, newest first |
 | `GET /artifacts/{id}/versions/{n}` | `artifact_version` | One version and its manifest |
-| `GET /artifacts/{id}/history` | `artifact_history` | Every publish, share, trash and elevated read, newest first; below editor, without the elevated reads or who a share named |
+| `GET /artifacts/{id}/history` | `artifact_history` | Every publish, share, trash, link to a work item and elevated read, newest first; below editor, without the elevated reads or who a share named |
 | `GET /artifacts/{id}/assets` | `artifact_assets` | The asset store |
 | `GET /artifacts/{id}/seen-by` | `artifact_seen_by` | Who has opened it, to the owner and editors while the company's `artifacts.seen_by` is `editors` (`shown: false` otherwise) |
 | `GET /artifacts/{id}/access` | `artifact_access` | The share dialog's list: the owner, each share with the seats a unit share reaches today (and `invalid: true` on a share that reaches nobody, see above), and an agent owner's leads; to a viewer, the owner and a count |
 | `GET /artifacts/usage` | `artifact_usage` | The company's counters against the Tier A quotas; `artifacts.usage`, an administrator's |
-| `GET /artifacts/trail` | `artifact_trail` | **The company trail of every artifact**: every artifact's history rows across the company, private ones included, newest first in the log's order, each naming its `artifact`, its current `title` and `owner`, the op, the actor and whether only the admin path admitted them. `op=` narrows it to one op (`read_elevated` lists every administrator's override, so one nobody would find in an artifact's own history is found here), with `cursor` and `limit`; an op the log does not record is `400 bad_params`. `audit.read`, an administrator's, decided by no relation to any artifact |
+| `GET /artifacts/trail` | `artifact_trail` | **The company trail of every artifact**: every artifact's history rows across the company, private ones included, newest first in the log's order, each naming its `artifact`, its current `title` and `owner`, the op, the actor and whether only the admin path admitted them. `op=` narrows it to one op (`read_elevated` lists every administrator's override, so one nobody would find in an artifact's own history is found here), with `cursor` and `limit`; an op no history row is filed under (a pin, an opened mark, a purge, which takes the history with it) is `400 bad_params`. `audit.read`, an administrator's, decided by no relation to any artifact |
 
 A head and every version carry `capabilities`, the set the version declares,
 always present and `[]` for none, so a version that declares nothing is told
@@ -6357,7 +6412,7 @@ The API origin **never renders an artifact**:
   Reading a design's source records that the caller opened it (its canvas is
   drawn whether or not any artboard is framed).
 - `GET /artifacts/{id}/versions/{n}/deck` answers a deck's version (a
-  `slides` artifact) as its **canonical tree**: the title, the cover, the
+  `slides` artifact) as its **canonical tree**: the title, the theme, the cover, the
   outline's sections, the typefaces and every slide in order, each its id,
   title, notes, transition, hidden flag and the `<section>` as elements,
   attributes and canonical style declarations, read through the same
@@ -6365,6 +6420,15 @@ The API origin **never renders an artifact**:
   dashboard draws, presents and prints a deck from this answer alone and never
   parses a slide's markup. Reading it records that the caller opened the deck,
   as a frame's ticket does for a page. Any other kind is `409 content_refused`.
+- `GET /artifacts/starters/slides` (`list_artifacts`, everybody's) answers
+  what a deck can begin from: `themes`, each its `id`, `name`, `tag` and
+  `sample` (a deck of every layout once, drawn in that theme, as the same
+  canonical tree a version's deck is answered as), `layouts`, each its `id`,
+  `name`, `description` and `heading` (the title a slide of it opens with), and
+  `default`, the plan a starter opens with when it names none. The create page
+  draws its theme picker and preview from it, and the deck editor adds a slide
+  from the sample of the theme its deck's index names (see
+  [Slide Format](slide-format.md#the-index)).
 - `GET /artifacts/{id}/versions/{n}/doc` answers a doc's version (a `doc`
   artifact) **tab by tab**: `indexed` (whether it opens on a `doc.json` index
   rather than one Markdown file) and every tab in the index's order, each its
@@ -6424,6 +6488,21 @@ The API origin **never renders an artifact**:
   dashboard's `engine` datasets may read: each source's name, domain, purpose,
   who may read it, its typed parameters, its columns and key, the push that
   announces a change and the most rows it answers. Any resolved caller.
+- `GET /artifacts/sources/preview/{name}` answers one catalogue source's rows
+  **as the caller**, before any board exists: what the dashboard's New
+  dashboard builder draws its suggested figures from. Decided by
+  `create_artifact`, then answered by the very read a board's `engine`
+  dataset over the source is: the same question on the caller's own request,
+  the same 30 second per-principal cache, and at most the source's most rows.
+  The query string is the source's parameters, each held to the catalogue's
+  type and bounds and every one left out at its default; a parameter the source
+  does not take, a value outside its type or a key sent twice is
+  `400 bad_params`, and a name the catalogue does not list is `404 not_found`.
+  The answer is `{source, status}` with `table` and `as_of`, or `refusal` and
+  `detail`, exactly as a dataset's. It reads no artifact and records nothing.
+  One caller's previews are budgeted as their reads of one board are (two a
+  second, a burst of 64), past which it is `429 read_budget` with a
+  `Retry-After`.
 - `GET /artifacts/{id}/versions/{n}/files/{path}` streams one file as an
   **attachment**, any text and anything a browser could run (HTML, SVG, a
   script) as `text/plain`, under the API's own `default-src 'none'` policy and

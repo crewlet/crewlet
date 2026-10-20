@@ -1,0 +1,6371 @@
+{
+  "default": {
+    "slides": [
+      {
+        "layout": "cover"
+      },
+      {
+        "layout": "agenda"
+      },
+      {
+        "layout": "columns"
+      },
+      {
+        "layout": "closing"
+      }
+    ],
+    "theme": "ink"
+  },
+  "layouts": [
+    {
+      "description": "The deck's title and who it is for",
+      "heading": "",
+      "id": "cover",
+      "name": "Cover"
+    },
+    {
+      "description": "A numbered list of the parts to come",
+      "heading": "Agenda",
+      "id": "agenda",
+      "name": "Agenda"
+    },
+    {
+      "description": "Opens a part of the deck and starts it in the outline",
+      "heading": "A new part of the story",
+      "id": "section",
+      "name": "Section"
+    },
+    {
+      "description": "A title and a short list",
+      "heading": "Three points",
+      "id": "points",
+      "name": "Points"
+    },
+    {
+      "description": "Two cards side by side, to compare or pair",
+      "heading": "One idea per slide",
+      "id": "columns",
+      "name": "Two columns"
+    },
+    {
+      "description": "One figure, large, and what it measures",
+      "heading": "The number that matters",
+      "id": "number",
+      "name": "Big number"
+    },
+    {
+      "description": "A quote, large, and who said it",
+      "heading": "A quote from a customer, in their own words",
+      "id": "quote",
+      "name": "Quote"
+    },
+    {
+      "description": "The one decision or ask to end on",
+      "heading": "What we need",
+      "id": "closing",
+      "name": "Closing"
+    }
+  ],
+  "themes": [
+    {
+      "id": "nightshade",
+      "name": "Nightshade",
+      "sample": {
+        "cover": "cover",
+        "faces": [],
+        "sections": [
+          {
+            "description": "A new part of the story",
+            "start": "section"
+          }
+        ],
+        "slides": [
+          {
+            "id": "cover",
+            "notes": "The cover. Say what the deck is for in one sentence before the first slide.",
+            "path": "slides/cover.html",
+            "root": {
+              "children": [
+                {
+                  "style": [
+                    {
+                      "p": "width",
+                      "v": "96px"
+                    },
+                    {
+                      "p": "height",
+                      "v": "8px"
+                    },
+                    {
+                      "p": "background",
+                      "v": "#9584ff"
+                    },
+                    {
+                      "p": "border-radius",
+                      "v": "4px"
+                    }
+                  ],
+                  "tag": "div"
+                },
+                {
+                  "children": [
+                    {
+                      "text": "Nightshade"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "'Inter', system-ui, sans-serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "112px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "600"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.05"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-2px"
+                    }
+                  ],
+                  "tag": "h1"
+                },
+                {
+                  "children": [
+                    {
+                      "text": "A subtitle: who it is for, and when"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-size",
+                      "v": "40px"
+                    },
+                    {
+                      "p": "color",
+                      "v": "#a9aec4"
+                    }
+                  ],
+                  "tag": "p"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "linear-gradient(160deg, #0d0f16 0%, #1b1640 100%)"
+                },
+                {
+                  "p": "color",
+                  "v": "#eef0f8"
+                },
+                {
+                  "p": "font-family",
+                  "v": "'Inter', system-ui, sans-serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "justify-content",
+                  "v": "center"
+                },
+                {
+                  "p": "gap",
+                  "v": "32px"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "Nightshade"
+          },
+          {
+            "id": "agenda",
+            "notes": "Three parts at most. Give each one a section slide where it begins.",
+            "path": "slides/agenda.html",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "Agenda"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "'Inter', system-ui, sans-serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "72px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "600"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.1"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-2px"
+                    }
+                  ],
+                  "tag": "h2"
+                },
+                {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "text": "Where we are"
+                        }
+                      ],
+                      "tag": "li"
+                    },
+                    {
+                      "children": [
+                        {
+                          "text": "What we will do"
+                        }
+                      ],
+                      "tag": "li"
+                    },
+                    {
+                      "children": [
+                        {
+                          "text": "What we need"
+                        }
+                      ],
+                      "tag": "li"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-size",
+                      "v": "40px"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.5"
+                    }
+                  ],
+                  "tag": "ol"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#0d0f16"
+                },
+                {
+                  "p": "color",
+                  "v": "#e8ebf4"
+                },
+                {
+                  "p": "font-family",
+                  "v": "'Inter', system-ui, sans-serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "gap",
+                  "v": "48px"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "Agenda"
+          },
+          {
+            "id": "section",
+            "notes": "A section slide opens a part of the deck. The outline starts a section here.",
+            "path": "slides/section.html",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "Section"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-size",
+                      "v": "28px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "600"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "4px"
+                    },
+                    {
+                      "p": "text-transform",
+                      "v": "uppercase"
+                    },
+                    {
+                      "p": "color",
+                      "v": "#9584ff"
+                    }
+                  ],
+                  "tag": "p"
+                },
+                {
+                  "children": [
+                    {
+                      "text": "A new part of the story"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "'Inter', system-ui, sans-serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "96px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "600"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.05"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-2px"
+                    }
+                  ],
+                  "tag": "h2"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "linear-gradient(160deg, #0d0f16 0%, #1b1640 100%)"
+                },
+                {
+                  "p": "color",
+                  "v": "#eef0f8"
+                },
+                {
+                  "p": "font-family",
+                  "v": "'Inter', system-ui, sans-serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "justify-content",
+                  "v": "center"
+                },
+                {
+                  "p": "gap",
+                  "v": "32px"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "A new part of the story"
+          },
+          {
+            "id": "points",
+            "notes": "Three points a person can repeat after the meeting. Click any text to change it.",
+            "path": "slides/points.html",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "Three points"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "'Inter', system-ui, sans-serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "72px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "600"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.1"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-2px"
+                    }
+                  ],
+                  "tag": "h2"
+                },
+                {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "text": "The first point, in one line"
+                        }
+                      ],
+                      "tag": "li"
+                    },
+                    {
+                      "children": [
+                        {
+                          "text": "The second, with the detail that matters"
+                        }
+                      ],
+                      "tag": "li"
+                    },
+                    {
+                      "children": [
+                        {
+                          "text": "The third, and what it means for us"
+                        }
+                      ],
+                      "tag": "li"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-size",
+                      "v": "40px"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.5"
+                    }
+                  ],
+                  "tag": "ul"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#0d0f16"
+                },
+                {
+                  "p": "color",
+                  "v": "#e8ebf4"
+                },
+                {
+                  "p": "font-family",
+                  "v": "'Inter', system-ui, sans-serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "gap",
+                  "v": "48px"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "Three points"
+          },
+          {
+            "id": "columns",
+            "notes": "Two cards side by side. Click any text to change it.",
+            "path": "slides/columns.html",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "One idea per slide"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "'Inter', system-ui, sans-serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "72px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "600"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.1"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-2px"
+                    }
+                  ],
+                  "tag": "h2"
+                },
+                {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "children": [
+                            {
+                              "text": "The point"
+                            }
+                          ],
+                          "style": [
+                            {
+                              "p": "font-family",
+                              "v": "'Inter', system-ui, sans-serif"
+                            },
+                            {
+                              "p": "font-size",
+                              "v": "40px"
+                            },
+                            {
+                              "p": "font-weight",
+                              "v": "600"
+                            }
+                          ],
+                          "tag": "h3"
+                        },
+                        {
+                          "children": [
+                            {
+                              "text": "Say it in one sentence a person remembers."
+                            }
+                          ],
+                          "style": [
+                            {
+                              "p": "font-size",
+                              "v": "30px"
+                            },
+                            {
+                              "p": "color",
+                              "v": "#9aa0b8"
+                            }
+                          ],
+                          "tag": "p"
+                        }
+                      ],
+                      "style": [
+                        {
+                          "p": "flex",
+                          "v": "1"
+                        },
+                        {
+                          "p": "display",
+                          "v": "flex"
+                        },
+                        {
+                          "p": "flex-direction",
+                          "v": "column"
+                        },
+                        {
+                          "p": "gap",
+                          "v": "12px"
+                        },
+                        {
+                          "p": "background",
+                          "v": "#151925"
+                        },
+                        {
+                          "p": "padding",
+                          "v": "40px"
+                        },
+                        {
+                          "p": "border",
+                          "v": "1px solid #262c3e"
+                        },
+                        {
+                          "p": "border-top",
+                          "v": "6px solid #9584ff"
+                        },
+                        {
+                          "p": "border-radius",
+                          "v": "16px"
+                        }
+                      ],
+                      "tag": "div"
+                    },
+                    {
+                      "children": [
+                        {
+                          "children": [
+                            {
+                              "text": "The evidence"
+                            }
+                          ],
+                          "style": [
+                            {
+                              "p": "font-family",
+                              "v": "'Inter', system-ui, sans-serif"
+                            },
+                            {
+                              "p": "font-size",
+                              "v": "40px"
+                            },
+                            {
+                              "p": "font-weight",
+                              "v": "600"
+                            }
+                          ],
+                          "tag": "h3"
+                        },
+                        {
+                          "children": [
+                            {
+                              "text": "A number, a quote or a picture that backs it."
+                            }
+                          ],
+                          "style": [
+                            {
+                              "p": "font-size",
+                              "v": "30px"
+                            },
+                            {
+                              "p": "color",
+                              "v": "#9aa0b8"
+                            }
+                          ],
+                          "tag": "p"
+                        }
+                      ],
+                      "style": [
+                        {
+                          "p": "flex",
+                          "v": "1"
+                        },
+                        {
+                          "p": "display",
+                          "v": "flex"
+                        },
+                        {
+                          "p": "flex-direction",
+                          "v": "column"
+                        },
+                        {
+                          "p": "gap",
+                          "v": "12px"
+                        },
+                        {
+                          "p": "background",
+                          "v": "#151925"
+                        },
+                        {
+                          "p": "padding",
+                          "v": "40px"
+                        },
+                        {
+                          "p": "border",
+                          "v": "1px solid #262c3e"
+                        },
+                        {
+                          "p": "border-top",
+                          "v": "6px solid #9584ff"
+                        },
+                        {
+                          "p": "border-radius",
+                          "v": "16px"
+                        }
+                      ],
+                      "tag": "div"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "display",
+                      "v": "flex"
+                    },
+                    {
+                      "p": "gap",
+                      "v": "32px"
+                    }
+                  ],
+                  "tag": "div"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#0d0f16"
+                },
+                {
+                  "p": "color",
+                  "v": "#e8ebf4"
+                },
+                {
+                  "p": "font-family",
+                  "v": "'Inter', system-ui, sans-serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "gap",
+                  "v": "48px"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "One idea per slide"
+          },
+          {
+            "id": "number",
+            "notes": "One figure the room should remember. Say where it comes from.",
+            "path": "slides/number.html",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "The number that matters"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "'Inter', system-ui, sans-serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "56px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "600"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.1"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-2px"
+                    }
+                  ],
+                  "tag": "h2"
+                },
+                {
+                  "children": [
+                    {
+                      "text": "42%"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "'Inter', system-ui, sans-serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "240px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "600"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-8px"
+                    },
+                    {
+                      "p": "color",
+                      "v": "#9584ff"
+                    }
+                  ],
+                  "tag": "p"
+                },
+                {
+                  "children": [
+                    {
+                      "text": "What it measures, and since when"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-size",
+                      "v": "40px"
+                    },
+                    {
+                      "p": "color",
+                      "v": "#9aa0b8"
+                    }
+                  ],
+                  "tag": "p"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#0d0f16"
+                },
+                {
+                  "p": "color",
+                  "v": "#e8ebf4"
+                },
+                {
+                  "p": "font-family",
+                  "v": "'Inter', system-ui, sans-serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "gap",
+                  "v": "48px"
+                },
+                {
+                  "p": "justify-content",
+                  "v": "center"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "The number that matters"
+          },
+          {
+            "id": "quote",
+            "notes": "Quote people in their own words, and say who they are.",
+            "path": "slides/quote.html",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "text": "A quote from a customer, in their own words"
+                        }
+                      ],
+                      "style": [
+                        {
+                          "p": "font-family",
+                          "v": "'Inter', system-ui, sans-serif"
+                        },
+                        {
+                          "p": "font-size",
+                          "v": "72px"
+                        },
+                        {
+                          "p": "font-weight",
+                          "v": "600"
+                        },
+                        {
+                          "p": "line-height",
+                          "v": "1.2"
+                        },
+                        {
+                          "p": "letter-spacing",
+                          "v": "-2px"
+                        }
+                      ],
+                      "tag": "p"
+                    },
+                    {
+                      "children": [
+                        {
+                          "text": "Name, role and company"
+                        }
+                      ],
+                      "style": [
+                        {
+                          "p": "font-size",
+                          "v": "32px"
+                        },
+                        {
+                          "p": "color",
+                          "v": "#9aa0b8"
+                        }
+                      ],
+                      "tag": "p"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "display",
+                      "v": "flex"
+                    },
+                    {
+                      "p": "flex-direction",
+                      "v": "column"
+                    },
+                    {
+                      "p": "gap",
+                      "v": "40px"
+                    },
+                    {
+                      "p": "padding",
+                      "v": "0 0 0 64px"
+                    },
+                    {
+                      "p": "border-left",
+                      "v": "8px solid #9584ff"
+                    }
+                  ],
+                  "tag": "div"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#0d0f16"
+                },
+                {
+                  "p": "color",
+                  "v": "#e8ebf4"
+                },
+                {
+                  "p": "font-family",
+                  "v": "'Inter', system-ui, sans-serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "gap",
+                  "v": "48px"
+                },
+                {
+                  "p": "justify-content",
+                  "v": "center"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "A quote from a customer, in their own words"
+          },
+          {
+            "id": "closing",
+            "notes": "End on what the room should do next.",
+            "path": "slides/closing.html",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "What we need"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "'Inter', system-ui, sans-serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "88px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "600"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.1"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-2px"
+                    }
+                  ],
+                  "tag": "h2"
+                },
+                {
+                  "children": [
+                    {
+                      "text": "The one decision or the one ask, said plainly"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-size",
+                      "v": "40px"
+                    },
+                    {
+                      "p": "color",
+                      "v": "#a9aec4"
+                    }
+                  ],
+                  "tag": "p"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "linear-gradient(160deg, #0d0f16 0%, #1b1640 100%)"
+                },
+                {
+                  "p": "color",
+                  "v": "#eef0f8"
+                },
+                {
+                  "p": "font-family",
+                  "v": "'Inter', system-ui, sans-serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "justify-content",
+                  "v": "center"
+                },
+                {
+                  "p": "gap",
+                  "v": "32px"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "What we need"
+          }
+        ],
+        "theme": "nightshade",
+        "title": "Nightshade"
+      },
+      "tag": "Periwinkle on blue-black"
+    },
+    {
+      "id": "ink",
+      "name": "Ink",
+      "sample": {
+        "cover": "cover",
+        "faces": [],
+        "sections": [
+          {
+            "description": "A new part of the story",
+            "start": "section"
+          }
+        ],
+        "slides": [
+          {
+            "id": "cover",
+            "notes": "The cover. Say what the deck is for in one sentence before the first slide.",
+            "path": "slides/cover.html",
+            "root": {
+              "children": [
+                {
+                  "style": [
+                    {
+                      "p": "width",
+                      "v": "96px"
+                    },
+                    {
+                      "p": "height",
+                      "v": "8px"
+                    },
+                    {
+                      "p": "background",
+                      "v": "#2f5d8c"
+                    },
+                    {
+                      "p": "border-radius",
+                      "v": "4px"
+                    }
+                  ],
+                  "tag": "div"
+                },
+                {
+                  "children": [
+                    {
+                      "text": "Ink"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "'Georgia', serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "112px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "600"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.05"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-1px"
+                    }
+                  ],
+                  "tag": "h1"
+                },
+                {
+                  "children": [
+                    {
+                      "text": "A subtitle: who it is for, and when"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-size",
+                      "v": "40px"
+                    },
+                    {
+                      "p": "color",
+                      "v": "#c7cdd8"
+                    }
+                  ],
+                  "tag": "p"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#1d2433"
+                },
+                {
+                  "p": "color",
+                  "v": "#f5f3ee"
+                },
+                {
+                  "p": "font-family",
+                  "v": "'Georgia', serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "justify-content",
+                  "v": "center"
+                },
+                {
+                  "p": "gap",
+                  "v": "32px"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "Ink"
+          },
+          {
+            "id": "agenda",
+            "notes": "Three parts at most. Give each one a section slide where it begins.",
+            "path": "slides/agenda.html",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "Agenda"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "'Georgia', serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "72px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "600"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.1"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-1px"
+                    }
+                  ],
+                  "tag": "h2"
+                },
+                {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "text": "Where we are"
+                        }
+                      ],
+                      "tag": "li"
+                    },
+                    {
+                      "children": [
+                        {
+                          "text": "What we will do"
+                        }
+                      ],
+                      "tag": "li"
+                    },
+                    {
+                      "children": [
+                        {
+                          "text": "What we need"
+                        }
+                      ],
+                      "tag": "li"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-size",
+                      "v": "40px"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.5"
+                    }
+                  ],
+                  "tag": "ol"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#f7f6f2"
+                },
+                {
+                  "p": "color",
+                  "v": "#1d2433"
+                },
+                {
+                  "p": "font-family",
+                  "v": "'Georgia', serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "gap",
+                  "v": "48px"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "Agenda"
+          },
+          {
+            "id": "section",
+            "notes": "A section slide opens a part of the deck. The outline starts a section here.",
+            "path": "slides/section.html",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "Section"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-size",
+                      "v": "28px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "600"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "4px"
+                    },
+                    {
+                      "p": "text-transform",
+                      "v": "uppercase"
+                    },
+                    {
+                      "p": "color",
+                      "v": "#2f5d8c"
+                    }
+                  ],
+                  "tag": "p"
+                },
+                {
+                  "children": [
+                    {
+                      "text": "A new part of the story"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "'Georgia', serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "96px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "600"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.05"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-1px"
+                    }
+                  ],
+                  "tag": "h2"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#1d2433"
+                },
+                {
+                  "p": "color",
+                  "v": "#f5f3ee"
+                },
+                {
+                  "p": "font-family",
+                  "v": "'Georgia', serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "justify-content",
+                  "v": "center"
+                },
+                {
+                  "p": "gap",
+                  "v": "32px"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "A new part of the story"
+          },
+          {
+            "id": "points",
+            "notes": "Three points a person can repeat after the meeting. Click any text to change it.",
+            "path": "slides/points.html",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "Three points"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "'Georgia', serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "72px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "600"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.1"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-1px"
+                    }
+                  ],
+                  "tag": "h2"
+                },
+                {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "text": "The first point, in one line"
+                        }
+                      ],
+                      "tag": "li"
+                    },
+                    {
+                      "children": [
+                        {
+                          "text": "The second, with the detail that matters"
+                        }
+                      ],
+                      "tag": "li"
+                    },
+                    {
+                      "children": [
+                        {
+                          "text": "The third, and what it means for us"
+                        }
+                      ],
+                      "tag": "li"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-size",
+                      "v": "40px"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.5"
+                    }
+                  ],
+                  "tag": "ul"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#f7f6f2"
+                },
+                {
+                  "p": "color",
+                  "v": "#1d2433"
+                },
+                {
+                  "p": "font-family",
+                  "v": "'Georgia', serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "gap",
+                  "v": "48px"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "Three points"
+          },
+          {
+            "id": "columns",
+            "notes": "Two cards side by side. Click any text to change it.",
+            "path": "slides/columns.html",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "One idea per slide"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "'Georgia', serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "72px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "600"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.1"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-1px"
+                    }
+                  ],
+                  "tag": "h2"
+                },
+                {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "children": [
+                            {
+                              "text": "The point"
+                            }
+                          ],
+                          "style": [
+                            {
+                              "p": "font-family",
+                              "v": "'Georgia', serif"
+                            },
+                            {
+                              "p": "font-size",
+                              "v": "40px"
+                            },
+                            {
+                              "p": "font-weight",
+                              "v": "600"
+                            }
+                          ],
+                          "tag": "h3"
+                        },
+                        {
+                          "children": [
+                            {
+                              "text": "Say it in one sentence a person remembers."
+                            }
+                          ],
+                          "style": [
+                            {
+                              "p": "font-size",
+                              "v": "30px"
+                            },
+                            {
+                              "p": "color",
+                              "v": "#5b6472"
+                            }
+                          ],
+                          "tag": "p"
+                        }
+                      ],
+                      "style": [
+                        {
+                          "p": "flex",
+                          "v": "1"
+                        },
+                        {
+                          "p": "display",
+                          "v": "flex"
+                        },
+                        {
+                          "p": "flex-direction",
+                          "v": "column"
+                        },
+                        {
+                          "p": "gap",
+                          "v": "12px"
+                        },
+                        {
+                          "p": "background",
+                          "v": "#ffffff"
+                        },
+                        {
+                          "p": "padding",
+                          "v": "40px"
+                        },
+                        {
+                          "p": "border",
+                          "v": "1px solid #e2e4e8"
+                        },
+                        {
+                          "p": "border-top",
+                          "v": "6px solid #2f5d8c"
+                        },
+                        {
+                          "p": "border-radius",
+                          "v": "16px"
+                        }
+                      ],
+                      "tag": "div"
+                    },
+                    {
+                      "children": [
+                        {
+                          "children": [
+                            {
+                              "text": "The evidence"
+                            }
+                          ],
+                          "style": [
+                            {
+                              "p": "font-family",
+                              "v": "'Georgia', serif"
+                            },
+                            {
+                              "p": "font-size",
+                              "v": "40px"
+                            },
+                            {
+                              "p": "font-weight",
+                              "v": "600"
+                            }
+                          ],
+                          "tag": "h3"
+                        },
+                        {
+                          "children": [
+                            {
+                              "text": "A number, a quote or a picture that backs it."
+                            }
+                          ],
+                          "style": [
+                            {
+                              "p": "font-size",
+                              "v": "30px"
+                            },
+                            {
+                              "p": "color",
+                              "v": "#5b6472"
+                            }
+                          ],
+                          "tag": "p"
+                        }
+                      ],
+                      "style": [
+                        {
+                          "p": "flex",
+                          "v": "1"
+                        },
+                        {
+                          "p": "display",
+                          "v": "flex"
+                        },
+                        {
+                          "p": "flex-direction",
+                          "v": "column"
+                        },
+                        {
+                          "p": "gap",
+                          "v": "12px"
+                        },
+                        {
+                          "p": "background",
+                          "v": "#ffffff"
+                        },
+                        {
+                          "p": "padding",
+                          "v": "40px"
+                        },
+                        {
+                          "p": "border",
+                          "v": "1px solid #e2e4e8"
+                        },
+                        {
+                          "p": "border-top",
+                          "v": "6px solid #2f5d8c"
+                        },
+                        {
+                          "p": "border-radius",
+                          "v": "16px"
+                        }
+                      ],
+                      "tag": "div"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "display",
+                      "v": "flex"
+                    },
+                    {
+                      "p": "gap",
+                      "v": "32px"
+                    }
+                  ],
+                  "tag": "div"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#f7f6f2"
+                },
+                {
+                  "p": "color",
+                  "v": "#1d2433"
+                },
+                {
+                  "p": "font-family",
+                  "v": "'Georgia', serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "gap",
+                  "v": "48px"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "One idea per slide"
+          },
+          {
+            "id": "number",
+            "notes": "One figure the room should remember. Say where it comes from.",
+            "path": "slides/number.html",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "The number that matters"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "'Georgia', serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "56px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "600"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.1"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-1px"
+                    }
+                  ],
+                  "tag": "h2"
+                },
+                {
+                  "children": [
+                    {
+                      "text": "42%"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "'Georgia', serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "240px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "600"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-8px"
+                    },
+                    {
+                      "p": "color",
+                      "v": "#2f5d8c"
+                    }
+                  ],
+                  "tag": "p"
+                },
+                {
+                  "children": [
+                    {
+                      "text": "What it measures, and since when"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-size",
+                      "v": "40px"
+                    },
+                    {
+                      "p": "color",
+                      "v": "#5b6472"
+                    }
+                  ],
+                  "tag": "p"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#f7f6f2"
+                },
+                {
+                  "p": "color",
+                  "v": "#1d2433"
+                },
+                {
+                  "p": "font-family",
+                  "v": "'Georgia', serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "gap",
+                  "v": "48px"
+                },
+                {
+                  "p": "justify-content",
+                  "v": "center"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "The number that matters"
+          },
+          {
+            "id": "quote",
+            "notes": "Quote people in their own words, and say who they are.",
+            "path": "slides/quote.html",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "text": "A quote from a customer, in their own words"
+                        }
+                      ],
+                      "style": [
+                        {
+                          "p": "font-family",
+                          "v": "'Georgia', serif"
+                        },
+                        {
+                          "p": "font-size",
+                          "v": "72px"
+                        },
+                        {
+                          "p": "font-weight",
+                          "v": "600"
+                        },
+                        {
+                          "p": "line-height",
+                          "v": "1.2"
+                        },
+                        {
+                          "p": "letter-spacing",
+                          "v": "-1px"
+                        }
+                      ],
+                      "tag": "p"
+                    },
+                    {
+                      "children": [
+                        {
+                          "text": "Name, role and company"
+                        }
+                      ],
+                      "style": [
+                        {
+                          "p": "font-size",
+                          "v": "32px"
+                        },
+                        {
+                          "p": "color",
+                          "v": "#5b6472"
+                        }
+                      ],
+                      "tag": "p"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "display",
+                      "v": "flex"
+                    },
+                    {
+                      "p": "flex-direction",
+                      "v": "column"
+                    },
+                    {
+                      "p": "gap",
+                      "v": "40px"
+                    },
+                    {
+                      "p": "padding",
+                      "v": "0 0 0 64px"
+                    },
+                    {
+                      "p": "border-left",
+                      "v": "8px solid #2f5d8c"
+                    }
+                  ],
+                  "tag": "div"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#f7f6f2"
+                },
+                {
+                  "p": "color",
+                  "v": "#1d2433"
+                },
+                {
+                  "p": "font-family",
+                  "v": "'Georgia', serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "gap",
+                  "v": "48px"
+                },
+                {
+                  "p": "justify-content",
+                  "v": "center"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "A quote from a customer, in their own words"
+          },
+          {
+            "id": "closing",
+            "notes": "End on what the room should do next.",
+            "path": "slides/closing.html",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "What we need"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "'Georgia', serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "88px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "600"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.1"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-1px"
+                    }
+                  ],
+                  "tag": "h2"
+                },
+                {
+                  "children": [
+                    {
+                      "text": "The one decision or the one ask, said plainly"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-size",
+                      "v": "40px"
+                    },
+                    {
+                      "p": "color",
+                      "v": "#c7cdd8"
+                    }
+                  ],
+                  "tag": "p"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#1d2433"
+                },
+                {
+                  "p": "color",
+                  "v": "#f5f3ee"
+                },
+                {
+                  "p": "font-family",
+                  "v": "'Georgia', serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "justify-content",
+                  "v": "center"
+                },
+                {
+                  "p": "gap",
+                  "v": "32px"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "What we need"
+          }
+        ],
+        "theme": "ink",
+        "title": "Ink"
+      },
+      "tag": "Navy and paper, set in a serif"
+    },
+    {
+      "id": "paper",
+      "name": "Paper",
+      "sample": {
+        "cover": "cover",
+        "faces": [],
+        "sections": [
+          {
+            "description": "A new part of the story",
+            "start": "section"
+          }
+        ],
+        "slides": [
+          {
+            "id": "cover",
+            "notes": "The cover. Say what the deck is for in one sentence before the first slide.",
+            "path": "slides/cover.html",
+            "root": {
+              "children": [
+                {
+                  "style": [
+                    {
+                      "p": "width",
+                      "v": "96px"
+                    },
+                    {
+                      "p": "height",
+                      "v": "8px"
+                    },
+                    {
+                      "p": "background",
+                      "v": "#2450e6"
+                    },
+                    {
+                      "p": "border-radius",
+                      "v": "4px"
+                    }
+                  ],
+                  "tag": "div"
+                },
+                {
+                  "children": [
+                    {
+                      "text": "Paper"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "'Helvetica Neue', 'Arial', sans-serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "112px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "700"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.05"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-2px"
+                    }
+                  ],
+                  "tag": "h1"
+                },
+                {
+                  "children": [
+                    {
+                      "text": "A subtitle: who it is for, and when"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-size",
+                      "v": "40px"
+                    },
+                    {
+                      "p": "color",
+                      "v": "#5f5f5a"
+                    }
+                  ],
+                  "tag": "p"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#f2f2ee"
+                },
+                {
+                  "p": "color",
+                  "v": "#111111"
+                },
+                {
+                  "p": "font-family",
+                  "v": "'Helvetica Neue', 'Arial', sans-serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "justify-content",
+                  "v": "center"
+                },
+                {
+                  "p": "gap",
+                  "v": "32px"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "Paper"
+          },
+          {
+            "id": "agenda",
+            "notes": "Three parts at most. Give each one a section slide where it begins.",
+            "path": "slides/agenda.html",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "Agenda"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "'Helvetica Neue', 'Arial', sans-serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "72px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "700"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.1"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-2px"
+                    }
+                  ],
+                  "tag": "h2"
+                },
+                {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "text": "Where we are"
+                        }
+                      ],
+                      "tag": "li"
+                    },
+                    {
+                      "children": [
+                        {
+                          "text": "What we will do"
+                        }
+                      ],
+                      "tag": "li"
+                    },
+                    {
+                      "children": [
+                        {
+                          "text": "What we need"
+                        }
+                      ],
+                      "tag": "li"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-size",
+                      "v": "40px"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.5"
+                    }
+                  ],
+                  "tag": "ol"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#ffffff"
+                },
+                {
+                  "p": "color",
+                  "v": "#111111"
+                },
+                {
+                  "p": "font-family",
+                  "v": "'Helvetica Neue', 'Arial', sans-serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "gap",
+                  "v": "48px"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "Agenda"
+          },
+          {
+            "id": "section",
+            "notes": "A section slide opens a part of the deck. The outline starts a section here.",
+            "path": "slides/section.html",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "Section"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-size",
+                      "v": "28px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "600"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "4px"
+                    },
+                    {
+                      "p": "text-transform",
+                      "v": "uppercase"
+                    },
+                    {
+                      "p": "color",
+                      "v": "#2450e6"
+                    }
+                  ],
+                  "tag": "p"
+                },
+                {
+                  "children": [
+                    {
+                      "text": "A new part of the story"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "'Helvetica Neue', 'Arial', sans-serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "96px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "700"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.05"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-2px"
+                    }
+                  ],
+                  "tag": "h2"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#f2f2ee"
+                },
+                {
+                  "p": "color",
+                  "v": "#111111"
+                },
+                {
+                  "p": "font-family",
+                  "v": "'Helvetica Neue', 'Arial', sans-serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "justify-content",
+                  "v": "center"
+                },
+                {
+                  "p": "gap",
+                  "v": "32px"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "A new part of the story"
+          },
+          {
+            "id": "points",
+            "notes": "Three points a person can repeat after the meeting. Click any text to change it.",
+            "path": "slides/points.html",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "Three points"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "'Helvetica Neue', 'Arial', sans-serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "72px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "700"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.1"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-2px"
+                    }
+                  ],
+                  "tag": "h2"
+                },
+                {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "text": "The first point, in one line"
+                        }
+                      ],
+                      "tag": "li"
+                    },
+                    {
+                      "children": [
+                        {
+                          "text": "The second, with the detail that matters"
+                        }
+                      ],
+                      "tag": "li"
+                    },
+                    {
+                      "children": [
+                        {
+                          "text": "The third, and what it means for us"
+                        }
+                      ],
+                      "tag": "li"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-size",
+                      "v": "40px"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.5"
+                    }
+                  ],
+                  "tag": "ul"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#ffffff"
+                },
+                {
+                  "p": "color",
+                  "v": "#111111"
+                },
+                {
+                  "p": "font-family",
+                  "v": "'Helvetica Neue', 'Arial', sans-serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "gap",
+                  "v": "48px"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "Three points"
+          },
+          {
+            "id": "columns",
+            "notes": "Two cards side by side. Click any text to change it.",
+            "path": "slides/columns.html",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "One idea per slide"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "'Helvetica Neue', 'Arial', sans-serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "72px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "700"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.1"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-2px"
+                    }
+                  ],
+                  "tag": "h2"
+                },
+                {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "children": [
+                            {
+                              "text": "The point"
+                            }
+                          ],
+                          "style": [
+                            {
+                              "p": "font-family",
+                              "v": "'Helvetica Neue', 'Arial', sans-serif"
+                            },
+                            {
+                              "p": "font-size",
+                              "v": "40px"
+                            },
+                            {
+                              "p": "font-weight",
+                              "v": "700"
+                            }
+                          ],
+                          "tag": "h3"
+                        },
+                        {
+                          "children": [
+                            {
+                              "text": "Say it in one sentence a person remembers."
+                            }
+                          ],
+                          "style": [
+                            {
+                              "p": "font-size",
+                              "v": "30px"
+                            },
+                            {
+                              "p": "color",
+                              "v": "#62625d"
+                            }
+                          ],
+                          "tag": "p"
+                        }
+                      ],
+                      "style": [
+                        {
+                          "p": "flex",
+                          "v": "1"
+                        },
+                        {
+                          "p": "display",
+                          "v": "flex"
+                        },
+                        {
+                          "p": "flex-direction",
+                          "v": "column"
+                        },
+                        {
+                          "p": "gap",
+                          "v": "12px"
+                        },
+                        {
+                          "p": "background",
+                          "v": "#f5f5f1"
+                        },
+                        {
+                          "p": "padding",
+                          "v": "40px"
+                        },
+                        {
+                          "p": "border",
+                          "v": "1px solid #e4e4de"
+                        },
+                        {
+                          "p": "border-top",
+                          "v": "6px solid #2450e6"
+                        },
+                        {
+                          "p": "border-radius",
+                          "v": "16px"
+                        }
+                      ],
+                      "tag": "div"
+                    },
+                    {
+                      "children": [
+                        {
+                          "children": [
+                            {
+                              "text": "The evidence"
+                            }
+                          ],
+                          "style": [
+                            {
+                              "p": "font-family",
+                              "v": "'Helvetica Neue', 'Arial', sans-serif"
+                            },
+                            {
+                              "p": "font-size",
+                              "v": "40px"
+                            },
+                            {
+                              "p": "font-weight",
+                              "v": "700"
+                            }
+                          ],
+                          "tag": "h3"
+                        },
+                        {
+                          "children": [
+                            {
+                              "text": "A number, a quote or a picture that backs it."
+                            }
+                          ],
+                          "style": [
+                            {
+                              "p": "font-size",
+                              "v": "30px"
+                            },
+                            {
+                              "p": "color",
+                              "v": "#62625d"
+                            }
+                          ],
+                          "tag": "p"
+                        }
+                      ],
+                      "style": [
+                        {
+                          "p": "flex",
+                          "v": "1"
+                        },
+                        {
+                          "p": "display",
+                          "v": "flex"
+                        },
+                        {
+                          "p": "flex-direction",
+                          "v": "column"
+                        },
+                        {
+                          "p": "gap",
+                          "v": "12px"
+                        },
+                        {
+                          "p": "background",
+                          "v": "#f5f5f1"
+                        },
+                        {
+                          "p": "padding",
+                          "v": "40px"
+                        },
+                        {
+                          "p": "border",
+                          "v": "1px solid #e4e4de"
+                        },
+                        {
+                          "p": "border-top",
+                          "v": "6px solid #2450e6"
+                        },
+                        {
+                          "p": "border-radius",
+                          "v": "16px"
+                        }
+                      ],
+                      "tag": "div"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "display",
+                      "v": "flex"
+                    },
+                    {
+                      "p": "gap",
+                      "v": "32px"
+                    }
+                  ],
+                  "tag": "div"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#ffffff"
+                },
+                {
+                  "p": "color",
+                  "v": "#111111"
+                },
+                {
+                  "p": "font-family",
+                  "v": "'Helvetica Neue', 'Arial', sans-serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "gap",
+                  "v": "48px"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "One idea per slide"
+          },
+          {
+            "id": "number",
+            "notes": "One figure the room should remember. Say where it comes from.",
+            "path": "slides/number.html",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "The number that matters"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "'Helvetica Neue', 'Arial', sans-serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "56px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "700"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.1"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-2px"
+                    }
+                  ],
+                  "tag": "h2"
+                },
+                {
+                  "children": [
+                    {
+                      "text": "42%"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "'Helvetica Neue', 'Arial', sans-serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "240px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "700"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-8px"
+                    },
+                    {
+                      "p": "color",
+                      "v": "#2450e6"
+                    }
+                  ],
+                  "tag": "p"
+                },
+                {
+                  "children": [
+                    {
+                      "text": "What it measures, and since when"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-size",
+                      "v": "40px"
+                    },
+                    {
+                      "p": "color",
+                      "v": "#62625d"
+                    }
+                  ],
+                  "tag": "p"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#ffffff"
+                },
+                {
+                  "p": "color",
+                  "v": "#111111"
+                },
+                {
+                  "p": "font-family",
+                  "v": "'Helvetica Neue', 'Arial', sans-serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "gap",
+                  "v": "48px"
+                },
+                {
+                  "p": "justify-content",
+                  "v": "center"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "The number that matters"
+          },
+          {
+            "id": "quote",
+            "notes": "Quote people in their own words, and say who they are.",
+            "path": "slides/quote.html",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "text": "A quote from a customer, in their own words"
+                        }
+                      ],
+                      "style": [
+                        {
+                          "p": "font-family",
+                          "v": "'Helvetica Neue', 'Arial', sans-serif"
+                        },
+                        {
+                          "p": "font-size",
+                          "v": "72px"
+                        },
+                        {
+                          "p": "font-weight",
+                          "v": "700"
+                        },
+                        {
+                          "p": "line-height",
+                          "v": "1.2"
+                        },
+                        {
+                          "p": "letter-spacing",
+                          "v": "-2px"
+                        }
+                      ],
+                      "tag": "p"
+                    },
+                    {
+                      "children": [
+                        {
+                          "text": "Name, role and company"
+                        }
+                      ],
+                      "style": [
+                        {
+                          "p": "font-size",
+                          "v": "32px"
+                        },
+                        {
+                          "p": "color",
+                          "v": "#62625d"
+                        }
+                      ],
+                      "tag": "p"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "display",
+                      "v": "flex"
+                    },
+                    {
+                      "p": "flex-direction",
+                      "v": "column"
+                    },
+                    {
+                      "p": "gap",
+                      "v": "40px"
+                    },
+                    {
+                      "p": "padding",
+                      "v": "0 0 0 64px"
+                    },
+                    {
+                      "p": "border-left",
+                      "v": "8px solid #2450e6"
+                    }
+                  ],
+                  "tag": "div"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#ffffff"
+                },
+                {
+                  "p": "color",
+                  "v": "#111111"
+                },
+                {
+                  "p": "font-family",
+                  "v": "'Helvetica Neue', 'Arial', sans-serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "gap",
+                  "v": "48px"
+                },
+                {
+                  "p": "justify-content",
+                  "v": "center"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "A quote from a customer, in their own words"
+          },
+          {
+            "id": "closing",
+            "notes": "End on what the room should do next.",
+            "path": "slides/closing.html",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "What we need"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "'Helvetica Neue', 'Arial', sans-serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "88px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "700"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.1"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-2px"
+                    }
+                  ],
+                  "tag": "h2"
+                },
+                {
+                  "children": [
+                    {
+                      "text": "The one decision or the one ask, said plainly"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-size",
+                      "v": "40px"
+                    },
+                    {
+                      "p": "color",
+                      "v": "#5f5f5a"
+                    }
+                  ],
+                  "tag": "p"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#f2f2ee"
+                },
+                {
+                  "p": "color",
+                  "v": "#111111"
+                },
+                {
+                  "p": "font-family",
+                  "v": "'Helvetica Neue', 'Arial', sans-serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "justify-content",
+                  "v": "center"
+                },
+                {
+                  "p": "gap",
+                  "v": "32px"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "What we need"
+          }
+        ],
+        "theme": "paper",
+        "title": "Paper"
+      },
+      "tag": "White, quiet and exact"
+    },
+    {
+      "id": "signal",
+      "name": "Signal",
+      "sample": {
+        "cover": "cover",
+        "faces": [],
+        "sections": [
+          {
+            "description": "A new part of the story",
+            "start": "section"
+          }
+        ],
+        "slides": [
+          {
+            "id": "cover",
+            "notes": "The cover. Say what the deck is for in one sentence before the first slide.",
+            "path": "slides/cover.html",
+            "root": {
+              "children": [
+                {
+                  "style": [
+                    {
+                      "p": "width",
+                      "v": "96px"
+                    },
+                    {
+                      "p": "height",
+                      "v": "8px"
+                    },
+                    {
+                      "p": "background",
+                      "v": "#ffd400"
+                    },
+                    {
+                      "p": "border-radius",
+                      "v": "4px"
+                    }
+                  ],
+                  "tag": "div"
+                },
+                {
+                  "children": [
+                    {
+                      "text": "Signal"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "'Helvetica Neue', 'Arial', sans-serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "112px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "800"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.05"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-2px"
+                    }
+                  ],
+                  "tag": "h1"
+                },
+                {
+                  "children": [
+                    {
+                      "text": "A subtitle: who it is for, and when"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-size",
+                      "v": "40px"
+                    },
+                    {
+                      "p": "color",
+                      "v": "#b5b5b5"
+                    }
+                  ],
+                  "tag": "p"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#0a0a0a"
+                },
+                {
+                  "p": "color",
+                  "v": "#ffffff"
+                },
+                {
+                  "p": "font-family",
+                  "v": "'Helvetica Neue', 'Arial', sans-serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "justify-content",
+                  "v": "center"
+                },
+                {
+                  "p": "gap",
+                  "v": "32px"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "Signal"
+          },
+          {
+            "id": "agenda",
+            "notes": "Three parts at most. Give each one a section slide where it begins.",
+            "path": "slides/agenda.html",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "Agenda"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "'Helvetica Neue', 'Arial', sans-serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "72px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "800"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.1"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-2px"
+                    }
+                  ],
+                  "tag": "h2"
+                },
+                {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "text": "Where we are"
+                        }
+                      ],
+                      "tag": "li"
+                    },
+                    {
+                      "children": [
+                        {
+                          "text": "What we will do"
+                        }
+                      ],
+                      "tag": "li"
+                    },
+                    {
+                      "children": [
+                        {
+                          "text": "What we need"
+                        }
+                      ],
+                      "tag": "li"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-size",
+                      "v": "40px"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.5"
+                    }
+                  ],
+                  "tag": "ol"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#141414"
+                },
+                {
+                  "p": "color",
+                  "v": "#f5f5f5"
+                },
+                {
+                  "p": "font-family",
+                  "v": "'Helvetica Neue', 'Arial', sans-serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "gap",
+                  "v": "48px"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "Agenda"
+          },
+          {
+            "id": "section",
+            "notes": "A section slide opens a part of the deck. The outline starts a section here.",
+            "path": "slides/section.html",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "Section"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-size",
+                      "v": "28px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "600"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "4px"
+                    },
+                    {
+                      "p": "text-transform",
+                      "v": "uppercase"
+                    },
+                    {
+                      "p": "color",
+                      "v": "#ffd400"
+                    }
+                  ],
+                  "tag": "p"
+                },
+                {
+                  "children": [
+                    {
+                      "text": "A new part of the story"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "'Helvetica Neue', 'Arial', sans-serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "96px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "800"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.05"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-2px"
+                    }
+                  ],
+                  "tag": "h2"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#0a0a0a"
+                },
+                {
+                  "p": "color",
+                  "v": "#ffffff"
+                },
+                {
+                  "p": "font-family",
+                  "v": "'Helvetica Neue', 'Arial', sans-serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "justify-content",
+                  "v": "center"
+                },
+                {
+                  "p": "gap",
+                  "v": "32px"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "A new part of the story"
+          },
+          {
+            "id": "points",
+            "notes": "Three points a person can repeat after the meeting. Click any text to change it.",
+            "path": "slides/points.html",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "Three points"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "'Helvetica Neue', 'Arial', sans-serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "72px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "800"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.1"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-2px"
+                    }
+                  ],
+                  "tag": "h2"
+                },
+                {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "text": "The first point, in one line"
+                        }
+                      ],
+                      "tag": "li"
+                    },
+                    {
+                      "children": [
+                        {
+                          "text": "The second, with the detail that matters"
+                        }
+                      ],
+                      "tag": "li"
+                    },
+                    {
+                      "children": [
+                        {
+                          "text": "The third, and what it means for us"
+                        }
+                      ],
+                      "tag": "li"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-size",
+                      "v": "40px"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.5"
+                    }
+                  ],
+                  "tag": "ul"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#141414"
+                },
+                {
+                  "p": "color",
+                  "v": "#f5f5f5"
+                },
+                {
+                  "p": "font-family",
+                  "v": "'Helvetica Neue', 'Arial', sans-serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "gap",
+                  "v": "48px"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "Three points"
+          },
+          {
+            "id": "columns",
+            "notes": "Two cards side by side. Click any text to change it.",
+            "path": "slides/columns.html",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "One idea per slide"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "'Helvetica Neue', 'Arial', sans-serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "72px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "800"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.1"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-2px"
+                    }
+                  ],
+                  "tag": "h2"
+                },
+                {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "children": [
+                            {
+                              "text": "The point"
+                            }
+                          ],
+                          "style": [
+                            {
+                              "p": "font-family",
+                              "v": "'Helvetica Neue', 'Arial', sans-serif"
+                            },
+                            {
+                              "p": "font-size",
+                              "v": "40px"
+                            },
+                            {
+                              "p": "font-weight",
+                              "v": "800"
+                            }
+                          ],
+                          "tag": "h3"
+                        },
+                        {
+                          "children": [
+                            {
+                              "text": "Say it in one sentence a person remembers."
+                            }
+                          ],
+                          "style": [
+                            {
+                              "p": "font-size",
+                              "v": "30px"
+                            },
+                            {
+                              "p": "color",
+                              "v": "#a8a8a8"
+                            }
+                          ],
+                          "tag": "p"
+                        }
+                      ],
+                      "style": [
+                        {
+                          "p": "flex",
+                          "v": "1"
+                        },
+                        {
+                          "p": "display",
+                          "v": "flex"
+                        },
+                        {
+                          "p": "flex-direction",
+                          "v": "column"
+                        },
+                        {
+                          "p": "gap",
+                          "v": "12px"
+                        },
+                        {
+                          "p": "background",
+                          "v": "#1f1f1f"
+                        },
+                        {
+                          "p": "padding",
+                          "v": "40px"
+                        },
+                        {
+                          "p": "border",
+                          "v": "1px solid #333333"
+                        },
+                        {
+                          "p": "border-top",
+                          "v": "6px solid #ffd400"
+                        },
+                        {
+                          "p": "border-radius",
+                          "v": "16px"
+                        }
+                      ],
+                      "tag": "div"
+                    },
+                    {
+                      "children": [
+                        {
+                          "children": [
+                            {
+                              "text": "The evidence"
+                            }
+                          ],
+                          "style": [
+                            {
+                              "p": "font-family",
+                              "v": "'Helvetica Neue', 'Arial', sans-serif"
+                            },
+                            {
+                              "p": "font-size",
+                              "v": "40px"
+                            },
+                            {
+                              "p": "font-weight",
+                              "v": "800"
+                            }
+                          ],
+                          "tag": "h3"
+                        },
+                        {
+                          "children": [
+                            {
+                              "text": "A number, a quote or a picture that backs it."
+                            }
+                          ],
+                          "style": [
+                            {
+                              "p": "font-size",
+                              "v": "30px"
+                            },
+                            {
+                              "p": "color",
+                              "v": "#a8a8a8"
+                            }
+                          ],
+                          "tag": "p"
+                        }
+                      ],
+                      "style": [
+                        {
+                          "p": "flex",
+                          "v": "1"
+                        },
+                        {
+                          "p": "display",
+                          "v": "flex"
+                        },
+                        {
+                          "p": "flex-direction",
+                          "v": "column"
+                        },
+                        {
+                          "p": "gap",
+                          "v": "12px"
+                        },
+                        {
+                          "p": "background",
+                          "v": "#1f1f1f"
+                        },
+                        {
+                          "p": "padding",
+                          "v": "40px"
+                        },
+                        {
+                          "p": "border",
+                          "v": "1px solid #333333"
+                        },
+                        {
+                          "p": "border-top",
+                          "v": "6px solid #ffd400"
+                        },
+                        {
+                          "p": "border-radius",
+                          "v": "16px"
+                        }
+                      ],
+                      "tag": "div"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "display",
+                      "v": "flex"
+                    },
+                    {
+                      "p": "gap",
+                      "v": "32px"
+                    }
+                  ],
+                  "tag": "div"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#141414"
+                },
+                {
+                  "p": "color",
+                  "v": "#f5f5f5"
+                },
+                {
+                  "p": "font-family",
+                  "v": "'Helvetica Neue', 'Arial', sans-serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "gap",
+                  "v": "48px"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "One idea per slide"
+          },
+          {
+            "id": "number",
+            "notes": "One figure the room should remember. Say where it comes from.",
+            "path": "slides/number.html",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "The number that matters"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "'Helvetica Neue', 'Arial', sans-serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "56px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "800"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.1"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-2px"
+                    }
+                  ],
+                  "tag": "h2"
+                },
+                {
+                  "children": [
+                    {
+                      "text": "42%"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "'Helvetica Neue', 'Arial', sans-serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "240px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "800"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-8px"
+                    },
+                    {
+                      "p": "color",
+                      "v": "#ffd400"
+                    }
+                  ],
+                  "tag": "p"
+                },
+                {
+                  "children": [
+                    {
+                      "text": "What it measures, and since when"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-size",
+                      "v": "40px"
+                    },
+                    {
+                      "p": "color",
+                      "v": "#a8a8a8"
+                    }
+                  ],
+                  "tag": "p"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#141414"
+                },
+                {
+                  "p": "color",
+                  "v": "#f5f5f5"
+                },
+                {
+                  "p": "font-family",
+                  "v": "'Helvetica Neue', 'Arial', sans-serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "gap",
+                  "v": "48px"
+                },
+                {
+                  "p": "justify-content",
+                  "v": "center"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "The number that matters"
+          },
+          {
+            "id": "quote",
+            "notes": "Quote people in their own words, and say who they are.",
+            "path": "slides/quote.html",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "text": "A quote from a customer, in their own words"
+                        }
+                      ],
+                      "style": [
+                        {
+                          "p": "font-family",
+                          "v": "'Helvetica Neue', 'Arial', sans-serif"
+                        },
+                        {
+                          "p": "font-size",
+                          "v": "72px"
+                        },
+                        {
+                          "p": "font-weight",
+                          "v": "800"
+                        },
+                        {
+                          "p": "line-height",
+                          "v": "1.2"
+                        },
+                        {
+                          "p": "letter-spacing",
+                          "v": "-2px"
+                        }
+                      ],
+                      "tag": "p"
+                    },
+                    {
+                      "children": [
+                        {
+                          "text": "Name, role and company"
+                        }
+                      ],
+                      "style": [
+                        {
+                          "p": "font-size",
+                          "v": "32px"
+                        },
+                        {
+                          "p": "color",
+                          "v": "#a8a8a8"
+                        }
+                      ],
+                      "tag": "p"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "display",
+                      "v": "flex"
+                    },
+                    {
+                      "p": "flex-direction",
+                      "v": "column"
+                    },
+                    {
+                      "p": "gap",
+                      "v": "40px"
+                    },
+                    {
+                      "p": "padding",
+                      "v": "0 0 0 64px"
+                    },
+                    {
+                      "p": "border-left",
+                      "v": "8px solid #ffd400"
+                    }
+                  ],
+                  "tag": "div"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#141414"
+                },
+                {
+                  "p": "color",
+                  "v": "#f5f5f5"
+                },
+                {
+                  "p": "font-family",
+                  "v": "'Helvetica Neue', 'Arial', sans-serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "gap",
+                  "v": "48px"
+                },
+                {
+                  "p": "justify-content",
+                  "v": "center"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "A quote from a customer, in their own words"
+          },
+          {
+            "id": "closing",
+            "notes": "End on what the room should do next.",
+            "path": "slides/closing.html",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "What we need"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "'Helvetica Neue', 'Arial', sans-serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "88px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "800"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.1"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-2px"
+                    }
+                  ],
+                  "tag": "h2"
+                },
+                {
+                  "children": [
+                    {
+                      "text": "The one decision or the one ask, said plainly"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-size",
+                      "v": "40px"
+                    },
+                    {
+                      "p": "color",
+                      "v": "#b5b5b5"
+                    }
+                  ],
+                  "tag": "p"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#0a0a0a"
+                },
+                {
+                  "p": "color",
+                  "v": "#ffffff"
+                },
+                {
+                  "p": "font-family",
+                  "v": "'Helvetica Neue', 'Arial', sans-serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "justify-content",
+                  "v": "center"
+                },
+                {
+                  "p": "gap",
+                  "v": "32px"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "What we need"
+          }
+        ],
+        "theme": "signal",
+        "title": "Signal"
+      },
+      "tag": "Yellow on black, for a big room"
+    },
+    {
+      "id": "studio",
+      "name": "Studio",
+      "sample": {
+        "cover": "cover",
+        "faces": [],
+        "sections": [
+          {
+            "description": "A new part of the story",
+            "start": "section"
+          }
+        ],
+        "slides": [
+          {
+            "id": "cover",
+            "notes": "The cover. Say what the deck is for in one sentence before the first slide.",
+            "path": "slides/cover.html",
+            "root": {
+              "children": [
+                {
+                  "style": [
+                    {
+                      "p": "width",
+                      "v": "96px"
+                    },
+                    {
+                      "p": "height",
+                      "v": "8px"
+                    },
+                    {
+                      "p": "background",
+                      "v": "#c4562b"
+                    },
+                    {
+                      "p": "border-radius",
+                      "v": "4px"
+                    }
+                  ],
+                  "tag": "div"
+                },
+                {
+                  "children": [
+                    {
+                      "text": "Studio"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "'Palatino', 'Palatino Linotype', 'Georgia', serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "112px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "500"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.05"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-1px"
+                    }
+                  ],
+                  "tag": "h1"
+                },
+                {
+                  "children": [
+                    {
+                      "text": "A subtitle: who it is for, and when"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-size",
+                      "v": "40px"
+                    },
+                    {
+                      "p": "color",
+                      "v": "#d6c6b3"
+                    }
+                  ],
+                  "tag": "p"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#2b1d17"
+                },
+                {
+                  "p": "color",
+                  "v": "#f6efe6"
+                },
+                {
+                  "p": "font-family",
+                  "v": "'Avenir Next', 'Avenir', 'Helvetica Neue', 'Arial', sans-serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "justify-content",
+                  "v": "center"
+                },
+                {
+                  "p": "gap",
+                  "v": "32px"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "Studio"
+          },
+          {
+            "id": "agenda",
+            "notes": "Three parts at most. Give each one a section slide where it begins.",
+            "path": "slides/agenda.html",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "Agenda"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "'Palatino', 'Palatino Linotype', 'Georgia', serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "72px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "500"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.1"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-1px"
+                    }
+                  ],
+                  "tag": "h2"
+                },
+                {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "text": "Where we are"
+                        }
+                      ],
+                      "tag": "li"
+                    },
+                    {
+                      "children": [
+                        {
+                          "text": "What we will do"
+                        }
+                      ],
+                      "tag": "li"
+                    },
+                    {
+                      "children": [
+                        {
+                          "text": "What we need"
+                        }
+                      ],
+                      "tag": "li"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-size",
+                      "v": "40px"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.5"
+                    }
+                  ],
+                  "tag": "ol"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#f6efe6"
+                },
+                {
+                  "p": "color",
+                  "v": "#2b1d17"
+                },
+                {
+                  "p": "font-family",
+                  "v": "'Avenir Next', 'Avenir', 'Helvetica Neue', 'Arial', sans-serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "gap",
+                  "v": "48px"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "Agenda"
+          },
+          {
+            "id": "section",
+            "notes": "A section slide opens a part of the deck. The outline starts a section here.",
+            "path": "slides/section.html",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "Section"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-size",
+                      "v": "28px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "600"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "4px"
+                    },
+                    {
+                      "p": "text-transform",
+                      "v": "uppercase"
+                    },
+                    {
+                      "p": "color",
+                      "v": "#c4562b"
+                    }
+                  ],
+                  "tag": "p"
+                },
+                {
+                  "children": [
+                    {
+                      "text": "A new part of the story"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "'Palatino', 'Palatino Linotype', 'Georgia', serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "96px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "500"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.05"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-1px"
+                    }
+                  ],
+                  "tag": "h2"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#2b1d17"
+                },
+                {
+                  "p": "color",
+                  "v": "#f6efe6"
+                },
+                {
+                  "p": "font-family",
+                  "v": "'Avenir Next', 'Avenir', 'Helvetica Neue', 'Arial', sans-serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "justify-content",
+                  "v": "center"
+                },
+                {
+                  "p": "gap",
+                  "v": "32px"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "A new part of the story"
+          },
+          {
+            "id": "points",
+            "notes": "Three points a person can repeat after the meeting. Click any text to change it.",
+            "path": "slides/points.html",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "Three points"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "'Palatino', 'Palatino Linotype', 'Georgia', serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "72px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "500"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.1"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-1px"
+                    }
+                  ],
+                  "tag": "h2"
+                },
+                {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "text": "The first point, in one line"
+                        }
+                      ],
+                      "tag": "li"
+                    },
+                    {
+                      "children": [
+                        {
+                          "text": "The second, with the detail that matters"
+                        }
+                      ],
+                      "tag": "li"
+                    },
+                    {
+                      "children": [
+                        {
+                          "text": "The third, and what it means for us"
+                        }
+                      ],
+                      "tag": "li"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-size",
+                      "v": "40px"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.5"
+                    }
+                  ],
+                  "tag": "ul"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#f6efe6"
+                },
+                {
+                  "p": "color",
+                  "v": "#2b1d17"
+                },
+                {
+                  "p": "font-family",
+                  "v": "'Avenir Next', 'Avenir', 'Helvetica Neue', 'Arial', sans-serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "gap",
+                  "v": "48px"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "Three points"
+          },
+          {
+            "id": "columns",
+            "notes": "Two cards side by side. Click any text to change it.",
+            "path": "slides/columns.html",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "One idea per slide"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "'Palatino', 'Palatino Linotype', 'Georgia', serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "72px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "500"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.1"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-1px"
+                    }
+                  ],
+                  "tag": "h2"
+                },
+                {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "children": [
+                            {
+                              "text": "The point"
+                            }
+                          ],
+                          "style": [
+                            {
+                              "p": "font-family",
+                              "v": "'Palatino', 'Palatino Linotype', 'Georgia', serif"
+                            },
+                            {
+                              "p": "font-size",
+                              "v": "40px"
+                            },
+                            {
+                              "p": "font-weight",
+                              "v": "500"
+                            }
+                          ],
+                          "tag": "h3"
+                        },
+                        {
+                          "children": [
+                            {
+                              "text": "Say it in one sentence a person remembers."
+                            }
+                          ],
+                          "style": [
+                            {
+                              "p": "font-size",
+                              "v": "30px"
+                            },
+                            {
+                              "p": "color",
+                              "v": "#76604f"
+                            }
+                          ],
+                          "tag": "p"
+                        }
+                      ],
+                      "style": [
+                        {
+                          "p": "flex",
+                          "v": "1"
+                        },
+                        {
+                          "p": "display",
+                          "v": "flex"
+                        },
+                        {
+                          "p": "flex-direction",
+                          "v": "column"
+                        },
+                        {
+                          "p": "gap",
+                          "v": "12px"
+                        },
+                        {
+                          "p": "background",
+                          "v": "#fffaf3"
+                        },
+                        {
+                          "p": "padding",
+                          "v": "40px"
+                        },
+                        {
+                          "p": "border",
+                          "v": "1px solid #e7d9c6"
+                        },
+                        {
+                          "p": "border-top",
+                          "v": "6px solid #c4562b"
+                        },
+                        {
+                          "p": "border-radius",
+                          "v": "16px"
+                        }
+                      ],
+                      "tag": "div"
+                    },
+                    {
+                      "children": [
+                        {
+                          "children": [
+                            {
+                              "text": "The evidence"
+                            }
+                          ],
+                          "style": [
+                            {
+                              "p": "font-family",
+                              "v": "'Palatino', 'Palatino Linotype', 'Georgia', serif"
+                            },
+                            {
+                              "p": "font-size",
+                              "v": "40px"
+                            },
+                            {
+                              "p": "font-weight",
+                              "v": "500"
+                            }
+                          ],
+                          "tag": "h3"
+                        },
+                        {
+                          "children": [
+                            {
+                              "text": "A number, a quote or a picture that backs it."
+                            }
+                          ],
+                          "style": [
+                            {
+                              "p": "font-size",
+                              "v": "30px"
+                            },
+                            {
+                              "p": "color",
+                              "v": "#76604f"
+                            }
+                          ],
+                          "tag": "p"
+                        }
+                      ],
+                      "style": [
+                        {
+                          "p": "flex",
+                          "v": "1"
+                        },
+                        {
+                          "p": "display",
+                          "v": "flex"
+                        },
+                        {
+                          "p": "flex-direction",
+                          "v": "column"
+                        },
+                        {
+                          "p": "gap",
+                          "v": "12px"
+                        },
+                        {
+                          "p": "background",
+                          "v": "#fffaf3"
+                        },
+                        {
+                          "p": "padding",
+                          "v": "40px"
+                        },
+                        {
+                          "p": "border",
+                          "v": "1px solid #e7d9c6"
+                        },
+                        {
+                          "p": "border-top",
+                          "v": "6px solid #c4562b"
+                        },
+                        {
+                          "p": "border-radius",
+                          "v": "16px"
+                        }
+                      ],
+                      "tag": "div"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "display",
+                      "v": "flex"
+                    },
+                    {
+                      "p": "gap",
+                      "v": "32px"
+                    }
+                  ],
+                  "tag": "div"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#f6efe6"
+                },
+                {
+                  "p": "color",
+                  "v": "#2b1d17"
+                },
+                {
+                  "p": "font-family",
+                  "v": "'Avenir Next', 'Avenir', 'Helvetica Neue', 'Arial', sans-serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "gap",
+                  "v": "48px"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "One idea per slide"
+          },
+          {
+            "id": "number",
+            "notes": "One figure the room should remember. Say where it comes from.",
+            "path": "slides/number.html",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "The number that matters"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "'Palatino', 'Palatino Linotype', 'Georgia', serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "56px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "500"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.1"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-1px"
+                    }
+                  ],
+                  "tag": "h2"
+                },
+                {
+                  "children": [
+                    {
+                      "text": "42%"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "'Palatino', 'Palatino Linotype', 'Georgia', serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "240px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "500"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-8px"
+                    },
+                    {
+                      "p": "color",
+                      "v": "#c4562b"
+                    }
+                  ],
+                  "tag": "p"
+                },
+                {
+                  "children": [
+                    {
+                      "text": "What it measures, and since when"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-size",
+                      "v": "40px"
+                    },
+                    {
+                      "p": "color",
+                      "v": "#76604f"
+                    }
+                  ],
+                  "tag": "p"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#f6efe6"
+                },
+                {
+                  "p": "color",
+                  "v": "#2b1d17"
+                },
+                {
+                  "p": "font-family",
+                  "v": "'Avenir Next', 'Avenir', 'Helvetica Neue', 'Arial', sans-serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "gap",
+                  "v": "48px"
+                },
+                {
+                  "p": "justify-content",
+                  "v": "center"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "The number that matters"
+          },
+          {
+            "id": "quote",
+            "notes": "Quote people in their own words, and say who they are.",
+            "path": "slides/quote.html",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "text": "A quote from a customer, in their own words"
+                        }
+                      ],
+                      "style": [
+                        {
+                          "p": "font-family",
+                          "v": "'Palatino', 'Palatino Linotype', 'Georgia', serif"
+                        },
+                        {
+                          "p": "font-size",
+                          "v": "72px"
+                        },
+                        {
+                          "p": "font-weight",
+                          "v": "500"
+                        },
+                        {
+                          "p": "line-height",
+                          "v": "1.2"
+                        },
+                        {
+                          "p": "letter-spacing",
+                          "v": "-1px"
+                        }
+                      ],
+                      "tag": "p"
+                    },
+                    {
+                      "children": [
+                        {
+                          "text": "Name, role and company"
+                        }
+                      ],
+                      "style": [
+                        {
+                          "p": "font-size",
+                          "v": "32px"
+                        },
+                        {
+                          "p": "color",
+                          "v": "#76604f"
+                        }
+                      ],
+                      "tag": "p"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "display",
+                      "v": "flex"
+                    },
+                    {
+                      "p": "flex-direction",
+                      "v": "column"
+                    },
+                    {
+                      "p": "gap",
+                      "v": "40px"
+                    },
+                    {
+                      "p": "padding",
+                      "v": "0 0 0 64px"
+                    },
+                    {
+                      "p": "border-left",
+                      "v": "8px solid #c4562b"
+                    }
+                  ],
+                  "tag": "div"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#f6efe6"
+                },
+                {
+                  "p": "color",
+                  "v": "#2b1d17"
+                },
+                {
+                  "p": "font-family",
+                  "v": "'Avenir Next', 'Avenir', 'Helvetica Neue', 'Arial', sans-serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "gap",
+                  "v": "48px"
+                },
+                {
+                  "p": "justify-content",
+                  "v": "center"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "A quote from a customer, in their own words"
+          },
+          {
+            "id": "closing",
+            "notes": "End on what the room should do next.",
+            "path": "slides/closing.html",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "What we need"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "'Palatino', 'Palatino Linotype', 'Georgia', serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "88px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "500"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.1"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-1px"
+                    }
+                  ],
+                  "tag": "h2"
+                },
+                {
+                  "children": [
+                    {
+                      "text": "The one decision or the one ask, said plainly"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-size",
+                      "v": "40px"
+                    },
+                    {
+                      "p": "color",
+                      "v": "#d6c6b3"
+                    }
+                  ],
+                  "tag": "p"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#2b1d17"
+                },
+                {
+                  "p": "color",
+                  "v": "#f6efe6"
+                },
+                {
+                  "p": "font-family",
+                  "v": "'Avenir Next', 'Avenir', 'Helvetica Neue', 'Arial', sans-serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "justify-content",
+                  "v": "center"
+                },
+                {
+                  "p": "gap",
+                  "v": "32px"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "What we need"
+          }
+        ],
+        "theme": "studio",
+        "title": "Studio"
+      },
+      "tag": "Warm cream and terracotta"
+    },
+    {
+      "id": "grove",
+      "name": "Grove",
+      "sample": {
+        "cover": "cover",
+        "faces": [],
+        "sections": [
+          {
+            "description": "A new part of the story",
+            "start": "section"
+          }
+        ],
+        "slides": [
+          {
+            "id": "cover",
+            "notes": "The cover. Say what the deck is for in one sentence before the first slide.",
+            "path": "slides/cover.html",
+            "root": {
+              "children": [
+                {
+                  "style": [
+                    {
+                      "p": "width",
+                      "v": "96px"
+                    },
+                    {
+                      "p": "height",
+                      "v": "8px"
+                    },
+                    {
+                      "p": "background",
+                      "v": "#1f8a5b"
+                    },
+                    {
+                      "p": "border-radius",
+                      "v": "4px"
+                    }
+                  ],
+                  "tag": "div"
+                },
+                {
+                  "children": [
+                    {
+                      "text": "Grove"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "system-ui, sans-serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "112px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "600"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.05"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-1px"
+                    }
+                  ],
+                  "tag": "h1"
+                },
+                {
+                  "children": [
+                    {
+                      "text": "A subtitle: who it is for, and when"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-size",
+                      "v": "40px"
+                    },
+                    {
+                      "p": "color",
+                      "v": "#a9c3b3"
+                    }
+                  ],
+                  "tag": "p"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#10261d"
+                },
+                {
+                  "p": "color",
+                  "v": "#eef5ef"
+                },
+                {
+                  "p": "font-family",
+                  "v": "system-ui, sans-serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "justify-content",
+                  "v": "center"
+                },
+                {
+                  "p": "gap",
+                  "v": "32px"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "Grove"
+          },
+          {
+            "id": "agenda",
+            "notes": "Three parts at most. Give each one a section slide where it begins.",
+            "path": "slides/agenda.html",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "Agenda"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "system-ui, sans-serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "72px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "600"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.1"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-1px"
+                    }
+                  ],
+                  "tag": "h2"
+                },
+                {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "text": "Where we are"
+                        }
+                      ],
+                      "tag": "li"
+                    },
+                    {
+                      "children": [
+                        {
+                          "text": "What we will do"
+                        }
+                      ],
+                      "tag": "li"
+                    },
+                    {
+                      "children": [
+                        {
+                          "text": "What we need"
+                        }
+                      ],
+                      "tag": "li"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-size",
+                      "v": "40px"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.5"
+                    }
+                  ],
+                  "tag": "ol"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#f3f6f2"
+                },
+                {
+                  "p": "color",
+                  "v": "#10261d"
+                },
+                {
+                  "p": "font-family",
+                  "v": "system-ui, sans-serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "gap",
+                  "v": "48px"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "Agenda"
+          },
+          {
+            "id": "section",
+            "notes": "A section slide opens a part of the deck. The outline starts a section here.",
+            "path": "slides/section.html",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "Section"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-size",
+                      "v": "28px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "600"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "4px"
+                    },
+                    {
+                      "p": "text-transform",
+                      "v": "uppercase"
+                    },
+                    {
+                      "p": "color",
+                      "v": "#1f8a5b"
+                    }
+                  ],
+                  "tag": "p"
+                },
+                {
+                  "children": [
+                    {
+                      "text": "A new part of the story"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "system-ui, sans-serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "96px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "600"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.05"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-1px"
+                    }
+                  ],
+                  "tag": "h2"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#10261d"
+                },
+                {
+                  "p": "color",
+                  "v": "#eef5ef"
+                },
+                {
+                  "p": "font-family",
+                  "v": "system-ui, sans-serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "justify-content",
+                  "v": "center"
+                },
+                {
+                  "p": "gap",
+                  "v": "32px"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "A new part of the story"
+          },
+          {
+            "id": "points",
+            "notes": "Three points a person can repeat after the meeting. Click any text to change it.",
+            "path": "slides/points.html",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "Three points"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "system-ui, sans-serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "72px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "600"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.1"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-1px"
+                    }
+                  ],
+                  "tag": "h2"
+                },
+                {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "text": "The first point, in one line"
+                        }
+                      ],
+                      "tag": "li"
+                    },
+                    {
+                      "children": [
+                        {
+                          "text": "The second, with the detail that matters"
+                        }
+                      ],
+                      "tag": "li"
+                    },
+                    {
+                      "children": [
+                        {
+                          "text": "The third, and what it means for us"
+                        }
+                      ],
+                      "tag": "li"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-size",
+                      "v": "40px"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.5"
+                    }
+                  ],
+                  "tag": "ul"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#f3f6f2"
+                },
+                {
+                  "p": "color",
+                  "v": "#10261d"
+                },
+                {
+                  "p": "font-family",
+                  "v": "system-ui, sans-serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "gap",
+                  "v": "48px"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "Three points"
+          },
+          {
+            "id": "columns",
+            "notes": "Two cards side by side. Click any text to change it.",
+            "path": "slides/columns.html",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "One idea per slide"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "system-ui, sans-serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "72px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "600"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.1"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-1px"
+                    }
+                  ],
+                  "tag": "h2"
+                },
+                {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "children": [
+                            {
+                              "text": "The point"
+                            }
+                          ],
+                          "style": [
+                            {
+                              "p": "font-family",
+                              "v": "system-ui, sans-serif"
+                            },
+                            {
+                              "p": "font-size",
+                              "v": "40px"
+                            },
+                            {
+                              "p": "font-weight",
+                              "v": "600"
+                            }
+                          ],
+                          "tag": "h3"
+                        },
+                        {
+                          "children": [
+                            {
+                              "text": "Say it in one sentence a person remembers."
+                            }
+                          ],
+                          "style": [
+                            {
+                              "p": "font-size",
+                              "v": "30px"
+                            },
+                            {
+                              "p": "color",
+                              "v": "#566a5e"
+                            }
+                          ],
+                          "tag": "p"
+                        }
+                      ],
+                      "style": [
+                        {
+                          "p": "flex",
+                          "v": "1"
+                        },
+                        {
+                          "p": "display",
+                          "v": "flex"
+                        },
+                        {
+                          "p": "flex-direction",
+                          "v": "column"
+                        },
+                        {
+                          "p": "gap",
+                          "v": "12px"
+                        },
+                        {
+                          "p": "background",
+                          "v": "#ffffff"
+                        },
+                        {
+                          "p": "padding",
+                          "v": "40px"
+                        },
+                        {
+                          "p": "border",
+                          "v": "1px solid #d9e3db"
+                        },
+                        {
+                          "p": "border-top",
+                          "v": "6px solid #1f8a5b"
+                        },
+                        {
+                          "p": "border-radius",
+                          "v": "16px"
+                        }
+                      ],
+                      "tag": "div"
+                    },
+                    {
+                      "children": [
+                        {
+                          "children": [
+                            {
+                              "text": "The evidence"
+                            }
+                          ],
+                          "style": [
+                            {
+                              "p": "font-family",
+                              "v": "system-ui, sans-serif"
+                            },
+                            {
+                              "p": "font-size",
+                              "v": "40px"
+                            },
+                            {
+                              "p": "font-weight",
+                              "v": "600"
+                            }
+                          ],
+                          "tag": "h3"
+                        },
+                        {
+                          "children": [
+                            {
+                              "text": "A number, a quote or a picture that backs it."
+                            }
+                          ],
+                          "style": [
+                            {
+                              "p": "font-size",
+                              "v": "30px"
+                            },
+                            {
+                              "p": "color",
+                              "v": "#566a5e"
+                            }
+                          ],
+                          "tag": "p"
+                        }
+                      ],
+                      "style": [
+                        {
+                          "p": "flex",
+                          "v": "1"
+                        },
+                        {
+                          "p": "display",
+                          "v": "flex"
+                        },
+                        {
+                          "p": "flex-direction",
+                          "v": "column"
+                        },
+                        {
+                          "p": "gap",
+                          "v": "12px"
+                        },
+                        {
+                          "p": "background",
+                          "v": "#ffffff"
+                        },
+                        {
+                          "p": "padding",
+                          "v": "40px"
+                        },
+                        {
+                          "p": "border",
+                          "v": "1px solid #d9e3db"
+                        },
+                        {
+                          "p": "border-top",
+                          "v": "6px solid #1f8a5b"
+                        },
+                        {
+                          "p": "border-radius",
+                          "v": "16px"
+                        }
+                      ],
+                      "tag": "div"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "display",
+                      "v": "flex"
+                    },
+                    {
+                      "p": "gap",
+                      "v": "32px"
+                    }
+                  ],
+                  "tag": "div"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#f3f6f2"
+                },
+                {
+                  "p": "color",
+                  "v": "#10261d"
+                },
+                {
+                  "p": "font-family",
+                  "v": "system-ui, sans-serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "gap",
+                  "v": "48px"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "One idea per slide"
+          },
+          {
+            "id": "number",
+            "notes": "One figure the room should remember. Say where it comes from.",
+            "path": "slides/number.html",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "The number that matters"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "system-ui, sans-serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "56px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "600"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.1"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-1px"
+                    }
+                  ],
+                  "tag": "h2"
+                },
+                {
+                  "children": [
+                    {
+                      "text": "42%"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "system-ui, sans-serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "240px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "600"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-8px"
+                    },
+                    {
+                      "p": "color",
+                      "v": "#1f8a5b"
+                    }
+                  ],
+                  "tag": "p"
+                },
+                {
+                  "children": [
+                    {
+                      "text": "What it measures, and since when"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-size",
+                      "v": "40px"
+                    },
+                    {
+                      "p": "color",
+                      "v": "#566a5e"
+                    }
+                  ],
+                  "tag": "p"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#f3f6f2"
+                },
+                {
+                  "p": "color",
+                  "v": "#10261d"
+                },
+                {
+                  "p": "font-family",
+                  "v": "system-ui, sans-serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "gap",
+                  "v": "48px"
+                },
+                {
+                  "p": "justify-content",
+                  "v": "center"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "The number that matters"
+          },
+          {
+            "id": "quote",
+            "notes": "Quote people in their own words, and say who they are.",
+            "path": "slides/quote.html",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "text": "A quote from a customer, in their own words"
+                        }
+                      ],
+                      "style": [
+                        {
+                          "p": "font-family",
+                          "v": "system-ui, sans-serif"
+                        },
+                        {
+                          "p": "font-size",
+                          "v": "72px"
+                        },
+                        {
+                          "p": "font-weight",
+                          "v": "600"
+                        },
+                        {
+                          "p": "line-height",
+                          "v": "1.2"
+                        },
+                        {
+                          "p": "letter-spacing",
+                          "v": "-1px"
+                        }
+                      ],
+                      "tag": "p"
+                    },
+                    {
+                      "children": [
+                        {
+                          "text": "Name, role and company"
+                        }
+                      ],
+                      "style": [
+                        {
+                          "p": "font-size",
+                          "v": "32px"
+                        },
+                        {
+                          "p": "color",
+                          "v": "#566a5e"
+                        }
+                      ],
+                      "tag": "p"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "display",
+                      "v": "flex"
+                    },
+                    {
+                      "p": "flex-direction",
+                      "v": "column"
+                    },
+                    {
+                      "p": "gap",
+                      "v": "40px"
+                    },
+                    {
+                      "p": "padding",
+                      "v": "0 0 0 64px"
+                    },
+                    {
+                      "p": "border-left",
+                      "v": "8px solid #1f8a5b"
+                    }
+                  ],
+                  "tag": "div"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#f3f6f2"
+                },
+                {
+                  "p": "color",
+                  "v": "#10261d"
+                },
+                {
+                  "p": "font-family",
+                  "v": "system-ui, sans-serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "gap",
+                  "v": "48px"
+                },
+                {
+                  "p": "justify-content",
+                  "v": "center"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "A quote from a customer, in their own words"
+          },
+          {
+            "id": "closing",
+            "notes": "End on what the room should do next.",
+            "path": "slides/closing.html",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "What we need"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-family",
+                      "v": "system-ui, sans-serif"
+                    },
+                    {
+                      "p": "font-size",
+                      "v": "88px"
+                    },
+                    {
+                      "p": "font-weight",
+                      "v": "600"
+                    },
+                    {
+                      "p": "line-height",
+                      "v": "1.1"
+                    },
+                    {
+                      "p": "letter-spacing",
+                      "v": "-1px"
+                    }
+                  ],
+                  "tag": "h2"
+                },
+                {
+                  "children": [
+                    {
+                      "text": "The one decision or the one ask, said plainly"
+                    }
+                  ],
+                  "style": [
+                    {
+                      "p": "font-size",
+                      "v": "40px"
+                    },
+                    {
+                      "p": "color",
+                      "v": "#a9c3b3"
+                    }
+                  ],
+                  "tag": "p"
+                }
+              ],
+              "style": [
+                {
+                  "p": "background",
+                  "v": "#10261d"
+                },
+                {
+                  "p": "color",
+                  "v": "#eef5ef"
+                },
+                {
+                  "p": "font-family",
+                  "v": "system-ui, sans-serif"
+                },
+                {
+                  "p": "padding",
+                  "v": "128px"
+                },
+                {
+                  "p": "display",
+                  "v": "flex"
+                },
+                {
+                  "p": "flex-direction",
+                  "v": "column"
+                },
+                {
+                  "p": "justify-content",
+                  "v": "center"
+                },
+                {
+                  "p": "gap",
+                  "v": "32px"
+                }
+              ],
+              "tag": "section"
+            },
+            "title": "What we need"
+          }
+        ],
+        "theme": "grove",
+        "title": "Grove"
+      },
+      "tag": "Deep green and mint"
+    }
+  ]
+}

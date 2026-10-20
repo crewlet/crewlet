@@ -951,6 +951,11 @@ const (
 	// budget for live sources refused for now (adr/0043). 429 with a
 	// Retry-After; never a lockout.
 	CodeReadBudget Code = "read_budget"
+	// CodeCheckBudget is a page check (`POST /artifacts/checks`) this node's
+	// budget for checks refused for now: a check is asked for while a person
+	// writes, so a client sending one per keystroke is held to a few a
+	// second. 429 with a Retry-After; never a lockout.
+	CodeCheckBudget Code = "check_budget"
 )
 
 // codes is THE TABLE: every code this engine answers with, each with the one
@@ -1286,6 +1291,8 @@ var codes = map[Code]string{
 		"Retry-After names, then send it again.",
 	CodeReadBudget: "This dashboard asked for its live data too often. Wait the " +
 		"moment Retry-After names, then refresh it.",
+	CodeCheckBudget: "Too many checks at once. Wait the moment Retry-After names, " +
+		"then check the page again.",
 }
 
 // Codes is every code in the vocabulary, sorted.

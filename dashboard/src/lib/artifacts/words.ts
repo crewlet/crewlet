@@ -9,6 +9,7 @@
 
 import {
   ARTIFACT_CAPABILITIES,
+  ARTIFACT_HISTORY_OPS,
   ARTIFACT_KINDS,
   ARTIFACT_ROLES,
   ARTIFACT_TRASH_RETENTION_DAYS,
@@ -19,14 +20,35 @@ import type {
   ArtifactAudience,
   ArtifactCapability,
   ArtifactHistoryEntry,
+  ArtifactHistoryOp,
   ArtifactKind,
   ArtifactRole,
+  ColumnType,
   DataFieldChange,
   DataHistoryEntry,
   DataVerdict,
   ShareableRole,
 } from "~/protocol/index.ts";
 import { fmtDate, parseUTC, plural } from "../format.ts";
+
+/**
+ * What each column type is called, in the schema editor and in a new sheet's
+ * column settings: a select is a "Choice" and a URL a "Link", the words a
+ * person filling the sheet in uses.
+ */
+export const COLUMN_TYPE_WORDS: Readonly<Record<ColumnType, string>> = {
+  text: "Text",
+  longtext: "Long text",
+  number: "Number",
+  checkbox: "Checkbox",
+  select: "Choice",
+  multiselect: "Choices",
+  status: "Status",
+  person: "Person",
+  date: "Date",
+  url: "Link",
+  rating: "Rating",
+};
 
 /**
  * What each kind is called, in the eyebrow, the gallery's Type column and its
@@ -40,6 +62,46 @@ export const KIND_WORDS: Readonly<Record<ArtifactKind, string>> = {
   dashboard: "Dashboard",
   sheet: "Sheet",
   design: "Design",
+};
+
+/**
+ * What each kind's create page is called, in its bar and the trail
+ * ("Artifacts › New doc"). Slides are made as a deck, and an HTML artifact is
+ * a page, so each is said as what a person starts.
+ */
+export const NEW_KIND_TITLES: Readonly<Record<ArtifactKind, string>> = {
+  html: "New HTML page",
+  doc: "New doc",
+  slides: "New slide deck",
+  dashboard: "New dashboard",
+  sheet: "New sheet",
+  design: "New design",
+};
+
+/**
+ * The order the kinds are offered to make in, by the gallery's Make row and
+ * its New menu: what people write first, then what they lay out, then data.
+ */
+export const MAKE_ORDER: readonly ArtifactKind[] = [
+  "doc",
+  "slides",
+  "design",
+  "dashboard",
+  "html",
+  "sheet",
+];
+
+/**
+ * The article each kind's word takes in a sentence, by how it is said rather
+ * than how it is spelled: "an HTML artifact", "a Doc artifact".
+ */
+export const KIND_ARTICLES: Readonly<Record<ArtifactKind, "a" | "an">> = {
+  html: "an",
+  doc: "a",
+  slides: "a",
+  dashboard: "a",
+  sheet: "a",
+  design: "a",
 };
 
 /** Every kind, in the engine's order, as the gallery's filter offers them. */
@@ -295,28 +357,20 @@ export function historyWords(
           : "changed who it is shared with";
       case "transfer":
         return `gave it to ${s.to ? names.seat(s.to) : "another seat"}`;
-      case "prune":
-        return s.pruned && s.pruned.length > 0
-          ? `retired ${plural(s.pruned.length, "old version")}`
-          : "retired old versions";
       case "trash":
         return "moved it to the trash";
       case "restore":
         return "restored it from the trash";
       case "purge_begin":
         return "began deleting it for good";
-      case "purge":
-        return "deleted it for good";
-      case "remove":
+      case "asset_create":
+        return `added the asset ${s.name ?? s.asset ?? ""}`.trim();
+      case "asset_remove":
         return `removed the asset ${s.name ?? s.asset ?? ""}`.trim();
+      case "link_work_item":
+        return entry.work_item ? `linked it to ${entry.work_item}` : "linked it to a work item";
       case "read_elevated":
         return `opened version ${number || "?"} as an administrator`;
-      case "opened":
-        return "opened it";
-      case "pin":
-        return "pinned it";
-      case "unpin":
-        return "unpinned it";
       default:
         return entry.op.replaceAll("_", " ");
     }
@@ -328,10 +382,13 @@ export function historyWords(
 /**
  * A history row's op as one short verb, for the company audit's What column,
  * where every source's rows share one narrow track and the row's sentence is
- * its Detail. Keyed by the engine's ops (`artifactsdomain.OpKind`); an op this
- * build has not met is read with its underscores as spaces.
+ * its Detail. Keyed by every op a history row is filed under
+ * (`ARTIFACT_HISTORY_OPS`, held to `artifactsdomain.HistoryOps`), so an op the
+ * engine grew is a compile error here until it has its word; an op a newer
+ * engine sends that this build has not met is read with its underscores as
+ * spaces.
  */
-const HISTORY_OP_TAGS: Readonly<Record<string, string>> = {
+const HISTORY_OP_TAGS: Readonly<Record<ArtifactHistoryOp, string>> = {
   create: "create",
   publish: "publish",
   restore_version: "restore version",
@@ -339,21 +396,23 @@ const HISTORY_OP_TAGS: Readonly<Record<string, string>> = {
   share: "share",
   unshare: "unshare",
   transfer: "transfer",
-  prune: "prune",
   trash: "trash",
   restore: "untrash",
   purge_begin: "begin purge",
-  purge: "purge",
-  remove: "remove asset",
-  pin: "pin",
-  unpin: "unpin",
-  opened: "open",
+  asset_create: "add asset",
+  asset_remove: "remove asset",
+  link_work_item: "link work item",
   read_elevated: "admin read",
 };
 
 /** A history op as the audit's What column says it: "admin read", "restore version". */
 export function historyOpTag(op: string): string {
-  return HISTORY_OP_TAGS[op] ?? op.replaceAll("_", " ");
+  return isHistoryOp(op) ? HISTORY_OP_TAGS[op] : op.replaceAll("_", " ");
+}
+
+/** Whether a history row's op is one this build words. */
+function isHistoryOp(op: string): op is ArtifactHistoryOp {
+  return (ARTIFACT_HISTORY_OPS as readonly string[]).includes(op);
 }
 
 /**
@@ -397,14 +456,12 @@ function stripPast(said: string): string {
     ["shared", "share"],
     ["stopped", "stop"],
     ["gave", "give"],
-    ["retired", "retire"],
     ["moved", "move"],
     ["began", "begin"],
-    ["deleted", "delete"],
+    ["added", "add"],
     ["removed", "remove"],
+    ["linked", "link"],
     ["opened", "open"],
-    ["pinned", "pin"],
-    ["unpinned", "unpin"],
   ];
   for (const [past, base] of table) {
     if (said.startsWith(`${past} `) || said === past) return base + said.slice(past.length);

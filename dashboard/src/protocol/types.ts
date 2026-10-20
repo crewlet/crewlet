@@ -53,6 +53,7 @@ import type {
 import type { PushKind, SeatActivity, StoppedReason } from "../contract/wire.ts";
 import type {
   ARTIFACT_CAPABILITIES,
+  ARTIFACT_HISTORY_OPS,
   ARTIFACT_KINDS,
   ARTIFACT_LIST_SCOPES,
   ARTIFACT_LIST_SORTS,
@@ -5009,6 +5010,8 @@ export type PresenceActivity = (typeof PRESENCE_ACTIVITIES)[number];
 export type ArtifactListScope = (typeof ARTIFACT_LIST_SCOPES)[number];
 /** How a listing is ordered. */
 export type ArtifactListSort = (typeof ARTIFACT_LIST_SORTS)[number];
+/** What an artifact's history row is filed under (`artifactsdomain.HistoryOps`). */
+export type ArtifactHistoryOp = (typeof ARTIFACT_HISTORY_OPS)[number];
 /** How one datastore field is stored and drawn. */
 export type ColumnType = (typeof COLUMN_TYPES)[number];
 /** Who reads a collection's rows. */
@@ -5229,7 +5232,11 @@ export interface ArtifactHistorySummary {
 export interface ArtifactHistoryEntry {
   position: number;
   op_id: string;
-  /** `create`, `publish`, `restore_version`, `patch`, `share`, `unshare`, `transfer`, `prune`, `trash`, `restore`, `purge_begin`, `purge`, `remove`, `pin`, `unpin`, `opened`, `read_elevated`. */
+  /**
+   * An [ArtifactHistoryOp]. Typed as text, because a newer engine may file a
+   * row under an op this build has not met, which is still said in its own
+   * words.
+   */
   op: string;
   outcome: "applied" | "refused";
   reason?: string;
@@ -5352,6 +5359,24 @@ export interface ArtifactUploadIntent {
   transfers?: ArtifactTransfer[];
 }
 
+/**
+ * One thing the publish linter found in a page (`lint.Finding`): a refusal
+ * that refuses the publish, or a warning it lands with. `line` is 0 where the
+ * finding is about the version rather than one line of it.
+ */
+export interface ArtifactLintFinding {
+  path: string;
+  line?: number;
+  code: string;
+  message: string;
+}
+
+/** `POST /artifacts/checks` (`artifactupload.CheckReport`): what a publish of the files would say. */
+export interface ArtifactCheckAnswer {
+  refusals: ArtifactLintFinding[];
+  warnings: ArtifactLintFinding[];
+}
+
 /** One tab of a doc, with its Markdown (`docindex.Tab`). */
 export interface DocTab {
   path: string;
@@ -5426,10 +5451,49 @@ export interface DeckFace {
 /** A version's deck as the dashboard draws it (`slideformat.Deck`). */
 export interface ArtifactDeck {
   title: string;
+  /** The theme the deck began in (`deck.json`'s `theme`), absent for a deck that names none. */
+  theme?: string;
   cover: string;
   sections: DeckSection[] | null;
   faces: DeckFace[] | null;
   slides: DeckSlide[] | null;
+}
+
+/** One slide a starter deck opens with: a layout and its title (`slideformat.PlanSlide`). */
+export interface DeckPlanSlide {
+  layout: string;
+  /** Absent is the layout's own heading; a cover's is the deck's title. */
+  title?: string;
+}
+
+/** What a starter deck is composed from (`slideformat.Plan`), sent as a create's `deck`. */
+export interface DeckPlan {
+  theme?: string;
+  slides?: DeckPlanSlide[];
+}
+
+/** One layout a starter deck can hold (`slideformat.Layout`). */
+export interface DeckLayout {
+  id: string;
+  name: string;
+  description: string;
+  /** The title a slide of this layout opens with when its plan names none. */
+  heading: string;
+}
+
+/** One theme a deck can begin in, drawn as a deck of every layout once (`artifactsapi.SlidesStarterTheme`). */
+export interface DeckTheme {
+  id: string;
+  name: string;
+  tag: string;
+  sample: ArtifactDeck;
+}
+
+/** `GET /artifacts/starters/slides` (`artifactsapi.SlidesStartersAnswer`). */
+export interface SlidesStartersAnswer {
+  themes: DeckTheme[];
+  layouts: DeckLayout[];
+  default: DeckPlan;
 }
 
 /** `GET /artifacts/{id}/versions/{n}/deck` (`artifactsapi.DeckAnswer`). */
@@ -5649,16 +5713,25 @@ export interface DashboardBoardAnswer {
   outline: DashboardOutline;
 }
 
-/** One dataset as its viewer may read it (`GET …/sources/{dataset}`, `datasetsapi.Answer`). */
-export interface DashboardDatasetAnswer {
-  artifact: string;
-  version: number;
-  dataset: string;
+/** What one read of a dataset or a source answered (`datasetsapi.Reading`). */
+export interface DashboardReading {
   status: DashboardDatasetStatus;
   as_of?: string;
   table?: DashboardTable;
   refusal?: { dataset: string; reason: string; grants?: string[] };
   detail?: string;
+}
+
+/** One dataset as its viewer may read it (`GET …/sources/{dataset}`, `datasetsapi.Answer`). */
+export interface DashboardDatasetAnswer extends DashboardReading {
+  artifact: string;
+  version: number;
+  dataset: string;
+}
+
+/** One engine source read directly, before any board exists (`GET /artifacts/sources/preview/{name}`, `datasetsapi.Preview`). */
+export interface DashboardSourcePreview extends DashboardReading {
+  source: string;
 }
 
 /** The engine source catalogue (`GET /artifacts/sources`). */

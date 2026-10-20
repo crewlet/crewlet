@@ -23,7 +23,7 @@
  * What the dashboard reaches is read from the SOURCE, parsed rather than
  * matched as text, everywhere a URL is handed to the browser:
  *
- *  - the REST transport: `rest.get/post/put/patch/del/putText(path, …)` and
+ *  - the REST transport: `rest.get/post/put/patch/del/putText/putBytes(path, …)` and
  *    `rest.request(method, path, …)`, where `rest` is the one imported from
  *    this tree under whatever local name — so a module built on it, a screen
  *    or another piece of the protocol layer, is read at its own call;
@@ -65,7 +65,16 @@ import {
 } from "../test/source.ts";
 
 /** The `rest` methods that take the path first. */
-const REST_PATH_FIRST = new Set(["get", "post", "put", "patch", "del", "putText", "blob"]);
+const REST_PATH_FIRST = new Set([
+  "get",
+  "post",
+  "put",
+  "patch",
+  "del",
+  "putText",
+  "putBytes",
+  "blob",
+]);
 /** Constructors whose first argument is the URL they dial. */
 const DIALS = new Set(["WebSocket", "EventSource"]);
 /** The objects `fetch` can be called off as a property. */

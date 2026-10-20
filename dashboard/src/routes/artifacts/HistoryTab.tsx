@@ -263,7 +263,7 @@ function ChangeRecord({ detail }: { detail: ArtifactDetail }) {
   const people = useArtifactPeople();
   const now = useNow();
   const answer = useQuery("artifact_history", { id: detail.id, limit: 50 });
-  const entries = (answer.data?.entries ?? []).filter((e) => e.op !== "opened");
+  const entries = answer.data?.entries ?? [];
   return (
     <Section title="Changes" hint="What was published, shared and changed, and by whom">
       <QueryState

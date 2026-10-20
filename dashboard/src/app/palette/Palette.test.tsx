@@ -1347,9 +1347,9 @@ describe("a screen found by what it holds", () => {
     const nav = { to: vi.fn() } as unknown as Parameters<typeof destinationHits>[1];
     const hits = destinationHits("s", nav, Infinity, null).map((h) => h.label);
     // THE LABEL MATCHES COME FIRST, then the screens only a keyword found
-    // ("Account", "New artifact"), and never one after the other.
+    // ("Account"), and never one after the other.
     const firstKeyword = hits.findIndex((label) => !label.toLowerCase().includes("s"));
-    expect(hits.slice(firstKeyword)).toEqual(expect.arrayContaining(["Account", "New artifact"]));
+    expect(hits.slice(firstKeyword)).toEqual(expect.arrayContaining(["Account"]));
     for (const label of hits.slice(firstKeyword)) expect(label.toLowerCase()).not.toContain("s");
     for (const label of hits.slice(0, firstKeyword)) expect(label.toLowerCase()).toContain("s");
     expect(hits).toContain("Tasks");

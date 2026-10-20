@@ -252,6 +252,18 @@ describe("what a request sends", () => {
       rest.request("PUT", "/secrets/X", { body: { value: 1 }, contentType: "text/plain" }),
     ).rejects.toThrow(TypeError);
   });
+
+  test("a file's bytes are sent as the Blob, under the file's own type", async () => {
+    const sent = stub(() => new Response(null, { status: 204 }));
+    const png = new Blob([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], { type: "image/png" });
+    await rest.putBytes("/artifacts/uploads/u/files/logo.png", png);
+    expect(sent[0]!.init.body).toBe(png);
+    expect((sent[0]!.init.headers as Record<string, string>)["Content-Type"]).toBe("image/png");
+    await rest.putBytes("/artifacts/uploads/u/files/data.bin", new Blob([new Uint8Array([1])]));
+    expect((sent[1]!.init.headers as Record<string, string>)["Content-Type"]).toBe(
+      "application/octet-stream",
+    );
+  });
 });
 
 describe("cancellation", () => {

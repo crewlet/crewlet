@@ -56,23 +56,8 @@ import {
   schemaProblem,
   withPreset,
 } from "~/lib/artifacts/schema.ts";
-import { ROLE_WORDS, roleIncludes } from "~/lib/artifacts/words.ts";
+import { COLUMN_TYPE_WORDS, ROLE_WORDS, roleIncludes } from "~/lib/artifacts/words.ts";
 import { plural } from "~/lib/format.ts";
-
-/** What each column type is called. */
-const TYPE_WORDS: Readonly<Record<ColumnType, string>> = {
-  text: "Text",
-  longtext: "Long text",
-  number: "Number",
-  checkbox: "Checkbox",
-  select: "Choice",
-  multiselect: "Choices",
-  status: "Status",
-  person: "Person",
-  date: "Date",
-  url: "Link",
-  rating: "Rating",
-};
 
 /** What each status category is called. */
 const CATEGORY_WORDS: Readonly<Record<(typeof STATUS_CATEGORIES)[number], string>> = {
@@ -464,7 +449,7 @@ function ColumnRow({
           value={column.type}
           disabled={!canEdit}
           onChange={(value) => setType(String(value) as ColumnType)}
-          options={COLUMN_TYPES.map((t) => ({ value: t, label: TYPE_WORDS[t] }))}
+          options={COLUMN_TYPES.map((t) => ({ value: t, label: COLUMN_TYPE_WORDS[t] }))}
           ariaLabel={`Type of ${column.label || column.key}`}
         />
         <Select

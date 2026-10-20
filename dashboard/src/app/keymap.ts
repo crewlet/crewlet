@@ -51,6 +51,7 @@ export type KeyScope =
   | "canvas"
   | "draft"
   | "compose"
+  | "create"
   | "search"
   | "layer";
 
@@ -64,6 +65,7 @@ export const KEY_SCOPES: readonly { scope: KeyScope; title: string }[] = [
   { scope: "canvas", title: "On a chart" },
   { scope: "draft", title: "Editing a draft: the org builder, or Home while it is arranged" },
   { scope: "compose", title: "Writing a reply" },
+  { scope: "create", title: "Making a new artifact" },
   { scope: "search", title: "In search" },
   {
     scope: "layer",
@@ -326,6 +328,38 @@ const COMPOSE: KeyRow[] = [
 ];
 
 /**
+ * A CREATE PAGE'S KEY, bound by the shared frame every kind's create page
+ * stands in (`routes/artifacts/new/CreateShell.tsx`) to the page's one primary
+ * action, so every kind starts with the same press and none binds its own. It
+ * fires from inside a field, since a create page is mostly fields, and it
+ * shares its press with the composer's Send, which no create page draws
+ * ([SCOPES_APART]).
+ */
+const CREATE: KeyRow[] = [
+  {
+    id: "create.start",
+    scope: "create",
+    presses: [{ key: "enter", mod: true }],
+    does: "Do the page's main action: create it, or ask the agent",
+    by: "dashboard",
+    whileTyping: true,
+  },
+];
+
+/**
+ * Scopes never live on one screen, which may therefore share a press: a
+ * reply's composer is the Inbox's and a task's, and a create page is
+ * neither, so Send and a create page's main action are both the command key
+ * with Enter.
+ */
+export const SCOPES_APART: readonly (readonly [KeyScope, KeyScope])[] = [["compose", "create"]];
+
+/** Whether two scopes can be live on one screen. */
+export function liveTogether(a: KeyScope, b: KeyScope): boolean {
+  return !SCOPES_APART.some(([x, y]) => (x === a && y === b) || (x === b && y === a));
+}
+
+/**
  * THE PALETTE'S OWN KEYS, read by it from its field through [matchesRow]. They
  * are live while it is the top layer and never beside a page key, so they
  * share a namespace with the layer's Escape and with nothing else.
@@ -385,7 +419,14 @@ const LAYER: KeyRow[] = [
 ];
 
 /** The table. */
-export const KEYMAP: readonly KeyRow[] = [...FRAME, ...PAGE, ...COMPOSE, ...SEARCH, ...LAYER];
+export const KEYMAP: readonly KeyRow[] = [
+  ...FRAME,
+  ...PAGE,
+  ...COMPOSE,
+  ...CREATE,
+  ...SEARCH,
+  ...LAYER,
+];
 
 /**
  * Whether a row is live only while a layer holds the keyboard — its own

@@ -1041,7 +1041,11 @@ const (
 	// TestNoLazyStylesheetCarriesTheDesignSystem), so the editor's 1.8 KiB of
 	// rules ride the first paint, and the Markdown grammar the reader's
 	// renderer and the editor share became a chunk of its own. It moved to
-	// 310 KiB then, still under two seconds on that link.
+	// 310 KiB then, still under two seconds on that link. The create pages
+	// took the load to 314.5 KiB, and it came back without a change here:
+	// their rules (3.1 KiB) arrive with them in create.css, and the command
+	// palette (about 10 KiB), mounted only while open, became a chunk of its
+	// own, which left it at 300.2 KiB.
 	initialBudget = 310 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a

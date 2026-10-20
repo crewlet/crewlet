@@ -277,7 +277,7 @@ function mount(viewer: Record<string, unknown> = ADMIN, identity = "ready") {
 /** Every answer in flight lands. */
 /** Open an opened principal's More menu and press one of its gestures. */
 async function more(name: string) {
-  fireEvent.click(await screen.findByRole("button", { name: "More" }));
+  fireEvent.click(await screen.findByRole("button", { name: /^More for / }));
   fireEvent.click(await screen.findByRole("menuitem", { name }));
 }
 
@@ -347,7 +347,7 @@ test("a reader without Admin sees no write control, and an administrator sees th
   for (const name of ["Invite person", "New service account", "Cancel", "Revoke"]) {
     expect(screen.queryByRole("button", { name: new RegExp(`^${name}`) })).toBeNull();
   }
-  expect(screen.queryByRole("button", { name: "More" })).toBeNull();
+  expect(screen.queryByRole("button", { name: /^More for / })).toBeNull();
   cleanup();
   engine();
   mount(ADMIN);
@@ -359,7 +359,7 @@ test("a reader without Admin sees no write control, and an administrator sees th
       0,
     );
   }
-  expect(screen.getByRole("button", { name: "More" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: /^More for / })).toBeTruthy();
   // A SEAT'S OWN GESTURES stay on the seat: this page invites through a picker.
   for (const name of ["Invite", "Add person"]) {
     expect(screen.queryByRole("button", { name })).toBeNull();

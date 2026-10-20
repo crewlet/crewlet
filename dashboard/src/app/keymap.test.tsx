@@ -13,9 +13,11 @@ import {
   KEY_SCOPES,
   keyRow,
   layerScoped,
+  liveTogether,
   matchesRow,
   useKeymap,
   type KeyHandler,
+  type KeyRow,
 } from "./keymap.ts";
 import { KeyLegend } from "./KeyLegend.tsx";
 import { WORKSPACES } from "./nav.ts";
@@ -77,20 +79,35 @@ describe("the table", () => {
   // press that does two things. The layer's rows — and the palette's, which
   // is a layer — are live only while every page key stands aside, so they
   // are their own namespace, shared with each other.
+  //
+  // TWO SCOPES NEVER ON ONE SCREEN may share a press, and only those the
+  // table names (`SCOPES_APART`): a reply's composer and a create page.
   test("no press is answered twice where both rows can be live", () => {
     for (const layer of [false, true]) {
-      const seen = new Map<string, string>();
+      const seen = new Map<string, KeyRow[]>();
       const clashes: string[] = [];
       for (const row of KEYMAP.filter((r) => layerScoped(r.scope) === layer)) {
         for (const p of row.presses) {
           const sig = signature(p);
-          const other = seen.get(sig);
-          if (other) clashes.push(`${sig}: ${other} and ${row.id}`);
-          seen.set(sig, row.id);
+          const others = seen.get(sig) ?? [];
+          for (const other of others) {
+            if (liveTogether(other.scope, row.scope))
+              clashes.push(`${sig}: ${other.id} and ${row.id}`);
+          }
+          seen.set(sig, [...others, row]);
         }
       }
       expect(clashes).toEqual([]);
     }
+  });
+
+  test("a create page's main action and a reply's Send share their press, and only because they are apart", () => {
+    expect(signature(keyRow("create.start").presses[0]!)).toBe(
+      signature(keyRow("compose.send").presses[0]!),
+    );
+    expect(liveTogether("create", "compose")).toBe(false);
+    expect(liveTogether("create", "frame")).toBe(true);
+    expect(liveTogether("compose", "list")).toBe(true);
   });
 
   test("a sequence's prefix is no key of its own", () => {

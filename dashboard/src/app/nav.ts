@@ -45,7 +45,8 @@
 
 import type { GlyphName } from "@crewlethq/icons/glyphs";
 import { holdsAny, type Grant } from "~/lib/access.ts";
-import { KIND_LIST } from "~/lib/artifacts/words.ts";
+import { KIND_LIST, MAKE_ORDER, NEW_KIND_TITLES } from "~/lib/artifacts/words.ts";
+import type { ArtifactKind } from "~/protocol/index.ts";
 
 /** The workspaces: the sidebar's navigation rows, and the reader's own Account. */
 export type Workspace =
@@ -212,6 +213,58 @@ const BUDGETS: Section = {
   path: ["spend", "budgets"],
   hint: "Daily, weekly and monthly token limits",
 };
+
+/**
+ * What the palette says about each kind's create page, and the words a reader
+ * finds it by beside its title.
+ */
+const NEW_ARTIFACT_PAGES: Readonly<
+  Record<ArtifactKind, { icon: GlyphName; hint: string; keywords: readonly string[] }>
+> = {
+  doc: {
+    icon: "file-text",
+    hint: "Write a doc in Markdown, edit it in place and print it",
+    keywords: ["document", "write", "markdown"],
+  },
+  slides: {
+    icon: "presentation",
+    hint: "Make a slide deck to edit in place, present full screen and print",
+    keywords: ["new deck", "slides", "presentation"],
+  },
+  design: {
+    icon: "palette",
+    hint: "Ask an agent for screens and boards laid out on a canvas",
+    keywords: ["canvas", "mockup", "screens"],
+  },
+  dashboard: {
+    icon: "layout-dashboard",
+    hint: "Ask an agent for live figures from your company's data",
+    keywords: ["figures", "metrics", "chart"],
+  },
+  html: {
+    icon: "code",
+    hint: "Ask an agent for any page, run in a sandboxed frame",
+    keywords: ["page", "web page", "interactive"],
+  },
+  sheet: {
+    icon: "table",
+    hint: "Start a sheet, blank or from the Review sheet template",
+    keywords: ["spreadsheet", "review sheet", "template", "table"],
+  },
+};
+
+/**
+ * The create page of each kind, as sections of Artifacts reached from its
+ * Make row and New menu (`tab: false`), in the order they are offered there.
+ */
+const NEW_ARTIFACT_SECTIONS: readonly Section[] = MAKE_ORDER.map((kind) => ({
+  key: `new-${kind}`,
+  label: NEW_KIND_TITLES[kind],
+  path: ["artifacts", "new", kind],
+  ...NEW_ARTIFACT_PAGES[kind],
+  tab: false,
+  grants: ["artifacts"],
+}));
 
 /**
  * THE READER'S OWN, AND NO ROW: the user block at the sidebar's foot is the
@@ -616,28 +669,10 @@ export const WORKSPACES: WorkspaceRow[] = [
         hint: "Artifacts somebody shared with you, your team or the whole company",
         keywords: ["company", "by agents"],
       },
-      {
-        // AN ADDRESS AND A BUTTON, not a tab: the gallery's New starts it, and
-        // a reader arrives at Artifacts to look.
-        key: "new",
-        label: "New artifact",
-        icon: "plus",
-        path: ["artifacts", "new"],
-        hint: "Start a sheet, blank or from the Review sheet template, a doc or a slide deck",
-        keywords: [
-          "new sheet",
-          "new doc",
-          "document",
-          "review sheet",
-          "template",
-          "spreadsheet",
-          "new deck",
-          "slides",
-          "presentation",
-        ],
-        tab: false,
-        grants: ["artifacts"],
-      },
+      // EACH KIND'S CREATE PAGE IS AN ADDRESS, not a tab: the gallery's Make
+      // row and its New menu open them, and a reader arrives at Artifacts to
+      // look. Listed so the palette finds "new doc" and the trail names it.
+      ...NEW_ARTIFACT_SECTIONS,
     ],
   },
   {

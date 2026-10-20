@@ -3,6 +3,7 @@ package artifactsapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -20,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactserve"
 	"github.com/crewlet/crewlet/internal/artifactupload"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/costlimit"
 	"github.com/crewlet/crewlet/internal/objectives"
 	"github.com/crewlet/crewlet/internal/objstore"
 )
@@ -42,6 +44,8 @@ type Writes interface {
 	Unshare(ctx context.Context, c artifactsdomain.Call, id artifacts.ID, a artifacts.Audience) (
 		artifactsdomain.Written, error)
 	Transfer(ctx context.Context, c artifactsdomain.Call, id artifacts.ID, toSeat string) (
+		artifactsdomain.Written, error)
+	LinkWorkItem(ctx context.Context, c artifactsdomain.Call, id artifacts.ID, item string) (
 		artifactsdomain.Written, error)
 	Trash(ctx context.Context, c artifactsdomain.Call, id artifacts.ID) (artifactsdomain.Written, error)
 	Restore(ctx context.Context, c artifactsdomain.Call, id artifacts.ID) (artifactsdomain.Written, error)
@@ -66,6 +70,8 @@ type Pipeline interface {
 		artifactsdomain.Published, artifactupload.Report, error)
 	AddAsset(ctx context.Context, c artifactsdomain.Call, id artifacts.ID, upload, name string) (
 		artifactsdomain.Asset, error)
+	Check(ctx context.Context, c artifactsdomain.Call, kind artifacts.Kind, entry string,
+		files []artifactupload.CheckFile) (artifactupload.CheckReport, error)
 }
 
 // Objects is the object store a version's bytes are read back through, each
@@ -108,6 +114,14 @@ type Options struct {
 	// routes. REQUIRED.
 	Objects Objects
 
+	// WorkItems is the company's own tracker, asked for per request: the
+	// tracker comes up with the node's first company, which a node that
+	// booted with none meets after this surface is serving. It answers
+	// [ErrTrackerNotUp] before then and [ErrNoTracker] for a company whose
+	// work items another tracker keeps. REQUIRED: a link to a work item is
+	// refused unless the item is one the tracker holds.
+	WorkItems func() (WorkItems, error)
+
 	// Frames mints view frames. NIL IS A DEPLOYMENT WITH NO ARTIFACT ORIGIN
 	// (`api.artifacts.external_url` unset): a frame is refused naming the
 	// key an operator sets, and everything else is served.
@@ -131,9 +145,14 @@ type Service struct {
 	writes  Writes
 	uploads func() (Pipeline, error)
 	objects Objects
-	frames  Framer
-	ready   Beacon
-	pace    func() time.Time
+	// workItems is the tracker a link checks its item against.
+	workItems func() (WorkItems, error)
+	frames    Framer
+	ready     Beacon
+	pace      func() time.Time
+
+	// checks is the node's budget for page checks ([Service.check]).
+	checks *costlimit.Limiter
 
 	// decks, docs, boards and canvases are what this node read of each
 	// version for the dashboard, through the kind's format.
@@ -162,14 +181,18 @@ func New(opts Options) (*Service, error) {
 	case opts.Ready == nil:
 		return nil, errors.New("artifactsapi: no ready beacon: a frame's ready report is " +
 			"counted into the node's service objectives through it")
+	case opts.WorkItems == nil:
+		return nil, errors.New("artifactsapi: no tracker: a link to a work item is checked " +
+			"against the item the company's tracker holds")
 	}
 	pace := opts.PaceClock
 	if pace == nil {
 		pace = time.Now
 	}
 	return &Service{gate: opts.Gate, reads: opts.Reads, writes: opts.Writes, uploads: opts.Uploads,
-		objects: opts.Objects, frames: opts.Frames, ready: opts.Ready, pace: pace,
-		decks: newDeckCache(opts.Objects), docs: newDocCache(opts.Objects),
+		objects: opts.Objects, workItems: opts.WorkItems, frames: opts.Frames, ready: opts.Ready, pace: pace,
+		checks: newCheckLimiter(pace),
+		decks:  newDeckCache(opts.Objects), docs: newDocCache(opts.Objects),
 		boards: newBoardCache(opts.Objects), canvases: newCanvasCache(opts.Objects)}, nil
 }
 
@@ -218,6 +241,8 @@ func (s *Service) Routes(mux authz.Mux) error {
 		{"POST /artifacts/{id}/uploads", pre, s.intendPublish},
 		{patternTransfer, pre, s.transfer},
 		{"POST /artifacts", create, s.create},
+		{"GET /artifacts/starters/slides", pre, s.slidesStarters},
+		{"POST /artifacts/checks", create, s.check},
 		{"POST /artifacts/{id}/versions", pre, s.publish},
 		{"POST /artifacts/{id}/versions/{n}/restore", pre, s.restoreVersion},
 		{"PATCH /artifacts/{id}", pre, s.patch},
@@ -225,6 +250,7 @@ func (s *Service) Routes(mux authz.Mux) error {
 		{"PUT /artifacts/{id}/shares", pre, s.share},
 		{"DELETE /artifacts/{id}/shares/{audience...}", pre, s.unshare},
 		{"POST /artifacts/{id}/transfer", pre, s.transferOwnership},
+		{"POST /artifacts/{id}/work-items", pre, s.linkWorkItem},
 		{"DELETE /artifacts/{id}", pre, s.trash},
 		{"POST /artifacts/{id}/restore", pre, s.restore},
 		{"POST /artifacts/{id}/purge", purge, s.purge},
@@ -282,16 +308,14 @@ func pathVersion(w http.ResponseWriter, r *http.Request) (int, bool) {
 	return n, true
 }
 
-// workItemField bounds the work item a write names: a tracker key, which
-// confers nothing and is kept for the link alone.
-const maxWorkItemBytes = 64
-
 // checkWorkItem refuses a work item that could not be a tracker key: one
-// longer than any key, or one carrying a byte outside visible ASCII.
+// longer than any key ([artifacts.MaxWorkItemBytes]), or one carrying a byte
+// outside visible ASCII. A tracker key confers nothing and is kept for the
+// link alone.
 func checkWorkItem(item string) (string, error) {
 	item = strings.TrimSpace(item)
-	if len(item) > maxWorkItemBytes {
-		return "", errors.New("work_item is a tracker key, at most 64 bytes")
+	if len(item) > artifacts.MaxWorkItemBytes {
+		return "", fmt.Errorf("work_item is a tracker key, at most %d bytes", artifacts.MaxWorkItemBytes)
 	}
 	for i := 0; i < len(item); i++ {
 		if c := item[i]; c <= ' ' || c > '~' {

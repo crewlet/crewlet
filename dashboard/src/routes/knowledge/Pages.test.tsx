@@ -196,7 +196,7 @@ const outline = () => screen.getByRole("treegrid", { name: "Pages in Engineering
 /** The Create control of the level an add row closes, found by the row's own name. */
 const createIn = (where: string) =>
   within(within(outline()).getByRole("row", { name: `Create in ${where}` })).getByRole("button", {
-    name: "Create",
+    name: `Create in ${where}`,
   });
 const rowNamed = (name: string) =>
   within(outline())
@@ -330,6 +330,6 @@ test("Create is offered to a credential bound to no seat that the engine serves"
     acts: ["write_page"],
   });
   await settle();
-  const create = within(outline()).getByRole("button", { name: "Create" });
+  const create = within(outline()).getByRole("button", { name: /^Create in / });
   expect(create.getAttribute("aria-disabled")).not.toBe("true");
 });

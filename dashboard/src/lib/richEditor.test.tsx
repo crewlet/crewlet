@@ -22,7 +22,9 @@ import { describe, expect, test } from "vitest";
 import { canonicalMarkdown, roundTripMarkdown } from "@crewlethq/ui/RichEditorMarkdown";
 import { renderMarkdown } from "./markdown.ts";
 import { TEMPLATES } from "~/routes/knowledge/Composer.tsx";
+import { DOC_TEMPLATES } from "~/lib/artifacts/docTemplates.ts";
 import { repoRoot } from "~/test/engineFiles.ts";
+import { CASE_BOUND_MS } from "~/test/bounds.ts";
 
 const SKIP = new Set(["node_modules", ".git", "static", "dashboard"]);
 
@@ -37,6 +39,12 @@ function markdownUnder(dir: string): string[] {
   return out;
 }
 
+/** A document this long is rendered twice in the rewrite case, which takes time in its size. */
+const LONG_DOCUMENT_CHARS = 500_000;
+
+/** The rewrite case's bound for such a document: three times the suite's. */
+const LONG_DOCUMENT_BOUND_MS = 3 * CASE_BOUND_MS;
+
 const root = repoRoot();
 const fixtures = join(root, "dashboard", "src", "test", "markdown");
 const corpus: { name: string; text: string }[] = [
@@ -48,6 +56,7 @@ const corpus: { name: string; text: string }[] = [
     text: readFileSync(join(fixtures, name), "utf8"),
   })),
   ...TEMPLATES.map((t) => ({ name: `template ${t.value}`, text: t.body })),
+  ...DOC_TEMPLATES.map((t) => ({ name: `doc template ${t.key}`, text: t.body })),
 ];
 
 /** Elements whose box starts a new line of text. */
@@ -126,7 +135,12 @@ describe("the rich editor's round trip", () => {
     expect(roundTripMarkdown(text)).toBe(text);
   });
 
-  test.each(corpus)("$name rewritten whole reads as it did", ({ text }) => {
+  // A LONG DOCUMENT IS RENDERED TWICE HERE, and that is CPU work in its size:
+  // `docs/reference/api-endpoints.md` (about 700 KB) and the design doc took
+  // close to the suite's case bound under a loaded machine. Only those cases
+  // get the larger bound, so a hang anywhere else is still caught at the
+  // usual one.
+  const rewritten = (text: string) => {
     const before = seen(text);
     const after = seen(canonicalMarkdown(text));
     expect(after.elements).toEqual(before.elements);
@@ -136,5 +150,14 @@ describe("the rich editor's round trip", () => {
     expect(after.text.slice(Math.max(0, at - 80), at + 80)).toBe(
       before.text.slice(Math.max(0, at - 80), at + 80),
     );
-  });
+  };
+  const long = (c: { text: string }) => c.text.length >= LONG_DOCUMENT_CHARS;
+  test.each(corpus.filter((c) => !long(c)))("$name rewritten whole reads as it did", ({ text }) =>
+    rewritten(text),
+  );
+  test.each(corpus.filter(long))(
+    "$name rewritten whole reads as it did",
+    ({ text }) => rewritten(text),
+    LONG_DOCUMENT_BOUND_MS,
+  );
 });

@@ -194,6 +194,11 @@ func writeFailed(w http.ResponseWriter, r *http.Request, key, verb string, err e
 		moved      *artifactsdomain.VersionMoved
 		failClient = func(code httpjson.Code) { fail(http.StatusUnprocessableEntity, code) }
 	)
+	if key == "" {
+		// A CHECK IS NO OPERATION: it writes nothing, so there is no
+		// operation a retry would reuse, and an empty id would only be noise.
+		delete(detail, "op_id")
+	}
 	switch {
 	case errors.As(err, &moved):
 		// A MOVED HEAD IS ANSWERED BY THE PUBLISH ROUTES with the entry's

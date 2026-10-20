@@ -151,10 +151,10 @@ to the datastore and presence, used without a framework). It is served from
 `/_crewlet/kit/<version>/` on the artifact origin:
 
 ```html
-<link rel="stylesheet" href="/_crewlet/kit/0.34.1/kit.css">
-<link rel="stylesheet" href="/_crewlet/kit/0.34.1/content.css">
-<script src="/_crewlet/kit/0.34.1/theme.js"></script>
-<script type="module" src="/_crewlet/kit/0.34.1/kit.js"></script>
+<link rel="stylesheet" href="/_crewlet/kit/0.35.1/kit.css">
+<link rel="stylesheet" href="/_crewlet/kit/0.35.1/content.css">
+<script src="/_crewlet/kit/0.35.1/theme.js"></script>
+<script type="module" src="/_crewlet/kit/0.35.1/kit.js"></script>
 ```
 
 Link the version shown here, which is the newest this engine serves. The
@@ -295,9 +295,9 @@ of each tab in order, with the tabs and any images beside it.
   renderer, so a doc carries no script, no styles and no HTML that becomes
   markup. Images are files of the version, named by their path.
 - **Publish it** with `crewlet artifacts publish <dir>` (a `doc.json` or a
-  lone `.md` file makes it a `doc`), from the dashboard with New › Doc (one tab
-  you then edit in place, adding, renaming, reordering and removing tabs, each
-  save a version), or from an agent with
+  lone `.md` file makes it a `doc`), from the dashboard with New › Doc (one tab,
+  written on the create page or left to fill later, that you then edit in
+  place, adding, renaming, reordering and removing tabs, each save a version), or from an agent with
   `create_artifact`,
   `kind: "doc"` and either `content` (one tab) or `files` with
   `entry: "doc.json"`. Revise a tab with `edits` on its file against your base
@@ -332,8 +332,11 @@ style and bound; the short version:
   of the version named by their path (`images/team.png`), never URLs.
 - **Publish it** with `crewlet artifacts publish <dir>` (a `deck.json` makes it
   `slides`), or from an agent with `create_artifact`, `kind: "slides"` and
-  `files`. In the dashboard, New › Deck starts one from four example slides
-  you edit in place. Revise one slide at a time with `edits` on its file against your
+  `files`. In the dashboard, New › Slides starts one from a theme and the
+  slides you choose to open with (see
+  [Themes and layouts](../reference/slide-format.md#themes-and-layouts)), which
+  you edit in place. An agent's deck may name one of those themes as `theme` in
+  `deck.json`, so a person adds slides to it from that theme's layouts. Revise one slide at a time with `edits` on its file against your
   base version; `get_artifact` with `view: "outline"` lists the slides first.
 
 ## Writing a dashboard
@@ -422,6 +425,12 @@ body background.
   edits and deletes notes in the dashboard, and each save is a version that changes `canvas.json`
   alone. Read the head before you publish, and merge onto a layout a person
   changed rather than restoring your own.
+- **Building a design a person laid out.** A design begun on the dashboard's
+  New design page already holds the person's boards, each a placeholder page
+  under `boards/` that says the board's size and what it is for. Read the
+  outline, keep each board's path, place and size, and publish each board's
+  real page over its placeholder (an `edits` or a `files` publish on that
+  path), so the canvas the person drew is the one that fills in.
 - **Publish it** with `crewlet artifacts publish <dir>` (a `canvas.json` makes
   it a `design`), or from an agent with `create_artifact`, `kind: "design"`
   and `source: {sandbox: "dist"}` for a build, or `files`. The entry is

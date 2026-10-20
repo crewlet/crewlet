@@ -3,11 +3,13 @@ package artifactsapi_test
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -24,6 +26,10 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
+	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // THE RIG: the surface over fakes of everything it reads and writes, each
@@ -36,7 +42,8 @@ import (
 // with bob as viewer; the
 // page is shared with bob as viewer, with the ENG unit as editor and with sam
 // as editor. `scribe` is an agent owning `report`, led by lee. dana relates to
-// nothing, and ada is an administrator who relates to nothing either.
+// nothing, and ada is an administrator who relates to nothing either. The
+// tracker holds ENG-12, live, and ENG-9, removed.
 
 var (
 	page     = artifacts.IDFor("jane's page")
@@ -247,6 +254,10 @@ func (w *writes) Transfer(_ context.Context, c artifactsdomain.Call, id artifact
 	artifactsdomain.Written, error) {
 	return w.record("transfer", c, id, to)
 }
+func (w *writes) LinkWorkItem(_ context.Context, c artifactsdomain.Call, id artifacts.ID, item string) (
+	artifactsdomain.Written, error) {
+	return w.record("link", c, id, item)
+}
 func (w *writes) Trash(_ context.Context, c artifactsdomain.Call, id artifacts.ID) (artifactsdomain.Written, error) {
 	return w.record("trash", c, id, nil)
 }
@@ -269,6 +280,143 @@ func (w *writes) all() []call {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return append([]call(nil), w.calls...)
+}
+
+// workItems is the company's tracker: ENG-12 (formerly OPS-3, and by its id
+// `task-12`) is live, and ENG-9 was removed. down, when set, is what asking
+// for the tracker answers.
+type workItems struct {
+	mu    sync.Mutex
+	asked []string
+	fresh []statelog.Freshness
+	down  error
+
+	// log, when a case installs one ([workItems.behind]), is the tracker's
+	// own read authority every read goes through first, as the tracker's
+	// reader does: the framework's reader over a node whose applied
+	// position the case moves, so a floor it names is waited for and
+	// refused exactly as on a node, rather than as this fake would guess.
+	log *statelog.Reader
+}
+
+func (t *workItems) Task(ctx context.Context, ref string, _ tracker.DetailWants, fresh statelog.Freshness) (
+	tracker.TaskDetail, error) {
+	t.mu.Lock()
+	t.asked = append(t.asked, ref)
+	t.fresh = append(t.fresh, fresh)
+	log := t.log
+	t.mu.Unlock()
+	// THE WAIT HOLDS NO LOCK, as the reader's own holds nothing.
+	if log != nil {
+		if _, err := log.Read(ctx, fresh.Query(statelog.ScopeSet{}, false),
+			func(*sql.Tx) error { return nil }); err != nil {
+			return tracker.TaskDetail{}, err
+		}
+	}
+	switch ref {
+	case "ENG-12", "OPS-3", "task-12":
+		return tracker.TaskDetail{Task: tracker.Task{ID: "task-12", Key: "ENG-12",
+			FormerKeys: []string{"OPS-3"}}}, nil
+	case "ENG-9":
+		return tracker.TaskDetail{Task: tracker.Task{ID: "task-9", Key: "ENG-9",
+			Removed: &tracker.Tombstone{By: "jane", At: time.Unix(1_700_000_000, 0)}}}, nil
+	}
+	return tracker.TaskDetail{}, tracker.ErrNoTask
+}
+
+func (t *workItems) tracker() (artifactsapi.WorkItems, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.down != nil {
+		return nil, t.down
+	}
+	return t, nil
+}
+
+func (t *workItems) reads() []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return append([]string(nil), t.asked...)
+}
+
+// floors are the freshness every read of the tracker was asked at, in order.
+func (t *workItems) floors() []statelog.Freshness {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return append([]statelog.Freshness(nil), t.fresh...)
+}
+
+// behind puts the tracker on a node that has applied its log through at, and
+// answers that node's applied position for the case to move.
+func (t *workItems) behind(tb testing.TB, at statelog.Position) *appliedLog {
+	tb.Helper()
+	node, db := storetest.OpenEstate(tb, filepath.Join(tb.TempDir(), "node.db"), store.Options{}, 1)
+	tb.Cleanup(func() { _ = node.Close() })
+	applied := &appliedLog{at: at, moved: make(chan struct{}), waiting: make(chan statelog.Position, 8)}
+	log, err := statelogtest.LocalReaderOver(tracker.Domain{}, db, applied)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.log = log
+	return applied
+}
+
+// appliedLog is a node's applied position on the tracker's log, which only a
+// case moves: a wait for a position past it blocks until the case advances it
+// there, or the wait's own deadline passes.
+type appliedLog struct {
+	mu    sync.Mutex
+	at    statelog.Position
+	moved chan struct{}
+
+	// waiting receives every position a wait began blocking on, so a case
+	// knows a read is held rather than guessing with a sleep.
+	waiting chan statelog.Position
+}
+
+func (l *appliedLog) Committed() statelog.Position {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.at
+}
+
+func (l *appliedLog) WaitCommitted(ctx context.Context, p statelog.Position) error {
+	announced := false
+	for {
+		l.mu.Lock()
+		at, moved := l.at, l.moved
+		l.mu.Unlock()
+		if p.Packed() <= at.Packed() {
+			return nil
+		}
+		if !announced {
+			announced = true
+			select {
+			case l.waiting <- p:
+			default:
+			}
+		}
+		select {
+		case <-moved:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+func (l *appliedLog) WaitApplied(ctx context.Context, _ statelog.ScopeSet, p statelog.Position) error {
+	return l.WaitCommitted(ctx, p)
+}
+
+// advance applies the log through p.
+func (l *appliedLog) advance(p statelog.Position) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.at = p
+	close(l.moved)
+	l.moved = make(chan struct{})
 }
 
 // marks records the reader records a read leaves.
@@ -309,6 +457,8 @@ type pipeline struct {
 	calls2    []artifactsdomain.Call
 	transfers []string
 	upload    artifactupload.Upload
+	checks    [][]artifactupload.CheckFile
+	report    artifactupload.CheckReport
 	err       error
 }
 
@@ -368,6 +518,15 @@ func (p *pipeline) AddAsset(_ context.Context, c artifactsdomain.Call, id artifa
 	defer p.mu.Unlock()
 	p.note("asset", c)
 	return artifactsdomain.Asset{Artifact: id, Name: name}, p.err
+}
+
+func (p *pipeline) Check(_ context.Context, c artifactsdomain.Call, _ artifacts.Kind, _ string,
+	files []artifactupload.CheckFile) (artifactupload.CheckReport, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.note("check", c)
+	p.checks = append(p.checks, files)
+	return p.report, p.err
 }
 
 func (p *pipeline) verbs() []string {
@@ -484,19 +643,22 @@ type rig struct {
 	objects  *objects
 	framer   *framer
 	ready    *ready
+	work     *workItems
 	company  config.CompanyArtifacts
 }
 
 func newRig(t *testing.T, framed bool) *rig {
 	t.Helper()
 	g := &rig{t: t, estate: &estate{}, writes: &writes{}, marks: &marks{}, pipeline: &pipeline{},
-		objects: &objects{}, framer: &framer{minted: map[string]artifacts.TicketClaims{}}, ready: &ready{}}
+		objects: &objects{}, framer: &framer{minted: map[string]artifacts.TicketClaims{}}, ready: &ready{},
+		work: &workItems{}}
 	opts := artifactsapi.Options{
 		Gate: artifactsapi.Gate{Heads: g.estate, Chart: chart{}, Limits: limits, Marks: g.marks,
 			Roster: roster{}, Company: func() config.CompanyArtifacts { return g.company }},
 		Reads: g.estate, Writes: g.writes, Objects: g.objects,
-		Uploads: func() (artifactsapi.Pipeline, error) { return g.pipeline, nil },
-		Ready:   g.ready,
+		Uploads:   func() (artifactsapi.Pipeline, error) { return g.pipeline, nil },
+		WorkItems: g.work.tracker,
+		Ready:     g.ready,
 	}
 	if framed {
 		opts.Frames = g.framer

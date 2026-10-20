@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 
+import { sheetRules } from "../test/sheets.ts";
 import { modules } from "../test/source.ts";
 
 /**
@@ -956,16 +957,68 @@ describe("every class the dashboard names", () => {
 //
 // A missing import has no other symptom: nothing errors, nothing warns, and
 // the page renders — just wrongly, and only where somebody looks.
-test("every stylesheet is imported by the entry point", () => {
+//
+// ONE SHEET IS A SCREEN'S OWN, imported by that screen's module so it arrives
+// with the screen's chunk rather than in the first paint: `create.css`, the
+// create pages'. It is appended after the entry's sheets, so each of its rules
+// must select a class of the screen it arrives with, or a tie it wins would
+// change other screens from the moment a reader first opened that one.
+const LAZY_SHEETS: Readonly<Record<string, { importer: string; owns: RegExp }>> = {
+  "create.css": {
+    importer: "routes/artifacts/new/CreateShell.tsx",
+    owns: /\.(?:[a-z]+-create|artifact-who)\b/,
+  },
+};
+
+test("every stylesheet is imported by the entry point, or by the screen it belongs to", () => {
   const entry = readFileSync(join(SRC, "main.tsx"), "utf8");
   const found = readdirSync(join(SRC, "styles"))
     .filter((f) => f.endsWith(".css"))
     .sort();
   expect(found.length).toBeGreaterThan(0);
-  const missing = found.filter((f) => !entry.includes(`./styles/${f}`));
+  const missing = found.filter((f) => {
+    const lazy = LAZY_SHEETS[f];
+    if (!lazy) return !entry.includes(`./styles/${f}`);
+    return (
+      entry.includes(`styles/${f}`) ||
+      !readFileSync(join(SRC, lazy.importer), "utf8").includes(`import "~/styles/${f}";`)
+    );
+  });
   expect(
     missing,
-    "these stylesheets are in the tree and nothing imports them, so none of " +
-      "their rules reach the browser",
+    "these stylesheets are not imported where they belong: by main.tsx, or, for " +
+      "a screen's own sheet, by its screen's module and not by main.tsx",
   ).toEqual([]);
+});
+
+/** A selector list's selectors: split at the commas outside every parenthesis. */
+function splitSelectors(list: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let from = 0;
+  for (let i = 0; i < list.length; i++) {
+    if (list[i] === "(") depth++;
+    else if (list[i] === ")") depth--;
+    else if (list[i] === "," && depth === 0) {
+      out.push(list.slice(from, i).trim());
+      from = i + 1;
+    }
+  }
+  out.push(list.slice(from).trim());
+  return out;
+}
+
+test("a screen's own sheet selects only that screen's classes", () => {
+  for (const [file, { owns }] of Object.entries(LAZY_SHEETS)) {
+    const rules = sheetRules().filter((r) => r.file === file);
+    expect(rules.length, `${file} holds no rules`).toBeGreaterThan(0);
+    const foreign = rules
+      .flatMap((r) => splitSelectors(r.selector))
+      .filter((selector) => !owns.test(selector));
+    expect(
+      foreign,
+      `${file} arrives after the entry's sheets, so these selectors, which name ` +
+        "no class of its screen, would win ties on other screens once it loads",
+    ).toEqual([]);
+  }
 });

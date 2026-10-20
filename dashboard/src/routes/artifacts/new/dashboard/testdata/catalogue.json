@@ -1,0 +1,318 @@
+[
+  {
+    "name": "tracker.items",
+    "domain": "tracker",
+    "summary": "Work items from the tracker, one row each. `scope` narrows them to the viewer's own (`mine`), the viewer's queue, their priorities, the unassigned triage list, the blocked or the overdue work, each resolved for whoever is viewing.",
+    "access": "people and agents holding the tracker; anybody else is told they cannot read it",
+    "params": [
+      {
+        "key": "scope",
+        "type": "enum",
+        "summary": "whose work: all, or one of the viewer's own lists",
+        "enum": [
+          "all",
+          "mine",
+          "queue",
+          "priorities",
+          "triage",
+          "blocked",
+          "overdue"
+        ],
+        "default": "all"
+      },
+      {
+        "key": "project",
+        "type": "text",
+        "summary": "a project key; absent reads every project",
+        "max_bytes": 32
+      },
+      {
+        "key": "status_group",
+        "type": "enum",
+        "summary": "one status group; absent reads the open work",
+        "enum": [
+          "not_started",
+          "active",
+          "done",
+          "closed"
+        ]
+      },
+      {
+        "key": "limit",
+        "type": "number",
+        "summary": "the most rows answered",
+        "min": 1,
+        "max": 500,
+        "default": "100"
+      }
+    ],
+    "columns": [
+      {
+        "key": "key",
+        "type": "text",
+        "label": "Key"
+      },
+      {
+        "key": "title",
+        "type": "text",
+        "label": "Title"
+      },
+      {
+        "key": "status",
+        "type": "text",
+        "label": "Status",
+        "words": "tracker_status"
+      },
+      {
+        "key": "status_group",
+        "type": "text",
+        "label": "Status group",
+        "words": "tracker_status_group"
+      },
+      {
+        "key": "priority",
+        "type": "text",
+        "label": "Priority",
+        "words": "tracker_priority"
+      },
+      {
+        "key": "assignee",
+        "type": "text",
+        "label": "Assignee"
+      },
+      {
+        "key": "project",
+        "type": "text",
+        "label": "Project"
+      },
+      {
+        "key": "due",
+        "type": "date",
+        "label": "Due"
+      },
+      {
+        "key": "updated",
+        "type": "date",
+        "label": "Updated"
+      },
+      {
+        "key": "points",
+        "type": "number",
+        "label": "Points"
+      },
+      {
+        "key": "blocked",
+        "type": "boolean",
+        "label": "Blocked"
+      },
+      {
+        "key": "overdue",
+        "type": "boolean",
+        "label": "Overdue"
+      }
+    ],
+    "key": "key",
+    "max_rows": 500
+  },
+  {
+    "name": "tracker.workload",
+    "domain": "tracker",
+    "summary": "Open work per assignee across every project: how much each person or agent is carrying.",
+    "access": "people and agents holding the tracker; anybody else is told they cannot read it",
+    "params": [
+      {
+        "key": "unit",
+        "type": "text",
+        "summary": "a team's key or name; absent reads everybody",
+        "max_bytes": 64
+      }
+    ],
+    "columns": [
+      {
+        "key": "handle",
+        "type": "text",
+        "label": "Assignee"
+      },
+      {
+        "key": "open",
+        "type": "number",
+        "label": "Open"
+      },
+      {
+        "key": "points",
+        "type": "number",
+        "label": "Points"
+      },
+      {
+        "key": "blocked",
+        "type": "number",
+        "label": "Blocked"
+      },
+      {
+        "key": "overdue",
+        "type": "number",
+        "label": "Overdue"
+      },
+      {
+        "key": "unscheduled",
+        "type": "number",
+        "label": "Unscheduled"
+      }
+    ],
+    "key": "handle",
+    "max_rows": 500
+  },
+  {
+    "name": "spend.seats",
+    "domain": "spend",
+    "summary": "Token spend per seat over a window of company days, or over the live window when `days` is absent.",
+    "access": "everybody the company admits: spend is the overview",
+    "params": [
+      {
+        "key": "days",
+        "type": "number",
+        "summary": "company days ending today; absent reads the live window",
+        "min": 1,
+        "max": 90
+      }
+    ],
+    "columns": [
+      {
+        "key": "handle",
+        "type": "text",
+        "label": "Seat"
+      },
+      {
+        "key": "name",
+        "type": "text",
+        "label": "Name"
+      },
+      {
+        "key": "person",
+        "type": "boolean",
+        "label": "Person"
+      },
+      {
+        "key": "total_tokens",
+        "type": "number",
+        "label": "Tokens"
+      },
+      {
+        "key": "input_tokens",
+        "type": "number",
+        "label": "Input"
+      },
+      {
+        "key": "output_tokens",
+        "type": "number",
+        "label": "Output"
+      },
+      {
+        "key": "calls",
+        "type": "number",
+        "label": "Calls"
+      }
+    ],
+    "key": "handle",
+    "signal": "tokens",
+    "max_rows": 500
+  },
+  {
+    "name": "spend.daily",
+    "domain": "spend",
+    "summary": "Token spend per company day, one row per day and band, banded by `group` (the busiest bands named, the rest as Other).",
+    "access": "everybody the company admits: spend is the overview",
+    "params": [
+      {
+        "key": "days",
+        "type": "number",
+        "summary": "company days ending today",
+        "min": 1,
+        "max": 90,
+        "default": "14"
+      },
+      {
+        "key": "group",
+        "type": "enum",
+        "summary": "what a band is",
+        "enum": [
+          "seat",
+          "phase",
+          "model",
+          "provider",
+          "unit",
+          "worker"
+        ],
+        "default": "seat"
+      }
+    ],
+    "columns": [
+      {
+        "key": "day",
+        "type": "date",
+        "label": "Day"
+      },
+      {
+        "key": "band",
+        "type": "text",
+        "label": "Band"
+      },
+      {
+        "key": "total_tokens",
+        "type": "number",
+        "label": "Tokens"
+      }
+    ],
+    "key": "",
+    "signal": "tokens",
+    "max_rows": 450
+  },
+  {
+    "name": "agents.status",
+    "domain": "agents",
+    "summary": "Every agent seat and what it is doing now: working, waiting on a person, stopped or idle.",
+    "access": "everybody the company admits: agent status is the overview",
+    "params": [],
+    "columns": [
+      {
+        "key": "handle",
+        "type": "text",
+        "label": "Seat"
+      },
+      {
+        "key": "name",
+        "type": "text",
+        "label": "Name"
+      },
+      {
+        "key": "activity",
+        "type": "text",
+        "label": "Activity",
+        "words": "agent_activity"
+      },
+      {
+        "key": "phase",
+        "type": "text",
+        "label": "Phase"
+      },
+      {
+        "key": "paused",
+        "type": "boolean",
+        "label": "Paused"
+      },
+      {
+        "key": "last_turn_at",
+        "type": "date",
+        "label": "Last turn"
+      },
+      {
+        "key": "last_outcome",
+        "type": "text",
+        "label": "Last outcome"
+      }
+    ],
+    "key": "handle",
+    "signal": "agents",
+    "max_rows": 1000
+  }
+]

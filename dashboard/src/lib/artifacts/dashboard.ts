@@ -17,6 +17,7 @@ import type {
   DashboardColumnType,
   DashboardDataset,
   DashboardDatasetAnswer,
+  DashboardReading,
   DashboardFreshness,
   DashboardNumberFormat,
   DashboardParam,
@@ -336,6 +337,16 @@ export interface DatasetState {
   received: number;
 }
 
+/**
+ * What a figure says when its rows could not be read for a reason the engine
+ * did not answer as the dataset's own status: a node that could not reach
+ * the domain, or a route that answered nothing. One sentence of a reader's,
+ * never the route's detail, which names a path and a node rather than
+ * anything a person can act on. A board's datasets and New dashboard's
+ * previews both say it.
+ */
+export const ROWS_UNREAD = "These rows could not be read right now. Refresh to try again.";
+
 /** A dataset's state as the design system draws it. */
 export function datasetStatus(
   d: Pick<DashboardBoardDataset, "source" | "freshness">,
@@ -467,12 +478,12 @@ export function definitionWords(
 }
 
 /** A rows count as the rail says it. */
-export function rowsWords(answer: DashboardDatasetAnswer | null | undefined): number | undefined {
+export function rowsWords(answer: DashboardReading | null | undefined): number | undefined {
   return answer?.status === "ready" ? (answer.table?.rows.length ?? 0) : undefined;
 }
 
 /** A dataset's rows as CSV cells, in its columns' order, each value as the spreadsheet should hold it. */
-export function csvOf(answer: DashboardDatasetAnswer): {
+export function csvOf(answer: DashboardReading): {
   header: string[];
   rows: DashboardValue[][];
 } {

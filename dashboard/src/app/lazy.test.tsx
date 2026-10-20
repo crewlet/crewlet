@@ -65,7 +65,17 @@ afterEach(() => {
 
 describe("which chunk draws a screen", () => {
   test("every workspace is a chunk, and the org editor is one of its own", () => {
-    expect([...CHUNKS].sort()).toEqual([...WORKSPACES.map((ws) => ws.key), "org"].sort());
+    expect([...CHUNKS].sort()).toEqual(
+      [...WORKSPACES.map((ws) => ws.key), "org", "palette"].sort(),
+    );
+  });
+
+  // EVERY SCREEN OPENS THE PALETTE WITH A KEY, so it is the first chunk the
+  // idle prefetch fetches: a ⌘K pressed after the first idle moment finds it in.
+  test("the palette is a chunk of its own, and the first one prefetched", async () => {
+    expect(CHUNKS[0]).toBe("palette");
+    const module = await loadChunk("palette");
+    expect(typeof module.CommandPalette).toBe("function");
   });
 
   test("a screen is drawn by its workspace's chunk, the builder by the org chunk", () => {
@@ -75,6 +85,14 @@ describe("which chunk draws a screen", () => {
     expect(edit.resolved && chunkOf(edit)).toBe("org");
     expect(chart.resolved && chunkOf(chart)).toBe("agents");
     expect(item.resolved && chunkOf(item)).toBe("work");
+  });
+
+  test("each kind's create page is a chunk of its own, and none is prefetched", () => {
+    const doc = resolve(["artifacts", "new", "doc"]);
+    const html = resolve(["artifacts", "new", "html"]);
+    expect(doc.resolved && chunkOf(doc)).toBe("new-doc");
+    expect(html.resolved && chunkOf(html)).toBe("new-html");
+    expect(CHUNKS.some((c) => c.startsWith("new-"))).toBe(false);
   });
 
   // Every place the sidebar and the palette can send a reader has a chunk that
@@ -411,8 +429,11 @@ describe("the split", () => {
   // into the chunk every reader downloads first: the sidebar's and the
   // palette's `artifactPath` once brought every artifact write and read with
   // it. Such a module is named here, and the entry's static graph, walked
-  // from `main.tsx`, must not reach it.
-  const SCREEN_ONLY = ["lib/artifacts/api.ts"];
+  // from `main.tsx`, must not reach it. So is a LAYER the frame mounts only
+  // while open and loads as a chunk of its own: the command palette, the
+  // largest single piece of the frame, which one static import of it would
+  // put back into the first paint.
+  const SCREEN_ONLY = ["lib/artifacts/api.ts", "app/palette/Palette.tsx"];
 
   test("the entry's static graph reaches no module only a screen needs", () => {
     const byPath = new Map(modules().map((m) => [m.path, m]));

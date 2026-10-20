@@ -35,7 +35,7 @@ import { EllipsisGlyph } from "@crewlethq/icons/glyphs";
 import type {
   DashboardBoardDataset,
   DashboardColumn,
-  DashboardDatasetAnswer,
+  DashboardReading,
   DashboardRow,
   DashboardValue,
   DashboardWidget as Widget,
@@ -79,7 +79,7 @@ export interface DashboardWidgetProps {
   boardTitle: string;
   widget: Widget;
   dataset: DashboardBoardDataset | undefined;
-  answer: DashboardDatasetAnswer | null;
+  answer: DashboardReading | null;
   status: DatasetStatus;
   detail: string | undefined;
   asOf: string | undefined;
@@ -91,6 +91,11 @@ export interface DashboardWidgetProps {
    * every number of the row starts on one line.
    */
   inRow?: boolean;
+  /**
+   * The frame's own controls in place of the export menu: a builder's Add,
+   * where the figure is a suggestion and not yet a board's.
+   */
+  actions?: ReactNode;
 }
 
 export function DashboardWidget({
@@ -104,6 +109,7 @@ export function DashboardWidget({
   onCite,
   onFocus,
   inRow = false,
+  actions: own,
 }: DashboardWidgetProps) {
   const toast = useToast();
   const figure = useRef<HTMLDivElement>(null);
@@ -148,19 +154,22 @@ export function DashboardWidget({
       });
     }
   };
-  const actions = ready ? (
-    <Menu
-      label={`Export ${title || "this widget"}`}
-      icon={<EllipsisGlyph size="sm" />}
-      align="end"
-      items={[
-        { key: "csv", label: "Download CSV", onSelect: saveCsv },
-        ...(CHARTS.has(widget.type)
-          ? [{ key: "png", label: "Download PNG", onSelect: () => void savePng() }]
-          : []),
-      ]}
-    />
-  ) : undefined;
+  const actions =
+    own !== undefined ? (
+      own
+    ) : ready ? (
+      <Menu
+        label={`Export ${title || "this widget"}`}
+        icon={<EllipsisGlyph size="sm" />}
+        align="end"
+        items={[
+          { key: "csv", label: "Download CSV", onSelect: saveCsv },
+          ...(CHARTS.has(widget.type)
+            ? [{ key: "png", label: "Download PNG", onSelect: () => void savePng() }]
+            : []),
+        ]}
+      />
+    ) : undefined;
 
   return (
     <WidgetFrame

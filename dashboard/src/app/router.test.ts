@@ -457,6 +457,22 @@ describe("the resolver", () => {
     expect(resolve(["artifacts", "constructor"]).resolved).toBe(false);
   });
 
+  // EVERY KIND IS MADE ON ITS OWN PAGE, and the bare `new` (an earlier link's,
+  // with `?kind=`) resolves so the frame can rewrite it to one.
+  test("a new artifact's address names its kind", () => {
+    expect(resolve(["artifacts", "new", "doc"])).toMatchObject({
+      screen: "new-artifact",
+      kind: "doc",
+    });
+    expect(resolve(["artifacts", "new", "html"])).toMatchObject({
+      screen: "new-artifact",
+      kind: "html",
+    });
+    expect(resolve(["artifacts", "new"])).toMatchObject({ screen: "new-artifact", kind: null });
+    expect(resolve(["artifacts", "new", "deck"]).resolved).toBe(false);
+    expect(resolve(["artifacts", "new", "doc", "x"]).resolved).toBe(false);
+  });
+
   test("a key is a project, a key with a number or a uuid an item, and nothing else is", () => {
     expect(resolve(["work", "ENG"])).toMatchObject({ screen: "project", key: "ENG" });
     expect(resolve(["work", "ENG-42"])).toMatchObject({ screen: "item", id: "ENG-42" });
@@ -599,6 +615,7 @@ describe("the breadcrumb", () => {
       ["agents", "teams", "Platform"],
       ["knowledge", "pages", "0f0f0f0f-1111-4222-8333-444455556666"],
       ["knowledge", "new"],
+      ["artifacts", "new", "sheet"],
       ["live", "turns", "t-1"],
       ["settings", "config", "revisions", "r-1"],
       ["settings", "backups", "tracker"],
@@ -626,6 +643,11 @@ describe("the breadcrumb", () => {
       ["Artifact", false],
     ]);
     expect(crumbsFor(["artifacts", id], { [id]: "Q4 roadmap" }).at(-1)?.label).toBe("Q4 roadmap");
+    expect(crumbsFor(["artifacts", "new", "doc"]).map((c) => c.label)).toEqual([
+      "Artifacts",
+      "New doc",
+    ]);
+    expect(crumbsFor(["artifacts", "new", "slides"]).at(-1)?.label).toBe("New slide deck");
   });
 
   // AND EVERY OTHER CRUMB IS ONE, or the trail is a label rather than an

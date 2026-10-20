@@ -286,6 +286,33 @@ can change none of it.
 
 ---
 
+## Work items
+
+A tracker work item's **Artifacts** panel lists every artifact made or linked
+for it, read from the artifacts' own history (`GET /artifacts?work_item=ENG-12`):
+
+- **A write made for an item names it.** A create, a publish or a rollback that
+  carries `work_item` (or an agent's turn charged to the item) stamps the key on
+  its history row, and that row lists the artifact on the item.
+- **An artifact that already exists is linked** with `POST
+  /artifacts/{id}/work-items`, which records one history row filed under the
+  item and changes nothing else about the artifact. The dashboard's create pages
+  use it to make a design or a dashboard first and file the task for it after.
+- **A link needs both halves.** The caller must be able to read the artifact
+  (any role, viewer and above; the admin path is recorded as every elevated
+  read is), and must be able to change the item (`update_work_item`, the
+  tracker's own decision). The item must be one the company's tracker holds and
+  not removed, and the link is made under its current key, so an id or a
+  former key links where the panel looks.
+- **A link is made once.** A retry under the same `Idempotency-Key` is the same
+  operation, and a link to an item the artifact's history already names answers
+  success and writes nothing.
+- **Only an applied row counts.** A write the log refused (a link that reached a
+  trashed artifact, a publish over a moved head) lists the artifact on nothing,
+  and the panel reads the history's retention window (a year).
+
+---
+
 ## Serving
 
 An artifact runs on an **origin that holds no credential**. The dashboard acts
@@ -698,6 +725,12 @@ holds titles and stickies beside them, and one `.html` file per board with its
 own scripts and styles. [Authoring Artifacts](../guides/artifact-authoring.md#writing-a-design)
 has the format.
 
+- **Begun from a layout in the dashboard.** A person lays out the boards a
+  design needs (their names, sizes, places and what each is for) on its
+  create page, and the engine publishes that layout as the design's first
+  version: `canvas.json` and one placeholder page per board under `boards/`,
+  saying the board's size and brief, until an agent publishes the board's
+  real page over it (`canvasformat.Starter`).
 - **Held to its format at publish.** The canvas is read strictly
   (`internal/artifacts/canvasformat`): a field it does not know, a bound
   passed, a board naming no page of the version, or a page no board frames

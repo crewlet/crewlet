@@ -1015,7 +1015,7 @@ async function attempt(method, path, options) {
 	let encoded;
 	if (body !== void 0) {
 		if (contentType && !isJson(contentType)) {
-			if (typeof body !== "string") throw new TypeError(`rest.request: a ${contentType} body must be a string`);
+			if (typeof body !== "string" && !(body instanceof Blob)) throw new TypeError(`rest.request: a ${contentType} body must be a string or a Blob`);
 			encoded = body;
 		} else encoded = JSON.stringify(body);
 	}
@@ -1203,6 +1203,15 @@ var rest = {
 	putText: (path, value) => bodyOf("PUT", path, {
 		body: value,
 		contentType: "text/plain; charset=utf-8"
+	}),
+	/**
+	* A file's bytes as the body, under the file's own type (or
+	* `application/octet-stream` where the browser knows none): an artifact's
+	* picture moving through the engine's transfer route.
+	*/
+	putBytes: (path, value) => bodyOf("PUT", path, {
+		body: value,
+		contentType: value.type || "application/octet-stream"
 	}),
 	del: (path, body, headers) => bodyOf("DELETE", path, {
 		body,

@@ -77,6 +77,11 @@ type run struct {
 	// counts are the composed manifest's files by where their bytes came
 	// from, nil until it is composed.
 	counts *FileCounts
+
+	// dry is a check ([Service.Check]): it judges the files and writes
+	// nothing, so a CDN file is named where its copy would be served and
+	// never fetched.
+	dry bool
 }
 
 // pending is one file of the new version, as the run assembles it.
@@ -767,7 +772,7 @@ func (r *run) resolver(ctx context.Context, from string, depth int) func(lint.Re
 		if err != nil {
 			return "", err
 		}
-		if !r.vendored[local] {
+		if !r.vendored[local] && !r.dry {
 			if err := r.vendorFile(ctx, ref, local, depth); err != nil {
 				return "", err
 			}

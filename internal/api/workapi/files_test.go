@@ -25,6 +25,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -846,6 +847,33 @@ func TestADownloadNoDataNodeServedIsUnavailable(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), "data-b") {
 		t.Errorf("the router's detail reached the client: %s", rec.Body.String())
+	}
+}
+
+// A DOWNLOAD FLOORED ON ANOTHER LOG IS THE REQUEST'S MISTAKE. The reader
+// refuses a `min_position` on another domain's log before it waits for
+// anything, and every node refuses it the same, so it is `400 bad_params`
+// naming the log, as every read surface answers it: never a fault of this
+// node.
+//
+// Mutation: drop the foreign-position arm from readFailed and the download is
+// a `500 internal_error`.
+func TestADownloadFlooredOnAnotherLogIsBadParams(t *testing.T) {
+	t.Parallel()
+	fake := newFakeFiles(t)
+	floor := statelog.Position{Stream: topics.PagesLogStream, Generation: 1, Seq: 4}
+	fake.readErr = fmt.Errorf("this read's floor: %w", floor.On(topics.TrackerLogStream))
+	s := filesSurface(t, fake, chart{})
+	rec := httptest.NewRecorder()
+	if aborted := s.download(rec); aborted != nil {
+		t.Fatal(aborted)
+	}
+	if rec.Code != http.StatusBadRequest ||
+		answerOf(t, rec)["error"] != string(httpjson.CodeBadParams) {
+		t.Fatalf("a download floored on another log answered %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), topics.PagesLogStream) {
+		t.Errorf("the refusal does not name the log the floor is on: %s", rec.Body.String())
 	}
 }
 

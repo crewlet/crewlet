@@ -2,6 +2,7 @@ package artifactsapi
 
 import (
 	"net/http"
+	"sync"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/artifacts"
@@ -9,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts/dashspec"
 	"github.com/crewlet/crewlet/internal/artifacts/docindex"
 	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
+	"github.com/crewlet/crewlet/internal/authz"
 )
 
 // HOW THE DASHBOARD DRAWS A NATIVE KIND: it never reads a file's markup. The
@@ -141,4 +143,55 @@ func (s *Service) outline(w http.ResponseWriter, r *http.Request) {
 	case artifacts.FormatNone:
 	}
 	httpjson.Write(w, http.StatusOK, out)
+}
+
+// SlidesStartersAnswer is what a deck can begin from (`GET
+// /artifacts/starters/slides`): every theme, drawn as a deck of every layout
+// through the format a publish is held to, the layouts in a picker's order and
+// the plan a starter opens with when it names none. The create page draws its
+// theme picker and its preview from it, and the deck editor adds a slide from
+// the sample of the theme its deck names, so neither parses a slide's markup.
+type SlidesStartersAnswer struct {
+	Themes  []SlidesStarterTheme `json:"themes"`
+	Layouts []slideformat.Layout `json:"layouts"`
+	Default slideformat.Plan     `json:"default"`
+}
+
+// SlidesStarterTheme is one theme and its sample deck.
+type SlidesStarterTheme struct {
+	slideformat.Theme
+	Sample slideformat.Deck `json:"sample"`
+}
+
+// slidesStarters is the answer, composed once: the themes and layouts are the
+// engine's own, fixed for the life of the process.
+var slidesStarters = sync.OnceValues(func() (SlidesStartersAnswer, error) {
+	themes := slideformat.Themes()
+	out := SlidesStartersAnswer{Themes: make([]SlidesStarterTheme, len(themes)),
+		Layouts: slideformat.Layouts(), Default: slideformat.DefaultPlan()}
+	for i, t := range themes {
+		sample, err := slideformat.Sample(t)
+		if err != nil {
+			return SlidesStartersAnswer{}, err
+		}
+		out.Themes[i] = SlidesStarterTheme{Theme: t, Sample: sample}
+	}
+	return out, nil
+})
+
+// slidesStarters answers what a deck can begin from, to anyone who may list
+// artifacts: it is the engine's own content, the same for every caller.
+func (s *Service) slidesStarters(w http.ResponseWriter, r *http.Request) {
+	if _, ok := caller(w, r, authz.ActionArtifactList); !ok {
+		return
+	}
+	answer, err := slidesStarters()
+	if err != nil {
+		// THE TESTS HOLD EVERY THEME TO THE FORMAT; a failure here is a
+		// broken build, answered as the engine's fault rather than hidden.
+		log.ErrorContext(r.Context(), "artifacts_slides_starters_unreadable", "error", err.Error())
+		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, answer)
 }

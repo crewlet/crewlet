@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts/docindex"
 	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/artifactupload"
 	"github.com/crewlet/crewlet/internal/clientsource"
 )
 
@@ -20,7 +21,8 @@ import (
 // The gallery filters by kind and scope and sorts by what the listing sorts
 // by, the share dialog grants the roles a share may hold to the audiences a
 // share may name, the viewer embeds a frame by the origin mode the engine
-// minted it in, and the presence chrome draws what a member is doing. Every
+// minted it in, the presence chrome draws what a member is doing, and the
+// history and the company trail word every op a history row is filed under. Every
 // one of those is a closed set the engine owns, so `contract/artifacts.ts`
 // declares each once and this holds it: a value the engine grew that the
 // dashboard lacks is a kind it cannot draw or a role nobody can grant; one the
@@ -40,6 +42,7 @@ func TestTheDashboardSpeaksTheArtifactsVocabulary(t *testing.T) {
 		"PRESENCE_ACTIVITIES":   names(artifacts.PresenceActivities),
 		"ARTIFACT_LIST_SCOPES":  names(artifactsdomain.ListScopes),
 		"ARTIFACT_LIST_SORTS":   names(artifactsdomain.ListSorts),
+		"ARTIFACT_HISTORY_OPS":  names(artifactsdomain.HistoryOps),
 	} {
 		body, err := clientsource.Literal(tree, name)
 		if err != nil {
@@ -110,8 +113,12 @@ func TestTheDashboardBoundsArtifactTextAtTheEnginesCaps(t *testing.T) {
 		"ARTIFACT_ICON_MAX_BYTES":        artifacts.MaxIconBytes,
 		"ARTIFACT_LABEL_MAX_BYTES":       artifacts.MaxLabelBytes,
 		"PRESENCE_FRAMES_PER_SECOND":     artifacts.PresenceClientRate,
+		"ARTIFACT_CHECK_MAX_FILES":       artifactupload.MaxCheckFiles,
+		"ARTIFACT_CHECK_MAX_BYTES":       artifactupload.MaxCheckBytes,
 		"DOC_MAX_TABS":                   docindex.MaxTabs,
 		"DOC_TAB_TITLE_MAX_BYTES":        docindex.MaxTitleBytes,
+		"DECK_PLAN_MAX_SLIDES":           slideformat.MaxPlanSlides,
+		"DECK_SLIDE_TITLE_MAX_BYTES":     slideformat.MaxSlideTitleBytes,
 		"ARTIFACT_TRASH_RETENTION_DAYS":  int(artifacts.TrashRetention / (24 * time.Hour)),
 	} {
 		raw, err := clientsource.Scalar(clientsource.Tree(t), name)
@@ -209,7 +216,10 @@ func TestTheDashboardDrawsTheBoardFormat(t *testing.T) {
 		}
 	}
 	for name, want := range map[string]int{"DASHBOARD_COLUMNS": artifacts.DashboardColumns,
-		"DASHBOARD_MIN_REFRESH_SECONDS": artifacts.MinRefreshSeconds} {
+		"DASHBOARD_MIN_REFRESH_SECONDS": artifacts.MinRefreshSeconds,
+		"DASHBOARD_MAX_WIDGETS":         artifacts.MaxDashboardWidgets,
+		"DASHBOARD_MAX_DATASETS":        artifacts.MaxDashboardDatasets,
+		"DASHBOARD_MAX_TABLE_COLUMNS":   artifacts.MaxTableColumns} {
 		got, err := clientsource.Scalar(tree, name)
 		if err != nil || got != strconv.Itoa(want) {
 			t.Errorf("%s is %q (%v), want %d", name, got, err, want)

@@ -2,4 +2,3 @@
 
 export { ArtifactGallery } from "./Gallery.tsx";
 export { ArtifactPage } from "./ArtifactPage.tsx";
-export { NewArtifact } from "./NewArtifact.tsx";

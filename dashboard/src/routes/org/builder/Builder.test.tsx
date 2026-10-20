@@ -209,7 +209,7 @@ describe("the posture table", () => {
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
     await waitFor(() => expect(liveRegion().textContent).toContain("Editing is paused"));
 
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add to the organization" }));
     const menu = await screen.findByRole("menu", { name: "Add to the organization" });
     for (const name of ["Add unit", "Add agent seat", "Add human seat"]) {
       expect(within(menu).getByRole("menuitem", { name }).getAttribute("aria-disabled")).toBe(
@@ -287,7 +287,7 @@ describe("the views the builder hosts", () => {
   test("an add is handed to the structure chart rather than opened over it", async () => {
     mountBuilder({ engine: new Engine(company()) });
     await screen.findByText("Drawing the structure chart");
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add to the organization" }));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Add agent seat" }));
     expect(await screen.findByText("Adding agent to the company")).toBeDefined();
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -306,7 +306,7 @@ describe("the views the builder hosts", () => {
   test("an add asked from the table or the reporting chart is a dialog", async () => {
     mountBuilder({ engine: new Engine(company()), hash: "#/agents/edit?view=table" });
     await screen.findByText("No problems");
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add to the organization" }));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Add agent seat" }));
     expect(await screen.findByRole("dialog", { name: "Add to Acme" })).toBeDefined();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
@@ -316,7 +316,7 @@ describe("the views the builder hosts", () => {
     await screen.findByText("Drawing the structure chart");
     fireEvent.click(screen.getByRole("tab", { name: "Reporting" }));
     await screen.findByText("Drawing the reporting chart");
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add to the organization" }));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Add agent seat" }));
     expect(await screen.findByRole("dialog", { name: "Add to Acme" })).toBeDefined();
   });
@@ -329,7 +329,7 @@ describe("the views the builder hosts", () => {
   test("an add open in the chart becomes a dialog when the reader leaves the chart", async () => {
     mountBuilder({ engine: new Engine(company()) });
     await screen.findByText("Drawing the structure chart");
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add to the organization" }));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Add unit" }));
     await screen.findByText("Adding unit to the company");
     fireEvent.click(screen.getByRole("tab", { name: "Table" }));
@@ -405,7 +405,7 @@ describe("the views the builder hosts", () => {
     await screen.findByText("No problems");
     expect(screen.queryByText(/^About /)).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Select CEO" }));
-    fireEvent.click(await screen.findByRole("button", { name: "CEO" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Actions for CEO, selected" }));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Edit reports" }));
     expect(await screen.findByText("About seat:ceo")).toBeDefined();
   });
@@ -560,15 +560,17 @@ describe("the selection in the URL", () => {
     await waitFor(() => expect(location.hash).toContain("unit=engineering"));
 
     // The toolbar's own actions for the selection are a control.
-    fireEvent.click(await screen.findByRole("button", { name: "Engineering" }));
-    const menu = await screen.findByRole("menu", { name: "Actions for Engineering" });
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Actions for Engineering, selected" }),
+    );
+    const menu = await screen.findByRole("menu", { name: "Actions for Engineering, selected" });
     fireEvent.keyDown(menu, { key: "Escape" });
     expect(location.hash).toContain("unit=engineering");
 
     // Words on the page are nothing to select.
     fireEvent.click(screen.getByText("editable"));
     await waitFor(() => expect(location.hash).not.toContain("unit="));
-    expect(screen.queryByRole("button", { name: "Engineering" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Actions for Engineering, selected" })).toBeNull();
   });
 
   test("a click under an open dialog keeps the selection the dialog is about", async () => {
@@ -577,8 +579,8 @@ describe("the selection in the URL", () => {
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Select CEO" }));
     await waitFor(() => expect(location.hash).toContain("seat=ceo"));
-    fireEvent.click(await screen.findByRole("button", { name: "CEO" }));
-    const menu = await screen.findByRole("menu", { name: "Actions for CEO" });
+    fireEvent.click(await screen.findByRole("button", { name: "Actions for CEO, selected" }));
+    const menu = await screen.findByRole("menu", { name: "Actions for CEO, selected" });
     fireEvent.click(within(menu).getByRole("menuitem", { name: /^Edit\b/ }));
     await screen.findByRole("dialog", { name: "Edit CEO" });
     fireEvent.click(screen.getByText("editable"));
@@ -594,9 +596,9 @@ describe("the selection in the URL", () => {
     mountBuilder({ engine });
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Select the company" }));
-    const actions = await screen.findByRole("button", { name: "Acme" });
+    const actions = await screen.findByRole("button", { name: "Actions for Acme, selected" });
     fireEvent.click(actions);
-    const menu = await screen.findByRole("menu", { name: "Actions for Acme" });
+    const menu = await screen.findByRole("menu", { name: "Actions for Acme, selected" });
     // Nothing moves or deletes the document the company IS.
     expect(labels(menu)).toEqual(["Add unit", "Add agent seat", "Add human seat", "Edit"]);
     fireEvent.keyDown(menu, { key: "Escape" });
@@ -606,7 +608,7 @@ describe("the selection in the URL", () => {
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
     await waitFor(() => expect(engine.checks()).toHaveLength(2));
     await screen.findByText("No problems");
-    expect(screen.getByRole("button", { name: "Acme" })).toBeDefined();
+    expect(screen.getByRole("button", { name: "Actions for Acme, selected" })).toBeDefined();
   });
 
   test("a link naming a seat selects it and opens its editor, and the toolbar offers that seat's actions", async () => {
@@ -619,10 +621,10 @@ describe("the selection in the URL", () => {
     const editor = await screen.findByRole("dialog", { name: "Edit CEO" });
     fireEvent.keyDown(editor, { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    const actions = await screen.findByRole("button", { name: "CEO" });
+    const actions = await screen.findByRole("button", { name: "Actions for CEO, selected" });
     expect(actions.getAttribute("aria-haspopup")).toBe("menu");
     fireEvent.click(actions);
-    const menu = await screen.findByRole("menu", { name: "Actions for CEO" });
+    const menu = await screen.findByRole("menu", { name: "Actions for CEO, selected" });
     // The same actions, in the same order, as the seat's own card offers.
     expect(labels(menu)).toEqual(["Edit", "Open seat", "Edit reports", "Move to", "Delete"]);
     fireEvent.click(within(menu).getByRole("menuitem", { name: "Open seat" }));
@@ -649,8 +651,8 @@ describe("the selection in the URL", () => {
     await screen.findByText("Could not reach the engine to check");
     fireEvent.click(screen.getByRole("button", { name: "Select Analyst" }));
     const actionsFor = async () => {
-      fireEvent.click(await screen.findByRole("button", { name: "Analyst" }));
-      return screen.findByRole("menu", { name: "Actions for Analyst" });
+      fireEvent.click(await screen.findByRole("button", { name: "Actions for Analyst, selected" }));
+      return screen.findByRole("menu", { name: "Actions for Analyst, selected" });
     };
     let menu = await actionsFor();
     expect(within(menu).queryByRole("menuitem", { name: "Open seat" })).toBeNull();
@@ -684,12 +686,12 @@ test("a selection made before the engine described the company follows the seat"
   mountBuilder({ engine });
   await waitFor(() => expect(engine.checks()).toHaveLength(1));
   fireEvent.click(await screen.findByRole("button", { name: "Select CEO" }));
-  expect(await screen.findByRole("button", { name: "CEO" })).toBeDefined();
+  expect(await screen.findByRole("button", { name: "Actions for CEO, selected" })).toBeDefined();
   engine.script = () => null;
   act(() => answer());
   await screen.findByText("No problems");
   await waitFor(() => expect(location.hash).toContain("seat=ceo"));
-  expect(screen.getByRole("button", { name: "CEO" })).toBeDefined();
+  expect(screen.getByRole("button", { name: "Actions for CEO, selected" })).toBeDefined();
 });
 
 describe("a revision saved by somebody else", () => {
@@ -927,7 +929,7 @@ describe("a document another system manages", () => {
         "Editing is paused. This company's configuration is managed by gitops.",
       ),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add to the organization" }));
     const menu = await screen.findByRole("menu", { name: "Add to the organization" });
     expect(
       within(menu).getByRole("menuitem", { name: "Add unit" }).getAttribute("aria-disabled"),

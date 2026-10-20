@@ -377,6 +377,34 @@ func EngineArgs(d Dataset, params map[string]string) (map[string]string, error) 
 	return out, nil
 }
 
+// SourceArgs are the arguments of a read that names a source directly rather
+// than through a board's dataset (a builder's preview, before any board
+// exists): each value sent held to its parameter's type, every parameter left
+// out at the source's default. A key the source does not take is refused, so
+// a preview can ask a domain nothing a board's dataset could not.
+func SourceArgs(src EngineSource, sent map[string]string) (map[string]string, error) {
+	for key := range sent {
+		if _, ok := src.Param(key); !ok {
+			return nil, fmt.Errorf("%w: %s takes no parameter %q", ErrInvalid, src.Name, key)
+		}
+	}
+	out := map[string]string{}
+	for _, p := range src.Params {
+		v, ok := sent[p.Key]
+		if !ok || v == "" {
+			if p.Default != "" {
+				out[p.Key] = p.Default
+			}
+			continue
+		}
+		if why := p.check(v); why != "" {
+			return nil, fmt.Errorf("%w: %s.%s %s", ErrInvalid, src.Name, p.Key, why)
+		}
+		out[p.Key] = v
+	}
+	return out, nil
+}
+
 func quoteList(values []string) string {
 	q := make([]string, len(values))
 	for i, v := range values {

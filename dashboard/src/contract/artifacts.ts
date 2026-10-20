@@ -2,8 +2,8 @@
  * The artifacts' closed sets and bounds: what an artifact can be, what a
  * version may declare, the role ladder a share grants, who a share can name,
  * how the artifact origin isolates a page, what a listing scopes and sorts by,
- * what a datastore column, rule and write can be, and how long the text a
- * person types may run.
+ * what a history row is filed under, what a datastore column, rule and write
+ * can be, and how long the text a person types may run.
  *
  * EXACTLY THE ENGINE'S, in the engine's own order, each held by the gate its
  * row in `internal/clientsource/contract.go` names. A kind or a role the
@@ -63,6 +63,30 @@ export const ARTIFACT_LIST_SCOPES = ["mine", "shared", "company", "agents", "all
 /** How a listing is ordered (`artifactsdomain.ListSorts`), the engine's default first. */
 export const ARTIFACT_LIST_SORTS = ["updated", "created", "title", "opened"] as const;
 
+/**
+ * Every op an artifact's history row is filed under (`artifactsdomain.HistoryOps`),
+ * in the engine's order: what a history row and the company trail are worded
+ * by. Not every op the log carries: a purge takes the history with it, and a
+ * pin, an unpin and an opened mark are one person's browsing, so none of them
+ * is ever a row; an asset's records are filed under the asset's own op.
+ */
+export const ARTIFACT_HISTORY_OPS = [
+  "create",
+  "publish",
+  "restore_version",
+  "patch",
+  "share",
+  "unshare",
+  "transfer",
+  "trash",
+  "restore",
+  "purge_begin",
+  "asset_create",
+  "asset_remove",
+  "link_work_item",
+  "read_elevated",
+] as const;
+
 /** The longest title, in UTF-8 bytes (`artifacts.MaxTitleBytes`): a tab title and a card line. */
 export const ARTIFACT_TITLE_MAX_BYTES = 120;
 
@@ -75,11 +99,23 @@ export const ARTIFACT_ICON_MAX_BYTES = 40;
 /** The longest version label, in UTF-8 bytes (`artifacts.MaxLabelBytes`). */
 export const ARTIFACT_LABEL_MAX_BYTES = 60;
 
+/** The most files one page check reads (`artifactupload.MaxCheckFiles`). */
+export const ARTIFACT_CHECK_MAX_FILES = 64;
+
+/** The most text one page check reads, in bytes across its files (`artifactupload.MaxCheckBytes`). */
+export const ARTIFACT_CHECK_MAX_BYTES = 2097152;
+
 /** The most tabs one doc holds (`docindex.MaxTabs`). */
 export const DOC_MAX_TABS = 32;
 
 /** The longest tab title, in UTF-8 bytes (`docindex.MaxTitleBytes`). */
 export const DOC_TAB_TITLE_MAX_BYTES = 120;
+
+/** The most slides a starter deck opens with (`slideformat.MaxPlanSlides`). */
+export const DECK_PLAN_MAX_SLIDES = 60;
+
+/** The longest slide title in a starter deck's plan, in UTF-8 bytes (`slideformat.MaxSlideTitleBytes`). */
+export const DECK_SLIDE_TITLE_MAX_BYTES = 200;
 /**
  * How many days a trashed artifact is kept before it is deleted for good
  * (`artifacts.TrashRetention`): the date every trash sentence names.
@@ -566,3 +602,12 @@ export const DASHBOARD_COLUMNS = 12;
 
 /** The shortest interval an engine dataset refreshes at, in seconds (`artifacts.MinRefreshSeconds`). */
 export const DASHBOARD_MIN_REFRESH_SECONDS = 60;
+
+/** The most widgets one board holds, a group's children counted (`artifacts.MaxDashboardWidgets`). */
+export const DASHBOARD_MAX_WIDGETS = 64;
+
+/** The most datasets one board declares (`artifacts.MaxDashboardDatasets`). */
+export const DASHBOARD_MAX_DATASETS = 32;
+
+/** The most columns one table widget draws (`artifacts.MaxTableColumns`). */
+export const DASHBOARD_MAX_TABLE_COLUMNS = 16;
