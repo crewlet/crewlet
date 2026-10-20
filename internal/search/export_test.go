@@ -9,6 +9,25 @@ import (
 // statement [Semantic] issues rather than a copy that can drift from it.
 var SemanticStatement = semanticStatement
 
+// The lexical index's statements, for its plan gate, on [SemanticStatement]'s
+// terms.
+const (
+	LexicalCorpusStatement        = lexicalCorpusStatement
+	LexicalTermDocsStatement      = lexicalTermDocsStatement
+	LexicalClearPostingsStatement = lexicalClearPostingsStatement
+	LexicalRemoveDocStatement     = lexicalRemoveDocStatement
+	LexicalOrphanWalkStatement    = lexicalOrphanWalkStatement
+	LexicalIndexedCountStatement  = lexicalIndexedCountStatement
+	LinkedFromStatement           = linkedFromStatement
+)
+
+// The lexical index's statement builders, on the same terms.
+var (
+	LexicalPostingScanStatement = lexicalPostingScanStatement
+	LexicalHydrateStatement     = lexicalHydrateStatement
+	LexicalHeldStatement        = lexicalHeldStatement
+)
+
 // TrainingReading is what [readTrainingSet] reads, exported so a test trains
 // an index from a store's rows exactly as the duty does.
 type TrainingReading struct {

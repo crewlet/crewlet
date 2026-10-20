@@ -346,6 +346,19 @@ func refuseUnnested(t *testing.T, plans map[string][]string) {
 // range — one sixty-fourth of the corpus, which is far more documents than a
 // term appears in — and probes the postings per document. And no plan answers
 // a per-row aggregate from its whole child table ([refuseUnnested]).
+//
+// # The statements planned are the statements run
+//
+// Each is the indexer's own text (search.Lexical…Statement), and every
+// fragment of the module's source that reads kb_docs or kb_postings must be
+// one of them ([storetest.StatementLiterals]): the gate registered a copy of
+// each, and the copies had already drifted — the held-version read lost its
+// derivation column, the indexed count bound its source as a literal — so a
+// change to what the indexer issues left the gate planning what it used to.
+//
+// Mutation: drive the posting scan on kb_docs (`FROM kb_docs d JOIN
+// kb_postings p`) and the shape check names it; read kb_docs inline anywhere
+// in the module and the completeness check names the file.
 func TestEveryLexicalIndexServesARegisteredQuery(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
@@ -377,49 +390,49 @@ func TestEveryLexicalIndexServesARegisteredQuery(t *testing.T) {
 		statement string
 		args      []any
 	}{
-		// THE POSTING SCAN, in the shape a fan-out issues it: a term, a
-		// container filter and a bucket range at once, which is the plan
-		// with the most for a planner to get wrong.
-		"the posting scan under an assignment": {`
-			SELECT p.doc_id, p.freq, d.length
-			  FROM kb_postings p
-			  JOIN kb_docs d ON d.id = p.doc_id
-			 WHERE p.term = ? AND d.container IN (?)
-			   AND d.search_shard >= ? AND d.search_shard < ?
-			 ORDER BY p.freq DESC
-			 LIMIT ?`,
+		// THE POSTING SCAN, in the shapes it is issued in: a term, a
+		// container filter and a bucket range at once — a fan-out's, the
+		// plan with the most for a planner to get wrong — a term narrowed
+		// to its sources, and a term alone.
+		"the posting scan under an assignment": {
+			search.LexicalPostingScanStatement(1, 0, true),
 			[]any{"migration", "ENG", 0, half, 5_000}},
-		"the posting scan with no assignment": {`
-			SELECT p.doc_id, p.freq, d.length
-			  FROM kb_postings p
-			  JOIN kb_docs d ON d.id = p.doc_id
-			 WHERE p.term = ?
-			 ORDER BY p.freq DESC
-			 LIMIT ?`,
+		"the posting scan narrowed to a source": {
+			search.LexicalPostingScanStatement(0, 1, false),
+			[]any{"migration", "page", 5_000}},
+		"the posting scan with no assignment": {
+			search.LexicalPostingScanStatement(0, 0, false),
 			[]any{"migration", 5_000}},
-		"the term's document frequency": {
-			`SELECT COUNT(*) FROM kb_postings WHERE term = ?`,
+		"the term's document frequency": {search.LexicalTermDocsStatement,
 			[]any{"migration"}},
-		"the corpus statistics": {
-			`SELECT COUNT(*), COALESCE(AVG(length), 0) FROM kb_docs`, nil},
-		"the hit hydration": {`
-			SELECT id, source, source_id, container, title, excerpt
-			  FROM kb_docs WHERE id IN (?, ?)`,
+		"the corpus statistics": {search.LexicalCorpusStatement, nil},
+		"the hit hydration": {search.LexicalHydrateStatement(2),
 			[]any{"page:p.0001", "page:p.0002"}},
-		"what the index already holds": {
-			`SELECT source_id, source_rev FROM kb_docs WHERE id IN (?, ?)`,
+		"what the index already holds": {search.LexicalHeldStatement(2),
 			[]any{"page:p.0001", "page:p.0002"}},
-		"the orphan walk": {`
-			SELECT source_id FROM kb_docs WHERE source = 'page' AND source_id > ?
-			  ORDER BY source_id LIMIT ?`,
-			[]any{"", 200}},
-		"the indexed page count": {
-			`SELECT COUNT(*) FROM kb_docs WHERE source = 'page'`, nil},
-		"one document's removal": {
-			`DELETE FROM kb_docs WHERE source = ? AND source_id = ?`,
+		"the orphan walk": {search.LexicalOrphanWalkStatement,
+			[]any{"page", "", 200}},
+		"the indexed page count": {search.LexicalIndexedCountStatement,
+			[]any{"page"}},
+		"one document's removal": {search.LexicalRemoveDocStatement,
 			[]any{"page", "p.0001"}},
-		"one document's postings": {
-			`DELETE FROM kb_postings WHERE doc_id = ?`, []any{"page:p.0001"}},
+		"one document's postings": {search.LexicalClearPostingsStatement,
+			[]any{"page:p.0001"}},
+		"what links to a page": {search.LinkedFromStatement, []any{"p.0001"}},
+	}
+
+	// EVERY READER IN THE SOURCE IS ONE OF THEM, matched whole.
+	for _, literal := range storetest.StatementLiterals(t, "internal/search",
+		"kb_docs", "kb_postings") {
+		planned := false
+		for _, q := range registered {
+			planned = planned || strings.Contains(q.statement, literal.Text)
+		}
+		if !planned {
+			t.Errorf("%s reads a lexical table in a statement this test does not "+
+				"plan — name it beside the indexer's others and register it:\n%s",
+				literal.File, literal.Text)
+		}
 	}
 
 	// TWO OF THE REGISTERED STATEMENTS ARE the index's own removals, which a
@@ -437,6 +450,7 @@ func TestEveryLexicalIndexServesARegisteredQuery(t *testing.T) {
 	// searches get slow.
 	for _, name := range []string{
 		"the posting scan under an assignment",
+		"the posting scan narrowed to a source",
 		"the posting scan with no assignment",
 	} {
 		joined := strings.Join(plans[name], "\n")
