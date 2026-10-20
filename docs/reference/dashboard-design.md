@@ -4911,7 +4911,9 @@ turns for the last one it ended. Until that read existed, every one of these
 screens started blank after a restart, a deploy or a node joining a fleet,
 which is the one empty state a reader has no way to question; a seed that
 missed a node is named on `/health` (`seeded_from`) rather than drawn as a
-quieter company. Spend is not among them: the Overview and Spend screens read
+quieter company, and every screen drawing the seeded feed names it too: Live ›
+Events and Live now's Activity card add it to the coverage note above their
+rows, and Home's Latest events widget says it as its gap. Spend is not among them: the Overview and Spend screens read
 named windows — whole company days from the replicated `usage` domain, the
 same on every node — so a restart never empties them, and the 24-hour spend
 window the seed also fills is the `tokens` push's, which no screen draws.
