@@ -1,0 +1,229 @@
+/*
+ * Studio: stage tiles on the gallery, and a studio per kind. Every value is
+ * a token.
+ */
+
+/* ---- the Make row ---- */
+
+.cfs-make {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  margin-bottom: var(--spacing-2);
+}
+
+.cfs-make-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--spacing-1) var(--spacing-3);
+}
+
+.cfs-make-row {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: var(--spacing-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+@container page (width < 1000px) {
+  .cfs-make-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* ON A PHONE, THREE ACROSS IN TWO ROWS: every kind in view at once, the hint left to the studio. */
+@container page (width < 560px) {
+  .cfs-make-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--spacing-3) var(--spacing-2);
+  }
+
+  .cfs-make-row .crewlet-kind-tile__hint {
+    display: none;
+  }
+
+  .cfs-make-row .crewlet-kind-tile__name {
+    font-size: var(--font-size-sm);
+  }
+
+  .cfs-make-row .crewlet-kind-tile__frame {
+    padding: 3px;
+    border-radius: var(--radius-xl);
+  }
+}
+
+/* ---- the studio ---- */
+
+.cfs-studio {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-5);
+  min-width: 0;
+}
+
+.cfs-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-3) var(--spacing-4);
+}
+
+.cfs-head-words {
+  display: grid;
+  flex: 1 1 18rem;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cfs-title {
+  margin: 0;
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.25;
+}
+
+.cfs-about {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.cfs-switch {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-2);
+}
+
+/* THE SWITCH IS QUIET: a row of small chips, the kind on screen pressed. */
+.cfs-switch .crewlet-kind-tile--chip {
+  height: var(--size-control-md);
+}
+
+@container page (width < 720px) {
+  .cfs-switch {
+    flex-wrap: nowrap;
+    width: 100%;
+    margin-inline: calc(var(--spacing-4) * -1);
+    padding-inline: var(--spacing-4);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .cfs-switch .crewlet-kind-tile--chip {
+    flex: none;
+  }
+}
+
+.cfs-body {
+  display: grid;
+  grid-template-columns: 17rem minmax(0, 1fr);
+  gap: var(--spacing-5);
+  align-items: start;
+  min-width: 0;
+}
+
+.cfs-rail {
+  position: sticky;
+  top: var(--spacing-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+
+.cfs-rail-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+@container page (width < 860px) {
+  .cfs-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cfs-rail {
+    position: static;
+  }
+
+  .cfs-rail-list {
+    flex-direction: row;
+    margin-inline: calc(var(--spacing-4) * -1);
+    padding: 0 var(--spacing-4) var(--spacing-1);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .cfs-rail-list > li {
+    flex: 0 0 15rem;
+  }
+}
+
+/*
+ * THE WORKSHOP: the kind's dotted ground, with the thing being made set on
+ * it as a sheet of paper, the way a page sits on a desk. It fills the page's
+ * height so the studio never ends in a strip of empty page.
+ */
+.cfs-canvas {
+  display: flex;
+  justify-content: center;
+  min-height: 34rem;
+  padding: var(--spacing-8) var(--spacing-6);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-xl);
+}
+
+.cfs-paper {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  width: 100%;
+  max-width: 52rem;
+  min-height: 30rem;
+  padding: var(--spacing-9) var(--spacing-9) var(--spacing-8);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-background);
+  box-shadow: var(--shadow-card);
+}
+
+.cfs-paper--wide {
+  max-width: none;
+  padding: var(--spacing-7);
+}
+
+.cfs-paper--deck {
+  max-width: 72rem;
+  min-height: 0;
+  padding: var(--spacing-6);
+}
+
+.cfs-paper--brief {
+  max-width: 64rem;
+  min-height: 0;
+  padding: var(--spacing-7);
+}
+
+@container page (width < 720px) {
+  .cfs-canvas {
+    min-height: 0;
+    margin-inline: calc(var(--spacing-4) * -1);
+    padding: var(--spacing-4);
+    border-inline: 0;
+    border-radius: 0;
+  }
+
+  .cfs-paper,
+  .cfs-paper--wide,
+  .cfs-paper--deck,
+  .cfs-paper--brief {
+    min-height: 24rem;
+    padding: var(--spacing-5) var(--spacing-4);
+  }
+}

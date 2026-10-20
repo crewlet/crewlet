@@ -1,0 +1,126 @@
+/*
+ * Quick: one line of kinds on the gallery, and a quiet editor with nothing
+ * around it. Every value is a token.
+ */
+
+.cfq-make {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-3);
+  margin-bottom: var(--spacing-2);
+  padding: var(--spacing-2) var(--spacing-2) var(--spacing-2) var(--spacing-4);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-subtle);
+}
+
+.cfq-title {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+.cfq-row {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cfq-row .crewlet-kind-tile--chip {
+  height: var(--size-control-md);
+  border-color: transparent;
+  background: transparent;
+}
+
+.cfq-row .crewlet-kind-tile--chip:hover {
+  border-color: var(--color-border-default);
+  background: var(--color-surface-background);
+}
+
+@container page (width < 720px) {
+  .cfq-make {
+    flex-wrap: nowrap;
+    border-radius: var(--radius-xl);
+  }
+
+  .cfq-row {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .cfq-row > li {
+    flex: none;
+  }
+}
+
+/* ---- the quiet editor ---- */
+
+.cfq-focus {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-6);
+  min-width: 0;
+}
+
+.cfq-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-3);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+}
+
+.cfq-line-kind {
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-medium);
+}
+
+.cfq-line-state::before {
+  content: "·";
+  margin-inline-end: var(--spacing-3);
+}
+
+.cfq-keys {
+  display: inline-flex;
+  align-items: center;
+}
+
+.cfq-doc {
+  max-width: 48rem;
+  padding-top: var(--spacing-6);
+}
+
+.cfq-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+
+.cfq-ask {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--spacing-4);
+  width: 100%;
+  max-width: 46rem;
+  margin: var(--spacing-8) auto 0;
+}
+
+.cfq-ask-title {
+  margin: 0;
+  font-size: var(--font-size-2xl);
+  font-weight: var(--font-weight-semibold);
+  text-align: center;
+}
+
+.cfq-ask .cf-brief {
+  align-self: stretch;
+}
