@@ -379,11 +379,9 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
       // ON A PHONE THE BAR KEEPS ITS WIDTH FOR THE NAME AND THE ACTION: the
       // count is said under the stage there.
       status={
-        phone ? undefined : (
-          <span className="slides-create-status">
-            {rows.length === 1 ? "1 slide" : `${rows.length} slides`} · {theme.name}
-          </span>
-        )
+        phone
+          ? undefined
+          : `${rows.length === 1 ? "1 slide" : `${rows.length} slides`} · ${theme.name}`
       }
       action={{
         label: drafter === "agent" ? (agent ? `Ask ${agent.name}` : "Ask an agent") : "Create deck",
