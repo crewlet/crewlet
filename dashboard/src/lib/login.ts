@@ -64,6 +64,17 @@ export function tierATokenOf(login: string): string {
 }
 
 /**
+ * A login as a reader is told it where no seat stands for it: a Tier A
+ * token's by its id, said to be one ("review (API token)"), since
+ * `token:review` is the credential's spelling rather than a name; any other
+ * login as written, a person's dotted login and a service account's alike.
+ */
+export function loginWords(login: string): string {
+  const token = tierATokenOf(login);
+  return token ? `${token} (API token)` : login;
+}
+
+/**
  * Whether a session is a PERSON'S, with a directory row of their own: a
  * profile, a password, a second factor, sessions and tokens to manage.
  *

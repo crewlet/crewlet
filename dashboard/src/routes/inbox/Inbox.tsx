@@ -40,7 +40,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Callout, InlineCode } from "@crewlethq/ui";
+import { Callout, InlineCode, useMediaMatch } from "@crewlethq/ui";
 import { CheckGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator, useParam } from "~/app/router.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
@@ -56,7 +56,6 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { useNow } from "~/lib/clock.ts";
-import { useMediaQuery } from "~/lib/media.ts";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { conditionsToDecide, watchedIn } from "~/lib/attention.ts";
@@ -125,7 +124,7 @@ export function Inbox() {
   const nav = useNavigator();
   const index = useMemo(() => indexOrg(org), [org]);
   const zone = org?.timezone;
-  const phone = useMediaQuery(`(width < ${PHONE_BREAKPOINT}px)`);
+  const phone = useMediaMatch(`(width < ${PHONE_BREAKPOINT}px)`);
   // THE LIST AND THE PANE EACH SCROLL ON THEIR OWN, so the screen takes the
   // window's height rather than growing the page, above a phone, where the
   // two are one column and the page scrolls as any other.

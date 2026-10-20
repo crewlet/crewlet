@@ -21,6 +21,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  Button,
+  EmptyState,
   LinkInterstitial,
   Modal,
   Select,
@@ -34,7 +36,8 @@ import {
   type SheetCellRef,
   type SheetSort,
 } from "@crewlethq/ui";
-import { useParam } from "~/app/router.tsx";
+import { PlusGlyph, TableGlyph } from "@crewlethq/icons/glyphs";
+import { useNavigator, useParam, useRoute } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { relTime } from "~/lib/format.ts";
@@ -49,6 +52,7 @@ import { inferredColumns, sheetColumns, sheetRows } from "~/lib/artifacts/sheet.
 import { useStoreVersion } from "~/lib/artifacts/useDataStore.ts";
 import { actorName, cellChangeWords, roleIncludes } from "~/lib/artifacts/words.ts";
 import { useRowDelete } from "./RowDelete.tsx";
+import { withPanel } from "./panels.ts";
 import type { PresenceReport } from "./presence.ts";
 
 /** The collections a reader is offered as sheets: every one but the engine's per-viewer state. */
@@ -148,16 +152,7 @@ export function SheetView({
       <Skeleton variant="table" rows={6} label={`Loading ${detail.title}`} />
     );
   }
-  if (!collection) {
-    return (
-      <p className="artifact-note">
-        This sheet has no columns yet.{" "}
-        {roleIncludes(role, "editor")
-          ? "Add a collection in the Data panel."
-          : "Its editors add them in the Data panel."}
-      </p>
-    );
-  }
+  if (!collection) return <NoColumns canEdit={roleIncludes(role, "editor")} />;
   return (
     <div className="artifact-sheet">
       {collections.length > 1 && (
@@ -254,6 +249,43 @@ export function SheetView({
       {remove.dialog}
       <LinkInterstitial url={link} source={detail.title} onClose={() => setLink(null)} />
     </div>
+  );
+}
+
+/**
+ * A sheet with nothing to draw yet: what it needs, and for an editor the one
+ * control that opens the place it is set up (Data, Schema).
+ */
+function NoColumns({ canEdit }: { canEdit: boolean }) {
+  const route = useRoute();
+  const nav = useNavigator();
+  const setUp = () => {
+    const query = withPanel(route.query, "data");
+    query.set("data", "schema");
+    nav.to(route.path, query);
+  };
+  return (
+    <EmptyState
+      icon={<TableGlyph size="xl" />}
+      title="No columns yet"
+      description={
+        canEdit
+          ? "Set up the columns this sheet keeps, and rows can be added under them."
+          : "The people who can edit this sheet set up its columns."
+      }
+      action={
+        canEdit ? (
+          <Button
+            size="small"
+            variant="primary"
+            leadingIcon={<PlusGlyph size="sm" />}
+            onClick={setUp}
+          >
+            Set up columns
+          </Button>
+        ) : undefined
+      }
+    />
   );
 }
 

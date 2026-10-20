@@ -18,7 +18,7 @@
  */
 
 import { useCallback, useMemo, useState } from "react";
-import { Button, Card, SegmentedControl } from "@crewlethq/ui";
+import { Button, Card, SegmentedControl, useMediaMatch } from "@crewlethq/ui";
 import {
   CircleCheckGlyph,
   CalendarClockGlyph,
@@ -29,7 +29,6 @@ import {
 import { href, useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
-import { useMediaQuery } from "~/lib/media.ts";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { useClient, useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, type OrgIndex } from "~/lib/seats.ts";
@@ -60,7 +59,7 @@ export function Feed({ now }: { now: number }) {
     [filter.kinds],
   );
   const live = useQuery("company_feed", params, { pollMs: 30_000 });
-  const phone = useMediaQuery(`(width < ${PHONE_BREAKPOINT}px)`);
+  const phone = useMediaMatch(`(width < ${PHONE_BREAKPOINT}px)`);
 
   // The older pages, the head they were paged from, and where they stopped —
   // all reset by a filter change, which is a different feed.

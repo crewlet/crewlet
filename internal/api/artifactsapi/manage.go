@@ -1,7 +1,9 @@
 package artifactsapi
 
 import (
+	"errors"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -119,15 +121,49 @@ func (s *Service) share(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body, false) {
 		return
 	}
+	// AN AUDIENCE THE ARTIFACT ALREADY SHARES WITH is the owner's to change
+	// whatever it names, as it is to withdraw: a share stored before the
+	// grant rule, or to a seat since removed, is never a record nobody can
+	// act on. Only a new audience is held to the rule and the roster.
+	stored := slices.ContainsFunc(a.Head.Shares, func(sh artifacts.Share) bool {
+		return sh.Audience == body.Audience
+	})
+	if !stored && !s.audiencesKnown(w, r, body.Audience) {
+		return
+	}
 	out, err := s.writes.Share(r.Context(), c, a.Head.ID,
 		artifacts.Share{Audience: body.Audience, Role: body.Role})
 	done(w, r, key, "share the artifact", a.Head.ID, out, err)
+}
+
+// audiencesKnown answers a share naming an audience nobody holds as invalid
+// (422), with the sentence that says which, and a roster this node could not
+// read as unavailable. It reports whether every audience is known.
+func (s *Service) audiencesKnown(w http.ResponseWriter, r *http.Request, audiences ...artifacts.Audience) bool {
+	for _, a := range audiences {
+		switch err := s.gate.knownAudience(r.Context(), a); {
+		case err == nil:
+		case errors.Is(err, artifacts.ErrInvalidAudience), errors.Is(err, ErrUnknownAudience):
+			invalid(w, say(err))
+			return false
+		default:
+			unavailable(w, err, "the company's seats and units could not be read to check "+
+				"who the share names; try again")
+			return false
+		}
+	}
+	return true
 }
 
 // unshare withdraws one audience's share (`DELETE
 // /artifacts/{id}/shares/{audience}`, the audience as `seat:<handle>`,
 // `unit:<key>` or `company`), decided by `unshare_artifact`. A share that is
 // not there answers success and writes nothing.
+//
+// ANY STORED AUDIENCE IS WITHDRAWN, held to [artifacts.Audience.Validate]
+// alone and never to the roster or the grant rule: a share to a login named
+// as a seat, written before the rule refused one, and a share to a seat the
+// chart has since removed are exactly the ones an owner most needs to remove.
 func (s *Service) unshare(w http.ResponseWriter, r *http.Request) {
 	a, c, key, ok := s.gesture(w, r, authz.ActionArtifactUnshare)
 	if !ok {

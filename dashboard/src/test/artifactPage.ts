@@ -286,12 +286,16 @@ export interface PageOptions {
   viewer: BridgeViewer;
   people?: BridgePerson[];
   roster?: BridgeRoster;
+  /** What the origin writes on the runtime's element (`data-capabilities`); none when absent. */
+  scriptCapabilities?: string;
 }
 
 /** An open page: its runtime, and the host and store behind it. */
 export interface OpenPage {
   host: PageHost;
   store: ArtifactDataStore;
+  /** What `crewlet.capabilities.list()` answered as the runtime installed, before the handshake. */
+  early: string[];
   /** Closes the port, so nothing keeps the suite's process alive. */
   close(): void;
 }
@@ -359,11 +363,20 @@ export async function openPage(options: PageOptions): Promise<OpenPage> {
   // THE RUNTIME IS A CLASSIC SCRIPT the origin places first in the page: run
   // as one in this context, against this window's globals, by Node's own
   // script runner (this is a suite's helper, never the dashboard's code).
+  // THE ELEMENT THE ORIGIN WROTE, as `document.currentScript` names it while
+  // the runtime runs.
+  const element = document.createElement("script");
+  if (options.scriptCapabilities !== undefined)
+    element.setAttribute("data-capabilities", options.scriptCapabilities);
+  Object.defineProperty(document, "currentScript", { value: element, configurable: true });
   runInThisContext(runtimeScript(), { filename: "runtime.js" });
+  Object.defineProperty(document, "currentScript", { value: null, configurable: true });
+  const early = pageRuntime().capabilities.list();
   await pageRuntime().ready;
   return {
     host,
     store,
+    early,
     close() {
       host.stop();
       store.stop();

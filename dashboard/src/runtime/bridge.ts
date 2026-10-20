@@ -194,6 +194,18 @@ const record = (data: unknown): Record<string, unknown> | null =>
 const isCapability = (v: unknown): v is RuntimeCapability =>
   typeof v === "string" && (ARTIFACT_CAPABILITIES as readonly string[]).includes(v);
 
+/**
+ * The capabilities the artifact origin wrote on the runtime's own script
+ * element (`data-capabilities`, space separated): the frame's grant, known from
+ * the page's first script, before the host's handshake says it again. Only the
+ * names a version may declare are read; anything else in the attribute is
+ * left out.
+ */
+export function readDeclaredCapabilities(attribute: string | null): RuntimeCapability[] {
+  if (!attribute) return [];
+  return [...new Set(attribute.split(/\s+/).filter(isCapability))];
+}
+
 const isMethod = (v: unknown): v is BridgeMethod =>
   typeof v === "string" && Object.hasOwn(BRIDGE_METHODS, v);
 

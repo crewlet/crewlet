@@ -10,7 +10,11 @@ import {
   dataChangeWords,
   dataRefusalReason,
   dataRefusalText,
+  historyOpTag,
+  historyRefusalWords,
   historyWords,
+  KIND_LIST,
+  KIND_WORDS,
   purgeAt,
   purgeSentence,
   roleIncludes,
@@ -67,6 +71,21 @@ describe("a history row", () => {
     expect(historyWords(entry({ op: "purge_begin", outcome: "refused" }), names)).toBe(
       "tried to begin deleting it for good and was refused",
     );
+  });
+
+  // AN ADMINISTRATOR'S READ SAID IT TWICE: "opened version 1 as an
+  // administrator (as an administrator)", the row's flag appended to a
+  // sentence that already names it.
+  test("a change made as an administrator says so once", () => {
+    expect(historyWords(entry({ op: "read_elevated", number: 1, elevated: true }), names)).toBe(
+      "opened version 1 as an administrator",
+    );
+    expect(
+      historyWords(
+        entry({ op: "share", elevated: true, summary: { audience: "seat:pm", role: "viewer" } }),
+        names,
+      ),
+    ).toBe("shared it with Pat Mills: can view (as an administrator)");
   });
 
   test("an op this build does not know is still said, in its own words", () => {
@@ -163,5 +182,31 @@ describe("the trash", () => {
   test("an unknown trash time says the retention rather than a wrong date", () => {
     expect(purgeAt("0001-01-01T00:00:00Z")).toBeNull();
     expect(purgeSentence(undefined)).toMatch(/30 days after it was trashed/);
+  });
+});
+
+describe("the words other screens say an artifact's facts in", () => {
+  test("the kind list names every kind the engine has, in its order", () => {
+    expect(KIND_LIST).toBe("HTML pages, docs, slides, dashboards, sheets and designs");
+  });
+
+  // "PAGE" IS KNOWLEDGE'S WORD: the html kind beside Knowledge's Pages named
+  // two things one way.
+  test("an html artifact is called HTML, and no kind is called a page", () => {
+    expect(KIND_WORDS.html).toBe("HTML");
+    expect(Object.values(KIND_WORDS)).not.toContain("Page");
+  });
+
+  test("an op is a word a reader knows, and an unknown one keeps its name", () => {
+    expect(historyOpTag("read_elevated")).toBe("admin read");
+    expect(historyOpTag("patch")).toBe("edit");
+    expect(historyOpTag("restore")).toBe("untrash");
+    expect(historyOpTag("some_new_op")).toBe("some new op");
+  });
+
+  test("a refusal reason is a clause, never the log's code", () => {
+    expect(historyRefusalWords("head_moved")).toBe("a newer version was published first");
+    expect(historyRefusalWords("quota_bytes")).toBe("the company has reached its storage limit");
+    expect(historyRefusalWords("some_new_reason")).toBe("some new reason");
   });
 });

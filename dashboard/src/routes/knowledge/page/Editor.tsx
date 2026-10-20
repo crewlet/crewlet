@@ -50,6 +50,7 @@ import {
 import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { PAGE_MESSAGE_MAX_BYTES } from "~/contract/pages.ts";
 import { plural, textBudget } from "~/lib/format.ts";
+import { shownImage } from "~/lib/markdown.ts";
 import { clashesOf, merge3, mergedText, type Merge } from "~/lib/merge.ts";
 import { useAct } from "~/lib/useAct.ts";
 import type { PageDetail } from "~/protocol/index.ts";
@@ -218,6 +219,7 @@ export function PageEditor({
           disabled={merging !== null}
           autoFocus
           commands={commands}
+          resolveImage={shownImage}
           fallback={reading}
           onEscape={leave}
           onSubmit={() => {

@@ -19,12 +19,13 @@ import type {
   DashboardDatasetAnswer,
   DashboardFreshness,
   DashboardNumberFormat,
+  DashboardParam,
   DashboardRow,
   DashboardStep,
   DashboardValue,
   DashboardWidget,
 } from "~/protocol/index.ts";
-import { EMPTY_VALUE, type DatasetStatus } from "@crewlethq/ui";
+import { DATA_COLORS, EMPTY_VALUE, type DatasetStatus } from "@crewlethq/ui";
 import { fmtCount, fmtExact, plural } from "~/lib/format.ts";
 import { axisLabel } from "~/lib/work.ts";
 import { stateWord, type SeatState } from "~/lib/seats.ts";
@@ -61,12 +62,18 @@ export function allDays(values: readonly DashboardValue[]): boolean {
   return values.length > 0 && values.every((v) => typeof v === "string" && DAY.test(v));
 }
 
-/** A day on a chart's axis or in its tooltip: the date, never a time of day. */
-export function formatDay(at: number): string {
-  return new Date(at).toLocaleDateString(undefined, {
+/**
+ * A day on a chart's axis or in its tooltip: the date, never a time of day,
+ * and the year only when it is not this one. Three dates under a plot that
+ * each said "2026" ran into each other on a widget a third of a board wide,
+ * and the year a reader is in goes without saying.
+ */
+export function formatDay(at: number, now = Date.now()): string {
+  const day = new Date(at);
+  return day.toLocaleDateString(undefined, {
     day: "numeric",
     month: "short",
-    year: "numeric",
+    ...(day.getFullYear() === new Date(now).getFullYear() ? {} : { year: "numeric" }),
   });
 }
 
@@ -91,6 +98,33 @@ export function wordsOf(column: DashboardColumn | undefined, v: DashboardValue):
     case undefined:
       return text;
   }
+}
+
+/**
+ * A table cell's words, the one rule a widget's table, its column widths and
+ * the Sources rail's preview all read: none (and no priority) as nothing,
+ * which a table draws as the empty mark, a boolean as Yes or
+ * No, a number grouped to two decimals, a date as a reader writes one (a day
+ * as `Sep 1`, an instant with its time), and any other value in its column's
+ * own words. A date drawn as the engine stores it (`2026-09-01`,
+ * `2026-09-01T10:00:00Z`) is a machine's spelling of a fact a reader reads.
+ */
+export function cellText(column: DashboardColumn | undefined, v: DashboardValue): string {
+  if (v === null || v === "") return "";
+  // A priority of none is no priority: drawn as the absence it is, as an
+  // empty due date is, never as the word "None".
+  if (column?.words === "tracker_priority" && v === "none") return "";
+  if (typeof v === "boolean") return v ? "Yes" : "No";
+  if (column?.type === "number" && typeof v === "number") return formatNumber(v, "number");
+  if (column?.type === "date" && typeof v === "string") {
+    const at = chartTimeOf(v);
+    if (!Number.isNaN(at)) {
+      return DAY.test(v)
+        ? formatDay(at)
+        : new Date(at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+    }
+  }
+  return wordsOf(column, v);
 }
 
 /**
@@ -198,6 +232,72 @@ export function formatNumber(
 }
 
 /**
+ * The format a figure's headline number is written in: the author's, else
+ * `compact`. A stat or a meter is read at a glance, and written to every digit
+ * (`123,456,789.12`) it was cut short in its tile with an ellipsis, losing the
+ * digits that said how big it was; a table cell keeps every digit.
+ */
+export function figureFormat(w: Pick<DashboardWidget, "format">): DashboardNumberFormat {
+  return w.format ?? "compact";
+}
+
+/**
+ * How a chart's scale is written: as a ratio for a `percent` widget, else
+ * shortened from a thousand up, and never with the unit. A scale is read at a
+ * glance against its lines (`7.5k`, not `7,500 USD` on every one), and every
+ * line of one scale is written the same way: shortened only past ten
+ * thousand, as a figure is, one axis read `10k` over `7,500`. The tooltip
+ * reads each value in full, unit and all.
+ */
+export function scaleFormat(w: Pick<DashboardWidget, "format">): (v: number) => string {
+  if (w.format === "percent") return (v) => formatNumber(v, "percent");
+  return (v) => {
+    const abs = Math.abs(v);
+    if (abs < 1000) return v.toLocaleString(undefined, { maximumFractionDigits: 2 });
+    const [n, suffix] =
+      abs < 1_000_000
+        ? [v / 1000, "k"]
+        : abs < 1_000_000_000
+          ? [v / 1_000_000, "M"]
+          : [v / 1e9, "B"];
+    return `${n.toLocaleString(undefined, { maximumFractionDigits: 1 })}${suffix}`;
+  };
+}
+
+/** The data hues a chart can tell apart, the design system's ramp. */
+const RAMP = DATA_COLORS.length;
+
+/** The series every part past the ramp folds into. */
+export const OTHER_SERIES = "\u0000other";
+
+/**
+ * A chart's series, held to the hues a reader can tell apart: every series,
+ * when there are no more than the ramp's hues and one residual; else the
+ * first of them, in the order given, and one "Other" that the rest fold into
+ * (`fold` names the series a value is summed under).
+ *
+ * WHY: the design system has four data hues and a neutral for the rest
+ * (`dataColor`), and a board may draw six series (eight parts of a share).
+ * Past the fifth, every series took the same neutral, so a legend of six
+ * named two of them in one grey and a reader could not tell which was which.
+ * Folded, each named series keeps a hue of its own and the grey means what it
+ * means everywhere else in the product: the rest. The rows are untouched, so
+ * the CSV and the dataset's preview still carry every series.
+ */
+export function foldSeries(series: readonly { id: string; name: string }[]): {
+  series: { id: string; name: string }[];
+  fold: (id: string) => string;
+} {
+  if (series.length <= RAMP + 1) return { series: [...series], fold: (id) => id };
+  const kept = series.slice(0, RAMP);
+  const ids = new Set(kept.map((s) => s.id));
+  return {
+    series: [...kept, { id: OTHER_SERIES, name: "Other" }],
+    fold: (id) => (ids.has(id) ? id : OTHER_SERIES),
+  };
+}
+
+/**
  * The datasets that stand on any of `ids`, through every calculation, the ids
  * themselves included: what refreshes when a source does.
  */
@@ -289,16 +389,35 @@ function minutes(seconds: number): string {
   return n === 1 ? unit : plural(n, unit);
 }
 
-function argText(a: DashboardArg): string {
-  return typeof a === "object" ? `the ${a.param} filter` : String(a);
+/** The board's filters, by key, which a bound argument is named by. */
+type ParamLabels = ReadonlyMap<string, string>;
+
+/** An argument in words: a literal as written, a binding as the filter a reader sees ("the Service filter"). */
+function argText(a: DashboardArg, params: ParamLabels): string {
+  return typeof a === "object" ? `the ${params.get(a.param) ?? a.param} filter` : String(a);
 }
 
+/** A filter's comparison in words, as a sentence reads it rather than as the spec spells it. */
+const CMP_WORDS: Record<string, string> = {
+  eq: "is",
+  ne: "is not",
+  lt: "is under",
+  le: "is at most",
+  gt: "is over",
+  ge: "is at least",
+  present: "has a value",
+  absent: "has no value",
+};
+
 /** One calculation step in words. */
-export function stepWords(st: DashboardStep): string {
+export function stepWords(st: DashboardStep, params: ParamLabels = new Map()): string {
   switch (st.op) {
     case "filter":
       return `keep rows where ${(st.where ?? [])
-        .map((w) => `${w.column} ${w.cmp}${w.value === undefined ? "" : ` ${argText(w.value)}`}`)
+        .map(
+          (w) =>
+            `${w.column} ${CMP_WORDS[w.cmp] ?? w.cmp}${w.value === undefined ? "" : ` ${argText(w.value, params)}`}`,
+        )
         .join(" and ")}`;
     case "group":
       return `group by ${(st.by ?? []).join(", ") || "all rows"}: ${(st.aggregates ?? [])
@@ -317,11 +436,22 @@ export function stepWords(st: DashboardStep): string {
   }
 }
 
-/** What a dataset reads, in the rail's words: a source and its arguments, a collection, a file, or the steps. */
-export function definitionWords(d: DashboardDataset): string {
+/**
+ * What a dataset reads, in the rail's words: a source and its arguments, a
+ * collection, a file, or the steps. A filter is named as the reader sees it,
+ * by its label, and an argument bound to one says so: "scope from the Whose
+ * work filter", where the key alone read "scope the scope filter".
+ */
+export function definitionWords(
+  d: DashboardDataset,
+  boardParams: readonly Pick<DashboardParam, "key" | "label">[] = [],
+): string {
+  const params: ParamLabels = new Map(boardParams.map((p) => [p.key, p.label]));
   switch (d.source) {
     case "engine": {
-      const args = Object.entries(d.engine?.params ?? {}).map(([k, v]) => `${k} ${argText(v)}`);
+      const args = Object.entries(d.engine?.params ?? {}).map(([k, v]) =>
+        typeof v === "object" ? `${k} from ${argText(v, params)}` : `${k} ${argText(v, params)}`,
+      );
       return args.length ? `${d.engine?.name}, ${args.join(", ")}` : (d.engine?.name ?? "");
     }
     case "store":
@@ -329,7 +459,10 @@ export function definitionWords(d: DashboardDataset): string {
     case "file":
       return `The file ${d.file?.path} of this version`;
     case "calc":
-      return [`From ${d.calc?.from}`, ...(d.calc?.steps ?? []).map(stepWords)].join("; ");
+      return [
+        `From ${d.calc?.from}`,
+        ...(d.calc?.steps ?? []).map((st) => stepWords(st, params)),
+      ].join("; ");
   }
 }
 
@@ -359,6 +492,35 @@ export function exportName(board: string, widget: string, ext: "csv" | "png"): s
   return `${stem || "dashboard"}.${ext}`;
 }
 
+/**
+ * The narrowest a widget is drawn, in pixels: room for a title of a word or
+ * two beside the widget's menu, and a figure under it.
+ */
+const WIDGET_MIN_PX = 120;
+
+/** The spans a narrowed widget snaps to: those that tile a row of twelve evenly. */
+const EVEN_SPANS = [1, 2, 3, 4, 6, 12];
+
+/**
+ * The columns a widget spans on a board `width` pixels wide with `gap`
+ * between columns: its own `w`, unless that is narrower than [WIDGET_MIN_PX],
+ * when it takes the fewest columns of an even span that are not.
+ *
+ * WHY: a board is laid out at whatever width its author saw, and read at every
+ * other. Two columns of a board that has lost its Sources rail's width to the
+ * page (a laptop) were 105px, and a widget's title broke inside its words
+ * ("Empt|y", "Budg|et"). Widened to an even span, a row of narrow widgets still
+ * tiles its rows (six of two become four of three).
+ */
+export function boardSpan(w: number, width: number, gap: number, columns = 12): number {
+  if (width <= 0) return w;
+  const column = (width - gap * (columns - 1)) / columns;
+  const drawn = w * column + (w - 1) * gap;
+  if (drawn >= WIDGET_MIN_PX) return w;
+  const need = Math.ceil((WIDGET_MIN_PX + gap) / (column + gap));
+  return EVEN_SPANS.find((span) => span >= need) ?? columns;
+}
+
 /** Every widget of a board, a group's children after it, with the group each sits in. */
 export function eachWidget(
   widgets: readonly DashboardWidget[],
@@ -372,21 +534,32 @@ export function eachWidget(
 }
 
 /**
- * What one character of a compact table's text takes, in pixels, and a cell's
- * padding: the widget frame's 16px inset each side (a widget's table is
- * flush, its cells on the frame's inset) and 4px of air.
+ * How wide a run of a widget table's text is drawn, in pixels: a `heading`
+ * (set in capitals and tracked open, as the compact table's header is) or a
+ * value. The board measures with the fonts the table is drawn in (see
+ * `tableMeasure.ts`); [estimateTableText] stands in where nothing is drawn.
  */
-const TABLE_CHAR_PX = 7.5;
-const TABLE_CELL_PAD_PX = 36;
+export type TableMeasure = (text: string, heading: boolean) => number;
 
 /**
- * A heading's character: a heading is set in capitals and spaced wider than a
- * value, so a column sized for its values alone cut its heading short
- * (`SERVI…`). It carries no sort control (a widget's rows are in the order
+ * An estimate of [TableMeasure], from a character's average width on the
+ * compact step (a heading's capitals wider), for a suite and for a browser
+ * that cannot measure. The board does not size by it: an average reserved too
+ * much for lowercase words and too little for capitals, so one table both ran
+ * past its widget and cut `DEP-1050` to `DEP-105…`.
+ */
+export const estimateTableText: TableMeasure = (text, heading) =>
+  text.length * (heading ? 8.5 : 7.5);
+
+/**
+ * A cell's padding: the compact table's 12px each side and 4px of air. The
+ * table is flush in its widget, so its first and last columns stand on the
+ * frame's 16px instead of the cell's 12px on their outer side (TABLE_EDGE_PX
+ * more). A heading carries no sort control (a widget's rows are in the order
  * its dataset gives them), so its padding is a cell's.
  */
-const TABLE_HEAD_CHAR_PX = 8.5;
-const TABLE_HEAD_PAD_PX = TABLE_CELL_PAD_PX;
+const TABLE_CELL_PAD_PX = 28;
+const TABLE_EDGE_PX = 4;
 
 /** The narrowest and widest a table column starts at, in pixels. */
 const TABLE_MIN_PX = 72;
@@ -396,7 +569,7 @@ const TABLE_MAX_PX = 320;
  * The narrowest the prose column is fitted to, about twenty characters: what
  * still reads as the start of a title. Past it the table scrolls sideways.
  */
-const TABLE_PROSE_MIN_PX = 180;
+const TABLE_PROSE_MIN_PX = 150;
 
 /** How a dashboard table's columns are laid out: see [tableLayout]. */
 export interface TableLayout {
@@ -409,8 +582,8 @@ export interface TableLayout {
 }
 
 /**
- * Each column's width, from what it holds: the wider of its heading (with its
- * sort control) and its longest value as shown, at least [TABLE_MIN_PX] and at
+ * Each column's width, from what it holds: the wider of its heading and its
+ * longest value as `measure` says each is drawn, at least [TABLE_MIN_PX] and at
  * most [TABLE_MAX_PX]; and the one column that gives or takes the room left
  * in the widget.
  *
@@ -432,24 +605,25 @@ export interface TableLayout {
 export function tableLayout(
   shown: readonly { key: string; label: string; column: DashboardColumn | undefined }[],
   rows: readonly DashboardRow[],
+  measure: TableMeasure = estimateTableText,
 ): TableLayout {
   const widths: Record<string, number> = {};
   let flex: string | undefined;
   let flexChars = 0;
-  for (const { key, label, column } of shown) {
+  for (const [at, { key, label, column }] of shown.entries()) {
+    const edge = (at === 0 ? TABLE_EDGE_PX : 0) + (at === shown.length - 1 ? TABLE_EDGE_PX : 0);
     let chars = 0;
+    let drawn = 0;
     let spaced = false;
     for (const r of rows) {
       const v = r[key] ?? null;
-      const text =
-        column?.type === "number" && typeof v === "number"
-          ? formatNumber(v, "number")
-          : wordsOf(column, v);
+      const text = cellText(column, v);
       chars = Math.max(chars, text.length);
+      drawn = Math.max(drawn, measure(text, false));
       spaced ||= /\s/.test(text.trim());
     }
-    const head = label.length * TABLE_HEAD_CHAR_PX + TABLE_HEAD_PAD_PX;
-    const body = chars * TABLE_CHAR_PX + TABLE_CELL_PAD_PX;
+    const head = Math.ceil(measure(label.toUpperCase(), true)) + TABLE_CELL_PAD_PX + edge;
+    const body = Math.ceil(drawn) + TABLE_CELL_PAD_PX + edge;
     widths[key] = Math.round(Math.min(TABLE_MAX_PX, Math.max(TABLE_MIN_PX, head, body)));
     // Prose is free text in words: a column of a closed vocabulary is a
     // state, and one value with no space in it an identifier, each read

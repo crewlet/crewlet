@@ -59,6 +59,7 @@
 
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
+  ArtifactKindGlyph,
   CommandPalette as KitPalette,
   Kbd,
   KeyChip,
@@ -89,7 +90,7 @@ import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useRecents, forgetAll } from "~/lib/recents.ts";
 import { previewPalette, useViewerPrefs } from "~/lib/prefs.ts";
-import { useKeyHints } from "~/lib/media.ts";
+import { useKeyHints } from "~/app/layout.ts";
 import { themeEntry, useApplyTheme } from "../appearance.tsx";
 import { useViewer, type ViewerState } from "~/lib/viewer.ts";
 import { useAgents, useConnection, useOrg, useTools } from "~/lib/store-hooks.ts";
@@ -119,6 +120,7 @@ import type { LogRefusal, QueryRefusal, SearchOutcome, WorkProjectRow } from "~/
 import { SEARCH_MODES, modeLabel, searchTooLong, servedNote } from "~/lib/search.ts";
 import { PriorityMark, StatusMark } from "~/components/work.tsx";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
+import { KIND_LIST } from "~/lib/artifacts/words.ts";
 import { Mark } from "~/ui/glyph.tsx";
 import { QueryState } from "~/components/common.tsx";
 import {
@@ -612,9 +614,14 @@ export function CommandPalette({
   const asItems = (hits: Hit[]): CommandPaletteItem[] =>
     hits.map((h) => ({
       id: h.id,
-      icon: <Mark name={h.icon} size="sm" />,
+      icon: h.kind ? (
+        <ArtifactKindGlyph kind={h.kind} size="sm" />
+      ) : (
+        <Mark name={h.icon} size="sm" />
+      ),
       label: h.label,
-      hint: h.hint,
+      ...(h.hint ? { hint: h.hint } : {}),
+      ...(h.meta ? { meta: h.meta } : {}),
       onSelect: h.go,
     }));
 
@@ -969,7 +976,7 @@ export function CommandPalette({
             id: "artifact-scope",
             icon: <SearchGlyph size="sm" />,
             label: `Find “${term}” in artifacts →`,
-            hint: "sheets, pages and documents",
+            hint: KIND_LIST,
             onSelect: () => {
               setScope("artifacts");
               return false;
@@ -1326,7 +1333,7 @@ const SCOPE_NOTES: Record<Exclude<ScopeId, "actions">, string> = {
   all: "Screens, tasks, pages, agents",
   tasks: "The company’s tasks",
   pages: "The knowledge base",
-  artifacts: "Sheets, pages and documents you can open",
+  artifacts: "Every artifact you can open",
   agents: "The org chart",
 };
 

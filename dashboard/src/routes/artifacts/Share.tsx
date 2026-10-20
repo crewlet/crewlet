@@ -38,7 +38,13 @@ import {
   useArtifactPeople,
   type ArtifactPeople,
 } from "~/lib/artifacts/people.ts";
-import { GRANTABLE, ROLE_WORDS, audienceKey, roleIncludes } from "~/lib/artifacts/words.ts";
+import {
+  GRANTABLE,
+  ROLE_WORDS,
+  audienceKey,
+  invalidShareWords,
+  roleIncludes,
+} from "~/lib/artifacts/words.ts";
 import { plural } from "~/lib/format.ts";
 import { artifactAddress } from "./parts.tsx";
 
@@ -171,6 +177,9 @@ function ShareSurface({
         id,
         principal: audiencePrincipal(share.audience, people),
         role: share.role,
+        // A SHARE THAT REACHES NOBODY IS LISTED, NOT HIDDEN: the engine marks
+        // it, and its owner is told why and offered Remove alone.
+        ...(share.invalid ? { invalid: invalidShareWords(share.audience) } : {}),
         ...(state.pending ? { pending: true } : {}),
         ...(state.refusal ? { refusal: state.refusal } : {}),
       });

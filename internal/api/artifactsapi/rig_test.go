@@ -46,6 +46,9 @@ var (
 	report   = artifacts.IDFor("scribe's report")
 	binned   = artifacts.IDFor("jane's trashed page")
 	unknown  = artifacts.IDFor("nothing at all")
+	// legacy carries a share an earlier build wrote to a login named as a
+	// seat, which reaches nobody and which its owner must still remove.
+	legacy = artifacts.IDFor("jane's page shared with a login")
 )
 
 // files of the page's version 2.
@@ -133,6 +136,9 @@ func heads() map[artifacts.ID]artifactsdomain.Head {
 			OwnerKind: iam.ActorAgent, HeadNumber: 1, Status: artifactsdomain.StatusLive},
 		binned: {ID: binned, Kind: artifacts.KindHTML, Title: "Binned", Owner: "jane",
 			OwnerKind: iam.ActorHuman, HeadNumber: 1, Status: artifactsdomain.StatusTrashed},
+		legacy: {ID: legacy, Kind: artifacts.KindHTML, Title: "Old share", Owner: "jane",
+			OwnerKind: iam.ActorHuman, HeadNumber: 1, Status: artifactsdomain.StatusLive,
+			Shares: []artifacts.Share{share(artifacts.AudienceSeat, "token:maya", artifacts.RoleViewer)}},
 	}
 }
 

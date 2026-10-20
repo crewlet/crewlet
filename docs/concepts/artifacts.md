@@ -425,7 +425,9 @@ entries, and the hot history, measured within a few percent of the file. A
 twelve-column review sheet costs about 3.2 KiB a row with a week of history,
 so the default 32 MiB per store holds about ten thousand rows.
 
-**Exports.** An editor downloads any collection as CSV.
+**Exports.** An editor downloads any collection as CSV, written for a person
+to read: columns headed by their labels, choices by their labels and people by
+their names.
 
 ---
 
@@ -697,13 +699,16 @@ has the format.
   sandboxed frame minted for that board alone, and its ticket opens that page
   and no other ([ADR-0035](https://github.com/crewlet/crewlet/blob/main/adr/0035-an-artifact-is-served-from-an-origin-that-holds-no-credential.md),
   "One document per ticket"). Only boards on screen and drawn wide enough to
-  read run, at most twelve at once; the rest are placeholders of their size.
-  A board opens at its own size in a dialog, still framed.
+  make out run (96 pixels on screen, a thumbnail), at most twelve at once; the
+  rest are placeholders of their size. A board opens in a dialog, still
+  framed, fitted to it or at its own size.
 - **Worked like a design tool.** A floating palette holds Move (`V`) and Hand
   (`H`, or Space held), and while editing Text (`T`) and Sticky (`S`), which
   place a note where the canvas is clicked. A click selects a board or a note
   and a double-click hands a board's page the pointer, Escape giving it back.
-  Shift 1 fits every board in view and Shift 0 shows actual size.
+  Shift 1 fits every board in view and Shift 0 shows actual size. The list of
+  boards beside the canvas marks the board selected on it, and a board picked
+  there is selected and brought into view.
 - **Rearranged as versions.** A person with `editor` moves and resizes boards
   (by a board's name and a selected board's corners) and places, edits and
   deletes notes; Save publishes a version whose one change

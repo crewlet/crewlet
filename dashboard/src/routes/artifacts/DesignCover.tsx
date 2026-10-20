@@ -5,7 +5,7 @@
  * page at all.
  */
 
-import { CanvasSchematic } from "@crewlethq/ui";
+import { ArtifactPreviewGlyph, CanvasSchematic } from "@crewlethq/ui";
 import type { ArtifactListItem, ArtifactOutline } from "~/protocol/index.ts";
 import { useRest } from "~/lib/useRest.ts";
 import { readOutline } from "~/lib/artifacts/api.ts";
@@ -20,7 +20,7 @@ export function DesignCover({
     (signal) => readOutline(item.id, item.head_number, signal),
   );
   const design = outline.data?.design;
-  if (!design) return null;
+  if (!design) return <ArtifactPreviewGlyph kind="design" />;
   return (
     <span className="design-cover">
       <CanvasSchematic

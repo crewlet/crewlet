@@ -5279,6 +5279,11 @@ export interface ArtifactSeenByAnswer {
 /** One share and the seats a unit share reaches today (`artifactsapi.ShareAccess`). */
 export interface ArtifactShareAccess extends ArtifactShare {
   members?: string[];
+  /**
+   * The share reaches nobody: a login named as a seat, which a build before the
+   * grant rule wrote. Listed so its owner removes it; never offered a role.
+   */
+  invalid?: boolean;
 }
 
 /** `artifact_access{id}`: the share dialog's list (`artifactsapi.Access`). */
@@ -5925,7 +5930,7 @@ export interface PresenceFocus {
 /** One open viewer of one artifact (`artifacts.PresenceMember`). */
 export interface ArtifactPresenceMember {
   session: string;
-  /** The seat handle; the dashboard resolves the name. */
+  /** The seat handle, which the dashboard resolves to a name, or the login of one acting under no seat. */
   seat: string;
   kind: string;
   activity: PresenceActivity;

@@ -312,7 +312,7 @@ test("the Sources rail lists every dataset with how it is kept current", async (
 test("each widget is a cell of the board's twelve-column grid", async () => {
   mount(dataStore());
   await waitFor(() => expect(widget("pipeline")).toBeTruthy());
-  const grid = document.querySelector<HTMLElement>(".dashboard-board > .crewlet-arrange-grid");
+  const grid = document.querySelector<HTMLElement>(".dashboard-board .crewlet-arrange-grid");
   expect(grid).toBeTruthy();
   expect(grid?.style.getPropertyValue("--crewlet-arrange-columns")).toBe("12");
   const cells = [...document.querySelectorAll(".dashboard-cell")].filter(
@@ -320,4 +320,18 @@ test("each widget is a cell of the board's twelve-column grid", async () => {
   );
   expect(cells.length).toBe(board.board.widgets.length);
   for (const cell of cells) expect(cell.parentElement).toBe(grid);
+});
+
+// THE RAIL'S PREVIEW IS A WIDGET'S TABLE: a dataset's first rows drawn by the
+// rule a widget's table is, never sorted and never broken mid-word, where the
+// design system's default table offered a sort on every column and wrapped
+// "DEP-1040" over two lines in the rail's width.
+test("the Sources rail previews a dataset's rows as a widget's table draws them", async () => {
+  mount(dataStore());
+  const rail = await screen.findByRole("complementary", { name: "Sources" });
+  await waitFor(() => expect(within(rail).getByText("Pipeline total")).toBeTruthy());
+  within(rail).getByText("Pipeline total").click();
+  await waitFor(() => expect(rail.querySelector("table")).not.toBeNull());
+  expect(rail.querySelector(".crewlet-data-table--wrap-lines")).toBeNull();
+  expect(rail.querySelector(".crewlet-data-table__sort-button, th[aria-sort]")).toBeNull();
 });

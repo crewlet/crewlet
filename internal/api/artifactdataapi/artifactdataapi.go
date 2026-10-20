@@ -65,6 +65,11 @@ type Options struct {
 	// Versions answers a version's declared capabilities. REQUIRED.
 	Versions Versions
 
+	// Names answers a seat handle's display name, which a person cell is
+	// exported as. REQUIRED: an export is read by people, and a handle is
+	// the chart's address for a seat, not its name.
+	Names artifactdata.Names
+
 	// Now is the clock an operation key is minted at; nil is the wall clock.
 	Now func() time.Time
 }
@@ -74,6 +79,7 @@ type Service struct {
 	gate     artifactsapi.Gate
 	data     Data
 	versions Versions
+	names    artifactdata.Names
 	now      func() time.Time
 }
 
@@ -97,12 +103,15 @@ func New(opts Options) (*Service, error) {
 	case opts.Versions == nil:
 		return nil, errors.New("artifactdataapi: no versions: a page script's write is " +
 			"checked against its version's declared capabilities")
+	case opts.Names == nil:
+		return nil, errors.New("artifactdataapi: no seat names: an export writes a person " +
+			"cell as the seat's name")
 	}
 	now := opts.Now
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{gate: opts.Gate, data: opts.Data, versions: opts.Versions, now: now}, nil
+	return &Service{gate: opts.Gate, data: opts.Data, versions: opts.Versions, names: opts.Names, now: now}, nil
 }
 
 // Routes mounts the surface's write routes and the export.
@@ -453,7 +462,7 @@ func (s *Service) export(w http.ResponseWriter, r *http.Request) {
 	}
 	out := &csvResponse{w: w, collection: collection}
 	err := artifactdata.Export(r.Context(), s.data, id, Reading(a, statelog.Freshness{
-		Level: statelog.DefaultReadLevel(statelog.SurfaceDashboard)}), collection, out)
+		Level: statelog.DefaultReadLevel(statelog.SurfaceDashboard)}), collection, s.names, out)
 	switch {
 	case err == nil && !out.started:
 		// AN EXPORT ALWAYS WRITES ITS HEADER ROW, so this is unreachable;

@@ -187,20 +187,6 @@
   }
 }
 
-/* A DIALOG'S MARK SITS ON ITS TITLE'S LINE. The kit centres the header's items,
-   which is right for a title alone and wrong once a subtitle runs to two or
-   three lines under it: the mark floated beside the description, belonging to
-   neither line. With a subtitle the row aligns to the top, and the mark's box
-   is one title line tall so the glyph centres on that line. A dialog with no
-   subtitle keeps the kit's centring, where the two are the same thing. */
-.crewlet-modal__header:has(.crewlet-modal__subtitle) {
-  align-items: flex-start;
-}
-.crewlet-modal__header:has(.crewlet-modal__subtitle) .crewlet-modal__icon {
-  align-items: center;
-  height: calc(var(--font-size-sm) * var(--font-line-height-tight));
-}
-
 /* THE GROUP HEADINGS IN THE DESIGN'S REGISTER: "Tasks", "Pages", "Actions"
    in sentence case at the small label step, as the approved palette writes
    them — the listbox's uppercase micro-label is a table's column head, and
@@ -212,12 +198,6 @@
   text-transform: none;
 }
 
-/* THE LEGEND SPANS THE BAND, keys at its start and what the search is doing at
-   its end, as the approved palette draws it. The kit's start slot is sized to
-   its content; this lets it take the band so the end can sit at the end. */
-.palette .crewlet-modal__footer-start {
-  flex: 1 1 auto;
-}
 /* THE KEYS WRAP rather than run off the band: a phone's palette is 358px wide
    and three keys with their words are not. */
 .palette-keys {
@@ -850,27 +830,18 @@
 }
 
 /* ---- The section tabs ----------------------------------------------------
-   A workspace's sections, under the bar, as LINKS: each goes to its own
-   address, so the current one is `aria-current="page"` and is drawn from that
-   attribute — the underline and the primary ink, no hue — and the two cannot
-   come apart. The row never scrolls: the tabs that do not fit fold into the
-   "More" menu at its end (`SectionTabs` in PageHeader.tsx measures which). It
-   is the containing block of the folded ones, which sit at its start, out of
-   the flow and invisible, so they can be measured again when it grows. */
+   A workspace's sections, under the bar, as LINKS: the kit's underline `Tabs`
+   in router mode (`SectionTabs` in PageHeader.tsx), so the tab, its figure,
+   the bar under the current one and the focus ring are the kit's. What is
+   left here is the strip's place under the bar and its fold: the row never
+   scrolls, because the tabs that do not fit fold into the "More" menu at its
+   end, and the folded ones sit at its start, out of the flow and invisible,
+   so they can be measured again when it grows. */
 .section-tabs {
-  position: relative;
-  display: flex;
-  align-items: stretch;
-  gap: var(--spacing-5);
-  min-height: var(--size-control-lg);
   padding: 0 var(--spacing-5);
-  border-bottom: 1px solid var(--color-border-default);
-  overflow: hidden;
 }
 
-.section-tab[data-folded],
-.section-tabs-more[data-folded],
-.section-tabs-note[data-folded] {
+.section-tabs [data-folded] {
   position: absolute;
   inset-block-start: 0;
   inset-inline-start: 0;
@@ -878,8 +849,8 @@
   pointer-events: none;
 }
 
-/* "More" is the kit's own quiet menu button — the one the page bar's "More"
-   is — centred on the tabs' line. */
+/* "More" is the kit's own quiet menu button (the one the page bar's "More"
+   is), centred on the tabs' line. */
 .section-tabs-more {
   display: inline-flex;
   flex: none;
@@ -887,7 +858,7 @@
 }
 
 /* A workspace's reading note (`WorkspaceRow.note`), at the row's far end: a
-   sentence about every section, never one of them. It gives way to the tabs —
+   sentence about every section, never one of them. It gives way to the tabs,
    folded whenever the strip has no room for it beside every one of them
    (`noteFits`), which on a phone is always. */
 .section-tabs-note {
@@ -907,19 +878,16 @@
    overlay: it fades whatever is under it on every ground, in both themes, with
    no colour of its own to keep in step with the surface. */
 .page-controls[data-more-end],
-.work-tabs-group[data-more-end],
 .work-bar-run[data-more-end] {
   mask-image: linear-gradient(to right, #000 calc(100% - var(--spacing-8)), transparent);
 }
 
 .page-controls[data-more-start],
-.work-tabs-group[data-more-start],
 .work-bar-run[data-more-start] {
   mask-image: linear-gradient(to left, #000 calc(100% - var(--spacing-8)), transparent);
 }
 
 .page-controls[data-more-start][data-more-end],
-.work-tabs-group[data-more-start][data-more-end],
 .work-bar-run[data-more-start][data-more-end] {
   mask-image: linear-gradient(
     to right,
@@ -928,43 +896,6 @@
     #000 calc(100% - var(--spacing-8)),
     transparent
   );
-}
-
-.section-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  flex: none;
-  padding: 0 2px;
-  border-bottom: 2px solid transparent;
-  color: var(--color-text-tertiary);
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-medium);
-  text-decoration: none;
-  white-space: nowrap;
-}
-
-.section-tab:hover {
-  color: var(--color-text-primary);
-}
-
-/* A section's figure: the tertiary step whatever the tab's own ink, so the
-   current tab's name lifts and its number does not. */
-.section-tab-count {
-  color: var(--color-text-tertiary);
-  font-weight: var(--font-weight-regular);
-}
-
-.section-tab[aria-current="page"] {
-  color: var(--color-text-primary);
-  border-bottom-color: var(--color-text-primary);
-}
-
-/* INSIDE ITS OWN BOX, because the row clips at its edges and an outset ring on
-   the first tab would be cut there. */
-.section-tab:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: var(--size-focus-ring-inset-offset);
 }
 
 /* ---- The Settings column and the Knowledge tree ---------------------------
@@ -1245,6 +1176,10 @@
   gap: 4px;
   padding: var(--spacing-2) var(--spacing-3);
   font-size: var(--font-size-2xs);
+  /* THE LIST TABLE'S HEAD, 11/500 uppercase as every other list table draws
+     it (the kit's DataTable): at 400 the tracked capitals read lighter than
+     the cells under them. */
+  font-weight: var(--font-weight-medium);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--color-text-tertiary);

@@ -3,9 +3,10 @@
  *
  * # The first row is WHAT is drawn: the shape, then the saved views
  *
- * The five shapes are tabs again — but tabs of the DRAWING, never mixed with
- * the views: a divider separates the two kinds, because a saved view is a
- * query somebody arranged and a shape is how any query is drawn. They were in
+ * The five shapes are a segmented row of the DRAWING, never mixed with the
+ * views: they are two rows, each in its own well, because a saved view is a
+ * query somebody arranged and a shape is how any query is drawn. Both are the
+ * kit's `SegmentedControl`, the switch the Artifacts gallery draws too. They were in
  * the Display menu for a while, which made the board — the shape a team lives
  * in — two presses away and said nothing about which was on until the menu was
  * opened. The views after the divider are the ones this reader PINNED, plus
@@ -35,7 +36,7 @@
  */
 
 import { useRef, type RefObject } from "react";
-import { Input, Kbd, Select, cx } from "@crewlethq/ui";
+import { Input, Kbd, SegmentedControl, Select, cx } from "@crewlethq/ui";
 import {
   CalendarGlyph,
   ChartNoAxesGanttGlyph,
@@ -47,12 +48,11 @@ import {
   SearchGlyph,
 } from "@crewlethq/icons/glyphs";
 import { useSearchTarget } from "~/app/searchTarget.ts";
-import { useScrollEdges } from "~/lib/useScrollEdges.ts";
 import { href } from "~/app/router.tsx";
 import { SORTS, groupAxisOptions, type Scope, type Shape } from "~/lib/work.ts";
 import type { WorkView } from "~/protocol/index.ts";
 
-/** The five shapes, in the order the approved board draws their tabs. */
+/** The five shapes, in the order the approved board draws them. */
 export const SHAPES: { value: Shape; label: string; Glyph: typeof ListGlyph }[] = [
   { value: "list", label: "List", Glyph: ListGlyph },
   { value: "board", label: "Board", Glyph: LayoutDashboardGlyph },
@@ -62,33 +62,39 @@ export const SHAPES: { value: Shape; label: string; Glyph: typeof ListGlyph }[] 
 ];
 
 /**
- * The shapes, as a row of pressed buttons rather than a tablist.
+ * The shapes, as the kit's segmented row: the same switch the Artifacts
+ * gallery draws its List and Cards with, so the two view switches in the
+ * product are one control.
  *
- * A BUTTON GROUP, because each one redraws THE SAME panel below rather than
- * showing one of five: a `tablist` promises a panel per tab and arrow keys
- * between them, and a screen reader would announce a structure the page does
- * not have.
+ * A RADIO GROUP, NOT A TABLIST, because each choice redraws THE SAME panel
+ * below rather than showing one of five: a `tablist` promises a panel per tab,
+ * and a screen reader would announce a structure the page does not have.
+ *
+ * MANUAL ACTIVATION, because the shape is a section in the URL: a change
+ * pushes a history entry and redraws the list, so the arrows move focus and
+ * Enter or Space chooses, and walking the row leaves nothing for Back to walk
+ * back through.
+ *
+ * EACH SHAPE IS ITS GLYPH, named for a screen reader and titled for a
+ * pointer, as the gallery's are. Drawn as glyphs the five fit on one line at a
+ * phone's width, which the worded row did not.
  */
-export function ShapeTabs({ shape, onShape }: { shape: Shape; onShape: (shape: Shape) => void }) {
-  // ON A PHONE THE SHAPES ARE ONE LINE THAT SCROLLS (the sheet's container
-  // query), and the edge with more past it fades — see `useScrollEdges`.
-  const row = useRef<HTMLDivElement>(null);
-  const edges = useScrollEdges(row);
+export function ShapeSwitch({ shape, onShape }: { shape: Shape; onShape: (shape: Shape) => void }) {
   return (
-    <div ref={row} className="work-tabs-group" role="group" aria-label="Draw as" {...edges}>
-      {SHAPES.map(({ value, label, Glyph }) => (
-        <button
-          key={value}
-          type="button"
-          className="work-tab"
-          aria-pressed={shape === value}
-          onClick={() => onShape(value)}
-        >
-          <Glyph size="sm" aria-hidden="true" />
-          <span>{label}</span>
-        </button>
-      ))}
-    </div>
+    <SegmentedControl<Shape>
+      semantics="radio"
+      activate="manual"
+      size="sm"
+      label="Draw as"
+      value={shape}
+      onValueChange={onShape}
+      options={SHAPES.map(({ value, label, Glyph }) => ({
+        value,
+        icon: <Glyph size="sm" />,
+        srLabel: label,
+        title: label,
+      }))}
+    />
   );
 }
 
@@ -98,8 +104,14 @@ export function ShapeTabs({ shape, onShape }: { shape: Shape; onShape: (shape: S
  *
  * THE CONTAINER'S OWN LIST STAYS FIRST, because a strip of saved views with no
  * way back to the unsaved list is a strip a reader gets stuck in.
+ *
+ * THE SAME SEGMENTED ROW AS THE SHAPES, with the same manual activation for
+ * the same reason: a view is a URL change that re-runs the list. A strip with
+ * more pinned views than the row holds wraps inside its well, as every kit
+ * segmented row does, and a long name is cut at a width the row can hold with
+ * its title carrying the rest.
  */
-export function ViewTabs({
+export function ViewSwitch({
   views,
   chosen,
   containerLabel,
@@ -113,29 +125,23 @@ export function ViewTabs({
   const strip = views.filter((v) => !v.builtin && (v.pinned || v.key === chosen));
   const current = strip.some((v) => v.key === chosen) ? chosen : "";
   return (
-    <div className="work-tabs-group" role="group" aria-label="Saved views">
-      <button
-        type="button"
-        className="work-tab"
-        aria-pressed={current === ""}
-        onClick={() => onView("")}
-      >
-        {containerLabel}
-      </button>
-      {strip.map((v) => (
-        <button
-          key={v.key}
-          type="button"
-          className="work-tab"
-          aria-pressed={current === v.key}
-          title={v.pinned ? `${v.name} (pinned)` : v.name}
-          onClick={() => onView(v.key)}
-        >
-          {v.pinned ? <PinGlyph size="sm" aria-hidden="true" /> : null}
-          <span className="truncate">{v.name}</span>
-        </button>
-      ))}
-    </div>
+    <SegmentedControl
+      semantics="radio"
+      activate="manual"
+      size="sm"
+      label="Saved views"
+      value={current}
+      onValueChange={onView}
+      options={[
+        { value: "", label: containerLabel },
+        ...strip.map((v) => ({
+          value: v.key,
+          icon: v.pinned ? <PinGlyph size="sm" /> : undefined,
+          label: <span className="work-view-name truncate">{v.name}</span>,
+          title: v.pinned ? `${v.name} (pinned)` : v.name,
+        })),
+      ]}
+    />
   );
 }
 

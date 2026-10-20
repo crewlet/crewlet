@@ -28,9 +28,13 @@ import type {
 } from "~/protocol/index.ts";
 import { fmtDate, parseUTC, plural } from "../format.ts";
 
-/** What each kind is called, in the eyebrow, the gallery's Type column and its filter. */
+/**
+ * What each kind is called, in the eyebrow, the gallery's Type column and its
+ * filter. An `html` artifact is "HTML", never "Page": a page is Knowledge's
+ * word, and "Page" beside Knowledge's Pages named two things one way.
+ */
 export const KIND_WORDS: Readonly<Record<ArtifactKind, string>> = {
-  html: "Page",
+  html: "HTML",
   doc: "Doc",
   slides: "Slides",
   dashboard: "Dashboard",
@@ -40,6 +44,24 @@ export const KIND_WORDS: Readonly<Record<ArtifactKind, string>> = {
 
 /** Every kind, in the engine's order, as the gallery's filter offers them. */
 export const KINDS: readonly ArtifactKind[] = ARTIFACT_KINDS;
+
+/** What each kind is called where a sentence names several of it: "docs, slides and sheets". */
+export const KIND_PLURAL_WORDS: Readonly<Record<ArtifactKind, string>> = {
+  html: "HTML pages",
+  doc: "docs",
+  slides: "slides",
+  dashboard: "dashboards",
+  sheet: "sheets",
+  design: "designs",
+};
+
+/**
+ * Every kind in one phrase, for a sentence that says what Artifacts holds:
+ * "HTML pages, docs, slides, dashboards, sheets and designs". Derived from the
+ * kind table, so a kind the engine grows is named wherever the workspace
+ * describes itself, rather than each description listing the three it knew.
+ */
+export const KIND_LIST = wordList(KINDS.map((kind) => KIND_PLURAL_WORDS[kind]));
 
 /** Whether a value off the wire is a kind this build draws. */
 export function isArtifactKind(value: string): value is ArtifactKind {
@@ -111,6 +133,12 @@ export function dataRefusalText(verdict: Exclude<DataVerdict, "applied">): strin
 export function dataRefusalReason(verdict: Exclude<DataVerdict, "applied">): string {
   const words = DATA_REFUSAL_WORDS[verdict];
   return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/** Words in a sentence: "a", "a and b", "a, b and c". */
+function wordList(words: readonly string[]): string {
+  if (words.length < 2) return words.join("");
+  return `${words.slice(0, -1).join(", ")} and ${words.at(-1)}`;
 }
 
 /** Names in a sentence: "Notes", "Notes and Gate", "3 columns". */
@@ -212,8 +240,20 @@ export function audienceKey(audience: ArtifactAudience): string {
 }
 
 /**
+ * Why a stored share reaches nobody, as its row in the share dialog says it:
+ * the engine marks it `invalid` (a sign-in named as a seat, which a build
+ * before the grant rule wrote), and its owner is told what it is and what to
+ * do instead. The sign-in is named as written, since that is what was stored.
+ */
+export function invalidShareWords(audience: ArtifactAudience): string {
+  return `${audience.id ?? ""} is a sign-in, not a seat. Remove it and share with their seat.`;
+}
+
+/**
  * One history row as a sentence after its actor's name. A refused row says it
- * was refused, so the record reads as what was tried and what came of it.
+ * was refused, so the record reads as what was tried and what came of it, and
+ * a change an administrator made with no share of their own says so once: an
+ * administrator's read already names it in its own words.
  * `audience` reads a share's audience as the engine spells it (`seat:pm`,
  * `unit:ops`, `company`) and `seat` a seat handle, each as the names the
  * reader knows them by.
@@ -281,7 +321,67 @@ export function historyWords(
         return entry.op.replaceAll("_", " ");
     }
   })();
-  return entry.outcome === "refused" ? `tried to ${stripPast(said)} and was refused` : said;
+  const tried = entry.outcome === "refused" ? `tried to ${stripPast(said)} and was refused` : said;
+  return entry.elevated && entry.op !== "read_elevated" ? `${tried} (as an administrator)` : tried;
+}
+
+/**
+ * A history row's op as one short verb, for the company audit's What column,
+ * where every source's rows share one narrow track and the row's sentence is
+ * its Detail. Keyed by the engine's ops (`artifactsdomain.OpKind`); an op this
+ * build has not met is read with its underscores as spaces.
+ */
+const HISTORY_OP_TAGS: Readonly<Record<string, string>> = {
+  create: "create",
+  publish: "publish",
+  restore_version: "restore version",
+  patch: "edit",
+  share: "share",
+  unshare: "unshare",
+  transfer: "transfer",
+  prune: "prune",
+  trash: "trash",
+  restore: "untrash",
+  purge_begin: "begin purge",
+  purge: "purge",
+  remove: "remove asset",
+  pin: "pin",
+  unpin: "unpin",
+  opened: "open",
+  read_elevated: "admin read",
+};
+
+/** A history op as the audit's What column says it: "admin read", "restore version". */
+export function historyOpTag(op: string): string {
+  return HISTORY_OP_TAGS[op] ?? op.replaceAll("_", " ");
+}
+
+/**
+ * Why the artifact log refused a record, as the sentence after "Refused:".
+ * Keyed by the engine's reasons (`artifactsdomain.Refusal`); a reason this
+ * build has not met is read with its underscores as spaces.
+ */
+const HISTORY_REFUSAL_WORDS: Readonly<Record<string, string>> = {
+  invalid: "the request was malformed",
+  not_found: "the artifact or asset does not exist",
+  exists: "it already exists",
+  purged: "it was deleted for good",
+  trashed: "it is in the trash",
+  live: "it is not in the trash",
+  purging: "it is being deleted for good",
+  head_moved: "a newer version was published first",
+  carried_object_gone: "a file it kept from the last version is gone",
+  object_named_elsewhere: "a file belongs to another artifact",
+  quota_artifacts: "the company has reached its artifact limit",
+  quota_bytes: "the company has reached its storage limit",
+  label_taken: "another version holds that label",
+  version_not_found: "the version does not exist",
+  source_taken: "another artifact holds that source",
+};
+
+/** A refused history row's reason in words: "a newer version was published first". */
+export function historyRefusalWords(reason: string): string {
+  return HISTORY_REFUSAL_WORDS[reason] ?? reason.replaceAll("_", " ");
 }
 
 /** A sentence's verb in the infinitive, for "tried to …": a crude but closed table. */

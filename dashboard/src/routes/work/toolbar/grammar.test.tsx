@@ -271,11 +271,11 @@ const ARRANGEMENT: Record<
 > = {
   shape: {
     at: "#/work",
-    // THE FIRST ROW'S OWN TABS, never the Display menu: the shape is the one
+    // THE FIRST ROW'S OWN SWITCH, never the Display menu: the shape is the one
     // arrangement a team switches all day.
     press: async () => {
-      const shapes = await screen.findByRole("group", { name: "Draw as" });
-      fireEvent.click(within(shapes).getByRole("button", { name: "Board" }));
+      const shapes = await screen.findByRole("radiogroup", { name: "Draw as" });
+      fireEvent.click(within(shapes).getByRole("radio", { name: "Board" }));
     },
     writes: "shape=board",
   },
@@ -406,10 +406,10 @@ test("the scope is the bar's own switch, with no chip and no row in the Filter m
   expect(screen.queryByText("scope=")).toBeNull();
 });
 
-// A SAVED VIEW IS A TAB IN THE STRIP — a pressed button, pinned by this reader: it is a query somebody arranged and put
-// somewhere, which is neither a narrowing the reader added nor a way of
-// drawing one.
-test("the saved view is a tab rather than a chip or a menu row", async () => {
+// A SAVED VIEW IS AN OPTION IN THE STRIP, pinned by this reader: it is a
+// query somebody arranged and put somewhere, which is neither a narrowing the
+// reader added nor a way of drawing one.
+test("the saved view is an option in the strip rather than a chip or a menu row", async () => {
   location.hash = "#/work";
   serving({
     ...rows,
@@ -430,7 +430,7 @@ test("the saved view is a tab rather than a chip or a menu row", async () => {
     },
   });
   mountList();
-  fireEvent.click(await screen.findByRole("button", { name: "Arranged" }));
+  fireEvent.click(await screen.findByRole("radio", { name: "Arranged" }));
   await waitFor(() => expect(location.hash).toContain("view=arranged"));
   expect(document.querySelector(".work-chip-field")).toBeNull();
 });

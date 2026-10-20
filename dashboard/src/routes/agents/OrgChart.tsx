@@ -93,6 +93,7 @@ import {
   type TreeInput,
   type TreeItemAction,
   type TreeModel,
+  useMediaMatch,
 } from "@crewlethq/ui";
 import { NetworkGlyph } from "@crewlethq/icons/glyphs";
 import { useFillScreen } from "~/app/fill.tsx";
@@ -118,7 +119,6 @@ import {
 } from "~/components/people.tsx";
 import type { HumanSeat } from "~/contract/identity.ts";
 import type { RestResult } from "~/lib/useRest.ts";
-import { useMediaQuery } from "~/lib/media.ts";
 import { CANVAS_PEEK_WIDTH, PHONE_BREAKPOINT } from "~/app/layout.ts";
 import {
   activityOf,
@@ -181,7 +181,7 @@ export function OrgChart() {
   // BELOW A PHONE'S WIDTH THE CHART IS ROWS (see [OrgOutline]), and rows
   // scroll with the page as any list does; the canvas takes the height the
   // page leaves.
-  const phone = useMediaQuery(`(width < ${PHONE_BREAKPOINT}px)`);
+  const phone = useMediaMatch(`(width < ${PHONE_BREAKPOINT}px)`);
   useFillScreen(!phone);
   // THE PEEK RESTS AT THE CANVAS WIDTH beside a chart, as the approved one
   // draws it: every pixel it takes is one the whole company is shrunk into.

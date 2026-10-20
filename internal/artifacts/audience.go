@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"unicode"
+
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // AN AUDIENCE'S TEXT FORM: `seat:<handle>`, `unit:<key>` or `company`. It is
@@ -31,10 +33,15 @@ func (a Audience) String() string {
 	return string(a.Kind) + audienceSeparator + a.ID
 }
 
-// Validate refuses an audience that cannot name a principal set: a kind this
+// Validate refuses an audience that cannot be addressed at all: a kind this
 // build does not know (a later build's `link` included), a seat or a unit with
 // no id, an id that could not round-trip through the text form or a URL
 // segment, or a company audience carrying an id.
+//
+// IT IS WHAT A STORED SHARE IS HELD TO, and so what a withdrawal accepts. A
+// NEW grant is held to [Audience.ValidateGrant] as well: a share written
+// before that rule existed (a login named as a seat) is the owner's to
+// withdraw or change, never a record the engine can neither honour nor remove.
 func (a Audience) Validate() error {
 	switch a.Kind {
 	case AudienceCompany:
@@ -70,10 +77,40 @@ func validAudienceID(kind AudienceKind, id string) error {
 	return nil
 }
 
+// ValidateGrant refuses an audience a NEW share may not name: everything
+// [Audience.Validate] refuses, and a seat audience that is not a seat handle.
+//
+// A SEAT AUDIENCE NAMES A SEAT, in the chart's own grammar, and NEVER A LOGIN:
+// the kinds are a closed set of company principals ([AudienceKind]), and the
+// authority table matches a seat share against the principal's SEAT alone. A
+// person's dotted login and a machine's or a Tier A token's coloned one are
+// disjoint from a handle by construction ([iam.ValidSeatHandle]), so a share to
+// one was written, counted by the listing and then admitted by nothing:
+// `seat:token:maya` reached nobody while saying it reached Maya.
+func (a Audience) ValidateGrant() error {
+	if err := a.Validate(); err != nil {
+		return err
+	}
+	if !a.Reaches() {
+		return fmt.Errorf("%w: %q is not a seat handle: a share names the seat a "+
+			"person or an agent holds, and a login (a person's dotted name, a service "+
+			"account's or an API token's coloned one) is not a seat, so share with the "+
+			"seat it acts as", ErrInvalidAudience, a.ID)
+	}
+	return nil
+}
+
+// Reaches reports whether a well-formed audience can reach anybody: false for
+// a seat audience naming a login, which a share written before
+// [Audience.ValidateGrant] may hold and which only a withdrawal is for.
+func (a Audience) Reaches() bool {
+	return a.Kind != AudienceSeat || iam.ValidSeatHandle(a.ID)
+}
+
 // ParseAudience reads an audience's text form back.
 //
-// THE KIND IS CUT AT THE FIRST SEPARATOR, so a seat handle or unit key that
-// itself contains one still reads back whole; an audience the text form could
+// THE KIND IS CUT AT THE FIRST SEPARATOR, so a unit key that itself contains
+// one still reads back whole (a seat handle never does); an audience the text form could
 // not have produced is refused rather than guessed at.
 func ParseAudience(s string) (Audience, error) {
 	if s == string(AudienceCompany) {

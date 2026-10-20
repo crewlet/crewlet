@@ -31,12 +31,18 @@ import {
 } from "~/lib/artifacts/api.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { SHEET_TEMPLATES, type SheetTemplate } from "~/lib/artifacts/schema.ts";
+import { KIND_WORDS } from "~/lib/artifacts/words.ts";
 
-/** What New can start, in the order its kind control offers them, and what each says. */
+/**
+ * What New can start, in the order its kind control offers them, and what each
+ * says. Each is named by its KIND'S WORD, as the gallery's Type filter and
+ * column name it: the switch said "Deck" for what every other screen calls
+ * "Slides".
+ */
 const STARTS = [
   {
     kind: "sheet",
-    label: "Sheet",
+    label: KIND_WORDS.sheet,
     title: "New sheet",
     hint: "A sheet everyone you share it with fills in together, live",
     placeholder: "Integration requirements review",
@@ -45,7 +51,7 @@ const STARTS = [
   },
   {
     kind: "doc",
-    label: "Doc",
+    label: KIND_WORDS.doc,
     title: "New doc",
     hint: "A document you write in Markdown, edit in place and print",
     placeholder: "On-call handbook",
@@ -54,8 +60,8 @@ const STARTS = [
   },
   {
     kind: "slides",
-    label: "Deck",
-    title: "New deck",
+    label: KIND_WORDS.slides,
+    title: "New slide deck",
     hint: "A slide deck you edit in place, present full screen and print",
     placeholder: "Quarterly plan",
     starts:
@@ -125,21 +131,26 @@ export function NewArtifact() {
   return (
     <Section title={kind.title} hint={kind.hint}>
       <div className="artifact-form">
-        <SegmentedControl
-          label="Kind"
-          semantics="radio"
-          size="sm"
-          options={STARTS.map((s) => ({ value: s.kind, label: s.label }))}
-          value={kind.kind}
-          onValueChange={(v: string) => setKind(v)}
-        />
+        {/* EVERY CONTROL UNDER ITS NAME, as the title is: the switch and the
+            templates were two unnamed blocks between the heading and the
+            actions. */}
+        <FormField as="fieldset" label="Type">
+          <SegmentedControl
+            label="Type"
+            semantics="radio"
+            size="sm"
+            options={STARTS.map((s) => ({ value: s.kind, label: s.label }))}
+            value={kind.kind}
+            onValueChange={(v: string) => setKind(v)}
+          />
+        </FormField>
         <FormField label="Title" error={titleWrong}>
           {(field) => (
             <Input
               id={field.id}
               aria-describedby={field.describedBy}
               aria-invalid={field.invalid}
-              width="md"
+              width="full"
               value={title}
               placeholder={kind.placeholder}
               onChange={(e) => setTitle(e.target.value)}
@@ -147,16 +158,18 @@ export function NewArtifact() {
           )}
         </FormField>
         {kind.kind === "sheet" ? (
-          <ChoiceList
-            label="Start from"
-            value={template}
-            onChange={(value) => setTemplate(value === "blank" ? "blank" : "review")}
-            options={SHEET_TEMPLATES.map((t) => ({
-              value: t.key,
-              label: t.label,
-              detail: t.description,
-            }))}
-          />
+          <FormField as="fieldset" label="Start from">
+            <ChoiceList
+              label="Start from"
+              value={template}
+              onChange={(value) => setTemplate(value === "blank" ? "blank" : "review")}
+              options={SHEET_TEMPLATES.map((t) => ({
+                value: t.key,
+                label: t.label,
+                detail: t.description,
+              }))}
+            />
+          </FormField>
         ) : (
           <p className="artifact-note">{kind.starts}</p>
         )}

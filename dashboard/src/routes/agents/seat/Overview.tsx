@@ -42,6 +42,7 @@ import {
   StatusDot,
   Stepper,
   Tag,
+  useMediaMatch,
 } from "@crewlethq/ui";
 import { BrainGlyph, ClockGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
@@ -74,7 +75,6 @@ import {
   type SeatReading,
 } from "~/lib/seats.ts";
 import { renderInline } from "~/lib/markdown.ts";
-import { useMediaQuery } from "~/lib/media.ts";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { useEngineHealth, useOrg, useSandboxes, useSchedules } from "~/lib/store-hooks.ts";
 import { turnSteps } from "~/lib/turnsteps.ts";
@@ -347,7 +347,7 @@ function CurrentTurn({
 }) {
   const viewer = useViewer();
   const sandboxes = useSandboxes();
-  const phone = useMediaQuery(`(width < ${PHONE_BREAKPOINT}px)`);
+  const phone = useMediaMatch(`(width < ${PHONE_BREAKPOINT}px)`);
   const turn = agent?.turn ?? null;
   const call = agent?.live_call ?? null;
   const turnId = turnIdOf(agent);

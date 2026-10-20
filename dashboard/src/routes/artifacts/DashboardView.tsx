@@ -16,7 +16,7 @@
  * person sees is always a version every other reader can open.
  */
 
-import { useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import {
   ArrangeBoard,
   ArrangeFrame,
@@ -24,13 +24,11 @@ import {
   ArrangeGroup,
   Button,
   Card,
-  DataTable,
   DatasetSource,
   DatasetSourceList,
   FormField,
   Select,
   Skeleton,
-  type DataTableColumn,
   type SurfaceTone,
 } from "@crewlethq/ui";
 import { DASHBOARD_COLUMNS } from "~/contract/artifacts.ts";
@@ -42,6 +40,7 @@ import type {
 import { QueryState } from "~/components/common.tsx";
 import type { ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
 import {
+  boardSpan,
   datasetStatus,
   definitionWords,
   refreshWords,
@@ -49,7 +48,8 @@ import {
 } from "~/lib/artifacts/dashboard.ts";
 import { useBoardData, type BoardDataOptions } from "~/lib/artifacts/useBoardData.ts";
 import { useNarrowerThan } from "~/lib/useNarrowerThan.ts";
-import { DashboardWidget } from "./DashboardWidget.tsx";
+import { useWidth } from "~/lib/useWidth.ts";
+import { DashboardWidget, RowsTable } from "./DashboardWidget.tsx";
 import type { PresenceReport } from "./presence.ts";
 
 /** The height of one board row, in pixels: the Home board's. */
@@ -79,7 +79,16 @@ export function DashboardView({
   const [selected, setSelected] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const root = useRef<HTMLDivElement>(null);
+  const boardRef = useRef<HTMLDivElement>(null);
   const stacked = useNarrowerThan(root, STACKS_BELOW, data.board.data !== null);
+  const boardWidth = useWidth(boardRef, data.board.data !== null);
+  // The grid's gap, as its stylesheet sets it (it follows the density), read
+  // whenever the board's width moves.
+  const [gap, setGap] = useState(0);
+  useLayoutEffect(() => {
+    const grid = boardRef.current?.querySelector(".crewlet-arrange-grid");
+    if (grid) setGap(Number.parseFloat(getComputedStyle(grid).columnGap) || 0);
+  }, [boardWidth]);
   const now = Date.now();
   const answer = data.board.data;
 
@@ -92,6 +101,13 @@ export function DashboardView({
   }
   const spec = answer.board;
   const byId = new Map(answer.datasets.map((d) => [d.id, d]));
+  /*
+   * A widget's span on this board's width (see boardSpan). A group is a
+   * section of the board with no inset of its own, so its children stand on
+   * the board's own columns.
+   */
+  const spanOf = (w: Widget) =>
+    stacked ? DASHBOARD_COLUMNS : boardSpan(w.w, boardWidth, gap, DASHBOARD_COLUMNS);
   const statusOf = (d: DashboardBoardDataset | undefined) =>
     d ? datasetStatus(d, data.datasets.get(d.id), now) : "loading";
 
@@ -105,7 +121,7 @@ export function DashboardView({
         name={w.title ?? w.id}
         editing={false}
         bare={w.type === "note"}
-        columns={stacked ? DASHBOARD_COLUMNS : w.w}
+        columns={spanOf(w)}
         rows={w.h ?? null}
         rowHeight={ROW}
         selected={d !== undefined && selected === d.id}
@@ -121,6 +137,7 @@ export function DashboardView({
           asOf={got?.as_of}
           onCite={d ? () => setSelected(d.id) : undefined}
           onFocus={() => presence?.at({ region: `widget:${w.id}` }, false)}
+          inRow={!stacked}
         />
       </ArrangeFrame>
     );
@@ -143,45 +160,51 @@ export function DashboardView({
         </Button>
       </div>
       <div className="dashboard-body">
-        <ArrangeBoard editing={false} columns={DASHBOARD_COLUMNS} className="dashboard-board">
-          <ArrangeGrid>
-            {spec.widgets.map((w) =>
-              w.type === "group" ? (
-                <ArrangeFrame
-                  key={w.id}
-                  name={w.title ?? w.id}
-                  editing={false}
-                  container
-                  columns={stacked ? DASHBOARD_COLUMNS : w.w}
-                  rows={null}
-                  rowHeight={ROW}
-                  className="dashboard-cell"
-                >
-                  <ArrangeGroup
-                    title={w.title ?? ""}
-                    tone={(w.tone ?? "none") as SurfaceTone}
-                    collapsed={collapsed.has(w.id)}
-                    onCollapsedChange={(c) =>
-                      setCollapsed((prev) => {
-                        const next = new Set(prev);
-                        if (c) next.add(w.id);
-                        else next.delete(w.id);
-                        return next;
-                      })
-                    }
-                    count={w.children?.length ?? 0}
-                    columns={DASHBOARD_COLUMNS}
-                    empty="This group holds no widgets."
+        <div className="dashboard-board" ref={boardRef}>
+          <ArrangeBoard editing={false} columns={DASHBOARD_COLUMNS}>
+            <ArrangeGrid>
+              {spec.widgets.map((w) =>
+                w.type === "group" ? (
+                  <ArrangeFrame
+                    key={w.id}
+                    name={w.title ?? w.id}
+                    editing={false}
+                    container
+                    columns={spanOf(w)}
+                    rows={null}
+                    rowHeight={ROW}
+                    className="dashboard-cell"
                   >
-                    {(w.children ?? []).map(renderLeaf)}
-                  </ArrangeGroup>
-                </ArrangeFrame>
-              ) : (
-                renderLeaf(w)
-              ),
-            )}
-          </ArrangeGrid>
-        </ArrangeBoard>
+                    <ArrangeGroup
+                      // A SECTION OF THE BOARD, read rather than arranged: a
+                      // quiet header over a hairline, its widgets on the
+                      // board's own columns.
+                      variant="section"
+                      title={w.title ?? ""}
+                      tone={(w.tone ?? "none") as SurfaceTone}
+                      collapsed={collapsed.has(w.id)}
+                      onCollapsedChange={(c) =>
+                        setCollapsed((prev) => {
+                          const next = new Set(prev);
+                          if (c) next.add(w.id);
+                          else next.delete(w.id);
+                          return next;
+                        })
+                      }
+                      count={w.children?.length ?? 0}
+                      columns={DASHBOARD_COLUMNS}
+                      empty="This group holds no widgets."
+                    >
+                      {(w.children ?? []).map(renderLeaf)}
+                    </ArrangeGroup>
+                  </ArrangeFrame>
+                ) : (
+                  renderLeaf(w)
+                ),
+              )}
+            </ArrangeGrid>
+          </ArrangeBoard>
+        </div>
         {/* ONE CARD, as every panel beside a board is: the rail's heading is
             the card's, and the entries are rows of it rather than loose
             blocks on the page, its top level with the board's first row. */}
@@ -204,7 +227,7 @@ export function DashboardView({
                     key={spec.id}
                     title={spec.title}
                     kind={spec.source}
-                    definition={definitionWords(spec)}
+                    definition={definitionWords(spec, answer.board.params)}
                     refresh={d ? refreshWords(d.freshness) : undefined}
                     asOf={got?.as_of}
                     status={statusOf(d)}
@@ -215,19 +238,10 @@ export function DashboardView({
                     now={now}
                   >
                     {isSelected && got?.status === "ready" && got.table ? (
-                      <DataTable
-                        variant="compact"
-                        columns={Object.fromEntries(
-                          got.table.columns.map((c): [string, DataTableColumn] => [
-                            c.key,
-                            { label: c.label ?? c.key },
-                          ]),
-                        )}
-                        data={got.table.rows
-                          .slice(0, PREVIEW_ROWS)
-                          .map((r, i) => ({ ...r, __row: i }))}
-                        getRowKey={(r) => Number(r.__row)}
-                        emptyMessage="No rows."
+                      <RowsTable
+                        columns={got.table.columns}
+                        shown={got.table.columns.map((c) => c.key)}
+                        rows={got.table.rows.slice(0, PREVIEW_ROWS)}
                       />
                     ) : null}
                   </DatasetSource>

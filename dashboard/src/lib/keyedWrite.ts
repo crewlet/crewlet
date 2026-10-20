@@ -38,6 +38,7 @@
 
 import { useCallback, useState } from "react";
 import { isAbort, newActOpID, rest, RestError, type QueryValue } from "~/protocol/index.ts";
+import { openSentence } from "./format.ts";
 import { refusalText } from "./refusal.ts";
 import { youNeedWords } from "./access.ts";
 
@@ -156,7 +157,7 @@ function refusalOf(
     const said = err.unanswered
       ? "No answer came back, so nothing here knows whether this landed."
       : "The engine could not confirm whether this landed.";
-    const next = asked(err.detail) || "Try again: this makes a new one.";
+    const next = openSentence(err.detail) || "Try again: this makes a new one.";
     return { kind: "unknown", key, text: `${said}${changed} ${next}` };
   }
   // A CONFIRMATION THE PERSON CANCELLED is no refusal of theirs: the engine's
@@ -185,12 +186,6 @@ function refusalOf(
     stale: err.status === 409 && err.code === "stale",
     error: err,
   };
-}
-
-/** The engine's own sentence, capitalised, or "". */
-function asked(detail: string): string {
-  const trimmed = detail.trim();
-  return trimmed ? trimmed[0]!.toUpperCase() + trimmed.slice(1) : "";
 }
 
 /** One gesture's write: its key, its answer, and whether it is out. */
