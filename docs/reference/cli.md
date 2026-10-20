@@ -25,7 +25,7 @@ subcommand below is served by it.
 | `crewlet retention verify --restore -dir DIR` | Restore the newest artefact and open the copy. **Exits non-zero past its cadence** — the cron hook that turns a lapsed restore test into a failing check. Talks to no node |
 | `crewlet worklet purge <item> -reason TEXT -confirm <item-key> [-op-id ID]` | Destroy a task and every row it produced, on every data node. The one operation with no inverse, restricted to a credential holding `admin`, and never a seat. Its children move onto its own parent rather than being destroyed with it |
 | `crewlet objects migrate -to s3 -target <path> [-final]` | Moves the company's files from the fleet's NATS bucket to an S3-compatible bucket, through a running data node: a copy pass on a live fleet, then `-final` with every node in maintenance mode, which seals the NATS bucket and moves the fleet's record. See [Moving the files to a bucket](../concepts/object-store.md#moving-the-files-to-a-bucket). The token takes `admin` |
-| `crewlet objects status [config] [-json]` | Where the company's files are kept — the [object store's](../concepts/object-store.md) backend, `nats` or an S3 bucket — read from a running node, the node that ran the collector's last passes, and what each found: objects listed and deleted and unfinished uploads abandoned by the last collection; files named, **missing** and **damaged** by the last audit to finish, with those files listed. `-json` prints the fleet view's `objects` block as the node answered it. The token takes `admin` |
+| `crewlet objects status [config] [-json]` | Where the company's files are kept — the [object store's](../concepts/object-store.md) backend, `nats` or an S3 bucket — read from a running node, the node that ran the collector's last passes, and what each found: objects listed and deleted and unfinished uploads abandoned by the last collection; files named, **missing** and **damaged** by the last audit to finish, with those files listed. `-json` prints the fleet view's `objects` block as JSON for a script: every field and number as the node answered them, its text as written. The token takes `admin` |
 | `crewlet fleet broker list [config] [-json]` | The fleet broker's membership: each live node's broker kind (`member`, `leaf`, `client`, or `unknown` for a kind this build does not know) beside how the JetStream metadata group counts it — read through a member — and, in words, every disagreement: a member gone for good that the group still counts in every election, with the command that removes it. The token takes `admin` |
 | `crewlet fleet broker remove <node> -confirm <node> [-force]`, or `-peer <peer> -confirm <peer>` | Stop the metadata group counting a member that is gone for good, through a live member's system account — by node id, or by the peer id `list` shows for a voter no member can name. Refused while the node holds a live presence lease as a member; `-force` is for a member wedged in a way that still renews it. The token takes `admin` |
 | `crewlet seats pause <handle> [-stop] [-reason TEXT] [-op-id ID]` | Pause an agent seat: it starts no new turn, its mail waits in order and its scheduled runs are skipped. `-stop` also ends the turn it is on at its next round. Taken by the seat's holder, whoever leads it, or an administrator, and recorded under the caller's own name, kind and credential |
@@ -931,7 +931,7 @@ optional. `seats` lists which seats are free.
 |---|---|---|
 | `-config PATH` | `crewlet.yaml` | The node config file naming the node to reach |
 | `-api URL` | the `api.host:port` in `-config` | The running node to talk to |
-| `-json` | off | Print the raw answer rather than a table |
+| `-json` | off | Print the node's answer as JSON rather than a table: every field and number as the node sent them, its text as written (`<`, `>` and `&` as themselves) and its keys sorted |
 | `-reason TEXT` | the surface's own | Saved with the change for the audit trail |
 | `-grants G,...` | see below | A comma-separated list of `admin`, `worklet`, `doclet`, `artifacts` and `chatlet`, or the word `none` for an empty one; anything else is refused before any config is read, naming the set. `admin` also sends every app, as the dashboard's picker stores it, so taking admin away later leaves the apps. Left out: on a person's `invite` or `create`, **every app** and not admin; on a service account's `create`, refused (it has no default); on `grant`, nothing is changed; on `token`, everything the owner holds that the minting session may confer. `none` stands alone (beside a permission it is refused, since the two say opposite things), and the flag is refused on every command but `invite`, `create`, `grant` and `token` rather than ignored |
 | `-person ID` | yourself | Whose credentials or sessions, and — on `token` — the **service account** a minted token is for; a person's id is refused there, whoever asks |
@@ -1146,7 +1146,7 @@ hold their work until a provider is added (see
 | Flag | Description |
 |------|-------------|
 | `-tier` | Which tier a positional file is. `auto` (default) reads the document's **keys**, not its filename. The two tiers share no top-level key, so `name`/`roles`/`units`/`providers` mean Tier B and `node`/`stream`/`store`/`coordination` mean Tier A. A document that carries neither, or an equal count of both, is **refused naming this flag** rather than guessed at: guessing wrong reports every field of the file as invalid, and an operator reading that cannot tell it from a genuinely broken document. |
-| `-json` | Emit a machine-readable result on stdout instead of prose. |
+| `-json` | Emit a machine-readable result on stdout instead of prose, its text as written: a problem naming `token:<id>` says so, never `token:\u003cid\u003e`. |
 | `-config` / `-company` | The two-tier form. Ignored when a positional file is given. |
 
 A Tier A document's prose summary names what it resolved to:
@@ -1522,8 +1522,8 @@ for each pass:
   [backup](../guides/backup.md) or upload again.
 
 Before the collector has finished a pass — on a new fleet, in the minute or so
-before a data node first claims the duty — it says so. `-json` prints the block exactly as the node answered it,
-for a script. The exit status is non-zero when the node cannot say — its
+before a data node first claims the duty — it says so. `-json` prints the block as JSON for a script: every field and every number as
+the node answered them, its text as written and its keys sorted. The exit status is non-zero when the node cannot say — its
 coordination store did not answer, the node runs no object store, or it
 answered a state this build does not know — and zero otherwise, files that
 cannot be read included: a store that lost bytes is an answer, and the
@@ -1561,7 +1561,8 @@ direct uploads, any file the fleet's own store could not give back (no copy
 can bring those back), and what to do next. `-wait` (six hours) is how long
 it waits for the answer; the node finishes the pass either way, and running
 the command again reports where the copy stands. `-json` prints the node's
-report as it answered it. The token takes `admin`.
+report as JSON for a script: every field and every number as the node answered
+them, its text as written and its keys sorted. The token takes `admin`.
 
 ## `crewlet fleet broker`
 
@@ -1608,7 +1609,8 @@ answering member happens to have heard.
 A group no member could report is said to be unread, never shown as empty. On a
 fleet whose broker is an external cluster it says so and lists nothing: that
 membership is the cluster's own operator's. `-json` prints the node's answer as
-it came.
+JSON for a script: every field and every number as the node sent them, its text
+as written and its keys sorted.
 
 ### `crewlet fleet broker remove`
 

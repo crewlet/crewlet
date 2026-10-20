@@ -140,7 +140,7 @@ func (m selfMint) signIn(ctx context.Context) (*http.Cookie, bool, error) {
 		return nil, false, fmt.Errorf("read the sign-in response: %w", err)
 	}
 	var answer map[string]any
-	_ = json.Unmarshal(raw, &answer)
+	_ = decodeAnswer(raw, &answer)
 	code, _ := answer["error"].(string)
 	switch {
 	case resp.StatusCode == http.StatusOK:
@@ -214,7 +214,7 @@ func (m selfMint) send(ctx context.Context, method, path string,
 			m.base+path, err)
 	}
 	var answer map[string]any
-	_ = json.Unmarshal(raw, &answer)
+	_ = decodeAnswer(raw, &answer)
 	return answer, resp.StatusCode, raw, nil
 }
 

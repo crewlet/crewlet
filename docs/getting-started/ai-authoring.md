@@ -10,7 +10,7 @@ Three things make this work, and you can use any of them on their own:
 | Piece | What it gives you |
 |---|---|
 | **`crewlet schema`** | JSON Schema generated from the models — the authoritative field list, for your editor, your CI, or an agent |
-| **`crewlet validate -json`** | Machine-readable problems with exact field paths and kinds, so a fix loop converges |
+| **`crewlet validate -json`** | Machine-readable problems with exact field paths and kinds, their text as written, so a fix loop converges |
 | **The `company-architect` skill** | An interview script, the invariants, and the write → validate → fix loop |
 
 ---

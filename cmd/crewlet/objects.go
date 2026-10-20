@@ -95,7 +95,7 @@ func objectsStatus(environ config.Source, args []string, stdout, stderr io.Write
 	var asJSON *bool
 	client, err := nodeClientFor(environ, args, "objects status", stderr, func(fs *flag.FlagSet) {
 		asJSON = fs.Bool("json", false,
-			"print the fleet view's objects block as the node answered it")
+			"print the fleet view's objects block as JSON, for a script")
 	})
 	if err != nil {
 		return err
@@ -111,8 +111,7 @@ func objectsStatus(environ config.Source, args []string, stdout, stderr io.Write
 			"none, so ask a node that does with -api")
 	}
 	if *asJSON {
-		_, err := fmt.Fprintf(stdout, "%s\n", answer.Objects)
-		return err
+		return printAnswer(stdout, answer.Objects)
 	}
 	var view objectsView
 	if err := json.Unmarshal(answer.Objects, &view); err != nil {
@@ -267,7 +266,7 @@ func objectsMigrate(environ config.Source, args []string, stdout, stderr io.Writ
 		final = fs.Bool("final", false, "run the final pass, which moves the fleet; every node "+
 			"must be running with -mode maintenance")
 		wait = fs.Duration("wait", migrateWait, "how long to wait for the pass before giving up on the answer")
-		asJSON = fs.Bool("json", false, "print the node's report as it answered it")
+		asJSON = fs.Bool("json", false, "print the node's report as JSON, for a script")
 	})
 	if err != nil {
 		return err
@@ -295,8 +294,7 @@ func objectsMigrate(environ config.Source, args []string, stdout, stderr io.Writ
 		return err
 	}
 	if *asJSON {
-		_, err := fmt.Fprintf(stdout, "%s\n", raw)
-		return err
+		return printAnswer(stdout, raw)
 	}
 	var view migrateView
 	if err := json.Unmarshal(raw, &view); err != nil {
