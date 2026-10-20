@@ -315,10 +315,9 @@ func (n *ChatletConfig) validate(path Path) error {
 	if d := n.MessageRetentionDays; d != nil && *d != 0 &&
 		(*d < MinMessageRetentionDays || *d > MaxMessageRetentionDays) {
 		p.add(at(path, "message_retention_days"), ErrOutOfRange,
-			"%d is outside %d..%d — below a month a decision taken while "+
-				"somebody was away would be gone before they read it, and past "+
-				"ten years the horizon is a rounding error against never "+
-				"pruning. Write 0 for that, which keeps messages for ever",
+			"%d is outside %d..%d. Under a month, someone who was away could "+
+				"miss a decision before they read it. To keep messages longer, "+
+				"write 0, which keeps them for ever",
 			*d, MinMessageRetentionDays, MaxMessageRetentionDays)
 	}
 	return p.err()
@@ -423,13 +422,10 @@ func (c *Company) validateUnitRooms() error {
 				}
 			}
 			p.add(at(u.path, "channel"), ErrConflict,
-				"unit %q declares the channel %q, and so does %s. This company's "+
-					"chat is Chatlet, where a unit's room belongs to ONE unit — its "+
-					"members are that unit's subtree and its lead answers what "+
-					"nobody else did — so the engine would open the room for one "+
-					"of them and leave every other out of a room its seats are "+
-					"told is theirs. Give each its own channel, or leave a child "+
-					"unit's empty so it inherits its parent's room",
+				"unit %q declares the channel %q, and so does %s. In Chatlet "+
+					"a unit's room belongs to one unit, so the others would "+
+					"be left out of it. Give each its own channel, or leave a "+
+					"child unit's empty so it inherits its parent's room",
 				u.name, channel, quotedList(others))
 		}
 	}
@@ -462,9 +458,8 @@ func (c *Company) validateChat() error {
 	// delete.
 	if c.Chat.Backend == ChatChatlet && len(vendors) > 0 {
 		p.add(field("chat.backend"), ErrConflict,
-			"Chatlet and %s cannot both run: conversations would live in "+
-				"two places and nothing would keep them in step. Remove one",
-			names(vendors))
+			"Chatlet and %s can't both run, because conversations would "+
+				"be split between them. Remove one", names(vendors))
 	}
 	if c.Chat.Backend == ChatVendor && len(vendors) == 0 {
 		ways := make([]string, len(chatVendors))
@@ -472,8 +467,7 @@ func (c *Company) validateChat() error {
 			ways[i] = vendor.howToDeclare
 		}
 		p.add(field("chat.backend"), ErrConflict,
-			"chat.backend: vendor needs %s — there is no vendor surface "+
-				"here to talk on", strings.Join(ways, " or "))
+			"chat.backend: vendor needs %s", strings.Join(ways, " or "))
 	}
 
 	// A CHATLET BLOCK ON A COMPANY THAT DOES NOT RUN CHATLET describes nothing, and
@@ -485,9 +479,8 @@ func (c *Company) validateChat() error {
 	// intent.
 	if c.Chat.Chatlet != nil && c.ChatBackendFor() != ChatChatlet {
 		p.add(field("chat.chatlet"), ErrConflict,
-			"this company's chat is %q, and `chat.chatlet` is the engine's own "+
-				"chat's policy — nothing would read it. Remove the block, or run "+
-				"Chatlet", c.ChatBackendFor())
+			"this company's chat is %q, so nothing reads `chat.chatlet`. "+
+				"Remove the block, or use Chatlet", c.ChatBackendFor())
 	}
 	return p.err()
 }

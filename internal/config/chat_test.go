@@ -3,9 +3,12 @@ package config
 import (
 	"errors"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/coord"
 )
 
 // mattermostBlock is a Mattermost integration written the way a real company
@@ -169,7 +172,7 @@ func TestTheChatAxisRefusesWhatItCannotResolve(t *testing.T) {
 		if !errors.Is(err, ErrConflict) {
 			t.Fatalf("want ErrConflict, got %v", err)
 		}
-		for _, want := range []string{"integrations.mattermost", "in step", "Remove one"} {
+		for _, want := range []string{"integrations.mattermost", "Remove one"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("refusal = %q, want it to say %q", err, want)
 			}
@@ -243,6 +246,95 @@ func TestTheChatAxisRefusesWhatItCannotResolve(t *testing.T) {
 			t.Errorf("typing status = %q, want addressed", got)
 		}
 	})
+}
+
+// THE CHAT AXIS SPEAKS IN SHORT SENTENCES, and so do Worklet's and Doclet's
+// rules it was copied from. Each refusal and warning says
+// what is wrong and what to set; the rationale a reader cannot act on, the
+// em dash that carried it and the capitals that shouted it are what the
+// rewrite of this package's other messages took out, and these are held to
+// the same: no em dash, no semicolon gluing a second clause on, and no word
+// in capitals outside a `code span`, a quoted value or a named acronym. Each
+// rule is driven by its own failing document and read at its own path, so a
+// message nobody produces cannot pass by being absent. Mutation: an em dash
+// back in the retention range, or "ONE unit" back in the shared-room
+// refusal, is red.
+func TestTheChatAxisRefusesInShortSentences(t *testing.T) {
+	t.Parallel()
+	const (
+		jira       = "integrations:\n  jira: {url: \"https://acme.example.com\", token: t, webhook_secret: s}\n"
+		confluence = "integrations:\n  confluence: {url: \"https://wiki.example.com\", token: t, webhook_secret: s}\n"
+		twoTeams   = "name: Acme\nunits:\n  - name: Alpha\n    channel: eng\n    roles:\n" +
+			"      - name: Ann\n  - name: Beta\n    channel: eng\n    roles:\n      - name: Bob\n"
+	)
+	refusals := []struct{ name, doc, path string }{
+		{"a backend outside the set", "name: Acme\nchat: {backend: mattermost}\n", "chat.backend"},
+		{"Chatlet beside a vendor", "name: Acme\nchat: {backend: chatlet}\n" + mattermostBlock, "chat.backend"},
+		{"a vendor with no surface", "name: Acme\nchat: {backend: vendor}\n", "chat.backend"},
+		{"a Chatlet block on a vendor company",
+			"name: Acme\nchat:\n  chatlet:\n    message_retention_days: 90\n" + mattermostBlock, "chat.chatlet"},
+		{"a retention out of range",
+			"name: Acme\nchat:\n  chatlet:\n    message_retention_days: 3\n", "chat.chatlet.message_retention_days"},
+		{"two units on one channel", twoTeams, "units[0].channel"},
+		{"a channel that is not a name",
+			"name: Acme\nunits:\n  - name: Eng\n    channel: \"#Eng\"\n    roles:\n      - name: Ann\n",
+			"units[0].channel"},
+		// Worklet's and Doclet's, which the chat axis's rules were copied
+		// from and read alike
+		{"a worklet block on a jira company",
+			"name: Acme\ntracker:\n  worklet:\n    inbox_retention_days: 90\n" + jira, "tracker.worklet"},
+		{"an inbox retention out of range",
+			"name: Acme\ntracker:\n  worklet:\n    inbox_retention_days: 3\n", "tracker.worklet.inbox_retention_days"},
+		{"Worklet beside jira", "name: Acme\ntracker: {backend: worklet}\n" + jira, "tracker.backend"},
+		{"Doclet beside confluence",
+			"name: Acme\nknowledge: {backend: doclet}\n" + confluence, "knowledge.backend"},
+		{"vectors with nothing to search",
+			"name: Acme\nknowledge: {backend: none, vectors: true}\ntracker: {backend: none}\n",
+			"knowledge.vectors"},
+	}
+	var said []struct{ name, message string }
+	for _, tc := range refusals {
+		_, err := ParseCompany([]byte(tc.doc))
+		found := false
+		for _, p := range Problems(err) {
+			if p.Path == tc.path {
+				found = true
+				said = append(said, struct{ name, message string }{tc.name, p.Message})
+			}
+		}
+		if !found {
+			t.Errorf("%s: no problem at %s, so its words are not read: %v", tc.name, tc.path, err)
+		}
+	}
+	if w := channelWarnings(mustCompany(t, "name: Acme\nunits:\n  - name: Eng\n"+
+		"    roles:\n      - name: Ann\n")); len(w) == 1 {
+		said = append(said, struct{ name, message string }{"no unit declares a channel", w[0].Message})
+	} else {
+		t.Errorf("a Chatlet company with no channel carries %d channel warnings, want 1", len(w))
+	}
+	_, err := ResolveNodeID(&Bootstrap{}, NewResolver(MapSource{NodeIDEnvVar: coord.OperatorBackupOwner}))
+	if err == nil {
+		t.Error("the operator's backup owner was taken as a node id")
+	} else {
+		said = append(said, struct{ name, message string }{"a reserved node id", err.Error()})
+	}
+
+	quoted := regexp.MustCompile("`[^`]*`|\"[^\"]*\"")
+	capitals := regexp.MustCompile(`\b[A-Z]{3,}\b`)
+	acronyms := map[string]bool{"API": true, "URL": true, "TTL": true, "JSON": true,
+		"YAML": true, "HTTP": true, "HTTPS": true, "RFC": true, "TLS": true, "UTC": true,
+		"CLI": true, "LLM": true, "MCP": true}
+	for _, m := range said {
+		if strings.Contains(m.message, "\u2014") || strings.Contains(m.message, ";") {
+			t.Errorf("%s: %q glues a second clause on with a dash or a "+
+				"semicolon: say it as its own short sentence", m.name, m.message)
+		}
+		for _, word := range capitals.FindAllString(quoted.ReplaceAllString(m.message, ""), -1) {
+			if !acronyms[word] {
+				t.Errorf("%s: %q shouts %q", m.name, m.message, word)
+			}
+		}
+	}
 }
 
 // THREE SETTINGS, AND A PLAIN INT CARRIES TWO. Absent is the default horizon,
@@ -503,7 +595,7 @@ func TestAChatletCompanyWithNoChannelsIsWarnedAbout(t *testing.T) {
 	// knows is false, and an advisory that overstates is one an author
 	// learns to skip.
 	message := warnings[0].Message
-	for _, says := range []string{"keeps its members to the org chart", "opens one by hand"} {
+	for _, says := range []string{"members follow the org chart", "opens one by hand"} {
 		if !strings.Contains(message, says) {
 			t.Errorf("warning = %q, want it to say %q", message, says)
 		}

@@ -8,8 +8,23 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 )
 
-// sharedRoomRefusal is the words the Chatlet refusal is recognised by.
-const sharedRoomRefusal = "a unit's room belongs to ONE unit"
+// sharedRoom is the Chatlet refusal, recognised by WHERE it is and WHAT it is —
+// a conflict at a unit's `channel` — rather than by its words, which are a
+// sentence for the person reading them and change with how it is best said.
+func sharedRoom(path, kind string) bool {
+	return kind == "conflict" && strings.HasSuffix(path, ".channel")
+}
+
+// sharedRoomProblems is every shared-room refusal err carries, located.
+func sharedRoomProblems(err error) []located {
+	var out []located
+	for _, p := range config.Problems(err) {
+		if sharedRoom(p.Path, p.Kind) {
+			out = append(out, located{p.Path, p.Kind, p.Seat, p.Unit})
+		}
+	}
+	return out
+}
 
 // sharedRoomAdvisory is the words the vendor surface's advisory is recognised
 // by; that advisory has its own case in chat_test.go.
@@ -51,7 +66,7 @@ func TestTwoUnitsDeclaringOneChannelAreRefusedOnChatlet(t *testing.T) {
 		t.Fatalf("the fixture's chat is %q — the case is about Chatlet", got)
 	}
 
-	got := locatedOf(config.Problems(cfg.Validate()), sharedRoomRefusal)
+	got := sharedRoomProblems(cfg.Validate())
 	want := []located{
 		{"units[0].channel", "conflict", "", "Alpha"},
 		{"units[1].channel", "conflict", "", "Beta"},
@@ -60,7 +75,7 @@ func TestTwoUnitsDeclaringOneChannelAreRefusedOnChatlet(t *testing.T) {
 		t.Fatalf("problems = %+v, want one beside each declaring unit: %+v", got, want)
 	}
 	for _, p := range config.Problems(cfg.Validate()) {
-		if !strings.Contains(p.Message, sharedRoomRefusal) {
+		if !sharedRoom(p.Path, p.Kind) {
 			continue
 		}
 		other := map[string]string{"Alpha": `"Beta"`, "Beta": `"Alpha"`}[p.Unit]
@@ -77,7 +92,7 @@ func TestTwoUnitsDeclaringOneChannelAreRefusedOnChatlet(t *testing.T) {
 	}
 	warned := 0
 	for _, w := range cfg.AdmissionWarnings() {
-		if strings.Contains(w.Message, sharedRoomRefusal) {
+		if w.Kind == config.WarningAdmission && strings.HasSuffix(w.Path, ".channel") {
 			warned++
 		}
 	}
@@ -110,7 +125,7 @@ units:
         roles:
           - name: Frank
 `)
-	got := locatedOf(config.Problems(cfg.Validate()), sharedRoomRefusal)
+	got := sharedRoomProblems(cfg.Validate())
 	want := []located{
 		{"units[0].channel", "conflict", "", "Eng"},
 		{"units[0].children[0].channel", "conflict", "", "Platform"},
