@@ -14,6 +14,23 @@ vi.mock("~/lib/artifacts/api.ts", async (original) => ({
   uploadFiles: vi.fn(),
   checkPage: vi.fn(),
 }));
+const fileArtifactTask = vi.fn();
+vi.mock("./WhoBuildsIt.tsx", () => ({
+  useWhoBuildsIt: () => ({
+    builders: [{ seat: { handle: "pixel", name: "Pixel" }, suggested: true }],
+    seat: "pixel",
+    setSeat: () => {},
+    project: "CRW",
+    setProject: () => {},
+    projects: [{ key: "CRW", name: "Crewlet" }],
+    projectsLoading: false,
+  }),
+  WhoBuildsIt: () => null,
+}));
+vi.mock("./fileTask.ts", async (original) => ({
+  ...(await original<typeof import("./fileTask.ts")>()),
+  useFileArtifactTask: () => ({ fileArtifactTask, busy: false, refusal: null, held: null }),
+}));
 vi.mock("./html/DraftPreview.tsx", () => ({
   DraftPreview: ({ id, version }: { id: string; version: number }) => (
     <p>{`The draft ${id} at version ${version}`}</p>
@@ -23,6 +40,7 @@ vi.mock("./html/DraftPreview.tsx", () => ({
 afterEach(cleanup);
 beforeEach(() => {
   vi.mocked(keyedWrite).mockReset();
+  fileArtifactTask.mockReset().mockResolvedValue({ item: "CRW-9", key: "CRW-9", linked: null });
   vi.mocked(uploadFiles)
     .mockReset()
     .mockResolvedValue({
@@ -153,4 +171,28 @@ test("the checks speak while the page is written", async () => {
   } finally {
     vi.useRealTimers();
   }
+});
+
+// ASKING FILES ONE REAL TASK to the chosen agent, carrying the brief exactly
+// as the side panel showed it, and lands on that task.
+test("asking files the task to the chosen agent and opens it", async () => {
+  mount("#/artifacts/new/html");
+  const brief = screen.getByRole("textbox", { name: "Describe the page" });
+  fireEvent.change(brief, { target: { value: "A poll for the offsite venue." } });
+  fireEvent.click(screen.getByRole("checkbox", { name: /Saves what people enter/ }));
+  const shown = document.querySelector(".html-create-sent-body")!.textContent;
+  expect(screen.getByText("Filed to Pixel in Crewlet.")).toBeTruthy();
+  await act(async () => {
+    fireEvent.click(screen.getAllByRole("button", { name: "Ask Pixel" })[0]!);
+  });
+  const request = fileArtifactTask.mock.calls[0]![0];
+  expect(request).toMatchObject({
+    kind: "html",
+    seat: "pixel",
+    project: "CRW",
+    title: "Build an HTML page: A poll for the offsite venue.",
+  });
+  expect(shown).toContain(request.brief);
+  expect(shown).toContain("(kind `html`)");
+  expect(location.hash).toBe("#/work/CRW-9");
 });

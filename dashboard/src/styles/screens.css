@@ -10809,6 +10809,11 @@ a.live-row:focus-visible {
   font-weight: var(--font-weight-medium);
   color: var(--color-text-primary);
 }
+.html-create-sent-to {
+  margin: var(--spacing-2) 0 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
 .html-create-sent-body {
   margin: 0;
   padding: var(--spacing-3);

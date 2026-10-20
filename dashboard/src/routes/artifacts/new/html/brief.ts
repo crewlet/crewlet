@@ -31,13 +31,16 @@ export function pageName(b: PageBrief): string {
 /** The task's title. */
 export function taskTitle(b: PageBrief): string {
   const name = pageName(b);
-  return name ? `Build the HTML page “${name}”` : "Build an HTML page";
+  // A COLON, NOT QUOTES: the title is quoted again wherever it is named
+  // ("Asked Pixel for “…”"), and quotes inside quotes read as a typo.
+  return name ? `Build an HTML page: ${name}` : "Build an HTML page";
 }
 
 /**
- * The task's body: the brief as written, what the page must be able to do in
- * the create page's words with the engine's capability names, and how it is
- * delivered.
+ * The brief the task carries: what the person wrote, what the page must be
+ * able to do in the create page's words with the engine's capability names,
+ * and how it is delivered. The shared task filing (`artifactTaskBody`) adds
+ * the kind to publish it as.
  */
 export function taskBody(b: PageBrief): string {
   const parts = [b.brief.trim()];
@@ -54,7 +57,7 @@ export function taskBody(b: PageBrief): string {
   }
   const title = b.title.trim();
   parts.push(
-    `Publish it as an HTML artifact${title ? ` titled “${title}”` : ""}, declaring only the capabilities above, and share it with me as an editor.`,
+    `${title ? `Title it “${title}”, declare` : "Declare"} only the capabilities above, and share it with me as an editor.`,
   );
   return parts.filter(Boolean).join("\n\n");
 }

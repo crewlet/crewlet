@@ -10,11 +10,24 @@
  */
 
 import { useState, type ReactNode } from "react";
-import { Checkbox, ChoiceButtons, Composer, FormField, Input, Timeline } from "@crewlethq/ui";
+import {
+  Callout,
+  Checkbox,
+  ChoiceButtons,
+  Composer,
+  FormField,
+  Input,
+  Timeline,
+} from "@crewlethq/ui";
+import { SendGlyph } from "@crewlethq/icons/glyphs";
+import { useNavigator } from "~/app/router.tsx";
+import { youNeedWords } from "~/lib/access.ts";
 import type { ArtifactCapability } from "~/protocol/index.ts";
 import { CreateShell, useLeaveCreate } from "../CreateShell.tsx";
 import { titleProblem } from "../create.ts";
-import { taskBody, taskTitle } from "./brief.ts";
+import { artifactTaskBody, useFileArtifactTask } from "../fileTask.ts";
+import { WhoBuildsIt, useWhoBuildsIt } from "../WhoBuildsIt.tsx";
+import { pageName, taskBody, taskTitle } from "./brief.ts";
 import { CAPABILITY_CHOICES, STARTERS } from "./words.ts";
 import { LeaveDialog } from "./LeaveDialog.tsx";
 
@@ -29,6 +42,38 @@ export function DescribeBody({ modeSwitch }: { modeSwitch: ReactNode }) {
   const [leaving, setLeaving] = useState(false);
   const capabilities = CAPABILITY_CHOICES.map((c) => c.capability).filter((c) => caps.has(c));
   const asked = { title, brief, capabilities };
+  const nav = useNavigator();
+  const who = useWhoBuildsIt("html");
+  const task = useFileArtifactTask();
+  const agent = who.builders.find((b) => b.seat.handle === who.seat)?.seat;
+  const project = who.projects.find((p) => p.key === who.project);
+  // WHAT IS SHOWN IS WHAT IS FILED: the shared filing's body over this brief.
+  const sent = artifactTaskBody("html", taskBody(asked));
+
+  const hold =
+    brief.trim() === ""
+      ? "Describe the page first."
+      : (titleProblem(title) ??
+        task.held ??
+        (who.seat === ""
+          ? "This company has no agent to ask."
+          : who.project === ""
+            ? "Choose the project the task is filed in."
+            : task.busy
+              ? "Filing the task."
+              : undefined));
+
+  const ask = async () => {
+    if (hold) return;
+    const filed = await task.fileArtifactTask({
+      kind: "html",
+      title: taskTitle(asked),
+      brief: taskBody(asked),
+      seat: who.seat,
+      project: who.project,
+    });
+    if (filed) nav.to(["work", filed.item]);
+  };
 
   const start = (key: string) => {
     const starter = STARTERS.find((s) => s.key === key);
@@ -42,6 +87,14 @@ export function DescribeBody({ modeSwitch }: { modeSwitch: ReactNode }) {
   return (
     <CreateShell
       kind="html"
+      action={{
+        label: agent ? `Ask ${agent.name}` : "Ask an agent",
+        icon: <SendGlyph size="sm" />,
+        keys: ["Mod", "Enter"],
+        onSelect: () => void ask(),
+        ...(hold ? { disabledReason: hold } : {}),
+      }}
+      status={task.busy ? "Filing the task…" : null}
       onCancel={() => (brief.trim() || title.trim() ? setLeaving(true) : leave())}
     >
       <div className="html-create">
@@ -55,6 +108,7 @@ export function DescribeBody({ modeSwitch }: { modeSwitch: ReactNode }) {
                 label="Describe the page"
                 value={brief}
                 onChange={setBrief}
+                onSubmit={() => void ask()}
                 maxLength={BRIEF_MAX}
                 rows={6}
                 autoFocus
@@ -91,6 +145,7 @@ export function DescribeBody({ modeSwitch }: { modeSwitch: ReactNode }) {
               ))}
             </div>
           </FormField>
+          <WhoBuildsIt who={who} />
           <FormField
             label="Title"
             optional
@@ -116,20 +171,32 @@ export function DescribeBody({ modeSwitch }: { modeSwitch: ReactNode }) {
             <h2 className="html-create-side-title">What will be sent</h2>
             <p className="html-create-sent-title">{taskTitle(asked)}</p>
             <pre className="html-create-sent-body">
-              {brief.trim() ? taskBody(asked) : "Describe the page to see the task."}
+              {brief.trim() ? sent : "Describe the page to see the task."}
             </pre>
+            {agent && who.project ? (
+              <p className="html-create-sent-to">{`Filed to ${agent.name} in ${project?.name ?? who.project}.`}</p>
+            ) : null}
+            {task.refusal ? (
+              <Callout variant="danger" title="The task was not filed" live="polite">
+                {task.refusal.grants.length > 0
+                  ? `${youNeedWords(task.refusal.grants)} Ask an admin.`
+                  : task.refusal.sentence}
+              </Callout>
+            ) : null}
           </section>
           <section>
             <h2 className="html-create-side-title">What happens next</h2>
             <Timeline itemLabel="Step">
-              <Timeline.Item>The agent picks up the task.</Timeline.Item>
+              <Timeline.Item>{`${agent?.name ?? "The agent"} picks up the task.`}</Timeline.Item>
               <Timeline.Item>
                 It builds the page and checks it against the publish rules.
               </Timeline.Item>
               <Timeline.Item>
                 It publishes the page and shares it with you as an editor.
               </Timeline.Item>
-              <Timeline.Item>You hear about it in your Inbox and on the task.</Timeline.Item>
+              <Timeline.Item>
+                {`You hear about ${brief.trim() ? `“${pageName(asked)}”` : "it"} in your Inbox and on the task.`}
+              </Timeline.Item>
             </Timeline>
           </section>
         </aside>
