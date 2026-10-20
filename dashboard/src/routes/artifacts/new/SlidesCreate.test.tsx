@@ -6,7 +6,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { FrameReadings } from "~/app/Shell.tsx";
 import { Router } from "~/app/router.tsx";
@@ -190,15 +190,56 @@ test("leaving with a title typed asks first, and keeping on stays", async () => 
   mount();
   fireEvent.change(await title(), { target: { value: "Board review" } });
   fireEvent.click(screen.getAllByRole("button", { name: "Cancel" })[0]!);
-  expect(await screen.findByText("Leave without creating the deck?")).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
+  // THE SAME PROMPT AS EVERY CREATE PAGE'S: discard the kind, or keep editing.
+  const prompt = await screen.findByRole("alertdialog", { name: "Discard this deck?" });
+  expect(within(prompt).getByRole("button", { name: "Discard" })).toBeTruthy();
+  fireEvent.click(within(prompt).getByRole("button", { name: "Keep editing" }));
   expect(location.hash).toBe("#/artifacts/new/slides");
+});
+
+/** Lay the composer out as if its page were this wide, for the duration of the test. */
+function atWidth(width: number) {
+  const had = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
+  Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, value: width });
+  return () => {
+    if (had) Object.defineProperty(HTMLElement.prototype, "clientWidth", had);
+    else delete (HTMLElement.prototype as unknown as Record<string, unknown>).clientWidth;
+  };
+}
+
+test("a page too narrow for three columns lays the strip out as a row under the stage", async () => {
+  const restore = atWidth(800);
+  try {
+    mount();
+    await title();
+    const strip = screen.getByRole("list", { name: "Slides to start with" });
+    expect(strip.closest(".crewlet-slide-filmstrip--horizontal")).toBeTruthy();
+    expect(strip.closest(".slides-create-main")).toBeTruthy();
+  } finally {
+    restore();
+  }
+});
+
+test("a page wide enough keeps the strip in its own column beside the stage", async () => {
+  const restore = atWidth(1200);
+  try {
+    mount();
+    await title();
+    const strip = screen.getByRole("list", { name: "Slides to start with" });
+    expect(strip.closest(".crewlet-slide-filmstrip--vertical")).toBeTruthy();
+    expect(strip.closest(".slides-create-main")).toBeNull();
+  } finally {
+    restore();
+  }
 });
 
 test("themes that did not load say so and offer to ask again", async () => {
   vi.mocked(readSlidesStarters).mockRejectedValueOnce(new Error("down"));
   mount();
-  const retry = await screen.findByRole("button", { name: "Try again" });
+  expect(
+    await screen.findByRole("heading", { name: "The themes and layouts did not load" }),
+  ).toBeTruthy();
+  const retry = screen.getByRole("button", { name: "Try again" });
   fireEvent.click(retry);
   expect(await title()).toBeTruthy();
 });
@@ -206,10 +247,14 @@ test("themes that did not load say so and offer to ask again", async () => {
 test("asking an agent makes the deck shared with it, files its task linked to the deck, and opens the task", async () => {
   mount();
   fireEvent.change(await title(), { target: { value: "Board review" } });
-  fireEvent.click(screen.getByRole("radio", { name: "An agent" }));
-  const ask = await screen.findByRole("button", { name: "Ask Agent Marketer" });
+  fireEvent.click(screen.getAllByRole("button", { name: "Ask an agent" })[0]!);
+  const panel = screen.getByRole("complementary", { name: "Ask an agent" });
+  // THE SLIDES LAID OUT GO WITH THE BRIEF, and the panel says so.
+  expect(within(panel).getByText("4 slides")).toBeTruthy();
+  expect(within(panel).getByText("The Nightshade theme")).toBeTruthy();
+  const ask = within(panel).getByRole("button", { name: "Create and ask Agent Marketer" });
   expect(ask.getAttribute("aria-disabled")).toBe("true");
-  fireEvent.change(screen.getByRole("textbox", { name: "Brief" }), {
+  fireEvent.change(within(panel).getByRole("textbox", { name: "What is the deck for?" }), {
     target: { value: "A ten-minute update for the board." },
   });
   await waitFor(() => expect(ask.getAttribute("aria-disabled")).toBeNull());

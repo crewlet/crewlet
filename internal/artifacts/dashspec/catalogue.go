@@ -89,6 +89,13 @@ type EngineSource struct {
 	// Signal is the push that announces a change, or none.
 	Signal Signal `json:"signal,omitempty"`
 
+	// Windowed is whether the source reads a span of time (spend over
+	// company days), so a read with no rows means nothing happened in that
+	// span. A source that reads what is true now (open work, every agent)
+	// is not, and its empty answer means there is nothing to show, never
+	// "nothing in this window".
+	Windowed bool `json:"windowed,omitempty"`
+
 	// MaxRows is the most rows one read answers.
 	MaxRows int `json:"max_rows"`
 }
@@ -189,9 +196,10 @@ var catalogue = []EngineSource{
 			{Key: "output_tokens", Type: ColumnNumber, Label: "Output"},
 			{Key: "calls", Type: ColumnNumber, Label: "Calls"},
 		},
-		Key:     "handle",
-		Signal:  SignalTokens,
-		MaxRows: 500,
+		Key:      "handle",
+		Signal:   SignalTokens,
+		Windowed: true,
+		MaxRows:  500,
 	},
 	{
 		Name:   "spend.daily",
@@ -210,8 +218,9 @@ var catalogue = []EngineSource{
 			{Key: "band", Type: ColumnText, Label: "Band"},
 			{Key: "total_tokens", Type: ColumnNumber, Label: "Tokens"},
 		},
-		Signal:  SignalTokens,
-		MaxRows: MaxSpendDays * (MaxSpendBands + 1),
+		Signal:   SignalTokens,
+		Windowed: true,
+		MaxRows:  MaxSpendDays * (MaxSpendBands + 1),
 	},
 	{
 		Name:    "agents.status",

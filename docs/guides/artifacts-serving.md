@@ -229,8 +229,10 @@ Whatever the proxy, it must:
 - **never cache `/t/` paths in a shared cache.** Documents are `private,
   no-store` and subresources `private`; a cache keyed without the ticket would
   serve a revoked viewer, and one keyed with it caches nothing useful. Only
-  `/_crewlet/runtime/` and `/_crewlet/kit/` are public and immutable, and those
-  are safe to cache anywhere;
+  `/_crewlet/runtime/` and `/_crewlet/kit/` are public, and those are safe to
+  cache anywhere: a kit release and a runtime named by its bytes
+  (`runtime.<digest>.js`) are immutable, and a runtime at its contract's name
+  (`runtime.js`) is revalidated on every use, so honour its `no-cache`;
 - **never inject anything**: no analytics or rewriting of HTML, no challenge
   or captcha page (a challenge inside a frame cannot be solved), no added
   cookies.
@@ -247,8 +249,10 @@ crewlet validate                       # mode, refusals, and the same-site warni
 curl -sI https://abc.example-usercontent.net/_crewlet/runtime/1.0.0/runtime.js
 ```
 
-The runtime answers `200` with `Cache-Control: public, max-age=31536000,
-immutable` on any host the listener serves. Then open an `html` artifact in the
+The runtime answers `200` on any host the listener serves. At its contract's
+name it says `Cache-Control: public, no-cache, must-revalidate`; the name a
+page actually loads it by, `runtime.<digest>.js`, says `public,
+max-age=31536000, immutable`. Then open an `html` artifact in the
 dashboard: the frame loads, and the browser's developer tools show the document
 with a `Content-Security-Policy` carrying a fresh `nonce-` on every reload.
 

@@ -38,6 +38,7 @@ import "virtual:crewlet-design-system.css";
 
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { trackFocusModality } from "@crewlethq/ui";
 import { App } from "./app/App.tsx";
 import { Router } from "./app/router.tsx";
 import { ClientContext } from "./lib/store-hooks.ts";
@@ -58,6 +59,13 @@ import "./styles/screens.css";
 // Before the first paint, so a reader whose machine is set to light never sees
 // a dark flash on the way to their own preference.
 bootTheme();
+
+// HOW THE READER LAST MOVED, kept for the life of the tab: a field rings at
+// 2px for the keyboard and at its own hairline where a pointer put the caret.
+// Every field starts this while it is mounted; started here as well, the first
+// key a reader presses (Enter on the link that opens a page whose title is
+// focused on load) is seen before any field has mounted.
+trackFocusModality();
 
 // A key no module reads any more leaves the reader's profile here, once per
 // boot — see `lib/storage.ts`.

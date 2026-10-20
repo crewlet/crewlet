@@ -31,7 +31,17 @@
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
+}
+/* THE BODY AND THE HAND-OFF PANEL BESIDE IT (`AskAgent.tsx`): the workspace
+   fills the body, and its body column is the kind's scroll, as the frame's
+   body was before a panel could stand beside it. */
+.artifact-create-workspace {
+  flex: 1 1 auto;
+}
+.artifact-create-canvas {
+  display: flex;
+  flex-direction: column;
 }
 /* WHO BUILDS IT: the agent, then the project, one field under the other. */
 .artifact-who {
@@ -66,29 +76,6 @@
   width: 100%;
   max-width: var(--size-measure);
   min-width: 0;
-}
-/* THE PAGE'S HEAD: how the doc is made, and who will see it, on one line
-   that wraps on a phone. */
-.doc-create-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--spacing-2) var(--spacing-4);
-}
-/* THE BRIEF: the fields an agent is asked with, in the form's own rhythm
-   under the title. */
-.doc-create-brief {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-5);
-}
-.doc-create-next {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-  margin: 0;
-  padding-inline-start: var(--spacing-5);
 }
 /* WHO WILL SEE IT, said once above the title, quietly. */
 .doc-create-where {
@@ -142,47 +129,6 @@
   min-width: 0;
   --crewlet-sheet-max-height: calc(100vh - 280px);
   --crewlet-sheet-min-height: 160px;
-}
-.sheet-create-head {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-}
-.sheet-create-head > :first-child {
-  flex: none;
-}
-.sheet-create-title {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-.sheet-create-title-input {
-  box-sizing: border-box;
-  width: 100%;
-  margin: 0;
-  padding: var(--spacing-1) var(--spacing-2);
-  margin-inline-start: calc(var(--spacing-2) * -1);
-  border: 0;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--color-text-primary);
-  font: inherit;
-  font-size: var(--font-size-2xl);
-  font-weight: var(--font-weight-semibold);
-  line-height: var(--font-line-height-tight);
-}
-.sheet-create-title-input::placeholder {
-  color: var(--color-text-tertiary);
-}
-.sheet-create-title-input:hover {
-  background: var(--color-surface-hover);
-}
-/* FOCUSED, THE TITLE IS UNDERLINED in the focus ink rather than boxed: it
-   is the page's heading being written, and a ring round it read as a form. */
-.sheet-create-title-input:focus-visible {
-  outline: 2px solid transparent;
-  background: transparent;
-  box-shadow: inset 0 -2px 0 var(--color-focus);
-  border-radius: var(--radius-md) var(--radius-md) 0 0;
 }
 .sheet-create-source,
 .sheet-create-hint,
@@ -247,29 +193,6 @@
   min-height: 240px;
   align-content: center;
 }
-/* Ask an agent: the brief, a few examples to start from, who builds it, and
-   what happens next, in the grid's column at a reading measure. */
-.sheet-create-ask {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-4);
-  max-width: 640px;
-}
-.sheet-create-briefs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--spacing-2);
-  margin-top: calc(var(--spacing-2) * -1);
-}
-.sheet-create-next {
-  margin: 0;
-  padding: var(--spacing-3) var(--spacing-4);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-subtle);
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-sm);
-  line-height: var(--font-line-height-normal);
-}
 @media (width < 1024px) {
   .sheet-create {
     grid-template-columns: minmax(0, 1fr);
@@ -278,9 +201,6 @@
   }
   .sheet-create-rail {
     position: static;
-  }
-  .sheet-create-title-input {
-    font-size: var(--font-size-xl);
   }
 }
 
@@ -352,6 +272,13 @@
   flex-direction: column;
   gap: var(--spacing-4);
 }
+/* WHERE THE REST IS: a board's settings on the canvas, the brief in the hand-off. */
+.design-create-note {
+  margin: 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+  line-height: var(--font-line-height-normal);
+}
 .design-create-panel-head {
   display: flex;
   align-items: center;
@@ -362,6 +289,11 @@
   margin: 0;
   font-size: var(--font-size-md);
   font-weight: var(--font-weight-semibold);
+}
+/* Add board beside the panel's heading, for the widths where the list of
+   boards that carries it is folded away. */
+.design-create-panel-add {
+  display: none;
 }
 .design-create-size {
   display: grid;
@@ -484,6 +416,9 @@
   .design-create-layers {
     display: none;
   }
+  .design-create-panel-add {
+    display: contents;
+  }
 }
 /* A phone: the canvas over the panel, and the page scrolls. */
 @container design-create (width < 40rem) {
@@ -522,7 +457,8 @@
   min-width: 0;
   min-height: 0;
   overflow: auto;
-  padding: var(--spacing-6);
+  /* The create pages' one inset: 16px under the bar, 20px at the sides. */
+  padding: var(--spacing-4) var(--spacing-5) var(--spacing-5);
 }
 .dashboard-create-head {
   display: flex;
@@ -533,21 +469,6 @@
 .dashboard-create-title {
   flex: 1 1 22rem;
   max-width: 40rem;
-}
-.dashboard-create-mode {
-  flex: 0 0 auto;
-}
-.dashboard-create-agent {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-4);
-  max-width: 48rem;
-}
-.dashboard-create-next {
-  margin: 0;
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-sm);
-  line-height: 1.5;
 }
 .dashboard-create-board {
   display: flex;
@@ -587,15 +508,17 @@
   color: inherit;
   cursor: pointer;
 }
+/* A starter reads at the body's step, under the empty state that introduces
+   it: at a step above, the cards outranked the heading they answer. */
 .dashboard-create-starter-label {
   color: var(--color-text-primary);
-  font-size: var(--font-size-md);
+  font-size: var(--font-size-sm);
   font-weight: var(--font-weight-medium);
 }
 .dashboard-create-starter-text {
   color: var(--color-text-secondary);
-  font-size: var(--font-size-sm);
-  line-height: 1.45;
+  font-size: var(--font-size-xs);
+  line-height: var(--font-line-height-normal);
 }
 .dashboard-create-data {
   display: flex;
@@ -604,20 +527,22 @@
   min-width: 0;
   min-height: 0;
   overflow: auto;
-  padding: var(--spacing-6) var(--spacing-4);
+  padding: var(--spacing-4) var(--spacing-4) var(--spacing-5);
   border-inline-start: 1px solid var(--color-border-default);
   background: var(--color-surface-subtle);
 }
+/* Inset as a source's own text is (its padding and its hairline), so the
+   heading, the line under it and every source start on one edge. */
 .dashboard-create-data-head {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-1);
-  padding: 0 var(--spacing-1);
+  padding: 0 calc(var(--spacing-3) + 1px);
 }
 .dashboard-create-data-head h2 {
   margin: 0;
   color: var(--color-text-primary);
-  font-size: var(--font-size-lg);
+  font-size: var(--font-size-md);
   font-weight: var(--font-weight-semibold);
 }
 .dashboard-create-data-head p {
@@ -625,6 +550,12 @@
   color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
   line-height: 1.45;
+}
+.dashboard-create-data-note {
+  margin: 0;
+  padding: 0 calc(var(--spacing-3) + 1px);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
 }
 /* An open source: its settings, then its figures, under its entry. */
 .dashboard-create-source {
@@ -654,11 +585,6 @@
 }
 .dashboard-create-suggestion--half {
   grid-column: auto;
-}
-@container dashboard-create (width < 60rem) {
-  .dashboard-create-main {
-    padding: var(--spacing-5);
-  }
 }
 /* NARROW, the board and the Data panel are two tabs over one pane. */
 .dashboard-create[data-narrow] {
@@ -718,10 +644,13 @@
   justify-content: space-between;
   gap: var(--spacing-2);
 }
+/* Ghost buttons, so their words end on the editor's edge rather than their
+   padding's. */
 .html-create-pick {
   display: flex;
   flex-wrap: wrap;
   gap: var(--spacing-1);
+  margin-inline-end: calc(var(--spacing-2) * -1);
 }
 .html-create-source {
   display: flex;
@@ -755,16 +684,6 @@
   grid-template-columns: repeat(auto-fill, minmax(min(17rem, 100%), 1fr));
   gap: var(--spacing-3) var(--spacing-4);
   min-width: 0;
-}
-/* The starting points as a grid of tiles rather than a column of rows: six
-   short answers read at a glance side by side. */
-.html-create-starters {
-  grid-template-columns: repeat(auto-fill, minmax(min(11rem, 100%), 1fr));
-}
-.html-create-first-action {
-  display: grid;
-  justify-items: center;
-  gap: var(--spacing-2);
 }
 .html-create-keys {
   display: inline-flex;
@@ -841,40 +760,6 @@
 .html-create-leave {
   margin: 0;
 }
-.html-create-ask {
-  gap: var(--spacing-5);
-  padding-top: var(--spacing-4);
-}
-.html-create-side-title {
-  margin: 0 0 var(--spacing-2);
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-secondary);
-}
-.html-create-sent-title {
-  margin: 0 0 var(--spacing-2);
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-primary);
-}
-.html-create-sent-to {
-  margin: var(--spacing-2) 0 0;
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-.html-create-sent-body {
-  margin: 0;
-  padding: var(--spacing-3);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-inset);
-  color: var(--color-text-secondary);
-  font: inherit;
-  font-size: var(--font-size-sm);
-  line-height: var(--font-line-height-normal);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
 @container page (width < 900px) {
   /* STACKED, THE PAGE GROWS WITH WHAT IT HOLDS and the body scrolls it:
      held to the body's height, the two rows were squeezed over each other. */
@@ -932,11 +817,6 @@
   flex-direction: column;
   gap: var(--spacing-3);
 }
-/* The title reads as the deck's name, a step above a form field's text. */
-.slides-create-title input {
-  font-size: var(--font-size-lg);
-  font-weight: var(--font-weight-semibold);
-}
 /* The stage keeps its 16:9 whatever the column's height: it never shrinks. */
 .slides-create-stage {
   flex: none;
@@ -945,16 +825,36 @@
   flex: none;
   aspect-ratio: 16 / 9;
 }
-/* A placeholder fills its slide-shaped hold, so its glow is the slide's size. */
-.slides-create-skeleton {
-  height: 100%;
-}
-/* While the themes load: the strip's thumbnails as their own shapes. */
+/* WHILE THE THEMES LOAD: each part held where it will stand, the strip's
+   thumbnails inset as the strip insets them (its list's padding, the number
+   column, the drag handle), so nothing moves when the composer arrives. */
 .slides-create-strip-hold {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-2);
-  padding-left: calc(var(--spacing-5) + var(--spacing-2));
+  padding: var(--spacing-1) calc(var(--spacing-2) + var(--size-control-sm)) var(--spacing-1)
+    calc(var(--spacing-2) + var(--spacing-5));
+}
+.slides-create-strip-hold[data-orientation="horizontal"] {
+  flex-direction: row;
+  gap: var(--spacing-3);
+  padding: var(--spacing-1);
+}
+.slides-create-thumb-hold {
+  flex: none;
+  aspect-ratio: 16 / 9;
+}
+.slides-create-strip-hold[data-orientation="horizontal"] .slides-create-thumb-hold {
+  width: 7.5rem;
+}
+/* A placeholder fills its hold, so its glow is the hold's size. */
+.slides-create-skeleton {
+  height: 100%;
+}
+/* The title's own height, as its field draws it: a line of the title type
+   and the rule under it. */
+.slides-create-title-hold {
+  height: calc(var(--font-size-3xl) * var(--font-line-height-tight) + var(--spacing-1) + 2px);
 }
 .slides-create-caption {
   display: flex;
@@ -997,12 +897,6 @@
 .slides-create-keys {
   color: var(--color-text-tertiary);
 }
-.slides-create-status {
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-xs);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
 /* Themes and layouts did not load: what failed, and a way to ask again. */
 .slides-create-state {
   display: flex;
@@ -1012,6 +906,13 @@
   justify-content: center;
   gap: var(--spacing-3);
   padding: var(--spacing-5);
+  text-align: center;
+}
+.slides-create-state-title {
+  margin: 0;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
 }
 @container page (width < 1180px) {
   .slides-create {
@@ -1023,29 +924,33 @@
     display: none;
   }
 }
+/* TOO NARROW FOR THREE COLUMNS (`useComposerArrangement`): the stage and the
+   settings, the strip a row under the stage. */
+.slides-create[data-arrangement="split"] {
+  grid-template-columns: minmax(0, 1fr) 16rem;
+}
+/* A ROW UNDER THE STAGE, its own sideways scroller, never shrunk by the
+   column it stands in. */
+.slides-create-main > .slides-create-strip {
+  flex: none;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 0;
+}
 /* A PHONE: one column that scrolls as a page, the strip a row under the
    stage, the settings after it. */
-@media (width < 640px) {
-  .slides-create {
-    display: flex;
-    flex-direction: column;
-    gap: var(--spacing-5);
-    padding: var(--spacing-3) var(--spacing-4) var(--spacing-5);
-  }
-  /* Each part as tall as what it holds: the body scrolls, not the parts, so
-     none is shrunk to the window's height and drawn over the next. */
-  .slides-create-strip,
-  .slides-create-main,
-  .slides-create-side {
-    flex: none;
-    overflow: visible;
-    padding-bottom: 0;
-  }
-  /* A ROW UNDER THE STAGE, its own sideways scroller, never shrunk by the
-     column it stands in. */
-  .slides-create-main > .slides-create-strip {
-    flex: none;
-    overflow-x: auto;
-    overflow-y: hidden;
-  }
+.slides-create[data-arrangement="column"] {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-5);
+  padding: var(--spacing-3) var(--spacing-4) var(--spacing-5);
+}
+/* Each part as tall as what it holds: the body scrolls, not the parts, so
+   none is shrunk to the window's height and drawn over the next. */
+.slides-create[data-arrangement="column"] > .slides-create-strip,
+.slides-create[data-arrangement="column"] > .slides-create-main,
+.slides-create[data-arrangement="column"] > .slides-create-side {
+  flex: none;
+  overflow: visible;
+  padding-bottom: 0;
 }

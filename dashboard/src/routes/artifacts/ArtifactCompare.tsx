@@ -27,7 +27,7 @@
 
 import { useMemo, useState, type ReactNode } from "react";
 import { Callout, DiffList, Select, Skeleton, VersionCompare, type DiffRow } from "@crewlethq/ui";
-import type { ArtifactDetail, ArtifactEntry, ArtifactVersionSummary } from "~/protocol/index.ts";
+import type { ArtifactDetail, ArtifactEntry } from "~/protocol/index.ts";
 import { QueryState } from "~/components/common.tsx";
 import { fmtBytes, plural } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -85,7 +85,6 @@ export function ArtifactCompare({
   against,
   lens,
   onLens,
-  versions,
   room,
   presence,
   bridgeStores,
@@ -95,7 +94,6 @@ export function ArtifactCompare({
   against: number;
   lens: CompareLens;
   onLens: (lens: CompareLens) => void;
-  versions: ArtifactVersionSummary[];
   room: ArtifactRoom;
   presence: PresenceReport;
   bridgeStores: Set<ArtifactDataStore>;
@@ -108,7 +106,6 @@ export function ArtifactCompare({
     KIND_VIEWS[detail.kind]({
       detail,
       version: n,
-      versions,
       store: null,
       room,
       presence,

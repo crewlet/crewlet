@@ -17,8 +17,9 @@
  *
  * # Make something new, then the work
  *
- * All and Yours open on a row of the kinds a reader can start, each a tile
- * with the kind's own drawing (`ArtifactKindTile`), and then the artifacts as
+ * All and Yours open on a quiet tray of the kinds a reader can start, each
+ * its glyph on its own tint, its name and what it is for (`ArtifactMakeRow`),
+ * a toolbar for making things rather than a hero, and then the artifacts as
  * a grid of cards whose previews are the artifacts' own content drawn small
  * (`GalleryPreview`). The list is the second shape, kept for a reader who
  * scans names, dates and roles; which one a browser shows is remembered in
@@ -49,7 +50,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArtifactCardSkeleton,
   ArtifactKindGlyph,
-  ArtifactKindTile,
+  ArtifactMakeRow,
   Button,
   Input,
   LivePreviewBudgetProvider,
@@ -138,7 +139,7 @@ const SORT_WORDS: Readonly<Record<ArtifactListSort, string>> = {
   opened: "Recently opened",
 };
 
-/** What each kind's tile on the Make row is called: the kind's word, said as what one makes. */
+/** What each kind is called on the Make row: the kind's word, said as what one makes. */
 const MAKE_WORDS: Readonly<Record<ArtifactKind, string>> = {
   doc: "Docs",
   slides: "Slides",
@@ -146,6 +147,20 @@ const MAKE_WORDS: Readonly<Record<ArtifactKind, string>> = {
   dashboard: "Dashboard",
   html: "HTML",
   sheet: "Sheet",
+};
+
+/**
+ * What each kind is for, in a few words under its name on the Make row: what
+ * a reader gets, never who makes it, since most kinds are written by a person
+ * or asked of an agent alike.
+ */
+const MAKE_DETAILS: Readonly<Record<ArtifactKind, string>> = {
+  doc: "Write and print",
+  slides: "A deck to present",
+  design: "Screens on a canvas",
+  dashboard: "Live figures",
+  html: "Any web page",
+  sheet: "A table to fill in",
 };
 
 /** What a section says when it holds nothing, and what to do about it. */
@@ -458,8 +473,8 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
 }
 
 /**
- * The Make row: one tile per kind, each the kind's own drawing on its tinted
- * ground, opening that kind's own create page.
+ * The Make row: one item per kind, each opening that kind's own create page,
+ * under a heading as quiet as the groups' below it.
  */
 function MakeRow() {
   return (
@@ -467,13 +482,15 @@ function MakeRow() {
       <h2 className="artifacts-make-title" id="artifacts-make-title">
         Make something new
       </h2>
-      <ul className="artifacts-make-row" role="list">
-        {MAKE_ORDER.map((k) => (
-          <li key={k}>
-            <ArtifactKindTile kind={k} label={MAKE_WORDS[k]} href={href(newArtifactPath(k))} />
-          </li>
-        ))}
-      </ul>
+      <ArtifactMakeRow
+        aria-labelledby="artifacts-make-title"
+        items={MAKE_ORDER.map((k) => ({
+          kind: k,
+          label: MAKE_WORDS[k],
+          detail: MAKE_DETAILS[k],
+          href: href(newArtifactPath(k)),
+        }))}
+      />
     </section>
   );
 }

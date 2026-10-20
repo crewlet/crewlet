@@ -1,32 +1,15 @@
 /**
  * A new HTML page: its own create page, in the shared frame (`CreateShell`).
  *
- * TWO WAYS IN, ONE PAGE. "Describe it" asks an agent to build the page in a
- * task; "Bring the HTML" takes the page the person writes, pastes, drops or
- * picks, checks it as they write and previews it as a private draft. The way
- * in is the address's (`mode=source`), so a link opens the one it names.
+ * ONE PAGE, TWO WAYS IN. The page is the source: written, pasted, dropped or
+ * picked, checked as it is written and previewed as a private draft. Asking
+ * an agent to build it from a description is the hand-off panel beside it,
+ * open as the page arrives because most people describe a page rather than
+ * write one (`html/SourceBody.tsx`).
  */
 
-import { SegmentedControl } from "@crewlethq/ui";
-import { useParam } from "~/app/router.tsx";
 import { SourceBody } from "./html/SourceBody.tsx";
-import { DescribeBody } from "./html/DescribeBody.tsx";
 
 export function HtmlCreate() {
-  const [mode, setMode] = useParam("mode", "describe");
-  const source = mode === "source";
-  const modeSwitch = (
-    <SegmentedControl
-      label="How to make it"
-      semantics="radio"
-      size="sm"
-      options={[
-        { value: "describe", label: "Describe it" },
-        { value: "source", label: "Bring the HTML" },
-      ]}
-      value={source ? "source" : "describe"}
-      onValueChange={(v: string) => setMode(v)}
-    />
-  );
-  return source ? <SourceBody modeSwitch={modeSwitch} /> : <DescribeBody modeSwitch={modeSwitch} />;
+  return <SourceBody />;
 }

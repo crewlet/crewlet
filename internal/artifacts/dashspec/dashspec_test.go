@@ -448,6 +448,23 @@ func TestTheCatalogueIsACopy(t *testing.T) {
 	}
 }
 
+// A SOURCE IS WINDOWED EXACTLY WHEN IT READS A SPAN OF DAYS: the spend
+// sources, whose empty answer a figure words as "nothing in this window",
+// and never a source that reads what is true now, where that wording would
+// promise a window the reader cannot find.
+func TestASourceIsWindowedExactlyWhenItReadsASpanOfDays(t *testing.T) {
+	want := map[string]bool{"spend.seats": true, "spend.daily": true}
+	for _, src := range Catalogue() {
+		if src.Windowed != want[src.Name] {
+			t.Errorf("%s is windowed %v, want %v", src.Name, src.Windowed, want[src.Name])
+		}
+		if _, days := src.Param("days"); days != src.Windowed {
+			t.Errorf("%s is windowed %v and takes days %v: a span is a parameter of the read",
+				src.Name, src.Windowed, days)
+		}
+	}
+}
+
 // A DOMAIN'S IDS ARE DRAWN IN ITS OWN WORDS: the tracker's status, status
 // group and priority, and an agent's activity, carry the vocabulary a reader
 // is shown them in, while their values stay the ids a filter compares.
@@ -505,6 +522,27 @@ func TestSourceArgsHoldsADirectReadToTheCatalogue(t *testing.T) {
 		{"days": "1.5"}} {
 		if _, err := SourceArgs(src, sent); !errors.Is(err, ErrInvalid) {
 			t.Errorf("SourceArgs(%v) = %v, want a refusal", sent, err)
+		}
+	}
+}
+
+// A COUNT OR A SUM OF NO ROWS IS ZERO, because the source answered and a
+// total of nothing is a measured nought; rows that hold no value total
+// nothing anybody measured, and a fold that picks or averages has nothing to
+// pick. The dashboard's own fold is held to the same cases.
+func TestAFoldOverNoRowsIsZeroOnlyWhereItCounts(t *testing.T) {
+	if got := Fold(AggSum, ColumnNumber, nil, "amount"); got != 0.0 {
+		t.Errorf("a sum of no rows is %v, want 0", got)
+	}
+	if got := Fold(AggCount, ColumnNumber, nil, ""); got != 0.0 {
+		t.Errorf("a count of no rows is %v, want 0", got)
+	}
+	if got := Fold(AggSum, ColumnNumber, []Row{{"amount": nil}}, "amount"); got != nil {
+		t.Errorf("a sum of rows holding no value is %v, want none", got)
+	}
+	for _, agg := range []Agg{AggAvg, AggMin, AggMax, AggFirst, AggLast} {
+		if got := Fold(agg, ColumnNumber, nil, "amount"); got != nil {
+			t.Errorf("%s of no rows is %v, want none", agg, got)
 		}
 	}
 }

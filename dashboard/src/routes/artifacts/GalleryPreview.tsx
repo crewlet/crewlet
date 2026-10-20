@@ -17,13 +17,36 @@
  *
  * # What it costs
  *
- * Every preview is a design system `LivePreview`: mounted only near the
- * viewport and only while the gallery's live budget grants it a slot, the
- * kind's drawing standing in otherwise (off screen, over the budget, still
- * loading, failed or empty). A version's outline never changes, so each is
- * read once per tab (`outlines`). Every read is a PREVIEW (`ReadOptions`):
- * the engine records no open, so browsing a gallery never fills an
- * artifact's Seen by list or reorders the reader's Recently opened.
+ * Every preview is a design system `LivePreview`, and it is a SNAPSHOT: the
+ * content is rendered once, out of sight, when the card comes near the
+ * viewport and the gallery's budget has a render free (a few at once); once
+ * it has drawn, what it drew is kept as a still copy and the content is
+ * unmounted, so a card holds no query, subscription, poll or timer after it,
+ * and scrolling past it again reads and draws nothing. The kind's drawing
+ * stands in until then (never yet near, waiting for a render, still loading,
+ * failed or empty). The copy is kept by the VERSION it drew
+ * (`snapshotKey`), so a card mounted again on this visit (a filter, the
+ * list's shape, a page of results) shows it at once, a new version is drawn
+ * afresh, and a page loaded afresh takes new snapshots. Every read is made
+ * once and never again on a reconnect; a version's outline never changes, so
+ * each is read once per tab (`outlines`). Every read is a PREVIEW
+ * (`ReadOptions`): the engine records no open, so browsing a gallery never
+ * fills an artifact's Seen by list or reorders the reader's Recently opened.
+ *
+ * # A frame is kept, not copied
+ *
+ * A page and a design's board run in a frame (`FRAMED`): another document,
+ * which nothing in this one can copy, and which a copy of the frame would
+ * load again from the start. So a framed preview keeps its frame once it has
+ * loaded, and the budget caps the frames it keeps. What it may still do is
+ * bounded instead: its ticket is minted once (never again on a reconnect,
+ * which would reload the page), and the read-only preview host answers each
+ * distinct read once and every repeat from that answer, so a page that polls
+ * its datastore is drawn as it stood and asks the engine nothing more. A
+ * picture of the page posted by the page itself was weighed and set aside:
+ * rasterising a document inside the frame is a renderer of its own that
+ * misses cross-origin images and fonts, and handing its markup out to draw
+ * here would put the artifact's own HTML in the dashboard's document.
  *
  * # Never a control
  *
@@ -67,7 +90,7 @@ import { sheetColumns, sheetRows } from "~/lib/artifacts/sheet.ts";
 import type { ArtifactPeople } from "~/lib/artifacts/people.ts";
 import { useClient } from "~/lib/store-hooks.ts";
 import { DashboardWidget } from "./DashboardWidget.tsx";
-import { PREVIEW_HOST_CAPABILITIES, PreviewHost } from "./previewHost.ts";
+import { PreviewHost } from "./previewHost.ts";
 import { sheetCollections } from "./SheetView.tsx";
 
 /** The width a board's preview is laid out at: a laptop's half, so its widgets fill a card's box. */
@@ -87,14 +110,17 @@ const BOARD_DATASETS = 6;
 /**
  * The width each kind is laid out at before it is scaled to the card, chosen
  * so what it says reads at a card's size: a doc at a narrow page with its
- * margins, as the top of a page reads across a room; a sheet at a desktop
+ * margins, as the top of a page reads across a room; a deck's cover at half
+ * its authored stage, which the stage fits whole; a sheet at a desktop
  * width; a board at [BOARD_WIDTH]; a page at a small laptop's, where a page
- * laid out for a wide screen still wraps into lines a card can show. A deck's
- * stage scales itself, and a design's board is laid out at its own size.
+ * laid out for a wide screen still wraps into lines a card can show. A
+ * design's board is laid out at its own size. A width is also what lets a
+ * still copy follow its card when the card changes size: it is scaled again
+ * rather than drawn again.
  */
 const LAYOUT_WIDTH: Readonly<Record<ArtifactKind, number | undefined>> = {
   doc: 600,
-  slides: undefined,
+  slides: 640,
   sheet: 880,
   dashboard: BOARD_WIDTH,
   design: undefined,
@@ -114,11 +140,20 @@ export function previewable(item: Pick<ArtifactListItem, "kind" | "capabilities"
   return !item.capabilities.includes("state");
 }
 
+/** The kinds whose preview runs the artifact's page in a frame. */
+const FRAMED: ReadonlySet<ArtifactKind> = new Set(["html", "design"]);
+
 /** How many rows of a sheet are read and drawn: more than the card shows at any width. */
 const SHEET_ROWS = 14;
 
 /** How many columns of a sheet are drawn. */
 const SHEET_COLUMNS = 8;
+
+/**
+ * A preview's reads are made once: it is a snapshot, so an answer is not
+ * read again when the socket comes back.
+ */
+const ONCE = { refetchOnReconnect: false } as const;
 
 /** The board's row height, in pixels: the dashboard page's own (`DashboardView`). */
 const BOARD_ROW = 16;
@@ -138,10 +173,25 @@ export function GalleryPreview({
     (item.kind !== "sheet" && item.head_number <= 0) ||
     !previewable(item);
   return (
-    <LivePreview fallback={fallback} width={LAYOUT_WIDTH[item.kind]} disabled={still}>
+    <LivePreview
+      fallback={fallback}
+      width={LAYOUT_WIDTH[item.kind]}
+      disabled={still}
+      frame={FRAMED.has(item.kind)}
+      snapshot={snapshotKey(item)}
+    >
       <KindPreview item={item} people={people} />
     </LivePreview>
   );
+}
+
+/**
+ * What a preview's snapshot is of: the artifact at its version. A sheet's
+ * rows move without a version, so its snapshot is of the rows as this visit
+ * to the gallery first read them.
+ */
+export function snapshotKey(item: Pick<ArtifactListItem, "id" | "head_number">): string {
+  return `${item.id}:${item.head_number}`;
 }
 
 function KindPreview({ item, people }: { item: ArtifactListItem; people: ArtifactPeople }) {
@@ -163,7 +213,8 @@ function KindPreview({ item, people }: { item: ArtifactListItem; people: Artifac
 
 /**
  * A version's outline, read once per tab: a version never changes, so a card
- * scrolled away and back draws again from what was read. Bounded, the oldest
+ * drawn again (the gallery opened again in this tab) draws from what was
+ * read. Bounded, the oldest
  * forgotten first, so a long session holds a gallery's worth and no more.
  */
 const outlines = new Map<string, Promise<ArtifactOutline>>();
@@ -184,8 +235,10 @@ function outlineOf(id: string, version: number): Promise<ArtifactOutline> {
 }
 
 function useOutline(item: Pick<ArtifactListItem, "id" | "head_number">) {
-  return useRest<ArtifactOutline>(`gallery-outline:${item.id}:${item.head_number}`, () =>
-    outlineOf(item.id, item.head_number),
+  return useRest<ArtifactOutline>(
+    `gallery-outline:${item.id}:${item.head_number}`,
+    () => outlineOf(item.id, item.head_number),
+    ONCE,
   );
 }
 
@@ -236,12 +289,12 @@ function SlidesPreview({ item }: { item: ArtifactListItem }) {
 }
 
 function SheetPreview({ item, people }: { item: ArtifactListItem; people: ArtifactPeople }) {
-  const schema = useQuery("artifact_data_schema", { id: item.id });
+  const schema = useQuery("artifact_data_schema", { id: item.id }, ONCE);
   const collection = schema.data ? sheetCollections(schema.data.collections)[0] : undefined;
   const docs = useQuery(
     "artifact_data",
     { id: item.id, collection: collection?.name ?? "", limit: SHEET_ROWS },
-    { enabled: collection !== undefined },
+    { ...ONCE, enabled: collection !== undefined },
   );
   const drawn = useMemo(() => {
     if (!collection || !schema.data || !docs.data) return null;
@@ -332,6 +385,7 @@ function DashboardPreview({ item }: { item: ArtifactListItem }) {
   const board = useRest<DashboardBoardAnswer>(
     `gallery-board:${item.id}:${item.head_number}`,
     (signal) => readBoard(item.id, item.head_number, signal, { preview: true }),
+    ONCE,
   );
   const answer = board.data;
   const drawn = useMemo(() => (answer ? previewWidgets(answer.board.widgets) : []), [answer]);
@@ -445,9 +499,15 @@ function PagePreview({ item }: { item: ArtifactListItem }) {
  * A page framed for a preview: a ticket minted as a preview (no open is
  * recorded, and it grants only what drawing needs), the design system's frame
  * embedding it exactly as minted, and on its port at most the READ-ONLY
- * preview host (`previewHost.ts`): a page that declares a datastore is
- * answered its reads, so it draws its real content, and every other call is
- * refused. A page that declares none has nothing on its port at all.
+ * preview host (`previewHost.ts`): a page whose frame is granted a datastore
+ * is answered its reads, so it draws its real content, and every other call
+ * is refused. A page granted none has nothing on its port at all.
+ *
+ * THE HOST IS BUILT FROM THE MINTED FRAME'S GRANT, never from the gallery
+ * item: the origin tells the page's runtime that grant as it loads, so a
+ * host that told it the item's declaration at the handshake (more than an
+ * engine granting a preview no datastore, say) answered a page that asked
+ * after the handshake differently from one that asked before it.
  */
 function PreviewFrame({
   item,
@@ -461,16 +521,16 @@ function PreviewFrame({
   const frame = useRest<ArtifactFrame>(
     `gallery-frame:${item.id}:${item.head_number}:${document ?? ""}`,
     () => mintFrame(item.id, item.head_number, document, { preview: true }),
+    ONCE,
   );
   const { socket } = useClient();
-  const granted = useMemo(
-    () =>
-      PREVIEW_HOST_CAPABILITIES.filter((c) => (item.capabilities as readonly string[]).includes(c)),
-    [item.capabilities],
-  );
+  const minted = frame.data;
   const host = useMemo(
-    () => (granted.includes("db") ? new PreviewHost({ artifact: item.id, socket, granted }) : null),
-    [granted, item.id, socket],
+    () =>
+      minted?.capabilities.includes("db")
+        ? new PreviewHost({ artifact: item.id, socket, granted: minted.capabilities })
+        : null,
+    [minted, item.id, socket],
   );
   const [mode] = useTheme();
   const [palette] = usePalette();
@@ -483,8 +543,7 @@ function PreviewFrame({
   useEffect(() => {
     if (frame.error) preview.fail();
   }, [frame.error, preview]);
-  if (!frame.data) return null;
-  const minted = frame.data;
+  if (!minted) return null;
   return (
     <div className="artifacts-preview-frame">
       <SandboxedFrame

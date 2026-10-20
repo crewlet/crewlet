@@ -100,7 +100,6 @@ const mount = (picked: number, against: number) =>
         against={against}
         lens="source"
         onLens={() => {}}
-        versions={[]}
         room={{} as never}
         presence={{} as never}
         bridgeStores={new Set()}
@@ -186,7 +185,6 @@ test("a deck's versions are compared slide by slide", async () => {
         against={11}
         lens="visual"
         onLens={() => {}}
-        versions={[]}
         room={{} as never}
         presence={{} as never}
         bridgeStores={new Set()}

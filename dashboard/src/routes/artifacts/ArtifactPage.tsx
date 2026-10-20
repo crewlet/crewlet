@@ -915,7 +915,6 @@ function Loaded({
             <ViewTab
               detail={detail}
               version={showing}
-              versions={versions}
               store={store}
               room={room}
               presence={presence}

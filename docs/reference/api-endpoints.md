@@ -6376,8 +6376,12 @@ The API origin **never renders an artifact**:
   head by default) mints the frame the dashboard embeds a page in, or one
   artboard of a design: `frame_url` on the artifact
   origin under a one-hour view ticket bound to the caller's own sign-in or
-  token, the `origin` its bridge must hear from, and the `sandbox` and `allow`
-  attributes the dashboard sets verbatim. The page is re-authorized on every
+  token, the `origin` its bridge must hear from, the `sandbox` and `allow`
+  attributes the dashboard sets verbatim, and `capabilities`, what the
+  ticket grants in the canonical order (`[]` for none): the origin writes
+  that grant on the page's runtime element, and the dashboard's host tells
+  the page the same list at the handshake, never one it works out from the
+  version or a gallery item. The page is re-authorized on every
   document request there, so a withdrawn share, a sign-out or the trash closes
   it at once. `document` names the page the frame opens: left out for a
   page's entry, and always one artboard's path for a design, whose ticket

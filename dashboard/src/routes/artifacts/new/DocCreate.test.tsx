@@ -4,7 +4,7 @@
  */
 
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { Router } from "~/app/router.tsx";
 import { DOC_TEMPLATES } from "~/lib/artifacts/docTemplates.ts";
@@ -162,6 +162,8 @@ test("Cancel asks before discarding a title, and leaves at once when nothing is 
   fireEvent.change(title(), { target: { value: "Draft" } });
   fireEvent.click(screen.getAllByRole("button", { name: "Cancel" })[0]!);
   const dialog = await screen.findByRole("alertdialog", { name: "Discard this doc?" });
+  // The way back reads as every create page's does.
+  expect(within(dialog).getByRole("button", { name: "Keep editing" })).toBeTruthy();
   expect(location.hash).toBe("#/artifacts/new/doc");
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "Discard" }));
@@ -174,18 +176,22 @@ test("Cancel asks before discarding a title, and leaves at once when nothing is 
   expect(location.hash).toBe("#/artifacts");
 });
 
-// ASK AN AGENT turns the column into a brief, and the press files one task to
-// the agent with the brief and lands on it; nothing is created here.
-test("Ask an agent files the brief as a task to the agent and opens the task", async () => {
-  mount("#/artifacts/new/doc?mode=agent");
-  expect(screen.getByRole("radio", { name: "Ask an agent" }).getAttribute("aria-checked")).toBe(
-    "true",
-  );
-  expect(screen.getByText("What happens next")).toBeTruthy();
-  const ask = () => screen.getByRole("button", { name: "Ask SRE Lead" });
+// ASK AN AGENT opens the hand-off panel beside the page, which stays; the
+// send files one task to the agent with the brief and lands on it, and
+// nothing is created here.
+test("Ask an agent opens the hand-off beside the page and files the brief as a task", async () => {
+  mount();
+  fireEvent.click(screen.getAllByRole("button", { name: "Ask an agent" })[0]!);
+  expect(location.hash).toContain("panel=ask");
+  const panel = screen.getByRole("complementary", { name: "Ask an agent" });
+  // THE PAGE STAYS: the title and the templates are still there beside it.
+  expect(title()).toBeTruthy();
+  expect(screen.getByRole("radio", { name: "Runbook" })).toBeTruthy();
+  expect(within(panel).getByText("What happens next")).toBeTruthy();
+  const ask = () => within(panel).getByRole("button", { name: "Ask SRE Lead" });
   fireEvent.change(title(), { target: { value: "Incident review guide" } });
   expect(ask().getAttribute("aria-disabled")).toBe("true");
-  fireEvent.change(screen.getByRole("textbox", { name: "Brief" }), {
+  fireEvent.change(within(panel).getByRole("textbox", { name: "What should the doc cover?" }), {
     target: { value: "  How we run incident reviews. " },
   });
   fireEvent.click(ask());
@@ -200,24 +206,44 @@ test("Ask an agent files the brief as a task to the agent and opens the task", a
   expect(write).not.toHaveBeenCalled();
 });
 
-// THE TITLE AND THE PAGE GO ACROSS: a template chosen in Write it reaches the
-// agent as the outline to follow.
-test("switching to Ask an agent keeps the title and hands over the template", async () => {
+// A LINK OPENS THE PANEL: the address carries it, as an open artifact's panels.
+test("an address naming the panel opens the page with it open, and Close closes it", () => {
+  mount("#/artifacts/new/doc?panel=ask");
+  fireEvent.click(screen.getByRole("button", { name: "Close ask an agent" }));
+  expect(screen.queryByRole("complementary", { name: "Ask an agent" })).toBeNull();
+  expect(location.hash).not.toContain("panel=");
+});
+
+// WHAT IS ON THE PAGE GOES WITH THE BRIEF: a template chosen on the page
+// reaches the agent as the outline to follow, and the panel lists it.
+test("a template on the page goes to the agent as the outline to follow", async () => {
   mount();
   fireEvent.change(title(), { target: { value: "Database failover" } });
   fireEvent.click(screen.getByRole("radio", { name: "Runbook" }));
-  fireEvent.click(screen.getByRole("radio", { name: "Ask an agent" }));
-  expect((title() as HTMLInputElement).value).toBe("Database failover");
-  expect(screen.getByText(/runbook outline goes with it/)).toBeTruthy();
-  fireEvent.change(screen.getByRole("textbox", { name: "Brief" }), {
+  fireEvent.click(screen.getAllByRole("button", { name: "Ask an agent" })[0]!);
+  const panel = screen.getByRole("complementary", { name: "Ask an agent" });
+  expect(within(panel).getByText("The runbook outline")).toBeTruthy();
+  expect(within(panel).getByText("“Database failover”")).toBeTruthy();
+  fireEvent.change(within(panel).getByRole("textbox", { name: "What should the doc cover?" }), {
     target: { value: "For the on-call rota." },
   });
-  fireEvent.click(screen.getByRole("button", { name: "Ask SRE Lead" }));
+  fireEvent.click(within(panel).getByRole("button", { name: "Ask SRE Lead" }));
   await waitFor(() => expect(fileTask).toHaveBeenCalledOnce());
   const runbook = DOC_TEMPLATES.find((t) => t.key === "runbook")!;
   expect(fileTask.mock.calls[0]![0].brief).toBe(
     `For the on-call rota.\n\nFollow the runbook outline:\n\n${runbook.body.trim()}`,
   );
+});
+
+// COMMAND+ENTER IN THE PANEL SENDS, and never creates the doc behind it.
+test("Command Enter in the panel asks the agent rather than creating the doc", async () => {
+  mount("#/artifacts/new/doc?panel=ask");
+  fireEvent.change(title(), { target: { value: "Guide" } });
+  const brief = screen.getByRole("textbox", { name: "What should the doc cover?" });
+  fireEvent.change(brief, { target: { value: "Cover it." } });
+  fireEvent.keyDown(brief, { key: "Enter", metaKey: true });
+  await waitFor(() => expect(fileTask).toHaveBeenCalledOnce());
+  expect(write).not.toHaveBeenCalled();
 });
 
 test("a brief carries a draft to build on, or nothing beyond the reader's words", () => {

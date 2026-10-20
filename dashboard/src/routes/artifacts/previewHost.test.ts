@@ -1,14 +1,15 @@
 /**
  * The preview host: it tells a page it may read its datastore and nothing
  * else, names nobody, answers reads through the datastore's own questions and
- * a subscription once, and refuses every write, state change, presence,
- * identity, link and print, asking the engine nothing for them.
+ * a subscription once, answers each read once and every repeat from that
+ * answer, and refuses every write, state change, presence, identity, link and
+ * print, asking the engine nothing for them.
  */
 
 import { describe, expect, test, vi } from "vitest";
 import type { LiveSocket } from "~/protocol/index.ts";
 import { BRIDGE_MESSAGE, BRIDGE_METHODS, type BridgeMethod } from "~/runtime/bridge.ts";
-import { PREVIEW_SNAPSHOT_LIMIT, PreviewHost } from "./previewHost.ts";
+import { PREVIEW_READS, PREVIEW_SNAPSHOT_LIMIT, PreviewHost } from "./previewHost.ts";
 
 const doc = (id: string) => ({
   id,
@@ -139,5 +140,54 @@ describe("a preview's host", () => {
       "capability_not_declared",
     );
     expect(s.query).not.toHaveBeenCalled();
+  });
+
+  // A SNAPSHOT, NOT A LIVE VIEW: the frame stays loaded after it has drawn,
+  // and a page that polls must not reach the engine through a card.
+  test("answers each read once, and a page asking again is answered as it stood", async () => {
+    const s = socket();
+    const host = new PreviewHost({ artifact: "a1", socket: s, granted: ["db", "assets"] });
+    const p = port();
+    for (let i = 0; i < 5; i++) {
+      expect((await call(host, p, "data.list", { collection: "rows" })).ok).toBe(true);
+      expect((await call(host, p, "data.schema")).ok).toBe(true);
+      expect((await call(host, p, "assets.list")).ok).toBe(true);
+    }
+    const first = await call(host, p, "data.subscribe", { collection: "rows" });
+    const again = await call(host, p, "data.subscribe", { collection: "rows" });
+    expect(first.value).toMatchObject({ subscription: 1, docs: [{ id: "r1" }] });
+    expect(again.value).toMatchObject({ subscription: 2, docs: [{ id: "r1" }] });
+    // One question per distinct read (list and subscribe both ask
+    // `artifact_data`, with different limits), however often the page asks.
+    expect(s.query.mock.calls.map(([what]) => what).sort()).toEqual([
+      "artifact_assets",
+      "artifact_data",
+      "artifact_data",
+      "artifact_data_schema",
+    ]);
+  });
+
+  test("a refused read is answered the same way again without asking the engine", async () => {
+    const s = socket();
+    s.query.mockRejectedValueOnce(new Error("down"));
+    const host = new PreviewHost({ artifact: "a1", socket: s, granted: ["db"] });
+    const p = port();
+    expect((await call(host, p, "data.schema")).ok).toBe(false);
+    expect((await call(host, p, "data.schema")).ok).toBe(false);
+    expect(s.query).toHaveBeenCalledTimes(1);
+  });
+
+  test("answers no more than its distinct reads, so a page inventing new ones is refused", async () => {
+    const s = socket();
+    const host = new PreviewHost({ artifact: "a1", socket: s, granted: ["db"] });
+    const p = port();
+    for (let i = 0; i < PREVIEW_READS; i++) {
+      expect((await call(host, p, "data.get", { collection: "rows", id: `r${i}` })).ok).toBe(true);
+    }
+    const past = await call(host, p, "data.get", { collection: "rows", id: "one more" });
+    expect(past).toMatchObject({ ok: false, error: { code: "forbidden" } });
+    expect(s.query).toHaveBeenCalledTimes(PREVIEW_READS);
+    // A read it already answered is still answered.
+    expect((await call(host, p, "data.get", { collection: "rows", id: "r0" })).ok).toBe(true);
   });
 });

@@ -29,11 +29,6 @@ export function DraftPreview({
   title: string;
 }) {
   const detail = useQuery("artifact", { id });
-  const versions = useQuery(
-    "artifact_versions",
-    { id, limit: 100 },
-    { enabled: detail.data !== null },
-  );
   const bridgeStores = useRef(new Set<ArtifactDataStore>());
   const live = detail.data?.status === "live";
   const room = useArtifactRoom(id, live, {
@@ -68,7 +63,6 @@ export function DraftPreview({
       key={version}
       detail={head}
       version={version}
-      versions={versions.data?.versions ?? []}
       room={room}
       presence={presence}
       bridgeStores={bridgeStores.current}

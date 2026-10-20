@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { installWindow } from "~/testing.tsx";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { Router } from "~/app/router.tsx";
 import { RestError } from "~/protocol/index.ts";
@@ -37,6 +38,13 @@ vi.mock("./html/DraftPreview.tsx", () => ({
   ),
 }));
 
+// A LAPTOP'S WIDTH, where the hand-off stands beside the page as a column
+// and so arrives open.
+let win: ReturnType<typeof installWindow>;
+beforeEach(() => {
+  win = installWindow(1440);
+});
+afterEach(() => win.restore());
 afterEach(cleanup);
 beforeEach(() => {
   vi.mocked(keyedWrite).mockReset();
@@ -85,7 +93,7 @@ test("a refused preview lists the linter's findings and takes the editor to one"
       ],
     }),
   });
-  mount("#/artifacts/new/html?mode=source");
+  mount("#/artifacts/new/html?panel=closed");
   const source = screen.getByRole("textbox", {
     name: "Source of index.html",
   }) as HTMLTextAreaElement;
@@ -119,7 +127,7 @@ test("a landed preview makes a private draft and frames it", async () => {
     pending: false,
     body: { artifact: "a-1", number: 1, warnings: [] },
   });
-  mount("#/artifacts/new/html?mode=source");
+  mount("#/artifacts/new/html?panel=closed");
   const source = screen.getByRole("textbox", { name: "Source of index.html" });
   fireEvent.change(source, {
     target: { value: page("<script>crewlet.data.collection('v')</script>") },
@@ -142,18 +150,69 @@ test("a landed preview makes a private draft and frames it", async () => {
   }
 });
 
-// DESCRIBE IT shows the task exactly as it will be filed, and a starting
-// point fills an empty brief without overwriting words.
-test("a starting point fills an empty brief and the task is shown as it is sent", () => {
+// THE PAGE ARRIVES WITH THE HAND-OFF OPEN beside the source, since most
+// people describe a page rather than write one; closing it leaves the source.
+test("the page opens on the source with Ask an agent open beside it, and Close leaves the source", () => {
   mount("#/artifacts/new/html");
-  fireEvent.click(screen.getByRole("button", { name: /Poll/ }));
-  const brief = screen.getByRole("textbox", { name: "Describe the page" }) as HTMLTextAreaElement;
+  const panel = screen.getByRole("complementary", { name: "Ask an agent" });
+  expect(within(panel).getByRole("textbox", { name: "Describe the page" })).toBeTruthy();
+  expect(screen.getByRole("textbox", { name: "Source of index.html" })).toBeTruthy();
+  fireEvent.click(within(panel).getByRole("button", { name: "Close ask an agent" }));
+  expect(screen.queryByRole("complementary", { name: "Ask an agent" })).toBeNull();
+  expect(location.hash).toContain("panel=closed");
+  expect(screen.getByRole("textbox", { name: "Source of index.html" })).toBeTruthy();
+});
+
+// A STARTING POINT fills the empty brief and ticks what that kind of page
+// needs on the page's own choices, and the task is shown as it is sent.
+test("a starting point fills an empty brief, ticks what the page needs, and the task is shown as it is sent", () => {
+  mount("#/artifacts/new/html");
+  const panel = screen.getByRole("complementary", { name: "Ask an agent" });
+  fireEvent.click(within(panel).getByRole("button", { name: "Poll" }));
+  const brief = within(panel).getByRole("textbox", {
+    name: "Describe the page",
+  }) as HTMLTextAreaElement;
   expect(brief.value).toContain("A poll asking");
-  expect(screen.getByText(/the `db` capability/)).toBeTruthy();
+  expect(
+    (screen.getByRole("checkbox", { name: /Saves what people enter/ }) as HTMLInputElement).checked,
+  ).toBe(true);
+  // ONCE THE BRIEF IS WRITTEN the starting points step aside, so none overwrites it.
   fireEvent.change(brief, { target: { value: "My own words" } });
-  fireEvent.click(screen.getByRole("button", { name: /Tracker/ }));
-  expect(brief.value).toBe("My own words");
-  expect(screen.getByText(/the `presence` capability/)).toBeTruthy();
+  expect(within(panel).queryByRole("button", { name: "Tracker" })).toBeNull();
+  fireEvent.click(within(panel).getByRole("button", { name: "The task as it is filed" }));
+  expect(within(panel).getByText(/the `db` capability/)).toBeTruthy();
+});
+
+// A PREVIEW THAT FAILS FOR ANY OTHER REASON IS SAID IN PREVIEW, where its
+// callout is: flipped to Checks, the reader was told the page had no problems.
+test("a preview that failed, not refused, stays on Preview and says why", async () => {
+  vi.mocked(keyedWrite).mockResolvedValue({
+    kind: "refused",
+    text: "The engine could not save the draft.",
+    stale: false,
+    error: new RestError(503, { error: "unavailable" }),
+  });
+  mount("#/artifacts/new/html?mode=source");
+  await act(async () => {
+    fireEvent.click(screen.getAllByRole("button", { name: "Preview privately" })[0]!);
+  });
+  await screen.findByText("The engine could not save the draft.");
+  expect(screen.getByRole("tab", { name: "Preview" }).getAttribute("aria-selected")).toBe("true");
+  expect(screen.getByText("The preview was not saved")).toBeTruthy();
+});
+
+// LEAVING ASKS AS EVERY CREATE PAGE ASKS: unsaved words are discarded or kept
+// in the same prompt, worded alike.
+test("leaving with unsaved words asks to discard them, as every create page does", () => {
+  mount("#/artifacts/new/html?mode=source");
+  fireEvent.change(screen.getByRole("textbox", { name: "Source of index.html" }), {
+    target: { value: page("") },
+  });
+  fireEvent.click(screen.getAllByRole("button", { name: "Cancel" })[0]!);
+  const dialog = screen.getByRole("alertdialog", { name: "Discard this page?" });
+  expect(dialog.textContent).toContain("What you wrote here is not saved anywhere yet.");
+  fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
+  expect(screen.queryByRole("alertdialog")).toBeNull();
 });
 
 test("the checks speak while the page is written", async () => {
@@ -165,7 +224,7 @@ test("the checks speak while the page is written", async () => {
       ],
       warnings: [],
     });
-    mount("#/artifacts/new/html?mode=source");
+    mount("#/artifacts/new/html?panel=closed");
     await act(async () => {
       await vi.advanceTimersByTimeAsync(700);
     });
@@ -180,16 +239,17 @@ test("the checks speak while the page is written", async () => {
 });
 
 // ASKING FILES ONE REAL TASK to the chosen agent, carrying the brief exactly
-// as the side panel showed it, and lands on that task.
+// as the panel showed it, and lands on that task.
 test("asking files the task to the chosen agent and opens it", async () => {
   mount("#/artifacts/new/html");
-  const brief = screen.getByRole("textbox", { name: "Describe the page" });
+  const panel = screen.getByRole("complementary", { name: "Ask an agent" });
+  const brief = within(panel).getByRole("textbox", { name: "Describe the page" });
   fireEvent.change(brief, { target: { value: "A poll for the offsite venue." } });
   fireEvent.click(screen.getByRole("checkbox", { name: /Saves what people enter/ }));
-  const shown = document.querySelector(".html-create-sent-body")!.textContent;
-  expect(screen.getByText("Filed to Pixel in Crewlet.")).toBeTruthy();
+  fireEvent.click(within(panel).getByRole("button", { name: "The task as it is filed" }));
+  const shown = panel.querySelector(".crewlet-agent-handoff__task-body")!.textContent;
   await act(async () => {
-    fireEvent.click(screen.getAllByRole("button", { name: "Ask Pixel" })[0]!);
+    fireEvent.click(within(panel).getByRole("button", { name: "Ask Pixel" }));
   });
   const request = fileArtifactTask.mock.calls[0]![0];
   expect(request).toMatchObject({
@@ -201,4 +261,24 @@ test("asking files the task to the chosen agent and opens it", async () => {
   expect(shown).toContain(request.brief);
   expect(shown).toContain("(kind `html`)");
   expect(location.hash).toBe("#/work/CRW-9");
+});
+
+// A PAGE THE PERSON WROTE goes to the agent to build on.
+test("a source written on the page goes with the brief", async () => {
+  mount("#/artifacts/new/html");
+  fireEvent.change(screen.getByRole("textbox", { name: "Source of index.html" }), {
+    target: { value: page("<p>Draft</p>") },
+  });
+  const panel = screen.getByRole("complementary", { name: "Ask an agent" });
+  expect(within(panel).getByText("Your HTML, index.html")).toBeTruthy();
+  fireEvent.change(within(panel).getByRole("textbox", { name: "Describe the page" }), {
+    target: { value: "Finish this poll." },
+  });
+  await act(async () => {
+    fireEvent.click(within(panel).getByRole("button", { name: "Ask Pixel" }));
+  });
+  const request = fileArtifactTask.mock.calls[0]![0];
+  expect(request.title).toBe("Build an HTML page: Venue poll");
+  expect(request.brief).toContain("Build on the page as it stands (index.html):");
+  expect(request.brief).toContain("<p>Draft</p>");
 });

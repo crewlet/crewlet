@@ -13,40 +13,42 @@
  * in keeps its own draft, so trying a template and coming back to Blank loses
  * nothing typed into either.
  *
- * OR AN AGENT SETS IT UP. The last way in trades the grid for a brief: what
- * the sheet should hold, and which agent builds it (`WhoBuildsIt`). Create
- * files a real task to that agent (`useFileArtifactTask`) and lands on it,
- * where the reader follows the work; the agent publishes the sheet.
+ * OR AN AGENT SETS IT UP. "Ask an agent" in the bar opens the hand-off panel
+ * beside the grid (`AskAgent.tsx`): what the sheet should hold, and which
+ * agent builds it. The grid stays as it is, and the columns and rows shaped
+ * in it go with the brief (`draftBrief`) once the reader has shaped any, so
+ * the agent starts from them. The send files a real task to that agent
+ * (`useFileArtifactTask`) and lands on it, where the reader follows the work;
+ * the agent publishes the sheet.
  *
  * NOTHING EXISTS UNTIL CREATE. The writes are the shared ones (`create.ts`):
  * the sheet, its schema, then its rows in keyed batches, and the page lands
  * on the new sheet. Cancel asks first when there is something to lose.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
-  ArtifactKindGlyph,
-  Button,
   Callout,
   Checkbox,
   ChoiceList,
+  ConfirmModal,
+  DocumentTitleField,
   FileDrop,
   FilePickButton,
   FormField,
-  Modal,
   Select,
   SheetColumnEditor,
   SheetColumnTypeGlyph,
   SheetGrid,
-  Textarea,
   parseCsv,
   type SheetColumn,
   type SheetColumnType,
 } from "@crewlethq/ui";
-import { BotGlyph, PlusGlyph, UploadGlyph } from "@crewlethq/icons/glyphs";
+import { Columns3Glyph, FileTextGlyph, PlusGlyph, UploadGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator } from "~/app/router.tsx";
 import { COLLECTION_PRESETS } from "~/contract/artifacts.ts";
-import { plural } from "~/lib/format.ts";
+import { TASK_BODY_MAX_BYTES } from "~/contract/work.ts";
+import { plural, utf8Bytes } from "~/lib/format.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { useArtifactPeople } from "~/lib/artifacts/people.ts";
 import {
@@ -60,8 +62,10 @@ import {
   IMPORT_ROWS_MAX,
   canAddColumn,
   columnNameProblem,
+  draftBrief,
   draftColumns,
   draftFromTable,
+  isBlankRow,
   draftOf,
   draftProblem,
   draftWrites,
@@ -82,20 +86,40 @@ import { COLUMN_TYPE_WORDS } from "~/lib/artifacts/words.ts";
 import type { CollectionPreset } from "~/protocol/index.ts";
 import { CreateShell, useLeaveCreate } from "./CreateShell.tsx";
 import { titleHold, titleProblem, useCreateArtifact, useWorkItem } from "./create.ts";
-import { useFileArtifactTask } from "./fileTask.ts";
-import { WhoBuildsIt, useWhoBuildsIt } from "./WhoBuildsIt.tsx";
+import { artifactTaskBody, useFileArtifactTask } from "./fileTask.ts";
+import { useWhoBuildsIt } from "./WhoBuildsIt.tsx";
+import {
+  AskAgentPanel,
+  askTitleHold,
+  askTool,
+  chosenAgent,
+  taskRefusal,
+  useAskPanel,
+} from "./AskAgent.tsx";
 
-/** A way in: a template, a CSV the reader brings, or an agent that sets it up. */
-type Start = SheetTemplate | "import" | "agent";
+/** A way in: a template, or a CSV the reader brings. */
+type Start = SheetTemplate | "import";
 
 /** The files an import reads. */
 const CSV_TYPES = ".csv,.tsv,.txt,text/csv,text/tab-separated-values,text/plain";
 
 /** Briefs a reader can start from, one press each. */
 const BRIEFS = [
-  "A hiring pipeline: each candidate's role, stage, interviewer and next step.",
-  "A vendor comparison: price, contract length, security review and a score for each.",
-  "A content calendar: each post's channel, owner, publish date and status.",
+  {
+    key: "hiring",
+    label: "Hiring pipeline",
+    brief: "A hiring pipeline: each candidate's role, stage, interviewer and next step.",
+  },
+  {
+    key: "vendors",
+    label: "Vendor comparison",
+    brief: "A vendor comparison: price, contract length, security review and a score for each.",
+  },
+  {
+    key: "content",
+    label: "Content calendar",
+    brief: "A content calendar: each post's channel, owner, publish date and status.",
+  },
 ] as const;
 
 /** A template's draft, with its example rows or without. */
@@ -145,17 +169,13 @@ export function SheetCreate() {
   const nav = useNavigator();
   const who = useWhoBuildsIt("sheet");
   const task = useFileArtifactTask();
-  const agentName = who.builders.find((b) => b.seat.handle === who.seat)?.seat.name ?? "";
-  const titleInput = useRef<HTMLInputElement>(null);
+  const panel = useAskPanel();
+  const agentName = chosenAgent(who)?.seat.name ?? "";
   const body = useRef<HTMLDivElement>(null);
 
   const draft = drafts[start];
   const preset = presets[start] ?? (draft ? presetOf(draft) : "shared");
   const columns = useMemo(() => (draft ? draftColumns(draft) : []), [draft]);
-
-  useEffect(() => {
-    titleInput.current?.focus({ preventScroll: true });
-  }, []);
 
   /** Change the draft the reader is looking at. */
   const update = useCallback(
@@ -172,7 +192,7 @@ export function SheetCreate() {
   const choose = (next: Start) => {
     setSettingsColumn(null);
     setStart(next);
-    if (next !== "import" && next !== "agent" && !drafts[next]) {
+    if (next !== "import" && !drafts[next]) {
       setDrafts((all) => ({ ...all, [next]: templateDraft(next, examples[next] ?? true) }));
     }
     // BELOW A LAPTOP'S WIDTH the rail stands under the grid, so what a choice
@@ -241,40 +261,50 @@ export function SheetCreate() {
     if (first) void readFile(first.file);
   };
 
-  const asking = start === "agent";
-  const hold = asking
-    ? (task.held ??
-      (task.busy
-        ? "Filing the task…"
-        : (titleHold(title) ??
-          (brief.trim() === ""
-            ? "Say what the sheet should hold."
-            : who.seat === ""
-              ? "Add an agent to the chart first, in Edit org."
-              : undefined))))
-    : !access.can
-      ? access.reason
-      : create.busy
-        ? "Creating the sheet…"
-        : !draft
-          ? "Choose a CSV file to start from."
-          : (titleHold(title) ?? draftProblem(draft));
+  const hold = !access.can
+    ? access.reason
+    : create.busy
+      ? "Creating the sheet…"
+      : !draft
+        ? "Choose a CSV file to start from."
+        : (titleHold(title) ?? draftProblem(draft));
+
+  // THE GRID GOES WITH THE BRIEF once the reader has shaped it: a template, a
+  // file, or a blank sheet they changed. An untouched blank sheet says nothing
+  // the brief does not.
+  const shaped = draft !== undefined && (start !== "blank" || touched);
+  const handed = shaped ? `${brief.trim()}\n\n${draftBrief(draft, COLUMN_TYPE_WORDS)}` : brief;
+  const taskText = artifactTaskBody("sheet", handed);
+  const taskBytes = utf8Bytes(taskText);
+  const askHold =
+    task.held ??
+    (brief.trim() === ""
+      ? "Say what the sheet should hold."
+      : (askTitleHold(title, "sheet") ??
+        (who.seat === ""
+          ? "Add an agent to the chart first."
+          : taskBytes > TASK_BODY_MAX_BYTES
+            ? `The brief and the sheet are ${taskBytes.toLocaleString()} bytes, and a task holds at most ${TASK_BODY_MAX_BYTES.toLocaleString()}. Remove some rows.`
+            : undefined)));
 
   const make = async () => {
-    if (hold) return;
-    if (asking) {
-      const filed = await task.fileArtifactTask({
-        kind: "sheet",
-        title: title.trim(),
-        brief,
-        seat: who.seat,
-        project: who.project || undefined,
-      });
-      if (filed?.item) nav.to(["work", filed.item]);
-      return;
-    }
-    if (draft) await create.sheet(title, draftWrites(draft, preset));
+    if (hold || !draft) return;
+    await create.sheet(title, draftWrites(draft, preset));
   };
+
+  const ask = async () => {
+    if (askHold || task.busy) return;
+    const filed = await task.fileArtifactTask({
+      kind: "sheet",
+      title: title.trim(),
+      brief: handed,
+      seat: who.seat,
+      project: who.project || undefined,
+    });
+    if (filed?.item) nav.to(["work", filed.item]);
+  };
+
+  const filledRows = draft ? draft.rows.filter((row) => !isBlankRow(row)).length : 0;
 
   const dirty = touched || title.trim() !== "" || brief.trim() !== "";
   const cancel = () => (dirty ? setLeaving(true) : leave());
@@ -385,15 +415,6 @@ export function SheetCreate() {
         </div>
       ),
     },
-    {
-      value: "agent",
-      label: (
-        <span className="sheet-create-start">
-          <span>Ask an agent</span>
-        </span>
-      ),
-      detail: "Describe the sheet. An agent sets up its columns and publishes it.",
-    },
   ];
 
   return (
@@ -402,18 +423,64 @@ export function SheetCreate() {
       status={status}
       onCancel={cancel}
       action={{
-        label: asking
-          ? task.busy
-            ? "Filing…"
-            : agentName
-              ? `Ask ${agentName}`
-              : "Ask an agent"
-          : create.busy
-            ? "Creating…"
-            : "Create sheet",
-        icon: asking ? <BotGlyph size="sm" /> : <PlusGlyph size="sm" />,
+        label: create.busy ? "Creating…" : "Create sheet",
+        icon: <PlusGlyph size="sm" />,
         onSelect: () => void make(),
         disabledReason: hold,
+      }}
+      handoff={{
+        tool: askTool(who, panel),
+        open: () => panel.setOpen(true),
+        panel: panel.open ? (
+          <AskAgentPanel
+            panel={panel}
+            who={who}
+            intro={`${agentName || "The agent"} gets a task to set up the sheet from your brief, makes its columns and rows, and publishes it to Artifacts.`}
+            brief={brief}
+            onBrief={setBrief}
+            briefLabel="What should the sheet hold?"
+            briefPlaceholder="A launch checklist: each gate's owner, due date and status."
+            briefHelper="Name its columns, the choices they offer, and any rows to start with."
+            starters={BRIEFS}
+            carried={[
+              ...(title.trim()
+                ? [
+                    {
+                      key: "title",
+                      icon: <FileTextGlyph size="sm" />,
+                      label: `“${title.trim()}”`,
+                      detail: "The sheet's title",
+                    },
+                  ]
+                : []),
+              ...(shaped
+                ? [
+                    {
+                      key: "columns",
+                      icon: <Columns3Glyph size="sm" />,
+                      label:
+                        filledRows > 0
+                          ? `${plural(columns.length, "column")} and ${plural(filledRows, "row")}`
+                          : plural(columns.length, "column"),
+                      detail: columns.map((c) => c.label).join(", "),
+                    },
+                  ]
+                : []),
+            ]}
+            alone="Shape columns in the grid, start from a template or bring a CSV, and they go with the brief."
+            task={{ title: title.trim() || "Untitled sheet", body: taskText }}
+            steps={[
+              `A task is filed to ${agentName || "the agent"}${who.project ? ` in ${who.project}` : ""}, with your brief${shaped ? " and the columns" : ""}.`,
+              `${agentName || "The agent"} sets up the columns and rows and publishes the sheet to Artifacts.`,
+              "You land on the task, where you follow the work and answer their questions.",
+            ]}
+            notice={taskRefusal(task.refusal)}
+            sendLabel={(n) => `Ask ${n}`}
+            onSend={() => void ask()}
+            hold={askHold}
+            busy={task.busy}
+          />
+        ) : null,
       }}
     >
       <FileDrop
@@ -424,33 +491,27 @@ export function SheetCreate() {
         onFiles={takeFiles}
       >
         <div className="sheet-create-main">
-          <div className="sheet-create-head">
-            <ArtifactKindGlyph kind="sheet" size="lg" />
-            <FormField className="sheet-create-title" error={titleProblem(title)}>
-              {(field) => (
-                <input
-                  ref={titleInput}
-                  id={field.id}
-                  aria-describedby={field.describedBy}
-                  aria-invalid={field.invalid || undefined}
-                  aria-label="Sheet title"
-                  className="sheet-create-title-input"
-                  value={title}
-                  placeholder="Untitled sheet"
-                  autoComplete="off"
-                  spellCheck
-                  onChange={(event) => setTitle(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key !== "Enter" || event.metaKey || event.ctrlKey) return;
-                    event.preventDefault();
-                    body.current
-                      ?.querySelector<HTMLElement>('[role="grid"] [tabindex="0"]')
-                      ?.focus();
-                  }}
-                />
-              )}
-            </FormField>
-          </div>
+          <FormField error={titleProblem(title)}>
+            {(field) => (
+              <DocumentTitleField
+                autoFocus
+                id={field.id}
+                aria-describedby={field.describedBy}
+                aria-label="Sheet title"
+                error={field.invalid}
+                value={title}
+                placeholder="Untitled sheet"
+                autoComplete="off"
+                spellCheck
+                onChange={(event) => setTitle(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter" || event.metaKey || event.ctrlKey) return;
+                  event.preventDefault();
+                  body.current?.querySelector<HTMLElement>('[role="grid"] [tabindex="0"]')?.focus();
+                }}
+              />
+            )}
+          </FormField>
 
           {start === "import" && imported && draft && (
             <p className="sheet-create-source">
@@ -471,51 +532,8 @@ export function SheetCreate() {
               {create.refusal}
             </Callout>
           )}
-          {asking && task.refusal && (
-            <Callout variant="danger" title="The task was not filed">
-              {task.refusal.sentence}
-              {task.refusal.hint ? ` ${task.refusal.hint}` : ""}
-            </Callout>
-          )}
 
-          {asking ? (
-            <div className="sheet-create-ask">
-              <FormField
-                label="What should the sheet hold?"
-                helper="Name its columns, the choices they offer, and any rows to start with."
-              >
-                {(field) => (
-                  <Textarea
-                    id={field.id}
-                    aria-describedby={field.describedBy}
-                    autoResize
-                    rows={5}
-                    value={brief}
-                    placeholder="A launch checklist: each gate's owner, due date and status, with the security review and pricing page as the first rows."
-                    onChange={(event) => setBrief(event.target.value)}
-                  />
-                )}
-              </FormField>
-              <div className="sheet-create-briefs" role="group" aria-label="Start from an example">
-                {BRIEFS.map((example) => (
-                  <Button
-                    key={example}
-                    size="small"
-                    variant="outline"
-                    onClick={() => setBrief(example)}
-                  >
-                    {example.slice(0, example.indexOf(":"))}
-                  </Button>
-                ))}
-              </div>
-              <WhoBuildsIt who={who} />
-              <p className="sheet-create-next">
-                {agentName
-                  ? `${agentName} gets a task to set up “${title.trim() || "the sheet"}”. They make its columns and rows from your brief and publish it to Artifacts. You land on the task, where you can follow the work and answer their questions.`
-                  : "The agent you pick gets a task to set up the sheet from your brief and publish it to Artifacts. You land on the task, where you can follow the work."}
-              </p>
-            </div>
-          ) : draft ? (
+          {draft ? (
             <>
               <SheetGrid
                 label={title.trim() || "Untitled sheet"}
@@ -579,7 +597,7 @@ export function SheetCreate() {
               />
             </FormField>
           </section>
-          {!asking && (
+          {
             <section className="sheet-create-section">
               <FormField label="Who can change rows" helper={PRESET_WORDS[preset].description}>
                 {(field) => (
@@ -605,36 +623,25 @@ export function SheetCreate() {
                 it is made.
               </p>
             </section>
-          )}
-          {workItem && !asking && (
-            <p className="sheet-create-note">It will be listed on {workItem}.</p>
-          )}
+          }
+          {workItem && <p className="sheet-create-note">It will be listed on {workItem}.</p>}
         </aside>
       </FileDrop>
 
-      <Modal
+      <ConfirmModal
         open={leaving}
-        onClose={() => setLeaving(false)}
+        destructive
         title="Discard this sheet?"
-        size="sm"
-        placement="top"
-        footer={
-          <>
-            <Button size="small" variant="ghost" onClick={() => setLeaving(false)}>
-              Keep editing
-            </Button>
-            <Button size="small" variant="danger" onClick={leave}>
-              Discard
-            </Button>
-          </>
+        message={
+          brief.trim()
+            ? "Its title, columns, rows and brief are not saved anywhere yet."
+            : "Its title, columns and rows are not saved anywhere yet."
         }
-      >
-        <p>
-          {asking
-            ? "Its title and brief have not been sent, and leaving discards them."
-            : "Its title, columns and rows have not been saved, and leaving discards them."}
-        </p>
-      </Modal>
+        cancelLabel="Keep editing"
+        confirmLabel="Discard"
+        onClose={() => setLeaving(false)}
+        onConfirm={leave}
+      />
     </CreateShell>
   );
 }

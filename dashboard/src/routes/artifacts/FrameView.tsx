@@ -32,7 +32,6 @@ import {
   RestError,
   type ArtifactDetail,
   type ArtifactFrame,
-  type ArtifactVersionSummary,
 } from "~/protocol/index.ts";
 import { useRest } from "~/lib/useRest.ts";
 import { useClient, useConnection } from "~/lib/store-hooks.ts";
@@ -44,7 +43,7 @@ import type { ArtifactRoom } from "~/lib/artifacts/room.ts";
 import { useDataStore } from "~/lib/artifacts/useDataStore.ts";
 import { useArtifactPeople } from "~/lib/artifacts/people.ts";
 import { rowID, type ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
-import type { BridgeViewer, RuntimeCapability } from "~/runtime/bridge.ts";
+import type { BridgeViewer } from "~/runtime/bridge.ts";
 import { PageHost } from "./host.ts";
 import { pageRoster, pageSelf, pageViewer } from "./pageIdentity.ts";
 import type { PresenceReport } from "./presence.ts";
@@ -91,7 +90,6 @@ const SETTLED_REFUSALS = new Set([
 export function FrameView({
   detail,
   version,
-  versions,
   room,
   presence,
   bridgeStores,
@@ -104,7 +102,6 @@ export function FrameView({
 }: {
   detail: ArtifactDetail;
   version: number;
-  versions: ArtifactVersionSummary[];
   room: ArtifactRoom;
   presence: PresenceReport;
   bridgeStores: Set<ArtifactDataStore>;
@@ -136,16 +133,16 @@ export function FrameView({
     if (frame.data) handed.current = performance.now();
   }, [frame.data]);
 
-  // WHAT THE VERSION DECLARES is what the page may use, read off the version
-  // itself rather than the head, which may be newer.
-  const summary = versions.find((v) => v.number === version);
-  const capabilities = useMemo(
-    () =>
-      (summary?.capabilities ??
-        (version === detail.head_number ? detail.capabilities : undefined) ??
-        []) as RuntimeCapability[],
-    [summary, version, detail.head_number, detail.capabilities],
-  );
+  // WHAT THE FRAME'S TICKET GRANTS is what the page may use, and nothing
+  // else: the origin tells the page's runtime that grant as it loads, so the
+  // host tells it the same at the handshake. A list worked out here, from the
+  // version or the head this tab had read (not loaded yet, or a page of the
+  // history that does not name this version), could disagree with the grant,
+  // so a page that asked before the handshake and one that asked after were
+  // told different things, and a sheet on it said for good that its page
+  // declared no datastore.
+  const minted = frame.data;
+  const capabilities = useMemo(() => minted?.capabilities ?? [], [minted]);
   const needsData = capabilities.includes("db") || capabilities.includes("state");
   const store = useDataStore(detail.id, { via: "bridge", version }, needsData);
   // THE PAGE'S STORE HEARS THE ROOM the viewer joined: the page's own store
@@ -166,7 +163,7 @@ export function FrameView({
   // it is made, so a memo would hand back one a cleanup had stopped.
   const host = useOwned(
     () =>
-      !store && needsData
+      !minted || (!store && needsData)
         ? null
         : new PageHost({
             artifact: detail.id,
@@ -185,7 +182,7 @@ export function FrameView({
           }),
     (made) => made.stop(),
     // The presence report is read through its stable `at`.
-    [detail.id, version, capabilities, socket, store, needsData, clientID, canPrint],
+    [minted, detail.id, version, capabilities, socket, store, needsData, clientID, canPrint],
   );
 
   // WHO IS VIEWING, and the people a page may name, to a page that declared
@@ -252,13 +249,12 @@ export function FrameView({
       </div>
     );
   }
-  if (!frame.data || !host)
+  if (!minted || !host)
     return (
       <div className={box}>
         <SandboxedFramePlaceholder className="artifact-frame" title={name} />
       </div>
     );
-  const minted = frame.data;
   const report = (outcome: "ready" | "failed") => {
     if (reported.current === minted.frame_url) return;
     reported.current = minted.frame_url;

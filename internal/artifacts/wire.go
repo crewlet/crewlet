@@ -152,4 +152,13 @@ type Frame struct {
 
 	// Document is the page the frame opens, a path of the version.
 	Document string `json:"document"`
+
+	// Capabilities is what the frame's ticket grants, in the canonical order,
+	// and [] for none: what the origin tells the page's runtime as it loads
+	// and so the one list the dashboard's host may tell it at the handshake.
+	// A host that worked its list out for itself (from the version it read,
+	// a gallery item, its own build's idea of a preview) could tell the page
+	// something the ticket does not grant, and a page that asked before the
+	// handshake and one that asked after would be answered differently.
+	Capabilities []Capability `json:"capabilities"`
 }

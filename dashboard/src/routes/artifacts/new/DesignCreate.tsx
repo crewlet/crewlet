@@ -13,11 +13,21 @@
  *
  * # The panel follows the selection, as a design tool's does
  *
- * With nothing selected the panel is the design's: its name, its brief and
- * its references. With a board selected it is the board's: its name, its
+ * With nothing selected the panel says what the canvas holds and how to
+ * shape a board. The design's name, brief and references are the hand-off's,
+ * since they are what the agent is asked, and on a phone the hand-off is the
+ * screen: every field the ask waits on is in it. With a board selected it is the board's: its name, its
  * frame (a preset or a custom size), its place in the order and what it is
  * for. The list of boards beside the canvas is the canvas's other half: the
  * board picked on one is marked on the other.
+ *
+ * # Asking is the primary action
+ *
+ * Only an agent draws a design, so the hand-off is the page's one way to make
+ * it: the page arrives with the hand-off panel open beside the canvas
+ * (`AskAgent.tsx`), holding the design's brief, its references, who builds it
+ * and the boards that go with them, and the bar's "Ask an agent" is its
+ * primary while the panel is closed. The canvas stays the page.
  *
  * # Created, it is a real design waiting for its first draft
  *
@@ -53,6 +63,7 @@ import {
 import {
   ChevronDownGlyph,
   ChevronUpGlyph,
+  FileTextGlyph,
   LaptopGlyph,
   LayoutGridGlyph,
   MonitorGlyph,
@@ -97,9 +108,32 @@ import {
   type StarterLayout,
 } from "~/lib/artifacts/designLayout.ts";
 import { CreateShell, useLeaveCreate } from "./CreateShell.tsx";
-import { titleHold, titleProblem, useWorkItem } from "./create.ts";
-import { useFileArtifactTask } from "./fileTask.ts";
-import { WhoBuildsIt, useWhoBuildsIt, type WhoBuildsItState } from "./WhoBuildsIt.tsx";
+import { titleProblem, useWorkItem } from "./create.ts";
+import { artifactTaskBody, useFileArtifactTask } from "./fileTask.ts";
+import { useWhoBuildsIt } from "./WhoBuildsIt.tsx";
+import { AskAgentPanel, askTool, chosenAgent, useAskPanel } from "./AskAgent.tsx";
+
+/** Briefs to start from, one press each. */
+const DESIGN_BRIEFS = [
+  {
+    key: "launch",
+    label: "Product launch",
+    brief:
+      "A landing page for the new product: a headline that says what it does, three benefits, a screenshot and one call to action. Follow our brand.",
+  },
+  {
+    key: "firstrun",
+    label: "First-run screens",
+    brief:
+      "The first-run screens of the mobile app: a welcome, the two permissions we need and why, and the empty home screen with a first step.",
+  },
+  {
+    key: "settings",
+    label: "Calmer settings",
+    brief:
+      "A calmer version of our settings screen: the same options grouped by what people come to change, with clearer labels and fewer borders.",
+  },
+] as const;
 
 /** Each frame preset's glyph. */
 const PRESET_GLYPHS: Record<FramePreset["id"], ReactNode> = {
@@ -125,6 +159,7 @@ export function DesignCreate() {
   const create = useKeyedGesture();
   const who = useWhoBuildsIt("design");
   const ask = useFileArtifactTask();
+  const panel = useAskPanel(true);
   // THE DESIGN ONCE IT IS MADE: a task refused after it was made is filed
   // again on its own, so a second press never makes a second design.
   const [made, setMade] = useState<string | null>(null);
@@ -165,17 +200,19 @@ export function DesignCreate() {
     );
   };
 
-  const hold = titleHold(title) ?? (draft ? draftHold(draft) : "Pick a layout.");
+  const hold =
+    (title.trim() === "" ? "Name the design first." : titleProblem(title)) ??
+    (draft ? draftHold(draft) : "Pick a layout.");
   const briefBudget = textBudget(brief, DESIGN_BRIEF_MAX_BYTES, "a design's brief");
-  const builder = who.builders.find((b) => b.seat.handle === who.seat);
+  const builder = chosenAgent(who);
   const blocked = !access.can
     ? access.reason
     : (ask.held ??
       (builder ? undefined : "Add an agent to the chart to build it.") ??
       (briefBudget.over ? "Shorten the brief." : hold));
   const busy = create.busy || ask.busy;
-  // A PHONE'S BAR HOLDS THE VERB ALONE: the agent's name is in the panel, and
-  // beside the page's title it pushed the title out of the bar.
+  // A PHONE'S BAR KEEPS ITS WIDTH FOR THE NAME AND THE ACTION: the board
+  // count is the boards list's own there.
   const narrow = useMediaMatch("(width < 40rem)");
 
   const submit = useCallback(async () => {
@@ -266,23 +303,133 @@ export function DesignCreate() {
           ? "Creating the design…"
           : ask.busy
             ? `Asking ${builder?.seat.name ?? "the agent"}…`
-            : undefined
+            : narrow
+              ? undefined
+              : count
       }
       tools={tools}
       onCancel={() => (dirty ? setConfirmLeave(true) : leave())}
-      action={{
-        label: narrow
-          ? made
-            ? "Ask"
-            : "Create"
-          : made
-            ? `Ask ${builder?.seat.name ?? "the agent"}`
-            : builder
-              ? `Create and ask ${builder.seat.name}`
-              : "Create design",
-        icon: <PlusGlyph size="sm" />,
-        onSelect: () => void submit(),
-        disabledReason: busy ? "Creating the design." : blocked,
+      handoff={{
+        tool: askTool(who, panel, true),
+        open: () => panel.setOpen(true),
+        panel: panel.open ? (
+          <AskAgentPanel
+            panel={panel}
+            who={who}
+            intro={`The design is made from the boards you laid out and shared with ${builder?.seat.name ?? "the agent"}, who draws each board over its placeholder.`}
+            brief={brief}
+            onBrief={setBrief}
+            briefLabel="What is the design for?"
+            briefPlaceholder="A landing page for the new product, in our brand."
+            briefHelper={briefBudget.line ?? BRIEF_HINT}
+            starters={DESIGN_BRIEFS}
+            carried={[
+              ...(title.trim()
+                ? [
+                    {
+                      key: "title",
+                      icon: <FileTextGlyph size="sm" />,
+                      label: `“${title.trim()}”`,
+                      detail: "The design's name",
+                    },
+                  ]
+                : []),
+              ...(draft
+                ? [
+                    {
+                      key: "boards",
+                      icon: <LayoutGridGlyph size="sm" />,
+                      label: plural(draft.boards.length, "board"),
+                      detail:
+                        draft.boards.map((b) => b.title.trim() || "Untitled board").join(", ") ||
+                        "Place a board on the canvas.",
+                    },
+                  ]
+                : []),
+            ]}
+            alone="Pick a starting layout and its boards go with the brief."
+            task={
+              draft
+                ? {
+                    title: title.trim() || "Untitled design",
+                    body: artifactTaskBody(
+                      "design",
+                      taskBrief({ brief, draft, links }),
+                      made ?? "created when you send",
+                    ),
+                  }
+                : undefined
+            }
+            steps={[
+              `The design is made from your boards and shared with ${builder?.seat.name ?? "the agent"} as an editor.`,
+              `A task is filed to ${builder?.seat.name ?? "the agent"}${who.project ? ` in ${who.project}` : ""}, with the design linked.`,
+              `${builder?.seat.name ?? "The agent"} draws each board and publishes it over its placeholder.`,
+              "You land on the design, and follow the work from it and the task.",
+            ]}
+            notice={
+              <>
+                {create.answer && create.answer.kind !== "done" && (
+                  <Callout variant="danger" title="The design was not created" live="polite">
+                    <p>{create.answer.text}</p>
+                  </Callout>
+                )}
+                {ask.refusal && (
+                  <Callout
+                    live="polite"
+                    variant={made ? "warning" : "danger"}
+                    title={
+                      made
+                        ? "The design is made, and its task was not filed"
+                        : "The task was not filed"
+                    }
+                  >
+                    <p>{ask.refusal.sentence}</p>
+                    {made && (
+                      <p>
+                        Press Ask again to file it, or{" "}
+                        <Link href={href(artifactPath(made))}>open the design</Link>.
+                      </p>
+                    )}
+                  </Callout>
+                )}
+              </>
+            }
+            sendLabel={(n) => (made ? `Ask ${n}` : `Create and ask ${n}`)}
+            onSend={() => void submit()}
+            hold={blocked}
+            busy={busy}
+          >
+            <FormField label="Design name" required error={titleProblem(title)}>
+              {(field) => (
+                <Input
+                  id={field.id}
+                  aria-describedby={field.describedBy}
+                  aria-invalid={field.invalid || undefined}
+                  value={title}
+                  placeholder="Launch site"
+                  autoComplete="off"
+                  onChange={(event) => setTitle(event.currentTarget.value)}
+                />
+              )}
+            </FormField>
+            <ListInput
+              label="References"
+              itemName="link"
+              optional
+              value={links}
+              onChange={(next) => {
+                const added = next.find((l) => !links.includes(l));
+                const wrong = added === undefined ? undefined : linkProblem(added);
+                setLinkError(wrong);
+                if (!wrong) setLinks(next.map((l) => l.trim()));
+              }}
+              error={linkError}
+              placeholder="https://"
+              helper="Sites, files or other artifacts to look at."
+              enterHint
+            />
+          </AskAgentPanel>
+        ) : null,
       }}
     >
       {picking || !draft ? (
@@ -388,35 +535,14 @@ export function DesignCreate() {
                 />
               ) : (
                 <DesignPanel
-                  title={title}
-                  onTitle={setTitle}
-                  brief={brief}
-                  onBrief={setBrief}
-                  briefLine={briefBudget.line}
-                  links={links}
-                  onLinks={(next) => {
-                    const added = next.find((l) => !links.includes(l));
-                    const wrong = added === undefined ? undefined : linkProblem(added);
-                    setLinkError(wrong);
-                    if (!wrong) setLinks(next.map((l) => l.trim()));
-                  }}
-                  linkError={linkError}
-                  who={who}
+                  boards={draft.boards.length}
+                  addBoard={
+                    <AddBoardMenu
+                      disabled={draft.boards.length >= DESIGN_MAX_BOARDS}
+                      onAdd={addPreset}
+                    />
+                  }
                 />
-              )}
-              {create.answer && create.answer.kind !== "done" && (
-                <Callout variant="danger" title="The design was not created">
-                  <p>{create.answer.text}</p>
-                </Callout>
-              )}
-              {made && ask.refusal && (
-                <Callout variant="warning" title="The design is made, and its task was not filed">
-                  <p>{ask.refusal.sentence}</p>
-                  <p>
-                    Press Ask again to file it, or{" "}
-                    <Link href={href(artifactPath(made))}>open the design</Link>.
-                  </p>
-                </Callout>
               )}
             </div>
           </div>
@@ -427,8 +553,8 @@ export function DesignCreate() {
           open
           destructive
           title="Discard this design?"
-          message="The boards and brief you laid out are not kept."
-          cancelLabel="Keep working"
+          message="Its name, its boards and any brief you wrote are not saved anywhere yet."
+          cancelLabel="Keep editing"
           confirmLabel="Discard"
           onClose={() => setConfirmLeave(false)}
           onConfirm={leave}
@@ -556,69 +682,27 @@ function BoardPlaceholder({ board }: { board: DraftBoard }) {
   );
 }
 
-/** The panel with nothing selected: the design's name, brief and references. */
+/** The panel with nothing selected: what the canvas holds, and how to shape a board. */
 function DesignPanel({
-  title,
-  onTitle,
-  brief,
-  onBrief,
-  briefLine,
-  links,
-  onLinks,
-  linkError,
-  who,
+  boards,
+  addBoard,
 }: {
-  title: string;
-  onTitle: (v: string) => void;
-  brief: string;
-  onBrief: (v: string) => void;
-  briefLine: string | undefined;
-  links: string[];
-  onLinks: (next: string[]) => void;
-  linkError: string | undefined;
-  who: WhoBuildsItState;
+  boards: number;
+  /** Add board, drawn here where the list of boards that carries it is folded away. */
+  addBoard: ReactNode;
 }) {
   return (
     <div className="design-create-fields">
-      <h2 className="design-create-panel-title">Design</h2>
-      <FormField label="Name" required error={titleProblem(title)}>
-        {(field) => (
-          <Input
-            id={field.id}
-            aria-describedby={field.describedBy}
-            aria-invalid={field.invalid || undefined}
-            value={title}
-            placeholder="Name this design"
-            autoComplete="off"
-            onChange={(event) => onTitle(event.currentTarget.value)}
-          />
-        )}
-      </FormField>
-      <FormField label="Brief" optional helper={briefLine ?? BRIEF_HINT} error={undefined}>
-        {(field) => (
-          <Textarea
-            id={field.id}
-            aria-describedby={field.describedBy}
-            autoResize
-            rows={5}
-            value={brief}
-            onChange={(event) => onBrief(event.currentTarget.value)}
-          />
-        )}
-      </FormField>
-      <ListInput
-        label="References"
-        itemName="link"
-        optional
-        value={links}
-        onChange={onLinks}
-        error={linkError}
-        placeholder="https://"
-        helper="Sites, files or other artifacts to look at."
-        enterHint
-      />
-      <h2 className="design-create-panel-title">Who builds it</h2>
-      <WhoBuildsIt who={who} />
+      <div className="design-create-panel-head">
+        <h2 className="design-create-panel-title">Design</h2>
+        <span className="design-create-panel-add">{addBoard}</span>
+      </div>
+      <p className="design-create-note">
+        {boards === 0
+          ? "Place a board on the canvas to start."
+          : `${plural(boards, "board")} on the canvas. Select one to set its size, its place in the order and what it is for.`}{" "}
+        The design's name, brief and references are in Ask an agent.
+      </p>
     </div>
   );
 }

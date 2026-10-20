@@ -22,27 +22,26 @@
  * shown, word for word but for what the person changes next.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   Button,
   Callout,
   ConfirmModal,
+  DocumentTitleField,
   FormField,
   Input,
   Kbd,
   isApplePlatform,
   Menu,
-  SegmentedControl,
   Select,
   Skeleton,
   SlideFilmstrip,
   SlideStage,
-  Textarea,
   ThemeGallery,
   useMediaMatch,
   useToast,
 } from "@crewlethq/ui";
-import { PlusGlyph, PresentationGlyph, WandSparklesGlyph } from "@crewlethq/icons/glyphs";
+import { FileTextGlyph, PaletteGlyph, PlusGlyph, PresentationGlyph } from "@crewlethq/icons/glyphs";
 import { useLeaveGuard, useNavigator } from "~/app/router.tsx";
 import { artifactPath } from "~/app/routes.ts";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
@@ -65,15 +64,36 @@ import {
   type PlanRow,
 } from "~/lib/artifacts/deckPlan.ts";
 import { renderSlide } from "~/lib/slides.tsx";
+import { useWidth } from "~/lib/useWidth.ts";
 import { useRest } from "~/lib/useRest.ts";
 import type { DeckLayout, DeckSlide, DeckTheme, SlidesStartersAnswer } from "~/protocol/index.ts";
 import { CreateShell, useLeaveCreate } from "./CreateShell.tsx";
 import { titleHold, titleProblem, useCreateArtifact, useWorkItem } from "./create.ts";
-import { useFileArtifactTask } from "./fileTask.ts";
-import { WhoBuildsIt, useWhoBuildsIt } from "./WhoBuildsIt.tsx";
+import { artifactTaskBody, useFileArtifactTask } from "./fileTask.ts";
+import { useWhoBuildsIt } from "./WhoBuildsIt.tsx";
+import { AskAgentPanel, askTitleHold, askTool, chosenAgent, useAskPanel } from "./AskAgent.tsx";
 
-/** Who drafts the deck: the reader, in the editor, or an agent, in a task. */
-type Drafter = "self" | "agent";
+/** Briefs to start from, one press each. */
+const DECK_BRIEFS = [
+  {
+    key: "board",
+    label: "Board update",
+    brief:
+      "A ten-minute board update on the support desk: what changed this quarter, the numbers, and the one decision we need.",
+  },
+  {
+    key: "kickoff",
+    label: "Project kickoff",
+    brief:
+      "A kickoff deck for the new project: the problem, the goal, who is on it, the plan by month and how we will know it worked.",
+  },
+  {
+    key: "review",
+    label: "Quarterly review",
+    brief:
+      "A quarterly review for the whole company: what we shipped, what we learned, where we missed and the priorities for next quarter.",
+  },
+] as const;
 
 /** The longest brief, in characters: a task's description holds it and the plan. */
 const BRIEF_MAX = 4000;
@@ -83,6 +103,82 @@ const BRIEF_MAX = 4000;
  * keeps the look its starter always had, for a create that names none.
  */
 const OPENING_THEME = "nightshade";
+
+/**
+ * The composer's width under which the strip leaves its column for a row
+ * under the stage: three columns there would leave the stage under 480px.
+ */
+const SPLIT_BELOW = 960;
+
+/**
+ * How the composer lays out its three parts: in "three" columns (the strip,
+ * the stage, the settings), "split" (the strip a row under the stage, the
+ * settings beside it), or one "column" on a phone.
+ *
+ * THE STAGE IS THE PAGE'S SUBJECT, so a page too narrow for three columns to
+ * leave it a readable width lays the strip out under it, as a phone does. The
+ * composer's own width decides, since the sidebar and a peek take from it and
+ * the window's width says nothing about either. The placeholder drawn while
+ * the themes load asks the same question, so the page does not move when they
+ * arrive.
+ */
+function useComposerArrangement() {
+  const phone = useMediaMatch(`(width < ${PHONE_BREAKPOINT}px)`);
+  const root = useRef<HTMLDivElement>(null);
+  const width = useWidth(root);
+  const arrangement = phone ? "column" : width > 0 && width < SPLIT_BELOW ? "split" : "three";
+  return { root, phone, arrangement, stripInMain: arrangement !== "three" };
+}
+
+/** A slide's placeholder: its hold's whole box, with a slide's corners and none of a box's default margin. */
+const SLIDE_HOLD = {
+  className: "slides-create-skeleton",
+  variant: "box",
+  height: "100%",
+  marginTop: 0,
+  borderRadius: "var(--radius-sm)",
+} as const;
+
+/** The composer's shape while the themes and layouts load: its parts where they will stand. */
+function ComposerSkeleton() {
+  const { root, arrangement, stripInMain } = useComposerArrangement();
+  const strip = (
+    <div
+      className="slides-create-strip slides-create-strip-hold"
+      data-orientation={stripInMain ? "horizontal" : "vertical"}
+    >
+      {[0, 1, 2, 3].map((n) => (
+        <div key={n} className="slides-create-thumb-hold">
+          <Skeleton {...SLIDE_HOLD} />
+        </div>
+      ))}
+    </div>
+  );
+  return (
+    <div ref={root} className="slides-create" data-arrangement={arrangement} aria-busy="true">
+      {!stripInMain && strip}
+      <div className="slides-create-main">
+        <div className="slides-create-title-hold">
+          <Skeleton
+            className="slides-create-skeleton"
+            variant="box"
+            width="40%"
+            height="100%"
+            marginTop={0}
+            label="Loading themes and layouts"
+          />
+        </div>
+        <div className="slides-create-stage-hold">
+          <Skeleton {...SLIDE_HOLD} />
+        </div>
+        {stripInMain && strip}
+      </div>
+      <div className="slides-create-side">
+        <Skeleton variant="grid" rows={3} columns={2} />
+      </div>
+    </div>
+  );
+}
 
 /** Nothing on a starter slide is a file of a version: no image to resolve. */
 const noImage = () => null;
@@ -95,31 +191,10 @@ export function SlidesCreate() {
     return (
       <CreateShell kind="slides">
         {starters.loading ? (
-          <div className="slides-create" aria-busy="true">
-            <div className="slides-create-strip slides-create-strip-hold">
-              {[0, 1, 2, 3].map((n) => (
-                <div key={n} className="slides-create-stage-hold">
-                  <Skeleton
-                    className="slides-create-skeleton"
-                    variant="box"
-                    height="100%"
-                    {...(n === 0 ? { label: "Loading themes and layouts" } : {})}
-                  />
-                </div>
-              ))}
-            </div>
-            <div className="slides-create-main">
-              <Skeleton variant="box" height="var(--size-control-md)" />
-              <div className="slides-create-stage-hold">
-                <Skeleton className="slides-create-skeleton" variant="box" height="100%" />
-              </div>
-            </div>
-            <div className="slides-create-side">
-              <Skeleton variant="grid" rows={3} columns={2} />
-            </div>
-          </div>
+          <ComposerSkeleton />
         ) : (
-          <div className="slides-create-state">
+          <div className="slides-create-state" role="alert">
+            <h2 className="slides-create-state-title">The themes and layouts did not load</h2>
             <QueryState error={starters.code} refusal={starters.refusal} loading={false} />
             <Button size="small" variant="secondary" onClick={() => void starters.reload()}>
               Try again
@@ -135,7 +210,7 @@ export function SlidesCreate() {
 function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
   const create = useCreateArtifact();
   const workItem = useWorkItem();
-  const phone = useMediaMatch(`(width < ${PHONE_BREAKPOINT}px)`);
+  const { root, phone, arrangement, stripInMain } = useComposerArrangement();
   const opening = useMemo(() => rowsOf(starters.default), [starters.default]);
   const firstTheme =
     starters.themes.find((t) => t.id === OPENING_THEME)?.id ??
@@ -151,7 +226,6 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
   const [leaving, setLeaving] = useState<{ leave: () => void } | null>(null);
   const creating = useRef(false);
   const leave = useLeaveCreate();
-  const titleField = useRef<HTMLInputElement>(null);
 
   const theme = starters.themes.find((t) => t.id === themeId) ?? starters.themes[0]!;
   const layouts = useMemo(
@@ -183,16 +257,12 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
       : null,
   );
 
-  useEffect(() => {
-    titleField.current?.focus();
-  }, []);
-
   // ASKING AN AGENT drafts the same deck: the page makes it from the plan,
   // shared with the agent as an editor so its turns can publish versions of
   // it, then files the agent a task the deck is linked to, whose description
   // carries the brief and the slides it starts from. The reader lands on the
   // task, where the deck is listed and the agent's progress is told.
-  const [drafter, setDrafter] = useState<Drafter>("self");
+  const panel = useAskPanel();
   const who = useWhoBuildsIt("slides");
   const files = useFileArtifactTask();
   const make = useKeyedGesture();
@@ -201,21 +271,22 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
   // A DECK MADE FOR A TASK THAT WAS THEN REFUSED is kept, and the next press
   // files the task for it rather than making a second deck.
   const [made, setMade] = useState<{ id: string; seat: string } | null>(null);
-  const agent = who.builders.find((b) => b.seat.handle === who.seat)?.seat;
+  const agent = chosenAgent(who)?.seat;
 
-  const hold =
-    titleHold(title) ??
-    planHold(rows) ??
-    (drafter === "agent"
-      ? brief.trim() === ""
-        ? "Tell the agent what the deck is for."
-        : !who.seat
-          ? "Choose an agent."
+  const hold = titleHold(title) ?? planHold(rows);
+  const askHold =
+    files.held ??
+    (brief.trim() === ""
+      ? "Say what the deck is for."
+      : (askTitleHold(title, "deck") ??
+        planHold(rows) ??
+        (!who.seat
+          ? "Add an agent to the chart first."
           : !who.project
-            ? "Choose a project for the task."
-            : (files.held ?? undefined)
-      : undefined);
+            ? "Choose the project to file the task in."
+            : undefined)));
   const busy = create.busy || make.busy || files.busy;
+  const handed = `${brief.trim()}\n\n${planBrief(theme, rows, title, layouts)}`;
 
   const start = async () => {
     if (hold || busy) return;
@@ -228,7 +299,7 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
   };
 
   const ask = async () => {
-    if (hold || busy || !agent) return;
+    if (askHold || busy || !agent) return;
     let id = made && made.seat === agent.handle ? made.id : "";
     if (!id) {
       const answer = await make.run(
@@ -249,7 +320,7 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
     const filed = await files.fileArtifactTask({
       kind: "slides",
       title: title.trim(),
-      brief: `${brief.trim()}\n\n${planBrief(theme, rows, title, layouts)}`,
+      brief: handed,
       seat: agent.handle,
       project: who.project,
       artifact: id,
@@ -265,8 +336,6 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
     creating.current = true;
     nav.to(filed.item ? ["work", filed.item] : artifactPath(id));
   };
-
-  const commit = () => void (drafter === "agent" ? ask() : start());
 
   const add = (layout: string) => {
     const next = addAfter(rows, current?.key ?? "", layout);
@@ -291,7 +360,7 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
   const strip = (
     <SlideFilmstrip
       className="slides-create-strip"
-      orientation={phone ? "horizontal" : "vertical"}
+      orientation={stripInMain ? "horizontal" : "vertical"}
       slides={slides.map((s) => ({ id: s.id, title: s.title }))}
       selected={current?.key ?? ""}
       onSelect={setSelected}
@@ -327,43 +396,119 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
       // ON A PHONE THE BAR KEEPS ITS WIDTH FOR THE NAME AND THE ACTION: the
       // count is said under the stage there.
       status={
-        phone ? undefined : (
-          <span className="slides-create-status">
-            {rows.length === 1 ? "1 slide" : `${rows.length} slides`} · {theme.name}
-          </span>
-        )
+        phone
+          ? undefined
+          : `${rows.length === 1 ? "1 slide" : `${rows.length} slides`} · ${theme.name}`
       }
       action={{
-        label: drafter === "agent" ? (agent ? `Ask ${agent.name}` : "Ask an agent") : "Create deck",
-        icon:
-          drafter === "agent" ? <WandSparklesGlyph size="sm" /> : <PresentationGlyph size="sm" />,
-        onSelect: commit,
-        ...(hold
-          ? { disabledReason: hold }
-          : busy
-            ? {
-                disabledReason:
-                  drafter === "agent"
-                    ? "Making the deck and filing the task."
-                    : "Creating the deck.",
-              }
-            : {}),
+        label: "Create deck",
+        icon: <PresentationGlyph size="sm" />,
+        onSelect: () => void start(),
+        ...(hold ? { disabledReason: hold } : busy ? { disabledReason: "Creating the deck." } : {}),
+      }}
+      handoff={{
+        tool: askTool(who, panel),
+        open: () => panel.setOpen(true),
+        panel: panel.open ? (
+          <AskAgentPanel
+            panel={panel}
+            who={who}
+            intro={`The deck is made from the slides you laid out and shared with ${agent?.name ?? "the agent"}, who writes it from your brief.`}
+            brief={brief}
+            onBrief={setBrief}
+            briefLabel="What is the deck for?"
+            briefPlaceholder="A ten-minute board update on what changed this quarter."
+            briefHelper="Who it is for, what it should say and where the material is. The agent also reads the slides you laid out."
+            briefMaxLength={BRIEF_MAX}
+            starters={DECK_BRIEFS}
+            carried={[
+              ...(title.trim()
+                ? [
+                    {
+                      key: "title",
+                      icon: <FileTextGlyph size="sm" />,
+                      label: `“${title.trim()}”`,
+                      detail: "The deck's title",
+                    },
+                  ]
+                : []),
+              {
+                key: "slides",
+                icon: <PresentationGlyph size="sm" />,
+                label: rows.length === 1 ? "1 slide" : `${rows.length} slides`,
+                detail: rows.map((r) => layouts.get(r.layout)?.name ?? r.layout).join(", "),
+              },
+              {
+                key: "theme",
+                icon: <PaletteGlyph size="sm" />,
+                label: `The ${theme.name} theme`,
+              },
+            ]}
+            task={{
+              title: title.trim() || "Untitled deck",
+              body: artifactTaskBody("slides", handed, made?.id ?? "created when you send"),
+            }}
+            steps={[
+              `The deck is made from your slides and shared with ${agent?.name ?? "the agent"} as an editor.`,
+              `A task is filed to ${agent?.name ?? "the agent"}${who.project ? ` in ${who.project}` : ""}, with the deck linked.`,
+              `${agent?.name ?? "The agent"} writes the slides and publishes each change as a version.`,
+            ]}
+            notice={
+              <>
+                {make.answer && make.answer.kind !== "done" ? (
+                  <Callout variant="danger" title="The deck was not created">
+                    {make.answer.text}
+                  </Callout>
+                ) : null}
+                {files.refusal ? (
+                  <Callout
+                    variant="danger"
+                    title={
+                      made
+                        ? "The deck was made, and the task was not filed"
+                        : "The task was not filed"
+                    }
+                  >
+                    {files.refusal.sentence}
+                    {files.refusal.hint ? ` ${files.refusal.hint}` : ""}
+                    {made && (
+                      <>
+                        {" "}
+                        <Button
+                          size="small"
+                          variant="ghost"
+                          onClick={() => nav.to(artifactPath(made.id))}
+                        >
+                          Open the deck
+                        </Button>
+                      </>
+                    )}
+                  </Callout>
+                ) : null}
+              </>
+            }
+            sendLabel={(n) => (made ? `Ask ${n}` : `Create and ask ${n}`)}
+            onSend={() => void ask()}
+            hold={askHold}
+            busy={make.busy || files.busy}
+          />
+        ) : null,
       }}
     >
-      <div className="slides-create">
-        {!phone && strip}
+      <div ref={root} className="slides-create" data-arrangement={arrangement}>
+        {!stripInMain && strip}
         <div className="slides-create-main">
-          <FormField label="Title" error={titleWrong}>
+          <FormField error={titleWrong}>
             {(field) => (
-              <Input
-                ref={titleField}
+              <DocumentTitleField
+                autoFocus
                 id={field.id}
                 aria-describedby={field.describedBy}
-                aria-invalid={field.invalid}
-                className="slides-create-title"
-                width="full"
+                aria-label="Title"
+                error={field.invalid}
+                autoComplete="off"
                 value={title}
-                placeholder="Quarterly plan"
+                placeholder="Untitled deck"
                 onChange={(e) => setTitle(e.target.value)}
               />
             )}
@@ -381,87 +526,22 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
           <p className="slides-create-caption">
             <span className="slides-create-position">
               Slide {position + 1} of {rows.length}
+              {layout ? ` · ${layout.name}` : ""}
             </span>
-            <span>{layout?.name}</span>
             <span className="slides-create-hint">
-              {drafter === "agent"
+              {panel.open
                 ? "The agent starts from these slides and writes them from your brief."
                 : "Every word is yours to change once the deck opens."}
             </span>
           </p>
-          {phone && strip}
-          {drafter === "self" && create.refusal && (
+          {stripInMain && strip}
+          {create.refusal && (
             <Callout variant="danger" title="The deck was not created">
               {create.refusal}
             </Callout>
           )}
-          {drafter === "agent" && make.answer && make.answer.kind !== "done" && (
-            <Callout variant="danger" title="The deck was not created">
-              {make.answer.text}
-            </Callout>
-          )}
-          {drafter === "agent" && files.refusal && (
-            <Callout
-              variant="danger"
-              title={
-                made ? "The deck was made, and the task was not filed" : "The task was not filed"
-              }
-            >
-              {files.refusal.sentence}
-              {files.refusal.hint ? ` ${files.refusal.hint}` : ""}
-              {made && (
-                <>
-                  {" "}
-                  <Button
-                    size="small"
-                    variant="ghost"
-                    onClick={() => nav.to(artifactPath(made.id))}
-                  >
-                    Open the deck
-                  </Button>
-                </>
-              )}
-            </Callout>
-          )}
         </div>
         <aside className="slides-create-side" aria-label="Deck settings">
-          <section className="slides-create-group" aria-labelledby="slides-create-drafter">
-            <h2 id="slides-create-drafter" className="slides-create-heading">
-              Who writes it
-            </h2>
-            <SegmentedControl
-              label="Who writes it"
-              semantics="radio"
-              size="sm"
-              options={[
-                { value: "self", label: "You, in the editor" },
-                { value: "agent", label: "An agent" },
-              ]}
-              value={drafter}
-              onValueChange={(v: string) => setDrafter(v === "agent" ? "agent" : "self")}
-            />
-            {drafter === "agent" && (
-              <>
-                <WhoBuildsIt who={who} />
-                <FormField
-                  label="Brief"
-                  helper="Who it is for, what it should say and where the material is. The agent also reads the slides you laid out."
-                >
-                  {(field) => (
-                    <Textarea
-                      id={field.id}
-                      aria-describedby={field.describedBy}
-                      value={brief}
-                      autoResize
-                      maxLength={BRIEF_MAX}
-                      placeholder="A ten-minute board update on the support desk: what changed this quarter, the numbers, and the one decision we need."
-                      onChange={(e) => setBrief(e.target.value)}
-                    />
-                  )}
-                </FormField>
-              </>
-            )}
-          </section>
           <section className="slides-create-group" aria-labelledby="slides-create-theme">
             <h2 id="slides-create-theme" className="slides-create-heading">
               Theme
@@ -539,10 +619,10 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
           setLeaving(null);
           go?.leave();
         }}
-        title="Leave without creating the deck?"
-        message="The title, theme and slides you chose will be lost."
-        confirmLabel="Discard and leave"
+        title="Discard this deck?"
+        message="Its title, its theme and the slides you laid out are not saved anywhere yet."
         cancelLabel="Keep editing"
+        confirmLabel="Discard"
         destructive
       />
     </CreateShell>

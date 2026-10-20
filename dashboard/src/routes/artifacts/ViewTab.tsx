@@ -11,7 +11,7 @@
 
 import type { ReactNode } from "react";
 import type { PresenceMember } from "@crewlethq/ui";
-import type { ArtifactDetail, ArtifactKind, ArtifactVersionSummary } from "~/protocol/index.ts";
+import type { ArtifactDetail, ArtifactKind } from "~/protocol/index.ts";
 import type { ArtifactRoom } from "~/lib/artifacts/room.ts";
 import type { ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
 import { DashboardView } from "./DashboardView.tsx";
@@ -26,7 +26,6 @@ import type { PresenceReport } from "./presence.ts";
 export interface KindViewProps {
   detail: ArtifactDetail;
   version: number;
-  versions: ArtifactVersionSummary[];
   /** The artifact's datastore, null where it keeps none or it is not open. */
   store: ArtifactDataStore | null;
   room: ArtifactRoom;
@@ -45,11 +44,10 @@ export interface KindViewProps {
 
 /** How each kind draws one version: a record over every kind, so a new kind fails the build until it is drawn. */
 export const KIND_VIEWS: Readonly<Record<ArtifactKind, (props: KindViewProps) => ReactNode>> = {
-  html: ({ detail, version, versions, room, presence, bridgeStores, dataNote }) => (
+  html: ({ detail, version, room, presence, bridgeStores, dataNote }) => (
     <FrameView
       detail={detail}
       version={version}
-      versions={versions}
       room={room}
       presence={presence}
       bridgeStores={bridgeStores}
@@ -79,11 +77,10 @@ export const KIND_VIEWS: Readonly<Record<ArtifactKind, (props: KindViewProps) =>
     store ? (
       <SheetView detail={detail} store={store} room={room} presence={presence} drawn={drawn} />
     ) : null,
-  design: ({ detail, version, versions, room, presence, bridgeStores, onPublished }) => (
+  design: ({ detail, version, room, presence, bridgeStores, onPublished }) => (
     <DesignView
       detail={detail}
       version={version}
-      versions={versions}
       room={room}
       presence={presence}
       bridgeStores={bridgeStores}

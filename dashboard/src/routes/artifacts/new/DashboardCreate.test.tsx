@@ -63,6 +63,8 @@ const project = (key: string): WorkProjectRow =>
 let sent: { method: string; path: string; body: unknown }[] = [];
 /** What the create's write answers: the artifact, or a refusal. */
 let createAnswer: { status: number; body: unknown } = { status: 201, body: { artifact: MADE } };
+/** Whether the catalogue read fails, as an engine that cannot answer it does. */
+let catalogueFails = false;
 
 function rows(name: string): Record<string, unknown>[] {
   switch (name) {
@@ -101,6 +103,7 @@ beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
   sent = [];
   createAnswer = { status: 201, body: { artifact: MADE } };
+  catalogueFails = false;
   location.hash = "#/artifacts/new/dashboard";
   Object.defineProperty(globalThis, "fetch", {
     writable: true,
@@ -115,7 +118,10 @@ beforeEach(() => {
         // A transfer's body is the file's own text.
       }
       sent.push({ method, path: url.pathname, body });
-      if (url.pathname === "/artifacts/sources") return json(200, { sources: catalogue });
+      if (url.pathname === "/artifacts/sources")
+        return catalogueFails
+          ? json(500, { error: "internal", message: "The catalogue could not be read." })
+          : json(200, { sources: catalogue });
       const preview = /^\/artifacts\/sources\/preview\/(.+)$/.exec(url.pathname);
       if (preview) {
         const name = decodeURIComponent(preview[1]!);
@@ -286,15 +292,18 @@ test("a board the engine refuses is said where the reader is looking, and the dr
 test("an agent asked with nothing on the board gets a task with the brief, and the reader lands on it", async () => {
   mount();
   await waitFor(() => expect(within(data()).getByText("Work items")).toBeTruthy());
-  fireEvent.click(screen.getByRole("radio", { name: "Ask an agent" }));
+  fireEvent.click(screen.getAllByRole("button", { name: "Ask an agent" })[0]!);
   fireEvent.change(screen.getByRole("textbox", { name: "Title" }), {
     target: { value: "Team load" },
   });
   fireEvent.change(screen.getByRole("textbox", { name: "What should the board answer?" }), {
     target: { value: "Who is carrying the most work." },
   });
-  // THE AGENT WHOSE WORK IS DASHBOARDS is suggested first.
-  const ask = await screen.findByRole("button", { name: /Ask Agent Analyst/ });
+  // THE AGENT WHOSE WORK IS DASHBOARDS is suggested first, and with nothing
+  // on the board the brief goes alone.
+  const panel = screen.getByRole("complementary", { name: "Ask an agent" });
+  expect(within(panel).queryByText(/^The board, with/)).toBeNull();
+  const ask = await within(panel).findByRole("button", { name: "Ask Agent Analyst" });
   fireEvent.click(ask);
   await waitFor(() => expect(location.hash).toBe("#/work/OPS-4"));
   expect(filed()?.args).toMatchObject({ title: "Team load", assignee: "analyst" });
@@ -305,15 +314,20 @@ test("an agent asked with nothing on the board gets a task with the brief, and t
 test("an agent asked with figures on the board refines it: the board is made, then linked to its task", async () => {
   mount();
   await waitFor(() => expect(within(data()).getByText("Work items")).toBeTruthy());
-  fireEvent.click(screen.getByRole("radio", { name: "Ask an agent" }));
+  // A BOARD MADE BEFORE ASKING goes with the brief: the page is the same page.
   fireEvent.click(screen.getByRole("button", { name: /Team workload/ }));
+  fireEvent.click(screen.getAllByRole("button", { name: "Ask an agent" })[0]!);
   fireEvent.change(screen.getByRole("textbox", { name: "Title" }), {
     target: { value: "Team load" },
   });
   fireEvent.change(screen.getByRole("textbox", { name: "What should the board answer?" }), {
     target: { value: "Add a trend per team." },
   });
-  fireEvent.click(await screen.findByRole("button", { name: /Ask Agent Analyst/ }));
+  const panel = screen.getByRole("complementary", { name: "Ask an agent" });
+  expect(within(panel).getByText(/^The board, with \d+ figures?$/)).toBeTruthy();
+  fireEvent.click(
+    await within(panel).findByRole("button", { name: "Create and ask Agent Analyst" }),
+  );
   await waitFor(() => expect(location.hash).toBe(`#/artifacts/${MADE}`));
   const order = sent.map((r) => `${r.method} ${r.path}`);
   const made = order.indexOf("POST /artifacts");
@@ -339,4 +353,14 @@ test("a preview that cannot be read says so in a reader's words, never the route
   const panel = data();
   await waitFor(() => expect(within(panel).getAllByText(ROWS_UNREAD).length).toBeGreaterThan(0));
   expect(within(panel).queryByText(/serves nothing/)).toBeNull();
+});
+
+// A CATALOGUE THAT CANNOT BE READ leaves no blank panel: the board says why,
+// and the Data panel says where the sources will be.
+test("a catalogue that cannot be read is said on the board, and the Data panel is not left blank", async () => {
+  catalogueFails = true;
+  mount();
+  const panel = await screen.findByRole("complementary", { name: "Data" });
+  await within(panel).findByText("The sources appear here once they can be read.");
+  expect(within(panel).queryByRole("list", { name: "Data you can use" })).toBeNull();
 });
