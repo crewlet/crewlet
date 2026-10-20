@@ -295,21 +295,28 @@ func threadParticipants(ctx context.Context, tx *sql.Tx, task, replyTo string) (
 //
 // NONE IS NOT AN ERROR. Most comments answer nothing, and a comment from
 // somebody with no open ask is the ordinary case rather than a mistake.
-func inferAnswer(ctx context.Context, tx *sql.Tx, task, author string) (string, error) {
-	// `ask <> ''` IS STATED THOUGH `ask = ?` IMPLIES IT, because the index
-	// this selects on is PARTIAL — `(task_id, ask) WHERE ask <> '' AND
-	// resolved = 0 AND answered_by IS NULL AND removed = 0` — and a
-	// planner matches a partial index by SYNTACTIC implication. A bound
-	// parameter could be the empty string as far as it can tell, so
-	// without the literal term the index is skipped and this reads every
-	// comment on the task.
-	rows, err := tx.QueryContext(ctx, `
+// openAsksStatement is the open asks on one task addressed to one author,
+// oldest first, at most its last argument of them: the candidates
+// [inferAnswer] chooses among.
+//
+// THE NON-EMPTY ASK IS STATED THOUGH `ask = ?` IMPLIES IT, because the index
+// this selects on is PARTIAL — over (task_id, ask), holding only the open
+// comments whose ask is not the empty string — and a planner matches a partial
+// index by SYNTACTIC implication. A bound parameter could be the empty string
+// as far as it can tell, so without the literal term the index is skipped and
+// this reads every comment on the task. Named, so the gate that holds it to
+// that index (TestTheOpenAskInferenceIsIndexServed) plans this text rather
+// than a copy a deletion here would leave green.
+const openAsksStatement = `
 		SELECT id, author, body, document
 		FROM tracker_comments
 		WHERE task_id = ? AND ask = ? AND ask <> '' AND resolved = 0
 		  AND answered_by IS NULL AND removed = 0
 		ORDER BY created_at, id
-		LIMIT ?`, task, author, MaxOpenAsksNamed+1)
+		LIMIT ?`
+
+func inferAnswer(ctx context.Context, tx *sql.Tx, task, author string) (string, error) {
+	rows, err := tx.QueryContext(ctx, openAsksStatement, task, author, MaxOpenAsksNamed+1)
 	if err != nil {
 		return "", fmt.Errorf("worklet: read the open asks on %s for %s: %w",
 			task, author, err)
