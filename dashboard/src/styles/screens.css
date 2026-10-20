@@ -11340,7 +11340,6 @@ a.live-row:focus-visible {
   min-width: 0;
   min-height: 0;
   overflow: auto;
-  overscroll-behavior: contain;
   padding-bottom: var(--spacing-5);
 }
 .slides-create-main {
@@ -11348,13 +11347,14 @@ a.live-row:focus-visible {
   flex-direction: column;
   gap: var(--spacing-3);
 }
-.slides-create-main > .crewlet-slide-stage {
-  flex: none;
-}
 /* The title reads as the deck's name, a step above a form field's text. */
 .slides-create-title input {
   font-size: var(--font-size-lg);
   font-weight: var(--font-weight-semibold);
+}
+/* The stage keeps its 16:9 whatever the column's height: it never shrinks. */
+.slides-create-stage {
+  flex: none;
 }
 .slides-create-stage-hold {
   aspect-ratio: 16 / 9;
@@ -11435,9 +11435,12 @@ a.live-row:focus-visible {
     gap: var(--spacing-5);
     padding: var(--spacing-3) var(--spacing-4) var(--spacing-5);
   }
+  /* Each part as tall as what it holds: the body scrolls, not the parts, so
+     none is shrunk to the window's height and drawn over the next. */
   .slides-create-strip,
   .slides-create-main,
   .slides-create-side {
+    flex: none;
     overflow: visible;
     padding-bottom: 0;
   }

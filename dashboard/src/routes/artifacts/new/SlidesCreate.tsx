@@ -271,12 +271,14 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
             )}
           </FormField>
           {currentSlide && (
-            <SlideStage
-              framed
-              label={`Slide ${position + 1} of ${rows.length}, ${currentSlide.title || "Untitled"}`}
-            >
-              {renderSlide(currentSlide, { prefix: "new-s-", image: noImage })}
-            </SlideStage>
+            <div className="slides-create-stage">
+              <SlideStage
+                framed
+                label={`Slide ${position + 1} of ${rows.length}, ${currentSlide.title || "Untitled"}`}
+              >
+                {renderSlide(currentSlide, { prefix: "new-s-", image: noImage })}
+              </SlideStage>
+            </div>
           )}
           <p className="slides-create-caption">
             <span className="slides-create-position">
