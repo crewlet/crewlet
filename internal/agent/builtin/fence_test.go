@@ -312,6 +312,37 @@ func TestEveryUntrustedReadIsFenced(t *testing.T) {
 	})
 }
 
+// TestAFencedReadCarriesMarkupAsWritten: a fenced answer is a tool answer like
+// any other, so the markup a person wrote reaches the model as the bytes they
+// typed — inside the fence, in a field neutralised beside it, and in the
+// envelope — and never as the six-byte escapes an HTML-safe encoder writes,
+// which the answer's final encoder copies through rather than decodes.
+func TestAFencedReadCarriesMarkupAsWritten(t *testing.T) {
+	t.Parallel()
+	turn, b := readerTurn(t)
+	const said = `if a < b && c > d { return "<ok>" }`
+	kb := newFakeKB()
+	kb.page.Page.Title = "Release <notes> & such"
+	kb.page.Page.Body = said
+	kb.page.Page.Author, kb.page.Page.Version = "founder", 1
+	kb.page.History = []doclet.RevisionSummary{{Version: 1, Author: "founder"}}
+	reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb})
+	got := callIn(t, reg, turn, builtin.GetPageTool, map[string]any{"page": "p1"})
+	for _, escape := range []string{`\u003c`, `\u003e`, `\u0026`} {
+		if strings.Contains(got.Output, escape) {
+			t.Errorf("the fenced answer carries %s: %s", escape, got.Output)
+		}
+	}
+	if !strings.Contains(got.Output, `if a < b && c > d { return \"<ok>\" }`) ||
+		!strings.Contains(got.Output, "Release <notes> & such") {
+		t.Errorf("the fenced answer does not carry the page as written: %s", got.Output)
+	}
+	seen, _ := fencesIn(t, b, got.Output)
+	if len(seen) != 1 || strings.TrimSuffix(seen[0].inner, "\n") != said {
+		t.Errorf("the body's fence holds %+v, want %q", seen, said)
+	}
+}
+
 // TestAPageWithWritersItCannotNameIsNeverOwn: a body the reading seat saved
 // last, over revisions this read no longer holds, is not labelled `own`,
 // because the pruned revisions may be anybody's; with every revision kept and

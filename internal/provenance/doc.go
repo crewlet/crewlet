@@ -20,10 +20,13 @@
 //	[/untrusted:K7Q2M4XWB3ZP6TNA]
 //
 // SQUARE BRACKETS AND NO QUOTES, because nearly every fenced field reaches the
-// model inside a JSON tool answer: the encoder rewrites `<` and `>` as `<`
-// and `>` and backslashes every quote, so an XML-shaped marker would read
-// as escape soup exactly where it has to be unmistakable. `[REDACTED:` set the
-// precedent for an engine marker inside foreign text (internal/redact).
+// model inside a JSON tool answer, which backslashes every quote: a marker
+// carrying a quoted attribute would read as escape soup exactly where it has
+// to be unmistakable, and JSON writes a square bracket as itself. (A tool
+// answer writes `<` and `>` as themselves too — internal/plainjson — so an
+// XML-shaped marker would survive the encoding; the bracket is kept because it
+// is what foreign text is least likely to be full of, and `[REDACTED:` set the
+// precedent for an engine marker inside foreign text, internal/redact.)
 //
 // # Why the content cannot close it
 //
