@@ -394,8 +394,8 @@ func TestAnEvictionIsEffectiveExactlyWhenTheGateSaysSo(t *testing.T) {
 
 // A LIVE NODE WITH NO POSITION YET IS COUNTED, AND VISIBLE.
 //
-// It is a node between boot and its first heartbeat — a node adopting a
-// snapshot — and it blocks every term derived from the counted set. A row it
+// It is a live data node whose row has not landed — its heartbeat's write
+// refused — and it blocks every term derived from the counted set. A row it
 // did not appear in would be a block with no visible cause.
 func TestALiveNodeWithNoPositionIsCountedAndRendered(t *testing.T) {
 	t.Parallel()

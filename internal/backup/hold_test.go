@@ -191,7 +191,7 @@ func TestATrimmedLogRefusesTheManifest(t *testing.T) {
 	// AND IT SAYS WHERE TO LOOK. The hold is the thing that failed to stop
 	// the trim, and the one line that records a hold going stale is its
 	// renewal warning, so the refusal names it rather than a node shape.
-	if !strings.Contains(err.Error(), "backup_hold_not_renewed") {
+	if !strings.Contains(err.Error(), "statelog_hold_not_renewed") {
 		t.Errorf("the refusal does not say where to look: %v", err)
 	}
 
@@ -215,7 +215,7 @@ func TestATrimmedLogRefusesTheManifest(t *testing.T) {
 			"a restore from it applies 40 onward over the missing 39 and reports " +
 			"nothing")
 	}
-	if !strings.Contains(err.Error(), "backup_hold_not_renewed") {
+	if !strings.Contains(err.Error(), "statelog_hold_not_renewed") {
 		t.Errorf("the refusal one record short does not say where to look: %v", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(short, backup.ManifestName)); statErr == nil {

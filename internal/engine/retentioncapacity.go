@@ -88,11 +88,11 @@ func (r *retention) backupGauges(ctx context.Context) {
 		return
 	}
 	if holds, err := r.fleet.Holds(ctx); err == nil {
-		// A COUNT THAT DOES NOT RETURN TO ZERO IS A BACKUP THAT CRASHED
-		// MID-COPY. The pin outlives its owner until the stale bound
-		// expires it, and until then the trim does not advance — which
-		// has no other symptom at all until the log walks into its
-		// ceiling.
+		// A COUNT THAT DOES NOT RETURN TO ZERO IS A HOLDER THAT CRASHED
+		// — a backup mid-copy, or a join before its node was counted.
+		// Nothing but its owner removes a hold, and until the stale bound
+		// expires it the trim does not advance — which has no other
+		// symptom at all until the log walks into its ceiling.
 		r.metrics.Set(metrics.BackupHolds, float64(len(holds)), nil)
 	}
 	points, err := r.fleet.BackupPoints(ctx)

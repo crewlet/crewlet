@@ -326,17 +326,18 @@
 //
 // A purge that lands between the check and the append is licensed by a tick
 // that published its floor first, from an applied term over a counted set
-// that holds every node from its presence lease at boot until its eviction
+// that holds every data node from its first positions row until its eviction
 // ([CountedSet]) — so it removes nothing this node had not applied when that
 // tick read its position, and the only writer it can pass is an evicted one,
-// which is (iii)'s. That bounds a purge by what this node had APPLIED, which
-// may be past C, so the term alone does not exclude a record on this subject
-// that this node applied after its snapshot. The ORDER OF THE WRITE'S OWN
-// READS does: a write learns the subject is empty from LastSeq — answered by
-// the stream's leader, because a log allows no direct gets — and only AFTER
-// that does the fence read either bound, on both roads to an expectation of
-// zero. A record R on this subject that the decision did not read, so R > C,
-// is one of three kinds:
+// which is (iii)'s, or one still booting before its first row, which is the
+// interval stated under "Who may write a log" below. That bounds a purge by
+// what this node had APPLIED, which may be past C, so the term alone does not
+// exclude a record on this subject that this node applied after its snapshot.
+// The ORDER OF THE WRITE'S OWN READS does: a write learns the subject is empty
+// from LastSeq — answered by the stream's leader, because a log allows no
+// direct gets — and only AFTER that does the fence read either bound, on both
+// roads to an expectation of zero. A record R on this subject that the
+// decision did not read, so R > C, is one of three kinds:
 //
 //   - Still on the log when LastSeq answers: the subject is not empty, so the
 //     write waits for the subject's last record and decides again rather than
@@ -462,24 +463,45 @@
 // manifest name the log by the domain's; and a barrier proves where that one
 // log ends, single-flighted per node per log ([ReadIndex]).
 //
-// # Who may write a log: every writer is counted by construction
+// # Who may write a log: every writer is counted, but for its own boot
 //
 // The floor theorem above rests on a premise none of its three clauses states:
 // EVERY WRITER IS COUNTED — the trim never removes a record that a node which
-// may still decide a write has not applied. It holds by construction, not by a
-// gate a write passes:
+// may still decide a write has not applied. It is what keeps a writer whose
+// fence read a stale floor safe: a purge cannot pass a node the trim counts,
+// whatever that node's read of the register said. It holds by construction,
+// not by a gate a write passes — with one interval stated below:
 //
 //   - A publisher exists only on a node with the `data` role. Such a node holds
 //     the replicated estate and runs every log into it, the identity estate's
 //     included, from boot, company or none; a node without `data`
 //     holds no estate and builds no publisher, so it has no write to decide —
 //     its tools reach the estate through a data node that does.
-//   - Every live data node is in every log's counted set ([CountedSet]): by
-//     its presence lease from boot, at position zero until its first heartbeat
-//     reports one, and by its positions row after that, which never expires —
-//     until an eviction's tombstone on that log is older than the fence
-//     window. So a node that can decide a write is a node the trim is already
-//     waiting for, from before its first decision.
+//   - Every data node is in every log's counted set ([CountedSet]) by its
+//     positions row, which never expires, from the first one its heartbeat
+//     writes — published as its state log starts, after any join and before
+//     the node claims a presence lease — until an eviction's tombstone on that
+//     log is older than the fence window. A RUNNING node whose row has not
+//     landed (its heartbeat's write refused) is counted all the same, by its
+//     presence lease, at position zero.
+//
+// THE INTERVAL THE SET DOES NOT COVER is a node's own boot, from its state log
+// starting until its first row lands: a few milliseconds, or a heartbeat
+// interval and more if that write is refused, during which the node holds no
+// presence lease yet. A node that ran before is counted there by the row its
+// last run left, at a position its rows still hold unless they went
+// backwards; a node adopting a snapshot is kept by its own pin, renewed until
+// its first row counts the tail it replays ([AdoptDeps.Hold]); and a node
+// that never ran, or whose rows went back below its old row without falling
+// below the floor, is counted by nothing. A write such a node decides in that
+// interval is still fenced by clause (ii) and by its own read order above, so
+// a purge that passes it is ordinarily refused (`behind`, `below_floor`)
+// rather than overwritten; what the interval removes is the premise's cover
+// for a fence read that answered stale. For that to cost an update, a fleet
+// whose trim the node did not hold back must purge, past a record older than
+// the trim's minimum age, on the subject a write of this node is deciding,
+// inside that interval — and that write must have read a stale floor and a
+// stream bound that had not caught up.
 //
 // The one way out of the set while still running is an eviction, and an
 // evicted node's records are what clause (iii) drops on every node, whatever it

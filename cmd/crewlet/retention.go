@@ -514,10 +514,12 @@ func retentionNodes(w io.Writer, report retentionReport) {
 	for _, n := range report.Nodes {
 		if len(n.Domains) == 0 {
 			// A COUNTED NODE WITH NO POSITION STILL GETS A ROW.
-			// It is exactly a node between boot and its first
-			// heartbeat — a node adopting a snapshot — and it
-			// blocks every term derived from the counted set, so
-			// dropping the row would hide the block's cause.
+			// It is a live data node whose heartbeat has not yet
+			// written its row, and it blocks every term derived
+			// from the counted set, so dropping the row would hide
+			// the block's cause. (A node adopting a snapshot at
+			// boot is not one: it holds no presence lease yet, and
+			// what keeps its tail is its own pin, under min_hold.)
 			fmt.Fprintf(w, "%s\t-\t-\t-\t-\t-\t-\t%s\t%s\t%s\n",
 				n.NodeID, yesNo(n.Counted), yesNo(n.Live), noteOrStamp(n))
 			continue

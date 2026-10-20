@@ -71,11 +71,25 @@ type AdoptDeps struct {
 	StillUsable func(ctx context.Context, m Manifest) error
 
 	// Hold pins the replay tail for the whole transfer and returns the
-	// release.
+	// release. The pin must RENEW ITSELF until released — the trim ignores
+	// one older than [TrimHoldStale], and a transfer outlives that many
+	// times over — which is what [HoldTail] does.
 	//
 	// WITHOUT IT THE TRIM CAN PASS THE ARTEFACT while it is in flight, and
 	// the node installs a snapshot whose tail is already gone — which is
 	// the state it was adopting to escape.
+	//
+	// THE ADOPTER RELEASES IT ONLY WHEN NOTHING WAS INSTALLED — a refused
+	// offer, an abandoned join, a fault before the rename. Once the
+	// artefact is installed, the tail it pins is the one this node is about
+	// to replay, and nothing in the fleet counts that yet: a boot's join runs
+	// before the node holds a presence lease and before it has published a
+	// position, and a running node's published row still names the
+	// checkpoint the artefact replaced. So the release is handed to the
+	// caller in the [Adoption], to call once this node's own published
+	// position counts the tail — released at the end of the join, the pin
+	// left the installed artefact's tail unprotected until a row of the
+	// node's own did.
 	//
 	// at is the ARTEFACT'S OWN POSITIONS, by domain, each with the
 	// generation its sequence belongs to — the manifest's, which
@@ -205,6 +219,23 @@ func NewAdopter(d AdoptDeps) (*Adopter, error) {
 	return &Adopter{deps: d, log: logger, now: now}, nil
 }
 
+// Adoption is what a join installed, and the pin on the tail it is about to
+// replay.
+type Adoption struct {
+	// Manifest is the artefact installed: zero when the join installed
+	// nothing, and the installed one whenever the rename happened, whatever
+	// error came beside it ([Adopter.Join]).
+	Manifest Manifest
+
+	// Release ends the pin [AdoptDeps.Hold] took on the installed artefact's
+	// replay tail. It is the CALLER'S to call — once this node's own
+	// published position is no further along any log than the rows it now
+	// holds, which is the moment the trim counts what the pin protects — and
+	// nil exactly when Manifest is zero, the adopter having released the pin
+	// itself. See [AdoptDeps.Hold].
+	Release func()
+}
+
 // ErrNoOffer reports a join that found no artefact it could use.
 //
 // It is a statement about the FLEET — every offer was refused for something
@@ -321,7 +352,7 @@ func ownFault(err error) error {
 //
 //  1. HOLD the replay tail at the artefact's own position, for every domain,
 //     before anything is fetched — the trim's minimum-hold term then covers
-//     the tail for the whole transfer.
+//     the tail for as long as the pin is held, since it renews itself.
 //  2. SELECT from what the fleet offers, refusing every unusable one from its
 //     manifest alone: a gigabyte-scale transfer that ends in a refusal is one
 //     nobody needed.
@@ -339,7 +370,8 @@ func ownFault(err error) error {
 //     makes this a belt; a fleet that trimmed anyway is one this node must not
 //     follow into a hole.
 //  8. INSTALL, which is the one place the engine replaces a live database.
-//  9. COMPLETE, and only then release the hold.
+//  9. COMPLETE, and hand the hold to the caller, who releases it once this
+//     node's own position counts the tail ([AdoptDeps.Hold]).
 //
 // # Which side of the install a failure fell on
 //
@@ -354,11 +386,13 @@ func ownFault(err error) error {
 // manifest it installed, beside [ErrAdoptionUnrecorded] when only the history
 // row could not be advanced and [ErrEstateNotRestored] when the artefact
 // could not be opened, and never moves on to install another offer over it.
-// A NON-ZERO MANIFEST MEANS INSTALLED, error or not.
-func (a *Adopter) Join(ctx context.Context) (Manifest, error) {
+// A NON-ZERO MANIFEST MEANS INSTALLED, error or not — and an installed
+// adoption carries the pin on its tail, for the caller to release
+// ([Adoption.Release]).
+func (a *Adopter) Join(ctx context.Context) (Adoption, error) {
 	req, err := a.deps.Need(ctx)
 	if err != nil {
-		return Manifest{}, fmt.Errorf("statelog: read what this node needs: %w", err)
+		return Adoption{}, fmt.Errorf("statelog: read what this node needs: %w", err)
 	}
 	req.NodeID = a.deps.NodeID
 
@@ -381,7 +415,7 @@ func (a *Adopter) Join(ctx context.Context) (Manifest, error) {
 	}
 	offers, err := collectOffers(ctx, a.deps.Conn, req, OfferWindow, expect)
 	if err != nil {
-		return Manifest{}, err
+		return Adoption{}, err
 	}
 	// THE ADOPTION BEGINS HERE, once every offer is in, and this is the
 	// instant its row keeps. It is one instant for every offer this join
@@ -390,7 +424,7 @@ func (a *Adopter) Join(ctx context.Context) (Manifest, error) {
 
 	known, err := store.KnownMigrations(store.EstateReplicated)
 	if err != nil {
-		return Manifest{}, fmt.Errorf("statelog: read this binary's schema: %w", err)
+		return Adoption{}, fmt.Errorf("statelog: read this binary's schema: %w", err)
 	}
 	var refusals []error
 	for _, offer := range offers {
@@ -414,18 +448,19 @@ func (a *Adopter) Join(ctx context.Context) (Manifest, error) {
 				"detail", "refused from the manifest alone, before any transfer")
 			continue
 		}
-		installed, err := a.adopt(ctx, offer, began)
-		if installed {
+		release, err := a.adopt(ctx, offer, began)
+		if release != nil {
 			// THE ARTEFACT IS THE LIVE DATABASE — see the doc above.
 			// Checked before the cancellation below, because a caller
 			// that gave up after the rename is still a node running the
 			// donor's file, and an answer saying the join was abandoned
 			// would send it on as though its estate were its own.
+			adopted := Adoption{Manifest: offer.Manifest, Release: release}
 			if err != nil {
-				return offer.Manifest, fmt.Errorf("statelog: adopting %s's "+
+				return adopted, fmt.Errorf("statelog: adopting %s's "+
 					"snapshot: %w", offer.Manifest.NodeID, err)
 			}
-			return offer.Manifest, nil
+			return adopted, nil
 		}
 		// A CALLER THAT GAVE UP IS NOT A DONOR THAT FAILED. Filed as a
 		// refusal, the cancellation would end every remaining offer the
@@ -436,7 +471,7 @@ func (a *Adopter) Join(ctx context.Context) (Manifest, error) {
 		// stopped. Returned rather than joined to the refusals, so
 		// [ErrNoOffer] never wraps it.
 		if ctx.Err() != nil {
-			return Manifest{}, fmt.Errorf("statelog: the join was abandoned "+
+			return Adoption{}, fmt.Errorf("statelog: the join was abandoned "+
 				"adopting %s's snapshot: %w: %w", offer.Manifest.NodeID, ctx.Err(), err)
 		}
 		// NOR IS A NODE THAT LOST ITS OWN DATABASE — see
@@ -445,7 +480,7 @@ func (a *Adopter) Join(ctx context.Context) (Manifest, error) {
 		// back as [ErrNoOffer], which a boot answers by coming up with
 		// no replicated estate at all.
 		if errors.Is(err, ErrEstateNotRestored) {
-			return Manifest{}, fmt.Errorf("statelog: adopting %s's snapshot: %w",
+			return Adoption{}, fmt.Errorf("statelog: adopting %s's snapshot: %w",
 				offer.Manifest.NodeID, err)
 		}
 		// NOR A FAULT OF THIS NODE'S OWN ([nodeFault]): nothing was
@@ -454,7 +489,7 @@ func (a *Adopter) Join(ctx context.Context) (Manifest, error) {
 		// register — each donor logged as refusing, and the whole join
 		// reported as a fleet with nothing to give.
 		if fault := (*nodeFault)(nil); errors.As(err, &fault) {
-			return Manifest{}, fmt.Errorf("%w — met adopting %s's snapshot, and "+
+			return Adoption{}, fmt.Errorf("%w — met adopting %s's snapshot, and "+
 				"every other offer would meet it too: %w", ErrJoinerFault,
 				offer.Manifest.NodeID, err)
 		}
@@ -465,28 +500,36 @@ func (a *Adopter) Join(ctx context.Context) (Manifest, error) {
 			"detail", "the artefact was fetched or inspected and did not survive it")
 	}
 	if len(refusals) == 0 {
-		return Manifest{}, fmt.Errorf("%w: nobody answered", ErrNoOffer)
+		return Adoption{}, fmt.Errorf("%w: nobody answered", ErrNoOffer)
 	}
-	return Manifest{}, fmt.Errorf("%w: %w", ErrNoOffer, errors.Join(refusals...))
+	return Adoption{}, fmt.Errorf("%w: %w", ErrNoOffer, errors.Join(refusals...))
 }
 
 // adopt runs steps 1 and 3 through 9 for one chosen offer, recording each
-// phase under the adoption's start, began, and reports whether the artefact
-// was installed — the rename happened — beside any failure.
+// phase under the adoption's start, began. It reports whether the artefact was
+// installed — the rename happened — by handing back the release of the pin on
+// its tail, beside any failure; nil means nothing was installed, and the pin
+// has been released.
 //
 // A failure before the rename that is this node's own rather than the offer's
 // is marked as one ([ownFault]), which is how [Adopter.Join] tells the two
 // apart.
-func (a *Adopter) adopt(ctx context.Context, offer Offer, began time.Time) (installed bool, err error) {
+func (a *Adopter) adopt(ctx context.Context, offer Offer, began time.Time) (keep func(), err error) {
 	// 1. THE HOLD, BEFORE THE FETCH. Without it the trim can pass the
 	// artefact's own position while it is in flight, and this node
 	// installs a snapshot whose replay tail is already gone — which is
 	// exactly the state it is adopting to escape.
 	release, err := a.deps.Hold(ctx, offer.Manifest.Domains)
 	if err != nil {
-		return false, ownFault(fmt.Errorf("statelog: pin the replay tail: %w", err))
+		return nil, ownFault(fmt.Errorf("statelog: pin the replay tail: %w", err))
 	}
-	defer release()
+	// RELEASED HERE ONLY IF NOTHING WAS INSTALLED — see [AdoptDeps.Hold].
+	installed := false
+	defer func() {
+		if !installed {
+			release()
+		}
+	}()
 
 	part := a.deps.LivePath + AdoptPartSuffix
 	// A PART FILE FROM A PREVIOUS ATTEMPT IS DEBRIS rather than a resume
@@ -496,7 +539,7 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer, began time.Time) (inst
 	// the moment step 4 opens it. What a copy grows beside itself is the
 	// store's list, so [store.RemoveCopy] clears it rather than a name here.
 	if err = store.RemoveCopy(part); err != nil {
-		return false, ownFault(fmt.Errorf("statelog: clear an earlier attempt's "+
+		return nil, ownFault(fmt.Errorf("statelog: clear an earlier attempt's "+
 			"artefact: %w", err))
 	}
 
@@ -505,7 +548,7 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer, began time.Time) (inst
 	// or the link's.
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if _, err := FetchArtefact(ctx, a.deps.Conn, offer, part); err != nil {
-		return false, err
+		return nil, err
 	}
 	// Discarded on every path, the install's included: the rename moves the
 	// file and leaves nothing of it behind for this to find, and every
@@ -517,18 +560,18 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer, began time.Time) (inst
 	// 4. INSPECT, READ-ONLY, before anything migrates it.
 	schema, err := store.PendingEstate(ctx, store.EstateReplicated, part, store.Options{})
 	if err != nil {
-		return false, fmt.Errorf("statelog: inspect the artefact: %w", err)
+		return nil, fmt.Errorf("statelog: inspect the artefact: %w", err)
 	}
 	for _, applied := range offer.Manifest.Migrations {
 		if !slices.Contains(schema.Applied, applied) {
-			return false, fmt.Errorf("statelog: the artefact's manifest "+
+			return nil, fmt.Errorf("statelog: the artefact's manifest "+
 				"claims migration %q and the file does not have it — a metadata "+
 				"claim the file does not keep is a corrupt snapshot", applied)
 		}
 	}
 	known, err := store.KnownMigrations(store.EstateReplicated)
 	if err != nil {
-		return false, ownFault(fmt.Errorf("statelog: read this binary's schema: %w", err))
+		return nil, ownFault(fmt.Errorf("statelog: read this binary's schema: %w", err))
 	}
 	// A MIGRATION THE FILE HAS AND THIS BINARY DOES NOT is the refusal
 	// that matters, and it is the opposite question to the one the pending
@@ -536,7 +579,7 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer, began time.Time) (inst
 	// not run, so it cannot reason about them and cannot migrate them
 	// forward either.
 	if ahead := aheadOf(schema.Applied, known); len(ahead) > 0 {
-		return false, fmt.Errorf("statelog: the artefact carries migrations "+
+		return nil, fmt.Errorf("statelog: the artefact carries migrations "+
 			"this binary does not: %v — its rows are shaped by code this node "+
 			"does not run", ahead)
 	}
@@ -544,25 +587,25 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer, began time.Time) (inst
 	// 5. VERIFY the bytes and the positions the file actually keeps.
 	digest, err := store.FileDigest(part)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	if digest != offer.Manifest.SHA256 {
-		return false, fmt.Errorf("statelog: the artefact hashes to %s and "+
+		return nil, fmt.Errorf("statelog: the artefact hashes to %s and "+
 			"its manifest says %s — a transfer that dropped or reordered a chunk "+
 			"arrives looking exactly like one that did not", digest, offer.Manifest.SHA256)
 	}
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := a.verifyPositions(ctx, part, offer.Manifest); err != nil {
-		return false, err
+		return nil, err
 	}
 
 	// 6. VERIFY THE SCRUB, on the still-temporary file.
 	empty, err := store.EmptyTables(ctx, part, offer.Manifest.Scrubbed)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	if len(empty) != len(offer.Manifest.Scrubbed) {
-		return false, fmt.Errorf("statelog: the artefact claims %v scrubbed "+
+		return nil, fmt.Errorf("statelog: the artefact claims %v scrubbed "+
 			"and only %v are empty — the safety argument for accepting it at all "+
 			"is that everything still in it is fleet-visible",
 			offer.Manifest.Scrubbed, empty)
@@ -571,7 +614,7 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer, began time.Time) (inst
 	// refuses is refused for every offer, so the join ends here rather than
 	// fetching the next one to meet the same refusal.
 	if err := a.deps.Record(ctx, began, offer.Manifest.NodeID, offer.Manifest, AdoptionScrubbed); err != nil {
-		return false, ownFault(fmt.Errorf("statelog: record the adoption: %w", err))
+		return nil, ownFault(fmt.Errorf("statelog: record the adoption: %w", err))
 	}
 
 	// 7. RE-CHECK. The hold makes this a belt rather than the mechanism,
@@ -579,7 +622,7 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer, began time.Time) (inst
 	// must not follow into a hole.
 	if a.deps.StillUsable != nil {
 		if err := a.deps.StillUsable(ctx, offer.Manifest); err != nil {
-			return false, fmt.Errorf("statelog: the artefact stopped being "+
+			return nil, fmt.Errorf("statelog: the artefact stopped being "+
 				"usable during the transfer: %w", err)
 		}
 	}
@@ -595,17 +638,18 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer, began time.Time) (inst
 		// A CLOSE THAT FAILED MAY STILL HAVE CLOSED — the engine's takes
 		// the handle out of service before it closes it — and nothing
 		// was renamed, so it unwinds exactly as a failed install does.
-		return false, a.rollback(ctx, part, ownFault(fmt.Errorf("statelog: close "+
+		return nil, a.rollback(ctx, part, ownFault(fmt.Errorf("statelog: close "+
 			"the database being replaced: %w", err)))
 	}
 	if err := store.AdoptFile(ctx, a.deps.LivePath, part); err != nil {
 		// The database is closed and the rename did not happen, so the
 		// live file is still the live file — reopening it is the
 		// recovery rather than an extra step.
-		return false, a.rollback(ctx, part, ownFault(err))
+		return nil, a.rollback(ctx, part, ownFault(err))
 	}
 	// INSTALLED. Everything below reports an adoption, whatever it reports
-	// beside it — see [Adopter.Join].
+	// beside it — see [Adopter.Join] — and carries the pin out with it.
+	installed = true
 	if err := a.deps.Reopen(ctx); err != nil {
 		// FORWARD PROGRESS, NOT A ROLLBACK, so it keeps the caller's
 		// context: the artefact is the live file now, and whatever opens
@@ -614,7 +658,7 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer, began time.Time) (inst
 		// [AdoptionScrubbed] left it, incomplete, which is what happened.
 		// But the estate is not open, and that is what the caller has to
 		// be told.
-		return true, fmt.Errorf("%w: the artefact is installed and "+
+		return release, fmt.Errorf("%w: the artefact is installed and "+
 			"opening it failed: %w", ErrEstateNotRestored, err)
 	}
 	// 9. COMPLETE, through the installed phase. A write refused here is the
@@ -645,10 +689,10 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer, began time.Time) (inst
 				"on it; its row in statelog_adoption stays incomplete because "+
 				"advancing it failed, so the row reads as an adoption that "+
 				"stopped partway when it did not")
-		return true, fmt.Errorf("%w at phase %q: %w", ErrAdoptionUnrecorded,
+		return release, fmt.Errorf("%w at phase %q: %w", ErrAdoptionUnrecorded,
 			phase, recordErr)
 	}
-	return true, nil
+	return release, nil
 }
 
 // rollback undoes an install that stopped before its rename: the live file is
