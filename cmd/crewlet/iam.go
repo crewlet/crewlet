@@ -101,7 +101,7 @@ Usage:
 Flags:
   -config PATH   The node config file naming the node to reach (default %[1]q)
   -api URL       The running node's API; default is its own api.host:port
-  -json          Print the raw answer rather than a table
+  -json          Print the node's answer as JSON rather than a table
   -reason TEXT   Saved with the change for the audit trail
   -op-id OP      Retry a write whose outcome was unknown, as the same operation
   -grants G,...  On invite, create, grant and token:
@@ -177,7 +177,7 @@ func runIAM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 		"node config file: the node this command reaches")
 	apiURL := nodeAPIFlag(fs,
 		"the running node's API; default is the api.host:port in -config")
-	asJSON := fs.Bool("json", false, "print the raw answer")
+	asJSON := fs.Bool("json", false, "print the node's answer as JSON")
 	reason := fs.String("reason", "", "recorded on the change")
 	grants := fs.String("grants", "",
 		iamGrantWords()+", comma-separated, or `none`. admin includes "+
@@ -888,7 +888,7 @@ func (c *iamClient) call(ctx context.Context, method, path string,
 			fmt.Errorf("read the answer from %s: %w", target, err))
 	}
 	var answer map[string]any
-	_ = json.Unmarshal(raw, &answer)
+	_ = decodeAnswer(raw, &answer)
 	if resp.StatusCode >= 400 {
 		refusal := iamRefusal(resp.StatusCode, resp.Header.Get("Content-Type"),
 			answer, raw, c.keyed)
@@ -1139,13 +1139,11 @@ func (p *iamPrinter) settled(answer map[string]any) error {
 		iamUnkeyed(p.write.gesture))
 }
 
+// dump is -json: the answer as the node gave it, every field and every number
+// as it came — [iamClient.call] decodes through [decodeAnswer] — with its text
+// as written.
 func (p *iamPrinter) dump(answer map[string]any) error {
-	encoded, err := json.MarshalIndent(answer, "", "  ")
-	if err != nil {
-		return err
-	}
-	fmt.Fprintln(p.w, string(encoded))
-	return nil
+	return printJSON(p.w, answer)
 }
 
 func (p *iamPrinter) people(asked url.Values, answer map[string]any, err error) error {
@@ -1313,10 +1311,11 @@ func (p *iamPrinter) check(answer map[string]any, err error) error {
 	// qualifies everything below it: "nothing to report" from a node that
 	// runs no company yet is not a directory with no dangling binding, it
 	// is one nobody could check.
-	if unchecked, _ := answer["bindings_unchecked"].(float64); unchecked > 0 {
-		fmt.Fprintf(p.w, "%d seat binding(s) couldn't be checked. This "+
+	if unchecked := str(answer["bindings_unchecked"]); unchecked != "" &&
+		unchecked != "0" {
+		fmt.Fprintf(p.w, "%s seat binding(s) couldn't be checked. This "+
 			"node hasn't loaded the company yet, so try another node.\n",
-			int(unchecked))
+			unchecked)
 	}
 	if len(rows) == 0 {
 		fmt.Fprintf(p.w, "no problems found, as of %s\n",
@@ -1705,6 +1704,8 @@ func str(v any) string {
 	switch held := v.(type) {
 	case string:
 		return held
+	case json.Number:
+		return held.String()
 	case float64:
 		return strconv.FormatFloat(held, 'f', -1, 64)
 	case bool:

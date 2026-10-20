@@ -25,7 +25,13 @@
 //     screen as the conversation ledger, and is neither kind of document;
 //   - a CLI RUN'S TRANSCRIPT ([github.com/crewlet/crewlet/internal/providers/llm/cliagent])
 //     shows the model its own earlier calls, which it reads as written:
-//     shown a `<` it typed as an escape, it reads a call it never made.
+//     shown a `<` it typed as an escape, it reads a call it never made;
+//   - a COMMAND'S -json (`cmd/crewlet`: a validation's problems, a node's
+//     answer decoded and printed again) is read at a terminal, matched by a
+//     script and handed to the loop that fixes a document from
+//     `crewlet validate -json`, where `replicas \u003e 1` and
+//     `token:\u003cid\u003e` were escapes every one of them had to decode back
+//     into the setting it was being told about.
 //
 // # The text ends where its value does
 //

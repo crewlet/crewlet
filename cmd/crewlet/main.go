@@ -930,11 +930,9 @@ func validateBoth(cfg configFlags, asJSON bool, stdout io.Writer) error {
 // outcome, so a reader sees them whichever way it went.
 func report(stdout io.Writer, res validation, asJSON bool) error {
 	if asJSON {
-		raw, err := json.MarshalIndent(res, "", "  ")
-		if err != nil {
+		if err := printJSON(stdout, res); err != nil {
 			return err
 		}
-		fmt.Fprintln(stdout, string(raw))
 		if res.Valid {
 			return nil
 		}
