@@ -9,6 +9,15 @@
  * (`bridgeReads.ts`): a document, a page of a collection, a query, the schema,
  * and a subscription answered once with the collection as it stands.
  *
+ * A SNAPSHOT, NOT A LIVE VIEW. A preview is the page as it stood when the
+ * gallery drew it, and its frame stays loaded after, so this host answers
+ * each distinct read ONCE and every repeat of it from that answer: a page
+ * that polls its datastore is drawn as it stood and asks the engine nothing
+ * more, however long the gallery stays open. A refusal is kept the same way,
+ * so a page retrying a read that failed does not retry it against the
+ * engine. And it answers at most [PREVIEW_READS] distinct reads, so a page
+ * that keeps inventing new ones is refused rather than read for.
+ *
  * WHAT IT NEVER DOES, by construction rather than by a check: it holds no
  * write path (no keyed write, no datastore copy, no state), so a write, an
  * undo, a state change or a print is refused before anything is asked; it
@@ -42,6 +51,14 @@ import {
 export const PREVIEW_SNAPSHOT_LIMIT = 200;
 
 /**
+ * The most distinct reads a preview's page is answered. Drawing a page takes
+ * a handful (its schema, a collection or two, a query per chart); sixty-four
+ * covers a busy board many times over, and bounds what a page that builds a
+ * new read on every tick can ask the engine for through a card.
+ */
+export const PREVIEW_READS = 64;
+
+/**
  * The capabilities a preview's page is told it holds: the frame's grant, and
  * of it only what this host answers. Anything else the version declares is
  * not offered, so the page's runtime never asks for it.
@@ -50,6 +67,8 @@ export const PREVIEW_HOST_CAPABILITIES: readonly RuntimeCapability[] = ["db", "a
 
 export class PreviewHost {
   private nextSubscription = 1;
+  /** Each distinct read the page has made, by method and parameters, as it was answered. */
+  private readonly answered = new Map<string, Promise<unknown>>();
 
   constructor(
     private readonly options: {
@@ -103,30 +122,48 @@ export class PreviewHost {
     const p = call.params;
     switch (call.method) {
       case "assets.list":
-        return readAssets({ artifact, socket });
+        return this.once(call, () => readAssets({ artifact, socket }));
       case "data.get":
       case "data.list":
-      case "data.query":
-        return readData(call.method, p, { artifact, socket });
+      case "data.query": {
+        const method = call.method;
+        return this.once(call, () => readData(method, p, { artifact, socket }));
+      }
       case "data.schema":
-        return readSchema({ artifact, socket });
+        return this.once(call, () => readSchema({ artifact, socket }));
       case "data.subscribe": {
         // ONCE, AS IT STANDS: the collection's first page is the answer, and
-        // no change is pushed after it.
-        const page = await socket.query("artifact_data", {
-          id: artifact,
-          collection: str(p["collection"], "collection"),
-          limit: PREVIEW_SNAPSHOT_LIMIT,
+        // no change is pushed after it. A page subscribing again is handed
+        // the same rows under a subscription of its own.
+        const docs = await this.once(call, async () => {
+          const page = await socket.query("artifact_data", {
+            id: artifact,
+            collection: str(p["collection"], "collection"),
+            limit: PREVIEW_SNAPSHOT_LIMIT,
+          });
+          return page.docs.filter((d) => !d.deleted).map((d) => bridgeDoc(d));
         });
-        return {
-          subscription: this.nextSubscription++,
-          docs: page.docs.filter((d) => !d.deleted).map((d) => bridgeDoc(d)),
-        };
+        return { subscription: this.nextSubscription++, docs };
       }
       case "data.unsubscribe":
         return null;
       default:
         throw new Refusal("forbidden", "a preview only reads; open the artifact to do this");
     }
+  }
+
+  /** The answer to a read, asked of the engine the first time the page makes it and kept after. */
+  private once(call: BridgeCall, read: () => Promise<unknown>): Promise<unknown> {
+    const key = `${call.method} ${JSON.stringify(call.params)}`;
+    const held = this.answered.get(key);
+    if (held) return held;
+    if (this.answered.size >= PREVIEW_READS) {
+      return Promise.reject(
+        new Refusal("forbidden", "a preview has read all it may; open the artifact to read more"),
+      );
+    }
+    const answer = read();
+    this.answered.set(key, answer);
+    return answer;
   }
 }

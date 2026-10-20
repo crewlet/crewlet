@@ -1,17 +1,19 @@
 /**
- * A gallery card's live preview: the kind's drawing stands in until the
- * artifact's own content has drawn, nothing live is drawn for an artifact in
- * the trash, every content read is a preview that records no open, and a
- * board's preview reads its first row alone.
+ * A gallery card's preview: the kind's drawing stands in until the artifact's
+ * own content has drawn, what it drew is kept as a still copy with the
+ * content unmounted, nothing live is drawn for an artifact in the trash,
+ * every content read is a preview that records no open, and a board's
+ * preview reads its first row alone.
  */
 
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-import { GalleryPreview, previewWidgets, previewable } from "./GalleryPreview.tsx";
+import { LivePreviewBudgetProvider } from "@crewlethq/ui";
+import { GalleryPreview, previewWidgets, previewable, snapshotKey } from "./GalleryPreview.tsx";
 import type { ArtifactListItem, DashboardWidget } from "~/protocol/index.ts";
 import type { ArtifactPeople } from "~/lib/artifacts/people.ts";
-import { mintFrame, readOutline } from "~/lib/artifacts/api.ts";
+import { mintFrame, readBoard, readOutline } from "~/lib/artifacts/api.ts";
 
 vi.mock("~/lib/artifacts/api.ts", async () => {
   const actual =
@@ -97,7 +99,7 @@ test("with no observer, every kind draws its own stand-in and reads nothing", ()
   expect(readOutline).not.toHaveBeenCalled();
 });
 
-test("on screen, a doc draws its opening and the stand-in gives way to it", async () => {
+test("on screen, a doc draws its opening once, kept as a still copy with nothing live behind it", async () => {
   vi.stubGlobal("IntersectionObserver", SeenObserver);
   vi.mocked(readOutline).mockResolvedValue({
     artifact: "d1",
@@ -111,11 +113,13 @@ test("on screen, a doc draws its opening and the stand-in gives way to it", asyn
       "ready",
     ),
   );
-  const live = container.querySelector(".crewlet-live-preview__live") as HTMLElement;
-  expect(live.hasAttribute("inert")).toBe(true);
-  expect(live.closest("[aria-hidden='true']")).not.toBeNull();
-  expect(live.querySelector(".artifacts-preview-doc")?.textContent).toContain("On call");
-  expect(live.textContent).toContain("Who answers the pager.");
+  expect(container.querySelector(".crewlet-live-preview__live")).toBeNull();
+  const still = container.querySelector(".crewlet-live-preview__still") as HTMLElement;
+  expect(still.hasAttribute("inert")).toBe(true);
+  expect(still.closest("[aria-hidden='true']")).not.toBeNull();
+  expect(still.querySelector(".artifacts-preview-doc")?.textContent).toContain("On call");
+  expect(still.textContent).toContain("Who answers the pager.");
+  expect(readOutline).toHaveBeenCalledTimes(1);
 });
 
 test("a doc with nothing to draw keeps its stand-in", async () => {
@@ -213,6 +217,48 @@ test("a page that keeps each viewer's own state shows the kind's drawing, and re
   expect(container.querySelector(".crewlet-kind-ground.crewlet-kind--html")).not.toBeNull();
   expect(container.querySelector(".crewlet-live-preview__live")).toBeNull();
   expect(mintFrame).not.toHaveBeenCalled();
+});
+
+// A SNAPSHOT OF A VERSION, KEPT FOR THE VISIT: a card mounted again under the
+// gallery's provider (a filter, the list's shape) shows what it drew and
+// reads nothing, and a new version is drawn afresh.
+test("a card mounted again on the same visit shows its snapshot and reads nothing", async () => {
+  vi.stubGlobal("IntersectionObserver", SeenObserver);
+  vi.mocked(readBoard).mockClear();
+  vi.mocked(readBoard).mockResolvedValue({
+    board: {
+      title: "Weekly",
+      widgets: [{ id: "n", type: "note", w: 12, h: 4, text: "Shipped on time." }],
+    },
+    datasets: [],
+  } as never);
+  const board = item({ id: "b1", kind: "dashboard", head_number: 2 });
+  const gallery = (shown: ArtifactListItem | null) => (
+    <LivePreviewBudgetProvider>
+      {shown && <GalleryPreview item={shown} people={people} />}
+    </LivePreviewBudgetProvider>
+  );
+  const { container, rerender } = render(gallery(board));
+  await waitFor(() =>
+    expect(container.querySelector(".crewlet-live-preview")?.getAttribute("data-state")).toBe(
+      "ready",
+    ),
+  );
+  expect(container.querySelector(".crewlet-live-preview__still")?.textContent).toContain(
+    "Shipped on time.",
+  );
+  rerender(gallery(null));
+  rerender(gallery(board));
+  expect(container.querySelector(".crewlet-live-preview")?.getAttribute("data-state")).toBe(
+    "ready",
+  );
+  expect(container.querySelector(".crewlet-live-preview__still")?.textContent).toContain(
+    "Shipped on time.",
+  );
+  expect(readBoard).toHaveBeenCalledTimes(1);
+  expect(snapshotKey(board)).not.toBe(snapshotKey({ ...board, head_number: 3 }));
+  rerender(gallery({ ...board, head_number: 3 }));
+  await waitFor(() => expect(readBoard).toHaveBeenCalledTimes(2));
 });
 
 const widget = (id: string, w: number, more: Partial<DashboardWidget> = {}): DashboardWidget => ({

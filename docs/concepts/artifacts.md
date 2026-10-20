@@ -275,14 +275,17 @@ What an **agent** may do is narrower than its shares, on purpose:
 
 "**Seen by**" lists who has opened an artifact, to its editors and above. It is
 on by default, and a company turns it off with `artifacts.seen_by: nobody`.
-The gallery's live previews draw an artifact without opening it: every read
-they make is a preview (`?purpose=preview`, or the outline and the datastore's
-own questions, which record nothing), so scrolling past a card is not seeing
+The gallery's previews draw an artifact without opening it, and each is a
+snapshot: drawn once when the card first comes near and then kept as it drew
+(a copy of what it drew, or for a page in a frame the frame itself), reading,
+polling and subscribing to nothing more until the gallery is loaded again.
+Every read they make is a preview (`?purpose=preview`, or the outline and the
+datastore's own questions, which record nothing), so scrolling past a card is not seeing
 it. A preview joins no room and publishes no presence, so nobody is shown as
 viewing an artifact a reader only scrolled past, and its frame is granted only
 what drawing needs, for minutes: its assets, and its datastore answered by a
-read-only host, so a page that keeps its content there draws that content and
-can change none of it.
+read-only host that answers each read once, so a page that keeps its content
+there draws that content as it stood and can change none of it.
 
 ---
 
