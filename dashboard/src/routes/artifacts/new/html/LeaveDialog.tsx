@@ -35,7 +35,7 @@ export function LeaveDialog({
         open
         destructive
         title="Discard this page?"
-        message="What you wrote is not saved anywhere."
+        message="What you wrote here is not saved anywhere yet."
         cancelLabel="Keep editing"
         confirmLabel="Discard"
         onClose={onStay}

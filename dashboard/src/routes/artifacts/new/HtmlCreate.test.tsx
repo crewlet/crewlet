@@ -210,7 +210,7 @@ test("leaving with unsaved words asks to discard them, as every create page does
   });
   fireEvent.click(screen.getAllByRole("button", { name: "Cancel" })[0]!);
   const dialog = screen.getByRole("alertdialog", { name: "Discard this page?" });
-  expect(dialog.textContent).toContain("What you wrote is not saved anywhere.");
+  expect(dialog.textContent).toContain("What you wrote here is not saved anywhere yet.");
   fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
   expect(screen.queryByRole("alertdialog")).toBeNull();
 });

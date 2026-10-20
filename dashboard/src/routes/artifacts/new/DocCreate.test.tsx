@@ -162,6 +162,8 @@ test("Cancel asks before discarding a title, and leaves at once when nothing is 
   fireEvent.change(title(), { target: { value: "Draft" } });
   fireEvent.click(screen.getAllByRole("button", { name: "Cancel" })[0]!);
   const dialog = await screen.findByRole("alertdialog", { name: "Discard this doc?" });
+  // The way back reads as every create page's does.
+  expect(within(dialog).getByRole("button", { name: "Keep editing" })).toBeTruthy();
   expect(location.hash).toBe("#/artifacts/new/doc");
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "Discard" }));

@@ -635,8 +635,8 @@ export function SheetCreate() {
         title="Discard this sheet?"
         message={
           brief.trim()
-            ? "Its title, columns, rows and brief have not been saved, and leaving discards them."
-            : "Its title, columns and rows have not been saved, and leaving discards them."
+            ? "Its title, columns, rows and brief are not saved anywhere yet."
+            : "Its title, columns and rows are not saved anywhere yet."
         }
         cancelLabel="Keep editing"
         confirmLabel="Discard"

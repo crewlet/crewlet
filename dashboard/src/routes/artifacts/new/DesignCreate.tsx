@@ -553,7 +553,7 @@ export function DesignCreate() {
           open
           destructive
           title="Discard this design?"
-          message="The boards and brief you laid out are not kept."
+          message="Its name, its boards and any brief you wrote are not saved anywhere yet."
           cancelLabel="Keep editing"
           confirmLabel="Discard"
           onClose={() => setConfirmLeave(false)}
