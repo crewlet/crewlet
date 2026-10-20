@@ -95,6 +95,10 @@ Flags:
   -no-smoke      Skip doctor's real completions (the tool call and both probes; an
                  anthropic entry's Models API read still runs, it bills nothing)
   -print-token   Write a captured token to stdout instead of the store (login only)
+
+list, status, export and doctor resolve ${VAR}, a configured credential bundle
+included, from this node's own secret rows (-config) and this shell — not from
+the fleet's secret store the engine reads first — and say so on stderr.
 `
 
 // runLLM dispatches `crewlet llm`.
@@ -154,11 +158,18 @@ func runLLM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 	}
 
 	ctx := context.Background()
-	company, resolver, closeResolver, err := loadLLMConfig(ctx, *companyPath, *bootstrapPath, stderr)
+	company, resolver, boot, closeResolver, err := loadLLMConfig(ctx, *companyPath, *bootstrapPath, stderr)
 	if err != nil {
 		return err
 	}
 	defer closeResolver()
+	switch sub {
+	case "list", "status", "export", "doctor":
+		// SAID BEFORE ANYTHING IS RESTORED, because these four answer about
+		// the login the engine would run with and cannot read where the
+		// engine reads it from: see [resolvedFrom].
+		fmt.Fprintln(stderr, resolvedFrom(boot, *bootstrapPath))
+	}
 
 	if sub == "doctor" {
 		entries, buildErr := doctorEntries(company, resolver, *companyPath)
@@ -230,23 +241,56 @@ type cliAgentProvider struct {
 }
 
 // loadLLMConfig reads the company document and the resolver its references
-// go through.
+// go through, and hands back the Tier A it was resolved under (nil where there
+// is none, and the resolver is the environment's alone).
 //
-// The SAME resolver the provisioning CLIs use — store first, then the
-// environment — because a token rotated into the secret store must win over a
-// stale `.env` exported into this shell months ago. A command that resolved
-// from the environment alone would report a provider as having no token while
-// the running engine used one.
-func loadLLMConfig(ctx context.Context, companyPath, bootstrapPath string, notes io.Writer) (*config.Company, *config.Resolver, func(), error) {
+// The SAME resolver the provisioning CLIs use — this node's own secret rows
+// first, then the environment — because a token rotated into those rows must
+// win over a stale `.env` exported into this shell months ago. It is NOT the
+// engine's chain, whose store is the fleet's ([resolvedFrom] says so on every
+// answer that depends on it).
+func loadLLMConfig(ctx context.Context, companyPath, bootstrapPath string, notes io.Writer) (
+	*config.Company, *config.Resolver, *config.Bootstrap, func(), error) {
+
 	company, err := config.LoadCompanyToRun(companyPath)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
-	resolver, _, closeResolver, err := companyResolver(ctx, bootstrapPath, notes)
+	resolver, boot, closeResolver, err := companyResolver(ctx, bootstrapPath, notes)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
-	return company, resolver, closeResolver, nil
+	return company, resolver, boot, closeResolver, nil
+}
+
+// resolvedFrom says where `list`, `status`, `export` and `doctor` resolved the
+// entries' `${VAR}` references from — a configured credential bundle among
+// them, which each restores before it answers — and that it is not where the
+// engine resolves them.
+//
+// THE ENGINE'S STORE IS THE FLEET'S, and these commands cannot read it: they
+// open this node's own database, which a running engine holds, so they run
+// where the engine is stopped, and there the fleet's store — inside the
+// engine's process on the default topology — is out of reach. What they read
+// is this node's own secret rows (what was set here while its engine was
+// stopped, before its next start migrates it) and this shell's environment. A
+// bundle or token stored through a running node is the fleet's, and an answer
+// that read "as the engine does" reported a login the engine would not run
+// with, or none where it would. Reading the fleet's values from here would need
+// them sent over the wire, which no command does.
+func resolvedFrom(boot *config.Bootstrap, bootstrapPath string) string {
+	const engine = "The engine resolves them from the fleet's secret store first, which " +
+		"this command cannot read, so a bundle or token stored through a running node " +
+		"is not in these answers."
+	if boot == nil {
+		return fmt.Sprintf("crewlet: ${VAR} references, a configured credential bundle "+
+			"among them, are resolved from this shell's environment alone (no %s). %s",
+			bootstrapPath, engine)
+	}
+	return fmt.Sprintf("crewlet: ${VAR} references, a configured credential bundle among "+
+		"them, are resolved from this node's own secret rows in %s (what was set here "+
+		"while its engine was stopped and not yet migrated), then from this shell's "+
+		"environment. %s", boot.Store.Path, engine)
 }
 
 // cliAgents builds every cli-agent provider the company declares, in the
@@ -291,9 +335,10 @@ func oneProvider(providers []cliAgentProvider, key string) (*cliagent.Provider, 
 }
 
 // restoreConfiguredBundle makes the restore the engine makes before it runs an
-// entry ([cliagent.Provider.RestoreConfiguredBundle]), for a command that
-// answers about the login the engine would run with, and says on stderr why
-// it restored nothing where it did not: the engine warns and runs the entry
+// entry ([cliagent.Provider.RestoreConfiguredBundle]) — of the bundle THIS
+// command resolved, which [resolvedFrom] has said is not the fleet's — for a
+// command that answers about the login the engine would run with, and says on
+// stderr why it restored nothing where it did not: the engine warns and runs the entry
 // signed out, and the command then reports a login that is not there, which
 // this line explains — a bundle that failed, or a logout that keeps it out
 // until a login is written again.

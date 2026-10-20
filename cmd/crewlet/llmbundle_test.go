@@ -314,3 +314,49 @@ func TestALogoutWhoseVendorHalfFailedStillNamesTheBundle(t *testing.T) {
 		t.Errorf("status after a logout whose vendor half failed restored the login: %q", got)
 	}
 }
+
+// EVERY ANSWER ABOUT THE LOGIN THE ENGINE WOULD RUN WITH SAYS WHERE IT
+// RESOLVED THE BUNDLE, because it is not where the engine does.
+//
+// `list`, `status`, `export` and `doctor` restore the entry's configured
+// bundle before they answer, and they said so "as the engine does" — but they
+// open this node's own database, which only a stopped engine lets them, and so
+// resolve from that node's own secret rows and this shell, never from the
+// fleet's secret store the engine reads first. A bundle stored through a
+// running node is the fleet's, and these answers do not see it. Each says
+// which it read — the store's file, or the environment alone — and that the
+// engine reads the fleet's store.
+//
+// Mutation: drop the line, or print it only for `doctor`, and the other
+// commands are red.
+func TestEveryLoginAnswerSaysWhereItResolvedTheBundle(t *testing.T) {
+	bundle := llmBundle(t, `{"token":"k-bundled"}`)
+	flags, _ := bundledEntry(t, bundle)
+	withStore := append([]string(nil), flags...)
+	cfg := bootstrapWithKeyring(t, "k1")
+	withStore[len(withStore)-1] = cfg
+	boot, err := loadBootstrapForStore(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name  string
+		flags []string
+		want  string
+	}{
+		{"no bootstrap", flags, "from this shell's environment alone"},
+		{"a stopped node's store", withStore, "from this node's own secret rows in " + boot.Store.Path},
+	} {
+		for _, sub := range [][]string{{"list"}, {"status"}, {"export"}, {"doctor", "-no-smoke"}} {
+			_, stderr, err := runSub(t, tc.flags, sub[0], sub[1:]...)
+			if err != nil && sub[0] != "doctor" {
+				t.Fatalf("%s, %s: %v (%s)", tc.name, sub[0], err, stderr)
+			}
+			for _, want := range []string{tc.want, "the fleet's secret store first"} {
+				if !strings.Contains(stderr, want) {
+					t.Errorf("%s, %s: stderr does not say %q:\n%s", tc.name, sub[0], want, stderr)
+				}
+			}
+		}
+	}
+}

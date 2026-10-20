@@ -77,7 +77,7 @@ subcommand below is served by it.
 
 ---
 
-> **Every command that reads the Tier B company document takes `-config`** (default `./crewlet.yaml`), and resolves its `${VAR}` references the way the engine does: **the secret store first, the process environment behind it**. A command that read the environment alone would see an empty string for every value already rotated into the store — and for `integrations.gitlab.signing_secret`, empty is the signal to *mint*, so a re-run would replace a working webhook secret at the third-party app. With no bootstrap at that path the run resolves from the environment alone and says so on its first line; a bootstrap that exists and declares no `secrets.keys` is refused, because every node's Tier A carries a keyring and resolving a company's values from whatever the shell holds on the strength of one that does not would hide the misconfiguration. The one exception is the operator's own credential (`-admin-token` / `$GITLAB_ADMIN_TOKEN` and its siblings), which is read from the environment only — see [the secret store](../concepts/secret-store.md#what-still-has-to-be-in-the-environment).
+> **Every command that reads the Tier B company document takes `-config`** (default `./crewlet.yaml`), and resolves its `${VAR}` references in the engine's order: **the secret store first, the process environment behind it** — where the secret store is **this node's own rows** in the store `-config` names (what was set there while its engine was stopped, before the engine migrated it), because a command run where no engine holds that file cannot reach the fleet's store the engine reads. A command that read the environment alone would see an empty string for every value already rotated into the store — and for `integrations.gitlab.signing_secret`, empty is the signal to *mint*, so a re-run would replace a working webhook secret at the third-party app. With no bootstrap at that path the run resolves from the environment alone and says so on its first line; a bootstrap that exists and declares no `secrets.keys` is refused, because every node's Tier A carries a keyring and resolving a company's values from whatever the shell holds on the strength of one that does not would hide the misconfiguration. The one exception is the operator's own credential (`-admin-token` / `$GITLAB_ADMIN_TOKEN` and its siblings), which is read from the environment only — see [the secret store](../concepts/secret-store.md#what-still-has-to-be-in-the-environment).
 
 
 > **Every command except `crewlet run` logs at `warn`.** They open a store,
@@ -2286,12 +2286,22 @@ the smoke test was answered, which proves the CLI authenticates some way the
 engine does not hand it (an endpoint that takes no key, a credential in its
 own configuration). A token `auth.mode: api-key` removes from the child is not
 counted. `${VAR}` references and the variables `inherit-env` forwards are
-resolved in the process running `crewlet llm` — the secret store first, then
-that shell's environment — so run it with the engine's environment to get the
-engine's answer.
+resolved in the process running `crewlet llm` — **this node's own secret rows**
+first (the `-config` store: what was set here while its engine was stopped and
+has not been migrated yet), then that shell's environment — and **not** the
+fleet's secret store, which the engine reads first and these commands cannot
+reach: they open this node's own database, which a running engine holds, and on
+the default topology the fleet's store is inside the engine's process. So a
+token or a bundle stored through a running node (`-api`, the dashboard, `crewlet
+secrets set` while the engine was up) is not in these answers; run them with the
+engine's environment, and with the value in this node's rows or the shell, to
+get the engine's answer. `list`, `status`, `export` and `doctor` each say on
+stderr which of the two they resolved from.
 
 `llm list`'s `SIGN-IN` column is the first route `doctor` would name — both
-restore the entry's configured bundle first, as the engine does:
+restore the entry's configured bundle first, as the engine does, but from the
+bundle this node's own rows or the shell resolve (above) rather than the
+fleet's store:
 `credentials` (files a login wrote), `token` (a headless token), `api key`
 (under `auth.mode: api-key`), `inherited token` or `inherited key` (forwarded
 by `auth.mode: inherit-env`), `environment` (a `cli.env` key), or `none`.
@@ -2406,8 +2416,10 @@ publishes (never for a revision it refuses), from
 `CREWLET_LLM_CLI_<KEY>_CREDENTIALS` variable — and only into an empty
 credential directory, by the same rule, and never after a `logout` until a
 login is written again. `list`, `status`, `export` and `doctor` make
-the same restore before they look, so they report the login the engine would
-run with; `validate` never writes one. That path authenticates a fresh
+the same restore before they look, from the bundle they resolve — this node's
+own secret rows and the shell, never the fleet's store the engine reads (each
+says which on stderr) — so they report the login the engine would run with only
+where that is the bundle the engine resolves too; `validate` never writes one. That path authenticates a fresh
 container before its first turn rather than after an operator remembers a
 command; `import` is for the hosts that are already up. See [environment
 variables](environment-variables.md).
