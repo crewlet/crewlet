@@ -285,7 +285,7 @@ services:
   # ---------------------------------------------------------------------------
   seaweedfs:
     # PINNED EXACTLY, for the reason every service here is.
-    image: chrislusf/seaweedfs:3.80
+    image: chrislusf/seaweedfs:4.48
     profiles: [s3]
     command: ["server", "-dir=/data", "-s3", "-s3.port=8333", "-ip.bind=0.0.0.0"]
     ports:
