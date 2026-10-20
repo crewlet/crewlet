@@ -768,6 +768,21 @@ describe("the knowledge answer", () => {
 });
 
 describe("the actions, made as the person", () => {
+  // THE ANSWER'S CLOCK IS HELD for every case here. "rotate the join timeout"
+  // and "swe cluster join" read as questions, so typing one arms the answer's
+  // ANSWER_IDLE_MS pause on a real timer, and a case that took longer than
+  // that between typing and its press — any case, on a loaded machine — had
+  // `answer_knowledge` sent through the same act route as the write it is
+  // about: the route below answers every tool with the write's receipt, the
+  // palette drew that receipt as an answer and threw on its missing sources,
+  // and `posted` held two calls where the case counts one. These cases are
+  // about the writes; the answer's own cases, above, move this clock by hand.
+  // Only setTimeout is held: React's scheduler and the fetch the writes go
+  // through run as they always do.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  });
+
   const TASKS: Answers = {
     work_search: async () => ({ ...OUTCOME, hits: [HIT], available: true }),
     colleague: async (params) =>
