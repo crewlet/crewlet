@@ -120,7 +120,15 @@ function dataOptions(type: ColumnType, options: SheetColumn["options"]): DataOpt
 }
 
 /** The fields a column's type gives meaning to, dropped when the type changes. */
-const TYPED_FIELDS = ["options", "min", "max", "max_length", "max_items", "default", "mode"] as const;
+const TYPED_FIELDS = [
+  "options",
+  "min",
+  "max",
+  "max_length",
+  "max_items",
+  "default",
+  "mode",
+] as const;
 
 /**
  * A column changed in its settings, carried into the draft: its name, type,
@@ -210,7 +218,10 @@ export function withNewColumn(draft: SheetDraft): { draft: SheetDraft; key: stri
   const key = freshKey(columns);
   const column: DataColumn = { key, type: "text", label: freshLabel(columns) };
   return {
-    draft: { ...withColumns(draft, [...columns, column]), provisional: [...draft.provisional, key] },
+    draft: {
+      ...withColumns(draft, [...columns, column]),
+      provisional: [...draft.provisional, key],
+    },
     key,
   };
 }
@@ -276,7 +287,11 @@ export function canAddColumn(draft: SheetDraft): boolean {
 }
 
 /** Why a column's name would be refused, or undefined: empty, too long, or another column's. */
-export function columnNameProblem(draft: SheetDraft, key: string, label: string): string | undefined {
+export function columnNameProblem(
+  draft: SheetDraft,
+  key: string,
+  label: string,
+): string | undefined {
   const name = label.trim();
   if (name === "") return "Give the column a name.";
   const bytes = utf8Bytes(name);
@@ -470,7 +485,11 @@ function choicesFrom(words: readonly string[]): DataOption[] {
 }
 
 /** Whether every value parses as the column, and so the column is that type. */
-function allParse(column: SheetColumn, values: readonly string[], context: SheetValueContext): boolean {
+function allParse(
+  column: SheetColumn,
+  values: readonly string[],
+  context: SheetValueContext,
+): boolean {
   return values.every((v) => v.trim() === "" || parseText(column, v, context).ok);
 }
 
@@ -495,7 +514,9 @@ export function inferColumn(
     ...extra,
   });
   if (filled.length === 0) {
-    return named && !hasOptions(named) ? column(named, named === "rating" ? { max: 5 } : {}) : column("text");
+    return named && !hasOptions(named)
+      ? column(named, named === "rating" ? { max: 5 } : {})
+      : column("text");
   }
   const probe = (type: ColumnType, extra: Partial<SheetColumn> = {}): SheetColumn => ({
     field: key,
@@ -509,11 +530,15 @@ export function inferColumn(
   if (allParse(probe("number"), filled, context)) {
     const ints = filled.every((v) => /^\s*[1-9]\d*\s*$/.test(v));
     const most = Math.max(...filled.map((v) => Number(v)));
-    if (named === "rating" && ints && most <= 10) return column("rating", { max: Math.max(5, most) });
+    if (named === "rating" && ints && most <= 10)
+      return column("rating", { max: Math.max(5, most) });
     return column("number");
   }
   if (allParse(probe("date"), filled, context)) return column("date");
-  if (filled.every((v) => /^https?:\/\//i.test(v.trim())) && allParse(probe("url"), filled, context)) {
+  if (
+    filled.every((v) => /^https?:\/\//i.test(v.trim())) &&
+    allParse(probe("url"), filled, context)
+  ) {
     return column("url");
   }
   if (context.people && context.people.length > 0 && allParse(probe("person"), filled, context)) {
@@ -524,19 +549,29 @@ export function inferColumn(
     const words = distinct(filled);
     // REPEATED: some word comes back, and there are few enough of them to
     // read as a list to pick from, even in a short file.
-    const repeated = words.length < filled.length && words.length <= Math.max(3, Math.floor(filled.length / 2));
+    const repeated =
+      words.length < filled.length && words.length <= Math.max(3, Math.floor(filled.length / 2));
     if (repeated && words.length <= CHOICES_MAX && words.every((w) => w.length <= 40)) {
       const type: ColumnType = named === "status" ? "status" : "select";
       const options = choicesFrom(words).map((o, i) =>
-        type === "status" ? { id: o.id, label: o.label, category: i === 0 ? "todo" : "in_progress" } : o,
+        type === "status"
+          ? { id: o.id, label: o.label, category: i === 0 ? "todo" : "in_progress" }
+          : o,
       );
       return column(type, { options });
     }
     const listed = filled.some((v) => /[,;]/.test(v));
     if (listed) {
       const parts = distinct(filled.flatMap((v) => v.split(/[,;]/)));
-      const listedCount = filled.reduce((n, v) => n + v.split(/[,;]/).filter((p) => p.trim()).length, 0);
-      if (parts.length <= CHOICES_MAX && parts.length < listedCount && parts.every((w) => w.length <= 40)) {
+      const listedCount = filled.reduce(
+        (n, v) => n + v.split(/[,;]/).filter((p) => p.trim()).length,
+        0,
+      );
+      if (
+        parts.length <= CHOICES_MAX &&
+        parts.length < listedCount &&
+        parts.every((w) => w.length <= 40)
+      ) {
         return column("multiselect", { options: choicesFrom(parts) });
       }
     }
@@ -565,7 +600,12 @@ export function draftFromTable(
     const values = body.map((r) => r[i] ?? "");
     if (i === 0) {
       const long = values.some((v) => v.length > 120 || /[\r\n]/.test(v));
-      return { key: keys[i]!, type: long ? "longtext" : "text", label, primary: true } as DataColumn;
+      return {
+        key: keys[i]!,
+        type: long ? "longtext" : "text",
+        label,
+        primary: true,
+      } as DataColumn;
     }
     return inferColumn(keys[i]!, label, values, context);
   });

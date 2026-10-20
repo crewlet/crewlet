@@ -21,7 +21,8 @@ vi.mock("~/lib/keyedWrite.ts", async () => {
   };
 });
 vi.mock("~/lib/store-hooks.ts", async () => {
-  const actual = await vi.importActual<typeof import("~/lib/store-hooks.ts")>("~/lib/store-hooks.ts");
+  const actual =
+    await vi.importActual<typeof import("~/lib/store-hooks.ts")>("~/lib/store-hooks.ts");
   return { ...actual, useOrg: () => null };
 });
 const fileArtifactTask = vi.hoisted(() => vi.fn());
@@ -114,7 +115,10 @@ test("Create writes the sheet, its schema and its rows in the order drawn, and o
   });
   fireEvent.click(screen.getByRole("radio", { name: /Tracker/ }));
   expect(screen.getByText("It will be listed on ENG-12.")).toBeTruthy();
-  fireEvent.keyDown(screen.getByRole("textbox", { name: "Sheet title" }), { key: "Enter", metaKey: true });
+  fireEvent.keyDown(screen.getByRole("textbox", { name: "Sheet title" }), {
+    key: "Enter",
+    metaKey: true,
+  });
   await waitFor(() => expect(location.hash).toBe(`#/artifacts/${ID}`));
   expect(sent.map((r) => `${r.method} ${r.path}`)).toEqual([
     "POST /artifacts",
@@ -143,7 +147,9 @@ test("a refused row batch still opens the sheet, and says how many rows went in"
     return { kind: "done", pending: false, body: {} };
   });
   mount();
-  fireEvent.change(screen.getByRole("textbox", { name: "Sheet title" }), { target: { value: "Budget" } });
+  fireEvent.change(screen.getByRole("textbox", { name: "Sheet title" }), {
+    target: { value: "Budget" },
+  });
   fireEvent.click(screen.getByRole("radio", { name: /Budget/ }));
   fireEvent.click(create());
   await waitFor(() => expect(location.hash).toBe(`#/artifacts/${ID}`));
@@ -169,16 +175,23 @@ test("a press on a header opens its settings; Add column appends one and opens i
 test("a CSV is read in the browser, typed by its values, and titles the sheet", async () => {
   mount();
   fireEvent.click(screen.getByRole("radio", { name: /Import a CSV/ }));
-  const file = new File(["Gate,Budget,Approved\nSecurity review,\"12,500\",yes\nLoad test,800,no\n"], "launch-gates.csv", {
-    type: "text/csv",
-  });
+  const file = new File(
+    ['Gate,Budget,Approved\nSecurity review,"12,500",yes\nLoad test,800,no\n'],
+    "launch-gates.csv",
+    {
+      type: "text/csv",
+    },
+  );
   const input = document.querySelector<HTMLInputElement>('input[type="file"]')!;
   expect(screen.getByText("Choose a CSV file, or drop one here")).toBeTruthy();
   await act(async () => {
     fireEvent.change(input, { target: { files: [file] } });
   });
   await waitFor(() => expect(headers()).toEqual(["Gate", "Budget", "Approved"]));
-  expect(screen.getByRole("textbox", { name: "Sheet title" })).toHaveProperty("value", "Launch gates");
+  expect(screen.getByRole("textbox", { name: "Sheet title" })).toHaveProperty(
+    "value",
+    "Launch gates",
+  );
   expect(screen.getByText(/2 rows, 3 columns\. Every value fits its column\./)).toBeTruthy();
   expect(within(grid()).getByText("12,500")).toBeTruthy();
 });
@@ -197,7 +210,9 @@ test("a file that cannot be read as CSV says why, on the page", async () => {
 
 test("Cancel with something typed asks before discarding it", () => {
   mount();
-  fireEvent.change(screen.getByRole("textbox", { name: "Sheet title" }), { target: { value: "Plan" } });
+  fireEvent.change(screen.getByRole("textbox", { name: "Sheet title" }), {
+    target: { value: "Plan" },
+  });
   fireEvent.click(screen.getAllByRole("button", { name: "Cancel" })[0]!);
   expect(screen.getByRole("dialog", { name: "Discard this sheet?" })).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Discard" }));

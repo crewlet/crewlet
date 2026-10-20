@@ -59,7 +59,6 @@ import {
 import { COLUMN_TYPE_WORDS, ROLE_WORDS, roleIncludes } from "~/lib/artifacts/words.ts";
 import { plural } from "~/lib/format.ts";
 
-
 /** What each status category is called. */
 const CATEGORY_WORDS: Readonly<Record<(typeof STATUS_CATEGORIES)[number], string>> = {
   todo: "To do",

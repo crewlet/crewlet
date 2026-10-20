@@ -51,7 +51,12 @@ describe("typing an imported column", () => {
   });
 
   test("repeated words become choices, each with its own hue and an id from its label", () => {
-    const column = inferColumn("c", "Tier", ["Gold", "Silver", "Gold", "gold", "Bronze", "Silver"], bare);
+    const column = inferColumn(
+      "c",
+      "Tier",
+      ["Gold", "Silver", "Gold", "gold", "Bronze", "Silver"],
+      bare,
+    );
     expect(column.type).toBe("select");
     expect(column.options).toEqual([
       { id: "gold", label: "Gold", color: "purple" },
@@ -67,7 +72,12 @@ describe("typing an imported column", () => {
   });
 
   test("lists of repeated words become a multi-select", () => {
-    const column = inferColumn("c", "Areas", ["security, legal", "legal", "infra; perf", "perf"], bare);
+    const column = inferColumn(
+      "c",
+      "Areas",
+      ["security, legal", "legal", "infra; perf", "perf"],
+      bare,
+    );
     expect(column.type).toBe("multiselect");
     expect(column.options?.map((o) => o.label)).toEqual(["security", "legal", "infra", "perf"]);
   });
@@ -127,15 +137,36 @@ describe("a draft from a table", () => {
 
 describe("shaping a draft", () => {
   test("a column retyped keeps every value that reads as the new type", () => {
-    let draft = draftFromTable([["Name", "Score"], ["a", "7"], ["b", "x"]], true, bare).draft;
-    draft = withColumnSettings(draft, "column_2", { field: "column_2", label: "Score", type: "text" }, bare);
+    let draft = draftFromTable(
+      [
+        ["Name", "Score"],
+        ["a", "7"],
+        ["b", "x"],
+      ],
+      true,
+      bare,
+    ).draft;
+    draft = withColumnSettings(
+      draft,
+      "column_2",
+      { field: "column_2", label: "Score", type: "text" },
+      bare,
+    );
     expect(draft.rows.map((r) => r.values["column_2"])).toEqual(["7", "x"]);
-    draft = withColumnSettings(draft, "column_2", { field: "column_2", label: "Score", type: "number" }, bare);
+    draft = withColumnSettings(
+      draft,
+      "column_2",
+      { field: "column_2", label: "Score", type: "number" },
+      bare,
+    );
     expect(draft.rows.map((r) => r.values["column_2"])).toEqual([7, undefined]);
   });
 
   test("a choice removed clears the rows that chose it; a template's write rules stay", () => {
-    let draft = draftOf(reviewSheetSchema(), [{ item: "A", status: "approved" }, { item: "B", status: "pending" }]);
+    let draft = draftOf(reviewSheetSchema(), [
+      { item: "A", status: "approved" },
+      { item: "B", status: "pending" },
+    ]);
     const status = draftColumns(draft).find((c) => c.field === "status")!;
     draft = withColumnSettings(
       draft,
@@ -154,7 +185,12 @@ describe("shaping a draft", () => {
   test("a status keeps a category on every choice; a choice column carries none", () => {
     let draft = draftOf(trackerSheetSchema());
     const priority = draftColumns(draft).find((c) => c.field === "priority")!;
-    draft = withColumnSettings(draft, "priority", { ...priority, type: "status", options: [{ id: "high", label: "High" }] }, bare);
+    draft = withColumnSettings(
+      draft,
+      "priority",
+      { ...priority, type: "status", options: [{ id: "high", label: "High" }] },
+      bare,
+    );
     expect(draft.collection.columns?.find((c) => c.key === "priority")?.options).toEqual([
       { id: "high", label: "High", category: "todo" },
     ]);
@@ -164,7 +200,11 @@ describe("shaping a draft", () => {
     const start = draftOf(trackerSheetSchema());
     const { draft, key } = withNewColumn(start);
     expect(draft.provisional).toEqual([key]);
-    expect(draft.collection.columns?.at(-1)).toMatchObject({ key: "column_7", label: "Column 7", type: "text" });
+    expect(draft.collection.columns?.at(-1)).toMatchObject({
+      key: "column_7",
+      label: "Column 7",
+      type: "text",
+    });
     expect(withColumnMoved(draft, "owner", -1)).toBe(draft);
     expect(withoutColumn(draft, "task")).toBe(draft);
     const moved = withColumnMoved(draft, key, -1);
@@ -177,7 +217,12 @@ describe("what the engine is sent", () => {
   test("columns made here are keyed from their names, uniquely; template keys and the policy are kept", () => {
     let draft = draftOf(trackerSheetSchema());
     const first = withNewColumn(draft);
-    draft = withColumnSettings(first.draft, first.key, { field: first.key, label: "Due", type: "date" }, bare);
+    draft = withColumnSettings(
+      first.draft,
+      first.key,
+      { field: first.key, label: "Due", type: "date" },
+      bare,
+    );
     draft = withEdits(draft, [
       { rowId: draft.rows[0]!.id, field: "task", value: "Ship" },
       { rowId: draft.rows[0]!.id, field: first.key, value: "2026-11-02" },
@@ -186,21 +231,36 @@ describe("what the engine is sent", () => {
     const [collection] = writes.collections;
     expect(collection?.preset).toBe("contribute");
     expect(collection).not.toHaveProperty("read");
-    expect(collection?.columns?.map((c) => c.key)).toEqual(["task", "owner", "status", "priority", "due", "notes", "due_2"]);
+    expect(collection?.columns?.map((c) => c.key)).toEqual([
+      "task",
+      "owner",
+      "status",
+      "priority",
+      "due",
+      "notes",
+      "due_2",
+    ]);
     expect(writes.rows).toEqual([{ task: "Ship", due_2: "2026-11-02" }]);
     expect(schemaProblem(writes.collections)).toBeNull();
   });
 
   test("a row that leaves a required column empty holds Create, and says which", () => {
     const draft = withEdits(draftOf(trackerSheetSchema()), []);
-    const typed = withEdits(draft, [{ rowId: draft.rows[1]!.id, field: "notes", value: "Only notes" }]);
+    const typed = withEdits(draft, [
+      { rowId: draft.rows[1]!.id, field: "notes", value: "Only notes" },
+    ]);
     expect(draftProblem(draft)).toBeUndefined();
     expect(draftProblem(typed)).toBe("Row 2 needs a value in Task.");
   });
 
   test("two columns of one name hold Create", () => {
     const { draft, key } = withNewColumn(draftOf(trackerSheetSchema()));
-    const clash = withColumnSettings(draft, key, { field: key, label: "owner", type: "text" }, bare);
+    const clash = withColumnSettings(
+      draft,
+      key,
+      { field: key, label: "owner", type: "text" },
+      bare,
+    );
     expect(draftProblem(clash)).toBe("Owner: Another column is called “owner”.");
   });
 
@@ -211,14 +271,20 @@ describe("what the engine is sent", () => {
     expect(batches.map((b) => b.length)).toEqual([DATA_BATCH_MAX_OPS, DATA_BATCH_MAX_OPS, 50]);
     const ids = batches.flat().map((op) => op.doc);
     expect([...ids].sort()).toEqual(ids);
-    expect(batches[0]![0]).toEqual({ op: "set", collection: "rows", doc: "000_r0", fields: { n: 0 } });
+    expect(batches[0]![0]).toEqual({
+      op: "set",
+      collection: "rows",
+      doc: "000_r0",
+      fields: { n: 0 },
+    });
   });
 
   test("every template's examples name only its columns and read as their types", () => {
     for (const template of SHEET_TEMPLATES) {
       const draft = draftOf(template.schema(), template.examples(new Date(2026, 9, 19)));
       const keys = new Set((draft.collection.columns ?? []).map((c) => c.key));
-      for (const row of draft.rows) for (const key of Object.keys(row.values)) expect(keys, template.key).toContain(key);
+      for (const row of draft.rows)
+        for (const key of Object.keys(row.values)) expect(keys, template.key).toContain(key);
       expect(draftProblem(draft), template.key).toBeUndefined();
     }
   });

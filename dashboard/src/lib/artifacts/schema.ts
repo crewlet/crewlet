@@ -278,7 +278,15 @@ export function blankSheetSchema(): DataCollection[] {
 
 /** One collection people who can edit change, with the columns given. */
 function sharedCollection(name: string, title: string, columns: DataColumn[]): DataCollection {
-  return { name, title, preset: "shared", read: "all", create: "editor", delete: "editor", columns };
+  return {
+    name,
+    title,
+    preset: "shared",
+    read: "all",
+    create: "editor",
+    delete: "editor",
+    columns,
+  };
 }
 
 /**
@@ -444,19 +452,45 @@ export const SHEET_TEMPLATES = [
     description: "Work with an owner, a status, a priority and a due date.",
     schema: trackerSheetSchema,
     examples: ((today) => [
-      { task: "Draft the launch announcement", status: "in_progress", priority: "high", due: dayAfter(today, 3) },
-      { task: "Review the pricing page", status: "not_started", priority: "medium", due: dayAfter(today, 7) },
-      { task: "Book the customer interviews", status: "done", priority: "low", due: dayAfter(today, -2) },
+      {
+        task: "Draft the launch announcement",
+        status: "in_progress",
+        priority: "high",
+        due: dayAfter(today, 3),
+      },
+      {
+        task: "Review the pricing page",
+        status: "not_started",
+        priority: "medium",
+        due: dayAfter(today, 7),
+      },
+      {
+        task: "Book the customer interviews",
+        status: "done",
+        priority: "low",
+        due: dayAfter(today, -2),
+      },
     ]) as ExampleRows,
   },
   {
     key: "review",
     label: "Review",
-    description: "Items to review, a reviewer for each, and the status, labels and notes they fill in.",
+    description:
+      "Items to review, a reviewer for each, and the status, labels and notes they fill in.",
     schema: reviewSheetSchema,
     examples: (() => [
-      { item: "Single sign-on with SAML", details: "Customers on the Enterprise plan sign in through their identity provider.", status: "pending", labels: ["must_have"] },
-      { item: "Audit log export", details: "A daily export of every admin action as CSV.", status: "changes_requested", labels: ["nice_to_have", "question"] },
+      {
+        item: "Single sign-on with SAML",
+        details: "Customers on the Enterprise plan sign in through their identity provider.",
+        status: "pending",
+        labels: ["must_have"],
+      },
+      {
+        item: "Audit log export",
+        details: "A daily export of every admin action as CSV.",
+        status: "changes_requested",
+        labels: ["nice_to_have", "question"],
+      },
       { item: "Data residency in the EU", status: "approved", labels: ["must_have"], done: true },
     ]) as ExampleRows,
   },
@@ -477,9 +511,27 @@ export const SHEET_TEMPLATES = [
     description: "Initiatives by quarter, with a status, a lead, a target date and a confidence.",
     schema: roadmapSheetSchema,
     examples: ((today) => [
-      { initiative: "Self-serve onboarding", quarter: "q1", status: "building", target: dayAfter(today, 30), confidence: 4 },
-      { initiative: "Usage-based billing", quarter: "q2", status: "exploring", target: dayAfter(today, 90), confidence: 3 },
-      { initiative: "Mobile app", quarter: "q3", status: "paused", target: dayAfter(today, 180), confidence: 2 },
+      {
+        initiative: "Self-serve onboarding",
+        quarter: "q1",
+        status: "building",
+        target: dayAfter(today, 30),
+        confidence: 4,
+      },
+      {
+        initiative: "Usage-based billing",
+        quarter: "q2",
+        status: "exploring",
+        target: dayAfter(today, 90),
+        confidence: 3,
+      },
+      {
+        initiative: "Mobile app",
+        quarter: "q3",
+        status: "paused",
+        target: dayAfter(today, 180),
+        confidence: 2,
+      },
     ]) as ExampleRows,
   },
   {

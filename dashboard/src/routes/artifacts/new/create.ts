@@ -143,12 +143,16 @@ export function useCreateArtifact(): CreateArtifact {
       if (total > 0) setProgress({ done, total });
       for (const batch of insertBatches(writes.collection, writes.rows, rowID)) {
         const key = newActOpID();
-        let result = resultOf(await keyedWrite({ ...writeData(id, batch, client, { via: "dashboard" }), key }));
+        let result = resultOf(
+          await keyedWrite({ ...writeData(id, batch, client, { via: "dashboard" }), key }),
+        );
         for (let retry = 0; retry < BATCH_RETRIES; retry++) {
           if (result.verdict !== "unknown" && result.verdict !== "rate_limited") break;
           const wait = result.verdict === "rate_limited" ? (result.retryAfterMs ?? 1000) : 500;
           await new Promise((settle) => setTimeout(settle, wait));
-          result = resultOf(await keyedWrite({ ...writeData(id, batch, client, { via: "dashboard" }), key }));
+          result = resultOf(
+            await keyedWrite({ ...writeData(id, batch, client, { via: "dashboard" }), key }),
+          );
         }
         if (result.verdict !== "applied" && result.verdict !== "pending") {
           stopped = result.reason;
