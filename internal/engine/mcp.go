@@ -483,11 +483,26 @@ func serverSpec(
 	// shares — a base URL, a workspace — and the seat's block is the
 	// identity inside it, so a seat that names the same key is naming its
 	// own credential rather than a second default.
+	//
+	// INTO WHAT THE TRANSPORT AUTHENTICATES WITH: the environment of a
+	// stdio child, the headers of an http connection. It went into Env
+	// whatever the transport, and an http connection reads no environment
+	// ([mcp.Spec.Headers]), so every seat's child of a per-role http server
+	// — the remote GitHub server a seat reaches with its own
+	// `Authorization: Bearer …` — connected with the template's headers
+	// alone: refused for want of a token, or, under a template carrying
+	// one, every seat acting as that one identity. The in-box rendering of
+	// the same server has always split them this way
+	// ([sandbox.RenderMCP]).
 	if len(seatEnv) > 0 {
-		if spec.Env == nil {
-			spec.Env = make(map[string]string, len(seatEnv))
+		target := &spec.Env
+		if server.Kind() == config.TransportHTTP {
+			target = &spec.Headers
 		}
-		maps.Copy(spec.Env, resolveMap(env, seatEnv))
+		if *target == nil {
+			*target = make(map[string]string, len(seatEnv))
+		}
+		maps.Copy(*target, resolveMap(env, seatEnv))
 	}
 	return spec, nil
 }
