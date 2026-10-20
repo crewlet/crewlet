@@ -191,7 +191,12 @@ other import in `dashboard/src/main.tsx`. Above, because an import is
 evaluated in source order and the components carry their own stylesheets, and
 the baseline has to be the thing a component rule outranks rather than the
 other way round. The dashboard's own sheets (`tokens.css`, `base.css`,
-`components.css`, `frame.css`, `screens.css`) come last.
+`components.css`, `frame.css`, `screens.css`) come last. One more is a
+screen's own: `create.css`, the create pages' rules, which
+`routes/artifacts/new/CreateShell.tsx` imports so that it arrives with their
+chunks rather than in the first paint. It lands after every other sheet, so it
+selects only the create pages' own classes (`styles/classes.test.ts`), and
+never a kit class (`TestNoLazyStylesheetCarriesTheDesignSystem`).
 
 **There is no alias layer.** Every stylesheet in `dashboard/src` reads the
 package's tokens under their own names — `--color-text-tertiary`,
@@ -7830,9 +7835,12 @@ reaches, a lazy one included, is also held to the Content-Security-Policy.
 screen is loaded by `app/lazyScreen.ts`, one chunk per workspace's
 `routes/<workspace>/index.ts` plus one for the org builder, which is a section
 of Agents and larger than any whole workspace. The entry the shell loads holds
-the frame — the sidebar, the page header, the palette, the socket client — and
-nothing a screen draws, so a reader who came to read the Inbox parses the
-Inbox and not the org builder. A screen's peek lives in its workspace's chunk
+the frame (the sidebar, the page header, the socket client) and nothing a
+screen draws, so a reader who came to read the Inbox parses the Inbox and not
+the org builder. The command palette is a layer mounted only while it is open
+and the largest single piece of the frame, so it is a chunk of its own, the
+first the idle prefetch fetches; `app/lazy.test.tsx` refuses a static path to
+it from `main.tsx`. A screen's peek lives in its workspace's chunk
 beside it. Two things keep the second click fast: hovering or focusing a
 sidebar row starts fetching the chunk it leads to, and once the first screen is
 up every other chunk is fetched in turn, one at a time, each in an idle moment
@@ -7861,7 +7869,7 @@ and fails a build over any of four numbers:
 
 | What | Budget | Measured as | Why this number |
 |---|---|---|---|
-| The initial load: the entry, its static imports and the linked stylesheet | 310 KiB | gzip at the best level, which is what the engine serves | Under two seconds on a 1.5 Mbit/s link. It was 300 KiB until the rich editor: the first paint had reached 297 KiB, and the shell sends every design system stylesheet in one sheet by rule, so the editor's 1.8 KiB of rules ride it although its code is fetched only to edit, and the Markdown grammar the renderer and the editor share became a 2 KiB chunk of its own |
+| The initial load: the entry, its static imports and the linked stylesheet | 310 KiB | gzip at the best level, which is what the engine serves | Under two seconds on a 1.5 Mbit/s link. It was 300 KiB until the rich editor: the first paint had reached 297 KiB, and the shell sends every design system stylesheet in one sheet by rule, so the editor's 1.8 KiB of rules ride it although its code is fetched only to edit, and the Markdown grammar the renderer and the editor share became a 2 KiB chunk of its own. The create pages took it to 314.5 KiB: their rules (3.1 KiB) moved into `create.css`, which arrives with them, and the command palette (about 10 KiB) became a chunk of its own, which left it at 300.2 KiB |
 | Each chunk fetched later: a workspace, the org builder, a lazy stylesheet | 150 KiB | the same | Half the initial load, for the first click into a screen the idle prefetch has not reached |
 | Every font face the build embeds | 90 KB | as served — woff2 is never recompressed | The four Geist faces (83,736 bytes) and room to re-cut them, never a fifth |
 | The whole of `static/dashboard`, which every binary and image carries | 4 MiB | raw | Every binary carries it, opened or not. 3 MiB, then 3.5 MiB for the artifacts workspace, then 4 MiB for the rich editor, whose chunk is about 276 KB raw (ProseMirror 228 KB of it) plus 15 KB of its packages' notices: it measured 3.54 MiB after it. A doubled 2.3 MB baseline is still refused |
