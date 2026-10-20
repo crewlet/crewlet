@@ -199,7 +199,7 @@ test("the Make row offers every kind on All and Yours, each opening its kind's o
 // kind's page: there is no generic page that asks for the type first.
 test("New opens a menu of every kind, each going to its own create page", () => {
   mount("all");
-  fireEvent.click(screen.getByRole("button", { name: "New" }));
+  fireEvent.click(screen.getByRole("button", { name: "New artifact" }));
   const rows = screen.getAllByRole("menuitem");
   expect(rows.map((r) => r.textContent)).toEqual([
     "Doc",

@@ -14,6 +14,7 @@ import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { FrameReadings } from "~/app/Shell.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
+import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { reloadForTest } from "~/lib/prefs.ts";
 import { LiveSocket, Store, type WorkProjectRow } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
@@ -107,14 +108,14 @@ afterEach(() => {
   location.hash = "#/";
 });
 
-function mount(children: ReactNode) {
+function mount(children: ReactNode, viewer: Record<string, unknown> = JANE) {
   const store = new Store();
   store.applyHealth(healthFrame({ nodes: 1 }));
   store.applyOrg(withDerived(ORG) as never);
   const socket = new LiveSocket(store);
   socket.query = ((what: string) => {
     const answers: Record<string, unknown> = {
-      viewer: JANE,
+      viewer,
       work_projects: { projects: [project("DES"), project("OPS")] },
       work_inbox: { handle: "jane", notices: [], unread: 0, primary: 0 },
     };
@@ -139,7 +140,11 @@ async function settle() {
   });
 }
 
-/** Files `request` on its first render and hands back what was filed. */
+/**
+ * A page's ask as a control draws it: the action, held with the hook's reason
+ * for a reader who cannot file, as every create page passes `held` to its
+ * action's `disabledReason`.
+ */
 function Filer({
   request,
   onFiled,
@@ -147,17 +152,23 @@ function Filer({
   request: ArtifactTaskRequest;
   onFiled: (filed: FiledArtifactTask | null) => void;
 }) {
-  const { fileArtifactTask } = useFileArtifactTask();
+  const { fileArtifactTask, held } = useFileArtifactTask();
   return (
-    <button type="button" onClick={() => void fileArtifactTask(request).then(onFiled)}>
-      File
-    </button>
+    <>
+      <button type="button" onClick={() => void fileArtifactTask(request).then(onFiled)}>
+        File
+      </button>
+      {held && <p role="note">{held}</p>}
+    </>
   );
 }
 
-async function file(request: ArtifactTaskRequest): Promise<FiledArtifactTask | null> {
+async function file(
+  request: ArtifactTaskRequest,
+  viewer: Record<string, unknown> = JANE,
+): Promise<FiledArtifactTask | null> {
   let filed: FiledArtifactTask | null = null;
-  mount(<Filer request={request} onFiled={(f) => (filed = f)} />);
+  mount(<Filer request={request} onFiled={(f) => (filed = f)} />, viewer);
   await settle();
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "File" }));
@@ -229,6 +240,30 @@ test("a link the engine refused is said, and the filed task is still returned", 
     artifact: "a2",
   });
   expect(filed).toEqual({ item: "DES-4", key: "DES-4", linked: "You cannot open that artifact." });
+});
+
+// THE ASK IS HELD, NEVER HIDDEN, for every reader who cannot file: the hook
+// says why, for the page's action to say it, and a press sends nothing.
+test.each([
+  {
+    who: "anonymous",
+    viewer: { login: "", grants: [], handle: "", owner: "", name: "", acts: [] },
+    reason: WRITE_REASONS.anonymous,
+  },
+  {
+    who: "not served the create",
+    viewer: { ...JANE, acts: ["update_work_item"] },
+    reason: WRITE_REASONS.not_served,
+  },
+])("a reader who is $who is told why, and nothing is filed", async ({ viewer, reason }) => {
+  const filed = await file(
+    { kind: "design", title: "Screens", brief: "Two.", seat: "designer", artifact: "a3" },
+    viewer,
+  );
+  expect(screen.getByRole("note").textContent).toBe(reason);
+  expect(filed).toBeNull();
+  expect(posted).toEqual([]);
+  expect(linked).toEqual([]);
 });
 
 function Who({ onState }: { onState: (who: WhoBuildsItState) => void }) {
