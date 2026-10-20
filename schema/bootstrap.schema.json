@@ -363,7 +363,7 @@
               "pattern": "\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}"
             }
           ],
-          "description": "Short label; the token acts under the login token:\u003cid\u003e, which is recorded as the author of its writes. Lowercase letters, digits and hyphens, optionally joined by colons, at most 58 characters so the login stays within 64.",
+          "description": "Short label; the token acts under the login token:<id>, which is recorded as the author of its writes. Lowercase letters, digits and hyphens, optionally joined by colons, at most 58 characters so the login stays within 64.",
           "type": [
             "string",
             "number",
@@ -1046,7 +1046,7 @@
           ]
         },
         "snapshot_dir": {
-          "description": "Where this node keeps snapshots of the replicated estate; empty is \u003cdir of path\u003e/snapshots.",
+          "description": "Where this node keeps snapshots of the replicated estate; empty is <dir of path>/snapshots.",
           "type": [
             "string",
             "number",
@@ -1701,7 +1701,7 @@
       }
     },
     {
-      "$comment": "stream.replicas \u003e 1 on an embedded stream that joins no fleet needs peers to replicate to.",
+      "$comment": "stream.replicas > 1 on an embedded stream that joins no fleet needs peers to replicate to.",
       "if": {
         "properties": {
           "stream": {

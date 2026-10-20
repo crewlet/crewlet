@@ -31,7 +31,11 @@
 //     script and handed to the loop that fixes a document from
 //     `crewlet validate -json`, where `replicas \u003e 1` and
 //     `token:\u003cid\u003e` were escapes every one of them had to decode back
-//     into the setting it was being told about.
+//     into the setting it was being told about;
+//   - a TIER SCHEMA ([github.com/crewlet/crewlet/internal/config.Schema], the
+//     committed and published `schema/*.schema.json`) is read by an editor
+//     showing a field's description on hover, by a person reading the file
+//     and by a model authoring a document against it.
 //
 // # The text ends where its value does
 //
