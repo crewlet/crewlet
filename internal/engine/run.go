@@ -580,6 +580,13 @@ type Engine struct {
 	dataView     *coord.LeaseView
 	stopDataView func()
 
+	// claims is the seat-claim gate as the seat host asks it, and the
+	// watch that asks the host for a pass when the gate opens after
+	// refusing one; stopAdmission ends that watch — nil while none runs.
+	// Built in [New]. See admission.go.
+	claims        *gateWatch
+	stopAdmission func()
+
 	// objects is this node's object store and, on a data node, the
 	// collector's duty. See objects.go.
 	objects *objectStore
@@ -1407,6 +1414,10 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		// ever on the apply loop's own goroutine.
 		directoryNudge: make(chan struct{}, 1),
 	}
+	// AND THE CLAIM GATE'S WATCH, for the same reason: every log whose
+	// health gates admission tells it from its apply loop, from boot, and
+	// the node's seat host is built over its gate.
+	e.claims = newGateWatch(e.seatsAdmitted)
 	// THE DESK FILES ON THE SAME RECORDS: a turn's box, handed over in the
 	// write its launch makes to create the run's record — before any box or
 	// CLI exists — and every late offer to the turn after it (steer.go).
@@ -1836,7 +1847,11 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		//
 		// AND NEVER IN A MAINTENANCE MODE, where this same host still
 		// runs for the presence it renews — see [Engine.seatsAdmitted].
-		SeatsAdmitted: e.seatsAdmitted,
+		//
+		// ASKED THROUGH THE CLAIM GATE'S WATCH, which records a refusal so
+		// that the gate's opening asks the host for a pass rather than
+		// leaving the seats to the next tick (admission.go).
+		SeatsAdmitted: e.claims.gate,
 		// AND THE OTHER DIRECTION. Admission withholds new work from a
 		// node that is merely behind; this gives back work already held
 		// only by a node that can no longer ROUTE its seats' calls — no
@@ -2219,6 +2234,11 @@ func (e *Engine) Start(ctx context.Context) error {
 	if err := e.node.Start(context.WithoutCancel(ctx)); err != nil {
 		return fmt.Errorf("engine: start: %w", err)
 	}
+	// THE CLAIM GATE'S WATCH, AFTER the host's first pass: what it asks of
+	// the host is to sweep again once a pass the gate refused can be
+	// answered, and before the host runs there is no pass to have been
+	// refused. Detached, like the host. See admission.go.
+	e.startAdmissionWatch(ctx)
 	// THE LIVE TOKEN METERS, which the dashboard's header pushes from and
 	// which nothing published — so every header carried zeroes. AFTER the
 	// host is running, because its first frame is published at once onto
@@ -2576,7 +2596,11 @@ func (e *Engine) teardown(ctx context.Context) {
 	// [Engine.stopping] — and from here on the one a hold given back by a
 	// loop stopped below is charged to ([Engine.tearingDown]).
 	ctx = seat.WithStopBudget(ctx, e.tearingDown())
-	// FIRST, THE TRIGGER THAT RE-DERIVES WHAT A COMPANY ROUTES BY: the
+	// FIRST, THE CLAIM GATE'S WATCH, which reads the logs, the router and
+	// the fleet's view that everything below takes down — and whose one
+	// gesture, asking the host for a pass, has nothing left to claim for.
+	e.stopAdmissionWatch()
+	// THEN THE TRIGGER THAT RE-DERIVES WHAT A COMPANY ROUTES BY: the
 	// party registry's. A rebuild over vendor wiring the stops below had
 	// already ended would register identities nothing serves, so it is
 	// ended before anything it reads from is.

@@ -3111,6 +3111,86 @@ func TestTheFirstDrainOfARunIsToldOnce(t *testing.T) {
 	<-errs
 }
 
+// THE LOOP SAYS SO EACH TIME IT COMES LEVEL WITH ITS LOG, AND ONLY THEN.
+//
+// What waits on it is a node's seat claims, which ask whether the node is
+// level NOW: a boot's first drain is one such moment, and so is the end of
+// every burst of writes the loop works through and every outage it retries
+// across — a gate told of the first drain alone learned of the rest on a
+// timer. Each is told after the records it applied are committed, so a gate
+// it wakes reads the rows it was woken for; and an idle loop, whose every
+// fetch comes back empty, is level once rather than once a fetch interval.
+func TestTheLoopSaysEachTimeItComesLevel(t *testing.T) {
+	t.Parallel()
+	var h *applyHarness
+	told := make(chan uint64, 16)
+	// stopOnTell, when armed, ends the run from inside the hook, so the loop
+	// leaves between two fetches still level — the stop the restart below
+	// has to see past.
+	var stopOnTell atomic.Pointer[context.CancelFunc]
+	h = newApplyHarnessWith(t, probeDomain{}, func(d *statelog.RunnerDeps) {
+		d.OnLevel = func() {
+			told <- h.runner.Committed().Seq
+			if stop := stopOnTell.Load(); stop != nil {
+				(*stop)()
+			}
+		}
+	})
+	h.fetch.offer(1, env(1, "edit", "a", "op-1", 1))
+
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	errs := make(chan error, 1)
+	go func() { errs <- h.runner.Run(ctx) }()
+	awaitLevel(t, told, 1, "the first drain")
+	// AN IDLE LOOP IS LEVEL ONCE: every empty fetch after the one that
+	// told says nothing new, and the loop is left long enough for three.
+	time.Sleep(3 * statelog.FetchWait)
+	select {
+	case seq := <-told:
+		t.Fatalf("an idle loop said it came level again, at checkpoint %d", seq)
+	default:
+	}
+
+	// A BURST OF WRITES, worked through: level again once it is applied.
+	h.fetch.offer(2, env(2, "edit", "b", "op-2", 1))
+	awaitLevel(t, told, 2, "the end of a burst of writes")
+
+	// A BROKER THAT STOPPED ANSWERING, retried across: level again on the
+	// first answer after it, with nothing new to apply. The run ends there,
+	// as the hook returns, before another fetch could clear the latch.
+	stopOnTell.Store(&cancel)
+	h.fetch.mu.Lock()
+	h.fetch.failures = 2
+	h.fetch.mu.Unlock()
+	awaitLevel(t, told, 2, "the first answer after an outage")
+	<-errs
+	stopOnTell.Store(nil)
+
+	// A RUN THAT STARTS AGAIN is level about a history of its own, however
+	// the last one ended.
+	ctx, cancel = context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	go func() { errs <- h.runner.Run(ctx) }()
+	awaitLevel(t, told, 2, "the restarted loop's first drain")
+	cancel()
+	<-errs
+}
+
+// awaitLevel waits for one call of the level hook and holds it to having been
+// made with the checkpoint at seq: told before its records were committed, a
+// gate it woke would read the rows it was woken for as not there yet.
+func awaitLevel(t *testing.T, told <-chan uint64, seq uint64, what string) {
+	t.Helper()
+	select {
+	case at := <-told:
+		if at != seq {
+			t.Fatalf("%s was told at checkpoint %d, want %d", what, at, seq)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatalf("waited 15s for %s to be told", what)
+	}
+}
+
 // awaitTold waits for one call of the drain hook and holds it to having been
 // made with the latch already set.
 func awaitTold(t *testing.T, told <-chan bool, what string) {
