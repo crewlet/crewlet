@@ -29,6 +29,7 @@ import {
   TabPanel,
   Tabs,
   Tag,
+  useMediaMatch,
   useToast,
   type Finding,
   type PickedFile,
@@ -122,6 +123,7 @@ export function SourceBody({ modeSwitch }: { modeSwitch: ReactNode }) {
   const checks = useChecks(texts, entry, entry !== "");
   const draft = useDraft();
   const running = draft.state.kind === "running";
+  const phone = useMediaMatch("(width < 40rem)");
   const dirty = draft.draft
     ? draft.draft.published !== print
     : files.length !== 1 || texts[0]?.text !== initial;
@@ -283,12 +285,14 @@ export function SourceBody({ modeSwitch }: { modeSwitch: ReactNode }) {
         },
       ]
     : [];
+  // A PHONE'S BAR KEEPS ROOM FOR THE PAGE'S TITLE: there it says only that
+  // a preview is being saved, and the draft itself is in the Preview pane.
   const status = running
-    ? "Publishing the preview…"
-    : draft.draft
-      ? dirty
-        ? `Private draft, v${draft.draft.head}, edited`
-        : `Private draft, v${draft.draft.head}`
+    ? phone
+      ? "Saving…"
+      : "Publishing the preview…"
+    : draft.draft && !phone
+      ? `Private draft, v${draft.draft.head}${dirty ? ", edited" : ""}`
       : null;
 
   return (
