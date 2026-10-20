@@ -21,9 +21,16 @@ var releaseName = regexp.MustCompile(`^(\d+)\.(\d+)\.(\d+)$`)
 const LatestContract = "latest"
 
 // ReleaseSet is the releases one embedded tree holds: the runtime contracts a
-// page may pin, or the kit versions a page may link.
+// page may pin, or the kit versions a page may link, each with the files it
+// ships.
 type ReleaseSet struct {
 	versions []string
+
+	// files is every file each release ships, by its path inside the
+	// release's directory (`kit.css`, `fonts/geist-sans.woff2`): read from
+	// the tree itself, so a file a release added or never had is answered
+	// from what the origin serves rather than from a list kept by hand.
+	files map[string]map[string]bool
 }
 
 // ReleasesIn is the releases a tree holds: one directory per exact version
@@ -39,14 +46,39 @@ func ReleasesIn(tree fs.FS) (ReleaseSet, error) {
 	case err != nil:
 		return ReleaseSet{}, fmt.Errorf("artifactupload: read the release tree: %w", err)
 	}
-	var set ReleaseSet
+	set := ReleaseSet{files: map[string]map[string]bool{}}
 	for _, e := range entries {
-		if e.IsDir() && releaseName.MatchString(e.Name()) {
-			set.versions = append(set.versions, e.Name())
+		if !e.IsDir() || !releaseName.MatchString(e.Name()) {
+			continue
 		}
+		files, err := filesIn(tree, e.Name())
+		if err != nil {
+			return ReleaseSet{}, err
+		}
+		set.versions = append(set.versions, e.Name())
+		set.files[e.Name()] = files
 	}
 	slices.SortFunc(set.versions, compareReleases)
 	return set, nil
+}
+
+// filesIn is every regular file under one release's directory, by its path
+// inside it.
+func filesIn(tree fs.FS, release string) (map[string]bool, error) {
+	files := map[string]bool{}
+	err := fs.WalkDir(tree, release, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.Type().IsRegular() {
+			files[strings.TrimPrefix(p, release+"/")] = true
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("artifactupload: read release %s: %w", release, err)
+	}
+	return files, nil
 }
 
 // Latest is the newest release, empty for none.
@@ -59,6 +91,10 @@ func (r ReleaseSet) Latest() string {
 
 // Serves reports whether version is one of the set.
 func (r ReleaseSet) Serves(version string) bool { return slices.Contains(r.versions, version) }
+
+// Ships reports whether release version ships file, a path inside its
+// directory. A release the set does not hold ships nothing.
+func (r ReleaseSet) Ships(version, file string) bool { return r.files[version][file] }
 
 // Versions is every release served, oldest first.
 func (r ReleaseSet) Versions() []string { return slices.Clone(r.versions) }

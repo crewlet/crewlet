@@ -19,6 +19,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Button,
   Checkbox,
+  EmptyState,
   FormField,
   HuePicker,
   IconButton,
@@ -164,14 +165,20 @@ export function SchemaEditor({
               key={c.name}
               selected={c.name === current?.name}
               onClick={() => setPicked(c.name)}
-              trailing={plural(c.columns?.length ?? 0, "column")}
+              trailing={
+                <span className="artifact-note">{plural(c.columns?.length ?? 0, "column")}</span>
+              }
             >
               {c.title || c.name}
             </ListItem>
           ))}
         </List>
         {canEdit && (
-          <FormField label="New collection" error={nameProblem ?? undefined}>
+          <FormField
+            label="New collection"
+            error={nameProblem ?? undefined}
+            helper="Lowercase letters, digits and underscores."
+          >
             {(field) => (
               <span className="artifact-inline">
                 <Input
@@ -198,6 +205,13 @@ export function SchemaEditor({
           </FormField>
         )}
       </div>
+      {!current && (
+        <EmptyState
+          size="compact"
+          title="No collections yet"
+          description="A collection is one table of rows with its own columns. Name one to start adding its columns."
+        />
+      )}
       {current && (
         <CollectionForm
           collection={current}
@@ -294,7 +308,7 @@ function CollectionForm({
             <Input
               id={field.id}
               aria-describedby={field.describedBy}
-              width="md"
+              width="full"
               value={collection.title ?? ""}
               disabled={!canEdit}
               onChange={(e) => onChange((c) => ({ ...c, title: e.target.value }))}
@@ -432,6 +446,7 @@ function ColumnRow({
     <li className="artifact-column">
       <div className="artifact-column-head">
         <Input
+          containerClassName="artifact-column-name"
           inputSize="sm"
           width="full"
           aria-label={`Name of column ${column.key}`}
@@ -443,6 +458,7 @@ function ColumnRow({
           {column.key}
         </span>
         <Select
+          className="artifact-column-type"
           width="full"
           size="sm"
           value={column.type}
@@ -452,6 +468,7 @@ function ColumnRow({
           ariaLabel={`Type of ${column.label || column.key}`}
         />
         <Select
+          className="artifact-column-write"
           width="full"
           size="sm"
           value={column.write ?? ""}
@@ -472,6 +489,7 @@ function ColumnRow({
           ariaLabel={`Who writes ${column.label || column.key}`}
         />
         <Checkbox
+          className="artifact-column-required"
           size="sm"
           label="Required"
           checked={column.required === true}
@@ -479,6 +497,7 @@ function ColumnRow({
           onChange={(e) => onChange((c) => ({ ...c, required: e.target.checked || undefined }))}
         />
         <Checkbox
+          className="artifact-column-hidden"
           size="sm"
           label="Hidden"
           checked={column.hidden === true}
@@ -487,6 +506,7 @@ function ColumnRow({
         />
         {removable ? (
           <IconButton
+            className="artifact-column-remove"
             size="sm"
             variant="ghost"
             label={`Remove ${column.label || column.key}`}
@@ -494,7 +514,7 @@ function ColumnRow({
             onClick={onRemove}
           />
         ) : (
-          <span aria-hidden="true" />
+          <span className="artifact-column-remove" aria-hidden="true" />
         )}
       </div>
       {hasOptions(column.type) && (

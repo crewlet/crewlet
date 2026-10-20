@@ -149,7 +149,13 @@ func newHarness(t *testing.T, o options) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	kits, err := artifactupload.ReleasesIn(fstest.MapFS{testKit + "/kit.css": {Data: []byte(":root{}")}})
+	// The harness's kit release ships the guide's three files and not the
+	// content stylesheet, as the releases before it did not.
+	kits, err := artifactupload.ReleasesIn(fstest.MapFS{
+		testKit + "/kit.css":  {Data: []byte(":root{}")},
+		testKit + "/theme.js": {Data: []byte("//")},
+		testKit + "/kit.js":   {Data: []byte("//")},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

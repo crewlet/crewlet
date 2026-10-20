@@ -14,6 +14,7 @@ import { describe, expect, test } from "vitest";
 // unnoticed: it goes green on whatever is written, not on what is correct.
 import { EMPTY_VALUE } from "@crewlethq/ui";
 import {
+  asSentence,
   configValueKind,
   elapsedMs,
   eventHistoryLabel,
@@ -37,6 +38,7 @@ import {
   tsKey,
   fmtElapsed,
   fmtUptime,
+  openSentence,
 } from "./format.ts";
 
 describe("timestamps", () => {
@@ -401,5 +403,40 @@ describe("how far back the log goes", () => {
     for (const absent of [undefined, null, 0, -1, Number.NaN]) {
       expect(eventHistoryLabel(absent)).toBe("how far back the log goes is not known yet");
     }
+  });
+});
+
+describe("the engine's words as a sentence", () => {
+  test("a clause is opened and closed", () => {
+    expect(asSentence("no verified backup has been recorded")).toBe(
+      "No verified backup has been recorded.",
+    );
+    expect(asSentence("  already closed!  ")).toBe("Already closed!");
+    expect(asSentence("   ")).toBe("");
+    expect(openSentence("the code does not match")).toBe("The code does not match");
+  });
+
+  // A LITERAL FIRST WORD IS A VALUE, and a capital letter makes it another
+  // one: the sign-in screen read "Http://localhost:5199 isn't an address".
+  test("a first word that is a literal is written as the engine wrote it", () => {
+    expect(asSentence("http://localhost:5199 isn't an address for this deployment.")).toBe(
+      "http://localhost:5199 isn't an address for this deployment.",
+    );
+    for (const literal of [
+      "example.com answered 502",
+      "token:review holds no seat",
+      "api.external_url is unset",
+      "backup_age: no verified backup",
+      "@maya is not a seat",
+      "/var/lib/crewlet is not writable",
+      "`crewlet iam` refused the login",
+    ]) {
+      expect(openSentence(literal)).toBe(literal);
+    }
+  });
+
+  test("prose that only looks punctuated is still opened", () => {
+    expect(openSentence("isn't an address")).toBe("Isn't an address");
+    expect(openSentence("done, then saved")).toBe("Done, then saved");
   });
 });

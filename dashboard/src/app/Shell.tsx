@@ -49,7 +49,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { Announcer, AppShell } from "@crewlethq/ui";
+import { Announcer, AppShell, useMediaMatch } from "@crewlethq/ui";
 import { DESTINATIONS, WORKSPACES, workspaceOf, workspaceRow } from "./nav.ts";
 import { samePath, useNavigator, useRoute } from "./router.tsx";
 import { crumbsFor, titleOf, type Labels } from "./crumbs.ts";
@@ -74,7 +74,6 @@ import { SessionReading, useFrameSession } from "~/lib/frameSession.ts";
 import { InboxCountsProvider } from "~/lib/useInboxCounts.ts";
 import { QueueCountProvider } from "~/lib/useQueueCount.ts";
 import { useViewerPrefs } from "~/lib/prefs.ts";
-import { useMediaQuery } from "~/lib/media.ts";
 import { PEEK_WIDTH, columnWidth, densityScale, listReserve, peekColumnMin } from "./layout.ts";
 import { goSignIn } from "~/lib/session.ts";
 import type { CoverageFacts } from "~/components/work.tsx";
@@ -497,7 +496,7 @@ function Frame({ children }: { children: ReactNode }) {
   // which this frame, at this density, still leaves the list its floor.
   const column = columnWidth(row?.renderer);
   const frame = { column, scale: densityScale(prefs.density) };
-  const roomy = useMediaQuery(`(width >= ${peekColumnMin(frame)}px)`);
+  const roomy = useMediaMatch(`(width >= ${peekColumnMin(frame)}px)`);
   const peekShape = peekable(peek) ? (roomy ? "column" : "drawer") : undefined;
   const crumbs = useMemo(() => crumbsFor(route.path, labels), [route.path, labels]);
 

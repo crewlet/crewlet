@@ -153,7 +153,7 @@ import { PageNote } from "~/app/frame/PageNote.tsx";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { fmtDate, tsKey } from "~/lib/format.ts";
+import { asSentence, fmtDate, tsKey } from "~/lib/format.ts";
 import { ADMIN, accessLine, holds, needsWords } from "~/lib/access.ts";
 import { documentUnits, handleLabel, indexOrg, unitByKey } from "~/lib/seats.ts";
 import { useIamGesture } from "~/lib/iamWrite.ts";
@@ -417,14 +417,6 @@ const CONTACT_SURFACES: Record<string, string> = {
   github_login: "GitHub",
   gitlab_username: "GitLab",
 };
-
-/** The engine writes a detail in its own lower case; drawn, it is a sentence. */
-function sentence(text: string): string {
-  const trimmed = text.trim();
-  if (trimmed === "") return "";
-  const opened = trimmed[0]!.toUpperCase() + trimmed.slice(1);
-  return /[.!?]$/.test(opened) ? opened : `${opened}.`;
-}
 
 function WordTag({ words, fallback }: { words: Words | undefined; fallback: string }) {
   return (
@@ -1325,7 +1317,7 @@ function findingSentence(f: DirectoryFinding, row: DirectoryRow | undefined): st
     case "admin_clamped_by_node":
       return `${name} has Admin, but this node turns it off.`;
   }
-  return sentence(f.detail);
+  return asSentence(f.detail);
 }
 
 /** The one-click repair a finding offers, where it has one. */

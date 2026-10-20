@@ -155,7 +155,7 @@ func TestARowHiddenFromAReaderIsHiddenFromEveryReadPath(t *testing.T) {
 		t.Fatalf("bob reads the cell history of dana's vote: %+v", cell.Entries)
 	}
 	var out bytes.Buffer
-	if err := artifactdata.Export(ctx, n.reader, sheet, reading("jane", artifacts.RoleEditor), "votes", &out); err != nil {
+	if err := artifactdata.Export(ctx, n.reader, sheet, reading("jane", artifacts.RoleEditor), "votes", nil, &out); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(out.String(), "dana-vote") || strings.Contains(out.String(), "bob-vote") {
@@ -167,6 +167,52 @@ func TestARowHiddenFromAReaderIsHiddenFromEveryReadPath(t *testing.T) {
 	// AN EDITOR reads the editors' collection and every row's history.
 	if page, err := n.reader.Docs(ctx, sheet, reading("jane", artifacts.RoleEditor), "notes", 0, "", 0); err != nil || len(page.Docs) != 1 {
 		t.Fatalf("an editor's listing of notes: %+v, %v", page.Docs, err)
+	}
+}
+
+// AN EMPTY COLLECTION ANSWERS AN EMPTY LIST: a collection configured with
+// no rows yet, read whole or caught up, encodes its page's docs as `[]`, and
+// so do one whose only row was deleted and a query that matches nothing. It
+// encoded them as `null`, and a reader that iterates the array (the
+// dashboard's sheet) failed on every new sheet's first state.
+func TestAnEmptyCollectionAnswersAnEmptyList(t *testing.T) {
+	t.Parallel()
+	n := newHarness(t)
+	ctx := t.Context()
+	jane := person("jane", artifacts.RoleOwner)
+	n.configure(jane, artifacts.Collection{Name: "tasks", Preset: artifacts.PresetShared},
+		artifacts.Collection{Name: "done", Preset: artifacts.PresetShared})
+	n.applied(jane, set("done", "a", map[string]string{"n": `1`}))
+	n.applied(jane, artifacts.DataOp{Op: artifacts.DataDelete, Collection: "done", Doc: "a"})
+	rd := reading("jane", artifacts.RoleOwner)
+	emptied, err := n.reader.Docs(ctx, sheet, rd, "done", 0, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	matched, err := n.reader.Query(ctx, sheet, rd, "done", query.Query{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if matched.Docs == nil {
+		t.Error("a query that matches nothing answers a nil docs list")
+	}
+	whole, err := n.reader.Docs(ctx, sheet, rd, "tasks", 0, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caught, err := n.reader.Docs(ctx, sheet, rd, "tasks", whole.Through, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, page := range map[string]artifactdata.DocPage{"whole": whole, "catch-up": caught,
+		"emptied": emptied} {
+		encoded, err := json.Marshal(page)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(encoded, []byte(`"docs":[]`)) {
+			t.Fatalf("the %s read of an empty collection encodes %s, want docs as []", name, encoded)
+		}
 	}
 }
 
@@ -341,18 +387,27 @@ func TestACellsHistoryNamesEachChangeAndItsAuthor(t *testing.T) {
 	}
 }
 
-// THE CSV EXPORT IS A SPREADSHEET'S: option labels for ids, a list's elements
-// joined, the row's attribution, and a cell a spreadsheet would run as a
-// formula neutralised.
+// THE CSV EXPORT IS A SPREADSHEET'S, READ BY A PERSON: a column headed by its
+// label (its key where it has none), option labels for ids, a person by the
+// seat's name, a list's elements joined, the row's attribution under readable
+// headings, and a cell a spreadsheet would run as a formula neutralised.
 func TestTheExportIsASpreadsheetsAndRunsNoFormula(t *testing.T) {
 	t.Parallel()
 	n := newHarness(t)
 	jane := person("jane", artifacts.RoleOwner)
-	n.configure(jane, reviewSheet())
+	review := reviewSheet()
+	review.Columns[0].Label = "Title of the review"
+	n.configure(jane, review)
 	n.applied(jane, set("review", "r1", map[string]string{"title": `"=HYPERLINK(\"http://evil\")"`,
-		"status": `"done"`, "labels": `["copy","design"]`, "score": `-2`}))
+		"reviewer": `"dana"`, "status": `"done"`, "labels": `["copy","design"]`, "score": `-2`}))
+	names := func(handle string) string {
+		if handle == "dana" {
+			return "Dana Reyes"
+		}
+		return handle
+	}
 	var out bytes.Buffer
-	if err := artifactdata.Export(t.Context(), n.reader, sheet, reading("jane", artifacts.RoleEditor), "review", &out); err != nil {
+	if err := artifactdata.Export(t.Context(), n.reader, sheet, reading("jane", artifacts.RoleEditor), "review", names, &out); err != nil {
 		t.Fatal(err)
 	}
 	records, err := csv.NewReader(&out).ReadAll()
@@ -370,17 +425,20 @@ func TestTheExportIsASpreadsheetsAndRunsNoFormula(t *testing.T) {
 		}
 		return row[i]
 	}
-	if got := col("title"); !strings.HasPrefix(got, "'=") {
+	if got := col("Title of the review"); !strings.HasPrefix(got, "'=") {
 		t.Errorf("a formula cell is written %q, unneutralised", got)
+	}
+	if col("reviewer") != "Dana Reyes" {
+		t.Errorf("the person cell is written %q, want the seat's name", col("reviewer"))
 	}
 	if col("status") != "Done" || col("labels") != "Copy; Design" || col("score") != "-2" {
 		t.Errorf("the row renders status %q, labels %q, score %q", col("status"), col("labels"), col("score"))
 	}
-	if col("created_by") != "jane" || col("id") != "r1" {
-		t.Errorf("the row's id and author are %q and %q", col("id"), col("created_by"))
+	if col("Created by") != "jane" || col("ID") != "r1" {
+		t.Errorf("the row's id and author are %q and %q", col("ID"), col("Created by"))
 	}
-	if _, err := strconv.ParseInt(col("version"), 10, 64); err != nil {
-		t.Errorf("the version cell is %q", col("version"))
+	if _, err := strconv.ParseInt(col("Version"), 10, 64); err != nil {
+		t.Errorf("the version cell is %q", col("Version"))
 	}
 }
 

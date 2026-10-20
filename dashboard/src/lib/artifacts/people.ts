@@ -22,20 +22,27 @@ import {
 } from "@crewlethq/ui";
 import type { ArtifactAudience, ArtifactPresenceMember, OrgProjection } from "~/protocol/index.ts";
 import type { BridgePerson } from "~/runtime/bridge.ts";
+import { loginKind, loginWords, tierATokenOf } from "../login.ts";
 import { indexOrg, principalOfSeat, type OrgIndex, type Unit } from "../seats.ts";
 import { useOrg } from "../store-hooks.ts";
 import { plural } from "../format.ts";
+import { tabOfRegion } from "./doc.ts";
+import { slideOfRegion } from "./follow.ts";
 
 /** The chart, indexed, with the lookups an artifact's surfaces make. */
 export interface ArtifactPeople {
   index: OrgIndex;
   /** The company's name, as the share dialog's company row says it. */
   company: string;
-  /** A seat's name by handle, or the handle as written where the chart holds no such seat. */
+  /**
+   * A seat's name by handle. A name the chart holds no seat for is a LOGIN
+   * (an owner who acts as no seat, a Tier A token) and is said in its words
+   * ([loginWords]), else the handle as written.
+   */
   seatName: (handle: string) => string;
   /** A unit's name by key, or the key as written. */
   unitName: (key: string) => string;
-  /** A seat as a principal: a person or an agent with their face. */
+  /** A seat as a principal: a person or an agent with their face; a login as a person, by its words. */
   seatPrincipal: (handle: string) => Principal;
   /** A unit as a principal: a team, with how many it holds. */
   unitPrincipal: (key: string) => Principal;
@@ -85,12 +92,13 @@ export function memberTurn(
 export function artifactPeople(org: OrgProjection | null | undefined): ArtifactPeople {
   const index = indexOrg(org);
   const units = new Map(index.units.map((u) => [u.id, u]));
+  const nameOf = (handle: string) => index.byHandle.get(handle)?.name ?? loginWords(handle);
   const pagePerson = (handle: string, kind?: "human" | "agent"): BridgePerson => {
     const seat = index.byHandle.get(handle);
     const person: BridgePerson = {
       seat: handle,
       kind: kind ?? (seat?.kind === "agent" ? "agent" : "human"),
-      displayName: seat?.name ?? (handle || "Somebody"),
+      displayName: handle ? nameOf(handle) : "Somebody",
     };
     if (seat?.kind === "agent" && seat.avatar) {
       person.avatar = { character: seat.avatar.character, hue: seat.avatar.color };
@@ -100,9 +108,24 @@ export function artifactPeople(org: OrgProjection | null | undefined): ArtifactP
   return {
     index,
     company: org?.name?.trim() || "the company",
-    seatName: (handle) => index.byHandle.get(handle)?.name ?? handle,
+    seatName: nameOf,
     unitName: (key) => units.get(key)?.name ?? key,
-    seatPrincipal: (handle) => principalOfSeat(index.byHandle.get(handle), handle),
+    // A LOGIN IS NOT A SEAT, and drawn as the chart's default it wore an
+    // agent's squircle with the credential's first letters ("TO" for
+    // `token:review`). It is a person's circle and its words, as the Audit
+    // trail draws a login.
+    seatPrincipal: (handle) => {
+      const seat = index.byHandle.get(handle);
+      if (!seat && loginKind(handle) !== null) {
+        // A TOKEN'S ID IS ITS NAME and "API token" the line under it, so a
+        // badge draws the id's initials: "review (API token)" drew "R(".
+        const token = tierATokenOf(handle);
+        return token
+          ? { id: handle, kind: "person", name: token, detail: "API token" }
+          : { id: handle, kind: "person", name: handle };
+      }
+      return principalOfSeat(seat, handle);
+    },
     unitPrincipal: (key) => principalOfUnit(units.get(key), key),
     sheetPeople: index.seats.map((seat) => {
       const person: SheetPerson = { id: seat.handle, name: seat.name, kind: seat.kind };
@@ -121,6 +144,20 @@ export function artifactPeople(org: OrgProjection | null | undefined): ArtifactP
 export function useArtifactPeople(): ArtifactPeople {
   const org = useOrg();
   return useMemo(() => artifactPeople(org), [org]);
+}
+
+/**
+ * A share's audience as the engine spells it in a history row (`seat:pm`,
+ * `unit:ops`, `company`), named the way a reader knows it, for
+ * [historyWords]' `audience`.
+ */
+export function audienceName(raw: string, people: ArtifactPeople): string {
+  if (raw === "company") return `everyone in ${people.company}`;
+  // AT THE FIRST COLON ONLY: a seat handle may carry its own (`token:maya`).
+  const at = raw.indexOf(":");
+  const kind = raw.slice(0, at);
+  const id = raw.slice(at + 1);
+  return kind === "unit" ? people.unitName(id) : people.seatName(id);
 }
 
 /** A share's audience as a principal, for the share dialog's row. */
@@ -152,9 +189,11 @@ export interface PresencePlace {
   row: (collection: string, doc: string) => string | null;
   /** "Gate". */
   field: (collection: string, field: string) => string | null;
+  /** A view's own region by the name its view gives it: "Overview", "slide 3". */
+  region: (region: string) => string | null;
 }
 
-const NO_PLACE: PresencePlace = { row: () => null, field: () => null };
+const NO_PLACE: PresencePlace = { row: () => null, field: () => null, region: () => null };
 
 /**
  * Where a member is, in words, after the verb: "row 4, Gate", "version 3".
@@ -170,9 +209,21 @@ export function memberLocation(
     if (!f.field) return row;
     return `${row}, ${place.field(f.collection, f.field) ?? "a column"}`;
   }
-  if (f.region) return `in ${f.region}`;
+  if (f.region) {
+    const named = place.region(f.region);
+    if (named) return named;
+    // A DOC'S TAB OR A DECK'S SLIDE IS AN ADDRESS ("tab:index.md"), never
+    // words: unnamed, it is left unsaid and the version stands in for it. A
+    // page's own region is the page author's words, and is said as written.
+    if (!isViewRegion(f.region)) return `in ${f.region}`;
+  }
   if (f.version) return `version ${f.version}`;
   return "";
+}
+
+/** Whether a region is one of the views' own addresses: a doc's tab or a deck's slide. */
+export function isViewRegion(region: string): boolean {
+  return slideOfRegion(region) !== "" || tabOfRegion(region) !== "";
 }
 
 /**
@@ -214,7 +265,7 @@ export function presenceMembers(
     const out: PresenceMember = {
       id: m.session,
       seat: m.seat || m.session,
-      name: seat?.name ?? (m.seat || "Somebody"),
+      name: m.seat ? people.seatName(m.seat) : "Somebody",
       kind,
       activity: m.activity,
     };

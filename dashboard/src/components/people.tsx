@@ -78,7 +78,7 @@ import {
   holds,
   isGrant,
 } from "~/lib/access.ts";
-import { fmtDate, fmtDateCompact, tsKey } from "~/lib/format.ts";
+import { asSentence, fmtDate, fmtDateCompact, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { loginProblem } from "~/lib/login.ts";
 import { indexOrg } from "~/lib/seats.ts";
@@ -1008,7 +1008,7 @@ export function CreatePersonDialog({
             // since its first answer — in the engine's own words, which name
             // the way to a new one.
             <Callout variant="warning" title="No link to show">
-              {sentenceOf(text("detail"))}
+              {asSentence(text("detail"))}
             </Callout>
           ) : null}
         </>
@@ -1067,14 +1067,6 @@ export function CreatePersonDialog({
       <IamOutcome answer={write.answer} />
     </Modal>
   );
-}
-
-/** The engine writes a detail in its own lower case; drawn, it is a sentence. */
-function sentenceOf(text: string): string {
-  const trimmed = text.trim();
-  if (trimmed === "") return "";
-  const opened = trimmed[0]!.toUpperCase() + trimmed.slice(1);
-  return /[.!?]$/.test(opened) ? opened : `${opened}.`;
 }
 
 /**

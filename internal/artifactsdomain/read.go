@@ -1189,10 +1189,22 @@ func listSpecFor(v Viewer, q ListQuery) (listSpec, error) {
 
 // sharedClause is "shared with the viewer": their seat, a unit they sit in or
 // below, or the company.
+//
+// THEIR SEAT, NOT THEIR RECORD. The record is the seat when the viewer holds
+// one and the login when they do not ([iam.RecordOwner]), and a seat share
+// names a seat ([artifacts.Audience.Validate]); the authority table matches
+// it against the principal's seat alone. Matched against the record, a share
+// to a login was counted in the viewer's Shared listing and then withheld by
+// every read of it: "2 shared with you" over an empty list. A record in the
+// seat grammar is the seat, since a login never is one.
 func sharedClause(v Viewer) (string, []any) {
 	clause := `EXISTS (SELECT 1 FROM artifact_shares s WHERE s.artifact_id = a.id AND (
-		(s.audience_kind = ? AND s.audience_id = ?) OR s.audience_kind = ?`
-	args := []any{string(artifacts.AudienceSeat), v.Record, string(artifacts.AudienceCompany)}
+		s.audience_kind = ?`
+	args := []any{string(artifacts.AudienceCompany)}
+	if iam.ValidSeatHandle(v.Record) {
+		clause += ` OR (s.audience_kind = ? AND s.audience_id = ?)`
+		args = append(args, string(artifacts.AudienceSeat), v.Record)
+	}
 	if len(v.Units) > 0 {
 		clause += ` OR (s.audience_kind = ? AND s.audience_id IN (` + placeholders(len(v.Units)) + `))`
 		args = append(args, string(artifacts.AudienceUnit))

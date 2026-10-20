@@ -104,6 +104,11 @@ const (
 	// the origin answers it with a 404, so the page loads no kit at all.
 	CodeKitUnserved Code = "kit_unserved"
 
+	// CodeKitFileUnserved is a link to a file its kit release does not ship
+	// (a stylesheet a later release added, a misspelt name): the origin
+	// answers it with a 404, so the page loads nothing from that link.
+	CodeKitFileUnserved Code = "kit_file_unserved"
+
 	// CodeNoViewport is a page with no viewport meta: it renders at desktop
 	// width on a phone.
 	CodeNoViewport Code = "no_viewport"

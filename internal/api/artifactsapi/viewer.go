@@ -48,6 +48,45 @@ type RosterSeat struct {
 var ErrNoRoster = errors.New("artifactsapi: this node runs no company yet, so it " +
 	"cannot tell which units and seats a viewer relates to")
 
+// ErrUnknownAudience is a share naming a seat or a unit the company does not
+// hold: well formed, and nobody's.
+var ErrUnknownAudience = errors.New("artifactsapi: nobody holds that audience")
+
+// knownAudience refuses an audience a NEW share could not reach: one a grant
+// may not name ([artifacts.Audience.ValidateGrant], a login named as a seat
+// included), and a seat or a unit the company's roster does not hold. The
+// agents' share tool asks the running org the same question
+// (internal/agent/builtin), so a share is refused alike from either side.
+//
+// AN ERROR READING THE ROSTER IS NOT A REFUSAL: the caller answers it as
+// unavailable rather than telling a person their colleague does not exist.
+func (g Gate) knownAudience(ctx context.Context, a artifacts.Audience) error {
+	if err := a.ValidateGrant(); err != nil {
+		return err
+	}
+	switch a.Kind {
+	case artifacts.AudienceSeat:
+		seats, err := g.Roster.Seats(ctx)
+		if err != nil {
+			return err
+		}
+		if !slices.ContainsFunc(seats, func(s RosterSeat) bool { return s.Handle == a.ID }) {
+			return fmt.Errorf("%w: the company has no seat %q; share with a seat the "+
+				"org chart holds", ErrUnknownAudience, a.ID)
+		}
+	case artifacts.AudienceUnit:
+		units, err := g.Roster.Units(ctx)
+		if err != nil {
+			return err
+		}
+		if !slices.Contains(units, a.ID) {
+			return fmt.Errorf("%w: the company has no unit %q; share with a unit the "+
+				"org chart holds", ErrUnknownAudience, a.ID)
+		}
+	}
+	return nil
+}
+
 // viewerFor is the listing filter for principal p: their record, the units the
 // chart seats them in (or below), and the agent seats it says they lead. An
 // error is a chart or roster this node could not read, which a listing answers
@@ -228,6 +267,11 @@ type ShareAccess struct {
 	// Members are the seats a unit share reaches today: the unit's and
 	// every unit's below it. Empty for a seat or company share.
 	Members []string `json:"members,omitempty"`
+
+	// Invalid marks a share that reaches nobody ([artifacts.Audience.Reaches]):
+	// a login named as a seat, which a build before the grant rule wrote. It
+	// is listed rather than hidden, so its owner sees it and removes it.
+	Invalid bool `json:"invalid,omitempty"`
 }
 
 // access is the effective access on a, as the caller a admitted is shown it.
@@ -249,7 +293,7 @@ func (g Gate) access(ctx context.Context, a Admission) (Access, error) {
 	}
 	out.Shares = make([]ShareAccess, 0, len(head.Shares))
 	for _, s := range head.Shares {
-		entry := ShareAccess{Share: s}
+		entry := ShareAccess{Share: s, Invalid: !s.Audience.Reaches()}
 		if s.Audience.Kind == artifacts.AudienceUnit {
 			for _, seat := range seats {
 				member, err := g.Chart.MemberOf(ctx, seat.Handle, s.Audience.ID)

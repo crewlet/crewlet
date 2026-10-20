@@ -155,7 +155,7 @@ func rigWithMarks(t *testing.T) (*http.ServeMux, *store, *marks) {
 			Limits: func() artifacts.Limits {
 				return artifacts.Limits{DataBytes: 1 << 30, DataStoreBytes: 32 << 20, CompanyBytes: 1, Artifacts: 1}
 			}, Marks: reads},
-		Data: data, Versions: heads{},
+		Data: data, Versions: heads{}, Names: func(handle string) string { return "Seat " + handle },
 	})
 	if err != nil {
 		t.Fatal(err)

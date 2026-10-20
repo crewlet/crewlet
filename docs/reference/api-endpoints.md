@@ -2300,7 +2300,7 @@ as one that does not exist.
 | `POST` | `/artifacts/{id}/data/undo` | `{"seq": N}`: reverts one write of the last seven days, as a write of the caller's own under the same rules, conditioned on every document it changed being where it left them, so a document changed since is `409` `stale_version` naming it. A write older than the history, one that was refused, a schema change, one holding a value the history kept only as its hash, and one whose undo would restore more than one write carries (a bulk delete of large rows, whose inverse is over 1 MiB) are `409` `not_undoable`, and the detail says which. The history's `undoable` is false for every one of them, so a client never offers an undo that cannot land |
 | `POST` | `/artifacts/{id}/data/state` | `{"key", "value"}` or `{"key", "delete": true}`: sets or removes one of the caller's own per-viewer state keys, the backing of the page runtime's state API |
 | `PUT` | `/artifacts/{id}/data/schema` | `{"collections": [...]}`, every collection the store keeps after the change *(editor and above)*. Decided against every write before it; a change that would rewrite more documents than one record carries is `422` `migration_too_large` |
-| `GET` | `/artifacts/{id}/data/export.csv` | `collection=` one collection as CSV, streamed a page at a time *(editor and above)*, under the collection's read rule, with any cell a spreadsheet would run as a formula written as text. An artifact in the trash is `410` `data_gone` |
+| `GET` | `/artifacts/{id}/data/export.csv` | `collection=` one collection as CSV, streamed a page at a time *(editor and above)*, under the collection's read rule, written for a person to read: each column headed by its label (its key where it has none), choices as their labels, a person as the seat's name, the row's attribution under `ID`, `Created by`, `Created at`, `Updated by`, `Updated at` and `Version`, and any cell a spreadsheet would run as a formula written as text. An artifact in the trash is `410` `data_gone` |
 
 Every read here is a read of the artifact's content: an artifact in the trash
 answers none of them (the questions `404` `not_found`), and an administrator
@@ -6211,8 +6211,19 @@ for. The domain's applier decides from the record alone.
 | `POST /artifacts/{id}/versions/{n}/restore` | `publish_artifact` | Version `n` again as a new version, every file carried, based on `If-Match` |
 | `PATCH /artifacts/{id}` | `update_artifact` | The title, the description or the icon |
 | `PATCH /artifacts/{id}/versions/{n}` | `update_artifact` | Version `n`'s label (`{"label": ""}` clears it); a labelled version is kept past the hundred unlabelled ones |
-| `PUT /artifacts/{id}/shares` | `share_artifact` | `{"audience": {"kind": "seat", "id": "bob"}, "role": "editor"}`; never above the sharer's own role, and never the company from an agent |
-| `DELETE /artifacts/{id}/shares/{audience}` | `unshare_artifact` | The audience as `seat:<handle>`, `unit:<key>` or `company` |
+| `PUT /artifacts/{id}/shares` | `share_artifact` | `{"audience": {"kind": "seat", "id": "bob"}, "role": "editor"}`; never above the sharer's own role, and never the company from an agent. A NEW audience is held to the grant rule: a seat audience is a seat handle, never a login (`token:maya` or `jane.doe` is refused 422, `invalid`), and a seat or a unit the company's roster does not hold is refused the same way, with the sentence that says which; a create's `shares` are held to the same rule. An audience the artifact already shares with may change its role whatever it names |
+| `DELETE /artifacts/{id}/shares/{audience}` | `unshare_artifact` | The audience as `seat:<handle>`, `unit:<key>` or `company`. Any audience a share can be stored under is withdrawn, never held to the grant rule or the roster: a share to a login written before the rule, and a share to a seat the chart has since removed, are the ones an owner most needs to remove |
+
+**A share that reaches nobody is surfaced, not dropped.** A build before the
+grant rule could store a share to a login named as a seat (`seat:token:maya`),
+which no principal's seat matches, so it grants nothing. The engine neither
+deletes such a share on read nor sweeps it at boot: a share is authorisation
+data its owner wrote, and removing it silently would rewrite the record of who
+was meant to have access without anybody deciding to. Instead `artifact_access`
+marks it `invalid: true`, the share dialog lists it with why ("token:maya is a
+sign-in, not a seat. Remove it and share with their seat.") and offers Remove as
+its one action, and the listing never counts it toward the login's Shared
+section, where every read of it would be withheld.
 | `POST /artifacts/{id}/transfer` | `artifacts.transfer` | `{"to": "<seat>"}` |
 | `DELETE /artifacts/{id}` | `artifacts.trash` | Into the trash: every frame stops loading at once, and it is purged after thirty days |
 | `POST /artifacts/{id}/restore` | `artifacts.restore` | Out of the trash; `409 artifact_purging` once a purge has begun on it |
@@ -6289,7 +6300,7 @@ a person present, and the version is marked forced.
 | `GET /artifacts/{id}/history` | `artifact_history` | Every publish, share, trash and elevated read, newest first; below editor, without the elevated reads or who a share named |
 | `GET /artifacts/{id}/assets` | `artifact_assets` | The asset store |
 | `GET /artifacts/{id}/seen-by` | `artifact_seen_by` | Who has opened it, to the owner and editors while the company's `artifacts.seen_by` is `editors` (`shown: false` otherwise) |
-| `GET /artifacts/{id}/access` | `artifact_access` | The share dialog's list: the owner, each share with the seats a unit share reaches today, and an agent owner's leads; to a viewer, the owner and a count |
+| `GET /artifacts/{id}/access` | `artifact_access` | The share dialog's list: the owner, each share with the seats a unit share reaches today (and `invalid: true` on a share that reaches nobody, see above), and an agent owner's leads; to a viewer, the owner and a count |
 | `GET /artifacts/usage` | `artifact_usage` | The company's counters against the Tier A quotas; `artifacts.usage`, an administrator's |
 | `GET /artifacts/trail` | `artifact_trail` | **The company trail of every artifact**: every artifact's history rows across the company, private ones included, newest first in the log's order, each naming its `artifact`, its current `title` and `owner`, the op, the actor and whether only the admin path admitted them. `op=` narrows it to one op (`read_elevated` lists every administrator's override, so one nobody would find in an artifact's own history is found here), with `cursor` and `limit`; an op the log does not record is `400 bad_params`. `audit.read`, an administrator's, decided by no relation to any artifact |
 

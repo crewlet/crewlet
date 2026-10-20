@@ -148,7 +148,45 @@ test("the rail says what a dataset reads", () => {
       source: "engine",
       engine: { name: "tracker.items", params: { scope: { param: "scope" }, limit: 50 } },
     }),
-  ).toBe("tracker.items, scope the scope filter, limit 50");
+  ).toBe("tracker.items, scope from the scope filter, limit 50");
+  // A filter is named as a reader sees it, and a comparison in words.
+  const params = [
+    { key: "scope", label: "Whose work" },
+    { key: "svc", label: "Service" },
+  ];
+  expect(
+    definitionWords(
+      {
+        id: "work",
+        title: "My work",
+        source: "engine",
+        engine: { name: "tracker.items", params: { scope: { param: "scope" } } },
+      },
+      params,
+    ),
+  ).toBe("tracker.items, scope from the Whose work filter");
+  expect(
+    definitionWords(
+      {
+        id: "mine",
+        title: "Mine",
+        source: "calc",
+        calc: {
+          from: "deploys",
+          steps: [
+            {
+              op: "filter",
+              where: [
+                { column: "service", cmp: "eq", value: { param: "svc" } },
+                { column: "cost", cmp: "present" },
+              ],
+            },
+          ],
+        },
+      },
+      params,
+    ),
+  ).toBe("From deploys; keep rows where service is the Service filter and cost has a value");
   expect(
     definitionWords({
       id: "total",
@@ -178,9 +216,13 @@ test("a time axis of days is labelled with dates, never a time of day", () => {
   expect(allDays(["2026-10-01", "2026-10-02"])).toBe(true);
   expect(allDays(["2026-10-01", "2026-10-02T10:00:00Z"])).toBe(false);
   expect(allDays([])).toBe(false);
-  const label = formatDay(chartTimeOf("2026-10-01"));
+  const label = formatDay(chartTimeOf("2026-10-01"), Date.parse("2027-01-04T12:00:00Z"));
   expect(label).toMatch(/2026/);
   expect(label).not.toMatch(/\d:\d\d|AM|PM/);
+  // The year a reader is in goes without saying.
+  expect(formatDay(chartTimeOf("2026-10-01"), Date.parse("2026-10-19T12:00:00Z"))).not.toMatch(
+    /2026/,
+  );
 });
 
 test("an id is shown in its column's own words, as the domain's own screens show it", () => {
@@ -209,15 +251,16 @@ test("a table column starts as wide as what it holds, within its bounds", () => 
     ],
     rows,
   );
-  // "succeeded" is wider than its heading "OUTCOME": 9 x 7.5 + 36.
-  expect(widths.outcome).toBe(104);
-  expect(widths.outcome).toBeGreaterThan(7 * 8.5 + 36);
+  // "succeeded" is wider than its heading "OUTCOME": 9 x 7.5, the cell's 28
+  // and the first column's 4 more.
+  expect(widths.outcome).toBe(100);
+  expect(widths.outcome).toBeGreaterThan(7 * 8.5 + 32);
   expect(widths.n).toBe(72);
   expect(widths.notes).toBe(320);
   // The prose column, the text with the longest values, takes the room left.
   expect(flex).toBe("notes");
   // Fitted no narrower than about twenty characters, or its own width if less.
-  expect(flexMin).toBe(180);
+  expect(flexMin).toBe(150);
 });
 
 test("a column of a closed vocabulary, of identifiers or of numbers never flexes, however long", () => {
@@ -243,4 +286,72 @@ test("a column of a closed vocabulary, of identifiers or of numbers never flexes
   expect(
     tableLayout([{ key: "n", label: "N", column: { key: "n", type: "number" } }], rows).flex,
   ).toBeUndefined();
+});
+
+import {
+  boardSpan,
+  cellText,
+  figureFormat,
+  foldSeries,
+  OTHER_SERIES,
+  scaleFormat,
+} from "./dashboard.ts";
+
+test("past the ramp's four hues and a residual, a chart's series fold into one Other", () => {
+  const five = ["a", "b", "c", "d", "e"].map((id) => ({ id, name: id.toUpperCase() }));
+  // Five fit: the fifth takes the residual and keeps its name.
+  expect(foldSeries(five).series).toEqual(five);
+  const six = [...five, { id: "f", name: "F" }];
+  const { series, fold } = foldSeries(six);
+  expect(series.map((s) => s.name)).toEqual(["A", "B", "C", "D", "Other"]);
+  expect(fold("b")).toBe("b");
+  expect(fold("e")).toBe(OTHER_SERIES);
+  expect(fold("f")).toBe(OTHER_SERIES);
+});
+
+test("a narrow widget widens to an even span, never drawn under its least width", () => {
+  // A board 807px wide with a 16px gap: two columns are 121px, which is enough.
+  expect(boardSpan(2, 807, 16)).toBe(2);
+  // At 710px two columns are 105px: three are drawn instead, and four tile a row.
+  expect(boardSpan(2, 710, 16)).toBe(3);
+  expect(boardSpan(1, 710, 16)).toBe(3);
+  // A widget wide enough keeps its own span, even an uneven one.
+  expect(boardSpan(5, 710, 16)).toBe(5);
+  // Not yet measured, a widget keeps its span.
+  expect(boardSpan(2, 0, 16)).toBe(2);
+});
+
+test("a figure's number reads compact unless its author chose a format", () => {
+  expect(figureFormat({})).toBe("compact");
+  expect(figureFormat({ format: "integer" })).toBe("integer");
+});
+
+test("a chart's scale is written one way on every line, short from a thousand and without its unit", () => {
+  const scale = scaleFormat({ format: "integer" });
+  expect([0, 2500, 7500, 10000, -20000].map(scale)).toEqual(["0", "2.5k", "7.5k", "10k", "-20k"]);
+  expect(scaleFormat({ format: "percent" })(0.25)).toBe("25%");
+});
+
+test("a table cell writes a date as a reader does, never as the engine stores it", () => {
+  const day = cellText({ key: "d", type: "date" }, "2026-09-01");
+  expect(day).not.toMatch(/2026-09-01/);
+  expect(day).toMatch(/Sep/);
+  expect(cellText({ key: "d", type: "date" }, "2026-09-01T10:00:00Z")).not.toMatch(/T10/);
+  expect(cellText({ key: "b", type: "boolean" }, true)).toBe("Yes");
+  expect(cellText({ key: "n", type: "number" }, 1234.567)).toBe((1234.57).toLocaleString());
+});
+
+test("a table is sized by the text as the measure draws it", () => {
+  const rows: DashboardRow[] = [{ key: "DEP-1050" }];
+  const shown = [{ key: "key", label: "Key", column: { key: "key", type: "text" as const } }];
+  // A measure that draws capitals wide holds the column wider than the estimate.
+  const wide = tableLayout(shown, rows, (text) => text.length * 10);
+  expect(wide.widths.key).toBe(80 + 28 + 8);
+});
+
+test("an absent value and a priority of none are written as nothing, which a table marks", () => {
+  expect(cellText({ key: "d", type: "date" }, null)).toBe("");
+  expect(cellText({ key: "t", type: "text" }, "")).toBe("");
+  expect(cellText({ key: "p", type: "text", words: "tracker_priority" }, "none")).toBe("");
+  expect(cellText({ key: "p", type: "text", words: "tracker_priority" }, "high")).toBe("High");
 });

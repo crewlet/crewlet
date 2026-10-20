@@ -7,6 +7,7 @@
 
 import { useMemo } from "react";
 import {
+  ArtifactPreviewGlyph,
   SHEET_COVER_COLUMNS,
   SHEET_COVER_ROWS,
   SHEET_LABELS,
@@ -47,6 +48,6 @@ export function SheetCover({ item }: { item: Pick<ArtifactListItem, "id"> }) {
       ),
     };
   }, [collection, schema.data, docs.data]);
-  if (!drawn || drawn.columns.length === 0) return null;
+  if (!drawn || drawn.columns.length === 0) return <ArtifactPreviewGlyph kind="sheet" />;
   return <Cover columns={drawn.columns} rows={drawn.rows} />;
 }

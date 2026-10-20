@@ -459,8 +459,9 @@ Two kinds, and nothing is both:
   grouping, the order, the grid's columns, the board lanes put away — and it
   is drawn as a control that SAYS WHAT IT IS SET TO, so the arrangement is
   readable without opening anything. The three a reader changes all day are
-  on screen: the five shapes are a row of pressed buttons ahead of the saved
-  views, and **Group by** and **Sort** sit at the far end of the chip bar,
+  on screen: the five shapes are a segmented row of glyphs ahead of the
+  saved views (the kit's `SegmentedControl`, the same switch the Artifacts
+  gallery draws its List and Cards with), and **Group by** and **Sort** sit at the far end of the chip bar,
   each showing its value — the default order named for what it is ("Manual",
   "Recently updated", "Start date") rather than "Default". What a reader sets
   once and forgets — the second axis, the grid's columns, what a board's
@@ -541,7 +542,7 @@ from an absent key, and the address writer deleted it — so the Unassigned
 column's own "N more →" loaded the whole board.
 
 A **saved view** is neither: it is a query somebody arranged and put somewhere,
-so it is a tab in the strip. The five shapes are not tabs beside it — a shape
+so it is an option in the strip. The five shapes are not options beside it: a shape
 is a way of drawing any query, and mixed into one strip the two read as the
 same kind of thing. That is also why `view=` and `shape=` are two keys:
 switching a saved board to a list must not throw the saved filters away.
@@ -586,7 +587,7 @@ each the answer to one thing that went missing at one item:
   not, and that card is a 292 px object in a 1500 px field. A list degrades to
   one full-width row and is still a list. So a container with no default view
   opens as a list and the board is one press away, the second of the five
-  shape buttons ahead of the saved views — and the
+  shape glyphs ahead of the saved views, and the
   landing shape is never conditional on how much work exists, because a screen
   that redraws itself as a company fills up is a screen nobody can learn.
 - **A closed-set axis draws every declared value; an open one draws what
@@ -1110,7 +1111,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/knowledge/pages/{id}` | **Page**: addressed by its id, which a rename does not change. The document with its outline, its properties, its comments and what it is connected to; edited as you | `edit=1` · `version=` (History: one revision in the document's place) · `lens=diff\|full` |
 | `#/knowledge/skills` | **Agent skills** — the tool skills the engine offers a phase, who loaded each; and what one agent learned | `kind=pages\|learned` · `seat=` (learned) |
 | `#/knowledge/diaries` · `#/knowledge/diaries/{handle}` | **Agent diaries** — every agent's diary at a glance, each counted by the node holding the agent; one agent's diary and episodes *(needs Admin access)*. Handles live here as they do under `seats/` | |
-| `#/artifacts` · `#/artifacts/mine` · `#/artifacts/shared` · `#/artifacts/company` · `#/artifacts/agents` | **Artifacts**: For you (what the reader opened most lately and what was shared with them, their pins first), then Mine, Shared with you, Company and By agents, each the engine's `artifacts` listing under one scope, every row decided by `get_artifact`. A list or cards. No permission opens the workspace: a share alone admits a reader (D01), and the engine decides every artifact. An administrator also sees the company's storage against its quotas | `kind=html\|doc\|slides\|sheet` · `q=` · `sort=updated\|created\|title\|opened` · `shape=list\|cards` (all four kept across the sections) · `status=trashed` (Mine: the reader's own trash) |
+| `#/artifacts` · `#/artifacts/mine` · `#/artifacts/shared` · `#/artifacts/company` · `#/artifacts/agents` | **Artifacts**: For you (what the reader opened most lately and what was shared with them, their pins first), then Mine, Shared with you, Company and By agents, each the engine's `artifacts` listing under one scope, every row decided by `get_artifact`. The page bar holds the search and New; the toolbar under the sections holds the type, the order, the trash (Mine) and the shape, a list or cards. The reader's own artifacts are owned by "You", and Mine draws no owner or role column; the trash's rows say when each was trashed and when it is deleted for good. No permission opens the workspace: a share alone admits a reader (D01), and the engine decides every artifact. An administrator also sees the company's storage against its quotas, counted over every artifact, private ones and the trash included | `kind=html\|doc\|slides\|design\|dashboard\|sheet` · `q=` · `sort=updated\|created\|title\|opened` · `shape=list\|cards` (all four kept across the sections) · `status=trashed` (Mine: the reader's own trash) |
 | `#/artifacts/new` | **New artifact**: a native sheet, blank or from the Review sheet template, or a doc or a deck from the engine's starter, owned by the reader *(needs Artifacts access)*. A page is published by an agent's tool or the CLI, not typed here | `kind=sheet\|doc\|slides` · `template=review\|blank` · `item=` (the task it is made for, which lists it on that task's Artifacts card) |
 | `#/artifacts/{id}` | **Artifact**: addressed by its id, drawn under ONE slim bar in the frame's place ([An open artifact is the screen](#an-open-artifact-is-the-screen)). A page runs in a sandboxed frame on the artifact origin, edge to edge, a doc is rendered here tab by tab by the dashboard's own Markdown renderer with its outline beside it, Edit (the text in place, in the rich editor, and the tabs: add, rename, reorder, remove; each save a version, a raced save merged onto the newer one) and Print, a deck is drawn from its canonical tree with Edit, Grid and Present in the bar, a sheet is drawn from its schema. The bar holds the way back, the title (renamed in place by an editor), the version chip, the kind's views, who is here, and the controls that open a panel at the side: Details (what the page header and its fact line used to say), History (versions, Compare, Restore, labels and the change record), Data where it keeps any (rows, the schema editor and every write, with Undo), People (who is here, with Follow) and, from More, Settings (details, what it can do, its owner, the trash); Share and More close the bar. A reader with no relation is told it is not there or not theirs, in one card | `panel=details\|history\|data\|people\|settings` (pushes; the old `tab=` and `rail=people` are read as the panel they became and rewritten) · `expand=1` (the panel takes the workspace) · `version=` · `against=` · `lens=` · `sheet=` (which collection a sheet draws) · `doctab=` (which tab of a doc is on show) · `data=rows\|schema\|history` · `mode=grid\|present\|presenter` · `slide=` · `follow=` |
 | `#/spend` | **Spend › Overview**: the window's tokens against the one before, the monthly budget, the prompt-cache share and the median task; daily tokens by phase (or model, provider, seat, unit, worker); then by agent beside by provider and by team, and the three most expensive tasks beside the auxiliary model by purpose (tokens only) | `window=7d\|30d\|90d\|<from>/<to>` (whole company days, kept across the sections) · `group=phase\|model\|provider\|seat\|unit\|worker` |
@@ -2116,6 +2117,11 @@ show its ancestry beside the controls takes a line of its own.
   five pixels past the strip's end with nothing to say it was there. The
   object strip measures a twin of the kit's row — hidden, inert, clipped —
   since the kit draws a row whole, and hands the widths to the same fold.
+  **Both are the kit's underline row**: the section strip is `Tabs` in router
+  mode (a `nav` of links, the current one `aria-current="page"`), with "More"
+  and the reading note as its `trailing` node and its own root measured
+  through `ref`, so the tab, its figure, the accent bar under the current tab
+  and the focus ring are one control across a workspace and an object.
 - **The star is on every page that is one.** A workspace's own page is already
   a sidebar row, so the star there cannot keep it, but it is drawn,
   unavailable and saying "Already in the sidebar", rather than left out: left
@@ -3108,8 +3114,8 @@ On a phone Edit org folds into the bar's More menu, so Add seat stays in view.
 It is the same bar on every Agents section, Schedules included, where a found
 seat opens beside the list as it does on Teams.
 The section tabs carry the Roster, Teams and Schedules figures on every Agents
-section, as plain numbers in the tab's quiet ink — which is why Schedules no
-longer restates its count in the bar. The Agents sections open on their work,
+section, as the kit's count beside each name (the figure an object's own tabs
+draw), which is why Schedules no longer restates its count in the bar. The Agents sections open on their work,
 with no introduction above it.
 
 **The seat peek answers "who is this, and what is it doing".** A state card
@@ -3490,6 +3496,14 @@ content it read somewhere else:
   rather than as a link, and an image with a refused source renders as its alt
   text. An allowlist rather than a denylist: enumerating the bad schemes is
   wrong the moment a browser grows one more.
+- **A picture is shown from this origin only.** The dashboard's policy loads
+  images from its own origin (and `data:` and `blob:`), so an image whose
+  allowed address is on another host renders as a link to it, labelled by its
+  alt text, rather than as a picture the browser refuses; loading it would also
+  tell that host who reads the page and when. The rich editor shows the same
+  picture as its alt text (`shownImage` in `lib/markdown.ts`). A doc's pictures
+  are files of its version, fetched with the reader's credential, and are
+  unaffected. A link inside a link's label is that label's text.
 
 An outbound link opens in a new tab with `rel="noopener noreferrer"`; an
 in-app `#/` link does neither, because it *is* this application. A task
@@ -5704,7 +5718,7 @@ indistinguishable to the next reader from one whose declaration they failed to
 find.
 
 So the frame's own hover vocabulary carries it. The sidebar's rows,
-`.section-tab` and `.crumb-link` already answer a pointer by moving to
+the section tabs and `.crumb-link` already answer a pointer by moving to
 `--color-text-primary`, and a link does the same: in dark the accent ink (#a9b0ff) brightens
 toward near-white, in light the violet (#4f51bd) darkens toward near-black, so
 in BOTH themes hovering makes a link MORE prominent rather than merely
@@ -5810,8 +5824,13 @@ is one of the rules on this page applied to a tracker.
   somebody saved: mixed in beside an arranged query, the two read as the same
   kind of thing, which is why `view=` and `shape=` are two keys. The SIDEBAR
   drops them because a builtin carries no id, so there is no row to address.
-  The five shapes are the first row's own buttons; after a divider the strip is
-  the container's own tab, the views THIS reader pinned (★) plus whichever one
+  The five shapes are the first row's own segmented switch, and the strip is a
+  second one in its own well. Both are radio groups with manual activation,
+  because each choice is a URL change that re-runs the list: the arrows move
+  focus and Enter or Space chooses, so walking a row leaves no history entry
+  per keypress. A strip with more views than the row holds wraps inside its
+  well, as every kit segmented row does, and a long name is cut at 200px with
+  its title carrying the rest. The strip is the container's own list, the views THIS reader pinned (★) plus whichever one
   is running, **+ View** — the query on screen saved under a name, shared or
   kept to the person who saved it, with the shape as its type and without its
   paging or a calendar's month — and the inventory, as one glyph named **All
@@ -5834,9 +5853,8 @@ is one of the rules on this page applied to a tracker.
   the first lives in these docs and the empty state and the second is said
   when somebody tries to drag outside the manual order (and in the Sort
   control's title on a board). On a phone the
-  row is the sticky band, so it stays ONE line that scrolls sideways, like the
-  shape tabs above it: wrapped, it stood three rows tall and covered the
-  board's lane heads as the page scrolled under it. Both fade the edge with
+  row is the sticky band, so it stays ONE line that scrolls sideways: wrapped, it stood three rows tall and covered the
+  board's lane heads as the page scrolled under it. It fades the edge with
   more past it, as the page bar's controls do — cut at the edge with nothing
   said, "Ta" and "No g" read as broken labels — and what scrolls in the bar is
   the run of controls inside it, never the opaque band, which a fade would let

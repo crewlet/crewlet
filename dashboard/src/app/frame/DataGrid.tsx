@@ -37,14 +37,13 @@ import {
 } from "react";
 import { useParam } from "../router.tsx";
 import { peekHref, usePeek } from "./DetailRail.tsx";
-import { Button, EmptyState, cx } from "@crewlethq/ui";
+import { Button, EmptyState, cx, useMediaMatch } from "@crewlethq/ui";
 import { ChevronDownGlyph, ChevronUpGlyph } from "@crewlethq/icons/glyphs";
 // A GRID'S EMPTY MARK IS NAME-KEYED, because `empty.icon` is part of the prop
 // every screen fills in — so the name→drawing lookup stays in `~/ui/Icon.tsx`.
 import type { GlyphName } from "@crewlethq/icons/glyphs";
 import { Mark } from "~/ui/glyph.tsx";
 import { useKeymap } from "../keymap.ts";
-import { useMediaQuery } from "~/lib/media.ts";
 import { PHONE_BREAKPOINT } from "../layout.ts";
 
 export interface GridColumn<T> {
@@ -626,7 +625,7 @@ export function DataGrid<T>({
   // STATE, NOT A REF: a grid showing its empty state renders no wrap to
   // measure, and the observer below has to attach when the rows arrive.
   const [wrap, setWrap] = useState<HTMLDivElement | null>(null);
-  const phone = useMediaQuery(`(width < ${PHONE_BREAKPOINT}px)`);
+  const phone = useMediaMatch(`(width < ${PHONE_BREAKPOINT}px)`);
 
   // THE ROW THE RAIL IS OPEN ON IS MARKED, in every grid, by comparing
   // ADDRESSES: a row's link is its object's page, and the peek names an object

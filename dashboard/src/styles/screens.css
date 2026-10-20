@@ -708,11 +708,14 @@
 .tool-row.failed {
   border-color: color-mix(in srgb, var(--color-feedback-danger) 40%, transparent);
 }
-/* A task's artifacts, the design system's compact cards stacked in the rail. */
+/* A task's artifacts, the design system's compact cards stacked in the rail.
+   ONE TRACK AS WIDE AS THE RAIL: an `auto` track grows to a card's widest
+   content, and a long title cut on one line is as wide as its whole text. */
 .task-rail-artifacts {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--spacing-1);
-  margin: 0;
+  margin: 0 0 var(--spacing-1);
   padding: 0;
   list-style: none;
 }
@@ -3089,8 +3092,11 @@ a.prof-row:hover {
 
 /* THE OUTLINE TO THE LEFT AND THE PAGE BESIDE IT: the outline stays in view
    while the page scrolls, so where a reader is in a long page is always on
-   screen. On a phone the page is one column and the outline is not drawn. */
-.knowledge-read {
+   screen. On a phone the page is one column and the outline is not drawn.
+   A doc's tab reads the same way (`DocView`), so the two share these rules
+   rather than keeping two copies that drift. */
+.knowledge-read,
+.doc-read {
   display: grid;
   grid-template-columns: var(--size-shell-rail) minmax(0, var(--size-content-max));
   gap: var(--spacing-6);
@@ -3100,7 +3106,8 @@ a.prof-row:hover {
 /* THE WHOLE COLUMN FITS IN THE VIEW: the scroller's own height (`100cqb`)
    less the band above it and the screen's padding below, so a long outline
    scrolls inside it rather than past the fold. */
-.knowledge-read-side {
+.knowledge-read-side,
+.doc-read-side {
   position: sticky;
   top: var(--sticky-top);
   max-height: calc(100cqb - var(--sticky-top) - 2 * var(--spacing-5));
@@ -3108,10 +3115,12 @@ a.prof-row:hover {
   min-width: 0;
 }
 @container page (width < 760px) {
-  .knowledge-read {
+  .knowledge-read,
+  .doc-read {
     grid-template-columns: minmax(0, 1fr);
   }
-  .knowledge-read-side {
+  .knowledge-read-side,
+  .doc-read-side {
     display: none;
   }
 }
@@ -3464,11 +3473,6 @@ a.knowledge-reader-how:hover {
   min-width: 5rem;
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
-}
-/* THE TITLE IS SET AS THE PAGE WILL WEAR IT. */
-.knowledge-composer-title input {
-  font-size: var(--font-size-xl);
-  font-weight: var(--font-weight-semibold);
 }
 .knowledge-composer-count {
   display: flex;
@@ -4730,14 +4734,16 @@ details > summary.int-summary::-webkit-details-marker {
 
 /* ---- The first row: shapes, views, search and Display ------------------- */
 
-/* WHAT IS DRAWN, as one row of underlined tabs — the approved board's second
-   band. It is the top edge of this screen's content on every company, one day
-   old or a thousand, so it is drawn whether or not anybody has saved a view.
+/* WHAT IS DRAWN, as one row: the shapes and the saved views, each a kit
+   segmented well, then the tools. It is the top edge of this screen's content
+   on every company, one day old or a thousand, so it is drawn whether or not
+   anybody has saved a view.
 
    IT WRAPS RATHER THAN SCROLLS. A company's pinned views are a handful, and a
-   row that scrolled would hide the search box and the Display menu at its end —
-   the controls a reader reaches for most — behind a scroll nobody sees. At a
-   phone's width the tabs take one line and the rest wraps under them. */
+   row that scrolled would hide the search box and the Display menu at its end,
+   the controls a reader reaches for most, behind a scroll nobody sees. At a
+   phone's width the shapes and the views share a line and the tools wrap
+   under them. */
 .work-tabs {
   display: flex;
   align-items: center;
@@ -4749,49 +4755,14 @@ details > summary.int-summary::-webkit-details-marker {
   border-bottom: 1px solid var(--color-border-default);
   min-width: 0;
 }
-.work-tabs-group {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--spacing-4);
-  min-width: 0;
+/* A view's name is the reader's own words, so a long one is cut at a width
+   the strip can hold rather than taking the row; its title carries the rest. */
+.work-view-name {
+  display: block;
+  max-width: 200px;
 }
-/* A TAB IS ITS WORD AND ITS UNDERLINE: the pressed one is the ink step up and
-   the rule under it in the primary text colour — where the reader IS, drawn in
-   ink rather than in the accent, which the primary action at the head of the
-   page already spends. */
-.work-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 32px;
-  max-width: 220px;
-  padding: 0 2px;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  background: none;
-  color: var(--color-text-tertiary);
-  font: inherit;
-  font-size: var(--font-size-compact);
-  font-weight: var(--font-weight-medium);
-  cursor: pointer;
-  min-width: 0;
-}
-.work-tab:hover {
-  color: var(--color-text-primary);
-}
-.work-tab[aria-pressed="true"] {
-  color: var(--color-text-primary);
-  border-bottom-color: var(--color-text-primary);
-}
-.work-tabs-sep {
-  width: 1px;
-  height: 18px;
-  background: var(--color-border-strong);
-  flex: none;
-}
-/* The inventory, as the strip's last glyph: a square target at the tabs'
-   height, in the tabs' own quiet ink, lifted on hover as a tab is. */
+/* The inventory, as the strip's last glyph: a square target in the strip's
+   own quiet ink, lifted on hover as an option is. */
 .work-strip-more {
   flex: none;
   display: inline-flex;
@@ -4836,29 +4807,6 @@ details > summary.int-summary::-webkit-details-marker {
   flex: 0 1 220px;
   min-width: 140px;
 }
-/* ON A PHONE THE SHAPES ARE ONE LINE THAT SCROLLS, never four and a stray: a
-   wrapped row of five left Table alone under the other four, with the divider
-   hanging at the start of the next line. The row scrolls inside itself, so the
-   page never does; the divider goes, because the views start a line of their
-   own there. */
-@container page (width < 640px) {
-  .work-tabs > .work-tabs-group:first-child {
-    flex-wrap: nowrap;
-    max-width: 100%;
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-  .work-tabs > .work-tabs-group:first-child::-webkit-scrollbar {
-    display: none;
-  }
-  .work-tabs-sep {
-    display: none;
-  }
-  .work-tab {
-    flex: none;
-  }
-}
-
 /* ---- The arrangement at the bar's end ------------------------------------ */
 
 .work-arrange {
@@ -7262,22 +7210,27 @@ a.work-cal-chip {
 }
 
 /* A TABLE SCROLLS RATHER THAN OVERFLOWING ITS PANEL. A page's own table is
-   written for a document and can be wider than the column it lands in here. */
-.md-table {
+   written for a document and can be wider than the column it lands in here.
+   SCOPED TO `.prose.md` like every rule above: the same renderer draws a doc
+   and a Knowledge page into uilet's `Document`, and the rich editor names its
+   tables `md-table` too, so an unscoped rule here outranked the design
+   system's table there (a 12px table in a 14px body, its header in the
+   secondary ink). */
+.prose.md .md-table {
   overflow-x: auto;
 }
-.md-table table {
+.prose.md .md-table table {
   border-collapse: collapse;
   width: 100%;
   font-size: var(--font-size-xs);
 }
-.md-table th,
-.md-table td {
+.prose.md .md-table th,
+.prose.md .md-table td {
   padding: var(--spacing-1) var(--spacing-2);
   border-bottom: 1px solid var(--color-border-default);
   vertical-align: top;
 }
-.md-table th {
+.prose.md .md-table th {
   font-weight: 600;
   color: var(--color-text-secondary);
   white-space: nowrap;
@@ -10420,9 +10373,13 @@ a.live-row:focus-visible {
   }
 }
 
-.artifacts-trash-toggle {
-  display: flex;
-  justify-content: flex-end;
+/* THE TOOLBAR'S END: the trash and the shape, kept together at the far end
+   of whichever line they land on. */
+.artifacts-bar-end {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin-inline-start: auto;
 }
 
 /* A ROW'S NAME: the kind's glyph, the title cut to its track, and the pin. */
@@ -10457,16 +10414,11 @@ a.live-row:focus-visible {
   font-size: var(--font-size-xs);
 }
 
-.artifacts-usage {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(14rem, 100%), 1fr));
-  gap: var(--spacing-4);
-}
-
+/* AN ARTIFACT THE READER CANNOT OPEN, refused or in the trash: one
+   composition, the kit's empty state on the page, at the same place. */
 .artifacts-denied {
   display: flex;
   justify-content: center;
-  padding-block: var(--spacing-6);
 }
 
 /* AN ARTIFACT'S PAGE is the artifact, under one slim bar the page draws in
@@ -10474,14 +10426,21 @@ a.live-row:focus-visible {
    frame for the window's height (`useFillScreen`) and takes the content
    column edge to edge, so the workspace (the body and the one panel beside
    it) runs from the bar to the sheet's bottom edge: the body scrolls inside
-   itself, and a panel beside it stays in view however far it is read. */
+   itself, and a panel beside it stays in view however far it is read.
+   THE KIT'S CONTENT PADDING IS TAKEN BACK for this one screen, as the org
+   chart and the task page take it, rather than cancelled by a margin of the
+   wide padding: under a laptop's width the kit pads less, and that margin
+   pushed the body past the window's edges and under the bar. */
+.app .crewlet-app-shell__content:has(> .artifact-page) {
+  padding: 0;
+  gap: 0;
+}
 .artifact-page {
   display: flex;
   flex-direction: column;
-  height: calc(100% + var(--spacing-5) * 2);
+  height: 100%;
   min-width: 0;
   min-height: 0;
-  margin: calc(-1 * var(--spacing-5));
 }
 .artifact-loading,
 .artifact-trashed {
@@ -10515,6 +10474,9 @@ a.live-row:focus-visible {
 }
 .artifact-workspace {
   flex: 1 1 auto;
+  /* THE BODY'S INSET, the shell's own step: the wide one, and on a phone the
+     16px every artifact surface and the shell keep there (below). */
+  --artifact-inset: var(--spacing-5);
 }
 /* THE BODY IS THE SCROLLER, and so it is the size container its views
    measure the view by (`100cqb`), as the frame's own scroller is. A page's
@@ -10525,30 +10487,58 @@ a.live-row:focus-visible {
   --sticky-top: 0px;
   /* THE VIEW A KIND DRAWS IN: the body's height inside its padding. A view
      that fills the screen subtracts only its own bar from it, since nothing
-     of the page's stands above it any more. */
-  --artifact-view: calc(100cqb - 2 * var(--spacing-5));
+     of the page's stands above it any more. The unit is read where the
+     property is used, against this body as the nearest size container, and
+     a container unit measures the content box, so the padding is already
+     out of it: subtracting it here took it off twice. */
+  --artifact-view: 100cqb;
   display: flex;
   flex-direction: column;
   gap: var(--spacing-4);
-  padding: var(--spacing-5);
+  padding: var(--artifact-inset);
   scrollbar-gutter: stable;
 }
+/*
+ * ON A PHONE the body stands 16px in from both edges, as the shell does: it
+ * folded to 12px. Its scrollbar gutter is reserved on BOTH edges there, so the
+ * two sides match whatever scrollbar the device draws: an overlay scrollbar
+ * (a phone's) reserves nothing on either side, and a classic one (a narrow
+ * desktop window) the same on each, where `stable` alone reserved it at the
+ * end edge only and stood the content 11px further from the right than the
+ * left.
+ */
+@container crewlet-artifact-workspace (width < 640px) {
+  .artifact-body {
+    --artifact-inset: var(--spacing-4);
+    scrollbar-gutter: stable both-edges;
+  }
+}
+/* A PAGE'S FRAME MEETS THE BAR AND THE SHEET SQUARE: a page that paints its
+   own background would otherwise show the body through rounded corners. */
 .artifact-body--html {
   padding: 0;
   gap: 0;
+  /* THE FRAME SCROLLS ITSELF and the body never does, so a reserved gutter
+     was a dead strip down the frame's end edge. */
+  scrollbar-gutter: auto;
 }
 .artifact-body--html > .artifact-frame-box {
   flex: 1 1 auto;
   min-height: 0;
+  gap: 0;
 }
-.artifact-body--html .artifact-frame,
-.artifact-body--html .artifact-frame-skeleton {
+.artifact-body--html .artifact-frame {
   flex: 1 1 auto;
   height: auto;
   min-height: 20rem;
+  border-radius: 0;
 }
+/* The note under an older version is the frame's footer: one line on a
+   hairline, so it reads as part of the page's chrome, not of the page. */
 .artifact-body--html .artifact-frame-box > .artifact-note {
+  flex: none;
   padding: var(--spacing-2) var(--spacing-4);
+  border-top: 1px solid var(--color-border-default);
 }
 /* A PANEL'S BODY is the screen's measuring stick for what it holds, as the
    content column is for a screen: History's list, the data's grid and the
@@ -10557,12 +10547,26 @@ a.live-row:focus-visible {
 .artifact-panel-body {
   container: page / inline-size;
   min-width: 0;
+  /* ONE RHYTHM BETWEEN A PANEL'S SECTIONS, in every panel: they ran 16 in
+     Details, 20 in History, 12 in Data, and nothing at all between a sheet's
+     note and its Changes. */
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+.artifact-panel-body > .artifact-data {
+  gap: var(--spacing-4);
 }
 /* The details: the artifact's own sentence, then its facts and the link. */
 .artifact-details {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-4);
+}
+/* THE LINK UNDER THE FACTS, at their start edge: it is the panel's one action
+   and reads with the facts above it, not as a form's submit at the end. */
+.artifact-details-actions {
+  display: flex;
 }
 .artifact-details-description {
   margin: 0;
@@ -10589,14 +10593,14 @@ a.live-row:focus-visible {
   gap: var(--spacing-2);
   min-width: 0;
 }
-.artifact-frame,
-.artifact-frame-skeleton {
+.artifact-frame {
   height: max(28rem, calc(100cqb - var(--sticky-top) - 14rem));
   min-width: 0;
 }
 
-/* A DOC: its tabs and actions in one bar, then the outline beside the tab on
-   show, as a Knowledge page reads; one column on a narrow page. */
+/* A DOC: its tabs in one bar, then the outline beside the tab on show, laid
+   out by the Knowledge page's own rules (`.doc-read`, under "A page"); one
+   column on a narrow page. */
 .doc-view {
   display: flex;
   flex-direction: column;
@@ -10614,27 +10618,24 @@ a.live-row:focus-visible {
   flex: 1 1 20rem;
   min-width: 0;
 }
-.doc-read {
-  display: grid;
-  grid-template-columns: var(--size-shell-rail) minmax(0, var(--size-content-max));
-  gap: var(--spacing-6);
-  align-items: start;
-  min-width: 0;
+/* A tab with no outline to draw takes the row on its own; an empty one
+   takes the whole view, so its empty state stands in the middle of it as
+   every other kind's does, rather than in the middle of a prose column. */
+.doc-read--bare {
+  grid-template-columns: minmax(0, var(--size-content-max));
 }
+.doc-read--blank {
+  grid-template-columns: minmax(0, 1fr);
+}
+.doc-read--blank > .doc-read-page {
+  max-width: none;
+}
+/* THE OUTLINE FITS THE ARTIFACT'S VIEW: the body is the size container, and
+   `--artifact-view` (its `100cqb`) is already the height inside its inset, so
+   nothing of the inset is taken off again. The page's own rule above takes
+   the screen's padding off a different container. */
 .doc-read-side {
-  position: sticky;
-  top: var(--sticky-top);
-  max-height: calc(100cqb - var(--sticky-top) - 2 * var(--spacing-5));
-  overflow-y: auto;
-  min-width: 0;
-}
-@container page (width < 760px) {
-  .doc-read {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .doc-read-side {
-    display: none;
-  }
+  max-height: calc(var(--artifact-view) - var(--sticky-top));
 }
 .doc-read-page {
   min-width: 0;
@@ -10656,11 +10657,13 @@ a.live-row:focus-visible {
   align-items: center;
 }
 /* WHILE EDITING, THE TABS STAY REACHABLE ON A PHONE: they are what a writer
-   renames, reorders, adds and removes, so they stack above the text. */
+   renames, reorders, adds and removes, so they stack above the text, on the
+   text's own measure so the two share a right edge. */
 @container page (width < 760px) {
   .doc-read--editing .doc-read-side {
     display: block;
     position: static;
+    max-width: var(--size-measure);
     max-height: none;
   }
 }
@@ -10685,6 +10688,18 @@ a.live-row:focus-visible {
   gap: var(--spacing-3);
   min-width: 0;
 }
+/* THE SHEET TAKES THE ROOM IT IS GIVEN: the view is a column item of the
+   artifact body, and the Data panel's rows one of the panel body (uilet's
+   ArtifactPanel), so each may shrink and its grid gives way (uilet's
+   fit="content") until Add row sits on the edge. The other Data views are
+   forms and lists that keep their height and scroll the panel. */
+.artifact-sheet {
+  min-height: 0;
+}
+.artifact-data--rows,
+.artifact-panel-body:has(> .artifact-data--rows) {
+  min-height: 0;
+}
 .artifact-sheet-bar,
 .artifact-data-bar {
   display: flex;
@@ -10696,12 +10711,13 @@ a.live-row:focus-visible {
 .artifact-data-bar-end {
   margin-inline-start: auto;
 }
-/* A GRID IS AS TALL AS ITS ROWS (fit="content") up to what the view holds
-   below its own bar (in the Data panel, below the panel's head and the
-   data bar), so twelve rows draw no empty slab under them and Add row sits
-   under the last row on a phone too. */
+/* A GRID IS AS TALL AS ITS ROWS (fit="content") up to the room its column
+   leaves it (above), so twelve rows draw no empty slab under them and Add row
+   sits on the view's edge under two thousand. Never shorter than 16rem of
+   rows, where it has that many: a short window scrolls the view instead. */
 .artifact-grid {
-  --crewlet-sheet-max-height: max(16rem, calc(var(--artifact-view, 100cqb - 8rem) - 3rem));
+  --crewlet-sheet-max-height: none;
+  --crewlet-sheet-min-height: 16rem;
 }
 
 /* A HISTORY IS ONE LINE PER CHANGE: who, what, when, and its one action. */
@@ -10720,6 +10736,11 @@ a.live-row:focus-visible {
   padding-block: var(--spacing-2);
   border-bottom: 1px solid var(--color-border-default);
   font-size: var(--font-size-compact);
+}
+/* Rules run BETWEEN changes: the last one closes on the list's own edge (a
+   dialog's foot, a section's end) rather than drawing a second line there. */
+.artifact-history-row:last-child {
+  border-bottom: 0;
 }
 .artifact-history-who {
   color: var(--color-text-primary);
@@ -10753,14 +10774,24 @@ a.live-row:focus-visible {
 .artifact-history-reason {
   color: var(--color-text-tertiary);
 }
+/* NARROW (a phone, a side panel), WHO AND WHEN SHARE THE FIRST LINE and what
+   they did runs the width under it. Placed by line, not left to the flow: the
+   sentence spanning the row pushed the time onto a third line of its own. */
 @container page (width < 640px) {
   .artifact-history-row {
     grid-template-columns: minmax(0, 1fr) auto;
+    row-gap: var(--spacing-1);
   }
   .artifact-history-row--action {
     grid-template-columns: minmax(0, 1fr) auto 4.5rem;
   }
+  .artifact-history-who,
+  .artifact-history-when,
+  .artifact-history-action {
+    grid-row: 1;
+  }
   .artifact-history-what {
+    grid-row: 2;
     grid-column: 1 / -1;
   }
 }
@@ -10768,7 +10799,7 @@ a.live-row:focus-visible {
 .artifact-history-tab {
   display: grid;
   grid-template-columns: minmax(16rem, 22rem) minmax(0, 1fr);
-  gap: var(--spacing-5);
+  gap: var(--spacing-4);
   align-items: start;
 }
 /* TWO COLUMNS DOWN TO A SMALL LAPTOP: one column below 720 px, where a
@@ -10836,7 +10867,7 @@ a.live-row:focus-visible {
 .artifact-settings {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-5);
+  gap: var(--spacing-4);
   max-width: var(--size-measure);
 }
 .artifact-form {
@@ -10874,9 +10905,13 @@ a.live-row:focus-visible {
    with how many changes it will apply at the start of the band. */
 .artifact-schema-foot {
   position: sticky;
-  bottom: 0;
+  /* A sticky edge stops at the panel body's padding, which left a band under
+     the foot that the form scrolled through; it sits on the panel's own
+     bottom edge instead, padded by that inset above and below its buttons. */
+  bottom: calc(-1 * var(--crewlet-artifact-panel-inset, 0px));
   z-index: var(--z-index-sticky);
-  padding-block: var(--spacing-3);
+  padding-block: var(--crewlet-artifact-panel-inset, var(--spacing-3));
+  margin-block-end: calc(-1 * var(--crewlet-artifact-panel-inset, 0px));
   border-top: 1px solid var(--color-border-default);
   background: var(--color-surface-background);
 }
@@ -10947,8 +10982,42 @@ a.live-row:focus-visible {
   align-items: center;
   gap: var(--spacing-2) var(--spacing-3);
 }
+/* A NARROW FORM (a phone, the panel beside the sheet) keeps each column on
+   tracks too, rather than stacking seven full-width controls: the name with
+   its remove slot, the key under it, the type beside who writes it, and the
+   two flags on one line under those. */
 @container artifact-schema-form (width < 44rem) {
-  .artifact-column-head,
+  .artifact-column-head {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) var(--size-row-sm);
+    grid-template-areas:
+      "name name remove"
+      "key key key"
+      "type write write"
+      "required hidden hidden";
+    row-gap: var(--spacing-2);
+  }
+  .artifact-column-name {
+    grid-area: name;
+  }
+  .artifact-column-key {
+    grid-area: key;
+    margin-block-start: calc(-1 * var(--spacing-1));
+  }
+  .artifact-column-type {
+    grid-area: type;
+  }
+  .artifact-column-write {
+    grid-area: write;
+  }
+  .artifact-column-required {
+    grid-area: required;
+  }
+  .artifact-column-hidden {
+    grid-area: hidden;
+  }
+  .artifact-column-remove {
+    grid-area: remove;
+  }
   .artifact-option {
     display: flex;
     flex-wrap: wrap;
@@ -11006,15 +11075,36 @@ a.live-row:focus-visible {
 .slides-edit > .slides-merged {
   grid-column: 1 / -1;
 }
+/* The strip scrolls itself (uilet's own), bounded here: as tall as the view
+   beside the stage, and a row as wide as the column under it on a phone. */
 .slides-strip {
   max-height: max(24rem, var(--artifact-view, 100cqb));
-  overflow: auto;
 }
 .slides-main {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-3);
   min-width: 0;
+}
+/* UNDER THE STAGE: where the reader is in the deck, and whether the slide on
+   the stage is one Present skips. */
+.slides-stage-caption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-3);
+  margin: calc(var(--spacing-1) * -1) 0 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+.slides-stage-position {
+  font-variant-numeric: tabular-nums;
+}
+.slides-stage-hidden {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  color: var(--color-text-secondary);
 }
 .slides-panel {
   display: grid;
@@ -11028,14 +11118,18 @@ a.live-row:focus-visible {
   gap: var(--spacing-2);
 }
 .slides-notes {
+  display: grid;
+  gap: var(--spacing-2);
   max-width: var(--size-measure);
+}
+.slides-notes > p {
+  margin: 0;
+}
+.slides-notes-body {
   padding: var(--spacing-3);
   border-radius: var(--radius-md);
   background: var(--color-surface-subtle);
   white-space: pre-wrap;
-}
-.slides-notes p {
-  margin: 0;
 }
 .slides-conflicts {
   display: flex;
@@ -11047,7 +11141,6 @@ a.live-row:focus-visible {
     grid-template-columns: minmax(0, 1fr);
   }
   .slides-strip {
-    order: 2;
     max-height: none;
   }
 }
@@ -11059,14 +11152,49 @@ a.live-row:focus-visible {
    The show's height follows its content, and its scroll margins are what that
    room keeps clear. */
 .slides-show {
+  position: relative;
   display: flex;
   flex-direction: column;
   scroll-margin-top: var(--sticky-top);
   scroll-margin-bottom: var(--spacing-4);
-  background: var(--color-surface-inset);
 }
+/* THE SHOW TAKES THE KEYS, and says so: a ring a little outside its edge,
+   in the page's padding, so a keyboard reader sees the arrows will move the
+   slides and the ring never draws over the slide itself. Full screen is the
+   room's screen, where the show is all there is: the ring is transparent
+   there, and forced colors still paints it. */
+.slides-show:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: var(--spacing-1);
+}
+.slides-show:fullscreen:focus-visible {
+  outline-color: transparent;
+}
+/* FULL SCREEN IS A PROJECTOR: the slide fills the screen on black, and its
+   controls float over its foot, put away with the cursor while the pointer
+   rests. */
 .slides-show:fullscreen {
   height: 100%;
+  background: var(--color-projection-letterbox);
+}
+.slides-show:fullscreen .slides-show-bar {
+  position: absolute;
+  inset-inline: 0;
+  bottom: var(--spacing-5);
+  pointer-events: none;
+  transition: opacity var(--motion-duration-moderate) var(--motion-easing-out);
+}
+.slides-show:fullscreen .slides-show-bar > * {
+  pointer-events: auto;
+}
+.slides-show[data-idle] {
+  cursor: none;
+}
+.slides-show[data-idle] .slides-show-bar {
+  opacity: 0;
+}
+.slides-show[data-idle] .slides-show-bar > * {
+  pointer-events: none;
 }
 .slides-show-slide[data-transition="fade"] {
   animation: slides-fade var(--motion-duration-moderate) var(--motion-easing-out);
@@ -11088,13 +11216,7 @@ a.live-row:focus-visible {
 .slides-show-bar {
   display: flex;
   justify-content: center;
-  align-items: center;
-  gap: var(--spacing-2);
-  padding: var(--spacing-2);
-}
-.slides-show-count {
-  color: var(--color-text-secondary);
-  font-variant-numeric: tabular-nums;
+  padding-top: var(--spacing-2);
 }
 .slides-presenter {
   height: max(30rem, var(--artifact-view, 100cqb));
@@ -11256,15 +11378,19 @@ a.live-row:focus-visible {
   }
 }
 
-/* A DESIGN: the canvas fills the view beside its list of boards. */
+/* A DESIGN: the canvas fills the view beside its list of boards. The view is
+   the body's whole height, so the canvas takes what its bar and any notice
+   leave of it, down to the body's own padding. */
 .design-view {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-3);
   min-width: 0;
+  height: max(28rem, var(--artifact-view, 100cqb));
 }
 .design-bar {
   display: flex;
+  flex: none;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--spacing-2);
@@ -11274,42 +11400,25 @@ a.live-row:focus-visible {
   color: var(--color-text-tertiary);
   font-size: var(--font-size-compact);
 }
-/* The board list is as wide as its longest name, and no wider than 12rem, so
-   the canvas keeps the room at a laptop's width. */
+/* The board list (the design system's LayersList) is as wide as its longest
+   name, and no wider than 12rem, so the canvas keeps the room at a laptop's
+   width; it scrolls on its own when a design has more boards than the canvas
+   is tall. */
 .design-body {
   display: grid;
+  flex: 1 1 auto;
   grid-template-columns: fit-content(12rem) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   gap: var(--spacing-3);
   min-width: 0;
+  min-height: 0;
 }
-.design-boards ol {
-  margin: 0;
-  padding: 0;
-  list-style: none;
+.design-canvas {
+  min-width: 0;
+  min-height: 0;
 }
-.design-board-link {
-  width: 100%;
-  padding: var(--spacing-1) var(--spacing-2);
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--color-text-secondary);
-  font: inherit;
-  font-size: var(--font-size-compact);
-  text-align: left;
-  cursor: pointer;
-}
-.design-board-link:hover {
-  background: var(--color-surface-hover);
-  color: var(--color-text-primary);
-}
-.design-board-link:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: var(--size-focus-ring-inset-offset);
-}
-.design-canvas,
 .design-skeleton {
-  height: max(28rem, calc(var(--artifact-view, 100cqb) - 3.5rem));
+  height: max(28rem, var(--artifact-view, 100cqb));
   min-width: 0;
 }
 @media (width < 640px) {
@@ -11328,8 +11437,7 @@ a.live-row:focus-visible {
   gap: 0;
   height: 100%;
 }
-:is(.design-board-frame, .design-opened-frame, .design-print-frame)
-  :is(.artifact-frame, .artifact-frame-skeleton) {
+:is(.design-board-frame, .design-opened-frame, .design-print-frame) .artifact-frame {
   height: 100%;
 }
 :is(.design-board-frame, .design-opened-frame, .design-print-frame) .artifact-note {
@@ -11343,7 +11451,8 @@ a.live-row:focus-visible {
 }
 .design-opened--fit {
   display: grid;
-  height: 70vh;
+  width: 100%;
+  max-height: 70vh;
 }
 .design-opened--actual {
   height: 70vh;
@@ -11414,6 +11523,14 @@ a.live-row:focus-visible {
 .dashboard-filter {
   min-width: 12rem;
 }
+/* ON A PHONE EACH FILTER TAKES THE ROW, and Refresh the row under them: at
+   their least width two filters left one alone on a row and the next beside
+   Refresh, a ragged pair of rows that read as two groups. */
+@container (max-width: 30rem) {
+  .dashboard-filter {
+    flex: 1 1 100%;
+  }
+}
 .dashboard-body {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(16rem, 20rem);
@@ -11433,18 +11550,35 @@ a.live-row:focus-visible {
   flex-direction: column;
   min-width: 0;
 }
+/* A FIGURE FILLS ITS FRAME'S BODY, so a chart with nothing to draw says so
+   in the middle of the area its plot would have filled.
+
+   A STAT OR A METER STANDS AT THE HEAD OF ITS BODY, under a title held at two
+   lines in a row (WidgetFrame's holdTitle), so every number of a row shares
+   one baseline: a meter's maximum and bar hang under its number where a
+   stat has the air before its citation. Stood on the foot of the frame, a
+   meter's number rode its bar a line above the stats beside it. */
 .dashboard-figure {
   min-width: 0;
+  height: 100%;
 }
-/* A STAT OR A METER STANDS ON THE FOOT OF ITS FRAME, over the citation, so
-   the values of a row share one baseline whether a title or a label above
-   them took one line or two, and a frame the board makes taller than its
-   figure holds its air above the figure, never as a gap under it. */
-.dashboard-figure:is([data-figure="stat"], [data-figure="meter"]) {
+/* A DATASET'S ROWS ARE A LIST TABLE: 32px rows over the 13px cells, the
+   rhythm every table of an artifact keeps (a sheet's row), set through the
+   compact table's own hooks: the inset is what the row leaves around a line
+   of text and its 1px rule, so the row is the token's height and no more
+   (the header takes the same inset). At the list row's 36px a widget's table
+   was the one table of the artifacts screens that stood taller. Our sheets
+   load after the design system's, so this binding outranks the table's own
+   at equal weight. */
+.dashboard-rows {
+  --crewlet-data-table-row-height: var(--size-sheet-row);
+  --crewlet-data-table-cell-pad-y: calc((var(--size-sheet-row) - 1lh - 1px) / 2);
+}
+/* A meter: the number as a stat draws it, and the bar a step under it. */
+.dashboard-meter {
   display: flex;
   flex-direction: column;
-  justify-content: flex-end;
-  height: 100%;
+  gap: var(--spacing-2);
 }
 /* A share: the bar, and under it the legend naming each part and its value. */
 .dashboard-share {

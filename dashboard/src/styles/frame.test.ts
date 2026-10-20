@@ -202,6 +202,16 @@ describe("the frame's layout", () => {
   // Asserted in the SHEET because it cannot be asserted anywhere else: jsdom
   // computes no layout, so the suites that render a grid stay green through
   // every value of this, and a screenshot is the only other witness.
+  // THE LIST TABLE'S HEAD IS 11/500 UPPERCASE, as the kit's DataTable draws
+  // every other list table: the gallery's and Audit's heads were the one
+  // pair at 400, lighter than the cells under them.
+  test("a grid's column heads are the list table's head: the 2xs step, medium, uppercase", () => {
+    const head = block(sheet("frame.css"), ".grid-th");
+    expect(head).toMatch(/font-size:\s*var\(--font-size-2xs\)/);
+    expect(head).toMatch(/font-weight:\s*var\(--font-weight-medium\)/);
+    expect(head).toMatch(/text-transform:\s*uppercase/);
+  });
+
   test("one grid owns the columns and every row adopts them", () => {
     // THE WIDE LAYOUT ALONE. Below the phone breakpoint a row is deliberately
     // NOT a row — the heads go and each cell draws its own label — so the
@@ -1783,5 +1793,19 @@ test("the engine's row takes its control marks from the kit alone, and the user 
   // lift are asserted in uilet; no sheet of ours draws a second copy.
   for (const name of ["base.css", "components.css", "frame.css", "screens.css"]) {
     expect(sheet(name), name).not.toMatch(/\.user-block/);
+  }
+});
+
+// THE KIT'S CONTENT PADDING IS ONE STEP WIDE AND ANOTHER NARROW, so a screen
+// that cancels it with a negative margin of the wide step overshoots under a
+// laptop's width: the artifact page did, and on a phone its body ran 8px past
+// both edges of the window and 4px under its bar. A screen that draws to the
+// sheet's edges takes the padding back on the column (`:has`), as the org
+// chart and the artifact page do.
+test("no screen cancels the content column's padding with a negative margin", () => {
+  for (const name of ["frame.css", "screens.css"]) {
+    expect(sheet(name), name).not.toMatch(
+      /margin[^;:]*:\s*calc\(\s*-1\s*\*\s*var\(--spacing-5\)\s*\)/,
+    );
   }
 });

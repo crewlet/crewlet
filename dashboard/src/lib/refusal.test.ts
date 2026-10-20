@@ -39,6 +39,20 @@ test("a refusal that names what to change says it, with its hint, as sentences",
   );
 });
 
+// AN ADDRESS LEADING THE ENGINE'S DETAIL IS A VALUE (`internal/api/auth`'s
+// cross-site refusal names the origin first), so it is not capitalised.
+test("a refusal whose detail opens with an address keeps the address as written", () => {
+  const err = new RestError(403, {
+    error: "csrf_origin",
+    message: "This request came from a page this deployment does not serve.",
+    detail: "http://localhost:5199 isn't an address for this deployment.",
+    hint: "Set this deployment's address in `api.external_url`, and any other hostname in `api.auth.allowed_origins`.",
+  });
+  expect(refusalText(err)).toBe(
+    "http://localhost:5199 isn't an address for this deployment. Set this deployment's address in `api.external_url`, and any other hostname in `api.auth.allowed_origins`.",
+  );
+});
+
 test("a throttled attempt says how long, from its Retry-After", () => {
   const err = new RestError(429, { error: "throttled", message: "Too many failed attempts." }, 1);
   expect(refusalText(err)).toBe("Too many failed attempts. Try again in 1 second.");

@@ -95,3 +95,13 @@ test("column rows share bounded tracks and the foot sticks to the view", () => {
   expect(head).toMatch(/grid-template-columns:/);
   expect(block(".artifact-schema-foot")).toMatch(/position:\s*sticky/);
 });
+
+test("a store with no collections says what one is and how to add it", () => {
+  render(
+    <ToastProvider>
+      <SchemaEditor detail={detail} collections={[]} role="owner" onSaved={() => {}} />
+    </ToastProvider>,
+  );
+  expect(screen.getByText("No collections yet")).toBeTruthy();
+  expect(screen.getByText("Lowercase letters, digits and underscores.")).toBeTruthy();
+});

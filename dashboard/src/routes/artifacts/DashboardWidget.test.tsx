@@ -69,7 +69,11 @@ test("a meter shows what it measures, its count and its maximum", () => {
     [{ outcome: "failed" }, { outcome: "failed" }, { outcome: "rolled_back" }],
     "Failed deploys",
   );
-  expect(screen.getByText("3 of 5")).toBeTruthy();
+  // The count at the tile's step, what it is out of under it, and the bar,
+  // which a screen reader hears it all from once.
+  expect(screen.getByText("3")).toBeTruthy();
+  expect(screen.getByText("of 5")).toBeTruthy();
+  expect(screen.getByRole("meter").getAttribute("aria-valuetext")).toBe("3 of 5");
   expect(screen.getAllByText("Failed deploys").length).toBeGreaterThan(0);
 });
 
@@ -145,11 +149,12 @@ test("a table shows a tracker status in Work's words, never its id", () => {
   expect(screen.getByText("In progress")).toBeTruthy();
   expect(screen.queryByText("in_progress")).toBeNull();
   // Each column is held at what it holds, so the table never fits it narrower.
-  // "In progress" is eleven characters: 11 x 7.5 + 36 = 118.5, held at 119px.
+  // "In progress" is eleven characters: 11 x 7.5 = 82.5, the cell's 28px and,
+  // as the last column, the frame's 4px more: held at 115px.
   const heading = screen
     .getAllByRole("columnheader")
     .find((h) => /status/i.test(h.textContent ?? ""));
-  expect(heading?.style.width).toBe("119px");
+  expect(heading?.style.width).toBe("115px");
 });
 
 test("a chart over days labels its axis with dates and no time of day", () => {
@@ -166,5 +171,108 @@ test("a chart over days labels its axis with dates and no time of day", () => {
   );
   const text = document.body.textContent ?? "";
   expect(text).not.toMatch(/\d{1,2}:\d{2}(:\d{2})?\s?(AM|PM)?/);
-  expect(text).toMatch(/2026/);
+  expect(text).toMatch(/Oct/);
+});
+
+test("every widget kind says one phrase when its dataset answered no rows", () => {
+  const columns = [
+    { key: "day", type: "date" as const },
+    { key: "n", type: "number" as const },
+    { key: "label", type: "text" as const },
+  ];
+  for (const widget of [
+    { id: "t", type: "timeseries" as const, title: "T", x: "day", y: ["n"], w: 6 },
+    { id: "c", type: "columns" as const, title: "C", x: "day", y: ["n"], w: 6 },
+    { id: "a", type: "activity" as const, title: "A", x: "day", y: ["n"], w: 6 },
+    { id: "b", type: "bars" as const, title: "B", label: "label", value: "n", w: 6 },
+    { id: "s", type: "share" as const, title: "S", label: "label", value: "n", w: 6 },
+    { id: "r", type: "table" as const, title: "R", columns: ["label", "n"], w: 6 },
+  ]) {
+    draw(widget, columns, []);
+    expect(screen.getAllByText("Nothing in this window").length).toBeGreaterThan(0);
+    cleanup();
+  }
+});
+
+test("a widget's table offers no column resizing, its widths being its content's", () => {
+  draw(
+    { id: "w", type: "table", title: "Open work", columns: ["key"], w: 8 },
+    [{ key: "key", type: "text" }],
+    [{ key: "FAIR-1" }],
+  );
+  expect(document.querySelector(".crewlet-data-table__resizer")).toBeNull();
+  expect(document.querySelector(".dashboard-rows")).not.toBeNull();
+});
+
+test("a table draws every absent value as the empty mark, a priority of none included", () => {
+  draw(
+    { id: "w", type: "table", title: "Open work", columns: ["key", "priority", "due"], w: 8 },
+    [
+      { key: "key", type: "text" },
+      { key: "priority", type: "text", words: "tracker_priority" },
+      { key: "due", type: "date" },
+    ],
+    [{ key: "ENG-1", priority: "none", due: null }],
+  );
+  expect(screen.queryByText("None")).toBeNull();
+  expect(document.querySelectorAll(".dashboard-rows .crewlet-empty-value")).toHaveLength(2);
+});
+
+test("a chart of one named column draws no key, and a split of one band names it", () => {
+  const columns = [
+    { key: "day", type: "date" as const },
+    { key: "n", type: "number" as const, label: "Deploys" },
+    { key: "team", type: "text" as const },
+  ];
+  const rows = [
+    { day: "2026-10-01", n: 3, team: "Platform" },
+    { day: "2026-10-02", n: 5, team: "Platform" },
+  ];
+  draw(
+    { id: "c", type: "columns", title: "Deploys per day", x: "day", y: ["n"], w: 6 },
+    columns,
+    rows,
+  );
+  expect(document.querySelector(".crewlet-legend")).toBeNull();
+  cleanup();
+  draw(
+    { id: "c", type: "columns", title: "Deploys per day", x: "day", y: ["n"], by: "team", w: 6 },
+    columns,
+    rows,
+  );
+  expect(
+    within(document.querySelector(".crewlet-legend") as HTMLElement).getByText("Platform"),
+  ).toBeTruthy();
+});
+
+test("in a row, a stat's and a meter's frame hold their title at two lines", () => {
+  render(
+    <ToastProvider>
+      <DashboardWidget
+        boardTitle="Pulse"
+        widget={{ id: "s", type: "stat", title: "Open", dataset: "ds", agg: "count", w: 3 }}
+        dataset={{
+          id: "ds",
+          title: "Deploys",
+          source: "store",
+          shape: { columns: [] },
+          freshness: { mode: "live", collection: "ds" },
+        }}
+        answer={{
+          artifact: "a",
+          version: 1,
+          dataset: "ds",
+          status: "ready",
+          table: { columns: [], rows: [{}] },
+        }}
+        status="ready"
+        detail={undefined}
+        asOf={undefined}
+        onCite={undefined}
+        onFocus={() => {}}
+        inRow
+      />
+    </ToastProvider>,
+  );
+  expect(document.querySelector(".crewlet-widget-frame--hold-title")).not.toBeNull();
 });

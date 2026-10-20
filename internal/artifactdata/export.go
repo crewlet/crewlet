@@ -17,8 +17,10 @@ import (
 // THE CSV EXPORT of one collection: a header row naming the document id, every
 // column (a schemaless collection's every top-level field, sorted) and the
 // row's attribution, then one row per live document the reader may see, in id
-// order. Option ids are written as their labels and a list as its elements
-// joined by "; ", because a spreadsheet is what reads it.
+// order. A PERSON READS IT: a declared column is headed by its label (its key
+// where it has none), option ids are written as their labels, a person cell as
+// the seat's name ([Names]), and a list as its elements joined by "; ". No
+// path reads an export back in, so nothing keys on the stored field names.
 //
 // A CELL A SPREADSHEET WOULD RUN AS A FORMULA is written with a leading
 // apostrophe: a value somebody typed as `=HYPERLINK(...)` into a shared sheet
@@ -41,8 +43,15 @@ type ExportSource interface {
 		cursor string, limit int) (DocPage, error)
 }
 
-// Export writes one collection as CSV to w, under the collection's read rule.
-func Export(ctx context.Context, r ExportSource, id artifacts.ID, rd Reading, collection string, w io.Writer) error {
+// Names answers the name a person cell's seat handle is written as: the
+// seat's display name in the running org, or the handle itself for a seat the
+// org does not hold (a retired one). Nil writes every handle as it is.
+type Names func(handle string) string
+
+// Export writes one collection as CSV to w, under the collection's read rule,
+// with person cells named by names.
+func Export(ctx context.Context, r ExportSource, id artifacts.ID, rd Reading, collection string,
+	names Names, w io.Writer) error {
 	schema, err := r.Schema(ctx, id)
 	if err != nil {
 		return err
@@ -57,9 +66,15 @@ func Export(ctx context.Context, r ExportSource, id artifacts.ID, rd Reading, co
 	if err != nil {
 		return err
 	}
+	if names == nil {
+		names = func(handle string) string { return handle }
+	}
 	out := csv.NewWriter(w)
-	header := append([]string{"id"}, keys...)
-	header = append(header, "created_by", "created_at", "updated_by", "updated_at", "version")
+	header := []string{"ID"}
+	for _, k := range keys {
+		header = append(header, cell(columnTitle(coll, k)))
+	}
+	header = append(header, "Created by", "Created at", "Updated by", "Updated at", "Version")
 	if err := out.Write(header); err != nil {
 		return fmt.Errorf("artifactdata: write the export of %s: %w", collection, err)
 	}
@@ -70,7 +85,7 @@ func Export(ctx context.Context, r ExportSource, id artifacts.ID, rd Reading, co
 			return err
 		}
 		for _, d := range page.Docs {
-			row, err := exportRow(coll, keys, d)
+			row, err := exportRow(coll, keys, names, d)
 			if err != nil {
 				return err
 			}
@@ -129,8 +144,17 @@ func exportKeys(ctx context.Context, r ExportSource, id artifacts.ID, rd Reading
 	return keys, nil
 }
 
+// columnTitle is a field column's header: a declared column's label, or its
+// key where it has none (and every field of a schemaless collection).
+func columnTitle(c *collState, key string) string {
+	if col, declared := c.columns[key]; declared && col.Label != "" {
+		return col.Label
+	}
+	return key
+}
+
 // exportRow is one document's CSV row.
-func exportRow(c *collState, keys []string, d Doc) ([]string, error) {
+func exportRow(c *collState, keys []string, names Names, d Doc) ([]string, error) {
 	v, err := canon.Parse(d.Fields, canon.MaxDepth)
 	if err != nil {
 		return nil, fmt.Errorf("artifactdata: decode %s/%s: %w", c.spec.Name, d.ID, err)
@@ -146,7 +170,7 @@ func exportRow(c *collState, keys []string, d Doc) ([]string, error) {
 			row = append(row, "")
 			continue
 		}
-		row = append(row, cell(render(c.columns[k], val)))
+		row = append(row, cell(render(c.columns[k], names, val)))
 	}
 	return append(row, cell(d.CreatedBy.Name), d.CreatedAt.UTC().Format(time.RFC3339),
 		cell(d.UpdatedBy.Name), d.UpdatedAt.UTC().Format(time.RFC3339),
@@ -154,7 +178,7 @@ func exportRow(c *collState, keys []string, d Doc) ([]string, error) {
 }
 
 // render is one value as a spreadsheet cell reads it.
-func render(col artifacts.Column, v canon.Value) string {
+func render(col artifacts.Column, names Names, v canon.Value) string {
 	label := func(id string) string {
 		for _, o := range col.Options {
 			if o.ID == id && o.Label != "" {
@@ -165,8 +189,11 @@ func render(col artifacts.Column, v canon.Value) string {
 	}
 	switch v.Kind {
 	case canon.KindString:
-		if hasOptions(col.Type) {
+		switch {
+		case hasOptions(col.Type):
 			return label(v.String)
+		case col.Type == artifacts.ColumnPerson:
+			return names(v.String)
 		}
 		return v.String
 	case canon.KindNumber:
@@ -183,7 +210,7 @@ func render(col artifacts.Column, v canon.Value) string {
 				scalar = false
 				break
 			}
-			parts = append(parts, render(col, e))
+			parts = append(parts, render(col, names, e))
 		}
 		if scalar {
 			return strings.Join(parts, "; ")

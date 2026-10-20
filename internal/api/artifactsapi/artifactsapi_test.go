@@ -513,6 +513,82 @@ func TestTheShareDialogGrantsRevokesAndListsAccess(t *testing.T) {
 	}
 }
 
+// A SHARE NAMES A SEAT OR A UNIT THE COMPANY HOLDS, OR THE COMPANY. A login
+// named as a seat (`token:maya`) was answered 200 and written, counted in
+// Maya's Shared listing and admitted by nothing, since the authority table
+// matches a seat share against a principal's seat alone; a seat or a unit
+// nobody holds was written the same way. Each is refused with the sentence
+// that says why, and nothing is written, on the share and on a create alike.
+func TestAShareNamesOnlyAnAudienceTheCompanyHolds(t *testing.T) {
+	t.Parallel()
+	g := newRig(t, true)
+	for _, c := range []struct{ audience, says string }{
+		{`{"kind":"seat","id":"token:maya"}`, "is not a seat handle"},
+		{`{"kind":"seat","id":"maya.ortiz"}`, "is not a seat handle"},
+		{`{"kind":"seat","id":"ghost"}`, `the company has no seat "ghost"`},
+		{`{"kind":"unit","id":"NOPE"}`, `the company has no unit "NOPE"`},
+		{`{"kind":"link","id":"x"}`, "not one this build shares with"},
+	} {
+		grant := `{"audience":` + c.audience + `,"role":"viewer"}`
+		w := g.do(person("jane"), "PUT", at(page, "/shares"), grant, keyed()...)
+		if w.Code != http.StatusUnprocessableEntity || !strings.Contains(fields(t, w)["detail"].(string), c.says) {
+			t.Errorf("sharing with %s: %d %s", c.audience, w.Code, w.Body)
+		}
+		create := `{"kind":"html","title":"Plan","upload":"u-1","files":[{"path":"index.html","upload":true}],` +
+			`"shares":[` + grant + `]}`
+		if w := g.do(person("dana"), "POST", "/artifacts", create, keyed()...); w.Code != http.StatusUnprocessableEntity {
+			t.Errorf("creating shared with %s: %d %s", c.audience, w.Code, w.Body)
+		}
+	}
+	if calls := g.writes.all(); len(calls) != 0 {
+		t.Errorf("a refused share was written: %+v", calls)
+	}
+	if len(g.pipeline.creates) != 0 {
+		t.Errorf("a refused create reached the pipeline: %+v", g.pipeline.creates)
+	}
+	for _, ok := range []string{`{"kind":"seat","id":"bob"}`, `{"kind":"unit","id":"ENG"}`, `{"kind":"company"}`} {
+		if w := g.do(person("jane"), "PUT", at(page, "/shares"), `{"audience":`+ok+`,"role":"viewer"}`,
+			keyed()...); w.Code != http.StatusOK {
+			t.Errorf("sharing with %s: %d %s", ok, w.Code, w.Body)
+		}
+	}
+}
+
+// A SHARE STORED BEFORE THE GRANT RULE IS THE OWNER'S TO SEE, CHANGE AND
+// WITHDRAW. A login named as a seat reaches nobody, and the rule refuses a new
+// one; the one an earlier build wrote is listed in the dialog's access, its
+// role may change, and DELETE by its text form removes it, never a record the
+// API could neither honour nor remove.
+func TestAShareStoredBeforeTheGrantRuleIsListedAndWithdrawn(t *testing.T) {
+	t.Parallel()
+	g := newRig(t, true)
+	full, err := g.svc.Gate().Access(t.Context(), person("jane"), legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored := artifacts.Audience{Kind: artifacts.AudienceSeat, ID: "token:maya"}
+	if !slices.ContainsFunc(full.Shares, func(s artifactsapi.ShareAccess) bool {
+		return s.Audience == stored && s.Invalid
+	}) {
+		t.Errorf("the owner's access does not list the stored share as invalid: %+v", full.Shares)
+	}
+	change := `{"audience":{"kind":"seat","id":"token:maya"},"role":"commenter"}`
+	if w := g.do(person("jane"), "PUT", at(legacy, "/shares"), change, keyed()...); w.Code != http.StatusOK {
+		t.Errorf("changing the stored share's role: %d %s", w.Code, w.Body)
+	}
+	if w := g.do(person("jane"), "DELETE", at(legacy, "/shares/seat:token:maya"), ``, keyed()...); w.Code != http.StatusOK {
+		t.Fatalf("withdrawing the stored share: %d %s", w.Code, w.Body)
+	}
+	calls := g.writes.all()
+	if len(calls) != 2 || calls[0].arg.(artifacts.Share).Audience != stored || calls[1].arg.(artifacts.Audience) != stored {
+		t.Errorf("the writes were %+v", calls)
+	}
+	// The same audience is still refused as a NEW grant on another artifact.
+	if w := g.do(person("jane"), "PUT", at(page, "/shares"), change, keyed()...); w.Code != http.StatusUnprocessableEntity {
+		t.Errorf("a new share to the login: %d %s", w.Code, w.Body)
+	}
+}
+
 // A READER BELOW EDITOR SEES THE OWNER AND A COUNT, NOT THE AUDIENCE, and not
 // the elevated reads in the history.
 func TestAViewerSeesTheOwnerAndACountNotTheAudience(t *testing.T) {

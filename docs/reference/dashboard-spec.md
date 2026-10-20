@@ -181,14 +181,29 @@ any other is refused.
 | `group` | Widgets under a title | `title`, `tone` (`none`, `purple`, `cyan`, `green`, `amber`, `rose`, `blue`), `children` (no group inside a group) |
 
 `format` is `number` (grouped, up to two decimals), `integer`, `percent` (a
-ratio: 0.25 is 25%) or `compact` (12.3k). `unit` is at most 16 bytes.
+ratio: 0.25 is 25%) or `compact` (12.3k). `unit` is at most 16 bytes. A stat's
+or a meter's number is read at a glance, so it is `compact` unless `format`
+says otherwise; a chart's scale is shortened from a thousand (`7.5k`), without
+the unit, and its tooltip reads each value in the widget's format and unit. A
+meter is drawn as the number, what it is out of, and a bar against the maximum
+that turns to the warning hue from three quarters of it and to the danger hue
+at it.
+
+A chart tells four series apart by hue and draws a fifth in the residual grey.
+Past five, the first four keep their hues and the rest are summed into one
+series named Other: the `y` columns in the order written, a `by` split's values
+the biggest over the window first, and a `share`'s parts in the order its rows
+come. The dataset's rows are untouched, so its CSV and preview carry every
+series. A chart of no rows says so in a sentence in its place.
 
 A `table` draws its rows in the order its dataset answers them, and a reader
 does not re-sort them: sort and cut the rows in the dataset (a calculation's
 `sort` and `limit`), since sorting the first eight rows by another column would
 read as an order over every row. Each column is as wide as what it holds; the
 one column of free text in words, the longest such (a title), takes the room
-the others leave and ends in an ellipsis when there is less.
+the others leave and ends in an ellipsis when there is less. A date is written
+as a reader writes one (`Sep 1`, the year only when it is not this one, and an
+instant with its time), a boolean as Yes or No.
 
 ## Reading a board
 

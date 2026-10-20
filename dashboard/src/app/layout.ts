@@ -64,6 +64,7 @@
  */
 
 import { breakpoint, density, size, spacing } from "@crewlethq/tokens";
+import { useMediaMatch } from "@crewlethq/ui";
 import type { SectionRenderer } from "./nav.ts";
 
 const px = (value: string): number => Number.parseFloat(value);
@@ -80,13 +81,23 @@ export const PHONE_BREAKPOINT = px(breakpoint.phone);
  * a keyboard, and a wide tablet still has none.
  *
  * A KEYCAP IS A HINT FOR A KEYBOARD, so the frame draws none here
- * (`lib/media.ts`'s `useKeyHints`): the drawer's search drew "Ctrl + K" on a
+ * ([useKeyHints]): the drawer's search drew "Ctrl + K" on a
  * phone, a key the reader does not have, and the keycap took the room its own
  * label needed. Asked this way round — "is it touch?" rather than "is there a
  * keyboard?" — because no media feature can see a keyboard, and a browser
  * that answers neither question keeps its hints.
  */
 export const TOUCH_MEDIA = "(hover: none) and (pointer: coarse)";
+
+/**
+ * Whether the frame draws its KEYCAP hints: everywhere but where the reader's
+ * primary input is touch ([TOUCH_MEDIA]), where a keycap names a key the
+ * reader does not have. The keys still work for a reader who attaches a
+ * keyboard; only the hint is withheld.
+ */
+export function useKeyHints(): boolean {
+  return !useMediaMatch(TOUCH_MEDIA);
+}
 
 /** The peek's resting width, and the range a reader may drag it through. */
 export const PEEK_WIDTH = 420;

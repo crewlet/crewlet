@@ -35,10 +35,11 @@ const refetch = vi.fn();
 
 vi.mock("~/lib/useQuery.ts", () => ({ useQuery: vi.fn() }));
 vi.mock("~/lib/artifacts/useDataStore.ts", () => ({ useDataStore: vi.fn(() => null) }));
+const roomOthers = vi.hoisted(() => [] as unknown[]);
 vi.mock("~/lib/artifacts/room.ts", () => ({
   useArtifactRoom: () => ({
     state: { kind: "joined" },
-    others: [],
+    others: roomOthers,
     roster: { members: [] },
   }),
 }));
@@ -60,9 +61,10 @@ vi.mock("~/lib/artifacts/people.ts", async () => {
   };
   return { ...actual, useArtifactPeople: () => people };
 });
+const reader = vi.hoisted(() => ({ handle: "", login: "", owner: "" }));
 vi.mock("~/lib/viewer.ts", async () => {
   const actual = await vi.importActual<typeof import("~/lib/viewer.ts")>("~/lib/viewer.ts");
-  return { ...actual, useViewer: () => ({ handle: "" }) };
+  return { ...actual, useViewer: () => reader };
 });
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
@@ -166,6 +168,10 @@ beforeEach(() => {
   }) as never);
   vi.mocked(useDataStore).mockReturnValue(null);
   onMode.mockClear();
+  reader.handle = "";
+  reader.login = "";
+  reader.owner = "";
+  roomOthers.length = 0;
 });
 
 afterEach(() => {
@@ -235,6 +241,45 @@ test("each panel has its key, and the key closes what it opened", () => {
   expect(screen.getByText("The share dialog")).toBeTruthy();
 });
 
+// AN OLDER VERSION WAS ONLY A TINTED CHIP: nothing said why a deck's Edit
+// had gone, or offered the way back.
+test("an older version says so, with the way back to the latest", () => {
+  mount(`#/artifacts/${ID}?version=1`);
+  expect(screen.getByText(/You are looking at version 1, an older version/)).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Show the latest" }));
+  expect(location.hash).toBe(`#/artifacts/${ID}`);
+  expect(screen.queryByText(/an older version/)).toBeNull();
+});
+
+// A READER SIGNED IN WITH NO SEAT saw a People panel of everybody but
+// themselves: "You" was drawn only from a seat.
+test("the People panel starts with the reader, seat or none", () => {
+  reader.login = "token:review";
+  mount(`#/artifacts/${ID}?panel=people`);
+  const panel = screen.getByRole("complementary", { name: "People here" });
+  expect(within(panel).getByText("You")).toBeTruthy();
+});
+
+// THE ROOM NAMES A SEATLESS READER BY THEIR LOGIN, so their own second tab is
+// theirs: compared against the seat alone, it was drawn as somebody else
+// they could follow.
+test("a seatless reader's own other tab is counted beside You", () => {
+  reader.login = "token:review";
+  reader.owner = "token:review";
+  roomOthers.push({
+    session: "s-2",
+    seat: "token:review",
+    kind: "operator",
+    activity: "viewing",
+    focus: {},
+    at: "2026-10-18T10:00:00Z",
+  });
+  mount(`#/artifacts/${ID}?panel=people`);
+  const panel = screen.getByRole("complementary", { name: "People here" });
+  expect(within(panel).getByText("You, 2 tabs")).toBeTruthy();
+  expect(within(panel).queryByText("token:review")).toBeNull();
+});
+
 test("Data is a control and a key only where the artifact keeps data", () => {
   mount(`#/artifacts/${ID}`);
   expect(within(screen.getByRole("banner")).queryByRole("button", { name: "Data" })).toBeNull();
@@ -256,6 +301,9 @@ test("a sheet's version names nothing a reader sees change, so it draws no chip"
   detail = { ...detail, kind: "sheet" } as ArtifactDetail;
   mount(`#/artifacts/${ID}`);
   expect(screen.queryByRole("button", { name: /^Versions:/ })).toBeNull();
+  // AND ITS PANEL PROMISES NO VERSIONS: it is the sheet's History.
+  fireEvent.click(tool("History"));
+  expect(screen.getByRole("complementary", { name: "History" })).toBeTruthy();
 });
 
 test("Escape from inside a panel closes it and hands focus back to its control", () => {

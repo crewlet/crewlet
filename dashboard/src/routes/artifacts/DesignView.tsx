@@ -8,6 +8,11 @@
  * framed, at most twelve at once. A board opens at its own size in a dialog,
  * still framed and still ticketed.
  *
+ * THE LIST OF BOARDS BESIDE IT IS THE CANVAS'S OTHER HALF, as a design tool's
+ * layers are: the selection is held here and handed to both, so the board
+ * picked on the canvas is the one marked in the list, and a board picked in
+ * the list is selected on the canvas and brought into view.
+ *
  * THE CANVAS WORKS AS A DESIGN TOOL'S DOES, and all of it is the design
  * system's: a floating palette of tools (Move, Hand, and while editing Text
  * and Sticky), each with its key, the pointer the tool means, hairline board
@@ -34,12 +39,14 @@ import {
   Button,
   Callout,
   CanvasBoard,
+  LayersList,
   Modal,
   SegmentedControl,
   Skeleton,
   SlideStage,
   useToast,
   type CanvasBoardItem,
+  type CanvasBoardSelection,
   type CanvasHandle,
 } from "@crewlethq/ui";
 import type { ArtifactDetail, ArtifactSource, ArtifactVersionSummary } from "~/protocol/index.ts";
@@ -160,10 +167,13 @@ function Design({
   // else publishes, and its save is merged onto their version.
   const editable = primary && publish.can && (version === detail.head_number || draft !== null);
   const boards = useMemo(() => boardItems(shown), [shown]);
+  const boardLayers = useMemo(() => boards.map((b) => ({ id: b.id, label: b.title })), [boards]);
   const notes = useMemo(() => noteItems(shown), [shown]);
 
   const { at } = presence;
   const [active, setActive] = useState<string | null>(null);
+  const [selected, setSelected] = useState<CanvasBoardSelection | null>(null);
+  const selectedBoard = selected?.kind === "board" ? selected.id : null;
   useEffect(() => {
     if (primary) at(active ? { region: boardRegion(active) } : null, editing && dirty);
   }, [at, primary, active, editing, dirty]);
@@ -239,8 +249,10 @@ function Design({
     }
   };
 
-  const reveal = (b: CanvasBoardItem) =>
+  const pick = (b: CanvasBoardItem) => {
+    setSelected({ kind: "board", id: b.id });
     canvasRef.current?.focusRegion({ x: b.x, y: b.y, width: b.w, height: b.h });
+  };
 
   const frameOf = (b: CanvasBoardItem, className: string, onReady?: () => void): ReactNode => (
     // Keyed by board, so another board opened is a frame of its own.
@@ -315,30 +327,17 @@ function Design({
         </Callout>
       )}
       <div className="design-body">
-        <nav className="design-boards" aria-label="Boards">
-          <ol>
-            {boards.map((b) => (
-              <li key={b.id}>
-                {/* A click selects the board and brings it into view; Enter or a
-                    double-click opens it at its own size, which the name says. */}
-                <button
-                  type="button"
-                  className="design-board-link"
-                  aria-label={`${b.title}, press Enter or double-click to open`}
-                  onClick={() => reveal(b)}
-                  onDoubleClick={() => openBoard(b.id)}
-                  onKeyDown={(event) => {
-                    if (event.key !== "Enter") return;
-                    event.preventDefault();
-                    openBoard(b.id);
-                  }}
-                >
-                  {b.title}
-                </button>
-              </li>
-            ))}
-          </ol>
-        </nav>
+        <LayersList
+          className="design-boards"
+          label="Boards"
+          items={boardLayers}
+          selected={selectedBoard}
+          onSelect={(id) => {
+            const b = boards.find((x) => x.id === id);
+            if (b) pick(b);
+          }}
+          onOpen={openBoard}
+        />
         <div className="design-canvas">
           <CanvasBoard
             label={shown.title || detail.title}
@@ -354,6 +353,8 @@ function Design({
             onNoteCreate={placeNote}
             onOpen={openBoard}
             onActivate={setActive}
+            selected={selected}
+            onSelectedChange={setSelected}
             canvasRef={canvasRef}
           />
         </div>
@@ -388,9 +389,14 @@ function Design({
         {openedBoard &&
           (openedSize === "fit" ? (
             // FITTED: the page lays itself out at its board's own size and
-            // is scaled as a whole into the dialog, letterboxed, so it reads
-            // as the board drawn on the canvas does, only larger.
-            <div className="design-opened design-opened--fit">
+            // is scaled as a whole into the dialog, so it reads as the board
+            // drawn on the canvas does, only larger. The stage takes the
+            // board's own proportions, so it is letterboxed only where the
+            // window is too short for it, never on a narrow one.
+            <div
+              className="design-opened design-opened--fit"
+              style={{ aspectRatio: `${openedBoard.w} / ${openedBoard.h}` }}
+            >
               <SlideStage
                 label={`${openedBoard.title}, ${openedBoard.w} by ${openedBoard.h}`}
                 roleDescription="artboard"
