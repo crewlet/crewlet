@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tools/argval"
@@ -277,7 +278,7 @@ func (d ArtifactDeps) link(id artifacts.ID) string {
 // focused where the call named. A person's call (an operator's assistant) is
 // not presence: their own tab is.
 func (d ArtifactDeps) present(c artifactCaller, id artifacts.ID,
-	activity artifacts.PresenceActivity, focus artifacts.Focus) {
+	activity presence.Activity, focus presence.Focus) {
 
 	if d.Presence == nil || !c.agent() || c.principal.Seat == "" {
 		return
@@ -286,7 +287,8 @@ func (d ArtifactDeps) present(c artifactCaller, id artifacts.ID,
 	if c.turn != nil {
 		turn = c.turn.RunID
 	}
-	d.Presence.Touch(id, c.principal.Seat, turn, activity, focus)
+	d.Presence.Touch(presence.ArtifactRoom(id), presence.Agent{Seat: c.principal.Seat,
+		Turn: turn, Activity: activity, Focus: focus})
 }
 
 // orgFor is the chart a call reads: the turn's, or the surface's own.

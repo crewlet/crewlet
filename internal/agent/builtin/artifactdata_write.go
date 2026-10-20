@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/caveat"
+	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -112,8 +113,8 @@ func (t *writeArtifactData) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			return dataFailure(ctx, t.Name(), err), nil
 		}
 	}
-	t.d.touch(a.c, a.head.ID, artifacts.PresenceEditing,
-		artifacts.Focus{Collection: ops[0].Collection, Doc: ops[0].Doc})
+	t.d.touch(a.c, a.head.ID, presence.Editing,
+		presence.Focus{Collection: ops[0].Collection, Doc: ops[0].Doc})
 	res, err := t.d.data.Store.Write(ctx, t.d.art.call(a.c, a.stamp, a.dec.Elevated),
 		a.head.ID, artifacts.DataWrite{Ops: ops})
 	if err != nil {
@@ -329,7 +330,7 @@ func (t *setArtifactSchema) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return refusedBy(tools.RefusalForbidden, artifactdata.ErrGone, fmt.Sprintf("%s: the "+
 			"artifact is in the trash. Nothing was changed.", t.Name())), nil
 	}
-	t.d.touch(a.c, a.head.ID, artifacts.PresenceEditing, artifacts.Focus{})
+	t.d.touch(a.c, a.head.ID, presence.Editing, presence.Focus{})
 	res, err := t.d.data.Store.Configure(ctx, t.d.art.call(a.c, a.stamp, a.dec.Elevated),
 		a.head.ID, collections)
 	if err != nil {
