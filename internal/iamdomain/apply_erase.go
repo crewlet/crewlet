@@ -98,13 +98,24 @@ func erasedInvitationsStatement(among string) string {
 }
 
 // erasedTrailStatement selects the trail rows a removal erases: every row
-// about the removed person, and every issue's row about the address the
-// removal releases, which names no person ([Applier.applyDirectory]).
+// about the removed person, and every row filed under the address the removal
+// releases — an invitation's issue and its cancellation, which name no person
+// ([Applier.applyDirectory]) — each arm a seek of its own index.
+//
+// THE ADDRESS ARM DOES NOT ALSO ASK THAT THE ROW NAME NOBODY. It used to, and
+// that one term was what the planner sought on: every trail row that names no
+// person, read through the person index, for a removal that wanted the few
+// filed under one address — while the index on the object, which is exactly
+// that address, was reached by no statement at all. Nothing is lost by leaving
+// it out: only the invitation's two records are filed under an address, and
+// neither names a person, so every row the arm selects is one it selected
+// before; and an address is held by one person at a time, so a row under it
+// that named somebody would be about the person being removed.
 func erasedTrailStatement(among string) string {
 	return `
 		SELECT id, document FROM iam_history
 		WHERE person_id = ?
-		   OR (person_id = '' AND object_kind = '` + historyObjectAddress + `'
+		   OR (object_kind = '` + historyObjectAddress + `'
 		       AND object_id IN ` + among + `)`
 }
 
