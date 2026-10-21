@@ -14,9 +14,10 @@ import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { focusSearchTarget } from "~/app/searchTarget.ts";
+import { CHAT_SEARCH_PAGE } from "~/contract/chat.ts";
 import { SEARCH_QUERY_MAX } from "~/contract/wire.ts";
 import { mountChat } from "~/test/chat.tsx";
-import { Search } from "./Search.tsx";
+import { FULL_PAGE, Search } from "./Search.tsx";
 
 const position = { stream: "CREWLET_CHAT_LOG", generation: 1, seq: 9 };
 
@@ -242,4 +243,42 @@ test("an empty ranking from an index still building says so, not that nothing ma
   });
   expect(await screen.findByText(/Still indexing/)).toBeTruthy();
   expect(screen.queryByText(/Nothing matched/)).toBeNull();
+});
+
+// THE PAGE IS THE ENGINE'S, AND A FULL ONE SAYS SO. The engine answers at most
+// `CHAT_SEARCH_PAGE` hits and has no next page; asked for more, it clamped
+// without a word, and a full page read as everything that matched. So the
+// screen asks for exactly that page, and under a full one says there may be
+// more and how to narrow it — and under a page that is not full, says nothing
+// of the kind. Mutation: ask with the transcript's PAGE again and the first
+// assertion goes red; drop the full-page sentence and the second does.
+test("a search asks for the engine's page, and a full page says there may be more", async () => {
+  const full = Array.from({ length: CHAT_SEARCH_PAGE }, (_, i) => ({
+    message_id: `m-${i}`,
+    channel_id: "room-1",
+    author: "bo",
+    snippet: `launch note ${i}`,
+    at: "2026-01-01T00:00:00Z",
+    score: 1,
+  }));
+  location.hash = `#/chatlet/search?q=${encodeURIComponent("launch")}`;
+  const { socket } = mountChat(
+    <Search channels={[general as never]} viewer="ada" nameOf={(handle) => handle} />,
+    {
+      answer: async (what) =>
+        what === "chat_search" ? { hits: full, searched: 3, read_level: "session", position } : {},
+    },
+  );
+  await screen.findByText(/launch note 0$/);
+  const limits = socket.query.mock.calls
+    .filter(([what]) => what === "chat_search")
+    .map(([, params]) => (params as Record<string, unknown> | undefined)?.limit);
+  expect(limits).toEqual([CHAT_SEARCH_PAGE]);
+  expect(screen.getByText(new RegExp(FULL_PAGE.slice(0, 30)))).toBeTruthy();
+});
+
+test("a page that is not full says nothing of more matches", async () => {
+  mount("launch");
+  await screen.findByText(/the launch moved to Thursday/);
+  expect(screen.queryByText(new RegExp(FULL_PAGE.slice(0, 30)))).toBeNull();
 });

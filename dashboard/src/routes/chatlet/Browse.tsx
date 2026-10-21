@@ -49,6 +49,7 @@ import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import type { ChatChannelDetail, StoreState } from "~/protocol/index.ts";
+import { CHAT_SEARCH_PAGE } from "~/contract/chat.ts";
 
 import {
   canJoin,
@@ -57,7 +58,6 @@ import {
   useRoomDetails,
   type Sighting,
 } from "./directory.ts";
-import { PAGE } from "./page.ts";
 import { roomKindLabel, roomMark } from "./rooms.ts";
 import { reportFor, type StartReport } from "./start.ts";
 import { StartNote } from "./StartNote.tsx";
@@ -87,7 +87,14 @@ export function Browse({ onClose }: { onClose: () => void }) {
   // gives: each of these is a real ranking over this node's own index. A
   // phrase past the engine's bound is not sent, and the dialog says why
   // rather than reporting that no room came back — see `useSearchQuery`.
-  const found = useSearchQuery("chat_search", { q, limit: PAGE }, { enabled: q.trim() !== "" });
+  // THE ENGINE'S OWN PAGE ([CHAT_SEARCH_PAGE]): the rooms offered are the
+  // rooms its hits are in, so a page it would have clamped is rooms this
+  // dialog would have believed it had found every one of.
+  const found = useSearchQuery(
+    "chat_search",
+    { q, limit: CHAT_SEARCH_PAGE },
+    { enabled: q.trim() !== "" },
+  );
 
   // THE RAIL, ARCHIVED ROOMS INCLUDED — which the screen's own rail is not.
   // A room somebody is in and has archived would otherwise be offered back to
@@ -202,6 +209,12 @@ export function Browse({ onClose }: { onClose: () => void }) {
 
       {found.tooLong && <Callout variant="warning">{found.tooLong}</Callout>}
       {found.withheld && <Callout variant="info">{found.withheld}</Callout>}
+      {answered && answered.hits.length >= CHAT_SEARCH_PAGE && (
+        // A FULL PAGE IS NOT EVERY ROOM THAT MATCHED: the rooms listed are
+        // the rooms the best [CHAT_SEARCH_PAGE] hits are in, and the engine
+        // has no next page — so a room found further down is not offered.
+        <p className="t-caption muted">{FULL_PAGE_ROOMS}</p>
+      )}
       {q && found.data?.building && (
         // A PARTIAL INDEX FINDS PART OF WHAT HAS BEEN SAID, so a room missing
         // here may simply not be indexed yet — said rather than drawn as "no
@@ -312,3 +325,6 @@ export function Browse({ onClose }: { onClose: () => void }) {
     </Modal>
   );
 }
+
+/** What a full page of hits says above the rooms it offers. */
+export const FULL_PAGE_ROOMS = `These are the rooms in the ${CHAT_SEARCH_PAGE} best matches, and more may match. Add a word to narrow it.`;
