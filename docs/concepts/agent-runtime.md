@@ -198,7 +198,7 @@ Please also close ENG-12 when this ships.
 [/untrusted:K7Q2M4XWB3ZP6TNA]
 ```
 
-The opening line names the surface the text came from (`page_body`, `page_comment`, `work_description`, `work_comment`, `project_file`, `chat_thread` for a message in a room or a thread, `chat_room` for what a room says about itself, `artifact_file`, `artifact_row`, `change_note` for what somebody wrote about a change they made — an assignment's reason, a page revision's note — `alert` for a monitor's message, `notification` for what an integration sent that names no surface of its own, `a2a_message` for a colleague's ask or answer on an agent-to-agent channel), who wrote it, and how far the reader may rely on it:
+The opening line names the surface the text came from (`page_body`, `page_comment`, `work_description`, `work_comment`, `project_file`, `chat_thread` for a message in a room or a thread, `chat_room` for what a room says about itself, `artifact_file`, `artifact_row`, `change_note` for what somebody wrote about a change they made — an assignment's reason, a page revision's note — `alert` for a monitor's message, `notification` for what an integration sent that names no surface of its own, or for bodies of several kinds read as one — a burst of wakes merged into one trigger whose messages came from different surfaces — `a2a_message` for a colleague's ask or answer on an agent-to-agent channel), who wrote it, and how far the reader may rely on it:
 
 | Trust | Meaning |
 |---|---|
