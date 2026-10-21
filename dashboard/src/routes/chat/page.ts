@@ -16,7 +16,10 @@ import { packPosition } from "./cursor.ts";
  *
  * ONE CONSTANT for the transcript, the thread and the mention feed, because
  * they are the same question — how much conversation is a page — and three
- * numbers would be three answers that drift.
+ * numbers would be three answers that drift. A SEARCH IS ANOTHER QUESTION, a
+ * ranking with no next page, and asks for the engine's own page instead
+ * (`contract/chat.ts`'s `CHAT_SEARCH_PAGE`): asked for this one, the engine
+ * clamped it to forty without a word.
  */
 export const PAGE = 50;
 

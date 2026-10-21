@@ -130,6 +130,7 @@ var contract = []Entry{
 	{"CHANNEL_NAME_PATTERN", ReadScalar, "internal/chat.TestTheDashboardsChannelNameGrammarIsTheEngines"},
 	{"TYPING_THROTTLE_MS", ReadScalar, "internal/presence.TestTheDashboardReassertsTypingInsideTheEnginesExpiry"},
 	{"PENDING_REASK_MS", ReadScalar, "internal/chat.TestTheDashboardAsksAPendingPostAgainAfterTheApplierHadItsWait"},
+	{"CHAT_SEARCH_PAGE", ReadScalar, "internal/search.TestTheDashboardAsksForTheChatSearchPageTheEngineServes"},
 
 	// presence.ts
 	{"PRESENCE_ROOMS", ReadLiteral, "internal/presence.TestTheDashboardSpeaksThePresenceVocabulary"},
