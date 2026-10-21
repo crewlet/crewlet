@@ -141,7 +141,9 @@ describe("a note the turn refuses on its bounds", () => {
     fireEvent.change(within(dialog).getByLabelText("Note"), { target: { value: "use staging" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "Send note" }));
     await waitFor(() => expect(within(dialog).getByText(ACT_ERRORS[code])).toBeTruthy());
-    expect(within(dialog).queryByText(ACT_ERRORS.conflict)).toBeNull();
+    // A COLLISION'S WORDS ARE LOOKED FOR IN THE TEXT: a `conflict` is said in
+    // the engine's words, and has no fixed sentence of the dashboard's to find.
+    expect(dialog.textContent).not.toMatch(/look again|retry/i);
     expect(dialog.textContent).not.toMatch(/collided/);
   });
 });

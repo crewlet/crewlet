@@ -1215,9 +1215,10 @@ var codes = map[Code]string{
 		"what was entered, then try again.",
 	CodeStaleVersion: "Somebody changed this after you read it, so nothing was " +
 		"written. Read it again and decide from what it says now.",
-	// A RACE OR A STATE, and it stands alone as well: a conflict nobody has
-	// worded for a person carries no detail (ADR-0060), so it says how to
-	// find out which rather than pointing at a detail it does not carry.
+	// A RACE OR A STATE, and it stands alone as well: the dashboard draws
+	// this sentence for every conflict nobody has worded for a person, so it
+	// says how to find out which rather than pointing at a detail it does not
+	// carry.
 	CodeConflict: "This collided with another change, or with the state the " +
 		"object is in now, and nothing was written. Read it again to see " +
 		"which, and what has to change before the same request lands.",

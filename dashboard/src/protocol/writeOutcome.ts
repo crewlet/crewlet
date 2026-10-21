@@ -168,13 +168,14 @@ export function writeLanded(body: unknown): WriteLanded {
 
 /**
  * The refusals that say the screen the press was made from is OUT OF DATE:
- * somebody else changed the object since it was drawn (`stale_version`,
- * `conflict`), removed it (`not_found`), made it already (`exists`), answered
- * it (`already_answered`), or moved what the request named so its operation
- * already landed on something else (`invalid_input`). Each asks again every
- * question the write would have moved, without raising a floor, since nothing
- * of this tab's landed, so the page redraws what IS there and the next press
- * is made against it.
+ * somebody else changed the object since it was drawn (`stale_version`, or a
+ * `conflict`: a race, or a state the screen did not show yet, an archived
+ * room or an item in the trash), removed it (`not_found`), made it already or
+ * took the name it asked for (`exists`), answered it (`already_answered`), or
+ * moved what the request named so its operation already landed on something
+ * else (`invalid_input`). Each asks again every question the write would have
+ * moved, without raising a floor, since nothing of this tab's landed, so the
+ * page redraws what IS there and the next press is made against it.
  */
 const LOOK_AGAIN = new Set<string>([
   "stale_version",
