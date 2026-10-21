@@ -2321,11 +2321,17 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	patch := []byte(`{"integrations":{"` + string(kind) + `":null}}`)
+	// THE BASE IS THE HEADER, the one write here whose base is: a disconnect
+	// that loses its race lost a precondition its request stated, which is
+	// refused 412 ([configapi.RacedError.Status]), where every other write
+	// here states its base as the body's `if_match` and loses as 409.
+	ifMatch := strings.TrimSpace(r.Header.Get("If-Match"))
 	applied, err := s.config.Apply(r.Context(), configapi.ApplyRequest{
 		Patch:   patch,
 		Summary: "disconnect " + string(kind),
 		By:      attributionOf(r),
-		Expect:  strings.TrimSpace(r.Header.Get("If-Match")),
+		Expect:  ifMatch,
+		Stated:  ifMatch != "",
 	})
 	if err != nil {
 		s.refuse(w, r, err, setup.Result{})
@@ -2413,7 +2419,9 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 		// the config surface names them: a revision that lost its activation
 		// is in the history of the node that stored it and of no other.
 		maps.Copy(extra, configapi.KeptRevision(raced))
-		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeRevisionAdvanced, extra)
+		// 412 WHERE THE REQUEST'S IF-MATCH WAS THE BASE (a disconnect's),
+		// 409 where its base was a body field: the config surface's one rule.
+		httpjson.FailWithFields(w, raced.Status(), httpjson.CodeRevisionAdvanced, extra)
 	case errors.As(err, &invalid):
 		// THE CONFIG SURFACE'S OWN STRUCTURE, located problems and the
 		// derived hierarchy, so a screen placing a refusal on the field it

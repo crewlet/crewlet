@@ -760,7 +760,7 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, "read the fleet's revision", err)
 		return
 	}
-	createOnly, ok := s.checkPrecondition(w, r, cur.revision, found)
+	cond, ok := s.checkPrecondition(w, r, cur.revision, found)
 	if !ok {
 		return
 	}
@@ -769,6 +769,7 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		built = cur.revision.ID
 	}
 	d := replaceDraft(incoming, built, attributionOf(r))
+	d.stated = cond.stated
 	if importing {
 		d.rules, d.source = importRules, importSource
 	}
@@ -777,7 +778,7 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 	}
 	prepared, err := s.prepare(r.Context(), d)
 	if err != nil {
-		s.refuseWrite(w, err, createOnly)
+		s.refuseWrite(w, err, cond.createOnly)
 		return
 	}
 	if dryRun {
@@ -791,7 +792,7 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 	}
 	applied, err := s.commit(r.Context(), prepared, summary)
 	if err != nil {
-		s.refuseWrite(w, err, createOnly)
+		s.refuseWrite(w, err, cond.createOnly)
 		return
 	}
 	writeApplied(w, applied)
@@ -850,12 +851,14 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 			})
 		return
 	}
-	if _, ok = s.checkPrecondition(w, r, cur.revision, found); !ok {
+	cond, ok := s.checkPrecondition(w, r, cur.revision, found)
+	if !ok {
 		return
 	}
 
 	d := patchDraft(ApplyRequest{
 		Patch: sent.text, Summary: summary, By: attributionOf(r), Expect: cur.revision.ID,
+		Stated: cond.stated,
 	}, sent.doc)
 	if d.principal, ok = principalOf(w, r); !ok {
 		return
@@ -980,7 +983,7 @@ func (s *Service) refuseApply(w http.ResponseWriter, err error) {
 		if raced.Current != "" {
 			body["current_revision_id"] = raced.Current
 		}
-		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeRevisionAdvanced, body)
+		httpjson.FailWithFields(w, raced.Status(), httpjson.CodeRevisionAdvanced, body)
 	case errors.As(err, &patchErr):
 		refuseDocument(w, httpjson.CodeInvalidPatch, patchErr.Err.Error(),
 			"the patched document was refused; an unknown key in a "+
@@ -1289,25 +1292,52 @@ func (s *Service) nudge(ctx context.Context, revisionID, summary, source string,
 	}
 }
 
+// condition is what a write's precondition headers asked of the fleet's
+// revision, as [Service.checkPrecondition] judged them, carried on to the
+// write's refusal so that the refusal is decided by what was judged rather than
+// by reading the request again.
+type condition struct {
+	// createOnly is `If-None-Match: *`: store this only where no company is
+	// configured, which a caller needs to answer a revision that appears
+	// after the check as the precondition would have.
+	createOnly bool
+	// stated is an If-Match naming the revision the write is built on: a
+	// write that then loses its activation's compare-and-set failed the
+	// precondition the request stated ([RacedError.Stated]).
+	stated bool
+}
+
 // checkPrecondition enforces If-Match, the optimistic-concurrency guard,
 // against the fleet's revision ([Service.current]).
 //
 // Two operators editing one company through a full-document PUT is a
 // last-writer-wins race that silently discards the other's change. If-Match
-// turns it into a 409 the loser can see, and the document they need to re-read
+// turns it into a 412 the loser can see, and the document they need to re-read
 // is named in the answer.
 //
-// createOnly reports that the request asked for create-only semantics
-// (`If-None-Match: *`), which a caller needs to answer a revision that appears
-// after this check as the precondition would have. ok is false when the
-// request has been answered.
-func (s *Service) checkPrecondition(w http.ResponseWriter, r *http.Request, active store.Revision, found bool) (createOnly, ok bool) {
+// The answer is the condition the request stated ([condition]), which the
+// write carries on to its refusal; ok is false when the request has been
+// answered.
+func (s *Service) checkPrecondition(w http.ResponseWriter, r *http.Request, active store.Revision, found bool) (cond condition, ok bool) {
+	expected := strings.TrimSpace(r.Header.Get("If-Match"))
 	// IF-NONE-MATCH FIRST, because `*` on a write is the create-only
 	// precondition (RFC 9110 §13.1.2): "store this only if the company has
 	// not been configured yet". It is the only spelling of that condition
 	// this surface takes: every If-Match value but `*` is an entity-tag.
 	if none := r.Header.Get("If-None-Match"); none != "" {
-		createOnly = strings.TrimSpace(none) == "*"
+		// NEVER BESIDE IF-MATCH, as an entity write refuses the pair: the
+		// two ask opposite things of one company, and taking either alone
+		// would judge a condition the caller stated as though it had not
+		// been sent, so a stale If-Match beside it was never refused.
+		if expected != "" {
+			httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeConflictingPreconditions,
+				map[string]string{
+					"hint": "If-None-Match: * asks for a first import and If-Match names " +
+						"the revision an edit was built on; send one",
+				})
+			return condition{}, false
+		}
+		cond.createOnly = strings.TrimSpace(none) == "*"
 		if !found {
 			// NOTHING IS CONFIGURED, asked of the fleet's pointer first —
 			// [Service.current] reads it, so a node that joined a fleet and
@@ -1315,7 +1345,7 @@ func (s *Service) checkPrecondition(w http.ResponseWriter, r *http.Request, acti
 			// pointer published after this read refuses the write at the
 			// compare-and-set, which is create-only for a write built on
 			// nothing, and answers as this would have.
-			return createOnly, true
+			return cond, true
 		}
 		if matchesTag(none, etagOf(active)) {
 			httpjson.FailWithFields(w, http.StatusPreconditionFailed,
@@ -1324,12 +1354,11 @@ func (s *Service) checkPrecondition(w http.ResponseWriter, r *http.Request, acti
 					"hint": "If-None-Match asked for this write to land only on a " +
 						"config that is not there; one is active",
 				})
-			return createOnly, false
+			return cond, false
 		}
-		return createOnly, true
+		return cond, true
 	}
 
-	expected := strings.TrimSpace(r.Header.Get("If-Match"))
 	switch {
 	case expected == "":
 		// NO PRECONDITION, and permitted: a first import has nothing to
@@ -1339,20 +1368,26 @@ func (s *Service) checkPrecondition(w http.ResponseWriter, r *http.Request, acti
 		// it (or expecting none) — so a write that lands between that read
 		// and the activation is answered 409 revision_advanced, never
 		// replaced: only the HTTP precondition is waived, not the race.
-		return false, true
+		return condition{}, true
 	case !found:
 		httpjson.FailWith(w, http.StatusPreconditionFailed, httpjson.CodeNoActiveRevision,
 			map[string]string{
 				"hint": "there is no revision to match against; retry without " +
 					"If-Match, or send If-None-Match: * to require that",
 			})
-		return false, false
+		return condition{}, false
 	case !matchesTag(expected, etagOf(active)):
-		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeRevisionAdvanced,
+		// THE CALLER'S OWN CONDITION FAILED, so 412 — as an If-Match
+		// against no company is above and If-None-Match against one is,
+		// and as a commit the tag lost to after this check is
+		// ([RacedError.Status]).
+		httpjson.FailWithFields(w, http.StatusPreconditionFailed, httpjson.CodeRevisionAdvanced,
 			httpjson.Detail{"current_revision_id": active.ID, "your_base": expected})
-		return false, false
+		return condition{}, false
 	default:
-		return false, true
+		// `*` NAMES NO REVISION: its condition, that a company exists, is
+		// still true of whichever company wins a race.
+		return condition{stated: expected != "*"}, true
 	}
 }
 

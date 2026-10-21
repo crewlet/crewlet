@@ -193,8 +193,23 @@ export class Engine {
       (request.method === "PATCH" || request.method === "PUT")
     ) {
       const expected = request.headers["If-Match"];
-      if ((request.method === "PATCH" || unit !== null) && expected !== `"${this.revision}"`) {
-        return json({ error: "revision_advanced", current_revision_id: this.revision }, 409);
+      if (unit !== null && expected !== `"${this.revision}"`) {
+        // A UNIT WRITE'S IF-MATCH IS THE UNIT'S OWN TAG, which this fake keeps
+        // as the revision's (its GET answers that as the unit's ETag), so a
+        // moved revision is the unit having changed: the engine's `412
+        // version_moved`, carrying the unit as it stands and its tag.
+        const current = this.document?.units?.find((u) => u.id === unit) ?? null;
+        return json({ error: "version_moved", current, etag: `"${this.revision}"` }, 412, {
+          ETag: `"${this.revision}"`,
+        });
+      }
+      if (request.method === "PATCH" && expected !== `"${this.revision}"`) {
+        // 412 for a revision the header named, as the engine answers a stale
+        // If-Match, and 409 for a write that named none.
+        return json(
+          { error: "revision_advanced", current_revision_id: this.revision },
+          expected ? 412 : 409,
+        );
       }
       if (request.method === "PUT" && request.headers["If-None-Match"] === "*" && this.document) {
         return json({ error: "already_configured", current_revision_id: this.revision }, 412);

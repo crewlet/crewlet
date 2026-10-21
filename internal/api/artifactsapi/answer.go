@@ -187,9 +187,13 @@ func writeFailed(w http.ResponseWriter, r *http.Request, key, verb string, err e
 	switch {
 	case errors.As(err, &moved):
 		// A MOVED HEAD IS ANSWERED BY THE PUBLISH ROUTES with the entry's
-		// text to merge onto; a gesture reaching here names no base.
+		// text to merge onto, `412` because they take their base as the
+		// If-Match header. A gesture reaching here stated no such header,
+		// so it is the class's own conflict, as a tool is told it: a 412
+		// says a precondition the request stated was false, and this one
+		// stated none.
 		detail["head"] = moved.Head.HeadNumber
-		fail(http.StatusPreconditionFailed, httpjson.CodeVersionMoved)
+		fail(http.StatusConflict, httpjson.CodeStaleVersion)
 	case errors.As(err, &gone):
 		detail["paths"] = gone.Paths
 		fail(http.StatusConflict, httpjson.CodeCarriedObjectGone)

@@ -132,11 +132,10 @@ func (s *served) postItem(w http.ResponseWriter, r *http.Request) {
 
 func (s *served) patchItem(w http.ResponseWriter, r *http.Request) {
 	args, ok := readArgs(w, r)
-	if !ok || !fromPath(w, args, "item", r.PathValue("key")) ||
-		!ifMatch(w, r, args, "if_match") {
+	if !ok || !fromPath(w, args, "item", r.PathValue("key")) {
 		return
 	}
-	s.call(w, r, worklet.UpdateWorkItemTool, args)
+	s.callIfMatched(w, r, worklet.UpdateWorkItemTool, args, "if_match")
 }
 
 func (s *served) postItemComment(w http.ResponseWriter, r *http.Request) {
@@ -150,21 +149,19 @@ func (s *served) postItemComment(w http.ResponseWriter, r *http.Request) {
 func (s *served) postDepend(w http.ResponseWriter, r *http.Request) {
 	args, ok := readArgs(w, r)
 	if !ok || !only(w, args, "waiting_on", "blocking", "dependency_note", "if_match") ||
-		!fromPath(w, args, "item", r.PathValue("key")) ||
-		!ifMatch(w, r, args, "if_match") {
+		!fromPath(w, args, "item", r.PathValue("key")) {
 		return
 	}
-	s.call(w, r, worklet.UpdateWorkItemTool, args)
+	s.callIfMatched(w, r, worklet.UpdateWorkItemTool, args, "if_match")
 }
 
 func (s *served) postRelate(w http.ResponseWriter, r *http.Request) {
 	args, ok := readArgs(w, r)
 	if !ok || !only(w, args, "linked", "linked_pages", "if_match") ||
-		!fromPath(w, args, "item", r.PathValue("key")) ||
-		!ifMatch(w, r, args, "if_match") {
+		!fromPath(w, args, "item", r.PathValue("key")) {
 		return
 	}
-	s.call(w, r, worklet.UpdateWorkItemTool, args)
+	s.callIfMatched(w, r, worklet.UpdateWorkItemTool, args, "if_match")
 }
 
 func (s *served) deleteItem(w http.ResponseWriter, r *http.Request) {
@@ -294,7 +291,7 @@ func (s *served) personRecord(w http.ResponseWriter, r *http.Request, tool strin
 	}, handle, write)
 	about := operator.About(tool, args)
 	about["handle"] = handle
-	s.answerDispatched(w, r, key, tool, about, result, err)
+	s.answerDispatched(w, r, key, tool, about, result, err, false)
 }
 
 // ---- the gestures no tool makes ---------------------------------------- //
@@ -313,11 +310,10 @@ func (s *served) personRecord(w http.ResponseWriter, r *http.Request, tool strin
 func (s *served) postRank(w http.ResponseWriter, r *http.Request) {
 	args, ok := readArgs(w, r)
 	if !ok || !only(w, args, "after", "before", "status", "if_match") ||
-		!fromPath(w, args, "item", r.PathValue("key")) ||
-		!ifMatch(w, r, args, "if_match") {
+		!fromPath(w, args, "item", r.PathValue("key")) {
 		return
 	}
-	s.call(w, r, worklet.PlaceWorkItemTool, args)
+	s.callIfMatched(w, r, worklet.PlaceWorkItemTool, args, "if_match")
 }
 
 // patchItemComment rewrites one remark on a work item, AS ITS AUTHOR.

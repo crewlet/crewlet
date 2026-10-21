@@ -892,7 +892,8 @@ it may have to fetch when the logs can no longer bring its rows level, which
 append-only pointer whose own revision *is* the epoch: it lands only while the
 pointer still names the revision it was built on, so of two operators editing
 the same revision at once one lands and the other is refused
-`409 revision_advanced` rather than overwriting it. The
+`revision_advanced` rather than overwriting it, `412` where it named that
+revision in `If-Match` and `409` where it named none. The
 pointer **is** the company — `GET /config` answers it on every node. Each node
 polls it, applies, and writes its own status, naming the epoch it last applied,
 the revision it serves and the one it would come back on;

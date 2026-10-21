@@ -291,6 +291,16 @@ func (b *bound) MoveTaskToProject(_ context.Context, opID, _, target string,
 	return b.w.answer(opID)
 }
 
+// Depend is a dependency gesture, answered as every write here is.
+func (b *bound) Depend(_ context.Context, opID string, _ worklet.DependencyChange,
+	_ worklet.Leads) (worklet.DependencyResult, error) {
+
+	b.w.mu.Lock()
+	defer b.w.mu.Unlock()
+	res, err := b.w.answer(opID)
+	return worklet.DependencyResult{WriteResult: res}, err
+}
+
 // PlaceTask is a board drag: the card, the neighbour it was dropped beside
 // and the lane, as the tool resolved them. The order step answers as every
 // write here does; the lane step wrote nothing unless the drag named one.
@@ -615,6 +625,9 @@ func (r *rig) halves() workapi.Halves {
 				return r.writes.as(a)
 			},
 			Placer: func(a builtin.Actor) builtin.WorkPlacer {
+				return r.writes.as(a)
+			},
+			Dependencies: func(a builtin.Actor) builtin.WorkDepender {
 				return r.writes.as(a)
 			},
 			Holders: r.dir,

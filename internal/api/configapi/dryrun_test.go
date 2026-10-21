@@ -403,8 +403,8 @@ func TestADryRunIsRefusedForWhatTheWriteIsRefusedFor(t *testing.T) {
 	s.seed(t, companyDoc)
 	stale := s.do(t, http.MethodPatch, "/config?dry_run=true", `{"mission": "x"}`,
 		map[string]string{"If-Match": `"a-revision-that-moved-on"`})
-	if stale.Code != http.StatusConflict || decode(t, stale)["error"] != "revision_advanced" {
-		t.Errorf("a stale patch check = %d %s, want 409 revision_advanced", stale.Code, stale.Body)
+	if stale.Code != http.StatusPreconditionFailed || decode(t, stale)["error"] != "revision_advanced" {
+		t.Errorf("a stale patch check = %d %s, want 412 revision_advanced", stale.Code, stale.Body)
 	}
 	created := s.do(t, http.MethodPut, "/config?dry_run=true", companyDoc,
 		map[string]string{"If-None-Match": "*"})

@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 
@@ -92,6 +94,37 @@ type RacedError struct {
 	// history and no other's, so it is diffed and reverted there alone
 	// ([KeptRevision]).
 	Node string
+	// Stated is a write whose request named Base in its If-Match header
+	// ([ApplyRequest.Stated]): what it lost is a precondition it stated.
+	// Never set by a write whose If-Match was another tag (the charter's, an
+	// entity's), a write that reads none (a reload, a revert), a base sent as
+	// a body field, or `If-Match: *`, which names no revision.
+	Stated bool
+}
+
+// Status is the status a [RacedError] is refused with: 412 where the request
+// stated the revision it lost in its If-Match header ([RacedError.Stated]),
+// and 409 where it stated none.
+//
+// HTTP'S RULE, the one every surface here answers a moved version by (RFC
+// 9110 §13.1.1): a condition the request stated as a header that turned out
+// false is a FAILED PRECONDITION, whether it was false when the request
+// arrived or became false before the activation's compare-and-set landed;
+// either way the server did not perform what was conditioned on it. A write
+// that named no revision lost a race it never declared a condition for,
+// which is a conflict. The code is `revision_advanced` either way, because
+// what moved is the company's revision; crewlet-operator and the dashboard
+// read the code, and the status says only which kind of request lost.
+//
+// DECIDED BY WHAT WAS JUDGED, carried on the error from the precondition
+// check, never by reading the request again: a route whose If-Match is
+// another resource's tag, or that reads none, would otherwise answer a stray
+// header's revision as a precondition it never evaluated.
+func (e *RacedError) Status() int {
+	if e.Stated {
+		return http.StatusPreconditionFailed
+	}
+	return http.StatusConflict
 }
 
 func (e *RacedError) Error() string {
@@ -218,6 +251,12 @@ type ApplyRequest struct {
 	// what arrives in an `If-Match` header, and a caller that forwards one
 	// is doing the standard thing rather than the wrong thing.
 	Expect string
+
+	// Stated is an Expect the caller's own request named in its If-Match
+	// header (`/setup`'s forced disconnect forwards it, PATCH /config judged
+	// it): a write that then loses its race is refused 412 rather than 409
+	// ([RacedError.Status]). `*` names no revision and is never stated.
+	Stated bool
 }
 
 // Apply merges a patch onto the active revision and activates the result.
@@ -288,6 +327,9 @@ type draft struct {
 	// judges, and the author the revision records — one value for both, so
 	// the party a write was admitted as is the party it is stored under.
 	by iam.Actor
+	// stated is an expect the request named in its If-Match header
+	// ([RacedError.Stated]).
+	stated bool
 	// republishes is a write that re-publishes the active document's
 	// stored bytes unchanged ([Service.Reload]). It changes nothing about
 	// the company, so a managed document does not refuse it: see
@@ -319,6 +361,9 @@ type prepared struct {
 	by iam.Actor
 	// source is the draft's, resolved: what the revision records.
 	source string
+	// stated is the draft's: a race this write loses at the compare-and-set
+	// is a precondition its request stated ([RacedError.Stated]).
+	stated bool
 }
 
 // prepare builds and checks a write, storing nothing.
@@ -373,7 +418,7 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 		// equals a bare revision id: a caller doing the standard thing was
 		// answered 409 with their own current revision named as the
 		// conflict.
-		return nil, &RacedError{Base: d.expect, Current: active.ID}
+		return nil, &RacedError{Base: d.expect, Current: active.ID, Stated: d.stated}
 	}
 	b := base{revision: active, found: found}
 	if found {
@@ -413,7 +458,7 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 	p := &prepared{
 		document: document, warnings: company.Warnings(), derived: derived, by: d.by,
 		source: cmp.Or(d.source, revisionSource), pointed: cur.pointed,
-		held: heldWarnings(b.prior),
+		held: heldWarnings(b.prior), stated: d.stated,
 	}
 	if found {
 		p.base = active
@@ -496,7 +541,7 @@ func (s *Service) commit(ctx context.Context, p *prepared, summary string) (Appl
 		log.InfoContext(ctx, "config_activation_raced",
 			"revision", id, "expected", p.base.ID, "by", by.Name,
 			"operator", by.OperatorID)
-		raced := &RacedError{Base: p.base.ID, Stored: id, Node: s.node}
+		raced := &RacedError{Base: p.base.ID, Stored: id, Node: s.node, Stated: p.stated}
 		if current, _, terr := s.plane.Target(ctx); terr == nil {
 			raced.Current = current.RevisionID
 		}
@@ -563,8 +608,10 @@ func importRules(next, _ *config.Company) error {
 // on; nil reads the patch from req.Patch, which is all a programmatic caller
 // has.
 func patchDraft(req ApplyRequest, sent *yaml.Node) draft {
+	expect := strings.TrimSpace(req.Expect)
 	return draft{
-		expect: req.Expect, requireActive: true, by: req.By,
+		expect: req.Expect, stated: req.Stated && expect != "" && expect != "*",
+		requireActive: true, by: req.By,
 		rules: authoredRules,
 		build: func(b base) (*config.Company, []byte, error) {
 			if len(req.Patch) == 0 {

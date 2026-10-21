@@ -880,7 +880,9 @@ func TestASubmissionIsValidatedAsTheWholeCompany(t *testing.T) {
 }
 
 // A STALE BASE IS REFUSED BEFORE ANYTHING IS WRITTEN, and the refusal names
-// both sides so the caller can re-read and re-derive.
+// both sides so the caller can re-read and re-derive. 409, because the base
+// is the body's `if_match` rather than an If-Match header: a race the request
+// stated no HTTP condition about (a disconnect's header is 412, below).
 func TestAStaleRevisionIsRefused(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
@@ -1399,6 +1401,51 @@ func TestRotatingASecretPublishesAnyway(t *testing.T) {
 }
 
 // --- disconnect ------------------------------------------------------------- //
+
+// A DISCONNECT UNDER A STALE If-Match IS A FAILED PRECONDITION: the base it
+// names is the request's own header, so it is answered as the configuration
+// surface answers the same header (`412 revision_advanced`,
+// [configapi.RevisionStatus]) — where a connect, whose base is the body's
+// `if_match`, is the 409 above. Nothing is removed.
+//
+// Mutation: answer the stale arms 409 whatever the request stated, or 412
+// wherever an If-Match header arrived, and this goes red.
+func TestADisconnectUnderAStaleIfMatchIsAFailedPrecondition(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t)
+	connect := s.do(t, http.MethodPost, "/setup/integrations/datadog/inputs",
+		`{"values": {"route_to": "sre-lead", "enabled": "true", "site": "datadoghq.com", "api_key": "dd-api", "app_key": "dd-app"}, "generate": ["webhook_token"]}`, nil)
+	if connect.Code != http.StatusCreated {
+		t.Fatalf("connect = %d: %s", connect.Code, connect.Body)
+	}
+
+	res := s.do(t, http.MethodDelete, "/setup/integrations/datadog", `{"force": true}`,
+		map[string]string{"If-Match": `"a-revision-that-moved-on"`})
+	if res.Code != http.StatusPreconditionFailed {
+		t.Fatalf("status = %d, want 412: %s", res.Code, res.Body)
+	}
+	if body := decode(t, res); body["error"] != "revision_advanced" ||
+		body["current_revision_id"] == nil {
+		t.Errorf("refusal = %v, want revision_advanced naming the current revision", body)
+	}
+	after := decode(t, s.do(t, http.MethodGet, "/setup/integrations/datadog", "", nil))
+	if after["configured"] != true {
+		t.Errorf("configured = %v after a refused disconnect", after["configured"])
+	}
+
+	// AND ONLY THE HEADER A WRITE READS: a connect reads no If-Match, so
+	// one that carries a header and loses on its body's base stated no
+	// condition the server evaluated.
+	ignored := s.do(t, http.MethodPost, "/setup/integrations/datadog/inputs", `{
+		"if_match": "01JSOMETHINGELSE",
+		"values": {"route_to": "sre-lead", "enabled": "true", "site": "datadoghq.com", "api_key": "dd-api", "app_key": "dd-app"}
+	}`, map[string]string{"If-Match": `"01JSOMETHINGELSE"`})
+	if ignored.Code != http.StatusConflict {
+		t.Errorf("a connect with a header it does not read = %d, want 409: %s",
+			ignored.Code, ignored.Body)
+	}
+}
 
 // A FORCED DISCONNECT REMOVES THE BLOCK AND NAMES WHAT IS ORPHANED, without
 // deleting it. A credential an operator may be sharing with another

@@ -66,11 +66,10 @@ func (s *served) postPage(w http.ResponseWriter, r *http.Request) {
 // has a header for, and the tool refuses a save without one.
 func (s *served) putPage(w http.ResponseWriter, r *http.Request) {
 	args, ok := readArgs(w, r)
-	if !ok || !fromPath(w, args, "page", r.PathValue("id")) ||
-		!ifMatch(w, r, args, "base_version") {
+	if !ok || !fromPath(w, args, "page", r.PathValue("id")) {
 		return
 	}
-	s.call(w, r, builtin.SavePageTool, args)
+	s.callIfMatched(w, r, builtin.SavePageTool, args, "base_version")
 }
 
 func (s *served) postPageComment(w http.ResponseWriter, r *http.Request) {
