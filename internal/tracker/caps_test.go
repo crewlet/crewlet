@@ -144,13 +144,17 @@ func TestAnUnwatchIsNeverRefusedHoweverManyAreWatching(t *testing.T) {
 	}
 	r.drain()
 
-	// GROWING PAST IT IS REFUSED, which is the cap doing its job.
+	// GROWING PAST IT IS REFUSED, which is the cap doing its job — as the
+	// TASK'S STATE: the gesture names one person, and it lands once
+	// somebody stops watching. Refused as the request's, it told a caller
+	// to change an argument nothing was wrong with.
 	if _, err := r.writer.UpdateTask(t.Context(), "op-watch", "t-1", "ENG",
 		tracker.NoIfMatch,
 		tracker.TaskPatch{Watch: &tracker.WatchIntent{
 			Handle: "one-more", Watch: true,
-		}}, tracker.ChangeWatchers, nil); err == nil {
-		t.Error("a sixty-fifth explicit watch was accepted")
+		}}, tracker.ChangeWatchers, nil); !errors.Is(err, tracker.ErrState) ||
+		errors.Is(err, tracker.ErrInvalid) {
+		t.Errorf("a sixty-fifth explicit watch answered %v, want the task's state", err)
 	}
 
 	// AND LEAVING IS NOT, which is the half that was broken.
