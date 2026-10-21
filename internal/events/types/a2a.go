@@ -115,15 +115,16 @@ func (e A2ARequest) Brief() string {
 // a seat is handed. The lead line around it is neutralised, so nothing in a
 // role name opens or closes a fence either.
 func (e A2ARequest) FencedBrief(b provenance.Boundary) string {
-	fenced := colleagueFence(b, e.Requester, e.Content)
-	lead := e.lead()
-	switch {
-	case lead == "":
-		return fenced
-	case fenced == "":
-		return provenance.Neutralise(b, lead)
-	}
-	return provenance.Neutralise(b, lead) + "\n\n" + fenced
+	lead, words, label := e.Quoted()
+	return fencedBrief(b, lead, words, label)
+}
+
+// Quoted is the ask as its parts: the line naming who asks, the question —
+// the asking seat's words — and the label they are fenced under. What
+// [A2ARequest.FencedBrief] renders, for a reader that keeps the label beside
+// the text rather than a fence around it.
+func (e A2ARequest) Quoted() (lead, words string, label provenance.Label) {
+	return e.lead(), e.Content, colleagueLabel(e.Requester)
 }
 
 // lead is the line naming who asks, or "" when the ask names nobody.
@@ -138,16 +139,25 @@ func (e A2ARequest) lead() string {
 	return "A colleague (" + who + ") asks:"
 }
 
-// colleagueFence is a colleague seat's words inside a fence of b, or "" for
-// none: an agent-to-agent channel joins two agent seats and nothing else, so
-// its writer is always an agent, read as a colleague.
-func colleagueFence(b provenance.Boundary, handle, text string) string {
-	if strings.TrimSpace(text) == "" {
-		return ""
+// colleagueLabel is what a colleague seat's words on an agent-to-agent channel
+// are: an a2a message by that agent, read as a colleague's — the channel joins
+// two agent seats and nothing else, so its writer is always one.
+func colleagueLabel(handle string) provenance.Label {
+	return provenance.LabelFor("", provenance.SourceA2AMessage,
+		[]provenance.Author{{Kind: iam.ActorAgent, Seat: handle}})
+}
+
+// fencedBrief is a brief's lead, neutralised under b, above its words inside a
+// fence of b under label — each only where it has one.
+func fencedBrief(b provenance.Boundary, lead, words string, label provenance.Label) string {
+	var parts []string
+	if lead = strings.TrimSpace(provenance.Neutralise(b, lead)); lead != "" {
+		parts = append(parts, lead)
 	}
-	authors := []provenance.Author{{Kind: iam.ActorAgent, Seat: handle}}
-	return provenance.Fence(b, provenance.SourceA2AMessage,
-		provenance.TrustFor("", authors), authors, text)
+	if strings.TrimSpace(words) != "" {
+		parts = append(parts, label.Fence(b, words))
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 // Actor is the colleague who asked, not the bus that relayed it.
@@ -187,7 +197,15 @@ func (e A2AMessage) Brief() string {
 // that asked — so it is neutralised rather than fenced, which is all its own
 // text needs: it can open or close no fence around the answer.
 func (e A2AMessage) FencedBrief(b provenance.Boundary) string {
-	return provenance.Neutralise(b, e.lead()) + colleagueFence(b, e.Sender, e.Content)
+	lead, words, label := e.Quoted()
+	return fencedBrief(b, lead, words, label)
+}
+
+// Quoted is the answer as its parts: the question it answers and who gave it,
+// the answer — the answering seat's words — and the label they are fenced
+// under. See [A2ARequest.Quoted].
+func (e A2AMessage) Quoted() (lead, words string, label provenance.Label) {
+	return e.lead(), e.Content, colleagueLabel(e.Sender)
 }
 
 // lead is everything above the answer: the question it answers and who gave

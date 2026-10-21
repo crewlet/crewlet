@@ -113,6 +113,10 @@ func TestTheTurnsAskIsFencedAsItsTriggerIs(t *testing.T) {
 					t.Errorf("the company's own instruction is not handed over as "+
 						"itself:\n%s", read)
 				}
+				if l := ask.Label(); l != nil {
+					t.Errorf("the company's own instruction is recorded as somebody's "+
+						"words, under %+v", *l)
+				}
 				return
 			}
 			if strings.Contains(outside, probe) {
@@ -122,8 +126,34 @@ func TestTheTurnsAskIsFencedAsItsTriggerIs(t *testing.T) {
 			if head == "" || head != want {
 				t.Errorf("the ask fences the words as %q and the trigger as %q", head, want)
 			}
+
+			// AND THE TURN'S RECORD OF IT SAYS THE SAME: the label the
+			// ask is kept under, and each interaction's, fence the words
+			// as the trigger does — the learning workers read them long
+			// after the trigger is gone, and fence them under these.
+			labelled := func(l provenance.Label) string {
+				return strings.SplitN(l.Fence(b, probe), "\n", 2)[0]
+			}
+			if l := ask.Label(); l == nil || labelled(*l) != want {
+				t.Errorf("the turn records its ask under %+v, which fences as %q, and the "+
+					"trigger fences it as %q", l, labelled(labelOrZero(l)), want)
+			}
+			for _, in := range interactionsFor(reg, w.prompts, "swe", evs) {
+				if strings.Contains(in.Body, probe) && labelled(in.Provenance) != want {
+					t.Errorf("an interaction records its body under %q, and the trigger "+
+						"fences it as %q", labelled(in.Provenance), want)
+				}
+			}
 		})
 	}
+}
+
+// labelOrZero is l's label, or the zero label for none.
+func labelOrZero(l *provenance.Label) provenance.Label {
+	if l == nil {
+		return provenance.Label{}
+	}
+	return *l
 }
 
 // A MERGED BURST'S ASK NAMES EVERY WRITER, AT THE LEAST TRUST ANY OF THEM EARNS.

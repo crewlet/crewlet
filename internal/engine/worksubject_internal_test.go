@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -466,9 +467,15 @@ func TestAParkCarriesWhatTheTurnWrote(t *testing.T) {
 	if want := turnAsk([]*events.Event{chatTrigger("D0ANA")}); want == "" || state.Ask != want {
 		t.Errorf("the suspension parks the ask %q, want %q", state.Ask, want)
 	}
+	// AND WHO WROTE IT, for that segment's record of the ask to say so
+	// (ADR-0040): nothing it reads could decide the label again.
+	asked := e.askOf(Request{Handle: "swe", Events: []*events.Event{chatTrigger("D0ANA")}})
+	if want := asked.Label(); want == nil || !reflect.DeepEqual(state.AskProvenance, want) {
+		t.Errorf("the suspension parks the ask's label %+v, want %+v", state.AskProvenance, want)
+	}
 	// AND WHO ASKED IT, for a refresh_memory call in the segment that
 	// finishes the turn: that segment has no interactions to read them off.
-	if want := sendersSpoken(e.interactionsOf([]*events.Event{chatTrigger("D0ANA")})); len(want) == 0 ||
+	if want := sendersSpoken(e.interactionsOf([]*events.Event{chatTrigger("D0ANA")}, "swe")); len(want) == 0 ||
 		!slices.Equal(state.Senders, want) {
 		t.Errorf("the suspension parks the senders %+v, want %+v", state.Senders, want)
 	}
