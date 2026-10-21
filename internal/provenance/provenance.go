@@ -79,6 +79,10 @@ const (
 	// no surface for: a source with no prompt of its own, or a body its
 	// parser did not label.
 	SourceNotification Source = "notification"
+
+	// SourceA2AMessage is a message on an agent-to-agent channel: the
+	// question a colleague asked, or the answer one gave.
+	SourceA2AMessage Source = "a2a_message"
 )
 
 // Sources are every surface.
@@ -86,6 +90,7 @@ var Sources = []Source{
 	SourcePageBody, SourcePageComment, SourceWorkDescription, SourceWorkComment,
 	SourceProjectFile, SourceChatThread, SourceChatRoom, SourceArtifactFile,
 	SourceArtifactRow, SourceChangeNote, SourceAlert, SourceNotification,
+	SourceA2AMessage,
 }
 
 // Valid reports whether s is one of [Sources].
