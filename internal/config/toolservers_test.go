@@ -1044,10 +1044,13 @@ func skillGate(s MCPServer, tools map[string]string) (skill, tool string) {
 // The exception is the one way a newer release fails there without a sound: a
 // bundled tool skill (examples/tool-skills/) triggering on a tool the server
 // serves, which a release renaming that tool disarms. Such a server's entry
-// names the exact release the skill was read against — the Mattermost
-// server's does, whose tool names platform_mentions and channel_discovery
-// trigger on — and only while a skill still names one of its tools. Which
-// release that is, is [TestThePinnedToolServersRunOneReleaseEverywhere]'s.
+// names the exact release the skill was read against, and only while a skill
+// still names one of its tools. WHICH SERVERS THOSE ARE IS DERIVED, never
+// listed here: every tool any bundled skill's trigger names
+// ([bundledSkillTools]), matched to the server whose launch serves it
+// ([skillGate]) — a list kept in this comment had already drifted, naming two
+// of the four skills that trigger on one server's tools. Which release that
+// is, is [TestThePinnedToolServersRunOneReleaseEverywhere]'s.
 func TestTheShippedExamplesRunTheNewestRelease(t *testing.T) {
 	t.Parallel()
 	tools := bundledSkillTools(t)
