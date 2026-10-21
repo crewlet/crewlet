@@ -70,7 +70,7 @@ func TestTheManifestNamesThePositionInsideTheCopy(t *testing.T) {
 		if artifact.Estate != store.EstateReplicated {
 			continue
 		}
-		digest, err := store.FileDigest(filepath.Join(dir, artifact.File))
+		digest, err := store.FileDigest(t.Context(), filepath.Join(dir, artifact.File))
 		if err != nil {
 			t.Fatal(err)
 		}

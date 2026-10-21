@@ -1,6 +1,10 @@
 package store_test
 
 import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
@@ -9,6 +13,35 @@ import (
 
 	"github.com/crewlet/crewlet/internal/store"
 )
+
+// A CHECKSUM ENDS WHEN ITS CALLER GIVES UP.
+//
+// The files hashed are whole estates — a backup's copy, a donor's snapshot —
+// and reading one takes as long as the disk does. With no context, a snapshot
+// loop told to stop by a node's drain read to the end of the file first and
+// the stop waited for it, and a backup whose request had gone away finished a
+// checksum nobody would read. So the digest is the file's while its caller
+// waits, and the caller's own ending once it does not.
+func TestAChecksumEndsWhenItsCallerGivesUp(t *testing.T) {
+	t.Parallel()
+	content := bytes.Repeat([]byte("a donor's snapshot "), 1<<16)
+	path := filepath.Join(t.TempDir(), "snapshot.db")
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatalf("write the file: %v", err)
+	}
+	want := sha256.Sum256(content)
+	got, err := store.FileDigest(t.Context(), path)
+	if err != nil || got != hex.EncodeToString(want[:]) {
+		t.Fatalf("FileDigest = (%s, %v), want the file's own %x", got, err, want)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if got, err := store.FileDigest(ctx, path); !errors.Is(err, context.Canceled) {
+		t.Fatalf("a checksum whose caller had given up answered (%s, %v), want "+
+			"the cancellation — it read the whole file for nobody", got, err)
+	}
+}
 
 // A path with a space in it is ordinary and must work: the destination
 // reaches the driver as an interpolated SQL literal (VACUUM INTO refuses a

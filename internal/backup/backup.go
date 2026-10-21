@@ -524,7 +524,7 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 		// the ONE question a shipped artefact raises — is the file that
 		// arrived the file that was verified — with a number that never
 		// matched what was written.
-		digest, err := store.FileDigest(path)
+		digest, err := store.FileDigest(ctx, path)
 		if err != nil {
 			return Manifest{}, err
 		}
