@@ -674,7 +674,7 @@ func publishFailure(ctx context.Context, tool string, c artifactCaller, err erro
 		// ANY OTHER REFUSAL A DOMAIN DECIDED, in its own class — see
 		// [writeFailure]'s same arm: a write the log refused because the
 		// artifact's purge had begun, which no arm above names.
-		return refusedBy(class, err, fmt.Sprintf("%s was refused: %s.", tool, said))
+		return refusedBy(class, err, domainRefusal(tool, err))
 	}
 	if why, ok := Condition(err); ok {
 		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s did not land "+

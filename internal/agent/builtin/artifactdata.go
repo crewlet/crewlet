@@ -356,7 +356,7 @@ func dataFailure(ctx context.Context, tool string, err error) tools.Result {
 	if class, ok := WriterClass(err); ok {
 		// ANY OTHER REFUSAL A DOMAIN DECIDED, in its own class — see
 		// [writeFailure]'s same arm.
-		return refusedBy(class, err, fmt.Sprintf("%s was refused: %s.", tool, dataSentence(err)))
+		return refusedBy(class, err, domainRefusal(tool, err))
 	}
 	return dataConditionOrFault(ctx, tool, err)
 }

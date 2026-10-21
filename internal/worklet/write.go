@@ -252,16 +252,21 @@ func forbiddenAs(sentinel error, format string, args ...any) error {
 }
 
 // Sentence is a refusal this package wrote, as a person reads it: the
-// writer's own sentence, without the package prefix a Go error carries. Any
-// other error — one this package did not write as a refusal, or a refusal a
-// caller wrapped in context of its own — is its whole message, because context
-// is never dropped to tidy a prefix away.
+// writer's own sentence, without the package prefix a Go error carries.
+//
+// ANY OTHER ERROR THIS PACKAGE WROTE — a sentinel with the words after it
+// ("worklet: no such task: ENG-42"), a typed refusal of its own — opens with
+// that prefix too, which says where it came from and nothing a reader acts on:
+// the prefix goes and every word after it stays. A refusal a caller wrapped in
+// context of its own opens with that context and is its whole message, because
+// context is never dropped to tidy a prefix away. The tools used to print such
+// an error whole, so a model read "worklet:" in front of what it was told.
 func Sentence(err error) string {
 	var r sentenced
 	if errors.As(err, &r) && r.Error() == err.Error() {
 		return r.sentence()
 	}
-	return err.Error()
+	return strings.TrimPrefix(err.Error(), "worklet: ")
 }
 
 // NoIfMatch omits an update's version precondition, which MERGES the patch

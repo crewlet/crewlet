@@ -2,6 +2,7 @@ package builtin
 
 import (
 	"errors"
+	"fmt"
 	"maps"
 	"slices"
 
@@ -143,9 +144,13 @@ func WriterClass(err error) (tools.Refusal, bool) {
 // WriterSentence is a native domain writer's refusal in the sentence the
 // domain that decided it composed, which its own tools word the same refusal
 // with for a model — and false for an error no domain decided: a
-// condition, a fault, an outcome nobody can vouch for, or one of the state
-// log's own refusals, which [WriterClass] classes and which keeps the words
-// the framework wrote it in, as the tools keep them.
+// condition, a fault, or an outcome nobody can vouch for.
+//
+// A WRITE THAT LOST ITS RACE, AND A CREATE OF WHAT IS THERE, are told in the
+// same words on every domain ([lostRaceWords], [alreadyThereWords]) — the state log's
+// own refusals, and every domain's that wraps them — because what the
+// framework says about them is the subject it met, a broker path nobody can
+// act on, and the tool-less verbs used to hand it to a person whole.
 //
 // A MODEL'S WORDS, and the human write surface's tool-less verbs do not
 // answer them: a purge's or a rename's refusal is told to a person in the
@@ -157,11 +162,58 @@ func WriterSentence(err error) (string, bool) {
 	if err == nil || errors.Is(UnknownCause("", err), ErrOutcomeUnknown) {
 		return "", false
 	}
+	if said, ok := frameworkSentence(err); ok {
+		return said, true
+	}
 	for _, name := range slices.Sorted(maps.Keys(nativeDomains)) {
 		d := nativeDomains[name]
 		if _, ok := d.class(err); ok {
 			return d.sentence(err), true
 		}
+	}
+	return "", false
+}
+
+// domainRefusal is a refusal some native domain decided, as a tool's fallback
+// arm words it: the framework's own two whole ([frameworkSentence]), and any
+// other as "<tool> was refused: <the deciding domain's sentence>." — the
+// DECIDING domain's, through [WriterSentence], because a tool's fallback meets
+// refusals other domains wrote too, and worded by its own domain's Sentence
+// one of them reached a model as "save_page was refused: chat: the room kept
+// changing under this write: room-1: statelog: conflict".
+func domainRefusal(tool string, err error) string {
+	if said, ok := frameworkSentence(err); ok {
+		return said
+	}
+	said, _ := WriterSentence(err)
+	return fmt.Sprintf("%s was refused: %s.", tool, said)
+}
+
+// lostRaceWords is a write that lost its compare-and-set rounds, in the words
+// [WriterSentence] answers on every domain: what happened, that nothing was
+// written, and that the same change may be made again once they have looked at
+// what the object says now. A tool's fallback arm tells a model so; a
+// domain's own tools tell it which read decides what to do next.
+const lostRaceWords = "Someone else changed this at the same moment, so nothing " +
+	"was written. Look at it again, then make the change again if it still " +
+	"needs making."
+
+// alreadyThereWords is a create the framework found already made — most often the
+// same create sent again after its operation was forgotten — in the words
+// [WriterSentence] answers on every domain.
+const alreadyThereWords = "What this creates is already there, so nothing was " +
+	"written. Look at what's there rather than making it again."
+
+// frameworkSentence is [lostRaceWords] for a write that lost its race and
+// [alreadyThereWords] for a create the framework found made, on every domain whose
+// error wraps the state log's own — and false for anything else, a collision a
+// domain words itself (a name, a title, a label another object holds) among it.
+func frameworkSentence(err error) (string, bool) {
+	switch {
+	case errors.Is(err, statelog.ErrConflict):
+		return lostRaceWords, true
+	case errors.Is(err, statelog.ErrExists):
+		return alreadyThereWords, true
 	}
 	return "", false
 }

@@ -218,15 +218,20 @@ func TestAMarkedRefusalKeepsItsSentenceAndItsChain(t *testing.T) {
 			errors.Is(alone, ErrForbidden), errors.Is(alone, sentinel), errors.Is(alone, ErrInvalid))
 	}
 
-	// CONTEXT IS NEVER DROPPED TO TIDY A PREFIX: a refusal a caller wrapped
-	// is its whole message, and an error this package did not write as a
-	// refusal is too.
+	// CONTEXT IS NEVER DROPPED TO TIDY A PREFIX: an error this package wrote
+	// loses the "worklet:" it opens with and keeps every word after it, the
+	// context a caller here gave it included; one another package wrapped
+	// opens with its context and is its whole message.
 	wrapped := fmt.Errorf("worklet: create ENG: %w", err)
-	if got := Sentence(wrapped); got != wrapped.Error() {
-		t.Errorf("a wrapped refusal's sentence is %q, want its whole message", got)
+	if got, want := Sentence(wrapped), strings.TrimPrefix(wrapped.Error(), "worklet: "); got != want {
+		t.Errorf("a wrapped refusal's sentence is %q, want %q", got, want)
 	}
-	if got := Sentence(ErrNoTask); got != ErrNoTask.Error() {
-		t.Errorf("an unmarked error's sentence is %q, want its whole message", got)
+	if got, want := Sentence(ErrNoTask), "no such task"; got != want {
+		t.Errorf("a sentinel's sentence is %q, want %q", got, want)
+	}
+	outside := fmt.Errorf("move ENG-1: %w", ErrNoTask)
+	if got := Sentence(outside); got != outside.Error() {
+		t.Errorf("a refusal another package wrapped is %q, want its whole message", got)
 	}
 }
 

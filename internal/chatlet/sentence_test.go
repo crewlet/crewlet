@@ -75,11 +75,17 @@ func TestARefusalReadsAsAnInstruction(t *testing.T) {
 	for name, err := range map[string]error{
 		"a wrapped field refusal": fmt.Errorf("open #launch: %w", chatlet.ChannelPatch{}.Validate()),
 		"a wrapped forbidden":     fmt.Errorf("edit: %w", forbidden),
-		"a conflict":              fmt.Errorf("%w: room kept moving", chatlet.ErrConflict),
 		"anything else":           errors.New("disk I/O"),
 	} {
 		if got := chatlet.Sentence(err); got != err.Error() {
 			t.Errorf("%s: Sentence = %q, want the whole message %q", name, got, err)
 		}
+	}
+	// AND ANY OTHER ERROR THIS PACKAGE WROTE loses the "chatlet:" it opens with
+	// and keeps every word after it: a tool printed it whole, so a model read
+	// "chatlet:" in front of what it was told.
+	taken := fmt.Errorf("%w: launch", chatlet.ErrNameTaken)
+	if got, want := chatlet.Sentence(taken), "that channel name is taken: launch"; got != want {
+		t.Errorf("a taken name: Sentence = %q, want %q", got, want)
 	}
 }

@@ -526,7 +526,8 @@ func (t *writeProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// `upload_expired` are — and the one the same call fixes, since
 		// it uploads the content anew, under a fresh key.
 		return refusedBy(tools.RefusalConflict, err, fmt.Sprintf("%s: %s was not "+
-			"written: %v. Make the same call again.", t.Name(), filePath, err)), nil
+			"written: %s. Make the same call again.", t.Name(), filePath,
+			worklet.Sentence(err))), nil
 	}
 	if err != nil {
 		return writeFailure(ctx, actor, t.Name(), err), nil
