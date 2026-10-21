@@ -790,7 +790,7 @@ func (f *Fetcher) auxCall(ctx context.Context, r Request, purpose types.AuxPurpo
 // knowledge hits searched for), every one of which is a number a reader can
 // reason about — unlike a character ceiling that lands mid-list.
 //
-// The empty-drop is load-bearing: renderEpisode and renderSkill both return
+// The empty-drop is load-bearing: learning.RenderPastTurn and renderSkill both return
 // "" for an entry with nothing to say, and joining those blindly leaves blank
 // bullets in the prompt.
 func joinBullets(bullets []string) string {

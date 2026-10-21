@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
 	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -350,6 +351,9 @@ func (t *queryEpisodes) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		found = keepOutcome(found, outcome, limit)
 		scope += fmt.Sprintf(" that ended %s", clip(outcome))
 	}
+	// THE SCOPE ECHOES WHAT THE SEAT ASKED FOR, its own words, and is only
+	// neutralised beside the fences of the turns below.
+	scope = provenance.Neutralise(turn.FenceBoundary(), scope)
 	if len(found) == 0 {
 		if unsearched > 0 {
 			// NOT NEW WORK — NOT SEARCHED. Recall compares only turns
@@ -397,58 +401,23 @@ func unsearchedNote(n int) string {
 // by its size, and the answer waits at most that long however many turns it
 // carries — where it once waited out the compactor's minute, and its retry,
 // per account, and then thirty seconds for every four rewrites.
+//
+// EACH TURN IS [learning.RenderPastTurn]'S, under the turn's own token: what a
+// past turn was asked is, on most turns, somebody else's words, fenced under
+// the label it was asked with exactly as the turn-start block fences it
+// (ADR-0040), and everything else on the line neutralised.
 func (t *queryEpisodes) render(ctx context.Context, turn *turnctx.Turn, found []learning.Episode) []string {
 	// Each rewrite is the turn's own cost, filed under its run.
 	turns := learning.PastTurns(ctx, found, t.compact.For(turn.Seat, turn.Aux()),
 		learning.EpisodeAccountBytes)
-	out := make([]string, len(found))
+	fence := turn.FenceBoundary()
+	out := make([]string, 0, len(found))
 	for i, ep := range found {
-		out[i] = renderPastTurn(ep, turns[i])
+		if entry := learning.RenderPastTurn(fence, ep, turns[i]); entry != "" {
+			out = append(out, entry+"\n")
+		}
 	}
 	return out
-}
-
-// renderPastTurn is one entry of query_episodes' answer.
-//
-// A RAW TURN is what woke it, what it was asked, how it ended, and what it did.
-// What woke it is the label of the waking event, MARKED as that — the worker
-// prompts' "woken by" — because unmarked, after the date, a model read "Message
-// from Ana: Slack message" as the question it had been asked; what it was asked
-// is the ask the row stores (none for a turn that was told nothing). A
-// COMPACTED ROW stands for a cluster of turns, so it is the pattern, how many
-// turns it stands for and how many of them ended done, and what varied: it has
-// no label and no account of its own, and rendered as a turn it showed nothing
-// but its date.
-func renderPastTurn(ep learning.Episode, past learning.PastTurn) string {
-	var b strings.Builder
-	if ep.Kind == learning.KindCompacted {
-		count := max(ep.Count, 1)
-		fmt.Fprintf(&b, "- %s to %s — %d turns like this: %s\n",
-			ep.StartedAt.Format(time.DateOnly), ep.EndedAt.Format(time.DateOnly), count,
-			ep.CommonTaskPattern)
-		if ep.ReviewOutcome != "" {
-			fmt.Fprintf(&b, "    outcome: %s (%d of %d done)\n", ep.ReviewOutcome, ep.DoneCount(), count)
-		}
-		if notable := strings.TrimSpace(ep.NotablePatterns); notable != "" {
-			fmt.Fprintf(&b, "    what varied: %s\n", notable)
-		}
-		return b.String()
-	}
-	fmt.Fprintf(&b, "- %s", ep.StartedAt.Format(time.RFC3339))
-	if ep.TaskSummary != "" {
-		fmt.Fprintf(&b, " — woken by: %s", ep.TaskSummary)
-	}
-	b.WriteString("\n")
-	if past.Ask != "" {
-		fmt.Fprintf(&b, "    asked: %s\n", past.Ask)
-	}
-	if ep.ReviewOutcome != "" {
-		fmt.Fprintf(&b, "    outcome: %s\n", ep.ReviewOutcome)
-	}
-	if past.Account != "" {
-		fmt.Fprintf(&b, "    what it did: %s\n", past.Account)
-	}
-	return b.String()
 }
 
 // --- refresh_memory ------------------------------------------------------- //

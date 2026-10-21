@@ -112,7 +112,11 @@ func (f *Fetcher) episodeRecall(ctx context.Context, r Request, vector turnVecto
 	// are what the seat is shown: the summary off, or a summary that did not
 	// answer.
 	if f.src.SummarizeEpisodes && f.src.Models != nil {
-		whole := joinBullets(f.renderEpisodes(ctx, r, hits, summaryTextBytes))
+		// ONE TOKEN FOR THE CALL, minted for it and never the turn's: the
+		// task and the past asks it reads are both somebody else's words
+		// on most turns, fenced under it ([Ask], [learning.RenderPastTurn]).
+		token := provenance.NewBoundary()
+		whole := joinBullets(f.renderEpisodes(ctx, r, hits, summaryTextBytes, token))
 		if whole == "" {
 			return ""
 		}
@@ -126,21 +130,22 @@ func (f *Fetcher) episodeRecall(ctx context.Context, r Request, vector turnVecto
 		// is the same on every turn of its surface, so it bears on
 		// nothing.
 		//
-		// THE TASK ARRIVES FENCED, under a token minted for this call and
-		// never the turn's ([Ask]): the briefing is written into the seat's
-		// system prompt with nothing around it, so a task that addresses the
-		// summary must read as somebody's words, and what the summary writes
-		// is neutralised under the turn's token, so nothing it echoes can
-		// pass for a fence's line there.
+		// THE TASK AND THE PAST ASKS ARRIVE FENCED, under the call's token
+		// ([Ask], [learning.RenderPastTurn]): the briefing is written into
+		// the seat's system prompt with nothing around it, so words that
+		// address the summary — today's or a month-old stranger's — must
+		// read as somebody's words, and what the summary writes is
+		// neutralised under the turn's token, so nothing it echoes can pass
+		// for a fence's line there.
 		summary, ok := f.auxCall(ctx, r, types.AuxEpisodeSummary, recallSummarySystemPrompt,
-			"Current task:\n"+r.Ask.For(provenance.NewBoundary())+
+			"Current task:\n"+r.Ask.For(token)+
 				"\n\nPast turns by this agent:\n"+whole+
 				"\n\nBriefing:")
 		if ok && strings.TrimSpace(summary) != "" {
 			return provenance.Neutralise(r.Boundary, summary)
 		}
 	}
-	return joinBullets(f.renderEpisodes(ctx, r, hits, learning.EpisodeAccountBytes))
+	return joinBullets(f.renderEpisodes(ctx, r, hits, learning.EpisodeAccountBytes, r.Boundary))
 }
 
 // summaryTextBytes bounds one recalled turn's ask, and its account, as the
@@ -158,9 +163,11 @@ const summaryTextBytes = compact.ChunkBytes / (2 * recallHits)
 // condensed where it is past textBytes — through [learning.PastTurns], the
 // one rendering the query_episodes tool shares, so at most [compact.Parallel]
 // rewrites run at once and all of them are held to one deadline: the render's
-// own [learning.EpisodeRewriteTimeout], or ctx's when sooner.
+// own [learning.EpisodeRewriteTimeout], or ctx's when sooner — and each turn
+// rendered by [learning.RenderPastTurn], its ask fenced under b as the label it
+// was asked with says.
 func (f *Fetcher) renderEpisodes(ctx context.Context, r Request, hits []learning.Hit,
-	textBytes int,
+	textBytes int, b provenance.Boundary,
 ) []string {
 	episodes := make([]learning.Episode, len(hits))
 	for i, hit := range hits {
@@ -169,44 +176,9 @@ func (f *Fetcher) renderEpisodes(ctx context.Context, r Request, hits []learning
 	turns := learning.PastTurns(ctx, episodes, f.src.Compact.For(r.Seat, r.Aux), textBytes)
 	bullets := make([]string, len(hits))
 	for i, hit := range hits {
-		bullets[i] = renderEpisode(hit.Episode, turns[i])
+		bullets[i] = learning.RenderPastTurn(b, hit.Episode, turns[i])
 	}
 	return bullets
-}
-
-// renderEpisode renders one past turn.
-//
-// WHAT WOKE IT, WHAT IT WAS ASKED, WHAT IT DID, AND WHETHER IT WORKED, because
-// those are what make a past turn useful as precedent. The label alone was all
-// this showed, and a label names the kind of event and nothing of the work —
-// every chat turn's is "Message from <someone>: <surface> message" — so it is
-// said as what WOKE the turn, the worker prompts' own word for it, and what
-// the turn was asked and what it did ([learning.PastTurn]) ride beside it. The
-// tool sequence rides along
-// because it is the cheapest possible answer to "how did I do this last time".
-func renderEpisode(ep learning.Episode, turn learning.PastTurn) string {
-	label := collapse(ep.TaskSummary)
-	if label == "" && turn.Ask == "" && turn.Account == "" {
-		return ""
-	}
-	line := "- Woken by: " + firstNonEmpty(label, "(not recorded)")
-	var notes []string
-	if ep.ReviewOutcome != "" {
-		notes = append(notes, "outcome: "+ep.ReviewOutcome)
-	}
-	if len(ep.ToolSequence) > 0 {
-		notes = append(notes, "tools: "+strings.Join(ep.ToolSequence, " → "))
-	}
-	if len(notes) > 0 {
-		line += " _(" + strings.Join(notes, "; ") + ")_"
-	}
-	if turn.Ask != "" {
-		line += "\n  Asked: " + turn.Ask
-	}
-	if turn.Account != "" {
-		line += "\n  What it did: " + turn.Account
-	}
-	return line
 }
 
 // counterpartyProfile renders what this seat has observed about whoever

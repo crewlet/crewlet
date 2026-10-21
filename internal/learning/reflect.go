@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -105,6 +106,28 @@ func (t Turn) Ask() string {
 		}
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+// AskLabel is who wrote [Turn.Ask] (ADR-0040), as one label over the whole of
+// it: the ask's own label ([types.TurnCompleted.AskProvenance]) where the ask
+// is carried, and otherwise the labels of the interactions whose bodies it
+// joins, merged ([provenance.Merge]) — or nil where it holds nobody's words but
+// the company's or the seat's own, or nothing.
+func (t Turn) AskLabel() *provenance.Label {
+	if strings.TrimSpace(t.Event.Ask) != "" {
+		return t.Event.AskProvenance
+	}
+	var labels []provenance.Label
+	for _, in := range t.Event.Interactions {
+		if strings.TrimSpace(in.Body) != "" {
+			labels = append(labels, in.Provenance)
+		}
+	}
+	if len(labels) == 0 {
+		return nil
+	}
+	merged := provenance.Merge(labels...)
+	return &merged
 }
 
 // describeTurn writes the lines every post-turn worker's prompt opens its
