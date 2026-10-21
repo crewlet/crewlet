@@ -518,7 +518,7 @@ func TestEveryChatConstituentIsKept(t *testing.T) {
 	// suppresses the echo, and no chat event is an OUTCOME the actor does
 	// not already know about.
 	for _, kind := range []string{"posted", "post_edited", "reaction_added"} {
-		if chatPrompt.WakesActor(kind) {
+		if chatPrompt.WakesActor(notify.Inbound{Source: chatPrompt.Backend, EventType: kind}) {
 			t.Fatalf("%s wakes its own actor", kind)
 		}
 	}

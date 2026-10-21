@@ -115,7 +115,7 @@ func (Prompt) WorkItem(metadata map[string]string) (types.WorkItem, bool) {
 // copy at the door. The exception exists for a third-party app that reports a
 // consequence the actor could not have seen coming, which is a code host's
 // failing pipeline, not an issue whose description was just saved.
-func (Prompt) WakesActor(string) bool { return false }
+func (Prompt) WakesActor(notify.Inbound) bool { return false }
 
 // DigestBody implements [notify.Prompt]: comments keep their body, issue
 // snapshots collapse.

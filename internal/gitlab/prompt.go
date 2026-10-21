@@ -98,7 +98,7 @@ func (Prompt) Addressed(n notify.Inbound) bool {
 // The test is "did something happen BECAUSE of me that I do not yet know
 // about". A build is the answer because it runs asynchronously, minutes
 // after the push, and reports a result nobody could have predicted.
-func (Prompt) WakesActor(eventType string) bool { return eventType == PipelineFailed }
+func (Prompt) WakesActor(n notify.Inbound) bool { return n.EventType == PipelineFailed }
 
 // DigestBody implements [notify.Prompt]: comments keep their body, item
 // snapshots collapse.

@@ -77,7 +77,7 @@ func (p ChatPrompt) Source() string { return p.Backend }
 // suppresses that at the door. Nothing a chat backend emits is an OUTCOME of
 // the actor's own action that the actor does not already know — which is the
 // only thing the exception is for.
-func (ChatPrompt) WakesActor(string) bool { return false }
+func (ChatPrompt) WakesActor(Inbound) bool { return false }
 
 // DigestBody implements [Prompt]: every constituent is kept.
 //
