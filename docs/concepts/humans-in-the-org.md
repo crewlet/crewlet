@@ -525,7 +525,9 @@ sequenceDiagram
   dashboards reading through a sound data node. Its own applier is then the
   one thing on it nobody vouches for, so for as long as the copy is out the
   node follows a sound data node's movements instead, relayed over the
-  broker, and withholds its own. Each switch — onto a peer, from one peer to
+  broker, and withholds its own. Every ask and answer on that relay is signed
+  under the fleet keyring and bound to the ask it answers, so an answer the
+  fleet did not sign reaches no screen. Each switch — onto a peer, from one peer to
   another, back to its own applier — sends every watched inbox one frame that
   counts nothing, because what moved during the switch is not replayed: the
   dashboard reads the inbox again, as it does on any frame.

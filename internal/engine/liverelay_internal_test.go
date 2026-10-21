@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -214,6 +216,19 @@ func written(doc string) []artifactdata.Moved {
 		Through: statelog.Position{Stream: topics.ArtifactDataLogStream, Generation: 1, Seq: 4}}}
 }
 
+// relayRing is the fleet keyring every relay node of a case signs under.
+var relayRing = statelog.OneKey("k1", "the live relay cases' fleet key material")
+
+// relayWireFor is one node's relay envelopes over ring.
+func relayWireFor(t *testing.T, ring statelog.Keyring) *relayWire {
+	t.Helper()
+	wire, err := newRelayWire(ring)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return wire
+}
+
 // relayNode is one data node's relay over a shared in-memory broker, with its
 // copy's verdict a switch the case holds, and the stops of its artifact
 // listeners for a case about a node that has none.
@@ -240,7 +255,7 @@ func newRelayNode(t *testing.T, broker *memory.Broker, self string,
 	stopMoved := n.engine.OnArtifactsMoved(n.heard.artifactsMoved)
 	stopData := n.engine.OnArtifactDataMoved(n.heard.dataMoved)
 	n.stopArtifacts = func() { stopMoved(); stopData() }
-	n.relay = newLiveRelay(self, q,
+	n.relay = newLiveRelay(self, q, relayWireFor(t, relayRing),
 		func(context.Context) ([]string, error) { return fleet, nil },
 		func(context.Context) bool { return n.faulted.Load() },
 		n.engine.liveListening, n.engine.deliverLive, n.engine.liveGap)
@@ -423,7 +438,7 @@ func TestAFollowerMovesToAnotherServerWhenItsServerStopsServing(t *testing.T) {
 func TestAServerSaysWhatAFollowerCannotPlaceItselfIn(t *testing.T) {
 	t.Parallel()
 	var faulted atomic.Bool
-	r := newLiveRelay("a", nil, nil,
+	r := newLiveRelay("a", nil, nil, nil,
 		func(context.Context) bool { return faulted.Load() }, nil, nil, nil)
 	ctx := t.Context()
 
@@ -556,5 +571,196 @@ func TestANodeNobodyListensOnRelaysNothing(t *testing.T) {
 	if d.relay.relaying.Load() {
 		t.Fatal("a node whose only attachment is a chat hub serving no socket is " +
 			"relaying a peer's batches to nobody")
+	}
+}
+
+// A RELAYED ANSWER THE FLEET DID NOT SIGN NEVER REACHES A SOCKET, AND ONE IT
+// SIGNED DOES.
+//
+// What a follower takes from the relay is pushed to every socket on its node
+// as a peer's appliers' work — a chat batch's excerpts and mentions, a
+// datastore's documents whole — so an answer anybody on the broker could write
+// is words in a room under anybody's name. Here a forger serves a's subject
+// beside a and answers every ask at once, before a does, in exactly the epoch
+// and the sequence the follower asked after — the forgery the unsigned relay
+// believed — unsealed, sealed under a key the fleet does not hold, and sealed
+// under the fleet's own key id with other material. Each is passed over while
+// the follower goes on waiting, and a's own sealed answer, arriving behind it,
+// is the one b's sockets hear.
+//
+// Mutation: let the follower believe a reply its OpenReply refuses (or decode
+// the body without opening it), and the forged post reaches b's chat; end the
+// ask on the first reply whatever it is, and b stops hearing a's posts behind
+// the forger; break a's seal (another channel name), and a's real post never
+// arrives.
+func TestARelayedAnswerTheFleetDidNotSignNeverReachesASocket(t *testing.T) {
+	t.Parallel()
+	for name, seal := range map[string]func(t *testing.T, a relayAnswer) []byte{
+		"unsealed": func(t *testing.T, a relayAnswer) []byte {
+			raw, err := json.Marshal(a)
+			if err != nil {
+				t.Error(err)
+			}
+			return raw
+		},
+		"sealed under a key the fleet does not hold": forgedSeal(
+			statelog.OneKey("k-forger", "material nobody in the fleet holds")),
+		"sealed under the fleet's key id with other material": forgedSeal(
+			statelog.OneKey("k1", "material that is not the fleet's")),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			broker := memory.NewBroker()
+			fleet := []string{"a", "b"}
+			a := newRelayNode(t, broker, "a", fleet)
+			b := newRelayNode(t, broker, "b", fleet)
+			b.faulted.Store(true)
+			b.follow(t)
+			b.heard.waitFor(t, "b following a", func(h heard) bool { return h.chatGaps == 1 })
+
+			// THE FORGER: on a's subject, answering first, in the follower's
+			// own epoch, with the batch after its last — and bound to the
+			// id it read off the ask, since an ask's body is in the clear.
+			forger := broker.Client()
+			if err := forger.Start(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			reader := relayWireFor(t, statelog.OneKey("k-forger", "material nobody in the fleet holds"))
+			var forged atomic.Int32
+			stop, err := forger.Serve(t.Context(), liveRelaySubject("a"),
+				func(_ context.Context, raw []byte) ([]byte, error) {
+					claimed := reader.Admit(raw, signedask.NewGuard(), time.Now()).Request
+					batch, err := json.Marshal(relayedBatch{Seq: claimed.After + 1,
+						liveBatch: liveBatch{Chat: posted("m-forged")}})
+					if err != nil {
+						return nil, err
+					}
+					forged.Add(1)
+					return seal(t, relayAnswer{Request: claimed.ID, Epoch: claimed.Epoch,
+						Head: claimed.After + 1, Batches: []json.RawMessage{batch}}), nil
+				})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = stop(context.WithoutCancel(t.Context())) })
+
+			// a's first post releases the ask in flight, which the forger
+			// never saw; the follower's next ask reaches both, and the
+			// forger answers it first.
+			a.engine.chatApplied(posted("m-1"))
+			b.heard.waitFor(t, "a's first post reaching b", func(h heard) bool {
+				return len(h.chat) == 1
+			})
+			deadline := time.Now().Add(2 * liveRelayWait)
+			for forged.Load() == 0 {
+				if time.Now().After(deadline) {
+					t.Fatal("the forger was never asked, so nothing here was forged")
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			a.engine.chatApplied(posted("m-2"))
+			b.heard.waitFor(t, "a's sealed post reaching b behind the forger",
+				func(h heard) bool { return slices.Contains(messages(h.chat), "m-2") })
+			got := b.heard.snapshot()
+			if m := messages(got.chat); m[0] != "m-1" || m[1] != "m-2" {
+				t.Errorf("b's chat heard %v, want a's two posts alone — a forged "+
+					"answer reached its sockets", m)
+			}
+			if got.chatGaps != 1 {
+				t.Errorf("b's chat was told to read again %d times, want once — a "+
+					"forged answer moved the follower", got.chatGaps)
+			}
+		})
+	}
+}
+
+// forgedSeal seals an answer the way a party holding ring would — one that is
+// not the fleet's.
+func forgedSeal(ring statelog.Keyring) func(t *testing.T, a relayAnswer) []byte {
+	return func(t *testing.T, a relayAnswer) []byte {
+		wire, err := newRelayWire(ring)
+		if err != nil {
+			t.Error(err)
+			return nil
+		}
+		sealed, err := wire.SealReply(a)
+		if err != nil {
+			t.Error(err)
+		}
+		return sealed
+	}
+}
+
+// A SERVER ANSWERS FROM ITS RING ONLY AN ASK THE FLEET SIGNED, BOUND AND NOT
+// TAKEN BEFORE.
+//
+// A server that sealed an answer to any ask would seal its ring — excerpts,
+// documents — for anybody, bound to whatever id they named. Here a server
+// holding a batch is asked unsealed, under a key it does not hold, with a
+// fleet-signed ask twice, and with one past its deadline: only the first
+// fleet-signed ask is answered with the batch, the one under an unheld key is
+// unserved and bound to its id (so its follower moves on at once), and the
+// rest are unserved and carry nothing. And a relay with no envelopes refuses
+// to serve rather than answering unsigned.
+//
+// Mutation: decode the ask without Admit, and the unsealed ask is answered
+// the batch; drop the guard, and the replay is; drop the deadline check in the
+// guard, and the late ask is.
+func TestARelayServerAnswersOnlyAnAskTheFleetSigned(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	wire := relayWireFor(t, relayRing)
+	r := newLiveRelay("a", nil, wire, nil,
+		func(context.Context) bool { return false }, nil, nil, nil)
+	first, _ := r.answerNow(ctx, relayAsk{})
+	r.record(liveBatch{Chat: posted("m-1")})
+	now := time.Now()
+	ask := relayAsk{Epoch: first.Epoch, After: first.Head, From: "b",
+		ID: signedask.NewID(), Deadline: now.Add(time.Minute)}
+
+	unsealed, err := json.Marshal(ask)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := r.answerSealed(ctx, unsealed, now); !got.Unserved || len(got.Batches) != 0 ||
+		got.Request != "" {
+		t.Errorf("an ask the fleet did not sign was answered %+v, want unserved, "+
+			"bound to nothing and carrying nothing", got)
+	}
+	unheld, err := relayWireFor(t, statelog.OneKey("k2", "a key this server does not hold")).
+		SealRequest(ask)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := r.answerSealed(ctx, unheld, now); !got.Unserved || len(got.Batches) != 0 ||
+		got.Request != ask.ID {
+		t.Errorf("an ask under a key the server does not hold was answered %+v, "+
+			"want unserved, bound to its id and carrying nothing", got)
+	}
+	sealed, err := wire.SealRequest(ask)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := r.answerSealed(ctx, sealed, now); got.Unserved || len(got.Batches) != 1 ||
+		got.Request != ask.ID {
+		t.Fatalf("an ask the fleet signed was answered %+v, want the batch after "+
+			"it, bound to its id", got)
+	}
+	if got := r.answerSealed(ctx, sealed, now); !got.Unserved || len(got.Batches) != 0 {
+		t.Errorf("a replay of an ask already answered was answered %+v, want "+
+			"unserved and nothing", got)
+	}
+	late := ask
+	late.ID, late.Deadline = signedask.NewID(), now.Add(-time.Second)
+	sealedLate, err := wire.SealRequest(late)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := r.answerSealed(ctx, sealedLate, now); !got.Unserved || len(got.Batches) != 0 {
+		t.Errorf("an ask past its deadline was answered %+v, want unserved and nothing", got)
+	}
+
+	if _, err := newLiveRelay("a", nil, nil, nil, nil, nil, nil, nil).serve(ctx); err == nil {
+		t.Error("a relay with no envelopes served its subject, answering unsigned")
 	}
 }

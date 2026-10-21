@@ -14,7 +14,7 @@
 // is an instruction — and an unsigned instruction is exactly what ADR-0031
 // refuses on a state log, one hop before the log.
 //
-// The channels that are instructions are each a [Channel] — among them:
+// These channels carry instructions, and each is a [Channel]:
 //
 //   - the ESTATE SERVICE (internal/estate): a data node runs a tracker, a
 //     knowledge-base or a chat write AS THE ACTOR THE REQUEST NAMES, and
@@ -36,10 +36,18 @@
 //     (internal/sandbox, `sandbox.box_read`): the host reads a box no other
 //     node can reach and pauses it, as the collection it is part of does —
 //     so unsigned, anybody on the broker could have a run's box read back
-//     and paused.
-//
-// The bridge's relayed exchange (internal/httprelay) and the assistant's
-// replay and stop (internal/assistant/live) are channels on the same terms.
+//     and paused;
+//   - the BOX BRIDGE'S RELAY (internal/httprelay, which internal/api/mcpbridge
+//     joins), on two channels: an OPEN has the node holding a box's session
+//     run its HTTP request AS WHOEVER ITS TOKEN NAMES, and each frame of the
+//     answer is written to the box as that node's. So unsigned, anybody on the
+//     broker could call a running seat's tools as that seat, or answer a box in
+//     the holder's place;
+//   - the ASSISTANT'S REPLAY AND STOP (internal/assistant/live), on two
+//     channels: the node running a person's turn hands over the frames another
+//     node's client missed, or stops the turn, on the asking node's word that
+//     the person asked. So unsigned, anybody on the broker could stop anybody's
+//     turn, or end one by answering for the node running it.
 //
 // # One frame, the state log's
 //
@@ -90,24 +98,44 @@
 //     deadline, its deadline had passed when it arrived, or this node has
 //     already taken its id. Runs nothing.
 //
-// # And one way, for a frame that names a person
+// # And one way, for a frame a node shows to people
 //
-// One channel carries no instruction and expects no reply, and is signed all
-// the same: a PRESENCE frame (internal/presence) is broadcast to every node
-// listening, and what a node does with it is show a person in a room. A forged
-// one would put a colleague somewhere they are not, so it is sealed one way
+// Two channels carry no instruction and expect no reply, and are signed all
+// the same. A PRESENCE frame (internal/presence) is broadcast to every node
+// listening, and what a node does with it is show a person in a room: a forged
+// one would put a colleague somewhere they are not. An ASSISTANT FRAME
+// (internal/assistant/live) is broadcast to every node following a person's
+// turn, and what a node does with it is stream it to that person: a forged one
+// would put words in their own conversation. So each is sealed one way
 // ([OneWay]): the same frame, a key domain of its own, and an expiry inside the
-// signed body in place of the id and deadline a reply would be bound to.
+// signed body in place of the id and deadline a reply would be bound to. An
+// assistant frame is encrypted under the fleet keyring before it is sealed as
+// well, because it carries the person's conversation and a seal hides nothing.
+//
+// # And a read whose answer is shown
+//
+// One request-and-reply channel carries no instruction either: the LIVE RELAY
+// (internal/engine, liverelay.go), on which a data node whose own copy is out
+// of service asks a sound peer what that peer's appliers committed. It only
+// reads, and it is a [Channel] all the same, because what the asker does with
+// the answer is PUSH it to every socket it holds as the peer's work — a chat
+// batch's excerpts and mentions, a datastore batch's documents — so a forged
+// answer is words shown under somebody's name. Its asks are bound like any
+// request, so the answer a follower believes is the one to the ask it just
+// sent; a one-way seal would let a captured answer be believed by any follower
+// asking inside its validity.
 //
 // # What it does not cover
 //
-// The scatters that only READ — the fleet's history, a search slice, a held
-// seat's memory, a sandbox's live tail — carry no instruction a node carries
-// out, so they are not channels here; and the queue's own event envelopes,
-// custody batches among them, carry what a node observed rather than what it
-// must do (ADR-0031). A broker that anybody can reach can read and forge on
-// those as it can on any subject: keeping both ports private is the operator's
-// half of the rule (SECURITY.md).
+// The scatters whose answer is READ — the fleet's history, a search slice, a
+// held seat's memory, a sandbox's live tail, each handed back to the one
+// caller that asked as the answer to its question — carry no instruction a
+// node carries out and nothing a node shows as another's content, so they are
+// not channels here; and the queue's own event envelopes, custody batches
+// among them, carry what a node observed rather than what it must do
+// (ADR-0031). A broker that anybody can reach can read and forge on those as
+// it can on any subject: keeping both ports private is the operator's half of
+// the rule (SECURITY.md).
 package signedask
 
 import (

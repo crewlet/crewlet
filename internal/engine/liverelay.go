@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -16,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -92,23 +94,56 @@ import (
 // rather than lost: another epoch, a sequence the ring no longer reaches, or
 // another server, each of which is a re-read.
 //
-// # Not signed, deliberately
+// # Signed, because what it answers is shown as somebody's work
 //
 // The fleet's ephemeral channels that are INSTRUCTIONS are signed
-// (internal/signedask): a node carries the request out as somebody. This is a
-// READ — a follower asks a server what its own appliers committed, and the
-// server answers about itself — and what the follower does with the answer is
-// hand it to its own sockets' filters, which decide what each is shown: an
-// inbox movement through the `work_inbox` question and its own authority, a
-// chat batch through the room's own visibility for each viewer
-// ([chatlet.Visible]), and an artifact's batch through the room's own join and
-// each reader's role and the collection's read rule ([artifactdata.Readable]).
-// It is the scatters that only read (ADR-0031): a forged inbox or artifacts
-// answer causes a re-read and nothing else, and a forged chat or datastore
-// answer shows a viewer what the room admits them until their screen reads
-// the room again — what a forged history or search slice shows too, what a
-// party on the broker can do on any subject it reaches, and why keeping the
-// broker's ports private is the operator's half (SECURITY.md).
+// (internal/signedask), and the scatters that only READ are not (ADR-0031):
+// a forged history page or search slice is a wrong answer to one question,
+// read once and gone with the next. This scatter's answer is not that. What a
+// follower takes from it is PUSHED, unasked, to every socket on its node as
+// what that server's appliers committed — a chat batch carries each message's
+// excerpt and who it mentions ([chatlet.Applied]), and a datastore batch every
+// document it changed, whole ([artifactdata.DocDelta]) — and a screen shows it
+// as what a colleague just said or wrote. Unsigned, anybody who reached the
+// cluster or the leaf port could answer a follower before its server did and
+// put words in a room under anybody's name, or a value in a shared table, on
+// every screen of an out-of-service node until each read the rows again.
+//
+// So the relay is a CHANNEL of internal/signedask's, in key domains of its own
+// ([liveRelayChannel], `live.relay.request` and `live.relay.reply`), so no
+// state-log record, presence frame or other channel's envelope verifies as one
+// of its asks or answers. A channel and not a one-way frame, because the relay
+// is an ask and ONE answer to it, and what makes an answer worth believing is
+// that it answers THIS ask: sealed one way, with an expiry and no binding, a
+// captured answer would be believed by any follower asking inside its validity
+// — one server's "unserved" moving every follower off it, or an old answer's
+// batches handed to a follower that had already moved on. Bound to an id drawn
+// for each ask ([signedask.NewID]), an answer is believed by the one follower
+// that asked, once. The server admits the ask too ([signedask.Channel.Admit]):
+// it is no instruction, but a server that sealed an answer to any ask would
+// seal its ring for anybody, bound to whatever id they named, and one under a
+// key it does not hold is answered "unserved" at once, so its follower moves to
+// a server that holds the key rather than waiting out its ask.
+//
+// AN ANSWER THE FOLLOWER CANNOT BELIEVE IS NO ANSWER — never "unserved", never
+// a gap, never batches — and the follower goes on waiting for its server's own
+// ([liveRelay.ask]): the transport hands back whichever reply arrives first and
+// carries no sender, so a forged reply that arrived first and ended the ask
+// would let anybody on the broker move every follower off every server. Its
+// server's real answer, arriving behind it, is the one taken; a server that
+// never sends one is a silent peer, which the follower already handles by
+// moving on.
+//
+// What a follower does with a believed answer is what its own appliers' batch
+// would have had done with it: hand it to its sockets' own filters, which
+// decide what each is shown — an inbox movement through the `work_inbox`
+// question and its own authority, a chat batch through the room's own
+// visibility for each viewer ([chatlet.Visible]), and an artifact's batch through
+// the room's own join and each reader's role and the collection's read rule
+// ([artifactdata.Readable]). Signing authenticates and does not encrypt: what
+// the relay carries is readable by anything on the broker, as every record on
+// the logs it derives from is, and keeping both ports private is the
+// operator's half (SECURITY.md).
 
 // liveRelaySubject is the one subject a node serves its relay on —
 // [topics.LiveRelayPrefix] and the node, one node per subject, because a
@@ -118,6 +153,34 @@ import (
 func liveRelaySubject(node string) string {
 	return topics.LiveRelayPrefix + coord.DocumentKey(node)
 }
+
+// liveRelayChannel is the relay's channel, and so the stem of the two key
+// domains its asks and answers are signed under — its own, so no estate
+// envelope, broker request, steer note, presence frame or state-log record
+// verifies as one.
+const liveRelayChannel = "live.relay"
+
+// relayWire is the relay's envelopes: one per node, both halves, since a data
+// node both asks (as a follower) and answers (as a server).
+type relayWire = signedask.Channel[relayAsk, relayAnswer]
+
+// newRelayWire builds this node's relay envelopes over the fleet keyring
+// every state-log record is signed under. The keyring is required on every
+// node, so this fails only on a bootstrap [config.Bootstrap.Validate] would
+// already have refused.
+func newRelayWire(ring statelog.Keyring) (*relayWire, error) {
+	wire, err := signedask.New[relayAsk, relayAnswer](liveRelayChannel, ring)
+	if err != nil {
+		return nil, fmt.Errorf("engine: the live relay's envelopes: %w", err)
+	}
+	return wire, nil
+}
+
+// errNoRelayWire is a relay built without its envelopes: it can neither ask a
+// server nor answer a follower.
+var errNoRelayWire = errors.New("engine: no envelopes for the live relay — every " +
+	"ask and answer on its subjects is signed under the fleet keyring (Tier A " +
+	"secrets.keys)")
 
 // liveRelayRingBytes is how much of what its appliers announced a server keeps
 // for its followers, ENCODED.
@@ -201,27 +264,52 @@ type heldBatch struct {
 
 // relayAsk is what a follower sends: the epoch and the sequence of the last
 // batch it took from this server — none, for a follower that has taken
-// nothing from it yet and asks only where it stands.
+// nothing from it yet and asks only where it stands — signed whole, with the
+// id and the deadline that bind it ([signedask.Request]).
 type relayAsk struct {
+	// ID and Deadline bind the ask: drawn per ask, so the answer a follower
+	// believes is the one to the ask it just sent.
+	ID       string    `json:"id"`
+	Deadline time.Time `json:"deadline"`
+
 	Epoch string `json:"epoch,omitempty"`
 	After uint64 `json:"after"`
+
+	// From is the asking node, for the server's log.
+	From string `json:"from,omitempty"`
 }
+
+// Binding is the ask's id and deadline ([signedask.Request]).
+func (a relayAsk) Binding() (string, time.Time) { return a.ID, a.Deadline }
 
 // relayAnswer is what a server answers: where it stands, and every batch after
 // the follower's that it holds, each a [relayedBatch] — or that it cannot
 // answer from its own copy at all (Unserved), or no longer reaches back as far
-// as the follower (Gap).
+// as the follower (Gap). Signed whole, and naming the ask it answers
+// ([signedask.Reply]).
 type relayAnswer struct {
+	// Request is the id of the ask this answers, empty only where the ask
+	// could not be read at all.
+	Request  string            `json:"request,omitempty"`
 	Epoch    string            `json:"epoch"`
 	Head     uint64            `json:"head"`
 	Batches  []json.RawMessage `json:"batches,omitempty"`
 	Gap      bool              `json:"gap,omitempty"`
 	Unserved bool              `json:"unserved,omitempty"`
+	// Detail says why an answer is unserved where the server did not take
+	// the ask at all — not signed by the fleet, under a key it does not
+	// hold, past its deadline — for the follower's log.
+	Detail string `json:"detail,omitempty"`
 }
 
-// relayQueue is the two ephemeral verbs the relay rides.
+// Answers is the id of the ask this answers ([signedask.Reply]).
+func (a relayAnswer) Answers() string { return a.Request }
+
+// relayQueue is the two ephemeral verbs the relay rides. AskEach rather than
+// Ask, so a follower judges each reply as it arrives and goes on waiting past
+// one it cannot believe ([liveRelay.ask]).
 type relayQueue interface {
-	Ask(ctx context.Context, subject string, request []byte, want int) ([][]byte, error)
+	AskEach(ctx context.Context, subject string, request []byte, each func(reply []byte) bool) error
 	Serve(ctx context.Context, subject string, h queue.AnswerFunc) (queue.Unsubscribe, error)
 }
 
@@ -230,6 +318,12 @@ type relayQueue interface {
 type liveRelay struct {
 	self  string
 	queue relayQueue
+
+	// wire signs this node's asks and answers and verifies its peers'
+	// ([newRelayWire]); taken is the ask ids this node has admitted as a
+	// server, each until its deadline ([signedask.Guard]).
+	wire  *relayWire
+	taken *signedask.Guard
 
 	// roster is every live data node, from memory ([Engine.dataRoster]).
 	roster func(context.Context) ([]string, error)
@@ -273,13 +367,14 @@ type liveRelay struct {
 }
 
 // newLiveRelay builds a relay with a fresh epoch.
-func newLiveRelay(self string, q relayQueue, roster func(context.Context) ([]string, error),
+func newLiveRelay(self string, q relayQueue, wire *relayWire,
+	roster func(context.Context) ([]string, error),
 	faulted func(context.Context) bool, listening func() bool,
 	deliver func(liveBatch), gap func()) *liveRelay {
 
-	return &liveRelay{self: self, queue: q, roster: roster, faulted: faulted,
-		listening: listening, deliver: deliver, gap: gap, epoch: rand.Text(),
-		moved: make(chan struct{})}
+	return &liveRelay{self: self, queue: q, wire: wire, taken: signedask.NewGuard(),
+		roster: roster, faulted: faulted, listening: listening, deliver: deliver,
+		gap: gap, epoch: rand.Text(), moved: make(chan struct{})}
 }
 
 // record keeps one batch this node's appliers announced, for its followers.
@@ -395,16 +490,66 @@ func (r *liveRelay) answerNow(ctx context.Context, ask relayAsk) (relayAnswer, <
 }
 
 // serve makes this node the answerer of its own relay subject.
+//
+// A RELAY WITHOUT ITS ENVELOPES IS REFUSED rather than serving unsigned: what
+// it answers is pushed to a peer's sockets as this node's appliers' work, and
+// a server that answered unsigned is the hole the envelopes close.
 func (r *liveRelay) serve(ctx context.Context) (queue.Unsubscribe, error) {
+	if r.wire == nil {
+		return nil, errNoRelayWire
+	}
 	return r.queue.Serve(ctx, liveRelaySubject(r.self),
 		func(ctx context.Context, raw []byte) ([]byte, error) {
-			var ask relayAsk
-			if err := json.Unmarshal(raw, &ask); err != nil {
-				return nil, fmt.Errorf("engine: a live relay ask this build "+
-					"cannot read: %w", err)
-			}
-			return json.Marshal(r.answer(ctx, ask, liveRelayWait))
+			return r.wire.SealReply(r.answerSealed(ctx, raw, time.Now()))
 		})
+}
+
+// answerSealed answers one sealed ask, and ALWAYS answers, for the estate
+// server's reason: a server that stayed silent would be indistinguishable from
+// one that is down, and its follower would wait out its whole ask before it
+// asked another.
+//
+// IT ANSWERS FROM ITS RING ONLY WHAT IT ADMITS ([signedask.Channel.Admit]);
+// every other ask is answered unserved, with what it was, so its follower
+// moves on — bound to the ask's id where the id is the fleet's to name, and to
+// nothing where it is not, which no follower believes.
+func (r *liveRelay) answerSealed(ctx context.Context, raw []byte, now time.Time) relayAnswer {
+	admitted := r.wire.Admit(raw, r.taken, now)
+	switch admitted.Disposition {
+	case signedask.Tampered:
+		// NOT THE FLEET'S: nothing in it is believed, not even the id an
+		// answer would name. At ERROR — no server will ever take it, so
+		// whoever sent it reached the broker and is not the fleet.
+		log.ErrorContext(ctx, "live_relay_ask_refused", "node", r.self,
+			"disposition", string(admitted.Disposition), "detail", admitted.Why)
+		return relayAnswer{Unserved: true, Detail: fmt.Sprintf(
+			"%s refused an ask that is not signed by this fleet", r.self)}
+	case signedask.KeyUnknown:
+		// A FACT ABOUT THIS SERVER, which an operator changes by adding
+		// the key: unserved, bound to the id the follower sent, so it asks
+		// a server that holds the key.
+		log.WarnContext(ctx, "live_relay_ask_refused", "node", r.self,
+			"disposition", string(admitted.Disposition), "claimed_from", admitted.Request.From,
+			"detail", admitted.Why)
+		return relayAnswer{Request: admitted.ID, Unserved: true, Detail: fmt.Sprintf(
+			"%s does not hold the key the ask is signed under (it holds %v)",
+			r.self, r.wire.HeldKeys())}
+	case signedask.Undecodable:
+		log.WarnContext(ctx, "live_relay_ask_refused", "node", r.self,
+			"disposition", string(admitted.Disposition), "detail", admitted.Why)
+		return relayAnswer{Unserved: true, Detail: fmt.Sprintf(
+			"%s could not decode an ask the fleet signed: %s", r.self, admitted.Why)}
+	case signedask.Stale:
+		log.WarnContext(ctx, "live_relay_ask_refused", "node", r.self,
+			"disposition", string(admitted.Disposition), "from", admitted.Request.From,
+			"detail", admitted.Why)
+		return relayAnswer{Request: admitted.ID, Unserved: true,
+			Detail: fmt.Sprintf("%s: %s", r.self, admitted.Why)}
+	}
+	ask := admitted.Request
+	out := r.answer(ctx, ask, liveRelayWait)
+	out.Request = ask.ID
+	return out
 }
 
 // follow runs until ctx ends: idle while this node's own copy serves, and
@@ -528,30 +673,65 @@ func (r *liveRelay) pick(ctx context.Context, tried map[string]bool) string {
 	return ""
 }
 
-// ask asks one server, reporting false for a server that did not answer.
+// ask asks one server, reporting false for a server that gave no answer this
+// follower believes.
+//
+// EACH REPLY IS JUDGED AS IT ARRIVES, and one this follower cannot believe —
+// not signed by the fleet, signed under a key it does not hold, bound to
+// another ask, or one this build cannot decode — is logged and passed over
+// while the ask goes on: the transport carries no sender, so a forged reply
+// that ended the ask would be anybody on the broker deciding that this server
+// did not answer. A server whose own answer never comes is silent, and the
+// follower moves on as it does from any silent server.
 func (r *liveRelay) ask(ctx context.Context, node string, a relayAsk) (relayAnswer, bool) {
-	raw, err := json.Marshal(a)
-	if err != nil {
+	if r.wire == nil {
+		log.ErrorContext(ctx, "live_relay_unanswered", "server", node,
+			"error", errNoRelayWire.Error())
 		return relayAnswer{}, false
 	}
 	// THE WAIT AND A ROUND TRIP: the server answers at the end of its wait
 	// at the latest, and statelog.ReadBudget is the budget the estate's
-	// own reads give a peer to answer in.
+	// own reads give a peer to answer in. The ask's deadline is the same
+	// instant, which is how long its server remembers its id.
 	askCtx, cancel := context.WithTimeout(ctx, liveRelayWait+statelog.ReadBudget)
 	defer cancel()
-	replies, err := r.queue.Ask(askCtx, liveRelaySubject(node), raw, 1)
-	if err != nil || len(replies) == 0 {
+	a.ID, a.From = signedask.NewID(), r.self
+	a.Deadline, _ = askCtx.Deadline()
+	sealed, err := r.wire.SealRequest(a)
+	if err != nil {
+		log.ErrorContext(ctx, "live_relay_unanswered", "server", node, "error", err.Error())
+		return relayAnswer{}, false
+	}
+	var (
+		got      relayAnswer
+		believed bool
+	)
+	err = r.queue.AskEach(askCtx, liveRelaySubject(node), sealed, func(reply []byte) bool {
+		rep, why, openErr := r.wire.OpenReply(reply, a.ID)
+		switch {
+		case openErr != nil:
+			// THE FLEET SIGNED IT FOR THIS ASK and this build cannot read
+			// it — a server on a newer build. Nothing else will come.
+			log.WarnContext(ctx, "live_relay_unreadable", "server", node,
+				"error", openErr.Error())
+			return false
+		case why != "":
+			log.WarnContext(ctx, "live_relay_reply_refused", "server", node,
+				"detail", why+"; still waiting for the server's own answer")
+			return true
+		}
+		got, believed = rep, true
+		return false
+	})
+	if !believed {
 		if ctx.Err() == nil {
 			log.DebugContext(ctx, "live_relay_unanswered", "server", node,
 				"error", fmt.Sprint(err))
 		}
 		return relayAnswer{}, false
 	}
-	var got relayAnswer
-	if err := json.Unmarshal(replies[0], &got); err != nil {
-		log.WarnContext(ctx, "live_relay_unreadable", "server", node,
-			"error", err.Error())
-		return relayAnswer{}, false
+	if got.Unserved && got.Detail != "" {
+		log.DebugContext(ctx, "live_relay_unserved", "server", node, "detail", got.Detail)
 	}
 	return got, true
 }
@@ -649,7 +829,7 @@ func (e *Engine) armLiveRelay(ctx context.Context) error {
 	if e.local == nil || e.backends == nil || e.backends.Queue == nil {
 		return nil
 	}
-	relay := newLiveRelay(e.id, e.backends.Queue, e.dataRoster,
+	relay := newLiveRelay(e.id, e.backends.Queue, e.relayWire, e.dataRoster,
 		e.local.faultedUnasked, e.liveListening, e.deliverLive, e.liveGap)
 	stop, err := relay.serve(ctx)
 	if err != nil {
