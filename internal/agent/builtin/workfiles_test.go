@@ -413,7 +413,9 @@ func TestWritingTheSameContentAgainStoresNothing(t *testing.T) {
 
 // AN UPLOAD TOO OLD TO RECORD IS ONE THE SAME CALL FIXES: the call uploads the
 // content anew, under a fresh key — so the seat is told to make it again,
-// rather than that the write failed.
+// rather than that the write failed. Its class is the upload's state, a
+// conflict, as the artifacts' stale upload and the file route's own 409 are:
+// no wait changes it.
 func TestAnUploadTooOldToRecordIsMadeAgain(t *testing.T) {
 	t.Parallel()
 	files, objects := newFakeFiles(), newFakeObjects()
@@ -422,7 +424,7 @@ func TestAnUploadTooOldToRecordIsMadeAgain(t *testing.T) {
 	got := callWork(t, reg, worklet.WriteProjectFileTool, map[string]any{
 		"path": "r.md", "content": "late",
 	})
-	if !got.Failed || tools.RefusalOf(got) != tools.RefusalUnavailable ||
+	if !got.Failed || tools.RefusalOf(got) != tools.RefusalConflict ||
 		!strings.Contains(got.Output, "Make the same call again") {
 		t.Fatalf("a stale upload answered %s (refusal %q)", got.Output, tools.RefusalOf(got))
 	}

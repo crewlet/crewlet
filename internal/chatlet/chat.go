@@ -584,10 +584,11 @@ func invalid(field, why string, args ...any) error {
 // never a tool's sentence, until the refusal catalog words it for them
 // (ADR-0060).
 //
-// THE FOUR IT RECOGNISES ARE THE FOUR WRITTEN AS SENTENCES: a field refused
+// THE FIVE IT RECOGNISES ARE THE FIVE WRITTEN AS SENTENCES: a field refused
 // ([ErrInvalid]), a gesture this actor may not make ([ErrForbidden]), a room
-// that takes nothing more ([ErrArchived]), which a caller fixes by choosing
-// another room, and a room this node cannot serve until it is upgraded
+// that takes nothing more ([ErrArchived]) and a message that carries all the
+// emoji it may ([ErrReactionsFull]), each a state the sentence says how to
+// change, and a room this node cannot serve until it is upgraded
 // ([ErrUnknownKind]). The rest are sentences for a model, or are answered in
 // words the tool composes itself.
 func Sentence(err error) string {
@@ -595,7 +596,7 @@ func Sentence(err error) string {
 	if errors.As(err, &refusal) && refusal.Error() == err.Error() {
 		return "`" + refusal.Field + "`: " + refusal.Why
 	}
-	for _, mark := range []error{ErrForbidden, ErrArchived, ErrUnknownKind} {
+	for _, mark := range []error{ErrForbidden, ErrArchived, ErrReactionsFull, ErrUnknownKind} {
 		if !errors.Is(err, mark) {
 			continue
 		}

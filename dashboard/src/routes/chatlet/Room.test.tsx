@@ -31,6 +31,7 @@ import { LIVE_REFETCH_MS } from "./live.ts";
 import { SHORTEN_FIRST } from "./Composer.tsx";
 import { DELETE_IN_FLIGHT, EDIT_IN_FLIGHT, NOTHING_CHANGED } from "./Transcript.tsx";
 import { MAX_BODY_BYTES } from "~/contract/chat.ts";
+import { ACT_ERRORS } from "~/contract/errors.ts";
 import { Store, type ChatPresencePush, type RoomMember, type QueryName } from "~/protocol/index.ts";
 import { MAX_CHAT_LIVE } from "~/protocol/store.ts";
 import { LoneRoom } from "./testkit.tsx";
@@ -269,14 +270,40 @@ test("a reply's retry offline is held with why, in a thread as in the room", asy
 
 test("a refusal is shown as the engine's own sentence rather than as a failure", async () => {
   reply = (tool) =>
-    refused(tool, "invalid", "post_message refused that: room general is archived", 422);
+    refused(
+      tool,
+      "invalid",
+      "post_message refused that: `body`: a message is 40960 bytes against a 32768 cap",
+      422,
+    );
   mount();
   await screen.findByText("line 2");
   await say("anyone there?");
-  await waitFor(() => expect(screen.getByText(/is archived/)).toBeTruthy());
+  await waitFor(() => expect(screen.getByText(/40960 bytes/)).toBeTruthy());
   // A REFUSAL OF THE MESSAGE IS NOT A BUTTON TO PRESS AGAIN: it is refused
   // the same way however often it is sent.
   expect(screen.queryByRole("button", { name: /try again/i })).toBeNull();
+});
+
+test("a post the room's state refuses is drawn as a conflict, never as a retry", async () => {
+  // AN ARCHIVED ROOM IS THE ROOM'S STATE (`409 conflict`, the one rule every
+  // domain's refusals are classed by): the same post lands once somebody
+  // reopens the room and not before, so the row says it met the room as it
+  // is now, in the dashboard's own words for the class, and offers nothing
+  // to press again.
+  reply = (tool) =>
+    refused(
+      tool,
+      "conflict",
+      "post_message refused that: room-1 was archived on 2026-02-01T00:00:00Z",
+      409,
+    );
+  mount();
+  await screen.findByText("line 2");
+  await say("anyone there?");
+  await waitFor(() => expect(screen.getByText(ACT_ERRORS.conflict)).toBeTruthy());
+  expect(screen.queryByRole("button", { name: /try again/i })).toBeNull();
+  expect(screen.queryByRole("button", { name: /send again/i })).toBeNull();
 });
 
 test("a refusal the node made can be tried again, under the same operation key", async () => {

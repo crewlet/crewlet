@@ -312,7 +312,8 @@ func (s *served) deleteFile(w http.ResponseWriter, r *http.Request) {
 
 // acceptsFiles reads the project an upload names, refusing — before a byte of
 // the body is read — one there is none of and one that takes no files, in the
-// writer's own sentence ([worklet.AcceptFiles]). It reports whether to go on.
+// writer's own sentence and class ([worklet.AcceptFiles]). It reports whether
+// to go on.
 //
 // AT THE LEVEL EVERY DECISION HERE READS AT ([decisionRead]), and only an
 // early refusal: the write's own decide is what actually judges the project.
@@ -327,9 +328,11 @@ func (s *served) acceptsFiles(w http.ResponseWriter, r *http.Request, project st
 	if err == nil {
 		return true
 	}
-	if errors.Is(err, worklet.ErrInvalid) {
-		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalid,
-			map[string]string{"detail": worklet.Sentence(err)})
+	if errors.Is(err, worklet.ErrState) {
+		// THE PROJECT'S STATE, answered as the write itself would answer
+		// it — by the one mapping ([operator.FailWrite]), `409 conflict`
+		// in the writer's sentence — before a byte of the body is read.
+		operator.FailWrite(r.Context(), w, err, "", nil)
 		return false
 	}
 	fileReadFailed(w, r, err)
@@ -449,12 +452,14 @@ func fileWriteFailed(w http.ResponseWriter, r *http.Request, err error, key stri
 		// another.
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeUploadExpired,
 			map[string]string{"detail": err.Error()})
-	case errors.Is(err, worklet.ErrInvalid):
-		// THE WRITE CAN NEVER LAND AS SENT — an archived project, a
-		// content type no row may hold — which is the request's to change.
-		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalid,
-			map[string]string{"detail": worklet.Sentence(err)})
 	default:
+		// A CONTENT REFUSAL — a content type no row may hold — is `422
+		// invalid` and an archived project the project's state, `409
+		// conflict`, each in the writer's own sentence, BY THE ONE MAPPING
+		// every write surface answers a class with: this route had its own
+		// arm, which answered both `400 invalid`, so a state the request
+		// could not change read as a request to fix, and an invalid one
+		// was a status no other surface answers the class with.
 		failErr(w, r, err, key)
 	}
 }

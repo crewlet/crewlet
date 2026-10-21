@@ -492,20 +492,28 @@ func (r *roundTrip) tagSlugs(project string) []string {
 //
 // [worklet.TagClash] and [worklet.TagsFull] are types so a caller several
 // steps away — a cross-project move declaring its subtree's tags — can name
-// the tags involved. They must still be what every content refusal here is:
-// [worklet.ErrInvalid] under errors.Is, and worded by [worklet.Sentence]
-// without the package prefix, or a surface that does not look for the type
-// classes a person's fixable refusal as the engine's own failure and shows
-// them "worklet:" in front of it.
+// the tags involved. They must still be what every refusal here is: marked
+// under errors.Is — a clash [worklet.ErrInvalid], the label to change, and a
+// full set [worklet.ErrState], the project's state, which the same add meets
+// until a tag is archived — and worded by [worklet.Sentence] without the
+// package prefix, or a surface that does not look for the type classes a
+// person's refusal as the engine's own failure and shows them "worklet:" in
+// front of it.
 func TestATypedTagRefusalIsClassedAndWordedAsARefusal(t *testing.T) {
 	t.Parallel()
-	for name, err := range map[string]error{
-		"a clash": &worklet.TagClash{Project: "OPS", Slug: "api", Label: "API",
+	for name, c := range map[string]struct {
+		err       error
+		mark, not error
+	}{
+		"a clash": {&worklet.TagClash{Project: "OPS", Slug: "api", Label: "API",
 			Other: worklet.Tag{Slug: "backend-api", Label: "API"}},
-		"a full set": &worklet.TagsFull{Project: "OPS", Slug: "api"},
+			worklet.ErrInvalid, worklet.ErrState},
+		"a full set": {&worklet.TagsFull{Project: "OPS", Slug: "api"},
+			worklet.ErrState, worklet.ErrInvalid},
 	} {
-		if !errors.Is(err, worklet.ErrInvalid) {
-			t.Errorf("%s is not ErrInvalid: %v", name, err)
+		err := c.err
+		if !errors.Is(err, c.mark) || errors.Is(err, c.not) {
+			t.Errorf("%s is not %v alone: %v", name, c.mark, err)
 		}
 		sentence := worklet.Sentence(err)
 		if strings.HasPrefix(sentence, "worklet:") || err.Error() != "worklet: "+sentence {

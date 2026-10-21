@@ -1060,7 +1060,7 @@ func (w *Writer) refuseCreate(ctx context.Context, tx *sql.Tx, task Task) (
 		return settledCreate{}, fmt.Errorf("worklet: project %s is not on this "+
 			"node: %w", task.Project, statelog.ErrUnavailable)
 	case project.Archived:
-		return settledCreate{}, invalid("project %s is archived, so "+
+		return settledCreate{}, refusedByState("project %s is archived, so "+
 			"it takes no new work; unarchive it first", task.Project)
 	}
 	if task.Parent != nil && *task.Parent != "" {
@@ -1767,7 +1767,7 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 				"task moves between projects — moving a subtask alone would "+
 				"leave it in a project its parent is not in", taskID)
 		case current.Removed != nil:
-			return invalid("task %s was removed by %s at %s; "+
+			return refusedByState("task %s was removed by %s at %s; "+
 				"restore it before moving it", taskID,
 				current.Removed.By,
 				current.Removed.At.Format(time.RFC3339))
@@ -1804,7 +1804,7 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 		}
 		for _, descendant := range subtree {
 			if descendant.Removed != nil {
-				return invalid("task %s under %s is in the trash, "+
+				return refusedByState("task %s under %s is in the trash, "+
 					"and a removed task is frozen, so the move could not carry "+
 					"it and would leave it in %s under a root in %s — restore "+
 					"it or purge it, then move again", descendant.ID, taskID,
@@ -2167,7 +2167,7 @@ func (w *Writer) followRoot(ctx context.Context, opID string, root Task,
 	}
 	if len(frozen) > 0 {
 		return stop(carried+len(left), w.addressOf(ctx, frozen[0]),
-			invalid("task %s (%s) under %s is in the trash and still in "+
+			refusedByState("task %s (%s) under %s is in the trash and still in "+
 				"project %s, and a removed task is frozen — the move waits for "+
 				"it: restore it and the next pass carries it into %s, or purge "+
 				"it", frozen[0].Key, frozen[0].ID, root.ID, frozen[0].Project,
@@ -2526,7 +2526,7 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 		case !held:
 			return missingTask(ctx, tx, duplicate, "it cannot be merged")
 		case current.Removed != nil:
-			return invalid("task %s was removed by %s at %s; "+
+			return refusedByState("task %s was removed by %s at %s; "+
 				"restore it before merging it", duplicate,
 				current.Removed.By,
 				current.Removed.At.Format(time.RFC3339))

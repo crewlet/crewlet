@@ -180,10 +180,12 @@ func ObjectArgs() []string {
 
 // trackerClass is the class of a refusal the tracker's writer decided.
 //
-// AS THE TOOLS CLASS IT where a tool decides one alone: a stale upload is the
-// same call again, a restore with nothing in the trash is the item's state
-// rather than the argument, a type the project does not file is the argument
-// to change.
+// AS THE TOOLS CLASS IT where a tool decides one alone, by the one rule
+// (internal/mcp's [tools.Refusal]): what the item or project the write is
+// about refuses by its STATE — frozen in the trash, archived, its tags or pins
+// at their cap, nothing in the trash to restore, an upload too old to name —
+// is a conflict, as an artifact's trash is; a type the project does not file,
+// or a parent in the trash, is the argument to change.
 func trackerClass(err error) (tools.Refusal, bool) {
 	var (
 		ambiguous       *worklet.ErrAmbiguous
@@ -203,9 +205,10 @@ func trackerClass(err error) (tools.Refusal, bool) {
 		return tools.RefusalInboxFull, true
 	case errors.Is(err, worklet.ErrReassignmentBudget):
 		return tools.RefusalReassignmentBudget, true
-	case errors.Is(err, worklet.ErrNothingToRestore):
+	case errors.Is(err, worklet.ErrNothingToRestore), errors.Is(err, worklet.ErrState),
+		errors.Is(err, worklet.ErrUploadStale):
 		return tools.RefusalConflict, true
-	case errors.Is(err, worklet.ErrUploadStale), errors.Is(err, worklet.ErrIndexBuilding):
+	case errors.Is(err, worklet.ErrIndexBuilding):
 		return tools.RefusalUnavailable, true
 	case errors.Is(err, worklet.ErrInvalid), errors.Is(err, worklet.ErrBadQuery),
 		errors.Is(err, worklet.ErrTooBroad), errors.Is(err, worklet.ErrNoType),

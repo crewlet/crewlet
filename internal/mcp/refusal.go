@@ -48,6 +48,49 @@ import (
 // the cause and an audit row recording the field could tell one caller two
 // different stories about the same call.
 //
+// # Which class a refusal is
+//
+// ONE RULE, for every domain a first-party tool writes: a refusal is classed by
+// WHAT IT IS ABOUT and by WHAT WOULD MAKE THE SAME REQUEST LAND, because that
+// is the one thing every reader of a class decides from — a model choosing
+// between another argument and another attempt, a screen choosing between the
+// sentence and a re-read, a client choosing a status.
+//
+//   - THE REQUEST ITSELF is [RefusalInvalid]: an argument outside its
+//     grammar, a value past a limit of its own (a body's bytes, the members
+//     one call names, what one move may carry), or an argument naming ANOTHER
+//     object that cannot take part — a parent in the trash, a blocker at its
+//     dependents' cap, an archived type, a destination that takes nothing.
+//     Nothing anybody does makes the same request land; a different one does.
+//   - THE OBJECT THE CALL IS ABOUT — or the container it writes into, a room,
+//     a project, an artifact — NOT BEING THERE is [RefusalNotFound], and it
+//     being gone for good (purged, erased, taken back) is the same.
+//   - THAT OBJECT IN A STATE THAT REFUSES THE GESTURE UNTIL SOMEBODY CHANGES
+//     IT is [RefusalConflict]: archived, in the trash, being purged, frozen,
+//     nothing in the trash to restore, a history that cannot be undone, an
+//     upload too old to name — and its own contents at their cap, which is
+//     its state too: a message's distinct emoji, a project's tags, the views a
+//     person pins, the labels an artifact's versions hold. The request was
+//     well formed; reading the object again shows the state, and the very
+//     same request lands once whoever the sentence names changes it, and not
+//     before. A write that lost its race is the same class for the same
+//     reason: the object moved, and the request is not wrong.
+//   - A LIMIT THIS VOCABULARY GIVES A CLASS OF ITS OWN is that class, because
+//     what lifts it is not a change of the object and a surface names the
+//     remedy: [RefusalQuotaExceeded] (the company's plan),
+//     [RefusalInboxFull] (a person's marks), [RefusalReassignmentBudget] (an
+//     item's hand-offs, which must not invite another attempt) and
+//     [RefusalBudgetExhausted] (a token window).
+//
+// So a room archived a moment before a post, a project archived before a task
+// is filed into it and an artifact in the trash are one class wherever they
+// are met, and a parent in the trash is another, since the call is about the
+// child. internal/agent/builtin's TestEveryDomainRefusalIsClassed holds every
+// sentinel each native domain declares to the meaning it carries and the
+// class this rule gives that meaning, on the domains' own table and on every
+// domain's tools alike; internal/api/operator answers each class with one
+// status.
+//
 // # Why it is a named string with [Refusal.Valid]
 //
 // The value travels: a newer build may classify a refusal this build has no
@@ -57,9 +100,12 @@ import (
 type Refusal string
 
 const (
-	// RefusalInvalid — an argument is wrong, and the sentence names which
-	// one. The only class whose fix is "send something different", and the
-	// default for a refusal that says nothing more specific.
+	// RefusalInvalid — the REQUEST is wrong: an argument outside its
+	// grammar, a value past a limit of its own, or an argument naming
+	// another object that cannot take part, and the sentence names which.
+	// The only class whose fix is "send something different", and the
+	// default for a refusal that says nothing more specific. NOT a state of
+	// the object the call is about — see [RefusalConflict].
 	RefusalInvalid Refusal = "invalid"
 
 	// RefusalNotFound — the object the call is ABOUT does not exist. Not
@@ -79,11 +125,14 @@ const (
 
 	// RefusalConflict — the write lost its race against other writers for
 	// its whole round budget, the running turn a note is for already holds
-	// as many unread notes as it takes, or the object is in a STATE that
-	// refuses the gesture — an artifact in the trash or being purged, a
-	// restore with nothing in the trash — which the sentence names. Read
-	// the object again: a race clears on its own, and a state is changed by
-	// whoever the sentence names.
+	// as many unread notes as it takes, or the object the call is about is
+	// in a STATE that refuses the gesture until somebody changes it — a room
+	// or a project archived, an artifact in the trash or being purged, a task
+	// frozen in the trash, a restore with nothing in the trash, or the
+	// object's own contents at their cap, a message carrying all the emoji
+	// it may — which the sentence names. Read the object again: a race
+	// clears on its own, and a state is changed by whoever the sentence
+	// names, after which the same request lands.
 	RefusalConflict Refusal = "conflict"
 
 	// RefusalExists — the object this call would create already exists.

@@ -170,7 +170,7 @@ func TestAReactionPastTheCapIsRefusedAndTheWriterIsTold(t *testing.T) {
 			return r.store.React(ctx, keyed(person("jane"), requested("k-2")),
 				room.Channel.ID, said.Message.ID, ":one-too-many:")
 		})
-	refused(t, r, "a reaction past the cap", got, err, chatlet.ErrInvalid,
+	refused(t, r, "a reaction past the cap", got, err, chatlet.ErrReactionsFull,
 		chatlet.VerdictReactionsFull)
 	if n := r.count(`SELECT COUNT(DISTINCT emoji) FROM chat_reactions WHERE message_id = ?`,
 		said.Message.ID); n != chatlet.MaxReactionEmoji {
@@ -185,8 +185,9 @@ func TestAReactionPastTheCapIsRefusedAndTheWriterIsTold(t *testing.T) {
 	}
 	_, err = r.store.React(t.Context(), keyed(person("jane"), requested("k-3")),
 		room.Channel.ID, said.Message.ID, ":another:")
-	if !errors.Is(err, chatlet.ErrInvalid) {
-		t.Fatalf("a reaction on a full message was answered %v", err)
+	if !errors.Is(err, chatlet.ErrReactionsFull) || errors.Is(err, chatlet.ErrInvalid) {
+		t.Fatalf("a reaction on a full message was answered %v, want the "+
+			"message's state (chatlet.ErrReactionsFull) and no field refusal", err)
 	}
 	if after, err := r.log.End(t.Context()); err != nil || after != before {
 		t.Errorf("a reaction this snapshot holds full was appended (%d -> %d, %v)",
