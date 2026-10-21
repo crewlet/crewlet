@@ -367,7 +367,7 @@ func TestAnUndecidedSeedIsRefused(t *testing.T) {
 	}
 	db := seedStore(t)
 	err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, seedPlan{},
-		fixtureCipher, testNode, quiet())
+		fixtureCipher, testNode, builds, quiet())
 	if !errors.Is(err, errUndecidedSeed) {
 		t.Errorf("the import of an undecided seed = %v, want it refused", err)
 	}

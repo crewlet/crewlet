@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -207,5 +208,56 @@ func TestAManagedNodeOnAnEmptyStoreRunsNoCompany(t *testing.T) {
 	}
 	if _, found, err := e.Backends().Fleet.Target(t.Context()); err != nil || found {
 		t.Errorf("a managed node pointed the fleet at a revision (%v, %v), want none", found, err)
+	}
+}
+
+// unbuildableCompanyYAML is a company valid on paper that no node without the
+// key can build: its one seat codes in an E2B box, whose key resolves to
+// nothing.
+const unbuildableCompanyYAML = `
+name: Unbuildable
+providers:
+  sandbox:
+    e2b:
+      api_key: "${CREWLET_TEST_E2B_KEY_NEVER_SET}"
+roles:
+  - name: SWE
+    handle: swe
+    sandbox:
+      enabled: true
+      run_in: e2b
+`
+
+// A FIRST BOOT WHOSE FILE THIS NODE CANNOT BUILD IS REFUSED WITH NOTHING
+// WRITTEN, through the engine's own build.
+//
+// The engine starts unconfigured to import its file, so the first build of
+// that file is the first reconcile's — after the seed has stored it and pointed
+// the fleet at it. Unchecked, the boot went on: the first reconcile's refusal
+// is a warning, the node served no company while its log said it was serving
+// the one it booted with, and every restart was refused on the revision the
+// first one had written, with the corrected file ignored because a company now
+// existed.
+//
+// Mutation: hand seedCompany a build that accepts everything and the fleet is
+// pointed at the file.
+func TestAFirstBootThisNodeCannotBuildIsRefusedWithNothingWritten(t *testing.T) {
+	t.Parallel()
+	cfg := bootstrapForStore(t, t.TempDir())
+	boot := storedBoot(t, cfg)
+
+	e, plan := bootDecided(t, cfg, boot, seedOf(parse(t, unbuildableCompanyYAML)))
+	_, err := startReconciler(t.Context(), e, boot, plan, e.Cipher(), quiet())
+	if err == nil || !strings.Contains(err.Error(), "company.yaml") ||
+		!strings.Contains(err.Error(), "api_key") {
+		t.Fatalf("startReconciler = %v, want the build's refusal naming the file", err)
+	}
+	if revisions, _ := e.Backends().Store.Configs().List(t.Context(), 0, 0); len(revisions) != 0 {
+		t.Errorf("%d revisions stored for a file this node cannot build, want none",
+			len(revisions))
+	}
+	if _, found, err := e.Backends().Fleet.Target(t.Context()); err != nil || found {
+		t.Errorf("the fleet was pointed at a company this node cannot build (%v, %v)",
+			found, err)
 	}
 }
