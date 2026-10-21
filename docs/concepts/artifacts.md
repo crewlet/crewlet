@@ -567,7 +567,8 @@ flowchart LR
   room asks its peers once, so a newcomer sees the room at once.
 - A tab joining a room is handed the room as the node's other tabs are being
   shown it, with itself beside them, and every change after that in the order
-  the node took it, so no tab goes on showing somebody who has left.
+  the node took it — never one ahead of the room it changes — so no tab goes on
+  showing somebody who has left, or somebody as they were before they moved.
 - Every frame between nodes is sealed under the fleet keyring with a
   60-second validity; a frame the fleet did not seal shows nobody.
 - Past 50 members a room shows the 50 most recently active plus counts of

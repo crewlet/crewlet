@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -33,7 +34,7 @@ func TestARoomCrossesTheFleet(t *testing.T) {
 	a := startNode(t, broker, "node-a", c)
 	b := startNode(t, broker, "node-b", c)
 
-	danaSession, roster, err := a.hub.Join(room1, dana)
+	danaSession, roster, err := joined(a.hub, room1, dana)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +44,7 @@ func TestARoomCrossesTheFleet(t *testing.T) {
 	}
 	a.seen.waitFor(t, "node-a", room1, "dana:viewing")
 
-	if _, _, err := b.hub.Join(room1, erin); err != nil {
+	if _, _, err := joined(b.hub, room1, erin); err != nil {
 		t.Fatal(err)
 	}
 	b.seen.waitFor(t, "node-b", room1, "dana:viewing", "erin:viewing")
@@ -91,7 +92,7 @@ func TestAJoinShowsThePeersMembersAsTheyAnswer(t *testing.T) {
 	t.Parallel()
 	broker, c := memory.NewBroker(), newClock()
 	a := startNode(t, broker, "node-a", c)
-	if _, _, err := a.hub.Join(room1, dana); err != nil {
+	if _, _, err := joined(a.hub, room1, dana); err != nil {
 		t.Fatal(err)
 	}
 	a.seen.waitFor(t, "node-a", room1, "dana:viewing")
@@ -113,7 +114,7 @@ func TestAJoinShowsThePeersMembersAsTheyAnswer(t *testing.T) {
 	}
 	b := startNodeAsking(t, broker, "node-b", c, 5*time.Second)
 	started := time.Now()
-	if _, _, err := b.hub.Join(room1, erin); err != nil {
+	if _, _, err := joined(b.hub, room1, erin); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.After(Rebroadcast)
@@ -140,16 +141,16 @@ func TestAStoppingNodeTakesItsMembersWithIt(t *testing.T) {
 	broker, c := memory.NewBroker(), newClock()
 	a := startNode(t, broker, "node-a", c)
 	b := startNode(t, broker, "node-b", c)
-	if _, _, err := a.hub.Join(room1, dana); err != nil {
+	if _, _, err := joined(a.hub, room1, dana); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := b.hub.Join(room1, erin); err != nil {
+	if _, _, err := joined(b.hub, room1, erin); err != nil {
 		t.Fatal(err)
 	}
 	b.seen.waitFor(t, "node-b", room1, "dana:viewing", "erin:viewing")
 	a.hub.Stop(context.Background())
 	b.seen.waitFor(t, "node-b", room1, "erin:viewing")
-	if _, _, err := a.hub.Join(room1, dana); !errors.Is(err, ErrStopped) {
+	if _, _, err := joined(a.hub, room1, dana); !errors.Is(err, ErrStopped) {
 		t.Fatalf("a join on a stopped hub answered %v, want ErrStopped", err)
 	}
 }
@@ -163,7 +164,7 @@ func TestAPresenceFrameTheFleetDidNotSealShowsNobody(t *testing.T) {
 	t.Parallel()
 	broker, c := memory.NewBroker(), newClock()
 	a := startNode(t, broker, "node-a", c)
-	if _, _, err := a.hub.Join(room1, dana); err != nil {
+	if _, _, err := joined(a.hub, room1, dana); err != nil {
 		t.Fatal(err)
 	}
 	a.seen.waitFor(t, "node-a", room1, "dana:viewing")
@@ -228,7 +229,7 @@ func TestPresenceExpiresAfterThreeMissedHeartbeats(t *testing.T) {
 	t.Parallel()
 	broker, c := memory.NewBroker(), newClock()
 	b := startNode(t, broker, "node-b", c)
-	if _, _, err := b.hub.Join(room1, erin); err != nil {
+	if _, _, err := joined(b.hub, room1, erin); err != nil {
 		t.Fatal(err)
 	}
 	waitListening(t, b.hub, room1)
@@ -269,7 +270,7 @@ func TestABroadcastIsNeverRetained(t *testing.T) {
 	t.Parallel()
 	broker, c := memory.NewBroker(), newClock()
 	a := startNode(t, broker, "node-a", c)
-	session, _, err := a.hub.Join(room1, dana)
+	session, _, err := joined(a.hub, room1, dana)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -327,11 +328,11 @@ func TestPresenceWritesNoRowAnywhere(t *testing.T) {
 	broker, c := memory.NewBroker(), newClock()
 	a := startNode(t, broker, "node-a", c)
 	b := startNode(t, broker, "node-b", c)
-	session, _, err := a.hub.Join(room1, dana)
+	session, _, err := joined(a.hub, room1, dana)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := b.hub.Join(room1, erin); err != nil {
+	if _, _, err := joined(b.hub, room1, erin); err != nil {
 		t.Fatal(err)
 	}
 	b.hub.Touch(room1, Agent{Seat: "agent-cto", Turn: "run-1", Activity: Editing, Focus: Focus{Collection: "review"}})
@@ -401,7 +402,7 @@ func TestALargeRoomPresentsTheMostRecentFifty(t *testing.T) {
 		if i%10 == 9 {
 			who.Kind = iam.ActorAgent
 		}
-		s, _, err := a.hub.Join(room1, who)
+		s, _, err := joined(a.hub, room1, who)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -420,7 +421,7 @@ func TestALargeRoomPresentsTheMostRecentFifty(t *testing.T) {
 	// A JOINER IS HANDED WHAT THE NODE'S SOCKETS ARE SHOWN — the fifty and
 	// their counts — and its own member beside them, until the next fan-out
 	// takes the least recent out as it does for every socket here.
-	lateSession, roster, err := a.hub.Join(room1, Local{Seat: "late", Kind: iam.ActorHuman})
+	lateSession, roster, err := joined(a.hub, room1, Local{Seat: "late", Kind: iam.ActorHuman})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -460,7 +461,7 @@ func TestAFanOutRePresentsAtMostItsBoundOfMembers(t *testing.T) {
 	a := startNode(t, broker, "node-a", c)
 	var sessions []string
 	for i := range 30 {
-		s, _, err := a.hub.Join(room1, Local{Seat: fmt.Sprintf("seat-%02d", i), Kind: iam.ActorHuman})
+		s, _, err := joined(a.hub, room1, Local{Seat: fmt.Sprintf("seat-%02d", i), Kind: iam.ActorHuman})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -519,13 +520,13 @@ func TestAHeldBackMemberIsToldWithinAFewFanOuts(t *testing.T) {
 	a := startNode(t, broker, "node-a", c)
 	var busy []string
 	for i := range 2 * FrameMembers {
-		s, _, err := a.hub.Join(room1, Local{Seat: fmt.Sprintf("busy-%02d", i), Kind: iam.ActorHuman})
+		s, _, err := joined(a.hub, room1, Local{Seat: fmt.Sprintf("busy-%02d", i), Kind: iam.ActorHuman})
 		if err != nil {
 			t.Fatal(err)
 		}
 		busy = append(busy, s)
 	}
-	probe, _, err := a.hub.Join(room1, Local{Seat: "probe", Kind: iam.ActorHuman})
+	probe, _, err := joined(a.hub, room1, Local{Seat: "probe", Kind: iam.ActorHuman})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -574,7 +575,7 @@ func TestAnAgentIsPresentWhileItWorks(t *testing.T) {
 	broker, c := memory.NewBroker(), newClock()
 	worker := startNode(t, broker, "node-seats", c)
 	viewer := startNode(t, broker, "node-api", c)
-	if _, _, err := viewer.hub.Join(room1, erin); err != nil {
+	if _, _, err := joined(viewer.hub, room1, erin); err != nil {
 		t.Fatal(err)
 	}
 	waitListening(t, viewer.hub, room1)
@@ -624,7 +625,7 @@ func TestARoomFansOutAtMostItsCoalescedRate(t *testing.T) {
 	}
 	seen := newScreen()
 	h.OnChange(seen.apply)
-	session, _, err := h.Join(room1, dana)
+	session, _, err := joined(h, room1, dana)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -677,11 +678,11 @@ func TestAMoveCrossesNodesInOneShortWindowOnEachSide(t *testing.T) {
 	}
 	mover, _ := hub("node-a")
 	viewer, viewed := hub("node-b")
-	moving, _, err := mover.Join(room1, dana)
+	moving, _, err := joined(mover, room1, dana)
 	if err != nil {
 		t.Fatal(err)
 	}
-	busy, _, err := viewer.Join(room1, erin)
+	busy, _, err := joined(viewer, room1, erin)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -705,7 +706,7 @@ func TestAMoveCrossesNodesInOneShortWindowOnEachSide(t *testing.T) {
 	defer func() { close(stop); <-done }()
 	// AND THE MOVER'S IS TOO, so its broadcast window is always running
 	// when the probe moves.
-	other, _, err := mover.Join(room1, Local{Seat: "frank", Kind: iam.ActorHuman})
+	other, _, err := joined(mover, room1, Local{Seat: "frank", Kind: iam.ActorHuman})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -756,7 +757,7 @@ func TestAPresenceFrameIsHeldToItsSessionAndBounds(t *testing.T) {
 	t.Parallel()
 	broker, c := memory.NewBroker(), newClock()
 	a := startNode(t, broker, "node-a", c)
-	session, _, err := a.hub.Join(room1, dana)
+	session, _, err := joined(a.hub, room1, dana)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -854,10 +855,12 @@ func waitCounts(t *testing.T, s *screen, id Room, want *Counts) {
 // two timers: the second can fire while the first is still in its sinks. Taken
 // then and handed over first, a member's leave reaches the sink ahead of the
 // upsert taken before it, and what the sink shows ends with the member in the
-// room — for good, since nothing says they left again.
+// room — for good, since nothing says they left again. The room moves on here
+// by a leave and an agent's touch, neither of which waits for a fan-out in its
+// sinks (a join does: [Hub.Join]).
 //
 // Mutation: drop [Hub.delivering] from flush, and the screen ends showing dana
-// beside erin.
+// beside the agent.
 func TestARoomsFanOutsReachItsSinksInTheOrderTheyWereTaken(t *testing.T) {
 	t.Parallel()
 	broker, c := memory.NewBroker(), newClock()
@@ -879,21 +882,128 @@ func TestARoomsFanOutsReachItsSinksInTheOrderTheyWereTaken(t *testing.T) {
 		shown.apply(ch)
 	})
 
-	danaSession, _, err := n.hub.Join(room1, dana)
+	danaSession, _, err := joined(n.hub, room1, dana)
 	if err != nil {
 		t.Fatal(err)
 	}
 	<-inSink
-	if _, _, err := n.hub.Join(room1, erin); err != nil {
-		t.Fatal(err)
-	}
+	n.hub.Touch(room1, Agent{Seat: "agent-cto", Turn: "run-1", Activity: Viewing})
 	n.hub.Leave(room1, danaSession)
 	// LONG ENOUGH FOR THE NEXT FAN-OUT TO HAVE BEEN TAKEN AND HANDED OVER,
 	// were it not waiting for the one in the sink.
 	settle()
 	close(release)
 	<-out
-	shown.waitFor(t, "the held sink", room1, "erin:viewing")
+	shown.waitFor(t, "the held sink", room1, "agent-cto:viewing")
+}
+
+// A JOINER IS HANDED ITS ROSTER IN THE ROOM'S DELIVERY ORDER.
+//
+// A roster is a screen the fan-outs after it are differences from, so it has
+// to reach the joiner's socket after every fan-out it already holds and before
+// every one taken after it. Answered to the caller as a return value, it was
+// sent whenever the caller got to it: a fan-out taken after the join could
+// reach the socket first, and the roster arriving behind it put back what the
+// fan-out had moved on. Here a fan-out is held in its sink while a join is
+// asked: the joiner's hand waits for that fan-out to be handed over whole, and
+// the fan-out of the join itself reaches the sink only after the hand.
+//
+// Mutation: drop [Hub.delivering] from Join, and the hand runs while the held
+// fan-out is still in its sink, and the join's own fan-out can overtake it.
+func TestAJoinerIsHandedItsRosterInTheRoomsDeliveryOrder(t *testing.T) {
+	t.Parallel()
+	broker, c := memory.NewBroker(), newClock()
+	n := startNode(t, broker, "node-a", c)
+	var (
+		mu    sync.Mutex
+		order []string
+	)
+	note := func(what string) {
+		mu.Lock()
+		defer mu.Unlock()
+		order = append(order, what)
+	}
+	inSink, release := make(chan struct{}), make(chan struct{})
+	var first atomic.Bool
+	n.hub.OnChange(func(ch Change) {
+		if ch.Room != room1 {
+			return
+		}
+		if first.CompareAndSwap(false, true) {
+			close(inSink)
+			<-release
+			note("held fan-out")
+			return
+		}
+		for _, m := range ch.Upsert {
+			if m.Seat == erin.Seat {
+				note("erin's fan-out")
+			}
+		}
+	})
+	if _, _, err := joined(n.hub, room1, dana); err != nil {
+		t.Fatal(err)
+	}
+	<-inSink
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := n.hub.Join(room1, erin, func(string, Roster) bool {
+			note("erin's roster")
+			return true
+		})
+		done <- err
+	}()
+	settle()
+	mu.Lock()
+	early := slices.Clone(order)
+	mu.Unlock()
+	if len(early) != 0 {
+		t.Fatalf("with a fan-out still in its sink the joiner was handed %v", early)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"held fan-out", "erin's roster", "erin's fan-out"}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		mu.Lock()
+		got := slices.Clone(order)
+		mu.Unlock()
+		if len(got) >= len(want) {
+			if !slices.Equal(got, want) {
+				t.Fatalf("the sink and the joiner were handed %v, want %v", got, want)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the sink and the joiner were handed %v, want %v", got, want)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// A JOINER WHOSE HAND DECLINES IS NOT IN THE ROOM. A socket that went away
+// while its join was being decided declines the room; left in it, its member
+// would stand there until an expiry no socket refreshes.
+//
+// Mutation: drop the undo, and the node's sockets show erin.
+func TestAJoinTheHandDeclinesIsUndone(t *testing.T) {
+	t.Parallel()
+	broker, c := memory.NewBroker(), newClock()
+	n := startNode(t, broker, "node-a", c)
+	if _, _, err := joined(n.hub, room1, dana); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := n.hub.Join(room1, erin, func(string, Roster) bool { return false }); !errors.Is(err, ErrDeclined) {
+		t.Fatalf("a declined join answered %v, want ErrDeclined", err)
+	}
+	n.seen.waitFor(t, "the node's sockets", room1, "dana:viewing")
+	settle()
+	if got := n.seen.members(room1); !slices.Equal(got, []string{"dana:viewing"}) {
+		t.Fatalf("the room shows %v once a declined join settled, want dana alone", got)
+	}
 }
 
 // A JOINER IS HANDED WHAT EVERY FAN-OUT AFTER ITS JOIN IS TAKEN FROM: what this
@@ -903,57 +1013,62 @@ func TestARoomsFanOutsReachItsSinksInTheOrderTheyWereTaken(t *testing.T) {
 // joiner handed the room as it presented at the join holds a screen the next
 // fan-out does not apply to: erin, who arrived after the last fan-out and left
 // before the next, was in its roster and in no fan-out's leave, and stayed on
-// its screen for good.
+// its screen for good. The room here fans out only when the case says so (a
+// coalescing interval of an hour), so nothing is fanned out between erin's
+// arrival and her leave.
 //
 // Mutation: hand the joiner r.present() rather than the baseline, and the
 // joiner's screen ends showing erin.
 func TestAJoinersScreenIsRightFromItsRoster(t *testing.T) {
 	t.Parallel()
-	broker, c := memory.NewBroker(), newClock()
-	n := startNode(t, broker, "node-a", c)
-	joiner := newScreen()
-	var joined atomic.Bool
-	inSink, release, out := make(chan struct{}), make(chan struct{}), make(chan struct{})
-	var first atomic.Bool
-	n.hub.OnChange(func(ch Change) {
-		if ch.Room != room1 {
-			return
-		}
-		if first.CompareAndSwap(false, true) {
-			// THE FIRST FAN-OUT IS HELD in this sink, so nothing is fanned
-			// out between erin's arrival and her leave.
-			close(inSink)
-			<-release
-			defer close(out)
-		}
-		if joined.Load() {
+	q := memory.NewBroker().Client()
+	if err := q.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = q.Stop(context.Background()) })
+	c := newClock()
+	h, err := New(Options{Queue: q, Wire: wireFor(t, fleetRing), Node: "node-a",
+		AskBudget: 300 * time.Millisecond, Now: c.Now, Coalesce: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	everyone, joiner := newScreen(), newScreen()
+	var handed atomic.Bool
+	h.OnChange(func(ch Change) {
+		everyone.apply(ch)
+		if handed.Load() {
 			joiner.apply(ch)
 		}
 	})
+	if err := h.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { h.Stop(context.Background()) })
 
-	if _, _, err := n.hub.Join(room1, dana); err != nil {
+	// THE FIRST FAN-OUT GOES AT ONCE; every later one waits the hour.
+	if _, _, err := joined(h, room1, dana); err != nil {
 		t.Fatal(err)
 	}
-	<-inSink
-	erinSession, _, err := n.hub.Join(room1, erin)
+	everyone.waitFor(t, "the node's sockets", room1, "dana:viewing")
+	erinSession, _, err := joined(h, room1, erin)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, roster, err := n.hub.Join(room1, Local{Seat: "late", Kind: iam.ActorHuman})
-	if err != nil {
+	if _, err := h.Join(room1, Local{Seat: "late", Kind: iam.ActorHuman},
+		func(_ string, roster Roster) bool {
+			joiner.apply(Change{Room: room1, Upsert: roster.Members, Leave: []string{},
+				Counts: roster.Counts, Truncated: roster.Truncated})
+			handed.Store(true)
+			return true
+		}); err != nil {
 		t.Fatal(err)
 	}
-	joiner.apply(Change{Room: room1, Upsert: roster.Members, Leave: []string{},
-		Counts: roster.Counts, Truncated: roster.Truncated})
-	joined.Store(true)
-	n.hub.Leave(room1, erinSession)
-	close(release)
-	<-out
+	h.Leave(room1, erinSession)
+	h.flush(room1)
 
 	want := []string{"dana:viewing", "late:viewing"}
 	joiner.waitFor(t, "the joiner", room1, want...)
-	settle()
 	if got := joiner.members(room1); !slices.Equal(got, want) {
-		t.Fatalf("the joiner shows %v once the room settled, want %v", got, want)
+		t.Fatalf("the joiner shows %v once the room fanned out, want %v", got, want)
 	}
 }

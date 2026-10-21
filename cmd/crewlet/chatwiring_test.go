@@ -420,8 +420,13 @@ func workingIn(t *testing.T, e *engine.Engine, room uuid.UUID, want func(string)
 // handed, which is the room as the node's sockets were last shown it.
 func workingNow(t *testing.T, e *engine.Engine, room uuid.UUID) string {
 	t.Helper()
-	session, roster, err := e.Presence().Join(presence.ChatRoom(room),
-		presence.Local{Seat: "watcher", Kind: iam.ActorHuman})
+	var roster presence.Roster
+	session, err := e.Presence().Join(presence.ChatRoom(room),
+		presence.Local{Seat: "watcher", Kind: iam.ActorHuman},
+		func(_ string, r presence.Roster) bool {
+			roster = r
+			return true
+		})
 	if err != nil {
 		t.Fatalf("join the room: %v", err)
 	}

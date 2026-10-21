@@ -773,8 +773,11 @@ func dataBatch(id artifacts.ID, docs ...artifactdata.DocDelta) artifactdata.Move
 // nopPresence is a hub that holds nobody, for a case about the datastore.
 type nopPresence struct{}
 
-func (nopPresence) Join(presence.Room, presence.Local) (string, presence.Roster, error) {
-	return "s", presence.Roster{}, nil
+func (nopPresence) Join(_ presence.Room, _ presence.Local, hand presence.Hand) (string, error) {
+	if !hand("s", presence.Roster{}) {
+		return "", presence.ErrDeclined
+	}
+	return "s", nil
 }
 func (nopPresence) Update(presence.Room, string, presence.Activity, presence.Focus) error {
 	return nil
