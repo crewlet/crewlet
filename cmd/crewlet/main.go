@@ -18,12 +18,10 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api"
@@ -1273,8 +1271,8 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	// signal — because a graceful drain is the difference between a
 	// restart that resumes cleanly and one that redelivers half-finished
 	// turns. Nothing else in the process may install a handler.
-	ctx, stop := interruptContext()
-	defer stop()
+	ctx, signals := interruptContext()
+	defer signals.end()
 
 	nodeID, err := config.ResolveNodeID(boot, nil)
 	if err != nil {
@@ -1533,16 +1531,16 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	var fatal error
 	select {
 	case <-ctx.Done():
-		// The signals are already handed back by now (see
-		// [interruptContext]), so the second interrupt the drain line below
+		// The signals were handed back before the context was cancelled
+		// (see [interrupts]), so the second interrupt the drain line below
 		// promises does what it says.
 	case <-e.Fatal():
 		fatal = e.FatalCause()
-		// NO SIGNAL ARRIVED, so interruptContext still holds both: handed
+		// NO SIGNAL ARRIVED, so the hold is still on its first tier: handed
 		// back here, an operator's FIRST interrupt during this drain ends it.
-		// Left installed, that press would only cancel a context the drain
-		// is already detached from, and be swallowed.
-		stop()
+		// Left on the first tier, that press would only cancel a context the
+		// drain is already detached from, and be swallowed.
+		signals.handBack()
 		log.ErrorContext(ctx, "engine_fatal", "error", fatal,
 			"detail", "this node cannot go on running: it stops the way a signal "+
 				"stops it and exits non-zero, for whatever supervises it to start "+
@@ -1610,9 +1608,9 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	//
 	// The bound belongs to whatever supervises the process: a container
 	// runtime's kill grace, or the operator's next interrupt, which the
-	// signal that woke us handed back to the operating system (see
-	// [interruptContext]) and a fatal hands back above. Both already have one
-	// and can see things this process cannot.
+	// signal that woke us moved to the second tier (see [interrupts]) and a
+	// fatal moves there above. Both already have one and can see things this
+	// process cannot.
 	//
 	// THE SAME DRAIN ON A FATAL, with no signal behind it and so no kill
 	// grace running, and it still ends — for a reason that depends on which
@@ -1631,30 +1629,6 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 		return fmt.Errorf("the node stopped itself: %w", fatal)
 	}
 	return nil
-}
-
-// interruptContext is the context `crewlet run` lives under: cancelled by the
-// first SIGINT or SIGTERM, and HANDING BOTH SIGNALS BACK to the operating
-// system the moment it is, so a SECOND one kills the process.
-//
-// At the first signal rather than once the node is serving, because a
-// serving node's drain is not the only unbounded wait. A boot has them too:
-// a boot that fails once the engine is up runs the same drain, and an
-// embedded broker still recovering a large store cannot be interrupted
-// (internal/queue/jetstream's startEmbedded waits the recovery out). While
-// signal.NotifyContext is still the installed handler, every further press is
-// swallowed, which left an operator with no way to abort from the terminal
-// they started the node in short of SIGKILL from somewhere else. The escape
-// hatch is what makes those unbounded waits safe to offer: the bound belongs
-// to whoever supervises the process, and for an operator at a terminal the
-// second press IS their bound.
-//
-// The returned stop releases the signals without one having arrived; calling
-// it again is harmless.
-func interruptContext() (context.Context, context.CancelFunc) {
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	context.AfterFunc(ctx, stop)
-	return ctx, stop
 }
 
 // shutdown is the one order a node comes down in, whatever stopped it.

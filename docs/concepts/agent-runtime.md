@@ -679,10 +679,26 @@ flowchart TD
 Embedding our own grace window would duplicate that decision in two places and inevitably disagree. Size the orchestrator's grace period to at least your longest turn plus 60 s (a multi-tool executor → reviewer turn can comfortably take 2–5 minutes): the drain needs the longest turn, and what follows it needs up to about 50 s on a node that has lost both its stores (see "A member that has lost both stores" above, and [Probes](../guides/deployment.md#probes)).
 
 **Force stop (second signal).** The first signal *hands the signals back to
-the operating system* the moment it arrives, so a second SIGINT or SIGTERM
-does what it always does: the process dies immediately, with no cleanup.
-That holds from the first moment of `crewlet run`, while the node is still
-booting as much as while it drains, because a boot can wait unboundedly too.
+the operating system* the moment it arrives, before the drain begins, so a
+second SIGINT or SIGTERM does what it always does: the process dies
+immediately, with no cleanup. A second press that lands while the hand-back is
+under way is raised again once it is done rather than lost. That holds from
+the first moment of `crewlet run`, while the node is still booting as much as
+while it drains, because a boot can wait unboundedly too.
+
+A process started with **SIGINT ignored** is the one exception, and it still
+ends on the second press. A background job of a non-interactive shell
+(`crewlet run &` in a script) starts that way, and so does anything a parent
+that ignored SIGINT starts. The first SIGINT is caught and drains the node
+like any other, but there is no default to hand SIGINT back to: the process
+inherited "ignore", and handing back restores that. So the engine keeps its
+own SIGINT handler past the first signal, and the second SIGINT exits the
+process at once, with no cleanup, with status **130** (128 plus SIGINT's
+number). That is the status a shell reports for a process SIGINT killed, so
+`$?` and `wait` read the two the same, while a supervisor that tells an exit
+from a kill sees an exit with 130 instead of the SIGINT. SIGTERM is not
+affected: the runtime handles SIGTERM itself whatever the process inherited,
+so a second SIGTERM always kills.
 A boot that fails once the engine is up runs the same drain. An embedded
 broker that is still recovering a large store cannot be interrupted, so a
 first Ctrl+C during that recovery waits for it to finish (the log says
