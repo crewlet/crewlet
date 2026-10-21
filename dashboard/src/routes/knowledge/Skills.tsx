@@ -13,7 +13,12 @@
  *
  * `kind=learned` is what one seat DREW from its own repeated work, answered by
  * the node holding that seat (`agent_memory`), with "n of total" — the page is
- * cut at the answer's limit and the total is the seat's own. A seat's memory
+ * cut at the answer's limit and the total is the seat's own. The HOLDER orders
+ * the seat's whole set before it cuts that page — most used first, or most
+ * recently changed (`skills_order`, from `LEARNED_SKILL_ORDERS`), chosen in the
+ * toolbar and kept in `sort=` as the grid's own key — for the reason the tool
+ * skills' order is the engine's: sorted here, "most used" was the most used of
+ * the newest fifty. A seat's memory
  * is its TRAIL, which the engine answers to an admin and to whoever leads the
  * seat (`mayReadTrail`); for anybody else it is drawn locked and never asked.
  *
@@ -64,10 +69,11 @@ import { TRAIL_WORDS, mayReadTrail } from "~/routes/agents/seat/profile.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
-import { plural, tsKey, fmtCount } from "~/lib/format.ts";
+import { plural, fmtCount } from "~/lib/format.ts";
 import { loadedBy } from "~/lib/pageReads.ts";
 import { seatBadge } from "~/ui/SeatAvatar.tsx";
 import { PAGE_LIST_ORDERS, type SkillLoad } from "~/contract/pages.ts";
+import { LEARNED_SKILL_ORDERS } from "~/contract/memory.ts";
 import type { PageSummary } from "~/protocol/index.ts";
 import { usePagedPages } from "./usePagedPages.ts";
 
@@ -89,10 +95,26 @@ export function skillOrderOf(sort: string): ListOrder {
   return PAGE_LIST_ORDERS.find((order) => ORDER_SORT[order] === sort) ?? "title";
 }
 
+type LearnedOrder = (typeof LEARNED_SKILL_ORDERS)[number];
+
+/** Each learned order's `sort=`, the grid's key for the column it orders by. */
+const LEARNED_SORT: Record<LearnedOrder, string> = { uses: "-uses", updated: "-updated" };
+
+const LEARNED_WORDS: Record<LearnedOrder, string> = {
+  uses: "Most used",
+  updated: "Recently changed",
+};
+
+/** The learned order a `sort=` asks for, the most used for any other value. */
+export function learnedOrderOf(sort: string): LearnedOrder {
+  return LEARNED_SKILL_ORDERS.find((order) => LEARNED_SORT[order] === sort) ?? "uses";
+}
+
 export function Skills() {
   const [kind, setKind] = useParam("kind", "pages");
   const [sort, setSort] = useParam("sort", ORDER_SORT.title, "filter");
   const order = skillOrderOf(sort);
+  const learned = learnedOrderOf(sort);
   return (
     <>
       <div className="toolbar">
@@ -107,24 +129,34 @@ export function Skills() {
             { value: "learned", label: "Learned", title: "What one agent drew from its own work" },
           ]}
         />
-        {kind !== "learned" && (
-          <>
-            <span className="spacer" />
-            <SegmentedControl
-              semantics="radio"
-              activate="manual"
-              label="Order"
-              value={ORDER_SORT[order]}
-              onValueChange={setSort}
-              options={PAGE_LIST_ORDERS.map((o) => ({
-                value: ORDER_SORT[o],
-                label: ORDER_WORDS[o],
-              }))}
-            />
-          </>
+        <span className="spacer" />
+        {kind === "learned" ? (
+          <SegmentedControl
+            semantics="radio"
+            activate="manual"
+            label="Order"
+            value={LEARNED_SORT[learned]}
+            onValueChange={setSort}
+            options={LEARNED_SKILL_ORDERS.map((o) => ({
+              value: LEARNED_SORT[o],
+              label: LEARNED_WORDS[o],
+            }))}
+          />
+        ) : (
+          <SegmentedControl
+            semantics="radio"
+            activate="manual"
+            label="Order"
+            value={ORDER_SORT[order]}
+            onValueChange={setSort}
+            options={PAGE_LIST_ORDERS.map((o) => ({
+              value: ORDER_SORT[o],
+              label: ORDER_WORDS[o],
+            }))}
+          />
         )}
       </div>
-      {kind === "learned" ? <LearnedSkills /> : <ToolSkills order={order} />}
+      {kind === "learned" ? <LearnedSkills order={learned} /> : <ToolSkills order={order} />}
     </>
   );
 }
@@ -254,7 +286,7 @@ function ToolSkills({ order }: { order: ListOrder }) {
   );
 }
 
-function LearnedSkills() {
+function LearnedSkills({ order }: { order: LearnedOrder }) {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
   const now = useNow();
@@ -271,7 +303,11 @@ function LearnedSkills() {
   const viewer = useViewer();
   const trail = seat !== "" && mayReadTrail(viewer, index, seat);
   const locked = seat !== "" && !viewer.loading && !trail;
-  const memory = useQuery("agent_memory", { id: seat }, { enabled: trail, pollMs: 60_000 });
+  const memory = useQuery(
+    "agent_memory",
+    { id: seat, skills_order: order },
+    { enabled: trail, pollMs: 60_000 },
+  );
   const skills = memory.data?.skills ?? [];
   const total = memory.data?.skills_total ?? 0;
   const who = index.byHandle.get(seat);
@@ -316,12 +352,15 @@ function LearnedSkills() {
           <DataGrid
             rows={skills}
             rowKey={(r) => r.id}
-            defaultSort="-uses"
+            defaultSort={LEARNED_SORT[order]}
+            // THE HOLDER ORDERED THE WHOLE SET before it cut this page; a head
+            // that re-sorted the page would answer another question under the
+            // same arrow.
+            serverSorted
             columns={[
               {
                 key: "title",
                 header: "Skill",
-                sortValue: (r) => r.title,
                 cell: (r) => (
                   <span className="col">
                     <span>{r.title || r.key}</span>
@@ -334,7 +373,6 @@ function LearnedSkills() {
                 header: "Uses",
                 shrink: true,
                 align: "right",
-                sortValue: (r) => r.uses,
                 cell: (r) => <TableNumberCell value={r.uses} format={fmtCount} />,
               },
               {
@@ -342,7 +380,6 @@ function LearnedSkills() {
                 header: "Version",
                 shrink: true,
                 align: "right",
-                sortValue: (r) => r.version,
                 cell: (r) => <TableNumberCell value={r.version} format={fmtCount} />,
               },
               {
@@ -350,7 +387,6 @@ function LearnedSkills() {
                 header: "Updated",
                 shrink: true,
                 align: "right",
-                sortValue: (r) => tsKey(r.updated_at),
                 cell: (r) => <TableDateCell value={r.updated_at} now={now} />,
               },
             ]}

@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/learning/memread"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/schedule"
@@ -922,16 +923,25 @@ func (s Sources) trailSeat(ctx context.Context, asked string) (memread.Seat, err
 // `id` is the seat's handle, or a person's login; `limit` pages
 // every collection (at most [memread.PageLimit]); a profile's summary asks for
 // one, since the totals and the latest reflection travel whatever the page.
+// `skills_order` is the order the skills are read in before their page is
+// cut ([learning.SkillOrders], newest first when absent), so a screen sorting
+// them by use is handed the most used rather than sorting the newest.
 func (s Sources) agentMemory(ctx context.Context, p Params) (any, error) {
 	id := strings.TrimSpace(p.String("id"))
 	if id == "" {
 		return nil, fmt.Errorf("%w: agent_memory needs an id", ErrBadParams)
 	}
+	order := learning.SkillOrder(strings.TrimSpace(p.String("skills_order")))
+	if !order.Valid() {
+		return nil, fmt.Errorf("%w: agent_memory reads a seat's skills in one of %v, "+
+			"not %q", ErrBadParams, learning.SkillOrders(), order)
+	}
 	seat, err := s.trailSeat(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	memory, err := s.Memory.Memory(ctx, seat, p.Int("limit", 0))
+	memory, err := s.Memory.Memory(ctx, seat,
+		memread.MemoryQuery{Limit: p.Int("limit", 0), Skills: order})
 	if err != nil {
 		return nil, err
 	}

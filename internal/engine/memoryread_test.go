@@ -39,7 +39,7 @@ func TestASeatThisNodeHoldsHasItsMemoryReadHere(t *testing.T) {
 		// THE SEAT AS THE ASKER RESOLVES IT: its id and its handle —
 		// memread re-resolves nothing.
 		seat := memread.Seat{ID: placed.ID, Handle: placed.Handle}
-		got, err := reads.Memory(t.Context(), seat, 1)
+		got, err := reads.Memory(t.Context(), seat, memread.MemoryQuery{Limit: 1})
 		if err != nil {
 			t.Fatalf("reading %s's memory on the node holding it: %v", seat.Handle, err)
 		}

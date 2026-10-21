@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
@@ -298,6 +299,110 @@ func TestListOrderIsTotalWhenCreationStampsTie(t *testing.T) {
 	if !slices.Equal(skillNames(second), skillNames(first)) {
 		t.Errorf("order moved between reads: %v then %v",
 			skillNames(first), skillNames(second))
+	}
+}
+
+// A PAGE OF SKILLS IS THE TOP OF THE WHOLE SET IN THE ORDER ASKED, never the
+// newest page re-sorted. A screen sorted the newest page by use, so past the
+// page "most used" meant the most used of the newest — which reads exactly
+// like the most used. Each order is asked for one row fewer than the seat
+// holds, so a listing that cut the newest first and ordered afterwards drops
+// the very skill the order puts first.
+//
+// Mutation: make orderBy answer the newest for every order, and the first row
+// of the use and the change orders is the wrong skill.
+func TestASkillPageIsTheTopOfTheWholeSetInTheOrderAsked(t *testing.T) {
+	t.Parallel()
+	s, _ := skillStore(t)
+	ctx := context.Background()
+	// THE OLDEST is the most used and the most recently changed, so only an
+	// order applied before the cut can put it first.
+	oldest := newSkill("alice", "oldest", base)
+	mustInsert(t, s, oldest)
+	mustInsert(t, s, newSkill("alice", "middle", base.Add(time.Hour)))
+	mustInsert(t, s, newSkill("alice", "newest", base.Add(2*time.Hour)))
+	for i := range 3 {
+		s.MarkUsed(ctx, oldest.ID, base.Add(time.Duration(i+3)*time.Hour))
+	}
+	s.MarkUsed(ctx, "sk-alice-middle", base.Add(3*time.Hour))
+	rev := oldest.Revision()
+	rev.Description = "changed"
+	mustUpdate(t, s, oldest.ID, rev, learning.Refinement{Kind: learning.RefineObserved,
+		At: base.Add(5 * time.Hour)})
+
+	for _, tc := range []struct {
+		order learning.SkillOrder
+		want  []string
+	}{
+		{"", []string{"newest", "middle"}},
+		{learning.SkillsNewest, []string{"newest", "middle"}},
+		{learning.SkillsMostUsed, []string{"oldest", "middle"}},
+		{learning.SkillsUpdated, []string{"oldest", "newest"}},
+	} {
+		got, err := s.List(ctx, "alice", learning.ListOptions{Limit: 2, Order: tc.order})
+		if err != nil {
+			t.Fatalf("List %q: %v", tc.order, err)
+		}
+		if !slices.Equal(skillNames(got), tc.want) {
+			t.Errorf("a page of two in %q is %v, want %v", tc.order, skillNames(got), tc.want)
+		}
+	}
+}
+
+// EVERY ORDER A LISTING READS IS ONE [learning.SkillOrder.Valid] admits, and
+// nothing else is: the question refuses an order it does not read rather than
+// answering the default under another name.
+func TestASkillOrderIsOneTheStoreReads(t *testing.T) {
+	t.Parallel()
+	for _, order := range learning.SkillOrders() {
+		if !order.Valid() {
+			t.Errorf("%q is listed and not valid", order)
+		}
+	}
+	for _, order := range []learning.SkillOrder{"", "newest"} {
+		if !order.Valid() {
+			t.Errorf("%q is the default and not valid", order)
+		}
+	}
+	for _, order := range []learning.SkillOrder{"-uses", "title", "Uses"} {
+		if order.Valid() {
+			t.Errorf("%q is no order the store reads and is valid", order)
+		}
+	}
+}
+
+// THE DASHBOARD ASKS FOR A SEAT'S SKILLS IN EXACTLY THE ORDERS THE STORE
+// READS.
+//
+// Agent skills' Learned grid offers its orders as the `skills_order` an
+// `agent_memory` question carries, from `LEARNED_SKILL_ORDERS`. An order the
+// dashboard sends that the store does not read is no mis-sorted grid: the
+// question refuses it as bad params and the whole answer goes with it. An
+// order the store grew that the dashboard does not name is one nobody can ask
+// for — except the default, which every screen asks for by naming none.
+func TestTheDashboardAsksForExactlyTheOrdersASeatsSkillsAreReadIn(t *testing.T) {
+	t.Parallel()
+	body, err := clientsource.Literal(clientsource.Tree(t), "LEARNED_SKILL_ORDERS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := clientsource.Strings(body)
+	if len(client) == 0 {
+		t.Fatal("the dashboard names no skills order at all, so this gate certifies nothing")
+	}
+	for _, name := range client {
+		if order := learning.SkillOrder(name); name == "" || !order.Valid() {
+			t.Errorf("the dashboard asks for a seat's skills in the order %q, which the "+
+				"store does not read: the question is refused and the screen with it. "+
+				"The store reads %v", name, learning.SkillOrders())
+		}
+	}
+	for _, order := range learning.SkillOrders() {
+		if order != learning.SkillsNewest && !slices.Contains(client, string(order)) {
+			t.Errorf("the store reads a seat's skills in the order %q and the dashboard "+
+				"does not name it, so nobody can ask for it. The dashboard names %v",
+				order, client)
+		}
 	}
 }
 
