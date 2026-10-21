@@ -1,1 +1,0 @@
-import{t as e}from"./react-DlYQp10C.js";import{Cn as t,Et as n,Tt as r,en as i,jn as a,or as o}from"./chunk-IUYUS2SO-C6XJ2cGR.js";var s=e(),c={html:r,doc:n,slides:a,design:t,dashboard:i,sheet:o};function l({kind:e,size:t=`md`}){let n=c[e];return(0,s.jsx)(n,{size:t})}export{l as t};
