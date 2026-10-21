@@ -89,7 +89,7 @@ func (t *removeWorkItem) Name() string { return worklet.RemoveWorkItemTool }
 func (t *removeWorkItem) Description() string {
 	return "Put a work item in the trash. It disappears from every list and " +
 		"board, its history is untouched, and it can be restored at any age " +
-		"with restore_work_item — there is no window. Nothing is destroyed: " +
+		"with " + worklet.RestoreWorkItemTool + " — there is no window. Nothing is destroyed: " +
 		"that is `crewlet worklet purge`, which has no inverse. Pass " +
 		"`subtree: true` to take its children with it; left behind, each " +
 		"stays on every list and board it is on, as the root of what is " +
@@ -137,7 +137,7 @@ func (t *removeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	ref := strings.TrimSpace(argString(args, "item"))
 	if ref == "" {
-		return failed("remove_work_item needs an `item` — a key like ENG-42, or an id."), nil
+		return failed(worklet.RemoveWorkItemTool + " needs an `item` — a key like ENG-42, or an id."), nil
 	}
 	before, err := t.deps.Reader.Task(ctx, ref, worklet.DetailWants{}, seatRead)
 	switch {
@@ -202,7 +202,7 @@ func (t *removeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			fmt.Sprintf("%s went to the trash", before.Named()), opID,
 			got.Unvouched, unknownNext(got.Unvouched,
 				sameCall(actor, worklet.RemoveWorkItemTool),
-				fmt.Sprintf("Read %s with get_work_item — it says whether it "+
+				fmt.Sprintf("Read %s with "+GetWorkItemTool+" — it says whether it "+
 					"is in the trash", before.Address()),
 				"it changes nothing, since the item is already there")), nil
 	}
@@ -228,7 +228,7 @@ func (t *restoreWorkItem) Description() string {
 	return "Take a work item out of the trash, at any age — one commit, no " +
 		"window and no rebuild. Anything removed by the same gesture comes " +
 		"back with it; anything that was already in the trash for its own " +
-		"reasons stays there. List the trash with list_work_items and " +
+		"reasons stays there. List the trash with " + ListWorkItemsTool + " and " +
 		"`removed: true`."
 }
 
@@ -266,7 +266,7 @@ func (t *restoreWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	ref := strings.TrimSpace(argString(args, "item"))
 	if ref == "" {
-		return failed("restore_work_item needs an `item` — a key like ENG-42, or an id."), nil
+		return failed(worklet.RestoreWorkItemTool + " needs an `item` — a key like ENG-42, or an id."), nil
 	}
 	// THE REMOVED HALF IS WHAT THIS READS. A restore is about a task that
 	// is by definition out of every ordinary list, so the detail read is
@@ -336,7 +336,7 @@ func (t *restoreWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			fmt.Sprintf("%s came out of the trash", before.Named()), opID,
 			got.Unvouched, unknownNext(got.Unvouched,
 				sameCall(actor, worklet.RestoreWorkItemTool),
-				fmt.Sprintf("Read %s with get_work_item — it says whether it "+
+				fmt.Sprintf("Read %s with "+GetWorkItemTool+" — it says whether it "+
 					"is still in the trash", before.Address()),
 				"it is refused, since there is nothing left to restore")), nil
 	}

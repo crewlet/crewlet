@@ -287,7 +287,7 @@ func readTools() []Tool {
 			},
 		},
 		{
-			Name: "list_projects", Phrase: "list projects",
+			Name: listProjectsTool, Phrase: "list projects",
 			Description: "The projects: each one's lead, unit, target date and open counts, or " +
 				"one project with its key.",
 			schema: object(nil, map[string]*schema{
@@ -703,7 +703,7 @@ func readTools() []Tool {
 			Label: func(map[string]any) string { return "Reading the budgets" },
 		},
 		{
-			Name: "search_knowledge", Phrase: "search the knowledge base",
+			Name: searchKnowledgeTool, Phrase: "search the knowledge base",
 			Narrow:      []string{"q"},
 			Description: "Search the company's pages, ranked, with the passage each matched on.",
 			schema: object([]string{"q"}, map[string]*schema{
@@ -749,7 +749,7 @@ func readTools() []Tool {
 			Label: func(map[string]any) string { return "Listing the knowledge spaces" },
 		},
 		{
-			Name: "get_page", Phrase: "read this page",
+			Name: getPageTool, Phrase: "read this page",
 			Description: "Read one knowledge page whole: its body, labels, comments and the " +
 				"version an edit proposes against.",
 			schema: object([]string{"page"}, map[string]*schema{
@@ -796,7 +796,7 @@ func readTools() []Tool {
 			Label: func(map[string]any) string { return "Reading the company's activity" },
 		},
 		{
-			Name: "list_artifacts", Phrase: "list artifacts",
+			Name: listArtifactsTool, Phrase: "list artifacts",
 			Narrow: []string{"kind", "q"},
 			Description: "The artifacts the person can open: documents, decks, sheets and " +
 				"dashboards, newest first.",
@@ -824,7 +824,7 @@ func readTools() []Tool {
 			Scope: func(a Args) string { return scopeOf(a.String("kind"), quoted(a)) },
 		},
 		{
-			Name: "get_artifact", Phrase: "read this artifact",
+			Name: getArtifactTool, Phrase: "read this artifact",
 			Description: "One artifact: its kind, owner, the person's role on it, its version and " +
 				"how widely it is shared.",
 			schema: object([]string{"artifact"}, map[string]*schema{

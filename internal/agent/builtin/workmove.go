@@ -108,9 +108,9 @@ func (t *moveWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	target := strings.ToUpper(strings.TrimSpace(argString(args, "project")))
 	switch {
 	case ref == "":
-		return failed("move_work_item needs an `item` — a key like ENG-42, or an id."), nil
+		return failed(worklet.MoveWorkItemTool + " needs an `item` — a key like ENG-42, or an id."), nil
 	case target == "":
-		return failed("move_work_item needs a `project` — the key of the " +
+		return failed(worklet.MoveWorkItemTool + " needs a `project` — the key of the " +
 			"project the item moves to."), nil
 	}
 	before, err := t.deps.Reader.Task(ctx, ref, worklet.DetailWants{}, seatRead)
@@ -172,7 +172,7 @@ func (t *moveWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			fmt.Sprintf("%s moved to %s", named, target), opID,
 			got.Unvouched, unknownNext(got.Unvouched,
 				sameCall(actor, worklet.MoveWorkItemTool),
-				fmt.Sprintf("Read %s with get_work_item — its key and project "+
+				fmt.Sprintf("Read %s with "+GetWorkItemTool+" — its key and project "+
 					"say where it is now", before.Address()),
 				"it is refused, because the item is already there")), nil
 	}
@@ -217,10 +217,10 @@ func (d WorkDeps) moveStopped(ctx context.Context, actor Actor, from, named stri
 		as = " as " + worklet.ItemNamed(stopped.Root, stopped.Key, stopped.KeyCollision)
 	}
 	duty := "the Worklet duty finishes the walk on its own once nobody is " +
-		"walking it; read the item with get_work_item to see it done"
+		"walking it; read the item with " + GetWorkItemTool + " to see it done"
 	frozen := fmt.Sprintf("%s is in the trash under it and still in its old "+
 		"project, and a task in the trash is frozen, so the move waits for it: "+
-		"it has to be restored (restore_work_item, where you have it) or purged "+
+		"it has to be restored ("+worklet.RestoreWorkItemTool+", where you have it) or purged "+
 		"first", stopped.Waiting)
 	again := sameCall(actor, tool)
 	var next string

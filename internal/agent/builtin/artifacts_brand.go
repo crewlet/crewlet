@@ -80,11 +80,11 @@ func (t *companyBrand) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	adoption, adopted, err := t.deps.Reader.Brand(ctx, seatRead)
 	if err != nil {
 		if why, ok := Condition(err); ok {
-			return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("get_company_brand could "+
+			return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf(CompanyBrandTool+" could "+
 				"not read the company's brand right now (%s). This is NOT \"no brand\": do not "+
 				"conclude the company has none. Try again shortly.", why)), nil
 		}
-		return faulted(ctx, t.Name(), err, "get_company_brand could not read the company's "+
+		return faulted(ctx, t.Name(), err, CompanyBrandTool+" could not read the company's "+
 			"brand: "+faultSaid+". This is NOT \"no brand\": say you could not check."), nil
 	}
 	if !adopted {
@@ -95,14 +95,14 @@ func (t *companyBrand) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	kit, err := brandformat.DecodeAdopted(adoption.BrandJSON)
 	if err != nil {
-		return faulted(ctx, t.Name(), err, "get_company_brand could not read the adopted brand's "+
+		return faulted(ctx, t.Name(), err, CompanyBrandTool+" could not read the adopted brand's "+
 			"record: "+faultSaid+"."), nil
 	}
 	read := newForeignRead(turn, c.self())
 	brand, err := brandAnswer(adoption, kit)
 	b := kit.Brand()
 	if err != nil {
-		return faulted(ctx, t.Name(), err, "get_company_brand could not name where the brand's "+
+		return faulted(ctx, t.Name(), err, CompanyBrandTool+" could not name where the brand's "+
 			"files go: "+faultSaid+"."), nil
 	}
 	if voice := voiceText(b.Voice); voice != "" {

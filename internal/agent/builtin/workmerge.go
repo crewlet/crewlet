@@ -109,10 +109,10 @@ func (t *mergeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	into := strings.TrimSpace(argString(args, "into"))
 	switch {
 	case ref == "":
-		return failed("merge_work_item needs an `item` — the duplicate, by " +
+		return failed(MergeWorkItemTool + " needs an `item` — the duplicate, by " +
 			"key like ENG-42 or by id."), nil
 	case into == "":
-		return failed("merge_work_item needs an `into` — the item that " +
+		return failed(MergeWorkItemTool + " needs an `into` — the item that " +
 			"survives. Without it the call would close the duplicate and " +
 			"say nothing about where the work went."), nil
 	}
@@ -150,9 +150,9 @@ func (t *mergeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// THE REFUSAL NAMES BOTH WAYS OUT, in this surface's own words:
 		// the tracker knows the gesture that clears it and not the tool
 		// or the argument a caller reaches it by.
-		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("merge_work_item "+
+		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf(MergeWorkItemTool+" "+
 			"was refused: %v. Move %s "+
-			"into the surviving item's project with move_work_item first — its "+
+			"into the surviving item's project with "+worklet.MoveWorkItemTool+" first — its "+
 			"subtasks go with it — or merge with `move_subtasks: false`, which "+
 			"leaves them under the duplicate.", err, before.Address())), nil
 	}
@@ -167,7 +167,7 @@ func (t *mergeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return unknownWrite(actor, worklet.MergeWorkItemTool,
 			fmt.Sprintf("%s was merged", before.Named()), opID, got.Unvouched,
 			unknownNext(got.Unvouched, sameCall(actor, worklet.MergeWorkItemTool),
-				fmt.Sprintf("Read %s with get_work_item — a merged item is "+
+				fmt.Sprintf("Read %s with "+GetWorkItemTool+" — a merged item is "+
 					"cancelled and links the one it was folded into", before.Address()),
 				"it merges it a second time")), nil
 	}

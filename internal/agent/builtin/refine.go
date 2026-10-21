@@ -91,7 +91,7 @@ func (t *refineSkill) Call(ctx context.Context, args map[string]any) (tools.Resu
 func (t *refineSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
 	handle := turn.Handle()
 	if handle == "" {
-		return refused(tools.RefusalForbidden, "refine_skill can only be called during a turn, on behalf of a seat."), nil
+		return refused(tools.RefusalForbidden, RefineSkillTool+" can only be called during a turn, on behalf of a seat."), nil
 	}
 	if t.skills == nil {
 		return refused(tools.RefusalUnavailable, "Skill synthesis is not configured on this deployment."), nil
@@ -102,9 +102,9 @@ func (t *refineSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 	reason := strings.TrimSpace(argString(args, "reason"))
 	switch {
 	case name == "":
-		return failed("refine_skill needs a `skill_name`."), nil
+		return failed(RefineSkillTool + " needs a `skill_name`."), nil
 	case content == "":
-		return failed("refine_skill needs `content`: the FULL corrected " +
+		return failed(RefineSkillTool + " needs `content`: the FULL corrected " +
 			"procedure. It replaces the current body, so a partial edit " +
 			"would delete the rest of the skill."), nil
 	case len(reason) > diaryNoteMax:

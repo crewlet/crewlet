@@ -33,7 +33,7 @@ import (
 // The tool wire names.
 const (
 	UseSkillTool          = "use_skill"
-	QueryEpisodesTool     = "query_episodes"
+	QueryEpisodesTool     = toolname.QueryEpisodes
 	RefreshMemoryTool     = "refresh_memory"
 	ReflectAndPersistTool = toolname.ReflectAndPersist
 	MarkOnboardedTool     = toolname.MarkOnboarded
@@ -134,14 +134,14 @@ func (t *useSkill) Call(ctx context.Context, args map[string]any) (tools.Result,
 func (t *useSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
 	seat := turn.Handle()
 	if seat == "" {
-		return refused(tools.RefusalForbidden, "use_skill can only be called during a turn, on behalf of a seat."), nil
+		return refused(tools.RefusalForbidden, UseSkillTool+" can only be called during a turn, on behalf of a seat."), nil
 	}
 	if t.skills == nil {
 		return refused(tools.RefusalUnavailable, "Skill synthesis is not configured on this deployment."), nil
 	}
 	name := strings.TrimSpace(argString(args, "skill_name"))
 	if name == "" {
-		return failed("use_skill needs a `skill_name`."), nil
+		return failed(UseSkillTool + " needs a `skill_name`."), nil
 	}
 
 	// Keyed on THIS seat, so a model naming another agent's skill gets
@@ -300,7 +300,7 @@ func (t *queryEpisodes) Call(ctx context.Context, args map[string]any) (tools.Re
 func (t *queryEpisodes) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
 	seat := turn.Handle()
 	if seat == "" {
-		return refused(tools.RefusalForbidden, "query_episodes can only be called during a turn, on behalf of a seat."), nil
+		return refused(tools.RefusalForbidden, QueryEpisodesTool+" can only be called during a turn, on behalf of a seat."), nil
 	}
 	if t.episodes == nil {
 		return refused(tools.RefusalUnavailable, "Episode memory is not configured on this deployment."), nil
@@ -510,7 +510,7 @@ func (t *refreshMemory) Call(ctx context.Context, args map[string]any) (tools.Re
 func (t *refreshMemory) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
 	agentID, why := seatAgentID(turn)
 	if why != "" {
-		return refused(tools.RefusalForbidden, "refresh_memory "+why), nil
+		return refused(tools.RefusalForbidden, RefreshMemoryTool+" "+why), nil
 	}
 	if t.diary == nil {
 		return refused(tools.RefusalUnavailable, "Durable memory is not configured on this deployment."), nil
@@ -546,7 +546,7 @@ func (t *refreshMemory) filtered(ctx context.Context, turn *turnctx.Turn,
 ) (tools.Result, error) {
 	if t.recall == nil {
 		return refused(tools.RefusalUnavailable, "This deployment cannot re-filter your notes by "+
-			"relevance — call refresh_memory without `context_hint` for your "+
+			"relevance — call "+RefreshMemoryTool+" without `context_hint` for your "+
 			"most recent ones instead."), nil
 	}
 	take := t.hints.take(turn.RunID, hint, t.hintBudget())
@@ -563,7 +563,7 @@ func (t *refreshMemory) filtered(ctx context.Context, turn *turnctx.Turn,
 		return failed(fmt.Sprintf(
 			"You have already re-filtered your notes on %d different hints this "+
 				"turn, which is this company's limit. Re-use one of those hints "+
-				"(that is free), or call refresh_memory without one.",
+				"(that is free), or call "+RefreshMemoryTool+" without one.",
 			take.Spent)), nil
 	}
 

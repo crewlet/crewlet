@@ -86,12 +86,12 @@ func (t *shareArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	role := artifacts.Role(strings.TrimSpace(argString(args, "role")))
 	if !slices.Contains(artifacts.ShareableRoles, role) {
-		return failed(fmt.Sprintf("share_artifact takes `role` as one of %v: ownership "+
+		return failed(fmt.Sprintf(ShareArtifactTool+" takes `role` as one of %v: ownership "+
 			"moves only by a person's transfer.", artifacts.ShareableRoles)), nil
 	}
 	if audience.Kind == artifacts.AudienceCompany && c.agent() {
 		return refusedBy(tools.RefusalForbidden, artifactsdomain.ErrAgentCompanyShare,
-			"share_artifact refused that: an agent never shares an artifact with the "+
+			ShareArtifactTool+" refused that: an agent never shares an artifact with the "+
 				"whole company. Share it with the seats or units that need it, or ask a "+
 				"person to widen it."), nil
 	}
@@ -105,7 +105,7 @@ func (t *shareArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	if !dec.Standing.Role.Includes(role) {
 		return refusedBy(tools.RefusalForbidden, artifactsdomain.ErrAboveOwnRole, fmt.Sprintf(
-			"share_artifact refused that: a share never grants above your own role, and "+
+			ShareArtifactTool+" refused that: a share never grants above your own role, and "+
 				"you hold %s.", roleOrNone(dec.Standing.Role))), nil
 	}
 	written, err := t.deps.Writer.Share(ctx, t.deps.call(c, dec.Standing.Role, dec.Elevated),
@@ -223,7 +223,7 @@ func (d ArtifactDeps) shareAnswer(ctx context.Context, tool string, c artifactCa
 	}
 	if written.Result.Outcome == statelog.OutcomeUnknown {
 		return artifactUnknown(tool, c, written.Result, "Read the artifact with "+
-			"get_artifact: its shares say whether the change landed."), nil
+			GetArtifactTool+": its shares say whether the change landed."), nil
 	}
 	d.settle(ctx, written.Result.Position)
 	out := map[string]any{"artifact": h.ID.String(), "outcome": outcomeOf(written.Result),
@@ -311,7 +311,7 @@ func (t *uploadArtifactAsset) CallForTurn(ctx context.Context, turn *turnctx.Tur
 	}
 	t.deps.present(c, h.ID, presence.Editing, presence.Focus{})
 	if !slices.Contains(h.Capabilities, artifacts.CapabilityAssets) {
-		return failed(fmt.Sprintf("upload_artifact_asset: artifact %s does not declare "+
+		return failed(fmt.Sprintf(UploadArtifactAssetTool+": artifact %s does not declare "+
 			"the `assets` capability, so its page cannot reference an asset. Publish a "+
 			"version declaring it first.", h.ID)), nil
 	}

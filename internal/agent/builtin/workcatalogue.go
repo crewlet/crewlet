@@ -103,7 +103,7 @@ func (t *writeWorkCatalogue) Description() string {
 	return "Declare the company's task types or its custom fields. Each list " +
 		"REPLACES the one it names, and each declaration in it is WHOLE — a " +
 		"key you leave out is cleared, `config` and its options included — so " +
-		"read get_work_catalogue and send back what it gave you with your " +
+		"read " + worklet.GetWorkCatalogueTool + " and send back what it gave you with your " +
 		"change in it, never a field composed from scratch. The two lists are " +
 		"separate writes: sending only `types` leaves the fields alone, and " +
 		"the reverse. The built-in types (task, bug, epic, story, spike, " +
@@ -208,7 +208,7 @@ func (t *writeWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn
 			// THE FIELDS WAIT FOR IT: a call answered with one half's
 			// receipt and the other's doubt is a call the reader has to
 			// take apart, and repeating the whole of it is harmless.
-			next := restateNext("Read the catalogue with get_work_catalogue")
+			next := restateNext("Read the catalogue with " + worklet.GetWorkCatalogueTool)
 			if hasFields {
 				next = "The fields were NOT written: the call stopped here, " +
 					"before them. " + next
@@ -235,7 +235,7 @@ func (t *writeWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn
 			return failure, nil
 		}
 		if result.Outcome == statelog.OutcomeUnknown {
-			next := restateNext("Read the catalogue with get_work_catalogue")
+			next := restateNext("Read the catalogue with " + worklet.GetWorkCatalogueTool)
 			if hasTypes {
 				next = "The types WERE written. " + next
 			}
@@ -366,7 +366,7 @@ func fieldConfig(spec map[string]any, slug string) (worklet.FieldConfig, string)
 	config, ok := raw.(map[string]any)
 	if !ok {
 		return worklet.FieldConfig{}, fmt.Sprintf("`config` on field %s is the "+
-			"settings object get_work_catalogue returns for it, as "+
+			"settings object "+worklet.GetWorkCatalogueTool+" returns for it, as "+
 			`{"precision": 1, "unit": "h"}.`, clip(slug))
 	}
 	options, refusal := catalogueOptions(config, slug)
@@ -512,7 +512,7 @@ func fieldDeclarationSchema() map[string]any {
 func fieldConfigSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
-		"description": "The field's own settings, exactly as get_work_catalogue " +
+		"description": "The field's own settings, exactly as " + worklet.GetWorkCatalogueTool + " " +
 			"returns them. Each key belongs to particular field TYPES and is " +
 			"refused by name on any other. WHOLE, like the declaration around " +
 			"it: a key left out is cleared.",

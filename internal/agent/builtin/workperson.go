@@ -132,7 +132,7 @@ func (t *setPriorities) Description() string {
 		"record, so they can see who chose it; their own next change clears " +
 		"that. An order is a statement about every entry at once, so the " +
 		"list you send is the whole list — pass `if_match` with the version " +
-		"get_person answered and it is refused if the list changed since."
+		worklet.GetPersonTool + " answered and it is refused if the list changed since."
 }
 
 func (t *setPriorities) Parameters() map[string]any {
@@ -150,7 +150,7 @@ func (t *setPriorities) Parameters() map[string]any {
 			},
 			"if_match": map[string]any{
 				"type": "integer",
-				"description": "The `version` get_person answered for this " +
+				"description": "The `version` " + worklet.GetPersonTool + " answered for this " +
 					"person. Given, the write is REFUSED if their record " +
 					"changed since you read it — a reorder made from an " +
 					"old screen would otherwise put back an order somebody " +
@@ -231,7 +231,7 @@ func (t *setPriorities) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if _, given := args["if_match"]; given {
 		version := argInt(args, "if_match", -1)
 		if version < 0 {
-			return failed("`if_match` is the `version` get_person answered, " +
+			return failed("`if_match` is the `version` " + worklet.GetPersonTool + " answered, " +
 				"a whole number of zero or more."), nil
 		}
 		expected := uint64(version)
@@ -247,7 +247,7 @@ func (t *setPriorities) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return refusedBy(tools.RefusalStaleVersion, err, fmt.Sprintf("%s was "+
 			"refused: %v. Nothing is wrong with your order — somebody "+
 			"changed this person's record after you read it. Call "+
-			"get_person again and decide from the list it shows now.",
+			worklet.GetPersonTool+" again and decide from the list it shows now.",
 			worklet.SetPrioritiesTool, err)), nil
 	}
 	if err != nil {
@@ -258,7 +258,7 @@ func (t *setPriorities) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			fmt.Sprintf("%s's priorities were set", handle), opID,
 			result.Unvouched, unknownNext(result.Unvouched,
 				sameCall(actor, worklet.SetPrioritiesTool),
-				"Read the list with get_person",
+				"Read the list with "+worklet.GetPersonTool,
 				"it sets the same list again, which changes nothing")), nil
 	}
 	t.deps.settle(ctx, result.Position)
@@ -356,7 +356,7 @@ func (d WorkDeps) writePins(ctx context.Context, actor Actor, writer PersonWrite
 		return unknownWrite(actor, worklet.SetPinsTool,
 			fmt.Sprintf("%s's pins were set", handle), opID, result.Unvouched,
 			unknownNext(result.Unvouched, sameCall(actor, worklet.SetPinsTool),
-				"Read them with get_person",
+				"Read them with "+worklet.GetPersonTool,
 				"it sets the same lists again, which changes nothing"))
 	}
 	d.settle(ctx, result.Position)
@@ -375,7 +375,7 @@ func (t *markInbox) Name() string { return worklet.MarkInboxTool }
 
 func (t *markInbox) Description() string {
 	return "Move your own inbox by one gesture. Name notices by the " +
-		"`record_id` work_inbox gives them: `read` marks them done, " +
+		"`record_id` " + worklet.WorkInboxTool + " gives them: `read` marks them done, " +
 		"`unread` brings them back, `snooze` puts them off until a time, " +
 		"`unsnooze` brings a snoozed one back now. `read_through` reads " +
 		"everything up to a log position — pass the newest notice you have " +
@@ -426,7 +426,7 @@ func (t *markInbox) Parameters() map[string]any {
 				"type":  "array",
 				"items": map[string]any{"type": "string"},
 				"description": "Which wake reasons land in the PRIMARY half " +
-					"of `work_inbox`, the rest being context. One of: " +
+					"of `" + worklet.WorkInboxTool + "`, the rest being context. One of: " +
 					reasonList() + ". An empty list takes the shipped " +
 					"default (" + defaultPrimaryList() + ") rather than " +
 					"making nothing primary; omit it to leave your choice " +
@@ -480,7 +480,7 @@ func (d WorkDeps) writeInbox(ctx context.Context, actor Actor, writer PersonWrit
 		return unknownWrite(actor, worklet.MarkInboxTool,
 			fmt.Sprintf("%s's inbox was marked", handle), opID, result.Unvouched,
 			unknownNext(result.Unvouched, sameCall(actor, worklet.MarkInboxTool),
-				"Read it with work_inbox",
+				"Read it with "+worklet.WorkInboxTool,
 				"it marks the same notices again, which changes nothing"))
 	}
 	d.settle(ctx, result.Position)
@@ -729,7 +729,7 @@ func (d WorkDeps) chartRecord(tool string) func(string) (string, string) {
 //
 // AUTHORIZED IS ALWAYS TRUE HERE and that is not a rubber stamp: nothing
 // reaches this without the table having answered for the record it names, and
-// [tracker.ownRecord] compares the actor to the handle before it ever reads
+// [worklet.ownRecord] compares the actor to the handle before it ever reads
 // this. What the value carries that matters is the GESTURE bar, which is the
 // tracker's own and not the table's.
 func admittedWrite(actor Actor) worklet.PersonAuthority {

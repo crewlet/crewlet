@@ -123,7 +123,7 @@ func (t *writeArtifactData) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if err != nil {
 		return dataFailure(ctx, t.Name(), err), nil
 	}
-	return t.d.verdict(ctx, turn, t.Name(), a, res, "Read the rows with read_artifact_data: "+
+	return t.d.verdict(ctx, turn, t.Name(), a, res, "Read the rows with "+ReadArtifactDataTool+": "+
 		"they say whether the write landed.")
 }
 
@@ -250,7 +250,7 @@ func (t *setArtifactSchema) Name() string { return SetArtifactSchemaTool }
 func (t *setArtifactSchema) Description() string {
 	return "Set the schema of an artifact's datastore in this Crewlet company: EVERY " +
 		"collection it keeps after the change (read the current one with " +
-		"read_artifact_data and no `collection`, and send it back with your change), " +
+		ReadArtifactDataTool + " and no `collection`, and send it back with your change), " +
 		"each with its columns, who reads it, who creates and deletes rows, and each " +
 		"column's write rule. An agent may tighten a collection's rules (add " +
 		"`humans_only`, raise a role) and never loosen them; that is a person's call."
@@ -326,7 +326,7 @@ func (t *setArtifactSchema) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	if _, given := args["collections"]; !given {
 		return failed(t.Name() + " needs `collections`: every collection the datastore " +
-			"keeps after the change, read first with read_artifact_data."), nil
+			"keeps after the change, read first with " + ReadArtifactDataTool + "."), nil
 	}
 	a, refusal := t.d.admit(ctx, turn, t.Name(), authz.ActionArtifactSchema, args, true)
 	if refusal != nil {
@@ -342,7 +342,7 @@ func (t *setArtifactSchema) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if err != nil {
 		return dataFailure(ctx, t.Name(), err), nil
 	}
-	return t.d.verdict(ctx, turn, t.Name(), a, res, "Read the schema with read_artifact_data: "+
+	return t.d.verdict(ctx, turn, t.Name(), a, res, "Read the schema with "+ReadArtifactDataTool+": "+
 		"it says whether the change landed.")
 }
 

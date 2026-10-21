@@ -124,7 +124,7 @@ func writeTools() []Tool {
 				"items":  names("Task keys or ids, most important first.", 100),
 				"handle": text("A report's handle or seat name. Default the person's own list.", nameBytes),
 			})),
-		write("mark_inbox", authz.ActionInboxMark, false, "mark the inbox",
+		write(markInboxTool, authz.ActionInboxMark, false, "mark the inbox",
 			"Propose marking inbox notices read or unread, by their record ids.",
 			object(nil, map[string]*schema{
 				"read":   names("Record ids to mark read.", 200),
@@ -142,7 +142,7 @@ func writeTools() []Tool {
 			object([]string{"handle"}, map[string]*schema{
 				"handle": text("The seat's handle or name.", nameBytes),
 			})),
-		write("steer_turn", authz.ActionTurnSteer, false, "steer running turns",
+		write(steerTurnTool, authz.ActionTurnSteer, false, "steer running turns",
 			"Propose a note to a turn that is running now; it becomes that agent's input.",
 			object([]string{"turn_id", "note"}, map[string]*schema{
 				"turn_id": text("The running turn's id.", nameBytes),
@@ -166,11 +166,11 @@ func writeTools() []Tool {
 				"message":   text("One line on why the page exists.", lineBytes),
 			})),
 		write("edit_page", authz.ActionPageSave, true, "edit pages",
-			"Propose a new version of a page. Read it with get_page first and pass its version "+
-				"as base_version.",
+			"Propose a new version of a page. Read it with "+getPageTool+" first and pass "+
+				"its version as base_version.",
 			object([]string{"page", "base_version", "body"}, map[string]*schema{
 				"page":         text("The page's id.", nameBytes),
-				"base_version": positive("The page's version from get_page.", 1<<30),
+				"base_version": positive("The page's version from "+getPageTool+".", 1<<30),
 				"body":         text("The whole new body, in Markdown.", bodyBytes),
 				"title":        text("A new title.", lineBytes),
 				"message":      text("One line on what changed and why.", lineBytes),
@@ -216,7 +216,7 @@ func shareTools() []Tool {
 	audience := text("A seat's handle, unit:<key> for a team and everybody under it, or "+
 		"company.", nameBytes)
 	share := Tool{
-		Name: "share_artifact", Act: string(authz.ActionArtifactShare), Kind: KindWrite,
+		Name: shareArtifactTool, Act: string(authz.ActionArtifactShare), Kind: KindWrite,
 		Phrase:      "share artifacts",
 		Description: "Propose sharing an artifact the person owns with a seat, a team or the company.",
 		schema: object([]string{"artifact", "to", "role"}, map[string]*schema{
@@ -245,7 +245,7 @@ func shareTools() []Tool {
 		StepUp: func(a Args) bool { return a.String("to") == string(artifacts.AudienceCompany) },
 	}
 	unshare := Tool{
-		Name: "unshare_artifact", Act: string(authz.ActionArtifactUnshare), Kind: KindWrite,
+		Name: unshareArtifactTool, Act: string(authz.ActionArtifactUnshare), Kind: KindWrite,
 		Phrase:      "withdraw shares",
 		Description: "Propose withdrawing one audience's share of an artifact the person owns.",
 		schema: object([]string{"artifact", "from"}, map[string]*schema{

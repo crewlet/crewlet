@@ -166,12 +166,12 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	turnID := strings.TrimSpace(argString(args, "turn_id"))
 	if turnID == "" {
-		return failed("answer_run needs a `turn_id` — the parked run's turn id."), nil
+		return failed(AnswerRunTool + " needs a `turn_id` — the parked run's turn id."), nil
 	}
 	answer := strings.TrimSpace(argString(args, "answer"))
 	switch {
 	case answer == "":
-		return failed("answer_run needs an `answer` — what the coding agent should be told."), nil
+		return failed(AnswerRunTool + " needs an `answer` — what the coding agent should be told."), nil
 	case len(answer) > MaxRunAnswerBytes:
 		return failed(fmt.Sprintf("That answer is %d KiB and one answer may be at most %d KiB: "+
 			"it is spliced into the run as a single tool reply. Put the detail on a page "+
@@ -181,7 +181,7 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	run, found, err := t.deps.Desk.Run(ctx, turnID)
 	switch {
 	case err != nil:
-		return nodeFailure(ctx, AnswerRunTool, err, fmt.Sprintf("answer_run could not "+
+		return nodeFailure(ctx, AnswerRunTool, err, fmt.Sprintf(AnswerRunTool+" could not "+
 			"read run %s", clip(turnID)), "This does NOT mean it is gone, and "+
 			"nothing was answered."), nil
 	case !found:
@@ -291,7 +291,7 @@ func (t *answerRun) parties(ctx context.Context, run sandbox.PendingRun) (runPar
 	if err != nil || id == uuid.Nil {
 		return runParties{}, refusalOf(faulted(ctx, AnswerRunTool,
 			fmt.Errorf("pending run %s names seat id %q: %w", run.TurnID, run.AgentID,
-				errUnreadableSeatID), fmt.Sprintf("answer_run cannot answer run %s: its "+
+				errUnreadableSeatID), fmt.Sprintf(AnswerRunTool+" cannot answer run %s: its "+
 				"record names no seat id this build can read, so the seat it would wake "+
 				"cannot be named — %s.", clip(run.TurnID), faultSaid)))
 	}

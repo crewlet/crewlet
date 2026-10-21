@@ -222,12 +222,12 @@ func (r *Reader) MyWork(ctx context.Context, q MyWorkQuery, now time.Time,
 	loc *time.Location) (MyWork, error) {
 
 	if q.Level == "" {
-		return MyWork{}, fmt.Errorf("worklet: this my_work read names no " +
+		return MyWork{}, fmt.Errorf("worklet: this " + MyWorkTool + " read names no " +
 			"level — a surface resolves an absent read_level to its own " +
 			"default before it reads")
 	}
 	if q.Handle == "" {
-		return MyWork{}, fmt.Errorf("worklet: my_work names nobody; a " +
+		return MyWork{}, fmt.Errorf("worklet: " + MyWorkTool + " names nobody; a " +
 			"surface resolves the viewer from its own credential before it " +
 			"reads, because a day with nobody's name on it is everybody's")
 	}
@@ -640,7 +640,7 @@ func askRowsOf(ctx context.Context, tx *sql.Tx, pending []askRecord,
 		if maxBytes > 0 && len(out) > 0 && weight+len(a.body) > maxBytes {
 			ask.Body = ""
 			ask.BodyNotIncluded = fmt.Sprintf("%d bytes, left out to keep this answer "+
-				"readable — read it with get_work_item(item=%q, comment=%q)",
+				"readable — read it with "+GetWorkItemTool+"(item=%q, comment=%q)",
 				len(a.body), row.Address(), a.comment)
 		} else {
 			weight += len(a.body)
