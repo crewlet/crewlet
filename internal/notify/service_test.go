@@ -1059,26 +1059,20 @@ func TestTheWakeCarriesTheSurfaceItsRecipientOwes(t *testing.T) {
 	}
 }
 
-// fencingPrompt is the tracker's prompt with its body fenced under the token
-// the delivery hands it, as a prompt that fences what somebody said does.
-type fencingPrompt struct{ tracker }
-
-func (fencingPrompt) Build(n notify.Inbound, _ notify.Parties) string {
-	return "## How to triage this\n\n" + provenance.Fence(n.Fence, provenance.SourceWorkComment,
-		provenance.TrustExternal, nil, n.Body)
-}
-
-// A WAKE NAMES THE TOKEN ITS PROMPT FENCED UNDER. The trigger is built here,
+// A WAKE NAMES THE TOKEN ITS BODY WAS FENCED UNDER. The trigger is built here,
 // where no turn exists to lend one, so the delivery mints a token for the wake
-// alone, hands it to the prompt and records it on the notification — the only
-// way the turn that reads the trigger can tell the prompt's own fences from
-// anything that merely looks like one, and move them onto its token.
+// alone, fences the body under it before the prompt renders it and records it
+// on the notification — the only way the turn that reads the trigger can tell
+// those fences from anything that merely looks like one, and move them onto
+// its token. The prompt here writes the body as it is handed it, which is how
+// every prompt is written: the fence is the spine's.
 //
 // Mutation: drop the stamp and the wake names no token; mint it after the
-// prompt is built and the body is fenced under another.
+// prompt is built and the body is fenced under another; build the prompt over
+// the raw body and nothing is fenced at all.
 func TestAWakeNamesTheTokenItsPromptFencedUnder(t *testing.T) {
 	h := newService(t, func(o *notify.Options, _ *harness) {
-		o.Prompts = notify.NewPrompts(fencingPrompt{})
+		o.Prompts = notify.NewPrompts(tracker{})
 	})
 	h.parser.out = []notify.Routed{to(notify.Recipient{Handle: "engineering-lead"}, "please look")}
 	if got := h.svc.Handle(t.Context(), delivery("tracker")); got.Outcome != queue.OutcomeAck {

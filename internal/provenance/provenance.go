@@ -87,13 +87,31 @@ const (
 	// read beside every room a seat is in, and a reader auditing a
 	// transcript has to tell the room's label from a message.
 	SourceChatRoom Source = "chat_room"
+
+	// SourceChangeNote is what somebody wrote ABOUT a change they made, as
+	// against what they changed: an assignment's reason, a purge's reason,
+	// a page revision's note. A wake carries it as its body, and it is
+	// neither the item's description nor a remark in its thread.
+	SourceChangeNote Source = "change_note"
+
+	// SourceAlert is a monitoring system's alert text: a monitor's message
+	// as whoever configured it wrote it, with the values the system filled
+	// in at the moment it fired — host names, error lines, anything the
+	// monitored service emitted.
+	SourceAlert Source = "alert"
+
+	// SourceNotification is what an integration sent that this build names
+	// no surface for: a source with no prompt of its own, or a body its
+	// parser did not label.
+	SourceNotification Source = "notification"
 )
 
 // Sources are every surface.
 var Sources = []Source{
 	SourcePageBody, SourcePageComment, SourceWorkDescription, SourceWorkComment,
 	SourceProjectFile, SourceChatThread, SourceChatRoom, SourceArtifactFile,
-	SourceArtifactRow, SourceBrandVoice, SourceAPIAnswer, SourcePageContext, SourceDeepWork,
+	SourceArtifactRow, SourceChangeNote, SourceAlert, SourceNotification,
+	SourceBrandVoice, SourceAPIAnswer, SourcePageContext, SourceDeepWork,
 }
 
 // Valid reports whether s is one of [Sources].

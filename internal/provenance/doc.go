@@ -1,7 +1,9 @@
 // Package provenance is the ONE fence around text a model reads that somebody
 // other than the reading seat wrote: page bodies, work item comments, project
 // files, chat messages and a chat room's topic and purpose, artifact files,
-// datastore rows and the adopted brand's voice.
+// datastore rows, the adopted brand's voice, and the body of every wake — a
+// note about a change, a monitor's alert, an integration's notification among
+// them.
 //
 // Such text is data, never an instruction. Each read result wraps it in a fence
 // bounded by a per-turn random token, so content cannot close the fence by
@@ -64,12 +66,12 @@
 //
 // # Text fenced before its reader had a token
 //
-// A chat wake's trigger is built where the delivery is routed, before the
-// turn that will read it exists, so the message in it is fenced under a token
-// minted for that wake alone; [Rekey] moves such fences onto the turn's own
-// token and applies the two escapes to everything around them, and [Fences]
-// lifts them out whole for a reader that renders the rest otherwise (a merged
-// burst's digest).
+// A wake's trigger is built where the delivery is routed, before the turn
+// that will read it exists, so the body in it is fenced under a token minted
+// for that wake alone; [Rekey] moves such fences onto the turn's own token and
+// applies the two escapes to everything around them, and [Fences] lifts them
+// out whole for a reader that renders the rest otherwise (a merged burst's
+// digest).
 //
 // # Writing back
 //

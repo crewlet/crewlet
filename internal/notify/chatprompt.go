@@ -3,7 +3,6 @@ package notify
 import (
 	"strings"
 
-	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/provenance"
 )
 
@@ -313,11 +312,9 @@ func (p ChatPrompt) Build(n Inbound, parties Parties) string {
 	if n.Body == "" {
 		b.WriteString("\n\n**Message:** (empty)")
 	} else {
-		// FENCED AS WHAT SOMEBODY SAID (ADR-0040): the message is the one
-		// part of this trigger the engine did not write, and a model reads
-		// every word of it as a possible instruction. Under the wake's own
-		// token, which the turn moves onto its own.
-		b.WriteString("\n\n**Message:**\n" + p.fenceMessage(n, parties))
+		// ALREADY FENCED as what somebody said ([Render]), under this
+		// prompt's own [ChatPrompt.Provenance].
+		b.WriteString("\n\n**Message:**\n" + n.Body)
 	}
 	b.WriteString("\n**From:** " + who)
 	if channel := meta[ChannelField]; channel != "" {
@@ -363,21 +360,13 @@ func (p ChatPrompt) Build(n Inbound, parties Parties) string {
 	return b.String()
 }
 
-// fenceMessage is the message's body inside its fence: written by its author,
-// at the trust that author earns from the seat the wake reached.
-func (p ChatPrompt) fenceMessage(n Inbound, parties Parties) string {
-	src, trust, authors := p.messageLabel(n.Metadata, parties, n.Metadata[RecipientField])
-	return provenance.Fence(n.Fence, src, trust, authors, n.Body)
-}
-
-// messageLabel is what a message's fence says of it, for the seat self: read
-// in a chat thread, written by its author, at the trust that author earns from
-// self. THE ONE ANSWER, which the trigger's fence and every later reader of
-// the same message's words both ask ([MessageProvenance]).
-func (p ChatPrompt) messageLabel(meta map[string]string, parties Parties, self string,
-) (provenance.Source, provenance.Trust, []provenance.Author) {
-	authors := []provenance.Author{p.author(meta, parties)}
-	return provenance.SourceChatThread, provenance.TrustFor(self, authors), authors
+// Provenance implements [Prompt]: a message in a room or a thread, written by
+// its sender — every chat event IS a message, and its author is who sent it.
+func (p ChatPrompt) Provenance(n Inbound, parties Parties) Provenance {
+	return Provenance{
+		Source:  provenance.SourceChatThread,
+		Authors: []provenance.Author{p.author(n.Metadata, parties)},
+	}
 }
 
 // author is [ChatPrompt.Author], or the registry's reading of the sender's id.
@@ -393,17 +382,7 @@ func (p ChatPrompt) author(meta map[string]string, parties Parties) provenance.A
 	return provenance.Author{}
 }
 
-// PartyAuthor is a colleague as a fence names them: their seat, as a person or
-// an agent.
-func PartyAuthor(party Party) provenance.Author {
-	kind := iam.ActorAgent
-	if party.Human {
-		kind = iam.ActorHuman
-	}
-	return provenance.Author{Kind: kind, Seat: party.Handle}
-}
-
-// triage is the addressee guidance, identical on every backend.// triage is the addressee guidance, identical on every backend, for a message
+// triage is the addressee guidance, identical on every backend, for a message
 // the engine has not already read as addressed to the seat.
 //
 // A PRINCIPLE, NOT A METHOD. It was a numbered procedure with worked examples

@@ -11,7 +11,6 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/slack"
-	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A REPLY'S WORDS ARE ITS WRITERS', EACH UNDER THEIR OWN NAME WHERE THERE ARE
@@ -75,12 +74,10 @@ func TestAReplysWordsAreItsWritersEachUnderTheirOwnName(t *testing.T) {
 // A REPLY IS LABELLED AS ITS TRIGGER LABELS THE MESSAGE, for the seat it was
 // delivered to: read in a chat thread, every writer named once, at the least
 // trust any of them earns, so a stranger's message in a burst of a
-// colleague's makes the whole reply data. A surface whose trigger fences no
-// message labels nothing, and the run reads its words defused, as the seat
-// reads the trigger.
+// colleague's makes the whole reply data.
 //
 // Mutation: take the newest message's trust alone and the stranger's case is
-// red; label a surface that fences nothing and the tracker's is.
+// red; name the writers by the newest message alone and it is too.
 func TestAReplyIsLabelledAsItsTriggerLabelsTheMessage(t *testing.T) {
 	t.Parallel()
 	o := &org.Organization{Name: "Acme", Roles: []*org.Role{
@@ -92,7 +89,7 @@ func TestAReplyIsLabelledAsItsTriggerLabelsTheMessage(t *testing.T) {
 	if err := reg.Register(slack.Backend, "U0ANA", "ana"); err != nil {
 		t.Fatal(err)
 	}
-	prompts := notify.NewPrompts(slack.Prompt(), worklet.Prompt{})
+	prompts := notify.NewPrompts(slack.Prompt())
 	said := func(source, user, body string) *events.Event {
 		salient := body
 		return events.New(types.ExternalNotification{
@@ -119,9 +116,6 @@ func TestAReplyIsLabelledAsItsTriggerLabelsTheMessage(t *testing.T) {
 				said(slack.Backend, "U0ANA", "Use Postgres")},
 			source: provenance.SourceChatThread, trust: provenance.TrustExternal,
 			authors: []provenance.Author{{}, ana},
-		},
-		"a surface that fences no message": {
-			evs: []*events.Event{said(worklet.Source, "ana", "Use Postgres")},
 		},
 	} {
 		source, trust, authors := replyProvenance(prompts, reg, "swe", tc.evs)

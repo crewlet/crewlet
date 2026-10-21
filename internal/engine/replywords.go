@@ -89,14 +89,13 @@ func replyWords(evs []*events.Event) string {
 // fence around each of the delivery's messages says of it in the trigger it
 // was delivered in ([notify.MessageProvenance]), merged as one reply: every
 // writer once, at the least trust any of them earns, under the surface they
-// share.
+// share, or an integration's notification where they differ.
 //
 // THE TRIGGER'S OWN LABEL, so the run reads a reply exactly as it would have
 // read the same message waking its turn: a colleague's words as a colleague's,
-// a stranger's as data. ZERO where a message holding words came from a surface
-// that fences none, which hands its trigger's words over unfenced and defused,
-// and so does the run; and where the messages name different surfaces, which
-// one conversation's never do and no one label could name.
+// a stranger's as data. ZERO where the delivery holds words that are no
+// notification's, which no surface labelled, and which the run then reads
+// defused.
 func replyProvenance(prompts notify.Prompts, parties notify.Parties, self string,
 	evs []*events.Event) (provenance.Source, provenance.Trust, []provenance.Author) {
 
@@ -113,14 +112,13 @@ func replyProvenance(prompts notify.Prompts, parties notify.Parties, self string
 		if !ok || n == nil {
 			return "", "", nil
 		}
-		src, trust, by, labelled := notify.MessageProvenance(prompts, *n, parties, self)
-		if !labelled {
-			return "", "", nil
+		src, trust, by := notify.MessageProvenance(prompts, *n, parties, self)
+		switch {
+		case source == "":
+			source = src
+		case src != source:
+			source = provenance.SourceNotification
 		}
-		if source != "" && src != source {
-			return "", "", nil
-		}
-		source = src
 		trusts = append(trusts, trust)
 		for _, a := range by {
 			if !slices.Contains(authors, a) {

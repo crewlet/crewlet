@@ -72,32 +72,13 @@ func NewPrompt() Prompt {
 	}}
 }
 
-// messageAuthor is who wrote a Chatlet message, as its fence names them.
-//
-// THE ROSTER FIRST, by the handle the record carries, so a colleague is the
-// seat the company holds; and where it no longer names them, THE KIND THE
-// RECORD STATED — a person whose seat has since gone is still a person who
-// wrote this, and the engine's own narration is the engine — rather than the
-// outside party a vendor's unknown id is. Only a record that stated neither
-// is nobody's.
+// messageAuthor is who wrote a Chatlet message, as its fence names them: the
+// first-party rule every engine-hosted surface names its writers by
+// ([notify.FirstPartyAuthor]) — the roster's seat for the handle the record
+// carries, and where it no longer names them the kind the record stated.
 func messageAuthor(meta map[string]string, parties notify.Parties) provenance.Author {
-	handle := meta[notify.ActorField]
-	if parties != nil && handle != "" {
-		if party, ok := parties.ByHandle(handle); ok {
-			return notify.PartyAuthor(party)
-		}
-	}
-	switch AuthorKind(meta[MetaAuthorKind]) {
-	case AuthorHuman:
-		return provenance.Author{Kind: iam.ActorHuman, Seat: handle}
-	case AuthorAgent:
-		return provenance.Author{Kind: iam.ActorAgent, Seat: handle}
-	case AuthorOperator:
-		return provenance.Author{Kind: iam.ActorOperator}
-	case AuthorSystem:
-		return provenance.Author{Kind: iam.ActorSystem}
-	}
-	return provenance.Author{}
+	return notify.FirstPartyAuthor(meta[notify.ActorField],
+		iam.ActorKind(meta[MetaAuthorKind]), parties)
 }
 
 // Source implements [notify.Prompt].

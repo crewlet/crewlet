@@ -5,6 +5,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // Prompt is what a Jira webhook asks of the seat it reached.
@@ -131,6 +132,18 @@ func (Prompt) DigestBody(eventType, body string) string {
 		return body
 	}
 	return ""
+}
+
+// Provenance implements [notify.Prompt]: what the parser stated — a comment by
+// its author while nobody else has edited it, or the issue's description by
+// nobody it can name — and, for a notification built without the parser, the
+// surface its event carries.
+func (Prompt) Provenance(n notify.Inbound, parties notify.Parties) notify.Provenance {
+	fallback := provenance.SourceWorkDescription
+	if commentEvents[n.Metadata["event_type"]] {
+		fallback = provenance.SourceWorkComment
+	}
+	return notify.Stated(n, parties, fallback)
 }
 
 // Build implements [notify.Prompt].
