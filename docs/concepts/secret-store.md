@@ -295,7 +295,11 @@ Reading a value back is **break-glass on both sides**. `crewlet secrets get` ref
 
 A write made while the node was stopped is not stranded: at its next start the engine **migrates** those rows onto the fleet and removes them locally, preserving the original author and the instant it was written, and recording the source `migrated` in place of the stopped node's own word. That is the bootstrap path — the equivalent of `crewlet config import` against a stopped node — and the CLI says which of the two it used after every write.
 
-`-api URL` writes through a named node instead, which is how the command works from a machine that is not the node at all. It authenticates with `CREWLET_API_TOKEN`, and with nothing else: `api.auth.tokens` is what a node **accepts**, not a wallet the CLI helps itself from, and a write whose author was whichever credential happened to be listed first landed under a name the operator had not chosen. Export the variable — one of the Tier A values, or a machine token minted with `crewlet iam token`. The credential's own identity is recorded as the author of the write.
+`-api URL` writes through a named node instead, which is how the command works from a machine that is not the node at all. It authenticates with `CREWLET_API_TOKEN`, and with nothing else: `api.auth.tokens` is what a node **accepts**, not a wallet the CLI helps itself from, and a write whose author was whichever credential happened to be listed first landed under a name the operator had not chosen. Export the variable — one of the Tier A values, or a machine token minted with `crewlet iam token` for a listing or a write; `get -reveal` is the break-glass read, which takes a person present and so refuses a machine token, and needs a Tier A value carrying `admin`. The credential's own identity is recorded as the author of the write.
+
+**Every command that reads the company's values takes the same route**, for its reads and its writes alike: `crewlet llm`, every `crewlet <vendor> provision`, `crewlet mattermost doctor` and `crewlet confluence import`/`resync` take `-config` and `-api` and go the way `crewlet secrets` would, decided once per run, so a run can never read one store and record into another. Through a node it asks for exactly the variables its company document reads — the references and the conventional names an entry reads in their place — in one [`POST /secrets/reveal`](../reference/api-endpoints.md#secrets--the-companys-credentials-auth-gated), the break-glass read: `admin`, a person present and a recent proof, logged by name on the node. So the credential is one of the node's Tier A tokens, as it is for `crewlet secrets get -reveal`, since a machine token is refused a reveal whatever it carries. A read the node refuses, or a node that does not answer, fails the run, and nothing is resolved from the environment in its place.
+
+**On a stopped node, a name its own rows lack is unknown.** Those rows are the whole store only on a node that has never started, and nothing on its disk says whether it has joined a fleet — a node joining one has never started either, and an external broker keeps its state on no disk of the node's. So a run there says which store it read, and refuses rather than takes every decision that would act on such an absence: it mints no webhook or signing secret into a variable the rows lack, and `-secret-store` hands no seat whose account exists already a new token for one — while a seat whose account the run creates is minted its first token, since nothing can hold one for an account that did not exist. **Whatever the shell exports for such a name is no better an answer.** The environment still fills it in behind the rows, as the engine's own environment does behind the store — but the store outranks the environment in the engine, so what this shell exports is a guess at the value the fleet verifies with, and the run registers it with no vendor: it registers what its own sink records for the name (an `-env-file` holding it), or refuses. Start the engine, or pass `-api`; the command's own flag for a fresh value is a decision rather than a reason, and goes ahead. A read never creates a database that is not there — only a write opens the file, as `crewlet secrets set` on a node that has never started does. See [where a command reads the company's values](../reference/cli.md#where-a-command-reads-the-companys-values).
 
 `crewlet secrets keygen` needs no config and no store: it is what an operator runs *before* either exists, and it prints the base64 form the keyring's `material` field takes.
 
@@ -338,13 +342,16 @@ GITLAB_ADMIN_TOKEN="$GITLAB_ADMIN_TOKEN" crewlet gitlab provision company.yaml \
 
 Minted PATs and the generated webhook signing secret go straight into the encrypted table under the same `${VAR}` names the config already references. The three-step dance collapses to one command — no file to source, no shell to be in.
 
-`-secret-store` follows the same routing as `crewlet secrets`: against a
-running node it writes through that node's API and the minted credential is on
-every node at once, and it takes the same `-api URL` flag. Against a stopped
-one it writes the local table, which the engine migrates at its next start. The
-row's `source` follows the route too: the node's `api`, or `provision` in the
-local table until the move onto the fleet makes it `migrated`. Who ran the
-command is what the row's author and credential say, either way.
+`-secret-store` follows the same routing as `crewlet secrets` — and so do the
+values the run reads, [on one route per run](#which-store-the-cli-writes):
+against a running node the run reads the company's values through that node's
+API and writes through it, so the minted credential is on every node at once,
+and it takes the same `-api URL` flag. Against a stopped one it reads and
+writes the local table, which the engine migrates at its next start, and a
+name that table lacks is unknown rather than unset: the run mints nothing into
+it. The row's `source` follows the route too: the node's `api`, or `provision`
+in the local table until the move onto the fleet makes it `migrated`. Who ran
+the command is what the row's author and credential say, either way.
 
 `crewlet slack provision -secret-store` and
 `crewlet mattermost provision -secret-store` work identically. Slack's own
@@ -455,12 +462,18 @@ above](#the-keyring-is-not-optional-and-it-does-three-jobs).)
 The **environment stays the bootstrap path**, and it is a perfectly good place to keep credentials if your platform already does — a Kubernetes `Secret` projected as env, systemd's `EnvironmentFile=`, Compose's `env_file:`. A node whose store is empty resolves everything from the environment and runs normally. What is no longer true is that a fleet *has* to work that way.
 
 > **Provisioner-minted credentials work fleet-wide too.** `crewlet gitlab
-> provision`, `crewlet slack provision` and the rest MINT credentials, and
-> `-secret-store` against a running node records them where every node reads
-> them. Run it against a **stopped** node and the credential is that node's
-> alone until it starts and migrates — which is fine for a first
-> provisioning run and wrong for a rotation on a live fleet. `-env-file PATH`
-> and `-print` remain for feeding a secret manager instead.
+> provision`, `crewlet slack provision` and the rest MINT credentials, and run
+> against a running node they read the fleet's values and `-secret-store`
+> records what they mint where every node reads it. Run one against a
+> **stopped** node and it reads that node's own rows alone: a credential it
+> writes is that node's until it starts and migrates, and a name those rows
+> lack is one the fleet may hold, so the run mints no webhook or signing secret
+> into it and `-secret-store` hands no seat whose account exists already a new
+> token over it — start the node, even one that has never run a company, or
+> pass `-api`; the command's own flag for a fresh value goes ahead regardless.
+> `-env-file PATH` and `-print` remain for feeding a secret manager instead,
+> and decide a seat's token from what they hold on every route: a seat they
+> lack is minted a new one.
 
 ---
 
@@ -471,7 +484,7 @@ Most `${VAR}` resolution funnels through one function, so the store covers it. A
 | Site | Source | Why |
 |---|---|---|
 | `providers.llm.*` / embeddings conventional-key fallback (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) | **Store, then env** | Otherwise `crewlet secrets set OPENAI_API_KEY` would work through a config reference but not through the fallback |
-| Everything a provisioning command reads out of the company document (`integrations.*.url`, `.workspace`, `.token`, `.signing_secret`) | **Store, then env** | The same chain the engine resolves through. A command that saw only the environment read an empty string for every value already rotated into the store, and for the GitLab signing secret, empty is the signal to *mint*, so a re-run replaced a working webhook secret at the third-party app. Each command takes `-config` for this |
+| Everything a provisioning command reads out of the company document (`integrations.*.url`, `.workspace`, `.token`, `.signing_secret`), and every `crewlet llm` command | **Store, then env** | The same chain the engine resolves through, from the same store: the fleet's, through a running node — this node's own if its engine is stopped, or the node `-api` names. A command that saw only the environment read an empty string for every value already rotated into the store, and for the GitLab signing secret, empty is the signal to *mint*, so a re-run replaced a working webhook secret at the third-party app. A node that refuses the read fails the run rather than leaving it to the environment. Each command takes `-config` and `-api` for this ([where a command reads the company's values](../reference/cli.md#where-a-command-reads-the-companys-values)) |
 | Sandbox launch credential check | **Store, then env** | A seat whose token lives only in the store must not read as unresolved |
 | Tier A bootstrap (`providers.database.dsn`, `secrets.keys[].material`) | **Env/file only** | Root of trust — this is what opens and decrypts the store |
 | Operator provisioning credentials (`GITLAB_ADMIN_TOKEN`, `MATTERMOST_ADMIN_TOKEN`) | **Env only** | Human operator credentials, never persisted by Crewlet **and never read back from the store**: a GitLab admin PAT carries `api` scope over the whole group, and the store is read by every node holding the keyring. Reading one from it would imply it may be kept there |

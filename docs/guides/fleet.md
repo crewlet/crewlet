@@ -99,12 +99,24 @@ the KV like everything else the fleet shares, so `crewlet secrets set` against
 a live node reaches all of them — but it gets there through that node's
 authenticated API, because the coordination broker is inside the engine's own
 process and listens on no socket. Against a **stopped** node the same command
-writes that node's own table instead, which is the bootstrap path: the value
-is on one node until it starts and migrates the row. Fine for a first
-provisioning run, wrong for a rotation on a live fleet. `-secret-store` on a
-provisioner follows the same rule, and both take `-api URL` to name the node
-to write through. The process environment remains the fallback every node
-resolves from, so a platform secret projected as env still works unchanged.
+writes that node's own table instead, which is the bootstrap path for
+`crewlet secrets set`: the value is on one node until it starts and migrates
+the row. A **provisioner** run against a stopped node is not a way to
+bootstrap, though: it reads that node's own rows alone, so a variable they lack
+is unknown to it rather than unset — the fleet may hold it — and it mints no
+webhook or signing secret into one, registers nothing the shell exports for one
+with a vendor, and with `-secret-store` hands no seat whose account exists
+already a new token over one. `-print` and `-env-file` still decide a seat's
+token from what they hold, as on every route, so a seat they lack is minted a
+new one and the token it had is retired; a seat whose account the run creates
+is minted its first token in any sink; and the command's own flag for a fresh
+value — `-rotate`, say — goes ahead whatever the rows hold. Start the node,
+even one that has never run a company, and provision through it with
+`CREWLET_API_TOKEN` set to one of its Tier A tokens, or pass `-api URL` naming
+a running node — see
+[where a command reads the company's values](../reference/cli.md#where-a-command-reads-the-companys-values).
+The process environment remains the fallback every node resolves from, behind
+the store, so a platform secret projected as env still works unchanged.
 
 **One keyring and one `api.external_url` on every node that serves the API.**
 A browser behind a load balancer signs in on whichever node it reaches and

@@ -7,7 +7,9 @@
 # the SSRF allowlist so webhooks can reach a host-side engine, disables PAT
 # expiry (dev), and seeds the `nimbus-hq` group + a project. It then prints
 # the `crewlet gitlab provision` command to run against a company config
-# whose integrations.gitlab.url points at THIS local instance.
+# whose integrations.gitlab.url points at THIS local instance — through the
+# RUNNING engine, which is where the provisioner reads the company's values
+# and records what it mints.
 #
 # examples/nimbus.company.yaml targets gitlab.com as shipped. To provision
 # it against this local GitLab, copy it and set integrations.gitlab.url to
@@ -17,7 +19,8 @@
 # Usage:
 #   docker compose --profile gitlab up -d
 #   scripts/gitlab-dev-bootstrap.sh
-#   # then provision your local-pointed config (see the printed command)
+#   # then start the engine and provision your local-pointed config through
+#   # it (see the printed commands)
 #
 # Re-runnable: every step is idempotent.
 set -euo pipefail
@@ -29,8 +32,18 @@ GROUP="${GITLAB_GROUP:-nimbus-hq}"
 PROJECT="${GITLAB_PROJECT:-nimbuscore}"
 # A company config whose integrations.gitlab.url is THIS local instance.
 # Set COMPANY=path/to/your-local-config.yaml to auto-provision it; leave
-# unset to just seed + print the provision command.
+# unset to just seed + print the commands.
+#
+# AUTO-PROVISIONING GOES THROUGH THE RUNNING ENGINE: start `crewlet run` on
+# the Tier A file CREWLET_CONFIG names first, and export CREWLET_API_TOKEN as
+# one of that file's api.auth.tokens carrying admin. The provisioner reads the
+# company's values through the node's break-glass reveal — which refuses a
+# machine token from `crewlet iam token` — and records what it mints in the
+# fleet's secret store. Against a STOPPED node it can read only that node's
+# own rows, which cannot say whether the signing secret is set elsewhere, so
+# it refuses to generate one rather than guess.
 COMPANY="${COMPANY:-}"
+CREWLET_CONFIG="${CREWLET_CONFIG:-crewlet.yaml}"
 # Where the compose GitLab should reach THE ENGINE — its base address, not
 # its webhook path. The engine serves seven webhook routes and owns every
 # one of those paths, so the provisioner is handed a host and derives
@@ -56,6 +69,17 @@ ENGINE_URL="${ENGINE_URL:-http://host.docker.internal:80}"
 # Display only, derived exactly as the provisioner derives it, so what this
 # script PRINTS cannot drift from what it registers.
 WEBHOOK_URL="${ENGINE_URL%/}/webhooks/gitlab"
+
+# REFUSED BEFORE ANYTHING IS SEEDED, because the provisioning step at the end
+# would be: without a credential for the running engine it cannot read the
+# company's values, and finding that out after a five-minute wait for GitLab
+# is a wait for nothing.
+if [ -n "${COMPANY}" ] && [ -z "${CREWLET_API_TOKEN:-}" ]; then
+  echo "COMPANY is set, so this provisions it through the running engine," >&2
+  echo "which needs CREWLET_API_TOKEN: one of ${CREWLET_CONFIG}'s api.auth.tokens" >&2
+  echo "carrying admin. Start \`crewlet run -config ${CREWLET_CONFIG}\` and export it." >&2
+  exit 2
+fi
 
 if [ -z "${GITLAB_CONTAINER}" ]; then
   echo "GitLab container not found. Run: docker compose --profile gitlab up -d" >&2
@@ -112,11 +136,12 @@ if ! api "${GITLAB_URL}/api/v4/projects/${GROUP}%2F${PROJECT}" >/dev/null 2>&1; 
 fi
 
 if [ -n "${COMPANY}" ]; then
-  echo "==> Provisioning agents from ${COMPANY}…"
+  echo "==> Provisioning agents from ${COMPANY} through the engine ${CREWLET_CONFIG} names…"
   GITLAB_ADMIN_TOKEN="${ROOT_TOKEN}" \
     crewlet gitlab provision "${COMPANY}" \
+      -config "${CREWLET_CONFIG}" \
       -public-url "${ENGINE_URL}" \
-      -env-file .env.gitlab
+      -secret-store
 fi
 
 cat <<EONOTE
@@ -130,15 +155,23 @@ EONOTE
 
 if [ -z "${COMPANY}" ]; then
   cat <<EONEXT
-   - Provision a local-pointed config (integrations.gitlab.url = ${GITLAB_URL}):
+   - Start the engine on a local-pointed config (integrations.gitlab.url =
+     ${GITLAB_URL}), then provision it through the engine, as one of
+     ${CREWLET_CONFIG}'s Tier A tokens:
+       crewlet run -config ${CREWLET_CONFIG} -company <your-config>.yaml
+       export CREWLET_API_TOKEN=<a token from ${CREWLET_CONFIG}'s api.auth.tokens>
        GITLAB_ADMIN_TOKEN=${ROOT_TOKEN} \\
          crewlet gitlab provision <your-config>.yaml \\
-           -public-url ${ENGINE_URL} -env-file .env.gitlab
-       source .env.gitlab && crewlet run -config crewlet.yaml -company <your-config>.yaml
+           -config ${CREWLET_CONFIG} -public-url ${ENGINE_URL} -secret-store
+   - Then re-activate the company so the engine reads what was minted:
+       curl -fsS -X POST -H "Authorization: Bearer \$CREWLET_API_TOKEN" \\
+         <api.external_url from ${CREWLET_CONFIG}>/config/reload
 EONEXT
 else
   cat <<EONEXT
-   - Tokens written: .env.gitlab
-   - Next: source .env.gitlab && crewlet run -config crewlet.yaml -company ${COMPANY}
+   - Tokens and the signing secret: the fleet's secret store
+   - Next: re-activate the company so the engine reads them:
+       curl -fsS -X POST -H "Authorization: Bearer \$CREWLET_API_TOKEN" \\
+         <api.external_url from ${CREWLET_CONFIG}>/config/reload
 EONEXT
 fi

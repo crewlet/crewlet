@@ -251,15 +251,20 @@ func TestEachRunPrintsToTheWriterItWasGiven(t *testing.T) {
 		t.Helper()
 		fs := flag.NewFlagSet("provision", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
-		sinks := addSinkFlags(fs)
-		if err := fs.Parse([]string{"-print"}); err != nil {
+		sinks := addSinkFlags(fs, sinkDecisions{})
+		if err := fs.Parse([]string{"-print",
+			"-config", filepath.Join(t.TempDir(), "absent.yaml")}); err != nil {
 			t.Fatalf("parse: %v", err)
 		}
-		sink, closeSink, err := sinks.open(t.Context(), noEnviron, w)
+		companySecrets, err := openCompanyStore(noEnviron, sinks.store, "crewlet gitlab provision")
+		if err != nil {
+			t.Fatalf("store: %v", err)
+		}
+		t.Cleanup(companySecrets.Close)
+		sink, err := sinks.open(t.Context(), companySecrets, w)
 		if err != nil {
 			t.Fatalf("open: %v", err)
 		}
-		t.Cleanup(closeSink)
 		return sink
 	}
 

@@ -246,7 +246,7 @@ On **Cloud** the webhook is registered exactly as it is on Data Center, through 
 
 Without `-public-url` nothing is registered and the run says so. A hook pointing at the wrong host is worse than no hook, because the instance then reports a healthy integration that delivers into the void. A hook somebody else registered is reported and never touched.
 
-Flags: `-secret-store` / `-env-file PATH` / `-print` (where a minted secret goes — exactly one is required), `-public-url URL`, `-recreate-webhook`, `-dry-run` (read and report, register nothing).
+Flags: `-secret-store` / `-env-file PATH` / `-print` (where a minted secret goes — exactly one is required), `-public-url URL`, `-recreate-webhook`, `-dry-run` (read and report, register nothing), and `-config PATH` / `-api URL` — the Tier A file and a running node to go through, which the company's `${VAR}`s resolve through and `-secret-store` records into; on a stopped node a variable its own rows lack is unknown, so no webhook secret is minted into it and none the shell exports for it is registered, short of `-recreate-webhook`, which mints a fresh one whatever the rows hold ([where a command reads the company's values](../reference/cli.md#where-a-command-reads-the-companys-values)).
 
 ---
 

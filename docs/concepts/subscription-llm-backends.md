@@ -1250,6 +1250,10 @@ crewlet llm login default -capture-token
 Runs the vendor's token-minting command (`claude setup-token`) and puts
 the result in the [encrypted secret store](secret-store.md) under the
 profile's token variable — `CLAUDE_CODE_OAUTH_TOKEN` for Claude Code.
+A running engine reads it at its next configuration apply, as it reads every
+value in the store, so the command says so after the write:
+[`POST /config/reload`](../reference/api-endpoints.md#post-configreload-after-a-secret-changes)
+to a node that is up re-activates the current revision now.
 **Prefer this whenever the CLI offers it:** no credential files to sync,
 no refresh-token rotation, and it survives an ephemeral container with
 no persistent volume.
@@ -1324,11 +1328,20 @@ list`, `status`, `export` and `doctor` restore it first too, so they answer
 about the login the engine would run with; `login`, `logout` and `import` do
 not, since each replaces or removes that login. `crewlet validate` never does:
 checking a document writes nothing onto the host.
-It is **that node's** store and nothing else's — the rows do not travel, and a
-second host needs its own `crewlet llm login`, or the same bundle handed to it
-through `providers.llm[].auth.credential_bundle`. The blob is validated on the way back in — only the
-profile's own credential paths, files only, size-capped — because an
-archive is an execution surface if it is unpacked on trust.
+The store is the **fleet's**: run against a node whose engine is up — or
+with `-api URL` naming one — the bundle is written through that node's API
+onto the secret store every node reads, so it is run once rather than once per
+host, and every node restores it the same way. Run against a stopped node it
+lands in that node's own rows, and reaches the fleet when that node next
+starts ([which store the CLI writes](secret-store.md#which-store-the-cli-writes)).
+A running node does not watch its directory, so a bundle written through one is
+restored at the fleet's next apply — the command says so, and
+[`POST /config/reload`](../reference/api-endpoints.md#post-configreload-after-a-secret-changes)
+to a node that is up makes that apply now.
+`-capture-token` writes the headless token the same way. The blob is validated
+on the way back in — only the profile's own credential paths, files only,
+size-capped — because an archive is an execution surface if it is unpacked on
+trust.
 
 Only the credential files — and a CLI's exported login document — travel,
 read as [one login](#a-login-of-several-files-is-written-whole), so a bundle
@@ -2197,9 +2210,13 @@ a headless token, an API key under `api-key`, a token or key forwarded under
 `inherit-env`, and a [credential-named](#5-a-provider-key-in-clienv-hermes-pi-opencode)
 variable in `cli.env` on a CLI that reads its key from its environment.
 
-`${VAR}` references, and the variables `inherit-env` forwards, are resolved
-in the process running `crewlet llm` — the secret store first, then *that
-shell's* environment — so run it with the engine's environment to get the
+What the CLI is given is resolved in the process running `crewlet llm`, from
+two places. `${VAR}` references, and the headless token (under
+`subscription`) and exported bundle an entry reads under their conventional
+names, come from the company's secret store first and then *that shell's*
+environment. The variables `inherit-env` forwards come from *that shell's*
+environment alone, exactly as the engine forwards its own environment and never
+its store. Either way, run it with the engine's environment to get the
 engine's answer.
 
 When none of those authenticates the CLI, `doctor` reports "no sign-in" as a
