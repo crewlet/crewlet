@@ -185,31 +185,29 @@ func keysAfter(group string, lineBytes int) string {
 // its length, 47 to 75 times what [Secrets] costs over 32 KiB in lines of 256
 // bytes. So the whole text is read once ([valueHolds]).
 //
-// A COMPARISON ACROSS SIZES, NOT ACROSS FUNCTIONS: Settled over 32 KiB against
-// eight times Settled over 4 KiB of the same lines, compared by
-// [withinFactor] as the tests above are. This used to compare
-// Settled with Secrets over the same text, but that ratio is a constant factor
-// between two different functions, 0.8 to 2.4 on a quiet machine, and the race
-// detector's overhead on a loaded runner moved it past the three times allowed
-// (3.4 to 3.6 in CI) with nothing quadratic in sight. Against itself, the
-// constant cancels: read once, eight times the bytes cost eight times as much
-// (measured 0.9 to 1.4 times the eight, with the race detector and without,
-// and beside the package's other tests); read once a line, they cost eight
-// times that again. Three times is allowed.
+// COUNTED, NOT TIMED: the bytes valueHolds is handed while Settled reads each
+// group's 32 KiB ([valueHoldsRead]), which is one read of the text, or two
+// where the keys' blocks were read beside the values, and never more. This
+// was timed twice before — Settled against Secrets over the same text, then
+// Settled against itself over a text eight times smaller, three times allowed
+// either way — and each ratio was a claim about how busy the runner was: the
+// first failed CI at 3.4 to 3.6, the second at 3.5, with nothing quadratic in
+// sight. A count is the property itself and the same on every machine.
+//
+// Not parallel, so no other test's Settled adds to the count: Go runs the
+// package's parallel tests only once its sequential ones have returned.
 //
 // Mutation: read the holds again in every prefix a line of the text ends, and
-// every group takes 50 to 80 times as long over eight times the bytes, and
-// this fails, with the race detector and without.
+// every group reads its text about 64 times over (2 MB for 32 KiB), and this
+// fails.
 func TestALiveViewOfManyPasswordKeysCostsOneRead(t *testing.T) {
-	t.Parallel()
-	read := func(text string) { _ = Settled(text) }
-	const scale = 8
 	for name, group := range passwordKeyGroups {
-		small, large := linesOf(group, 4<<10, 256), linesOf(group, scale*4<<10, 256)
-		if ok, smallCost, largeCost := withinFactor(read, small, large, 3*scale); !ok {
-			t.Errorf("%s: Settled took %v over 32 KiB against %v over 4 KiB, more than %d "+
-				"times as much for %d times the bytes, so it reads the text again for every "+
-				"line it holds", name, largeCost, smallCost, 3*scale, scale)
+		text := linesOf(group, 32<<10, 256)
+		before := valueHoldsRead.Load()
+		_ = Settled(text)
+		if read := valueHoldsRead.Load() - before; read > 2*int64(len(text)) {
+			t.Errorf("%s: Settled read %d bytes of a %d-byte text, more than twice its "+
+				"length, so it reads the text again for every line it holds", name, read, len(text))
 		}
 	}
 }
@@ -258,10 +256,10 @@ const (
 // COMPARISON THAT FAILS IS MEASURED AGAIN, up to [measureRounds] times, and
 // fails only if every measurement does. A burst of load from the other
 // packages beside this one under the race detector can outlast every read of
-// one measurement (the live view's 32 KiB read 264ms against 4ms in CI, with
-// nothing quadratic in it), but it does not recur on every measurement; the
-// regressions these tests guard cost six to eighty times the factor on every
-// one, so a real regression still fails.
+// one measurement (the live view's 32 KiB read 264ms against 4ms in CI while
+// that test was still timed, with nothing quadratic in it), but it does not
+// recur on every measurement; the regressions these tests guard cost six to
+// eighty times the factor on every one, so a real regression still fails.
 func withinFactor(read func(string), short, long string, factor int) (bool, time.Duration, time.Duration) {
 	timed := func(text string) time.Duration {
 		start := time.Now()
