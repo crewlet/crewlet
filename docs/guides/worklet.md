@@ -1241,7 +1241,8 @@ nothing else — "The status changed by ana." — and the seat had to read the
 task to learn what the status now was, which still left the value it moved
 **from** unrecoverable, because that side is nowhere on the task. A comment is
 the exception: its body is the comment, and the opener has already quoted it —
-**whole**. The card a change leaves in an inbox carries a 600-byte excerpt,
+**whole**, to every seat the comment reached, whether it named them, asked
+them, answered them or simply landed on a task they hold, filed or watch. The card a change leaves in an inbox carries a 600-byte excerpt,
 marked where it was cut, because an inbox is a list read to choose what to
 open; the wake is the one message a seat acts on, so it is given the comment
 (or a new task's description) whole from the change record itself, and never
