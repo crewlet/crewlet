@@ -1,7 +1,14 @@
 package engine
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
 	"maps"
+	"os"
+	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -20,6 +27,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/slack"
+	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -204,4 +212,109 @@ func TestEveryWakeSurfaceFencesWhatSomebodyWrote(t *testing.T) {
 			}
 		})
 	}
+}
+
+// EVERY PROMPT BUILDER IN THE TREE IS ONE OF THE SURFACES ABOVE.
+//
+// The gate above holds the surfaces to the sources the engine wakes seats from,
+// which a prompt nobody wired to one of those sources slips past: a second
+// prompt for a source, a wrapper around another's, a builder written for a
+// surface the lists do not name yet. So the tree's source is walked for every
+// type that BUILDS a wake's trigger — a method `Build(notify.Inbound, …)`,
+// which is the one method [notify.Prompt] adds that nothing else in the tree
+// declares — and each must be the prompt some surface above drives, so a new
+// one fails here until its wake is shown to be fenced.
+//
+// Mutation: drop a surface's case (its prompt is then a builder no surface
+// drives), or add a builder type anywhere under internal/, and this fails.
+func TestEveryPromptBuilderIsAWakeSurface(t *testing.T) {
+	t.Parallel()
+	driven := map[string]bool{}
+	for _, s := range wakeSurfaces() {
+		of := reflect.TypeOf(s.prompt)
+		if of.Kind() == reflect.Pointer {
+			of = of.Elem()
+		}
+		driven[of.PkgPath()+"."+of.Name()] = true
+	}
+	builders := promptBuilders(t)
+	if len(builders) < len(driven) {
+		t.Fatalf("the walk found %d prompt builders and the surfaces drive %d: "+
+			"it is reading less of the tree than it must", len(builders), len(driven))
+	}
+	for _, builder := range builders {
+		if !driven[builder] {
+			t.Errorf("%s builds a wake's trigger and no surface in wakeSurfaces drives "+
+				"it, so nothing shows that the body it renders reaches a seat fenced", builder)
+		}
+	}
+}
+
+// promptBuilders is every type under internal/, outside test files, declaring a
+// method `Build` whose first parameter is a [notify.Inbound], by import path
+// and type name.
+func promptBuilders(t *testing.T) []string {
+	t.Helper()
+	const module = "github.com/crewlet/crewlet"
+	root := sourcetree.Root(t)
+	ids := sourcetree.MustIdentifiers("Inbound")
+	var found []string
+	err := sourcetree.Walk(filepath.Join(root, "internal"), func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if !ids.In(src) {
+			return nil
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), path, src, parser.SkipObjectResolution)
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, filepath.Dir(path))
+		if err != nil {
+			return err
+		}
+		pkg := module + "/" + filepath.ToSlash(rel)
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Recv == nil || fn.Name.Name != "Build" || len(fn.Type.Params.List) == 0 {
+				continue
+			}
+			if !namesInbound(fn.Type.Params.List[0].Type, file.Name.Name) {
+				continue
+			}
+			recv := fn.Recv.List[0].Type
+			if star, ok := recv.(*ast.StarExpr); ok {
+				recv = star.X
+			}
+			if ident, ok := recv.(*ast.Ident); ok {
+				found = append(found, pkg+"."+ident.Name)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk the tree for prompt builders: %v", err)
+	}
+	return found
+}
+
+// namesInbound reports whether a parameter's type is notify's Inbound: the
+// selector `notify.Inbound`, or the bare name inside package notify itself.
+func namesInbound(expr ast.Expr, pkg string) bool {
+	switch x := expr.(type) {
+	case *ast.SelectorExpr:
+		base, ok := x.X.(*ast.Ident)
+		return ok && base.Name == "notify" && x.Sel.Name == "Inbound"
+	case *ast.Ident:
+		return pkg == "notify" && x.Name == "Inbound"
+	}
+	return false
 }
