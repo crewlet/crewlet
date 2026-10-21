@@ -18,6 +18,7 @@
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
+import { CHAT_SEARCH_PAGE } from "~/contract/chat.ts";
 import { MAX_IN_FLIGHT_QUERIES, SEARCH_QUERY_MAX } from "~/contract/wire.ts";
 import { QueryError } from "~/protocol/index.ts";
 import {
@@ -30,7 +31,7 @@ import {
 } from "~/test/chat.tsx";
 import { session } from "~/protocol/session.ts";
 import { RoomNamesProvider } from "~/lib/roomNames.ts";
-import { Browse } from "./Browse.tsx";
+import { Browse, FULL_PAGE_ROOMS } from "./Browse.tsx";
 
 const position = { stream: "CREWLET_CHAT_LOG", generation: 1, seq: 12 };
 const served = { read_level: "session", complete: true, position };
@@ -425,4 +426,21 @@ test("a search that matched many rooms looks up one wave of them and says how ma
   expect(await screen.findByText("No room to join")).toBeTruthy();
   const looked = query.mock.calls.filter(([what]) => what === "chat_channel");
   expect(looked).toHaveLength(MAX_IN_FLIGHT_QUERIES);
+});
+
+// THE PAGE IS THE ENGINE'S, AND A FULL ONE SAYS MORE MAY MATCH. The rooms this
+// panel offers are the rooms its hits are in; asked for more than the engine
+// answers, a clamped page offered a partial set of rooms as every room that
+// matched. Mutation: ask with the transcript's PAGE again and the limit goes
+// red; drop the note and the full page's assertion does.
+test("the finder asks for the engine's page, and a full one says more may match", async () => {
+  const { query } = mount(Array.from({ length: CHAT_SEARCH_PAGE }, () => "open-1"));
+  search("launch");
+  await waitFor(() =>
+    expect(screen.getByText(new RegExp(FULL_PAGE_ROOMS.slice(0, 30)))).toBeTruthy(),
+  );
+  const limits = query.mock.calls
+    .filter(([what]) => what === "chat_search")
+    .map(([, params]) => (params as Record<string, unknown> | undefined)?.limit);
+  expect(limits).toEqual([CHAT_SEARCH_PAGE]);
 });

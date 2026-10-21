@@ -7437,7 +7437,12 @@ and asks nothing.
   room your seat may READ — wider than your rail — by keyword alone: chat is not
   in the vector corpus
   ([ADR-0069](../../adr/0069-chat-is-a-keyword-corpus-and-takes-no-vectors.md)).
-  A phrase past the engine's bound is not sent, and the screen says why.
+  A phrase past the engine's bound is not sent, and the screen says why. It
+  asks for the engine's own page — forty hits, `contract/chat.ts`'s
+  `CHAT_SEARCH_PAGE`, the engine's `search.MaxChatSearchLimit` — and so does
+  **Find a room**, which offers the rooms those hits are in: the ranking has no
+  next page, so a full page says there may be more matches and how to narrow
+  the search, rather than reading as everything that matched.
 - **On Home**, Chatlet offers two widgets for the reader's board
   (`routes/chatlet/home.widgets.tsx`; see
   [Home is the reader's board](#home-is-the-readers-board)), each asking what

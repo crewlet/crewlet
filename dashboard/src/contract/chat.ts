@@ -20,7 +20,9 @@
  *    `presence.TypingLapse` (`internal/presence`'s
  *    `TestTheDashboardReassertsTypingInsideTheEnginesExpiry`);
  *  - the pending re-ask, EQUAL to `chatlet.DecisionWait`
- *    (`TestTheDashboardAsksAPendingPostAgainAfterTheApplierHadItsWait`).
+ *    (`TestTheDashboardAsksAPendingPostAgainAfterTheApplierHadItsWait`);
+ *  - the search page, EQUAL to `search.MaxChatSearchLimit`
+ *    (`internal/search`'s `TestTheDashboardAsksForTheChatSearchPageTheEngineServes`).
  *
  * A limit drifts silently from the side that sees it: a copy too low greys
  * out a gesture the engine would take, with nothing anywhere to say so, and a
@@ -109,3 +111,21 @@ export const TYPING_THROTTLE_MS = 3_000;
  * `TestTheDashboardAsksAPendingPostAgainAfterTheApplierHadItsWait`.
  */
 export const PENDING_REASK_MS = 2_000;
+
+/**
+ * How many hits one chat search asks for — the search screen's and the room
+ * finder's page.
+ *
+ * FORTY, `search.MaxChatSearchLimit`: the most the engine answers one search
+ * with, whatever it is asked for, because one answer is one tool result for a
+ * seat and forty is what still fits its ceiling. The screens asked for fifty
+ * (the transcript's page, `routes/chatlet/page.ts`), which the engine clamped
+ * without a word — so a full page was forty hits on a screen that took it for
+ * fewer than it asked, and read as "everything that matched". Asking for the
+ * engine's own page is what lets a screen tell a full page — there may be more,
+ * narrow the search — from the whole answer.
+ *
+ * Held EQUAL to `search.MaxChatSearchLimit` by `internal/search`'s
+ * `TestTheDashboardAsksForTheChatSearchPageTheEngineServes`.
+ */
+export const CHAT_SEARCH_PAGE = 40;

@@ -127,6 +127,7 @@ var contract = []Entry{
 	{"CHANNEL_NAME_PATTERN", ReadScalar, "internal/chatlet.TestTheDashboardsChannelNameGrammarIsTheEngines"},
 	{"TYPING_THROTTLE_MS", ReadScalar, "internal/presence.TestTheDashboardReassertsTypingInsideTheEnginesExpiry"},
 	{"PENDING_REASK_MS", ReadScalar, "internal/chatlet.TestTheDashboardAsksAPendingPostAgainAfterTheApplierHadItsWait"},
+	{"CHAT_SEARCH_PAGE", ReadScalar, "internal/search.TestTheDashboardAsksForTheChatSearchPageTheEngineServes"},
 
 	// presence.ts
 	{"PRESENCE_ROOMS", ReadLiteral, "internal/presence.TestTheDashboardSpeaksThePresenceVocabulary"},

@@ -34,8 +34,9 @@ import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { fmtDateTime } from "~/lib/format.ts";
 import type { ChatChannelSummary } from "~/protocol/index.ts";
 
+import { CHAT_SEARCH_PAGE } from "~/contract/chat.ts";
+
 import { MAX_BROWSE_ROOMS, useRoomDetails } from "./directory.ts";
-import { PAGE } from "./page.ts";
 import { isDirect, roomTitle } from "./rooms.ts";
 
 export function Search({
@@ -63,10 +64,11 @@ export function Search({
   // over this node's own index, and a search-as-you-type would run one per
   // letter for an answer nobody reads until they stop. A PHRASE PAST THE
   // ENGINE'S BOUND IS NOT SENT, and the screen says why in place of the
-  // results — see `useSearchQuery`.
+  // results — see `useSearchQuery`. THE PAGE IS THE ENGINE'S OWN
+  // ([CHAT_SEARCH_PAGE]), so a full one is told from the whole answer.
   const answer = useSearchQuery(
     "chat_search",
-    { q, limit: PAGE, ...(room ? { channel_id: room } : {}) },
+    { q, limit: CHAT_SEARCH_PAGE, ...(room ? { channel_id: room } : {}) },
     { enabled: q.trim().length > 0 },
   );
 
@@ -233,6 +235,7 @@ export function Search({
               <p className="t-caption muted">
                 Searched {answer.data.searched} room
                 {answer.data.searched === 1 ? "" : "s"}.
+                {answer.data.hits.length >= CHAT_SEARCH_PAGE && ` ${FULL_PAGE}`}
               </p>
             )}
             {resolved.unreadable.size > 0 && (
@@ -253,3 +256,12 @@ export function Search({
     </div>
   );
 }
+
+/**
+ * What a full page of hits says beneath them.
+ *
+ * A RANKING CUT AT ITS PAGE IS NOT "EVERYTHING THAT MATCHED": the engine
+ * answers at most [CHAT_SEARCH_PAGE] hits and has no next page, so a full one
+ * may have more behind it, and the move is a narrower question.
+ */
+export const FULL_PAGE = `These are the ${CHAT_SEARCH_PAGE} best matches, and there may be more. Add a word, or pick a room, to narrow it.`;
