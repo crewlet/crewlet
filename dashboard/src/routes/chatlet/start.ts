@@ -217,8 +217,8 @@ function refusal(kind: StartKind, result: Extract<ActResult, { kind: "refused" }
       // A NAME TO NEGOTIATE. The create arbitrates on the address, so this is
       // the arbitration working: somebody holds it. Drawn as a refusal in red
       // it reads as a fault, and the field a person has to change is the one
-      // they are already looking at. The sentence is this module's rather than
-      // the transport's "That already exists", which names no field.
+      // they are already looking at. The sentence is this module's, beside
+      // the field it names.
       note: "Another room already has that name. Pick another.",
       tone: "warning",
       taken: true,

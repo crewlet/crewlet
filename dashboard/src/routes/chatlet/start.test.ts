@@ -125,13 +125,19 @@ describe("a record that applied", () => {
 
 describe("a refusal", () => {
   test("a name somebody else holds is a name to change, not a failure", () => {
-    const report = reportFor("channel", refused("exists", "That already exists."));
+    const report = reportFor(
+      "channel",
+      refused(
+        "exists",
+        "Another room already has that name: launch. Open that room, or pick another name.",
+      ),
+    );
     expect(report.taken).toBe(true);
     expect(report.tone).toBe("warning");
     expect(report.tone).not.toBe("danger");
     expect(report.go).toBe("");
-    // THE FIELD IS NAMED: the transport's "That already exists" says nothing
-    // about which value a person has to change.
+    // THE FIELD IS NAMED in this module's own words, beside the field a
+    // person is already looking at.
     expect(report.note).toMatch(/already has that name/i);
   });
 

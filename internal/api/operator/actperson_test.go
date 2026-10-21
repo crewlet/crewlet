@@ -103,12 +103,14 @@ func wordedForAPerson(t *testing.T, what string, answer map[string]any) {
 }
 
 // drawsTheEnginesWords reports whether the dashboard shows this answer in the
-// engine's words: the two refusal classes its `contract/errors.ts` keeps no
-// sentence for, because only their detail names what to change or whom to ask.
-// Every other code it shows in a sentence of its own.
+// engine's words: the four refusal classes its `contract/errors.ts` keeps no
+// sentence for, because only the engine's words say what to change, whom to
+// ask, the state that refused the change, or what is already there. Every
+// other code it shows in a sentence of its own.
 func drawsTheEnginesWords(answer map[string]any) bool {
 	code, _ := answer["error"].(string)
-	return code == string(httpjson.CodeInvalid) || code == string(httpjson.CodeForbidden)
+	return code == string(httpjson.CodeInvalid) || code == string(httpjson.CodeForbidden) ||
+		code == string(httpjson.CodeConflict) || code == string(httpjson.CodeExists)
 }
 
 // EVERY REFUSAL THE ACT ROUTE ANSWERS IS WORDED FOR A PERSON (ADR-0060).

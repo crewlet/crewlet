@@ -107,7 +107,12 @@ test("what will actually be claimed is shown, because a name is normalised", () 
 });
 
 test("a name somebody else holds comes back as a name to change", async () => {
-  reply = refused("create_channel", "exists", "create_channel: chatlet: name taken: launch", 409);
+  reply = refused(
+    "create_channel",
+    "exists",
+    "Another room already has that name: launch. Open that room, or pick another name.",
+    409,
+  );
   const { onClose } = mount();
   await named("launch");
   fireEvent.click(create());

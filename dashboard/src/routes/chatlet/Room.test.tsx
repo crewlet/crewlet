@@ -31,7 +31,6 @@ import { LIVE_REFETCH_MS } from "./live.ts";
 import { SHORTEN_FIRST } from "./Composer.tsx";
 import { DELETE_IN_FLIGHT, EDIT_IN_FLIGHT, NOTHING_CHANGED } from "./Transcript.tsx";
 import { MAX_BODY_BYTES, PENDING_REASK_MS } from "~/contract/chat.ts";
-import { ACT_ERRORS } from "~/contract/errors.ts";
 import { Store, type ChatPresencePush, type RoomMember, type QueryName } from "~/protocol/index.ts";
 import { MAX_CHAT_LIVE } from "~/protocol/store.ts";
 import { LoneRoom } from "./testkit.tsx";
@@ -286,23 +285,27 @@ test("a refusal is shown as the engine's own sentence rather than as a failure",
   expect(screen.queryByRole("button", { name: /try again/i })).toBeNull();
 });
 
-test("a post the room's state refuses is drawn as a conflict, never as a retry", async () => {
+test("a post the room's state refuses says what refused it, never to retry", async () => {
   // AN ARCHIVED ROOM IS THE ROOM'S STATE (`409 conflict`, the one rule every
   // domain's refusals are classed by): the same post lands once somebody
-  // reopens the room and not before, so the row says it met the room as it
-  // is now, in the dashboard's own words for the class, and offers nothing
-  // to press again.
+  // reopens the room and not before, so the row says what refused it and who
+  // changes it, in the engine's own words — the chat domain's, which the
+  // engine sends as `detail` for a state it decided — and offers nothing to
+  // press again. A fixed sentence for the class ended "retry".
   reply = (tool) =>
     refused(
       tool,
       "conflict",
-      "post_message refused that: room-1 was archived on 2026-02-01T00:00:00Z",
+      "This room is archived, so it takes no new messages. Whoever created it, its team's lead or an administrator can reopen it.",
       409,
     );
   mount();
   await screen.findByText("line 2");
   await say("anyone there?");
-  await waitFor(() => expect(screen.getByText(ACT_ERRORS.conflict)).toBeTruthy());
+  await waitFor(() =>
+    expect(screen.getByText(/This room is archived, so it takes no new messages/)).toBeTruthy(),
+  );
+  expect(screen.queryByText(/retry/i)).toBeNull();
   expect(screen.queryByRole("button", { name: /try again/i })).toBeNull();
   expect(screen.queryByRole("button", { name: /send again/i })).toBeNull();
 });
@@ -319,15 +322,17 @@ test("a post answered pending is asked again under its own key, and its refusal 
     asked += 1;
     return asked === 1
       ? pending(tool, { message_id: "m-said" })
-      : refused(tool, "conflict", "post_message refused that: room-1 was archived", 409);
+      : refused(tool, "conflict", "This room was archived before the message reached it.", 409);
   };
   mount();
   await screen.findByText("line 2");
   await say("anyone there?");
   await screen.findByText(/Waiting for this node to catch up/);
-  await waitFor(() => expect(screen.getByText(ACT_ERRORS.conflict)).toBeTruthy(), {
-    timeout: PENDING_REASK_MS * 3,
-  });
+  await waitFor(
+    () =>
+      expect(screen.getByText(/This room was archived before the message reached it/)).toBeTruthy(),
+    { timeout: PENDING_REASK_MS * 3 },
+  );
   const sent = pressesOf("post_message");
   expect(sent).toHaveLength(2);
   expect(sent[1]!.opId).toBe(sent[0]!.opId);
