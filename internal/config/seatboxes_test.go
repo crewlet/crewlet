@@ -298,8 +298,8 @@ func TestARefusedSetupFileIsAnAdmissionRule(t *testing.T) {
 // manager resolves an empty one at launch — or, for a seat whose executor runs
 // in agent mode, the box that executor runs in, placed by its entry, and no
 // other: such a seat is never offered run_sandbox. Each is given the
-// engine-wide steps and then the seat's own, as the engine's boxSetup builds
-// them.
+// engine-wide steps and then the seat's own, as the engine's runEnvironment
+// builds them.
 func TestSeatBoxesArePlacedAsTheEngineLaunchesThem(t *testing.T) {
 	t.Parallel()
 	type box struct {

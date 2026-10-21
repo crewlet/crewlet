@@ -312,6 +312,19 @@ type RoleSandbox struct {
 	// variable of its own, and only LLM credentials derive automatically.
 	Env map[string]string `secret:"true" yaml:"env,omitempty" json:"env,omitempty" desc:"Env for this seat's sandbox run; declare external tokens here."`
 
+	// OptionalKeys names the keys of Env whose value may resolve to nothing,
+	// such a key then being left out of the run environment rather than
+	// refusing the coding run.
+	//
+	// The same declaration a tool server makes ([MCPServer.OptionalKeys]),
+	// and for the same reason: every other reference in a coding run's
+	// environment must resolve before a `run_sandbox` box is started, since
+	// a run handed an empty code-host token clones nothing and pushes
+	// nothing after spending its box, and nothing in a value can say that a
+	// setting — a test DATABASE_URL, a proxy — may be absent. A setup step's
+	// env and files declare theirs on the step.
+	OptionalKeys []string `yaml:"optional_keys,omitempty" json:"optional_keys,omitempty" desc:"Keys of env whose value may resolve to nothing; such a key is left out of the run rather than refusing it."`
+
 	// Setup is this seat's own provisioning, applied after the
 	// engine-wide steps.
 	Setup []SandboxSetupStep `yaml:"setup,omitempty" json:"setup,omitempty" desc:"Per-seat provisioning steps, applied after the engine-wide ones."`
@@ -770,6 +783,7 @@ func (r *Role) Seat() *org.Role {
 			Setup:           seatSetupSteps(s.Setup),
 			MCP:             org.RoleSandboxMCP{Servers: append([]string(nil), s.MCP.Servers...)},
 			Env:             env,
+			OptionalKeys:    slices.Clone(s.OptionalKeys),
 		}
 	}
 	return seat
@@ -1069,6 +1083,7 @@ func seatSetupSteps(in []SandboxSetupStep) []org.SandboxSetupStep {
 			Files:          maps.Clone(step.Files),
 			Commands:       append([]string(nil), step.Commands...),
 			Env:            maps.Clone(step.Env),
+			OptionalKeys:   slices.Clone(step.OptionalKeys),
 			Brief:          step.Brief,
 			TimeoutSeconds: step.TimeoutSeconds,
 		})

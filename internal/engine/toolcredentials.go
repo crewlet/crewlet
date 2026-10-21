@@ -240,15 +240,20 @@ func (e *Engine) mintedFor(c *Company, handle string) map[string]integration.Kin
 }
 
 // credentialMissing is why a server was not started — a seat's child, a
-// shared server, or one a coding agent's box was not given: references among
-// the values it is started with resolved to nothing, and the keys holding them
-// are not declared optional. See the file comment.
+// shared server, or one a coding agent's box was not given — or what a coding
+// run's own environment lacks ([Engine.runEnvironment]): references among the
+// values it is started with resolved to nothing, and the keys holding them are
+// not declared optional. See the file comment.
 type credentialMissing struct {
 	// seat is the seat's handle, which is what an integration's findings
 	// name a seat by — empty for a shared server; server is the
 	// configuration's name for the server, and instance the bridge's name
-	// for this start of it.
+	// for this start of it, both empty for a coding run.
 	seat, server, instance string
+
+	// reader is what goes without a value its sentence offers to declare
+	// optional: "the server", or "the run".
+	reader string
 
 	// unset are the variables nothing sets and nothing this engine runs
 	// mints, and empty the ones that are set, to nothing: the operator's to
@@ -349,7 +354,7 @@ func resolveServer(
 		}
 		gap.hold(l.key, missing, server.OptionalKey(l.key), offer, l.seat)
 	}
-	m := gap.missing(seat)
+	m := gap.missing(seat, "the server")
 	if m == nil {
 		return out, nil
 	}
@@ -380,7 +385,8 @@ type refGap struct {
 	issued map[string]bool
 }
 
-// hold records missing, the references key's value lacks.
+// hold records missing, the references key's value lacks, and reports whether
+// the key holds anything back.
 //
 // optional is whether the key is declared optional; where is where it could
 // be, for the remedy, or "" for a key the remedy never offers to leave out;
@@ -392,11 +398,13 @@ type refGap struct {
 // child would start without its identity and act as nobody until the seal —
 // the failure this rule exists to stop, reached again by a declaration the
 // sentence itself had offered.
-func (g *refGap) hold(key string, missing []string, optional bool, where string, issued bool) {
+func (g *refGap) hold(key string, missing []string, optional bool, where string, issued bool) bool {
+	holds := false
 	for _, name := range missing {
 		if _, minted := g.minted[name]; optional && !minted {
 			continue
 		}
+		holds = true
 		g.names = append(g.names, name)
 		if issued {
 			if g.issued == nil {
@@ -415,6 +423,7 @@ func (g *refGap) hold(key string, missing []string, optional bool, where string,
 		}
 		g.declarable[name][key] = where
 	}
+	return holds
 }
 
 // pin records missing, the references something with no key needs — a
@@ -430,12 +439,14 @@ func (g *refGap) pin(missing []string) {
 }
 
 // missing is the gap, sorted into its stories ([credentialGap]) with what each
-// remedy names, or nil where every value resolved or was left out.
-func (g *refGap) missing(seat string) *credentialMissing {
+// remedy names, or nil where every value resolved or was left out. reader is
+// what goes without a value the sentence offers to declare optional.
+func (g *refGap) missing(seat, reader string) *credentialMissing {
 	m := credentialGap(seat, g.names, g.env, g.minted)
 	if m == nil {
 		return nil
 	}
+	m.reader = reader
 	for _, name := range m.unset {
 		if g.issued[name] {
 			m.issued = append(m.issued, name)
@@ -662,8 +673,8 @@ func (m *credentialMissing) reason() string {
 
 // optionalRemedy is the last remedy for what the operator has to supply: the
 // keys holding it, and where each could be declared optional instead, for a
-// value the server can run without — or "" where every such variable sits in
-// the url, which no declaration can make optional.
+// value the server or the run can go without — or "" where no key holding one
+// is one the sentence offers to leave out.
 func (m *credentialMissing) optionalRemedy() string {
 	if len(m.optional) == 0 {
 		return ""
@@ -679,8 +690,8 @@ func (m *credentialMissing) optionalRemedy() string {
 		lists = append(lists, joined(keys)+" under "+where)
 	}
 	keys := slices.Collect(maps.Keys(m.optional))
-	return fmt.Sprintf("or, if the server runs without %s, list %s",
-		plural(keys, "it", "them"), strings.Join(lists, " and "))
+	return fmt.Sprintf("or, if %s can go without %s, list %s",
+		m.reader, plural(keys, "it", "them"), strings.Join(lists, " and "))
 }
 
 // Error is the sentence the heartbeat carries and the log writes: why the
@@ -692,6 +703,19 @@ func (m *credentialMissing) Error() string {
 		when = "; it starts once the seal reaches this node"
 	}
 	return "not started: " + m.reason() + when
+}
+
+// runRefusal is why a coding run was not started, as the tool result its turn
+// reads: what is missing, and — the reader being a model — what to do about
+// the turn meanwhile.
+func (m *credentialMissing) runRefusal() string {
+	refusal := "this seat's run environment is not complete, so no box was started: " + m.reason()
+	if m.waiting() {
+		return refusal + "; a run launched once the seal reaches this node is given it — " +
+			"try again then, or do the work with your own tools"
+	}
+	return refusal + "; until somebody does, do the work with your own tools, or say " +
+		"what is missing"
 }
 
 // mintedVariables lists what a child waits for, sorted, for a log line.

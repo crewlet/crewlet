@@ -92,6 +92,49 @@ func (c *Company) validateOptionalKeys() error {
 	return p.err()
 }
 
+// validateRunOptionalKeys holds a coding run's `optional_keys` lists — a seat's
+// sandbox block's, over its env, and every setup step's, over its env and its
+// files — to the rule a tool server's list is held to ([Company.validateOptionalKeys]):
+// an entry that leaves nothing out is refused, because the key it was meant
+// for stays required, and a coding run is refused wherever its value resolves
+// to nothing.
+//
+// AN ADMISSION RULE like that one: nothing about running depends on it, since
+// an entry naming nothing is merely never consulted.
+func (c *Company) validateRunOptionalKeys() error {
+	var p problems
+	steps := func(path Path, list []SandboxSetupStep) {
+		for i := range list {
+			step := &list[i]
+			if len(step.OptionalKeys) == 0 {
+				continue
+			}
+			held := heldKeys{}
+			held.settings(step.Env)
+			held.contents(step.Files)
+			held.check(&p, at(idx(path, i), "optional_keys"), step.OptionalKeys,
+				"this step's env, nor a path of its files", "no coding run is started")
+		}
+	}
+	if c.Providers.Sandbox != nil {
+		steps(field("providers.sandbox.setup"), c.Providers.Sandbox.Setup)
+	}
+	for role, path := range c.EachRole() {
+		gate := role.Sandbox
+		if gate == nil {
+			continue
+		}
+		if len(gate.OptionalKeys) > 0 {
+			held := heldKeys{}
+			held.settings(gate.Env)
+			held.check(&p, at(path, "sandbox.optional_keys"), gate.OptionalKeys,
+				"this sandbox block's env", "no coding run is started")
+		}
+		steps(at(path, "sandbox.setup"), gate.Setup)
+	}
+	return p.err()
+}
+
 // heldKeys is what an `optional_keys` list is checked against: for each key
 // its values are written under, whether one of them carries a reference, and
 // for each variable those values reference, the keys it is written under.
@@ -113,6 +156,19 @@ type heldKeys struct {
 func (h *heldKeys) settings(block map[string]string) {
 	for key, value := range block {
 		h.carry(key, envref.Names(value))
+	}
+}
+
+// contents carries a step's files, keyed by path, where a body is a reference
+// only when it is exactly one whole `${VAR}` — any other `${…}` in it is the
+// file's own syntax ([secrets.ReadContent]).
+func (h *heldKeys) contents(files map[string]string) {
+	for path, body := range files {
+		var names []string
+		if name, whole := envref.Whole(body); whole {
+			names = []string{name}
+		}
+		h.carry(path, names)
 	}
 }
 

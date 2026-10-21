@@ -1013,14 +1013,15 @@ func TestTheAtlassianSealingClockCoversOnlySeatsThisEngineProvisions(t *testing.
 	}
 }
 
-// A CODING BOX LAUNCHED WITHOUT A VARIABLE SAYS WHETHER A PASS IS MINTING IT,
-// by the rule a seat's own child is judged by.
+// A SERVER WITHHELD FROM A CODING BOX SAYS WHETHER A PASS IS MINTING ITS
+// CREDENTIAL, by the rule a seat's own child is judged by.
 //
-// The box goes ahead either way — a coding run is a tool call a turn made — but
-// its warning told the operator to export the variable or store it, for a token
-// the GitLab pass was about to mint into that very name: the same variable the
-// seat's code-host server points at, which the guide tells a seat to share.
-func TestABoxLaunchedWithoutAVariableSaysWhetherAPassIsMintingIt(t *testing.T) {
+// The run goes ahead without the server, so the line is all there is to say
+// why — and a warning telling the operator to store a token the GitLab pass
+// was about to mint into that very name sends them to do the pass's work. The
+// run's own environment is judged by the same rule
+// (TestARunWaitingForAMintedCredentialIsRefusedSayingWhenItCanRun).
+func TestABoxServerWithheldForAMintedCredentialIsSaidAtInfo(t *testing.T) {
 	logs := captureEngineLogs(t)
 	// The seat's code-host server, which the box is scoped to below: a name
 	// the company declares no server under is not withheld but unknown.
@@ -1029,24 +1030,6 @@ func TestABoxLaunchedWithoutAVariableSaysWhetherAPassIsMintingIt(t *testing.T) {
 			"    command: \"/nonexistent/definitely-not-glab\"\nroles:\n", 1))
 	seat := c.Org.AgentSeatByHandle("swe")
 	e := &Engine{}
-
-	e.sandboxEnv(t.Context(), c, seat, &org.RoleSandbox{
-		Env: map[string]string{"GITLAB_TOKEN": "${SWE_GITLAB_TOKEN}"}}, nil)
-	minted := logs.records("sandbox_env_unresolved", "swe")
-	if len(minted) != 1 || minted[0]["level"] != "INFO" ||
-		!strings.Contains(minted[0]["detail"].(string), "waiting for the gitlab integration to mint ${SWE_GITLAB_TOKEN}") {
-		t.Errorf("sandbox_env_unresolved for a minted variable = %v: want one line at INFO "+
-			"naming the integration minting it", minted)
-	}
-
-	e.sandboxEnv(t.Context(), c, seat, &org.RoleSandbox{
-		Env: map[string]string{"OTHER_TOKEN": "${SWE_NOBODY_SETS}"}}, nil)
-	all := logs.records("sandbox_env_unresolved", "swe")
-	if len(all) != 2 || all[1]["level"] != "WARN" ||
-		!strings.Contains(all[1]["detail"].(string), "${SWE_NOBODY_SETS} is not set") {
-		t.Errorf("sandbox_env_unresolved for a variable nothing mints = %v: want a second "+
-			"line, a warning naming the variable and the remedy", all)
-	}
 
 	e.boxServers(t.Context(), c, seat, &org.RoleSandbox{
 		MCP: org.RoleSandboxMCP{Servers: []string{"gitlab"}}})

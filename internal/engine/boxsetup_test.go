@@ -12,8 +12,10 @@ import (
 // A file is CONTENT: nothing on the way to a box expands a body, so a seat's
 // `.npmrc` reaches the box with its own `${NPM_TOKEN}` and `${HOME}` left for
 // the box's npm and shell. A body that is exactly one `${VAR}` is the one shape
-// read through this node's resolver, and one nothing answers for reaches the
-// box present and empty rather than as the reference's own text. A
+// read through this node's resolver, and one nothing answers for is not
+// written at all — neither as the reference's own text nor empty, which is no
+// credential either: the run's gap says it is missing, and a run_sandbox launch
+// is refused for it (internal/engine runenv tests). A
 // provider-wide file is read by the same rule, after the provider's steps and
 // before the seat's own, and the manager's own steps are never written
 // through.
@@ -63,17 +65,17 @@ roles:
 	if got := steps[1].Files["/usr/local/bin/h"]; got != helper {
 		t.Errorf("the helper script reaches the box as %q, want %q", got, helper)
 	}
-	if got, held := steps[1].Files["/root/.netrc"]; !held || got != "" {
+	if got, held := steps[1].Files["/root/.netrc"]; held {
 		t.Errorf("a seat file naming a variable nothing answers for reaches the "+
-			"box as (%q, %v), want present and empty", got, held)
+			"box as %q, want it not written", got)
 	}
 	if got := steps[0].Files["/etc/plain"]; got != "home is ${HOME}\n" {
 		t.Errorf("a provider-wide file was expanded to %q — a ${…} inside a "+
 			"body is the box's, never the engine host's", got)
 	}
-	if got, held := steps[0].Files["/etc/sealed"]; !held || got != "" {
+	if got, held := steps[0].Files["/etc/sealed"]; held {
 		t.Errorf("a file naming a variable nothing answers for reaches the "+
-			"box as (%q, %v), want present and empty", got, held)
+			"box as %q, want it not written", got)
 	}
 	if provider[0].Files["/etc/sealed"] != "${SHARED_FILE_UNSET}" {
 		t.Errorf("reading the provider's step wrote through to the manager's "+

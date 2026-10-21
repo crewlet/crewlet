@@ -426,6 +426,74 @@ roles:
 	}
 }
 
+// A CODING RUN'S optional_keys ARE HELD TO THE SAME RULE: a seat's sandbox
+// block's over its env, and a setup step's over its env and its files' paths,
+// wherever the step is declared.
+//
+// A file's body is a reference only when it is one whole ${VAR}: any other
+// `${…}` in it is the file's own syntax, expanded inside the box, so a script
+// full of `${HOME}` has nothing the engine could find missing.
+func TestARunsOptionalKeyThatLeavesNothingOutIsRefused(t *testing.T) {
+	t.Parallel()
+	const head = `
+name: Acme
+providers:
+  sandbox:
+    fake: true
+`
+	for _, tc := range []struct{ name, doc, path, want string }{
+		{"a seat block naming a variable", head + `
+roles:
+  - name: Dev
+    handle: dev
+    sandbox:
+      enabled: true
+      env: {GITLAB_TOKEN: "${DEV_GITLAB_TOKEN}"}
+      optional_keys: [DEV_GITLAB_TOKEN]
+`, "roles[0].sandbox.optional_keys[0]", "(GITLAB_TOKEN)"},
+		{"a provider-wide step naming no file of its own", head + `
+    setup:
+      - name: npm
+        files: {.npmrc: "${NPMRC}"}
+        optional_keys: [~/.npmrc]
+`, "providers.sandbox.setup[0].optional_keys[0]", "is not a key of this step's env, nor a path of its files"},
+		{"a seat's step naming a script", head + `
+roles:
+  - name: Dev
+    handle: dev
+    sandbox:
+      enabled: true
+      setup:
+        - name: tools
+          files: {bin/setup.sh: "cp ${HOME}/.cache/x ."}
+          optional_keys: [bin/setup.sh]
+`, "roles[0].sandbox.setup[0].optional_keys[0]", "carries a ${VAR} reference"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := rejects(t, tc.doc, tc.path)
+			if !errors.Is(err, ErrUnknownValue) || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("want an unknown value saying %q; got:\n%v", tc.want, err)
+			}
+		})
+	}
+
+	mustCompany(t, head+`
+    setup:
+      - name: npm
+        files: {.npmrc: "${NPMRC}"}
+        env: {NPM_TOKEN: "${NPM_TOKEN}"}
+        optional_keys: [.npmrc, NPM_TOKEN]
+roles:
+  - name: Dev
+    handle: dev
+    sandbox:
+      enabled: true
+      env: {DATABASE_URL: "postgres://${DB_HOST}/test"}
+      optional_keys: [DATABASE_URL]
+`)
+}
+
 // A VENDOR BLOCK IS READ WITHOUT ANY SERVER AT ALL, so refusing it would
 // refuse a company that works.
 //
