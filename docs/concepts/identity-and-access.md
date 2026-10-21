@@ -3066,6 +3066,14 @@ Rotating it is a migration, not a setting.
 | `iam_session_generation` | The **fleet-wide generation** every bearer carries: one row, about nobody, that `crewlet iam invalidate-all` moves to end every session and machine token in the company at once |
 | `iam_history` | The authentication trail: who did what to whom, through which credential, and why |
 
+Every statement the engine runs over the people, the invitations and the trail
+is planned by a gate in `internal/iamdomain`: a sign-in's lookup, a directory
+decision's check of who holds a value, and a page of the trail each read
+through an index, and an index no statement reaches is dropped rather than
+written on every apply. A page of the trail is read newest first in log order
+from its own index (replicated migration 0069), so it costs the page and not
+the trail.
+
 Beside those sit three **gate** tables — `iam_evictions`, `iam_log_generations`
 and `iam_removed` — which are not objects a record writes but the state an
 apply reads *before* it writes anything. They outlive the records that made
