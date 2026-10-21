@@ -83,8 +83,9 @@ ON CONFLICT (name) DO UPDATE SET
 //
 // BY IS THE AUTHOR AND THE CREDENTIAL, both kept — see [secrets.Author] —
 // and SOURCE is the command that wrote the row, held to the write paths' own
-// words by [secrets.CheckSource] here as on the fleet's store, since this row
-// is migrated onto the fleet at the next start.
+// words by [secrets.CheckSource] here as on the fleet's store, and the value
+// to [secrets.MaxValueBytes] by [secrets.CheckValue], since this row is
+// migrated onto the fleet at the next start.
 func (s *SecretValues) Set(ctx context.Context, name, value string,
 	by secrets.Author, source secrets.Source, now time.Time) error {
 
@@ -99,6 +100,11 @@ func (s *SecretValues) Set(ctx context.Context, name, value string,
 		return err
 	}
 	if err := secrets.CheckSource(source); err != nil {
+		return err
+	}
+	// THE SIZE EVERY STORE KEEPS, for the same reason: a row past it lands
+	// on the fleet at the next start, where nothing could read it back.
+	if err := secrets.CheckValue(value); err != nil {
 		return err
 	}
 	// THE NAME IS BOUND IN as associated data, so a ciphertext moved to

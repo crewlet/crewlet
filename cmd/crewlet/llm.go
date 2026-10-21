@@ -557,14 +557,9 @@ func loginLLM(ctx context.Context, req loginRequest, stdout, stderr io.Writer) e
 	case req.captureToken, req.tokenStdin:
 		var token string
 		if req.tokenStdin {
-			//nolint:govet // shadow: scoped to this block; see .golangci.yml
-			raw, err := io.ReadAll(os.Stdin)
+			token, err = tokenFromReader(os.Stdin)
 			if err != nil {
-				return fmt.Errorf("reading the token from stdin: %w", err)
-			}
-			token = strings.TrimSpace(string(raw))
-			if token == "" {
-				return errors.New("stdin held no token")
+				return err
 			}
 		} else {
 			token, err = p.CaptureToken(ctx, os.Stdin, stderr)
@@ -644,6 +639,25 @@ func loginLLM(ctx context.Context, req loginRequest, stdout, stderr io.Writer) e
 		fmt.Fprintf(stdout, "Verify it with `crewlet llm doctor %s`.\n", key)
 		return nil
 	}
+}
+
+// tokenFromReader reads the headless token piped to `-token-stdin`: trimmed of
+// the whitespace around it, refused when there is none, and held to the size
+// every store keeps a value to — before the rest of it is read, like every
+// value piped to be stored ([readPipedValue]).
+func tokenFromReader(r io.Reader) (string, error) {
+	raw, err := readPipedValue(r)
+	if err != nil {
+		return "", fmt.Errorf("reading the token from stdin: %w", err)
+	}
+	token := strings.TrimSpace(raw)
+	if token == "" {
+		return "", errors.New("stdin held no token")
+	}
+	if err := secrets.CheckValue(token); err != nil {
+		return "", fmt.Errorf("the token on stdin: %w", err)
+	}
+	return token, nil
 }
 
 func exportLLM(ctx context.Context, providers []cliAgentProvider, key string, toStore bool,

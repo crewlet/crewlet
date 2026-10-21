@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // revealBody spells a POST /secrets/reveal body naming these variables.
@@ -138,7 +139,7 @@ func TestARevealOfSeveralNamesRefusesWhatNoDocumentAsks(t *testing.T) {
 func TestTheLongestRevealFitsTheBoundAReaderIsGiven(t *testing.T) {
 	t.Parallel()
 	h, _ := surface(t, cipherFor(t, "k1"), "k1")
-	value := strings.Repeat("<", secretsapi.MaxValueBytes)
+	value := strings.Repeat("<", secrets.MaxValueBytes)
 	// AS LONG AS THE BODY LETS EVERY NAME BE: the envelope's own bytes
 	// come off the cap before it is shared out.
 	room := (secretsapi.MaxRevealBodyBytes-len(`{"names":[]}`))/secretsapi.MaxRevealNames - len(`"",`)
@@ -177,7 +178,7 @@ func TestTheLongestSingleRevealFitsTheBoundAReaderIsGiven(t *testing.T) {
 	t.Parallel()
 	h, _ := surface(t, cipherFor(t, "k1"), "k1")
 	const name = "PEM_KEY"
-	value := strings.Repeat("<", secretsapi.MaxValueBytes)
+	value := strings.Repeat("<", secrets.MaxValueBytes)
 	if code, body := call(t, h, http.MethodPut, "/secrets/"+name, value); code != http.StatusOK {
 		t.Fatalf("seed = %d %s", code, body)
 	}

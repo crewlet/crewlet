@@ -828,3 +828,67 @@ func calls(fn *ast.FuncDecl, name string) bool {
 	})
 	return found
 }
+
+// AN OFFLINE WRITE PAST THE SIZE EVERY STORE KEEPS IS REFUSED, AND OPENS
+// NOTHING.
+//
+// A stopped node's table took a value of any size, the next start moved it
+// onto the fleet, and from then on every read of it was refused as longer than
+// any answer the node gives: a credential stored and unreadable. The refusal
+// comes before the file is opened, so a node that has never started is left
+// with no database, as a read leaves it.
+func TestAnOfflineWritePastTheSizeEveryStoreKeepsIsRefused(t *testing.T) {
+	t.Parallel()
+	cfg := bootstrapWithKeyring(t, "k1")
+	_, _, err := secretsCmd(t, cfg, "set", "BIG", "-value",
+		strings.Repeat("&", secrets.MaxValueBytes+1))
+	if !errors.Is(err, secrets.ErrValueTooLarge) {
+		t.Fatalf("an offline set a byte past the limit answered %v, want ErrValueTooLarge", err)
+	}
+	boot, err := loadBootstrapForStore(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(boot.Store.Path); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the refused write left a database at %s (%v)", boot.Store.Path, err)
+	}
+}
+
+// endlessReader is a pipe that never ends, counting what was read from it.
+type endlessReader struct{ read int }
+
+func (r *endlessReader) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = 'a'
+	}
+	r.read += len(p)
+	return len(p), nil
+}
+
+// A PIPED VALUE LONGER THAN ANY STORE KEEPS IS REFUSED BEFORE IT IS READ
+// WHOLE.
+//
+// `crewlet secrets set X < backup.tar` read the whole file into memory only for
+// a store to refuse it — and a stream that never ends was never refused at
+// all. The value at the limit, with the newline a pipe adds, is still a value.
+func TestAPipedValueLongerThanAnyStoreKeepsIsRefusedBeforeItIsReadWhole(t *testing.T) {
+	t.Parallel()
+	atLimit := strings.Repeat("a", secrets.MaxValueBytes)
+	if got, err := secretFromReader(strings.NewReader(atLimit + "\n")); err != nil || got != atLimit {
+		t.Fatalf("the value at the limit and its newline read as %d bytes, %v", len(got), err)
+	}
+	for _, in := range []string{atLimit + "a", atLimit + "a\n", atLimit + "\n\n"} {
+		if _, err := secretFromReader(strings.NewReader(in)); !errors.Is(err, secrets.ErrValueTooLarge) {
+			t.Errorf("%d piped bytes answered %v, want ErrValueTooLarge", len(in), err)
+		}
+	}
+	endless := &endlessReader{}
+	if _, err := secretFromReader(endless); !errors.Is(err, secrets.ErrValueTooLarge) {
+		t.Fatalf("a stream that never ends answered %v, want ErrValueTooLarge", err)
+	}
+	// THE VALUE, ITS NEWLINE AND ONE BYTE TO SAY THERE IS MORE: what tells a
+	// value at the limit from one past it, and not a byte beyond.
+	if most := secrets.MaxValueBytes + 2; endless.read > most {
+		t.Errorf("read %d bytes of a stream to refuse it, want at most %d", endless.read, most)
+	}
+}

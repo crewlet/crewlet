@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // bundleProvider is a cli-agent provider with a credential directory of its
@@ -357,6 +359,31 @@ func TestDoctorNamesWhatItDoesNotExamine(t *testing.T) {
 	err = runLLM(noEnviron, []string{"doctor", "-company", company, "-config", filepath.Join(dir, "absent.yaml")}, &out, &notes)
 	if err == nil || !strings.Contains(err.Error(), "declares no cli-agent or anthropic providers") {
 		t.Errorf("err = %v", err)
+	}
+}
+
+// A TOKEN PIPED TO -token-stdin IS HELD TO THE SIZE EVERY STORE KEEPS, before
+// the rest of it is read: it was read whole, however much arrived, only for
+// the store to refuse it — and a stream that never ended was never refused.
+// The whitespace around a token is not part of it, and nothing but whitespace
+// is no token.
+func TestATokenPipedToBeStoredIsBounded(t *testing.T) {
+	t.Parallel()
+	if got, err := tokenFromReader(strings.NewReader("  sk-not-real\r\n")); err != nil || got != "sk-not-real" {
+		t.Errorf("a token with whitespace around it read as %q, %v", got, err)
+	}
+	if _, err := tokenFromReader(strings.NewReader(" \n")); err == nil {
+		t.Error("whitespace alone was taken as a token")
+	}
+	endless := &endlessReader{}
+	if _, err := tokenFromReader(endless); !errors.Is(err, secrets.ErrValueTooLarge) {
+		t.Fatalf("a stream that never ends answered %v, want ErrValueTooLarge", err)
+	}
+	if most := secrets.MaxValueBytes + 2; endless.read > most {
+		t.Errorf("read %d bytes of a stream to refuse it, want at most %d", endless.read, most)
+	}
+	if _, err := tokenFromReader(strings.NewReader(strings.Repeat("t", secrets.MaxValueBytes+1))); !errors.Is(err, secrets.ErrValueTooLarge) {
+		t.Errorf("a token a byte past the limit answered %v, want ErrValueTooLarge", err)
 	}
 }
 

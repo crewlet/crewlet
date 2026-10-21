@@ -91,22 +91,14 @@ import (
 
 var log = logging.Get("api.secrets")
 
-// MaxValueBytes bounds one secret's value.
-//
-// The largest real credential this engine handles is a service-account JSON
-// key or a PEM private key, which are a few kilobytes; 64 KiB is an order of
-// magnitude above that and still finite. The route is guarded, so this bounds
-// a mistake rather than an attacker — a `curl -d @big.tar` typo should be
-// refused rather than sealed.
-const MaxValueBytes = 64 << 10
-
 // MaxJSONValueBytes is the longest one stored value can be once it is spelled
 // as a JSON string, which is how every reveal answers it: [encoding/json]
 // writes each byte it escapes — a control character, `<`, `>`, `&` — as a
-// six-byte \u escape, so six times [MaxValueBytes], and its two quotes. It is
-// what a reader of a revealed value has to be prepared to take, since a value
-// the write admitted and the read refused would be stored and unreadable.
-const MaxJSONValueBytes = 6*MaxValueBytes + 2
+// six-byte \u escape, so six times [secrets.MaxValueBytes], the size every
+// store holds a value to, and its two quotes. It is what a reader of a
+// revealed value has to be prepared to take, since a value a write admitted
+// and the read refused would be stored and unreadable.
+const MaxJSONValueBytes = 6*secrets.MaxValueBytes + 2
 
 // MaxRevealNames bounds the names one POST /secrets/reveal asks for.
 //
@@ -524,7 +516,7 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 	// `value_too_large` where configapi answered `body_too_large` for the
 	// same 413, and its own reader is also the one place a body arrived
 	// with no time bound on it — see [httpjson.BodyReadTimeout].
-	body, err := httpjson.ReadBody(w, r, MaxValueBytes)
+	body, err := httpjson.ReadBody(w, r, secrets.MaxValueBytes)
 	if err != nil {
 		httpjson.Refuse(w, err)
 		return

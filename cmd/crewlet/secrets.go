@@ -360,9 +360,18 @@ func (l *localSecrets) List(ctx context.Context) ([]secrets.Record, error) {
 
 // Set writes the row under the author and source offered, which on this node's
 // own table are what it records.
+//
+// A WRITE THE TABLE WOULD REFUSE OPENS NOTHING: the name, the source and the
+// value are held to the table's own rules before the file is opened, so a
+// refused write on a node that has never started leaves no database behind,
+// as a read does not.
 func (l *localSecrets) Set(ctx context.Context, name, value string, by secrets.Author,
 	source secrets.Source, now time.Time) (secrets.Author, error) {
 
+	if err := errors.Join(secrets.CheckName(name), secrets.CheckSource(source),
+		secrets.CheckValue(value)); err != nil {
+		return secrets.Author{}, err
+	}
 	sv, err := l.write(ctx)
 	if err != nil {
 		return secrets.Author{}, err
@@ -1071,12 +1080,42 @@ func currentOperator() string {
 // 401 that names neither the newline nor this command. Stripping MORE would
 // be wrong in the other direction — a secret may legitimately end in
 // whitespace, and silently altering it is a failure nobody can see.
+//
+// A VALUE LONGER THAN ANY STORE KEEPS is refused here, before the rest of it
+// is read: see [readPipedValue].
 func secretFromReader(r io.Reader) (string, error) {
-	body, err := io.ReadAll(r)
+	body, err := readPipedValue(r)
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSuffix(string(body), "\n"), nil
+	value := strings.TrimSuffix(body, "\n")
+	if err := secrets.CheckValue(value); err != nil {
+		return "", err
+	}
+	return value, nil
+}
+
+// readPipedValue reads a value piped to a command to be stored, and refuses —
+// without reading the rest — one longer than [secrets.MaxValueBytes] and the
+// one trailing newline a pipe adds.
+//
+// BOUNDED, because what arrives on a pipe is whatever the operator pointed at
+// it: `crewlet secrets set X < backup.tar` would otherwise be read whole into
+// memory only for the store to refuse it, and a stream that never ends would
+// never be refused at all. Every store refuses such a value anyway
+// ([secrets.CheckValue]); this is where the command that read it stops.
+func readPipedValue(r io.Reader) (string, error) {
+	const most = secrets.MaxValueBytes + 1
+	body, err := io.ReadAll(io.LimitReader(r, most+1))
+	if err != nil {
+		return "", err
+	}
+	if len(body) > most {
+		return "", fmt.Errorf("%w: more than %d bytes arrived, so the rest was "+
+			"not read; a value is at most %d (%d KiB)", secrets.ErrValueTooLarge,
+			most, secrets.MaxValueBytes, secrets.MaxValueBytes>>10)
+	}
+	return string(body), nil
 }
 
 // nonEmpty wraps a peeled positional as a slice, empty when there was none.
