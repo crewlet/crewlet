@@ -471,7 +471,7 @@ func ambiguousText(e *tracker.ErrAmbiguousAnswer) string {
 	for i, ask := range e.Asks {
 		if i == tracker.MaxOpenAsksNamed {
 			fmt.Fprintf(&b, "\n  … and more — read the item with "+
-				"get_work_item to see the rest.")
+				GetWorkItemTool+" to see the rest.")
 			break
 		}
 		question := strings.TrimSpace(ask.Question)
@@ -479,7 +479,7 @@ func ambiguousText(e *tracker.ErrAmbiguousAnswer) string {
 			question = strings.TrimSpace(ask.Body)
 			if len(question) > room && i > 0 {
 				question = fmt.Sprintf("(a question of %d bytes — read it with "+
-					"get_work_item(item=%q, comment=%q))", len(question), e.Task, ask.Comment)
+					GetWorkItemTool+"(item=%q, comment=%q))", len(question), e.Task, ask.Comment)
 			} else {
 				room -= len(question)
 			}
@@ -507,7 +507,7 @@ func fieldMap(raw any) (map[string]json.RawMessage, string) {
 	if !ok {
 		return nil, "`fields` takes an object keyed by field slug, like " +
 			"{\"severity\": \"high\", \"effort\": 3}. Read the slugs with " +
-			"get_work_catalogue."
+			tracker.GetWorkCatalogueTool + "."
 	}
 	out := make(map[string]json.RawMessage, len(object))
 	for key, value := range object {

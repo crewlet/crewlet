@@ -339,12 +339,33 @@ func (g *schemaGen) overrides() map[reflect.Type]map[string]any {
 	}
 }
 
+// describedFields is a config type that DERIVES the schema's description of
+// some of its fields, keyed by the field's YAML name: a description that names
+// one of the engine's tools reads the name from its constant
+// (internal/toolname), which a `desc` tag — a literal the language takes as
+// written — cannot, so a rename would have left the published schema naming a
+// tool that no longer exists. internal/toolname's walk refuses a struct tag
+// that spells a tool name, so this is the one way to name one.
+type describedFields interface {
+	fieldDescriptions() map[string]string
+}
+
+// derivedDescriptions is t's [describedFields] answer, or none.
+func derivedDescriptions(t reflect.Type) map[string]string {
+	described, ok := reflect.Zero(t).Interface().(describedFields)
+	if !ok {
+		return nil
+	}
+	return described.fieldDescriptions()
+}
+
 // structSchema builds the object schema for a struct type. secret says the
 // struct was reached beneath a secret tag, so every string in it is a
 // credential, as redaction reads it.
 func (g *schemaGen) structSchema(t reflect.Type, secret bool) map[string]any {
 	props := map[string]any{}
 	var required []string
+	derived := derivedDescriptions(t)
 
 	// An `,inline` struct contributes its fields to the enclosing object,
 	// which is what yaml.v3 does when decoding one ([inlined]) — and a tag
@@ -366,7 +387,16 @@ func (g *schemaGen) structSchema(t reflect.Type, secret bool) map[string]any {
 			}
 			directives := parseDirectives(f.Tag.Get("js"))
 			schema := g.fieldSchema(f.Type, directives, secret || secrets.Field(f))
-			if desc := f.Tag.Get("desc"); desc != "" {
+			desc, written := f.Tag.Lookup("desc")
+			if text, ok := derived[name]; ok {
+				if written {
+					panic(fmt.Sprintf("config: %s.%s is described twice, by its "+
+						"desc tag and by its type's fieldDescriptions", t.Name(), f.Name))
+				}
+				desc = text
+				delete(derived, name)
+			}
+			if desc != "" {
 				schema["description"] = desc
 			}
 			props[name] = schema
@@ -376,6 +406,10 @@ func (g *schemaGen) structSchema(t reflect.Type, secret bool) map[string]any {
 		}
 	}
 	walk(t, secret)
+	for name := range derived {
+		panic(fmt.Sprintf("config: %s's fieldDescriptions describes %q, which "+
+			"is none of its fields", t.Name(), name))
+	}
 
 	out := map[string]any{
 		// A null block is an unset one, which the decoder leaves as it was.

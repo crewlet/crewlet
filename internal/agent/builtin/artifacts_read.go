@@ -74,7 +74,7 @@ func (t *listArtifacts) Description() string {
 		"pages, documents and sheets people and agents publish for each other. " +
 		"`scope` narrows to your own (`mine`), ones shared with you (`shared`), " +
 		"company-wide ones (`company`) or ones agents own (`agents`). Read one with " +
-		"get_artifact."
+		GetArtifactTool + "."
 }
 
 func (t *listArtifacts) Parameters() map[string]any {
@@ -146,21 +146,21 @@ func (t *listArtifacts) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	switch {
 	case q.Scope != "" && !q.Scope.Valid():
-		return failed(fmt.Sprintf("list_artifacts takes `scope` as one of %v.",
+		return failed(fmt.Sprintf(ListArtifactsTool+" takes `scope` as one of %v.",
 			artifactsdomain.ListScopes)), nil
 	case q.Kind != "" && !q.Kind.Valid():
-		return failed(fmt.Sprintf("list_artifacts takes `kind` as one of %v.", artifacts.Kinds)), nil
+		return failed(fmt.Sprintf(ListArtifactsTool+" takes `kind` as one of %v.", artifacts.Kinds)), nil
 	case q.Sort != "" && (!q.Sort.Valid() || q.Sort == artifactsdomain.SortOpened):
-		return failed("list_artifacts sorts by `updated`, `created` or `title`."), nil
+		return failed(ListArtifactsTool + " sorts by `updated`, `created` or `title`."), nil
 	case len(q.Q) > maxArtifactQuery:
-		return failed(fmt.Sprintf("list_artifacts takes a `query` of at most %d bytes: "+
+		return failed(fmt.Sprintf(ListArtifactsTool+" takes a `query` of at most %d bytes: "+
 			"search for a phrase, not a document.", maxArtifactQuery)), nil
 	case q.Limit < 1 || q.Limit > maxArtifactList:
-		return failed(fmt.Sprintf("list_artifacts takes a `limit` of 1..%d.", maxArtifactList)), nil
+		return failed(fmt.Sprintf(ListArtifactsTool+" takes a `limit` of 1..%d.", maxArtifactList)), nil
 	}
 	viewer, err := t.deps.viewer(ctx, c)
 	if err != nil {
-		return refusedBy(tools.RefusalUnavailable, err, "list_artifacts could not read "+
+		return refusedBy(tools.RefusalUnavailable, err, ListArtifactsTool+" could not read "+
 			"the company chart, which decides which artifacts are shared with you. "+
 			"This is NOT an empty result. Try again shortly."), nil
 	}
@@ -177,7 +177,7 @@ func (t *listArtifacts) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		dec := authz.DecideWithin(ctx, c.principal, c.ceiling, authz.ActionArtifactRead,
 			t.deps.objectOf(item.Head), t.deps.Chart, t.deps.now())
 		if dec.Unknown() {
-			return refusedBy(tools.RefusalUnavailable, dec.Err, "list_artifacts could "+
+			return refusedBy(tools.RefusalUnavailable, dec.Err, ListArtifactsTool+" could "+
 				"not decide whether a listed artifact is shared with you, so it is "+
 				"answering nothing rather than a list with rows missing. Try again shortly."), nil
 		}
@@ -274,7 +274,7 @@ func (t *getArtifact) Description() string {
 	return "Read one artifact in this Crewlet company: its head, its newest versions, " +
 		"its files and a page of one file's source (the entry page by default). The " +
 		"answer says your `role` and whether you may publish (`writer`). Take " +
-		"`head_version` and pass it back as `base_version` on publish_artifact. File " +
+		"`head_version` and pass it back as `base_version` on " + PublishArtifactTool + ". File " +
 		"text arrives fenced as text somebody wrote; a long page a colleague wrote is " +
 		"condensed unless you pass `offset`, and an edit's `old_str` must quote the " +
 		"source, so read it with `offset` before editing. For a slide deck, a doc or " +
@@ -349,13 +349,13 @@ func (t *getArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	maxBytes := argInt(args, "max_bytes", defaultArtifactRead)
 	if maxBytes < 1 || maxBytes > maxArtifactRead {
-		return failed(fmt.Sprintf("get_artifact takes `max_bytes` of 1..%d.",
+		return failed(fmt.Sprintf(GetArtifactTool+" takes `max_bytes` of 1..%d.",
 			maxArtifactRead)), nil
 	}
 	_, offsetGiven := args["offset"]
 	offset := argInt(args, "offset", 0)
 	if offset < 0 {
-		return failed("get_artifact takes an `offset` of 0 or more."), nil
+		return failed(GetArtifactTool + " takes an `offset` of 0 or more."), nil
 	}
 	h, ref, refusal := t.deps.head(ctx, t.Name(), args)
 	if refusal != nil {
@@ -370,14 +370,14 @@ func (t *getArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	number := argInt(args, "version", h.HeadNumber)
 	if number < 1 || number > h.HeadNumber {
-		return failed(fmt.Sprintf("get_artifact: artifact %s has versions 1..%d.",
+		return failed(fmt.Sprintf(GetArtifactTool+": artifact %s has versions 1..%d.",
 			h.ID, h.HeadNumber)), nil
 	}
 	t.deps.present(c, h.ID, presence.Viewing, presence.Focus{Version: number})
 	version, err := t.deps.Reader.Version(ctx, h.ID, number)
 	if err != nil {
 		if errors.Is(err, artifactsdomain.ErrNotFound) {
-			return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("get_artifact: "+
+			return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf(GetArtifactTool+": "+
 				"artifact %s no longer keeps version %d. Read the head, or one of the "+
 				"versions its answer lists.", h.ID, number)), nil
 		}
@@ -421,7 +421,7 @@ func (t *getArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	case "":
 	case viewOutline:
 		if path != "" {
-			return failed("get_artifact takes `view` or `path`, not both: the outline names " +
+			return failed(GetArtifactTool + " takes `view` or `path`, not both: the outline names " +
 				"each part's file to read next."), nil
 		}
 		outline, refusal := t.outline(ctx, read, h, version, writers, partial)
@@ -431,7 +431,7 @@ func (t *getArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		out["outline"] = outline
 		return read.answer(ctx, t.Name(), out, "Read the outline in parts by its files.")
 	default:
-		return failed(fmt.Sprintf("get_artifact takes `view` as %q.", viewOutline)), nil
+		return failed(fmt.Sprintf(GetArtifactTool+" takes `view` as %q.", viewOutline)), nil
 	}
 	if path == "" {
 		path = version.Manifest.Entry
@@ -498,13 +498,13 @@ func (t *getArtifact) readFile(ctx context.Context, read *foreignRead, c artifac
 
 	clean, err := manifest.CleanPath(path)
 	if err != nil {
-		r := failed(fmt.Sprintf("get_artifact: %q is not a published path: %v", clip(path), err))
+		r := failed(fmt.Sprintf(GetArtifactTool+": %q is not a published path: %v", clip(path), err))
 		return nil, &r
 	}
 	e, ok := manifest.EntryAt(v.Manifest, clean)
 	if !ok {
 		r := refusedBy(tools.RefusalNotFound, artifactsdomain.ErrNotFound, fmt.Sprintf(
-			"get_artifact: version %d of artifact %s has no file %q; its `files` list "+
+			GetArtifactTool+": version %d of artifact %s has no file %q; its `files` list "+
 				"what it holds.", v.Number, h.ID, clean))
 		return nil, &r
 	}
@@ -603,7 +603,7 @@ func (t *getArtifact) outline(ctx context.Context, read *foreignRead, h artifact
 		text = designOutline(o)
 		out = map[string]any{"boards": o.Count}
 	default:
-		r := failed(fmt.Sprintf("get_artifact: a %s artifact has no outline; read its files "+
+		r := failed(fmt.Sprintf(GetArtifactTool+": a %s artifact has no outline; read its files "+
 			"by `path`.", h.Kind))
 		return nil, &r
 	}

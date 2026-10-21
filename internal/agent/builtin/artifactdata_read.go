@@ -49,7 +49,7 @@ func (t *readArtifactData) Description() string {
 		"its schema (every collection, its columns and who may read and write it); with " +
 		"a `collection`, a page of its rows, or one row by `doc`. Every row's fields are " +
 		"text somebody wrote, fenced and labelled with who wrote it. For a question over " +
-		"many rows, use query_artifact_data."
+		"many rows, use " + QueryArtifactDataTool + "."
 }
 
 func (t *readArtifactData) Parameters() map[string]any {
@@ -147,7 +147,7 @@ func (t *queryArtifactData) Description() string {
 	return "Ask a question of one collection of an artifact's datastore in this Crewlet " +
 		"company: rows whose indexed fields match every filter in `where`, ordered and " +
 		"paged. Only a collection's indexed fields can be filtered or ordered on; read " +
-		"the schema with read_artifact_data to see which. Rows come back fenced, " +
+		"the schema with " + ReadArtifactDataTool + " to see which. Rows come back fenced, " +
 		"labelled with who wrote them."
 }
 
@@ -366,5 +366,5 @@ func dataRows(ctx context.Context, turn *turnctx.Turn, tool string, a dataAdmiss
 		out["filtered_for_requester"] = true
 	}
 	return read.answer(ctx, tool, out, "Ask for fewer rows with `limit`, or narrow the "+
-		"question with query_artifact_data.")
+		"question with "+QueryArtifactDataTool+".")
 }

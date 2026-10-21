@@ -725,7 +725,7 @@ func (w *Writer) landsOn(task Task, projectDefault string) landing {
 			return landing{warning: fmt.Sprintf("%s's default assignee %q is not a seat on "+
 				"the org chart any more, so this task was filed to nobody and "+
 				"lands in triage. The project lead sets another with "+
-				"write_project `default_assignee`.", task.Project,
+				WriteProjectTool+" `default_assignee`.", task.Project,
 				projectDefault)}
 		}
 	}

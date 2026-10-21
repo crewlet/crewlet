@@ -24,12 +24,14 @@
 //
 // # Held by a walk
 //
-// This package's suite reads every constant declared here off its source and
-// walks every non-test Go file in the module: a string literal anywhere else
-// that carries one of these names, as a word of its own, fails the build. A
-// prompt that names a tool builds its text from the constant, so a new copy
-// of a name is caught the day it is written rather than the day the name
-// changes.
+// This package's suite walks every non-test Go file in the module for EVERY
+// tool name the engine declares — these, and every tool-shaped verb of the
+// authority table, which internal/agent/builtin holds equal to the tools this
+// build registers — and a string literal carrying one, as a word of its own,
+// is either that name's one declaration (a constant's whole value, in its
+// owner) or a copy that fails the build. A prompt, a description or a refusal
+// that names a tool builds its text from the constant, so a new copy of a name
+// is caught the day it is written rather than the day the name changes.
 package toolname
 
 // The discovery pair: the two meta-tools the executor reaches MCP tools
@@ -113,6 +115,12 @@ const (
 // LookupColleague resolves a name to a seat. The roster and the human
 // colleagues section of a prompt tell a model to call it.
 const LookupColleague = "lookup_colleague"
+
+// QueryEpisodes recalls a seat's own past turns. The builtins implement it,
+// and internal/config's schema describes the reflection setting that leaves
+// its answer unsummarised — a description a struct tag cannot build, so the
+// config type derives it from this constant.
+const QueryEpisodes = "query_episodes"
 
 // SubmitResult is how a delegated worker answers. The worker package owns it
 // and imports the prompts, whose worker preamble tells a model to call it.

@@ -800,7 +800,7 @@ func (t *listWorkItems) Description() string {
 	return "List work items on the company's tracker, filtered. Use this to " +
 		"see what you are assigned, what is open in a project, or whether " +
 		"something has already been filed before you file it again. Returns " +
-		"summaries — call get_work_item for one item's full description, " +
+		"summaries — call " + GetWorkItemTool + " for one item's full description, " +
 		"comments and links."
 }
 
@@ -837,7 +837,7 @@ func (t *listWorkItems) Parameters() map[string]any {
 			},
 			"view": map[string]any{
 				"type": "string",
-				"description": "A saved view's `id`, from list_work_views: " +
+				"description": "A saved view's `id`, from " + tracker.ListWorkViewsTool + ": " +
 					"runs the query somebody arranged. Any other argument " +
 					"you pass overrides the view's own.",
 			},
@@ -854,13 +854,13 @@ func (t *listWorkItems) Parameters() map[string]any {
 				"description": "Substring of the KEY or TITLE only — it does " +
 					"not see descriptions. For an item whose key you are half " +
 					"sure of. To find work by what it is ABOUT, use " +
-					"search_work_items, which ranks over descriptions too; " +
-					"search_knowledge is for the company's written knowledge.",
+					SearchWorkItemsTool + ", which ranks over descriptions too; " +
+					SearchKnowledgeTool + " is for the company's written knowledge.",
 			},
 			"type": map[string]any{
 				"type": "string",
 				"description": "A work type — `bug`, `story`, `task`, and " +
-					"whatever else this company declares. get_work_catalogue " +
+					"whatever else this company declares. " + tracker.GetWorkCatalogueTool + " " +
 					"lists them. Comma separate for several.",
 			},
 			"priority": map[string]any{
@@ -906,7 +906,7 @@ func (t *listWorkItems) Parameters() map[string]any {
 				"type": "object",
 				"description": "Filter on this company's own custom fields, " +
 					"keyed by field SLUG — {\"impact\": \"high\"}. " +
-					"describe_project lists what a project declares and what " +
+					tracker.DescribeProjectTool + " lists what a project declares and what " +
 					"each may hold. An operator is available per type, e.g. " +
 					"`>3` on a number or `a..b` on a date.",
 				"additionalProperties": true,
@@ -1189,7 +1189,7 @@ func (t *getWorkItem) Description() string {
 		"history. Comment bodies in the thread are EXCERPTS, ending in `…` " +
 		"where one was cut — pass `comment` with that comment's id to read " +
 		"it whole. Take `task.version` from the result and pass it back as " +
-		"`if_match` on update_work_item to make your edit conditional. The " +
+		"`if_match` on " + UpdateWorkItemTool + " to make your edit conditional. The " +
 		"description and each comment arrive fenced as text somebody wrote; " +
 		"the two fence lines are a label, not part of the item."
 }
@@ -1283,7 +1283,7 @@ func detailWants(args map[string]any) (tracker.DetailWants, bool, string) {
 		case "fields":
 			want.Fields = true
 		default:
-			return want, false, fmt.Sprintf("get_work_item has no %q to "+
+			return want, false, fmt.Sprintf(GetWorkItemTool+" has no %q to "+
 				"include. The parts are: body, comments, history, links, fields.",
 				clip(part))
 		}
@@ -1307,7 +1307,7 @@ func (t *getWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 	}
 	id := strings.TrimSpace(argString(args, "item"))
 	if id == "" {
-		return failed("get_work_item needs an `item` — a key like ENG-42, or an id."), nil
+		return failed(GetWorkItemTool + " needs an `item` — a key like ENG-42, or an id."), nil
 	}
 	want, withBody, refusal := detailWants(args)
 	if refusal != "" {
@@ -1346,7 +1346,7 @@ func (t *getWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
 		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("There is no work item %q. Check the key, or "+
-			"use list_work_items to find it.", clip(id))), nil
+			"use "+ListWorkItemsTool+" to find it.", clip(id))), nil
 	case errors.Is(err, tracker.ErrNoComment):
 		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("Work item %q has no comment %q. Comment ids "+
 			"come from the `comments` in a read of the item itself — drop "+
@@ -1423,7 +1423,7 @@ var _ tools.SeatCallable = (*createWorkItem)(nil)
 func (t *createWorkItem) Name() string { return CreateWorkItemTool }
 
 func (t *createWorkItem) Description() string {
-	return "File a new work item. Search with list_work_items first — a " +
+	return "File a new work item. Search with " + ListWorkItemsTool + " first — a " +
 		"duplicate costs somebody a triage turn. Name an assignee and it " +
 		"goes straight to their queue; leave it empty and it goes to the " +
 		"project's default assignee, or lands in triage — where the " +
@@ -1459,7 +1459,7 @@ func (t *createWorkItem) Parameters() map[string]any {
 			"assignee": map[string]any{
 				"type": "string",
 				"description": "A seat's handle, from " + LookupColleagueTool + ". Omit " +
-					"and the project's default assignee takes it (describe_project " +
+					"and the project's default assignee takes it (" + tracker.DescribeProjectTool + " " +
 					"names them), else it waits in triage for the lead to route.",
 			},
 			"priority": map[string]any{
@@ -1480,7 +1480,7 @@ func (t *createWorkItem) Parameters() map[string]any {
 			"fields": map[string]any{
 				"type": "object",
 				"description": "Custom fields, keyed by SLUG — read them with " +
-					"get_work_catalogue or describe_project. A project may " +
+					tracker.GetWorkCatalogueTool + " or " + tracker.DescribeProjectTool + ". A project may " +
 					"REQUIRE some for this type, and the create is refused " +
 					"naming any that are missing.",
 			},
@@ -1495,14 +1495,14 @@ func (t *createWorkItem) Parameters() map[string]any {
 			"waiting_on": map[string]any{
 				"type": "array",
 				"description": "Items this one is blocked BY. " + itemRefs +
-					" A plain list here, unlike update_work_item: a new item " +
+					" A plain list here, unlike " + UpdateWorkItemTool + ": a new item " +
 					"has no dependencies to replace.",
 				"items": map[string]any{"type": "string"},
 			},
 			"labels": map[string]any{
 				"type": "array",
 				"description": "Tags this project declares — read them with " +
-					"describe_project. A label the project has not declared " +
+					tracker.DescribeProjectTool + ". A label the project has not declared " +
 					"is refused, because a typo would otherwise become a " +
 					"grouping nobody can filter on twice.",
 				"items": map[string]any{"type": "string"},
@@ -1801,7 +1801,7 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		unvouched: "it answers with the item where an earlier attempt " +
 			"filed it",
 		look: "the item may exist on a node this one has not caught up " +
-			"with: look for it with list_work_items rather than filing it " +
+			"with: look for it with " + ListWorkItemsTool + " rather than filing it " +
 			"any other way",
 	}, args, task.Project, task.Tags)
 	if labelRefusal != nil {
@@ -1936,7 +1936,7 @@ func createUnknown(actor Actor, opID, id string, got tracker.WriteResult) tools.
 	return unknownWrite(actor, CreateWorkItemTool, "the work item was filed",
 		opID, got.Unvouched, filed+" "+unknownNext(got.Unvouched,
 			sameCall(actor, CreateWorkItemTool),
-			"Look for it with list_work_items", "it files a second item"))
+			"Look for it with "+ListWorkItemsTool, "it files a second item"))
 }
 
 // unknownWrite explains a tracker write whose outcome is unknown, as the
@@ -2071,7 +2071,7 @@ func dependencyFailure(id, key string, collision bool, why string) string {
 	}
 	return fmt.Sprintf("The item WAS filed, as %s, but recording what it "+
 		"waits on did not finish: %s. Do NOT call "+tracker.CreateWorkItemTool+" again — that "+
-		"files a second item. Set its dependencies with update_work_item on %s, "+
+		"files a second item. Set its dependencies with "+UpdateWorkItemTool+" on %s, "+
 		"giving the same waiting_on: it records whichever of them are still "+
 		"missing, and says so if one cannot be.", filed, why,
 		tracker.ItemAddress(id, key, collision))
@@ -2090,7 +2090,7 @@ func dependencyFailure(id, key string, collision bool, why string) string {
 func updateDependencyFailure(item tracker.TaskDetail, why string) string {
 	return fmt.Sprintf("The change to %s WAS made, but its dependency change "+
 		"did not finish: %s. Do not report the dependencies as set. Set them "+
-		"with update_work_item on %s giving only the same waiting_on and "+
+		"with "+UpdateWorkItemTool+" on %s giving only the same waiting_on and "+
 		"blocking: it records whichever of them are still missing, and says so "+
 		"if one cannot be.", item.Named(), why, item.Address())
 }
@@ -2137,7 +2137,7 @@ func (d WorkDeps) resolveTask(ctx context.Context, tool, field,
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
 		return tracker.Task{}, refusalOf(failed(fmt.Sprintf("%s names %s %q "+
-			"and there is no such work item. Check the key with list_work_items "+
+			"and there is no such work item. Check the key with "+ListWorkItemsTool+" "+
 			"rather than guessing — a link to an item that does not exist "+
 			"renders as a dead reference on everybody's board.", tool, field,
 			clip(ref))))
@@ -2494,7 +2494,7 @@ func (t *updateWorkItem) Parameters() map[string]any {
 			"labels": map[string]any{
 				"type": "array",
 				"description": "REPLACES the item's labels. Each must be a " +
-					"tag this project declares — describe_project lists them.",
+					"tag this project declares — " + tracker.DescribeProjectTool + " lists them.",
 				"items": map[string]any{"type": "string"},
 			},
 			"labels_create_missing": map[string]any{
@@ -2517,7 +2517,7 @@ func (t *updateWorkItem) Parameters() map[string]any {
 			},
 			"if_match": map[string]any{
 				"type": "integer",
-				"description": "The `task.version` from get_work_item. Given, the " +
+				"description": "The `task.version` from " + GetWorkItemTool + ". Given, the " +
 					"edit is REFUSED if anybody changed the item since you " +
 					"read it. Omitted, your fields are merged onto the " +
 					"current item — which is usually what you want.",
@@ -2537,7 +2537,7 @@ func (t *updateWorkItem) Parameters() map[string]any {
 			"fields": map[string]any{
 				"type": "object",
 				"description": "Custom fields, keyed by SLUG — read them with " +
-					"get_work_catalogue or describe_project. A value is " +
+					tracker.GetWorkCatalogueTool + " or " + tracker.DescribeProjectTool + ". A value is " +
 					"checked against the field's own declaration and refused " +
 					"naming the rule, never rounded or coerced to fit; null " +
 					"clears a field.",
@@ -2595,7 +2595,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 
 	ref := strings.TrimSpace(argString(args, "item"))
 	if ref == "" {
-		return failed("update_work_item needs an `item` — a key like ENG-42, or an id."), nil
+		return failed(UpdateWorkItemTool + " needs an `item` — a key like ENG-42, or an id."), nil
 	}
 	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
 	switch {
@@ -2744,7 +2744,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 			unvouched: "it answers with the change where this node still " +
 				"holds its record",
 			look: fmt.Sprintf("the change may have landed where this node "+
-				"cannot see it: read %s with get_work_item to see whether it "+
+				"cannot see it: read %s with "+GetWorkItemTool+" to see whether it "+
 				"is there rather than making it any other way", before.Address()),
 		}, args, before.Task.Project, *patch.Tags); labelRefusal != nil {
 			return *labelRefusal, nil
@@ -2858,7 +2858,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 func updateUnknown(actor Actor, opID string, got tracker.WriteResult,
 	before tracker.TaskDetail, dependencies bool) tools.Result {
 
-	look := fmt.Sprintf("Read %s with get_work_item (a version past %d means "+
+	look := fmt.Sprintf("Read %s with "+GetWorkItemTool+" (a version past %d means "+
 		"something landed, and its history says whether it was this)",
 		before.Address(), before.Task.Version)
 	next := unknownNext(got.Unvouched, sameCall(actor, UpdateWorkItemTool), look,
@@ -3000,7 +3000,7 @@ func labelFailure(ctx context.Context, actor Actor, write labelWrite, opID, proj
 			"the label %s it has to declare it in %s, where the tag %s is "+
 			"already labelled %q — two tags nobody could tell apart. If they "+
 			"mean the same thing, give `labels` %s instead of %s; if not, "+
-			"declare %s in %s yourself under a label of its own (write_project "+
+			"declare %s in %s yourself under a label of its own ("+tracker.WriteProjectTool+" "+
 			"on %s with tags_add: [{\"slug\": %q, \"label\": \"<a label %s "+
 			"does not use>\"}]). Then make this call again.", write.tool,
 			clash.Slug, clash.Project, clash.Other.Slug, clash.Other.Label,
@@ -3011,8 +3011,8 @@ func labelFailure(ctx context.Context, actor Actor, write labelWrite, opID, proj
 			"and nothing was written: to use "+
 			"the label %s it has to declare it in %s, which already keeps %d "+
 			"tags, the most a project may. Use a tag %s already has "+
-			"(describe_project lists them) or leave %s out of `labels`; or have "+
-			"%s's lead archive tags it no longer files under (write_project's "+
+			"("+tracker.DescribeProjectTool+" lists them) or leave %s out of `labels`; or have "+
+			"%s's lead archive tags it no longer files under ("+tracker.WriteProjectTool+"'s "+
 			"tags_archive), then make this call again.", write.tool, full.Slug,
 			full.Project, tracker.MaxTagsPerProject, full.Project, full.Slug,
 			full.Project))
@@ -3066,7 +3066,7 @@ func labelFailure(ctx context.Context, actor Actor, write labelWrite, opID, proj
 				"same call made here stops at this step "+
 				"until the declaration reaches this node, and never if it did "+
 				"not land. Declaring a tag again is harmless, so declare them "+
-				"first: write_project on %s with tags_add: [%s] states the same "+
+				"first: "+tracker.WriteProjectTool+" on %s with tags_add: [%s] states the same "+
 				"tags as a new operation, and changes nothing if the first "+
 				"declaration landed. Then %s. That repeat skips the declaration, "+
 				"but its own write dates from the same instant, so this node "+
@@ -3561,7 +3561,7 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			fmt.Sprintf("the comment on %s was posted", before.Named()), opID,
 			got.Unvouched, unknownNext(got.Unvouched,
 				sameCall(actor, CommentOnWorkTool),
-				fmt.Sprintf("Read %s's thread with get_work_item", before.Address()),
+				fmt.Sprintf("Read %s's thread with "+GetWorkItemTool, before.Address()),
 				"that is a second comment")), nil
 	}
 	t.deps.settle(ctx, got.Position)
@@ -3791,9 +3791,9 @@ func writeFailure(ctx context.Context, actor Actor, name string, err error) tool
 		return out(tools.RefusalInvalid, fmt.Sprintf("%s was refused, and nothing was written: it has to "+
 			"declare the tag %s (%q) in %s, where the tag %s is already labelled "+
 			"%q — two tags nobody could tell apart. If they mean the same thing, "+
-			"put the items under %s instead (update_work_item's `labels`); if "+
+			"put the items under %s instead ("+UpdateWorkItemTool+"'s `labels`); if "+
 			"not, declare %s in %s yourself under a label of its own "+
-			"(write_project on %s with tags_add: [{\"slug\": %q, \"label\": "+
+			"("+tracker.WriteProjectTool+" on %s with tags_add: [{\"slug\": %q, \"label\": "+
 			"\"<a label %s does not use>\"}]). Then make this call again.",
 			name, clash.Slug, clash.Label, clash.Project, clash.Other.Slug,
 			clash.Other.Label, clash.Other.Slug, clash.Slug, clash.Project,
@@ -3801,9 +3801,9 @@ func writeFailure(ctx context.Context, actor Actor, name string, err error) tool
 	case errors.As(err, &full):
 		return out(tools.RefusalInvalid, fmt.Sprintf("%s was refused, and nothing was written: %s already "+
 			"keeps %d tags, the most a project may, and %s is not among them. "+
-			"Archive tags %s no longer files under (write_project's "+
+			"Archive tags %s no longer files under ("+tracker.WriteProjectTool+"'s "+
 			"tags_archive — its lead's decision), or take %s off the items with "+
-			"update_work_item, then make this call again.", name, full.Project,
+			UpdateWorkItemTool+", then make this call again.", name, full.Project,
 			tracker.MaxTagsPerProject, full.Slug, full.Project, full.Slug))
 	case errors.Is(err, tracker.ErrNoTask):
 		return out(tools.RefusalNotFound, fmt.Sprintf("%s: %v", name, err))
@@ -3816,7 +3816,7 @@ func writeFailure(ctx context.Context, actor Actor, name string, err error) tool
 	case errors.Is(err, statelog.ErrConflict):
 		return out(tools.RefusalConflict, fmt.Sprintf("%s could not land: "+
 			"%v. Somebody else is editing this item. Read it again with "+
-			"get_work_item and decide from what it says now.", name, err))
+			GetWorkItemTool+" and decide from what it says now.", name, err))
 	case errors.Is(err, statelog.ErrExists):
 		return out(tools.RefusalExists, fmt.Sprintf("%s: %v", name, err))
 	case errors.Is(err, tracker.ErrStaleVersion):
@@ -3825,7 +3825,7 @@ func writeFailure(ctx context.Context, actor Actor, name string, err error) tool
 		// re-send the same one against the same moved item forever.
 		return out(tools.RefusalStaleVersion, fmt.Sprintf("%s was "+
 			"refused: %v. Nothing is wrong with your edit — somebody "+
-			"changed the item after you read it. Call get_work_item again "+
+			"changed the item after you read it. Call "+GetWorkItemTool+" again "+
 			"and decide from what it says now.", name, err))
 	case errors.Is(err, tracker.ErrAlreadyAnswered):
 		// THE ANSWER THAT LOST A RACE. The thread read passed it and the
@@ -3855,7 +3855,7 @@ func writeFailure(ctx context.Context, actor Actor, name string, err error) tool
 		return tools.Result{Output: fmt.Sprintf("%s: %s. It may have landed and "+
 			"it may not — do not report it as done, and do not report it as "+
 			"failed. %s", name, Unanswered, unknownNext(false, sameCall(actor, name),
-			"Read what it writes with get_work_item or list_work_items",
+			"Read what it writes with "+GetWorkItemTool+" or "+ListWorkItemsTool,
 			"that is a second write")), Failed: true, Cause: writeCause(actor, err)}
 	case errors.Is(err, tracker.ErrStepUnvouched):
 		// NEITHER DONE NOR NOT MADE, AND NOT FINISHED BY ASKING AGAIN
@@ -3868,7 +3868,7 @@ func writeFailure(ctx context.Context, actor Actor, name string, err error) tool
 			"it may already have landed, and this node cannot tell which — "+
 			"calling %s again here stops at the same step. Do not report it as "+
 			"done or as failed, and do not redo it by other means: read the "+
-			"items it touches with get_work_item, and say which part is "+
+			"items it touches with "+GetWorkItemTool+", and say which part is "+
 			"unconfirmed.", name, err, name))
 	case errors.Is(err, tracker.ErrStepUnresolved):
 		// NEITHER DONE NOR NOT MADE. A gesture that walks — a move, a
@@ -3882,7 +3882,7 @@ func writeFailure(ctx context.Context, actor Actor, name string, err error) tool
 			return out(tools.RefusalUnavailable, fmt.Sprintf("%s stopped part of the way through: %v. Some "+
 				"of it may already have landed. Calling %s again is a new "+
 				"operation here and does not finish this one: read the items "+
-				"it touches with get_work_item and finish what is missing with "+
+				"it touches with "+GetWorkItemTool+" and finish what is missing with "+
 				"the tool for each. Do not report it as done.", name, err, name))
 		}
 		return out(tools.RefusalUnavailable, fmt.Sprintf("%s stopped part of the way through: %v. Some of "+

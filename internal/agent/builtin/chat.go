@@ -470,7 +470,7 @@ func chatWriteFailure(ctx context.Context, name string, err error, next string) 
 	case errors.Is(err, chat.ErrNameTaken):
 		return refusedBy(class, err, fmt.Sprintf("%s: %s. A room's name is its "+
 			"address and that one is held — open the room that has it "+
-			"(list_channels names the ones you are in), or choose another name.",
+			"("+ListChannelsTool+" names the ones you are in), or choose another name.",
 			name, chat.Sentence(err)))
 	case class == tools.RefusalExists:
 		return refusedBy(class, err, fmt.Sprintf("%s: %s.", name, chat.Sentence(err)))
@@ -485,8 +485,8 @@ func chatWriteFailure(ctx context.Context, name string, err error, next string) 
 	// cure for the other: a seat told a name will not do goes looking for an
 	// id it never needed.
 	return refusedBy(class, err, fmt.Sprintf("%s: %s\n\nCheck what you named: "+
-		"list_channels names the rooms you are in, any room you may read answers "+
-		"to its id or to its name, and read_channel shows each message's id.",
+		ListChannelsTool+" names the rooms you are in, any room you may read answers "+
+		"to its id or to its name, and "+ReadChannelTool+" shows each message's id.",
 		name, chat.Sentence(err)))
 }
 
@@ -597,7 +597,7 @@ func chatReadFailure(ctx context.Context, name string, err error) tools.Result {
 	switch {
 	case ok && class == tools.RefusalNotFound:
 		return refusedBy(class, err, fmt.Sprintf("%s: %s\n\nCheck the room with "+
-			"list_channels. A private room you are not in answers the same way as "+
+			ListChannelsTool+". A private room you are not in answers the same way as "+
 			"one that does not exist.", name, chat.Sentence(err)))
 	case ok && (class == tools.RefusalInvalid || class == tools.RefusalForbidden):
 		return refusedBy(class, err, fmt.Sprintf("%s was refused: %s", name,
@@ -676,7 +676,7 @@ func (d ChatDeps) channelID(ctx context.Context, name, viewer, ref string) (
 	switch {
 	case errors.Is(err, chat.ErrNotFound):
 		out := refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s: there is no "+
-			"room called %q that you can read — list_channels names the rooms you "+
+			"room called %q that you can read — "+ListChannelsTool+" names the rooms you "+
 			"are in, and a private room you are not in cannot be addressed at all.",
 			name, clip(want)))
 		return "", &out
@@ -818,7 +818,7 @@ func (d ChatDeps) message(body string, links []string) chat.NewMessage {
 func posted(tool string, written chat.Written, channelID, again string) (tools.Result, error) {
 	if written.Outcome.Outcome == statelog.OutcomeUnknown {
 		return chatUnknown(tool, written.Outcome,
-			postNext(written.Outcome.Unvouched, again, "Read the room with read_channel")), nil
+			postNext(written.Outcome.Unvouched, again, "Read the room with "+ReadChannelTool)), nil
 	}
 	return jsonResult(postReceipt(written, channelID))
 }
@@ -866,7 +866,7 @@ func (t *postMessage) Name() string { return PostMessageTool }
 
 func (t *postMessage) Description() string {
 	return "Say something new in a room. This starts a TOP-LEVEL message: to " +
-		"answer something somebody said, use reply_in_thread instead, which " +
+		"answer something somebody said, use " + ReplyInThreadTool + " instead, which " +
 		"puts your answer beside the question where the next reader will " +
 		"find it. @-mention a colleague by handle to reach them specifically; " +
 		"write @channel only when everybody in the room genuinely needs to " +
@@ -909,7 +909,7 @@ func (t *postMessage) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	body := strings.TrimSpace(unfence(turn, argString(args, "body")))
 	if body == "" {
-		return failed("post_message needs a `body` — an empty message is a " +
+		return failed(PostMessageTool + " needs a `body` — an empty message is a " +
 			"wake for nothing."), nil
 	}
 	actor, id, refusal := t.deps.resolved(ctx, turn, PostMessageTool, args)
@@ -921,7 +921,7 @@ func (t *postMessage) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		t.deps.message(body, argStrings(args, "links")))
 	if err != nil {
 		return chatWriteFailure(ctx, PostMessageTool, err,
-			postNext(false, again, "Read the room with read_channel")), nil
+			postNext(false, again, "Read the room with "+ReadChannelTool)), nil
 	}
 	t.deps.settle(ctx, written.Outcome.Position)
 	return posted(PostMessageTool, written, id, again)
@@ -953,7 +953,7 @@ func (t *replyInThread) Parameters() map[string]any {
 			"reply_to": map[string]any{
 				"type": "string",
 				"description": "The id of the message you are answering — the " +
-					"one you were woken about, or one read_channel returned.",
+					"one you were woken about, or one " + ReadChannelTool + " returned.",
 			},
 			"body": map[string]any{
 				"type":        "string",
@@ -983,10 +983,10 @@ func (t *replyInThread) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	replyTo := strings.TrimSpace(argString(args, "reply_to"))
 	switch {
 	case body == "":
-		return failed("reply_in_thread needs a `body`."), nil
+		return failed(ReplyInThreadTool + " needs a `body`."), nil
 	case replyTo == "":
-		return failed("reply_in_thread needs a `reply_to` — the id of the " +
-			"message you are answering. To start a new topic, use post_message."), nil
+		return failed(ReplyInThreadTool + " needs a `reply_to` — the id of the " +
+			"message you are answering. To start a new topic, use " + PostMessageTool + "."), nil
 	}
 	actor, id, refusal := t.deps.resolved(ctx, turn, ReplyInThreadTool, args)
 	if refusal != nil {
@@ -997,7 +997,7 @@ func (t *replyInThread) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		t.deps.message(body, argStrings(args, "links")))
 	if err != nil {
 		return chatWriteFailure(ctx, ReplyInThreadTool, err,
-			postNext(false, again, "Read the room with read_channel")), nil
+			postNext(false, again, "Read the room with "+ReadChannelTool)), nil
 	}
 	t.deps.settle(ctx, written.Outcome.Position)
 	return posted(ReplyInThreadTool, written, id, again)
@@ -1111,7 +1111,7 @@ func (t *sendDM) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return failedUnknown(written.Outcome.OpID, written.Outcome.Unvouched,
 			directOpen(to, room)+chatUnknownText(SendDMTool+"'s message",
 				written.Outcome, postNext(written.Outcome.Unvouched, again,
-					"Read the conversation with read_channel"))), nil
+					"Read the conversation with "+ReadChannelTool))), nil
 	}
 	// TWO RECORDS, ONE ANSWER: the call is as certain as the less certain
 	// of the open and the post, and a caller that reads after it waits
@@ -1157,7 +1157,7 @@ func directPostFailure(ctx context.Context, to []string, room chat.Written, err 
 		return tools.Result{Output: directOpen(to, room) + fmt.Sprintf("Whether the "+
 			"message landed is unknown (%s). It may have been said and it may not "+
 			"— do not report it as sent, and do not report it as failed. %s",
-			Unanswered, postNext(false, again, "Read the conversation with read_channel")),
+			Unanswered, postNext(false, again, "Read the conversation with "+ReadChannelTool)),
 			Failed: true, Cause: failure.Cause}
 	}
 	switch tools.RefusalOf(failure) {
@@ -1281,7 +1281,7 @@ func (t *searchMessages) Name() string { return SearchMessagesTool }
 func (t *searchMessages) Description() string {
 	return "Find a message by what it SAYS, ranked across every room you can " +
 		"read. Use it when you remember that something was discussed but not " +
-		"where: \"the decision about the retry backoff\". read_channel is the " +
+		"where: \"the decision about the retry backoff\". " + ReadChannelTool + " is the " +
 		"other half — it reads one room in order, from a point you name."
 }
 
@@ -1371,7 +1371,7 @@ func (t *searchMessages) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			// indexed — a seat told nobody said it acts on that.
 			return tools.Result{Output: "Nothing matched yet — but the chat " +
 				"index is still being built, so a message that says this may " +
-				"not be indexed yet. Read the room with read_channel if you " +
+				"not be indexed yet. Read the room with " + ReadChannelTool + " if you " +
 				"know where it was said, or search again shortly."}, nil
 		}
 		return tools.Result{Output: "Nothing in the rooms you can read matches that."}, nil
@@ -1593,7 +1593,7 @@ func (t *listChannels) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		out["truncated"] = true
 	}
 	return read.answer(ctx, ListChannelsTool, out,
-		"There is no narrower listing — read one room with read_channel.")
+		"There is no narrower listing — read one room with "+ReadChannelTool+".")
 }
 
 // ---- react_to_message -------------------------------------------------- //
@@ -1650,10 +1650,10 @@ func (t *reactToMessage) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	emoji := strings.TrimSpace(argString(args, "emoji"))
 	switch {
 	case messageID == "":
-		return failed("react_to_message needs a `message_id` — the id of the " +
+		return failed(ReactToMessageTool + " needs a `message_id` — the id of the " +
 			"message you are reacting to."), nil
 	case emoji == "":
-		return failed("react_to_message needs an `emoji`."), nil
+		return failed(ReactToMessageTool + " needs an `emoji`."), nil
 	}
 	actor, id, refusal := t.deps.resolved(ctx, turn, ReactToMessageTool, args)
 	if refusal != nil {
@@ -1664,7 +1664,7 @@ func (t *reactToMessage) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if remove {
 		react = t.deps.Writer.Unreact
 	}
-	const look = "Read the message's reactions with read_channel"
+	const look = "Read the message's reactions with " + ReadChannelTool
 	written, err := react(ctx, actor, id, messageID, emoji)
 	if err != nil {
 		return chatWriteFailure(ctx, ReactToMessageTool, err, restateNext(look)), nil
@@ -1679,7 +1679,7 @@ func (t *reactToMessage) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 // ---- join_channel / leave_channel -------------------------------------- //
 
 // membershipLook is the read that shows whether a join or a leave landed.
-const membershipLook = "Check list_channels, which names every room you are in"
+const membershipLook = "Check " + ListChannelsTool + ", which names every room you are in"
 
 type joinChannel struct{ deps ChatDeps }
 
