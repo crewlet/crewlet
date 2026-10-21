@@ -72,7 +72,10 @@ would have been had the earlier change already reached them: the room is
 archived, they are not in it, the message is gone, the message carries all the
 emoji it can. Every node reaches the same decision and records it, so a retry
 of a refused message is refused again rather than reported as said, and a
-refused message wakes nobody. A gesture answered `pending` — durable, and not
+refused message wakes nobody. Each decision is kept for thirty days, the
+operation ledger's own horizon, and every node records how far back it has let
+them go: asked about a message whose decision is past that, a node answers that
+it cannot tell — never that the message was not said. A gesture answered `pending` — durable, and not
 yet applied on the node that answered — may still be refused this way when it
 applies. This is recorded as
 [ADR-0045](../../adr/0045-a-message-is-sequenced-on-its-channels-subject.md).
