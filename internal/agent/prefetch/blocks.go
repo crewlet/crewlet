@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // The four blocks with no auxiliary judgement in them — plus one optional
@@ -124,12 +125,19 @@ func (f *Fetcher) episodeRecall(ctx context.Context, r Request, vector turnVecto
 		// similar work again", and an integration's triage scaffolding
 		// is the same on every turn of its surface, so it bears on
 		// nothing.
+		//
+		// THE TASK ARRIVES FENCED, under a token minted for this call and
+		// never the turn's ([Ask]): the briefing is written into the seat's
+		// system prompt with nothing around it, so a task that addresses the
+		// summary must read as somebody's words, and what the summary writes
+		// is neutralised under the turn's token, so nothing it echoes can
+		// pass for a fence's line there.
 		summary, ok := f.auxCall(ctx, r, types.AuxEpisodeSummary, recallSummarySystemPrompt,
-			"Current task:\n"+r.Ask+
+			"Current task:\n"+r.Ask.For(provenance.NewBoundary())+
 				"\n\nPast turns by this agent:\n"+whole+
 				"\n\nBriefing:")
 		if ok && strings.TrimSpace(summary) != "" {
-			return summary
+			return provenance.Neutralise(r.Boundary, summary)
 		}
 	}
 	return joinBullets(f.renderEpisodes(ctx, r, hits, learning.EpisodeAccountBytes))

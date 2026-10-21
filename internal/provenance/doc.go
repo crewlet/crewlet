@@ -73,6 +73,21 @@
 // out whole for a reader that renders the rest otherwise (a merged burst's
 // digest).
 //
+// # A model that judges for a seat
+//
+// Before a turn starts, auxiliary models decide what the seat is shown — which
+// of its memories, which pages, and a briefing of its past work written into
+// its prompt — each from what the turn was asked, which is on most wakes
+// somebody else's words. They read those words fenced like the seat does,
+// labelled as the trigger labels them, and their system prompts carry
+// [StandingInstruction]; but under a [Boundary] minted for each call rather
+// than the turn's, because a model can echo the token it is handed into what it
+// writes, and what the summary writes lands in the seat's prompt — which
+// [Neutralise] then defuses under the turn's own token. A defused copy alone
+// would not do there: these prompts hold no fence to forge, and what such a
+// model needs is to be told the task is somebody's words, which only a fence
+// and the sentence say.
+//
 // # Writing back
 //
 // A model that edits what it read is likely to send the fence back with it.

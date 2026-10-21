@@ -24,12 +24,13 @@ import (
 // and label, which Live › Coding runs, Now running and Home draw as its title
 // and sandbox_run_started announces, carry what the turn was asked, as it was
 // written, with no fence line, token or escape: a fence is a model's
-// (ADR-0040). So for every surface a seat is woken from ([wakeSurfaces]). A
-// chat message that says nothing (an attachment alone) asks nothing, and its
-// run is listed under the line a feed shows the message by, never under
-// nothing. A run a resumed segment launches (a reviewer's send-back, or a
-// person's answer carried on) is listed as its turn's first run is, off that
-// run's row: the resumed segment re-reads no trigger.
+// (ADR-0040). So for every surface a seat is woken from ([wakeSurfaces]) and
+// every other kind of wake that runs a turn ([wakeTypes]). A chat message that
+// says nothing (an attachment alone) asks nothing, and its run is listed under
+// the line a feed shows the message by, never under nothing. A run a resumed
+// segment launches (a reviewer's send-back, or a person's answer carried on)
+// is listed as its turn's first run is, off that run's row: the resumed
+// segment re-reads no trigger.
 //
 // Mutation: write the row from the turn's Task, as the launch did, and every
 // case whose trigger fences somebody's words is red; list a turn that was
@@ -57,6 +58,13 @@ func TestACodingRunIsListedUnderWhatItsTurnWasAskedWithNoFence(t *testing.T) {
 	}
 	for source, s := range wakeSurfaces() {
 		wakes[source] = func(t *testing.T) *events.Event { return s.wake(t, o, reg, said) }
+	}
+	for kind, w := range wakeTypes(o, reg, said) {
+		if kind == (types.ExternalNotification{}).EventType() {
+			// Every surface's, above.
+			continue
+		}
+		wakes[kind] = w.wake
 	}
 	for name, wake := range wakes {
 		t.Run(name, func(t *testing.T) {

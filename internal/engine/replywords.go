@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
@@ -25,12 +26,13 @@ func replyOf(prompts notify.Prompts, parties notify.Parties, self string,
 
 // replyWords is what a delivery offered to a parked run as its answer SAYS
 // ([sandbox.Reply.Text]): each event's words as the turn that would otherwise
-// have worked it records what it was asked ([eventAsk]), a chat message
-// exactly as it was typed, oldest first, a paragraph each. Where the delivery
-// holds more than one writer's words, each event's are put under the name its
-// writer posted as, the way a coalesced burst's salient text already names
-// each of its senders, so no writer's words are recorded as the newest
-// writer's alone, which is who the answer is recorded as coming from.
+// have worked it records what it was asked ([eventAsk], with no fence), a
+// chat message exactly as it was typed, oldest first, a paragraph each.
+// Where the delivery holds more than one writer's words, each event's are
+// put under the name its writer posted as, the way a coalesced burst's
+// salient text already names each of its senders, so no writer's words are
+// recorded as the newest writer's alone, which is who the answer is recorded
+// as coming from.
 //
 // NEVER THE TRIGGER ([DescribeTrigger]). That is the prompt the delivery would
 // wake the seat with: the surface's triage guidance, how to reply, the ids to
@@ -60,8 +62,9 @@ func replyWords(evs []*events.Event) string {
 		if ev == nil {
 			continue
 		}
-		words := strings.TrimSpace(eventAsk(ev))
-		if words == "" {
+		part, ok := eventAsk(notify.Prompts{}, nil, "", ev)
+		words := strings.TrimSpace(prefetch.Ask{part}.Text())
+		if !ok || words == "" {
 			continue
 		}
 		line := said{writer: ev.Actor(), words: words}
@@ -86,10 +89,10 @@ func replyWords(evs []*events.Event) string {
 }
 
 // replyProvenance is who wrote what a reply says, for the seat self: what the
-// fence around each of the delivery's messages says of it in the trigger it
-// was delivered in ([notify.MessageProvenance]), merged as one reply: every
-// writer once, at the least trust any of them earns, under the surface they
-// share, or an integration's notification where they differ.
+// fence around each of the delivery's bodies says of it in the trigger it was
+// delivered in ([notify.SalientProvenance]), merged as one reply: every writer
+// once, at the least trust any of them earns, under the surface they share, or
+// an integration's notification where they differ.
 //
 // THE TRIGGER'S OWN LABEL, so the run reads a reply exactly as it would have
 // read the same message waking its turn: a colleague's words as a colleague's,
@@ -105,14 +108,18 @@ func replyProvenance(prompts notify.Prompts, parties notify.Parties, self string
 		authors []provenance.Author
 	)
 	for _, ev := range evs {
-		if ev == nil || strings.TrimSpace(eventAsk(ev)) == "" {
+		if ev == nil {
+			continue
+		}
+		part, asks := eventAsk(prompts, parties, self, ev)
+		if !asks || strings.TrimSpace(prefetch.Ask{part}.Text()) == "" {
 			continue
 		}
 		n, ok := events.DataAs[*types.ExternalNotification](ev)
 		if !ok || n == nil {
 			return "", "", nil
 		}
-		src, trust, by := notify.MessageProvenance(prompts, *n, parties, self)
+		src, trust, by := notify.SalientProvenance(prompts, *n, parties, self)
 		switch {
 		case source == "":
 			source = src
