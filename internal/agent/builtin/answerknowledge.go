@@ -23,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -430,10 +431,13 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	call, cancel := context.WithTimeout(ctx, AnswerTimeout)
 	defer cancel()
+	// ONE TOKEN FOR THE CALL, never a turn's: every source is fenced under
+	// it as who wrote it ([prompts.BuildKnowledgeAnswer]).
 	completion, err := member.Provider.Complete(call, llm.Request{
 		Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: prompts.KnowledgeAnswerSystem},
-			{Role: llm.RoleUser, Content: prompts.BuildKnowledgeAnswer(question, excerpts)},
+			{Role: llm.RoleUser, Content: prompts.BuildKnowledgeAnswer(provenance.NewBoundary(),
+				question, excerpts)},
 		},
 		// No tools: the answer is the content, and a tool on the surface
 		// invites a model to call it and write nothing.
@@ -448,7 +452,10 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return refused(tools.RefusalUnavailable, fmt.Sprintf("The model could not "+
 			"answer (%s). Try again shortly.", reason)), nil
 	}
-	text := strings.TrimSpace(completion.Content)
+	// THE ANSWER IS DEFUSED under the caller's token: it is a model's
+	// rewording of pages somebody else wrote, read next by a person or by
+	// their assistant, and nothing in it may open or close a fence.
+	text := provenance.Neutralise(turn.FenceBoundary(), strings.TrimSpace(completion.Content))
 	if text == "" {
 		// Output spent reasoning, usually. Reported with the count,
 		// because nothing else says the model worked.
@@ -557,6 +564,9 @@ func (t *answerKnowledge) retrieve(ctx context.Context, question string,
 			})
 			excerpts = append(excerpts, prompts.KnowledgeSource{
 				Kind: "page", Label: title, Text: t.pageText(ctx, hit),
+				// AS THE BACKEND THAT FOUND IT LABELS IT, the label the
+				// seat's own search reads the same page under.
+				Written: hit.Provenance,
 			})
 		}
 	}
@@ -583,7 +593,7 @@ func (t *answerKnowledge) retrieve(ctx context.Context, question string,
 				})
 				excerpts = append(excerpts, prompts.KnowledgeSource{
 					Kind: "work item", Label: strings.TrimSpace(ref + " " + hit.Title),
-					Text: t.taskText(ctx, hit),
+					Text: t.taskText(ctx, hit), Written: workDescription,
 				})
 			}
 		}
@@ -617,7 +627,8 @@ func (t *answerKnowledge) condense(ctx context.Context, question string, asker *
 				keep[i] = true
 				return nil
 			}
-			res, err := fit.Focused(ctx, compact.KindSource, text, AnswerSourceBytes, question)
+			res, err := fit.Labelled(excerpts[i].Written).Focused(ctx, compact.KindSource, text,
+				AnswerSourceBytes, question)
 			if err != nil {
 				log.WarnContext(ctx, "knowledge_answer_source_dropped", "source", sources[i].Ref,
 					"bytes", len(text), "error", err.Error(),
@@ -677,6 +688,13 @@ func (t *answerKnowledge) taskText(ctx context.Context, hit worklet.Ranked) stri
 	}
 	return snippetOnly(hit.Snippet)
 }
+
+// workDescription is the label a work item's description is read under here:
+// a colleague's words with nobody named, as `search_work_items` reads the same
+// text — only the company's principals write the tracker, and neither the
+// index nor the search says which of them wrote what it holds.
+var workDescription = provenance.Label{Source: provenance.SourceWorkDescription,
+	Trust: provenance.TrustColleague}
 
 func snippetOnly(snippet string) string {
 	if strings.TrimSpace(snippet) == "" {

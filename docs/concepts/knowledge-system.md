@@ -896,7 +896,13 @@ sequenceDiagram
 
 - **From the sources and nothing else.** The model is told to say only what the
   numbered sources say, to cite each claim as `[n]`, and to say so in one
-  sentence when they do not answer the question. Source `[n]` is the n-th entry
+  sentence when they do not answer the question. Each source reaches it inside a
+  [fence](agent-runtime.md#text-somebody-else-wrote) of a token minted for the
+  call — a page labelled as the search that found it labels it, a work item's
+  description as a colleague's with nobody named — with the standing sentence
+  on what a fence means, so a page that addresses the model is read as the
+  page's words; a long source is condensed reading it under the same label, and
+  the answer has the fence's two escapes applied before anybody reads it. Source `[n]` is the n-th entry
   of the answer's `sources`, so a screen links every citation. A question
   nothing matches is answered without a model at all, and costs nothing.
 - **A person's, not a seat's, and only what the asker uses.** It takes either

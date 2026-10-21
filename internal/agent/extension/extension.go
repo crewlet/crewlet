@@ -17,6 +17,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/toolname"
 )
 
@@ -116,6 +117,12 @@ type Request struct {
 	// RemainingUnderCeiling is what is left for the whole phase across all
 	// extensions.
 	RemainingUnderCeiling int
+
+	// Boundary is the token the turn's fences carry ([turnctx.Turn.Boundary]):
+	// the task the phase works on fences the words somebody else wrote under
+	// it, and a judge reads them under a token of its own call instead
+	// ([LLMJudge.Decide]), so nothing it could echo is one of the turn's.
+	Boundary provenance.Boundary
 }
 
 // Judge is the model-facing half.
@@ -238,7 +245,13 @@ func FinishHint(ph phase.Phase) string {
 }
 
 // Nudge is the message handed to a phase that has been granted more rounds.
-func Nudge(ph phase.Phase, granted int, reason string) string {
+//
+// THE REASON IS DEFUSED under b, the turn's token (ADR-0040): it is a model's
+// sentence about a phase whose task carries other people's words, and it is
+// written into the seat's own conversation, where nothing it echoes may open
+// or close one of the turn's fences.
+func Nudge(b provenance.Boundary, ph phase.Phase, granted int, reason string) string {
+	reason = provenance.Neutralise(b, reason)
 	if reason == "" {
 		reason = "(none)"
 	}
