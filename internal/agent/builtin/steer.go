@@ -221,7 +221,7 @@ func (t *steerTurn) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	turnID := strings.TrimSpace(argString(args, "turn_id"))
 	if turnID == "" {
-		return failed("steer_turn needs a `turn_id` — the running turn's id."), nil
+		return failed(SteerTurnTool + " needs a `turn_id` — the running turn's id."), nil
 	}
 	note := strings.TrimSpace(argString(args, "note"))
 	if invalid := steer.Validate(note); invalid != nil {
@@ -232,7 +232,7 @@ func (t *steerTurn) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 				"Put the detail on the work item and send a note saying where it is.",
 				long.Runes, steer.MaxNoteRunes)), nil
 		}
-		return failed("steer_turn needs a `note` — what the running turn should take into account."), nil
+		return failed(SteerTurnTool + " needs a `note` — what the running turn should take into account."), nil
 	}
 	// THE RUN'S RECORD FIRST: where it exists it is where the note goes, and
 	// the seat it names is the one authority is decided on.
@@ -462,7 +462,7 @@ func (t *steerTurn) ask(ctx context.Context, req steer.Request) (steer.Reply, bo
 		// A FAULT: the request is this build's own struct, bound here, so
 		// a seal that fails fails the same way every time.
 		return steer.Reply{}, false, refusalOf(faulted(ctx, SteerTurnTool, err,
-			"steer_turn could not sign its request: "+faultSaid+". Nothing was sent."))
+			SteerTurnTool+" could not sign its request: "+faultSaid+". Nothing was sent."))
 	}
 	replies, err := t.deps.Asker.Ask(askCtx, topics.SeatSteer, request, 1)
 	if err != nil {
@@ -470,7 +470,7 @@ func (t *steerTurn) ask(ctx context.Context, req steer.Request) (steer.Reply, bo
 		// is `unavailable` rather than `unknown`: there is no note in
 		// flight to be uncertain about.
 		return steer.Reply{}, false, refusalOf(nodeFailure(ctx, SteerTurnTool, err,
-			"steer_turn could not reach the fleet", "Nothing was sent."))
+			SteerTurnTool+" could not reach the fleet", "Nothing was sent."))
 	}
 	reply, answered := t.replyFor(ctx, replies, req)
 	return reply, answered, nil

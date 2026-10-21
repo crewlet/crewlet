@@ -121,7 +121,7 @@ func (t *listProjectFiles) Name() string { return worklet.ListProjectFilesTool }
 func (t *listProjectFiles) Description() string {
 	return "List the files kept in a project — reports, specs, notes and " +
 		"anything else its work produced — in path order, a page at a time. " +
-		"Read one with read_project_file."
+		"Read one with " + worklet.ReadProjectFileTool + "."
 }
 
 func (t *listProjectFiles) Parameters() map[string]any {
@@ -410,7 +410,7 @@ func (t *writeProjectFile) Description() string {
 	return "Write a file into a project, creating it or replacing what is " +
 		"there. Use it for what the work produced — the report, the plan, the " +
 		"notes — so everybody on the project finds it in one place. Pass the " +
-		"`version` read_project_file gave you as `if_version` to refuse the " +
+		"`version` " + worklet.ReadProjectFileTool + " gave you as `if_version` to refuse the " +
 		"write if somebody changed the file since."
 }
 

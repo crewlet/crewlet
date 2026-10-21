@@ -56,7 +56,7 @@ func (t *searchWorkItems) Description() string {
 	return "Find work items by what they SAY — ranked over every item's title " +
 		"and description, not a substring match. Use this when you remember " +
 		"what a piece of work was about but not which item it is: \"the " +
-		"retry backoff on the payment client\". list_work_items is the other " +
+		"retry backoff on the payment client\". " + ListWorkItemsTool + " is the other " +
 		"half — it filters a board by assignee, status, project and the rest, " +
 		"and its `text` only matches a key or a title."
 }
@@ -107,7 +107,7 @@ func (t *searchWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	text := strings.TrimSpace(argString(args, "text"))
 	if text == "" {
-		return failed("search_work_items needs `text` — what the work is " +
+		return failed(SearchWorkItemsTool + " needs `text` — what the work is " +
 			"about, in plain words."), nil
 	}
 	if knowledge.CheckQuery(text) != nil {
@@ -116,7 +116,7 @@ func (t *searchWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// too, but as an error the model would read as the tracker
 		// failing; this says what to send instead.
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
-		return failed(fmt.Sprintf("search_work_items' `text` is %d bytes and takes at "+
+		return failed(fmt.Sprintf(SearchWorkItemsTool+"' `text` is %d bytes and takes at "+
 			"most %d — say what the work is about in a phrase, not the task or a "+
 			"pasted thread.", len(text), knowledge.MaxQueryBytes)), nil
 	}
@@ -127,7 +127,7 @@ func (t *searchWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// to the default would answer a different question from the one asked.
 	mode, err := knowledge.ParseMode(argString(args, "mode"))
 	if err != nil {
-		return failed(fmt.Sprintf("search_work_items: %v.", err)), nil
+		return failed(fmt.Sprintf(SearchWorkItemsTool+": %v.", err)), nil
 	}
 	answer, err := t.deps.Search.Search(ctx, worklet.SearchQuery{
 		Text: text, Limit: argInt(args, "limit", 0), Mode: mode,
@@ -140,7 +140,7 @@ func (t *searchWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return refused(tools.RefusalUnavailable, "This node is still building "+
 			"its search index, so it cannot answer that yet — it says nothing "+
 			"about whether the work exists. Try again shortly, or narrow it "+
-			"with list_work_items."), nil
+			"with "+ListWorkItemsTool+"."), nil
 	case err != nil:
 		return readFailure(ctx, worklet.SearchWorkItemsTool, err), nil
 	}

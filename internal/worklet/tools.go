@@ -82,7 +82,7 @@ const (
 	// hold. Every other facet it carries is gated inside, on the project's
 	// lead or an admin, who overrides it (archiving also on a
 	// principal that is not an agent), and the refusals name which.
-	WriteProjectTool = "write_project"
+	WriteProjectTool = toolname.WriteProject
 
 	// TaskActivityTool is what HAPPENED, which no board can answer: a
 	// board is about what is there now, and every question about a change

@@ -330,6 +330,10 @@ type buildOpts struct {
 	steer runner.SteerSource
 	// subagent arms delegate on the executor's surface.
 	subagent *runner.SubagentConfig
+	// ask is the tool the executor's run asks a person through, which the
+	// engine hands the runner from outside the seat's registry
+	// ([runner.Config.Ask]). Nil offers none.
+	ask tools.Callable
 
 	// calls, when set, is the run's call log, on a turn context the
 	// surfaces are bound to — for the cases about what a run has called.
@@ -427,6 +431,7 @@ func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Run
 		OnPhase:      opts.onPhase,
 		Steer:        opts.steer,
 		Subagent:     opts.subagent,
+		Ask:          opts.ask,
 		Turn:         runTurn,
 		Budget:       opts.budget,
 		Compact:      opts.compact,

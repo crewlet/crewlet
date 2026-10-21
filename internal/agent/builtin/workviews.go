@@ -58,7 +58,7 @@ func (t *listWorkViews) Description() string {
 		"and your pins first. Every container has a list, a board and a " +
 		"calendar without anybody saving one; what comes back beyond those " +
 		"is what somebody arranged. To run one, pass its `id` as `view` to " +
-		"list_work_items — its `params` are in the query grammar's own " +
+		ListWorkItemsTool + " — its `params` are in the query grammar's own " +
 		"names and are not this tool's arguments."
 }
 
@@ -128,7 +128,7 @@ func (t *saveWorkView) Description() string {
 	return "Save a view — a named query with a shape — on a project, unit, " +
 		"person or the workspace. Pass an existing view's `id` to replace " +
 		"it, or omit it to create one. `params` is the QUERY GRAMMAR, not " +
-		"this surface's arguments: four of list_work_items' arguments are " +
+		"this surface's arguments: four of " + ListWorkItemsTool + "' arguments are " +
 		"spelled differently there, and the view is refused if any key " +
 		"does not parse."
 }
@@ -139,7 +139,7 @@ func (t *saveWorkView) Parameters() map[string]any {
 		"properties": map[string]any{
 			"id": map[string]any{
 				"type": "string",
-				"description": "The view to replace: an id list_work_views " +
+				"description": "The view to replace: an id " + worklet.ListWorkViewsTool + " " +
 					"lists, or that a save answered. Omit to create a new " +
 					"one, whose id is minted and answered back.",
 			},
@@ -169,7 +169,7 @@ func (t *saveWorkView) Parameters() map[string]any {
 				"type":                 "object",
 				"additionalProperties": map[string]any{"type": "string"},
 				"description": "The query, in the grammar's own parameter " +
-					"names — which list_work_items spells differently for " +
+					"names — which " + ListWorkItemsTool + " spells differently for " +
 					"four of its arguments: " + AliasSentence() + ". A " +
 					"custom field is `f.<ref>`. Everything else — assignee, " +
 					"type, priority, due, updated, created, reporter, " +
@@ -197,7 +197,7 @@ func (t *saveWorkView) Parameters() map[string]any {
 				"description": "True makes it the container's landing tab, " +
 					"taking that from whichever view held it. Only a SHARED " +
 					"view can be: nobody but its owner sees a personal one, " +
-					"so pin that instead with set_pins.",
+					"so pin that instead with " + worklet.SetPinsTool + ".",
 			},
 			"icon": map[string]any{"type": "string"},
 		},
@@ -290,8 +290,8 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			// and the subject its writes arbitrate on, where "the view
 			// to replace" was what the argument promised.
 			return refused(tools.RefusalNotFound, fmt.Sprintf(
-				"save_work_view: there is no view %q to replace. Name a "+
-					"view list_work_views lists, or omit `id` to create a "+
+				worklet.SaveWorkViewTool+": there is no view %q to replace. Name a "+
+					"view "+worklet.ListWorkViewsTool+" lists, or omit `id` to create a "+
 					"new one — its id is minted and answered back.",
 				clip(id))), nil
 		}
@@ -327,7 +327,7 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			fmt.Sprintf("the view %q was saved", view.Name), opID,
 			result.Unvouched, unknownNext(result.Unvouched,
 				sameCall(actor, worklet.SaveWorkViewTool),
-				fmt.Sprintf("List the views in %s with list_work_views", where),
+				fmt.Sprintf("List the views in %s with "+worklet.ListWorkViewsTool, where),
 				"it saves a second view")), nil
 	}
 	t.deps.settle(ctx, result.Position)

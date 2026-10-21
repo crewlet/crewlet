@@ -80,7 +80,7 @@ func (t *searchKnowledge) Description() string {
 		"turn start, so use this once you know what the task actually " +
 		"needs — above all when the trigger was a bare pointer (a webhook " +
 		"naming an item, a thread reply) and that block came back empty. " +
-		"For a procedure you distilled from your own turns, use `use_skill` " +
+		"For a procedure you distilled from your own turns, use `" + UseSkillTool + "` " +
 		"instead: those are yours, not the team's."
 }
 
@@ -123,7 +123,7 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 ) (tools.Result, error) {
 	query := strings.TrimSpace(argString(args, "query"))
 	if query == "" {
-		return failed("search_knowledge needs a `query`: a few keywords describing " +
+		return failed(SearchKnowledgeTool + " needs a `query`: a few keywords describing " +
 			"what you are looking for."), nil
 	}
 	if knowledge.CheckQuery(query) != nil {
@@ -135,7 +135,7 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// though it were the one the model wrote, so a search on the wrong
 		// words read as a search that found nothing.
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
-		return failed(fmt.Sprintf("search_knowledge's `query` is %d bytes and takes at "+
+		return failed(fmt.Sprintf(SearchKnowledgeTool+"'s `query` is %d bytes and takes at "+
 			"most %d — send 2-8 keywords or key phrases, identifiers verbatim, not the "+
 			"task or a pasted thread.", len(query), knowledge.MaxQueryBytes)), nil
 	}
@@ -144,7 +144,7 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// the one asked.
 	mode, err := knowledge.ParseMode(argString(args, "mode"))
 	if err != nil {
-		return failed(fmt.Sprintf("search_knowledge: %v.", err)), nil
+		return failed(fmt.Sprintf(SearchKnowledgeTool+": %v.", err)), nil
 	}
 	// THE TURN'S ORG, or the wiring's where there is no turn — see
 	// [searchKnowledge.org]. Reading the turn unconditionally made this

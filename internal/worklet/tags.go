@@ -659,9 +659,9 @@ func declaredTags(ctx context.Context, tx *sql.Tx, project string, tags []string
 		hint = fmt.Sprintf(" Did you mean %s?", strings.Join(near, " or "))
 	}
 	return invalid("%s does not declare the tag %v — its tags are "+
-		"%v.%s Declare one with write_project(tags.add), or pass "+
+		"%v.%s Declare one with %s(tags.add), or pass "+
 		"`labels_create_missing` to declare it at this write",
-		project, unknown, declared, hint)
+		project, unknown, declared, hint, WriteProjectTool)
 }
 
 // EnsureTags declares the tags a write is about to use that the project lacks.

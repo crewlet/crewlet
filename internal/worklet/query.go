@@ -1010,7 +1010,7 @@ func (q *Query) parseText(p Params) error {
 		return fmt.Errorf("worklet: the find text is %d bytes and the bound is "+
 			"%d — this is a substring of a key or a title, and no title is "+
 			"longer, so a longer one matches nothing; to find work by what it "+
-			"is about, search it (search_work_items, or work_search)",
+			"is about, search it ("+SearchWorkItemsTool+", or work_search)",
 			len(q.Text), MaxQueryText)
 	}
 	return nil

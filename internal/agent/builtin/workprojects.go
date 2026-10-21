@@ -172,7 +172,7 @@ func (t *describeProject) Parameters() map[string]any {
 		"properties": map[string]any{
 			"project": map[string]any{
 				"type": "string",
-				"description": "The project key, as list_projects reports it. " +
+				"description": "The project key, as " + worklet.ListProjectsTool + " reports it. " +
 					"Omit for your own.",
 			},
 			"for_type": map[string]any{
@@ -209,7 +209,7 @@ func (t *describeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	if project == "" {
 		return failed("Name a project — this seat's unit owns none, so there " +
-			"is no default to fall back on. list_projects reports the keys."), nil
+			"is no default to fall back on. " + worklet.ListProjectsTool + " reports the keys."), nil
 	}
 	detail, err := reader.Project(ctx, worklet.ProjectDetailQuery{
 		Project: project,

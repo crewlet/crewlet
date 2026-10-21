@@ -751,7 +751,7 @@ func (d ArtifactDeps) head(ctx context.Context, tool string, args map[string]any
 func artifactNotFound(tool, ref string) tools.Result {
 	return refusedBy(tools.RefusalNotFound, artifactsdomain.ErrNotFound,
 		fmt.Sprintf("%s: there is no artifact %q you can open. Check the id, or "+
-			"find it with list_artifacts.", tool, clip(ref)))
+			"find it with "+ListArtifactsTool+".", tool, clip(ref)))
 }
 
 // artifactTrashed is the answer for a read of an artifact in the trash, to a

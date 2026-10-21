@@ -115,7 +115,7 @@ func (w *Writer) WriteProject(ctx context.Context, opID, key string,
 	case edit.Empty():
 		return WriteResult{}, invalid("a project edit of %s sets "+
 			"nothing — the name, purpose and owning unit come from the org "+
-			"chart, and the tags are write_project(tags.add)", key)
+			"chart, and the tags are %s(tags.add)", key, WriteProjectTool)
 	case !authority.Policy:
 		return WriteResult{}, forbidden("%s's field declarations, default "+
 			"assignee and target date are the project lead's, or an admin's — "+

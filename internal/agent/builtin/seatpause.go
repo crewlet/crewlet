@@ -134,7 +134,7 @@ func (t *pauseSeat) Description() string {
 		"The turn it is on finishes first unless `stop_running` is true, which ends that " +
 		"turn at its next round and any coding run the seat has out at once — its box " +
 		"reclaimed — instead. Pausing a paused seat changes nothing, except to add " +
-		"`stop_running`. Resume it with resume_seat."
+		"`stop_running`. Resume it with " + ResumeSeatTool + "."
 }
 
 func (t *pauseSeat) Parameters() map[string]any {
@@ -184,7 +184,7 @@ func (t *pauseSeat) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	for range pauseAttempts {
 		current, paused, err := t.deps.Pauses.SeatPause(ctx, seat.id)
 		if err != nil {
-			return nodeFailure(ctx, PauseSeatTool, err, fmt.Sprintf("pause_seat could not "+
+			return nodeFailure(ctx, PauseSeatTool, err, fmt.Sprintf(PauseSeatTool+" could not "+
 				"read whether %s is paused", seat.Handle()), "Nothing was changed."), nil
 		}
 		switch {
@@ -223,7 +223,7 @@ func (t *pauseSeat) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			return pauseAnswer(seat, current, false)
 		}
 	}
-	return refused(tools.RefusalConflict, fmt.Sprintf("pause_seat lost %d races in a row for "+
+	return refused(tools.RefusalConflict, fmt.Sprintf(PauseSeatTool+" lost %d races in a row for "+
 		"%s to other changes to its pause. Read the seat again before retrying.",
 		pauseAttempts, seat.Handle())), nil
 }
@@ -277,7 +277,7 @@ func (t *resumeSeat) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	for range pauseAttempts {
 		current, paused, err := t.deps.Pauses.SeatPause(ctx, seat.id)
 		if err != nil {
-			return nodeFailure(ctx, ResumeSeatTool, err, fmt.Sprintf("resume_seat could not "+
+			return nodeFailure(ctx, ResumeSeatTool, err, fmt.Sprintf(ResumeSeatTool+" could not "+
 				"read whether %s is paused", seat.Handle()), "Nothing was changed."), nil
 		}
 		if !paused {
@@ -305,7 +305,7 @@ func (t *resumeSeat) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"paused": false, "changed": true,
 		})
 	}
-	return refused(tools.RefusalConflict, fmt.Sprintf("resume_seat lost %d races in a row for "+
+	return refused(tools.RefusalConflict, fmt.Sprintf(ResumeSeatTool+" lost %d races in a row for "+
 		"%s to other changes to its pause. Read the seat again before retrying.",
 		pauseAttempts, seat.Handle())), nil
 }

@@ -231,7 +231,7 @@ func (t *listPages) Name() string { return ListPagesTool }
 func (t *listPages) Description() string {
 	return "List pages in Doclet, the company's knowledge base, by container, " +
 		"parent or title. For BROWSING a structure you know; to find pages ABOUT a " +
-		"subject, use search_knowledge, which ranks by relevance."
+		"subject, use " + SearchKnowledgeTool + ", which ranks by relevance."
 }
 
 func (t *listPages) Parameters() map[string]any {
@@ -327,7 +327,7 @@ func (t *getPage) Name() string { return GetPageTool }
 func (t *getPage) Description() string {
 	return "Read one page in full: its body, its comments, its revision " +
 		"history and its place in the tree. Take the `version` from the " +
-		"result and pass it back as `base_version` on save_page — an edit " +
+		"result and pass it back as `base_version` on " + SavePageTool + " — an edit " +
 		"that does not say which version it changed is refused. The body " +
 		"and each comment arrive fenced as text somebody wrote; the two " +
 		"fence lines are a label, not part of the page."
@@ -363,13 +363,13 @@ func (t *getPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[
 	}
 	ref := strings.TrimSpace(argString(args, "page"))
 	if ref == "" {
-		return failed("get_page needs a `page` — an id, or \"CONTAINER/Title\"."), nil
+		return failed(GetPageTool + " needs a `page` — an id, or \"CONTAINER/Title\"."), nil
 	}
 	detail, err := t.deps.Reader.Get(ctx, ref, seatRead)
 	switch {
 	case errors.Is(err, doclet.ErrNotFound):
 		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("There is no page %q. "+
-			"Check the container and title, or use search_knowledge to find it.",
+			"Check the container and title, or use "+SearchKnowledgeTool+" to find it.",
 			clip(ref))), nil
 	case err != nil:
 		return pageReadFailure(ctx, GetPageTool, err), nil
@@ -441,7 +441,7 @@ func (t *writePage) Description() string {
 		"splits what the company knows in half, and the next reader finds " +
 		"whichever they happen to search for. The title is the page's " +
 		"address and must be unique in its container; to change an existing " +
-		"page use save_page."
+		"page use " + SavePageTool + "."
 }
 
 func (t *writePage) Parameters() map[string]any {
@@ -541,7 +541,7 @@ func (t *writePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 	// A PAGE NOBODY CAN SAY WAS WRITTEN IS NOT ONE TO REPORT: the id and
 	// revision would be a create's that may never have landed. Looking first
 	// is right for every caller — a second write is refused for the title.
-	next := fmt.Sprintf("Read %s/%s with get_page before writing it again: if "+
+	next := fmt.Sprintf("Read %s/%s with "+GetPageTool+" before writing it again: if "+
 		"the first write landed, a second one is refused because the title is "+
 		"taken.", in.Container, in.Title)
 	got, err := t.deps.Writer.Create(ctx, actor, in)
@@ -580,7 +580,7 @@ func createStatus(args map[string]any) (doclet.Status, string) {
 	case ok && (status == doclet.StatusPublished || status == doclet.StatusDraft):
 		return status, ""
 	}
-	return "", fmt.Sprintf("write_page writes a page as `%s` or `%s`, and was "+
+	return "", fmt.Sprintf(WritePageTool+" writes a page as `%s` or `%s`, and was "+
 		"asked for %s. Leave `status` out to publish it.",
 		doclet.StatusPublished, doclet.StatusDraft, clip(fmt.Sprint(raw)))
 }
@@ -596,7 +596,7 @@ const pageLinkExample = "[its title](" + doclet.AddressPrefix + "<page id>)"
 
 // pageLinkHelp is the sentence both page-writing tools carry on `body`.
 const pageLinkHelp = "Link another page as " + pageLinkExample +
-	", using the `id` get_page or list_pages answers — not the title " +
+	", using the `id` " + GetPageTool + " or " + ListPagesTool + " answers — not the title " +
 	"and not [[wiki]] brackets, which nothing resolves."
 
 type savePage struct{ deps PageDeps }
@@ -607,7 +607,7 @@ func (t *savePage) Name() string { return SavePageTool }
 
 func (t *savePage) Description() string {
 	return "Change an existing page: its body, title, labels or parent. " +
-		"You MUST pass the `base_version` you read with get_page — an edit " +
+		"You MUST pass the `base_version` you read with " + GetPageTool + " — an edit " +
 		"against a version somebody else has already moved past is refused " +
 		"rather than silently overwriting what they wrote."
 }
@@ -622,7 +622,7 @@ func (t *savePage) Parameters() map[string]any {
 			},
 			"base_version": map[string]any{
 				"type": "integer",
-				"description": "The `version` from get_page. REQUIRED: it is " +
+				"description": "The `version` from " + GetPageTool + ". REQUIRED: it is " +
 					"what makes somebody else's edit a refusal instead of a " +
 					"silent overwrite.",
 			},
@@ -673,12 +673,12 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 	actor.OpKey = callOpKey(turn, t.Name(), nil, args, actor.OpKey)
 	ref := strings.TrimSpace(argString(args, "page"))
 	if ref == "" {
-		return failed("save_page needs a `page` — an id, or \"CONTAINER/Title\"."), nil
+		return failed(SavePageTool + " needs a `page` — an id, or \"CONTAINER/Title\"."), nil
 	}
 	base := argInt(args, "base_version", 0)
 	if base <= 0 {
-		return failed("save_page needs a `base_version`: read the page with " +
-			"get_page and pass its `version` back, so an edit somebody else " +
+		return failed(SavePageTool + " needs a `base_version`: read the page with " +
+			GetPageTool + " and pass its `version` back, so an edit somebody else " +
 			"made in the meantime is a refusal rather than a silent overwrite."), nil
 	}
 	detail, err := t.deps.Reader.Get(ctx, ref, seatRead)
@@ -732,7 +732,7 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 		// otherwise be told the save landed while still following the page.
 		watch, isBool := argval.Bool(raw)
 		if !isBool {
-			return failed(fmt.Sprintf("save_page takes `watch` as true or false, "+
+			return failed(fmt.Sprintf(SavePageTool+" takes `watch` as true or false, "+
 				"and was sent %s.", clip(fmt.Sprint(raw)))), nil
 		}
 		save.Watch = &watch
@@ -740,7 +740,7 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 
 	// A SAVE STATES A VERSION, so looking says which way it went and a save
 	// against the version it found is the right one either way.
-	const saveNext = "Read the page with get_page: if its version moved past " +
+	const saveNext = "Read the page with " + GetPageTool + ": if its version moved past " +
 		"the one you edited, the save landed; if it did not, save again with " +
 		"the version you just read."
 	got, err := t.deps.Writer.SavePage(ctx, actor, detail.Page.ID, save)
@@ -769,7 +769,7 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 		want := strings.TrimSpace(fmt.Sprint(title))
 		// A RENAME STATES A TITLE, so the page's title says which way it
 		// went and renaming to it again is harmless either way.
-		const renameNext = "Read the page with get_page: its title says " +
+		const renameNext = "Read the page with " + GetPageTool + ": its title says " +
 			"whether the rename landed, and renaming again to the same title " +
 			"is harmless."
 		renamed, err := t.deps.Writer.Rename(ctx, actor, detail.Page.ID, want, false)
@@ -841,7 +841,7 @@ func (t *commentOnPage) Description() string {
 	return "Comment on a page — to ask about something it says, or to flag " +
 		"that it has gone stale. Anyone you @-mention by handle is woken; " +
 		"people watching the page are told. If the answer is a change to the " +
-		"page, make the change with save_page rather than describing it here. " +
+		"page, make the change with " + SavePageTool + " rather than describing it here. " +
 		"Pass `edit` with the id of a comment YOU wrote to replace what it " +
 		"says instead of adding another."
 }
@@ -896,9 +896,9 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	body := strings.TrimSpace(argString(args, "body"))
 	switch {
 	case ref == "":
-		return failed("comment_on_page needs a `page` — an id, or \"CONTAINER/Title\"."), nil
+		return failed(CommentOnPageTool + " needs a `page` — an id, or \"CONTAINER/Title\"."), nil
 	case body == "":
-		return failed("comment_on_page needs a `body`."), nil
+		return failed(CommentOnPageTool + " needs a `body`."), nil
 	}
 	detail, err := t.deps.Reader.Get(ctx, ref, seatRead)
 	switch {
@@ -953,7 +953,7 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	again := callRepeat(turn, actor.OpKey, CommentOnPageTool)
 	commentNext := func(unvouched bool) string {
 		return unknownNext(unvouched, again,
-			"Read the page's comments with get_page", "that is a second comment")
+			"Read the page's comments with "+GetPageTool, "that is a second comment")
 	}
 	comment, written, err := t.deps.Writer.Comment(ctx, actor, detail.Page.ID, in)
 	if err != nil {
@@ -1067,11 +1067,11 @@ func pageWriteFailure(ctx context.Context, name string, err error, next string) 
 			"Write this somewhere a reader will find it.", name, err))
 	case errors.Is(err, doclet.ErrTitleTaken):
 		return refusedBy(tools.RefusalExists, err, fmt.Sprintf("%v\n\nThat page already "+
-			"exists — read it with get_page and edit it with save_page rather "+
+			"exists — read it with "+GetPageTool+" and edit it with "+SavePageTool+" rather "+
 			"than writing a second page on the same subject.", err))
 	case errors.Is(err, doclet.ErrStaleVersion):
 		return refusedBy(tools.RefusalStaleVersion, err, fmt.Sprintf("%v\n\nRead the "+
-			"page again with get_page, re-apply your change on top of what it "+
+			"page again with "+GetPageTool+", re-apply your change on top of what it "+
 			"says now, and save with the version you just read.", err))
 	case errors.Is(err, doclet.ErrConflict):
 		return refusedBy(tools.RefusalConflict, err, fmt.Sprintf("%s could not land: "+

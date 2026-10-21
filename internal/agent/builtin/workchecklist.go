@@ -75,7 +75,7 @@ func checklistSchema() map[string]any {
 			"{list, name, assignee?}; remove_item {item}; rename_item {item, " +
 			"name}; set_done {item, done}; assign_item {item, assignee} " +
 			"(\"\" for nobody). Lists and items are named by the ids " +
-			"get_work_item shows; the change is applied to the checklists as " +
+			GetWorkItemTool + " shows; the change is applied to the checklists as " +
 			"they are when it lands, so somebody else's tick in the meantime " +
 			"is kept.",
 		"properties": map[string]any{

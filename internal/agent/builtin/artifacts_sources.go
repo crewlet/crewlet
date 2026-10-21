@@ -266,7 +266,7 @@ func (s *fileSources) brandSlot(p, raw string) (brandformat.Slot, *tools.Result)
 		names[i] = string(v)
 	}
 	r := failed(fmt.Sprintf("%s: %q copies `from_brand` %q, which is no slot of the brand; "+
-		"take one of %s (get_company_brand lists what your company's brand holds).", s.tool, p,
+		"take one of %s ("+CompanyBrandTool+" lists what your company's brand holds).", s.tool, p,
 		clip(raw), strings.Join(names, ", ")))
 	return "", &r
 }

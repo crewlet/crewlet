@@ -113,7 +113,7 @@ const (
 	ActionWorkPlace Action = "place_work_item"
 
 	// --- a container's own policy ----------------------------------- //
-	ActionProjectWrite   Action = "write_project"
+	ActionProjectWrite   Action = toolname.WriteProject
 	ActionCatalogueWrite Action = "write_work_catalogue"
 	ActionPageRename     Action = "pages.rename"
 
@@ -344,7 +344,7 @@ const (
 	// THE DASHBOARD SOURCE CATALOGUE is the engine's own vocabulary, read
 	// before a board exists, so it is everybody's: what a source ANSWERS is
 	// decided as each board's viewer, never by who listed it.
-	ActionDashboardSources Action = "list_dashboard_sources"
+	ActionDashboardSources Action = toolname.ListDashboardSources
 	// THE FORMAT REFERENCE is the engine's own vocabulary too: the exact
 	// shape of a kind's index (`brand.json`, `deck.json`), read before an
 	// artifact of it exists, holding no row of any domain.
@@ -358,7 +358,7 @@ const (
 	// assistant could not read what the person could.
 	ActionDashboardSourceRead Action = "artifacts.source.read"
 	// AUTHORING, each asking the `artifacts` app beside the role.
-	ActionArtifactCreate  Action = "create_artifact"
+	ActionArtifactCreate  Action = toolname.CreateArtifact
 	ActionArtifactPublish Action = "publish_artifact"
 	ActionArtifactUpdate  Action = "update_artifact"
 	ActionArtifactAsset   Action = "upload_artifact_asset"

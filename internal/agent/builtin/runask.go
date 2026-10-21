@@ -15,8 +15,10 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// AskAndWaitTool is the tool's wire name.
-const AskAndWaitTool = "ask_and_wait"
+// AskAndWaitTool is the tool's wire name, declared in internal/toolname: no
+// authority row names the run's own ending, so the walk that holds every tool
+// name to one declaration reads it there ([toolname.AskAndWait]).
+const AskAndWaitTool = toolname.AskAndWait
 
 // RunAskDesk records the question a coding run asks onto the job's row: the
 // run record's own write, [sandbox.PendingStore.RecordAsk], which the engine

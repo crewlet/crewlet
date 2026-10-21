@@ -117,7 +117,7 @@ func (t *createChannel) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	room := strings.TrimPrefix(strings.TrimSpace(argString(args, "channel")), "#")
 	if room == "" {
-		return failed("create_channel needs a `channel` — the new room's name, " +
+		return failed(chatlet.CreateChannelTool + " needs a `channel` — the new room's name, " +
 			"which is its address."), nil
 	}
 	members, refusal := argMembers(name, args, "members")
@@ -140,7 +140,7 @@ func (t *createChannel) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// either way — a second create of the same name is refused because the
 	// name is taken.
 	next := func(unvouched bool) string {
-		return unknownNext(unvouched, again, "List the rooms with list_channels",
+		return unknownNext(unvouched, again, "List the rooms with "+ListChannelsTool,
 			"the second is refused because the name is taken")
 	}
 	written, err := t.deps.Writer.CreateChannel(ctx, actor, in)
@@ -200,7 +200,7 @@ func (t *openDM) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	to := argStrings(args, "to")
 	if len(to) == 0 {
-		return failed("open_dm needs a `to` — the handles of the people the " +
+		return failed(chatlet.OpenDMTool + " needs a `to` — the handles of the people the " +
 			"conversation is with."), nil
 	}
 	actor, refusal := t.deps.actor(ctx, turn, name, args)
@@ -209,7 +209,7 @@ func (t *openDM) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	// STATED, NOT POSTED: the conversation is its participants' whatever
 	// opens it, so opening it again is the same room and changes nothing.
-	const look = "List your rooms with list_channels"
+	const look = "List your rooms with " + ListChannelsTool
 	room, created, err := t.deps.Writer.OpenDirect(ctx, actor, to)
 	if err != nil {
 		return chatWriteFailure(ctx, name, err, restateNext(look)), nil
@@ -290,12 +290,12 @@ func (t *updateChannel) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if raw := args["archived"]; raw != nil {
 		archived, ok := argval.Bool(raw)
 		if !ok {
-			return failed("update_channel's `archived` is true or false."), nil
+			return failed(chatlet.UpdateChannelTool + "'s `archived` is true or false."), nil
 		}
 		patch.Archived = &archived
 	}
 	if patch.Topic == nil && patch.Purpose == nil && patch.Archived == nil {
-		return failed("update_channel names no change — set at least one of " +
+		return failed(chatlet.UpdateChannelTool + " names no change — set at least one of " +
 			"`topic`, `purpose` and `archived`."), nil
 	}
 	actor, id, refusal := t.deps.resolved(ctx, turn, name, args)
@@ -310,7 +310,7 @@ func (t *updateChannel) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 		authority = decided
 	}
-	const look = "Read the room's settings with list_channels"
+	const look = "Read the room's settings with " + ListChannelsTool
 	written, err := t.deps.Writer.PatchChannel(ctx, actor, id, patch, authority)
 	if err != nil {
 		return chatWriteFailure(ctx, name, err, restateNext(look)), nil
@@ -409,7 +409,7 @@ func (t *setChannelMembers) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// names `members` required and missing, and a null read as the empty
 	// list emptied the room under that very finding.
 	if args["members"] == nil {
-		return failed("set_channel_members needs `members` — the whole " +
+		return failed(chatlet.SetChannelMembersTool + " needs `members` — the whole " +
 			"membership after this call; an empty list empties the room."), nil
 	}
 	members, refusal := argMembers(name, args, "members")
@@ -508,11 +508,11 @@ func (t *editMessage) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	body := strings.TrimSpace(argString(args, "body"))
 	switch {
 	case messageID == "":
-		return failed("edit_message needs a `message_id` — the id of the " +
+		return failed(chatlet.EditMessageTool + " needs a `message_id` — the id of the " +
 			"message to rewrite."), nil
 	case body == "":
-		return failed("edit_message needs a `body`. To take a message back, " +
-			"use delete_message — its row stays, so a thread hung off it keeps " +
+		return failed(chatlet.EditMessageTool + " needs a `body`. To take a message back, " +
+			"use " + chatlet.DeleteMessageTool + " — its row stays, so a thread hung off it keeps " +
 			"its root."), nil
 	}
 	actor, id, refusal := t.deps.resolved(ctx, turn, name, args)
@@ -548,7 +548,7 @@ func (t *editMessage) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// STATED: the same words again replace the message with what it already
 	// says, so a repeat after an `unknown` changes nothing if the first
 	// landed.
-	const look = "Read the message with read_channel"
+	const look = "Read the message with " + ReadChannelTool
 	written, err := t.deps.Writer.Edit(ctx, actor, id, messageID, in)
 	if err != nil {
 		return chatWriteFailure(ctx, name, err, restateNext(look)), nil
@@ -602,7 +602,7 @@ func (t *deleteMessage) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	messageID := strings.TrimSpace(argString(args, "message_id"))
 	if messageID == "" {
-		return failed("delete_message needs a `message_id` — the id of the " +
+		return failed(chatlet.DeleteMessageTool + " needs a `message_id` — the id of the " +
 			"message to take back."), nil
 	}
 	actor, id, refusal := t.deps.resolved(ctx, turn, name, args)
@@ -616,7 +616,7 @@ func (t *deleteMessage) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	// STATED: a message already taken back is taken back again to the same
 	// tombstone, so the repeat changes nothing.
-	const look = "Read the room with read_channel"
+	const look = "Read the room with " + ReadChannelTool
 	written, err := t.deps.Writer.Delete(ctx, actor, id, messageID,
 		chatlet.MessageAuthority{Moderate: moderate})
 	if err != nil {
@@ -704,7 +704,7 @@ func (t *markChatRead) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			parsed, err := time.Parse(time.RFC3339, raw)
 			if err != nil {
 				//nolint:nilerr // A tool failure is a RESULT the model reads.
-				return failed(fmt.Sprintf("mark_chat_read's `dnd_until` is an RFC "+
+				return failed(fmt.Sprintf(chatlet.MarkChatReadTool+"'s `dnd_until` is an RFC "+
 					"3339 instant (2026-05-01T09:00:00Z), or an empty string to "+
 					"end do-not-disturb now — %q is neither.", clip(raw))), nil
 			}
@@ -714,7 +714,7 @@ func (t *markChatRead) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	if delta.Cursors == nil && delta.Mute == nil && delta.Unmute == nil &&
 		delta.DNDUntil == nil {
-		return failed("mark_chat_read names nothing to record — send `cursors`, " +
+		return failed(chatlet.MarkChatReadTool + " names nothing to record — send `cursors`, " +
 			"`mute`, `unmute` or `dnd_until`."), nil
 	}
 	actor, refusal := t.deps.actor(ctx, turn, name, args)
@@ -913,7 +913,7 @@ func argMembers(tool string, args map[string]any, key string) ([]chatlet.Member,
 func argCursors(raw any) (map[string]int64, *tools.Result) {
 	given, ok := argval.Object(raw)
 	if !ok {
-		out := failed("mark_chat_read's `cursors` is an object of room id to " +
+		out := failed(chatlet.MarkChatReadTool + "'s `cursors` is an object of room id to " +
 			"the position read through.")
 		return nil, &out
 	}
@@ -925,7 +925,7 @@ func argCursors(raw any) (map[string]int64, *tools.Result) {
 		room = strings.TrimSpace(room)
 		at, whole := argPositionValue(value)
 		if room == "" || !whole || at < 0 {
-			out := failed(fmt.Sprintf("mark_chat_read's cursor for %q is %v — a "+
+			out := failed(fmt.Sprintf(chatlet.MarkChatReadTool+"'s cursor for %q is %v — a "+
 				"room id and a whole, non-negative log position.", clip(room), value))
 			return nil, &out
 		}

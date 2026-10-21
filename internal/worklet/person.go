@@ -617,8 +617,8 @@ func checkInboxGesture(g InboxGesture, now time.Time) error {
 		// stream is in a number space the inbox does not count in.
 		if stream := trackerStream; at.Stream != stream {
 			return invalid("%s is a position on %s, and an inbox is "+
-				"read through a position on %s — the one `work_inbox` answers",
-				at, at.Stream, stream)
+				"read through a position on %s — the one `%s` answers",
+				at, at.Stream, stream, WorkInboxTool)
 		}
 	}
 	if g.PrimaryReasons != nil {
@@ -663,7 +663,7 @@ func inboxPositions(ctx context.Context, tx *sql.Tx,
 		case errors.Is(err, sql.ErrNoRows):
 			return nil, invalid("record %s is not a change this "+
 				"company recorded — a mark names the `record_id` a "+
-				"`work_inbox` notice carries", id)
+				"`%s` notice carries", id, WorkInboxTool)
 		case err != nil:
 			return nil, fmt.Errorf("worklet: read where record %s sits: %w",
 				id, err)
