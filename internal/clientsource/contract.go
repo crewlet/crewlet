@@ -129,6 +129,7 @@ var contract = []Entry{
 	{"MAX_DIRECT_PARTICIPANTS", ReadScalar, "internal/chat.TestTheDashboardsChatLimitsAreTheEngines"},
 	{"CHANNEL_NAME_PATTERN", ReadScalar, "internal/chat.TestTheDashboardsChannelNameGrammarIsTheEngines"},
 	{"TYPING_THROTTLE_MS", ReadScalar, "internal/presence.TestTheDashboardReassertsTypingInsideTheEnginesExpiry"},
+	{"PENDING_REASK_MS", ReadScalar, "internal/chat.TestTheDashboardAsksAPendingPostAgainAfterTheApplierHadItsWait"},
 
 	// presence.ts
 	{"PRESENCE_ROOMS", ReadLiteral, "internal/presence.TestTheDashboardSpeaksThePresenceVocabulary"},
