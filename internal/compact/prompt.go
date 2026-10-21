@@ -3,6 +3,8 @@ package compact
 import (
 	"fmt"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // The rewrite instructions.
@@ -85,19 +87,21 @@ func systemPrompt(kind Kind, focus string, budget int) string {
 	b.WriteString("\n\n")
 	b.WriteString(baseRules)
 	fmt.Fprintf(&b, "\n\nYour whole answer must be at most %d characters.", budget)
+	b.WriteString("\n\n")
+	b.WriteString(provenance.StandingInstruction)
 	return b.String()
 }
 
-// userPrompt carries the text, fenced so instructions inside it read as
-// content rather than as a request to this call.
-func userPrompt(text, retry string) string {
-	var b strings.Builder
+// userPrompt carries the text inside a fence of b under its label (ADR-0040),
+// so instructions inside it read as somebody's content rather than as a
+// request to this call, and nothing in it can close the fence.
+func userPrompt(b provenance.Boundary, label provenance.Label, text, retry string) string {
+	var out strings.Builder
 	if retry != "" {
-		b.WriteString(retry)
-		b.WriteString("\n\n")
+		out.WriteString(retry)
+		out.WriteString("\n\n")
 	}
-	b.WriteString("Rewrite the text between the markers.\n\n<<<TEXT\n")
-	b.WriteString(text)
-	b.WriteString("\nTEXT>>>")
-	return b.String()
+	out.WriteString("Rewrite the text inside the fence.\n\n")
+	out.WriteString(label.Fence(b, text))
+	return out.String()
 }
