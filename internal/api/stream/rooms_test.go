@@ -35,10 +35,11 @@ var sheet = artifacts.IDFor("stream-rooms-suite-sheet")
 // artifact, by their record, settable mid-case, and an error that makes every
 // decision unknown.
 type access struct {
-	mu    sync.Mutex
-	roles map[string]artifacts.Role
-	err   error
-	asked int
+	mu      sync.Mutex
+	roles   map[string]artifacts.Role
+	trashed map[artifacts.ID]bool
+	err     error
+	asked   int
 }
 
 func newAccess() *access { return &access{roles: map[string]artifacts.Role{}} }
@@ -47,6 +48,17 @@ func (a *access) set(record string, id artifacts.ID, role artifacts.Role) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.roles[record+"|"+id.String()] = role
+}
+
+// trash puts id in the trash: every reader it is disclosed to is answered
+// [artifactsdomain.ErrTrashed], and every other reader as before.
+func (a *access) trash(id artifacts.ID) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.trashed == nil {
+		a.trashed = map[artifacts.ID]bool{}
+	}
+	a.trashed[id] = true
 }
 
 func (a *access) fail(err error) {
@@ -62,7 +74,11 @@ func (a *access) Standing(_ context.Context, p iam.Principal, id artifacts.ID) (
 	if a.err != nil {
 		return "", a.err
 	}
-	return a.roles[iam.RecordOwner(p)+"|"+id.String()], nil
+	role := a.roles[iam.RecordOwner(p)+"|"+id.String()]
+	if role != "" && a.trashed[id] {
+		return "", fmt.Errorf("%w: %s", artifactsdomain.ErrTrashed, id)
+	}
+	return role, nil
 }
 
 // stores answers every datastore at version 40 with its delete floor at 10.
@@ -361,6 +377,46 @@ func TestARevokedShareDropsFromTheRoom(t *testing.T) {
 	write(t, erin, map[string]any{"kind": "ping"})
 	if got := nextOf(t, erin, stream.KindPong, stream.KindArtifactData); kindOf(got) != stream.KindPong {
 		t.Fatalf("a reader whose share was withdrawn received %v after it", got)
+	}
+}
+
+// THE TRASH IS SAID AS THE TRASH: a member of a room whose artifact is binned
+// is withdrawn with `artifact_trashed`, and a join while it is binned is
+// refused with it, where a reader the artifact is not disclosed to is still
+// told it is not there. The room carries no content until its owner restores
+// it, and `not_found` told a reader it would never come back.
+//
+// Mutation: answer the trash as an empty role in the join or the withdrawal,
+// or as undecidable, and this goes red.
+func TestATrashedArtifactsRoomSaysItIsInTheTrash(t *testing.T) {
+	t.Parallel()
+	acc := newAccess()
+	acc.set("dana", sheet, artifacts.RoleEditor)
+	n := newRoomNode(t, memory.NewBroker(), "node-a", acc, people)
+	dana := n.open(t, "dana")
+	join(t, dana, sheet, 0)
+
+	acc.trash(sheet)
+	n.svc.ArtifactsMoved([]artifactsdomain.Moved{{Artifact: sheet,
+		What: artifactsdomain.MoveTrash, AccessEpoch: 2, Head: 3}})
+	withdrawn := nextOf(t, dana, stream.KindError)
+	if withdrawn["error"] != stream.CodeArtifactTrashed || withdrawn["artifact"] != sheet.String() ||
+		withdrawn["what"] != "artifact_join" {
+		t.Fatalf("a member of a binned artifact's room was told %v, want the room withdrawn "+
+			"as artifact_trashed", withdrawn)
+	}
+	if again := join(t, dana, sheet, 0); kindOf(again) != stream.KindError ||
+		again["error"] != stream.CodeArtifactTrashed {
+		t.Fatalf("a join of a binned artifact was answered %v, want artifact_trashed", again)
+	}
+	erin := n.open(t, "erin")
+	if stranger := join(t, erin, sheet, 0); stranger["error"] != stream.CodeNotFound {
+		t.Fatalf("a reader with no relation to a binned artifact was answered %v, want not_found",
+			stranger)
+	}
+	write(t, dana, map[string]any{"kind": "ping"})
+	if got := nextOf(t, dana, stream.KindPong); kindOf(got) != stream.KindPong {
+		t.Fatalf("the trash closed the socket: %v", got)
 	}
 }
 

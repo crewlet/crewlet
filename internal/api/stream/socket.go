@@ -137,6 +137,16 @@ const (
 	// boot reconcile is still running has to be able to say "ask me in a
 	// moment" rather than "there is nothing".
 	CodeUnavailable = "unavailable"
+
+	// CodeArtifactTrashed is a question about an artifact's CONTENT — its
+	// datastore, its room — asked by somebody the artifact is disclosed to,
+	// while it is in the trash. The REST routes' `409 artifact_trashed`,
+	// under the same code: the artifact's state, which its owner's restore
+	// changes. DISTINCT FROM not_found, which is what the same question is
+	// answered with for a caller the artifact is answered as absent to: told
+	// not_found, a client stopped asking about content a restore brings back
+	// whole, and a screen called a binned sheet one that does not exist.
+	CodeArtifactTrashed = "artifact_trashed"
 )
 
 // The failures a query surface reports precisely; everything else is a
@@ -150,6 +160,10 @@ var (
 	ErrNotFound     = errors.New("stream: no such record")
 	ErrBadParams    = errors.New("stream: query refused")
 	ErrUnavailable  = errors.New("stream: not available on this node")
+
+	// ErrArtifactTrashed is a question about the content of an artifact in
+	// the trash, answered [CodeArtifactTrashed].
+	ErrArtifactTrashed = errors.New("stream: the artifact is in the trash")
 )
 
 // RefusedError is [ErrUnauthorized] carrying WHY: the code the authority
@@ -1100,6 +1114,8 @@ func runQuery(ctx context.Context, client *Client, query Query, req request) {
 		client.Reply(env)
 	case errors.Is(err, ErrNotFound):
 		client.Reply(queryError(req, CodeNotFound))
+	case errors.Is(err, ErrArtifactTrashed):
+		client.Reply(queryError(req, CodeArtifactTrashed))
 	case errors.Is(err, ErrBadParams):
 		// DEBUG, NOT WARN: it is not this node's failure, and a poll
 		// behind a bad request writes a line per tick for as long as the

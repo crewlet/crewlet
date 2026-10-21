@@ -2304,6 +2304,7 @@ var QUERY_ERROR_CODES = {
 	bad_params: true,
 	not_found: true,
 	unavailable: true,
+	artifact_trashed: true,
 	timeout: true,
 	closed: true
 };

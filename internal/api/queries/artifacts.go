@@ -111,9 +111,11 @@ func artifactFailure(what string, err error) error {
 	case errors.As(err, &refusal):
 		return NewRefusal(what, refusal.Decision)
 	case errors.Is(err, artifactsdomain.ErrTrashed):
-		// IN THE TRASH, ITS CONTENT IS NOT SERVED: the record is not one
-		// this question answers until the owner restores the artifact.
-		return fmt.Errorf("%w: %w", ErrNotFound, err)
+		// IN THE TRASH, ITS CONTENT IS NOT SERVED until the owner restores
+		// the artifact — and the caller, whom the admission already
+		// decided the artifact is disclosed to, is told so rather than
+		// that it does not exist.
+		return fmt.Errorf("%w: %w", ErrArtifactTrashed, err)
 	case errors.Is(err, artifactsapi.ErrRecordUnwritten), errors.Is(err, artifactsapi.ErrNoRoster):
 		return fmt.Errorf("%w: %w", ErrUnavailable, err)
 	case errors.Is(err, artifactsdomain.ErrNotFound), errors.Is(err, artifactsdomain.ErrPurged):
