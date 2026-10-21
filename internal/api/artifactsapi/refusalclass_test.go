@@ -4,7 +4,6 @@ import (
 	"go/ast"
 	"go/parser"
 	gotoken "go/token"
-	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"slices"
@@ -33,17 +32,21 @@ import (
 // holds it, to ask for a permission the trash does not care about, and that
 // it may not publish when nobody may.
 //
-// WHAT HTTP SAYS MORE PRECISELY is declared, never assumed: `refines` is a
-// status HTTP has for one case of the class's meaning, with the reason.
+// THE PUBLISH STATES ITS BASE AS AN If-Match HEADER, so the status it is held
+// to is the one mapping's for a call such a header conditioned
+// ([operator.FailIfMatched]): a head that moved past the base is HTTP's failed
+// precondition, `412 version_moved`, where a tool, which takes the base as an
+// argument, is told the class's `409 stale_version`. It was a refinement this
+// case declared for the one row, which said 412 for a publish and left every
+// other surface's If-Match answering 409.
 //
 // Mutation: class ErrLabelTaken `invalid` in builtin's artifactClass, or answer
 // QuotaExceeded 413 in writeFailed, and this goes red naming it.
 func TestEveryArtifactRefusalIsOneClassOnBothSurfaces(t *testing.T) {
 	t.Parallel()
 	cases := map[string]struct {
-		err     error
-		refines int    // the API's own status, where HTTP says the class more precisely
-		why     string // set: not a write's refusal, and why
+		err error
+		why string // set: not a write's refusal, and why
 	}{
 		"ErrAboveOwnRole":      {err: artifactsdomain.ErrAboveOwnRole},
 		"ErrAgentCompanyShare": {err: artifactsdomain.ErrAgentCompanyShare},
@@ -59,11 +62,7 @@ func TestEveryArtifactRefusalIsOneClassOnBothSurfaces(t *testing.T) {
 		"CarriedObjectGone":    {err: &artifactsdomain.CarriedObjectGone{Paths: []string{"a.css"}}},
 		"QuotaExceeded": {err: &artifactsdomain.QuotaExceeded{Limit: 1, Usage: 2,
 			Key: "artifacts.limits.company_bytes"}},
-		// A PUBLISH NAMES ITS BASE VERSION, which is its precondition, and
-		// 412 is HTTP's answer for a precondition that failed — the status
-		// every surface that names a version answers a moved one with
-		// (`version_moved`), inside the class's own meaning.
-		"VersionMoved": {err: &artifactsdomain.VersionMoved{}, refines: http.StatusPreconditionFailed},
+		"VersionMoved": {err: &artifactsdomain.VersionMoved{}},
 
 		"ErrBadCursor": {why: "a read's refusal, answered by the listing routes, never a write's"},
 		"ErrNotInTrash": {why: "the trash reaper's own purge, made as the engine, never a " +
@@ -95,21 +94,17 @@ func TestEveryArtifactRefusalIsOneClassOnBothSurfaces(t *testing.T) {
 			continue
 		}
 		rec := httptest.NewRecorder()
-		operator.Fail(rec, tools.Classify(class, c.err), caveat.Refusal{}, "op", nil)
-		want := rec.Code
+		operator.FailIfMatched(rec, tools.Classify(class, c.err), caveat.Refusal{}, "op", nil)
+		want, wantCode := rec.Code, errorOf(t, rec)
 
 		g := newRig(t, true)
 		g.pipeline.err = c.err
 		w := g.do(person("sam"), "POST", at(page, "/versions"), publishV3,
 			append(keyed(), "If-Match", ifMatch2)...)
-		switch {
-		case c.refines != 0 && w.Code != c.refines:
-			t.Errorf("%s: the API answered %d %s, and its declared refinement of the "+
-				"tools' %q (%d) is %d", name, w.Code, errorOf(t, w), class, want, c.refines)
-		case c.refines == 0 && w.Code != want:
+		if w.Code != want {
 			t.Errorf("%s: the API answered %d %s and the tools class it %q, which the "+
-				"operator surface answers %d: one refusal is one class", name, w.Code,
-				errorOf(t, w), class, want)
+				"operator surface answers %d %s under an If-Match: one refusal is one "+
+				"class", name, w.Code, errorOf(t, w), class, want, wantCode)
 		}
 	}
 }

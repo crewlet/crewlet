@@ -154,7 +154,7 @@ curl -X PUT $CREWLET_URL/config \
   -H "Content-Type: application/yaml" \
   -H "X-Summary: bootstrap Nimbus" \
   --data-binary @examples/nimbus.company.yaml
-# 409 revision_advanced if the fleet's revision moved past $REV between read + write
+# 412 revision_advanced if the fleet's revision moved past $REV between read + write
 ```
 
 Take the tag from `GET /config`, not from the top of `/config/revisions`: that
@@ -162,8 +162,9 @@ list is this node's history, newest first, and its newest row need not be the
 fleet's — a write that lost a race is kept there, inert. Without `If-Match` a
 write is still built on the fleet's revision as the node reads it, and still
 refused `409 revision_advanced` if another write lands between that read and
-its activation; `If-Match` also refuses an edit of a revision that had moved
-before you sent it, before anything is built.
+its activation. With `If-Match` the same race is `412`, the precondition you
+stated having failed, and `If-Match` also refuses an edit of a revision that
+had moved before you sent it, before anything is built.
 
 ---
 
@@ -484,7 +485,7 @@ classified, beside the `detail` that renders them.
 | `400` | `validation_error` | The whole resulting document failed validation; `detail` carries the message and `problems` locates each failure |
 | `400` | `summary_required` | Any write with neither an `X-Summary` header nor a top-level `_summary` key in the body — asked once the write is admitted and its document checked, so a write you may not make is refused for that first |
 | `400` | `invalid_query` | `dry_run` given as anything but `true` or `false` |
-| `400` | `conflicting_preconditions` | A per-entity `PUT` carrying both `If-None-Match: *` and `If-Match`; send one |
+| `400` | `conflicting_preconditions` | A write carrying both `If-None-Match` and `If-Match`, to `/config` or a per-entity `PUT`; send one |
 | `400` | `identity_mismatch` | A per-entity `PUT` whose body names another id than its path: this route never renames — a seat's handle and a unit's key are permanent, and a server or provider is renamed in the whole document, with everything that names it |
 | `400` | `not_creatable` | A create-only `PUT` (`If-None-Match: *`) of a seat or a unit: each has a place the path cannot name, so add it by replacing the unit it sits in, or through `PUT /config` |
 | `401` | `invalid_token` | Bearer missing / wrong / wrong scheme |
@@ -496,8 +497,9 @@ classified, beside the `detail` that renders them.
 | `404` | `no_route` | A path under `/config` this surface does not serve |
 | `405` | `method_not_allowed` | A `/config` path under a method it does not take; `Allow` names the ones it does |
 | `409` | `no_active_revision` | A per-entity write before the company exists: there is nothing to splice into |
-| `409` | `revision_advanced` | Stale `If-Match`, or the fleet's activation moved between the write's read of it and its own activation, `If-Match` or not: a concurrent writer won the race, the activation was removed under it, or a write built while the fleet had none lost to one published meanwhile. A write that lost at its activation keeps the revision it stored, inert, and names it as `stored_revision_id` and the node holding it as `node`: it is in that node's history alone, so its diff and its revert go to that node, by its own address where several share one — any other answers `404` for it. Re-read `/config` and send the edit again |
+| `409` | `revision_advanced` | The fleet's activation moved between the write's read of it and its own activation, for a write that named no revision in `If-Match` (or sent `If-Match: *`, or another resource's tag, or none at all, as a reload and a revert do): a concurrent writer won the race, the activation was removed under it, or a write built while the fleet had none lost to one published meanwhile. A write that lost at its activation keeps the revision it stored, inert, and names it as `stored_revision_id` and the node holding it as `node`: it is in that node's history alone, so its diff and its revert go to that node, by its own address where several share one — any other answers `404` for it. Re-read `/config` and send the edit again |
 | `409` | `seat_held` | A write that removes a human seat, or makes it an agent's, while the identity directory binds somebody to it or an open invitation names it; `held` names the one thing holding each seat. Move or remove a person, unbind a service account, or cancel the invitation first |
+| `412` | `revision_advanced` | `If-Match: <revision>` names a revision that is not the fleet's: when the write arrived, or because another write was activated before it. One that lost at its activation keeps and names the revision it stored as the `409` does. Re-read `/config` and send the edit again |
 | `412` | `no_active_revision` | `If-Match: <revision>` sent before the company exists; retry without `If-Match`, or send `If-None-Match: *` |
 | `412` | `already_configured` | `If-None-Match: *` on `PUT /config` sent while the fleet runs a company — on every node alike, one that has not applied it yet included — or, with no activation, while this node knows one. Also a create-only write that read no activation and lost to one published before its own landed: it keeps the revision it stored, inert, as `stored_revision_id`, in the history of the node named `node` alone, as a `409` does |
 | `412` | `entity_exists` | A per-entity create (`If-None-Match: *`) naming an MCP server or LLM provider the active revision already has |

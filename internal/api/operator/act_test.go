@@ -740,6 +740,70 @@ func TestAToolRefusalIsAnsweredByItsClass(t *testing.T) {
 	}
 }
 
+// A TOOL REFUSED UNDER AN If-Match HEADER IS ANSWERED AS [operator.FailTool]
+// ANSWERS IT, BUT FOR A STALE VERSION, which is HTTP's failed precondition
+// (`412 version_moved`, [operator.FailIfMatched]); and either way the tool's
+// own sentence is told to the model that made the call and is never in the
+// person's answer. A route that folded the header answers both halves through
+// one function ([operator.FailToolIfMatched]), so the header moves the status
+// of a stale version and nothing about who hears which words.
+//
+// Mutation: answer the stale class 409 under the header, any other class
+// differently from FailTool, or drop FailToolIfMatched's modelnote.Tell, and
+// this goes red naming it.
+func TestAToolRefusedUnderIfMatchIsFailToolsAnswerButForAStaleVersion(t *testing.T) {
+	t.Parallel()
+	const model = "update_work_item refused that: the model's sentence, naming what to send."
+	answer := func(fail func(http.ResponseWriter, *http.Request, tools.Result, string,
+		httpjson.Detail), cause error) (*httptest.ResponseRecorder, string) {
+
+		ctx, heard := modelnote.Expect(t.Context())
+		r := httptest.NewRequestWithContext(ctx, http.MethodPatch, "/worklet/items/ENG-1", nil)
+		rec := httptest.NewRecorder()
+		// ANY PERSON'S WORDS: what is held is that both answers carry them.
+		fail(rec, r, tools.Result{Failed: true, Output: model, Cause: cause,
+			PersonRefusal: caveat.NotAnOption()}, "the-key",
+			httpjson.Detail{"tool": worklet.UpdateWorkItemTool})
+		return rec, heard.Said()
+	}
+	causes := map[string]error{
+		"an outcome nobody can establish": crewletmcp.ErrOutcomeUnknown,
+		"an unclassified failure":         errors.New("a tool that forgot to classify"),
+	}
+	for _, class := range crewletmcp.Refusals {
+		causes[string(class)] = crewletmcp.Classify(class, errors.New("the reason"))
+	}
+	for name, cause := range causes {
+		plain, toldPlain := answer(operator.FailTool, cause)
+		matched, toldMatched := answer(operator.FailToolIfMatched, cause)
+		if toldMatched != model || toldPlain != model {
+			t.Errorf("%s: the model heard %q under If-Match and %q without it, want "+
+				"the tool's sentence both times", name, toldMatched, toldPlain)
+		}
+		if strings.Contains(matched.Body.String(), "refused that") {
+			t.Errorf("%s: the person's answer under If-Match carries the model's "+
+				"sentence: %s", name, matched.Body)
+		}
+		if name == string(crewletmcp.RefusalStaleVersion) {
+			body, class := decode(t, matched), decode(t, plain)
+			if matched.Code != http.StatusPreconditionFailed ||
+				body["error"] != string(httpjson.CodeVersionMoved) ||
+				body["detail"] != class["detail"] || body["tool"] != worklet.UpdateWorkItemTool {
+				t.Errorf("a stale version under If-Match answered %d %v, want 412 "+
+					"version_moved carrying the person's words and what it was about",
+					matched.Code, body)
+			}
+			continue
+		}
+		if matched.Code != plain.Code || matched.Body.String() != plain.Body.String() ||
+			matched.Header().Get("Retry-After") != plain.Header().Get("Retry-After") {
+			t.Errorf("%s: under If-Match %d %s, and through FailTool %d %s: only a "+
+				"stale version may differ", name, matched.Code, matched.Body, plain.Code,
+				plain.Body)
+		}
+	}
+}
+
 // THE LARGEST PAGE THE KNOWLEDGE BASE ACCEPTS FITS THE BODY, as the browser
 // sends it: JSON.stringify escapes a quote, a backslash and a newline to two
 // bytes each, so a legal page of nothing but those doubles on the wire, and a

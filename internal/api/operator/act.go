@@ -441,6 +441,21 @@ func FailTool(w http.ResponseWriter, r *http.Request, result tools.Result, key s
 	modelnote.Tell(r.Context(), result.Output)
 }
 
+// FailToolIfMatched is [FailTool] for a call whose version the request stated
+// in its If-Match HEADER, which the route folded into the tool's version: a
+// stale version is HTTP's failed precondition ([FailIfMatched]), every other
+// refusal is FailTool's answer, and the tool's sentence is told to the model
+// that made the call as FailTool tells it. ONE FUNCTION for both halves, so a
+// route that folds the header cannot answer its status and forget the model:
+// the header moves the status of a stale version, and nothing about who hears
+// which words.
+func FailToolIfMatched(w http.ResponseWriter, r *http.Request, result tools.Result,
+	key string, about httpjson.Detail) {
+
+	FailIfMatched(w, result.Cause, result.PersonRefusal, key, about)
+	modelnote.Tell(r.Context(), result.Output)
+}
+
 // TellNote tells the note on a successful call's arguments ([tools.Result.Note])
 // to the one reader it is worded for, the model that wrote the call, in
 // process (internal/modelnote), as [FailTool] tells a refusal's sentence. A

@@ -14,7 +14,7 @@
  *
  * - EDIT mode is `PATCH /config` with a JSON merge patch of exactly the keys
  *   the builder changed (`buildPatch`) and `If-Match` naming the base
- *   revision, so a newer revision is a 409 rather than an overwrite.
+ *   revision, so a newer revision is a 412 rather than an overwrite.
  * - CREATE mode is `PUT /config` with the whole document and
  *   `If-None-Match: *`, so a company that appeared meanwhile, anywhere in the
  *   fleet, is a 412 rather than a replacement.

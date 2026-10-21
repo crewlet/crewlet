@@ -425,3 +425,60 @@ func TestARefusalASurfaceDecidedIsAnsweredInTheTablesCode(t *testing.T) {
 		})
 	}
 }
+
+// AN If-Match HEADER CHANGES ONE ANSWER AND NO OTHER: a stale version the
+// header stated is HTTP's failed precondition, `412 version_moved` (RFC 9110
+// §13.1.1), and every other class — and every arm decided before the class,
+// an outcome nobody can establish among them — is answered byte for byte as
+// [operator.Fail] answers it, so a route that folds the header into a tool's
+// version cannot answer anything but its staleness differently from the act
+// route the dashboard writes through.
+//
+// Mutation: answer the stale class 409 under the header, or any other class
+// differently, and this goes red naming it.
+func TestAnIfMatchHeaderRefinesOnlyAStaleVersion(t *testing.T) {
+	t.Parallel()
+	answer := func(fail func(http.ResponseWriter, error, caveat.Refusal, string, httpjson.Detail),
+		cause error) *httptest.ResponseRecorder {
+
+		// ANY PERSON'S WORDS: what is held is that both answers carry them.
+		rec := httptest.NewRecorder()
+		fail(rec, cause, caveat.NotAnOption(), "the-key",
+			httpjson.Detail{"tool": "update_work_item"})
+		return rec
+	}
+	causes := map[string]error{
+		"an outcome nobody can establish": crewletmcp.ErrOutcomeUnknown,
+		"an unclassified failure":         errors.New("a tool that forgot to classify"),
+	}
+	for _, class := range crewletmcp.Refusals {
+		causes[string(class)] = crewletmcp.Classify(class, errors.New("the reason"))
+	}
+	for name, cause := range causes {
+		plain, matched := answer(operator.Fail, cause), answer(operator.FailIfMatched, cause)
+		if name == string(crewletmcp.RefusalStaleVersion) {
+			var body, class map[string]any
+			if json.Unmarshal(matched.Body.Bytes(), &body) != nil ||
+				json.Unmarshal(plain.Body.Bytes(), &class) != nil {
+				t.Fatalf("a stale version answered %q and %q", matched.Body, plain.Body)
+			}
+			if matched.Code != http.StatusPreconditionFailed ||
+				body["error"] != string(httpjson.CodeVersionMoved) ||
+				body["detail"] != class["detail"] || body["tool"] != "update_work_item" {
+				t.Errorf("a stale version under If-Match answered %d %v, want 412 "+
+					"version_moved carrying the person's words and what it was about",
+					matched.Code, body)
+			}
+			if plain.Code != http.StatusConflict {
+				t.Errorf("a stale version stated as an argument answered %d, want the "+
+					"class's 409", plain.Code)
+			}
+			continue
+		}
+		if matched.Code != plain.Code || matched.Body.String() != plain.Body.String() ||
+			matched.Header().Get("Retry-After") != plain.Header().Get("Retry-After") {
+			t.Errorf("%s: under If-Match %d %s, and as an argument %d %s: only a stale "+
+				"version may differ", name, matched.Code, matched.Body, plain.Code, plain.Body)
+		}
+	}
+}
