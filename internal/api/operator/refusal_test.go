@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iam"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/modelnote"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -233,6 +234,95 @@ func TestADomainsRefusalIsToldInItsCodesOwnWords(t *testing.T) {
 				if strings.Contains(answer, strings.ToLower(never)) {
 					t.Errorf("the answer %v carries the error's own %q", body, never)
 				}
+			}
+		})
+	}
+}
+
+// A STATE OR A COLLISION A DOMAIN DECIDED IS TOLD TO A PERSON IN ITS CODE'S
+// OWN WORDS, and the tool's own sentence to the model alone, in process.
+//
+// The tool's sentence for a refusal is a model's — "post_message refused that:
+// … say it somewhere that is still open, or say nothing", "write_project on ENG
+// with tags_add: …" — and so is the domain's sentence it carries: the room
+// archived, the task in the trash, the label another tag holds. A person is
+// shown neither (ADR-0060), and nobody has worded these refusals for a person
+// yet, so each is answered in its class — a state, a race, a collision and a
+// turn's note bounds a `409` alike — with no detail and its code's own message
+// standing alone, and never with the tool's sentence beside it as a
+// `tool_detail`. That sentence reaches the one reader it is worded for through
+// [operator.FailTool], which tells it to the in-process model that made the
+// call (internal/modelnote).
+//
+// Mutation: answer result.Output as the detail, or drop FailTool's
+// modelnote.Tell, and every row goes red; answer the domain's sentence and
+// every row a domain decided does.
+func TestAStateOrACollisionIsToldToAPersonInItsCodesOwnWords(t *testing.T) {
+	t.Parallel()
+	model := "post_message refused that: the model's sentence, naming the tool to call next."
+	for name, tc := range map[string]struct {
+		cause  error
+		status int
+		code   httpjson.Code
+		words  string
+	}{
+		"an archived room": {crewletmcp.Classify(crewletmcp.RefusalConflict,
+			fmt.Errorf("%w: this room is archived, so it takes no new messages. "+
+				"Whoever created it, its team's lead or an administrator can reopen it",
+				chatlet.ErrArchived)), http.StatusConflict, httpjson.CodeConflict,
+			"reopen it"},
+		"a task in the trash": {crewletmcp.Classify(crewletmcp.RefusalConflict,
+			&worklet.Refusal{Mark: worklet.ErrState,
+				Err: errors.New("this task is in the trash, put there by ana. Restore it first")}),
+			http.StatusConflict, httpjson.CodeConflict, "put there by ana"},
+		"a lost race": {crewletmcp.Classify(crewletmcp.RefusalConflict,
+			fmt.Errorf("%w: crewlet.tracker.task.x kept changing", statelog.ErrConflict)),
+			http.StatusConflict, httpjson.CodeConflict, "kept changing"},
+		"a label another tag carries": {crewletmcp.Classify(crewletmcp.RefusalExists,
+			&worklet.TagClash{Project: "ENG", Slug: "api", Label: "API",
+				Other: worklet.Tag{Slug: "backend-api", Label: "API"}}), http.StatusConflict,
+			httpjson.CodeExists, "backend-api"},
+		"an argument refused": {crewletmcp.Classify(crewletmcp.RefusalInvalid,
+			&chatlet.InvalidError{Field: "body", Why: "a message is at most 32768 bytes"}),
+			http.StatusUnprocessableEntity, httpjson.CodeInvalid, "32768 bytes"},
+		"a seat pause's lost race": {crewletmcp.RefusalConflict, http.StatusConflict,
+			httpjson.CodeConflict, "naming the tool"},
+		"a turn's full note box": {crewletmcp.RefusalNotesFull, http.StatusConflict,
+			httpjson.CodeNotesFull, "naming the tool"},
+		"a turn's spent note box": {crewletmcp.RefusalNotesSpent, http.StatusConflict,
+			httpjson.CodeNotesSpent, "naming the tool"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx, heard := modelnote.Expect(t.Context())
+			r := httptest.NewRequestWithContext(ctx, http.MethodPost,
+				operator.ActPathPrefix+"post_message", nil)
+			rec := httptest.NewRecorder()
+			operator.FailTool(rec, r, crewletmcp.Result{Failed: true, Output: model,
+				Cause: tc.cause}, newKey(), httpjson.Detail{"tool": "post_message"})
+			body := decode(t, rec)
+			if rec.Code != tc.status || body["error"] != string(tc.code) {
+				t.Fatalf("answered %d %v, want %d %s", rec.Code, body, tc.status, tc.code)
+			}
+			if detail, has := body["detail"]; has || body["message"] != tc.code.Message() {
+				t.Errorf("answered %v with detail %v, want its code's own message alone",
+					body, detail)
+			}
+			if said, has := body["tool_detail"]; has {
+				t.Errorf("the answer carries the tool's sentence as tool_detail: %v", said)
+			}
+			if body["tool"] != "post_message" {
+				t.Errorf("the answer lost what it was about: %v", body)
+			}
+			for key, value := range body {
+				for _, never := range []string{"refused that", tc.words} {
+					if key != "tool" && strings.Contains(fmt.Sprint(value), never) {
+						t.Errorf("%s carries the model's own %q: %v", key, never, value)
+					}
+				}
+			}
+			if heard.Said() != model {
+				t.Errorf("the model heard %q, want the tool's own sentence", heard.Said())
 			}
 		})
 	}

@@ -22,12 +22,24 @@ func answered(write func(http.ResponseWriter)) exec.Response {
 	return exec.Response{Status: rec.Code, Header: rec.Header(), Body: rec.Body.Bytes()}
 }
 
+// told is resp with the tool's own sentence told beside it in process, as the
+// dispatcher hands back a tool's refusal the route answered a person
+// (internal/modelnote).
+func told(resp exec.Response, sentence string) exec.Response {
+	resp.ModelDetail = sentence
+	return resp
+}
+
 // A REFUSAL READS AS THE API SAID IT, ON TWO CHANNELS: the code, the sentence
 // the envelope says to a person, the deciding rule's reason with the grants
 // that would have admitted them, and the route's own account of this request
-// as the detail only the model reads; a body that is not the envelope is a
-// refusal by its status alone, with no reason. Mutation: read the detail into
-// the message, or drop the reason or the grants, and a row fails.
+// as the detail the model reads, a person's too only where the route marked it
+// so by the tool's own sentence told beside it in process, which is never read
+// as the detail itself; a body that is not the envelope is a refusal by its
+// status alone, with no reason. Mutation: read the detail into the message,
+// drop the reason or the grants, take an unmarked detail for a person's, or
+// read the tool's sentence as the detail or the person's words, and a row
+// fails.
 func TestARefusalReadsAsTheAPISaidIt(t *testing.T) {
 	t.Parallel()
 	deny := func(reason authz.Reason, grants ...iam.Grant) exec.Response {
@@ -77,6 +89,18 @@ func TestARefusalReadsAsTheAPISaidIt(t *testing.T) {
 				map[string]string{"detail": "the task moved to version 9", "hint": "ask again"})
 		}), wire.Refusal{Code: "proposal_stale", Message: httpjson.CodeProposalStale.Message(),
 			Hint: httpjson.Sentence("ask again"), Detail: httpjson.Sentence("the task moved to version 9")}},
+		{"a state told in a person's words", told(answered(func(w http.ResponseWriter) {
+			httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeConflict, httpjson.Detail{
+				"detail": "This artifact is in the trash. Restore it first, then try again.",
+			})
+		}), "update_artifact refused that: the artifact is in the trash"),
+			wire.Refusal{Code: "conflict", Message: httpjson.CodeConflict.Message(),
+				Detail: "This artifact is in the trash. Restore it first, then try again.",
+				Said:   "This artifact is in the trash. Restore it first, then try again."}},
+		{"a refusal nobody worded for a person", told(answered(func(w http.ResponseWriter) {
+			httpjson.Fail(w, http.StatusUnprocessableEntity, httpjson.CodeInvalid)
+		}), "create_work_item needs a `title`"),
+			wire.Refusal{Code: "invalid", Message: httpjson.CodeInvalid.Message()}},
 		{"a body that is not the envelope",
 			exec.Response{Status: http.StatusBadGateway, Body: []byte("<html>bad gateway</html>")},
 			wire.Refusal{Code: "http_502", Message: http.StatusText(http.StatusBadGateway)}},
@@ -87,7 +111,7 @@ func TestARefusalReadsAsTheAPISaidIt(t *testing.T) {
 		got := exec.RefusalOf(tc.resp)
 		if got.Code != tc.want.Code || got.Message != tc.want.Message || got.Hint != tc.want.Hint ||
 			got.Reason != tc.want.Reason || got.Detail != tc.want.Detail ||
-			!slices.Equal(got.Grants, tc.want.Grants) {
+			got.Said != tc.want.Said || !slices.Equal(got.Grants, tc.want.Grants) {
 			t.Errorf("%s read as %+v, want %+v", tc.name, got, tc.want)
 		}
 		if got.Message == "" {

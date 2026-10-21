@@ -13,10 +13,12 @@ import (
 // Because the sentence has one reader and the class has another. A model reads
 // [Result.Output] and is expected to act on its words — that is why the output
 // is the whole story for it, and why the refusal text names the argument to
-// change. A PERSON's surface cannot: the dashboard has to decide whether to
-// show the tool's sentence at all (it names a field only for [RefusalInvalid]
-// and [RefusalForbidden]), which HTTP status the write surface answers, and
-// whether a retry could ever help — and every one of those decisions, made by
+// change. A PERSON's surface cannot: it has to decide what a person reads in
+// place of the tool's sentence, which names the next call for a model (the
+// words the refusal carries for a person, or its code's own sentence where it
+// carries none: internal/api/operator's Fail, ADR-0060), which HTTP status the
+// write surface answers, and whether a retry could ever help — and every one
+// of those decisions, made by
 // matching the prose, is a decision that changes when somebody rewords a
 // refusal for the model's benefit. The prompt text is tuned against observed
 // model behaviour; it cannot also be a wire contract.

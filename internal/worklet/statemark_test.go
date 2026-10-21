@@ -3,6 +3,8 @@ package worklet_test
 import (
 	"errors"
 	"fmt"
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -93,20 +95,51 @@ func TestAWriteTheObjectsStateRefusesIsMarkedAsItsState(t *testing.T) {
 			t.Errorf("%s was refused %v, want %v and not %v", c.name, err, c.mark, c.not)
 		case worklet.Sentence(err) == err.Error():
 			t.Errorf("%s reads %q to a person, with the package's prefix", c.name, err)
+		case errors.Is(c.mark, worklet.ErrState) && !forAPerson(worklet.Sentence(err)):
+			// A STATE IS SHOWN TO THE PERSON WHOSE GESTURE MET IT, in the
+			// domain's words: no id, no instant, no aside.
+			t.Errorf("%s reads %q, which is not written for the person shown it",
+				c.name, worklet.Sentence(err))
 		}
 	}
 
 	// AND A PROJECT ARCHIVED BEFORE WORK IS FILED INTO IT, last, because
 	// it closes the project every row above wrote in.
+	// Each NAMES WHO CHANGES IT — the archive's own relation, the project's
+	// lead or an administrator — because a state's sentence sends a person to
+	// whoever can lift it, and "unarchive it first" sent everybody to do what
+	// most of them may not.
 	archiveENG(t, r)
 	_, err := r.writer.CreateTask(t.Context(), "op-create", newTask("late"), nil)
 	if !errors.Is(err, worklet.ErrState) || errors.Is(err, worklet.ErrInvalid) {
 		t.Errorf("a create into an archived project was refused %v, want the "+
 			"project's state alone", err)
 	}
-	if err := worklet.AcceptFiles("ENG", true); !errors.Is(err, worklet.ErrState) ||
-		errors.Is(err, worklet.ErrInvalid) {
+	files := worklet.AcceptFiles("ENG", true)
+	if !errors.Is(files, worklet.ErrState) || errors.Is(files, worklet.ErrInvalid) {
 		t.Errorf("a file into an archived project is refused %v, want the "+
-			"project's state alone", err)
+			"project's state alone", files)
+	}
+	for _, refused := range []error{err, files} {
+		if said := worklet.Sentence(refused); !forAPerson(said) ||
+			!strings.Contains(said, "Its lead or an administrator can unarchive it") {
+			t.Errorf("an archived project reads %q, which does not name who "+
+				"unarchives it", said)
+		}
 	}
 }
+
+// forAPerson is whether a refusal's sentence reads for the person a screen
+// shows it to: no em dash (an aside a short sentence does not need), no RFC
+// 3339 instant and no task id — a uuid, or this test's own `frozen`, the id
+// its trashed task is filed under — neither of which a person beside the task
+// acts on.
+func forAPerson(said string) bool {
+	return !strings.Contains(said, "—") && !rfc3339.MatchString(said) &&
+		!uuidLike.MatchString(said) && !strings.Contains(said, "frozen")
+}
+
+var (
+	rfc3339  = regexp.MustCompile(`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}`)
+	uuidLike = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-`)
+)

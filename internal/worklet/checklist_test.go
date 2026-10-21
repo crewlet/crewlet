@@ -213,13 +213,13 @@ func TestApplyChecklist(t *testing.T) {
 		"an item id already taken": {
 			lists:  launchList(),
 			intent: worklet.ChecklistIntent{Op: worklet.ChecklistAddItem, List: "launch", Item: "flag", Name: "dup"},
-			refuse: "already has a checklist item",
+			refuse: "already has that checklist line",
 			mark:   worklet.ErrTaken,
 		},
 		"a list id already taken": {
 			lists:  launchList(),
 			intent: worklet.ChecklistIntent{Op: worklet.ChecklistAddList, List: "launch", Name: "dup"},
-			refuse: "already has a checklist",
+			refuse: "already has that checklist.",
 			mark:   worklet.ErrTaken,
 		},
 		"an unknown item": {

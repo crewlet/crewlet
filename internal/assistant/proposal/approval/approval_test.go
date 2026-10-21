@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/proposal"
@@ -514,6 +515,38 @@ func TestARefusalsToolSentenceReachesTheModelAlone(t *testing.T) {
 	}
 }
 
+// A STATE IS TOLD IN A PERSON'S WORDS, NEVER AS A RACE. An approved write the
+// route refused for the state of what it was about, in the words its refusal
+// carries for a person (ADR-0060) with the tool's own told beside it in
+// process ([exec.Response.ModelDetail]), fails with a card in those words and
+// a next step that promises no change, since only whoever changes the state
+// clears it. Mutation: leave the person's words behind, or stop reading the
+// mark that makes them a person's, and the card reads the conflict's own
+// sentence.
+func TestAStateIsToldInAPersonsWords(t *testing.T) {
+	t.Parallel()
+	f := approvaltest.NewFleet()
+	trashed := "This artifact is in the trash. Restore it first, then try again."
+	body, _ := json.Marshal(map[string]any{"error": "conflict",
+		"message": httpjson.CodeConflict.Message(), "detail": trashed})
+	f.API.AnswerNext(exec.Response{Status: http.StatusConflict, Body: body,
+		ModelDetail: "update_artifact refused that: the artifact is in the trash"})
+	ada := approvaltest.Person(approvaltest.Noon.Add(time.Hour))
+	p := f.Propose(t, ada, nil)
+	got, err := f.Node(t).Approve(approvaltest.As(t.Context(), ada), approvaltest.Approve(p))
+	if err != nil || got.Proposal.State != wire.ProposalFailed {
+		t.Fatalf("a refused write answered %v, %v", got.Proposal.State, err)
+	}
+	r := f.Turns.Resumed()
+	if len(r) != 1 || r[0].Card.Proposal == nil || r[0].Card.Proposal.Failure == nil {
+		t.Fatalf("the turn was handed %+v, want the failure and its card", r)
+	}
+	shown := r[0].Card.Proposal.Failure.Refusal
+	if shown.Code != "conflict" || shown.Message != trashed || shown.Hint != cards.RefusalResumes {
+		t.Errorf("the card's failure is %+v, want the person's words %q", shown, trashed)
+	}
+}
+
 // AN APPLIED WRITE HANDS THE TURN ITS RECEIPT and the position open screens
 // raise their read floor to.
 func TestAnAppliedWriteHandsTheTurnItsReceipt(t *testing.T) {
@@ -868,8 +901,9 @@ func TestARacedCreateIsRefusedAsStale(t *testing.T) {
 // every note a turn takes answers its next one `409 notes_spent`: the failed
 // proposal reads as what happened — the turn has taken all it takes, the rest
 // belongs on its work item — never as a change that collided with another, and
-// its hint does not say the assistant will suggest a change that can apply,
-// since none can. The turn is handed the route's own refusal.
+// its hint is the settled one, which says what can still be done, never the
+// one for a state whoever changes it clears, since nothing clears it for that
+// turn. The turn is handed the route's own refusal.
 //
 // Mutation: hint every refusal with cards.RefusalResumes, or word every 409 as
 // a collision, and this goes red.

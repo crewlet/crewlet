@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -226,10 +225,7 @@ func decidePlace(ctx context.Context, tx *sql.Tx, place Place,
 	case !held:
 		return nil, missingTask(ctx, tx, place.Task, "it cannot be placed")
 	case current.Removed != nil:
-		return nil, refusedByState("task %s was removed by %s at %s; "+
-			"restore it first", place.Task,
-			current.Removed.By,
-			current.Removed.At.Format(time.RFC3339))
+		return nil, inTheTrash(current, "")
 	case ifMatch != 0 && current.Version != ifMatch:
 		return nil, fmt.Errorf("%w: task %s is at version %d and the drop "+
 			"was conditioned on %d — the card changed since the board was "+

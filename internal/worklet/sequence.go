@@ -1061,7 +1061,7 @@ func (w *Writer) refuseCreate(ctx context.Context, tx *sql.Tx, task Task) (
 			"node: %w", task.Project, statelog.ErrUnavailable)
 	case project.Archived:
 		return settledCreate{}, refusedByState("project %s is archived, so "+
-			"it takes no new work; unarchive it first", task.Project)
+			"it takes no new work. %s", task.Project, unarchiveProject)
 	}
 	if task.Parent != nil && *task.Parent != "" {
 		if err = refuseParent(ctx, tx, task, *task.Parent); err != nil {
@@ -1767,10 +1767,7 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 				"task moves between projects — moving a subtask alone would "+
 				"leave it in a project its parent is not in", taskID)
 		case current.Removed != nil:
-			return refusedByState("task %s was removed by %s at %s; "+
-				"restore it before moving it", taskID,
-				current.Removed.By,
-				current.Removed.At.Format(time.RFC3339))
+			return inTheTrash(current, "moving it")
 		}
 		root = current
 		if current.Project == target {
@@ -1804,11 +1801,11 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 		}
 		for _, descendant := range subtree {
 			if descendant.Removed != nil {
-				return refusedByState("task %s under %s is in the trash, "+
-					"and a removed task is frozen, so the move could not carry "+
-					"it and would leave it in %s under a root in %s — restore "+
-					"it or purge it, then move again", descendant.ID, taskID,
-					current.Project, target)
+				// A REMOVED TASK IS FROZEN, so the move could not carry
+				// it and would leave it under a root in another project.
+				return refusedByState("%s, under this task, is in the trash, "+
+					"and a move can't carry it. Restore it or purge it, then "+
+					"move again", nameOf(descendant))
 			}
 		}
 		carried, err = carriedTags(ctx, tx, current.Project,
@@ -2167,11 +2164,10 @@ func (w *Writer) followRoot(ctx context.Context, opID string, root Task,
 	}
 	if len(frozen) > 0 {
 		return stop(carried+len(left), w.addressOf(ctx, frozen[0]),
-			refusedByState("task %s (%s) under %s is in the trash and still in "+
-				"project %s, and a removed task is frozen — the move waits for "+
-				"it: restore it and the next pass carries it into %s, or purge "+
-				"it", frozen[0].Key, frozen[0].ID, root.ID, frozen[0].Project,
-				root.Project))
+			// A REMOVED TASK IS FROZEN, so the move waits for it.
+			refusedByState("%s, under this task, is in the trash and still in "+
+				"%s. Restore it and the next pass moves it into %s, or purge it",
+				nameOf(frozen[0]), frozen[0].Project, root.Project))
 	}
 	// AFTER WHAT THIS PASS MOVED, for the reason the sequence's own last
 	// append waits: [carriedAll] asks this node's rows whether anything
@@ -2526,10 +2522,7 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 		case !held:
 			return missingTask(ctx, tx, duplicate, "it cannot be merged")
 		case current.Removed != nil:
-			return refusedByState("task %s was removed by %s at %s; "+
-				"restore it before merging it", duplicate,
-				current.Removed.By,
-				current.Removed.At.Format(time.RFC3339))
+			return inTheTrash(current, "merging it")
 		}
 		task = current
 		survivor, held, err := readTask(ctx, tx, into)

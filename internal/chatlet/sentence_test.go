@@ -47,7 +47,7 @@ func TestARefusalReadsAsAnInstruction(t *testing.T) {
 		{"a gesture not this actor's", forbidden, chatlet.ErrForbidden,
 			"message " + said.Message.ID, "only its author may edit it"},
 		{"a room that takes nothing more", closed, chatlet.ErrArchived,
-			room.Channel.ID + " was archived", "reopen it before posting"},
+			"this room is archived", "its team's lead or an administrator can reopen it"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if !errors.Is(c.err, c.mark) {
@@ -85,7 +85,7 @@ func TestARefusalReadsAsAnInstruction(t *testing.T) {
 	// and keeps every word after it: a tool printed it whole, so a model read
 	// "chatlet:" in front of what it was told.
 	taken := fmt.Errorf("%w: launch", chatlet.ErrNameTaken)
-	if got, want := chatlet.Sentence(taken), "that channel name is taken: launch"; got != want {
+	if got, want := chatlet.Sentence(taken), "another room already has that name: launch"; got != want {
 		t.Errorf("a taken name: Sentence = %q, want %q", got, want)
 	}
 }

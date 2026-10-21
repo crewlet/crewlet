@@ -666,7 +666,7 @@ func TestEveryFilingOutcomeHasItsRefusal(t *testing.T) {
 	}{
 		{"full", func(t *testing.T) *runRecords {
 			return recordedTurn(t, builtin.RunFiled{Status: steer.StatusFull})
-		}, tools.RefusalNotesFull, "notes it has not read yet"},
+		}, tools.RefusalNotesFull, "notes it hasn't read yet"},
 		{"spent", func(t *testing.T) *runRecords {
 			return recordedTurn(t, builtin.RunFiled{Status: steer.StatusSpent})
 		}, tools.RefusalNotesSpent, "put the rest on the work item"},
