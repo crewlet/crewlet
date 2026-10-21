@@ -1,6 +1,7 @@
 // Package trashreap is the trash reaper: the fleet duty that purges what has
-// been trashed past its term, as the system, for every domain that keeps a
-// trash.
+// been trashed past its term, as the system, for every domain whose trash has
+// a term (the work tracker's removals have none: a removed item is restorable
+// at any age, and only a purge somebody asks for destroys one).
 //
 // # Why it exists
 //
