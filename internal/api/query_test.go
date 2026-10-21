@@ -369,6 +369,36 @@ func TestARefusalsSentenceReachesTheCallerOnBothTransports(t *testing.T) {
 	}
 }
 
+// AN ARTIFACT IN THE TRASH IS `artifact_trashed` ON BOTH TRANSPORTS: the
+// `409` every artifacts route answers it with over REST, and the same code on
+// the socket — never `not_found`, which is the answer for a caller the
+// artifact is answered as absent to. A datastore's question about a binned
+// sheet said it did not exist while the route beside it said it was in the
+// trash, so a screen drew a restorable sheet as a dead link.
+//
+// Mutation: translate queries.ErrArtifactTrashed as not found on either
+// transport, or drop its arm, and this goes red naming the transport.
+func TestATrashedArtifactIsAnsweredAsTrashedOnBothTransports(t *testing.T) {
+	t.Parallel()
+	a := seededApp(t, nil)
+	a.Queries().Register("binned", queries.Everybody(), func(context.Context, queries.Params) (any, error) {
+		return nil, fmt.Errorf("%w: the sheet", queries.ErrArtifactTrashed)
+	})
+
+	status, body := overREST(t, a, "binned", nil)
+	if status != http.StatusConflict ||
+		body.(map[string]any)["error"] != string(httpjson.CodeArtifactTrashed) {
+		t.Errorf("REST = %d %v, want 409 artifact_trashed", status, body)
+	}
+	if got := body.(map[string]any)["message"]; got != httpjson.CodeArtifactTrashed.Message() {
+		t.Errorf("REST message = %v, want the code's own sentence", got)
+	}
+	socket := overSocket(t, a, "binned", nil)
+	if socket["kind"] != "error" || socket["error"] != stream.CodeArtifactTrashed {
+		t.Errorf("socket answer = %v, want artifact_trashed", socket)
+	}
+}
+
 func TestAFailingQuestionReportsACodeAndNothingElse(t *testing.T) {
 	t.Parallel()
 	// The reason reaches the LOG, not the caller: it can carry a database

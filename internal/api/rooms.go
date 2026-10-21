@@ -83,8 +83,10 @@ func (r *Rooms) streamRooms() stream.Rooms {
 
 // roomAccess decides a join as the artifacts' own read admission does: the
 // role the artifact's shares and the chart give the reader, empty for one the
-// artifact is answered as absent to (no relation, purged, never created) and
-// for one in the trash, whose data is not served.
+// artifact is answered as absent to (no relation, purged, never created), and
+// [artifactsdomain.ErrTrashed] for one it is disclosed to while it is in the
+// trash, whose data is not served — told apart, because the second is a state
+// its owner's restore ends.
 //
 // A READ OF ITS CONTENT, RECORDED: a room carries the artifact's data to the
 // socket in it, so the join is the content read every other surface takes
@@ -99,8 +101,7 @@ func (a roomAccess) Standing(ctx context.Context, p iam.Principal, id artifacts.
 	admitted, err := a.gate.Content(ctx, p, authz.ActionArtifactRead, id, 0)
 	var refused *artifactsapi.Refused
 	switch {
-	case errors.Is(err, artifactsapi.ErrNoSuchArtifact), errors.Is(err, artifactsdomain.ErrTrashed),
-		errors.As(err, &refused):
+	case errors.Is(err, artifactsapi.ErrNoSuchArtifact), errors.As(err, &refused):
 		return "", nil
 	case err != nil:
 		return "", err

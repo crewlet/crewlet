@@ -119,7 +119,8 @@ const ARTIFACT_JOIN_WHAT = "artifact_join";
  * be caught up from the `through` it held or the datastore must be read whole.
  * `refused` is a join the engine refused or a room it withdrew, with the code
  * (`not_found` for both, in the words an artifact nobody holds is answered
- * with), after which no push arrives until the listener joins again.
+ * with, or `artifact_trashed` for an artifact disclosed to the reader and in
+ * the trash), after which no push arrives until the listener joins again.
  */
 export interface RoomListener {
   joined?: (answer: ArtifactJoined) => void;
@@ -162,6 +163,7 @@ const QUERY_ERROR_CODES: Record<QueryErrorCode, true> = {
   bad_params: true,
   not_found: true,
   unavailable: true,
+  artifact_trashed: true,
   timeout: true,
   closed: true,
 };

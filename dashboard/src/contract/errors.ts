@@ -24,6 +24,12 @@ export type QueryErrorCode =
    *  second is an answer a person acts on. A source this node does not have
    *  at all is `unknown_query`, which waiting never changes. */
   | "unavailable"
+  /** A question about the CONTENT of an artifact in the trash — its
+   *  datastore, its room — asked by somebody it is disclosed to: the REST
+   *  routes' `409 artifact_trashed`. Its owner's restore ends it, so a screen
+   *  says the artifact is in the trash rather than that it does not exist
+   *  (`not_found`, the answer for a reader it is not disclosed to). */
+  | "artifact_trashed"
   | "timeout"
   | "closed";
 
