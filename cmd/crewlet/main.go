@@ -271,12 +271,15 @@ Usage:
 Config:
   -config   Tier A, this NODE: where its broker, store and API are (default %q)
   -company  Tier B, the COMPANY: its org, providers and integrations (default %q).
-            A BOOTSTRAP seed: imported only when the store holds no company
-            yet. Once one exists the node serves the store and this file is
-            ignored, so a restart never reverts a live change.
+            A BOOTSTRAP seed: imported only where no company exists yet —
+            none in this node's store and none the fleet runs. Otherwise it
+            is ignored, loudly, and the node runs the company that exists,
+            so a restart never reverts a live change. Not read at all where
+            Tier A sets api.auth.company_writers.
   -import-company
             Tier B to make active NOW, over whatever the fleet is running.
             The deliberate "this file is the company again" gesture.
+            Refused where Tier A sets api.auth.company_writers.
             To change a RUNNING fleet with no restart at all, use
             "crewlet config import" — it goes through the node's API.
 
@@ -307,9 +310,10 @@ Environment:
 // document INTO that store, and there are two quite different reasons to want
 // that:
 //
-//	-company        BOOTSTRAP. Imported only when the store holds no active
-//	                revision. Once the company exists, this file is ignored
-//	                and the node boots on what the fleet is running.
+//	-company        BOOTSTRAP. Imported only where no company exists yet:
+//	                none in this node's store and none the fleet runs. Once
+//	                the company exists, this file is ignored and the node
+//	                boots on what the fleet is running.
 //
 //	-import-company OVERRIDE. Make this file the active revision now, over
 //	                whatever the fleet is running.
@@ -350,8 +354,9 @@ func addConfigFlags(fs *flag.FlagSet) configFlags {
 //
 // The store is authoritative at runtime, so a file on the command line is only
 // ever a way of getting a document INTO it. Override says which of the two
-// reasons this one is: bootstrap an empty store, or replace what the fleet is
-// running. Company is nil when there is no file to seed from at all.
+// reasons this one is: bootstrap a company that does not exist yet, or replace
+// what the fleet is running. Company is nil when there is no file to seed from
+// at all.
 //
 // It is the seed as the command line RESOLVED it, and not yet what it does:
 // that is [decideSeed]'s, whose [seedPlan] is the only thing the engine's boot
@@ -417,9 +422,9 @@ func (c configFlags) resolveSeed(set *flag.FlagSet, importPath string,
 		// running company.
 		return tierBSeed{}, errors.New(
 			"-company and -import-company both name a Tier B document, and " +
-				"they mean opposite things: -company bootstraps an empty " +
-				"store, -import-company replaces what the fleet is running. " +
-				"Pass one")
+				"they mean opposite things: -company bootstraps a company " +
+				"that does not exist yet, -import-company replaces what the " +
+				"fleet is running. Pass one")
 	}
 	if boot != nil && boot.API.Auth.CompanyManaged() {
 		return managedSeed(boot, *c.company, isFlagSet(set, "company"), named)
@@ -965,7 +970,8 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	// cured of.
 	importCompany := fs.String("import-company", "",
 		"Tier B config to make the active revision NOW, over whatever the "+
-			"fleet is running; -company only bootstraps an empty store")
+			"fleet is running; -company only bootstraps a company that does "+
+			"not exist yet")
 	// A FLAG AND NEVER A CONFIG FIELD, for the reason -mode is one and for
 	// a sharper one: `api.auth.disabled` was a field, and a field reaches
 	// production by being copied into an image. See auth.NewDevPrincipal

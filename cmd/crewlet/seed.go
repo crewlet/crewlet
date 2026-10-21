@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
@@ -68,9 +69,10 @@ const (
 	// publishes its own active revision where the fleet has none, or an
 	// older one ([publishLocalActive]).
 	seedNone seedAct = "none"
-	// seedBootstrap imports a -company file into a node whose store holds
-	// no company: an empty store, or a scratch one, which holds nothing by
-	// design.
+	// seedBootstrap imports a -company file where no company exists: this
+	// node's store holds none — it is empty, or a scratch one, which holds
+	// nothing by design — and, decided once the broker is up, the fleet
+	// runs none either.
 	seedBootstrap seedAct = "bootstrap"
 	// seedImport is -import-company: the file replaces what the fleet runs.
 	seedImport seedAct = "import"
@@ -267,7 +269,7 @@ func decideFile(ctx context.Context, boot *config.Bootstrap, seed tierBSeed,
 		log.WarnContext(ctx, "company_seed_ignored",
 			"file", seed.Path, "active_revision", active.revision.ID,
 			"reason", "the store already holds a company, and -company "+
-				"only bootstraps an empty one",
+				"only bootstraps a company that does not exist yet",
 			"hint", "to make this file the company again, restart with "+
 				"-import-company "+seed.Path+"; to change the running "+
 				"fleet with no restart, run `crewlet config import "+
@@ -290,6 +292,30 @@ func (s tierBSeed) is(opened []byte) (bool, error) {
 		return false, fmt.Errorf("encode the company config: %w", err)
 	}
 	return bytes.Equal(document, opened), nil
+}
+
+// isFleets reports whether the seed's file is the revision the fleet's pointer
+// names, read from the pointer's own payload as a peer's reconciler reads it.
+//
+// An error is a comparison that could not be made — the payload is gone with
+// a pointer that moved since it was read, or it does not open under this
+// node's keyring — and never a claim that the two differ.
+func (s tierBSeed) isFleets(ctx context.Context, plane coord.Plane,
+	target coord.Activation, cipher secrets.Cipher) (bool, error) {
+
+	payload, found, err := plane.Payload(ctx, target.RevisionID)
+	if err != nil {
+		return false, fmt.Errorf("read the fleet's revision %s: %w", target.RevisionID, err)
+	}
+	if !found {
+		return false, fmt.Errorf("the fleet's revision %s was replaced while it "+
+			"was read", target.RevisionID)
+	}
+	document, err := secrets.Open(cipher, payload)
+	if err != nil {
+		return false, fmt.Errorf("open the fleet's revision %s: %w", target.RevisionID, err)
+	}
+	return s.is(document)
 }
 
 // runnableRevision decodes the active revision for the engine to boot on.

@@ -756,11 +756,12 @@ var planeCases = []fleetCase{{
 	//
 	// The comparison is "if a pointer exists it must still name this", and
 	// with no pointer there is no winner to have lost to. Refusing here
-	// looks defensible and breaks a state nodes reach constantly: one
-	// seeded from a file has a locally-active revision before it has
-	// published anything, so every config write on it would fail until it
-	// did — measured as a 409 on a single-node deployment that had done
-	// nothing wrong.
+	// looks defensible and breaks a state a node reaches having done nothing
+	// wrong: its store holds an active revision that every config write on
+	// it names, while the pointer is gone — lost under the running node,
+	// and published again only at its next boot — so every one of those
+	// writes would fail until then. Refused, it was measured as a 409 on a
+	// single-node deployment that had done nothing wrong.
 	name: "an activation expecting a revision on an empty store still lands",
 	fn: func(h *fleetHarness) {
 		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{

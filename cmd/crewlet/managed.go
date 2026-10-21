@@ -86,7 +86,7 @@ func refuseManagedOverride(boot *config.Bootstrap, path string) error {
 //
 // IGNORED, LOUDLY, rather than refused: `-company` defaults to
 // ./company.yaml, so a node can carry one it was never told about, and a
-// bootstrap seed is ignored once a company exists anyway — this is the same
+// bootstrap seed is ignored wherever a company exists anyway — this is the same
 // answer for the same reason, said at the same level. An empty store on a
 // managed deployment waits for its managing system's first write.
 func managedSeed(boot *config.Bootstrap, path string, named bool, importPath string) (tierBSeed, error) {

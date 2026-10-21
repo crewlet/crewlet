@@ -390,10 +390,11 @@ engine in a single invocation:
 crewlet run crewlet.yaml -company company.yaml
 ```
 
-`-company` is a **bootstrap seed**: it is imported when the store holds no
-company yet, and once one exists it is ignored — with a warning that says so,
-naming the file and the two ways to apply it. So a restart never reverts a
-change you made live, however stale the file on disk is.
+`-company` is a **bootstrap seed**: it is imported when no company exists yet,
+in the node's store or anywhere in its fleet, and once one exists it is
+ignored — with a warning that says so, naming the file and the two ways to
+apply it. So a restart never reverts a change you made live, however stale the
+file on disk is.
 
 When you do want the file to win, that is a different flag:
 `crewlet run -import-company company.yaml` makes it the active revision over

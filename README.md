@@ -131,8 +131,9 @@ posture `api.auth.admin` (`serve` or `refuse`), and at least one
 `api.auth.tokens` entry — the token
 above, which is how the first person is invited onto their seat.
 
-The company file is a **bootstrap seed**: it fills an empty store and is
-ignored once a company exists, so a restart never reverts a change made live.
+The company file is a **bootstrap seed**: it starts a company that does not
+exist yet — in the node's store or anywhere in its fleet — and is ignored once
+one does, so a restart never reverts a change made live.
 The store is the source of truth at runtime. To change a running fleet, run
 `crewlet config import company.yaml` — it goes through the node's API and every
 node converges with no restart. To make the file win on a restart instead, pass

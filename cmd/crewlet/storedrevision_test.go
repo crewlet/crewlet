@@ -533,11 +533,13 @@ func TestBootingOnARevisionThisBuildCannotRunNamesTheRevision(t *testing.T) {
 //
 // `crewlet run -company company.yaml` is the documented way to run a node, and
 // most boots write nothing from that file: it is byte for byte the active
-// revision, or a bootstrap seed the store's own company outranks. When the
-// seed was loaded against every rule, a file that ran yesterday and carries a
-// duplicate unit key stopped the node from starting after the upgrade that added
-// the rule. The rule still holds where the file becomes a new revision: an
-// empty store, or -import-company over a different company.
+// revision, or a bootstrap seed a company that exists outranks — the store's
+// own, or the fleet's. When the seed was loaded against every rule, a file
+// that ran yesterday and carries a duplicate unit key stopped the node from
+// starting after the upgrade that added the rule. The rule still holds where
+// the file becomes a new revision: where no company exists yet — none in this
+// node's store and none the fleet runs — or -import-company over a different
+// company.
 func TestACompanyFileWithADuplicateUnitKeyRunsAndIsRefusedOnlyOnImport(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
