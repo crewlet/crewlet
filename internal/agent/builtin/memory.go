@@ -152,7 +152,8 @@ func (t *useSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 		return nodeFailure(ctx, UseSkillTool, err, fmt.Sprintf("Could not load %q", clip(name)), ""), nil
 	}
 	if !found {
-		return refused(tools.RefusalNotFound, t.suggest(ctx, seat, name)), nil
+		return refused(tools.RefusalNotFound,
+			provenance.Neutralise(turn.FenceBoundary(), t.suggest(ctx, seat, name))), nil
 	}
 
 	// Recorded BEFORE the content goes out, and its failure ignored: the
@@ -169,13 +170,17 @@ func (t *useSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 	note(ctx, t.events, turn, skillUsed(turn, sk.Name, sk.ID,
 		types.SkillSourceSynthesized, types.KnowledgeReadPage{}))
 
+	// NEUTRALISED under the turn's token (ADR-0040): a synthesized skill is
+	// what a model wrote after reading the turns it drew on, which read
+	// other people's words, and the seat follows it as its own procedure —
+	// so nothing in it may open or close one of the turn's fences.
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s\n\n", sk.Name)
 	if sk.Description != "" {
 		fmt.Fprintf(&b, "%s\n\n", sk.Description)
 	}
 	b.WriteString(sk.Content)
-	return tools.Result{Output: b.String()}, nil
+	return tools.Result{Output: provenance.Neutralise(turn.FenceBoundary(), b.String())}, nil
 }
 
 // suggest turns "not found" into something the model can act on.
@@ -501,7 +506,7 @@ func (t *refreshMemory) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	for _, e := range entries {
 		fmt.Fprintf(&b, "- [%s] %s\n", e.Kind, e.Content)
 	}
-	return tools.Result{Output: strings.TrimRight(b.String(), "\n")}, nil
+	return tools.Result{Output: noteText(turn, b.String())}, nil
 }
 
 // filtered re-runs the personal-memory relevance filter against a hint.
@@ -525,7 +530,7 @@ func (t *refreshMemory) filtered(ctx context.Context, turn *turnctx.Turn,
 		// rather than merely uncharged — see [hintLedger]. Re-rendered
 		// rather than replayed, so a repeat asking for more notes than
 		// the first call printed gets them.
-		return renderHintedNotes(take.Cached, hint, limit), nil
+		return renderHintedNotes(turn, take.Cached, hint, limit), nil
 	case !take.Allowed:
 		// REFUSED with the count, so the model learns the shape of the
 		// limit rather than that the tool became unreliable.
@@ -554,7 +559,7 @@ func (t *refreshMemory) filtered(ctx context.Context, turn *turnctx.Turn,
 	// an answer, and a repeat of the hint would otherwise cost another
 	// completion to be told it again.
 	t.hints.keep(turn.RunID, hint, entries)
-	return renderHintedNotes(entries, hint, limit), nil
+	return renderHintedNotes(turn, entries, hint, limit), nil
 }
 
 // renderHintedNotes prints a hint's filtered rows, newest-first as the filter
@@ -563,10 +568,10 @@ func (t *refreshMemory) filtered(ctx context.Context, turn *turnctx.Turn,
 // An empty result is NOT a fallback to recency. "The most recent eight" would
 // put a note about one person in front of a turn about another, which is the
 // failure the filter exists to prevent.
-func renderHintedNotes(entries []learning.DiaryEntry, hint string, limit int) tools.Result {
+func renderHintedNotes(turn *turnctx.Turn, entries []learning.DiaryEntry, hint string, limit int) tools.Result {
 	if len(entries) == 0 {
-		return tools.Result{Output: fmt.Sprintf(
-			"Nothing in your notes bears on %s.", clip(hint))}
+		return tools.Result{Output: noteText(turn, fmt.Sprintf(
+			"Nothing in your notes bears on %s.", clip(hint)))}
 	}
 	more := 0
 	if len(entries) > limit {
@@ -583,7 +588,15 @@ func renderHintedNotes(entries []learning.DiaryEntry, hint string, limit int) to
 		// without the one that was left off.
 		fmt.Fprintf(&b, "- (+%d more that bear on this — ask again with a larger `limit`)\n", more)
 	}
-	return tools.Result{Output: strings.TrimRight(b.String(), "\n")}
+	return tools.Result{Output: noteText(turn, b.String())}
+}
+
+// noteText is an answer of the seat's notes as the seat reads it: neutralised
+// under the turn's token (ADR-0040), because a note is what a post-turn model
+// concluded from other people's words, or what the seat wrote mid-turn, and
+// nothing in it may open or close one of the turn's fences.
+func noteText(turn *turnctx.Turn, text string) string {
+	return provenance.Neutralise(turn.FenceBoundary(), strings.TrimRight(text, "\n"))
 }
 
 // hintBudget is the company's max_refreshes_per_turn, or the shipped default.
