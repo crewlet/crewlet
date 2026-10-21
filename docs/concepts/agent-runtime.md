@@ -214,6 +214,7 @@ Which reads are fenced:
 
 - `get_page`: the body, under every writer its kept revisions name, and each comment under its author.
 - `get_work_item`: the description, under its last writer, and each comment under its author.
+- `search_work_items`: each hit's snippet, which is the opening of its description, as `work_description` at a colleague's trust with nobody named — only company principals write the tracker, and the index keeps no writer. The titles beside it have the two escapes applied.
 - `read_project_file`: text content, under the file's writers. Content read as base64 is not fenced (it is bytes, and its alphabet holds no bracket) but the envelope still labels it.
 - `read_channel`: each message of the room or of the thread, under its author and the kind the transcript recorded for them, the engine's own narration as `system`. A deleted message says nothing and is not fenced.
 - `search_messages`: each hit's snippet, which is the message itself cut only where it is long, under its author.
