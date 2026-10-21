@@ -38,12 +38,10 @@ type Asked struct {
 	// it was reclaimed while the question waited.
 	BoxKept bool
 
-	// Source, Trust and Authors are who wrote Answer, as the fence around a
-	// chat reply's message labelled it for this seat; zero for an answer by
-	// turn. See [Asked.answered].
-	Source  provenance.Source
-	Trust   provenance.Trust
-	Authors []provenance.Author
+	// Label is who wrote Answer, as the fence around a chat reply's message
+	// labelled it for this seat; nil for an answer by turn. See
+	// [Asked.answered].
+	Label *provenance.Label
 }
 
 // answered is the answer as the run reads it, under the fence token b of the
@@ -61,9 +59,8 @@ type Asked struct {
 // nothing in the question the run's own session wrote or in the answerer's
 // name, opens or closes a fence ([provenance.Neutralise]).
 func (a Asked) answered(b provenance.Boundary) string {
-	if a.Source.Valid() {
-		return a.answerer(b) + " answered:\n" +
-			provenance.Fence(b, a.Source, a.Trust, a.Authors, a.Answer)
+	if a.Label != nil {
+		return a.answerer(b) + " answered:\n" + a.Label.Fence(b, a.Answer)
 	}
 	return a.answerer(b) + " answered: " + provenance.Neutralise(b, a.Answer)
 }

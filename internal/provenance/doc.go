@@ -64,6 +64,19 @@
 // sentence an assistant without the seat prompt needs to read the fences
 // correctly.
 //
+// # A label travels with its text
+//
+// A fence's three facts — the surface, the trust, the writers — are a value,
+// [Label], so the label a text was read under can be kept beside it and the
+// text fenced again later under the same label, by a reader that could not
+// decide it: a learning worker running after the turn, a seat recalling a past
+// turn, a node rendering a search hit another node's backend found. Several
+// labelled texts read as one take ONE label ([Merge]): the least trust any of
+// them earns, every writer once, the surface they share or
+// [SourceNotification] where they differ. [Present] is how any such text
+// reaches a model: fenced under its label, or, with none — the company's or
+// the reader's own words — neutralised.
+//
 // # Text fenced before its reader had a token
 //
 // A wake's trigger is built where the delivery is routed, before the turn

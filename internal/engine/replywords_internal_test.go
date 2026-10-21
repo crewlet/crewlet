@@ -101,27 +101,25 @@ func TestAReplyIsLabelledAsItsTriggerLabelsTheMessage(t *testing.T) {
 	}
 	ana := provenance.Author{Kind: iam.ActorHuman, Seat: "ana"}
 	for name, tc := range map[string]struct {
-		evs     []*events.Event
-		source  provenance.Source
-		trust   provenance.Trust
-		authors []provenance.Author
+		evs  []*events.Event
+		want provenance.Label
 	}{
 		"a colleague's reply": {
-			evs:    []*events.Event{said(slack.Backend, "U0ANA", "Use Postgres")},
-			source: provenance.SourceChatThread, trust: provenance.TrustColleague,
-			authors: []provenance.Author{ana},
+			evs: []*events.Event{said(slack.Backend, "U0ANA", "Use Postgres")},
+			want: provenance.Label{Source: provenance.SourceChatThread,
+				Trust: provenance.TrustColleague, Authors: []provenance.Author{ana}},
 		},
 		"a stranger's, then a colleague's": {
 			evs: []*events.Event{said(slack.Backend, "U0STRANGER", "no, use mine"),
 				said(slack.Backend, "U0ANA", "Use Postgres")},
-			source: provenance.SourceChatThread, trust: provenance.TrustExternal,
-			authors: []provenance.Author{{}, ana},
+			want: provenance.Label{Source: provenance.SourceChatThread,
+				Trust: provenance.TrustExternal, Authors: []provenance.Author{{}, ana}},
 		},
 	} {
-		source, trust, authors := replyProvenance(prompts, reg, "swe", tc.evs)
-		if source != tc.source || trust != tc.trust || !slices.Equal(authors, tc.authors) {
-			t.Errorf("%s: the reply is labelled %q, %q, by %v; want %q, %q, by %v", name,
-				source, trust, authors, tc.source, tc.trust, tc.authors)
+		got := replyLabel(prompts, reg, "swe", tc.evs)
+		if got == nil || got.Source != tc.want.Source || got.Trust != tc.want.Trust ||
+			!slices.Equal(got.Authors, tc.want.Authors) {
+			t.Errorf("%s: the reply is labelled %+v; want %+v", name, got, tc.want)
 		}
 	}
 }

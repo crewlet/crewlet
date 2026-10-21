@@ -76,12 +76,12 @@ func TestAChatReplyToAParkedRunIsRecordedAsWhatThePersonTyped(t *testing.T) {
 	if answered.AnsweredBy != "ana" {
 		t.Errorf("the answer is recorded as %q's, want ana's", answered.AnsweredBy)
 	}
-	writer := []provenance.Author{{Kind: iam.ActorHuman, Seat: "ana"}}
-	if asked.Source != provenance.SourceChatThread || asked.Trust != provenance.TrustColleague ||
-		!slices.Equal(asked.Authors, writer) {
-		t.Errorf("the run reads the reply as %s, %s, by %v; want it read as the trigger "+
-			"labels the message: %s, %s, by %v", asked.Source, asked.Trust, asked.Authors,
-			provenance.SourceChatThread, provenance.TrustColleague, writer)
+	want := provenance.Label{Source: provenance.SourceChatThread, Trust: provenance.TrustColleague,
+		Authors: []provenance.Author{{Kind: iam.ActorHuman, Seat: "ana"}}}
+	if asked.Label == nil || asked.Label.Source != want.Source || asked.Label.Trust != want.Trust ||
+		!slices.Equal(asked.Label.Authors, want.Authors) {
+		t.Errorf("the run reads the reply under %+v; want it read as the trigger labels "+
+			"the message: %+v", asked.Label, want)
 	}
 }
 

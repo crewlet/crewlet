@@ -1,7 +1,6 @@
 package notify
 
 import (
-	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -68,10 +67,16 @@ type Provenance struct {
 	Authors []provenance.Author
 }
 
+// Label is this provenance at the trust its authors earn from the reading seat
+// self ([provenance.LabelFor]).
+func (p Provenance) Label(self string) provenance.Label {
+	return provenance.LabelFor(self, p.Source, p.Authors)
+}
+
 // Fence wraps text in a fence of b carrying this provenance, at the trust its
 // authors earn from the reading seat self.
 func (p Provenance) Fence(b provenance.Boundary, self, text string) string {
-	return provenance.Fence(b, p.Source, provenance.TrustFor(self, p.Authors), p.Authors, text)
+	return p.Label(self).Fence(b, text)
 }
 
 // Render is the trigger a seat is woken with: the source's prompt, built over
@@ -95,21 +100,17 @@ func FenceBody(p Prompt, n Inbound, parties Parties) string {
 	return p.Provenance(n, parties).Fence(n.Fence, n.Metadata[RecipientField], n.Body)
 }
 
-// SalientProvenance is who wrote a delivered notification's SALIENT body — the
-// raw text its turn was asked, which a model other than the woken seat's
-// executor reads (the turn-start relevance judgements) — and where it was read
-// from, at the trust its writers earn from self.
+// SalientLabels are who wrote each message a delivered notification carries —
+// the notification itself, or every constituent of a coalesced one, in the
+// order they spoke — and where each was read from, at the trust its writers
+// earn from self: one label per message, in the order the turn reads them as
+// what it was asked (the interactions a learning worker is handed are the same
+// messages in the same order).
 //
-// THE SOURCE'S OWN ANSWER, [Prompt.Provenance] over the notification as it was
-// delivered, so the text is labelled exactly as the body the trigger fenced. A
-// COALESCED notification's salient body is every constituent's message, so its
-// label names every constituent's writers at the LEAST trust any of them earns
-// — a stranger's line in a burst of colleagues' makes the whole of it
-// `external` — under the surface they share, or an integration's notification
-// where they differ. Every constituent counts, the ones the merge's supersede
-// rule left out of the text included, which can only lower the trust.
-func SalientProvenance(prompts Prompts, n types.ExternalNotification, parties Parties,
-	self string) (provenance.Source, provenance.Trust, []provenance.Author) {
+// THE SOURCE'S OWN ANSWER, [Prompt.Provenance] over each message as it was
+// delivered, so the text is labelled exactly as the body the trigger fenced.
+func SalientLabels(prompts Prompts, n types.ExternalNotification, parties Parties,
+	self string) []provenance.Label {
 
 	prompt := prompts.For(n.NotificationSource)
 	copies := []Inbound{{Source: n.NotificationSource, EventType: n.SourceEventType,
@@ -121,27 +122,28 @@ func SalientProvenance(prompts Prompts, n types.ExternalNotification, parties Pa
 				EventType: m.SourceEventType, Sender: m.Sender, Metadata: m.Metadata})
 		}
 	}
-	var (
-		source  provenance.Source
-		trusts  []provenance.Trust
-		authors []provenance.Author
-	)
-	for i, in := range copies {
-		p := prompt.Provenance(in, parties)
-		switch {
-		case i == 0:
-			source = p.Source
-		case p.Source != source:
-			source = provenance.SourceNotification
-		}
-		trusts = append(trusts, provenance.TrustFor(self, p.Authors))
-		for _, a := range p.Authors {
-			if !slices.Contains(authors, a) {
-				authors = append(authors, a)
-			}
-		}
+	labels := make([]provenance.Label, 0, len(copies))
+	for _, in := range copies {
+		labels = append(labels, prompt.Provenance(in, parties).Label(self))
 	}
-	return source, provenance.Least(trusts...), authors
+	return labels
+}
+
+// SalientLabel is who wrote a delivered notification's SALIENT body — the raw
+// text its turn was asked, which a model other than the woken seat's executor
+// reads (the turn-start relevance judgements) — and where it was read from, at
+// the trust its writers earn from self.
+//
+// A COALESCED notification's salient body is every constituent's message, so
+// its label is their [SalientLabels] merged ([provenance.Merge]): every
+// constituent's writers at the LEAST trust any of them earns — a stranger's
+// line in a burst of colleagues' makes the whole of it `external` — under the
+// surface they share, or an integration's notification where they differ.
+// Every constituent counts, the ones the merge's supersede rule left out of the
+// text included, which can only lower the trust.
+func SalientLabel(prompts Prompts, n types.ExternalNotification, parties Parties,
+	self string) provenance.Label {
+	return provenance.Merge(SalientLabels(prompts, n, parties, self)...)
 }
 
 // Stated is the provenance a parser stamped on n: the surface it named, or

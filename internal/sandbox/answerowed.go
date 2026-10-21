@@ -245,16 +245,13 @@ type Reply struct {
 	// seat with, which the engine writes for the seat's own turn.
 	Text string
 
-	// Source, Trust and Authors are what the fence around the delivery's
-	// message says of Text, for the seat it was delivered to: where it was
-	// read, who wrote it, and how far the run may rely on it, as the
-	// trigger's own fence labelled it. The run the reply carries on reads it
-	// inside a fence of its turn's token under them (ADR-0040). Zero where
-	// the delivery's surface fences no message, whose words the run reads
-	// defused instead.
-	Source  provenance.Source
-	Trust   provenance.Trust
-	Authors []provenance.Author
+	// Label is what the fence around the delivery's message says of Text,
+	// for the seat it was delivered to: where it was read, who wrote it, and
+	// how far the run may rely on it, as the trigger's own fence labelled it.
+	// The run the reply carries on reads it inside a fence of its turn's
+	// token under it (ADR-0040). Nil where the delivery holds words no
+	// surface labelled, which the run reads defused instead.
+	Label *provenance.Label
 
 	// Events are the delivery's events, oldest first.
 	Events []*events.Event
@@ -375,7 +372,7 @@ func (r Reply) answerOf(now time.Time) (AnswerWords, RecordedAnswer) {
 		// own session keep.
 		Text: redact.Secrets(r.Text), Via: types.AnswerViaChat,
 		By: who.by, ByKind: who.kind, OperatorID: who.operatorID,
-		Source: r.Source, Trust: r.Trust, Authors: r.Authors,
+		Label: r.Label,
 	}
 	answer := RecordedAnswer{EventIDs: r.ids(), PostedAt: r.Posted(), RecordedAt: now}
 	for _, ev := range r.Events {

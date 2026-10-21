@@ -4731,14 +4731,11 @@ type AskedRun struct {
 	// told so or it starts by looking for a working tree that is gone.
 	BoxKept bool
 
-	// Source, Trust and Authors are who wrote Answer as the fence around the
-	// reply's message labelled it ([AnswerWords.Source]), for the run that
-	// reads a chat reply inside a fence of its turn's token; zero for an
-	// answer by turn, the answering person's own instruction, which it reads
-	// defused.
-	Source  provenance.Source
-	Trust   provenance.Trust
-	Authors []provenance.Author
+	// Label is who wrote Answer as the fence around the reply's message
+	// labelled it ([AnswerWords.Label]), for the run that reads a chat reply
+	// inside a fence of its turn's token; nil for an answer by turn, the
+	// answering person's own instruction, which it reads defused.
+	Label *provenance.Label
 }
 
 // askedRun is what run's recorded answer resumes it with: the words its seal
@@ -4759,6 +4756,6 @@ func askedRun(run PendingRun, answer AnswerWords) *AskedRun {
 		Question: redact.Secrets(run.Question), Answer: redact.Secrets(text),
 		By: answer.attribution(), Branch: run.Branch, SessionID: run.SessionID,
 		BoxKept: run.SandboxID != "",
-		Source:  answer.Source, Trust: answer.Trust, Authors: answer.Authors,
+		Label:   answer.Label,
 	}
 }

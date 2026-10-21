@@ -1378,7 +1378,7 @@ func runnerAsked(asked *sandbox.AskedRun) *runner.Asked {
 	return &runner.Asked{
 		Question: asked.Question, Answer: asked.Answer, By: asked.By,
 		Branch: asked.Branch, SessionID: asked.SessionID, BoxKept: asked.BoxKept,
-		Source: asked.Source, Trust: asked.Trust, Authors: asked.Authors,
+		Label: asked.Label,
 	}
 }
 

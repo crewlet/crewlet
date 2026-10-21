@@ -14,14 +14,13 @@ import (
 
 // replyOf is a delivery offered to a parked run of the seat self as the
 // answer to its question: where it came from, what it says ([replyWords]),
-// and who wrote that and how far the run may rely on it
-// ([replyProvenance]), which the run reads it fenced under.
+// and who wrote that and how far the run may rely on it ([replyLabel]),
+// which the run reads it fenced under.
 func replyOf(prompts notify.Prompts, parties notify.Parties, self string,
 	conv sandbox.ConversationRef, evs []*events.Event) sandbox.Reply {
 
-	src, trust, authors := replyProvenance(prompts, parties, self, evs)
-	return sandbox.Reply{Conv: conv, Text: replyWords(evs), Source: src, Trust: trust,
-		Authors: authors, Events: evs}
+	return sandbox.Reply{Conv: conv, Text: replyWords(evs),
+		Label: replyLabel(prompts, parties, self, evs), Events: evs}
 }
 
 // replyWords is what a delivery offered to a parked run as its answer SAYS
@@ -88,25 +87,22 @@ func replyWords(evs []*events.Event) string {
 	return strings.Join(parts, "\n\n")
 }
 
-// replyProvenance is who wrote what a reply says, for the seat self: what the
-// fence around each of the delivery's bodies says of it in the trigger it was
-// delivered in ([notify.SalientProvenance]), merged as one reply: every writer
-// once, at the least trust any of them earns, under the surface they share, or
-// an integration's notification where they differ.
+// replyLabel is who wrote what a reply says, for the seat self: the label the
+// fence around each of the delivery's bodies carries in the trigger it was
+// delivered in ([notify.SalientLabel]), merged as one reply by the one rule
+// for several labels over one text ([provenance.Merge]): every writer once, at
+// the least trust any of them earns, under the surface they share, or an
+// integration's notification where they differ.
 //
 // THE TRIGGER'S OWN LABEL, so the run reads a reply exactly as it would have
 // read the same message waking its turn: a colleague's words as a colleague's,
-// a stranger's as data. ZERO where the delivery holds words that are no
+// a stranger's as data. NIL where the delivery holds words that are no
 // notification's, which no surface labelled, and which the run then reads
 // defused.
-func replyProvenance(prompts notify.Prompts, parties notify.Parties, self string,
-	evs []*events.Event) (provenance.Source, provenance.Trust, []provenance.Author) {
+func replyLabel(prompts notify.Prompts, parties notify.Parties, self string,
+	evs []*events.Event) *provenance.Label {
 
-	var (
-		source  provenance.Source
-		trusts  []provenance.Trust
-		authors []provenance.Author
-	)
+	var labels []provenance.Label
 	for _, ev := range evs {
 		if ev == nil {
 			continue
@@ -117,26 +113,15 @@ func replyProvenance(prompts notify.Prompts, parties notify.Parties, self string
 		}
 		n, ok := events.DataAs[*types.ExternalNotification](ev)
 		if !ok || n == nil {
-			return "", "", nil
+			return nil
 		}
-		src, trust, by := notify.SalientProvenance(prompts, *n, parties, self)
-		switch {
-		case source == "":
-			source = src
-		case src != source:
-			source = provenance.SourceNotification
-		}
-		trusts = append(trusts, trust)
-		for _, a := range by {
-			if !slices.Contains(authors, a) {
-				authors = append(authors, a)
-			}
-		}
+		labels = append(labels, notify.SalientLabel(prompts, *n, parties, self))
 	}
-	if source == "" {
-		return "", "", nil
+	if len(labels) == 0 {
+		return nil
 	}
-	return source, provenance.Least(trusts...), authors
+	merged := provenance.Merge(labels...)
+	return &merged
 }
 
 // parties is [Dispatcher.Parties]' registry, or none.

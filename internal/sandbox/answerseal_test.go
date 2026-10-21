@@ -406,17 +406,15 @@ func TestWhoWroteAReplyRidesItsSealWithTheWords(t *testing.T) {
 	seal := rigAnswers()
 	run := PendingRun{TurnID: "t1", LaunchID: "launch-1"}
 	words := AnswerWords{Text: "Use Postgres", Via: types.AnswerViaChat, By: "ana", ByKind: "human",
-		Source: provenance.SourceChatThread, Trust: provenance.TrustColleague,
-		Authors: []provenance.Author{{Kind: iam.ActorHuman, Seat: "ana"}}}
+		Label: &provenance.Label{Source: provenance.SourceChatThread, Trust: provenance.TrustColleague,
+			Authors: []provenance.Author{{Kind: iam.ActorHuman, Seat: "ana"}}}}
 	sealed := sealedOnto(t, seal, run, words, RecordedAnswer{EventIDs: []string{"r1"}})
 	run.Answer = &sealed
 	if got := openedOn(t, run); !reflect.DeepEqual(got, words) {
 		t.Errorf("the seal opened to %+v, want the reply and who wrote it, as sealed", got)
 	}
-	asked := askedRun(run, openedOn(t, run))
-	if asked.Source != words.Source || asked.Trust != words.Trust ||
-		!reflect.DeepEqual(asked.Authors, words.Authors) {
-		t.Errorf("the resumed run is handed the reply as %s, %s, by %v; want it as sealed",
-			asked.Source, asked.Trust, asked.Authors)
+	if asked := askedRun(run, openedOn(t, run)); !reflect.DeepEqual(asked.Label, words.Label) {
+		t.Errorf("the resumed run is handed the reply under %+v; want it as sealed, %+v",
+			asked.Label, words.Label)
 	}
 }
