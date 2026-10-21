@@ -392,8 +392,17 @@ means "this server did not say", not "it is off".
 
 ```
 export MATTERMOST_ADMIN_TOKEN="..."      # a system-admin personal access token
-crewlet mattermost provision company.yaml
+export CREWLET_API_TOKEN="..."           # one of the running node's Tier A tokens
+crewlet mattermost provision company.yaml -secret-store
 ```
+
+`-secret-store` records each bot's token where every node reads it; one of
+`-secret-store`, `-env-file PATH` and `-print` is required, so a run never
+mints a credential it has nowhere to put. With the engine running the run
+reads the company's values through it, as `CREWLET_API_TOKEN` — one of its
+Tier A tokens carrying `admin`, since that read is the node's break-glass
+reveal and refuses a machine token. See
+[where a command reads the company's values](../reference/cli.md#where-a-command-reads-the-companys-values).
 
 For every Mattermost-enabled agent seat the command:
 
@@ -1170,8 +1179,12 @@ crewlet run -config examples/nimbus-claude-cli.config.yaml \
 Step 3's `--dry-run --print` prints one line per seat — handle, bot
 username, and the variables it would mint. Step 2 already wrote
 `MATTERMOST_TOKEN_CEO`, `…_CTO`, `…_PM`, `…_DEVREL`, `…_SWE`, `…_FE` and
-`…_AI` into `.env`, which the engine reads on boot; nothing has to be
-re-sourced. Every step is idempotent, so re-run any of them freely.
+`…_AI` into `.env`, and step 3 sourced that file into this shell, so the
+engine step 5 starts from it inherits them: nothing has to be re-sourced as
+long as step 5 runs in the same shell. A new shell sources `.env` again
+first — the engine reads no `.env` file itself, only its own environment
+([Environment variables](../reference/environment-variables.md)). Every step
+is idempotent, so re-run any of them freely.
 
 Step 4 is the one that has no analogue in an API-key deployment, and
 `crewlet llm doctor` is the half that matters: a `cli-agent` entry can be
