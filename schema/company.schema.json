@@ -1598,6 +1598,21 @@
             "null"
           ]
         },
+        "optional_keys": {
+          "description": "Keys of env, headers or a seat's mcp_env block for this server whose value may resolve to nothing; such a key is left out rather than holding the server back.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "request_timeout_seconds": {
           "description": "Cap on one tool call.",
           "minimum": 0,
@@ -2766,6 +2781,21 @@
         "mcp": {
           "$ref": "#/$defs/RoleSandboxMCP"
         },
+        "optional_keys": {
+          "description": "Keys of env whose value may resolve to nothing; such a key is left out of the run rather than refusing it.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "pause_ttl_seconds": {
           "description": "Paused-box TTL. Unset = provider default; 0 = never pause.",
           "minimum": 0,
@@ -2998,6 +3028,21 @@
             "string",
             "number",
             "boolean",
+            "null"
+          ]
+        },
+        "optional_keys": {
+          "description": "Keys of env, or paths of files, whose value may resolve to nothing; left out rather than refusing the run.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
             "null"
           ]
         },

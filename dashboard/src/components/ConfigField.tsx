@@ -52,6 +52,7 @@
 
 import { createContext, useContext, useId, useRef, useState, type ReactNode } from "react";
 
+import { isWholeReference } from "~/lib/references.ts";
 import { withProblems } from "~/ui/Problems.tsx";
 import { complete, rank, referenceAt, type Typing } from "~/ui/secretref.ts";
 import { Combobox, FormField, InputAffix, Select, Textarea } from "@crewlethq/ui";
@@ -147,7 +148,11 @@ export function ConfigField({
   // a thing the config accepts, and an affix that silently rewrote it to
   // https would point the engine at a port nothing answers on.
   // MASKED UNLESS IT IS A REFERENCE. See the note above.
-  const reference = isReference(value);
+  // WHETHER TO MASK, and nothing else: the engine decides what a reference
+  // is and only ever sends a secret's value when it is a whole reference
+  // already, so this fails in the safe direction — too strict masks a
+  // reference; too loose would need a credential literally spelled `${WORD}`.
+  const reference = isWholeReference(value);
   const masked = kind === "secret" && !reference;
   // A SINGLE TOKEN TAKES NO WHITESPACE, ever, including from a paste. An
   // address, an identifier and an email each name one thing, and a space
@@ -429,18 +434,4 @@ function schemeOf(value: string): string {
   if (lower.startsWith("https://")) return "https://";
   if (lower.startsWith("http://")) return "http://";
   return "";
-}
-
-/**
- * Whether a value is wholly a `${NAME}` reference.
- *
- * The same grammar as the engine's `internal/envref`, and PRESENTATION ONLY:
- * the engine decides what a reference is, refuses what is not one, and only
- * ever sends a secret's value when it is a whole reference already. This
- * decides one thing, whether to mask, and it fails in the safe direction. Too
- * strict masks a reference, which is what this field did before; too loose
- * would need a credential that is literally spelled `${WORD}`.
- */
-function isReference(value: string): boolean {
-  return /^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(value.trim());
 }

@@ -814,3 +814,29 @@ test("removing an environment row keeps every other row's field its own", async 
   expect(left.value).toBe("SECOND");
   expect(left).toBe(second);
 });
+
+// A ROW SAYS WHETHER IT MAY BE UNSET, and the add sends it as the server's
+// `optional_keys` — the one declaration the engine starts a server without a
+// value by.
+test("a variable that may be unset is added as an optional key", async () => {
+  const calls = stubConfig((call) => {
+    if (call.method === "GET") return json(company, 200, { ETag: '"r1"' });
+    if (call.url.includes("dry_run=true")) return valid();
+    return json({ revision_id: "r2", epoch: 5, warnings: [], derived: null }, 201);
+  });
+  const dialog = await openAdd();
+  type(dialog, "Name", "search");
+  type(dialog, "Command", "search-mcp");
+  await press(dialog, /Add variable/);
+  type(dialog, "Variable 1 name", "NPM_CONFIG_REGISTRY");
+  type(dialog, "Variable 1 value", "${NPM_CONFIG_REGISTRY}");
+  await act(async () => {
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: /Variable 1 may be unset/ }));
+  });
+  await press(dialog, /Add server/);
+  const save = calls.find((c) => c.method === "PUT" && !c.url.includes("dry_run"));
+  expect(save?.body).toMatchObject({
+    env: { NPM_CONFIG_REGISTRY: "${NPM_CONFIG_REGISTRY}" },
+    optional_keys: ["NPM_CONFIG_REGISTRY"],
+  });
+});

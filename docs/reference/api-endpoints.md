@@ -6856,19 +6856,19 @@ failure somebody has to act on:
 |---|---|
 | `running` | Every instance any node launched is serving: it started, listed its tools and was up at its node's last beat |
 | `partial` | Some are serving and some are not — a node's environment, one seat's credentials, or one child that died and is being restarted, rather than the server |
-| `failing` | Instances were launched and none is serving — the server, its command or address, or credentials every seat shares, or every instance went down and is being restarted |
+| `failing` | Something failed and nothing is serving — instances were launched and none serves (the server, its command or address, or credentials every seat shares), every instance went down and is being restarted, or the server was held back, unlaunched, for a value that resolves to nothing: a shared server's own, or one every seat's instance lacks |
 | `waiting` | Nothing was launched and nothing failed, and some seat's instance is waiting for its provisioned credential. Only where nothing else decides: a server serving one seat while another waits is `running`, and one with a failure beside a wait is `partial` or `failing` |
 | `not_started` | Every reporting node started nothing for it — a per-seat template no seat on a live node declares credentials for |
 | `unreported` | No live node's latest heartbeat carried the report |
 
-`error` is one failed instance's reason, cut to 240 bytes on the heartbeat,
-and `error_seat` the seat it was launched for; the whole text is the node's
-`mcp_server_failed` log line for a start that failed, its
-`mcp_server_credential_missing` line for a seat's instance whose credential
-resolves to nothing and that nothing mints, or that the integration minting it
-cannot mint until a person acts (that one from the node's last pass over the
-seat; the heartbeat re-judges it against the integration's latest report), and
-its `server_exited` or
+`error` is one failed instance's reason, cut to 512 bytes on the heartbeat,
+and `error_seat` the seat it was launched for (none for a shared server); the
+whole text is the node's `mcp_server_failed` log line for a start that failed,
+its `mcp_server_credential_missing` line for a server or a seat's instance held
+back, unlaunched, because a value it is started with resolves to nothing and
+nothing mints it, or the integration minting it cannot mint until a person
+acts (that one from the node's last pass over the seat; the heartbeat re-judges
+it against the integration's latest report), and its `server_exited` or
 `server_restart_failed` line for an instance that went down after it started.
 `wait` is one waiting instance's sentence — the variables it waits for and the
 integration minting them — bounded the same way, and `wait_seat` its seat; the

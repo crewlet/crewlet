@@ -52,6 +52,7 @@ import type { CompanyDocument, ConfigRole, ConfigUnit } from "~/protocol/index.t
 import { formatPhaseLLM, plural } from "~/lib/format.ts";
 import { ConfigField, HelperOnFocus, type FieldChoice } from "~/components/ConfigField.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
+import { isWholeReference } from "~/lib/references.ts";
 import { handleLabel } from "~/lib/seats.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { SeatHolding, canManagePeople, useHumanSeats } from "~/components/people.tsx";
@@ -133,7 +134,6 @@ import {
   hasGitLabProvisioning,
   identityProblemOf,
   isConnected,
-  isWholeReference,
   mattermostBotUsername,
   nameOfHandle,
   placementSummary,

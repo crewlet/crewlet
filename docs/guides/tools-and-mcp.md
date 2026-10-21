@@ -710,47 +710,49 @@ in between still lists the old child's tools, and a call to one is refused,
 classed `unavailable`, as a server no longer running on this node; the seat's
 next turn has the new child.
 
-**A seat's child is started only with the identity it is configured to act
-as.** Every `${VAR}` in the seat's own `mcp_env` block for the server — its
-unit's block included — must resolve to a value before the child is started;
-an unresolved one is never handed to the server as an empty string, which a
-vendor's server either refuses or, worse, starts with and acts as nobody. What
-the engine does instead depends on whether anything will fill the variable:
+**A server is started only with what its configuration references.** Every
+`${VAR}` a server is started with must resolve to a value before it starts —
+its own `env` or `headers`, its `url`, and, for a seat's child of a per-role
+template, the seat's own `mcp_env` block for it, its unit's block included —
+on the engine host, as a shared server or a seat's child, and in a coding
+agent's box alike. An unresolved one is never handed to the server as an empty
+string, which a vendor's server either refuses or, worse, starts with and acts
+as nobody; the one exception is a key the server [declares
+optional](#a-key-that-may-go-without-its-value), which is left out instead.
+What the engine does depends on whether anything will fill the variable:
 
-| The variable | The child | Where it shows |
+| The variable | The server | Where it shows |
 |---|---|---|
 | Is one a [provisioning pass](../concepts/integration-reconcile.md) mints for this seat — a GitLab or Datadog account's token, an Atlassian account's token or address, or a Mattermost bot's token where `integrations.mattermost.provisioning` is set — and nothing that pass last reported stops it | **Waiting**, not failed. It starts once the seal reaches the node: the pass that sealed it asks the node it ran on for a pass over its seats at once, and re-activates the revision so every other node's apply does the same | `mcp_server_awaiting_credential` (info), naming the variable and the integration that mints it; on **Settings › Tools & MCP** the server's row counts it as *waiting* — the server reads *Waiting for credentials* where nothing else is wrong — and its page lists what each node's instance waits for |
 | Is one such a pass mints, and its last report says it cannot until a person acts — its own credential is missing or refused, an administrator has an app or a setting to switch on, or this seat's account could not be made or was switched off by somebody else — or the integration is being disconnected | **Failed**, with the finding that pass recorded: the same finding the integration's card shows. It is a wait with no end until somebody acts, so it is not reported as one | `mcp_server_credential_missing` (error) when the seat's pass meets it; the server's row counts it as failed from the first heartbeat after the integration reports it, whenever that is, and as waiting again from the first after it clears |
-| Is one nothing this engine runs mints — a secret nobody stored, a reference to a name nobody holds, or a variable set to an empty value | **Failed**, naming the variable and the remedy: seal it (`crewlet secrets set`, or the integration's own `provision` command where it has one) and `POST /config/reload`, or set it in the engine's own environment and restart the engine — a running engine never reads an `export` made after it started; for one set to an empty value, seal a value and `POST /config/reload`, or take the key out of the seat's `mcp_env` if the server needs none | `mcp_server_credential_missing` (error); the server's row counts it as failed, with the same sentence |
+| Is one nothing this engine runs mints — a secret nobody stored, a reference to a name nobody holds, or a variable set to an empty value; for a shared server, every variable is this | **Failed**, naming the variable and the remedies: seal it (`crewlet secrets set`, or for a seat's credential the integration's own `provision` command where it has one) and `POST /config/reload`, or set it in the engine's own environment and restart the engine — a running engine never reads an `export` made after it started; for one set to an empty value, seal a value and `POST /config/reload`; and, where the server can run without it, list the key holding it under the server's `optional_keys` — offered for the server's own settings, and never for a seat's own credential, which is the identity its child acts as, or for a variable the `url` needs, since a server is dialled at its `url` | `mcp_server_credential_missing` (error); the server's row counts it as failed, with the same sentence |
 
 Which variables a pass mints is read from the plan the pass mints by — each
 provisioning pass's run takes its plan from the one place the engine reads it
 from — so the two cannot disagree. None of these is retried on the restart
-schedule below: nothing about a held-back child changes until the secret
-snapshot does, and every change to the snapshot runs the seat's pass again —
-a revision, the reload a `crewlet secrets set` is followed by, the
-re-activation a provisioning pass makes, and the pass the sealing node asks
-for itself, which does not wait on that re-activation. What a person does at an
-integration is the one change no pass sees, which is why a held-back child's
-row is judged again on every heartbeat against what the integration last
-reported. A child already running whose credential stops resolving — a sealed
-token deleted by a disconnect that removed the seats' accounts, or by hand — is
+schedule below: nothing about a held-back server changes until the secret
+snapshot does, and every change to the snapshot runs the seat's pass again,
+and reconciles the shared servers — a revision, the reload a `crewlet secrets
+set` is followed by, the re-activation a provisioning pass makes, and (for a
+seat) the pass the sealing node asks for itself, which does not wait on that
+re-activation. A shared server held back is therefore never handed to its
+bridge, whose supervision would retry it, and starts on the apply that follows
+its secret's arrival. What a person does at an integration is the one change
+no pass sees, which is why a held-back child's row is judged again on every
+heartbeat against what the integration last reported. A server already
+running whose credential stops resolving — a sealed token deleted by a
+disconnect that removed the seats' accounts, or by hand — is
 stopped by the same rule (`mcp_server_retired`, naming the variable), rather
 than left acting at the vendor on the value it started with. The seat's mailbox
 does not wait for a held-back child: an identity that does not exist at the
 vendor yet, or waits on a person, is nothing the seat's first turn can be asked
 about there.
 
-**The rule covers the seat's block, and not the server's own `env` and
-`headers`.** Those are credential positions too — a shared server's key lives
-there — but they are also where a host value is passed through by name, and a
-reference cannot say it may resolve to nothing: an optional host setting
-(`NPM_CONFIG_REGISTRY` below) is unset on most hosts, and npm reads it empty as
-unset. So a reference there that resolves to nothing is passed on empty, as a
-shell would, with an `empty_env_vars` warning naming the key. A shared server
-carries no seat's identity, so only that half applies to it: one whose own key
-is unset starts, fails to authenticate, and is retried on the restart schedule
-below, as any server that will not start is.
+**A key that may go without its value is declared, and left out.** A host
+setting passed through by name may legitimately be unset; listed under the
+server's `optional_keys`, its key is left out of what the server is started
+with when its value does not resolve, rather than holding the server back —
+see [A key that may go without its value](#a-key-that-may-go-without-its-value).
 
 **A credential provisioned after the seat was claimed still reaches its
 child.** A seat is claimed as soon as its node can run it, and an integration
@@ -799,9 +801,9 @@ vendor that recovers is noticed within six minutes, and a server that never
 will repeats its failure about as often as that alarm. An apply retries at
 once and starts the series again. A spec that can never launch — no command, no URL —
 is not retried, since nothing about it changes until a revision does, and
-neither is a child held back for a seat credential that does not resolve
-(above), since nothing about it changes until the secret snapshot does and
-every change to the snapshot runs a pass of its own. It is
+neither is a server held back for a value that does not resolve (above), since
+nothing about it changes until the secret snapshot does and every change to the
+snapshot runs a pass of its own. It is
 the schedule every server is retried on: a shared server whose start failed,
 and any child that dies after starting, follow it too (see
 [A server that dies, or will not start](#a-server-that-dies-or-will-not-start)).
@@ -866,7 +868,7 @@ roles:
 
 The Slack entry's two `env` switches are not tuning: `slack-mcp-server` registers no tool that posts until `SLACK_MCP_ADD_MESSAGE_TOOL` is set, so without it a Slack seat reads every message and answers none. They belong in the entry's `env` rather than in an `--enabled-tools` argument: a list given only on the command line registers the tool, but the call reads the environment and refuses every post. The seat's `SLACK_MCP_CHANNELS_CACHE` is its own for the reason the previous section gives ([Slack](../integrations/slack.md#configure-in-yaml) has the detail of both).
 
-Environment variables and HTTP header values support `${VAR}` references — both whole-value (`"${TOKEN}"`) and embedded (`"Bearer ${TOKEN}"`) — so secrets stay out of config files. A reference resolves from the [secret store](../concepts/secret-store.md) first and the engine's process environment behind it, when the engine builds the server — so the value is baked into the running child's environment or its connection's headers, and a rotation reaches it only when that server is rebuilt (see [Secret Store § Propagation](../concepts/secret-store.md#propagation) for which gesture rebuilds which child).
+Environment variables, HTTP header values and an http server's `url` support `${VAR}` references — both whole-value (`"${TOKEN}"`) and embedded (`"Bearer ${TOKEN}"`) — so secrets stay out of config files. A reference resolves from the [secret store](../concepts/secret-store.md) first and the engine's process environment behind it, when the engine builds the server — so the value is baked into the running child's environment or its connection's headers, and a rotation reaches it only when that server is rebuilt (see [Secret Store § Propagation](../concepts/secret-store.md#propagation) for which gesture rebuilds which child). Every one must resolve before the server is started, except under a key listed in the server's `optional_keys`, which is left out instead ([above](#a-key-that-may-go-without-its-value)). `command` and `args` are passed as written.
 
 ### What a stdio server's environment is
 
@@ -877,9 +879,9 @@ A stdio server is handed an **explicit** environment, never the engine's own. Th
 | The host allowlist | `PATH`, the locale (`LANG`, `LANGUAGE`, `LC_ALL`, `LC_CTYPE`, `LC_NUMERIC`), `TERM`, `TZ`, the TLS trust variables (`SSL_CERT_FILE`, `SSL_CERT_DIR`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`) and the proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`, `http_proxy`, `https_proxy`, `all_proxy`, `no_proxy`) | What a process needs to run at all. It is the same list every child the engine starts is handed — a coding CLI and a local sandbox get it too |
 | The engine user's locations | `HOME`, `USER`, `LOGNAME`, `TMPDIR` and the XDG base directories (`XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_RUNTIME_DIR`) | A server launched through `npx` or `uvx` runs as the engine's user and keeps its package cache under that user's `HOME` |
 | A container runtime's own settings — **only** when the server's `command` is `docker` or `podman` | Every `DOCKER_*`, `CONTAINER_*`, `CONTAINERS_*` and `PODMAN_*` variable, `REGISTRY_AUTH_FILE` and `DBUS_SESSION_BUS_ADDRESS` | A server published as an image (`command: docker`, `args: ["run", "-i", "--rm", …]`) *is* the runtime's CLI, and a rootless runtime finds its daemon through `DOCKER_HOST`: without it the CLI dials the system socket and fails at the daemon with a permission error that names nothing you set. It is the same rule the [local sandbox](../concepts/code-sandbox.md) drives the runtime with. What the image itself receives is what `args` passes it — a bare `-e NAME` there copies `NAME` from this environment, so name it in `env:` |
-| What the config declares | The server's `env:`, then the seat's `mcp_env` for it, which wins variable by variable | The server's settings and its identity, resolved as above |
+| What the config declares | The server's `env:`, then the seat's `mcp_env` for it, which wins variable by variable | The server's settings and its identity, resolved as above — a key in `optional_keys` whose value does not resolve is not set at all |
 
-**Anything else a server reads is declared.** A server that reads a variable the table does not carry — a vendor SDK's conventional key, a private registry's `NPM_CONFIG_REGISTRY`, an `LD_LIBRARY_PATH` its runtime needs — gets it by naming it in `env:`, and a `${VAR}` reference there is how the host's own value is passed through:
+**Anything else a server reads is declared.** A server that reads a variable the table does not carry — a vendor SDK's conventional key, a private registry's `NPM_CONFIG_REGISTRY`, an `LD_LIBRARY_PATH` its runtime needs — gets it by naming it in `env:`, and a `${VAR}` reference there is how the host's own value is passed through. A host setting that may be unset is listed under `optional_keys`, or the server is not started on a host that does not set it ([A key that may go without its value](#a-key-that-may-go-without-its-value)):
 
 ```yaml
 mcp_servers:
@@ -889,6 +891,7 @@ mcp_servers:
     env:
       TAVILY_API_KEY: "${TAVILY_API_KEY}"            # the store, then the host
       NPM_CONFIG_REGISTRY: "${NPM_CONFIG_REGISTRY}"  # a host setting, passed on by name
+    optional_keys: [NPM_CONFIG_REGISTRY]             # left out where the host sets none
     # it advertises no annotations, so these say its tools only read
     # (see Tool annotation overrides below)
     tool_annotations:
@@ -902,6 +905,59 @@ mcp_servers:
 A server that worked by reading an undeclared variable out of the engine's environment fails to authenticate or to install until that line is added, and its own last words on stderr — surfaced as `server_stderr_tail` — usually name the variable.
 
 **This is not isolation, and it does not claim to be.** The server runs as the engine's user, so it can read whatever that user can: the Tier A file and the engine's own `/proc/<pid>/environ` among it. What the explicit environment removes is the engine *handing* its secrets to code that never asked for them. Keeping a server you do not trust away from them takes a different user or a container around the server itself — and, since declaring a stdio server is running its `command` on every engine host that runs seats, `admin` is a permission to give as you would give shell on those hosts (see [What admin runs](../concepts/identity-and-access.md#what-admin-runs)).
+
+### A key that may go without its value
+
+A host setting passed through by name — a private registry's
+`NPM_CONFIG_REGISTRY` in the example above, unset on most hosts — is a
+reference that may legitimately resolve to nothing, and nothing in a value can
+say so. The server says so instead, by listing the **key** under
+`optional_keys`; every other reference it is started with is required
+([Shared vs per-role servers](#shared-vs-per-role-servers)).
+
+A key listed there whose value does not resolve — any reference in it — is
+**left out, whole**: the child is started without the variable, or the request
+sent without the header, the way Kubernetes starts a container without an
+`optional` secret reference. It is never passed on empty and never as half of
+itself (`"Bearer ${TOKEN}"` with `TOKEN` unset would be `"Bearer "`, a
+credential that looks set).
+
+- **By key, not by variable.** A key is what the server reads: seats point one
+  key at variables of their own (`${ALICE_X}`, `${BOB_X}`), and one variable can
+  sit under a key that may go without it and another that may not.
+- **The list is the server's, and covers every value it is started with** — its
+  own `env` or `headers` and every seat's or unit's `mcp_env` block for it,
+  which land in the same environment or the same headers. A seat's key
+  replaces the server's whole before anything is resolved, so a seat's value
+  that resolves to nothing leaves the key out rather than handing back the
+  server's own value for it — which, for a key carrying an identity, would
+  start the seat's child as whoever the template names.
+- **An http header is one header in any case**, as HTTP has it:
+  `optional_keys: [authorization]` declares the `Authorization` header, and a
+  seat's `authorization` replaces its template's `Authorization` rather than
+  going out beside it. Two spellings of one header where nothing says which is
+  sent — two keys of one map, or a unit's block and one of its members' — are
+  refused when the document is written.
+- **A value a [provisioning pass](../concepts/integration-reconcile.md) mints
+  for the seat is waited for, whatever the declaration**: the declaration is
+  for a value nothing will supply, and that one is coming. Left out instead,
+  the seat's child would start without its identity and act as nobody until
+  the seal.
+- **The `url` is never optional**: a server is dialled at it.
+- **An entry that leaves nothing out is refused** when the document is written:
+  a variable's name where its key belongs, a variable only the `url`
+  references, a key no value the server is started with carries, or a key
+  whose values reference nothing. Unchecked, it would leave the key it was
+  meant for required, and the server not started on every host that does not
+  set its value.
+- **Not the shell's `${VAR:-}`.** The reference grammar deliberately parses no
+  shell expansion, so a sandbox setup step's script survives the engine's
+  resolution untouched; a declaration beside the values says the same thing
+  without reaching into anybody's scripts.
+
+`empty_env_vars`, the warning a stdio child's start logs naming a key whose
+value is empty, is therefore never about a reference: it means a value the
+configuration writes as an empty string.
 
 ### Tool annotation overrides
 

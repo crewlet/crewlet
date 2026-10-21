@@ -21,10 +21,16 @@
  * A CREDENTIAL IS A POINTER. Every environment value and header is a secret
  * field: typing `$` offers the company's sealed entries by name, and a literal
  * is masked. What the form never does is show a value it did not type.
+ *
+ * A POINTER THAT NAMES NOTHING HOLDS THE SERVER BACK. The engine starts no
+ * server with a value whose `${NAME}` resolves to nothing, so a row says, on
+ * its own, whether it may be unset: ticked, the row is in the server's
+ * `optional_keys` and is left out instead. A row, not a secret: one secret can
+ * sit in two values a server needs differently.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Button, Callout, Disclosure, IconButton, Modal, useToast } from "@crewlethq/ui";
+import { Button, Callout, Checkbox, Disclosure, IconButton, Modal, useToast } from "@crewlethq/ui";
 import { PlugGlyph, PlusGlyph, XGlyph } from "@crewlethq/icons/glyphs";
 import { ConfigField } from "~/components/ConfigField.tsx";
 import {
@@ -171,7 +177,7 @@ export function AddMcpServerDialog({
       });
       return;
     }
-    setState(refused(outcome, name));
+    setState(refused(outcome, name, form.transport));
   };
 
   const submit = () => {
@@ -196,7 +202,7 @@ export function AddMcpServerDialog({
           return;
         }
         if (after.kind !== "valid") {
-          setState(refused(after, name));
+          setState(refused(after, name, form.transport));
           return;
         }
         const warnings = introducedWarnings(
@@ -424,7 +430,8 @@ function AddStatus({ state }: { state: AddState }) {
  * `$` offers the sealed entries by name: the header an http server
  * authenticates with is the same token a stdio server reads from its
  * environment, and both belong in the sealed store rather than in the
- * company document.
+ * company document. Each row says whether it may be unset (see the module
+ * doc), said once above the rows rather than under each.
  */
 function PairsEditor({
   noun,
@@ -450,9 +457,13 @@ function PairsEditor({
   return (
     <fieldset className="mcp-add-pairs">
       <legend className="t-label">{label}</legend>
-      {pairs.length === 0 && (
+      {pairs.length === 0 ? (
         <p className="t-caption">
           None. Type <span className="mono">$</span> to insert a secret.
+        </p>
+      ) : (
+        <p className="t-caption">
+          A secret with no value keeps the server from starting, unless its {noun} may be unset.
         </p>
       )}
       {pairs.map((pair, i) => (
@@ -483,6 +494,15 @@ function PairsEditor({
             disabled={disabled}
             onClick={() => onChange(pairs.filter((_, j) => j !== i))}
           />
+          <div className="mcp-add-pair-optional">
+            <Checkbox
+              label={`${capital(noun)} ${i + 1} may be unset`}
+              checked={pair.optional}
+              size="sm"
+              onCheckedChange={(optional: boolean) => set(i, { optional })}
+              disabled={disabled}
+            />
+          </div>
         </div>
       ))}
       {error && (
@@ -509,9 +529,13 @@ function capital(word: string): string {
   return word.charAt(0).toUpperCase() + word.slice(1);
 }
 
-function refused(refusal: ConfigRefusal, name: string): AddState {
+function refused(
+  refusal: ConfigRefusal,
+  name: string,
+  transport: ServerForm["transport"],
+): AddState {
   if (refusal.kind === "problems") {
-    const { fields, rest } = problemsByField(refusal.problems);
+    const { fields, rest } = problemsByField(refusal.problems, transport);
     return {
       kind: "refused",
       message: rest.length > 0 ? rest.join(" ") : addRefusalWords(refusal, name),

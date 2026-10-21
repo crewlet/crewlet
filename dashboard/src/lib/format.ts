@@ -20,6 +20,7 @@
 // what lets it stay a leaf every screen and every test can reach.
 import { EMPTY_VALUE } from "@crewlethq/ui";
 import { zone } from "./prefs.ts";
+import { isWholeReference } from "./references.ts";
 
 /** Parse an ISO timestamp, tolerating a naive one (the engine emits both). */
 
@@ -806,7 +807,7 @@ export function configValueKind(
   if (value === REDACTED) return "hidden";
   // The grammar and the trim are `envref.Whole`'s, so what this calls a
   // reference is exactly what the engine resolves as one.
-  if (/^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(value.trim())) return "reference";
+  if (isWholeReference(value)) return "reference";
   return secret ? "hidden" : "literal";
 }
 

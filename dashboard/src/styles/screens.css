@@ -10106,6 +10106,11 @@ a.live-row:focus-visible {
 .mcp-add-pair-remove {
   margin-bottom: var(--spacing-1);
 }
+/* Whether the row may be unset: under the row, across it, since it is about
+   the pair rather than either box. */
+.mcp-add-pair-optional {
+  grid-column: 1 / -1;
+}
 .mcp-add-pairs-error {
   color: var(--color-feedback-danger-ink);
 }

@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"slices"
 	"sync"
 	"time"
@@ -91,11 +90,22 @@ func (e *Engine) startSharedServers(ctx context.Context, c *Company) {
 	env := e.resolver()
 	specs := make([]mcp.Spec, 0, len(c.Config.MCPServers))
 	var outcomes []mcpOutcome
-	for _, server := range c.Config.MCPServers {
+	for i := range c.Config.MCPServers {
+		server := &c.Config.MCPServers[i]
 		if !server.IsShared() {
 			continue
 		}
-		spec, err := serverSpec(server, server.Name, env, nil)
+		// HELD TO ITS REFERENCES like a seat's child (toolcredentials.go):
+		// a shared server whose key does not resolve is not handed to the
+		// bridge, whose supervision would retry a start for a value nothing
+		// is about to supply — the next apply, which every change to the
+		// snapshot is, starts it.
+		values, missing := resolveServer(server, "", server.Name, nil, env, nil)
+		if missing != nil {
+			outcomes = append(outcomes, mcpOutcome{server: server.Name, err: missing})
+			continue
+		}
+		spec, err := serverSpec(server, server.Name, values)
 		if err != nil {
 			log.ErrorContext(ctx, "mcp_server_unconfigured", "server", server.Name, "error", err,
 				"detail", "this server contributes no tools; the rest of the company still starts")
@@ -104,6 +114,7 @@ func (e *Engine) startSharedServers(ctx context.Context, c *Company) {
 		}
 		specs = append(specs, spec)
 	}
+	outcomes = e.withheldForCredentials(ctx, outcomes)
 	// RETIRED FIRST, because Reconcile is driven by the specs the CURRENT
 	// config names and therefore never visits a server the revision
 	// DELETED. Left alone, that child — holding the company's credentials
@@ -115,11 +126,12 @@ func (e *Engine) startSharedServers(ctx context.Context, c *Company) {
 	// the tools it published before the replacement files its own.
 	// e.mcp holds only shared servers — a seat's children live on their
 	// own bridge — so every absentee here is genuinely one this revision
-	// dropped.
+	// dropped, or one whose credential has stopped resolving.
 	desired := make(map[string]struct{}, len(specs))
 	for _, spec := range specs {
 		desired[spec.Name] = struct{}{}
 	}
+	withheld := withheldByInstance(outcomes)
 	for _, name := range e.mcp.Servers() {
 		if _, keep := desired[name]; keep {
 			continue
@@ -132,6 +144,15 @@ func (e *Engine) startSharedServers(ctx context.Context, c *Company) {
 			log.WarnContext(ctx, "mcp_server_retire_failed", "server", name, "error", err,
 				"detail", "its tools are gone from the catalogue; the child may have "+
 					"survived and is reaped when the engine stops")
+			continue
+		}
+		if missing, ok := withheld[name]; ok {
+			// A STOPPED CREDENTIAL STOPS THE SERVER, by the rule that
+			// would not start it: a key deleted from the store would leave
+			// a child running on the value it was started with.
+			log.InfoContext(ctx, "mcp_server_retired", "server", name,
+				"detail", "a value the server is started with no longer resolves, so it "+
+					"is not left running on the one it was started with: "+missing.reason())
 			continue
 		}
 		log.InfoContext(ctx, "mcp_server_retired", "server", name,
@@ -216,7 +237,7 @@ func (o *mcpOutcome) observe(bridge *mcp.Bridge, instance string) {
 // fault on the one screen an operator connecting an integration is watching.
 //
 // AND JUDGED AGAIN ON EVERY BEAT, against what the integration minting it last
-// recorded ([seatCredentialMissing.judged]). The pass that held it back ran at
+// recorded ([credentialMissing.judged]). The pass that held it back ran at
 // the claim, which on a first boot comes before that integration's first pass,
 // and nothing about a person acting on an integration — or failing to —
 // reaches a seat's pass: so a child the pass could only call waiting becomes a
@@ -239,9 +260,9 @@ func (e *Engine) mcpStatus(ctx context.Context) []coord.MCPServerStatus {
 	slices.SortFunc(all, func(a, b mcpOutcome) int {
 		return cmp.Or(cmp.Compare(a.server, b.server), cmp.Compare(a.seat.String(), b.seat.String()))
 	})
-	var withheld []*seatCredentialMissing
+	var withheld []*credentialMissing
 	for _, o := range all {
-		var missing *seatCredentialMissing
+		var missing *credentialMissing
 		if errors.As(o.err, &missing) {
 			withheld = append(withheld, missing)
 		}
@@ -284,7 +305,7 @@ func (e *Engine) mcpStatus(ctx context.Context) []coord.MCPServerStatus {
 				failure = errors.New(health.Down)
 			}
 		}
-		var missing *seatCredentialMissing
+		var missing *credentialMissing
 		if errors.As(failure, &missing) {
 			missing = missing.judged(states)
 			failure = missing
@@ -467,32 +488,33 @@ func file(ctx context.Context, reg *tools.Registry, server string, change mcp.Ch
 // child, because a template with nobody's identity in it is a server nobody
 // can act through.
 //
-// A child whose seat's block references a variable that resolves to nothing
-// gets no spec: it comes back as an outcome carrying a
-// [seatCredentialMissing], which the pass judges and logs
-// ([Engine.withheldForCredentials]) — see seatcredentials.go. So does a
-// template that does not resolve into a launchable spec. Either way the
-// heartbeat reports the server rather than leaving it out as though the seat
-// never declared it.
+// A child one of whose values references a variable that resolves to nothing
+// — the seat's block or the template's own, under a key not declared optional
+// — gets no spec: it comes back as an outcome carrying a [credentialMissing],
+// which the pass judges and logs ([Engine.withheldForCredentials]) — see
+// toolcredentials.go. So does a template that does not resolve into a
+// launchable spec. Either way the heartbeat reports the server rather than
+// leaving it out as though the seat never declared it.
 func seatSpecs(
 	c *Company, seat *org.Role, env *config.Resolver, minted map[string]integration.Kind,
 ) ([]mcp.Spec, []mcpOutcome) {
 	var out []mcp.Spec
 	var unconfigured []mcpOutcome
-	for _, server := range c.Config.MCPServers {
+	for i := range c.Config.MCPServers {
+		server := &c.Config.MCPServers[i]
 		// The epoch runs the shared ones; a template this seat is not
 		// granted has nobody's identity to run as.
 		if server.IsShared() || !server.Grants(seat) {
 			continue
 		}
-		values := seat.MCPEnv[server.Name]
 		instance := mcp.InstanceName(server.Name, seat.Name)
-		if missing := seatCredentialsMissing(
-			seat.Handle(), server.Name, instance, values, env, minted); missing != nil {
+		values, missing := resolveServer(server, seat.Handle(), instance,
+			seat.MCPEnv[server.Name], env, minted)
+		if missing != nil {
 			unconfigured = append(unconfigured, mcpOutcome{server: server.Name, err: missing})
 			continue
 		}
-		spec, err := serverSpec(server, instance, env, values)
+		spec, err := serverSpec(server, instance, values)
 		if err != nil {
 			log.Error("mcp_server_unconfigured", "server", server.Name, "seat", seat.Handle(),
 				"error", err, "detail", "this seat gets no child for it")
@@ -504,10 +526,10 @@ func seatSpecs(
 	return out, unconfigured
 }
 
-// withheldForCredentials judges every child of a seat's pass that was held
-// back for its credentials against what the integrations minting them last
-// recorded, logs each at the level its story earns, and hands back the
-// outcomes judged.
+// withheldForCredentials judges every server a pass held back for its
+// credentials — a seat's children, or an apply's shared servers — against what
+// the integrations minting them last recorded, logs each at the level its
+// story earns, and hands back the outcomes judged.
 //
 // NAMES ONLY: a variable is what an operator acts on, and what it would have
 // held is the credential.
@@ -520,9 +542,9 @@ func seatSpecs(
 // operator's secret is missing, or the integration that would mint it waits
 // on a person.
 func (e *Engine) withheldForCredentials(ctx context.Context, outcomes []mcpOutcome) []mcpOutcome {
-	var missing []*seatCredentialMissing
+	var missing []*credentialMissing
 	for _, o := range outcomes {
-		var m *seatCredentialMissing
+		var m *credentialMissing
 		if errors.As(o.err, &m) {
 			missing = append(missing, m)
 		}
@@ -532,13 +554,17 @@ func (e *Engine) withheldForCredentials(ctx context.Context, outcomes []mcpOutco
 	}
 	states := e.mintingStates(ctx, missing)
 	for i, o := range outcomes {
-		var m *seatCredentialMissing
+		var m *credentialMissing
 		if !errors.As(o.err, &m) {
 			continue
 		}
 		m = m.judged(states)
 		outcomes[i].err = m
-		attrs := append([]any{"server", m.server, "seat", m.seat}, m.logAttrs()...)
+		attrs := []any{"server", m.server}
+		if m.seat != "" {
+			attrs = append(attrs, "seat", m.seat)
+		}
+		attrs = append(attrs, m.logAttrs()...)
 		attrs = append(attrs, "detail", m.Error())
 		if m.waiting() {
 			log.InfoContext(ctx, "mcp_server_awaiting_credential", attrs...)
@@ -549,14 +575,24 @@ func (e *Engine) withheldForCredentials(ctx context.Context, outcomes []mcpOutco
 	return outcomes
 }
 
-// serverSpec turns one config entry into a launchable spec.
+// serverSpec turns one config entry into a launchable spec, from the values
+// [resolveServer] resolved for this start of it.
 //
-// The ${VAR} references are resolved HERE, at the edge, and never inside
-// internal/mcp: that package must not be able to read the secret store, which
-// is what keeps a tool server's credentials on one path with one audit point.
-func serverSpec(
-	server config.MCPServer, instance string, env *config.Resolver, seatEnv map[string]string,
-) (mcp.Spec, error) {
+// TAKING THEM RESOLVED is what keeps the rule in one place: the ${VAR}
+// references are resolved at the edge, by resolveServer, and never inside
+// internal/mcp — that package must not be able to read the secret store,
+// which is what keeps a tool server's credentials on one path with one audit
+// point — and no spec can be built from values that did not pass it.
+//
+// INTO WHAT THE TRANSPORT AUTHENTICATES WITH: the environment of a stdio
+// child, the headers of an http connection, which is where resolveServer laid
+// the seat's own block over the template's. A seat's block once went into Env
+// whatever the transport, and an http connection reads no environment
+// ([mcp.Spec.Headers]), so every seat's child of a per-role http server — the
+// remote GitHub server a seat reaches with its own `Authorization: Bearer …` —
+// connected with the template's headers alone. A coding agent's box is given
+// the same server from the same values ([sandboxMCP]).
+func serverSpec(server *config.MCPServer, instance string, v serverValues) (mcp.Spec, error) {
 	if instance == "" {
 		return mcp.Spec{}, fmt.Errorf("engine: mcp server %q has no instance name", server.Name)
 	}
@@ -565,52 +601,31 @@ func serverSpec(
 		Transport:           mcp.TransportKind(server.Transport),
 		Command:             server.Command,
 		Args:                server.Args,
-		Env:                 resolveMap(env, server.Env),
-		URL:                 env.Value(server.URL),
-		Headers:             resolveMap(env, server.Headers),
+		URL:                 v.url,
 		ToolPrefix:          server.ToolPrefix,
 		AnnotationOverrides: annotationOverrides(server.ToolAnnotations),
 		StartupTimeout:      mcpTimeout(server.StartupTimeoutSeconds),
 		RequestTimeout:      mcpTimeout(server.RequestTimeoutSeconds),
 	}
-	// THE SEAT'S OWN VALUES WIN. A template's env is the shape every child
-	// shares — a base URL, a workspace — and the seat's block is the
-	// identity inside it, so a seat that names the same key is naming its
-	// own credential rather than a second default.
-	//
-	// INTO WHAT THE TRANSPORT AUTHENTICATES WITH: the environment of a
-	// stdio child, the headers of an http connection. It went into Env
-	// whatever the transport, and an http connection reads no environment
-	// ([mcp.Spec.Headers]), so every seat's child of a per-role http server
-	// — the remote GitHub server a seat reaches with its own
-	// `Authorization: Bearer …` — connected with the template's headers
-	// alone: refused for want of a token, or, under a template carrying
-	// one, every seat acting as that one identity. The in-box rendering of
-	// the same server has always split them this way
-	// ([sandbox.RenderMCP]).
-	if len(seatEnv) > 0 {
-		target := &spec.Env
-		if server.Kind() == config.TransportHTTP {
-			target = &spec.Headers
-		}
-		if *target == nil {
-			*target = make(map[string]string, len(seatEnv))
-		}
-		maps.Copy(*target, resolveMap(env, seatEnv))
+	if server.Kind() == config.TransportHTTP {
+		spec.Headers = v.values
+	} else {
+		spec.Env = v.values
 	}
 	return spec, nil
 }
 
-// resolveMap expands every ${VAR} in a config map.
-func resolveMap(env *config.Resolver, in map[string]string) map[string]string {
-	if len(in) == 0 {
-		return nil
+// withheldByInstance indexes a pass's outcomes held back for their
+// credentials by the instance each would have started as.
+func withheldByInstance(outcomes []mcpOutcome) map[string]*credentialMissing {
+	withheld := make(map[string]*credentialMissing, len(outcomes))
+	for _, o := range outcomes {
+		var missing *credentialMissing
+		if errors.As(o.err, &missing) {
+			withheld[missing.instance] = missing
+		}
 	}
-	out := make(map[string]string, len(in))
-	for k, v := range in {
-		out[k] = env.Value(v)
-	}
-	return out
+	return withheld
 }
 
 // annotationOverrides converts the operator's per-tool hints.

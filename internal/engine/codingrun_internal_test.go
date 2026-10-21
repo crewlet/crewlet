@@ -26,10 +26,17 @@ func codeWorkRig(t *testing.T, c *Company) (*Engine, map[string]*sandbox.FakeRun
 	for name, runner := range jobs {
 		runners[name] = runner
 	}
+	// THE COMPANY'S OWN PROVIDER-WIDE STEPS, as buildSandbox hands them to
+	// the manager, so a launch here provisions what a node's would.
+	var defaults []sandbox.SetupStep
+	if spec := c.Config.Providers.Sandbox; spec != nil {
+		defaults = setupSteps(spec.Setup)
+	}
 	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
 		Providers:          map[sandbox.Placement]sandbox.Provider{sandbox.E2B: sandbox.NewFakeProvider()},
 		Runners:            runners,
 		DefaultCodingAgent: codingagent.ClaudeCodeName,
+		DefaultSetup:       defaults,
 	})
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)

@@ -19,9 +19,9 @@ import (
 // executor is an agent-mode launcher, which is what keeps run_sandbox off its
 // surface; the cell that launcher carries, or the run_sandbox gate's, each
 // resolved through the manager's own default, as BuildSpec resolves it at
-// launch; and the steps the engine's boxSetup hands the box. A change to any of
-// them here fails this case, where it would otherwise leave validation judging
-// cells and steps no box runs.
+// launch; and the steps the engine's runEnvironment hands the box. A change to
+// any of them here fails this case, where it would otherwise leave validation
+// judging cells and steps no box runs.
 //
 // The company covers every shape a seat's boxes take: a gate naming its cell,
 // a gate falling to the catalogue's default, a gate that is off, an agent-mode
@@ -163,7 +163,8 @@ roles:
 		for _, step := range box.Steps {
 			judgedSteps = append(judgedSteps, step.Step.Name)
 		}
-		for _, step := range e.boxSetup(t.Context(), e.Company(), manager.DefaultSetup(), handle, gate) {
+		for _, step := range e.runEnvironment(t.Context(), e.Company(),
+			e.Company().Org.AgentSeatByHandle(handle), gate, manager.DefaultSetup()).setup {
 			given = append(given, step.Name)
 		}
 		if !slices.Equal(judgedSteps, given) {

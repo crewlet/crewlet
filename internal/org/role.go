@@ -516,6 +516,11 @@ type SandboxSetupStep struct {
 	// Env is merged into the coding agent's run environment.
 	Env map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
 
+	// OptionalKeys names the keys of Env and the paths of Files whose value
+	// may resolve to nothing at launch, and so is left out rather than
+	// refusing the run.
+	OptionalKeys []string `yaml:"optional_keys,omitempty" json:"optional_keys,omitempty"`
+
 	// Brief is the paragraph handed to the coding agent: what this step
 	// made TRUE about its box.
 	Brief string `yaml:"brief,omitempty" json:"brief,omitempty"`
@@ -614,6 +619,10 @@ type RoleSandbox struct {
 	// tool-specific variable of its own, and only LLM credentials derive
 	// automatically.
 	Env map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
+
+	// OptionalKeys names the keys of Env whose value may resolve to nothing
+	// at launch, and so is left out rather than refusing the run.
+	OptionalKeys []string `yaml:"optional_keys,omitempty" json:"optional_keys,omitempty"`
 }
 
 // Role is a SEAT in the org chart, held by an AI agent or a human.

@@ -54,8 +54,8 @@ type BoxStep struct {
 // RUN_SANDBOX box, which an enabled gate offers it. Either box's cell, when
 // its placer names none, is the catalogue's default, resolved at launch
 // ([SandboxProvider.RunIn]); and either is given the engine-wide steps
-// followed by the seat's own, which is what the engine's boxSetup builds for
-// both.
+// followed by the seat's own, which is what the engine's runEnvironment
+// builds for both.
 //
 // A SECOND RESOLUTION OF THE ENGINE'S, for [Company.ExecutorProvider]'s
 // reason: validation has to answer before anything is built. The executor's

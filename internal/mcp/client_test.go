@@ -414,9 +414,10 @@ func TestStartFailureSurfacesTheServersLastWords(t *testing.T) {
 
 func TestEmptyDeclaredEnvVarIsWarned(t *testing.T) {
 	t.Parallel()
-	// Almost always an unresolved ${VAR}. The server comes up, fails to
-	// authenticate, and reports something unrelated — so the one moment the
-	// variable NAME is still in hand is the moment to say it.
+	// A value the configuration wrote empty: a reference that resolved to
+	// nothing never gets this far. The server comes up, fails to
+	// authenticate, and reports something unrelated — so the key is said
+	// here, before it does.
 	log, rec := recorder()
 	spec := helperSpec(t, "emptyenv", "serve", map[string]string{"SOME_API_TOKEN": ""})
 	c, err := connect(t.Context(), spec, log)

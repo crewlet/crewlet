@@ -262,11 +262,13 @@ func (c *Company) ValidateRunnable() error {
 // whose code work hands a cli-agent entry to another CLI's coding agent
 // ([Company.validateSandboxCodingAgents]), a sandbox gate saying what nothing
 // reads ([Company.validateSandboxGates]), a setup step writing a file a box
-// it reaches refuses ([Company.validateSetupFileHomes]), and the four
-// WHOLE-DOCUMENT rules
-// in [Company.validateFileRules] — an `mcp_env` key naming no server, two
-// seats declaring one email, a reference that is shaped like neither a handle
-// nor a key, and a unit key or a seat handle the org chart reserves.
+// it reaches refuses ([Company.validateSetupFileHomes]), a coding run's
+// `optional_keys` entry leaving nothing out ([Company.validateRunOptionalKeys]),
+// and the five WHOLE-DOCUMENT rules in [Company.validateFileRules] — an
+// `mcp_env` key naming no server, an `optional_keys` entry leaving nothing
+// out, one http header spelled two ways where nothing says which is sent, two
+// seats declaring one email, and a reference that is shaped like neither a
+// handle nor a key.
 func (c *Company) ValidateAdmission() error {
 	o, index := c.organization()
 	return index.locate(c.validateAdmission(o))
@@ -279,7 +281,7 @@ func (c *Company) validateAdmission(o *org.Organization) error {
 		c.validateSetupStepNames(), c.validateHumanSeatApps(), c.validateAvatars(),
 		c.validateCLIAgentCredentials(), c.validateCLIAgentModels(),
 		c.validateSandboxCodingAgents(), c.validateSandboxGates(), c.validateSetupFileHomes(),
-		c.validateFileRules())
+		c.validateRunOptionalKeys(), c.validateFileRules())
 }
 
 // validateUnitIDs requires an id on every authored unit, at any depth. See

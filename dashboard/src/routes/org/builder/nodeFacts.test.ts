@@ -12,6 +12,7 @@
 import { describe, expect, test } from "vitest";
 import type { AgentRow, CompanyDocument, OrgProjection, SandboxEntry } from "~/protocol/index.ts";
 import type { SeatActivity } from "~/contract/wire.ts";
+import { isWholeReference } from "~/lib/references.ts";
 import { locate } from "./model/draft.ts";
 import { builderReducer } from "./model/reducer.ts";
 import { fixtureCompany } from "./model/testkit.ts";
@@ -24,7 +25,6 @@ import {
   homeUnitOf,
   identityProblemOf,
   isConnected,
-  isWholeReference,
   isWorking,
   mattermostBotUsername,
   nameOfHandle,

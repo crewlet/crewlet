@@ -126,7 +126,8 @@ func SeedStore(t testing.TB, b *config.Bootstrap) {
 // needs a manager, a pending-run store and a budget, none of which is what a
 // case about how a file reaches the box is about.
 func SeatBoxSetupForTest(e *Engine, defaults []sandbox.SetupStep, handle string) []sandbox.SetupStep {
-	return e.boxSetup(context.Background(), e.Company(), defaults, handle, seatSandbox(e.Company(), handle))
+	c := e.Company()
+	return e.runEnvironment(context.Background(), c, c.Org.AgentSeatByHandle(handle), seatSandbox(c, handle), defaults).setup
 }
 
 // ForgetPersonBlinderForTest drops this node's resolved blinder, so the next
