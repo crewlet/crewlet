@@ -254,7 +254,14 @@ func TestDeclaredIsWhatTheWriteActuallyCreated(t *testing.T) {
 
 // TestTagLabelCollisionIsRefused is D43's rule: two tags a person cannot tell
 // apart split the work between them at random. It covers BOTH spellings,
-// because a label may collide with another tag's label or with its slug.
+// because a label may collide with another tag's label or with its slug, and
+// BOTH gestures, because a rename can give a tag another's label as surely as
+// an add can — and every one is a COLLISION ([tracker.ErrTaken]) naming the tag
+// that holds the label, never a malformed label ([tracker.ErrInvalid]). The
+// rename's was a bare content refusal naming nothing a caller could unwrap.
+//
+// Mutation: refuse the rename's clash with invalid() again, or unwrap
+// TagClash to ErrInvalid, and a case goes red.
 func TestTagLabelCollisionIsRefused(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -269,16 +276,37 @@ func TestTagLabelCollisionIsRefused(t *testing.T) {
 	// EACH CASE ISOLATES ONE SPELLING. The seed's label and slug are
 	// deliberately different words, so a collision on one cannot pass for
 	// a collision on the other.
-	for _, c := range []struct{ name, slug, label string }{
-		{"same label, different case", "rest-api", "public api"},
-		{"label is another tag's slug", "rest", "API"},
+	if _, err := r.writer.WriteTags(t.Context(), "op-seed-ux", "ENG",
+		tracker.TagEdit{Add: []tracker.Tag{{Slug: "ux", Label: "Design"}}},
+		tracker.TagAuthority{}); err != nil {
+
+		t.Fatalf("seed: %v", err)
+	}
+	r.drain()
+	for _, c := range []struct {
+		name string
+		edit tracker.TagEdit
+		slug string
+	}{
+		{"same label, different case", tracker.TagEdit{Add: []tracker.Tag{
+			{Slug: "rest-api", Label: "public api"}}}, "rest-api"},
+		{"label is another tag's slug", tracker.TagEdit{Add: []tracker.Tag{
+			{Slug: "rest", Label: "API"}}}, "rest"},
+		{"a rename onto another tag's label", tracker.TagEdit{
+			Rename: map[string]string{"ux": "Public API"}}, "ux"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			_, err := r.writer.WriteTags(t.Context(), "op-"+c.slug, "ENG",
-				tracker.TagEdit{Add: []tracker.Tag{{Slug: c.slug, Label: c.label}}},
-				tracker.TagAuthority{})
-			if err == nil {
+			_, err := r.writer.WriteTags(t.Context(), "op-"+c.name, "ENG", c.edit,
+				tracker.TagAuthority{Policy: true})
+			var clash *tracker.TagClash
+			switch {
+			case err == nil:
 				t.Fatalf("%s was accepted", c.name)
+			case !errors.As(err, &clash) || clash.Other.Slug != "api" || clash.Slug != c.slug:
+				t.Fatalf("%s was refused %v, want a TagClash of %s naming api",
+					c.name, err, c.slug)
+			case !errors.Is(err, tracker.ErrTaken) || errors.Is(err, tracker.ErrInvalid):
+				t.Fatalf("%s is not a collision alone: %v", c.name, err)
 			}
 		})
 	}
@@ -492,27 +520,30 @@ func (r *roundTrip) tagSlugs(project string) []string {
 // [tracker.TagClash] and [tracker.TagsFull] are types so a caller several
 // steps away — a cross-project move declaring its subtree's tags — can name
 // the tags involved. They must still be what every refusal here is: marked
-// under errors.Is — a clash [tracker.ErrInvalid], the label to change, and a
-// full set [tracker.ErrState], the project's state, which the same add meets
-// until a tag is archived — and worded by [tracker.Sentence] without the
+// under errors.Is — a clash [tracker.ErrTaken], the collision it is, which
+// another label avoids, and a full set [tracker.ErrState], the project's
+// state, which the same add meets until a tag is archived; neither is
+// [tracker.ErrInvalid], since nothing about the label is malformed — and
+// worded by [tracker.Sentence] without the
 // package prefix, or a surface that does not look for the type classes a
 // person's refusal as the engine's own failure and shows them "tracker:" in
 // front of it.
 func TestATypedTagRefusalIsClassedAndWordedAsARefusal(t *testing.T) {
 	t.Parallel()
+	marks := []error{tracker.ErrInvalid, tracker.ErrState, tracker.ErrTaken}
 	for name, c := range map[string]struct {
-		err       error
-		mark, not error
+		err  error
+		mark error
 	}{
 		"a clash": {&tracker.TagClash{Project: "OPS", Slug: "api", Label: "API",
-			Other: tracker.Tag{Slug: "backend-api", Label: "API"}},
-			tracker.ErrInvalid, tracker.ErrState},
-		"a full set": {&tracker.TagsFull{Project: "OPS", Slug: "api"},
-			tracker.ErrState, tracker.ErrInvalid},
+			Other: tracker.Tag{Slug: "backend-api", Label: "API"}}, tracker.ErrTaken},
+		"a full set": {&tracker.TagsFull{Project: "OPS", Slug: "api"}, tracker.ErrState},
 	} {
 		err := c.err
-		if !errors.Is(err, c.mark) || errors.Is(err, c.not) {
-			t.Errorf("%s is not %v alone: %v", name, c.mark, err)
+		for _, mark := range marks {
+			if errors.Is(err, mark) != errors.Is(c.mark, mark) {
+				t.Errorf("%s is not %v alone: %v", name, c.mark, err)
+			}
 		}
 		sentence := tracker.Sentence(err)
 		if strings.HasPrefix(sentence, "tracker:") || err.Error() != "tracker: "+sentence {

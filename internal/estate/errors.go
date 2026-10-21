@@ -82,6 +82,7 @@ var sentinels = []sentinel{
 	{"tracker.ErrState", tracker.ErrState},
 	{"tracker.ErrStepUnresolved", tracker.ErrStepUnresolved},
 	{"tracker.ErrStepUnvouched", tracker.ErrStepUnvouched},
+	{"tracker.ErrTaken", tracker.ErrTaken},
 	{"tracker.ErrTooBroad", tracker.ErrTooBroad},
 	{"tracker.ErrUploadStale", tracker.ErrUploadStale},
 
