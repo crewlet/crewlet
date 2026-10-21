@@ -164,3 +164,29 @@ func TestTheLongestRevealFitsTheBoundAReaderIsGiven(t *testing.T) {
 			len(raw), secretsapi.MaxRevealAnswerBytes)
 	}
 }
+
+// AND THE LONGEST SINGLE REVEAL FITS THE BOUND ITS READER IS GIVEN.
+//
+// `GET /secrets/{name}?reveal=true` answers the value as a JSON string too, so
+// the largest value the write admits, in the characters JSON spells longest,
+// comes back six times its stored length. A reader held to the write's limit
+// refused it: a value the store took and the break-glass read could not hand
+// back. Mutation: count the value at its stored length in RevealAnswerBytes,
+// and this answer overruns it.
+func TestTheLongestSingleRevealFitsTheBoundAReaderIsGiven(t *testing.T) {
+	t.Parallel()
+	h, _ := surface(t, cipherFor(t, "k1"), "k1")
+	const name = "PEM_KEY"
+	value := strings.Repeat("<", secretsapi.MaxValueBytes)
+	if code, body := call(t, h, http.MethodPut, "/secrets/"+name, value); code != http.StatusOK {
+		t.Fatalf("seed = %d %s", code, body)
+	}
+	code, raw := call(t, h, http.MethodGet, "/secrets/"+name+"?reveal=true", "")
+	if code != http.StatusOK {
+		t.Fatalf("reveal = %d %.300s", code, raw)
+	}
+	if len(raw) > secretsapi.RevealAnswerBytes(name) {
+		t.Errorf("the answer is %d bytes, over RevealAnswerBytes (%d)",
+			len(raw), secretsapi.RevealAnswerBytes(name))
+	}
+}

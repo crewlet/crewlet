@@ -90,7 +90,7 @@ func (c *secretsClient) List(ctx context.Context) ([]secrets.Record, error) {
 			Source        secrets.Source `json:"source"`
 		} `json:"secrets"`
 	}
-	if err := c.call(ctx, http.MethodGet, "/secrets", nil, &body); err != nil {
+	if err := c.call(ctx, http.MethodGet, "/secrets", nil, maxListingAnswerBytes, &body); err != nil {
 		return nil, err
 	}
 	out := make([]secrets.Record, 0, len(body.Secrets))
@@ -126,7 +126,7 @@ func (c *secretsClient) Set(ctx context.Context, name, value string, _ secrets.A
 		OperatorID    string `json:"operator_id"`
 	}
 	if err := c.call(ctx, http.MethodPut, "/secrets/"+url.PathEscape(name),
-		[]byte(value), &body); err != nil {
+		[]byte(value), maxRowAnswerBytes, &body); err != nil {
 		return secrets.Author{}, err
 	}
 	return secrets.Author{Name: body.UpdatedBy, Kind: body.UpdatedByKind,
@@ -134,12 +134,17 @@ func (c *secretsClient) Set(ctx context.Context, name, value string, _ secrets.A
 }
 
 // Get reads one value back. Break-glass, and the node logs it by name.
+//
+// READ TO THE LENGTH THE ROUTE CAN ANSWER FOR THIS NAME
+// ([secretsapi.RevealAnswerBytes]), which is not the write's limit: the value
+// comes back as a JSON string, which spells each byte it escapes in six, so a
+// reader held to the stored length refused a value the store had taken.
 func (c *secretsClient) Get(ctx context.Context, name string) (string, error) {
 	var body struct {
 		Value string `json:"value"`
 	}
-	err := c.call(ctx, http.MethodGet,
-		"/secrets/"+url.PathEscape(name)+"?reveal=true", nil, &body)
+	err := c.call(ctx, http.MethodGet, "/secrets/"+url.PathEscape(name)+"?reveal=true",
+		nil, secretsapi.RevealAnswerBytes(name), &body)
 	if err != nil {
 		return "", err
 	}
@@ -184,7 +189,8 @@ func (c *secretsClient) Unset(ctx context.Context, name string) (bool, error) {
 	var body struct {
 		Removed bool `json:"removed"`
 	}
-	err := c.call(ctx, http.MethodDelete, "/secrets/"+url.PathEscape(name), nil, &body)
+	err := c.call(ctx, http.MethodDelete, "/secrets/"+url.PathEscape(name), nil,
+		maxRowAnswerBytes, &body)
 	if err != nil {
 		return false, err
 	}
@@ -204,7 +210,7 @@ func (c *secretsClient) Rekey(ctx context.Context, activeKeyID string) (rotation
 		Identity   *secretsapi.IdentityResealed `json:"identity"`
 	}
 	err := c.call(ctx, http.MethodPost,
-		"/secrets/rekey?key_id="+url.QueryEscape(activeKeyID), nil, &body)
+		"/secrets/rekey?key_id="+url.QueryEscape(activeKeyID), nil, maxListingAnswerBytes, &body)
 	if err != nil {
 		return rotation{}, err
 	}
@@ -222,21 +228,23 @@ func (c *secretsClient) EngineKeys(ctx context.Context) (engineHeld, error) {
 		EngineKeys secrets.EngineKeys     `json:"engine_keys"`
 		Identity   *iamdomain.SealedCount `json:"identity_values"`
 	}
-	if err := c.call(ctx, http.MethodGet, "/secrets", nil, &body); err != nil {
+	if err := c.call(ctx, http.MethodGet, "/secrets", nil, maxListingAnswerBytes, &body); err != nil {
 		return engineHeld{}, err
 	}
 	return engineHeld{Keys: body.EngineKeys, Identity: body.Identity}, nil
 }
 
-// call performs one request whose body, where it has one, is a credential, and
-// decodes the answer, or explains the refusal.
+// call performs one request whose body, where it has one, is a credential,
+// reads at most limit bytes of the answer — the longest that route can give —
+// and decodes it, or explains the refusal.
 //
 // OCTET-STREAM, because the body IS the credential: bytes, not a document.
 // Labelling it text/plain would invite a proxy to re-encode a value the vendor
 // will compare byte for byte.
-func (c *secretsClient) call(ctx context.Context, method, path string, body []byte, out any) error {
-	return c.do(ctx, method, path, "application/octet-stream", body,
-		maxSecretResponseBytes, out)
+func (c *secretsClient) call(ctx context.Context, method, path string, body []byte,
+	limit int, out any) error {
+
+	return c.do(ctx, method, path, "application/octet-stream", body, limit, out)
 }
 
 // do performs one request carrying a body of contentType, reads at most limit
@@ -265,9 +273,10 @@ func (c *secretsClient) do(ctx context.Context, method, path, contentType string
 			"-api names its address", c.base, err)
 	}
 	defer resp.Body.Close()
-	// BOUNDED, AND REFUSED PAST THE BOUND. Every answer here is a small JSON
-	// object, one credential, or the credentials of one batch of names, and
-	// the caller's limit is the longest the node can answer that route with.
+	// BOUNDED, AND REFUSED PAST THE BOUND. Every answer here is one row's
+	// metadata, one credential, the credentials of one batch of names, or a
+	// listing of every row, and the caller's limit is the longest the node
+	// can answer that route with.
 	//
 	// The refusal is what the bound needs to be worth having: io.LimitReader
 	// stops at its cap and reports a clean EOF, so an over-long answer used
@@ -279,9 +288,9 @@ func (c *secretsClient) do(ctx context.Context, method, path, contentType string
 	}
 	if len(raw) > limit {
 		return fmt.Errorf(
-			"the node's answer to %s exceeded %d bytes, so it was not read: a "+
-				"credential this long is not one this build stores, and a clipped "+
-				"one would be worse than none", path, limit)
+			"the node's answer to %s exceeded %d bytes, so it was not read: no "+
+				"answer that route gives is this long, and a clipped one would be "+
+				"worse than none", path, limit)
 	}
 	if resp.StatusCode/100 != 2 {
 		return c.refusal(resp.StatusCode, path, resp.Header.Get("Content-Type"), raw)
@@ -296,12 +305,24 @@ func (c *secretsClient) do(ctx context.Context, method, path, contentType string
 	return nil
 }
 
-// maxSecretResponseBytes bounds one answer.
+// maxRowAnswerBytes bounds an answer about one row, and a refusal: the author
+// a write was stamped with, whether an unset removed anything, and the
+// engine's envelope for every refusal — each well under a kibibyte. Sixty-four
+// kibibytes is room for the error page a proxy in front of the node answers in
+// their place, so that its status still reaches the operator.
+const maxRowAnswerBytes = 64 << 10
+
+// maxListingAnswerBytes bounds an answer naming every row: the listing, and
+// the names a rekey moved.
 //
-// The write limit plus room for the JSON around it: the largest thing this
-// client ever reads back is a revealed credential, and one the node refused
-// to store cannot come back out of it.
-const maxSecretResponseBytes = (64 << 10) + (4 << 10)
+// A row's metadata is a few hundred bytes at most — its name, a key id, a
+// timestamp, the author (a login is at most 64 bytes), the credential it came
+// through and the source — so eight mebibytes is some eighteen thousand rows:
+// an order of magnitude above a company of a thousand seats holding several
+// credentials each, because an answer past the bound fails the command
+// outright. One bound for every route was a revealed credential's, and it
+// refused the listing of a company holding a few hundred.
+const maxListingAnswerBytes = 8 << 20
 
 // refusal turns a status code into something an operator can act on.
 func (c *secretsClient) refusal(status int, path, contentType string, raw []byte) error {

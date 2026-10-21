@@ -15,10 +15,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/config"
+	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/httpx"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
@@ -658,5 +663,104 @@ func TestARefusedBatchFailsTheWholeRead(t *testing.T) {
 	}
 	if got, err := client.Values(t.Context(), []string{"A"}); err == nil {
 		t.Fatalf("a refused read answered %v", got)
+	}
+}
+
+// secretsNode is a real /secrets surface over a memory fleet, served the way a
+// node serves it to a Tier A token holding admin — so a case about what the
+// client reads back reads exactly what the node writes, escaping included.
+func secretsNode(t *testing.T) *secretsClient {
+	t.Helper()
+	sum := make([]byte, 32)
+	sum[0] = 1
+	cipher, err := secrets.NewCipher(secrets.Keyring{ActiveID: "k1",
+		Keys: map[string][]byte{"k1": sum}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc, err := secretsapi.New(secretsapi.Options{Fleet: coordmem.NewFleet(),
+		Cipher: cipher, ActiveKeyID: "k1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	if err := svc.Routes(mux); err != nil {
+		t.Fatal(err)
+	}
+	caller := iam.Principal{
+		ID:    uuid.NewSHA1(auth.TokenNamespace, []byte("ops")),
+		Login: iam.TokenLogin("ops"), Kind: iam.KindMachine,
+		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantAdmin},
+		ReauthAt: time.Now().Add(time.Hour),
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mux.ServeHTTP(w, r.WithContext(iam.WithPrincipal(r.Context(), caller)))
+	}))
+	t.Cleanup(server.Close)
+	client, err := newSecretsClient(tokenEnviron("ops-token"),
+		bootWithAPI(t, "127.0.0.1", 1, "ops-token"), server.URL, secretsList)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client
+}
+
+// A VALUE THE STORE TOOK COMES BACK, HOWEVER JSON SPELLS IT.
+//
+// Both reveals answer a value as a JSON string, which spells `&`, `<`, `>` and
+// every control byte as a six-byte escape — so the largest value the write
+// admits can come back six times as long. The single reveal was read to the
+// write's own limit and refused that value as "a credential this long is not
+// one this build stores", on `crewlet secrets get -reveal` and on a
+// provisioning sink's read-back alike: a credential stored and unreadable.
+func TestTheLargestValueTheStoreTakesIsRevealedBothWays(t *testing.T) {
+	t.Parallel()
+	client := secretsNode(t)
+	for _, tc := range []struct{ name, value string }{
+		{"AMPERSANDS", strings.Repeat("&", secretsapi.MaxValueBytes)},
+		{"CONTROL_BYTES", strings.Repeat("\x01", secretsapi.MaxValueBytes)},
+	} {
+		if _, err := client.Set(t.Context(), tc.name, tc.value, secrets.Author{},
+			"", time.Time{}); err != nil {
+			t.Fatalf("set %s: %v", tc.name, err)
+		}
+		got, err := client.Get(t.Context(), tc.name)
+		if err != nil || got != tc.value {
+			t.Errorf("GET reveal of %s: %d bytes, %v; want the %d stored",
+				tc.name, len(got), err, len(tc.value))
+		}
+		values, err := client.Values(t.Context(), []string{tc.name})
+		if err != nil || values[tc.name] != tc.value {
+			t.Errorf("POST reveal of %s: %d bytes, %v; want the %d stored",
+				tc.name, len(values[tc.name]), err, len(tc.value))
+		}
+	}
+}
+
+// A LISTING IS READ TO A LISTING'S BOUND, NOT A CREDENTIAL'S.
+//
+// Every answer was held to one bound, a revealed credential's sixty-eight
+// kibibytes, and a listing grows with the company: one holding a few hundred
+// credentials was refused `crewlet secrets list` and `crewlet secrets rekey`
+// (whose count of the engine's keys reads the same listing) outright.
+func TestAListingOfManyCredentialsIsRead(t *testing.T) {
+	t.Parallel()
+	client := secretsNode(t)
+	const rows = 1000
+	for i := range rows {
+		if _, err := client.Set(t.Context(), fmt.Sprintf("SEAT_%04d_TOKEN", i), "v",
+			secrets.Author{}, "", time.Time{}); err != nil {
+			t.Fatalf("set %d: %v", i, err)
+		}
+	}
+	listed, err := client.List(t.Context())
+	if err != nil {
+		t.Fatalf("a listing of %d credentials was refused: %v", rows, err)
+	}
+	if len(listed) != rows {
+		t.Errorf("the listing named %d row(s), want %d", len(listed), rows)
+	}
+	if _, err := client.EngineKeys(t.Context()); err != nil {
+		t.Errorf("the count a rekey reads was refused: %v", err)
 	}
 }
