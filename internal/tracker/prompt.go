@@ -363,6 +363,17 @@ func promptOpener(b *strings.Builder, n notify.Inbound, parties notify.Parties,
 		b.WriteString("A task you are named on changed.")
 	}
 	promptHeader(b, n, parties)
+	// A COMMENT IS QUOTED WHATEVER BROUGHT IT HERE. The four reasons above
+	// are ABOUT something somebody said, but a remark reaches a task's
+	// assignee, reporter and watchers too, and to them the change IS the
+	// remark: [promptChanged] leaves a comment's body to this opener, and
+	// [Prompt.RequiresRecon] reports a comment wake as carrying its text —
+	// so a copy that rendered only "a comment was added" sent its seat to
+	// read the task for words the trigger was built to hand it.
+	switch ChangeKind(n.EventType) {
+	case ChangeComment, ChangeCommentEdited:
+		quoted = true
+	}
 	if !quoted {
 		return
 	}
