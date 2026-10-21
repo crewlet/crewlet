@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // Prompt is what a code-host event asks of the seat it reached.
@@ -144,6 +145,20 @@ func (Prompt) PartitionKey(metadata map[string]string, _ string) string {
 // together.
 func (p Prompt) ConversationIdentity(metadata map[string]string, subject string) string {
 	return p.PartitionKey(metadata, subject)
+}
+
+// Provenance implements [notify.Prompt]: what the parser stated — a note by
+// its writer while it is fresh, an issue's or merge request's description by
+// its opener on the hook that opened it and by nobody named after — and, for a
+// notification built without the parser, a remark for a note's reasons and a
+// description for every other.
+func (Prompt) Provenance(n notify.Inbound, parties notify.Parties) notify.Provenance {
+	fallback := provenance.SourceWorkDescription
+	switch n.Metadata["event_type"] {
+	case NoteMention, NoteComment:
+		fallback = provenance.SourceWorkComment
+	}
+	return notify.Stated(n, parties, fallback)
 }
 
 // Build implements [notify.Prompt].

@@ -400,7 +400,7 @@ func TestAChatletMessageIsFencedUnderWhoWroteIt(t *testing.T) {
 				n.Author, n.AuthorKind = c.author, c.kind
 			})
 			in.Body, in.Fence = "the release slipped", provenance.NewBoundary()
-			built := chatlet.NewPrompt().Build(in, c.parties)
+			built := notify.Render(chatlet.NewPrompt(), in, c.parties)
 			fences := provenance.Fences(built, in.Fence)
 			if len(fences) != 1 {
 				t.Fatalf("the wake carries %d fences, want the message's:\n%s",

@@ -47,6 +47,12 @@ func (tracker) Addressed(n notify.Inbound) bool { return n.EventType == "assigne
 // reaches them; everything else this third-party app emits, they already
 // know about.
 func (tracker) WakesActor(n notify.Inbound) bool { return n.EventType == "pipeline_failed" }
+
+// Provenance: what this third-party app's parser stated, and a work item's
+// comment where it stated nothing.
+func (tracker) Provenance(n notify.Inbound, parties notify.Parties) notify.Provenance {
+	return notify.Stated(n, parties, provenance.SourceWorkComment)
+}
 func (tracker) PartitionKey(m map[string]string, _ string) string {
 	return m["issue_id"]
 }
@@ -490,7 +496,7 @@ func TestACoalescedChatTriggerFencesEveryMessageUnderOneToken(t *testing.T) {
 		salient := body
 		return types.ExternalNotification{
 			NotificationSource: "chat", SourceEventType: "posted", Sender: sender,
-			Body: chatPrompt.Build(in, nil), FenceBoundary: string(in.Fence),
+			Body: notify.Render(chatPrompt, in, nil), FenceBoundary: string(in.Fence),
 			SalientBody: &salient, Metadata: in.Metadata,
 		}
 	}

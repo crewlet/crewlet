@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // Prompt is what a Confluence event asks of the seat it reached.
@@ -85,6 +86,18 @@ func (Prompt) DigestBody(eventType, body string) string {
 		return body
 	}
 	return ""
+}
+
+// Provenance implements [notify.Prompt]: what the parser stated — a remark, or
+// the page's own text, by its writer only on the event that wrote every word —
+// and, for a notification built without the parser, a remark for a comment's
+// events and the page's text for every other.
+func (Prompt) Provenance(n notify.Inbound, parties notify.Parties) notify.Provenance {
+	fallback := provenance.SourcePageBody
+	if strings.HasPrefix(n.Metadata["event_type"], "comment_") {
+		fallback = provenance.SourcePageComment
+	}
+	return notify.Stated(n, parties, fallback)
 }
 
 // Build implements [notify.Prompt].

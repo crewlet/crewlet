@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // The metadata keys the prompt reads back.
@@ -278,12 +279,23 @@ func (p *Parser) inbound(record MutationRecord) notify.Inbound {
 		// to name.
 		metadata[MetaKeyCollision] = "true"
 	}
+	body, source := wakeBody(record)
+	if body != "" {
+		// WHAT THE BODY IS AND WHO WROTE IT, for the fence the spine puts
+		// it in (ADR-0040): every word of a change's text is its author's
+		// — their comment, the description they filed, the reason they
+		// gave — and the record states the kind of author they are, which
+		// is what names them when the roster no longer holds the handle.
+		metadata[notify.BodySourceField] = string(source)
+		metadata[notify.BodyAuthorField] = record.Actor
+		metadata[notify.BodyAuthorKindField] = string(record.ActorKind)
+	}
 	return notify.Inbound{
 		Source:    Source,
 		EventType: string(record.Notify.Kind),
 		Sender:    record.Actor,
 		Subject:   subjectLine(snapshot, record.Subject, record.Notify.Kind),
-		Body:      wakeBody(record),
+		Body:      body,
 		Metadata:  metadata,
 	}
 }
@@ -303,35 +315,60 @@ func (p *Parser) inbound(record MutationRecord) notify.Inbound {
 // the record's excerpt is what [excerptOf] makes of it. An excerpt somebody
 // stated — a hand-off's reason, a purge's line — is not derived from the
 // payload, does not match, and is shown as the text it is.
-func wakeBody(record MutationRecord) string {
+//
+// AND WHAT IT IS, which only this derivation knows: the comment the excerpt was
+// cut from, the description a new task was filed with, or — an excerpt nothing
+// in the payload explains — a note its author wrote about the change, which is
+// the label its fence carries ([provenance.SourceChangeNote]).
+func wakeBody(record MutationRecord) (string, provenance.Source) {
 	excerpt := record.Notify.Excerpt
 	if excerpt == "" {
-		return ""
+		return "", ""
 	}
 	var carried struct {
 		Comment *Comment `json:"comment"`
 		Body    string   `json:"body"`
 	}
 	if json.Unmarshal(record.Mutation, &carried) != nil {
-		return excerpt
+		return excerpt, excerptSource(record.Notify.Kind)
 	}
-	candidates := []string{}
+	type candidate struct {
+		text   string
+		source provenance.Source
+	}
+	candidates := []candidate{}
 	if c := carried.Comment; c != nil {
 		body := strings.TrimSpace(c.Body)
 		if answered := record.Notify.Answered; answered != nil && answered.Choice != nil {
 			body = choiceExcerpt(answered.Choice.Label, body)
 		}
-		candidates = append(candidates, body)
+		candidates = append(candidates, candidate{body, provenance.SourceWorkComment})
 	}
 	if record.Notify.Kind == ChangeCreated {
-		candidates = append(candidates, strings.TrimSpace(carried.Body))
+		candidates = append(candidates, candidate{
+			strings.TrimSpace(carried.Body), provenance.SourceWorkDescription,
+		})
 	}
 	for _, whole := range candidates {
-		if whole != "" && excerptOf(whole) == excerpt {
-			return whole
+		if whole.text != "" && excerptOf(whole.text) == excerpt {
+			return whole.text, whole.source
 		}
 	}
-	return excerpt
+	return excerpt, excerptSource(record.Notify.Kind)
+}
+
+// excerptSource is what an excerpt the payload does not explain is: the cut of
+// a comment on a comment's change, of a description on a create, and otherwise
+// the note its author wrote about the change (a hand-off's reason, a purge's
+// line, a re-prioritisation's line).
+func excerptSource(kind ChangeKind) provenance.Source {
+	switch kind {
+	case ChangeComment, ChangeCommentEdited:
+		return provenance.SourceWorkComment
+	case ChangeCreated:
+		return provenance.SourceWorkDescription
+	}
+	return provenance.SourceChangeNote
 }
 
 // askedDecision is the decision a record's NEW ask carries, or nil.

@@ -70,7 +70,7 @@ func chatNote(mutate func(map[string]string)) notify.Inbound {
 }
 
 func TestTheChatPromptCarriesTheTriageRules(t *testing.T) {
-	got := chatPrompt.Build(chatNote(nil), nil)
+	got := notify.Render(chatPrompt, chatNote(nil), nil)
 
 	for _, want := range []string{
 		"A Chat message was posted by **ana**",
@@ -301,7 +301,7 @@ func TestTheMessageAChatWakeCarriesIsFenced(t *testing.T) {
 			return r
 		}(), "source=chat_thread trust=colleague authors=human:dana-founder]"},
 	} {
-		got := chatPrompt.Build(note(), c.parties)
+		got := notify.Render(chatPrompt, note(), c.parties)
 		fences := provenance.Fences(got, b)
 		if len(fences) != 1 {
 			t.Fatalf("%s: the prompt carries %d fences under the wake's token, want 1:\n%s",
