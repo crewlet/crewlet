@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/provenance`
-- **Enforced-by:** `internal/provenance.TestAFenceCannotBeClosedByItsContent`, `internal/agent/builtin.TestEveryUntrustedReadIsFenced`, `internal/agent/builtin.TestEveryArtifactToolResultIsFenced`, `internal/engine.TestEveryWakeSurfaceFencesWhatSomebodyWrote`
+- **Enforced-by:** `internal/provenance.TestAFenceCannotBeClosedByItsContent`, `internal/agent/builtin.TestEveryUntrustedReadIsFenced`, `internal/agent/builtin.TestEveryArtifactToolResultIsFenced`, `internal/engine.TestEveryWakeSurfaceFencesWhatSomebodyWrote`, `internal/engine.TestEveryWakeTypeFencesSomebodyElsesWords`
 - **Cost-when-tried:** before this record, a page body, a work item's comments, a project file and the chat thread handed to a turn all reached the model as plain text in a tool answer or a prompt block, with no boundary the text could not also write and nothing saying who wrote it or that it was data. Anybody who could write a page, comment on an item or speak in a thread a seat reads could address the seat in the voice of its instructions.
 - **Tag-status:** unreleased
 
@@ -19,7 +19,7 @@ never an instruction, and every read result says so.** One package,
   project file, a chat message, a chat room's own topic or purpose, an artifact
   file, a datastore row, the adopted brand's voice, a note somebody wrote about
   a change they made, a monitor's alert, a notification from an integration
-  that names no surface of its own, and what the Dashboard Assistant reads as
+  that names no surface of its own, a colleague's ask or answer on an agent-to-agent channel, and what the Dashboard Assistant reads as
   the person it acts for: a route's answer, what that person's open screen says
   about itself and a deep-work run's account of what it did), who wrote it (by
   kind and seat handle),
@@ -35,7 +35,8 @@ never an instruction, and every read result says so.** One package,
 It applies to every read that hands a model somebody else's words: page bodies,
 work item comments, project files, the chat thread block a turn is given, the
 body every wake hands a seat on every surface (a message, a comment, a
-description, a change's note, an alert, an unprompted integration's text), and
+description, a change's note, an alert, an unprompted integration's text), a
+colleague's ask and answer, and
 what the chat tools read (a room's messages, a thread, a search's snippets, a
 room's topic and purpose), and, from their first release, artifact files and
 datastore rows. A wake's trigger is built before the turn that reads it exists,
@@ -44,8 +45,10 @@ own; the notification service fences the body before the surface's prompt
 renders it, so a prompt is never handed the words bare. A wake names a body's
 writer only where its payload says one person wrote every word, and otherwise
 names nobody, which reads `external`. A tool that returns such text and does not
-go through the package fails a walk, and so does a wake surface whose body does
-not reach the turn fenced.
+go through the package fails a walk, and so does a wake surface or a kind of
+wake whose foreign text does not reach the turn fenced. A schedule's task is
+the company's own instruction to the seat, not somebody else's words, and is
+not fenced.
 
 **Fencing reduces prompt injection and does not remove it.** What holds whatever
 a model does is structural, and stays where it is: the requester ceiling on

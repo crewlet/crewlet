@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // Agent-to-agent channels: one ask, one answer, then closed. These events are
@@ -99,14 +101,53 @@ func (A2ARequest) EventType() string { return A2ARequestType }
 
 // Brief is the colleague's question, which IS the woken seat's whole task.
 func (e A2ARequest) Brief() string {
+	if lead := e.lead(); lead != "" {
+		return lead + "\n\n" + e.Content
+	}
+	return e.Content
+}
+
+// FencedBrief is [A2ARequest.Brief] with the question inside a fence of b
+// (ADR-0040): the asking seat's words, which the woken seat reads as a
+// colleague's request to weigh — never as an instruction that overrides its
+// own. An agent that read an outsider's page or comment can carry what it read
+// into an ask, so the ask is labelled with who wrote it like every other text
+// a seat is handed. The lead line around it is neutralised, so nothing in a
+// role name opens or closes a fence either.
+func (e A2ARequest) FencedBrief(b provenance.Boundary) string {
+	fenced := colleagueFence(b, e.Requester, e.Content)
+	lead := e.lead()
+	switch {
+	case lead == "":
+		return fenced
+	case fenced == "":
+		return provenance.Neutralise(b, lead)
+	}
+	return provenance.Neutralise(b, lead) + "\n\n" + fenced
+}
+
+// lead is the line naming who asks, or "" when the ask names nobody.
+func (e A2ARequest) lead() string {
 	who := e.SenderRole
 	if who == "" {
 		who = e.Requester
 	}
 	if who == "" {
-		return e.Content
+		return ""
 	}
-	return "A colleague (" + who + ") asks:\n\n" + e.Content
+	return "A colleague (" + who + ") asks:"
+}
+
+// colleagueFence is a colleague seat's words inside a fence of b, or "" for
+// none: an agent-to-agent channel joins two agent seats and nothing else, so
+// its writer is always an agent, read as a colleague.
+func colleagueFence(b provenance.Boundary, handle, text string) string {
+	if strings.TrimSpace(text) == "" {
+		return ""
+	}
+	authors := []provenance.Author{{Kind: iam.ActorAgent, Seat: handle}}
+	return provenance.Fence(b, provenance.SourceA2AMessage,
+		provenance.TrustFor("", authors), authors, text)
 }
 
 // Actor is the colleague who asked, not the bus that relayed it.
@@ -137,6 +178,21 @@ func (A2AMessage) EventType() string { return A2AMessageType }
 
 // Brief is the answer, under the question it answers.
 func (e A2AMessage) Brief() string {
+	return e.lead() + e.Content
+}
+
+// FencedBrief is [A2AMessage.Brief] with the answer inside a fence of b
+// (ADR-0040): the answering seat's words, read as a colleague's. The question
+// above it is the woken seat's OWN words — the answer only ever wakes the seat
+// that asked — so it is neutralised rather than fenced, which is all its own
+// text needs: it can open or close no fence around the answer.
+func (e A2AMessage) FencedBrief(b provenance.Boundary) string {
+	return provenance.Neutralise(b, e.lead()) + colleagueFence(b, e.Sender, e.Content)
+}
+
+// lead is everything above the answer: the question it answers and who gave
+// it, each where the message carries one.
+func (e A2AMessage) lead() string {
 	who := e.SenderRole
 	if who == "" {
 		who = e.Sender
@@ -148,7 +204,6 @@ func (e A2AMessage) Brief() string {
 	if who != "" {
 		b.WriteString("Their answer (" + who + "):\n\n")
 	}
-	b.WriteString(e.Content)
 	return b.String()
 }
 
