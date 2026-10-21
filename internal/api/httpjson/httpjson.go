@@ -630,15 +630,20 @@ const (
 	// model. Declared here, on the table, for the reason every code is: a
 	// code with no sentence answers a person with nothing.
 
-	// CodeInvalid is an argument the tool refused, and its detail names
-	// which: the only class whose fix is to send something different.
+	// CodeInvalid is an argument the tool refused, which a refusal worded
+	// for a person names in its detail: the only class whose fix is to send
+	// something different.
 	CodeInvalid Code = "invalid"
 	// CodeStaleVersion is an object that changed after the caller read it,
 	// the version stated as a tool's argument or a body field. 409. The same
 	// version stated as an If-Match header is [CodeVersionMoved].
 	CodeStaleVersion Code = "stale_version"
 	// CodeConflict is a write that lost its race against other writers, or
-	// another gesture holding the object; it clears on its own.
+	// another gesture holding the object, which clears on its own — or the
+	// object the write is about refusing it by its state (archived, in the
+	// trash, its contents at their cap) until somebody changes it, which a
+	// refusal worded for a person names in its detail. Either way the request
+	// was not wrong and reading the object again is the move.
 	CodeConflict Code = "conflict"
 	// CodeExists is a create of something that already exists.
 	CodeExists Code = "exists"
@@ -1206,8 +1211,12 @@ var codes = map[Code]string{
 		"what was entered, then try again.",
 	CodeStaleVersion: "Somebody changed this after you read it, so nothing was " +
 		"written. Read it again and decide from what it says now.",
-	CodeConflict: "This collided with another change landing at the same " +
-		"moment, and nothing was written. Read it again, then retry.",
+	// A RACE OR A STATE, and it stands alone as well: a conflict nobody has
+	// worded for a person carries no detail (ADR-0060), so it says how to
+	// find out which rather than pointing at a detail it does not carry.
+	CodeConflict: "This collided with another change, or with the state the " +
+		"object is in now, and nothing was written. Read it again to see " +
+		"which, and what has to change before the same request lands.",
 	CodeExists:          "That already exists, so nothing was created.",
 	CodeAlreadyAnswered: "Somebody has already answered it.",
 	CodeReassignmentBudget: "It has been handed between seats as often as it " +

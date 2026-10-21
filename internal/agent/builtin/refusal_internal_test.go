@@ -93,8 +93,13 @@ func TestWriteFailureClassesEachSentinel(t *testing.T) {
 		{"a clashing tag", fmt.Errorf("x: %w", &worklet.TagClash{Project: "OPS",
 			Slug: "api", Label: "API", Other: worklet.Tag{Slug: "backend-api",
 				Label: "API"}}), tools.RefusalInvalid},
+		// THE PROJECT'S STATE, not the call's: it lands once a tag is
+		// archived to make room.
 		{"a full tag set", fmt.Errorf("x: %w", &worklet.TagsFull{Project: "OPS",
-			Slug: "api"}), tools.RefusalInvalid},
+			Slug: "api"}), tools.RefusalConflict},
+		{"a task frozen in the trash", &worklet.Refusal{Mark: worklet.ErrState,
+			Err: errors.New("task t1 was removed by jane; restore it first")},
+			tools.RefusalConflict},
 		// EVERY OTHER REFUSAL A DOMAIN DECIDED is its class too
 		// ([WriterClass]): with no arm of its own here each fell to the
 		// fault, and told a caller the node had broken over a comment
@@ -291,10 +296,14 @@ func TestChatWriteFailureClassesEachSentinel(t *testing.T) {
 		want tools.Refusal
 	}{
 		{"a field refused", chatlet.ChannelPatch{}.Validate(), tools.RefusalInvalid},
-		// A ROOM THAT TAKES NOTHING MORE is fixed by saying it somewhere
-		// else — the argument — and is nobody's permission to ask for.
+		// A ROOM THAT TAKES NOTHING MORE is the room's state, which the same
+		// call meets until somebody reopens it — never an argument to change
+		// and nobody's permission to ask for — and a message carrying all
+		// the emoji it may is the message's.
 		{"an archived room", fmt.Errorf("%w: room-1 was archived", chatlet.ErrArchived),
-			tools.RefusalInvalid},
+			tools.RefusalConflict},
+		{"a message carrying all its emoji", fmt.Errorf("%w: the message reached "+
+			"its 32 distinct emoji", chatlet.ErrReactionsFull), tools.RefusalConflict},
 		{"not this actor's", fmt.Errorf("%w: message m1 was written by ana",
 			chatlet.ErrForbidden), tools.RefusalForbidden},
 		// A ROOM A NEWER PEER MADE is this node's to serve once upgraded,

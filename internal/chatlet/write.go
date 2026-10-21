@@ -267,7 +267,8 @@ func nowUTC() time.Time { return time.Now().UTC() }
 // The sentinels. Each is a different thing for the caller to do, which is why
 // they are separate: a name somebody else holds is a name to negotiate, a
 // conversation that already exists is one to open, an archived room is a room
-// to reopen, a refusal is a permission to ask for, and a conflict is a read to
+// to reopen, a message carrying all the emoji it may is one to take a reaction
+// off first, a refusal is a permission to ask for, and a conflict is a read to
 // redo.
 var (
 	// ErrNotFound reports a room or a message that is not there.
@@ -289,6 +290,17 @@ var (
 	// reply. An edit, a delete and a reaction are still taken there — see
 	// the head of this file for why an archive closes nothing else.
 	ErrArchived = errors.New("chatlet: that room is archived")
+
+	// ErrReactionsFull reports a reaction that would put a
+	// [MaxReactionEmoji] + 1st distinct emoji on a message. Decided by the
+	// applier at the record's position ([VerdictReactionsFull]), because a
+	// toggle cannot see the set it joins.
+	//
+	// THE MESSAGE'S STATE, not the argument, as [ErrArchived] is the room's:
+	// the same emoji lands the moment somebody takes one off, and only then.
+	// It was a field refusal of `emoji`, which told a caller to send another
+	// emoji — the one call that is refused the same way.
+	ErrReactionsFull = errors.New("chatlet: that message carries all the emoji it may")
 
 	// ErrForbidden reports a gesture this actor may not make.
 	ErrForbidden = errors.New("chatlet: that is not this actor's to do")

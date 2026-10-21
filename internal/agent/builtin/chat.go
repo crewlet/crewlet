@@ -387,18 +387,23 @@ func chatClass(err error) (tools.Refusal, bool) {
 		return tools.RefusalForbidden, true
 	case errors.Is(err, chatlet.ErrNameTaken), errors.Is(err, chatlet.ErrRoomExists):
 		return tools.RefusalExists, true
-	case errors.Is(err, chatlet.ErrConflict):
+	case errors.Is(err, chatlet.ErrConflict), errors.Is(err, chatlet.ErrArchived),
+		errors.Is(err, chatlet.ErrReactionsFull):
+		// A LOST RACE, AND THE STATE OF THE ROOM OR THE MESSAGE THE CALL IS
+		// ABOUT, on the one rule every domain's refusals take (internal/mcp's
+		// [tools.Refusal]): an archived room and a message carrying all the
+		// emoji it may refuse the same request until somebody reopens the
+		// room or takes an emoji off, and only that makes it land — as an
+		// artifact in the trash and a project archived before a task is
+		// filed into it do. Classed `invalid`, the archive told a caller to
+		// change an argument the call has nothing wrong with.
 		return tools.RefusalConflict, true
 	case errors.Is(err, chatlet.ErrUnknownKind):
 		// THIS NODE'S CONDITION, NOT A PERMISSION: a newer peer made the
 		// room and this build cannot say who may reach it. The same call
 		// lands once this node is upgraded.
 		return tools.RefusalUnavailable, true
-	case errors.Is(err, chatlet.ErrArchived), errors.Is(err, chatlet.ErrInvalid),
-		errors.As(err, &invalid):
-		// AN ARCHIVED ROOM IS AN ARGUMENT TO CHANGE, not a permission: it
-		// takes nothing more from anybody, and what fixes the call is
-		// saying it in a room that is still open.
+	case errors.Is(err, chatlet.ErrInvalid), errors.As(err, &invalid):
 		return tools.RefusalInvalid, true
 	}
 	return "", false
@@ -456,6 +461,9 @@ func chatWriteFailure(ctx context.Context, name string, err error, next string) 
 		return refusedBy(class, err, fmt.Sprintf("%s refused that: %s. Nothing "+
 			"more can be said there — say it somewhere that is still open, or "+
 			"say nothing.", name, chatlet.Sentence(err)))
+	case errors.Is(err, chatlet.ErrReactionsFull):
+		return refusedBy(class, err, fmt.Sprintf("%s refused that: %s.", name,
+			chatlet.Sentence(err)))
 	case class == tools.RefusalInvalid:
 		return refusedBy(class, err, fmt.Sprintf("%s refused that: %s", name,
 			chatlet.Sentence(err)))

@@ -80,7 +80,8 @@ var sentinels = []sentinel{
 	{"worklet.ErrReparentAcrossProjects", worklet.ErrReparentAcrossProjects},
 	{"worklet.ErrRestoresOthers", worklet.ErrRestoresOthers},
 	{"worklet.ErrStaleVersion", worklet.ErrStaleVersion},
-	{"worklet.ErrStepUnresolved", worklet.ErrStepUnresolved},
+	{"worklet.ErrState", worklet.ErrState},
+	{"tracker.ErrStepUnresolved", worklet.ErrStepUnresolved},
 	{"worklet.ErrStepUnvouched", worklet.ErrStepUnvouched},
 	{"worklet.ErrTooBroad", worklet.ErrTooBroad},
 	{"worklet.ErrUploadStale", worklet.ErrUploadStale},
@@ -104,6 +105,7 @@ var sentinels = []sentinel{
 	{"chatlet.ErrNameTaken", chatlet.ErrNameTaken},
 	{"chatlet.ErrNoActivation", chatlet.ErrNoActivation},
 	{"chatlet.ErrNotFound", chatlet.ErrNotFound},
+	{"chatlet.ErrReactionsFull", chatlet.ErrReactionsFull},
 	{"chatlet.ErrRoomExists", chatlet.ErrRoomExists},
 	{"chatlet.ErrUnknownKind", chatlet.ErrUnknownKind},
 

@@ -115,8 +115,9 @@ type TagsFull struct {
 
 func (e *TagsFull) Error() string { return "worklet: " + e.sentence() }
 
-// Unwrap classes the full set as the content refusal it is.
-func (e *TagsFull) Unwrap() error { return ErrInvalid }
+// Unwrap classes the full set as the PROJECT'S STATE ([ErrState]): the add
+// is well formed, and it lands once a tag is archived to make room.
+func (e *TagsFull) Unwrap() error { return ErrState }
 
 func (e *TagsFull) sentence() string {
 	return fmt.Sprintf("%s already has %d tags, which is the most a project "+

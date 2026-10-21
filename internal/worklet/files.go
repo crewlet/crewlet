@@ -386,15 +386,15 @@ func (w *Writer) refuseFileProject(ctx context.Context, tx *sql.Tx, key string) 
 }
 
 // AcceptFiles refuses a new file into project when it is archived, marked
-// [ErrInvalid]: the same request can never land, and unarchiving the project
-// is the change that lets it.
+// [ErrState]: the project's state, which the same request meets until
+// somebody unarchives it — the change that lets it land.
 //
 // EXPORTED FOR THE UPLOAD ROUTE, which asks before it streams a body that
 // could be a gibibyte into the store only for the write naming it to be
 // refused here — one sentence for both, so the two refusals cannot drift.
 func AcceptFiles(project string, archived bool) error {
 	if archived {
-		return invalid("project %s is archived, so it takes no new files; "+
+		return refusedByState("project %s is archived, so it takes no new files; "+
 			"unarchive it first", project)
 	}
 	return nil

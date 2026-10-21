@@ -521,9 +521,11 @@ func (t *writeProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		IfMatch: ifVersion,
 	})
 	if errors.Is(err, worklet.ErrUploadStale) {
-		// THE ONE WRITE REFUSAL THE SAME CALL FIXES: the call uploads the
-		// content anew, under a fresh key.
-		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s: %s was not "+
+		// THE UPLOAD'S STATE, which no wait changes — a conflict, as the
+		// artifacts' stale upload and this file route's own 409
+		// `upload_expired` are — and the one the same call fixes, since
+		// it uploads the content anew, under a fresh key.
+		return refusedBy(tools.RefusalConflict, err, fmt.Sprintf("%s: %s was not "+
 			"written: %v. Make the same call again.", t.Name(), filePath, err)), nil
 	}
 	if err != nil {

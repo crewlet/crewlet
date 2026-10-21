@@ -539,11 +539,11 @@ a model acts on:
 
 | Class | What it means | What a caller should do |
 |---|---|---|
-| `invalid` | An argument is wrong, and the sentence names which | Send something different |
+| `invalid` | The request is wrong — an argument outside its grammar, a value past a limit of its own, or an argument naming *another* object that cannot take part (a parent in the trash, an archived task type) — and the sentence names which | Send something different |
 | `not_found` | The item, page, skill or colleague the call is *about* does not exist | Stop; it is gone or was never there |
 | `forbidden` | This caller may not do this here — outside a turn, somebody else's inbox or priorities, a view protected for its owner, a project's policy without the lead's authority, a reserved container | Ask whoever the sentence names |
 | `stale_version` | The object changed after the caller read it | Read it again and decide from what it says now |
-| `conflict` | The write lost its race to other writers, or the object is in a state that refuses it — an artifact in the trash or being purged, a label another version holds, a restore with nothing in the trash — which the sentence names | Read it again; a race clears on its own, and a state is changed by whoever the sentence names |
+| `conflict` | The write lost its race to other writers, or the object the call is about is in a state that refuses it until somebody changes it — a room or a project archived, an item frozen in the trash, an artifact in the trash or being purged, a restore with nothing in the trash, or its own contents at their cap (a message carrying all its emoji, a label another version holds, a project keeping all its tags) — which the sentence names | Read it again; a race clears on its own, and a state is changed by whoever the sentence names, after which the same call lands |
 | `exists` | What the call would create is already there | Edit the existing one |
 | `already_answered` | The question this answers has an answer | Read the answer |
 | `reassignment_budget` | The item has been handed on as often as it may be | Do not reassign it again |
@@ -558,11 +558,16 @@ a model acts on:
 
 An argument that merely *names* something missing — a `parent`, a `waiting_on`
 item, an `assignee` nobody has — is `invalid`, not `not_found`: the fix is the
-argument, and the call is not about that object.
+argument, and the call is not about that object. The same holds for a state: a
+`parent` in the trash is `invalid`, the argument to change, while editing the
+item that is in the trash is `conflict`, its state. That is the
+[one rule](../reference/api-endpoints.md#which-class-a-refusal-is) every
+domain's refusals are classed by, on every surface.
 
 **`invalid` is claimed, never assumed.** A write Worklet refuses on
-what it was asked — a field value it will not round, a tombstoned item, a cap
-the object would pass — is marked as such where the refusal is written. Any
+what it was asked — a field value it will not round, a parent in the trash, a
+value past its cap — is marked as such where the refusal is written, and so is
+one the item or project it is about refuses by its state, which is `conflict`. Any
 failure that is *not* marked is read as the node's, in one of two ways: a
 condition waiting clears — the log refused the append, the coordination store
 or the event broker did not answer, this node's store was busy with other

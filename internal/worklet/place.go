@@ -226,7 +226,7 @@ func decidePlace(ctx context.Context, tx *sql.Tx, place Place,
 	case !held:
 		return nil, missingTask(ctx, tx, place.Task, "it cannot be placed")
 	case current.Removed != nil:
-		return nil, invalid("task %s was removed by %s at %s; "+
+		return nil, refusedByState("task %s was removed by %s at %s; "+
 			"restore it first", place.Task,
 			current.Removed.By,
 			current.Removed.At.Format(time.RFC3339))

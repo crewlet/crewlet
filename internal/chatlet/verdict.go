@@ -121,9 +121,9 @@ func (v Verdict) refusal(op OpKind, opID, channelID string) error {
 		return fmt.Errorf("%w: the message was taken back before this edit "+
 			"reached it, and there is nothing left to rewrite", ErrNotFound)
 	case VerdictReactionsFull:
-		return invalid("emoji", "the message reached its %d distinct emoji before "+
+		return fmt.Errorf("%w: the message reached its %d distinct emoji before "+
 			"this reaction did — add to one it already carries, or take one back",
-			MaxReactionEmoji)
+			ErrReactionsFull, MaxReactionEmoji)
 	}
 	// A VERDICT THIS BUILD DOES NOT KNOW, written by a newer peer's applier
 	// about a record that landed: it decided something this build cannot

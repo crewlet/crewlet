@@ -115,14 +115,15 @@ func TestAPersonsChatGesturesLandAsTheStoreRulesThem(t *testing.T) {
 	}
 
 	// ARCHIVED BY ITS CREATOR, and then a room that takes nothing more — the
-	// argument's to fix, by saying it somewhere else.
+	// room's state, which the same post meets until somebody reopens it, so
+	// a conflict, never an argument to change.
 	jane.do(chatlet.UpdateChannelTool, "req-archive", map[string]any{
 		"channel": room, "archived": true,
 	})
 	if got := jane.refused(chatlet.PostMessageTool, "req-late", map[string]any{
 		"channel": room, "body": "anybody there?",
-	}); tools.RefusalOf(got) != tools.RefusalInvalid {
-		t.Errorf("a post into an archived room answered %s (%s), want invalid", tools.RefusalOf(got), got.Output)
+	}); tools.RefusalOf(got) != tools.RefusalConflict {
+		t.Errorf("a post into an archived room answered %s (%s), want conflict", tools.RefusalOf(got), got.Output)
 	}
 }
 

@@ -6128,6 +6128,39 @@ has them:
 | `unavailable` | `503` |
 | `internal_error` | `500` — a fault of the node's own store or code: a fixed sentence, the error itself only in the node's log, and **no** `Retry-After`, since no wait clears it. It is also the answer for a failure that carried no class |
 
+#### Which class a refusal is
+
+One rule, for every domain — the tracker, the knowledge base, chat, the
+artifacts and their datastores — and every surface that answers one, a seat's
+tool, your assistant and this route alike. A refusal is classed by **what it
+is about** and **what would make the same request land**:
+
+- **The request itself** is `invalid` (`422`): an argument outside its
+  grammar, a value past a limit of its own (a message's bytes, the members one
+  call names, the views one gesture pins), or an argument naming *another*
+  object that cannot take part — a parent in the trash, a blocker at its
+  dependents' cap, an archived task type, a destination project that is
+  archived. Nothing anybody does makes the same request land; another one does.
+- **The object the call is about** — or the container it writes into, a room,
+  a project, an artifact — **not being there** is `not_found` (`404`), and
+  gone for good is the same.
+- **That object in a state that refuses the gesture until somebody changes
+  it** is `conflict` (`409`): a room or a project archived, an item frozen in
+  the trash, an artifact in the trash or being purged, a restore with nothing
+  in the trash, and the object's own contents at their cap — a message
+  carrying all 32 distinct emoji it may, a project keeping all its tags, a
+  person's pins. Nothing about the request is wrong: read the object again, and
+  the very same request lands once whoever the `detail` names reopens,
+  restores or makes room — not before. A write that lost its race is `conflict`
+  for the same reason.
+- **A limit with a class of its own** is that class, because what lifts it is
+  not a change of the object and a surface names the remedy:
+  `quota_exceeded` (the company's plan), `inbox_full` (a person's marks),
+  `reassignment_budget` (an item's hand-offs, which must not invite another
+  attempt), `notes_full` (the notes a running turn holds unread),
+  `notes_spent` (the notes a turn takes, which must not invite one either)
+  and `budget_exhausted` (a token window).
+
 Every `503` carries a `Retry-After` where waiting can clear it and **none**
 where it cannot — an evicted node, a full log, a record this node cannot
 decode: ask another node, or an operator. A call interrupted before the tool
@@ -6278,7 +6311,7 @@ for one; otherwise its `message`, the code's own sentence, stands alone
 | `403` | `unauthorized` / `step_up_required` | The authority table refused, or the verb needs a fresher proof | `reason` and `grants` (or the window), and the verb in `action` where the route decided it itself |
 | `403` | `forbidden` | The domain forbids this caller the gesture, such as rewriting somebody else's remark | `detail` in a person's words, where the refusal has them |
 | `404` | `not_found` | The item, page or comment does not exist — or it was purged | |
-| `409` | `stale_version`, `conflict`, `exists`, `reassignment_budget`, `inbox_full`, `notes_full`, `notes_spent`, … | Somebody changed it after you read it (a stale `if_match` or `base_version` in the body, a title taken, a race lost), or the state the request needs is not there | `message`: read it again, or change what is in the way |
+| `409` | `stale_version`, `conflict`, `exists`, `reassignment_budget`, `inbox_full`, `notes_full`, `notes_spent`, … | Somebody changed it after you read it (a stale `if_match` or `base_version` in the body, a title taken, a race lost), or the object is in a state that refuses it: archived, frozen in the trash, its contents at their cap ([which class a refusal is](#which-class-a-refusal-is)) | `message`: read it again, or change what is in the way |
 | `412` | `version_moved` | The version the request's `If-Match` header named is not the one it holds: the same refusal as a stale `if_match` in the body, answered as HTTP answers a precondition that failed (RFC 9110 §13.1.1), as a project file's and an artifact's are | `message`: read it again and decide again |
 | `409` | `invalid_input` | The `Idempotency-Key` already names a write to another object | send it under a new key |
 | `409` | `reader_changed` | The request names, in `X-Crewlet-Reader`, a principal its credential is not, and the guard refused it before it ran | nothing; ask `GET /auth/session` who the credential is — see [Auth](#routes) |
@@ -6554,8 +6587,8 @@ file whose content the fleet holds. A write cut off halfway, or refused once its
 object is stored, leaves an object nothing names, which the collector removes a
 day later; it never leaves a row pointing at content that is not there. A body
 whose `Content-Length` is already over 1 GiB, and an upload into a project that
-does not exist (`404 no_project`) or is archived (`400 invalid`), are refused
-before any of it is read.
+does not exist (`404 no_project`) or is archived (`409 conflict`, the project's
+state), are refused before any of it is read.
 
 **A write names the version it replaces.** `If-Match` carries the `ETag` the
 download answered. Absent, the write creates the path or overwrites whatever is
@@ -6607,7 +6640,8 @@ origin.
 |---|---|---|
 | `400` | `bad_path` | The path is empty, longer than 1024 bytes, not UTF-8, ends in `/`, has an empty folder or a `.` or `..` in it, or carries a control character or a backslash. A leading `/` is dropped rather than refused |
 | `400` | `bad_if_match` | `If-Match` is not a version |
-| `400` | `invalid` | The write can never land as sent: the project is archived (unarchive it first), or the content type is over 255 bytes or spans lines |
+| `409` | `conflict` | The project is archived: its state, which the same request meets until somebody unarchives it. Answered by the [one refusal rule](#which-class-a-refusal-is), as every write surface answers it |
+| `422` | `invalid` | The write can never land as sent: the content type is over 255 bytes or spans lines |
 | `400` | `unreadable_body` | The upload's body stopped arriving: the connection closed, or a mebibyte of it took more than 30 seconds (see below) |
 | `403` | `unauthorized` | The authority table refused: `reason` and `grants` say why and what would admit the caller |
 | `404` | `no_project` / `no_file` | No such project, or no file at that path |
@@ -7906,8 +7940,10 @@ author taken out of a private room or a direct conversation a moment before, a
 message taken back or erased a moment before, a message already carrying 32
 distinct emoji. Where the node that answered has applied the record, such a
 gesture is refused exactly as it would have been had that change reached it
-first — `invalid` for the archive and for the emoji, `forbidden` for the
-membership, `not_found` for a message that is gone or taken back — and a retry
+first — `conflict` for the archive and for the emoji, each the state of the
+room or the message ([which class a refusal is](#which-class-a-refusal-is)),
+`forbidden` for the membership, `not_found` for a message that is gone or taken
+back — and a retry
 under the same `Idempotency-Key` is refused the same way rather than reported
 as said. An answer of `pending` names a record this node has not applied yet,
 which may still be refused there.

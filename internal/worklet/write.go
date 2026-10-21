@@ -64,10 +64,13 @@ var ErrReassignmentBudget = errors.New("worklet: this task has been handed on to
 var ErrForbidden = errors.New("worklet: not this actor's to write")
 
 // ErrInvalid marks a write the tracker refuses on its CONTENT: a missing or
-// malformed argument, a value a field does not take, a cap the object would
-// exceed, a tombstoned or archived thing named as the target of new work.
-// Whatever carries it, the same request can never land and a different one
-// can — so the caller's answer is to change what it sent.
+// malformed argument, a value a field does not take, a value past a limit of
+// its own, or an argument naming ANOTHER object that cannot take part — a
+// parent or a blocker in the trash, a blocker at its dependents' cap, an
+// archived type or tag, a destination project that takes nothing. Whatever
+// carries it, the same request can never land and a different one can — so
+// the caller's answer is to change what it sent. What the object the write is
+// ABOUT refuses by being what it is now is [ErrState].
 //
 // A MARK RATHER THAN A DEFAULT, because the opposite default is the one that
 // lies. A write fails for two kinds of reason — what was asked, and what the
@@ -83,6 +86,23 @@ var ErrForbidden = errors.New("worklet: not this actor's to write")
 // text a model was tuned against and the mark is for a reader that is not one.
 var ErrInvalid = errors.New("worklet: invalid")
 
+// ErrState marks a write the OBJECT IT IS ABOUT refuses by its state, until
+// somebody changes it: a project archived before work is filed into it, a task
+// frozen in the trash that a write would place, move or merge, a project whose
+// tags or a person whose pins and stars are at their cap. Nothing is wrong with
+// the request, and nothing about it changes the answer: the same request lands
+// once whoever the sentence names reopens the project, restores the task or
+// takes something off the set, and not before.
+//
+// ITS OWN MARK beside [ErrInvalid] because the two send a caller to opposite
+// places, which is the one rule every domain's refusals are classed by
+// (internal/mcp's Refusal): told `invalid`, a seat sends another argument to
+// an object that will refuse every one, and a screen shows the sentence where
+// it should redraw the object; this is the class an artifact in the trash and
+// a room archived before a post are answered in too. The sentence names the
+// state and who changes it, as [ErrInvalid]'s names what to send instead.
+var ErrState = errors.New("worklet: its state refuses this")
+
 // ErrAlreadyAnswered reports an `answers` naming a question somebody already
 // answered. Its own sentinel because nothing about the comment is wrong and
 // nothing a caller could change makes it land: the answer it meant to give
@@ -95,14 +115,14 @@ var ErrAlreadyAnswered = errors.New("worklet: that question is already answered"
 //
 // THE SENTENCE IS HELD WITHOUT THE PACKAGE PREFIX, and [Refusal.Error] adds
 // it, so the Go error reads exactly as every error here does
-// ("worklet: …") while [Sentence] has the words alone. Both
-// classes built here — [ErrInvalid] and [ErrForbidden] — are the two a
-// tool tells a model in those words as they stand, because only their
-// sentences name what to change or whom to ask; "worklet:" in front of that
-// sentence is a word about where the error came from, for a log, and a
-// person filing a task was shown "create_work_item refused that: worklet: …"
-// while a person's surface still printed a tool's sentence. A person's
-// surface that answers a refusal through the one refusal mapping
+// ("worklet: …") while [Sentence] has the words alone. The three classes
+// built here — [ErrInvalid], [ErrState] and [ErrForbidden] — are the ones a
+// tool tells a model in those words as they stand, because their sentences
+// name what to change, who changes the state, or whom to ask; "worklet:" in
+// front of that sentence is a word about where the error came from, for a
+// log, and a person filing a task was shown "create_work_item refused that:
+// worklet: …" while a person's surface still printed a tool's sentence. A
+// person's surface that answers a refusal through the one refusal mapping
 // (internal/api/operator's Fail) tells them the words beside it
 // ([invalidSaying], [forbiddenSaying]) or its code's own sentence instead
 // (ADR-0060). The forbidden
@@ -115,12 +135,13 @@ var ErrAlreadyAnswered = errors.New("worklet: that question is already answered"
 // caller is told: the wire rebuilds an error TYPE from its exported fields,
 // and an unexported one arrived as its message alone — so [Sentence] on the
 // asking node found no refusal and handed its reader the whole "worklet: …".
-// Only this package builds one ([invalid], [forbidden], [forbiddenAs]).
+// Only this package builds one ([invalid], [refusedByState], [forbidden],
+// [forbiddenAs]).
 // [invalidSaying] and [forbiddenSaying] build one with a person's words
 // beside its sentence (ADR-0060).
 type Refusal struct {
-	// Mark is the sentinel that classes the refusal: [ErrInvalid] or
-	// [ErrForbidden].
+	// Mark is the sentinel that classes the refusal: [ErrInvalid],
+	// [ErrState] or [ErrForbidden].
 	Mark error
 	// Also is a sentinel of the refusal's own beside its class, or nil —
 	// see [forbiddenAs].
@@ -167,6 +188,13 @@ type sentenced interface {
 // [ErrInvalid].
 func invalid(format string, args ...any) error {
 	return &Refusal{Mark: ErrInvalid, Err: fmt.Errorf(format, args...)}
+}
+
+// refusedByState is [invalid] for a write the object it is about refuses by
+// its state, marked [ErrState]. The sentence names the state and who changes
+// it.
+func refusedByState(format string, args ...any) error {
+	return &Refusal{Mark: ErrState, Err: fmt.Errorf(format, args...)}
 }
 
 // forbidden is [invalid] for a write that is not this actor's to make, marked
@@ -921,7 +949,7 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 				// removal an entirely local decision with no walk
 				// behind it. Asked before anything about a new parent,
 				// because it is the answer whatever the parent is.
-				return statelog.Decision{}, invalid("task %s was "+
+				return statelog.Decision{}, refusedByState("task %s was "+
 					"removed by %s at %s; restore it first",
 					id, current.Removed.By,
 					current.Removed.At.Format(time.RFC3339))
