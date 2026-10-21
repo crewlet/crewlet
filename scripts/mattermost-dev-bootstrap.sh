@@ -656,6 +656,13 @@ else
   say "Skipping bot provisioning (set COMPANY=<company.yaml> to include it)"
 fi
 
+# THE PATH `.` IS HANDED: a bare name is looked up on PATH rather than in the
+# working directory, so a relative file is spelt with its ./ prefix.
+case "$ENV_FILE" in
+  */*) ENV_SOURCE="$ENV_FILE" ;;
+  *) ENV_SOURCE="./$ENV_FILE" ;;
+esac
+
 cat <<EOF
 
 $(printf '\033[1mDone.\033[0m')
@@ -674,15 +681,20 @@ Next:
            url: "\${MATTERMOST_URL}"
            team: ${TEAM}
 
-  2. Provision the bots (if you did not pass COMPANY= above):
+  2. Load the env file into this shell, and provision the bots into it if
+     you did not pass COMPANY= above (one of -env-file, -secret-store and
+     -print is required), loading it again for the tokens just minted:
 
-       crewlet mattermost provision <company.yaml>
+       set -a; . ${ENV_SOURCE}; set +a
+       crewlet mattermost provision <company.yaml> -env-file ${ENV_FILE}
+       set -a; . ${ENV_SOURCE}; set +a
 
   3. Check the whole path before you boot:
 
        crewlet mattermost doctor <company.yaml>
 
-  4. Start the engine — it opens one websocket per agent seat:
+  4. Start the engine from that shell — it opens one websocket per agent
+     seat, with the tokens the env file holds:
 
        crewlet run -config crewlet.yaml -company <company.yaml>
 
