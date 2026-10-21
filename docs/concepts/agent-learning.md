@@ -219,6 +219,8 @@ The two sets are deduped by row id. Their sizes (50 each, `memoryVectorLimit` an
 
 `PersistDecider`'s write-side dedup reads the diary's recency list alone (`Diary.Recent`, up to 50 rows), which is the correct shape for the "is this paraphrase already in the diary?" check.
 
+**One person is named one way.** The filter is told who triggered the turn (`Current sender:`), because its one hard rule rejects a memory about somebody who is not party to the task, and the persist decider attributes every fact to its requester. Both name a person the same way, by name and then the identity that outlives a rename (their seat's handle, or their platform's id): `Sam (slack:U1)` or `Dev Bot (dev)` (`learning.Subject.Label`), as do the counterparty profile block and the profiler's own prompt. Named by name alone on one side, two people called Sam on two surfaces would be one person to the filter.
+
 ### Failure modes
 
 The prefetch filters against the **salient inbound message** — the raw message, not the notification builder's enriched task description (see [Salient-body sourcing](#salient-body-sourcing)). That leaves two failure modes:
