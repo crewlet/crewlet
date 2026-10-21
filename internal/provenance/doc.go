@@ -101,6 +101,17 @@
 // model needs is to be told the task is somebody's words, which only a fence
 // and the sentence say.
 //
+// The same holds for EVERY model call that reads somebody else's words on a
+// seat's or a person's behalf — the models that learn from a turn after it
+// ends, the one that answers a person from the company's pages, the judge
+// that decides whether a phase gets more rounds, a rewrite — and for what each
+// writes back where a seat reads it (a memory, a trait, a skill, a judge's
+// reason), which is defused under the turn's token. Which calls those are is
+// not a list anybody keeps: a walk of the tree finds every function that
+// builds a model's input, a provider request or the launch of a coding CLI's
+// run (every seat's executor is one), and refuses one that does not say which
+// test holds its fences, or why it reads nobody's words.
+//
 // # Writing back
 //
 // A model that edits what it read is likely to send the fence back with it.

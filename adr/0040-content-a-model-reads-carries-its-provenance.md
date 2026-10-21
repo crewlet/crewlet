@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/provenance`
-- **Enforced-by:** `internal/provenance.TestAFenceCannotBeClosedByItsContent`, `internal/agent/builtin.TestEveryUntrustedReadIsFenced`, `internal/agent/builtin.TestEveryArtifactToolResultIsFenced`, `internal/engine.TestEveryWakeSurfaceFencesWhatSomebodyWrote`, `internal/engine.TestEveryPromptBuilderIsAWakeSurface`, `internal/engine.TestEveryWakeTypeFencesSomebodyElsesWords`, `internal/engine.TestTheTurnsAskIsFencedAsItsTriggerIs`, `internal/agent/prefetch.TestTheTurnStartJudgementsReadSomebodyElsesWordsFenced`, `internal/knowledge.TestRenderFencesEveryHitUnderItsBackendsLabel`, `internal/estate.TestAKnowledgeHitsLabelCrossesTheWire`, `internal/compact.TestARewriteReadsItsTextFencedUnderATokenOfItsOwn`, `internal/learning.TestAPastTurnsAskIsFencedAsWhoeverWroteIt`, `internal/agent/prefetch.TestAPastTurnsAskIsFencedWhereverItIsRead`, `internal/agent/builtin.TestQueryEpisodesFencesWhatAPastTurnWasAskedAsWhoeverWroteIt`, `internal/learning.TestEveryPostTurnWorkerReadsWhatItsTurnWasToldFenced`, `internal/agent/prefetch.TestEveryBlockDefusesWhatItReads`, `internal/agent/builtin.TestWhatASeatRemembersReachesItDefused`, `internal/agent/builtin.TestAnAnswerReadsItsSourcesAsTheirWritersWords`, `internal/agent/extension.TestTheJudgeReadsForeignWordsUnderItsOwnTokenAndItsReasonIsDefused`, `internal/agent/runner.TestTheJudgeIsToldTheTurnsTokenAndItsReasonReachesTheSeatDefused`
+- **Enforced-by:** `internal/provenance.TestAFenceCannotBeClosedByItsContent`, `internal/agent/builtin.TestEveryUntrustedReadIsFenced`, `internal/agent/builtin.TestEveryArtifactToolResultIsFenced`, `internal/engine.TestEveryWakeSurfaceFencesWhatSomebodyWrote`, `internal/engine.TestEveryPromptBuilderIsAWakeSurface`, `internal/engine.TestEveryWakeTypeFencesSomebodyElsesWords`, `internal/engine.TestTheTurnsAskIsFencedAsItsTriggerIs`, `internal/agent/prefetch.TestTheTurnStartJudgementsReadSomebodyElsesWordsFenced`, `internal/knowledge.TestRenderFencesEveryHitUnderItsBackendsLabel`, `internal/estate.TestAKnowledgeHitsLabelCrossesTheWire`, `internal/compact.TestARewriteReadsItsTextFencedUnderATokenOfItsOwn`, `internal/learning.TestAPastTurnsAskIsFencedAsWhoeverWroteIt`, `internal/agent/prefetch.TestAPastTurnsAskIsFencedWhereverItIsRead`, `internal/agent/builtin.TestQueryEpisodesFencesWhatAPastTurnWasAskedAsWhoeverWroteIt`, `internal/learning.TestEveryPostTurnWorkerReadsWhatItsTurnWasToldFenced`, `internal/agent/prefetch.TestEveryBlockDefusesWhatItReads`, `internal/agent/builtin.TestWhatASeatRemembersReachesItDefused`, `internal/agent/builtin.TestAnAnswerReadsItsSourcesAsTheirWritersWords`, `internal/agent/extension.TestTheJudgeReadsForeignWordsUnderItsOwnTokenAndItsReasonIsDefused`, `internal/agent/runner.TestTheJudgeIsToldTheTurnsTokenAndItsReasonReachesTheSeatDefused`, `internal/provenance.TestEveryModelCallIsAccountedFor`
 - **Cost-when-tried:** before this record, a page body, a work item's comments, a project file and the chat thread handed to a turn all reached the model as plain text in a tool answer or a prompt block, with no boundary the text could not also write and nothing saying who wrote it or that it was data. Anybody who could write a page, comment on an item or speak in a thread a seat reads could address the seat in the voice of its instructions.
 - **Tag-status:** unreleased
 
@@ -78,7 +78,20 @@ that reads somebody else's words on the seat's or a person's behalf: an
 answer written from the company's pages, and the judge that decides whether
 an exhausted onboarding pass gets more rounds, which reads the fences of the
 turn's ask moved onto its own call's token and whose reason reaches the seat
-defused. A model that rewrites a text to fit a budget reads it the
+defused. Every
+function in the tree that builds a model's input, a provider request or the
+launch of a coding CLI's run (every seat's executor, and the Dashboard
+Assistant's deep work), names the test that holds its fences, or why it reads
+nobody's words, and a walk refuses one that does not. Two things reach a
+seat's run unfenced on purpose, defused: an answer given by turn and a note a
+person sends the turn. Each is the instruction of a person the engine let
+direct that turn (the run's requester, its seat's lead or an administrator
+answers; a note is sent on the authority decided on the seat's sealed
+anchor), sealed on the run's record with who gave it
+([ADR-0031](0031-every-state-log-record-is-signed.md)'s amendments,
+[ADR-0067](0067-a-note-to-a-coding-run-waits-sealed-on-its-record.md),
+[ADR-0068](0068-a-run-asks-a-person-in-the-shape-a-decision-is-asked.md)), and
+a fence would tell the run not to follow the instruction it waited for. A model that rewrites a text to fit a budget reads it the
 same way, fenced under a token minted for that rewrite and labelled as its
 caller says, and its rewrite is defused before the caller places it. A tool that returns such text and does not
 go through the package fails a walk, and so does a wake surface or a kind of
