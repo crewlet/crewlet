@@ -979,9 +979,13 @@ const (
 	// CodeSourceTaken is a create naming a source address another artifact
 	// of the same owner holds. 409.
 	CodeSourceTaken Code = "source_taken"
-	// CodeLabelTaken is a label another version of the artifact holds, or
-	// one past the labelled versions an artifact keeps. 409.
+	// CodeLabelTaken is a label another version of the artifact holds: a
+	// collision, which another label avoids. 409.
 	CodeLabelTaken Code = "label_taken"
+	// CodeLabelsFull is a label for a version of an artifact whose every
+	// kept label is in use: the artifact's state, which removing a label
+	// changes and no other label does. 409.
+	CodeLabelsFull Code = "labels_full"
 	// CodeBrandContrast is an adoption of a brand whose body text does not
 	// contrast enough with its light ground to be read. 422, the detail's
 	// `contrast` naming the pair, its two colours, the ratio and the floor.
@@ -1439,8 +1443,10 @@ var codes = map[Code]string{
 	CodeBrandContrast: "The brand's text colour does not stand out enough from its " +
 		"light background to be read, so it was not adopted. Darken the text or " +
 		"lighten the background, then adopt it again.",
-	CodeLabelTaken: "Another version already has that label, or this " +
-		"artifact keeps no more labels. Choose another label.",
+	CodeLabelTaken: "Another version already has that label. Choose " +
+		"another one.",
+	CodeLabelsFull: "Every label this artifact keeps is in use. Remove one " +
+		"from a version that no longer needs it, then try again.",
 	CodeArtifactOriginUnset: "This engine has no address to open pages on, so " +
 		"this artifact can't be viewed yet. An operator sets " +
 		"`api.artifacts.external_url`.",

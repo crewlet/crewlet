@@ -7574,7 +7574,8 @@ dashboard follow the adopted brand live, drawn by the dashboard.
 | `409` | `artifact_purging` | A restore of an artifact whose purge has begun; the purge finishes on its own |
 | `409` | `carried_object_gone` / `upload_missing` | A carried file's bytes are gone, or a declared file has not arrived; `paths` names them |
 | `409` | `upload_consumed` / `upload_expired` | The upload is used, or an uploaded object is too old to name; upload again |
-| `409` | `label_taken` / `source_taken` | Another version holds the label, or another of the owner's artifacts the source address |
+| `409` | `label_taken` / `source_taken` | Another version holds the label, or another of the owner's artifacts the source address: a collision, which another label or address avoids now (the tools' class is `exists`) |
+| `409` | `labels_full` | Every label the artifact keeps is in use: remove one from a version that no longer needs it, then label this one (the tools' class is `conflict`, the artifact's state) |
 | `404` | `folder_not_found` | A folder a body names (a parent, a destination, the folder a create files into) that does not exist, was removed, or that the caller cannot see; one answer for all three |
 | `409` | `folder_name_taken` / `folder_cycle` / `folder_depth` / `folder_limit` | A name its place already holds, a folder moved into itself or beneath itself, a folder deeper than four, or past the company's or one folder's bound |
 | `409` | `folder_widens` / `folder_ambiguous` | A move that would show a folder to more people, unconfirmed; a path naming several folders the caller sees (`candidates`) |

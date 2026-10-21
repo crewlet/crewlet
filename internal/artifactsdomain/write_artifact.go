@@ -394,16 +394,15 @@ func versionFor(ctx context.Context, tx *sql.Tx, head Head, in PublishInput,
 			return VersionPayload{}, err
 		}
 		if holder != 0 {
-			return VersionPayload{}, fmt.Errorf("%w: version %d holds %q", ErrLabelTaken,
-				holder, in.Label)
+			return VersionPayload{}, fmt.Errorf("%w: version %d is labelled %q",
+				ErrLabelTaken, holder, in.Label)
 		}
 		count, err := labelled(ctx, tx, id)
 		if err != nil {
 			return VersionPayload{}, err
 		}
 		if count >= artifacts.MaxLabels {
-			return VersionPayload{}, fmt.Errorf("%w: artifact %s already keeps %d labelled "+
-				"versions, the most it keeps; remove a label first", ErrLabelTaken, id, count)
+			return VersionPayload{}, labelsFull(count)
 		}
 	}
 	prune, err := retention(ctx, tx, id, in.Label == "", 0, head.HeadNumber)
@@ -490,6 +489,15 @@ func (w *Writer) Patch(ctx context.Context, c Call, id artifacts.ID, p Patch) (W
 	return w.written(ctx, id, opID, res, err)
 }
 
+// labelsFull is the refusal of a label for a version of an artifact that
+// already keeps count labelled versions ([ErrLabelsFull]), naming the remedy a
+// person and a model both take: remove a label from a version that no longer
+// needs one.
+func labelsFull(count int) error {
+	return fmt.Errorf("%w: it keeps %d. Remove a label from a version that no "+
+		"longer needs one, then label this one", ErrLabelsFull, count)
+}
+
 // patchFor is the record a patch publishes, carrying only what it changes, and
 // false when it changes nothing.
 func patchFor(ctx context.Context, tx *sql.Tx, head Head, p Patch) (PatchPayload, bool, error) {
@@ -525,7 +533,7 @@ func patchFor(ctx context.Context, tx *sql.Tx, head Head, p Patch) (PatchPayload
 			return PatchPayload{}, false, err
 		}
 		if holder != 0 && holder != p.Label.Number {
-			return PatchPayload{}, false, fmt.Errorf("%w: version %d holds %q",
+			return PatchPayload{}, false, fmt.Errorf("%w: version %d is labelled %q",
 				ErrLabelTaken, holder, p.Label.Label)
 		}
 		if v.Label == "" {
@@ -534,9 +542,7 @@ func patchFor(ctx context.Context, tx *sql.Tx, head Head, p Patch) (PatchPayload
 				return PatchPayload{}, false, err
 			}
 			if count >= artifacts.MaxLabels {
-				return PatchPayload{}, false, fmt.Errorf("%w: artifact %s already keeps %d "+
-					"labelled versions, the most it keeps; remove a label first",
-					ErrLabelTaken, id, count)
+				return PatchPayload{}, false, labelsFull(count)
 			}
 		}
 	} else {

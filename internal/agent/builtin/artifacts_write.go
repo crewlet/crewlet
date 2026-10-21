@@ -621,11 +621,17 @@ func publishFailure(ctx context.Context, tool string, c artifactCaller, err erro
 		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused that: %s",
 			tool, said))
 	case errors.Is(err, artifactsdomain.ErrLabelTaken):
-		// THE ARTIFACT'S STATE, as the API's 409 says: another version
-		// holds the label, or the artifact keeps no more labels.
-		return refusedBy(tools.RefusalConflict, err, fmt.Sprintf("%s refused that: %s. "+
+		// A COLLISION: another version holds the label, which another
+		// label avoids now and which lands once that version gives it up.
+		return refusedBy(tools.RefusalExists, err, fmt.Sprintf("%s refused that: %s. "+
 			"Read the artifact's versions with "+GetArtifactTool+" and choose another label, "+
 			"or publish without one.", tool, said))
+	case errors.Is(err, artifactsdomain.ErrLabelsFull):
+		// THE ARTIFACT'S STATE: every label it keeps is in use, so no other
+		// label would land either until one is removed.
+		return refusedBy(tools.RefusalConflict, err, fmt.Sprintf("%s refused that: %s. "+
+			"A label is removed with "+UpdateArtifactTool+", naming its `version` with an "+
+			"empty `label`; or publish without one.", tool, said))
 	case errors.As(err, &quota):
 		return toPerson(refusedBy(tools.RefusalQuotaExceeded, err, fmt.Sprintf("%s refused "+
 			"that: the company's artifact quota is reached (%d in use of %d, `%s`). "+

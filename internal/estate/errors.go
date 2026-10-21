@@ -180,6 +180,7 @@ var sentinels = []sentinel{
 	{"artifactsdomain.ErrFolderNameTaken", artifactsdomain.ErrFolderNameTaken},
 	{"artifactsdomain.ErrFolderNotFound", artifactsdomain.ErrFolderNotFound},
 	{"artifactsdomain.ErrLabelTaken", artifactsdomain.ErrLabelTaken},
+	{"artifactsdomain.ErrLabelsFull", artifactsdomain.ErrLabelsFull},
 	{"artifactsdomain.ErrNotFound", artifactsdomain.ErrNotFound},
 	{"artifactsdomain.ErrNotInTrash", artifactsdomain.ErrNotInTrash},
 	{"artifactsdomain.ErrPurged", artifactsdomain.ErrPurged},
