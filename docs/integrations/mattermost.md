@@ -408,6 +408,12 @@ node's own rows only before a single node's first start, when they are the
 company's whole secret store; once the node has run it is refused before it
 changes anything, naming the running engine and `-api URL`. See
 [where a command reads the company's values](../reference/cli.md#where-a-command-reads-the-companys-values).
+A running engine reads the tokens at its next apply and not before, so a run
+that minted one says what is left on its `Next:` line: for `-secret-store`,
+re-activating the current revision (`POST /config/reload` to a node that is
+up). Where the block itself is new to the running company, the
+`crewlet config import` that applies it is that apply. A re-run that kept
+every token prints no `Next:` line.
 
 For every Mattermost-enabled agent seat the command:
 
@@ -560,8 +566,13 @@ tokens are what this run *mints*, so it cannot bootstrap itself from them.
 | `-dry-run` | Print the plan; create and modify nothing. It reads no stored value, so it runs on any node, a stopped one included — and so does a run with nothing to provision. |
 | `-config PATH` / `-api URL` | Where a real run reads the company's values (the instance URL, and with `-secret-store` each bot's token it reads back) and where `-secret-store` records: through the running engine holding the store `-config` names (default `./crewlet.yaml`), with one of its Tier A tokens in `CREWLET_API_TOKEN`, or through the node `-api` names; on a single node before its first start, from that node's own rows; with neither a file nor `-api`, from the environment alone. On any other stopped node a real run is refused before it touches the server, `-rotate` included — see [where a command reads the company's values](../reference/cli.md#where-a-command-reads-the-companys-values). |
 
-Afterwards, (re)start `crewlet run` so the engine reads the new credentials
-and opens each seat's websocket.
+Afterwards, do what the run's `Next:` line says. With `-secret-store` that is
+`POST /config/reload` to a node that is up — or the `crewlet config import`
+that adds the block, where it is new to the running company — and each seat's
+websocket is rebuilt from its new token at that apply, while a node that has
+not started yet reads the tokens as it starts. With `-env-file` or `-print` it
+is the values into the engine's environment and a restart. A re-run that kept
+every token prints no `Next:` line.
 
 ### Why a re-run does not rotate
 

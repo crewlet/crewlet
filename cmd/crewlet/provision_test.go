@@ -21,7 +21,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/gitlab"
+	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/provision"
+	"github.com/crewlet/crewlet/internal/slack"
 )
 
 const gitlabCompanyDoc = `
@@ -169,6 +171,39 @@ func TestARunReportsWhatIsLeftToDoOnlyWhenItRecordedSomething(t *testing.T) {
 	if strings.Contains(unchanged.String(), "Next:") {
 		t.Errorf("a run that changed nothing told the operator to act:\n%s",
 			unchanged.String())
+	}
+}
+
+// A CHAT RUN SAYS WHAT IS LEFT TO DO AS A GITLAB RUN DOES — Mattermost's and
+// Slack's reports stopped at where the values went, so an operator who chose
+// -secret-store was told nothing while every new bot stayed offline until the
+// engine's next apply. Only a run that recorded something says it.
+func TestAChatRunReportsWhatIsLeftToDoOnlyWhenItRecordedSomething(t *testing.T) {
+	t.Parallel()
+	sink, err := provision.NewPrintSink(io.Discard)
+	if err != nil {
+		t.Fatalf("NewPrintSink: %v", err)
+	}
+	reports := map[string]func(w io.Writer, recorded int){
+		"mattermost": func(w io.Writer, recorded int) {
+			printChatResult(w, &mattermost.Result{Recorded: recorded}, sink)
+		},
+		"slack": func(w io.Writer, recorded int) {
+			printSlackResult(w, &slack.Result{Recorded: recorded}, "slack-apps.json", sink)
+		},
+	}
+	for name, report := range reports {
+		var recorded, unchanged bytes.Buffer
+		report(&recorded, 1)
+		if !strings.Contains(recorded.String(), "Next: "+sink.NextStep()) {
+			t.Errorf("%s: a run that recorded a credential did not say what is "+
+				"left to do:\n%s", name, recorded.String())
+		}
+		report(&unchanged, 0)
+		if strings.Contains(unchanged.String(), "Next:") {
+			t.Errorf("%s: a run that recorded nothing told the operator to act:\n%s",
+				name, unchanged.String())
+		}
 	}
 }
 

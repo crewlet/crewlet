@@ -511,8 +511,18 @@ stream to its end now leaves the environment as it started.
 **No sink feeds the engine directly.** `-env-file` writes a file to `source`
 before the engine starts; the engine itself reads `${VAR}` from this store and
 then from the process environment, and from nowhere else. `-secret-store` is
-the one that needs no file and no restart — see [`crewlet config
-activate`](../reference/cli.md#crewlet-config-activate).
+the one that needs no file and no restart: the values land in the fleet's
+store, and [`POST /config/reload`](../reference/api-endpoints.md#post-configreload-after-a-secret-changes)
+to a node that is up makes a running fleet re-read them, as a run that
+recorded something says — on its `Next:` line for GitLab, Mattermost and
+Slack, and in the note naming the minted secret for GitHub, Jira and
+Confluence. Before a single node's first start its own rows are the whole
+store, and it reads them as it starts; on any other stopped node a
+provisioning run is refused
+([where a command reads the company's values](../reference/cli.md#where-a-command-reads-the-companys-values)).
+[`crewlet config activate`](../reference/cli.md#crewlet-config-activate) opens
+the node's own store, so it runs only while that engine is stopped, and is
+never what a running fleet needs.
 
 **And the store outranks the other two.** A value an `-env-file` or `-print`
 run mints for a name this store already holds is never read: the third-party

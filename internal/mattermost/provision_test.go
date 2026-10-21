@@ -1981,3 +1981,34 @@ func TestAnAdministratorsDeactivationIsNotReversed(t *testing.T) {
 			res.Findings())
 	}
 }
+
+// A RUN COUNTS THE TOKENS IT RECORDED, AND A RE-RUN THAT KEPT THEM COUNTS
+// NONE.
+//
+// The count decides whether the command tells the operator what has to happen
+// before a running engine reads a new token: a minted token in the secret
+// store reaches the engine at its next apply and not before, so a report that
+// said nothing left every new bot offline. A re-run that minted nothing has
+// nothing to say.
+func TestARunCountsTheTokensItRecorded(t *testing.T) {
+	t.Parallel()
+	srv := newChatServer()
+	sink := newChatSink()
+	roles := []*org.Role{chatSeat("SWE", "${MM_TOKEN_SWE}", "eng")}
+	res, err := reconcileChat(t, srv, sink, roles)
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	if res.Recorded != 1 {
+		t.Errorf("a run that minted one token counted %d", res.Recorded)
+	}
+	srv.forget()
+	again, err := reconcileChat(t, srv, sink, roles)
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if len(again.Kept) != 1 || again.Recorded != 0 {
+		t.Errorf("a re-run that kept the token counted %d (kept %v), want none",
+			again.Recorded, again.Kept)
+	}
+}

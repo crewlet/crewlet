@@ -236,13 +236,21 @@ Either way, `${VAR}` references that remain unanswered by the store still resolv
 **Those are the only two sources. The engine does not read a `.env` file.**
 `crewlet … provision -env-file PATH` writes one for an operator to `source`,
 and the values reach the engine only once they are in the process
-environment — so an `-env-file` run ends with "source it and restart", every
-time. A dotenv loader in the engine would be a third source of truth for
-secrets, discovered by filename and able to override the Tier A keyring that
-opens the store, which is the inversion the two-tier design exists to refuse.
+environment — so an `-env-file` run that recorded something tells you to
+source it and restart: on its `Next:` line for GitLab, Mattermost and Slack,
+and in the note naming the minted secret for GitHub, Jira and Confluence. A
+dotenv loader in the engine would be a third source of truth for secrets,
+discovered by filename and able to override the Tier A keyring that opens the
+store, which is the inversion the two-tier design exists to refuse.
 `-secret-store` is the path that needs no file and no restart: the values land
-in the encrypted table, and [`crewlet config activate`](cli.md#crewlet-config-activate)
-makes a running fleet re-read them.
+in the fleet's encrypted store, and `POST /config/reload` to a node that is up
+makes a running fleet re-read them, as the run says in the same place. Before
+a single node's first start its own rows are the whole store, and it reads
+them as it starts; on any other stopped node a provisioning run is refused
+([where a command reads the company's values](cli.md#where-a-command-reads-the-companys-values)).
+[`crewlet config activate`](cli.md#crewlet-config-activate) opens the node's
+own store, so it runs only while that engine is stopped, and is never what a
+running fleet needs.
 
 **Nothing in Tier A can move into the store**, no matter how it is configured — `CREWLET_SECRET_KEY_<ID>` above all. Tier A is what locates and decrypts the store, so it is always env- or file-sourced; it resolves with the store deliberately switched off.
 

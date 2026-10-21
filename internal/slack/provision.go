@@ -180,6 +180,24 @@ type Result struct {
 	Failed map[string]string
 
 	Notes []string
+
+	// Recorded counts the values this run obtained from Slack and wrote to
+	// the sink: a created app's signing secret and an installed app's bot
+	// token — what a running engine cannot hold yet.
+	//
+	// THE SIGNING SECRET OF AN APP THIS RUN DID NOT CREATE IS NOT COUNTED,
+	// although every run records it again from the ledger: the sink has
+	// held it since the run that created the app, when that run recorded
+	// into the same sink, so counting it would tell every re-run's operator
+	// to reload an engine that already has it. Where that run recorded
+	// elsewhere (-env-file first and -secret-store later), or the app was
+	// adopted into the ledger by hand, the secret is new to this sink and
+	// still not counted, because the ledger does not say which sink a
+	// value reached; docs/reference/cli.md tells that operator to do the
+	// sink's step themselves. A count rather than the names for GitLab's
+	// reason: the names are variables holding live credentials, and this
+	// only decides whether the report says what still has to happen.
+	Recorded int
 }
 
 // Err reports the run's failures as one error, or nil.
@@ -380,7 +398,9 @@ func (o Options) seat(ctx context.Context, configToken string, seat SeatPlan, re
 			res.Notes = append(res.Notes, fmt.Sprintf(
 				"%s: the recorded app %s no longer exists in Slack, so a "+
 					"replacement was created — anything holding the old app's "+
-					"bot token has to be restarted with the new one",
+					"bot token needs the new app's: the engine reads it at the "+
+					"step named on the Next: line of the run that installs the "+
+					"new app",
 				seat.Handle, record.AppID))
 			// THE HELD TOKEN IS A LEFTOVER. It belongs to the dead app
 			// and it satisfies the sink's half of the "already
@@ -403,6 +423,9 @@ func (o Options) seat(ctx context.Context, configToken string, seat SeatPlan, re
 		}
 	}
 
+	// fresh is whether this run created the app, and so obtained a signing
+	// secret no sink held before it.
+	fresh := false
 	switch {
 	case record.AppID == "":
 		// VALIDATED FIRST. apps.manifest.create is Tier 1 — roughly one
@@ -434,6 +457,7 @@ func (o Options) seat(ctx context.Context, configToken string, seat SeatPlan, re
 				seat.Handle, created.AppID, err)
 		}
 		res.Created = append(res.Created, seat.Handle)
+		fresh = true
 
 	case record.ManifestHash != fingerprint:
 		if err := o.Admin.UpdateApp(ctx, configToken, record.AppID, manifest); err != nil {
@@ -453,6 +477,9 @@ func (o Options) seat(ctx context.Context, configToken string, seat SeatPlan, re
 	if record.SigningSecret != "" {
 		if err := o.Sink.Record(ctx, seat.SigningVar, record.SigningSecret); err != nil {
 			return fmt.Errorf("slack: %s: record %s: %w", seat.Handle, seat.SigningVar, err)
+		}
+		if fresh {
+			res.Recorded++
 		}
 	}
 	return o.install(ctx, seat, record, res)
@@ -510,6 +537,7 @@ func (o Options) install(ctx context.Context, seat SeatPlan, record AppRecord, r
 	if err := o.Sink.Record(ctx, seat.TokenVar, installed.BotToken); err != nil {
 		return fmt.Errorf("slack: %s: record %s: %w", seat.Handle, seat.TokenVar, err)
 	}
+	res.Recorded++
 	record.BotUserID = installed.BotUserID
 	record.TeamID = installed.TeamID
 	o.Ledger.Apps[seat.Handle] = record

@@ -580,12 +580,13 @@ func mintInto(
 	}
 	value := secret.Value
 	// SAID IN THE NOTES, which is the one place a reader looks. There was a
-	// Result.Recorded counter beside this line as well, and it had no reader
-	// anywhere in the tree — printConfluenceHooks renders Deployment,
-	// Account, Hooks and Notes, and the only `.Recorded` in the tree is
-	// GitLab's own. A second, silent record of the same fact is a field
-	// waiting for its first reader to trust a number nothing keeps true, so
-	// the note below is the whole report and the counter is gone.
+	// Result.Recorded counter beside this line as well, and nothing read it:
+	// printConfluenceHooks renders Deployment, Account, Hooks and Notes, and
+	// the Recorded counts that are read are GitLab's, Mattermost's and
+	// Slack's, each deciding its own report's Next: line. A second, silent
+	// record of the same fact is a field waiting for its first reader to
+	// trust a number nothing keeps true, so the note below is the whole
+	// report and the counter is gone.
 	note := fmt.Sprintf("a fresh value was minted into %s (%s), and %s",
 		variable, role, opts.Sink.NextStep())
 	if opts.Recreate {

@@ -1032,3 +1032,47 @@ func anySlackNote(notes []string, want string) bool {
 	}
 	return false
 }
+
+// A RUN COUNTS WHAT IT OBTAINED FROM SLACK, AND NOTHING A RE-RUN HAD ALREADY.
+//
+// The count is what decides whether the command tells the operator what has
+// to happen before a running engine reads the values — the signing secret of
+// an app it created, the bot token of an app it installed. A re-run that kept
+// the app records the ledger's signing secret again, which the sink has held
+// since the app was created, so it counts nothing and the report asks for no
+// reload it does not need.
+func TestARunCountsTheValuesItObtainedFromSlack(t *testing.T) {
+	t.Parallel()
+	ws := newWorkspace(t)
+	withCreate(ws)
+	ws.replies["oauth.v2.access"] = `{"ok":true,"access_token":"xoxb-minted",
+		"bot_user_id":"U0BOTSWE","app_id":"A0SWE","team":{"id":"T0ACME"}}`
+	recorder := newSink()
+	install := func(context.Context, string, string) (string, error) {
+		return "the-temporary-code", nil
+	}
+
+	res, ledger, path, err := run(t, ws, func(o *slack.Options) {
+		o.Sink, o.Install = recorder, install
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Recorded != 2 {
+		t.Errorf("a run that created and installed an app counted %d value(s), "+
+			"want its signing secret and its bot token", res.Recorded)
+	}
+
+	again, err := slack.Reconcile(context.Background(), slack.Options{
+		Admin: slack.NewAdmin(rewriting(t, ws)), Seats: plans(),
+		Ledger: ledger, LedgerPath: path, Sink: recorder,
+		BaseURL: "https://engine.example.com", Install: install,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(again.Kept) != 1 || again.Recorded != 0 {
+		t.Errorf("a re-run that kept the app counted %d value(s) (kept %v), want none",
+			again.Recorded, again.Kept)
+	}
+}

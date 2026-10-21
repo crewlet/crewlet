@@ -535,7 +535,8 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 			res.Notes = append(res.Notes, fmt.Sprintf(
 				"%s: the account held a working token but %s did not, so a "+
 					"fresh one was minted and the old one retired — a running "+
-					"engine holding the old value has to be restarted",
+					"engine holding the old value is refused until it reads the "+
+					"new one, at the step this run's Next: line names",
 				seat.Handle, seat.TokenVar))
 		}
 	}
