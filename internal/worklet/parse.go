@@ -219,16 +219,22 @@ func registryHas(reg *notify.Registry) func(string) bool {
 func (p *Parser) inbound(record MutationRecord) notify.Inbound {
 	snapshot := record.Notify.Snapshot
 	metadata := map[string]string{
-		MetaTaskKey:    snapshot.Key,
-		MetaTaskID:     snapshot.TaskID(record.Subject),
-		MetaProject:    snapshot.Project,
-		MetaStatus:     string(snapshot.Status),
-		MetaAssignee:   snapshot.Assignee,
-		MetaRecordID:   record.OpID,
-		MetaChangeKind: string(record.Notify.Kind),
-		MetaTitle:      snapshot.Title,
-		MetaObject:     string(record.Subject.Kind),
-		MetaObjectID:   record.Subject.ID,
+		// WHO MADE THE CHANGE, under the one actor key every parser
+		// stamps ([notify.ActorField]), so the spine's self-action guard
+		// covers this source as it covers every other — the second face of
+		// the rule [Route] already applies here, and one that agrees with
+		// it by asking the same reason ([Prompt.WakesActor]).
+		notify.ActorField: record.Actor,
+		MetaTaskKey:       snapshot.Key,
+		MetaTaskID:        snapshot.TaskID(record.Subject),
+		MetaProject:       snapshot.Project,
+		MetaStatus:        string(snapshot.Status),
+		MetaAssignee:      snapshot.Assignee,
+		MetaRecordID:      record.OpID,
+		MetaChangeKind:    string(record.Notify.Kind),
+		MetaTitle:         snapshot.Title,
+		MetaObject:        string(record.Subject.Kind),
+		MetaObjectID:      record.Subject.ID,
 	}
 	if record.Notify.Excerpt != "" {
 		metadata[MetaExcerpt] = record.Notify.Excerpt

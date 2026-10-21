@@ -2049,6 +2049,12 @@ The single exception is **`unblocked`**, and it is the exception because it is
 about a *different* task: closing a blocker is exactly the moment to be told
 that your own other work became workable.
 
+Every wake names its author under the actor key every integration stamps, so
+the notification service applies the same rule a second time before it wakes
+a seat — and lets through the same one reason, read off the copy each person
+was sent rather than off the kind of change, since every copy of one status
+change is the same kind.
+
 **A task's wakes are one conversation, named by the task's id.** Wakes about
 one task that queue up while a seat is busy are merged into one digest turn,
 and every turn a seat takes on a task is filed in that task's

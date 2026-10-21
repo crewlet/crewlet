@@ -7,7 +7,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/notify"
-	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -196,10 +195,7 @@ func TestOnlyAnUnblockedNoticeWakesItsActor(t *testing.T) {
 // one notice the router kept for the person who closed the blocker.
 func TestTheSpineDeliversTheUnblockedCopyToItsActor(t *testing.T) {
 	t.Parallel()
-	o := &org.Organization{Name: "nimbus"}
-	o.Roles = append(o.Roles, &org.Role{Name: "Engineer", DeclaredHandle: "eng"})
-	o.Normalize()
-	reg := notify.NewRegistry(o, nil, worklet.Source)
+	reg := firstPartyRegistry(t, "eng")
 	seat, ok := reg.ByHandle("eng")
 	if !ok {
 		t.Fatal("the registry does not hold the seat")
