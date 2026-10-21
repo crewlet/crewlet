@@ -68,16 +68,15 @@ func ActorOf(metadata map[string]string) string { return metadata[ActorField] }
 // learns. A comment the actor wrote is the opposite — they already know.
 //
 // The distinction is "did something happen BECAUSE of me that I do not yet
-// know about", and only the third-party app can name which of its event types are
-// which, so it is asked through the prompt registry. A source with no
-// registered prompt gets the safe answer, which is no: an unrecognised event
-// type that loops is worse than one that goes unheard, because the loop
-// takes the company down with it.
-func WakesActor(prompts Prompts, source, eventType string) bool {
-	if eventType == "" {
-		return false
-	}
-	return prompts.For(source).WakesActor(eventType)
+// know about", and only the third-party app can name which of its
+// notifications are which, so it is asked through the prompt registry —
+// with the whole notification, because a source may answer from what its
+// parser stamped on this recipient's copy rather than from the event type
+// ([Prompt.WakesActor]). A source with no registered prompt gets the safe
+// answer, which is no: an unrecognised event type that loops is worse than
+// one that goes unheard, because the loop takes the company down with it.
+func WakesActor(prompts Prompts, n Inbound) bool {
+	return prompts.For(n.Source).WakesActor(n)
 }
 
 // Deliverable reports whether a notification should wake a recipient, and
@@ -94,7 +93,7 @@ func Deliverable(prompts Prompts, r *Registry, n Inbound, recipient Party) (bool
 		return false, ReasonHumanSeat
 	}
 	actor := ActorOf(n.Metadata)
-	if SelfAction(r, n.Source, actor, recipient) && !WakesActor(prompts, n.Source, n.EventType) {
+	if SelfAction(r, n.Source, actor, recipient) && !WakesActor(prompts, n) {
 		return false, ReasonSelfAction
 	}
 	return true, ""

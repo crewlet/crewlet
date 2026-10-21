@@ -121,7 +121,7 @@ func (Prompt) DigestBody(_, body string) string { return body }
 // A monitor has no author. The parser stamps no actor for that reason, so the
 // spine's self-action rule never has anything to suppress and this answer is
 // about a case that cannot occur rather than a policy.
-func (Prompt) WakesActor(string) bool { return false }
+func (Prompt) WakesActor(notify.Inbound) bool { return false }
 
 // Build implements [notify.Prompt].
 func (Prompt) Build(n notify.Inbound, _ notify.Parties) string {

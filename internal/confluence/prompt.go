@@ -72,7 +72,7 @@ func (p Prompt) ConversationIdentity(metadata map[string]string, subject string)
 
 // WakesActor implements [notify.Prompt]: never. A page reports what somebody
 // did, and the person who did it was there.
-func (Prompt) WakesActor(string) bool { return false }
+func (Prompt) WakesActor(notify.Inbound) bool { return false }
 
 // DigestBody implements [notify.Prompt]: a comment keeps its text, a page
 // snapshot collapses.

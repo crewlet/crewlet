@@ -72,7 +72,7 @@ func (p Prompt) ConversationIdentity(metadata map[string]string, subject string)
 
 // WakesActor implements [notify.Prompt]: never. Every change here is one the
 // actor already knows about.
-func (Prompt) WakesActor(string) bool { return false }
+func (Prompt) WakesActor(notify.Inbound) bool { return false }
 
 // DigestBody implements [notify.Prompt]: comments keep their text, saves
 // collapse.

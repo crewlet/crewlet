@@ -57,7 +57,7 @@ func (Generic) ConversationIdentity(map[string]string, string) string { return "
 // WakesActor is false for an unrecognised source: an event type nobody has
 // classified that turns out to loop takes the company down with it, while
 // one that goes unheard costs a single notification.
-func (Generic) WakesActor(string) bool { return false }
+func (Generic) WakesActor(Inbound) bool { return false }
 
 // DigestBody passes the body through unchanged: a backend with no message
 // format of its own has nothing to render a digest into.
