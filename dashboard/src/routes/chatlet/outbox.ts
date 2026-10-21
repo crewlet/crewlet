@@ -11,7 +11,18 @@
  *     brings it back, and until then it is still drawn as pending, because
  *     what is on screen is not yet the message the company holds.
  *   - **pending** — the record is published and this node has not applied it.
- *     Nothing is wrong. It is still not a sent message on this screen.
+ *     Nothing is wrong. It is still not a sent message on this screen — and
+ *     it is the one answer whose verdict is still to come, because a message
+ *     is DECIDED where it is applied (ADR-0046): the room may have been
+ *     archived, or its author taken out of it, by a record just ahead. So a
+ *     row answered pending is ASKED AGAIN, under its own operation key, once
+ *     the answering node has had the wait a read is promised
+ *     ([PENDING_REASK_MS]) and then less and less often: the operation ledger
+ *     answers the same key with what the applier decided, so the repeat
+ *     writes nothing twice and comes back applied, still pending, or the
+ *     refusal — which the row then says. Left alone, a refused post stayed
+ *     "accepted" for ever, because the transcript that settles a row never
+ *     carries a message that is in no room.
  *   - **unknown** — nobody can say whether it landed. It may be in the room
  *     already and it may never arrive, and the ONLY safe move is to say so and
  *     offer the retry, under the same operation key — the press's
@@ -46,8 +57,10 @@
  * their message rather than the first one again.
  */
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
+import { PENDING_REASK_MS } from "~/contract/chat.ts";
+import { RETRY_AFTER_MAX_MS } from "~/contract/retry.ts";
 import { useAct } from "~/lib/useAct.ts";
 import type { WriteAccess } from "~/lib/useWriteAccess.ts";
 import { newActOpID, type ActResult } from "~/protocol/act.ts";
@@ -83,6 +96,36 @@ export interface Outgoing {
    *  is NOT the message's: a message is stamped with the broker's time, and
    *  that is what the transcript will render. */
   startedAt: number;
+  /**
+   * What the engine said of an ACCEPTED row: `applied` — this node decided
+   * it and it landed — or `pending` — published and not decided here yet,
+   * which is the answer a row is asked again for. Empty on every other
+   * state.
+   */
+  answer: "applied" | "pending" | "";
+  /** How often a pending row has been asked again, which spaces the next. */
+  reasks: number;
+  /** When a pending row is next asked again (ms since the epoch); 0 for a
+   *  row that is not waiting on one. */
+  reaskAt: number;
+}
+
+/**
+ * How long after its last answer a row answered `pending` is asked again: the
+ * wait a read is promised the answering node's applier reaches what it waits
+ * for ([PENDING_REASK_MS]) first, doubling with every answer that is still
+ * pending, and never more than the dashboard's ceiling on waiting for an
+ * engine ([RETRY_AFTER_MAX_MS]) — a node that has not decided a post in that
+ * long is one a person stops believing will.
+ */
+export function reaskDelay(reasks: number): number {
+  return Math.min(PENDING_REASK_MS * 2 ** reasks, RETRY_AFTER_MAX_MS);
+}
+
+/** The row asked again `reasks` times, due its next ask at the delay that
+ *  count earns, from `now`. */
+function reaskLater(row: Outgoing, reasks: number, now: number): Outgoing {
+  return { ...row, reasks, reaskAt: now + reaskDelay(reasks) };
 }
 
 /** Whether this row is still waiting on the company — the state a composer
@@ -104,6 +147,7 @@ function applyResult(row: Outgoing, result: ActResult | null, blocked = ""): Out
     if (row.state === "unknown") return row;
     return {
       ...row,
+      ...unanswered,
       state: "refused",
       messageID: "",
       detail: blocked || "Nothing was sent.",
@@ -118,27 +162,66 @@ function applyResult(row: Outgoing, result: ActResult | null, blocked = ""): Out
       // away and carries the broker's own instant, the sequence, and whatever
       // else has happened since.
       const id = (result.receipt as Partial<ChatReceipt> | null)?.message_id;
-      return {
+      const accepted: Outgoing = {
         ...row,
         state: "accepted",
         messageID: typeof id === "string" ? id : "",
         detail: "",
         retryable: false,
+        answer: result.kind,
+        reasks: 0,
+        reaskAt: 0,
       };
+      return result.kind === "pending" ? reaskLater(accepted, 0, Date.now()) : accepted;
     }
     case "unknown":
       // NOT a message id: there may be no message. The operation key to
       // retry under is the one this row already holds.
-      return { ...row, state: "unknown", messageID: "", detail: "", retryable: false };
+      return { ...row, ...unanswered, state: "unknown", messageID: "", detail: "" };
     case "refused":
-      return {
-        ...row,
-        state: "refused",
-        messageID: "",
-        detail: [result.sentence, result.hint].filter((part) => part.trim() !== "").join(" "),
-        retryable: result.retryable,
-      };
+      return refusedRow(row, result);
   }
+}
+
+/** What a row waiting on no answer carries. */
+const unanswered = { retryable: false, answer: "", reasks: 0, reaskAt: 0 } as const;
+
+/** The row a refusal leaves, in the engine's own words. */
+function refusedRow(row: Outgoing, result: Extract<ActResult, { kind: "refused" }>): Outgoing {
+  return {
+    ...row,
+    ...unanswered,
+    state: "refused",
+    messageID: "",
+    detail: [result.sentence, result.hint].filter((part) => part.trim() !== "").join(" "),
+    retryable: result.retryable,
+  };
+}
+
+/**
+ * What asking again does to a row answered `pending`.
+ *
+ * THE RECORD IS DURABLE — the first answer said so — so only a DECISION moves
+ * the row: `applied` is the post having landed (the transcript then settles
+ * it), and a refusal of the message itself is what the applier decided, drawn
+ * as every refusal is. Anything that is not a decision — still pending, an
+ * answer nobody can vouch for, a node that refused for now, a browser that
+ * could not send — leaves it accepted and asks again later, because none of
+ * them says anything about the message, and drawing one as "it may not have
+ * been said" would take back what the first answer established.
+ */
+export function applyReask(row: Outgoing, result: ActResult | null, now: number): Outgoing {
+  if (result?.kind === "applied") {
+    const id = (result.receipt as Partial<ChatReceipt> | null)?.message_id;
+    return {
+      ...row,
+      answer: "applied",
+      messageID: typeof id === "string" && id !== "" ? id : row.messageID,
+      reaskAt: 0,
+    };
+  }
+  if (result?.kind === "refused" && !result.retryable) return refusedRow(row, result);
+  return reaskLater(row, row.reasks + 1, now);
 }
 
 /** What a composer hands over. */
@@ -199,6 +282,23 @@ export function useOutbox(): OutboxHandle {
     });
   }, []);
 
+  // ONE PRESS'S CALL, the first send, a retry and a re-ask alike: the same
+  // tool, the same arguments and the row's own operation key every time.
+  const ask = useCallback(
+    (row: Outgoing): Promise<ActResult | null> => {
+      const label = { done: "Sent", quiet: true };
+      const options = { opId: row.opId };
+      return row.threadRoot
+        ? reply.run(
+            { channel: row.channelID, reply_to: row.threadRoot, body: row.body },
+            label,
+            options,
+          )
+        : post.run({ channel: row.channelID, body: row.body }, label, options);
+    },
+    [post, reply],
+  );
+
   const run = useCallback(
     async (row: Outgoing): Promise<void> => {
       setRows((held) =>
@@ -206,15 +306,7 @@ export function useOutbox(): OutboxHandle {
           ? held.map((r) => (r.opId === row.opId ? row : r))
           : [...held, row],
       );
-      const label = { done: "Sent", quiet: true };
-      const options = { opId: row.opId };
-      const result = row.threadRoot
-        ? await reply.run(
-            { channel: row.channelID, reply_to: row.threadRoot, body: row.body },
-            label,
-            options,
-          )
-        : await post.run({ channel: row.channelID, body: row.body }, label, options);
+      const result = await ask(row);
       const blocked = row.threadRoot ? reply.access : post.access;
       setRows((held) =>
         held.map((r) =>
@@ -222,8 +314,51 @@ export function useOutbox(): OutboxHandle {
         ),
       );
     },
-    [post, reply],
+    [ask, post.access, reply.access],
   );
+
+  // A ROW ANSWERED PENDING IS ASKED AGAIN when it is due, and only one ask at
+  // a time per row: the timers are re-armed on every change to the rows, but
+  // each against the row's own due instant, so a room busy with other presses
+  // never pushes a waiting row's ask back.
+  const reasking = useRef(new Set<string>());
+  useEffect(() => {
+    const due = rows.filter(
+      (row) =>
+        row.state === "accepted" && row.answer === "pending" && !reasking.current.has(row.opId),
+    );
+    const timers = due.map((row) =>
+      setTimeout(
+        () => {
+          reasking.current.add(row.opId);
+          void ask(row).then(
+            (result) => {
+              reasking.current.delete(row.opId);
+              setRows((held) =>
+                held.map((r) =>
+                  r.opId === row.opId && r.state === "accepted" && r.answer === "pending"
+                    ? applyReask(r, result, Date.now())
+                    : r,
+                ),
+              );
+            },
+            () => {
+              reasking.current.delete(row.opId);
+              setRows((held) =>
+                held.map((r) =>
+                  r.opId === row.opId && r.state === "accepted" && r.answer === "pending"
+                    ? applyReask(r, null, Date.now())
+                    : r,
+                ),
+              );
+            },
+          );
+        },
+        Math.max(0, row.reaskAt - Date.now()),
+      ),
+    );
+    return () => timers.forEach(clearTimeout);
+  }, [rows, ask]);
 
   const send = useCallback(
     (draft: Draft) =>
@@ -238,8 +373,8 @@ export function useOutbox(): OutboxHandle {
         state: "sending",
         messageID: "",
         detail: "",
-        retryable: false,
         startedAt: Date.now(),
+        ...unanswered,
       }),
     [run],
   );
@@ -248,7 +383,7 @@ export function useOutbox(): OutboxHandle {
     async (opId: string): Promise<void> => {
       const row = rows.find((r) => r.opId === opId);
       if (!row) return;
-      await run({ ...row, state: "sending", detail: "" });
+      await run({ ...row, ...unanswered, state: "sending", detail: "" });
     },
     [rows, run],
   );

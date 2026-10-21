@@ -30,7 +30,7 @@ import { ReadCursors } from "./cursor.ts";
 import { LIVE_REFETCH_MS } from "./live.ts";
 import { SHORTEN_FIRST } from "./Composer.tsx";
 import { DELETE_IN_FLIGHT, EDIT_IN_FLIGHT, NOTHING_CHANGED } from "./Transcript.tsx";
-import { MAX_BODY_BYTES } from "~/contract/chat.ts";
+import { MAX_BODY_BYTES, PENDING_REASK_MS } from "~/contract/chat.ts";
 import { ACT_ERRORS } from "~/contract/errors.ts";
 import { Store, type ChatPresencePush, type RoomMember, type QueryName } from "~/protocol/index.ts";
 import { MAX_CHAT_LIVE } from "~/protocol/store.ts";
@@ -40,6 +40,7 @@ import {
   actEngine,
   applied,
   mountChat,
+  pending,
   refused,
   refusedForNow,
   unknown,
@@ -304,6 +305,33 @@ test("a post the room's state refuses is drawn as a conflict, never as a retry",
   await waitFor(() => expect(screen.getByText(ACT_ERRORS.conflict)).toBeTruthy());
   expect(screen.queryByRole("button", { name: /try again/i })).toBeNull();
   expect(screen.queryByRole("button", { name: /send again/i })).toBeNull();
+});
+
+test("a post answered pending is asked again under its own key, and its refusal is drawn", async () => {
+  // DECIDED WHERE IT IS APPLIED (ADR-0046): the node that answered had not
+  // applied the post, and the room was archived just ahead of it. Asked again
+  // under the SAME operation key once that node has had a read's wait, the
+  // ledger answers with what its applier decided — and the row says so
+  // rather than "sent" for ever, since the transcript that settles a row
+  // never carries a message that is in no room.
+  let asked = 0;
+  reply = (tool) => {
+    asked += 1;
+    return asked === 1
+      ? pending(tool, { message_id: "m-said" })
+      : refused(tool, "conflict", "post_message refused that: room-1 was archived", 409);
+  };
+  mount();
+  await screen.findByText("line 2");
+  await say("anyone there?");
+  await screen.findByText(/Waiting for this node to catch up/);
+  await waitFor(() => expect(screen.getByText(ACT_ERRORS.conflict)).toBeTruthy(), {
+    timeout: PENDING_REASK_MS * 3,
+  });
+  const sent = pressesOf("post_message");
+  expect(sent).toHaveLength(2);
+  expect(sent[1]!.opId).toBe(sent[0]!.opId);
+  expect(sent[1]!.args).toEqual(sent[0]!.args);
 });
 
 test("a refusal the node made can be tried again, under the same operation key", async () => {

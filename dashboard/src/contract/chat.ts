@@ -18,7 +18,9 @@
  *    expressions can be spelled differently and mean the same thing;
  *  - the typing throttle, an INEQUALITY — at most half of
  *    `presence.TypingLapse` (`internal/presence`'s
- *    `TestTheDashboardReassertsTypingInsideTheEnginesExpiry`).
+ *    `TestTheDashboardReassertsTypingInsideTheEnginesExpiry`);
+ *  - the pending re-ask, EQUAL to `chatlet.DecisionWait`
+ *    (`TestTheDashboardAsksAPendingPostAgainAfterTheApplierHadItsWait`).
  *
  * A limit drifts silently from the side that sees it: a copy too low greys
  * out a gesture the engine would take, with nothing anywhere to say so, and a
@@ -88,3 +90,22 @@ export const MAX_DIRECT_PARTICIPANTS = 8;
  * `TestTheDashboardReassertsTypingInsideTheEnginesExpiry`.
  */
 export const TYPING_THROTTLE_MS = 3_000;
+
+/**
+ * How soon a message answered `pending` is asked again, under its own
+ * operation key, in ms (`routes/chatlet/outbox.ts`).
+ *
+ * TWO SECONDS, `chatlet.DecisionWait` — itself `statelog.ReadBudget`, the wait a
+ * read is promised the answering node's applier reaches what it waits for, and
+ * the wait the engine's own change feed gives that applier before it derives a
+ * wake without its verdict. `pending` is a node that had not applied the post
+ * yet, and a message is decided where it is applied, so this is the soonest
+ * asking again can be answered with the verdict rather than with `pending`
+ * again; the operation ledger answers the same key with that verdict and
+ * writes nothing twice. Each answer still pending doubles the wait, up to
+ * `RETRY_AFTER_MAX_MS`.
+ *
+ * Held EQUAL to `chatlet.DecisionWait` by `internal/chatlet`'s
+ * `TestTheDashboardAsksAPendingPostAgainAfterTheApplierHadItsWait`.
+ */
+export const PENDING_REASK_MS = 2_000;

@@ -127,3 +127,34 @@ func TestTheDashboardsChannelNameGrammarIsTheEngines(t *testing.T) {
 			probe, len(probe), verdict)
 	}
 }
+
+// THE DASHBOARD ASKS A PENDING POST AGAIN ONCE THE APPLIER HAD ITS WAIT.
+//
+// A post answered `pending` was published and not yet decided on the node that
+// answered, and a message is decided where it is applied — so the outbox
+// (`routes/chatlet/outbox.ts`) asks again under the same operation key until the
+// operation ledger answers with the verdict. Its first wait is
+// [chatlet.DecisionWait], the read budget the answering node's applier is given
+// to reach a record before the change feed stops waiting for it: asked sooner,
+// the same node answers `pending` again; later, a refused post sits on screen
+// as sent for longer than the engine took to decide it.
+//
+// Mutation: change PENDING_REASK_MS in contract/chat.ts, or DecisionWait here,
+// and this goes red.
+func TestTheDashboardAsksAPendingPostAgainAfterTheApplierHadItsWait(t *testing.T) {
+	t.Parallel()
+	raw, err := clientsource.Scalar(clientsource.Tree(t), "PENDING_REASK_MS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := strconv.ParseInt(raw, 0, 64)
+	if err != nil {
+		t.Fatalf("PENDING_REASK_MS is %q, which is not an integer: %v", raw, err)
+	}
+	if want := chatlet.DecisionWait.Milliseconds(); client != want {
+		t.Errorf("the dashboard asks a pending post again after %d ms and the "+
+			"engine gives the answering node's applier %d ms to decide it "+
+			"(chatlet.DecisionWait); the engine owns the value, so "+
+			"contract/chat.ts is what changes", client, want)
+	}
+}

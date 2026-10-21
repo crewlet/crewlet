@@ -7416,7 +7416,14 @@ and asks nothing.
   where nobody can say whether it landed (asked under the same operation key,
   because the engine derives the message's id from it and a fresh key would
   say it twice), **Try again** where the node refused it, and **Take it off
-  the screen**, which unsays nothing. It waits there while you look at another
+  the screen**, which unsays nothing. A message the node accepted without having
+  applied it yet (`pending`) is not yet decided — the room may have been
+  archived, or its author taken out of it, just ahead of it — so the screen asks
+  again under the same key, first after the two seconds the node's applier is
+  given to reach it (`contract/chat.ts`'s `PENDING_REASK_MS`, the engine's
+  `chatlet.DecisionWait`) and then at doubling intervals up to thirty seconds,
+  until the answer is a decision: it landed, and the transcript brings it, or it
+  was refused, and the row says why. It waits there while you look at another
   room, and is there when you come back.
 - **A thread** is `thread=` on its room, opened beside the transcript, or
   under it on a screen too narrow for both (see [The frame](#the-frame)). It
