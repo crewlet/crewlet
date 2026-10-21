@@ -440,6 +440,15 @@ Extensions chain: when an extended run exhausts again, the judge fires
 once more, up to the configured ceiling. Token budget cascade still
 bounds the whole thing economically; the ceiling is a sanity check.
 
+**The judge reads the ask's foreign words fenced, and its reason reaches
+the seat defused.** The turn's ask it is shown carries other people's words
+under the turn's [fence](agent-runtime.md#text-somebody-else-wrote) token;
+the judge reads them moved onto a token minted for its call, with every
+other line of its evidence escaped and the standing sentence in its prompt,
+so a message telling it to grant fifty rounds is read as that message. Its
+one-sentence reason is written into the pass's conversation with the nudge,
+escaped under the turn's token.
+
 **A phase that submitted on its last round is finished, not exhausted.**
 Exhaustion means the budget ran out with the model still *asking for
 tools*, and a submission on the last round is a call too — so it used to

@@ -322,6 +322,18 @@ func runnerOver(
 	caps loopCaps, pair []tools.Callable, meter ...toolloop.BudgetMeter,
 ) *runner.Runner {
 	t.Helper()
+	return runnerIn(t, runner.Turn{RunID: "t-rounds", WorkKey: "wk-rounds", AgentID: "agent-1"},
+		prov, pub, judge, caps, pair, meter...)
+}
+
+// runnerIn is runnerOver in a turn the case states, for one whose subject is
+// what the turn hands the pass: the token its fences carry, which the judge is
+// told.
+func runnerIn(
+	t *testing.T, turn runner.Turn, prov llm.Provider, pub queue.Publisher, judge extension.Judge,
+	caps loopCaps, pair []tools.Callable, meter ...toolloop.BudgetMeter,
+) *runner.Runner {
+	t.Helper()
 	models, err := phase.NewRegistry([]phase.Entry{{Key: "default", Provider: prov}})
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
@@ -342,7 +354,7 @@ func runnerOver(
 		Publisher: pub,
 		Judge:     judge,
 		Budget:    budgetOf(meter),
-		Turn:      runner.Turn{RunID: "t-rounds", WorkKey: "wk-rounds", AgentID: "agent-1"},
+		Turn:      turn,
 		Sessions:  sessions,
 		Onboarding: runner.Onboarding{
 			Markers: &markers{claimHeld: true}, Latch: runner.NewLatch(),

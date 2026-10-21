@@ -1150,9 +1150,11 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 			span.SetAttributes(attribute.Int("crewlet.rounds", out.Rounds))
 			return done()
 		}
+		fence := surface.Turn().FenceBoundary()
 		granted, decision := r.consider(ctx, ph, iteration, out.Rounds, policy, extension.Request{
 			Phase: ph, Task: r.cfg.Task,
 			Calls: calls(surface), LastText: res.Text, RoundsUsed: out.Rounds,
+			Boundary: fence,
 		})
 		if granted <= 0 {
 			log.InfoContext(ctx, "phase_not_extended", "phase", ph, "iteration", iteration,
@@ -1163,7 +1165,7 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 			"granted", granted, "rounds_used", out.Rounds, "reason", decision.Reason)
 		messages = append(messages, llm.Message{
 			Role:    llm.RoleUser,
-			Content: extension.Nudge(ph, granted, decision.Reason),
+			Content: extension.Nudge(fence, ph, granted, decision.Reason),
 		})
 		// An exhausted phase was still calling tools, so no run of
 		// declines is being continued.
