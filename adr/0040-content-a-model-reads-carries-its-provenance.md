@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/provenance`
-- **Enforced-by:** `internal/provenance.TestAFenceCannotBeClosedByItsContent`, `internal/agent/builtin.TestEveryUntrustedReadIsFenced`, `internal/agent/builtin.TestEveryArtifactToolResultIsFenced`, `internal/engine.TestEveryWakeSurfaceFencesWhatSomebodyWrote`, `internal/engine.TestEveryPromptBuilderIsAWakeSurface`, `internal/engine.TestEveryWakeTypeFencesSomebodyElsesWords`, `internal/engine.TestTheTurnsAskIsFencedAsItsTriggerIs`, `internal/agent/prefetch.TestTheTurnStartJudgementsReadSomebodyElsesWordsFenced`, `internal/knowledge.TestRenderFencesEveryHitUnderItsBackendsLabel`, `internal/estate.TestAKnowledgeHitsLabelCrossesTheWire`
+- **Enforced-by:** `internal/provenance.TestAFenceCannotBeClosedByItsContent`, `internal/agent/builtin.TestEveryUntrustedReadIsFenced`, `internal/agent/builtin.TestEveryArtifactToolResultIsFenced`, `internal/engine.TestEveryWakeSurfaceFencesWhatSomebodyWrote`, `internal/engine.TestEveryPromptBuilderIsAWakeSurface`, `internal/engine.TestEveryWakeTypeFencesSomebodyElsesWords`, `internal/engine.TestTheTurnsAskIsFencedAsItsTriggerIs`, `internal/agent/prefetch.TestTheTurnStartJudgementsReadSomebodyElsesWordsFenced`, `internal/knowledge.TestRenderFencesEveryHitUnderItsBackendsLabel`, `internal/estate.TestAKnowledgeHitsLabelCrossesTheWire`, `internal/compact.TestARewriteReadsItsTextFencedUnderATokenOfItsOwn`
 - **Cost-when-tried:** before this record, a page body, a work item's comments, a project file and the chat thread handed to a turn all reached the model as plain text in a tool answer or a prompt block, with no boundary the text could not also write and nothing saying who wrote it or that it was data. Anybody who could write a page, comment on an item or speak in a thread a seat reads could address the seat in the voice of its instructions.
 - **Tag-status:** unreleased
 
@@ -52,7 +52,9 @@ writer and the episode summary, each handed what the turn was asked — fenced a
 the trigger labels them, under a token minted for that call rather than the
 turn's, beside the standing sentence; what those calls answer decides what the
 seat is shown, and the briefing the summary writes is defused before it reaches
-the seat's prompt. A chat reply that
+the seat's prompt. A model that rewrites a text to fit a budget reads it the
+same way, fenced under a token minted for that rewrite and labelled as its
+caller says, and its rewrite is defused before the caller places it. A chat reply that
 answers a coding run parked on a question is recorded as what was written,
 and the run it carries on reads it fenced as the message that woke a turn is,
 under its own turn's token: a fence is a model's, and what a person reads back

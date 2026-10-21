@@ -622,7 +622,8 @@ func (t *getArtifact) readFile(ctx context.Context, read *foreignRead, c artifac
 	if !offsetGiven && trust != provenance.TrustOwn && typ.Essence() == "text/html" &&
 		e.Object.Size > artifacts.ToolReadPageBytes &&
 		c.turn != nil && c.turn.Seat != nil && t.deps.compact != nil {
-		if summary, ok := t.condense(ctx, c, e, focus); ok {
+		label := provenance.Label{Source: provenance.SourceArtifactFile, Trust: trust, Authors: writers}
+		if summary, ok := t.condense(ctx, c, e, focus, label); ok {
 			file["summary_note"] = summary.Note() + " Pass `offset` to read the source, " +
 				"which an edit's `old_str` must quote exactly."
 			read.fence(at.key("summary"), provenance.SourceArtifactFile, writers, partial, summary.Text)
@@ -903,10 +904,11 @@ func (s toolVersionSource) Read(p string) ([]byte, error) {
 }
 
 // condense is a long text file a colleague wrote, rewritten to fit by the
-// seat's auxiliary model, or false where it could not be (a node with no
-// auxiliary model, a spent budget): the caller then answers the page itself.
+// seat's auxiliary model — which reads it fenced under label, the file's own
+// — or false where it could not be (a node with no auxiliary model, a spent
+// budget): the caller then answers the page itself.
 func (t *getArtifact) condense(ctx context.Context, c artifactCaller, e artifacts.Entry,
-	focus string) (compact.Result, bool) {
+	focus string, label provenance.Label) (compact.Result, bool) {
 
 	text, _, err := t.deps.Publisher.SourceText(ctx, e, artifacts.MaxConflictEntryText)
 	if err != nil {
@@ -915,8 +917,8 @@ func (t *getArtifact) condense(ctx context.Context, c artifactCaller, e artifact
 	if focus == "" {
 		focus = "what this page shows and how it is built"
 	}
-	res, err := t.deps.compact.For(c.turn.Seat, c.turn.Aux()).Focused(ctx, compact.KindSource,
-		string(text), summaryBudget, focus)
+	res, err := t.deps.compact.For(c.turn.Seat, c.turn.Aux()).Labelled(label).Focused(ctx,
+		compact.KindSource, string(text), summaryBudget, focus)
 	if err != nil || !res.Compacted {
 		return compact.Result{}, false
 	}

@@ -347,7 +347,10 @@ func (f *Fetcher) renderThread(ctx context.Context, r Request, read notify.Trans
 	// and only left out, and counted, where no rewrite can be had.
 	condensed := ""
 	if len(middle) > 0 {
-		res, err := f.src.Compact.For(r.Seat, r.Aux).Fit(ctx, compact.KindThread,
+		// THE REWRITE READS THEM AS THEIR WORDS, fenced under who said
+		// them, exactly as the seat reads the rest of the thread.
+		label := provenance.LabelFor(r.Seat.Handle(), provenance.SourceChatThread, authorsMiddle)
+		res, err := f.src.Compact.For(r.Seat, r.Aux).Labelled(label).Fit(ctx, compact.KindThread,
 			strings.Join(middle, "\n"), threadMaxChars/threadEarlierShare)
 		switch {
 		case err == nil && !res.Compacted:

@@ -181,6 +181,11 @@ func TestTheMiddleOfALongThreadIsCondensed(t *testing.T) {
 	if model.calls() != 1 || !strings.Contains(model.prompts()[0], "reply 1 ") {
 		t.Fatalf("the oldest reply never reached the rewrite (%d calls)", model.calls())
 	}
+	// THE REWRITE READS THEM AS THEIR WORDS (ADR-0040): fenced as the thread
+	// under who said them, an outside party here, as the seat reads the rest.
+	if p := model.prompts()[0]; !strings.Contains(p, " source=chat_thread trust=external authors=external]\n") {
+		t.Fatalf("the rewrite was not handed the middle fenced as the thread:\n%s", p)
+	}
 	if len(text) > 8000+600 {
 		t.Fatalf("the block is %d bytes, past its bound", len(text))
 	}
