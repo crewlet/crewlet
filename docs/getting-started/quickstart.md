@@ -822,26 +822,56 @@ through external surfaces — pick yours in
 base, code host, chat, sandbox — with the hosted vs self-hosted options for
 each), then wire them in:
 
-- Connect chat so agents collaborate in channels and you can DM them. If
-  your company already runs on [Slack](../integrations/slack.md), use it —
+- Connect chat — on Slack or on Mattermost, both below — so agents
+  collaborate in channels and you can DM them. Whichever you pick, first add
+  the integration's block to `company.yaml` — the page's *Configure in YAML*
+  section — with a `${VAR}` for each credential: the provisioner mints
+  exactly the variables the file names. It records what it mints through the
+  running node, as the founder token, and the `crewlet config import` that
+  ends each snippet is what hands the engine both: the node took its company
+  from the file once, at step 3, so an edit to the file reaches it only
+  through an import, and an apply is when the engine reads its secret store.
+  If your company already runs on [Slack](../integrations/slack.md), use it —
   the agents land where the conversations already happen, under the
   workspace admin and compliance setup you already have. It needs a public
   URL for its Events API and one OAuth **Allow** click per agent:
   ```bash
-  crewlet slack provision company.yaml -public-url https://your-server.com
+  export CREWLET_API_TOKEN="$CREWLET_API_TOKEN_FOUNDER"
+  crewlet slack provision company.yaml -secret-store -public-url https://your-server.com
+  crewlet config import company.yaml        # the block, with what was just minted
   ```
   To try chat on this machine first,
   [Mattermost](../integrations/mattermost.md) ships in this repo's
-  `docker-compose.yml` and needs no account, no inbound URL and no clicks:
+  `docker-compose.yml` and needs no account, no inbound URL and no clicks.
+  Its block names the instance as `url: "${MATTERMOST_URL}"` and
+  `team: nimbus`, the team the script creates:
   ```bash
   docker compose --profile mattermost up -d --wait
-  scripts/mattermost-dev-bootstrap.sh
-  crewlet mattermost provision company.yaml
+  scripts/mattermost-dev-bootstrap.sh       # writes MATTERMOST_* to .env
+  set -a; . ./.env; set +a                  # the admin token the provisioner uses
+  export CREWLET_API_TOKEN="$CREWLET_API_TOKEN_FOUNDER"
+  printf %s "$MATTERMOST_URL" | crewlet secrets set MATTERMOST_URL
+  crewlet mattermost provision company.yaml -secret-store
+  crewlet config import company.yaml        # the block, with what was just minted
   ```
+  The engine was started before `.env` existed, so `MATTERMOST_URL` reaches
+  it through the secret store, beside the bots' tokens, rather than through
+  its environment, which nothing changes while it runs.
   Running that stack on a **remote host** rather than this machine? Set
   `MATTERMOST_PUBLIC_URL` to the address your browser uses first — see
   [The Site URL](../integrations/mattermost.md#the-site-url). The engine
   needs no public URL; the Mattermost server still needs to know its own.
+  The import that ends each snippet makes the file the **whole** running
+  document, so it is the right last step only while `company.yaml` is what
+  the node runs. A company created in the dashboard's org builder, or changed
+  there since — a human seat added under **Org chart › Edit org** included — is
+  replaced by the file, and the write is refused `409 seat_held` where the
+  file drops a human seat somebody holds or is invited to. Connect chat from
+  Company › Integrations then, as each page's *Setting it up from the
+  dashboard* section describes
+  ([Slack](../integrations/slack.md#setting-it-up-from-the-dashboard),
+  [Mattermost](../integrations/mattermost.md#setting-it-up-from-the-dashboard)):
+  it seals the credentials and re-activates the company as it stands.
 - Connect a work-item tracker — [Jira](../integrations/jira.md), or the issue
   tracker of the code host you already run
 - Connect a knowledge backend — [Confluence](../integrations/confluence.md) —

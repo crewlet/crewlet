@@ -243,12 +243,30 @@ service account per seat, memberships, per-agent tokens minted into your config'
 `${VAR}` references, and the webhooks:
 
 ```bash
-crewlet mattermost provision company.yaml
-crewlet gitlab     provision company.yaml -public-url <url>
+crewlet mattermost provision company.yaml -env-file .env
+crewlet gitlab     provision company.yaml -public-url <url> -env-file .env
 crewlet jira       provision company.yaml -public-url <url> -env-file .env
 crewlet slack      provision company.yaml -public-url <url> -env-file .env
 crewlet github     provision company.yaml -public-url <url> -env-file .env
 ```
+
+Each run records what it mints where you send it — an env file (`-env-file`),
+the fleet's encrypted secret store (`-secret-store`) or your terminal
+(`-print`) — and a run that would mint takes exactly one of the three. It reads
+the company's values the way the engine does, the secret store before the
+environment: before a single node's first start from that node's own rows,
+which are then the whole store, and after it through the running engine, with
+`CREWLET_API_TOKEN` set to one of its Tier A tokens carrying `admin`, or through
+the running node `-api URL` names. Once the node has run, a run that reads the
+company's store is refused with its engine stopped, before it changes anything:
+every `gitlab`, `github` and `jira` run, its `-dry-run` included, and a
+`mattermost` or `slack` run with something to provision. A `mattermost` or
+`slack` run with `-dry-run` or nothing to provision reads nothing of the store
+and runs on any node
+([where a command reads the company's values](docs/reference/cli.md#where-a-command-reads-the-companys-values)).
+Beside a running engine, `-secret-store` is the sink the engine reads with no
+restart, at its next configuration apply; an env file reaches it only when it
+restarts from a shell that sourced the file.
 
 What each command can actually do differs by what the vendor allows: Mattermost and
 GitLab create an account per seat and mint its token; Jira and GitHub issue no
@@ -310,7 +328,9 @@ crewlet secrets keygen                        # a keyring key — REQUIRED on ev
 crewlet secrets set ANTHROPIC_API_KEY         # a secret the engine reads ${VAR} from
 
 crewlet confluence import company.yaml docs/  # publish knowledge docs + tool skills
-crewlet gitlab provision company.yaml         # reconcile the company's seats into GitLab
+crewlet gitlab provision company.yaml -env-file .env
+                                              # reconcile the company's seats into GitLab,
+                                              #   minting their tokens into .env
 ```
 
 Full reference: [CLI](docs/reference/cli.md) ·
