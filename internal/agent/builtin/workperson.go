@@ -244,10 +244,10 @@ func (t *setPriorities) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// the generic sentence sends a caller to get_work_item, which
 		// knows nothing about a person's queue.
 		return refusedBy(tools.RefusalStaleVersion, err, fmt.Sprintf("%s was "+
-			"refused: %v. Nothing is wrong with your order — somebody "+
+			"refused: %s. Nothing is wrong with your order — somebody "+
 			"changed this person's record after you read it. Call "+
 			tracker.GetPersonTool+" again and decide from the list it shows now.",
-			tracker.SetPrioritiesTool, err)), nil
+			tracker.SetPrioritiesTool, tracker.Sentence(err))), nil
 	}
 	if err != nil {
 		return writeFailure(ctx, actor, tracker.SetPrioritiesTool, err), nil

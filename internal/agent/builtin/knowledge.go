@@ -144,7 +144,8 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// the one asked.
 	mode, err := knowledge.ParseMode(argString(args, "mode"))
 	if err != nil {
-		return failed(fmt.Sprintf(SearchKnowledgeTool+": %v.", err)), nil
+		return refusedBy(tools.RefusalInvalid, err, unknownMode(SearchKnowledgeTool,
+			argString(args, "mode"))), nil
 	}
 	// THE TURN'S ORG, or the wiring's where there is no turn — see
 	// [searchKnowledge.org]. Reading the turn unconditionally made this
@@ -227,6 +228,19 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		"knowledge-base tools.")
 	b.WriteString(partial)
 	return tools.Result{Output: b.String()}, nil
+}
+
+// unknownMode is the refusal of a `mode` this build does not know, naming the
+// ones it does: composed here, because the parser's error opens with its
+// package ("knowledge: unknown search mode …"), which a model read after its
+// own tool's name.
+func unknownMode(tool, asked string) string {
+	names := make([]string, len(knowledge.Modes))
+	for i, m := range knowledge.Modes {
+		names[i] = string(m)
+	}
+	return fmt.Sprintf("%s does not search in mode %q. It takes `mode` as one of %s.",
+		tool, strings.TrimSpace(asked), strings.Join(names, ", "))
 }
 
 // degradedNote is the sentence a search that ranked other than it was asked

@@ -162,8 +162,12 @@ func (t *a2aAsk) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[s
 		// THE TARGET'S FAULT, and the service's sentence names why: the
 		// checks above catch both first, so this arm is a chart that moved
 		// between the resolve and the open.
-		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("Could not ask %s: %v.",
-			resolved.Handle, err)), nil
+		why := "they do not hold an agent's seat"
+		if errors.Is(err, a2a.ErrSelfChannel) {
+			why = "an ask has two parties, and that seat is yours"
+		}
+		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("Could not ask %s: %s.",
+			resolved.Handle, why)), nil
 	case err != nil:
 		return nodeFailure(ctx, A2AAskTool, err, fmt.Sprintf("Could not reach %s",
 			resolved.Handle), ""), nil

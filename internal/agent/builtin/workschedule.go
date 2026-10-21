@@ -137,7 +137,8 @@ func readSchedule(args map[string]any, now time.Time, loc *time.Location,
 		}
 		anchor, err := tracker.ResolveDate(token, now, loc)
 		if err != nil {
-			return out, fmt.Sprintf("%s could not read `%s`: %v", tool, key, err)
+			return out, fmt.Sprintf("%s could not read `%s`: %s", tool, key,
+				tracker.Sentence(err))
 		}
 		at := anchor.At
 		*target = &at

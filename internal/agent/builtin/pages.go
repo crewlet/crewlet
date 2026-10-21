@@ -1061,28 +1061,31 @@ func pageWriteFailure(ctx context.Context, name string, err error, next string) 
 		// THE STORE'S RULE, not a tool's: a reserved container refuses an
 		// agent there whichever surface the write came by, and its own
 		// sentence says which container and why.
-		return refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s refused that: %v. "+
-			"Write this somewhere a reader will find it.", name, err))
+		return refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s refused that: %s. "+
+			"Write this somewhere a reader will find it.", name, pages.Sentence(err)))
 	case errors.Is(err, pages.ErrTitleTaken):
-		return refusedBy(tools.RefusalExists, err, fmt.Sprintf("%v\n\nThat page already "+
+		return refusedBy(tools.RefusalExists, err, fmt.Sprintf("%s.\n\nThat page already "+
 			"exists — read it with "+GetPageTool+" and edit it with "+SavePageTool+" rather "+
-			"than writing a second page on the same subject.", err))
+			"than writing a second page on the same subject.", pages.Sentence(err)))
 	case errors.Is(err, pages.ErrStaleVersion):
-		return refusedBy(tools.RefusalStaleVersion, err, fmt.Sprintf("%v\n\nRead the "+
+		return refusedBy(tools.RefusalStaleVersion, err, fmt.Sprintf("%s.\n\nRead the "+
 			"page again with "+GetPageTool+", re-apply your change on top of what it "+
-			"says now, and save with the version you just read.", err))
+			"says now, and save with the version you just read.", pages.Sentence(err)))
 	case errors.Is(err, pages.ErrConflict):
+		// A LOST RACE, without the store's own words, which name the
+		// page's subject and the framework's error after it. A person is
+		// told it in [lostRaceWords] ([WriterSentence]).
 		return refusedBy(tools.RefusalConflict, err, fmt.Sprintf("%s could not land: "+
-			"%v. Somebody else is editing this page. Read it again before "+
-			"retrying.", name, err))
+			"somebody else is editing this page, so nothing was written. Read it "+
+			"again before retrying.", name))
 	case errors.Is(err, pages.ErrNotFound):
-		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("%s: %v", name, err))
+		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("%s: %s.", name,
+			pages.Sentence(err)))
 	}
 	if class, ok := WriterClass(err); ok {
-		// ANY OTHER REFUSAL A DOMAIN DECIDED, in its own class — see
-		// [writeFailure]'s same arm.
-		return refusedBy(class, err, fmt.Sprintf("%s was refused: %s.", name,
-			pages.Sentence(err)))
+		// ANY OTHER REFUSAL A DOMAIN DECIDED, in its own class and the
+		// deciding domain's words — see [writeFailure]'s same arm.
+		return refusedBy(class, err, domainRefusal(name, err))
 	}
 	if why, ok := Condition(err); ok {
 		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s did not "+

@@ -76,11 +76,17 @@ func TestARefusalReadsAsAPersonsSentence(t *testing.T) {
 	for name, err := range map[string]error{
 		"a wrapped field refusal": fmt.Errorf("open #launch: %w", chat.ChannelPatch{}.Validate()),
 		"a wrapped forbidden":     fmt.Errorf("edit: %w", forbidden),
-		"a conflict":              fmt.Errorf("%w: room kept moving", chat.ErrConflict),
 		"anything else":           errors.New("disk I/O"),
 	} {
 		if got := chat.Sentence(err); got != err.Error() {
 			t.Errorf("%s: Sentence = %q, want the whole message %q", name, got, err)
 		}
+	}
+	// AND ANY OTHER ERROR THIS PACKAGE WROTE loses the "chat:" it opens with
+	// and keeps every word after it: a tool printed it whole, so a model read
+	// "chat:" in front of what it was told.
+	taken := fmt.Errorf("%w: launch", chat.ErrNameTaken)
+	if got, want := chat.Sentence(taken), "that channel name is taken: launch"; got != want {
+		t.Errorf("a taken name: Sentence = %q, want %q", got, want)
 	}
 }

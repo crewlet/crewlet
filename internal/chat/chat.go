@@ -606,5 +606,8 @@ func Sentence(err error) string {
 			return rest
 		}
 	}
-	return err.Error()
+	// ANY OTHER ERROR THIS PACKAGE WROTE loses the "chat:" it opens with and
+	// keeps every word after it; one a caller wrapped in context of its own
+	// is its whole message.
+	return strings.TrimPrefix(err.Error(), "chat: ")
 }
