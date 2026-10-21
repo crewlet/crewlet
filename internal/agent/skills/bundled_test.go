@@ -164,3 +164,55 @@ func TestTheBundledChatPracticeSkillsFireOnChatlet(t *testing.T) {
 		t.Fatal("the getting-unstuck skill is enforced; it ships advisory")
 	}
 }
+
+// THE CHAT PRACTICE SKILLS REACH A SEAT ON SLACK TOO. None of them named a
+// Slack tool, so a seat posting through slack-mcp-server was never offered how
+// a mention reaches somebody there (`<@member-id>`, where a typed `@name`
+// notifies nobody), how to answer in a thread, which channel to choose or how
+// to hand a problem to its manager — the gap Chatlet had until its own
+// tools were added. The names are slack-mcp-server's at the release
+// internal/config's pinnedToolServers reads it at, under the `slack_` prefix
+// docs/integrations/slack.md gives its entry; the pin test there is what
+// sends a release that renames them back through every page that names them.
+func TestTheBundledChatPracticeSkillsFireOnSlack(t *testing.T) {
+	t.Parallel()
+	const (
+		post     = "slack_conversations_add_message"
+		mine     = "slack_channels_me"
+		channels = "slack_channels_list"
+		users    = "slack_users_search"
+	)
+	for _, tc := range []struct {
+		file, key string
+		tools     []string
+	}{
+		// A mention is spelled in the post, so the post waits on it.
+		{"platform-mentions.md", "skill:platform_mentions", []string{post}},
+		{"getting-unstuck.md", "skill:getting_unstuck", []string{post}},
+		{"observed-directives.md", "skill:observed_directives", []string{post}},
+		// Choosing a channel is listing them, finding somebody's DM, or
+		// posting in one.
+		{"channel-discovery.md", "skill:channel_discovery", []string{mine, channels, users, post}},
+	} {
+		s := bundled(t, tc.file)
+		if s.Key != tc.key {
+			t.Fatalf("%s: key = %q, want %q", tc.file, s.Key, tc.key)
+		}
+		catalogue := registry(t, s)
+		for _, tool := range tc.tools {
+			t.Run(tc.key+"/"+tool, func(t *testing.T) {
+				t.Parallel()
+				if len(catalogue.Matching(prompts.PhaseExecute, surface([]string{tool}))) != 1 {
+					t.Fatalf("a seat holding only %s is never offered %s (trigger %+v)",
+						tool, tc.key, s.Trigger)
+				}
+			})
+		}
+	}
+	// READS NEVER WAIT on the mentions skill, on Slack as on Chatlet.
+	mentions := registry(t, bundled(t, "platform-mentions.md"))
+	reads := []string{"slack_conversations_history", "slack_conversations_replies", channels, mine}
+	if got := mentions.Matching(prompts.PhaseExecute, surface(reads)); len(got) != 0 {
+		t.Fatalf("a seat holding only Slack's reads (%v) is gated on the mentions skill", reads)
+	}
+}

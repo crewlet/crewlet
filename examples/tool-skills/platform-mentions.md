@@ -7,6 +7,7 @@ trigger:
     - tool: send_dm
     - tool: mattermost_post_message
     - tool: mattermost_update_message
+    - tool: slack_conversations_add_message
     - tool: comment_on_work_item
     - tool: create_work_item
     - tool: update_work_item
@@ -17,7 +18,7 @@ phases: [execute]
 title: Mentioning teammates
 summary: |
   How a mention reaches somebody on each surface (Chatlet, Worklet,
-  Doclet and Mattermost) + shareable link shapes. Resolve IDs
+  Doclet Mattermost and Slack) + shareable link shapes. Resolve IDs
   via lookup_colleague before writing.
 ---
 
@@ -26,6 +27,7 @@ Call `lookup_colleague` for their identity before writing the body. The surfaces
 - **Work items and pages** (Worklet and Doclet): a literal `@handle`, for example `@agent-cto` or `@founder`. The handle is the `handle:` line `lookup_colleague` returns, the seat's own name in the org chart, not one of the per-platform ids under it: the engine resolves it against the chart when the comment is written and wakes that seat specifically, rather than only the people already watching the item. A handle nobody holds resolves to nobody and wakes nobody, so never guess a spelling.
 - **Chatlet** (the company's own rooms and direct conversations, through `post_message`, `reply_in_thread` and `send_dm`): the same literal `@handle`, from the same `handle:` line, resolved against the chart when the message is written, so it wakes that seat, and a handle nobody holds wakes nobody here too. In a PRIVATE room a mention of somebody who is not a member wakes nobody either, because only its members may read it: reach them with `send_dm` instead. In a direct conversation everybody in it hears every message already, so a mention there adds nobody. `@channel` wakes everybody in the room; write it only when every one of them must stop what they are doing.
 - **Mattermost**: a literal `@username` — e.g. `@agent-cto`, `@founder`. Use the `mattermost` line from `lookup_colleague` verbatim; that field already holds the username, not an opaque ID. No angle brackets, no `<@…>` wrapper: that is Slack markup and posts as visible punctuation here. The server resolves the name and notifies, so a typo'd username silently reaches nobody — and never assume somebody's Mattermost username matches their seat handle.
+- **Slack** (through `slack_conversations_add_message`): the member id in angle brackets — `<@U0123ABCD>` — from the `slack` line `lookup_colleague` returns. Slack shows it as `@name`, but a literal `@name` you type posts as plain text and notifies nobody, and so does a handle. `<!channel>` reaches everybody in the channel and `<!here>` everybody active in it; write them only when every one of them must stop what they are doing.
 
 **Who already hears you.** On a work item, its assignee, its reporter, its collaborators and its watchers are told about every change without being mentioned — a mention is for somebody who is NOT already on it. A page is the opposite: commenting on one does not subscribe you to it and does not wake the people who commented before you, so somebody who must read a page has to be mentioned in it by handle. A chat reply sits between the two: it reaches whoever started the thread, everybody who has spoken in it or been named in it, and anybody following the whole room, so anybody else has to be mentioned.
 
@@ -33,6 +35,7 @@ Call `lookup_colleague` for their identity before writing the body. The surfaces
 
 - **Chatlet**: `reply_in_thread`, with `reply_to` set to the id of the message you are answering — the one you were woken about, or one `read_channel` returned. Threads are one level deep, so answering a reply puts you in the same thread. `post_message` always starts a new top-level message.
 - **Mattermost**: pass `root_id` to `mattermost_post_message` — the post ID of the message you are answering (or of the thread's root, if it already has one).
+- **Slack**: pass `thread_ts` to `slack_conversations_add_message` — the `ts` of the message you are answering (or of the thread's first message, if it already has replies), as `slack_conversations_history` and `slack_conversations_replies` return it.
 
 **Sharing links.** When you share a link to a work item, a page or a chat room, build it on this deployment's own address:
 

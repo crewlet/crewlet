@@ -6,6 +6,7 @@ trigger:
     - tool: reply_in_thread
     - tool: send_dm
     - tool: mattermost_post_message
+    - tool: slack_conversations_add_message
     - tool: comment_on_work_item
     - tool: comment_on_page
     - tool: a2a_ask
@@ -57,6 +58,7 @@ Hand off on the surface where the problem already lives. The audit trail belongs
 | Work item | Comment on the work item | `comment_on_work_item` + @-mention your manager via the `platform_mentions` skill |
 | Chatlet thread (the company's own chat) | Reply in the thread | `reply_in_thread` with `reply_to` set to the message you are answering + `@manager-handle` |
 | Mattermost thread | Reply in the thread | `mattermost_post_message` with `root_id` set to the thread root + `@manager-username` |
+| Slack thread | Reply in the thread | `slack_conversations_add_message` with `thread_ts` set to the thread's first message + `<@manager-member-id>` |
 | Page review | Comment on the page | `comment_on_page` + @-mention them by handle — a page does not subscribe its commenters, so a mention is the only thing that reaches anybody |
 | Merge request | Comment on the MR / request review | Your code-host MCP comment tool + mention |
 | Cross-team coordination | Their team's channel | See `channel-discovery` skill |
