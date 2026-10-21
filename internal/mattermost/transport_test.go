@@ -40,11 +40,15 @@ type instance struct {
 	// batched username read; asked is every list of names it was asked
 	// about, each with the token it arrived on. peopleStatus, when set, is
 	// what that read answers instead, and refusesPeople names the tokens
-	// it refuses.
+	// it refuses. peopleGate, when set, holds every such read, once it is
+	// recorded, until the gate closes: a server slow to answer, which is
+	// how a case chooses the moment an ask the transport makes on its own
+	// goroutine is answered ([instance.holdPeople]).
 	people        map[string]mattermost.User
 	asked         []askedPeople
 	peopleStatus  int
 	refusesPeople map[string]bool
+	peopleGate    chan struct{}
 }
 
 // askedPeople is one batched username read: the names, and the token.
@@ -118,6 +122,14 @@ func newInstance(t *testing.T, identities map[string]mattermost.User) *instance 
 			json.NewDecoder(r.Body).Decode(&names)
 			inst.mu.Lock()
 			inst.asked = append(inst.asked, askedPeople{names: names, token: token})
+			gate := inst.peopleGate
+			inst.mu.Unlock()
+			if gate != nil {
+				<-gate
+			}
+			// WHAT THE SERVER HOLDS WHEN IT ANSWERS, not when it was asked:
+			// a held read answers with what the case set up meanwhile.
+			inst.mu.Lock()
 			status, refused := inst.peopleStatus, inst.refusesPeople[token]
 			var users []mattermost.User
 			for _, name := range names {
