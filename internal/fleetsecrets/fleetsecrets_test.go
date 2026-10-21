@@ -129,6 +129,54 @@ func TestASnapshotRefusesRatherThanSkippingAnUnopenableRow(t *testing.T) {
 	}
 }
 
+// A READ OF SEVERAL NAMES OPENS THOSE AND NO OTHERS.
+//
+// It is how a CLI run resolving one company document through a running node
+// is handed the credentials that document reads, so the answer carries exactly
+// the names asked for that are held — an absent name absent, never empty —
+// and the read fails closed on a named row it cannot open, while a row nobody
+// named that it cannot open does not fail a read that never needed it.
+func TestAReadOfSeveralNamesOpensThoseAndNoOthers(t *testing.T) {
+	t.Parallel()
+	s, fleet := fleetStore(t, ring(t, "k1"))
+	mustSet(t, s, "GITLAB_TOKEN", "glpat")
+	mustSet(t, s, "SLACK_TOKEN", "xoxb")
+	mustSet(t, s, "UNASKED", "not-for-this-reader")
+	stranger := fleetsecrets.New(fleet, ring(t, "k9"))
+	if err := stranger.Set(t.Context(), "FOREIGN", "sealed-elsewhere", sam,
+		secrets.SourceAPI, clock); err != nil {
+		t.Fatal(err)
+	}
+
+	values, err := s.Values(t.Context(), []string{"GITLAB_TOKEN", "SLACK_TOKEN",
+		"NEVER_SET", "GITLAB_TOKEN"})
+	if err != nil {
+		t.Fatalf("a row nobody asked for failed the read: %v", err)
+	}
+	if len(values) != 2 || values["GITLAB_TOKEN"] != "glpat" || values["SLACK_TOKEN"] != "xoxb" {
+		t.Fatalf("values = %v, want exactly the two held names asked for", values)
+	}
+	if _, present := values["NEVER_SET"]; present {
+		t.Error("a name nothing holds came back present, so it would resolve " +
+			"to the empty string instead of falling through")
+	}
+
+	if _, err := s.Values(t.Context(), []string{"GITLAB_TOKEN", "FOREIGN"}); err == nil ||
+		!strings.Contains(err.Error(), "FOREIGN") {
+		t.Errorf("a named row this keyring cannot open answered %v, want a "+
+			"refusal naming it", err)
+	}
+	if _, err := s.Values(t.Context(), []string{"iam/blind-index-key"}); !errors.Is(err,
+		secrets.ErrReservedName) {
+		t.Errorf("a read naming the engine's own key answered %v, want "+
+			"ErrReservedName", err)
+	}
+	if _, err := fleetsecrets.New(fleet, nil).Values(t.Context(),
+		[]string{"GITLAB_TOKEN"}); !errors.Is(err, secrets.ErrNoKeyring) {
+		t.Errorf("a store with no keyring answered %v, want ErrNoKeyring", err)
+	}
+}
+
 // A LISTING NEEDS NO KEYRING AND CARRIES NO ENVELOPE. "Is X set, and when did
 // it change" is asked far more often than "what is X", and answering it must
 // not require the ability to decrypt — nor put ciphertext into a scrollback.

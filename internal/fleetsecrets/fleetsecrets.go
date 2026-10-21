@@ -234,6 +234,58 @@ func (s *Store) All(ctx context.Context) (map[string]string, error) {
 	return out, nil
 }
 
+// Values unseals the operator values held under the names asked for, and no
+// other: a name nothing holds is simply absent from the answer.
+//
+// It is what a reader that needs SEVERAL values at once is given — a CLI run
+// resolving the `${VAR}` references of one company document through a running
+// node — and it exists so that reader is handed exactly the credentials that
+// document reads rather than [Store.All]'s every value, and in one round trip
+// rather than one per name.
+//
+// A RESERVED NAME IS REFUSED before anything is read, as [Store.Get] refuses
+// one: no reference can name an engine row, so a caller asking for one has
+// built its list from something other than a document.
+//
+// It FAILS CLOSED on a row it was asked for and cannot open, for [Store.All]'s
+// reason — an answer missing that name would let it resolve from whatever the
+// environment holds — and opens nothing it was not asked for, so an
+// unreadable row nobody named cannot fail a read that never needed it.
+func (s *Store) Values(ctx context.Context, names []string) (map[string]string, error) {
+	if s == nil || s.cipher == nil {
+		return nil, secrets.ErrNoKeyring
+	}
+	wanted := make(map[string]bool, len(names))
+	for _, name := range names {
+		if err := operatorName(name); err != nil {
+			return nil, err
+		}
+		wanted[name] = true
+	}
+	out := make(map[string]string, len(wanted))
+	if len(wanted) == 0 {
+		return out, nil
+	}
+	// ONE LISTING rather than a read per name, which is [Store.All]'s round
+	// trip: the rows a company document names are a handful of a bucket that
+	// is itself small, and the values are opened only for the names asked.
+	rows, err := s.fleet.SecretValues(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("fleetsecrets: read the secrets: %w", err)
+	}
+	for _, row := range rows {
+		if !wanted[row.Name] {
+			continue
+		}
+		value, err := s.cipher.Decrypt(row.Value, secrets.AADForVar(row.Name))
+		if err != nil {
+			return nil, fmt.Errorf("fleetsecrets: open %s: %w", row.Name, err)
+		}
+		out[row.Name] = value
+	}
+	return out, nil
+}
+
 // List reports what the operator has stored, without opening anything.
 //
 // NO VALUES, ever — this is what an operator reads to answer "is X set", and

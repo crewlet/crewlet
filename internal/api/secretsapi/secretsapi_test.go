@@ -735,6 +735,11 @@ func TestEveryRouteTakesTheGrantItsVerbNames(t *testing.T) {
 		// route's once the flag is read: admin as the listing is, so a
 		// caller holding every app is refused it naming admin too.
 		{"revealing the value", http.MethodGet, "/secrets/A?reveal=true", ""},
+		// AND SEVERAL AT ONCE, which is the same verb mounted on its
+		// own route: a caller holding every app is refused it naming
+		// admin, before the body is read.
+		{"revealing several values", http.MethodPost, "/secrets/reveal",
+			`{"names":["A"]}`},
 		{"a write", http.MethodPut, "/secrets/B", "two"},
 		{"a delete", http.MethodDelete, "/secrets/A", ""},
 		{"a rekey", http.MethodPost, "/secrets/rekey", ""},
@@ -820,6 +825,15 @@ func TestARefusedRevealIsTheSameForANameThatDoesNotExist(t *testing.T) {
 			// with nothing under it.
 			if presentBody != absentBody {
 				t.Errorf("the two refusals differ:\n%s\n%s", presentBody, absentBody)
+			}
+			// AND THE SAME FOR SEVERAL AT ONCE, decided on the route
+			// before the body is read.
+			many, manyBody := call(t, h, http.MethodPost, "/secrets/reveal", `{"names":["A"]}`)
+			none, noneBody := call(t, h, http.MethodPost, "/secrets/reveal", `{"names":["NOWHERE"]}`)
+			if many != http.StatusForbidden || none != http.StatusForbidden ||
+				manyBody != noneBody {
+				t.Errorf("revealing several values answered %d and %d, want the "+
+					"one 403 for both:\n%s\n%s", many, none, manyBody, noneBody)
 			}
 		})
 	}
