@@ -62,6 +62,14 @@ import (
 //     object that cannot take part — a parent in the trash, a blocker at its
 //     dependents' cap, an archived type, a destination that takes nothing.
 //     Nothing anybody does makes the same request land; a different one does.
+//   - A COLLISION is [RefusalExists]: a name, a title, a label, an address or
+//     an id the call gives an object is ANOTHER object's already — a page
+//     title in its container, a room's name, a tag label another tag carries,
+//     a label another version holds, a source address another artifact holds
+//     — as is a create of an object that is already there. The request is
+//     well formed and the object it is about refuses nothing by its state:
+//     another value lands now, the same one once its holder gives it up, and
+//     the sentence names the holder, because using it is often the move.
 //   - THE OBJECT THE CALL IS ABOUT — or the container it writes into, a room,
 //     a project, an artifact — NOT BEING THERE is [RefusalNotFound], and it
 //     being gone for good (purged, erased, taken back) is the same.
@@ -70,7 +78,7 @@ import (
 //     nothing in the trash to restore, a history that cannot be undone, an
 //     upload too old to name — and its own contents at their cap, which is
 //     its state too: a message's distinct emoji, a project's tags, the views a
-//     person pins, the labels an artifact's versions hold. The request was
+//     person pins, every label an artifact keeps in use. The request was
 //     well formed; reading the object again shows the state, and the very
 //     same request lands once whoever the sentence names changes it, and not
 //     before. A write that lost its race is the same class for the same
@@ -87,11 +95,15 @@ import (
 // So a room archived a moment before a post, a project archived before a task
 // is filed into it and an artifact in the trash are one class wherever they
 // are met, and a parent in the trash is another, since the call is about the
-// child. internal/agent/builtin's TestEveryDomainRefusalIsClassed holds every
-// sentinel each native domain declares to the meaning it carries and the
-// class this rule gives that meaning, on the domains' own table and on every
-// domain's tools alike; internal/api/operator answers each class with one
-// status.
+// child; and a label another version holds is a collision while every label
+// in use is the artifact's state, since another label lands on the first and
+// on the second none does. internal/agent/builtin's
+// TestEveryDomainRefusalIsClassed holds every sentinel each native domain
+// declares to the meaning it carries and the class this rule gives that
+// meaning, on the domains' own table and on every domain's tools alike, and
+// holds the meaning to the sentinel's own name where the name says it — a
+// …Taken, …Clash or …Exists is a collision, a …Full the object's contents at
+// their cap; internal/api/operator answers each class with one status.
 //
 // # Why it is a named string with [Refusal.Valid]
 //
@@ -136,7 +148,13 @@ const (
 	// names, after which the same request lands.
 	RefusalConflict Refusal = "conflict"
 
-	// RefusalExists — the object this call would create already exists.
+	// RefusalExists — the object this call would create already exists, or
+	// a name, a title, a label, an address or an id the call gives an object
+	// is another object's already: a COLLISION, which the sentence names the
+	// holder of. Another value lands now, and the same one once its holder
+	// gives it up — never "change an argument that is malformed"
+	// ([RefusalInvalid]) and never "the object refuses this by its state"
+	// ([RefusalConflict]).
 	RefusalExists Refusal = "exists"
 
 	// RefusalAlreadyAnswered — the question this answers has an answer.

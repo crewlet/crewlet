@@ -70,9 +70,9 @@ func (e TagEdit) Empty() bool {
 	return len(e.Add) == 0 && len(e.Rename) == 0 && len(e.Archive) == 0
 }
 
-// TagClash is an add refused because its label is already another tag's label
-// or slug in the project — two groupings a person cannot tell apart, which the
-// work would then split between at random.
+// TagClash is an add — or a rename — refused because its label is already
+// another tag's label or slug in the project: two groupings a person cannot
+// tell apart, which the work would then split between at random.
 //
 // # Why a type
 //
@@ -83,12 +83,14 @@ func (e TagEdit) Empty() bool {
 // nothing a seat could act on. The fields are what an answer names: the tag
 // being declared, the one it clashes with, and the project.
 //
-// A REFUSAL LIKE ANY OTHER as well: it is [ErrInvalid] under [errors.Is], and
-// [Sentence] reads it without the package prefix, so a caller that does not
-// look for the type still classes and words it as every content refusal here.
+// A REFUSAL LIKE ANY OTHER as well: it is [ErrTaken] under [errors.Is] — the
+// collision it is, which another label avoids now and which the same label
+// meets until the other tag gives it up — and [Sentence] reads it without the
+// package prefix, so a caller that does not look for the type still classes and
+// words it as every collision here.
 type TagClash struct {
 	Project string
-	// Slug and Label are the tag the add declared.
+	// Slug and Label are the tag the add declared, or the rename gave.
 	Slug, Label string
 	// Other is the project's own tag whose label or slug it collides with.
 	Other Tag
@@ -96,8 +98,8 @@ type TagClash struct {
 
 func (e *TagClash) Error() string { return "worklet: " + e.sentence() }
 
-// Unwrap classes the clash as the content refusal it is.
-func (e *TagClash) Unwrap() error { return ErrInvalid }
+// Unwrap classes the clash as the collision it is.
+func (e *TagClash) Unwrap() error { return ErrTaken }
 
 func (e *TagClash) sentence() string {
 	return fmt.Sprintf("%s already has a tag %s labelled %q — two tags a "+
@@ -341,9 +343,8 @@ func applyTagEdit(current TagSet, edit TagEdit, actor string, at time.Time) (
 				slug, len(label), MaxTagLabel)
 		}
 		if other, clash := taken[strings.ToLower(label)]; clash && other != at {
-			return TagSet{}, nil, nil, false, invalid("%s already has a "+
-				"tag %s labelled %q", current.Project,
-				next.Tags[other].Slug, next.Tags[other].Label)
+			return TagSet{}, nil, nil, false, &TagClash{Project: current.Project,
+				Slug: slug, Label: label, Other: next.Tags[other]}
 		}
 		if next.Tags[at].Label == label {
 			continue

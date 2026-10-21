@@ -6141,6 +6141,15 @@ is about** and **what would make the same request land**:
   object that cannot take part — a parent in the trash, a blocker at its
   dependents' cap, an archived task type, a destination project that is
   archived. Nothing anybody does makes the same request land; another one does.
+- **A collision** is `exists` (`409`): a name, a title, a label, an address or
+  an id the call gives an object is another object's already — a page title in
+  its container, a room's name, a tag label another tag carries, a label
+  another version of an artifact holds, a source address another of the
+  owner's artifacts holds — and so is a create of an object that is already
+  there. The request is well formed, and the object it is about refuses
+  nothing by its state: another value lands now, the same one once its holder
+  gives it up, and the `detail` names the holder, because using it is often
+  what you meant.
 - **The object the call is about** — or the container it writes into, a room,
   a project, an artifact — **not being there** is `not_found` (`404`), and
   gone for good is the same.
@@ -6149,7 +6158,8 @@ is about** and **what would make the same request land**:
   the trash, an artifact in the trash or being purged, a restore with nothing
   in the trash, and the object's own contents at their cap — a message
   carrying all 32 distinct emoji it may, a project keeping all its tags, a
-  person's pins. Nothing about the request is wrong: read the object again, and
+  person's pins, every label an artifact keeps in use. Nothing about the
+  request is wrong: read the object again, and
   the very same request lands once whoever the `detail` names reopens,
   restores or makes room — not before. A write that lost its race is `conflict`
   for the same reason.

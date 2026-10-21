@@ -103,6 +103,22 @@ var ErrInvalid = errors.New("worklet: invalid")
 // state and who changes it, as [ErrInvalid]'s names what to send instead.
 var ErrState = errors.New("worklet: its state refuses this")
 
+// ErrTaken marks a write the tracker refuses because what it would give an
+// object — a tag's label, a checklist's or a line's id — is ANOTHER object's
+// already: a COLLISION. Nothing about the request is malformed and the object
+// it is about refuses nothing by its state; another object holds the value, so
+// the same request lands once that one gives it up, and a different value lands
+// now. The sentence names the holder, which is the one fact a caller acts on:
+// use it if it means the same thing, or choose a value of its own.
+//
+// ITS OWN MARK beside [ErrInvalid] and [ErrState] for the one rule every
+// domain's refusals are classed by (internal/mcp's Refusal): a collision is the
+// class a page title, a room name, an artifact's label and its source address
+// another object holds are answered in, `exists`, and a tag label another tag
+// carries was the one collision classed `invalid` — as if the label were
+// malformed rather than held.
+var ErrTaken = errors.New("worklet: another object already holds that")
+
 // ErrAlreadyAnswered reports an `answers` naming a question somebody already
 // answered. Its own sentinel because nothing about the comment is wrong and
 // nothing a caller could change makes it land: the answer it meant to give
@@ -135,13 +151,13 @@ var ErrAlreadyAnswered = errors.New("worklet: that question is already answered"
 // caller is told: the wire rebuilds an error TYPE from its exported fields,
 // and an unexported one arrived as its message alone — so [Sentence] on the
 // asking node found no refusal and handed its reader the whole "worklet: …".
-// Only this package builds one ([invalid], [refusedByState], [forbidden],
-// [forbiddenAs]).
+// Only this package builds one ([invalid], [refusedByState], [collision],
+// [forbidden], [forbiddenAs]).
 // [invalidSaying] and [forbiddenSaying] build one with a person's words
 // beside its sentence (ADR-0060).
 type Refusal struct {
 	// Mark is the sentinel that classes the refusal: [ErrInvalid],
-	// [ErrState] or [ErrForbidden].
+	// [ErrState], [ErrTaken] or [ErrForbidden].
 	Mark error
 	// Also is a sentinel of the refusal's own beside its class, or nil —
 	// see [forbiddenAs].
@@ -188,6 +204,12 @@ type sentenced interface {
 // [ErrInvalid].
 func invalid(format string, args ...any) error {
 	return &Refusal{Mark: ErrInvalid, Err: fmt.Errorf(format, args...)}
+}
+
+// collision is [invalid] for a collision, marked [ErrTaken]. The sentence names
+// the object that holds the value.
+func collision(format string, args ...any) error {
+	return &Refusal{Mark: ErrTaken, Err: fmt.Errorf(format, args...)}
 }
 
 // refusedByState is [invalid] for a write the object it is about refuses by

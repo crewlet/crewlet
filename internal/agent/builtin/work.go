@@ -3009,7 +3009,8 @@ func labelFailure(ctx context.Context, actor Actor, write labelWrite, opID, proj
 	var full *worklet.TagsFull
 	switch {
 	case errors.As(err, &clash):
-		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s was refused, "+
+		// A COLLISION ([worklet.ErrTaken]): another tag carries the label.
+		return refusedBy(tools.RefusalExists, err, fmt.Sprintf("%s was refused, "+
 			"and nothing was written: to use "+
 			"the label %s it has to declare it in %s, where the tag %s is "+
 			"already labelled %q — two tags nobody could tell apart. If they "+
@@ -3818,11 +3819,12 @@ func writeFailure(ctx context.Context, actor Actor, name string, err error) tool
 	switch {
 	case errors.As(err, &clash) && name == worklet.WriteProjectTool:
 		// THE DECLARATION ITSELF, so the remedy is this call with another
-		// label, or the tag that already has this one.
-		return out(tools.RefusalInvalid, fmt.Sprintf("%s was refused, and nothing was written: %s already "+
+		// label, or the tag that already has this one: a COLLISION
+		// ([worklet.ErrTaken]), never a malformed label.
+		return out(tools.RefusalExists, fmt.Sprintf("%s was refused, and nothing was written: %s already "+
 			"has a tag %s labelled %q, and %s (%q) would be a second tag nobody "+
 			"could tell apart from it. Use %s if it means the same thing, or "+
-			"declare %s under a label of its own.", name, clash.Project,
+			"give %s a label of its own.", name, clash.Project,
 			clash.Other.Slug, clash.Other.Label, clash.Slug, clash.Label,
 			clash.Other.Slug, clash.Slug))
 	case errors.As(err, &clash):
@@ -3832,7 +3834,7 @@ func writeFailure(ctx context.Context, actor Actor, name string, err error) tool
 		// labels meets in its own project. Named with the two ways past
 		// it, because the generic "NOT made" gave a seat nothing to do but
 		// give up on the move.
-		return out(tools.RefusalInvalid, fmt.Sprintf("%s was refused, and nothing was written: it has to "+
+		return out(tools.RefusalExists, fmt.Sprintf("%s was refused, and nothing was written: it has to "+
 			"declare the tag %s (%q) in %s, where the tag %s is already labelled "+
 			"%q — two tags nobody could tell apart. If they mean the same thing, "+
 			"put the items under %s instead ("+UpdateWorkItemTool+"'s `labels`); if "+

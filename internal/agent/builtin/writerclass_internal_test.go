@@ -204,6 +204,8 @@ var domainErrors = map[string]map[string]classRow{
 		"ErrRestoresOthers": {err: &worklet.Refusal{Mark: worklet.ErrForbidden,
 			Also: worklet.ErrRestoresOthers, Err: errors.New("x")}, means: notPermitted},
 		"ErrStaleVersion": {err: worklet.ErrStaleVersion, means: staleRead},
+		"ErrTaken": {err: &worklet.Refusal{Mark: worklet.ErrTaken, Err: errors.New("x")},
+			means: taken},
 		// THE ITEM OR PROJECT THE WRITE IS ABOUT, refusing by what it is:
 		// archived, frozen in the trash, its tags or pins at their cap.
 		"ErrState": {err: &worklet.Refusal{Mark: worklet.ErrState, Err: errors.New("x")},
@@ -227,7 +229,10 @@ var domainErrors = map[string]map[string]classRow{
 			means: malformed},
 		"SubtreeStopped": {err: &worklet.SubtreeStopped{Err: errors.New("x")},
 			why: "a gesture that stopped part of the way, answered with what it did"},
-		"TagClash":     {err: &worklet.TagClash{}, means: malformed},
+		// A LABEL ANOTHER TAG CARRIES, on an add or a rename, and an id the
+		// task already holds: collisions, as a page title another page
+		// holds is.
+		"TagClash":     {err: &worklet.TagClash{}, means: taken},
 		"TagsFull":     {err: &worklet.TagsFull{}, means: objectState},
 		"TextCapError": {err: &worklet.TextCapError{}, means: malformed},
 	},
@@ -295,11 +300,18 @@ var domainErrors = map[string]map[string]classRow{
 // archived before a post, a project archived before a task is filed into it
 // and an artifact in the trash cannot be three classes, which they were.
 //
+// AND A ROW IS HELD TO ITS ERROR'S NAME where the name says what it is
+// ([namedFor]): a collision is a …Taken, a …Clash or an …Exists and nothing
+// else is, so a collision cannot be stated as a malformed request, which
+// worklet.TagClash was, nor a full set be one sentinel with a collision, which
+// artifactsdomain.ErrLabelTaken was.
+//
 // Mutation: drop any arm from trackerClass, pageClass or chatClass and its
 // rows go red; class chatlet.ErrArchived `invalid` again, in chatClass or in a
 // row, and it goes red; class worklet.TagsFull `invalid` in writeFailure alone
-// and the tools' half goes red; add an exported sentinel to any domain and the
-// gate names it.
+// and the tools' half goes red; state TagClash `malformed` in its row, or class
+// it `invalid` in writeFailure, and it goes red; add an exported sentinel to
+// any domain and the gate names it.
 func TestEveryDomainRefusalIsClassed(t *testing.T) {
 	t.Parallel()
 	root := sourcetree.Root(t)
@@ -334,6 +346,9 @@ func TestEveryDomainRefusalIsClassed(t *testing.T) {
 				t.Errorf("%s.%s has a row and the domain declares no such error", domain, name)
 				continue
 			}
+			if why := namedFor(name, row.means); why != "" {
+				t.Errorf("%s.%s: %s", domain, name, why)
+			}
 			class, ok := WriterClass(row.err)
 			want := row.means.class()
 			switch {
@@ -354,9 +369,11 @@ func TestEveryDomainRefusalIsClassed(t *testing.T) {
 			// state its class again where they do: the same error is one
 			// class whichever surface it reaches, so a seat, an assistant
 			// and a person's write surface are told the same thing.
-			if got := tools.RefusalOf(toolFailures[domain](row.err)); got != want {
-				t.Errorf("%s.%s is classed %q by the domain's tools, and what it "+
-					"means is %q", domain, name, string(got), string(want))
+			for tool, failure := range toolFailures[domain] {
+				if got := tools.RefusalOf(failure(row.err)); got != want {
+					t.Errorf("%s.%s is classed %q by %s, and what it means is %q",
+						domain, name, string(got), tool, string(want))
+				}
 			}
 		}
 	}
@@ -369,6 +386,38 @@ func TestEveryDomainRefusalIsClassed(t *testing.T) {
 			t.Errorf("WriterClass(%v) = %q, %v; want %q", err, class, ok, want)
 		}
 	}
+}
+
+// namedFor is why an error's NAME and the meaning its row states disagree, or
+// "" where they agree.
+//
+// THE NAME IS THE ONE STATEMENT OF MEANING A READER OF THE DOMAIN SEES, so where
+// it says what the error is the row is held to it, in both directions for a
+// collision: a …Taken, …Clash or …Exists is a value another object holds, and a
+// collision is named so. A row stating a meaning was otherwise free to state
+// the wrong one and agree with its domain — a tag label another tag carries
+// was `malformed`, and a label another version holds `objectState` because
+// one sentinel also covered every label in use. A …Full is the object's own
+// contents at their cap, its state, unless the vocabulary names a class for
+// that limit (an inbox's marks).
+func namedFor(name string, means meaning) string {
+	collision := false
+	for _, suffix := range []string{"Taken", "Clash", "Exists"} {
+		collision = collision || strings.HasSuffix(name, suffix)
+	}
+	switch {
+	case collision && means != taken:
+		return "named for a collision, and its row says it is something else: a " +
+			"value another object holds is `taken`, whatever the domain classes it"
+	case !collision && means == taken:
+		return "its row says it is a collision, and its name does not: name it " +
+			"…Taken, …Clash or …Exists, so the domain says what it is where it is " +
+			"declared"
+	case strings.HasSuffix(name, "Full") && means != objectState && means != inboxCeiling:
+		return "named for contents at their cap, and its row says it is something " +
+			"else: the object's own contents at their cap are its state"
+	}
+	return ""
 }
 
 // exportedErrors is every exported Err* package variable and every exported
@@ -423,23 +472,30 @@ func exportedErrors(t *testing.T, dir string) []string {
 
 // toolFailures is the failure each native domain's tools answer a writer's
 // refusal with — the function its write tools fall back to — keyed by the
-// domain's state-log name.
-var toolFailures = map[string]func(error) tools.Result{
-	worklet.Domain{}.Name(): func(err error) tools.Result {
-		return writeFailure(context.Background(), Actor{}, worklet.UpdateWorkItemTool, err)
+// domain's state-log name, then by the tool it is answered for, where an arm
+// depends on which tool asked (write_project's own words for a tag it
+// declares).
+var toolFailures = map[string]map[string]func(error) tools.Result{
+	worklet.Domain{}.Name(): {
+		worklet.UpdateWorkItemTool: func(err error) tools.Result {
+			return writeFailure(context.Background(), Actor{}, worklet.UpdateWorkItemTool, err)
+		},
+		worklet.WriteProjectTool: func(err error) tools.Result {
+			return writeFailure(context.Background(), Actor{}, worklet.WriteProjectTool, err)
+		},
 	},
-	doclet.Domain{}.Name(): func(err error) tools.Result {
+	doclet.Domain{}.Name(): {"save_page": func(err error) tools.Result {
 		return pageWriteFailure(context.Background(), "save_page", err, "")
-	},
-	chatlet.Domain{}.Name(): func(err error) tools.Result {
+	}},
+	chatlet.Domain{}.Name(): {PostMessageTool: func(err error) tools.Result {
 		return chatWriteFailure(context.Background(), PostMessageTool, err, "")
-	},
-	artifactsdomain.Domain{}.Name(): func(err error) tools.Result {
+	}},
+	artifactsdomain.Domain{}.Name(): {"publish_artifact": func(err error) tools.Result {
 		return publishFailure(context.Background(), "publish_artifact", artifactCaller{}, err)
-	},
-	artifactdata.Domain{}.Name(): func(err error) tools.Result {
+	}},
+	artifactdata.Domain{}.Name(): {"write_artifact_data": func(err error) tools.Result {
 		return dataFailure(context.Background(), "write_artifact_data", err)
-	},
+	}},
 }
 
 // domainPackages is each native domain's package, relative to internal/, read
