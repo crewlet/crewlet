@@ -74,7 +74,10 @@ carries all the emoji it can), and a person is answered that class in its
 code's own words until the refusal catalog words it for them
 ([ADR-0060](../../adr/0060-a-caveat-or-a-refusal-is-worded-for-each-reader-and-a-person-is-never-shown-a-models.md)). Every node reaches the same decision and records it, so a retry
 of a refused message is refused again rather than reported as said, and a
-refused message wakes nobody. A gesture answered `pending` — durable, and not
+refused message wakes nobody. Each decision is kept for thirty days, the
+operation ledger's own horizon, and every node records how far back it has let
+them go: asked about a message whose decision is past that, a node answers that
+it cannot tell — never that the message was not said. A gesture answered `pending` — durable, and not
 yet applied on the node that answered — may still be refused this way when it
 applies. This is recorded as
 [ADR-0046](../../adr/0046-a-message-is-sequenced-on-its-channels-subject.md).

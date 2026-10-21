@@ -134,26 +134,41 @@ func (v Verdict) refusal(op OpKind, opID, channelID string) error {
 }
 
 // verdictDropped is what [verdictIn] answers for a record every node's gate
-// dropped: this node applied everything through its position and the record
-// wrote nothing, which only a gate decides, and on every node alike. Never
-// written; a reading only.
+// dropped: this node applied everything through its position, the record wrote
+// nothing, and no prune has reached its position — which leaves only a gate,
+// deciding on every node alike. Never written; a reading only.
 const verdictDropped Verdict = "dropped"
+
+// verdictLost is what [verdictIn] answers for a record this node applied whose
+// verdict, if it had one, the horizon may have let go ([VerdictRetention]): its
+// position is at or below the highest the prune has removed
+// (`chat_verdicts_lost`). Neither "decided" nor "dropped" — nothing here can
+// say which — so a caller answers it as the framework answers an operation its
+// ledger may have lost ([statelog.Result.Unvouched]): unknown. Never written; a
+// reading only.
+const verdictLost Verdict = "lost"
 
 // verdictIn reads, inside tx, what this node's applier decided about operation
 // opID, whose record is at: the verdict its FIRST copy was given, which is the
 // operation's.
 //
-// THREE ANSWERS, and the third is why it reads the prefix. A verdict row is a
-// decision. No row on a snapshot whose rows have APPLIED everything through at
-// ([statelog.Prefix.Applied]) is a record a gate dropped — written by a node
-// the fleet evicted before it — which wrote nothing here or anywhere
-// ([verdictDropped]). No row on a snapshot that has not — the record not
+// FOUR ANSWERS, and the last two are why it reads the prefix and the prune's
+// watermark. A verdict row is a decision. No row on a snapshot that has not
+// applied everything through at ([statelog.Prefix.Applied]) — the record not
 // reached yet, or RETAINED, which moves the checkpoint without writing a row —
 // is no answer: decided false, and the caller asks another node or asks again.
-// A record whose verdict [VerdictRetention] has let go reads as dropped too,
-// which only a reader a month behind the record can meet: the writer reads its
-// own the moment its applier reaches it, and a retry is answered inside the
-// mint horizon.
+// No row on a snapshot that HAS is one of two absences that leave the same
+// bytes: a record a gate dropped — written by a node the fleet evicted before
+// it, which wrote nothing here or anywhere ([verdictDropped]) — or a verdict
+// [VerdictRetention] let go. The prune records the highest position it removed
+// (writeVerdict, apply_verdict.go), so a record above it was never pruned and
+// its absence is a gate's; one at or below it may have been, and its absence
+// vouches for nothing ([verdictLost]). That is the framework's own reading of
+// a ledger row a sweep may have taken ([statelog.Rows.LostBefore]), and for the
+// same reason: answered `dropped`, a month-old post that may be in its room
+// would have been told to the change feed as one nobody said. Only a reader a
+// month behind the record meets it — the writer reads its own the moment its
+// applier reaches it, and a retry is answered inside the mint horizon.
 func verdictIn(ctx context.Context, tx *sql.Tx, opID string, at statelog.Position) (
 	Verdict, bool, error) {
 
@@ -170,10 +185,21 @@ func verdictIn(ctx context.Context, tx *sql.Tx, opID string, at statelog.Positio
 		return "", false, fmt.Errorf("chatlet: read how far this node applied the log, for "+
 			"operation %s: %w", opID, err)
 	}
-	if prefix.Applied().Packed() >= at.Packed() {
-		return verdictDropped, true, nil
+	if prefix.Applied().Packed() < at.Packed() {
+		return "", false, nil
 	}
-	return "", false, nil
+	var through int64
+	err = tx.QueryRowContext(ctx, verdictLostReadStatement).Scan(&through)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return verdictDropped, true, nil
+	case err != nil:
+		return "", false, fmt.Errorf("chatlet: read how far the horizon pruned the "+
+			"verdicts, for operation %s: %w", opID, err)
+	case at.Packed() <= through:
+		return verdictLost, true, nil
+	}
+	return verdictDropped, true, nil
 }
 
 // Decisions is what the change feed reads before it derives a wake: what this
@@ -195,8 +221,9 @@ func verdictIn(ctx context.Context, tx *sql.Tx, opID string, at statelog.Positio
 type Decisions interface {
 	// Decided is the verdict of operation opID, whose record is at, and
 	// whether this node has one to give. ok false is no answer — not
-	// reached inside the wait, or held retained — and the caller derives
-	// the wake from the record.
+	// reached inside the wait, held retained, or decided so long ago that
+	// the horizon may have let the verdict go — and the caller derives the
+	// wake from the record.
 	Decided(ctx context.Context, opID string, at statelog.Position) (v Verdict, ok bool, err error)
 }
 
@@ -277,8 +304,14 @@ func (d NodeDecisions) Decided(ctx context.Context, opID string, at statelog.Pos
 		v, ok, err = verdictIn(ctx, tx, opID, at)
 		return err
 	})
-	if err != nil {
+	switch {
+	case err != nil:
 		return "", false, err
+	case v == verdictLost:
+		// NO ANSWER, as the writer's is `unknown`: the record was
+		// decided once and what it was is no longer kept, so the wake
+		// is derived from the record like any record not yet decided.
+		return "", false, nil
 	}
 	return v, ok, nil
 }

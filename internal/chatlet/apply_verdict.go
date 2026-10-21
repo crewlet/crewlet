@@ -48,6 +48,18 @@ const verdictPruneBatch = 64
 // ON CONFLICT DO NOTHING: the position is the row id, and the only record that
 // can write one is the record at it, whose verdict is a pure function of the
 // record and the rows — so a conflict is the same row, never another.
+//
+// # The prune says how far it reached
+//
+// A PRUNED VERDICT AND A DROPPED RECORD LEAVE THE SAME ABSENCE, and a reader
+// told one when it was the other answers a month-old post as one every node's
+// gate dropped. So the prune records the highest position it removed
+// (`chat_verdicts_lost`, replicated migration 0070) in the statement list that
+// removes it — read first, over the very rows the delete then takes, inside
+// one transaction — and [verdictIn] answers an absent verdict at or below it
+// as one nothing here can vouch for. The framework's ledger keeps its own
+// watermark the same way and for the same reason ([statelog.Rows.LostBefore]).
+// It moves only forward: the largest of what the row held and this prune.
 func writeVerdict(ctx context.Context, tx *sql.Tx, at applyContext, channelID string,
 	v Verdict) (int, error) {
 
@@ -62,13 +74,32 @@ func writeVerdict(ctx context.Context, tx *sql.Tx, at applyContext, channelID st
 		return int(written), nil
 	}
 	cutoff := store.EncodeTime(at.brokerAt.Add(-VerdictRetention))
+	var through sql.NullInt64
+	err = tx.QueryRowContext(ctx, verdictPruneReachStatement, cutoff,
+		verdictPruneBatch).Scan(&through)
+	if err != nil {
+		return 0, fmt.Errorf("chatlet: read how far the prune past the horizon at %s "+
+			"reaches: %w", at.position, err)
+	}
+	if !through.Valid {
+		// NOTHING IS PAST THE HORIZON: no verdict goes, and the
+		// watermark stays where the last prune left it.
+		return int(written), nil
+	}
 	res, err = tx.ExecContext(ctx, verdictPruneStatement, cutoff, verdictPruneBatch)
 	if err != nil {
 		return 0, fmt.Errorf("chatlet: prune the verdicts past the horizon at %s: %w",
 			at.position, err)
 	}
 	pruned, _ := res.RowsAffected()
-	return int(written + pruned), nil
+	res, err = tx.ExecContext(ctx, verdictLostStatement, through.Int64)
+	if err != nil {
+		return 0, fmt.Errorf("chatlet: record that the verdicts through %s were "+
+			"pruned at %s: %w", statelog.Unpack(at.position.Stream, through.Int64),
+			at.position, err)
+	}
+	marked, _ := res.RowsAffected()
+	return int(written + pruned + marked), nil
 }
 
 // decidedBefore reports whether an operation already has a verdict at a
@@ -89,8 +120,9 @@ func decidedBefore(ctx context.Context, tx *sql.Tx, at applyContext) (bool, erro
 	return true, nil
 }
 
-// The three statements over the verdicts, named so the plan gate holds each to
-// the index it was written for (verdictplan_internal_test.go).
+// The statements over the verdicts and the prune's watermark, named so the
+// plan gate holds each to the index it was written for
+// (verdictplan_internal_test.go).
 const (
 	verdictInsertStatement = `
 		INSERT INTO chat_verdicts (position, op_id, channel_id, verdict, at)
@@ -108,4 +140,18 @@ const (
 		DELETE FROM chat_verdicts WHERE position IN (
 			SELECT position FROM chat_verdicts WHERE at < ?
 			ORDER BY at, position LIMIT ?)`
+
+	// The highest position [verdictPruneStatement] is about to remove: the
+	// same rows, in the same order, under the same bound.
+	verdictPruneReachStatement = `
+		SELECT MAX(position) FROM (
+			SELECT position FROM chat_verdicts WHERE at < ?
+			ORDER BY at, position LIMIT ?)`
+
+	verdictLostStatement = `
+		INSERT INTO chat_verdicts_lost (id, through) VALUES (1, ?)
+		ON CONFLICT (id) DO UPDATE SET through = MAX(through, excluded.through)`
+
+	verdictLostReadStatement = `
+		SELECT through FROM chat_verdicts_lost WHERE id = 1`
 )

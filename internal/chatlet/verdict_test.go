@@ -3,6 +3,7 @@ package chatlet_test
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
@@ -394,4 +395,122 @@ func (r *writeRound) feedRecord(seq uint64) changefeed.Record {
 	return changefeed.Record{ID: env.OpID, Position: seq,
 		Stream: chatlet.Domain{}.Stream().Name, Gen: uint64(env.Gen),
 		Key: env.Subject.String(), Payload: body}
+}
+
+// A VERDICT THE HORIZON LET GO IS UNKNOWN, NEVER DROPPED.
+//
+// A message record that wrote no verdict on a node whose rows have applied it
+// was dropped by every node's gate — or decided a month ago, its verdict pruned
+// by the record that took it past [chatlet.VerdictRetention]. The two leave the
+// same absence, so the prune records how far back it reached, and an absence
+// at or below that position vouches for nothing: the writer answers `unknown`
+// and unvouched, as the framework answers an operation its ledger may have
+// lost, and the change feed derives the wake from the record, as it does for
+// any record this node has not decided. An absence ABOVE it is still the
+// gate's, and a dropped post still wakes nobody.
+//
+// Mutation: drop the watermark from writeVerdict, or stop reading it in
+// verdictIn, and the retry is told its own eviction dropped it while the feed
+// withholds the month-old post; write the watermark one position off and the
+// prune is caught naming a position it did not remove.
+func TestAVerdictTheHorizonLetGoIsUnknownNeverDropped(t *testing.T) {
+	t.Parallel()
+	r := newWriteRound(t, agents().withPeople("jane"))
+	room := r.room(person("jane"), "launch", "grace")
+	post := func(key, body string, mentions ...string) (chatlet.Written, error) {
+		return r.store.Post(t.Context(), keyed(person("jane"), requested(key)),
+			room.Channel.ID, chatlet.NewMessage{Body: body, Mentions: mentions})
+	}
+	said, err := post("k-1", "@grace can you look?", "grace")
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	r.drain()
+	saidAt := r.consumed
+
+	// A POST A GATE DROPS: the same words, from a node the fleet evicted
+	// before they reached the log, which apply nowhere and write no verdict.
+	operator := chatlet.Actor{Handle: "founder", Kind: chatlet.AuthorOperator,
+		OperatorID: "founder"}
+	if _, err := r.gate.EvictNode(t.Context(), operator, "op-evict", "node-b"); err != nil {
+		t.Fatalf("EvictNode: %v", err)
+	}
+	r.drain()
+	_, payload, _, ok, err := r.log.At(t.Context(), saidAt)
+	if err != nil || !ok {
+		t.Fatalf("read the post's record: %v (present: %v)", err, ok)
+	}
+	body, opened := r.verifier.Open(payload)
+	if opened != statelog.Verified {
+		t.Fatalf("the post's record did not verify: %s", opened)
+	}
+	dropped, err := chatlet.Decode(body)
+	if err != nil {
+		t.Fatalf("decode the post's record: %v", err)
+	}
+	var words chatlet.MessagePost
+	if err := json.Unmarshal(dropped.Mutation, &words); err != nil {
+		t.Fatalf("decode the post: %v", err)
+	}
+	words.MessageID = "message-from-node-b"
+	dropped.OpID, dropped.Writer = "5e2c1b90-0000-7000-8000-00000000c001", "node-b"
+	dropped.Mutation = mustJSON(t, words)
+	r.peerRecord(dropped)
+	droppedAt := r.consumed
+	if n := r.count(`SELECT COUNT(*) FROM chat_messages WHERE id = ?`,
+		words.MessageID); n != 0 {
+		t.Fatal("the evicted node's post applied, so nothing below is under test")
+	}
+
+	// A MONTH ON BY THE BROKER'S CLOCK, the next record's apply prunes the
+	// first post's verdict — and says how far it reached.
+	r.brokerShift = chatlet.VerdictRetention + time.Hour
+	if _, err := post("k-2", "back after a month"); err != nil {
+		t.Fatalf("post a month on: %v", err)
+	}
+	r.drain()
+	if n := r.count(`SELECT COUNT(*) FROM chat_verdicts WHERE op_id = ?`,
+		said.ChangeID); n != 0 {
+		t.Fatalf("the month-old post still holds %d verdicts, so nothing below "+
+			"is under test", n)
+	}
+	saidPacked := statelog.Position{Stream: chatlet.Domain{}.Stream().Name,
+		Generation: said.Outcome.Position.Generation, Seq: saidAt}.Packed()
+	if through := r.count(`SELECT through FROM chat_verdicts_lost WHERE id = 1`); int64(through) != saidPacked {
+		t.Errorf("the prune says it reached %d, want %d — the position of the "+
+			"one verdict it removed", through, saidPacked)
+	}
+
+	retried, err := post("k-1", "@grace can you look?", "grace")
+	switch {
+	case err != nil:
+		t.Fatalf("the retry of the month-old post was answered %v — a decision "+
+			"the horizon let go is no eviction of anybody", err)
+	case retried.Outcome.Outcome != statelog.OutcomeUnknown || !retried.Outcome.Unvouched:
+		t.Fatalf("the retry of the month-old post answered %+v, want `unknown` and "+
+			"unvouched: whether it landed is no longer kept anywhere", retried.Outcome)
+	case retried.Message.ID != "" || retried.Verdict != "" || !retried.Outcome.Position.IsZero():
+		t.Errorf("an unknown answer names message %q, verdict %q and position %s",
+			retried.Message.ID, retried.Verdict, retried.Outcome.Position)
+	}
+
+	decided := chatlet.NewTranslator(chatlet.NodeDecisions{Estate: r.db.Reader(),
+		Applied: r.waiter})
+	if _, wake, err := decided.Translate(t.Context(), r.feedRecord(saidAt)); err != nil ||
+		!wake {
+		t.Errorf("the month-old post woke nobody (%v) — a decision the horizon let "+
+			"go is no decision, and the wake is the record's", err)
+	}
+	if _, wake, err := decided.Translate(t.Context(), r.feedRecord(droppedAt)); err != nil ||
+		wake {
+		t.Errorf("the post a gate dropped woke somebody (%v): above the prune's "+
+			"reach, an absent verdict is still the gate's", err)
+	}
+	// THE CONTROL: the dropped post is one that WOULD wake grace, so the
+	// silence above is the verdict's.
+	if _, wake, err := chatlet.NewTranslator(chatlet.NodeDecisions{}).Translate(t.Context(),
+		r.feedRecord(droppedAt)); err != nil || !wake {
+		t.Fatalf("the dropped post would wake nobody undecided either (%v), so "+
+			"nothing above is under test", err)
+	}
 }

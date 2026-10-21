@@ -9,12 +9,14 @@ import (
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
-// THE VERDICTS ARE READ AND PRUNED BY SEEK, and every message record runs two
-// of the four statements inside the transaction that holds the estate's one
-// writer: whether an earlier copy decided its operation, and the prune past the
-// horizon. A scan of either is a cost every post pays, growing with the month
-// of verdicts the table holds; the writer's read-back and the feed's run on the
-// request path and the wake path.
+// THE VERDICTS ARE READ AND PRUNED BY SEEK, and every message record runs
+// three of these statements inside the transaction that holds the estate's one
+// writer: whether an earlier copy decided its operation, how far the prune past
+// the horizon reaches, and the prune itself. A scan of any of them is a cost
+// every post pays, growing with the month of verdicts the table holds; the
+// writer's read-back, the feed's and the watermark read beside them run on the
+// request path and the wake path. The two inserts are absent: a write by its
+// key has no plan to hold.
 //
 // NEVER ANALYZEd, because no node is: a plan taken over statistics is a plan
 // no deployment runs.
@@ -44,6 +46,17 @@ func TestTheVerdictsAreReadAndPrunedBySeek(t *testing.T) {
 			"LIST SUBQUERY 1",
 			"SEARCH chat_verdicts USING COVERING INDEX chat_verdicts_at_idx (at<?)",
 			"SEARCH chat_verdicts USING INTEGER PRIMARY KEY (rowid=?)",
+		}},
+		// THE SAME ROWS THE PRUNE TAKES, read first for the highest of
+		// their positions: at most a batch of them, off the same index.
+		{"how far the prune reaches", verdictPruneReachStatement, []string{
+			"SCAN (subquery-0)",
+			"SEARCH chat_verdicts USING COVERING INDEX chat_verdicts_at_idx (at<?)",
+		}},
+		// The watermark is one row, read on its key by every absent
+		// verdict a reader meets on a node that applied the record.
+		{"how far the prune has reached", verdictLostReadStatement, []string{
+			"SEARCH chat_verdicts_lost USING INTEGER PRIMARY KEY (rowid=?)",
 		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
