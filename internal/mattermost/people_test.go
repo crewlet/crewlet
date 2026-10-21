@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -79,6 +80,25 @@ func (i *instance) peopleAnswer(status int) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	i.peopleStatus = status
+}
+
+// holdPeople makes every username read wait, once the server has recorded
+// it, until the returned release is called, and releases them when the case
+// ends whatever it did.
+func (i *instance) holdPeople(t *testing.T) (release func()) {
+	t.Helper()
+	gate := make(chan struct{})
+	i.mu.Lock()
+	i.peopleGate = gate
+	i.mu.Unlock()
+	release = sync.OnceFunc(func() {
+		i.mu.Lock()
+		i.peopleGate = nil
+		i.mu.Unlock()
+		close(gate)
+	})
+	t.Cleanup(release)
+	return release
 }
 
 func (i *instance) peopleAsked() []askedPeople {
@@ -327,8 +347,14 @@ func TestAnApplyRegistersThePeopleBeforeItAsksAgain(t *testing.T) {
 		opts.PeopleRefresh = time.Hour
 	})
 
-	// THE SERVER STOPS ANSWERING, and the apply arrives.
-	inst.peopleAnswer(http.StatusInternalServerError)
+	// THE SERVER IS SLOW TO ANSWER, and the apply arrives. HELD, never
+	// failed: the apply's ask runs on the refresh loop's goroutine, and one
+	// failed is asked again only at the next refresh, an hour away — a
+	// server made to fail for as long as the apply took raced that ask, and
+	// an ask landing before the failure was lifted left the new name
+	// unasked for the hour.
+	release := inst.holdPeople(t)
+	inst.holds("ola.new", mattermost.User{ID: "u-ola", Username: "ola.new"})
 	next := peopleOrg(t, "jane", "ola.new")
 	reg := peopleRegistry(next)
 	asked := len(inst.peopleAsked())
@@ -336,11 +362,13 @@ func TestAnApplyRegistersThePeopleBeforeItAsksAgain(t *testing.T) {
 	if p, ok := reg.ByExternalID(mattermost.Backend, "u-jane"); !ok || p.Handle != "founder" {
 		t.Fatalf("the new registry did not get the founder from what was known: %+v", p)
 	}
+	if p, ok := reg.ByExternalID(mattermost.Backend, "u-ola"); ok {
+		t.Fatalf("the new name was registered before the server answered for it: %+v", p)
+	}
 
 	// And the apply's new name is asked about now, not in an hour.
-	inst.peopleAnswer(0)
-	inst.holds("ola.new", mattermost.User{ID: "u-ola", Username: "ola.new"})
 	eventually(t, "the apply asked", func() bool { return len(inst.peopleAsked()) > asked })
+	release()
 	eventually(t, "the new name registered", func() bool {
 		p, ok := reg.ByExternalID(mattermost.Backend, "u-ola")
 		return ok && p.Handle == "advisor"
