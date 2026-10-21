@@ -257,7 +257,7 @@ func (d *DB) Backup(ctx context.Context, dest string) (BackupInfo, error) {
 	// THE DIGEST BEFORE THE RENAME, over the file the rename will place —
 	// after the sidecars are gone and the mode is set, so what is hashed is
 	// byte-for-byte what an operator will ship.
-	digest, err := fileDigest(part)
+	digest, err := FileDigest(ctx, part)
 	if err != nil {
 		_ = removeDatabaseFiles(part)
 		return BackupInfo{}, err
@@ -460,9 +460,6 @@ func sameFile(a, b string) bool {
 	return os.SameFile(ai, bi)
 }
 
-// fileDigest is the sha256 of a file, hex-encoded.
-func fileDigest(path string) (string, error) { return FileDigest(path) }
-
 // FileDigest is the SHA-256 of a file, streamed rather than read whole.
 //
 // EXPORTED because a snapshot's manifest carries one and a joiner compares it
@@ -471,7 +468,14 @@ func fileDigest(path string) (string, error) { return FileDigest(path) }
 // second implementation is how one comes to hash the file and the other its
 // path, which is why statelog's TestAnArtefactArrivesByteForByte holds the
 // transfer's digest to this one.
-func FileDigest(path string) (string, error) {
+//
+// IT ENDS WHEN ITS CALLER GIVES UP, between one read and the next. The files
+// it hashes are a whole estate — a backup's copy, a donor's snapshot — and a
+// read of tens of gigabytes takes as long as the disk takes: with no context,
+// a snapshot loop asked to stop by a node's drain went on reading until the
+// end of the file, and the stop waited for it, and a backup whose request had
+// gone away finished a checksum nobody would read.
+func FileDigest(ctx context.Context, path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", fmt.Errorf("store: backup: read %s to checksum it: %w", path, err)
@@ -479,8 +483,23 @@ func FileDigest(path string) (string, error) {
 	defer func() { _ = f.Close() }()
 
 	sum := sha256.New()
-	if _, err := io.Copy(sum, f); err != nil {
+	if _, err := io.Copy(sum, readUntilDone{ctx: ctx, r: f}); err != nil {
 		return "", fmt.Errorf("store: backup: checksum %s: %w", path, err)
 	}
 	return hex.EncodeToString(sum.Sum(nil)), nil
+}
+
+// readUntilDone is r, refusing every read once ctx has ended. A wrapper rather
+// than the file itself also keeps [io.Copy] on its own buffered loop — an
+// [os.File] copies through its own WriteTo, which a context cannot reach.
+type readUntilDone struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (u readUntilDone) Read(p []byte) (int, error) {
+	if err := u.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return u.r.Read(p)
 }

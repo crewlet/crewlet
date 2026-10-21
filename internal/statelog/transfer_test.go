@@ -62,7 +62,7 @@ func newTransferHarnessWith(t *testing.T, bytes, maxTransfers int) *transferHarn
 	if err := os.WriteFile(artefact, body, 0o600); err != nil {
 		t.Fatalf("write an artefact: %v", err)
 	}
-	digest, err := store.FileDigest(artefact)
+	digest, err := store.FileDigest(t.Context(), artefact)
 	if err != nil {
 		t.Fatalf("digest the artefact: %v", err)
 	}
@@ -642,7 +642,7 @@ func TestAnArtefactArrivesByteForByte(t *testing.T) {
 	if fetched.Bytes != h.manifest.Bytes {
 		t.Fatalf("received %d bytes, want %d", fetched.Bytes, h.manifest.Bytes)
 	}
-	got, err := store.FileDigest(dest)
+	got, err := store.FileDigest(t.Context(), dest)
 	if err != nil {
 		t.Fatalf("digest what arrived: %v", err)
 	}
