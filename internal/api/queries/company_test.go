@@ -715,6 +715,31 @@ func TestAgentMemoryIsAskedOfTheHolderWithTheSeatWhole(t *testing.T) {
 	}
 }
 
+// THE SKILLS' ORDER IS ASKED OF THE HOLDER, which cuts the page: a screen that
+// sorted the page it was handed answered the most used of the newest. An order
+// the store does not read is refused as bad params, naming the ones it does,
+// rather than answered newest under another name.
+//
+// Mutation: drop the order from the query this handler sends, and the holder
+// is asked for the newest.
+func TestAgentMemoryAsksTheHolderForTheSkillsInTheirOrder(t *testing.T) {
+	t.Parallel()
+	cfg := company(t)
+	memory := &stubMemory{}
+	answer(t, queries.Sources{Company: companySource(t, cfg), Memory: memory},
+		"agent_memory", map[string]any{"id": "cto", "skills_order": "uses"})
+	if memory.skills != learning.SkillsMostUsed {
+		t.Errorf("the holder was asked for the skills in %q, want %q",
+			memory.skills, learning.SkillsMostUsed)
+	}
+	r := queries.NewRegistry()
+	queries.Register(r, queries.Sources{Company: companySource(t, cfg), Memory: &stubMemory{}})
+	if _, err := r.Answer(everyGrant(t), "agent_memory",
+		map[string]any{"id": "cto", "skills_order": "-uses"}); !errors.Is(err, queries.ErrBadParams) {
+		t.Errorf("an order the store does not read: %v, want bad params", err)
+	}
+}
+
 // --- the fleet's config columns --------------------------------------------
 
 func TestFleetCarriesEachNodesConfigState(t *testing.T) {

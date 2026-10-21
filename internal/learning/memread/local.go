@@ -335,15 +335,28 @@ func emptyThreads(handle, heldBy string) Threads {
 	}
 }
 
+// MemoryQuery is what a memory read asks for beyond the seat: the page every
+// collection is cut at, and the order the skills are read in before theirs
+// is.
+//
+// THE SKILLS' ORDER TRAVELS TO THE HOLDER, because the page is cut there: a
+// screen that sorted the page it was handed by use answered "the most used of
+// the newest fifty". The other collections keep the one order each answers
+// in — newest first, the counterparties by their last update.
+type MemoryQuery struct {
+	Limit  int
+	Skills learning.SkillOrder
+}
+
 // Memory reads one seat's memory from THIS node's store.
 //
 // AN ERROR IS NOT AN EMPTY HALF. Everything in `learning` is best effort for a
 // TURN, which must not die because a diary was slow — but a screen reporting
 // "this seat remembers nothing" when the store could not be reached is the
 // collapse every three-valued answer in this engine exists to prevent.
-func (s *Stores) Memory(ctx context.Context, seat Seat, limit int) (Memory, error) {
+func (s *Stores) Memory(ctx context.Context, seat Seat, q MemoryQuery) (Memory, error) {
 	out := emptyMemory(seat.Handle, "")
-	limit = Page(limit)
+	limit := Page(q.Limit)
 	if s.Diary != nil {
 		if id := agentID(seat); id != "" {
 			now := s.now()
@@ -387,7 +400,7 @@ func (s *Stores) Memory(ctx context.Context, seat Seat, limit int) (Memory, erro
 		if err != nil {
 			return Memory{}, err
 		}
-		opts.Limit = limit
+		opts.Limit, opts.Order = limit, q.Skills
 		skills, err := s.Skills.List(ctx, seat.Handle, opts)
 		if err != nil {
 			return Memory{}, err

@@ -7727,7 +7727,12 @@ alphabetically first skills at the top. Home's **Agent skills** widget asks
 for the newest the same way, a widget's window of the engine's order.
 **Learned** (`kind=learned&seat=`) is one agent
 seat's synthesized skills from `agent_memory`, answered by the node holding
-the seat, with "n of total" when the page is cut.
+the seat, with "n of total" when the page is cut. Their order is the HOLDER's
+for the same reason, chosen in the same toolbar **Order** and kept in `sort=`:
+**Most used** (`sort=-uses`, the default) or **Recently changed**
+(`sort=-updated`), asked as the question's `skills_order` (`uses`, `updated`)
+and applied to the seat's whole set before the page is cut. The heads are not
+sortable: sorted here, "most used" was the most used of the newest fifty.
 
 ### Agent diaries
 

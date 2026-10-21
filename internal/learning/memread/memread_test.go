@@ -150,6 +150,42 @@ func (c *counting) Ask(ctx context.Context, subject string, request []byte, want
 	return c.Asker.Ask(ctx, subject, request, want)
 }
 
+// THE SKILLS' ORDER CROSSES THE WIRE TO THE HOLDER, which cuts the page. The
+// holder drafted three skills, the oldest used most; a non-holder asking for
+// a page of one in use order is handed that oldest skill, which a page cut
+// newest first and sorted by the asker could never contain.
+//
+// Mutation: leave the order off the request, and the page is the newest.
+func TestTheSkillsOrderIsTheHoldersToApply(t *testing.T) {
+	t.Parallel()
+	f := newFleet()
+	a, b := newNode(t, "node-a:1"), newNode(t, "node-b:1")
+	for i, name := range []string{"oldest", "middle", "newest"} {
+		at := pinned.Add(time.Duration(i) * time.Hour)
+		if err := a.stores.Skills.Insert(t.Context(), learning.Skill{
+			ID: "sk-" + name, AgentHandle: "swe", Name: name, Content: "# " + name,
+			CreatedAt: at, UpdatedAt: at,
+		}); err != nil {
+			t.Fatalf("skill: %v", err)
+		}
+	}
+	a.stores.Skills.MarkUsed(t.Context(), "sk-oldest", pinned.Add(4*time.Hour))
+	f.hold(t, "swe", a.owner)
+	f.reader(t, a, "swe")
+	readB := f.reader(t, b)
+
+	got, err := readB.Memory(t.Context(), seatOf("swe"),
+		memread.MemoryQuery{Limit: 1, Skills: learning.SkillsMostUsed})
+	if err != nil {
+		t.Fatalf("Memory: %v", err)
+	}
+	if got.HeldBy != "node-a" || got.SkillsTotal != 3 || len(got.Skills) != 1 ||
+		got.Skills[0].ID != "sk-oldest" {
+		t.Errorf("a page of one in use order, from node-b, is %+v of %d held by %q, "+
+			"want sk-oldest of 3 held by node-a", got.Skills, got.SkillsTotal, got.HeldBy)
+	}
+}
+
 // A NON-HOLDER READS THE HOLDER'S MEMORY, NOT ITS OWN COPY.
 //
 // Two nodes each keep a copy of @swe's memory: node-b's is what it hydrated
@@ -168,7 +204,7 @@ func TestANonHolderReadsTheHoldersMemory(t *testing.T) {
 	f.reader(t, a, "swe")
 	readB := f.reader(t, b)
 
-	got, err := readB.Memory(t.Context(), seatOf("swe"), 0)
+	got, err := readB.Memory(t.Context(), seatOf("swe"), memread.MemoryQuery{})
 	if err != nil {
 		t.Fatalf("Memory: %v", err)
 	}
@@ -198,7 +234,7 @@ func TestASeatNobodyHoldsIsAnsweredEmptyAndSaysSo(t *testing.T) {
 	b.remember(t, "swe", "stale", 3)
 	read := f.reader(t, b)
 
-	got, err := read.Memory(t.Context(), seatOf("swe"), 0)
+	got, err := read.Memory(t.Context(), seatOf("swe"), memread.MemoryQuery{})
 	if err != nil {
 		t.Fatalf("Memory: %v", err)
 	}
@@ -234,7 +270,7 @@ func TestASilentHolderIsUnavailableNotEmpty(t *testing.T) {
 	f.hold(t, "swe", "node-c:9")
 	read := f.reader(t, b)
 
-	_, err := read.Memory(t.Context(), seatOf("swe"), 0)
+	_, err := read.Memory(t.Context(), seatOf("swe"), memread.MemoryQuery{})
 	if !errors.Is(err, memread.ErrUnavailable) {
 		t.Fatalf("err = %v, want ErrUnavailable", err)
 	}
@@ -258,7 +294,7 @@ func TestAHolderStillTakingTheSeatRefuses(t *testing.T) {
 	readB := f.reader(t, b)
 
 	for name, read := range map[string]*memread.Reader{"itself": readA, "a peer": readB} {
-		if _, err := read.Memory(t.Context(), seatOf("swe"), 0); !errors.Is(err, memread.ErrUnavailable) {
+		if _, err := read.Memory(t.Context(), seatOf("swe"), memread.MemoryQuery{}); !errors.Is(err, memread.ErrUnavailable) {
 			t.Errorf("asked by %s: err = %v, want ErrUnavailable", name, err)
 		}
 	}
@@ -280,7 +316,7 @@ func TestOnlyTheIncarnationTheLeaseNamesAnswers(t *testing.T) {
 	f.reader(t, fresh, "swe")
 	read := f.reader(t, asker)
 
-	got, err := read.Memory(t.Context(), seatOf("swe"), 0)
+	got, err := read.Memory(t.Context(), seatOf("swe"), memread.MemoryQuery{})
 	if err != nil {
 		t.Fatalf("Memory: %v", err)
 	}
@@ -295,7 +331,7 @@ func TestANodeWithNoBrokerAnswersItself(t *testing.T) {
 	n := newNode(t, "solo:1")
 	n.remember(t, "swe", "only", 2)
 	read := &memread.Reader{Owner: n.owner, Local: n.stores}
-	got, err := read.Memory(t.Context(), seatOf("swe"), 0)
+	got, err := read.Memory(t.Context(), seatOf("swe"), memread.MemoryQuery{})
 	if err != nil {
 		t.Fatalf("Memory: %v", err)
 	}
@@ -332,7 +368,7 @@ func TestEveryCollectionCarriesItsTotalBesideItsPage(t *testing.T) {
 	}
 	read := &memread.Reader{Owner: n.owner, Local: n.stores}
 
-	page, err := read.Memory(t.Context(), seatOf("swe"), 0)
+	page, err := read.Memory(t.Context(), seatOf("swe"), memread.MemoryQuery{})
 	if err != nil {
 		t.Fatalf("Memory: %v", err)
 	}
@@ -348,7 +384,7 @@ func TestEveryCollectionCarriesItsTotalBesideItsPage(t *testing.T) {
 		}
 	}
 
-	one, err := read.Memory(t.Context(), seatOf("swe"), 1)
+	one, err := read.Memory(t.Context(), seatOf("swe"), memread.MemoryQuery{Limit: 1})
 	if err != nil {
 		t.Fatalf("Memory: %v", err)
 	}
@@ -373,7 +409,7 @@ func TestOnboardedAtIsSetOnlyOnceAPassFinished(t *testing.T) {
 	if _, err := n.stores.Onboarding.Claim(t.Context(), seatID("swe").String(), pinned, time.Minute); err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
-	claimed, err := read.Memory(t.Context(), seatOf("swe"), 0)
+	claimed, err := read.Memory(t.Context(), seatOf("swe"), memread.MemoryQuery{})
 	if err != nil {
 		t.Fatalf("Memory: %v", err)
 	}
@@ -385,7 +421,7 @@ func TestOnboardedAtIsSetOnlyOnceAPassFinished(t *testing.T) {
 	}, pinned.Add(time.Minute)); err != nil {
 		t.Fatalf("Mark: %v", err)
 	}
-	marked, err := read.Memory(t.Context(), seatOf("swe"), 0)
+	marked, err := read.Memory(t.Context(), seatOf("swe"), memread.MemoryQuery{})
 	if err != nil {
 		t.Fatalf("Memory: %v", err)
 	}
@@ -433,7 +469,7 @@ func TestAnEmptyMemoryCarriesEveryKey(t *testing.T) {
 	t.Parallel()
 	n := newNode(t, "solo:1")
 	read := &memread.Reader{Owner: n.owner, Local: n.stores}
-	got, err := read.Memory(t.Context(), seatOf("nobody"), 0)
+	got, err := read.Memory(t.Context(), seatOf("nobody"), memread.MemoryQuery{})
 	if err != nil {
 		t.Fatalf("Memory: %v", err)
 	}
@@ -469,7 +505,7 @@ func TestTheProfilesAreAskedForThePageAndNoMore(t *testing.T) {
 	asked := &askedProfiles{}
 	local := &memread.Stores{Profiles: asked}
 	for _, c := range []struct{ page, want int }{{1, 1}, {0, memread.PageLimit}, {500, memread.PageLimit}} {
-		if _, err := local.Memory(t.Context(), seatOf("swe"), c.page); err != nil {
+		if _, err := local.Memory(t.Context(), seatOf("swe"), memread.MemoryQuery{Limit: c.page}); err != nil {
 			t.Fatalf("Memory: %v", err)
 		}
 		if asked.limit != c.want {
@@ -521,7 +557,7 @@ func TestAProfileCarriesBothInstantsAndOneIdentity(t *testing.T) {
 		},
 	}}
 	read := &memread.Reader{Owner: n.owner, Local: n.stores}
-	got, err := read.Memory(t.Context(), seatOf("swe"), 0)
+	got, err := read.Memory(t.Context(), seatOf("swe"), memread.MemoryQuery{})
 	if err != nil {
 		t.Fatalf("Memory: %v", err)
 	}
@@ -554,7 +590,7 @@ func TestAFailedProfileReadIsNotAnEmptyList(t *testing.T) {
 	sentinel := errors.New("the store could not be reached")
 	n.stores.Profiles = stubProfiles{err: sentinel}
 	read := &memread.Reader{Owner: n.owner, Local: n.stores}
-	if _, err := read.Memory(t.Context(), seatOf("swe"), 0); !errors.Is(err, sentinel) {
+	if _, err := read.Memory(t.Context(), seatOf("swe"), memread.MemoryQuery{}); !errors.Is(err, sentinel) {
 		t.Errorf("a failed profile read answered %v, want the failure", err)
 	}
 }
@@ -647,7 +683,7 @@ func TestAnEpisodeRowSaysWhatItIs(t *testing.T) {
 			t.Fatalf("episode %s: %v", ep.ID, err)
 		}
 	}
-	got, err := (&memread.Reader{Owner: n.owner, Local: n.stores}).Memory(t.Context(), seatOf("swe"), 0)
+	got, err := (&memread.Reader{Owner: n.owner, Local: n.stores}).Memory(t.Context(), seatOf("swe"), memread.MemoryQuery{})
 	if err != nil {
 		t.Fatalf("Memory: %v", err)
 	}
@@ -692,7 +728,7 @@ func TestAListedEpisodeCarriesItsOpeningsAndOneReadHasItWhole(t *testing.T) {
 		}
 	}
 	reader := &memread.Reader{Owner: n.owner, Local: n.stores}
-	got, err := reader.Memory(t.Context(), seatOf("swe"), 0)
+	got, err := reader.Memory(t.Context(), seatOf("swe"), memread.MemoryQuery{})
 	if err != nil || len(got.Episodes) != 1 {
 		t.Fatalf("Memory = %d episodes, %v", len(got.Episodes), err)
 	}
@@ -754,7 +790,7 @@ func TestWhatASeatIsShownWholeIsListedWhole(t *testing.T) {
 		t.Fatalf("the prompt showed a %d-byte ask as %q, want it whole", at, prompt[0].Ask)
 	}
 	reader := &memread.Reader{Owner: n.owner, Local: n.stores}
-	got, err := reader.Memory(t.Context(), seatOf("swe"), 0)
+	got, err := reader.Memory(t.Context(), seatOf("swe"), memread.MemoryQuery{})
 	if err != nil || len(got.Episodes) != 2 {
 		t.Fatalf("Memory = %d episodes, %v", len(got.Episodes), err)
 	}
@@ -802,7 +838,7 @@ func TestAPageOfLongAsksIsAnsweredByItsHolder(t *testing.T) {
 	// is that the page fits the transport, and a read that timed out says
 	// nothing about that either way.
 	readB.Budget = memread.DefaultBudget
-	got, err := readB.Memory(t.Context(), seatOf("swe"), 0)
+	got, err := readB.Memory(t.Context(), seatOf("swe"), memread.MemoryQuery{})
 	if err != nil {
 		t.Fatalf("a page of %d asks of %d bytes each was refused: %v", memread.PageLimit,
 			len(ask), err)

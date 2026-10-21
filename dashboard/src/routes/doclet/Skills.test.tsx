@@ -220,9 +220,46 @@ test("a seat's learned skills say how many of its total are listed", async () =>
     },
   });
   await settle();
-  expect(asked.find((a) => a.kind === "agent_memory")?.params).toEqual({ id: "swe" });
+  expect(asked.find((a) => a.kind === "agent_memory")?.params).toEqual({
+    id: "swe",
+    skills_order: "uses",
+  });
   expect(screen.getByText("Triage an alert")).toBeTruthy();
   expect(screen.getByText("1 of 40 learned skills.")).toBeTruthy();
+});
+
+// THE HOLDER ORDERS A SEAT'S SKILLS, because it cuts the page: sorted here, the
+// most used were the most used of the newest fifty. The order in `sort=` is
+// asked for as `skills_order`, and the heads are not buttons, because a head
+// that re-sorted the page would answer another question under the same arrow.
+// Mutation: drop `skills_order` from the question and the holder is asked for
+// the newest.
+test("a seat's learned skills are ordered by the holder, in the order sort= names", async () => {
+  location.hash = "#/doclet/skills?kind=learned&seat=swe&sort=-updated";
+  const { asked } = mount({
+    agent_memory: {
+      id: "swe",
+      skills: [],
+      skills_total: 0,
+      diary: [],
+      diary_total: 0,
+      episodes: [],
+      episodes_total: 0,
+      counterparties: [],
+      counterparties_total: 0,
+      latest_reflection: null,
+      onboarded_at: "",
+      held_by: "node-a",
+    },
+  });
+  await settle();
+  expect(asked.find((a) => a.kind === "agent_memory")?.params).toEqual({
+    id: "swe",
+    skills_order: "updated",
+  });
+  expect(screen.getByRole("radio", { name: "Recently changed" }).getAttribute("aria-checked")).toBe(
+    "true",
+  );
 });
 
 // WHAT A SEAT LEARNED IS ITS TRAIL, which the engine answers to an admin and
