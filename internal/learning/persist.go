@@ -631,30 +631,11 @@ func renderExistingMemories(b provenance.Boundary, memories []DiaryEntry) string
 	return out.String()
 }
 
-// DescribeSender renders a counterparty for an auxiliary prompt.
-//
-// THE one rendering, exported for the read-side memory filter to share: two
-// prompts describing the same person differently desynchronise the facts one
-// writes from the lines the other filters against, and the filter's job is to
-// reject a memory naming somebody else.
+// DescribeSender renders an inbound sender for an auxiliary prompt: the
+// subject their identity names ([SubjectOf]), described by [DescribeSubject],
+// the one rendering every auxiliary prompt names a person by.
 func DescribeSender(id types.CanonicalIdentity) string {
-	label := id.DisplayName
-	if label == "" {
-		label = id.Handle
-	}
-	switch {
-	case label != "" && id.ExternalID != "" && id.Platform != "":
-		return label + " (" + id.Platform + ":" + id.ExternalID + ")"
-	case label != "" && id.ExternalID != "":
-		return label + " (" + id.ExternalID + ")"
-	case label != "":
-		return label
-	case id.ExternalID != "" && id.Platform != "":
-		return id.Platform + ":" + id.ExternalID
-	case id.ExternalID != "":
-		return "unknown:" + id.ExternalID
-	}
-	return ""
+	return DescribeSubject(SubjectOf(id))
 }
 
 // coerceTTLDays clamps the model's proposed duration into the supported band.

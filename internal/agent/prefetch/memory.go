@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -309,7 +308,7 @@ func memoryFilterPrompt(r Request, candidates []learning.DiaryEntry) string {
 func senderLine(senders []learning.Subject) string {
 	labels := make([]string, 0, len(senders))
 	for _, s := range senders {
-		if label := subjectLabel(s); label != "" && !slices.Contains(labels, label) {
+		if label := learning.DescribeSubject(s); label != "" && !slices.Contains(labels, label) {
 			labels = append(labels, label)
 		}
 	}
@@ -416,21 +415,6 @@ func (f *Fetcher) embed(ctx context.Context, text string) (learning.Vector, erro
 		return learning.Vector{}, err
 	}
 	return vector, nil
-}
-
-// subjectLabel renders a counterparty as the filter and the profile block
-// name them.
-func subjectLabel(s learning.Subject) string {
-	if name := strings.TrimSpace(s.Name); name != "" {
-		if handle := strings.TrimSpace(s.Handle); handle != "" {
-			return fmt.Sprintf("%s (%s)", name, handle)
-		}
-		return name
-	}
-	if handle := strings.TrimSpace(s.Handle); handle != "" {
-		return handle
-	}
-	return strings.TrimSpace(s.ExternalID)
 }
 
 // collapse folds a memory's internal newlines so one entry stays one bullet.

@@ -300,7 +300,7 @@ func (p *Profiler) patch(ctx context.Context, t Turn, s subjectMessages,
 func (p *Profiler) prompt(b provenance.Boundary, s subjectMessages, existing Profile) string {
 	var out strings.Builder
 	out.WriteString("## The person\n")
-	out.WriteString(provenance.Neutralise(b, subjectLine(s.subject)))
+	out.WriteString(provenance.Neutralise(b, orElse(DescribeSubject(s.subject), "(unidentified)")))
 	out.WriteString("\n\n## Already known about them\n")
 	if len(existing.Traits) == 0 {
 		out.WriteString("Nothing on file yet.\n")
@@ -433,24 +433,6 @@ func scalarTraits(obj map[string]any) map[string]any {
 // is dropped and logged rather than stored truncated: this value is written
 // once and read in every later prompt about that person.
 const maxTraitValue = 200
-
-// subjectLine renders who a party is, for the profiler's prompt.
-func subjectLine(s Subject) string {
-	parts := make([]string, 0, 3)
-	if s.Name != "" {
-		parts = append(parts, s.Name)
-	}
-	if s.Handle != "" {
-		parts = append(parts, "@"+s.Handle)
-	}
-	if s.Platform != "" && s.ExternalID != "" {
-		parts = append(parts, s.Platform+" id "+s.ExternalID)
-	}
-	if len(parts) == 0 {
-		return "(unidentified)"
-	}
-	return strings.Join(parts, " · ")
-}
 
 // sortedKeys orders a trait bag so the prompt is stable between turns.
 //

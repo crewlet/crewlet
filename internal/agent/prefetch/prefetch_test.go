@@ -572,6 +572,40 @@ func TestTheFilterIsToldWhoTriggeredTheTurn(t *testing.T) {
 	}
 }
 
+// THE FILTER NAMES A SENDER AS THE DECIDER ATTRIBUTED THEM. The persist
+// decider files a fact under its requester as [learning.DescribeSender] names
+// them, and the filter's subject rule rejects a memory about somebody not party
+// to the task — so the sender line must name each person the same way, and
+// two people of one name on two surfaces must read as two people. The line
+// read "Sam" for both while the memories read "Sam (slack:U1)" and "Sam
+// (mattermost:U2)", so a preference about one was applied to the other.
+func TestTheFilterNamesASenderAsTheDeciderAttributesThem(t *testing.T) {
+	t.Parallel()
+	senders := []types.CanonicalIdentity{
+		{DisplayName: "Sam", ExternalID: "U1", Platform: "slack"},
+		{DisplayName: "Sam", ExternalID: "U2", Platform: "mattermost"},
+	}
+	r := request(t)
+	r.Senders = nil
+	for _, id := range senders {
+		r.Senders = append(r.Senders, learning.SubjectOf(id))
+	}
+	model := &aux{answers: []string{"[]"}}
+	fetch(t, prefetch.Sources{
+		Diary:  diary{recent: []learning.DiaryEntry{memory("m1", "a memory")}},
+		Models: models{provider: model},
+	}, r)
+	prompts := model.prompts()
+	if len(prompts) == 0 {
+		t.Fatal("the filter was never asked")
+	}
+	want := "Current sender: " + learning.DescribeSender(senders[0]) + ", " +
+		learning.DescribeSender(senders[1]) + "\n"
+	if !strings.Contains(prompts[0], want) || learning.DescribeSender(senders[0]) == learning.DescribeSender(senders[1]) {
+		t.Fatalf("the filter does not name each sender as the decider does (%q):\n%s", want, prompts[0])
+	}
+}
+
 // NO UNFILTERED FALLBACK. Falling back to "the most recent eight" would leak
 // a memory about one person into a turn triggered by another — the exact
 // failure the filter exists to prevent, reappearing on the transient

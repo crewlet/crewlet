@@ -45,6 +45,44 @@ func SubjectOf(id types.CanonicalIdentity) Subject {
 	}
 }
 
+// DescribeSubject names a counterparty in an auxiliary prompt: the name they
+// go by, then every identifier that tells them from somebody else of that
+// name — their seat's handle, their platform's id — as "Sam (slack:U1)",
+// "Dev Bot (dev)", or the identifier alone where there is no name.
+//
+// THE ONE RENDERING, for every auxiliary prompt that names a person: the
+// persist decider attributes a fact to the requester as it names them, and the
+// memory filter's one hard rule is to reject a memory about somebody who is
+// not party to the task — which it can only do if the sender line names them
+// the way the memory does. It was three renderings: the decider wrote "Sam
+// (slack:U1)", the filter and the profile block read "Sam", and the profiler
+// "Sam · slack id U1", so two people called Sam on two surfaces were one
+// person to the filter. "" for a subject that names nobody.
+func DescribeSubject(s Subject) string {
+	name, handle := strings.TrimSpace(s.Name), strings.TrimSpace(s.Handle)
+	var ids []string
+	if name != "" && handle != "" {
+		ids = append(ids, handle)
+	}
+	switch ext, platform := strings.TrimSpace(s.ExternalID), strings.TrimSpace(s.Platform); {
+	case ext != "" && platform != "":
+		ids = append(ids, platform+":"+ext)
+	case ext != "":
+		ids = append(ids, "unknown:"+ext)
+	}
+	label := name
+	if label == "" {
+		label = handle
+	}
+	switch {
+	case label != "" && len(ids) > 0:
+		return label + " (" + strings.Join(ids, ", ") + ")"
+	case label != "":
+		return label
+	}
+	return strings.Join(ids, ", ")
+}
+
 // Resolved reports whether the subject is a known seat.
 func (s Subject) Resolved() bool { return s.Handle != "" }
 

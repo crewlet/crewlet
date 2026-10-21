@@ -264,7 +264,7 @@ func renderProfile(fence provenance.Boundary, p learning.Profile) string {
 // profileText is [renderProfile]'s text before it is neutralised.
 func profileText(p learning.Profile) string {
 	var b strings.Builder
-	b.WriteString("Subject: " + firstNonEmpty(subjectLabel(p.Subject), "(unknown)"))
+	b.WriteString("Subject: " + firstNonEmpty(learning.DescribeSubject(p.Subject), "(unknown)"))
 	if p.Subject.Platform != "" {
 		b.WriteString("\nPlatform: " + p.Subject.Platform)
 	}
