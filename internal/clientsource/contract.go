@@ -132,6 +132,9 @@ var contract = []Entry{
 	// attribution.ts
 	{"CHANGE_FIELDS", ReadLiteral, "internal/tracker.TestAttributionFieldsAreTheEngines"},
 
+	// references.ts
+	{"REFERENCE_NAME", ReadScalar, "internal/envref.TestTheDashboardReadsAReferenceByTheEnginesGrammar"},
+
 	// avatar.ts
 	{"AVATAR_CHARACTERS", ReadLiteral, "internal/config.TestTheAvatarSetsAreTheDashboards"},
 	{"AVATAR_COLORS", ReadLiteral, "internal/config.TestTheAvatarSetsAreTheDashboards"},
