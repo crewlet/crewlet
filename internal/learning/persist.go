@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 )
@@ -267,10 +268,14 @@ func (d *PersistDecider) Decide(ctx context.Context, t Turn) (Decision, error) {
 
 	call, cancel := context.WithTimeout(ctx, d.timeout)
 	defer cancel()
+	// ONE TOKEN FOR THE CALL, minted for it and never a turn's: the turn's
+	// messages are somebody else's words, fenced under it, and what this
+	// call answers is written into the seat's memory.
+	fence := provenance.NewBoundary()
 	completion, err := member.Provider.Complete(call, llm.Request{
 		Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: PersistSystemPrompt},
-			{Role: llm.RoleUser, Content: buildPersistPrompt(t, existing)},
+			{Role: llm.RoleUser, Content: buildPersistPrompt(fence, t, existing)},
 		},
 		// No tools, deliberately. The contract is a JSON object in the
 		// content; a tool on the surface invites a model to call it and
@@ -422,6 +427,11 @@ func (d *PersistDecider) write(
 // written as [Subject.Label] renders a person — the form of the user
 // message's Requester lines and of the memory filter's "Current sender:"
 // line, which is what a stored fact is later matched against.
+//
+// IT ENDS ON THE STANDING SENTENCE ON FENCES ([provenance.StandingInstruction]),
+// the one the seat's own prompt carries: what the turn was asked and what was
+// said to it reach this call fenced under a token minted for the call
+// (ADR-0040), and the sentence is what says a fence is somebody's words.
 const PersistSystemPrompt = `You are a post-turn reflection classifier. Read the turn summary and decide
 which tier its content falls into:
 
@@ -460,23 +470,27 @@ Answer with one JSON object and nothing else:
   {"kind": "DOC", "content": "<the rule itself>", "target_hint": "<where it belongs, or empty>"}
   {"kind": "LONG", "content": "<declarative fact>"}
   {"kind": "SHORT", "content": "<declarative fact>", "ttl_days": <int>}
-`
+` + "\n" + provenance.StandingInstruction
 
-// buildPersistPrompt renders the turn and the seat's existing memory.
-func buildPersistPrompt(t Turn, existing []DiaryEntry) string {
+// buildPersistPrompt renders the turn and the seat's existing memory, every
+// word somebody else wrote inside a fence of b and everything else neutralised
+// under it (ADR-0040): the classifier's answer is a fact the seat will read
+// as its own memory on every later turn, so a message that tells the
+// classifier what to remember must read as that sender's words.
+func buildPersistPrompt(b provenance.Boundary, t Turn, existing []DiaryEntry) string {
 	tools := "(none)"
 	if len(t.Event.ToolSequence) > 0 {
 		tools = strings.Join(t.Event.ToolSequence, ", ")
 	}
-	var b strings.Builder
-	b.WriteString("Turn summary:\n")
+	var out strings.Builder
+	out.WriteString("Turn summary:\n")
 	// ONLY THE ASK NO INTERACTION CARRIES: each interaction is rendered
 	// below with its sender, which is what attributing a fact needs.
-	describeTurn(&b, t, t.Event.Ask)
-	b.WriteString("\n- Tools called: ")
-	b.WriteString(tools)
-	b.WriteString("\n- Outcome: ")
-	b.WriteString(t.Event.ReviewOutcome)
+	describeTurn(&out, b, t, t.Event.Ask, t.Event.AskProvenance)
+	out.WriteString("\n- Tools called: ")
+	out.WriteString(tools)
+	out.WriteString("\n- Outcome: ")
+	out.WriteString(provenance.Neutralise(b, t.Event.ReviewOutcome))
 
 	// One requester/message pair per interaction that has an identifiable
 	// sender — NOT merged by sender. A coalesced trigger is several
@@ -488,24 +502,27 @@ func buildPersistPrompt(t Turn, existing []DiaryEntry) string {
 		if who == "" {
 			continue
 		}
-		b.WriteString("\n- Requester: ")
-		b.WriteString(who)
-		if in.Body != "" {
-			b.WriteString("\n- Inbound message: \"")
-			b.WriteString(strings.ReplaceAll(strings.TrimSpace(in.Body), "\n", " "))
-			b.WriteString("\"")
+		// A DISPLAY NAME IS THE SENDER'S CHOICE, so it opens no fence.
+		out.WriteString("\n- Requester: ")
+		out.WriteString(provenance.Neutralise(b, who))
+		if body := inboundBody(b, in); body != "" {
+			out.WriteString("\n- Inbound message:\n")
+			out.WriteString(body)
 		}
 	}
-	b.WriteString(renderExistingMemories(existing))
-	b.WriteString("\nClassify and emit the JSON object.")
-	return b.String()
+	out.WriteString(renderExistingMemories(b, existing))
+	out.WriteString("\nClassify and emit the JSON object.")
+	return out.String()
 }
 
 // renderExistingMemories renders the dedup block, "" when there is nothing to
 // render — a fresh seat and a seat whose diary could not be read produce the
 // same compact prompt rather than a header over an empty list.
-func renderExistingMemories(memories []DiaryEntry) string {
-	var b strings.Builder
+//
+// Each memory is what an earlier classification wrote, and is neutralised
+// under b: it opens and closes no fence of the call.
+func renderExistingMemories(b provenance.Boundary, memories []DiaryEntry) string {
+	var out strings.Builder
 	n := 0
 	for _, m := range memories {
 		content := strings.ReplaceAll(strings.TrimSpace(m.Content), "\n", " ")
@@ -513,28 +530,28 @@ func renderExistingMemories(memories []DiaryEntry) string {
 			continue
 		}
 		if n == 0 {
-			b.WriteString("\n\nAlready in your memory:")
+			out.WriteString("\n\nAlready in your memory:")
 		}
-		b.WriteString("\n")
-		b.WriteString(strconv.Itoa(n))
-		b.WriteString(". ")
-		b.WriteString(content)
+		out.WriteString("\n")
+		out.WriteString(strconv.Itoa(n))
+		out.WriteString(". ")
+		out.WriteString(provenance.Neutralise(b, content))
 		// A deadline is rendered so the model can tell "the seat knows
 		// this and the row is still live" from "the seat knew this until
 		// last week" — the second is not a duplicate, it is a fact worth
 		// restating.
 		if !m.TTLUntil.IsZero() {
-			b.WriteString(" (until ")
-			b.WriteString(m.TTLUntil.UTC().Format(time.RFC3339))
-			b.WriteString(")")
+			out.WriteString(" (until ")
+			out.WriteString(m.TTLUntil.UTC().Format(time.RFC3339))
+			out.WriteString(")")
 		}
 		n++
 	}
 	if n == 0 {
 		return ""
 	}
-	b.WriteString("\n")
-	return b.String()
+	out.WriteString("\n")
+	return out.String()
 }
 
 // coerceTTLDays clamps the model's proposed duration into the supported band.
