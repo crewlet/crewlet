@@ -835,13 +835,15 @@ type Options struct {
 	// revision this node's store marks active, when that is what Company
 	// is.
 	//
-	// ZERO FOR A COMPANY NO ACTIVATION HAS NAMED YET — a Tier B file this
-	// node booted with, which its reconciler publishes and applies with the
-	// pointer's own instant before a seat is claimed. It is not the boot's
-	// clock, because what reads it is the chart apply, which stamps every
-	// project with it so that an older configuration cannot walk a newer
-	// one back — and a boot on a stale revision stamped with NOW is exactly
-	// the older configuration that would. See [Engine.applyChart].
+	// ZERO FOR A COMPANY NO ACTIVATION HAS NAMED — one a caller built in
+	// code. `crewlet run` never passes one: it boots on the revision its
+	// store activated, or on nothing, and a Tier B file reaches the engine
+	// through an activation, applied with the pointer's own instant before
+	// a seat is claimed. It is not the boot's clock, because what reads it
+	// is the chart apply, which stamps every project with it so that an
+	// older configuration cannot walk a newer one back — and a boot on a
+	// stale revision stamped with NOW is exactly the older configuration
+	// that would. See [Engine.applyChart].
 	ActivatedAt time.Time
 
 	// Mode is what this node starts for: normal, or one of the two
@@ -1518,8 +1520,8 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 			return nil, err
 		}
 		// STAMPED ONCE, as it is built, with the activation the caller
-		// says this company came from — zero for a file no activation has
-		// named yet. See [stampActivation].
+		// says this company came from — zero for one no activation has
+		// named. See [stampActivation].
 		stampActivation(company, opts.ActivatedAt)
 	}
 	// THE REST IS SKIPPED WHEN THERE IS NO EPOCH. Everything here is

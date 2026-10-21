@@ -359,15 +359,6 @@ func addConfigFlags(fs *flag.FlagSet) configFlags {
 	}
 }
 
-// companyName is what the boot line calls the company, including when there
-// is not one yet.
-func companyName(c *config.Company) string {
-	if c == nil {
-		return "(unconfigured — no active revision and no Tier B file)"
-	}
-	return c.Name
-}
-
 // tierBSeed is the Tier B document a `crewlet run` invocation carries, and
 // what it is FOR.
 //
@@ -375,10 +366,19 @@ func companyName(c *config.Company) string {
 // ever a way of getting a document INTO it. Override says which of the two
 // reasons this one is: bootstrap an empty store, or replace what the fleet is
 // running. Company is nil when there is no file to seed from at all.
+//
+// It is the seed as the command line RESOLVED it, and not yet what it does:
+// that is [decideSeed]'s, whose [seedPlan] is the only thing the engine's boot
+// and the import accept.
 type tierBSeed struct {
 	Path     string
 	Override bool
 	Company  *config.Company
+
+	// Managed is a -company seed this deployment's Tier A rules out
+	// (`api.auth.company_writers`, ADR-0030): Path names the file, which
+	// was never read, and Company is nil. See [managedSeed].
+	Managed bool
 }
 
 // loadForRun reads Tier A, and Tier B as the seed `run` will reconcile.
@@ -401,18 +401,33 @@ func (c configFlags) loadForRun(ctx context.Context, set *flag.FlagSet, importPa
 	// over that revision, so it is restored against it as `crewlet config
 	// import` restores one ([config.LoadCompanyToRun]). Read only for a file
 	// with a mask in it, and never from a scratch store, which holds the
-	// previous run's rows and is deleted as the engine opens it.
+	// previous run's rows and is deleted as the engine opens it. Read as the
+	// STORED form, as the import's is ([activeRevision]): a newer peer may
+	// have written it.
 	var prior config.PriorRevision
 	if bootErr == nil && !boot.Store.Scratch {
+		stored := storeAt(*c.bootstrap)
 		prior = func() (*config.Company, error) {
-			company, _, err := companyFromStore(ctx, *c.bootstrap)
-			return company, err
+			active, found, err := stored(ctx)
+			if err != nil || !found {
+				return nil, err
+			}
+			company, err := config.DecodeCompany(active.document)
+			if err != nil {
+				return nil, fmt.Errorf("parse the active revision %s: %w", active.revision.ID, err)
+			}
+			return company, nil
 		}
 	}
-	seed, seedErr := c.resolveSeed(set, importPath, prior)
-	if bootErr == nil && seedErr == nil && seed.Override {
-		seedErr = refuseManagedOverride(boot, seed.Path)
+	// THE SEED IS RESOLVED AGAINST THE TIER A IT RUNS UNDER, when that
+	// loaded: a managed deployment reads no seed at all ([managedSeed]).
+	// When Tier A failed the run fails anyway, and the seed is resolved on
+	// its own so that both documents' problems are reported at once.
+	seedBoot := boot
+	if bootErr != nil {
+		seedBoot = nil
 	}
+	seed, seedErr := c.resolveSeed(set, importPath, seedBoot, prior)
 	// TIER A COMES BACK EVEN WHEN THE SEED DID NOT. The two documents fail
 	// independently, and a caller holding a valid Tier A can do something
 	// with it before reporting the other one's error — `crewlet run` opens
@@ -427,8 +442,12 @@ func (c configFlags) loadForRun(ctx context.Context, set *flag.FlagSet, importPa
 
 // resolveSeed decides which Tier B file this invocation carries and why, the
 // file restored against prior where it is a redacted read.
+//
+// boot is the Tier A the run loaded, or nil when that failed: a managed
+// deployment's seed is resolved without reading the file ([managedSeed]).
 func (c configFlags) resolveSeed(set *flag.FlagSet, importPath string,
-	prior config.PriorRevision) (tierBSeed, error) {
+	boot *config.Bootstrap, prior config.PriorRevision) (tierBSeed, error) {
+
 	named := strings.TrimSpace(importPath)
 	if named != "" && isFlagSet(set, "company") {
 		// REFUSED rather than resolved by precedence. The two flags ask
@@ -442,9 +461,12 @@ func (c configFlags) resolveSeed(set *flag.FlagSet, importPath string,
 				"store, -import-company replaces what the fleet is running. " +
 				"Pass one")
 	}
-	// THE RUNNABLE RULES ONLY. The node is about to run this file, and most
-	// boots import nothing from it: see [config.LoadCompanyToRun]. Where the
-	// file IS imported, seedCompany holds it to the admission rules first.
+	if boot != nil && boot.API.Auth.CompanyManaged() {
+		return managedSeed(boot, *c.company, isFlagSet(set, "company"), named)
+	}
+	// THE RUNNABLE RULES ONLY. Most boots import nothing from this file: see
+	// [config.LoadCompanyToRun]. Where the file IS imported, seedCompany
+	// holds it to the admission rules first.
 	if named != "" {
 		company, err := config.LoadCompanyToRun(named, prior)
 		if err != nil {
@@ -1109,7 +1131,6 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	if loadErr != nil {
 		return loadErr
 	}
-	company := seed.Company
 	// THE FLAGS OVERRIDE THE FILE, and are applied AFTER it loads so a
 	// validation failure names the file's own value rather than one the
 	// command line put there. Each is applied only when it was actually
@@ -1185,7 +1206,7 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 		return err
 	}
 	// THE LISTENERS, BOUND NOW: before the first step of the boot that can
-	// take time, which is everything from [bootOptions] on. What they answer
+	// take time, which is everything from [decideSeed] on. What they answer
 	// until the node hands them its own surface is internal/api's boot
 	// surface ([api.Boot]): /health 503 while the node recovers what it holds
 	// and 200 once it has — so a startup probe bounds the recovery exactly as
@@ -1253,10 +1274,20 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 		}
 	}()
 
-	// THE EPOCH THIS NODE STARTS ON: see [bootOptions], which is where it
-	// is decided and what its test holds. The options go to the engine
-	// WHOLE, so no field of them can be decided there and dropped here.
-	opts, err := bootOptions(ctx, *cfg.bootstrap, boot, company)
+	// WHAT THE TIER B FILE IS FOR, AND WHAT THE ENGINE STARTS ON: one
+	// decision, taken here and handed to both the engine's boot and the
+	// import below, so the two cannot disagree about one file. See
+	// [decideSeed]. After the log file and Tier A's last refusals, so an
+	// ignored seed's warning is in the durable record and never beside those
+	// refusals — nor beside the decision's own, being said only once it
+	// holds; and after the listeners, because it opens the store.
+	plan, err := decideSeed(ctx, boot, seed, storeAt(*cfg.bootstrap), log)
+	if err != nil {
+		return err
+	}
+	// The options go to the engine WHOLE, so no field of them can be
+	// decided there and dropped here.
+	opts, err := bootOptions(boot, plan)
 	if err != nil {
 		return err
 	}
@@ -1266,7 +1297,7 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	opts.Recovered = listeners.recovered
 
 	log.InfoContext(ctx, "engine_starting", "version", version.String(),
-		"company", companyName(opts.Company))
+		"company", plan.startsOn(), "seed", string(plan.act), "seed_file", plan.file.Path)
 	e, err := engine.New(ctx, opts)
 	if err != nil {
 		return err
@@ -1285,8 +1316,9 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	// a PUT /config on one node would be invisible to every other.
 	//
 	// Converged BEFORE Start, so seats are claimed under the epoch this
-	// node will actually serve rather than under the file's and then moved.
-	reconciler, err := startReconciler(ctx, e, boot, seed, cipher, log)
+	// node will actually serve — on a node the plan booted unconfigured to
+	// import its file, the first reconcile is what builds that company.
+	reconciler, err := startReconciler(ctx, e, boot, plan, cipher, log)
 	if err != nil {
 		e.Stop(context.WithoutCancel(ctx))
 		return err
@@ -3220,7 +3252,7 @@ func overrideNode(boot *config.Bootstrap, fs *flag.FlagSet,
 // the flags given and comes first.
 //
 // AND BEFORE ANYTHING ACTS ON IT: the listeners bind on its addresses soon
-// after ([bindListeners]) and [bootOptions] opens and migrates the node's
+// after ([bindListeners]) and [decideSeed] opens and migrates the node's
 // store, so a document a flag broke is refused as the rule it broke rather
 // than as a bind error about an address, and before a store is opened for a
 // configuration the engine would refuse.

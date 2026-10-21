@@ -26,8 +26,7 @@ func TestASeedIsRecordedAsTheSystems(t *testing.T) {
 	t.Parallel()
 	db := seedStore(t)
 	fleet := coordmemory.NewFleet()
-	if err := seedCompany(t.Context(), db, fleet, nil, seedOf(parse(t, companyYAML)),
-		fixtureCipher, testNode, quiet()); err != nil {
+	if err := bootSeed(t, db, fleet, seedOf(parse(t, companyYAML)), fixtureCipher); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	active, found, err := db.Configs().Active(t.Context())
@@ -80,8 +79,7 @@ func TestAPublishedLocalRevisionKeepsItsAuthor(t *testing.T) {
 		t.Fatalf("store the offline import: %v", err)
 	}
 	fleet := coordmemory.NewFleet()
-	if err := seedCompany(t.Context(), db, fleet, nil, tierBSeed{Path: "company.yaml"},
-		fixtureCipher, testNode, quiet()); err != nil {
+	if err := bootSeed(t, db, fleet, tierBSeed{Path: "company.yaml"}, fixtureCipher); err != nil {
 		t.Fatalf("boot: %v", err)
 	}
 	target, found, err := fleet.Target(t.Context())
@@ -105,8 +103,7 @@ func TestTheEnginesConfigWriterRecordsTheActorItIsHanded(t *testing.T) {
 	t.Parallel()
 	db := seedStore(t)
 	fleet := coordmemory.NewFleet()
-	if err := seedCompany(t.Context(), db, fleet, nil, seedOf(parse(t, companyYAML)),
-		fixtureCipher, testNode, quiet()); err != nil {
+	if err := bootSeed(t, db, fleet, seedOf(parse(t, companyYAML)), fixtureCipher); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	surface, err := configapi.New(configapi.Options{

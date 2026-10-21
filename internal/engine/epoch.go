@@ -83,9 +83,12 @@ func (e *Engine) RecheckGitHub() {
 // only at the end of construction, after every fleet duty was already armed;
 // see [Engine.Registry] for what that window did.
 //
-// And a store opened with NO width, which is a node that booted with no active
-// revision. It holds no rows, and its first epoch is what tells it how wide
-// its vectors will be. A store that already has a width keeps it
+// And a store opened with NO width, which is a node that booted on no
+// revision: one whose store activated none, which holds no rows, or one
+// started with `-import-company`, which reads none and may hold the stored
+// revision's rows (see [OpenBackends] for why it learns the imported
+// file's). Its first epoch is what tells it how wide its vectors will be. A
+// store that already has a width keeps it
 // ([store.DB.LearnEmbeddingDim] only ever raises from 0), because the width
 // belongs to the rows in the file rather than to the current config, and
 // [Engine.buildEmbedder] has already refused any revision that would change

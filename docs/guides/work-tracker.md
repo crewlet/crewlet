@@ -37,9 +37,9 @@ node's clock, except that an activation is never published at an instant no
 later (to the millisecond) than the one it replaces: the activation pointer
 moves it to a millisecond after, so an activation made on a node whose clock
 runs behind the last activator's is still applied to every project. A node
-that boots on a company file it has not imported yet applies no chart until
-the control plane activates that file, which happens before the node claims
-any seat. **Every project is attempted on every pass**: one the node could not
+never boots on a company file: one it imports is applied by the control
+plane's first reconcile, with the activation's own instant, before the node
+claims any seat. **Every project is attempted on every pass**: one the node could not
 write — a full stream, a write whose outcome is unknown — does not stop the
 rest of the company's projects from being brought up, and a pass that left any
 behind logs `tracker_chart_not_applied` naming each project that failed and
