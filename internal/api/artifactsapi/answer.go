@@ -253,6 +253,8 @@ func writeFailed(w http.ResponseWriter, r *http.Request, key, verb string, err e
 		fail(http.StatusConflict, httpjson.CodeLabelsFull)
 	case errors.Is(err, artifactsdomain.ErrSourceTaken):
 		fail(http.StatusConflict, httpjson.CodeSourceTaken)
+	case errors.Is(err, artifactsdomain.ErrExists):
+		fail(http.StatusConflict, httpjson.CodeExists)
 	case errors.Is(err, artifactsdomain.ErrTrashed):
 		fail(http.StatusConflict, httpjson.CodeArtifactTrashed)
 	case errors.Is(err, artifactsdomain.ErrPurging):
