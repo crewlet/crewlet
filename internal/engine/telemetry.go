@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
@@ -98,6 +99,17 @@ type turnTelemetry struct {
 	// the interactions do not ([types.TurnCompleted.Ask]) and for a
 	// suspension to park beside the conversation.
 	ask string
+
+	// askLabel is who wrote ask, as one label over the whole of it
+	// ([prefetch.Ask.Label]) — nil where it is the company's or the seat's
+	// own words — read and parked exactly as ask is, so the record of what
+	// the turn was asked says whose words they were (ADR-0040).
+	askLabel *provenance.Label
+
+	// askParts is the ask part by part, each with who wrote it
+	// ([turnAskFor]): what the turn-start judgements read. Empty on a
+	// resume, which runs none of them.
+	askParts prefetch.Ask
 
 	// task is the trigger as the executor is handed it ([DescribeTrigger]):
 	// the brief of every wake, with what a delivery fenced moved onto
@@ -250,8 +262,11 @@ func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request
 	// OFF THE ASK: a coalesced conversation's interactions come from the
 	// merged digest's own constituent list, which is the same set the
 	// partition held and the one place a merge combined them.
-	t.interactions = e.interactionsOf(req.Ask())
-	t.ask = turnAsk(req.Ask())
+	t.interactions = e.interactionsOf(req.Ask(), req.Handle)
+	// ONE READING OF WHO WROTE THE ASK, for the judgements that read it now
+	// and for the record that keeps it.
+	t.askParts = e.askOf(req)
+	t.ask, t.askLabel = t.askParts.Text(), t.askParts.Label()
 	t.senders = sendersSpoken(t.interactions)
 	t.requester = requesterIdentity(company, requesterOf(req.Events, t.interactions))
 	// The turn's own span, not the trigger's ids copied forward.
@@ -572,6 +587,7 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		DurationMS:    int(ended.Sub(t.startedAt) / time.Millisecond),
 		TaskSummary:   t.trigger.Summary,
 		Ask:           t.unspokenAsk(),
+		AskProvenance: t.unspokenAskLabel(),
 		PlanSummary:   planSummary(res),
 		// ReviewOutcome is the reviewer's decision, which is the turn's
 		// decision except where a guard ended it first — so it is read off
@@ -781,6 +797,15 @@ func (t turnTelemetry) unspokenAsk() string {
 	return t.ask
 }
 
+// unspokenAskLabel is who wrote [turnTelemetry.unspokenAsk]: carried exactly
+// when it is, and nil with it.
+func (t turnTelemetry) unspokenAskLabel() *provenance.Label {
+	if t.unspokenAsk() == "" {
+		return nil
+	}
+	return t.askLabel
+}
+
 // planSummary is the reviewer's account of the turn, or the artifact.
 //
 // The learning subsystem reads this to build an episode. The LAST review's
@@ -870,7 +895,8 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 		// WHAT IT WAS ASKED, off the parked conversation: the event that
 		// resumed it is a collection or a reply, and its ask is not the
 		// turn's.
-		ask: in.State.Ask,
+		ask:      in.State.Ask,
+		askLabel: in.State.AskProvenance,
 		// AND WHO ASKED IT, off the same parked conversation and for the
 		// same reason.
 		senders: in.State.Senders,

@@ -32,6 +32,7 @@ import (
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/node"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	llmchain "github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
@@ -1083,7 +1084,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// running and leaves the box for the next completion — and keeps its
 	// indicator on the same terms, off the ROW rather than off the intent.
 	if res.Suspended {
-		working = stillWorking(e.persistSuspension(ctx, r, in.Run.TurnID, tel.written, charge, tel.ask, tel.senders))
+		working = stillWorking(e.persistSuspension(ctx, r, in.Run.TurnID, tel.written, charge, tel.ask, tel.askLabel, tel.senders))
 	}
 	e.recordResume(ctx, in, res)
 	return nil
@@ -1298,12 +1299,13 @@ func resumeReply(run sandbox.PendingRun) (turn.Reply, error) {
 // turn has measured of itself so far (execstate.State.SoFar), for the record
 // that ends it to state the whole turn. And so does what
 // the turn was ASKED (execstate.State.Ask), which the finishing segment's
-// completed-turn event carries and is woken by something else entirely — and
-// WHO asked it (execstate.State.Senders), which a refresh_memory call in any
+// completed-turn event carries and is woken by something else entirely, with
+// who wrote it (execstate.State.AskProvenance), which nothing the finishing
+// segment reads could say again — and WHO asked it (execstate.State.Senders), which a refresh_memory call in any
 // later segment tells the memory filter, since no later segment has the
 // interactions to read them off.
 func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID string,
-	written *turnctx.Written, charge segmentCharge, ask string,
+	written *turnctx.Written, charge segmentCharge, ask string, askLabel *provenance.Label,
 	senders []types.CanonicalIdentity,
 ) (bool, error) {
 	rt := e.sandbox.Load()
@@ -1322,6 +1324,7 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 	suspension.State.Uncharged = charge.carry
 	suspension.State.SoFar = charge.soFar
 	suspension.State.Ask = ask
+	suspension.State.AskProvenance = askLabel
 	suspension.State.Senders = senders
 	blob, err := execstate.Encode(suspension.State)
 	if err != nil {

@@ -3,12 +3,15 @@ package execstate_test
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strconv"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/provenance"
 	llm "github.com/crewlet/crewlet/internal/providers/llm"
 )
 
@@ -45,8 +48,11 @@ func suspended() execstate.State {
 		}},
 		Iterations: []ledger.Iteration{{Iteration: 1, Intent: "fix it"}},
 		Task:       "fix the flake",
-		Uncharged:  &execstate.Uncharged{Turns: 1, Input: 900, Output: 120, Workers: 1},
-		SoFar:      &execstate.TurnSoFar{DurationMS: 42_000, Reviews: 2, SentBack: 1, Unaccepted: 1},
+		Ask:        "fix the flake on the payment client",
+		AskProvenance: &provenance.Label{Source: provenance.SourceChatThread,
+			Trust: provenance.TrustExternal, Authors: []provenance.Author{{Kind: iam.ActorHuman}}},
+		Uncharged: &execstate.Uncharged{Turns: 1, Input: 900, Output: 120, Workers: 1},
+		SoFar:     &execstate.TurnSoFar{DurationMS: 42_000, Reviews: 2, SentBack: 1, Unaccepted: 1},
 	}
 }
 
@@ -99,6 +105,12 @@ func TestAStateRoundTripsThroughTheRow(t *testing.T) {
 	}
 	if got.Task != "fix the flake" {
 		t.Fatalf("task = %q", got.Task)
+	}
+	// WHAT IT WAS ASKED, AND WHO ASKED IT IN WHAT WORDS: the segment that
+	// records the ask reads no trigger, so a label lost here is a stranger's
+	// words recorded as nobody's.
+	if got.Ask != want.Ask || !reflect.DeepEqual(got.AskProvenance, want.AskProvenance) {
+		t.Fatalf("the ask came back as %q under %+v", got.Ask, got.AskProvenance)
 	}
 	// WHAT NO ITEM HAS BEEN CHARGED FOR YET. The segment that finishes the
 	// turn pays it, and it is often another process on another node, so a

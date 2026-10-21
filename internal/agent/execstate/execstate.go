@@ -56,6 +56,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/provenance"
 	llm "github.com/crewlet/crewlet/internal/providers/llm"
 )
 
@@ -246,6 +247,13 @@ type State struct {
 	// label. Empty for a turn that was told nothing, whose episode is then
 	// embedded as its label and what it did.
 	Ask string `json:"ask,omitempty"`
+
+	// AskProvenance is who wrote Ask ([types.TurnCompleted.AskProvenance]),
+	// parked beside it for the same reason: the segment that records the
+	// ask reads no trigger, so the label the first segment read it under is
+	// one nothing else could rebuild. Nil where Ask is the company's or the
+	// seat's own words, or empty.
+	AskProvenance *provenance.Label `json:"ask_provenance,omitempty"`
 
 	// Senders is who ASKED — every distinct identifiable sender of the
 	// turn's interactions, in the order they first spoke — parked beside

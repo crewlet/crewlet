@@ -52,7 +52,12 @@ writer and the episode summary, each handed what the turn was asked — fenced a
 the trigger labels them, under a token minted for that call rather than the
 turn's, beside the standing sentence; what those calls answer decides what the
 seat is shown, and the briefing the summary writes is defused before it reaches
-the seat's prompt. A model that rewrites a text to fit a budget reads it the
+the seat's prompt. The label each of those words was read under is a value
+(`provenance.Label`) decided once, where the delivery is in hand, and carried
+on the turn's record of what it was asked — each inbound body's, and the ask's
+merged — across a suspension too, so every reader after the turn fences the
+same words the same way rather than deciding again from what it can no longer
+see. A model that rewrites a text to fit a budget reads it the
 same way, fenced under a token minted for that rewrite and labelled as its
 caller says, and its rewrite is defused before the caller places it. A tool that returns such text and does not
 go through the package fails a walk, and so does a wake surface or a kind of
