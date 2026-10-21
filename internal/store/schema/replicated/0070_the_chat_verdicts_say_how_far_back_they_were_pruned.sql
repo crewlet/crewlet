@@ -1,0 +1,48 @@
+-- The chat verdicts say how far back the horizon has pruned them.
+--
+-- # What was missing
+--
+-- 0068's `chat_verdicts` keeps what the applier decided about every message
+-- record for thirty days by the broker's clock, and a reader that finds no
+-- verdict on a node whose rows have applied the record read that absence as a
+-- record every node's eviction gate DROPPED — the one other way a consumed
+-- message record writes no verdict. But the prune is a second way, and it
+-- leaves the same bytes: "dropped, so it said nothing" and "decided a month
+-- ago, and the decision was let go" became one observation, answered as the
+-- first. The change feed then withheld the wake of a month-old post that may
+-- well be in its room, and a writer told a gesture its own eviction had
+-- dropped it.
+--
+-- # What the row says
+--
+-- `through` is the highest packed position whose verdict the prune has
+-- removed: every verdict this node no longer holds is at or below it. A
+-- message record ABOVE it with no verdict on a node that has applied it was
+-- never decided here — a gate dropped it, on every node alike — and a record
+-- AT OR BELOW it may have been decided and pruned, so its absence vouches for
+-- nothing, and a reader answers it as the framework answers an operation its
+-- ledger may have lost (0017, `statelog_ops_lost`): unknown, never dropped.
+-- No row means nothing has been pruned. The reading is internal/chatlet's —
+-- see verdictIn.
+--
+-- # Why a position, and why the applier writes it
+--
+-- A POSITION, not an instant: the reader is asking about a record it names by
+-- its position, and the prune removes verdicts in the broker's instant order,
+-- which a position compares against exactly where an instant would need the
+-- record's own and a skew allowance beside it. Written by the APPLIER, in the
+-- message record's own transaction and in the same statement list as the
+-- prune it describes, as the largest of what it held and what this prune
+-- reached — so it never trails the rows actually gone, which is the unsafe
+-- direction, and every node writes the same value at the same position, which
+-- a domain that claims identity requires of every row it holds.
+--
+-- ONE ROW, keyed on `id` = 1, which the applier alone writes. No CHECK holds
+-- it there, for the reason no replicated table carries a constraint beyond its
+-- key: a violation inside the apply transaction aborts it deterministically on
+-- every node, which stalls the log rather than refusing one write.
+CREATE TABLE chat_verdicts_lost (
+    id      INTEGER NOT NULL PRIMARY KEY,
+    -- The highest packed position whose verdict the prune removed.
+    through INTEGER NOT NULL
+);

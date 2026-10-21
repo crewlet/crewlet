@@ -55,6 +55,12 @@ type writeRound struct {
 	verifier *statelog.Verifier
 
 	consumed uint64
+
+	// brokerShift is added to every broker instant the drain applies a
+	// record at, for a case about what a MONTH of the broker's clock does
+	// to the rows: the log's own instants are the embedded broker's, and
+	// the horizons the applier prunes by are measured against them.
+	brokerShift time.Duration
 }
 
 // tune amends the store's options, for the settings that are FOUNDER POLICY
@@ -194,6 +200,7 @@ func (r *writeRound) drain() {
 		if !ok {
 			continue
 		}
+		storedAt = storedAt.Add(r.brokerShift)
 		// THE FRAME FIRST, exactly as the framework's loop does it: a
 		// record is signed on its way to the appender, and what a domain
 		// decodes is the BODY.

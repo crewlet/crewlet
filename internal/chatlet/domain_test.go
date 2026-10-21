@@ -431,11 +431,12 @@ var theWrittenTables = map[chatlet.ObjectKind][]string{
 	// row because the per-channel sequence is minted from its counter,
 	// and it writes the derived child rows — who was named, who has
 	// spoken in the thread, who now follows it — and, for every one of
-	// them, what the applier decided about it.
+	// them, what the applier decided about it, and how far back the
+	// horizon has pruned those decisions.
 	chatlet.KindMessage: {
 		"chat_messages", "chat_channels", "chat_mentions",
 		"chat_thread_participants", "chat_follows", "chat_reactions",
-		"chat_verdicts",
+		"chat_verdicts", "chat_verdicts_lost",
 	},
 	chatlet.KindEviction:   {"chat_evictions"},
 	chatlet.KindGeneration: {"chat_log_generations"},

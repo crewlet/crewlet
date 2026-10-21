@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/chatlet`
-- **Enforced-by:** `internal/chatlet.TestTheScopeAlphabetHasNoPerMessageTerm`, `internal/chatlet.TestAPostIntoARoomArchivedAheadOfItIsRefusedAndSoIsItsRetry`, `internal/chatlet.TestAReactionPastTheCapIsRefusedAndTheWriterIsTold`, `internal/chatlet.TestASecondCopyOfAnOperationDoesNothing`
+- **Enforced-by:** `internal/chatlet.TestTheScopeAlphabetHasNoPerMessageTerm`, `internal/chatlet.TestAPostIntoARoomArchivedAheadOfItIsRefusedAndSoIsItsRetry`, `internal/chatlet.TestAReactionPastTheCapIsRefusedAndTheWriterIsTold`, `internal/chatlet.TestASecondCopyOfAnOperationDoesNothing`, `internal/chatlet.TestAVerdictTheHorizonLetGoIsUnknownNeverDropped`
 - **Measured:** a declared census of 20,000 messages a day against a compare-and-set budget of 16 rounds, and one deferral cascade in which a message-scoped post lets a node mint a sequence a deferred sibling should have had
 - **Cost-when-tried:** two shapes. ARBITRATED, the one the framework's other strict domains use everywhere: the busiest subject in the company serialises behind itself, and its failure mode is the one a chat system may not have — `ErrConflict` on a message somebody typed. ADDITIVE, the one this record first chose: it called the records commutative while the applier decided four of them against rows the writer's snapshot could not see — it declined the thirty-third distinct emoji, skipped an edit of a tombstone, and wrote a post into a room a record ahead of it had archived or taken its author out of — and the writer answered `applied` for every one, a record the applier dropped included, while the change feed woke seats about posts the room never held; and a second copy of an edit, landing after a later edit, put the older words back.
 - **Tag-status:** unreleased
@@ -96,7 +96,13 @@ deferral grace every other domain has.
 
 A verdict row per message record, kept for the operation ledger's horizon
 (`statelog.OpsRetention`, thirty days) by the broker's clock and pruned inside
-each record's own apply, sixty-four at a time; one read of it per gesture,
+each record's own apply, sixty-four at a time, beside one row saying the
+highest position the prune has removed (`chat_verdicts_lost`) — because a
+pruned verdict and a record every node's eviction gate dropped leave the same
+absence, and only the watermark tells them apart: an absent verdict at or
+below it is answered as the framework answers an operation its ledger may have
+lost, `unknown` and unvouched to a writer and no decision to the change feed,
+never as dropped; one read of it per gesture,
 after the apply the writer already waited for; and one per post or edit the
 change feed handles. The feed never waits on an applier that cannot answer —
 one more than a pull behind, or holding the record retained — and derives the

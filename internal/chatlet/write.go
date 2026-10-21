@@ -2439,12 +2439,16 @@ func (s *Store) react(ctx context.Context, actor Actor, channelID, messageID,
 // by the operation, so a refused post retried is refused again rather than
 // answered as said.
 //
-// THREE ANSWERS THE VERDICT READ CAN GIVE besides a decision: a record this
+// FOUR ANSWERS THE VERDICT READ CAN GIVE besides a decision: a record this
 // node holds retained — consumed and not applied, so the outcome is `pending`;
 // one a gate dropped everywhere, which is this node's own eviction landing
-// between its decision and its append; and a read that failed, which is
-// returned beside the identity like [Store.answer]'s, since the gesture is
-// durable and the same call made again is answered without writing again.
+// between its decision and its append; one whose verdict the horizon may have
+// let go ([verdictLost]), which is `unknown` and [statelog.Result.Unvouched],
+// the framework's own answer for an operation its ledger may have lost —
+// whether the record landed or was refused, nothing here can say any more;
+// and a read that failed, which is returned beside the identity like
+// [Store.answer]'s, since the gesture is durable and the same call made again
+// is answered without writing again.
 func (s *Store) decided(ctx context.Context, op OpKind, channelID, messageID string,
 	w Written) (Written, error) {
 
@@ -2471,6 +2475,15 @@ func (s *Store) decided(ctx context.Context, op OpKind, channelID, messageID str
 		// known on this node yet.
 		w.Outcome.Outcome = statelog.OutcomePending
 		return s.answer(ctx, channelID, messageID, w)
+	case v == verdictLost:
+		// UNKNOWN, AND UNVOUCHED: the record is on the log and was
+		// decided, and the decision is no longer kept — so the answer
+		// carries no position and no room, as an unvouched `unknown`
+		// from the framework does ([answered]).
+		return answered(Written{ChangeID: w.ChangeID, Outcome: statelog.Result{
+			Outcome: statelog.OutcomeUnknown, OpID: w.ChangeID,
+			Waited: w.Outcome.Waited, Unvouched: true,
+		}}), nil
 	case v == verdictDropped:
 		return Written{ChangeID: w.ChangeID, Outcome: w.Outcome}, &statelog.Unavailable{
 			Reason: statelog.ReasonEvicted,
