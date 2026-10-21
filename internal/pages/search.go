@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/search"
 )
 
@@ -234,11 +235,12 @@ func (s *Searcher) Answer(ctx context.Context, q knowledge.Query) (knowledge.Res
 			continue
 		}
 		shown[hit.Key] = knowledge.Hit{
-			Title:     hit.Title,
-			Container: hit.Container,
-			PageID:    hit.ID,
-			Snippet:   hit.Snippet,
-			Backend:   Backend,
+			Title:      hit.Title,
+			Container:  hit.Container,
+			PageID:     hit.ID,
+			Snippet:    hit.Snippet,
+			Backend:    Backend,
+			Provenance: HitLabel(),
 		}
 	}
 	for _, key := range answer.Candidates.Fused() {
@@ -252,6 +254,24 @@ func (s *Searcher) Answer(ctx context.Context, q knowledge.Query) (knowledge.Res
 		}
 	}
 	return out, nil
+}
+
+// HitLabel is what a native hit's title and snippet are, as a model reads them
+// (ADR-0040): a page's body, at a COLLEAGUE'S trust with nobody named.
+//
+// NOBODY NAMED, because the index a hit is read back from keeps the page's
+// title and the opening of its body and not who wrote either: naming the
+// writers would be a read of every hit's revisions for a bullet the seat opens
+// in full anyway, where `get_page` names them.
+//
+// A COLLEAGUE'S TRUST ALL THE SAME ([provenance.TrustForPartial]), because the
+// surface vouches for it: every write to a page here is authenticated as a
+// seat, a person, an operator credential or the engine, so whoever wrote it was
+// a company principal, though never `own` — the unnamed writer may be anybody
+// who could write there.
+func HitLabel() provenance.Label {
+	return provenance.Label{Source: provenance.SourcePageBody,
+		Trust: provenance.TrustForPartial("", nil)}
 }
 
 // failed is the answer to a search this node could not run at all: no hits,
