@@ -25,12 +25,16 @@ import (
 //   - A credential the child is started from can be sealed AFTER the claim.
 //     On a first boot under an integration that provisions seat identities,
 //     the engine claims its seats before the provisioning pass has minted
-//     their tokens, so each child is spawned with the credential empty, the
-//     vendor's server refuses to start, and the seat receives messages it
-//     has no tool to answer — until it next changes hands, which on a single
-//     node is the next restart. The pass re-activates the revision once it
-//     has sealed ([Engine.rebuildForSealedSecrets]), and the apply that
-//     follows is where the child has to come back.
+//     their tokens. Such a child is not started at all while a value it is
+//     started with references a variable that resolves to nothing —
+//     waiting, not failed, where the pass will mint it (toolcredentials.go).
+//     The pass that seals asks for a pass over this node's seats as soon as
+//     it has refreshed the snapshot ([refreshingSink.Flush]), and
+//     re-activates the revision so every other node's apply does the same
+//     ([Engine.rebuildForSealedSecrets]); either is where the child starts.
+//     Before that rule a claim spawned it with the credential empty, the
+//     vendor's server refused to start, and the pass after the seal had to
+//     restart it from a spec the claim had already taken.
 //   - A credential is ROTATED, by the documented gesture of re-activating an
 //     unchanged revision. A child keeps the environment it was exec'd with,
 //     so only a restart hands it the new value.
@@ -43,11 +47,17 @@ import (
 // new epoch and the snapshot it just refreshed produce, exactly as the shared
 // servers are reconciled into each epoch: a child whose resolved spec is
 // unchanged is left running and never learns an apply happened, one whose
-// spec moved is restarted, one that is not running is started, and one the
-// seat no longer declares is stopped. And a pass that leaves a child failed
-// for any reason but a spec that can never launch tries again on its own,
-// on the restart schedule every MCP server is retried on ([mcp.RestartWait]),
-// until the child starts or the seat is let go.
+// spec moved is restarted, one that is not running is started — unless a
+// value it is started with does not resolve, when it is held back, unstarted
+// (toolcredentials.go) — and one the seat no longer declares, or whose
+// credential has stopped resolving, is stopped. A provisioning pass that
+// seals asks for the same pass as soon as this node's snapshot holds what it
+// sealed ([refreshingSink.Flush]). And a pass that leaves a child failed to
+// START tries again on its own, on the restart schedule every MCP server is
+// retried on ([mcp.RestartWait]), until the child starts or the seat is let
+// go — except a spec that can never launch and a child held back for its
+// credential, which nothing changes before a revision or the snapshot does,
+// and each of those runs a pass of its own.
 //
 // A child that DIES after it started is not this file's to restart: its
 // bridge noticed, keeps it, and is bringing it back, gated on the same proof
@@ -63,18 +73,18 @@ import (
 //
 // # One pass at a time per seat, and the last one is current
 //
-// A pass is asked for from three places — the claim, every apply, the retry
-// timer — on three goroutines, and two passes over one bridge at once would
-// race a restart against a start of the same child. They are SINGLE-FLIGHT:
-// each seat has at most one RUNNER, whoever finds a runner already there asks
-// it to go AGAIN and returns, and the runner does not stop until it has run a
-// pass nothing asked it to repeat. That is what closes the race the claim used
-// to lose. A claim's pass is spawning children from the snapshot it read when
-// the apply that seals their credential lands; the apply could not rebuild
-// what was not yet there, and the claim finished with the child it had
-// started from nothing. Now the apply's request makes the claim go again
-// before it returns — before the seat's mailbox opens — against the snapshot
-// the apply installed.
+// A pass is asked for from four places — the claim, every apply, a seal that
+// refreshed this node's snapshot, the retry timer — on as many goroutines, and
+// two passes over one bridge at once would race a restart against a start of
+// the same child. They are SINGLE-FLIGHT: each seat has at most one RUNNER,
+// whoever finds a runner already there asks it to go AGAIN and returns, and
+// the runner does not stop until it has run a pass nothing asked it to repeat.
+// That is what closes the race the claim used to lose. A claim's pass is
+// spawning children from the snapshot it read when the apply that seals their
+// credential lands; the apply could not rebuild what was not yet there, and
+// the claim finished with the child it had started from nothing. Now the
+// apply's request makes the claim go again before it returns — before the
+// seat's mailbox opens — against the snapshot the apply installed.
 //
 // THE CLAIM IS ITS SEAT'S FIRST RUNNER FROM BEFORE IT IS REGISTERED, and that
 // is the half that makes the promise hold for every apply rather than for the
@@ -291,11 +301,8 @@ func (e *Engine) claimSeatChildren(ctx context.Context, handle string) *seatChil
 // own, one goroutine per seat because each start is a subprocess handshake
 // that has nothing to do with another seat's.
 //
-// Each runner's goroutine belongs to the seat rather than to this call: the
-// release cancels its pass and waits for it ([Engine.retireSeatChildren]),
-// and so does the engine's stop. Its context is the apply's values without
-// the apply's cancellation, for the same reason as the lease's: the apply is
-// over long before a slow start is.
+// Each runner's goroutine belongs to the seat rather than to this call
+// ([Engine.askSeatPasses]).
 //
 // Called AFTER the pointer moves, like the mailbox and scheduler steps and
 // for the same reason: an apply refused later must not have rebuilt the seat
@@ -315,7 +322,47 @@ func (e *Engine) reconcileSeatServers(ctx context.Context) {
 		}
 	}
 	e.mcpMu.Unlock()
+	e.askSeatPasses(ctx, held)
+}
 
+// passHeldSeats asks every seat this node holds for a pass over its children,
+// for a snapshot that moved with no apply behind it on this node: the one a
+// provisioning pass refreshes the moment it has sealed
+// ([refreshingSink.Flush]).
+//
+// AN APPLY'S KIND OF PASS, a new retry series included, because it is an
+// apply's kind of event — it changes what a child is started from. What it
+// does not do is refile a surface: the epoch did not move, and the pass refiles
+// the seat's own when it is done.
+//
+// It exists because the re-activation that seal requests is a WRITE the node
+// asks for and may not get — the config surface absent, the write refused,
+// a store blip — and every child held back for the credential just sealed
+// waited for it: on the very node holding the value, a child stayed unstarted,
+// and its status went on saying the integration had not minted what this
+// node's snapshot resolved. A child that failed for want of it used to come
+// back on its own retry, which re-read the snapshot; one held back has no
+// retry, so this is that retry's half of the work, done once, at the moment
+// it can succeed.
+func (e *Engine) passHeldSeats(ctx context.Context) {
+	e.mcpMu.Lock()
+	held := make([]*seatChildren, 0, len(e.seatMCP))
+	for _, s := range e.seatMCP {
+		held = append(held, s)
+	}
+	e.mcpMu.Unlock()
+	e.askSeatPasses(ctx, held)
+}
+
+// askSeatPasses asks each seat for an apply's kind of pass, and runs it on a
+// goroutine of the seat's own where nobody is running its passes already.
+//
+// Each runner's goroutine belongs to the seat rather than to the caller: the
+// release cancels its pass and waits for it ([Engine.retireSeatChildren]), and
+// so does the engine's stop. Its context is the caller's values without its
+// cancellation, for the reason the lease's is: the caller is done long before
+// a slow start is.
+func (e *Engine) askSeatPasses(ctx context.Context, held []*seatChildren) {
 	runner := context.WithoutCancel(ctx)
 	for _, s := range held {
 		if s.ask(true) {
@@ -364,9 +411,12 @@ func (e *Engine) convergeSeat(ctx context.Context, s *seatChildren, fresh bool) 
 // nothing asked to repeat. The caller is the seat's runner: [seatChildren.ask]
 // said so, or the claim built the seat that way ([Engine.claimSeatChildren]).
 //
-// What the last pass left decides what happens next: nothing, when every
-// child the seat declares is running, and otherwise a retry, armed here and
-// disarmed by the next pass or by the release.
+// What the last pass left decides what happens next: a retry, armed here and
+// disarmed by the next pass or by the release, when a child it tried to start
+// did not — and otherwise nothing. A child it did not try to start is no
+// reason to retry: one held back for its credential, or one whose spec can
+// never launch, waits for the snapshot or a revision to change, and each of
+// those runs a pass of its own.
 func (e *Engine) runSeatPasses(ctx context.Context, s *seatChildren) {
 	s.mu.Lock()
 	retry := false
@@ -445,13 +495,14 @@ func (e *Engine) seatPass(ctx context.Context, s *seatChildren, retryNow bool) b
 		// goes: the revision that removed the role is current, the sweep
 		// is about to release the seat, and a child left running until
 		// then is an identity the company no longer has.
-		specs, outcomes = seatSpecs(c, seat, e.resolver())
+		specs, outcomes = seatSpecs(c, seat, e.resolver(), e.mintedFor(c, s.handle))
+		outcomes = e.withheldForCredentials(ctx, outcomes)
 		// THE SEAT'S ID rides every outcome, which is what the heartbeat
 		// names a failing instance by, as a lease names its seat. A seat
 		// the epoch no longer has declares nothing and so reports nothing.
 		id, _ = c.Org.AgentIDFor(seat)
 	}
-	retireUndeclared(ctx, s, specs)
+	retireUndeclared(ctx, s, specs, outcomes)
 	started, retry := bringUp(ctx, s, specs, retryNow)
 	outcomes = append(outcomes, started...)
 
@@ -488,16 +539,27 @@ func (e *Engine) seatPass(ctx context.Context, s *seatChildren, retryNow bool) b
 
 // retireUndeclared stops every child of the seat that specs no longer names: a
 // template the revision removed or renamed, a grant the seat lost, a server
-// turned shared.
+// turned shared — or one the seat still declares whose credential has stopped
+// resolving, which held lists among the pass's outcomes.
 //
 // FIRST, before anything starts, for the reason the shared servers retire
 // first: a rename frees the name and the tools it published before the
 // replacement files its own.
-func retireUndeclared(ctx context.Context, s *seatChildren, specs []mcp.Spec) {
+//
+// A CHILD WHOSE CREDENTIAL WENT IS STOPPED TOO, and says so. A sealed token
+// deleted — by a disconnect that removed the seats' accounts, or by an
+// operator — leaves a child running on the value it was started with, acting
+// at the vendor as an identity the company no longer holds a credential for;
+// the rule that would not start it (toolcredentials.go) is the rule that
+// stops it. Logged as the seat no longer declaring the server, it sent the
+// reader to the configuration, which still declares it, while the status beside
+// the line said what was actually missing.
+func retireUndeclared(ctx context.Context, s *seatChildren, specs []mcp.Spec, held []mcpOutcome) {
 	desired := make(map[string]struct{}, len(specs))
 	for _, spec := range specs {
 		desired[spec.Name] = struct{}{}
 	}
+	withheld := withheldByInstance(held)
 	for _, name := range s.bridge.Servers() {
 		if _, keep := desired[name]; keep {
 			continue
@@ -506,6 +568,12 @@ func retireUndeclared(ctx context.Context, s *seatChildren, specs []mcp.Spec) {
 			log.WarnContext(ctx, "mcp_server_retire_failed", "server", name, "seat", s.handle,
 				"error", err, "detail", "its tools are gone from the seat's catalogue; "+
 					"the child may have survived and is reaped when the seat is released")
+			continue
+		}
+		if missing, ok := withheld[name]; ok {
+			log.InfoContext(ctx, "mcp_server_retired", "server", name, "seat", s.handle,
+				"detail", "a value the child is started with no longer resolves, so it "+
+					"is not left acting on the one it was started with: "+missing.reason())
 			continue
 		}
 		log.InfoContext(ctx, "mcp_server_retired", "server", name, "seat", s.handle,

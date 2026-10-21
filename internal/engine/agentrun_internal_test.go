@@ -272,7 +272,7 @@ func TestAnAgentModeSeatNeedsNoSandboxBlock(t *testing.T) {
 	t.Parallel()
 	e := &Engine{}
 	seat := &org.Role{Name: "SWE"}
-	env := e.sandboxEnv(seat, nil, nil)
+	env := e.runEnvironment(t.Context(), nil, seat, nil, nil).env
 	if env == nil {
 		t.Fatal("a seat with no sandbox block assembled no environment")
 	}

@@ -28,7 +28,9 @@ import (
 // tokens; each seat's chat server was spawned with an empty token and refused
 // to start, and the seat received messages it had no tool to answer, until a
 // restart claimed it again. The helper server here refuses an empty token the
-// same way (toolServerRequireEnv).
+// same way (toolServerRequireEnv), which is what a case that lets a start
+// happen with one would see — none may now: a seat's child whose credential
+// does not resolve is not started at all (toolcredentials.go).
 
 // convergingCompany is a company whose per-role tracker refuses to start
 // without the seat's token. The CEO's token is the ${CEO_TRACKER_TOKEN} a case
@@ -164,15 +166,16 @@ func launches(t *testing.T, dir string) int {
 	return len(entries)
 }
 
-// THE FIRST BOOT: a seat claimed before its credential was sealed gets its
-// child once the credential is.
+// A SEAT CLAIMED BEFORE ITS CREDENTIAL WAS SEALED gets its child once the
+// credential is.
 //
-// The claim spawned the child with the token empty, and it refused to start.
-// The pass that minted the token sealed it and re-activated the revision, which
-// every node applies — and the apply rebuilt the seat's REGISTRY and left its
-// children exactly as the claim had: none. The seat kept no tool to answer
-// with until it changed hands.
-func TestASeatChildThatStartedBeforeItsCredentialWasSealedStartsOnceItIs(t *testing.T) {
+// Nothing here provisions the CEO's token, so until it is sealed the claim
+// holds the child back as failed, naming the variable. A person sealing it by
+// hand re-activates the revision afterwards — `crewlet secrets set` tells them
+// to, and this case does it for them — which every node applies; and the apply
+// once rebuilt the seat's REGISTRY and left its children exactly as the claim
+// had: none. The seat kept no tool to answer with until it changed hands.
+func TestASeatChildWhoseCredentialIsSealedAfterTheClaimStartsOnceItIs(t *testing.T) {
 	t.Parallel()
 	doc := convergingCompany(nil)
 	e := newEngine(t, sealingOptions(t, doc))
@@ -187,6 +190,107 @@ func TestASeatChildThatStartedBeforeItsCredentialWasSealedStartsOnceItIs(t *test
 
 	if got := describes(t, e, "ceo", "tracker_probe"); got != "SEAT_TOKEN=ceo-minted" {
 		t.Errorf("the seat's child reports %q, want the credential that was sealed", got)
+	}
+}
+
+// provisioningCompany is a company that PROVISIONS its seats' Atlassian
+// identities: the integration block is there, so the reconcile loop's pass
+// mints each agent's account and seals its address and token into the
+// variables the seat's mcp_env points at. The CEO's per-role server refuses
+// to start without its token, and records every launch in starts.
+func provisioningCompany(starts string) string {
+	return fmt.Sprintf(`
+name: Acme
+providers:
+  llm:
+    zulu:
+      type: anthropic
+      model: claude-sonnet-5
+      api_keys: ["${K}"]
+integrations:
+  atlassian:
+    org_id: "${ATLASSIAN_ORG_ID}"
+    api_key: "${ATLASSIAN_ORG_KEY}"
+mcp_servers:
+  - name: atlassian
+    shared: false
+    command: %q
+    tool_prefix: "atlassian_"
+    env:
+      %s: "server"
+      %s: "JIRA_API_TOKEN"
+      %s: "JIRA_API_TOKEN"
+      %s: %q
+      %s: %q
+roles:
+  - name: CEO
+    handle: ceo
+    llm: zulu
+    mcp_env:
+      atlassian:
+        JIRA_USERNAME: "${CEO_ATLASSIAN_EMAIL}"
+        JIRA_API_TOKEN: "${CEO_ATLASSIAN_TOKEN}"
+`, os.Args[0],
+		toolServerModeEnv, toolServerEchoEnv, toolServerRequireEnv,
+		toolServerLaunchesEnv, starts,
+		procgrouptest.GORACE, procgrouptest.StandInRaceOptions())
+}
+
+// A SEAT'S CHILD IS NOT STARTED WHILE THE CREDENTIAL IT NEEDS IS STILL BEING
+// PROVISIONED, and starts once the seal reaches its node.
+//
+// On a first boot the engine claims its seats before the provisioning pass has
+// minted their credentials. The claim used to spawn the vendor's server with
+// the token empty — a process that refuses to start, or worse, starts and acts
+// as nobody — then retry it on the restart schedule, logging each attempt as a
+// failure, for a credential the engine itself knew it had not minted yet. The
+// launch directory is the proof: nothing may have been launched before the
+// seal, and exactly one launch after it. And the heartbeat is the other half:
+// the child it reports is held back for its credential, not a start that
+// failed.
+func TestASeatChildWaitsForItsProvisionedCredentialUnstarted(t *testing.T) {
+	t.Parallel()
+	starts := t.TempDir()
+	doc := provisioningCompany(starts)
+	e := newEngine(t, sealingOptions(t, doc))
+	claimed(t, e, 1)
+
+	// THE CLAIM'S PASS IS OVER when claimed returns — a claim returns once its
+	// seat's children have converged — so a start it made would be counted
+	// already, with no wait.
+	if got := launches(t, starts); got != 0 {
+		t.Fatalf("the seat's server was launched %d time(s) before the credential "+
+			"provisioning mints for it was sealed: it ran with the token empty", got)
+	}
+	// WAITING, OR FAILED NAMING THE PASS, and which of the two this beat sees
+	// is a race the case does not need to win: this engine runs its own
+	// Atlassian pass, whose organization key is unset here, so once that pass
+	// has reported, the child's wait has no end and is a failure carrying its
+	// finding. What it may never be is a start — launched, or failed to launch.
+	// TestAWaitingChildIsReportedFailedWhileThePassThatMintsItWaitsOnAPerson
+	// holds the judgement itself.
+	var row coord.MCPServerStatus
+	for _, r := range engine.MCPStatus(e) {
+		if r.Server == "atlassian" {
+			row = r
+		}
+	}
+	heldBack := row.Waiting == 1 ||
+		(row.Failed == 1 && strings.Contains(row.Error, "atlassian integration will not mint"))
+	if row.Started != 0 || row.Waiting+row.Failed != 1 || !heldBack {
+		t.Fatalf("the atlassian row is %+v before the seal: want the CEO's child "+
+			"held back for its credential, waiting or failed naming the pass", row)
+	}
+
+	seal(t, e, "CEO_ATLASSIAN_EMAIL", "agent-ceo@example.com")
+	seal(t, e, "CEO_ATLASSIAN_TOKEN", "ceo-minted")
+	reactivateAndSettle(t, e, doc)
+
+	if got := describes(t, e, "ceo", "atlassian_probe"); got != "JIRA_API_TOKEN=ceo-minted" {
+		t.Errorf("the seat's child reports %q, want the credential that was sealed", got)
+	}
+	if got := launches(t, starts); got != 1 {
+		t.Errorf("%d launches, want exactly the one the seal's apply made", got)
 	}
 }
 
@@ -350,16 +454,26 @@ func TestAnApplyDoesNotWaitForASeatsChildToStart(t *testing.T) {
 
 // AN APPLY THAT LANDS WHILE THE CLAIM IS STARTING THE CHILD IS NOT LOST.
 //
-// This is the order the first boot actually ran in: the claim read the
-// snapshot and spawned the child, the provisioning pass sealed the token and
-// the apply landed while that child was still failing, and the apply could not
-// reconcile children the claim had not yet recorded. The claim then finished
-// with the child it had started from nothing.
+// This is the order a first boot ran in: the claim read the snapshot and
+// spawned the child, the provisioning pass sealed the token and the apply
+// landed while that child was still failing, and the apply could not reconcile
+// children the claim had not yet recorded. The claim then finished with the
+// child it had started from the old value. A claim no longer starts a child
+// whose credential does not resolve, so here the start in flight is one from
+// a value the host's environment holds — a REQUIRED variable it holds
+// nothing for keeps the start failing until the case lets it go — and the
+// sealed credential, which the store answers ahead of the environment, is
+// what the apply moves the spec to.
 func TestAnApplyDuringTheClaimIsFoldedIntoIt(t *testing.T) {
 	t.Parallel()
 	hold := filepath.Join(t.TempDir(), "release-the-start")
-	doc := convergingCompany(map[string]string{toolServerHoldEnv: hold})
-	e := newEngine(t, sealingOptions(t, doc))
+	doc := convergingCompany(map[string]string{
+		toolServerRequireEnv: "CREWLET_ENGINE_TEST_NEVER_SET",
+		toolServerHoldEnv:    hold,
+	})
+	opts := sealingOptions(t, doc)
+	opts.Environment = config.MapSource{"K": "test-key", "CEO_TRACKER_TOKEN": "from-the-host"}
+	e := newEngine(t, opts)
 
 	started := make(chan error, 1)
 	go func() { started <- e.Start(t.Context()) }()
@@ -368,9 +482,10 @@ func TestAnApplyDuringTheClaimIsFoldedIntoIt(t *testing.T) {
 		return err == nil
 	})
 
-	// The credential arrives while the start that will fail is in flight.
+	// The credential arrives while the start that will fail is in flight,
+	// with the revision that stops requiring what the host never set.
 	seal(t, e, "CEO_TRACKER_TOKEN", "ceo-minted")
-	reactivate(t, e, doc)
+	reactivate(t, e, convergingCompany(nil))
 	if err := os.WriteFile(hold, nil, 0o600); err != nil {
 		t.Fatalf("release the start: %v", err)
 	}

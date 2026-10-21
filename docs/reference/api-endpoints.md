@@ -6839,23 +6839,40 @@ read as "started nothing". A node that reports and started nothing is
 any a node reports that the configuration does not carry (`configured: false`
 — a node still on an older revision mid-rollout). The launch is the parts
 that are not credentials — `transport`, `command`, `args`, `url`; `env` and
-`headers` are never here. `started` and `failed` are summed over the nodes,
-`tools` is the most one started instance serves, and `state` is decided here
-so no screen re-derives it:
+`headers` are never here. `started`, `failed` and `waiting` are summed over
+the nodes, `tools` is the most one started instance serves, and `state` is
+decided here so no screen re-derives it. `waiting` counts a seat's instances
+held back, unstarted, for a credential a
+[provisioning pass mints for that seat](../guides/tools-and-mcp.md#shared-vs-per-role-servers)
+and has not sealed yet, where nothing that pass last reported says it cannot —
+neither started nor failed, since nothing is wrong and each starts once the
+seal reaches its node. One whose pass reports that a person must act first
+(its own credential missing or refused, an approval outstanding, the seat's
+account failed or switched off, or the integration being disconnected) counts
+as `failed`, judged again at every heartbeat, since a wait with no end is a
+failure somebody has to act on:
 
 | `state` | Means |
 |---|---|
 | `running` | Every instance any node launched is serving: it started, listed its tools and was up at its node's last beat |
 | `partial` | Some are serving and some are not — a node's environment, one seat's credentials, or one child that died and is being restarted, rather than the server |
-| `failing` | Instances were launched and none is serving — the server, its command or address, or credentials every seat shares, or every instance went down and is being restarted |
+| `failing` | Something failed and nothing is serving — instances were launched and none serves (the server, its command or address, or credentials every seat shares), every instance went down and is being restarted, or the server was held back, unlaunched, for a value that resolves to nothing: a shared server's own, or one every seat's instance lacks |
+| `waiting` | Nothing was launched and nothing failed, and some seat's instance is waiting for its provisioned credential. Only where nothing else decides: a server serving one seat while another waits is `running`, and one with a failure beside a wait is `partial` or `failing` |
 | `not_started` | Every reporting node started nothing for it — a per-seat template no seat on a live node declares credentials for |
 | `unreported` | No live node's latest heartbeat carried the report |
 
-`error` is one failed instance's reason, cut to 240 bytes on the heartbeat,
-and `error_seat` the seat it was launched for; the whole text is the node's
-`mcp_server_failed` log line for a start that failed, and its `server_exited`
-or `server_restart_failed` line for an instance that went down after it
-started.
+`error` is one failed instance's reason, cut to 512 bytes on the heartbeat,
+and `error_seat` the seat it was launched for (none for a shared server); the
+whole text is the node's `mcp_server_failed` log line for a start that failed,
+its `mcp_server_credential_missing` line for a server or a seat's instance held
+back, unlaunched, because a value it is started with resolves to nothing and
+nothing mints it, or the integration minting it cannot mint until a person
+acts (that one from the node's last pass over the seat; the heartbeat re-judges
+it against the integration's latest report), and its `server_exited` or
+`server_restart_failed` line for an instance that went down after it started.
+`wait` is one waiting instance's sentence — the variables it waits for and the
+integration minting them — bounded the same way, and `wait_seat` its seat; the
+node's `mcp_server_awaiting_credential` line carries it.
 
 `unlisted_annotations` are the entry's `tool_annotations` keys that no
 instance started on a reporting node lists a tool for — by the server's own
@@ -6876,12 +6893,13 @@ instance's own keys are on its `tools_discovered` log line
   "servers": [
     {"name": "github", "configured": true, "shared": false, "transport": "http",
      "command": "", "args": [], "url": "https://api.githubcopilot.com/mcp/",
-     "state": "partial", "started": 3, "failed": 1, "tools": 26,
+     "state": "partial", "started": 3, "failed": 1, "waiting": 0, "tools": 26,
      "unlisted_annotations": [],
      "nodes": [
-       {"node": "node-1", "reported": true, "started": 2, "failed": 0, "tools": 26, "error": "", "error_seat": ""},
-       {"node": "node-2", "reported": true, "started": 1, "failed": 1, "tools": 26,
-        "error": "401 Bad credentials", "error_seat": "backend-dev"}
+       {"node": "node-1", "reported": true, "started": 2, "failed": 0, "waiting": 0, "tools": 26,
+        "error": "", "error_seat": "", "wait": "", "wait_seat": ""},
+       {"node": "node-2", "reported": true, "started": 1, "failed": 1, "waiting": 0, "tools": 26,
+        "error": "401 Bad credentials", "error_seat": "backend-dev", "wait": "", "wait_seat": ""}
      ]}
   ]
 }

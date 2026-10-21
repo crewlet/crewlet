@@ -45,6 +45,7 @@ import { PlugGlyph, CopyGlyph, FileTextGlyph, LinkGlyph } from "@crewlethq/icons
 import { Field, type FieldKind } from "~/ui/Field.tsx";
 import { marked, paths, Problems } from "~/ui/Problems.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
+import { isWholeReference } from "~/lib/references.ts";
 import { useSecretNames } from "~/lib/useSecretNames.ts";
 import type { SetupRequirement, SetupSeatState, SetupToolState } from "~/protocol/index.ts";
 import { href } from "~/app/router.tsx";
@@ -124,16 +125,11 @@ export function vendorLink(
     // names the organization rather than being it, so the path takes what
     // the engine currently reads for it. WHAT IS TYPED WINS otherwise, so
     // the link follows the box as somebody fills it in.
-    const value = isReference(typed) ? (read?.(field) ?? "").trim() : typed;
+    const value = isWholeReference(typed) ? (read?.(field) ?? "").trim() : typed;
     if (value === "") return "";
     resolved = resolved.replace(`{${field}}`, encodeURIComponent(value));
   }
   return resolved;
-}
-
-/** Whether a value is wholly a `${NAME}` reference. See ui/Field.tsx. */
-function isReference(value: string): boolean {
-  return /^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(value.trim());
 }
 
 /**

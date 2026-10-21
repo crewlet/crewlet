@@ -107,10 +107,21 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 
 	company := e.Company()
 	gate := seatSandbox(company, l.seat.Handle())
-	setup := e.boxSetup(manager.DefaultSetup(), l.seat.Handle(), gate)
+	// A RUN ENVIRONMENT THAT DOES NOT RESOLVE IS SAID AND NOT REFUSED here,
+	// where run_sandbox refuses one. This run is not a tool call a turn
+	// chose but the turn's executor itself: refused, the phase fails and the
+	// turn with it (internal/agent/turn), so every message the seat could
+	// answer through its bridge would fail for a code-host token a pass may
+	// mint in a minute — the reason a seat's mailbox does not wait for a
+	// tool server held back for its credential (toolcredentials.go). The
+	// run starts without what is missing, and the line says why it is.
+	runEnv := e.runEnvironment(ctx, company, l.seat, gate, manager.DefaultSetup())
+	runEnv.logGap(ctx, l.seat.Handle(), "the run starts without them")
+	runEnv.logFacts(ctx, l.seat.Handle())
+	setup := runEnv.setup
 	var servers map[string]sandbox.MCPServer
 	if gate != nil {
-		servers = sandboxMCP(e.resolver(), company, l.seat, gate)
+		servers = e.boxServers(ctx, company, l.seat, gate)
 	}
 	// THE SEAT'S OWN SERVERS PLUS THE BRIDGE. Both, because they answer
 	// different questions: a scoped MCP server is a credential the box
@@ -118,7 +129,7 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	// colleagues, its channels, its memory, its submission.
 	servers = withBridge(servers, endpoint)
 
-	run, refused := l.executorRun(company, e.sandboxEnv(l.seat, gate, setup))
+	run, refused := l.executorRun(company, runEnv.env)
 	if refused != nil {
 		e.bridge.Close(l.turn.RunID)
 		return refused

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"net/textproto"
 	"slices"
 	"strings"
 
@@ -90,6 +91,38 @@ type MCPServer struct {
 	URL     string            `yaml:"url,omitempty" json:"url,omitempty" desc:"Endpoint of the remote server (http)."`
 	Headers map[string]string `secret:"true" yaml:"headers,omitempty" json:"headers,omitempty" desc:"Headers sent with each request (http); ${VAR} supported."`
 
+	// OptionalKeys names the keys whose value may resolve to nothing: of
+	// this server's env or headers, and of a seat's or unit's mcp_env block
+	// for it, which lands in the same environment or the same headers.
+	//
+	// EVERY OTHER REFERENCE MUST RESOLVE before the server is started — on
+	// the engine host or in a coding agent's box — because a credential that
+	// arrives empty either fails the server or lets it act as nobody
+	// (internal/engine, toolcredentials.go). What that rule cannot tell on
+	// its own is a host setting passed through by name, like a private
+	// registry's NPM_CONFIG_REGISTRY, which most hosts never set. Such a key
+	// is listed here, and when any reference in its value resolves to
+	// nothing the key is LEFT OUT, whole: the child is started without the
+	// variable or the request without the header, as Kubernetes starts a
+	// container without an `optional` secret reference. Never half a value
+	// — "Bearer ${TOKEN}" with TOKEN unset would be "Bearer ", a credential
+	// that looks set — and never an empty one.
+	//
+	// BY KEY AND NOT BY VARIABLE, because a key is what the server reads:
+	// seats point one key at variables of their own (${ALICE_X},
+	// ${BOB_X}), and one variable can sit under a key that may go without it
+	// and another that may not. And not as shell syntax (`${VAR:-}`): the
+	// reference grammar deliberately leaves that alone, so a setup step's
+	// script survives resolution untouched (internal/envref).
+	//
+	// A VARIABLE A PROVISIONING PASS MINTS for the seat is waited for
+	// whatever this list says: the declaration is for a value nothing will
+	// supply, and that one is coming. Started without it, the seat's child
+	// would act as nobody until the seal — the failure the rule exists to
+	// stop. The url has no key and is never optional: a server is dialled
+	// at it.
+	OptionalKeys []string `yaml:"optional_keys,omitempty" json:"optional_keys,omitempty" desc:"Keys of env, headers or a seat's mcp_env block for this server whose value may resolve to nothing; such a key is left out rather than holding the server back."`
+
 	// ToolAnnotations corrects behavioural hints per TOOL, keyed by bare
 	// tool name.
 	//
@@ -150,6 +183,34 @@ func (m *MCPServer) Grants(seat *org.Role) bool {
 	}
 	_, declared := seat.MCPEnv[m.Name]
 	return declared
+}
+
+// OptionalKey reports whether key's value may resolve to nothing, the key then
+// being left out rather than holding the server back — see [MCPServer.OptionalKeys].
+// Matched as [MCPServer.ValueKey] tells keys apart, so `authorization` declares
+// an http server's `Authorization` header optional.
+func (m *MCPServer) OptionalKey(key string) bool {
+	return slices.ContainsFunc(m.OptionalKeys, func(listed string) bool {
+		return m.ValueKey(listed) == m.ValueKey(key)
+	})
+}
+
+// ValueKey is the identity of key among the values this server is started
+// with: for an http server, the header's canonical spelling, and for a stdio
+// server the variable's own name.
+//
+// HTTP NAMES A HEADER IN ANY CASE, so `authorization` and `Authorization` are
+// one header, sent once. Compared as written, a seat's `authorization` did not
+// replace its template's `Authorization`: both were kept, the connection set
+// whichever came last out of a map on each request, and the seat's child sent
+// the template's identity on some of them — or, with the seat's key optional
+// and unset, on all of them. An environment does tell `token` from `TOKEN`,
+// so a stdio server's keys stay as written.
+func (m *MCPServer) ValueKey(key string) string {
+	if m.Kind() == TransportHTTP {
+		return textproto.CanonicalMIMEHeaderKey(key)
+	}
+	return key
 }
 
 // Kind is the transport, applying the stdio default.

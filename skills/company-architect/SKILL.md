@@ -432,8 +432,9 @@ When you finish, the founder should have:
    anything at, and it is what every company starts as. Validate it too
    (`crewlet validate crewlet.yaml`).
 3. `.env` — every `${VAR}` the two files reference, with real values.
-   List them explicitly; a missing one resolves to an empty string and
-   fails later, deep in a turn.
+   List them explicitly; a missing one keeps a tool server, or a
+   `run_sandbox` coding run, that reads it from starting, and anywhere
+   else can resolve to an empty string that fails later, deep in a turn.
 4. The run command, and what they should expect to see:
 
 ```bash

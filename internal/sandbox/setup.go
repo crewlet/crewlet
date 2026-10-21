@@ -60,6 +60,13 @@ type SetupStep struct {
 	// resolved exactly ONCE, with the rest of the sandbox env at launch.
 	Env map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
 
+	// OptionalKeys names the keys of Env and the paths of Files whose value
+	// may resolve to nothing at launch: the engine leaves such a variable
+	// out and writes no such file, where any other reference that resolves
+	// to nothing refuses a `run_sandbox` coding run (an agent-mode
+	// executor's box starts without it, and the engine says so).
+	OptionalKeys []string `yaml:"optional_keys,omitempty" json:"optional_keys,omitempty"`
+
 	// Brief is the environment-context paragraph for the coding agent —
 	// what this step made true about the box. Empty means nothing to tell.
 	Brief string `yaml:"brief,omitempty" json:"brief,omitempty"`
@@ -124,17 +131,6 @@ func (e *SetupError) Error() string {
 		msg += " — " + e.Detail
 	}
 	return msg
-}
-
-// SetupEnv merges every step's env contribution, in step order (later wins).
-func SetupEnv(steps []SetupStep) map[string]string {
-	merged := map[string]string{}
-	for _, step := range steps {
-		for key, value := range step.Env {
-			merged[key] = value
-		}
-	}
-	return merged
 }
 
 // ApplySetup applies every step to a fresh box: write files, run commands, in

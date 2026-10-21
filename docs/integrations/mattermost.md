@@ -33,11 +33,20 @@ fleet's secret store and kept, because disabling those bots again on
 disconnect needs the same authority that created them.
 
 On a first boot the engine claims its seats before that pass has minted their
-tokens, so each agent's `mcp-server-mattermost` is first started with an empty
-`MATTERMOST_TOKEN` and refuses to start (`mcp_server_failed` in the log). The
-pass seals the tokens and re-activates the revision, and once that apply has
-run each seat restarts its server with its token, so the agents get the tools
-they answer through without a restart of the engine. See
+tokens, so each agent's `mcp-server-mattermost` is not started yet: it is
+**waiting**, not failing, for a token this integration mints
+(`mcp_server_awaiting_credential` in the log, and *Waiting for credentials* on
+Settings › Tools & MCP, both naming it). The pass seals
+the tokens and re-activates the revision, and once the seal reaches a seat's
+node it starts the seat's server with its token, so the agents get the tools
+they answer through without a restart of the engine. That holds only where
+the company provisions its bots (`integrations.mattermost.provisioning`) and
+the pass can make them: where its last pass reports that it cannot until
+somebody acts — no administrator token, bot accounts or tokens switched off
+in the System Console, a bot somebody else deactivated — the server reads as
+failed, with that same finding. A company whose bots were made by hand seals
+each bot token itself, and a server whose token is unset is a failure naming
+the variable. See
 [Tools & MCP](../guides/tools-and-mcp.md#shared-vs-per-role-servers).
 
 Disconnecting with **"also remove the accounts this engine created"** revokes

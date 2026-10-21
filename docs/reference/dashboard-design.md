@@ -7435,12 +7435,17 @@ the engine's `mcp_servers_status`: each server's launch (the command and its
 arguments, or the address — never an `env` value or a header), who it
 **reaches** (every agent seat, *n seats* or *No seat*, from each agent seat's
 `tool_sources` on the pushed org — the engine's own grant), the engine's
-**state** (*Running*, *Partly failing*, *Failing*, *Not started*, *Not
-reported*) and **one chip per live node** with what that node started, and
-under THAT chip the first failure it reported, in secondary ink with the seat
-it was launched for — the chip carries the danger tone and names the node, so
-the reason does not repeat either. A server with `tool_annotations` keys no
-started instance lists says *n tool_annotations keys match no tool* under its
+**state** (*Running*, *Partly failing*, *Failing*, *Waiting for credentials*,
+*Not started*, *Not reported*) and **one chip per live node** with what that
+node started, and under THAT chip the first failure it reported, in secondary
+ink with the seat it was launched for — the chip carries the danger tone and
+names the node, so the reason does not repeat either. A seat's instance held
+back for a credential an integration is still minting is named on the chip
+(*n waiting*) and never toned, since it is no fault, and what it waits for sits
+under the chip as a failure's reason does; the server's page lists it whole
+under *What it waits for*, apart from *Why it failed*. A server with
+`tool_annotations` keys no started instance lists says
+*n tool_annotations keys match no tool* under its
 name, and its page names them whole. The engine puts `tool_sources` on every
 agent seat it pushes, so a shared server reaches every agent seat and a
 per-seat one the seats granted it. The launch
@@ -7470,7 +7475,14 @@ create judges the configuration alone), how it runs
 there is one for the company or one per seat granted it, the command and its
 arguments one per line (or the address), and the environment or headers as
 `NAME: value` rows whose value is a secret field (`$` offers the sealed
-entries). Add checks the whole company with the server in it (the create-only
+entries), each with its own **may be unset** box: ticked, the row's key is
+sent in the server's `optional_keys`, so a value whose secret has no value is
+left out rather than keeping the server from starting — said once above the
+rows, and refused before the round trip for a row whose value names no secret,
+since nothing in a literal can be unset. Two header rows spelling one header
+apart (`Authorization`, `authorization`) are refused the same way, since HTTP
+and the engine read them as one. Add checks the whole company with the
+server in it (the create-only
 `PUT /config/mcp-servers/{name}` with `If-None-Match: *` and `dry_run`), says
 any warning the add introduces — not one the company already carried — and
 places a refusal beside its field; then it stores the revision. A tool's own

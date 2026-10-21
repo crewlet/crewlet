@@ -30,6 +30,15 @@ import (
 	"strings"
 )
 
+// NameGrammar is the NAME a reference carries between its braces, as a
+// regular expression: the identifier rule the shell uses.
+//
+// EXPORTED FOR THE DASHBOARD'S GATE, which holds the screens' own copy of it
+// (`contract/references.ts`) to this one: a screen deciding whether a value
+// is a reference judged by a grammar of its own, and one that drifted would
+// mask a reference as a secret or show a secret as a reference.
+const NameGrammar = `[A-Za-z_][A-Za-z0-9_]*`
+
 // pattern matches valid environment-variable NAMES only — the same
 // identifier rule the shell uses.
 //
@@ -38,16 +47,16 @@ import (
 // config-authored script content, and a sandbox setup step is exactly such
 // content: an operator's helper script full of shell syntax must survive
 // config resolution untouched.
-var pattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
+var pattern = regexp.MustCompile(`\$\{(` + NameGrammar + `)\}`)
 
 // wholeRef is the anchored form: the value is EXACTLY one reference and
 // nothing else.
-var wholeRef = regexp.MustCompile(`^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$`)
+var wholeRef = regexp.MustCompile(`^\$\{(` + NameGrammar + `)\}$`)
 
 // namePattern is the same identifier rule with no braces around it: the
 // NAME on its own, as a secret store row is keyed and as the environment
 // spells it.
-var namePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+var namePattern = regexp.MustCompile(`^` + NameGrammar + `$`)
 
 // ValidName reports whether a reference could ever name this variable.
 //

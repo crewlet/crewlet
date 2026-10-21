@@ -106,6 +106,11 @@ roles:
         FAKE_AGENT_PATH: "${FAKE_AGENT_PATH}"
         FAKE_AGENT_ARGV: "${FAKE_AGENT_ARGV}"
         FAKE_AGENT_RELEASE: "${FAKE_AGENT_RELEASE}"
+      # Only the cases that read the argv or hold the agent set these two,
+      # and the stand-in reads both as possibly unset (${VAR:-}). Declared
+      # optional, a case that sets neither runs without them; undeclared,
+      # every such case's run is refused for a value it never needed.
+      optional_keys: [FAKE_AGENT_ARGV, FAKE_AGENT_RELEASE]
   - name: Founder
     kind: human
     contact:

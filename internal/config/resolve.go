@@ -179,12 +179,14 @@ func (r *Resolver) Value(value string) string {
 	return out
 }
 
-// Resolvable reports whether every reference in value resolves to something
-// NON-EMPTY.
+// Missing names every variable a value references that resolves to nothing
+// NON-EMPTY, in first-seen order and each once — nil when there is none.
 //
 // This is the presence check a caller makes before it commits to something
-// expensive with a credential — launching a sandbox, spawning an MCP
-// subprocess. It deliberately differs from [Resolver.Expand] in two ways.
+// that would act with a credential — spawning a seat's MCP child, offering a
+// coding agent a server — and it NAMES what it finds, because the one thing
+// the caller does next is tell somebody which variable to set. It
+// deliberately differs from [Resolver.Expand] in two ways.
 //
 // It tests the REFERENCES, not the resolved value: "Bearer ${TOKEN}" with
 // TOKEN unset resolves to "Bearer ", which is non-empty, so a caller
@@ -194,13 +196,14 @@ func (r *Resolver) Value(value string) string {
 // The two questions are different: Expand asks "did a source answer", which
 // is what substitution needs; this asks "is there a credential here", and an
 // empty credential is not one.
-func (r *Resolver) Resolvable(value string) bool {
+func (r *Resolver) Missing(value string) []string {
+	var missing []string
 	for _, name := range envref.Names(value) {
 		if r.Lookup(name) == "" {
-			return false
+			missing = append(missing, name)
 		}
 	}
-	return true
+	return missing
 }
 
 // Unresolved names one place in a config whose references resolved to

@@ -660,6 +660,13 @@ type SandboxSetupStep struct {
 	// service token is declared.
 	Env map[string]string `secret:"true" yaml:"env,omitempty" json:"env,omitempty" desc:"Env merged into the run; resolved once at launch, not at load."`
 
+	// OptionalKeys names the keys of Env, and the paths of Files, whose value
+	// may resolve to nothing: such a variable is left out of the run, such a
+	// file is not written, and the coding run is not refused for it. Every
+	// other reference must resolve before a `run_sandbox` box is started —
+	// see [RoleSandbox.OptionalKeys], the seat's own block's half.
+	OptionalKeys []string `yaml:"optional_keys,omitempty" json:"optional_keys,omitempty" desc:"Keys of env, or paths of files, whose value may resolve to nothing; left out rather than refusing the run."`
+
 	// Brief is the paragraph handed to the coding agent: what this step
 	// made TRUE about its box. Never resolved — it is agent-facing text,
 	// and substituting engine-host environment into it would be surprising

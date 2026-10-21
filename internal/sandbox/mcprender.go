@@ -18,18 +18,26 @@ import (
 // would be a claim rather than a control. What the engine decides is which
 // SERVERS reach the box, which it decides before the agent starts.
 //
-// This is a pure RESOLUTION, deliberately: the engine's own server
-// configuration and the seat's credentials in, the same server shape out with
-// the credentials merged and the unreachable entries dropped. What each CLI's
-// config file looks like belongs to its runner — which is where the key names
-// live, because this package once rendered them and then told the reader they
-// belonged elsewhere.
+// This is a pure SELECTION, deliberately: the engine's servers in, each with
+// its values already resolved and the seat's credentials already laid over
+// them, the same server shape out with the unscoped and unreachable entries
+// dropped. The merge is the engine's, beside the rule that decides whether a
+// server may start at all, because the two cannot be separated: a key a
+// server may go without is left out of the MERGED values, so a seat's value
+// that resolves to nothing never hands the key back to the server's default.
+// What each CLI's config file looks like belongs to its runner — which is
+// where the key names live, because this package once rendered them and then
+// told the reader they belonged elsewhere.
 
 // MCPServer is the engine's view of one configured server.
 //
 // Declared here rather than imported from config so this package depends on
 // the SHAPE and not on the config tree — the same reason the setup step is a
-// translation. A caller assembles these from whatever its config says.
+// translation. A caller assembles these from whatever its config says, with
+// every `${VAR}` reference already RESOLVED and the seat's own credentials
+// already merged in: what lands here is written into the coding CLI's own
+// config as it stands, and neither CLI reads a reference the way the engine
+// does.
 type MCPServer struct {
 	Name      string
 	Transport Transport
@@ -78,15 +86,15 @@ func (t Transport) Valid() bool {
 	}
 }
 
-// RenderMCP resolves a seat's scoped sandbox surface.
+// RenderMCP selects a seat's scoped sandbox surface.
 //
-// It answers in the SAME type it takes, with the seat's credentials merged in
-// — not a generic `map[string]any` of each CLI's own config keys. That shape
-// erased everything a runner needed: internal/sandbox/codingagent's OpenCode
-// writer had to assert its way back out of it, and its args branch carried two
-// fallbacks (`[]string` and `[]any`) because nothing but a convention said
-// which one it would find. The keys it erased into were Claude Code's, which
-// this package's own doc said belonged to a runner.
+// It answers in the SAME type it takes — not a generic `map[string]any` of
+// each CLI's own config keys. That shape erased everything a runner needed:
+// internal/sandbox/codingagent's OpenCode writer had to assert its way back
+// out of it, and its args branch carried two fallbacks (`[]string` and
+// `[]any`) because nothing but a convention said which one it would find. The
+// keys it erased into were Claude Code's, which this package's own doc said
+// belonged to a runner.
 //
 // Only the named servers are included, and one with no matching configuration
 // is SKIPPED rather than returned empty: the agent must never be shown a
@@ -95,7 +103,7 @@ func (t Transport) Valid() bool {
 //
 // Order does not matter to the output — it is a map — but the input list is
 // walked in the seat's own order so a duplicate name resolves once.
-func RenderMCP(servers []MCPServer, scoped []string, credentials map[string]map[string]string) map[string]MCPServer {
+func RenderMCP(servers []MCPServer, scoped []string) map[string]MCPServer {
 	if len(scoped) == 0 {
 		return nil
 	}
@@ -125,7 +133,7 @@ func RenderMCP(servers []MCPServer, scoped []string, credentials map[string]map[
 					"so the coding agent will not get this server")
 			continue
 		}
-		out[name] = withCredentials(server, credentials[name])
+		out[name] = forTransport(server)
 	}
 	if len(out) == 0 {
 		return nil
@@ -133,37 +141,23 @@ func RenderMCP(servers []MCPServer, scoped []string, credentials map[string]map[
 	return out
 }
 
-// withCredentials merges the seat's credentials over the server's own, into
-// whichever field its transport authenticates through.
-//
-// The seat's win: a server declares the shape and a seat declares who it is,
-// so a seat that supplies a token is saying something more specific than the
-// company-wide default it replaces.
+// forTransport is one server as its transport reads it, sharing nothing with
+// the server it was made from.
 //
 // The OTHER transport's field is cleared rather than carried: a stdio server
 // with headers on it is a config nobody wrote, and leaving one there would let
 // a future runner render a credential into a file the transport never reads.
-func withCredentials(server MCPServer, seat map[string]string) MCPServer {
+func forTransport(server MCPServer) MCPServer {
 	out := server
 	if server.Transport == TransportHTTP {
 		out.Command, out.Args, out.Env = "", nil, nil
-		out.Headers = merged(server.Headers, seat)
+		out.Headers = maps.Clone(server.Headers)
 		return out
 	}
 	// Stdio, which an empty transport also means. An unrecognised one never
 	// reaches here — RenderMCP skips it.
 	out.URL, out.Headers = "", nil
 	out.Args = slices.Clone(server.Args)
-	out.Env = merged(server.Env, seat)
-	return out
-}
-
-func merged(base, over map[string]string) map[string]string {
-	if len(base) == 0 && len(over) == 0 {
-		return nil
-	}
-	out := make(map[string]string, len(base)+len(over))
-	maps.Copy(out, base)
-	maps.Copy(out, over)
+	out.Env = maps.Clone(server.Env)
 	return out
 }

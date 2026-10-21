@@ -49,6 +49,7 @@ import type {
   OrgProjection,
   SandboxEntry,
 } from "~/protocol/index.ts";
+import { wholeReferenceName } from "~/lib/references.ts";
 import { activityOf } from "~/lib/seats.ts";
 import { keyOfHandle } from "./chartModel.ts";
 import { placeDerivation, type CheckedDocument, type PlacedDerivation } from "./model/document.ts";
@@ -350,23 +351,6 @@ export function placementSummary(placement: Readonly<Record<string, unknown>>): 
 // Names a document uses for credentials
 // ---------------------------------------------------------------------------
 
-/** A value that is exactly one `${NAME}` reference, as `envref.Whole` reads one. */
-const WHOLE_REFERENCE = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
-
-/**
- * Whether a value is exactly one `${NAME}` reference.
- *
- * WHICH IS WHAT MAKES A CREDENTIAL PROVISIONABLE. A provisioner mints into the
- * secret store and points the document at it, so it acts only where the
- * document already names an entry (`provision.SoleVar`); anything else is a
- * value somebody wrote by hand, which it reports and leaves alone. The
- * configuration surface sends a literal as its mask, so a screen cannot tell
- * the two apart by looking at the value, only by its shape.
- */
-export function isWholeReference(value: unknown): boolean {
-  return typeof value === "string" && WHOLE_REFERENCE.test(value.trim());
-}
-
 /**
  * Every secret store entry a value refers to by a whole `${NAME}`, sorted and
  * each once. Masked literals and partial references are not names and are
@@ -376,8 +360,8 @@ export function referenceNames(value: unknown): string[] {
   const out = new Set<string>();
   const walk = (v: unknown) => {
     if (typeof v === "string") {
-      const match = WHOLE_REFERENCE.exec(v.trim());
-      if (match) out.add(match[1]!);
+      const name = wholeReferenceName(v);
+      if (name !== undefined) out.add(name);
     } else if (Array.isArray(v)) v.forEach(walk);
     else if (isRecord(v)) Object.values(v).forEach(walk);
   };

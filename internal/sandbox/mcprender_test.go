@@ -20,7 +20,7 @@ func servers() []MCPServer {
 // what it is given IS the decision.
 func TestOnlyTheScopedServersReachTheBox(t *testing.T) {
 	t.Parallel()
-	got := RenderMCP(servers(), []string{"files"}, nil)
+	got := RenderMCP(servers(), []string{"files"})
 	if len(got) != 1 {
 		t.Fatalf("rendered %d servers, want just the scoped one: %v", len(got), got)
 	}
@@ -31,7 +31,7 @@ func TestOnlyTheScopedServersReachTheBox(t *testing.T) {
 
 func TestNothingScopedRendersNoConfigAtAll(t *testing.T) {
 	t.Parallel()
-	if got := RenderMCP(servers(), nil, nil); got != nil {
+	if got := RenderMCP(servers(), nil); got != nil {
 		t.Fatalf("RenderMCP with nothing scoped = %v, want nil", got)
 	}
 }
@@ -40,7 +40,7 @@ func TestNothingScopedRendersNoConfigAtAll(t *testing.T) {
 // spend a round discovering that it cannot connect.
 func TestAScopedServerTheEngineDoesNotKnowIsSkipped(t *testing.T) {
 	t.Parallel()
-	got := RenderMCP(servers(), []string{"files", "typo-in-the-name"}, nil)
+	got := RenderMCP(servers(), []string{"files", "typo-in-the-name"})
 	if len(got) != 1 {
 		t.Fatalf("rendered %v, want only the server that exists", got)
 	}
@@ -48,7 +48,7 @@ func TestAScopedServerTheEngineDoesNotKnowIsSkipped(t *testing.T) {
 
 func TestAStdioServerKeepsItsCommandAndArguments(t *testing.T) {
 	t.Parallel()
-	got := RenderMCP(servers(), []string{"files"}, nil)["files"]
+	got := RenderMCP(servers(), []string{"files"})["files"]
 	if got.Command != "mcp-files" {
 		t.Fatalf("command = %q", got.Command)
 	}
@@ -66,7 +66,7 @@ func TestAStdioServerKeepsItsCommandAndArguments(t *testing.T) {
 
 func TestAnHttpServerKeepsItsUrlAndHeaders(t *testing.T) {
 	t.Parallel()
-	got := RenderMCP(servers(), []string{"linear"}, nil)["linear"]
+	got := RenderMCP(servers(), []string{"linear"})["linear"]
 	if got.Transport != TransportHTTP || got.URL != "https://example.com/mcp" {
 		t.Fatalf("server = %+v", got)
 	}
@@ -78,46 +78,11 @@ func TestAnHttpServerKeepsItsUrlAndHeaders(t *testing.T) {
 	}
 }
 
-// A server declares the SHAPE and a seat declares WHO IT IS, so a seat that
-// supplies a token is saying something more specific than the company-wide
-// default it replaces.
-func TestTheSeatsOwnCredentialsWinOverTheServersDefaults(t *testing.T) {
-	t.Parallel()
-	creds := map[string]map[string]string{
-		"files":  {"MODE": "read-only", "TOKEN": "seat-token"},
-		"linear": {"Authorization": "Bearer seat-token"},
-	}
-	rendered := RenderMCP(servers(), []string{"files", "linear"}, creds)
-
-	env := rendered["files"].Env
-	if env["MODE"] != "read-only" {
-		t.Fatalf("the seat's value did not win: %v", env)
-	}
-	if env["TOKEN"] != "seat-token" {
-		t.Fatalf("the seat's own credential did not reach the box: %v", env)
-	}
-	headers := rendered["linear"].Headers
-	if headers["Authorization"] != "Bearer seat-token" || headers["X-Client"] != "crewlet" {
-		t.Fatalf("headers = %v", headers)
-	}
-}
-
-// One seat's credentials must never reach another server's spec.
-func TestOneServersCredentialsDoNotReachAnother(t *testing.T) {
-	t.Parallel()
-	creds := map[string]map[string]string{"files": {"TOKEN": "for-files-only"}}
-	rendered := RenderMCP(servers(), []string{"files", "linear"}, creds)
-	if _, leaked := rendered["linear"].Headers["TOKEN"]; leaked {
-		t.Fatalf("the files credential reached the linear server: %v",
-			rendered["linear"].Headers)
-	}
-}
-
 // The rendered args must not alias the configuration a later apply replaces.
 func TestTheRenderedServerDoesNotAliasTheConfiguration(t *testing.T) {
 	t.Parallel()
 	source := servers()
-	rendered := RenderMCP(source, []string{"files"}, nil)
+	rendered := RenderMCP(source, []string{"files"})
 	rendered["files"].Args[0] = "--mutated"
 	if source[0].Args[0] != "--root" {
 		t.Fatal("the rendered server aliased the configuration")
@@ -137,7 +102,7 @@ func TestAServerWithAnUnrecognisedTransportIsSkipped(t *testing.T) {
 	source := append(servers(), MCPServer{
 		Name: "mistyped", Transport: "htp", URL: "https://example.com/mcp",
 	})
-	got := RenderMCP(source, []string{"files", "mistyped"}, nil)
+	got := RenderMCP(source, []string{"files", "mistyped"})
 	if _, rendered := got["mistyped"]; rendered {
 		t.Errorf("a server with an unrecognised transport reached the box: %v", got["mistyped"])
 	}
