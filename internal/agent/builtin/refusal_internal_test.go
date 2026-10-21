@@ -516,11 +516,11 @@ func TestRefreshMemorySaysWhatALimitLeftOff(t *testing.T) {
 	for i := range entries {
 		entries[i] = learning.DiaryEntry{Kind: "long", Content: "note " + strconv.Itoa(i)}
 	}
-	all := renderHintedNotes(entries, "deploys", noteLimit)
+	all := renderHintedNotes(nil, entries, "deploys", noteLimit)
 	if strings.Count(all.Output, "- [long]") != noteLimit || strings.Contains(all.Output, "more that bear") {
 		t.Fatalf("the default did not show every pick:\n%s", all.Output)
 	}
-	some := renderHintedNotes(entries, "deploys", 3)
+	some := renderHintedNotes(nil, entries, "deploys", 3)
 	if strings.Count(some.Output, "- [long]") != 3 || !strings.Contains(some.Output, "+5 more that bear on this") {
 		t.Fatalf("a narrowed list did not say what it left off:\n%s", some.Output)
 	}
