@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/provenance`
-- **Enforced-by:** `internal/provenance.TestAFenceCannotBeClosedByItsContent`, `internal/agent/builtin.TestEveryUntrustedReadIsFenced`, `internal/agent/builtin.TestEveryArtifactToolResultIsFenced`
+- **Enforced-by:** `internal/provenance.TestAFenceCannotBeClosedByItsContent`, `internal/agent/builtin.TestEveryUntrustedReadIsFenced`, `internal/agent/builtin.TestEveryArtifactToolResultIsFenced`, `internal/engine.TestEveryWakeSurfaceFencesWhatSomebodyWrote`
 - **Cost-when-tried:** before this record, a page body, a work item's comments, a project file and the chat thread handed to a turn all reached the model as plain text in a tool answer or a prompt block, with no boundary the text could not also write and nothing saying who wrote it or that it was data. Anybody who could write a page, comment on an item or speak in a thread a seat reads could address the seat in the voice of its instructions.
 - **Tag-status:** unreleased
 
@@ -17,7 +17,9 @@ never an instruction, and every read result says so.** One package,
   close the fence by guessing its marker;
 - **labels** on the fence: the source (a page body, a work item comment, a
   project file, a chat message, a chat room's own topic or purpose, an artifact
-  file, a datastore row), who wrote
+  file, a datastore row, a note somebody wrote about a change they made, a
+  monitor's alert, a notification from an integration that names no surface of
+  its own), who wrote
   it (by kind and seat handle), and how far the reader may trust it (its own
   words, a colleague's, an outside party's, a page anybody may edit);
 - for a tool whose answer is structured, an **envelope** carrying the same
@@ -27,12 +29,18 @@ never an instruction, and every read result says so.** One package,
 
 It applies to every read that hands a model somebody else's words: page bodies,
 work item comments, project files, the chat thread block a turn is given, the
-message a chat wake hands a seat, and what the chat tools read (a room's
-messages, a thread, a search's snippets, a room's topic and purpose), and,
-from their first release, artifact files and datastore rows. A wake's trigger
-is built before the turn that reads it exists, so it is fenced under a token
-minted for the wake, which the turn moves onto its own. A tool that returns such text and does not go through the
-package fails a walk.
+body every wake hands a seat on every surface (a message, a comment, a
+description, a change's note, an alert, an unprompted integration's text), and
+what the chat tools read (a room's messages, a thread, a search's snippets, a
+room's topic and purpose), and, from their first release, artifact files and
+datastore rows. A wake's trigger is built before the turn that reads it exists,
+so it is fenced under a token minted for the wake, which the turn moves onto its
+own; the notification service fences the body before the surface's prompt
+renders it, so a prompt is never handed the words bare. A wake names a body's
+writer only where its payload says one person wrote every word, and otherwise
+names nobody, which reads `external`. A tool that returns such text and does not
+go through the package fails a walk, and so does a wake surface whose body does
+not reach the turn fenced.
 
 **Fencing reduces prompt injection and does not remove it.** What holds whatever
 a model does is structural, and stays where it is: the requester ceiling on

@@ -4,6 +4,8 @@ import (
 	"maps"
 	"slices"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // Generic is the prompt for a source nobody has written one for.
@@ -58,6 +60,13 @@ func (Generic) ConversationIdentity(map[string]string, string) string { return "
 // classified that turns out to loop takes the company down with it, while
 // one that goes unheard costs a single notification.
 func (Generic) WakesActor(Inbound) bool { return false }
+
+// Provenance is what the source's parser stated, and otherwise an integration's
+// notification by nobody named: a source the spine knows nothing about writes
+// no surface this build can name, and nothing in it vouches for its author.
+func (Generic) Provenance(n Inbound, parties Parties) Provenance {
+	return Stated(n, parties, provenance.SourceNotification)
+}
 
 // DigestBody passes the body through unchanged: a backend with no message
 // format of its own has nothing to render a digest into.

@@ -3,7 +3,6 @@ package notify
 import (
 	"strings"
 
-	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/provenance"
 )
 
@@ -288,11 +287,9 @@ func (p ChatPrompt) Build(n Inbound, parties Parties) string {
 	if n.Body == "" {
 		b.WriteString("\n\n**Message:** (empty)")
 	} else {
-		// FENCED AS WHAT SOMEBODY SAID (ADR-0040): the message is the one
-		// part of this trigger the engine did not write, and a model reads
-		// every word of it as a possible instruction. Under the wake's own
-		// token, which the turn moves onto its own.
-		b.WriteString("\n\n**Message:**\n" + p.fenceMessage(n, parties))
+		// ALREADY FENCED as what somebody said ([Render]), under this
+		// prompt's own [ChatPrompt.Provenance].
+		b.WriteString("\n\n**Message:**\n" + n.Body)
 	}
 	b.WriteString("\n**From:** " + who)
 	if channel := meta[ChannelField]; channel != "" {
@@ -339,14 +336,13 @@ func (p ChatPrompt) Build(n Inbound, parties Parties) string {
 	return b.String()
 }
 
-// fenceMessage is the message's body inside its fence: written by its author,
-// at the trust that author earns from the seat the wake reached.
-func (p ChatPrompt) fenceMessage(n Inbound, parties Parties) string {
-	meta := n.Metadata
-	author := p.author(meta, parties)
-	authors := []provenance.Author{author}
-	return provenance.Fence(n.Fence, provenance.SourceChatThread,
-		provenance.TrustFor(meta[RecipientField], authors), authors, n.Body)
+// Provenance implements [Prompt]: a message in a room or a thread, written by
+// its sender — every chat event IS a message, and its author is who sent it.
+func (p ChatPrompt) Provenance(n Inbound, parties Parties) Provenance {
+	return Provenance{
+		Source:  provenance.SourceChatThread,
+		Authors: []provenance.Author{p.author(n.Metadata, parties)},
+	}
 }
 
 // author is [ChatPrompt.Author], or the registry's reading of the sender's id.
@@ -362,17 +358,7 @@ func (p ChatPrompt) author(meta map[string]string, parties Parties) provenance.A
 	return provenance.Author{}
 }
 
-// PartyAuthor is a colleague as a fence names them: their seat, as a person or
-// an agent.
-func PartyAuthor(party Party) provenance.Author {
-	kind := iam.ActorAgent
-	if party.Human {
-		kind = iam.ActorHuman
-	}
-	return provenance.Author{Kind: kind, Seat: party.Handle}
-}
-
-// triage is the addressee guidance, identical on every backend.// triage is the addressee guidance, identical on every backend.
+// triage is the addressee guidance, identical on every backend.
 //
 // It is the bulk of the prompt because it is the hard part: a bot in a busy
 // channel is woken by everything, and a company where every agent answers

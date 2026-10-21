@@ -380,7 +380,7 @@ func TestANativeMessageIsFencedUnderWhoWroteIt(t *testing.T) {
 				n.Author, n.AuthorKind = c.author, c.kind
 			})
 			in.Body, in.Fence = "the release slipped", provenance.NewBoundary()
-			built := chat.NewPrompt().Build(in, c.parties)
+			built := notify.Render(chat.NewPrompt(), in, c.parties)
 			fences := provenance.Fences(built, in.Fence)
 			if len(fences) != 1 {
 				t.Fatalf("the wake carries %d fences, want the message's:\n%s",

@@ -74,6 +74,13 @@ func (p Prompt) ConversationIdentity(metadata map[string]string, subject string)
 // actor already knows about.
 func (Prompt) WakesActor(notify.Inbound) bool { return false }
 
+// Provenance implements [notify.Prompt]: the remark, the page's opening line or
+// the note saved with it, as the change kind says ([excerptSource]), by the
+// author the parser stated ([notify.Stated]).
+func (Prompt) Provenance(n notify.Inbound, parties notify.Parties) notify.Provenance {
+	return notify.Stated(n, parties, excerptSource(ChangeKind(n.EventType)))
+}
+
 // DigestBody implements [notify.Prompt]: comments keep their text, saves
 // collapse.
 //

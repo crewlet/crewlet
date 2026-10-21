@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // Prompt is what a firing monitor asks of the seat it reached.
@@ -122,6 +123,14 @@ func (Prompt) DigestBody(_, body string) string { return body }
 // spine's self-action rule never has anything to suppress and this answer is
 // about a case that cannot occur rather than a policy.
 func (Prompt) WakesActor(notify.Inbound) bool { return false }
+
+// Provenance implements [notify.Prompt]: an alert, by nobody the engine can
+// name. A monitor's message is whoever configured it plus whatever the
+// monitored system filled in when it fired — a host name, an error line — and
+// nothing in a payload vouches for either.
+func (Prompt) Provenance(notify.Inbound, notify.Parties) notify.Provenance {
+	return notify.Provenance{Source: provenance.SourceAlert}
+}
 
 // Build implements [notify.Prompt].
 func (Prompt) Build(n notify.Inbound, _ notify.Parties) string {

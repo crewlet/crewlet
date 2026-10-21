@@ -544,9 +544,9 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 	meta[RecipientField] = party.Handle
 	r.Metadata = meta
 	// THE WAKE'S OWN FENCE TOKEN, minted here because this is where the
-	// trigger is built and no turn exists yet to lend one: what a prompt
-	// fences of what somebody said is fenced under it, and the turn that
-	// reads the trigger moves those fences onto its own token.
+	// trigger is built and no turn exists yet to lend one: the body is
+	// fenced under it before the prompt renders it ([Render]), and the turn
+	// that reads the trigger moves those fences onto its own token.
 	r.Fence = provenance.NewBoundary()
 
 	out := types.ExternalNotification{
@@ -556,7 +556,7 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 		Agent:                party.AgentID.String(),
 		Sender:               r.Sender,
 		Subject:              r.Subject,
-		Body:                 prompt.Build(r.Inbound, reg),
+		Body:                 Render(prompt, r.Inbound, reg),
 		FenceBoundary:        string(r.Fence),
 		SalientBody:          &salient,
 		Metadata:             meta,

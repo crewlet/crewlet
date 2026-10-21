@@ -12,11 +12,13 @@ import (
 
 // Prompt is everything the spine needs to know about ONE third-party app.
 //
-// Eight questions, and each is asked by a different part of the spine — which
-// is why they are one interface rather than eight registries that could drift
+// Nine questions, and each is asked by a different part of the spine — which
+// is why they are one interface rather than nine registries that could drift
 // out of step about what a source is:
 //
 //   - Build renders the trigger a seat is woken with.
+//   - Provenance says what the notification's body is and who wrote it, which
+//     is how the spine fences it before Build is handed it ([Render]).
 //   - RequiresRecon says whether that trigger is the context or a POINTER at
 //     it, which the turn-start prefetches read.
 //   - SubjectIsLabel says whether the subject is part of what was sent or
@@ -48,10 +50,30 @@ type Prompt interface {
 
 	// Build renders the notification as the ask a seat is given.
 	//
+	// n.Body ARRIVES FENCED: [Render], the one caller, has already put it
+	// inside a fence of the wake's token labelled by [Prompt.Provenance]
+	// (ADR-0040), so a prompt renders it where it likes and cannot hand a
+	// seat somebody's words bare. A blank body arrives as it is.
+	//
 	// Parties resolves external ids to colleagues; a nil one is valid and
 	// means the raw ids are rendered, which is what a node with no org
 	// context can honestly do.
 	Build(n Inbound, parties Parties) string
+
+	// Provenance is what the notification's body is — the surface it was
+	// read from — and who wrote it, which is what the spine fences it as
+	// ([Render]) and what the turn's ask is fenced as where an auxiliary
+	// model reads it.
+	//
+	// Asked of the source because only it knows its surfaces: a code
+	// host's body is a comment on one event and a description on the next,
+	// and the person who CAUSED the event (who assigned the issue) is often
+	// not who wrote the body (who opened it). Most sources answer from what
+	// their parser stamped ([Stated]); a source whose body is always one
+	// kind of thing by one party, a chat message by its sender, answers
+	// from that. An author nobody can name is no author, which the fence
+	// labels `external`.
+	Provenance(n Inbound, parties Parties) Provenance
 
 	// RequiresRecon reports that the body only says WHERE to look.
 	//
@@ -204,8 +226,9 @@ type Inbound struct {
 
 	Subject string
 
-	// Body is the message as it arrived. The prompt turns it into the
-	// enriched trigger; this stays raw.
+	// Body is the message as it arrived, raw. The prompt turns it into the
+	// enriched trigger and is handed it fenced ([Render]); every other
+	// question the spine asks of a notification is asked of it raw.
 	Body string
 
 	Metadata map[string]string
