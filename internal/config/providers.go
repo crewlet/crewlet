@@ -787,8 +787,9 @@ func (l *LLMProvider) validateModel(path Path) error {
 }
 
 // validateCredentials holds an entry's credentials to the variables its
-// merged profile names, and the profile itself to keeping every credential
-// behind auth ([cliprofile.Profile.ValidateCredentials]).
+// merged profile names, those variables to the reference grammar, and the
+// profile itself to keeping every credential behind auth
+// ([cliprofile.Profile.ValidateCredentials]).
 //
 // The rules exist because the backend's applyAuth (in
 // internal/providers/llm/cliagent) places a credential only where the profile
@@ -825,6 +826,31 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 	agent := l.AgentName()
 	if err := profile.ValidateCredentials(agent); err != nil {
 		p.add(at(path, "overrides"), ErrConflict, "%v", err)
+	}
+
+	// THE TWO VARIABLES A CREDENTIAL IS HANDED OVER IN ARE NAMES OF THE
+	// REFERENCE GRAMMAR, because nothing that keeps a credential can hold
+	// any other: the secret store refuses the name, so `crewlet llm login
+	// -capture-token` cannot write the token there and a `${VAR}` cannot
+	// spell it; no shell exports one for auth.mode inherit-env to forward;
+	// and a name carrying `=` sets a different variable in the CLI's
+	// environment. Only overrides can name one — every shipped profile's
+	// names are in the grammar — and the CLI still starts with it, signed in
+	// by whatever it does read, so this is an admission rule like the rest.
+	// Here rather than in the profile's own rules because the grammar is
+	// envref's, which that leaf does not import.
+	for _, variable := range []struct{ field, name string }{
+		{"token_env", profile.TokenEnv}, {"api_key_env", profile.APIKeyEnv},
+	} {
+		if variable.name != "" && !envref.ValidName(variable.name) {
+			p.add(at(path, "overrides."+variable.field), ErrShape,
+				"%q is not an environment variable name (letters, digits and "+
+					"underscores, not starting with a digit): the CLI is handed its "+
+					"credential under it, and no secret store, ${VAR} or `crewlet llm "+
+					"login` can hold a name outside that grammar, nor a shell export "+
+					"one for auth.mode inherit-env to forward. Name the variable your "+
+					"build of the CLI reads", variable.name)
+		}
 	}
 
 	// The mode-dependent rules each state what a mode does with a
