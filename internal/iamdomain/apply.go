@@ -125,14 +125,18 @@ func (a *Applier) movedPerson(ctx context.Context, tx *sql.Tx, id string) error 
 // token's `token:<id>` row — is named too ([Moved.Logins]).
 func heldLogin(ctx context.Context, tx *sql.Tx, id string) (string, error) {
 	var login string
-	err := tx.QueryRowContext(ctx,
-		`SELECT login FROM iam_people WHERE id = ?`, id).Scan(&login)
+	err := tx.QueryRowContext(ctx, personLoginStatement, id).Scan(&login)
 	if err != nil && !errorsIsNoRows(err) {
 		return "", fmt.Errorf("iamdomain: read the login of person %s, whose "+
 			"row this record moved: %w", id, err)
 	}
 	return login, nil
 }
+
+// personLoginStatement is the login one person's row holds, by the row's own
+// key: what an apply names a moved person by ([heldLogin]) and what a decide
+// forms a credential's reason from ([loginOf]).
+const personLoginStatement = `SELECT login FROM iam_people WHERE id = ?`
 
 // THE APPLIER HEARS WHAT A BATCH RETAINED: see [Applier.Retained].
 var _ statelog.RetentionHook = (*Applier)(nil)
@@ -187,12 +191,15 @@ func (a *Applier) DerivationVersion() int { return DerivationVersion }
 //
 // READ WHOLE BEFORE ANY ROW IS WRITTEN, because an UPDATE of the table a
 // cursor is still walking is a write the cursor may or may not see again.
+//
+// A PASS, by definition: every invitation, in the order of its own key
+// ([invitationSeatsStatement]), each repaired by that key
+// ([rederiveSeatStatement]).
 func (a *Applier) Rederive(ctx context.Context, tx *sql.Tx,
 	_ statelog.ApplyOptions) (int, error) {
 
 	type stale struct{ id, seat string }
-	rows, err := tx.QueryContext(ctx,
-		`SELECT id, seat_id, document FROM iam_invites ORDER BY id`)
+	rows, err := tx.QueryContext(ctx, invitationSeatsStatement)
 	if err != nil {
 		return 0, fmt.Errorf("iamdomain: read the invitations to re-derive "+
 			"their seats: %w", err)
@@ -227,8 +234,7 @@ func (a *Applier) Rederive(ctx context.Context, tx *sql.Tx,
 			"their seats: %w", err)
 	}
 	for _, r := range repair {
-		if _, err = tx.ExecContext(ctx,
-			`UPDATE iam_invites SET seat_id = ? WHERE id = ?`,
+		if _, err = tx.ExecContext(ctx, rederiveSeatStatement,
 			r.seat, r.id); err != nil {
 			return 0, fmt.Errorf("iamdomain: re-derive invitation %s's "+
 				"seat: %w", r.id, err)
@@ -236,6 +242,14 @@ func (a *Applier) Rederive(ctx context.Context, tx *sql.Tx,
 	}
 	return len(repair), nil
 }
+
+// The two statements [Applier.Rederive] runs: every invitation with the seat
+// its row holds and the document that states it, and one row's seat set to
+// what its document states.
+const (
+	invitationSeatsStatement = `SELECT id, seat_id, document FROM iam_invites ORDER BY id`
+	rederiveSeatStatement    = `UPDATE iam_invites SET seat_id = ? WHERE id = ?`
+)
 
 // Gated reports a record that must produce no rows at all.
 //

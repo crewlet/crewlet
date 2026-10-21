@@ -76,23 +76,44 @@ func eraseSealed(ctx context.Context, tx *sql.Tx, personID, blind string) (int, 
 		blinds = []string{blind}
 	}
 	among, args := inList(blinds)
-	invites, err := eraseIn(ctx, tx, "iam_invites", `
-		SELECT id, document FROM iam_invites
-		WHERE person_id = ? OR email_blind IN `+among,
-		`UPDATE iam_invites SET email_sealed = x'', document = ? WHERE id = ?`,
+	invites, err := eraseIn(ctx, tx, "iam_invites",
+		erasedInvitationsStatement(among), eraseInvitationStatement,
 		append([]any{personID}, args...)...)
 	if err != nil {
 		return invites, err
 	}
-	trail, err := eraseIn(ctx, tx, "iam_history", `
-		SELECT id, document FROM iam_history
-		WHERE person_id = ?
-		   OR (person_id = '' AND object_kind = '`+historyObjectAddress+`'
-		       AND object_id IN `+among+`)`,
-		`UPDATE iam_history SET document = ? WHERE id = ?`,
+	trail, err := eraseIn(ctx, tx, "iam_history",
+		erasedTrailStatement(among), eraseTrailStatement,
 		append([]any{personID}, args...)...)
 	return invites + trail, err
 }
+
+// erasedInvitationsStatement selects the invitations a removal erases: the
+// one the removed person redeemed, and every invitation to the address the
+// removal releases, among being that address's placeholder list ([inList]).
+func erasedInvitationsStatement(among string) string {
+	return `
+		SELECT id, document FROM iam_invites
+		WHERE person_id = ? OR email_blind IN ` + among
+}
+
+// erasedTrailStatement selects the trail rows a removal erases: every row
+// about the removed person, and every issue's row about the address the
+// removal releases, which names no person ([Applier.applyDirectory]).
+func erasedTrailStatement(among string) string {
+	return `
+		SELECT id, document FROM iam_history
+		WHERE person_id = ?
+		   OR (person_id = '' AND object_kind = '` + historyObjectAddress + `'
+		       AND object_id IN ` + among + `)`
+}
+
+// eraseTrailStatement rewrites one trail row's document, by its key.
+const eraseTrailStatement = `UPDATE iam_history SET document = ? WHERE id = ?`
+
+// eraseInvitationStatement clears one invitation's sealed address, in its
+// column and in its document, by the invitation's key.
+const eraseInvitationStatement = `UPDATE iam_invites SET email_sealed = x'', document = ? WHERE id = ?`
 
 // inList is a parenthesised list of placeholders for values and the arguments
 // that fill it — `(”)` for none, which matches no address, since a blind is

@@ -25,6 +25,13 @@ func NewRows(db store.ReplicatedReader, spec statelog.StreamSpec) (statelog.Rows
 	return statelog.NewRows(db, Domain{}, spec, iamGuards)
 }
 
+// personGuardsStatement is whether one person's key holds a removal tombstone
+// and whether it holds a row, each by that key.
+const personGuardsStatement = `
+	SELECT
+		(SELECT COUNT(*) FROM iam_removed WHERE person_id = ?),
+		(SELECT COUNT(*) FROM iam_people  WHERE id = ?)`
+
 // iamGuards answers the two object-level facts a first write needs: whether a
 // tombstone forbids this subject for ever, and whether a row already guards it.
 //
@@ -43,10 +50,7 @@ func iamGuards(ctx context.Context, tx *sql.Tx, subj statelog.Subject) (
 		return false, false, nil
 	}
 	var removed, present int
-	err = tx.QueryRowContext(ctx, `
-		SELECT
-			(SELECT COUNT(*) FROM iam_removed WHERE person_id = ?),
-			(SELECT COUNT(*) FROM iam_people  WHERE id = ?)`,
+	err = tx.QueryRowContext(ctx, personGuardsStatement,
 		subj.ID, subj.ID).Scan(&removed, &present)
 	if err != nil {
 		return false, false, fmt.Errorf("iamdomain: read the guards on person "+

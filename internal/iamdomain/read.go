@@ -226,7 +226,7 @@ func (r *Reader) PersonByLoginVouched(ctx context.Context, login string) (
 	)
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
 		if login != "" {
-			if err := sightingIn(ctx, tx, "login", login, &out); err != nil {
+			if err := sightingIn(ctx, tx, sightingByLogin, login, &out); err != nil {
 				return err
 			}
 		}
@@ -307,6 +307,13 @@ func readSessionRow(ctx context.Context, tx *sql.Tx, lineage string,
 	return nil
 }
 
+// personStandingStatement is one person's stage, login, seat and document, by
+// their row's key: what a session's person ([readPersonRow]) and a token's
+// owner ([readTokenOwner]) are read as.
+const personStandingStatement = `
+	SELECT stage, login, seat_id, document
+	  FROM iam_people WHERE id = ?`
+
 // readPersonRow fills one person's facts, opening the document for the two
 // that live in it.
 func readPersonRow(ctx context.Context, tx *sql.Tx, person string,
@@ -319,9 +326,7 @@ func readPersonRow(ctx context.Context, tx *sql.Tx, person string,
 		stage, login, seat string
 		document           []byte
 	)
-	err := tx.QueryRowContext(ctx, `
-		SELECT stage, login, seat_id, document
-		  FROM iam_people WHERE id = ?`, person).
+	err := tx.QueryRowContext(ctx, personStandingStatement, person).
 		Scan(&stage, &login, &seat, &document)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -463,9 +468,7 @@ func readTokenOwner(ctx context.Context, tx *sql.Tx, id string,
 		stage, login, seat string
 		document           []byte
 	)
-	err := tx.QueryRowContext(ctx, `
-		SELECT stage, login, seat_id, document
-		  FROM iam_people WHERE id = ?`, id).
+	err := tx.QueryRowContext(ctx, personStandingStatement, id).
 		Scan(&stage, &login, &seat, &document)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -539,7 +542,7 @@ type Sighting struct {
 //
 // An error is still the unknown arm, as everywhere here.
 func (r *Reader) PersonByLogin(ctx context.Context, login string) (Sighting, error) {
-	return r.sighting(ctx, "login", login)
+	return r.sighting(ctx, sightingByLogin, login)
 }
 
 // PersonByEmailBlind resolves a keyed address blind to its holder, on the same
@@ -551,17 +554,34 @@ func (r *Reader) PersonByLogin(ctx context.Context, login string) (Sighting, err
 // with the party registry's fold or one address would reach a seat and a
 // different person.
 func (r *Reader) PersonByEmailBlind(ctx context.Context, blind string) (Sighting, error) {
-	return r.sighting(ctx, "email_blind", blind)
+	return r.sighting(ctx, sightingByBlind, blind)
 }
 
+// sightingQuery is one of the two sightings: the holders of one value — LIMIT
+// 2, because two rows are the unknown arm ([sightingIn]) — and what that value
+// is called in a refusal a person reads.
+type sightingQuery struct {
+	statement, value string
+}
+
+// The two sightings, each a seek of its value's own plain index.
+var (
+	sightingByLogin = sightingQuery{value: "login", statement: `
+		SELECT id, stage, login, seat_id, document
+		  FROM iam_people WHERE login = ? LIMIT 2`}
+	sightingByBlind = sightingQuery{value: "address", statement: `
+		SELECT id, stage, login, seat_id, document
+		  FROM iam_people WHERE email_blind = ? LIMIT 2`}
+)
+
 // sighting is the one lookup every spelling shares.
-func (r *Reader) sighting(ctx context.Context, column, token string) (Sighting, error) {
+func (r *Reader) sighting(ctx context.Context, by sightingQuery, token string) (Sighting, error) {
 	if token == "" {
 		return Sighting{}, nil
 	}
 	var out Sighting
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
-		return sightingIn(ctx, tx, column, token, &out)
+		return sightingIn(ctx, tx, by, token, &out)
 	})
 	if err != nil {
 		return Sighting{}, err
@@ -571,9 +591,10 @@ func (r *Reader) sighting(ctx context.Context, column, token string) (Sighting, 
 
 // sightingIn resolves one person row inside a read already open.
 //
-// THE COLUMN IS A LITERAL chosen by this package, never a caller's string:
-// every call site passes a constant, and the alternative is a surface one
-// parameter away from selecting on something a request named.
+// THE STATEMENT IS ONE OF THIS PACKAGE'S TWO, never a caller's string
+// ([sightingByLogin], [sightingByBlind]), each spelled whole:
+// a column passed in was a surface one parameter away from selecting on
+// something a request named, and a statement the plan gate could only copy.
 //
 // # Two rows holding one value are the unknown arm
 //
@@ -586,12 +607,10 @@ func (r *Reader) sighting(ctx context.Context, column, token string) (Sighting, 
 // a sign-in as its ordinary refusal, and never an arbitrary pick, which would
 // sign somebody in as somebody else.
 // A restore that copies duplicate rows back lands here the same way.
-func sightingIn(ctx context.Context, tx *sql.Tx, column, token string,
+func sightingIn(ctx context.Context, tx *sql.Tx, by sightingQuery, token string,
 	out *Sighting) error {
 
-	rows, err := tx.QueryContext(ctx, `
-		SELECT id, stage, login, seat_id, document
-		  FROM iam_people WHERE `+column+` = ? LIMIT 2`, token)
+	rows, err := tx.QueryContext(ctx, by.statement, token)
 	if err != nil {
 		return fmt.Errorf("iamdomain: resolve a person: %w", err)
 	}
@@ -606,7 +625,7 @@ func sightingIn(ctx context.Context, tx *sql.Tx, column, token string,
 		if found > 1 {
 			return fmt.Errorf("%w: this node has two people with the same "+
 				"%s. Try again on another node",
-				statelog.ErrUnavailable, column)
+				statelog.ErrUnavailable, by.value)
 		}
 		if err = rows.Scan(&id, &stage, &login, &seat, &document); err != nil {
 			return fmt.Errorf("iamdomain: resolve a person: %w", err)
@@ -678,8 +697,7 @@ func sightingIn(ctx context.Context, tx *sql.Tx, column, token string,
 func (r *Reader) AnyPerson(ctx context.Context, end uint64) (bool, error) {
 	var held bool
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
-		if err := tx.QueryRowContext(ctx, `
-			SELECT EXISTS(SELECT 1 FROM iam_people WHERE kind = ?)`,
+		if err := tx.QueryRowContext(ctx, anyPersonStatement,
 			string(iam.KindPerson)).
 			Scan(&held); err != nil {
 			return fmt.Errorf("iamdomain: read whether a person is enrolled: %w", err)
@@ -691,6 +709,9 @@ func (r *Reader) AnyPerson(ctx context.Context, end uint64) (bool, error) {
 	})
 	return held, err
 }
+
+// anyPersonStatement is whether any row is a person's.
+const anyPersonStatement = `SELECT EXISTS(SELECT 1 FROM iam_people WHERE kind = ?)`
 
 // provedAbsent is the proof a missing row needs before it is read as "there is
 // none": these rows applied every record the log held at end, and retain none
@@ -772,6 +793,12 @@ func CoversLog(prefix statelog.Prefix, end uint64) error {
 		ErrNotCurrent, prefix.Applied().Seq, end)
 }
 
+// anyBlindStatement is whether any row holds an address blind: a person's, or
+// any invitation's, since every invitation is to an address.
+const anyBlindStatement = `
+	SELECT EXISTS(SELECT 1 FROM iam_people WHERE email_blind != '')
+	    OR EXISTS(SELECT 1 FROM iam_invites)`
+
 // HoldsBlinds reports whether any row this node holds carries a value derived
 // from the company's blind-index key — a person's address, or an invitation's.
 //
@@ -806,9 +833,7 @@ func (r *Reader) HoldsBlinds(ctx context.Context, end uint64) (bool, error) {
 			return err
 		}
 		var count int
-		if err := tx.QueryRowContext(ctx, `
-			SELECT EXISTS(SELECT 1 FROM iam_people WHERE email_blind != '')
-			    OR EXISTS(SELECT 1 FROM iam_invites)`).
+		if err := tx.QueryRowContext(ctx, anyBlindStatement).
 			Scan(&count); err != nil {
 			return fmt.Errorf("iamdomain: look for a blinded row: %w", err)
 		}
@@ -935,6 +960,10 @@ func (i InvitationRow) Spent(now time.Time) bool {
 	return !i.RedeemedAt.IsZero() || !now.Before(i.ExpiresAt)
 }
 
+// invitationByIDStatement is one invitation as [scanInvitation] reads it, by
+// its key.
+const invitationByIDStatement = `SELECT ` + invitationColumns + ` FROM iam_invites WHERE id = ?`
+
 // InvitationByID resolves one invitation, on this file's three answers: the
 // zero value for one nobody issued, and an error for a node that could not
 // tell — with whether these rows vouch for it at end, the identity log's last
@@ -948,8 +977,8 @@ func (r *Reader) InvitationByID(ctx context.Context, id string, end uint64) (
 	var out InvitationRow
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
 		var err error
-		out, err = scanInvitation(tx.QueryRowContext(ctx, `
-			SELECT `+invitationColumns+` FROM iam_invites WHERE id = ?`, id).Scan)
+		out, err = scanInvitation(tx.QueryRowContext(ctx,
+			invitationByIDStatement, id).Scan)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			out = InvitationRow{}
@@ -1063,6 +1092,15 @@ func holdsPassword(credentials []Credential) bool {
 // password would hand back an account an administrator deliberately stopped.
 var ResetStages = []iam.Stage{iam.StageInvited, iam.StageEnrolling, iam.StageActive}
 
+// resetLinkStatement is one reset link by its credential's key, with the
+// person it is for joined by theirs.
+const resetLinkStatement = `
+	SELECT c.person_id, c.verifier, c.expires_at, c.revoked_at,
+	       c.document, p.login, p.kind, p.stage, p.seat_id
+	  FROM iam_credentials c
+	  JOIN iam_people p ON p.id = c.person_id
+	 WHERE c.id = ? AND c.method = ?`
+
 // ResetByID resolves one reset link by its credential id, on this file's three
 // answers: the zero value for an id that is not a reset link this estate
 // holds, and an error for a node that could not read — with whether these
@@ -1081,12 +1119,7 @@ func (r *Reader) ResetByID(ctx context.Context, id string, end uint64) (
 			expires, revoked   int64
 			kind, stage        string
 		)
-		err := tx.QueryRowContext(ctx, `
-			SELECT c.person_id, c.verifier, c.expires_at, c.revoked_at,
-			       c.document, p.login, p.kind, p.stage, p.seat_id
-			  FROM iam_credentials c
-			  JOIN iam_people p ON p.id = c.person_id
-			 WHERE c.id = ? AND c.method = ?`, id, string(MethodReset)).
+		err := tx.QueryRowContext(ctx, resetLinkStatement, id, string(MethodReset)).
 			Scan(&out.PersonID, &verifier, &expires, &revoked, &document,
 				&out.Login, &kind, &stage, &out.Seat)
 		switch {
@@ -1322,6 +1355,25 @@ type SeatHolder struct {
 	Removed bool
 }
 
+// The two statements [Reader.SeatHolders] reads in its one snapshot: every
+// binding, in seat order, and every removal whose seat no bind since has taken
+// and no current holder holds.
+const (
+	seatHoldersStatement = `
+		SELECT seat_id, id, stage FROM iam_people
+		 WHERE seat_id != ''
+		 ORDER BY seat_id, id`
+	removedHoldersStatement = `
+		SELECT json_extract(r.claims_json, '$.seat_id') AS seat, r.person_id
+		  FROM iam_removed r
+		 WHERE COALESCE(json_extract(r.claims_json, '$.seat_id'), '') != ''
+		   AND r.seat_rebound_by = ''
+		   AND NOT EXISTS (
+		       SELECT 1 FROM iam_people p
+		        WHERE p.seat_id = json_extract(r.claims_json, '$.seat_id'))
+		 ORDER BY seat, r.person_id`
+)
+
 // SeatHolders is every seat binding this node's directory holds, read in ONE
 // snapshot so a bind and a removal landing between two reads cannot produce a
 // set that never existed.
@@ -1344,10 +1396,7 @@ func (r *Reader) SeatHolders(ctx context.Context) ([]SeatHolder, error) {
 	var out []SeatHolder
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
 		out = out[:0]
-		rows, err := tx.QueryContext(ctx, `
-			SELECT seat_id, id, stage FROM iam_people
-			 WHERE seat_id != ''
-			 ORDER BY seat_id, id`)
+		rows, err := tx.QueryContext(ctx, seatHoldersStatement)
 		if err != nil {
 			return fmt.Errorf("iamdomain: read the seat bindings: %w", err)
 		}
@@ -1374,15 +1423,7 @@ func (r *Reader) SeatHolders(ctx context.Context) ([]SeatHolder, error) {
 		// account's unbind, does not bring the leaver back — and the NOT
 		// EXISTS keeps a current holder's standing the seat's word over a
 		// tombstone no bind has stamped yet.
-		removed, err := tx.QueryContext(ctx, `
-			SELECT json_extract(r.claims_json, '$.seat_id') AS seat, r.person_id
-			  FROM iam_removed r
-			 WHERE COALESCE(json_extract(r.claims_json, '$.seat_id'), '') != ''
-			   AND r.seat_rebound_by = ''
-			   AND NOT EXISTS (
-			       SELECT 1 FROM iam_people p
-			        WHERE p.seat_id = json_extract(r.claims_json, '$.seat_id'))
-			 ORDER BY seat, r.person_id`)
+		removed, err := tx.QueryContext(ctx, removedHoldersStatement)
 		if err != nil {
 			return fmt.Errorf("iamdomain: read the removed seat holders: %w", err)
 		}
