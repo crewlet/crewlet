@@ -296,7 +296,7 @@ func request(t *testing.T) prefetch.Request {
 	return prefetch.Request{
 		Seat: seat, AgentID: "agent-1", Org: o,
 		Task: triageScaffold + "\n\n**Message:** " + theAsk,
-		Ask:  theAsk,
+		Ask:  prefetch.PlainAsk(theAsk),
 		Aux:  turnAux,
 		Senders: []learning.Subject{
 			{ExternalID: "U1", Platform: "chat", Name: "Ana Ruiz"},

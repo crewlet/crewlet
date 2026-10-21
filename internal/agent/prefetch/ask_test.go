@@ -101,7 +101,7 @@ func TestAnEmptyAskIsJudgedLikeAThinTrigger(t *testing.T) {
 	model := &aux{answers: []string{"[0]", "a query"}}
 	pages := &searcher{hits: []knowledge.Hit{{Title: "Staging runbook"}}}
 	r := request(t)
-	r.Ask = "  \n "
+	r.Ask = prefetch.PlainAsk("  \n ")
 	blocks := fetch(t, prefetch.Sources{
 		Diary:     diary{recent: []learning.DiaryEntry{memory("m1", "a memory")}},
 		Knowledge: pages,
