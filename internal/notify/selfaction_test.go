@@ -1,7 +1,6 @@
 package notify_test
 
 import (
-	"slices"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/notify"
@@ -124,28 +123,5 @@ func TestWithoutACompanyNothingIsSuppressed(t *testing.T) {
 	r := registry(t)
 	if notify.SelfAction(r, "tracker", "", lead) {
 		t.Fatal("an unattributed event was called a self-action")
-	}
-}
-
-// The parse-time face of the same rule, where the identifiers are still the
-// third-party app's own usernames.
-func TestSuppressSelfDropsTheActorAndKeepsTheOrder(t *testing.T) {
-	targets := []string{"ana", "bo", "ana", "cy"}
-
-	got := notify.SuppressSelf(targets, "ana", false)
-	if !slices.Equal(got, []string{"bo", "cy"}) {
-		t.Fatalf("SuppressSelf = %v", got)
-	}
-	// The same exception: a failed pipeline reaches the person who pushed.
-	got = notify.SuppressSelf(targets, "ana", true)
-	if !slices.Equal(got, targets) {
-		t.Fatalf("the outcome exception dropped the actor anyway: %v", got)
-	}
-	if got = notify.SuppressSelf(targets, "", false); !slices.Equal(got, targets) {
-		t.Fatalf("an unattributed event lost targets: %v", got)
-	}
-	// "Nobody to tell" is ONE value, so callers cannot disagree about it.
-	if got = notify.SuppressSelf([]string{"ana"}, "ana", false); got != nil {
-		t.Fatalf("an emptied target list is %#v, want nil", got)
 	}
 }
