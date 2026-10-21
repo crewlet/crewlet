@@ -25,7 +25,7 @@ func TestAChatRoomsTypingLapsesAndAnArtifactsEditingDoesNot(t *testing.T) {
 	t.Parallel()
 	a := startNode(t, memory.NewBroker(), "node-a", newClock())
 	room := ChatRoom(uuid.New())
-	session, _, err := a.hub.Join(room, dana)
+	session, _, err := joined(a.hub, room, dana)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func TestAChatRoomsTypingLapsesAndAnArtifactsEditingDoesNot(t *testing.T) {
 	// AND WITH NOTHING SAID, it lapses back to viewing.
 	a.seen.waitFor(t, "node-a", room, "dana:viewing")
 
-	editor, _, err := a.hub.Join(room1, erin)
+	editor, _, err := joined(a.hub, room1, erin)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestASeatAnsweringInAChatRoomIsShownPerThreadUntilWithdrawn(t *testing.T) {
 	broker, c := memory.NewBroker(), newClock()
 	api, seats := startNode(t, broker, "node-api", c), startNode(t, broker, "node-seats", c)
 	room := ChatRoom(uuid.New())
-	if _, _, err := api.hub.Join(room, dana); err != nil {
+	if _, _, err := joined(api.hub, room, dana); err != nil {
 		t.Fatal(err)
 	}
 	waitListening(t, api.hub, room)

@@ -56,7 +56,8 @@ func TestEveryNodeRunsAPresenceHubTheFleetHears(t *testing.T) {
 			shown <- m
 		}
 	})
-	if _, _, err := api.Presence().Join(room, presence.Local{Seat: "dana", Kind: iam.ActorHuman}); err != nil {
+	if _, err := api.Presence().Join(room, presence.Local{Seat: "dana", Kind: iam.ActorHuman},
+		func(string, presence.Roster) bool { return true }); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.After(10 * time.Second)

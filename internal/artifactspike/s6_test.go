@@ -199,13 +199,16 @@ func (n *presenceNode) join(b *testing.B, id artifacts.ID, seat string, done <-c
 	c := stream.NewClient(stream.NewAudience(iam.Principal{Login: seat, Stage: iam.StageActive,
 		Grants: []iam.Grant{iam.GrantAdmin}}, nil))
 	n.sockets.Register(c)
-	session, _, err := n.hub.Join(presence.ArtifactRoom(id),
-		presence.Local{Seat: seat, Kind: iam.ActorHuman})
+	// THE SOCKET JOINS IN THE HAND, as the socket's own join does: in the
+	// room's delivery order (presence.Hub.Join).
+	session, err := n.hub.Join(presence.ArtifactRoom(id),
+		presence.Local{Seat: seat, Kind: iam.ActorHuman},
+		func(session string, _ presence.Roster) bool {
+			_, _, ok := n.sockets.JoinArtifact(c, id, artifacts.RoleViewer, session)
+			return ok
+		})
 	if err != nil {
 		b.Fatalf("join %s to the room: %v", seat, err)
-	}
-	if _, _, ok := n.sockets.JoinArtifact(c, id, artifacts.RoleViewer, session); !ok {
-		b.Fatalf("join %s's socket to the room: the hub does not hold it", seat)
 	}
 	n.clients++
 	go func() {

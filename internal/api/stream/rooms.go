@@ -117,7 +117,7 @@ type DataStores interface {
 
 // Presence is this node's presence hub as the socket uses it.
 type Presence interface {
-	Join(room presence.Room, who presence.Local) (string, presence.Roster, error)
+	Join(room presence.Room, who presence.Local, hand presence.Hand) (string, error)
 	Update(room presence.Room, session string, activity presence.Activity,
 		focus presence.Focus) error
 	Leave(room presence.Room, session string)
@@ -395,9 +395,35 @@ func (s *Service) joinArtifact(ctx context.Context, client *Client, req request)
 	}
 	resync := storeErr != nil || req.Since <= 0 || req.Since < floor
 
-	session, roster, err := s.rooms.Presence.Join(presence.ArtifactRoom(id), presence.Local{
-		Seat: presenceSeat(principal), Kind: presenceKind(principal)})
-	if err != nil {
+	// THE ROSTER IS HANDED IN THE ROOM'S DELIVERY ORDER ([presence.Hub.Join]),
+	// and the hand is where the socket joins the room and is answered: every
+	// fan-out the presence hub handed [Service.PresenceChanged] before the
+	// join is one the roster holds, and every one after finds the socket in
+	// the room and reaches it behind the answer, both being sends to its one
+	// queue. Joined and answered after the presence join returned, a fan-out
+	// taken in between either reached the socket ahead of the answer — and
+	// the roster behind it put back what the fan-out had moved on — or, sent
+	// before the socket was in the room, reached nobody, and the tab showed
+	// that member as they were until they moved again.
+	var replaced string
+	_, err = s.rooms.Presence.Join(presence.ArtifactRoom(id), presence.Local{
+		Seat: presenceSeat(principal), Kind: presenceKind(principal)},
+		func(session string, roster presence.Roster) bool {
+			var joined bool
+			_, replaced, joined = s.hub.JoinArtifact(client, id, role, session)
+			if !joined {
+				// THE SOCKET LEFT while the join was being decided.
+				return false
+			}
+			client.Reply(Envelope{Kind: KindResult, ID: req.ID, What: artifactJoinWhat,
+				Data: ArtifactJoined{Artifact: id, Session: session, Role: role,
+					Roster: roster, Through: through, Resync: resync}})
+			return true
+		})
+	switch {
+	case errors.Is(err, presence.ErrDeclined):
+		return
+	case err != nil:
 		log.WarnContext(ctx, "stream_room_presence_refused", "artifact", id.String(),
 			"error", err.Error())
 		env := refuse(CodeUnavailable)
@@ -405,18 +431,9 @@ func (s *Service) joinArtifact(ctx context.Context, client *Client, req request)
 		client.Reply(env)
 		return
 	}
-	_, replaced, ok := s.hub.JoinArtifact(client, id, role, session)
-	if !ok {
-		// THE SOCKET LEFT while the join was being decided.
-		s.rooms.Presence.Leave(presence.ArtifactRoom(id), session)
-		return
-	}
 	if replaced != "" {
 		s.rooms.Presence.Leave(presence.ArtifactRoom(id), replaced)
 	}
-	client.Reply(Envelope{Kind: KindResult, ID: req.ID, What: artifactJoinWhat,
-		Data: ArtifactJoined{Artifact: id, Session: session, Role: role, Roster: roster,
-			Through: through, Resync: resync}})
 }
 
 // presenceSeat is the name a member is shown under: the one the principal's
@@ -487,7 +504,8 @@ func (s *Service) leave(client *Client) {
 // PresenceChanged pushes one artifact room's presence fan-out to the sockets in
 // it. A room of any other kind is not this socket surface's: the hub's every
 // sink hears every room and keeps the kind it serves. Called on the presence
-// hub's goroutine; never blocks.
+// hub's goroutine, in its delivery order — a join's roster among the fan-outs
+// ([Service.joinArtifact]); never blocks.
 func (s *Service) PresenceChanged(c presence.Change) {
 	if c.Room.Kind != presence.RoomArtifact {
 		return

@@ -212,3 +212,14 @@ func sealedFrom(t *testing.T, ring statelog.Keyring, f Frame) []byte {
 
 // subject is a room's presence subject.
 func subject(id Room) string { return id.subject() }
+
+// joined is a join as most cases want it: the session, and the roster the hub
+// handed the joiner, taken whole.
+func joined(h *Hub, id Room, who Local) (string, Roster, error) {
+	var roster Roster
+	session, err := h.Join(id, who, func(_ string, r Roster) bool {
+		roster = r
+		return true
+	})
+	return session, roster, err
+}
