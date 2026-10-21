@@ -1730,8 +1730,8 @@ lists and single values replace wholesale.
 | `isolation_env` | A vendor's own switch that keeps the CLI from reading configuration outside its seat's home and its call's directory, with the value that turns that reading off — set on every command the profile runs, and refused in `env`, `passthrough_env` and `cli.env`, each of which is layered over it. The name the CLI reads first, never a fallback spelling of it. Never empty (a CLI that reads `1` as on reads an empty value as off), never a credential, `HOME`, an XDG home, `TMPDIR` or a relocated variable. |
 | `env` | Fixed child environment. Never a credential, never `token_env` or `api_key_env`, and never a variable the engine sets to isolate the call (`HOME`, the XDG homes, `TMPDIR`, a `config_env`, `work_config_env` or `isolation_env` variable). |
 | `passthrough_env` | Engine variables forwarded to the child. Never a credential, and never an isolation variable. |
-| `token_env` | The variable a headless subscription token goes in (`cli.auth.token`). |
-| `api_key_env` | The variable a metered key goes in (`api_keys` under `auth.mode: api-key`). |
+| `token_env` | The variable a headless subscription token goes in (`cli.auth.token`). An environment variable name, and refused otherwise ([below](#configuration-reference)). |
+| `api_key_env` | The variable a metered key goes in (`api_keys` under `auth.mode: api-key`). An environment variable name, and refused otherwise. |
 | `model_names_provider` | The CLI reads its model as `<provider>/<model>`, split at the first slash, so a `model` with nothing before or after that slash (as the CLI is handed it, through `model_args`) is refused on a write. Declared by `opencode` only — measured from its source; `hermes` and `pi` document a `provider/id` model but are not known to refuse a bare one. |
 | `env_sign_in` | The CLI reads its model provider's key from its own environment, so a [credential-named](#5-a-provider-key-in-clienv-hermes-pi-opencode) variable in `cli.env` signs it in. |
 | `credential_paths` | The login files, relative to the seat home: each must name a file inside it (not the home itself, not a path ending in a separator), and no two may share a file name, since the shared directory and a bundle keep each under its name. |
@@ -1829,6 +1829,7 @@ headless token — so each of these would run with the credential unused:
 | `auth.token` under `api-key` or `inherit-env` | `api-key` removes the token variable and `inherit-env` forwards the engine's own | `auth.mode: subscription` |
 | `auth.mode: inherit-env` on a CLI that names neither variable | nothing would be forwarded | `subscription`, with the key in `cli.env` or a login |
 | the profile's `token_env` or `api_key_env` in `cli.env` | `cli.auth` owns those: whether a value there reaches the CLI depends on `auth.mode` and on whether a credential resolves from the secret store or the engine's environment, which the document cannot show | `auth.token`, or `api_keys` with `auth.mode: api-key` |
+| `cli.overrides.token_env` or `api_key_env` that is not an environment variable name (letters, digits and underscores, not starting with a digit — `MY-TOKEN`, say) | no secret store, `${VAR}` or `crewlet llm login` can hold a name outside that grammar, no shell exports one for `inherit-env` to forward, and a name carrying `=` sets a different variable in the CLI's environment | the variable your build of the CLI reads, e.g. `MY_TOKEN` |
 
 Each is checked against the profile with `cli.overrides` merged in, and each
 refusal names the field and the route to take. They are **admission** rules:

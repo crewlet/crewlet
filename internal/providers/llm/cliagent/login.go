@@ -697,7 +697,7 @@ func (p *Provider) bundleSource() string {
 	if p.bundleConfigured {
 		return fmt.Sprintf("providers.llm.%s.cli.auth.credential_bundle", p.key)
 	}
-	return BundleVarName(p.key)
+	return cliprofile.BundleVarName(p.key)
 }
 
 // retireBundle says what removes the entry's configured bundle, which is what
@@ -707,7 +707,7 @@ func (p *Provider) retireBundle() string {
 		return fmt.Sprintf("remove providers.llm.%s.cli.auth.credential_bundle from the company "+
 			"document, or the secret it references", p.key)
 	}
-	name := BundleVarName(p.key)
+	name := cliprofile.BundleVarName(p.key)
 	return fmt.Sprintf("remove %s from the secret store (`crewlet secrets unset %s`) and from "+
 		"the engine's environment", name, name)
 }

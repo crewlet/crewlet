@@ -37,7 +37,7 @@ func TestAnEpochRestoresItsBundlesOnlyWhenItIsRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	name := filepath.Base(profile.CredentialPaths[0])
-	t.Setenv(cliagent.BundleVarName("subscription"), testBundle(t, name, `{"token":"configured"}`))
+	t.Setenv(cliprofile.BundleVarName("subscription"), testBundle(t, name, `{"token":"configured"}`))
 
 	c, err := config.ParseCompany([]byte(`
 name: Acme
@@ -244,7 +244,7 @@ func bundledLogin(t *testing.T) string {
 		t.Fatal(err)
 	}
 	name := filepath.Base(profile.CredentialPaths[0])
-	t.Setenv(cliagent.BundleVarName("subscription"), testBundle(t, name, `{"token":"configured"}`))
+	t.Setenv(cliprofile.BundleVarName("subscription"), testBundle(t, name, `{"token":"configured"}`))
 	c := parseBundled(t, bundledCompanyDoc)
 	stateDir, err := c.Providers.LLM["subscription"].CLI.ResolvedStateDir("subscription")
 	if err != nil {
@@ -332,7 +332,7 @@ func TestAnEpochDoesNotUndoALogout(t *testing.T) {
 		t.Fatal(err)
 	}
 	name := filepath.Base(profile.CredentialPaths[0])
-	t.Setenv(cliagent.BundleVarName("subscription"), testBundle(t, name, `{"token":"configured"}`))
+	t.Setenv(cliprofile.BundleVarName("subscription"), testBundle(t, name, `{"token":"configured"}`))
 	c, err := config.ParseCompany([]byte(bundledCompanyDoc))
 	if err != nil {
 		t.Fatalf("parse: %v", err)

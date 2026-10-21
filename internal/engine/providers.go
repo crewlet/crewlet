@@ -377,7 +377,7 @@ func buildCLIAgent(key string, spec config.LLMProvider, r *config.Resolver, apiK
 	// operator wiring up a ${VAR} for a value Crewlet itself just wrote.
 	auth.Token = resolveOrConvention(r, cli.Auth.Token, profile.TokenEnv)
 	auth.TokenConfigured = cli.Auth.Token != ""
-	bundle := resolveOrConvention(r, cli.Auth.CredentialBundle, cliagent.BundleVarName(key))
+	bundle := resolveOrConvention(r, cli.Auth.CredentialBundle, cliprofile.BundleVarName(key))
 	bundleConfigured := cli.Auth.CredentialBundle != ""
 
 	return cliagent.New(cliagent.Config{

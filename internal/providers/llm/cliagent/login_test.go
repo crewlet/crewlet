@@ -570,7 +570,7 @@ func TestALogoutIsNotUndoneByTheConfiguredBundle(t *testing.T) {
 	}
 	for _, want := range []string{"`crewlet llm login sub -from-host`", "`crewlet llm import sub`",
 		"a headless token signs the entry in without ending the logout",
-		"fresh volume", "crewlet secrets unset " + BundleVarName("sub")} {
+		"fresh volume", "crewlet secrets unset " + cliprofile.BundleVarName("sub")} {
 		if err != nil && !strings.Contains(err.Error(), want) {
 			t.Errorf("the decline does not name %q: %v", want, err)
 		}
@@ -591,7 +591,7 @@ func TestALogoutIsNotUndoneByTheConfiguredBundle(t *testing.T) {
 	// from: the conventional secret here, the field where one is set — and
 	// that a headless token, which writes no login there, does not end it.
 	notice := logoutNotice(t, p)
-	for _, want := range []string{BundleVarName("sub"), "fresh volume", "`crewlet llm login sub -from-host`",
+	for _, want := range []string{cliprofile.BundleVarName("sub"), "fresh volume", "`crewlet llm login sub -from-host`",
 		"`-token-stdin` signs it in without ending this"} {
 		if !strings.Contains(notice, want) {
 			t.Errorf("the logout notice does not name %q: %s", want, notice)
@@ -689,7 +689,7 @@ func TestTheLogoutNoticeSpeaksForTheRecord(t *testing.T) {
 	if hasLogin(t, p.Workspace()) {
 		t.Fatalf("the premise: a failed vendor logout left the login: %v", loginOnDisk(t, p.Workspace()))
 	}
-	if notice := logoutNotice(t, p); !strings.Contains(notice, BundleVarName("sub")) {
+	if notice := logoutNotice(t, p); !strings.Contains(notice, cliprofile.BundleVarName("sub")) {
 		t.Errorf("after a logout whose vendor half failed, the notice says nothing of the bundle "+
 			"it holds back: %q", notice)
 	}

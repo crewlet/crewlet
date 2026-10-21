@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/providers/llm/anthropic"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
@@ -652,7 +653,7 @@ func exportLLM(ctx context.Context, environ config.Source, providers []cliAgentP
 		fmt.Fprintln(stdout, bundle)
 		return nil
 	}
-	name := cliagent.BundleVarName(key)
+	name := cliprofile.BundleVarName(key)
 	if err := storeLLMSecret(ctx, environ, bootstrapPath, name, bundle); err != nil {
 		return err
 	}

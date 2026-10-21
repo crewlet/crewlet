@@ -256,7 +256,8 @@ func (c *Company) ValidateRunnable() error {
 // NAME is held unique), a unit with no id, duplicate sandbox setup step names
 // within one list, a GitHub App on a human seat, an avatar the dashboard
 // cannot draw or one on a human seat ([Company.validateAvatars]), a
-// cli-agent entry's credential configured where its CLI never reads it
+// cli-agent entry's credential configured where its CLI never reads it or
+// handed over under a variable name no store can hold
 // ([LLMProvider.validateCLICredentials]), a cli-agent model with no provider
 // segment on a CLI that reads one ([LLMProvider.validateCLIModel]), a seat
 // whose code work hands a cli-agent entry to another CLI's coding agent
