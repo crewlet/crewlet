@@ -34,3 +34,12 @@ func ShareBeforeTheGrantRule(ctx context.Context, w *Writer, c Call, id artifact
 		}))
 	return w.written(ctx, id, opID, res, err)
 }
+
+// PublishError is the framework's refusal of a publish on subject, in this
+// domain's terms.
+func PublishError(subject statelog.Subject, err error) error { return publishError(subject, err) }
+
+// RefusalError is what a refusal verdict of the applier is told as.
+func RefusalError(ctx context.Context, w *Writer, id string, reason Refusal, s HistorySummary) error {
+	return w.refusal(ctx, id, reason, s)
+}

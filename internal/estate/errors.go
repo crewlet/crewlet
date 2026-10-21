@@ -168,6 +168,7 @@ var sentinels = []sentinel{
 	{"artifactsdomain.ErrAgentCompanyShare", artifactsdomain.ErrAgentCompanyShare},
 	{"artifactsdomain.ErrBadCursor", artifactsdomain.ErrBadCursor},
 	{"artifactsdomain.ErrConflict", artifactsdomain.ErrConflict},
+	{"artifactsdomain.ErrExists", artifactsdomain.ErrExists},
 	{"artifactsdomain.ErrInvalid", artifactsdomain.ErrInvalid},
 	{"artifactsdomain.ErrLabelTaken", artifactsdomain.ErrLabelTaken},
 	{"artifactsdomain.ErrLabelsFull", artifactsdomain.ErrLabelsFull},

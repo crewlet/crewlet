@@ -150,6 +150,7 @@ var domainErrors = map[string]map[string]classRow{
 		"ErrAgentCompanyShare": {err: artifactsdomain.ErrAgentCompanyShare, means: notPermitted},
 		"ErrBadCursor":         {err: artifactsdomain.ErrBadCursor, means: malformed},
 		"ErrConflict":          {err: artifactsdomain.ErrConflict, means: lostRace},
+		"ErrExists":            {err: artifactsdomain.ErrExists, means: taken},
 		"ErrInvalid":           {err: artifactsdomain.ErrInvalid, means: malformed},
 		// A LABEL ANOTHER VERSION HOLDS is a collision, and every kept
 		// label in use is the artifact's own contents at their cap.

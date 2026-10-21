@@ -7055,6 +7055,7 @@ The API origin **never renders an artifact**:
 | `409` | `carried_object_gone` / `upload_missing` | A carried file's bytes are gone, or a declared file has not arrived; `paths` names them |
 | `409` | `upload_consumed` / `upload_expired` | The upload is used, or an uploaded object is too old to name; upload again |
 | `409` | `label_taken` / `source_taken` | Another version holds the label, or another of the owner's artifacts the source address: a collision, which another label or address avoids now (the tools' class is `exists`) |
+| `409` | `exists` | A create of an artifact or an asset that is already there — most often the same create sent again after its operation was forgotten: read it rather than make it again |
 | `409` | `labels_full` | Every label the artifact keeps is in use: remove one from a version that no longer needs it, then label this one (the tools' class is `conflict`, the artifact's state) |
 | `409` | `artifact_not_framed` / `artifact_origin_unset` | See [Viewing a version](#viewing-a-version) |
 | `409` | `conflict` | A frame whose ready time was already reported; see [Viewing a version](#viewing-a-version) |

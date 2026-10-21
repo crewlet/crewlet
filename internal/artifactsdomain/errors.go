@@ -58,6 +58,15 @@ var (
 	ErrLabelsFull = errors.New("artifactsdomain: every label this artifact " +
 		"keeps is in use")
 
+	// ErrExists reports a create of an artifact or an asset that is already
+	// there: a COLLISION with what an earlier write made, which is the same
+	// create made again after its operation ledger forgot it, or a create
+	// that raced another onto one id. Read it rather than make it again. Its
+	// own sentinel rather than [ErrInvalid] (nothing about the request is
+	// malformed) or the state log's bare one (which every surface but the
+	// tools answered as this node's fault).
+	ErrExists = errors.New("artifactsdomain: what this write creates is already there")
+
 	// ErrInvalid reports a write whose input the domain refuses, naming the
 	// field and what to change.
 	ErrInvalid = errors.New("artifactsdomain: invalid")

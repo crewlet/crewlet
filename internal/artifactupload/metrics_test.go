@@ -24,6 +24,7 @@ func TestACollisionIsCountedUnderItsOwnReason(t *testing.T) {
 		fmt.Errorf("%w: version 3 is labelled \"v1\"", artifactsdomain.ErrLabelTaken): "label_taken",
 		fmt.Errorf("%w: it keeps 100", artifactsdomain.ErrLabelsFull):                 "labels_full",
 		artifactsdomain.ErrSourceTaken:                                                "source_taken",
+		artifactsdomain.ErrExists:                                                     "exists",
 	} {
 		got := artifactupload.ReasonOf(err)
 		if got != want {
