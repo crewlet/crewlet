@@ -9,12 +9,17 @@ trigger:
     - tool: mattermost_list_public_channels
     - tool: mattermost_post_message
     - tool: mattermost_search_users
+    - tool: slack_channels_list
+    - tool: slack_channels_me
+    - tool: slack_conversations_add_message
+    - tool: slack_users_search
 phases: [execute]
 title: Choosing the right chat room / surface
 summary: |
   Team room for team-wide; DM individuals for direct asks; work items /
-  pages for durable or cross-team work. Discover with `list_channels`
-  (or `mattermost_list_my_channels`), and join public rooms yourself.
+  pages for durable or cross-team work. List your rooms (`list_channels`,
+  `mattermost_list_my_channels`, `slack_channels_me`); join a public one
+  where you may.
 ---
 
 # Default surfaces
@@ -32,6 +37,7 @@ Don't guess room names.
 
 - **The company's own chat**: `list_channels` returns the rooms you are already in, most recently active first, with each one's topic, purpose and last message. A public room, or a unit's room, that you are not in still answers to its name (`#eng` and `eng` are the same room) wherever a tool takes a `channel`, so you can read it with `read_channel` or post in it without joining. Nothing lists the rooms you are not in: to find where something is being discussed, `search_messages` ranks what was said across every room you can read.
 - **Mattermost**: `mattermost_list_my_channels` returns the channels you are already in — start there, since those are the ones you can post to immediately. `mattermost_list_public_channels` returns everything open on the team, including channels you have not joined. Both return `name` (the URL slug), `display_name`, `header`, and `purpose`.
+- **Slack**: `slack_channels_me` returns the channels you are in — the only ones you can read or post to, since a Slack app sees a channel only once it has been invited. `slack_channels_list` lists them by type (`channel_types`: `public_channel`, `private_channel`, `im`, `mpim`) and filters by a `query` against each channel's name, topic or purpose (`query_targets`).
 
 **Pick by purpose / topic, not by name** — room names are often abbreviated, dated, or repurposed.
 
@@ -46,6 +52,7 @@ Typical patterns:
 
 - **The company's own chat**: you may post in a public room or a unit's room without being in it. `join_channel` makes what is said there reach you, so call it when you need to keep following a room, not ahead of every post. A unit's own room cannot be joined, because its membership follows the org chart.
 - **Mattermost**: you can only post to channels you have joined, but you can fix that yourself for **public** channels: call `mattermost_join_channel` with the channel's id, then post. Joining a channel you are already in does nothing, so it is safe to call ahead of a post.
+- **Slack**: you can only post where your app has been **invited**, and you cannot invite yourself — the app is given no scope to join a channel, so a join is refused even on a public one. Ask somebody in the channel to `/invite` you, or use one of the routes below.
 
 **Private rooms are different** — on either surface you cannot join one yourself, and one you are not in appears in no listing (on the company's own chat it cannot be addressed at all). If the conversation you need is private:
 
@@ -63,6 +70,7 @@ Do **not** broadcast in your own room hoping the other team will see it — they
   2. `mattermost_post_message` with the returned `channel_id`.
 
   Prefer `get_user_by_username` when `lookup_colleague` already gave you a `mattermost_id` — that field holds the username, so the lookup is exact and a search is a guess.
+- **Slack**: a DM is a conversation that already exists between your app and them. `slack_users_search` with the member id from the `slack` line `lookup_colleague` returns (an exact lookup, where a name is a guess) answers with the DM's channel id when there is one; post there with `slack_conversations_add_message`. Your tools cannot open a DM nobody has opened yet, so when there is none, mention them where the work lives instead (the `platform_mentions` skill).
 
 # Asking for ongoing access
 
