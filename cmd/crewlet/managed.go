@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
+	"os"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -69,24 +72,50 @@ func refuseManagedOverride(boot *config.Bootstrap, path string) error {
 	return refuseManagedOffline(boot, "-import-company "+path)
 }
 
-// managedSeed drops a `-company` bootstrap seed on a managed deployment, and
-// says so.
+// managedSeed is the seed a managed deployment's command line carries, decided
+// as it is resolved and before anything reads the file.
+//
+// `-import-company` is refused ([refuseManagedOverride]), its file unread. A
+// `-company` bootstrap seed is NEVER READ: on a managed deployment it is
+// neither imported nor run, so there is nothing to read it for, and reading it
+// anyway is how a stray ./company.yaml the node was never told about — or one
+// that no longer parses — would fail the boot of a node that ignores it. What
+// comes back names the file when there is one to ignore (a named path, or the
+// default where it exists), for [decideSeed] to say so; an absent default is
+// no seed at all.
 //
 // IGNORED, LOUDLY, rather than refused: `-company` defaults to
 // ./company.yaml, so a node can carry one it was never told about, and a
 // bootstrap seed is ignored once a company exists anyway — this is the same
 // answer for the same reason, said at the same level. An empty store on a
 // managed deployment waits for its managing system's first write.
-func managedSeed(ctx context.Context, boot *config.Bootstrap, seed tierBSeed, log *slog.Logger) tierBSeed {
-	if seed.Company == nil || !boot.API.Auth.CompanyManaged() {
-		return seed
+func managedSeed(boot *config.Bootstrap, path string, named bool, importPath string) (tierBSeed, error) {
+	if importPath != "" {
+		return tierBSeed{}, refuseManagedOverride(boot, importPath)
 	}
+	if !named {
+		if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+			return tierBSeed{Path: path}, nil
+		}
+	}
+	return tierBSeed{Path: path, Managed: true}, nil
+}
+
+// warnManagedSeed says that a managed deployment ignored a -company seed.
+//
+// Said by [decideSeed] once its decision holds, rather than where the seed is
+// resolved: that is before the log file is open and before Tier A's last
+// refusals, and a warning printed beside the refusal that stops the boot — a
+// store that cannot be read, a stored revision this build cannot run — is
+// noise at the moment somebody is reading carefully.
+func warnManagedSeed(ctx context.Context, boot *config.Bootstrap, path string, log *slog.Logger) {
 	log.WarnContext(ctx, "company_seed_ignored",
-		"file", seed.Path,
+		"file", path,
 		"reason", "api.auth.company_writers names the company document's only "+
 			"writers ("+strings.Join(boot.API.Auth.CompanyWriters, ", ")+"), so a "+
-			"Tier B file on this node's command line is never imported",
+			"Tier B file on this node's command line is neither imported nor run, "+
+			"and is not read",
 		"hint", "the managing system writes the company through the API; remove "+
-			"the file, or remove api.auth.company_writers to take the document back")
-	return tierBSeed{Path: seed.Path}
+			"the file or the -company flag, or remove api.auth.company_writers "+
+			"to take the document back")
 }

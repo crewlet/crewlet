@@ -333,8 +333,8 @@ type Options struct {
 	// It is fixed for the life of the handle once it is non-zero: the
 	// vectors already in the file are this wide, and the engine refuses a
 	// revision that would change it. The one exception is a store opened
-	// at 0 — a node with no active revision, holding no rows — which
-	// learns its width from its first apply via [DB.LearnEmbeddingDim].
+	// at 0 — a node that boots on no revision — which learns its width
+	// from its first apply via [DB.LearnEmbeddingDim].
 	EmbeddingDim int
 
 	// pins is how many connections [DB.Writer] may hold for the life of
@@ -939,9 +939,14 @@ func (d *DB) EmbeddingDim() int {
 // holds rows of two widths and the reader can match neither reliably.
 //
 // So: zero to non-zero, once. That is the only safe transition, and it is the
-// one a node that booted with no active revision needs — it opened at 0
-// holding no rows at all, and its first apply is what tells it how wide its
-// vectors will be. Every other case is already correct at open, because
+// one a node that booted on no revision needs — its first apply is what tells
+// it how wide its vectors will be. Such a store usually holds no rows: its
+// node has no active revision. The one that may is a node started to import a
+// file over its stored revision, which reads no revision so that one this
+// build cannot run does not refuse the boot that replaces it; its first apply
+// is the imported file's, so it learns the width a boot on that file opened
+// at, over the rows the file replaces — where a restart onto a new width has
+// always left a store. Every other case is already correct at open, because
 // [OpenBackends] passes the active revision's width.
 //
 // A width of 0 is "no declared width", not a width of zero:

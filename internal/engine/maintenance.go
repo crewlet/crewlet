@@ -394,8 +394,8 @@ func (e *Engine) activeSeats(ctx context.Context) ([]placement.Seat, error) {
 // an unchanged revision, the rotation gesture, is a different activation here
 // too, and a company applied from the pointer's own activation is accepted
 // even while the reconciler is still inside the apply that publishes it. A
-// company no activation has named yet — a Tier B file a node booted with — is
-// unknown until the reconciler's first apply.
+// company no activation has named — one handed to [New] in code — is unknown
+// until the reconciler's first apply.
 func (e *Engine) fleetCompany(ctx context.Context, c *Company) (*Company, error) {
 	if e.backends == nil || e.backends.Fleet == nil {
 		return nil, fmt.Errorf("engine: this node has no fleet store to read the activation pointer from")

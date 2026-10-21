@@ -94,10 +94,11 @@ type Company struct {
 	// or a boot's reading of the active revision's `activated_at` — in UTC,
 	// stamped ONCE, as the company is built ([stampActivation]).
 	//
-	// ZERO FOR A COMPANY NO ACTIVATION HAS NAMED YET: a Tier B file a node
-	// booted with, which its reconciler publishes and applies with the
-	// pointer's instant before a seat is claimed. A zero instant is a
-	// configuration nothing derived from it may be written from.
+	// ZERO FOR A COMPANY NO ACTIVATION HAS NAMED: one handed to [New] in code
+	// rather than read from a store. `crewlet run` never boots on one — it
+	// starts on the revision its store activated, or on nothing, and a Tier
+	// B file reaches the engine through an activation and its apply. A zero
+	// instant is a configuration nothing derived from it may be written from.
 	//
 	// IT IS WHAT EVERY ROW DERIVED FROM THE CONFIGURATION IS STAMPED WITH
 	// ([configplane.ActivationStamp]) — the tracker's chart-owned project

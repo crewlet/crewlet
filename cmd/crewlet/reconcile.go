@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -45,17 +44,21 @@ import (
 // ways to apply it. `-import-company` is the deliberate override, and
 // `crewlet config import` changes a running fleet with no restart at all.
 //
-// # Why the comparison is against the opened document
+// WHICH of those a file is, and what the engine boots on, is decided once,
+// before the engine starts — see seed.go. This file carries the decision out.
 //
-// The seed is compared against the ACTIVE revision's opened document, not
-// against its stored bytes: every revision is sealed under the keyring every
-// node holds, so the stored form is ciphertext that differs on every seal, and
-// a byte comparison would import a fresh revision on every single boot.
+// The seed is compared against the ACTIVE revision's opened document, not its
+// stored bytes — see [tierBSeed.is].
 
-// startReconciler seeds the store from the file, converges this node on the
+// startReconciler carries out the decided seed, converges this node on the
 // pointer, and returns the loop for the caller to run.
+//
+// It takes the PLAN rather than the file: what the file is for was decided
+// before the engine started, by the decision the engine booted on too
+// ([decideSeed]), and a second reading of the file here is how the two once
+// disagreed.
 func startReconciler(ctx context.Context, e *engine.Engine, boot *config.Bootstrap,
-	seed tierBSeed, cipher secrets.Cipher, log *slog.Logger,
+	plan seedPlan, cipher secrets.Cipher, log *slog.Logger,
 ) (*engine.Reconciler, error) {
 	db := e.Backends().Store
 	plane := e.Backends().Fleet
@@ -65,8 +68,7 @@ func startReconciler(ctx context.Context, e *engine.Engine, boot *config.Bootstr
 	if err != nil {
 		return nil, fmt.Errorf("node identity: %w", err)
 	}
-	seed = managedSeed(ctx, boot, seed, log)
-	if err = seedCompany(ctx, db, plane, e.Backends().Queue, seed, cipher,
+	if err = seedCompany(ctx, db, plane, e.Backends().Queue, plan, cipher,
 		nodeID, log); err != nil {
 		return nil, err
 	}
@@ -81,10 +83,11 @@ func startReconciler(ctx context.Context, e *engine.Engine, boot *config.Bootstr
 	if err != nil {
 		return nil, err
 	}
-	// One tick now, so the node boots on the epoch the fleet is on. Its
-	// failure is NOT fatal: a node that cannot reach the current revision
-	// still serves the one it has, which is the whole point of publishing
-	// an epoch rather than mutating one.
+	// One tick now, so the node boots on the epoch the fleet is on — and on
+	// a node that booted unconfigured to import its file, this is where
+	// that file's company is built. Its failure is NOT fatal: a node that
+	// cannot reach the current revision still serves the one it has, which
+	// is the whole point of publishing an epoch rather than mutating one.
 	if err := reconciler.Tick(ctx); err != nil {
 		log.WarnContext(ctx, "initial_reconcile_failed", "error", err,
 			"hint", "this node is serving the configuration it booted with; "+
@@ -93,74 +96,88 @@ func startReconciler(ctx context.Context, e *engine.Engine, boot *config.Bootstr
 	return reconciler, nil
 }
 
-// seedCompany reconciles the command line's Tier B file into the store.
+// seedCompany carries out the decided seed against the store and the fleet.
 //
 // Idempotent by CONTENT, not by a marker: an unchanged file imports nothing
-// however many times the node boots. What happens to a CHANGED one is the
-// seed's mode — see the package note above. A bootstrap seed reports the
-// difference and leaves the store alone; an override imports it.
+// however many times the node boots. What happens to a CHANGED one was decided
+// with the boot ([decideSeed]): a bootstrap the store's company outranks
+// imports nothing and publishes what the store holds, and an override imports
+// it.
 //
 // A revision the seed writes is the NODE's, recorded under the node's own id:
 // nobody ran a command, the node read its -company file at boot, and which
 // node did it is the fact somebody reading the history later needs.
 func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue.Publisher,
-	seed tierBSeed, cipher secrets.Cipher, nodeID string, log *slog.Logger,
+	plan seedPlan, cipher secrets.Cipher, nodeID string, log *slog.Logger,
 ) error {
 	configs := db.Configs()
-	active, found, err := configs.Active(ctx)
-	if err != nil {
-		return fmt.Errorf("read the active revision: %w", err)
-	}
-	if seed.Company == nil {
-		// No file at all. The store is authoritative, so this is a normal
-		// way to run a node — it serves whatever the fleet activated.
+	switch plan.act {
+	case seedBootstrap:
+		// NOTHING TO COMPARE WITH: the plan was made on a store holding no
+		// company — an empty one, or a scratch one the engine discarded
+		// as it opened it — and one process owns the store.
+		return importSeed(ctx, configs, plane, pub, plan.file, "", cipher, nodeID, log)
+	case seedImport:
+		active, found, err := configs.Active(ctx)
+		if err != nil {
+			return fmt.Errorf("read the active revision: %w", err)
+		}
+		parent := ""
+		if found {
+			current, err := openStored(cipher, active)
+			if err != nil {
+				return err
+			}
+			same, err := plan.file.is(current)
+			if err != nil {
+				return err
+			}
+			if same {
+				// The file IS the active revision, so there is nothing
+				// to import. The node may still owe the fleet a
+				// POINTER — see publishLocalActive for the case that
+				// puts it there.
+				return publishLocalActive(ctx, plane, pub, configs, active, cipher, log)
+			}
+			parent = active.ID
+		}
+		return importSeed(ctx, configs, plane, pub, plan.file, parent, cipher, nodeID, log)
+	case seedNone:
+		// No file to import. The store is authoritative, so this is a
+		// normal way to run a node — it serves whatever the fleet
+		// activated, and publishes what it holds where the fleet has
+		// nothing newer.
+		active, found, err := configs.Active(ctx)
+		if err != nil {
+			return fmt.Errorf("read the active revision: %w", err)
+		}
 		if !found {
 			return nil
 		}
 		return publishLocalActive(ctx, plane, pub, configs, active, cipher, log)
+	default:
+		return errUndecidedSeed
 	}
+}
+
+// importSeed writes the seed's file as a new revision, chained to parent, and
+// points the fleet at it.
+func importSeed(ctx context.Context, configs *store.Configs, plane coord.Plane,
+	pub queue.Publisher, seed tierBSeed, parent string, cipher secrets.Cipher,
+	nodeID string, log *slog.Logger,
+) error {
 	document, err := json.Marshal(seed.Company)
 	if err != nil {
 		return fmt.Errorf("encode the company config: %w", err)
 	}
-	parent := ""
-	if found {
-		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		current, err := openStored(cipher, active)
-		if err != nil {
-			return err
-		}
-		if bytes.Equal(current, document) {
-			// The file has not changed, so there is nothing to import.
-			// The node may still owe the fleet a POINTER — see
-			// publishLocalActive for the case that puts it there.
-			return publishLocalActive(ctx, plane, pub, configs, active, cipher, log)
-		}
-		if !seed.Override {
-			// THE COMPANY EXISTS AND THIS FILE IS ONLY A BOOTSTRAP, so
-			// the store wins. Loud, because the operator edited a file
-			// that is not going to take effect and the old behaviour's
-			// one virtue was that it always did something.
-			log.WarnContext(ctx, "company_seed_ignored",
-				"file", seed.Path, "active_revision", active.ID,
-				"reason", "the store already holds a company, and -company "+
-					"only bootstraps an empty one",
-				"hint", "to make this file the company again, restart with "+
-					"-import-company "+seed.Path+"; to change the running "+
-					"fleet with no restart, run `crewlet config import "+
-					seed.Path+"`")
-			return publishLocalActive(ctx, plane, pub, configs, active, cipher, log)
-		}
-		parent = active.ID
-	}
 
 	// THE FILE IS BEING WRITTEN, so it meets every rule a written document
-	// meets. It was loaded against the runnable rules only, because the
-	// frames above return without writing it: unchanged from the active
-	// revision, or a bootstrap the store's own company outranks. Past them
-	// this is a new revision, the same act as `crewlet config import`, and
-	// admitting a duplicate here would store exactly what every other
-	// write refuses. Nothing has been stored or activated yet.
+	// meets. It was loaded against the runnable rules only, because most
+	// boots never write it: unchanged from the active revision, or a
+	// bootstrap the store's own company outranks. Here it is a new
+	// revision, the same act as `crewlet config import`, and admitting a
+	// duplicate here would store exactly what every other write refuses.
+	// Nothing has been stored or activated yet.
 	if invalid := seed.Company.ValidateAdmission(); invalid != nil {
 		return fmt.Errorf("company config %s cannot be imported into the store: "+
 			"a document written as a new revision must meet every rule, and "+
@@ -382,46 +399,6 @@ func nudge(ctx context.Context, pub queue.Publisher, revision store.Revision,
 	}
 }
 
-// bootOptions is what `crewlet run` builds its engine from: the Tier A it
-// loaded, the company this node starts on, and the instant that company was
-// activated at.
-//
-// With a Tier B file the company is that file's, which the reconcile converges
-// onto the fleet's before anything is claimed — and a file's company has NO
-// ACTIVATION YET, so its instant stays zero and the engine leaves its chart to
-// the reconciler's first tick, which publishes the file and applies it with
-// the pointer's own instant. Without one it is whatever this node's store has
-// marked active, WITH the instant it was activated at ([companyFromStore]),
-// which is what the engine stamps the chart and the knowledge spaces with at
-// boot ([engine.Options.ActivatedAt]): a boot that dropped it would stamp
-// nothing at all, and the company's projects would wait for the next apply.
-//
-// ONE VALUE, handed to the engine WHOLE, so no field of it can be decided here
-// and dropped at the call site. Read BEFORE the engine, in its own
-// open-and-close, so the engine still owns the backends it opens.
-func bootOptions(ctx context.Context, bootstrapPath string, boot *config.Bootstrap,
-	file *config.Company) (engine.Options, error) {
-
-	opts := engine.Options{Bootstrap: boot, Company: file}
-	if file != nil {
-		return opts, nil
-	}
-	// A SCRATCH STORE IS NOT READ: what it holds is the previous run's, it is
-	// deleted as the engine opens it, and opening it here would create the
-	// replicated estate a node without `data` must not have. Such a node
-	// boots unconfigured and its reconciler fetches the fleet's active
-	// revision off the coordination store before any seat is claimed.
-	if boot.Store.Scratch {
-		return opts, nil
-	}
-	company, activatedAt, err := companyFromStore(ctx, bootstrapPath)
-	if err != nil {
-		return engine.Options{}, err
-	}
-	opts.Company, opts.ActivatedAt = company, activatedAt
-	return opts, nil
-}
-
 // refuseScratchStore refuses an OFFLINE command against a node whose store is
 // scratch, naming what to do instead.
 //
@@ -436,72 +413,4 @@ func refuseScratchStore(boot *config.Bootstrap, command, instead string) error {
 	return fmt.Errorf("%s: this node's store is scratch (store.scratch) — it holds "+
 		"no data and is deleted at every boot, so nothing written into it offline "+
 		"survives the next start. %s", command, instead)
-}
-
-// companyFromStore is the epoch a node with no Tier B file boots on.
-//
-// The store is authoritative at runtime, so a node whose company already lives
-// there needs no file — and the documented bootstrap path (start the node,
-// then PUT /config) requires that it can start without one. What it cannot do
-// is guess: it reads the revision the node's own database marks active, which
-// is what the reconciler is about to converge from anyway.
-//
-// It also answers WHEN the revision was activated — the instant this node's
-// store recorded with its active copy, which is the fleet pointer's own
-// instant for a revision the fleet activated. The engine stamps the org
-// chart's projects with it, so a restart re-applying the same activation is
-// recognised as one and writes nothing (see [engine.Options.ActivatedAt]).
-//
-// A nil company with a nil error is the UNCONFIGURED case — no file and no
-// revision — and it is a state, not a failure. The node serves its API so an
-// operator can push the first revision into it.
-//
-// It opens the store, reads, and closes it again, rather than handing the open
-// handle on: the engine opens its own backends and owns their lifetime, and a
-// caller-supplied set would move that ownership into this function's caller
-// for the whole run. Two sequential opens at boot cost one migration pass over
-// an already-migrated file; a split lifetime costs a leaked store on every
-// error path that does not know it now has one.
-func companyFromStore(ctx context.Context, bootstrapPath string) (*config.Company, time.Time, error) {
-	cs, closeStore, err := openConfigStore(ctx, bootstrapPath,
-		"Another `crewlet run` holds this node's store: stop it before "+
-			"starting a second, since one store belongs to one process.")
-	if err != nil {
-		return nil, time.Time{}, err
-	}
-	defer closeStore()
-
-	active, found, err := cs.configs.Active(ctx)
-	if err != nil {
-		return nil, time.Time{}, fmt.Errorf("read the active revision: %w", err)
-	}
-	if !found {
-		return nil, time.Time{}, nil
-	}
-	document, err := openStored(cs.cipher, active)
-	if err != nil {
-		return nil, time.Time{}, err
-	}
-	company, err := config.DecodeCompany(document)
-	if err != nil {
-		return nil, time.Time{}, fmt.Errorf("parse the active revision %s: %w", active.ID, err)
-	}
-	// VALIDATED HERE, naming the revision, because booting is applying and
-	// the stored-form decode holds a revision to no rule. The engine checks
-	// the same rules again as it builds the epoch, but only this frame knows
-	// which revision it is and that an offline import is the way out: the
-	// node is not serving its API yet, and its listener answers every route
-	// it will serve `503 starting`.
-	//
-	// The RUNNABLE rules only, like every apply: an admission rule is one
-	// an apply does not enforce, because a newer peer may have admitted the
-	// revision under rules this build does not share. The reconciler warns
-	// about it once it applies the epoch (see
-	// [config.Company.ValidateRunnable]).
-	if err := company.ValidateRunnable(); err != nil {
-		return nil, time.Time{}, fmt.Errorf("the active revision %s cannot run on this build; "+
-			"import a corrected document with `crewlet config import` and start "+
-			"again: %w", active.ID, err)
-	}
-	return company, active.ActivatedAt, nil
 }
