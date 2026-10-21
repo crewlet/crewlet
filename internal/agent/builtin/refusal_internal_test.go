@@ -87,11 +87,11 @@ func TestWriteFailureClassesEachSentinel(t *testing.T) {
 		{"text past its cap", fmt.Errorf("x: %w", &worklet.TextCapError{
 			Field: worklet.TextTitle, Size: 600, Limit: worklet.MaxTitle}),
 			tools.RefusalInvalid},
-		// A TAG THAT CANNOT BE DECLARED is what the call asked for, and its
-		// sentence names the tag and the way past it.
+		// A TAG WHOSE LABEL ANOTHER TAG CARRIES is a collision, and its
+		// sentence names the tag that holds it and the way past it.
 		{"a clashing tag", fmt.Errorf("x: %w", &worklet.TagClash{Project: "OPS",
 			Slug: "api", Label: "API", Other: worklet.Tag{Slug: "backend-api",
-				Label: "API"}}), tools.RefusalInvalid},
+				Label: "API"}}), tools.RefusalExists},
 		// THE PROJECT'S STATE, not the call's: it lands once a tag is
 		// archived to make room.
 		{"a full tag set", fmt.Errorf("x: %w", &worklet.TagsFull{Project: "OPS",

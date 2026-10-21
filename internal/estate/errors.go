@@ -81,8 +81,9 @@ var sentinels = []sentinel{
 	{"worklet.ErrRestoresOthers", worklet.ErrRestoresOthers},
 	{"worklet.ErrStaleVersion", worklet.ErrStaleVersion},
 	{"worklet.ErrState", worklet.ErrState},
-	{"tracker.ErrStepUnresolved", worklet.ErrStepUnresolved},
+	{"worklet.ErrStepUnresolved", worklet.ErrStepUnresolved},
 	{"worklet.ErrStepUnvouched", worklet.ErrStepUnvouched},
+	{"worklet.ErrTaken", worklet.ErrTaken},
 	{"worklet.ErrTooBroad", worklet.ErrTooBroad},
 	{"worklet.ErrUploadStale", worklet.ErrUploadStale},
 
@@ -96,7 +97,7 @@ var sentinels = []sentinel{
 	{"doclet.ErrReserved", doclet.ErrReserved},
 	{"doclet.ErrStaleVersion", doclet.ErrStaleVersion},
 	{"doclet.ErrTitleTaken", doclet.ErrTitleTaken},
-	{"pages.ErrUnservedOrder", doclet.ErrUnservedOrder},
+	{"doclet.ErrUnservedOrder", doclet.ErrUnservedOrder},
 
 	{"chatlet.ErrArchived", chatlet.ErrArchived},
 	{"chatlet.ErrConflict", chatlet.ErrConflict},

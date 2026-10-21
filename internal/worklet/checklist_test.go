@@ -136,6 +136,10 @@ func TestApplyChecklist(t *testing.T) {
 		intent worklet.ChecklistIntent
 		check  func(t *testing.T, got []worklet.Checklist)
 		refuse string
+		// mark is the refusal's class mark, ErrInvalid unless the case
+		// says otherwise: an id another list or line holds is a
+		// collision, ErrTaken.
+		mark error
 	}{
 		"add a list with its first lines": {
 			lists: launchList(),
@@ -188,6 +192,13 @@ func TestApplyChecklist(t *testing.T) {
 			lists:  launchList(),
 			intent: worklet.ChecklistIntent{Op: worklet.ChecklistAddItem, List: "launch", Item: "flag", Name: "dup"},
 			refuse: "already has a checklist item",
+			mark:   worklet.ErrTaken,
+		},
+		"a list id already taken": {
+			lists:  launchList(),
+			intent: worklet.ChecklistIntent{Op: worklet.ChecklistAddList, List: "launch", Name: "dup"},
+			refuse: "already has a checklist",
+			mark:   worklet.ErrTaken,
 		},
 		"an unknown item": {
 			lists:  launchList(),
@@ -228,8 +239,13 @@ func TestApplyChecklist(t *testing.T) {
 			before := len(c.lists)
 			got, err := worklet.ApplyChecklist(c.lists, c.intent)
 			if c.refuse != "" {
-				if !errors.Is(err, worklet.ErrInvalid) || !strings.Contains(err.Error(), c.refuse) {
-					t.Fatalf("got %v, want a refusal mentioning %q", err, c.refuse)
+				mark := c.mark
+				if mark == nil {
+					mark = worklet.ErrInvalid
+				}
+				if !errors.Is(err, mark) || !strings.Contains(err.Error(), c.refuse) {
+					t.Fatalf("got %v, want a refusal marked %v mentioning %q", err, mark,
+						c.refuse)
 				}
 				return
 			}

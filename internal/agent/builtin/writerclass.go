@@ -184,8 +184,9 @@ func ObjectArgs() []string {
 // (internal/mcp's [tools.Refusal]): what the item or project the write is
 // about refuses by its STATE — frozen in the trash, archived, its tags or pins
 // at their cap, nothing in the trash to restore, an upload too old to name —
-// is a conflict, as an artifact's trash is; a type the project does not file,
-// or a parent in the trash, is the argument to change.
+// is a conflict, as an artifact's trash is; a label another tag carries is a
+// collision, `exists`, as a page title another page holds is; a type the
+// project does not file, or a parent in the trash, is the argument to change.
 func trackerClass(err error) (tools.Refusal, bool) {
 	var (
 		ambiguous       *worklet.ErrAmbiguous
@@ -201,6 +202,8 @@ func trackerClass(err error) (tools.Refusal, bool) {
 		return tools.RefusalForbidden, true
 	case errors.Is(err, worklet.ErrAlreadyAnswered):
 		return tools.RefusalAlreadyAnswered, true
+	case errors.Is(err, worklet.ErrTaken):
+		return tools.RefusalExists, true
 	case errors.Is(err, worklet.ErrInboxFull):
 		return tools.RefusalInboxFull, true
 	case errors.Is(err, worklet.ErrReassignmentBudget):

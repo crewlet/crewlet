@@ -269,7 +269,7 @@ func TestAWritersErrorIsClassedByTheToolsRule(t *testing.T) {
 		{err: fmt.Errorf("x: %w", worklet.ErrReassignmentBudget),
 			want: crewletmcp.RefusalReassignmentBudget},
 		{err: fmt.Errorf("x: %w", &worklet.TagClash{Project: "OPS", Slug: "api"}),
-			want: crewletmcp.RefusalInvalid},
+			want: crewletmcp.RefusalExists},
 		{err: &statelog.Unavailable{Reason: statelog.ReasonLogFull},
 			want: crewletmcp.RefusalUnavailable},
 		{err: fmt.Errorf("x: %w", coord.ErrUnavailable), want: crewletmcp.RefusalUnavailable},

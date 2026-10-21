@@ -255,7 +255,14 @@ func TestDeclaredIsWhatTheWriteActuallyCreated(t *testing.T) {
 
 // TestTagLabelCollisionIsRefused is D43's rule: two tags a person cannot tell
 // apart split the work between them at random. It covers BOTH spellings,
-// because a label may collide with another tag's label or with its slug.
+// because a label may collide with another tag's label or with its slug, and
+// BOTH gestures, because a rename can give a tag another's label as surely as
+// an add can — and every one is a COLLISION ([worklet.ErrTaken]) naming the tag
+// that holds the label, never a malformed label ([worklet.ErrInvalid]). The
+// rename's was a bare content refusal naming nothing a caller could unwrap.
+//
+// Mutation: refuse the rename's clash with invalid() again, or unwrap
+// TagClash to ErrInvalid, and a case goes red.
 func TestTagLabelCollisionIsRefused(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -270,16 +277,37 @@ func TestTagLabelCollisionIsRefused(t *testing.T) {
 	// EACH CASE ISOLATES ONE SPELLING. The seed's label and slug are
 	// deliberately different words, so a collision on one cannot pass for
 	// a collision on the other.
-	for _, c := range []struct{ name, slug, label string }{
-		{"same label, different case", "rest-api", "public api"},
-		{"label is another tag's slug", "rest", "API"},
+	if _, err := r.writer.WriteTags(t.Context(), "op-seed-ux", "ENG",
+		worklet.TagEdit{Add: []worklet.Tag{{Slug: "ux", Label: "Design"}}},
+		worklet.TagAuthority{}); err != nil {
+
+		t.Fatalf("seed: %v", err)
+	}
+	r.drain()
+	for _, c := range []struct {
+		name string
+		edit worklet.TagEdit
+		slug string
+	}{
+		{"same label, different case", worklet.TagEdit{Add: []worklet.Tag{
+			{Slug: "rest-api", Label: "public api"}}}, "rest-api"},
+		{"label is another tag's slug", worklet.TagEdit{Add: []worklet.Tag{
+			{Slug: "rest", Label: "API"}}}, "rest"},
+		{"a rename onto another tag's label", worklet.TagEdit{
+			Rename: map[string]string{"ux": "Public API"}}, "ux"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			_, err := r.writer.WriteTags(t.Context(), "op-"+c.slug, "ENG",
-				worklet.TagEdit{Add: []worklet.Tag{{Slug: c.slug, Label: c.label}}},
-				worklet.TagAuthority{})
-			if err == nil {
+			_, err := r.writer.WriteTags(t.Context(), "op-"+c.name, "ENG", c.edit,
+				worklet.TagAuthority{Policy: true})
+			var clash *worklet.TagClash
+			switch {
+			case err == nil:
 				t.Fatalf("%s was accepted", c.name)
+			case !errors.As(err, &clash) || clash.Other.Slug != "api" || clash.Slug != c.slug:
+				t.Fatalf("%s was refused %v, want a TagClash of %s naming api",
+					c.name, err, c.slug)
+			case !errors.Is(err, worklet.ErrTaken) || errors.Is(err, worklet.ErrInvalid):
+				t.Fatalf("%s is not a collision alone: %v", c.name, err)
 			}
 		})
 	}
@@ -493,27 +521,30 @@ func (r *roundTrip) tagSlugs(project string) []string {
 // [worklet.TagClash] and [worklet.TagsFull] are types so a caller several
 // steps away — a cross-project move declaring its subtree's tags — can name
 // the tags involved. They must still be what every refusal here is: marked
-// under errors.Is — a clash [worklet.ErrInvalid], the label to change, and a
-// full set [worklet.ErrState], the project's state, which the same add meets
-// until a tag is archived — and worded by [worklet.Sentence] without the
+// under errors.Is — a clash [worklet.ErrTaken], the collision it is, which
+// another label avoids, and a full set [worklet.ErrState], the project's
+// state, which the same add meets until a tag is archived; neither is
+// [worklet.ErrInvalid], since nothing about the label is malformed — and
+// worded by [worklet.Sentence] without the
 // package prefix, or a surface that does not look for the type classes a
 // person's refusal as the engine's own failure and shows them "worklet:" in
 // front of it.
 func TestATypedTagRefusalIsClassedAndWordedAsARefusal(t *testing.T) {
 	t.Parallel()
+	marks := []error{worklet.ErrInvalid, worklet.ErrState, worklet.ErrTaken}
 	for name, c := range map[string]struct {
-		err       error
-		mark, not error
+		err  error
+		mark error
 	}{
 		"a clash": {&worklet.TagClash{Project: "OPS", Slug: "api", Label: "API",
-			Other: worklet.Tag{Slug: "backend-api", Label: "API"}},
-			worklet.ErrInvalid, worklet.ErrState},
-		"a full set": {&worklet.TagsFull{Project: "OPS", Slug: "api"},
-			worklet.ErrState, worklet.ErrInvalid},
+			Other: worklet.Tag{Slug: "backend-api", Label: "API"}}, worklet.ErrTaken},
+		"a full set": {&worklet.TagsFull{Project: "OPS", Slug: "api"}, worklet.ErrState},
 	} {
 		err := c.err
-		if !errors.Is(err, c.mark) || errors.Is(err, c.not) {
-			t.Errorf("%s is not %v alone: %v", name, c.mark, err)
+		for _, mark := range marks {
+			if errors.Is(err, mark) != errors.Is(c.mark, mark) {
+				t.Errorf("%s is not %v alone: %v", name, c.mark, err)
+			}
 		}
 		sentence := worklet.Sentence(err)
 		if strings.HasPrefix(sentence, "worklet:") || err.Error() != "worklet: "+sentence {
