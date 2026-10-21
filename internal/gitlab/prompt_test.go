@@ -132,7 +132,7 @@ func TestAnUnknownReasonFallsBackToWatching(t *testing.T) {
 // predicted; every other event here reports what somebody DID.
 func TestOnlyAFailedPipelineWakesItsActor(t *testing.T) {
 	t.Parallel()
-	if !(gitlab.Prompt{}).WakesActor(gitlab.PipelineFailed) {
+	if !(gitlab.Prompt{}).WakesActor(gitlabEvent(gitlab.PipelineFailed)) {
 		t.Fatal("a failed pipeline does not reach the person who broke it")
 	}
 	for _, reason := range []string{
@@ -141,7 +141,7 @@ func TestOnlyAFailedPipelineWakesItsActor(t *testing.T) {
 		gitlab.MRMention, gitlab.IssueMention, "merge_request.merge",
 		"pipeline.success", "",
 	} {
-		if (gitlab.Prompt{}).WakesActor(reason) {
+		if (gitlab.Prompt{}).WakesActor(gitlabEvent(reason)) {
 			t.Fatalf("%q wakes its own actor", reason)
 		}
 	}
@@ -344,10 +344,15 @@ func TestThePromptAnswersForGitLab(t *testing.T) {
 		t.Fatalf("the prompt answers for %q", got)
 	}
 	prompts := notify.NewPrompts(gitlab.Prompt{})
-	if !notify.WakesActor(prompts, gitlab.Backend, gitlab.PipelineFailed) {
+	if !notify.WakesActor(prompts, gitlabEvent(gitlab.PipelineFailed)) {
 		t.Fatal("the spine does not reach the actor through the registry")
 	}
-	if notify.WakesActor(prompts, gitlab.Backend, gitlab.NoteComment) {
+	if notify.WakesActor(prompts, gitlabEvent(gitlab.NoteComment)) {
 		t.Fatal("the spine reaches the actor for their own comment")
 	}
+}
+
+// gitlabEvent is one GitLab copy of a notification, as the spine asks about it.
+func gitlabEvent(reason string) notify.Inbound {
+	return notify.Inbound{Source: gitlab.Backend, EventType: reason}
 }

@@ -30,7 +30,7 @@ import (
 //     the episodes column, and the value a parked coding run matches a
 //     person's answer against — they answer on the conversation, not into
 //     the batch.
-//   - WakesActor says whether an event reaches the party who caused it.
+//   - WakesActor says whether a notification reaches the party who caused it.
 //   - DigestBody is the supersede rule when several of them merge.
 //
 // The count was "four" over five bullets for as long as the interface had
@@ -148,7 +148,7 @@ type Prompt interface {
 	// keeps one ledger.
 	ConversationIdentity(metadata map[string]string, subject string) string
 
-	// WakesActor reports whether an event type reaches the party who
+	// WakesActor reports whether a notification reaches the party who
 	// caused it, overriding the self-action rule.
 	//
 	// True for an event reporting the OUTCOME of the actor's own action —
@@ -157,10 +157,20 @@ type Prompt interface {
 	// already knows about, which is nearly everything: their own comment,
 	// their own assignment, their own edit.
 	//
-	// Only the third-party app can say which of its event types are which, so it is
-	// asked here rather than pattern-matched on the name centrally. See
-	// [WakesActor] for what happens to a source with no registered prompt.
-	WakesActor(eventType string) bool
+	// Only the third-party app can say which of its notifications are
+	// which, so it is asked here rather than pattern-matched on the name
+	// centrally. See [WakesActor] for what happens to a source with no
+	// registered prompt.
+	//
+	// HANDED THE WHOLE NOTIFICATION, never its event type alone: a code
+	// host's answer is its event type (a failed pipeline), but the native
+	// tracker's is the ROUTING REASON the parser stamped on each
+	// recipient's copy — a status change that unblocked somebody's task
+	// reaches its actor as `unblocked` and every other copy of the same
+	// change does not, and the event type is `status` on all of them. Asked
+	// with the type alone, a prompt that needs the reason reads the type
+	// as one and answers no for every copy.
+	WakesActor(n Inbound) bool
 
 	// DigestBody is the per-source supersede rule for one constituent of a
 	// merged trigger.

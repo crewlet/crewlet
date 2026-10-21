@@ -46,7 +46,7 @@ func (tracker) Addressed(n notify.Inbound) bool { return n.EventType == "assigne
 // A pipeline result reports the outcome of the actor's OWN push, so it
 // reaches them; everything else this third-party app emits, they already
 // know about.
-func (tracker) WakesActor(eventType string) bool { return eventType == "pipeline_failed" }
+func (tracker) WakesActor(n notify.Inbound) bool { return n.EventType == "pipeline_failed" }
 func (tracker) PartitionKey(m map[string]string, _ string) string {
 	return m["issue_id"]
 }

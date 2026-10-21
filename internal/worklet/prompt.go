@@ -215,7 +215,15 @@ func (Prompt) WorkItem(metadata map[string]string) (types.WorkItem, bool) {
 // closed a blocker learns from this that the task it was blocking is now
 // workable, which is a CONSEQUENCE of their own write rather than a repeat of
 // it. Every other change here is something the actor already knows.
-func (Prompt) WakesActor(via string) bool { return Reason(via).WakesActor() }
+//
+// READ OFF THE ROUTING REASON this recipient's copy carries ([MetaVia]), never
+// the event type: the unblocked notice to the actor and every other copy of the
+// same status change share one event type (`status`), and only the reason the
+// parser stamped per recipient tells them apart — the reason [Route] already
+// let through by the same rule ([Reason.WakesActor]).
+func (Prompt) WakesActor(n notify.Inbound) bool {
+	return Reason(n.Metadata[MetaVia]).WakesActor()
+}
 
 // DigestBody implements [notify.Prompt]: comments keep their text, field and
 // status changes collapse to their lead.
