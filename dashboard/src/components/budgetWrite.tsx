@@ -33,6 +33,7 @@ import {
   Input,
   Modal,
   Popover,
+  returnFocus,
   useToast,
 } from "@crewlethq/ui";
 import { PencilGlyph, SlidersVerticalGlyph } from "@crewlethq/icons/glyphs";
@@ -186,7 +187,7 @@ export function CeilingEditor({
   useEffect(() => {
     if (!editing || !saved) return;
     setEditing(false);
-    pencil.current?.focus();
+    returnFocus(pencil.current);
   }, [editing, saved]);
 
   function open() {
@@ -200,8 +201,9 @@ export function CeilingEditor({
     write.reset();
     setEditing(false);
     // FOCUS GOES BACK TO WHAT OPENED IT, or a keyboard reader lands at the
-    // top of the page after every edit.
-    queueMicrotask(() => pencil.current?.focus());
+    // top of the page after every edit. Handed back rather than focused, so a
+    // pencil a pointer opened is not ringed for leaving the field.
+    queueMicrotask(() => returnFocus(pencil.current));
   }
 
   function submit(event?: FormEvent) {
