@@ -269,7 +269,8 @@ func artifactClass(err error) (tools.Refusal, bool) {
 		return tools.RefusalNotFound, true
 	case errors.As(err, &moved):
 		return tools.RefusalStaleVersion, true
-	case errors.Is(err, artifactsdomain.ErrSourceTaken), errors.Is(err, artifactsdomain.ErrLabelTaken):
+	case errors.Is(err, artifactsdomain.ErrSourceTaken), errors.Is(err, artifactsdomain.ErrLabelTaken),
+		errors.Is(err, artifactsdomain.ErrExists):
 		return tools.RefusalExists, true
 	case errors.As(err, &quota):
 		return tools.RefusalQuotaExceeded, true

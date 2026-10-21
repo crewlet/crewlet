@@ -110,9 +110,6 @@ func (w *Writer) Create(ctx context.Context, c Call, in CreateInput) (Published,
 			return w.decision(stamp, c, subject, OpCreate, scope, opID, payload, at)
 		}))
 	out := Published{Artifact: id, Number: 1, VersionID: versionID, Result: res}
-	if errors.Is(err, statelog.ErrExists) && in.SourceKey != "" {
-		return out, fmt.Errorf("%w: %w", ErrSourceTaken, err)
-	}
 	if err != nil {
 		return out, err
 	}

@@ -650,6 +650,11 @@ func publishFailure(ctx context.Context, tool string, c artifactCaller, err erro
 			"Nothing was published; make the call again.", tool, said))
 	case errors.Is(err, artifactsdomain.ErrSourceTaken):
 		return refusedBy(tools.RefusalExists, err, fmt.Sprintf("%s: %s", tool, said))
+	case errors.Is(err, artifactsdomain.ErrExists):
+		// WHAT AN EARLIER ATTEMPT OF THIS CREATE MADE, most often: read it
+		// rather than make a second one.
+		return refusedBy(tools.RefusalExists, err, fmt.Sprintf("%s: %s. Read it with "+
+			GetArtifactTool+" or "+ListArtifactsTool+" rather than making it again.", tool, said))
 	case errors.Is(err, artifactsdomain.ErrAgentCompanyShare),
 		errors.Is(err, artifactsdomain.ErrAboveOwnRole):
 		return refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s refused that: %s",

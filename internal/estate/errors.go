@@ -174,6 +174,7 @@ var sentinels = []sentinel{
 	{"artifactsdomain.ErrBrandContrast", artifactsdomain.ErrBrandContrast},
 	{"artifactsdomain.ErrBrandIncomplete", artifactsdomain.ErrBrandIncomplete},
 	{"artifactsdomain.ErrConflict", artifactsdomain.ErrConflict},
+	{"artifactsdomain.ErrExists", artifactsdomain.ErrExists},
 	{"artifactsdomain.ErrInvalid", artifactsdomain.ErrInvalid},
 	{"artifactsdomain.ErrFolderCycle", artifactsdomain.ErrFolderCycle},
 	{"artifactsdomain.ErrFolderDepth", artifactsdomain.ErrFolderDepth},

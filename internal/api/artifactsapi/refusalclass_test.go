@@ -51,6 +51,7 @@ func TestEveryArtifactRefusalIsOneClassOnBothSurfaces(t *testing.T) {
 		"ErrAboveOwnRole":      {err: artifactsdomain.ErrAboveOwnRole},
 		"ErrAgentCompanyShare": {err: artifactsdomain.ErrAgentCompanyShare},
 		"ErrConflict":          {err: artifactsdomain.ErrConflict},
+		"ErrExists":            {err: artifactsdomain.ErrExists},
 		"ErrInvalid":           {err: artifactsdomain.ErrInvalid},
 		"ErrLabelTaken":        {err: artifactsdomain.ErrLabelTaken},
 		"ErrLabelsFull":        {err: artifactsdomain.ErrLabelsFull},

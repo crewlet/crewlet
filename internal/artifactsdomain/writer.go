@@ -318,10 +318,26 @@ func (w *Writer) decision(stamp statelog.Stamp, c Call, subject Subject, op OpKi
 // this package's conflict: somebody else keeps changing the artifact.
 func (w *Writer) publish(ctx context.Context, req statelog.Request) (statelog.Result, error) {
 	res, err := w.publisher.Publish(ctx, req)
-	if errors.Is(err, statelog.ErrConflict) {
-		return res, fmt.Errorf("%w: %s: %w", ErrConflict, req.Subject.ID, err)
+	return res, publishError(req.Subject, err)
+}
+
+// publishError is the framework's refusal of a publish on subject, in this
+// domain's terms: a lost race is an artifact somebody kept changing, and a
+// create the framework found already made ([statelog.ErrExists]) is a
+// COLLISION — on a source address, another artifact holds it
+// ([ErrSourceTaken]); on anything else, what the create makes is there
+// ([ErrExists]). The framework's bare sentinel reached the artifacts API's
+// fallback and was answered as this node's fault.
+func publishError(subject statelog.Subject, err error) error {
+	switch {
+	case errors.Is(err, statelog.ErrConflict):
+		return fmt.Errorf("%w: %s: %w", ErrConflict, subject.ID, err)
+	case errors.Is(err, statelog.ErrExists) && ObjectKind(subject.Kind) == KindSource:
+		return fmt.Errorf("%w: %w", ErrSourceTaken, err)
+	case errors.Is(err, statelog.ErrExists):
+		return fmt.Errorf("%w: %s: %w", ErrExists, subject.ID, err)
 	}
-	return res, err
+	return err
 }
 
 // request is one write's framework request on subject, its scope resolved.
@@ -413,7 +429,7 @@ func (w *Writer) refusal(ctx context.Context, id string, reason Refusal, s Histo
 		return fmt.Errorf("%w: %s name objects another artifact or an asset already "+
 			"names; upload them again", ErrInvalid, strings.Join(s.Paths, ", "))
 	case RefusedExists:
-		return fmt.Errorf("%w: the object this write creates already exists", ErrInvalid)
+		return fmt.Errorf("%w: %s", ErrExists, id)
 	case RefusedLive:
 		return fmt.Errorf("%w: artifact %s is not in the trash", ErrInvalid, id)
 	case RefusedPurging:
