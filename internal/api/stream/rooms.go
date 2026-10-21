@@ -3,6 +3,7 @@ package stream
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -30,7 +31,10 @@ import (
 // like a watch: allowed puts the socket in the room at the role the decision
 // found, refused is a `not_found` error frame (a caller with no relation is
 // told the artifact does not exist, in the words an id nothing holds is
-// answered with), and undecidable an `unavailable` one with its retry hint.
+// answered with) — or `artifact_trashed` for a caller the artifact is
+// disclosed to while it is in the trash, whose content no room carries until
+// its owner restores it — and undecidable an `unavailable` one with its retry
+// hint.
 // None closes the socket. The join is DECIDED AGAIN on every decision of the
 // socket's credential and on every movement that can narrow who may read the
 // artifact (a share or an unshare, the trash, a transfer, a purge): a refusal
@@ -97,8 +101,9 @@ func (r Rooms) serves() bool {
 type ArtifactAccess interface {
 	// Standing is p's role on artifact id, decided as reading it is
 	// (`get_artifact`): the role, EMPTY for a caller the artifact is
-	// answered as absent to (no relation to it, in the trash, purged, never
-	// created), and an error for a node that could not decide.
+	// answered as absent to (no relation to it, purged, never created),
+	// [artifactsdomain.ErrTrashed] for one it is disclosed to while it is in
+	// the trash, and any other error for a node that could not decide.
 	Standing(ctx context.Context, p iam.Principal, id artifacts.ID) (artifacts.Role, error)
 }
 
@@ -364,6 +369,9 @@ func (s *Service) joinArtifact(ctx context.Context, client *Client, req request)
 	}
 	role, err := s.rooms.Access.Standing(ctx, principal, id)
 	switch {
+	case errors.Is(err, artifactsdomain.ErrTrashed):
+		client.Reply(refuse(CodeArtifactTrashed))
+		return
 	case err != nil:
 		log.InfoContext(ctx, "stream_room_undecidable", "login", principal.Login,
 			"artifact", id.String(), "error", err.Error())
@@ -714,6 +722,13 @@ func (s *Service) recheckRooms(ctx context.Context, client *Client) {
 // ended by ctx, returns nil: there is nothing left to ask about.
 func (s *Service) decideMember(ctx context.Context, p iam.Principal, id artifacts.ID, m RoomMember) error {
 	role, err := s.rooms.Access.Standing(ctx, p, id)
+	var refused httpjson.Code = CodeNotFound
+	if errors.Is(err, artifactsdomain.ErrTrashed) {
+		// THE TRASH WITHDRAWS THE ROOM as a refusal does, under its own
+		// code: the member may read the artifact again once it is
+		// restored, which not_found would tell it never to expect.
+		role, err, refused = "", nil, CodeArtifactTrashed
+	}
 	switch {
 	case err != nil:
 		if ctx.Err() != nil {
@@ -733,7 +748,7 @@ func (s *Service) decideMember(ctx context.Context, p iam.Principal, id artifact
 		}
 		s.rooms.Presence.Leave(presence.ArtifactRoom(id), session)
 		log.InfoContext(ctx, "stream_room_withdrawn", "login", p.Login, "artifact", id.String())
-		m.Client.Reply(Envelope{Kind: KindError, What: artifactJoinWhat, Error: CodeNotFound,
+		m.Client.Reply(Envelope{Kind: KindError, What: artifactJoinWhat, Error: refused,
 			Artifact: id.String()})
 		return nil
 	}

@@ -418,6 +418,9 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
     </Callout>
   ),
   not_found: <Callout variant="neutral">Not found. It may have been removed.</Callout>,
+  artifact_trashed: (
+    <Callout variant="neutral">This artifact is in the trash. Its owner can restore it.</Callout>
+  ),
   timeout: (
     <Callout variant="warning" icon={<ClockGlyph size="md" />}>
       The engine didn’t answer in time.

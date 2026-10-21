@@ -1567,6 +1567,8 @@ func (a *App) answer(ctx context.Context, what string, params map[string]any) (a
 		return nil, stream.RefusedFor(what, refusal.Decision)
 	case errors.Is(err, queries.ErrNotFound):
 		return nil, fmt.Errorf("%w: %s", stream.ErrNotFound, what)
+	case errors.Is(err, queries.ErrArtifactTrashed):
+		return nil, fmt.Errorf("%w: %s", stream.ErrArtifactTrashed, what)
 	case errors.Is(err, queries.ErrBadParams):
 		// TRANSLATED RATHER THAN LEFT TO THE DEFAULT, which is what it
 		// was: an untranslated refusal reached the socket as an
@@ -1677,6 +1679,12 @@ func writeQueryError(w http.ResponseWriter, what string, err error) {
 			httpjson.Detail{"detail": queries.RefusalDetail(err)})
 	case errors.Is(err, queries.ErrNotFound):
 		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
+	case errors.Is(err, queries.ErrArtifactTrashed):
+		// THE ARTIFACTS ROUTES' OWN ANSWER for the same artifact, so a
+		// question and the route beside it say one thing about it.
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeArtifactTrashed,
+			map[string]string{"detail": "the artifact is in the trash; its data is not " +
+				"served until it is restored"})
 	case errors.Is(err, stream.ErrNoCompany):
 		// A NATIVE QUESTION ON A NODE WITH NO COMPANY YET, answered as
 		// every surface answers that node — the webhook edge, the human

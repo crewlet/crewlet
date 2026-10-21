@@ -71,6 +71,18 @@ var (
 
 	// ErrBadParams is a request this surface understood and refused.
 	ErrBadParams = errors.New("queries: bad parameters")
+
+	// ErrArtifactTrashed is a question about the CONTENT of an artifact in
+	// the trash — its datastore — asked by somebody the artifact is
+	// disclosed to.
+	//
+	// NOT [ErrNotFound], which is what the same question is answered with
+	// for a caller the artifact is answered as absent to: the trash is the
+	// artifact's state, which its owner's restore ends, so both transports
+	// answer it as every artifacts route does (`409 artifact_trashed`). It
+	// was not found here, so the one artifact a datastore's REST routes
+	// said was binned, its questions said did not exist.
+	ErrArtifactTrashed = errors.New("queries: the artifact is in the trash")
 )
 
 // RefusalDetail is a [ErrBadParams] refusal's own sentence, for the caller.
@@ -745,6 +757,7 @@ func classifyFailure(err error) error {
 		errors.Is(err, ErrUnavailable),
 		errors.Is(err, ErrBadParams),
 		errors.Is(err, ErrNotFound),
+		errors.Is(err, ErrArtifactTrashed),
 		errors.Is(err, ErrUnauthenticated),
 		errors.Is(err, ErrUnauthorized):
 		return err
