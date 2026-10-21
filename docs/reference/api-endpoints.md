@@ -6158,7 +6158,8 @@ is about** and **what would make the same request land**:
   the trash, an artifact in the trash or being purged, a restore with nothing
   in the trash, and the object's own contents at their cap — a message
   carrying all 32 distinct emoji it may, a project keeping all its tags, a
-  person's pins, every label an artifact keeps in use. Nothing about the
+  task's watchers or checklists, a person's pins, every label an artifact
+  keeps in use. Nothing about the
   request is wrong: read the object again, and
   the very same request lands once whoever the `detail` names reopens,
   restores or makes room — not before. A write that lost its race is `conflict`
