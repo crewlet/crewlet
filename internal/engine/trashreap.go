@@ -19,11 +19,18 @@ import (
 //
 // # What it is for
 //
-// Every domain that keeps a trash promises that what is in it can be taken
-// back for the trash term and is gone after it. Nothing used to keep the
-// second half: a trashed page stayed in every data node's copy, and in every
-// backup, for ever. The reaper is the one fleet duty that keeps it, for every
-// domain that hands it a [trashreap.Source] here.
+// A domain whose trash has a TERM — the knowledge base's pages and the
+// artifacts — promises that what is in it can be taken back for that term and
+// is gone after it. Nothing used to keep the second half: a trashed page stayed
+// in every data node's copy, and in every backup, for ever. The reaper is the
+// one fleet duty that keeps it, for every domain that hands it a
+// [trashreap.Source] here.
+//
+// The work tracker hands it none, and that is the tracker's own promise rather
+// than a gap: a removed work item is restorable AT ANY AGE (the work-tracker
+// guide), because a removal is how a board is tidied, and the one step that
+// destroys an item is a purge somebody asks for. Reaping removed items after a
+// term would delete what that promise says is still there.
 //
 // # Where it runs
 //
