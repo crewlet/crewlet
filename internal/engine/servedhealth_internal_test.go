@@ -152,7 +152,8 @@ func TestAReadAsksTheBrokerNothing(t *testing.T) {
 	for range reads {
 		read()
 	}
-	rechecks := int64(time.Since(started)/servingRecheck) + 2
+	took := time.Since(started)
+	rechecks := int64(took/servingRecheck) + 2
 	sent = q.Conn().Stats().OutMsgs - sent
 	if got := s.floorMemos.of(trackerName).reads.Load() - floors; got > rechecks {
 		t.Errorf("%d reads listed the published floors %d times, want at most %d", reads, got, rechecks)
@@ -160,11 +161,22 @@ func TestAReadAsksTheBrokerNothing(t *testing.T) {
 	if got := running.ends.reads.Load() - ends; got > rechecks {
 		t.Errorf("%d reads asked the log for its ends %d times, want at most %d", reads, got, rechecks)
 	}
-	// THE CONNECTION'S OWN COUNT, which no wrapper chose what to count:
-	// what the node's appliers, heartbeat and alarms sent meanwhile is all
-	// there should be, and a request per read would be hundreds.
-	if sent > reads/5 {
-		t.Errorf("%d reads sent %d messages on the broker connection", reads, sent)
+	// THE CONNECTION'S OWN COUNT, which no wrapper chose what to count, set
+	// against what the same connection sends with nobody reading, over as
+	// long again. The node's appliers and feeds pull on it whatever anybody
+	// reads, about a dozen messages a second when idle, so a bound on the
+	// reads' count alone measured how long they took: on a loaded machine
+	// whose reads took a few seconds the background alone passed it (65
+	// messages against 60, with every read served from memory). What is
+	// left past the background is the reads' own traffic and the start-up
+	// burst the reads may overlap, a score or so of messages; a request per
+	// read would be hundreds.
+	idle := q.Conn().Stats().OutMsgs
+	time.Sleep(took)
+	idle = q.Conn().Stats().OutMsgs - idle
+	if sent > idle+reads/5 {
+		t.Errorf("%d reads sent %d messages on the broker connection, against %d sent "+
+			"over as long with nobody reading", reads, sent, idle)
 	}
 }
 
