@@ -3,6 +3,7 @@ package queries_test
 import (
 	"database/sql"
 	"errors"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -362,6 +363,35 @@ func TestAUnitSeatHasAHandleInTheRollup(t *testing.T) {
 	}
 	if handles := sources.RoleHandles(); handles["Site Reliability"] != "sre" || handles["Lead"] != "lead" {
 		t.Errorf("handles = %v, want every seat in the chart", handles)
+	}
+}
+
+// EVERY SEAT IS BANDED BY ITS OWN UNIT — the one holding it directly, never a
+// unit above it, so a team's spend is not counted again for its division — and
+// a root seat by none, which the series places in a band of its own.
+//
+// Mutation: band a seat by its outermost unit, and Dev reads Engineering.
+func TestEverySeatIsBandedByItsOwnUnit(t *testing.T) {
+	t.Parallel()
+	cfg, err := config.ParseCompany([]byte(`
+name: Acme
+roles:
+  - name: Lead
+units:
+  - name: Engineering
+    roles:
+      - name: VP
+    children:
+      - name: Platform
+        roles:
+          - name: Dev
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	got := queries.Sources{Company: func() *config.Company { return cfg }}.SeatUnits()
+	if want := map[string]string{"vp": "Engineering", "dev": "Platform"}; !maps.Equal(got, want) {
+		t.Errorf("SeatUnits() = %v, want %v: each seat by the unit holding it, the root seat by none", got, want)
 	}
 }
 

@@ -3,6 +3,7 @@ package config_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -104,5 +105,50 @@ func TestTheDerivedHierarchyWithoutPaths(t *testing.T) {
 	var empty config.Derived
 	if got := empty.WithoutPaths(); got.Seats != nil || got.Units != nil {
 		t.Errorf("an empty hierarchy gained lists: %+v", got)
+	}
+}
+
+// ledChartDoc is a company document of divisions, each led by a seat of its
+// own, with ten teams of three seats under each that name no lead and so
+// inherit the division's — the usual shape, and the one that made the chart's
+// own per-seat and per-unit readers dear (org's ledChart is the same chart
+// built in Go): 30 divisions are 330 units and 930 seats, 100 are 1 100 and
+// 3 100.
+func ledChartDoc(divisions int) string {
+	var doc strings.Builder
+	doc.WriteString("name: Acme\nunits:\n")
+	for d := range divisions {
+		fmt.Fprintf(&doc, "  - name: Division %d\n    lead: Lead %d\n    roles:\n      - {name: Lead %d}\n"+
+			"    children:\n", d, d, d)
+		for t := range 10 {
+			fmt.Fprintf(&doc, "      - name: Team %d %d\n        roles:\n", d, t)
+			for s := range 3 {
+				fmt.Fprintf(&doc, "          - {name: Seat %d %d %d}\n", d, t, s)
+			}
+		}
+	}
+	return doc.String()
+}
+
+// BenchmarkDerivingTheHierarchy is [config.Derive] — drawn on every
+// configuration write's answer and every read of the organization projection —
+// over a led chart of 330 units and 930 seats and of 1 100 and 3 100. The
+// figures, and what they were through the chart's own readers, are at
+// Derive's doc comment.
+func BenchmarkDerivingTheHierarchy(b *testing.B) {
+	for _, divisions := range []int{30, 100} {
+		c, err := config.ParseCompanyDocument([]byte(ledChartDoc(divisions)))
+		if err != nil {
+			b.Fatalf("decode: %v", err)
+		}
+		b.Run(fmt.Sprintf("%d_divisions", divisions), func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				if d := config.Derive(c); len(d.Seats) != divisions*31 || d.Units[1].Lead != "lead-0" {
+					b.Fatalf("derived %d seats and Team 0 0's lead %q, want %d and lead-0", len(d.Seats),
+						d.Units[1].Lead, divisions*31)
+				}
+			}
+		})
 	}
 }

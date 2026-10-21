@@ -342,8 +342,13 @@ func (s Sources) SeatUnits() map[string]string {
 	if organization == nil {
 		return out
 	}
+	// EVERY SEAT'S UNIT THROUGH ONE INDEX of the chart ([org.Index.UnitFor]):
+	// the chart's own [org.Organization.UnitFor] walks every unit's seats
+	// until one holds the seat, so asked of every seat it cost seats² a
+	// chart drawn.
+	homes := organization.Index()
 	for role := range organization.AllRoles() {
-		if unit := organization.UnitFor(role); unit != nil {
+		if unit := homes.UnitFor(role); unit != nil {
 			out[role.Handle()] = unit.Name
 		}
 	}

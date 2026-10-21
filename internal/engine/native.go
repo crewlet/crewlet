@@ -1523,6 +1523,12 @@ func chartProjects(o *org.Organization) []tracker.ChartProject {
 	for unit := range o.AllUnits() {
 		add(unit.Project, unit.Name, unit.Purpose, unit.Key())
 	}
+	// A SEAT'S HOME UNIT THROUGH ONE INDEX of the chart ([org.Index.UnitFor]),
+	// built at the first seat that names a project of its own — most name
+	// none, and their home is never asked — because the chart's own
+	// [org.Organization.UnitFor] walks every unit's seats until one holds
+	// the seat, which asked of every seat on every apply cost seats².
+	var homes *org.Index
 	for role := range o.AllRoles() {
 		// EVERY seat, not just the root-level ones: `Organization.Roles`
 		// holds only the seats declared outside a unit, and a seat
@@ -1533,8 +1539,14 @@ func chartProjects(o *org.Organization) []tracker.ChartProject {
 		// what a founder naming one on a seat meant — a project for that
 		// seat's work rather than for its unit's — and its home unit,
 		// so the project still says where in the company it sits.
+		if org.NormalizeScope(role.Project) == "" {
+			continue
+		}
+		if homes == nil {
+			homes = o.Index()
+		}
 		var home string
-		if unit := o.UnitFor(role); unit != nil {
+		if unit := homes.UnitFor(role); unit != nil {
 			home = unit.Key()
 		}
 		add(role.Project, role.Name, "", home)

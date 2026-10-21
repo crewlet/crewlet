@@ -4,6 +4,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"sync"
 )
 
 // Who owns an integration scope.
@@ -93,12 +94,15 @@ func (o *Organization) LeadsBy(s Scope) (map[string]string, LeadReport) {
 	}
 	byScope := map[string][]leadSource{}
 
+	// One index for every scoped unit's lead, built at the first, for the
+	// reason [Organization.autoManageByLead] gives.
+	chart := sync.OnceValue(o.Index)
 	for u := range o.AllUnits() {
 		scope := NormalizeScope(s.OfUnit(u))
 		if scope == "" {
 			continue
 		}
-		lead := o.EffectiveLead(u)
+		lead := chart().EffectiveLead(u)
 		if lead == nil {
 			report.Unled = append(report.Unled, UnledUnit{Unit: u.Name, Scope: scope})
 			continue

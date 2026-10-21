@@ -1,11 +1,21 @@
 package org
 
+import "slices"
+
 // Index is the chart's durable lookups — a unit by reference, a seat by
-// handle, and a unit's effective lead — built once, for a caller that asks
-// them of many references against one chart: the code host's validation and
-// its reconcile resolve the owner of every repository a document declares, up
-// to ten thousand of them, and its warnings and its grant roster ask the lead
-// of every unit those owners name.
+// handle, a unit's effective lead, and each seat's place in the hierarchy (the
+// seat a name answers, its manager and managers, its reports, its unit and its
+// unit chain) — built once, for a caller that asks them of many references
+// against one chart: the code host's validation and its reconcile resolve the
+// owner of every repository a document declares, up to ten thousand of them,
+// and its warnings and its grant roster ask the lead of every unit those
+// owners name; every apply asks the lead of every led unit (the leads'
+// automatic reports in [Organization.Normalize]) and of every unit with a
+// schedule run as its lead (a human lead's, in [Organization.Validate]), and
+// the home unit of every seat with a project of its own; the derived hierarchy a configuration write answers with asks every
+// question of every seat and every unit; and a spend chart's per-unit bands
+// and the schedules listing ask every seat's unit and every lead-targeted
+// schedule's lead.
 //
 // # Why it exists
 //
@@ -29,7 +39,27 @@ package org
 // the chart, and 4.7–7.9 ms and 1.5 MB through an Index built for the purpose
 // (BenchmarkAskingEveryUnitsLead, same machine and load) — a map lookup and a
 // walk of the seats SHARING the lead's name, which a chart that passed
-// admission has one of.
+// admission has one of. The two passes of every apply that ask it — of every
+// led unit for the leads' automatic reports ([Organization.Normalize]), of
+// every unit with a schedule run as its lead for a human lead's
+// ([Organization.Validate]) — through an Index each, went on that chart from
+// 76–108 ms and 29 MB to 13–17 ms and 4.3 MB, and from 63–69 ms and 29 MB to
+// 19–23 ms and 4.6 MB with every unit carrying such a schedule, and on one of
+// 330 units and 930 seats from 6.3–7.5 ms to 4.1–4.6 ms and from 8.8–10 ms to
+// 6.1–8.2 ms (BenchmarkNormalizingAndValidatingALedChart, same machine under a
+// load average near 16). Each pass builds its Index at the first unit it asks
+// about, so a chart that names no lead pays nothing for one.
+//
+// [Organization.Manager], [Organization.Role] — and so [Organization.Reports]
+// — [Organization.UnitFor] and [Organization.UnitChainFor] are each a walk of
+// the chart too, and their callers asked them of every seat: a list of every
+// seat's managers and reports is seats² through them, and a map lookup a seat
+// here. Every seat's unit took 154–185 ms and 82 MB through the chart on 3 100
+// seats and 17–20 ms and 7.5 MB on 930 — UnitFor walks the units through an
+// iterator, three and a half million allocations on the larger chart — and
+// 7.9–12 ms and 2.1 MB and 2.6–3.6 ms and 0.8 MB through an Index, its build
+// included (BenchmarkAskingEverySeatsUnit, same machine under a load average
+// near 12).
 //
 // # The same answer, by construction and by test
 //
@@ -38,9 +68,13 @@ package org
 // reference folds as [foldUnitKey] folds it, AN ID WINS an ambiguity with
 // another unit's name, and within one spelling the first unit in walk order
 // answers; a handle is compared exactly, the first seat in walk order
-// answering; and a unit's effective lead is the first seat named its lead in
-// its OWN subtree's walk order ([Unit.LeadRole]), else the first so named in
-// the chart's ([Organization.Role]).
+// answering; a unit's effective lead is the first seat named its lead in its
+// OWN subtree's walk order ([Unit.LeadRole]), else the first so named in the
+// chart's ([Organization.Role]); a name answers the first seat of it in walk
+// order; a seat's managers are every seat whose manages lists its name, once
+// each, in walk order, the first of them its manager; and its unit chain runs
+// from the outermost unit down to the first in walk order holding the seat
+// itself, by pointer.
 //
 // A unit's subtree is ONE RUN of the chart's seat walk ([Organization.AllRoles]
 // visits a unit's own seats, then each child's subtree, before anything after
@@ -70,6 +104,14 @@ type Index struct {
 	// spans is each unit's subtree as the half-open run of walk positions
 	// its seats hold.
 	spans map[*Unit]span
+	// managers is, for each name, the walk positions of the seats listing it
+	// in their manages — each seat once, in walk order.
+	managers map[string][]int
+	// homes is the first unit in walk order holding each seat directly, and
+	// parents each unit's parent, the first in walk order where a unit is
+	// reached twice; a root seat and a top-level unit have none.
+	homes   map[*Role]*Unit
+	parents map[*Unit]*Unit
 
 	unitKeys []string
 	handles  []string
@@ -90,6 +132,9 @@ func (o *Organization) Index() *Index {
 		seats:       map[string]*Role{},
 		named:       map[string]nameRun{},
 		spans:       map[*Unit]span{},
+		managers:    map[string][]int{},
+		homes:       map[*Role]*Unit{},
+		parents:     map[*Unit]*Unit{},
 	}
 	if o == nil {
 		return x
@@ -130,15 +175,28 @@ func (o *Organization) Index() *Index {
 			x.seats[handle] = r
 		}
 		x.handles = append(x.handles, handle)
+		for _, name := range r.Manages {
+			// ONCE A SEAT, however often its list repeats the name: the
+			// chart asks whether a seat's list contains it.
+			if listed := x.managers[name]; len(listed) == 0 || listed[len(listed)-1] != at {
+				x.managers[name] = append(listed, at)
+			}
+		}
 	}
-	var walk func(u *Unit)
-	walk = func(u *Unit) {
+	var walk func(u, above *Unit)
+	walk = func(u, above *Unit) {
+		if _, reached := x.parents[u]; !reached && above != nil {
+			x.parents[u] = above
+		}
 		start := len(x.roles)
 		for _, r := range u.Roles {
+			if _, placed := x.homes[r]; !placed {
+				x.homes[r] = u
+			}
 			add(r)
 		}
 		for _, c := range u.Children {
-			walk(c)
+			walk(c, u)
 		}
 		x.spans[u] = span{start: start, end: len(x.roles)}
 	}
@@ -146,9 +204,68 @@ func (o *Organization) Index() *Index {
 		add(r)
 	}
 	for _, u := range o.Units {
-		walk(u)
+		walk(u, nil)
 	}
 	return x
+}
+
+// Role is [Organization.Role] against the indexed chart: the first seat in
+// walk order with this name, or nil.
+func (x *Index) Role(name string) *Role {
+	run, named := x.named[name]
+	if !named {
+		return nil
+	}
+	return x.roles[run.first]
+}
+
+// Managers is every seat listing r in its manages, in walk order and each
+// once — the seats [Organization.Manager] answers the first of.
+func (x *Index) Managers(r *Role) []*Role {
+	var out []*Role
+	for _, at := range x.managers[r.Name] {
+		out = append(out, x.roles[at])
+	}
+	return out
+}
+
+// Manager is [Organization.Manager] against the indexed chart: the first seat
+// in walk order listing r in its manages, or nil for a top-level seat.
+func (x *Index) Manager(r *Role) *Role {
+	if listed := x.managers[r.Name]; len(listed) > 0 {
+		return x.roles[listed[0]]
+	}
+	return nil
+}
+
+// Reports is [Organization.Reports] against the indexed chart: r's direct
+// reports in the order r lists them, a name naming no seat skipped.
+func (x *Index) Reports(r *Role) []*Role {
+	var out []*Role
+	for _, name := range r.Manages {
+		if found := x.Role(name); found != nil {
+			out = append(out, found)
+		}
+	}
+	return out
+}
+
+// UnitFor is [Organization.UnitFor] against the indexed chart: the first unit
+// in walk order holding r as a direct member, or nil for a root seat or one the
+// Index was not built over.
+func (x *Index) UnitFor(r *Role) *Unit { return x.homes[r] }
+
+// UnitChainFor is [Organization.UnitChainFor] against the indexed chart: the
+// units from the outermost down to the first in walk order holding r as a
+// direct member, or nothing for a root seat or one the Index was not built
+// over.
+func (x *Index) UnitChainFor(r *Role) []*Unit {
+	var chain []*Unit
+	for u := x.homes[r]; u != nil; u = x.parents[u] {
+		chain = append(chain, u)
+	}
+	slices.Reverse(chain)
+	return chain
 }
 
 // EffectiveLead is [Organization.EffectiveLead] against the indexed chart: the

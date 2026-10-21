@@ -66,6 +66,11 @@ func (e *Engine) promotionUnits() []learning.PromotionUnit {
 	// all cannot change inside one walk, and asking per unit would take
 	// the mutex once per unit for the same answer.
 	wired := e.promotionWired()
+	// EVERY UNIT'S LEAD THROUGH ONE INDEX of the chart: the chart's own
+	// [org.Organization.EffectiveLead] walks every seat for each lead a
+	// unit inherits, so asked of every unit it cost units x seats
+	// ([org.Index.EffectiveLead]).
+	leads := company.Org.Index()
 	var out []learning.PromotionUnit
 	for unit := range company.Org.AllUnits() {
 		handles := agentHandlesIn(unit)
@@ -74,7 +79,7 @@ func (e *Engine) promotionUnits() []learning.PromotionUnit {
 		}
 		container, hint := promotionContainer(unit, wired)
 		out = append(out, learning.PromotionUnit{
-			ID: unit.Name, Lead: company.Org.EffectiveLead(unit),
+			ID: unit.Name, Lead: leads.EffectiveLead(unit),
 			Handles: handles, Container: container, Hint: hint,
 		})
 	}

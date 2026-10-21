@@ -140,6 +140,112 @@ func TestTheIndexAnswersWhatTheChartDoes(t *testing.T) {
 	if got := none.Index().EffectiveLead(nil); got != nil {
 		t.Errorf("a nil unit answered the lead %s, want none", roleName(got))
 	}
+
+	// EVERY SEAT'S PLACE IN THE HIERARCHY — the seat a name answers, its
+	// manager and every seat that manages it, its reports, its unit chain —
+	// on a chart with every shape those rules tell apart: a root seat
+	// managing across units, a seat three others manage (its lead, which
+	// Normalize makes manage its unit's seats, then two lists after it in
+	// the walk), a list naming nobody, a name two seats share (the first in
+	// the walk answers it), a seat three units deep and a root seat with no
+	// unit — and a list naming one seat twice, which Normalize never
+	// leaves, so it is written after: the chart asks whether a list
+	// contains a name, so the seat is its manager once.
+	//
+	// Mutations: keep a seat once a time its list names it (O1's), keep the
+	// last seat of a name (Shared), stop a chain at its home (Deep's), or
+	// answer a seat's unit as its outermost (Deep's).
+	ranked := normalized(&Organization{Name: "Ranked",
+		Roles: []*Role{
+			{Name: "CEO", Manages: []string{"VP", "Ghost", "VP"}},
+			{Name: "Shared", DeclaredHandle: "shared-root"},
+		},
+		Units: []*Unit{
+			{Name: "Eng", Lead: "VP", Roles: []*Role{{Name: "VP"}, {Name: "E1"}},
+				Children: []*Unit{
+					{Name: "Core", Roles: []*Role{{Name: "C1", Manages: []string{"Deep", "Shared"}}},
+						Children: []*Unit{{Name: "Kernel", Roles: []*Role{{Name: "Deep"}}}}},
+				}},
+			{Name: "Ops", Roles: []*Role{
+				{Name: "Shared", DeclaredHandle: "shared-ops"},
+				{Name: "O1", Manages: []string{"Deep", "Deep"}},
+			}},
+		},
+	})
+	twice := ranked.Role("O1")
+	twice.Manages = append(twice.Manages, "Deep")
+	if strings.Count(fmt.Sprint(twice.Manages), "Deep") != 2 {
+		t.Fatalf("the premise: O1's list is %v, want Deep in it twice", twice.Manages)
+	}
+	rx := ranked.Index()
+	names := []string{"", "Ghost", "Nobody"}
+	for r := range ranked.AllRoles() {
+		names = append(names, r.Name)
+		if got, want := rx.Manager(r), ranked.Manager(r); got != want {
+			t.Errorf("Manager(%s): the index answers %s, the chart %s", roleName(r), roleName(got), roleName(want))
+		}
+		var managers []*Role
+		for m := range ranked.AllRoles() {
+			if slices.Contains(m.Manages, r.Name) {
+				managers = append(managers, m)
+			}
+		}
+		if got := rx.Managers(r); !slices.Equal(got, managers) {
+			t.Errorf("Managers(%s): the index answers %s, the chart %s", roleName(r), roleNames(got),
+				roleNames(managers))
+		}
+		if got, want := rx.Reports(r), ranked.Reports(r); !slices.Equal(got, want) {
+			t.Errorf("Reports(%s): the index answers %s, the chart %s", roleName(r), roleNames(got), roleNames(want))
+		}
+		if got, want := rx.UnitFor(r), ranked.UnitFor(r); got != want {
+			t.Errorf("UnitFor(%s): the index answers %s, the chart %s", roleName(r), unitName(got), unitName(want))
+		}
+		if got, want := rx.UnitChainFor(r), ranked.UnitChainFor(r); !slices.Equal(got, want) {
+			t.Errorf("UnitChainFor(%s): the index answers %v, the chart %v", roleName(r), unitNames(got),
+				unitNames(want))
+		}
+	}
+	for _, name := range names {
+		if got, want := rx.Role(name), ranked.Role(name); got != want {
+			t.Errorf("Role(%q): the index answers %s, the chart %s", name, roleName(got), roleName(want))
+		}
+	}
+	// AND THE CASES ARE THE ONES THEY CLAIM TO BE.
+	deep := ranked.Role("Deep")
+	if got := handlesOf(rx.Managers(deep)); fmt.Sprint(got) != "[vp c1 o1]" {
+		t.Errorf("the premise: Deep's managers are %v, want [vp c1 o1] (its lead by Normalize, then two lists)", got)
+	}
+	if got := unitNames(rx.UnitChainFor(deep)); fmt.Sprint(got) != "[Eng Core Kernel]" {
+		t.Errorf("the premise: Deep's chain is %v, want [Eng Core Kernel]", got)
+	}
+	if got := rx.Role("Shared"); got == nil || got.Handle() != "shared-root" {
+		t.Errorf("the premise: the name Shared answers %s, want the root seat", roleName(got))
+	}
+	vp := ranked.Role("VP")
+	if got := handlesOf(rx.Reports(vp)); !slices.Contains(got, "e1") {
+		t.Errorf("the premise: VP's reports are %v, want its unit's E1 among them", got)
+	}
+	if got := rx.Manager(ranked.Role("CEO")); got != nil || rx.UnitChainFor(ranked.Role("CEO")) != nil {
+		t.Errorf("the premise: the root CEO has the manager %s or a unit chain", roleName(got))
+	}
+	if got := rx.UnitFor(deep); got == nil || got.Name != "Kernel" {
+		t.Errorf("the premise: Deep's unit is %s, want Kernel, its own and not the outermost", unitName(got))
+	}
+	// A seat the Index was not built over has no place in it.
+	if got := rx.UnitChainFor(&Role{Name: "Deep"}); got != nil {
+		t.Errorf("another chart's seat has the chain %v, want none", unitNames(got))
+	}
+	if got := rx.UnitFor(&Role{Name: "Deep"}); got != nil {
+		t.Errorf("another chart's seat has the unit %s, want none", unitName(got))
+	}
+}
+
+func handlesOf(seats []*Role) []string {
+	out := make([]string, 0, len(seats))
+	for _, r := range seats {
+		out = append(out, r.Handle())
+	}
+	return out
 }
 
 func unitName(u *Unit) string {
@@ -206,6 +312,14 @@ func BenchmarkResolvingADocumentsOwners(b *testing.B) {
 // subtree, so it is found by a walk of every seat in the chart. The config
 // warnings' and the engine roster's benchmarks build the same shape.
 func ledChart(divisions int) *Organization {
+	o := ledChartAsWritten(divisions)
+	o.Normalize()
+	return o
+}
+
+// ledChartAsWritten is [ledChart] before [Organization.Normalize]: what a
+// decoded document hands the chart.
+func ledChartAsWritten(divisions int) *Organization {
 	o := &Organization{Name: "T"}
 	for d := range divisions {
 		division := &Unit{Name: fmt.Sprintf("Division %d", d), Lead: fmt.Sprintf("Lead %d", d),
@@ -219,7 +333,6 @@ func ledChart(divisions int) *Organization {
 		}
 		o.Units = append(o.Units, division)
 	}
-	o.Normalize()
 	return o
 }
 
@@ -252,6 +365,78 @@ func BenchmarkAskingEveryUnitsLead(b *testing.B) {
 					if o.EffectiveLead(u) == nil {
 						b.Fatal("a unit has no lead")
 					}
+				}
+			}
+		})
+	}
+}
+
+// BenchmarkAskingEverySeatsUnit is every seat's own unit asked of a led chart —
+// 330 units and 930 seats, and 1 100 and 3 100 — through an [Index], whose
+// build it includes, and through the chart's own [Organization.UnitFor], a walk
+// of every unit's seats until one holds the seat: the question every apply's
+// tracker projects ask of every seat (a seat's own project names its home
+// unit), and every spend chart's per-unit band. The figures are in [Index]'s
+// doc.
+func BenchmarkAskingEverySeatsUnit(b *testing.B) {
+	for _, divisions := range []int{30, 100} {
+		o := ledChart(divisions)
+		seats := slices.Collect(o.AllRoles())
+		name := fmt.Sprintf("%d_seats", len(seats))
+		b.Run(name+"/index", func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				x := o.Index()
+				for _, r := range seats {
+					if x.UnitFor(r) == nil {
+						b.Fatal("a seat has no unit")
+					}
+				}
+			}
+		})
+		b.Run(name+"/chart", func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				for _, r := range seats {
+					if o.UnitFor(r) == nil {
+						b.Fatal("a seat has no unit")
+					}
+				}
+			}
+		})
+	}
+}
+
+// BenchmarkNormalizingAndValidatingALedChart is what every apply pays for its
+// chart on every node — [Organization.Normalize] when the epoch is built and
+// [Organization.Validate] when it is admitted — over a led chart of 330 units
+// and 930 seats and of 1 100 and 3 100: the two passes that ask a unit for its
+// effective lead (the leads' automatic reports of every led unit, a human
+// lead's schedules of every unit with a schedule run as its lead) and did so
+// through the chart's own method, a walk of every seat for each inherited
+// lead. Every unit carries a weekly report run as its lead, so validation
+// asks every unit's lead — its worst case. The figures are in [Index]'s doc.
+func BenchmarkNormalizingAndValidatingALedChart(b *testing.B) {
+	for _, divisions := range []int{30, 100} {
+		name := fmt.Sprintf("%d_divisions", divisions)
+		b.Run(name+"/normalize", func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				b.StopTimer()
+				o := ledChartAsWritten(divisions)
+				b.StartTimer()
+				o.Normalize()
+			}
+		})
+		o := ledChart(divisions)
+		for u := range o.AllUnits() {
+			u.Schedules = []Schedule{{Name: "report", Cron: "0 17 * * 5", Task: "weekly report", Target: TargetLead}}
+		}
+		b.Run(name+"/validate", func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				if err := o.Validate(); err != nil {
+					b.Fatalf("a led chart is invalid: %v", err)
 				}
 			}
 		})

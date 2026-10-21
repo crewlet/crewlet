@@ -632,17 +632,7 @@ func BenchmarkValidatingTheMostRepositories(b *testing.B) {
 func BenchmarkWarningAboutTheMostUnitRepositories(b *testing.B) {
 	for _, visibility := range []string{"unit", ""} {
 		var doc strings.Builder
-		doc.WriteString("name: Acme\nunits:\n")
-		for d := range 30 {
-			fmt.Fprintf(&doc, "  - name: Division %d\n    lead: Lead %d\n    roles:\n      - {name: Lead %d}\n"+
-				"    children:\n", d, d, d)
-			for t := range 10 {
-				fmt.Fprintf(&doc, "      - name: Team %d %d\n        roles:\n", d, t)
-				for s := range 3 {
-					fmt.Fprintf(&doc, "          - {name: Seat %d %d %d}\n", d, t, s)
-				}
-			}
-		}
+		doc.WriteString(ledChartDoc(30))
 		doc.WriteString("code:\n  native: true\n  repos:\n")
 		field := ""
 		if visibility != "" {
