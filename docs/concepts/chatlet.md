@@ -83,7 +83,9 @@ operation ledger's own horizon, and every node records how far back it has let
 them go: asked about a message whose decision is past that, a node answers that
 it cannot tell — never that the message was not said. A gesture answered `pending` — durable, and not
 yet applied on the node that answered — may still be refused this way when it
-applies. This is recorded as
+applies, so asking again under the same `Idempotency-Key` is how a caller hears
+the decision: the operation ledger answers the repeat with it and writes
+nothing twice. The dashboard does exactly that for a message it sent. This is recorded as
 [ADR-0046](../../adr/0046-a-message-is-sequenced-on-its-channels-subject.md).
 
 A message's subject carries its **channel's** id — one message subject per
