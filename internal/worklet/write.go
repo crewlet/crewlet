@@ -89,10 +89,11 @@ var ErrInvalid = errors.New("worklet: invalid")
 // ErrState marks a write the OBJECT IT IS ABOUT refuses by its state, until
 // somebody changes it: a project archived before work is filed into it, a task
 // frozen in the trash that a write would place, move or merge, a project whose
-// tags or a person whose pins and stars are at their cap. Nothing is wrong with
-// the request, and nothing about it changes the answer: the same request lands
-// once whoever the sentence names reopens the project, restores the task or
-// takes something off the set, and not before.
+// tags, a task whose watchers or checklists, or a person whose pins and stars
+// are at their cap. Nothing is wrong with the request, and nothing about it
+// changes the answer: the same request lands once whoever the sentence names
+// reopens the project, restores the task or takes something off the set, and
+// not before.
 //
 // ITS OWN MARK beside [ErrInvalid] because the two send a caller to opposite
 // places, which is the one rule every domain's refusals are classed by
@@ -1406,10 +1407,13 @@ func settleWatch(current Task, patch TaskPatch) (TaskPatch, error) {
 			patch.Watch = nil
 			return patch, nil
 		}
-		return patch, invalid("task %s already has %d watchers and "+
-			"the maximum is %d — an item this many people follow is an "+
-			"announcement, and a comment on it wakes all of them",
-			current.ID, len(current.Watchers), MaxWatchers)
+		//
+		// AND AN EXPLICIT ONE IS THE TASK'S STATE ([ErrState]), never the
+		// request's: the gesture names one person, and it lands once
+		// somebody stops watching.
+		return patch, refusedByState("this task already has %d watchers, "+
+			"the most a task can. Somebody has to stop watching it first",
+			len(current.Watchers))
 	}
 	patch.Watch = nil
 	patch.Watchers, patch.Muted = &watchers, &muted

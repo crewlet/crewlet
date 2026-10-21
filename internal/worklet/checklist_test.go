@@ -73,9 +73,9 @@ func TestTickingOneChecklistItemKeepsAConcurrentAdd(t *testing.T) {
 	}
 }
 
-// A GESTURE THAT GROWS THE CHECKLISTS PAST A CAP IS REFUSED — and one that
-// shrinks them never is, or a task that somehow grew past a cap could never be
-// brought back under it.
+// A GESTURE THAT GROWS THE CHECKLISTS PAST A CAP IS REFUSED, as the task's
+// state — and one that shrinks them never is, or a task that somehow grew past
+// a cap could never be brought back under it.
 func TestAChecklistGesturePastTheCapIsRefused(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -94,8 +94,11 @@ func TestAChecklistGesturePastTheCapIsRefused(t *testing.T) {
 	err := checklistGesture(t, r, "op-over", "t-full", worklet.ChecklistIntent{
 		Op: worklet.ChecklistAddItem, List: "big", Item: "one-more", Name: "one more",
 	})
-	if !errors.Is(err, worklet.ErrInvalid) || !strings.Contains(err.Error(), "at most") {
-		t.Fatalf("a sixty-fifth line was %v, want a refusal naming the cap", err)
+	// THE TASK'S STATE, which the same line meets until one is removed —
+	// never the request's, since one line is not too many on its own.
+	if !errors.Is(err, worklet.ErrState) || errors.Is(err, worklet.ErrInvalid) ||
+		!strings.Contains(err.Error(), "the most a list can") {
+		t.Fatalf("a sixty-fifth line was %v, want the task's state naming the cap", err)
 	}
 	if got := len(oneTask(t, r, "t-full").Checklists[0].Items); got != worklet.MaxChecklistItems {
 		t.Errorf("the refused line landed anyway: the list holds %d", got)
@@ -129,6 +132,25 @@ func TestApplyChecklist(t *testing.T) {
 	manyLists := make([]worklet.Checklist, 0, worklet.MaxChecklists)
 	for i := range worklet.MaxChecklists {
 		manyLists = append(manyLists, worklet.Checklist{ID: "l" + itoa(i), Name: "list"})
+	}
+	fullList := []worklet.Checklist{{ID: "launch", Name: "Launch"}}
+	for i := range worklet.MaxChecklistItems {
+		fullList[0].Items = append(fullList[0].Items, worklet.ChecklistItem{ID: "i" + itoa(i), Name: "line"})
+	}
+	tooMany := make([]worklet.ChecklistItem, 0, worklet.MaxChecklistItems+1)
+	for i := range worklet.MaxChecklistItems + 1 {
+		tooMany = append(tooMany, worklet.ChecklistItem{ID: "n" + itoa(i), Name: "line"})
+	}
+	// FOUR LISTS OF FIFTY, so a full new list crosses the task's total from
+	// well below it: 200 lines, and 264 with the new one.
+	nearTotal := make([]worklet.Checklist, 0, 4)
+	for l := range 4 {
+		list := worklet.Checklist{ID: "t" + itoa(l), Name: "list"}
+		for i := range 50 {
+			list.Items = append(list.Items, worklet.ChecklistItem{
+				ID: "t" + itoa(l) + "-" + itoa(i), Name: "line"})
+		}
+		nearTotal = append(nearTotal, list)
 	}
 
 	for name, c := range map[string]struct {
@@ -216,10 +238,33 @@ func TestApplyChecklist(t *testing.T) {
 				Name: strings.Repeat("n", worklet.MaxChecklistItemName+1)},
 			refuse: "maximum",
 		},
+		// A SET THE GESTURE ONLY PUSHES PAST A CAP is the task's state, and
+		// a gesture past the cap on its own is the request's.
 		"a seventeenth list": {
 			lists:  manyLists,
 			intent: worklet.ChecklistIntent{Op: worklet.ChecklistAddList, List: "one-more", Name: "more"},
 			refuse: "checklists",
+			mark:   worklet.ErrState,
+		},
+		"a line past a full list": {
+			lists:  fullList,
+			intent: worklet.ChecklistIntent{Op: worklet.ChecklistAddItem, List: "launch", Item: "x", Name: "one more"},
+			refuse: "the most a list can",
+			mark:   worklet.ErrState,
+		},
+		// THE TOTAL IS SAID AS WHAT THE GESTURE WOULD LEAVE, since a task
+		// holding 200 lines does not "already hold" 256.
+		"a full new list past the task's total": {
+			lists: nearTotal,
+			intent: worklet.ChecklistIntent{Op: worklet.ChecklistAddList, List: "more",
+				Name: "more", Items: tooMany[:worklet.MaxChecklistItems]},
+			refuse: "would leave this task's checklists with 264 lines",
+			mark:   worklet.ErrState,
+		},
+		"a new list longer than a list may be": {
+			lists:  launchList(),
+			intent: worklet.ChecklistIntent{Op: worklet.ChecklistAddList, List: "long", Name: "long", Items: tooMany},
+			refuse: "holds at most",
 		},
 		"an unknown op": {
 			lists:  launchList(),
