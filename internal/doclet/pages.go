@@ -310,14 +310,15 @@ func invalid(field, why string, args ...any) error {
 // Sentence is a refusal this package wrote, as a person reads it: the
 // argument it names, as a value, and what to do, without the "doclet:
 // invalid:" a Go error opens with, which says where the error came from and
-// nothing about what to change. Any other error, or a refusal a caller
-// wrapped in context of its own, is its whole message.
+// nothing about what to change. Any other error this package wrote loses the
+// "doclet:" it opens with and keeps every word after it; one a caller wrapped
+// in context of its own is its whole message.
 func Sentence(err error) string {
 	var r *InvalidError
 	if errors.As(err, &r) && r.Error() == err.Error() {
 		return "`" + r.Field + "`: " + r.Why
 	}
-	return err.Error()
+	return strings.TrimPrefix(err.Error(), "doclet: ")
 }
 
 // badParent builds the refusal of a page's `parent_id`, which is both a field

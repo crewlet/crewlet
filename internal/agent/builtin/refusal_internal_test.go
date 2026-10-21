@@ -523,6 +523,27 @@ func TestAmbiguousAnswerCandidatesAreWholeOrReferenced(t *testing.T) {
 	}
 }
 
+// A MODE THIS BUILD DOES NOT KNOW IS REFUSED NAMING THE ONES IT DOES, in the
+// tool's own words: the parser's error opens with its package, which both
+// searches printed after their own name ("search_knowledge: knowledge: unknown
+// search mode …").
+//
+// Mutation: print the parser's error again and the prefix check goes red.
+func TestAModeThisBuildDoesNotKnowIsRefusedNamingTheOnesItDoes(t *testing.T) {
+	t.Parallel()
+	for _, tool := range []string{SearchKnowledgeTool, SearchWorkItemsTool} {
+		said := unknownMode(tool, " fuzzy ")
+		for _, want := range []string{tool, `"fuzzy"`, "hybrid", "keyword", "semantic"} {
+			if !strings.Contains(said, want) {
+				t.Errorf("%s's refusal does not say %q: %s", tool, want, said)
+			}
+		}
+		if strings.Contains(said, "knowledge: ") {
+			t.Errorf("%s's refusal carries the parser's package: %s", tool, said)
+		}
+	}
+}
+
 // invalidDecision is the tracker's refusal of a decision with no options, as
 // its writer marks it: a content refusal that is no text cap.
 func invalidDecision() error {

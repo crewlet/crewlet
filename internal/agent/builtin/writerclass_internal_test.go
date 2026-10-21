@@ -3,6 +3,7 @@ package builtin
 import (
 	"context"
 	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -385,6 +386,78 @@ func TestEveryDomainRefusalIsClassed(t *testing.T) {
 	} {
 		if class, ok := WriterClass(err); !ok || class != want {
 			t.Errorf("WriterClass(%v) = %q, %v; want %q", err, class, ok, want)
+		}
+	}
+}
+
+// NO DOMAIN REFUSAL READS AS A GO ERROR, on any surface: every error each
+// native domain declares, answered by each of its tools and in the deciding
+// domain's words a tool's fallback tells ([WriterSentence]), carries none of
+// the package prefixes a Go error opens with and no framework error after it.
+//
+// THE PREFIX IS FOR A LOG, and the words after a framework error are the
+// subject it met — a broker path. The tracker's tools printed a lost race,
+// a create already made, a missing task, a moved version, an answered
+// question, a full inbox, a stopped gesture and a spent hand-off budget with
+// %v, so a model read "update_work_item could not land: statelog: conflict:
+// crewlet.tracker.task.… kept changing under this write"; the knowledge base's
+// did the same for six of its refusals, and the person's write surface handed
+// a rename's or a purge's lost race to a person whole.
+//
+// Mutation: print the tracker's lost race or a missing page with %v again, or
+// drop the prefix strip from worklet.Sentence, and a row goes red.
+func TestNoDomainRefusalReadsAsAGoError(t *testing.T) {
+	t.Parallel()
+	prefixes := []string{"worklet: ", "doclet: ", "chatlet: ", "statelog: ", "artifactsdomain: ",
+		"artifactdata: ", "artifacts: ", "%!"}
+	leaks := func(text string) string {
+		for _, p := range prefixes {
+			if strings.Contains(text, p) {
+				return p
+			}
+		}
+		return ""
+	}
+	for _, domain := range slices.Sorted(maps.Keys(domainErrors)) {
+		for _, name := range slices.Sorted(maps.Keys(domainErrors[domain])) {
+			row := domainErrors[domain][name]
+			if row.why != "" {
+				continue
+			}
+			for tool, failure := range toolFailures[domain] {
+				if p := leaks(failure(row.err).Output); p != "" {
+					t.Errorf("%s.%s, answered by %s, carries %q: %s", domain, name, tool, p,
+						failure(row.err).Output)
+				}
+			}
+			if said, ok := WriterSentence(row.err); ok && leaks(said) != "" {
+				t.Errorf("%s.%s, in the deciding domain's words, carries %q: %s",
+					domain, name, leaks(said), said)
+			}
+		}
+	}
+	// AND THE FRAMEWORK'S OWN TWO, as every domain's writer may return them
+	// and as a domain wraps them ("doclet: the page kept changing under this
+	// write: <subject>: statelog: conflict").
+	for _, err := range []error{
+		fmt.Errorf("%w: crewlet.tracker.task.x kept changing under this write", statelog.ErrConflict),
+		fmt.Errorf("%w: crewlet.tracker.task.x", statelog.ErrExists),
+		fmt.Errorf("%w: crewlet.pages.page.x: %w", doclet.ErrConflict, statelog.ErrConflict),
+		fmt.Errorf("%w: room-1: %w", chatlet.ErrConflict, statelog.ErrConflict),
+	} {
+		for domain, failures := range toolFailures {
+			for tool, failure := range failures {
+				if _, ok := WriterClass(err); !ok {
+					continue
+				}
+				if out := failure(err).Output; leaks(out) != "" {
+					t.Errorf("%v, answered by %s's %s, carries %q: %s", err, domain, tool,
+						leaks(out), out)
+				}
+			}
+		}
+		if said, ok := WriterSentence(err); !ok || leaks(said) != "" {
+			t.Errorf("%v is told in the deciding domain's words as %q (%v)", err, said, ok)
 		}
 	}
 }

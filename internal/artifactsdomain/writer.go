@@ -332,10 +332,13 @@ func publishError(subject statelog.Subject, err error) error {
 	switch {
 	case errors.Is(err, statelog.ErrConflict):
 		return fmt.Errorf("%w: %s: %w", ErrConflict, subject.ID, err)
+	// THE COLLISION IS THE WHOLE OF WHAT HAPPENED, so the framework's own
+	// words, which name the subject's broker path, are not carried after
+	// it: a person reads this error on the artifacts API.
 	case errors.Is(err, statelog.ErrExists) && ObjectKind(subject.Kind) == KindSource:
-		return fmt.Errorf("%w: %w", ErrSourceTaken, err)
+		return ErrSourceTaken
 	case errors.Is(err, statelog.ErrExists):
-		return fmt.Errorf("%w: %s: %w", ErrExists, subject.ID, err)
+		return fmt.Errorf("%w: %s", ErrExists, subject.ID)
 	}
 	return err
 }

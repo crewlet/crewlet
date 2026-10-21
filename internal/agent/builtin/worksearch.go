@@ -127,7 +127,8 @@ func (t *searchWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// to the default would answer a different question from the one asked.
 	mode, err := knowledge.ParseMode(argString(args, "mode"))
 	if err != nil {
-		return failed(fmt.Sprintf(SearchWorkItemsTool+": %v.", err)), nil
+		return refusedBy(tools.RefusalInvalid, err, unknownMode(SearchWorkItemsTool,
+			argString(args, "mode"))), nil
 	}
 	answer, err := t.deps.Search.Search(ctx, worklet.SearchQuery{
 		Text: text, Limit: argInt(args, "limit", 0), Mode: mode,

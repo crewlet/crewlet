@@ -151,10 +151,10 @@ func (t *mergeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// the tracker knows the gesture that clears it and not the tool
 		// or the argument a caller reaches it by.
 		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf(MergeWorkItemTool+" "+
-			"was refused: %v. Move %s "+
+			"was refused: %s. Move %s "+
 			"into the surviving item's project with "+worklet.MoveWorkItemTool+" first — its "+
 			"subtasks go with it — or merge with `move_subtasks: false`, which "+
-			"leaves them under the duplicate.", err, before.Address())), nil
+			"leaves them under the duplicate.", worklet.Sentence(err), before.Address())), nil
 	}
 	if err != nil {
 		return writeFailure(ctx, actor, worklet.MergeWorkItemTool, err), nil

@@ -22,12 +22,20 @@ func TestARefusalSaysItsFieldAsAValue(t *testing.T) {
 	if !errors.Is(err, ErrInvalid) {
 		t.Error("the refusal lost its mark")
 	}
-	// CONTEXT IS NEVER DROPPED TO TIDY A PREFIX.
+	// CONTEXT IS NEVER DROPPED TO TIDY A PREFIX: an error this package wrote
+	// loses the "doclet:" it opens with and keeps every word after it, the
+	// context a caller in this package gave it included; one somebody else
+	// wrapped opens with their context and is its whole message.
 	wrapped := fmt.Errorf("doclet: save ENG/Runbook: %w", err)
-	if got := Sentence(wrapped); got != wrapped.Error() {
-		t.Errorf("a wrapped refusal's sentence is %q, want its whole message", got)
+	if got, want := Sentence(wrapped), "save ENG/Runbook: doclet: invalid: title: 600 bytes, "+
+		"past the 256-byte cap"; got != want {
+		t.Errorf("a wrapped refusal's sentence is %q, want %q", got, want)
 	}
-	if got := Sentence(ErrNotFound); got != ErrNotFound.Error() {
-		t.Errorf("an unmarked error's sentence is %q, want its whole message", got)
+	if got, want := Sentence(ErrNotFound), "no such record"; got != want {
+		t.Errorf("a sentinel's sentence is %q, want %q", got, want)
+	}
+	outside := fmt.Errorf("rename the page: %w", ErrNotFound)
+	if got := Sentence(outside); got != outside.Error() {
+		t.Errorf("a refusal another package wrapped is %q, want its whole message", got)
 	}
 }

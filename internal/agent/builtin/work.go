@@ -1058,7 +1058,8 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	},
 		t.deps.now(), t.deps.zone())
 	if err != nil {
-		return failed(fmt.Sprintf("That filter is not one Worklet accepts: %v", err)), nil
+		return failed(fmt.Sprintf("That filter is not one Worklet accepts: %s.",
+			worklet.Sentence(err))), nil
 	}
 	// THIS SURFACE'S OWN LEVEL, and it OVERRULES rather than fills in.
 	// One query grammar serves the board, the socket, the REST route and
@@ -1107,7 +1108,7 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		// refusal is about the QUERY rather than about the node, and the
 		// same keys refuse again for ever. What the model needs is the
 		// refusal's own sentence, which names what would narrow it.
-		return failed(fmt.Sprintf("%s: %v", ListWorkItemsTool, err)), nil
+		return failed(fmt.Sprintf("%s: %s.", ListWorkItemsTool, worklet.Sentence(err))), nil
 	case err != nil:
 		return readFailure(ctx, ListWorkItemsTool, err), nil
 	}
@@ -3854,7 +3855,7 @@ func writeFailure(ctx context.Context, actor Actor, name string, err error) tool
 			UpdateWorkItemTool+", then make this call again.", name, full.Project,
 			worklet.MaxTagsPerProject, full.Slug, full.Project, full.Slug))
 	case errors.Is(err, worklet.ErrNoTask):
-		return out(tools.RefusalNotFound, fmt.Sprintf("%s: %v", name, err))
+		return out(tools.RefusalNotFound, fmt.Sprintf("%s: %s.", name, worklet.Sentence(err)))
 	case errors.Is(err, worklet.ErrForbidden):
 		// NOT A RACE. The sentence names who may, which is the only part
 		// of it a caller can act on; re-reading changes nothing.
@@ -3862,32 +3863,43 @@ func writeFailure(ctx context.Context, actor Actor, name string, err error) tool
 			"%s. Re-reading will not change this — ask whoever the refusal "+
 			"names.", name, worklet.Sentence(err)))
 	case errors.Is(err, statelog.ErrConflict):
-		return out(tools.RefusalConflict, fmt.Sprintf("%s could not land: "+
-			"%v. Somebody else is editing this item. Read it again with "+
-			GetWorkItemTool+" and decide from what it says now.", name, err))
+		// A LOST RACE, IN WORDS RATHER THAN THE ERROR: what the framework
+		// says is the subject it lost on, a broker path nobody can act on.
+		// A tool of another domain tells it in [lostRaceWords]
+		// ([WriterSentence]), and a person's surface in its code's own
+		// sentence (ADR-0060); this tool tells its model which read decides
+		// what to do next.
+		return out(tools.RefusalConflict, fmt.Sprintf("%s could not land: somebody "+
+			"else is editing this item, so nothing was written. Read it again with "+
+			GetWorkItemTool+" and decide from what it says now.", name))
 	case errors.Is(err, statelog.ErrExists):
-		return out(tools.RefusalExists, fmt.Sprintf("%s: %v", name, err))
+		// WHAT AN EARLIER ATTEMPT OF THIS WRITE MADE, most often: the same
+		// create sent again once its operation was forgotten.
+		return out(tools.RefusalExists, fmt.Sprintf("%s was refused: what it creates "+
+			"is already there, so nothing was written. Look for it with "+
+			ListWorkItemsTool+", or read it with "+GetWorkItemTool+", rather than "+
+			"making it again.", name))
 	case errors.Is(err, worklet.ErrStaleVersion):
 		// THE ONE REFUSAL WHOSE ANSWER IS "READ IT AGAIN". Nothing is
 		// wrong with the patch, so a model told only "it failed" would
 		// re-send the same one against the same moved item forever.
 		return out(tools.RefusalStaleVersion, fmt.Sprintf("%s was "+
-			"refused: %v. Nothing is wrong with your edit — somebody "+
+			"refused: %s. Nothing is wrong with your edit — somebody "+
 			"changed the item after you read it. Call "+GetWorkItemTool+" again "+
-			"and decide from what it says now.", name, err))
+			"and decide from what it says now.", name, worklet.Sentence(err)))
 	case errors.Is(err, worklet.ErrAlreadyAnswered):
 		// THE ANSWER THAT LOST A RACE. The thread read passed it and the
 		// write's own snapshot found the question answered in between,
 		// so the sentence names who answered and when — the move is to
 		// read that answer, never to send this one again.
 		return out(tools.RefusalAlreadyAnswered, fmt.Sprintf("%s was "+
-			"refused: %v. Nothing was posted.", name, err))
+			"refused: %s. Nothing was posted.", name, worklet.Sentence(err)))
 	case errors.Is(err, worklet.ErrInboxFull):
 		// NOT A SMALLER GESTURE BUT A DIFFERENT ONE: the sentence names
 		// `read_through`, which marks everything up to a notice in one move
 		// and is what empties the lists this refusal is about.
 		return out(tools.RefusalInboxFull, fmt.Sprintf("%s was refused: "+
-			"%v.", name, err))
+			"%s.", name, worklet.Sentence(err)))
 	case errors.Is(err, estate.ErrOutcomeUnknown):
 		// SENT, AND NO DATA NODE ANSWERED. The router asked every one under
 		// this call's operation and each that stayed silent may have run
@@ -3912,12 +3924,12 @@ func writeFailure(ctx context.Context, actor Actor, name string, err error) tool
 		// every time, because the ledger row that step needs is the one
 		// the loss took — and a model told "call again" goes round that
 		// loop until its rounds run out.
-		return out(tools.RefusalUnavailable, fmt.Sprintf("%s stopped part of the way through: %v. Some of "+
+		return out(tools.RefusalUnavailable, fmt.Sprintf("%s stopped part of the way through: %s. Some of "+
 			"it may already have landed, and this node cannot tell which — "+
 			"calling %s again here stops at the same step. Do not report it as "+
 			"done or as failed, and do not redo it by other means: read the "+
 			"items it touches with "+GetWorkItemTool+", and say which part is "+
-			"unconfirmed.", name, err, name))
+			"unconfirmed.", name, worklet.Sentence(err), name))
 	case errors.Is(err, worklet.ErrStepUnresolved):
 		// NEITHER DONE NOR NOT MADE. A gesture that walks — a move, a
 		// merge, a dependency — stopped at a step whose outcome is
@@ -3927,24 +3939,24 @@ func writeFailure(ctx context.Context, actor Actor, name string, err error) tool
 		// it — and what that is depends on the caller ([sameCall]).
 		again := sameCall(actor, name)
 		if again == "" {
-			return out(tools.RefusalUnavailable, fmt.Sprintf("%s stopped part of the way through: %v. Some "+
+			return out(tools.RefusalUnavailable, fmt.Sprintf("%s stopped part of the way through: %s. Some "+
 				"of it may already have landed. Calling %s again is a new "+
 				"operation here and does not finish this one: read the items "+
 				"it touches with "+GetWorkItemTool+" and finish what is missing with "+
-				"the tool for each. Do not report it as done.", name, err, name))
+				"the tool for each. Do not report it as done.", name, worklet.Sentence(err), name))
 		}
-		return out(tools.RefusalUnavailable, fmt.Sprintf("%s stopped part of the way through: %v. Some of "+
+		return out(tools.RefusalUnavailable, fmt.Sprintf("%s stopped part of the way through: %s. Some of "+
 			"it may already have landed. %s — the retry answers what landed "+
 			"and finishes the rest. Do not report it as done until a call "+
-			"answers without this error.", name, err, capitalize(again)))
+			"answers without this error.", name, worklet.Sentence(err), capitalize(again)))
 	case errors.Is(err, worklet.ErrReassignmentBudget):
 		// THE REFUSAL THAT MUST NOT INVITE ANOTHER ATTEMPT: this item is
 		// circulating between agents, and a message that reads like a
 		// transient failure is exactly what keeps it circulating.
 		return out(tools.RefusalReassignmentBudget, fmt.Sprintf("%s was "+
-			"refused: %v. Do not reassign it again. Comment on the item "+
+			"refused: %s. Do not reassign it again. Comment on the item "+
 			"saying what is blocking it and who you think should own it, "+
-			"and leave it where it is.", name, err))
+			"and leave it where it is.", name, worklet.Sentence(err)))
 	}
 	var capped *worklet.TextCapError
 	if errors.As(err, &capped) {
@@ -3979,7 +3991,7 @@ func writeFailure(ctx context.Context, actor Actor, name string, err error) tool
 		// refusal no arm above names — a comment that is not there, a
 		// remark that is not the caller's — fell to the fault below and
 		// told a caller the node had broken.
-		return out(class, fmt.Sprintf("%s was refused: %s.", name, worklet.Sentence(err)))
+		return out(class, domainRefusal(name, err))
 	}
 	if why, ok := Condition(err); ok {
 		return out(tools.RefusalUnavailable, fmt.Sprintf("%s did not land (%s). "+
@@ -4039,23 +4051,29 @@ func reusedOperation(actor Actor, tool string, err error) string {
 	if !errors.As(err, &refusal) || refusal.Reason != statelog.ReasonOpReused {
 		return ""
 	}
+	// THE REFUSAL'S OWN FACTS, without the framework's prefix: its reason
+	// and the two objects its detail names.
+	where := string(refusal.Reason)
+	if refusal.Detail != "" {
+		where += ": " + refusal.Detail
+	}
 	if actor.keyedRequest() {
 		return fmt.Sprintf("%s was refused, and this request's change was NOT "+
 			"made: the operation its Idempotency-Key names already wrote to "+
-			"something else (%v) — what it names has changed since the request "+
+			"something else (%s) — what it names has changed since the request "+
 			"was first sent — so it cannot finish that request here. Read the "+
 			"item again, and send this as a new request, under a new key.",
-			tool, err)
+			tool, where)
 	}
 	if actor.Operation == "" {
 		return ""
 	}
 	return fmt.Sprintf("%s was refused, and this call's change was NOT made: "+
-		"the operation `op_id` %q names already wrote to something else (%v) — "+
+		"the operation `op_id` %q names already wrote to something else (%s) — "+
 		"what this call names has changed since the call that op_id was "+
 		"answered for — so it cannot finish that call here. Read the item "+
 		"again, and leave `op_id` out to make this as a new write.",
-		tool, actor.Operation, err)
+		tool, actor.Operation, where)
 }
 
 // sameCall says how this caller makes THIS call again as the same operation,

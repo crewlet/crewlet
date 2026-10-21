@@ -1063,28 +1063,32 @@ func pageWriteFailure(ctx context.Context, name string, err error, next string) 
 		// THE STORE'S RULE, not a tool's: a reserved container refuses an
 		// agent there whichever surface the write came by, and its own
 		// sentence says which container and why.
-		return refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s refused that: %v. "+
-			"Write this somewhere a reader will find it.", name, err))
+		return refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s refused that: %s. "+
+			"Write this somewhere a reader will find it.", name, doclet.Sentence(err)))
 	case errors.Is(err, doclet.ErrTitleTaken):
-		return refusedBy(tools.RefusalExists, err, fmt.Sprintf("%v\n\nThat page already "+
+		return refusedBy(tools.RefusalExists, err, fmt.Sprintf("%s.\n\nThat page already "+
 			"exists — read it with "+GetPageTool+" and edit it with "+SavePageTool+" rather "+
-			"than writing a second page on the same subject.", err))
+			"than writing a second page on the same subject.", doclet.Sentence(err)))
 	case errors.Is(err, doclet.ErrStaleVersion):
-		return refusedBy(tools.RefusalStaleVersion, err, fmt.Sprintf("%v\n\nRead the "+
+		return refusedBy(tools.RefusalStaleVersion, err, fmt.Sprintf("%s.\n\nRead the "+
 			"page again with "+GetPageTool+", re-apply your change on top of what it "+
-			"says now, and save with the version you just read.", err))
+			"says now, and save with the version you just read.", doclet.Sentence(err)))
 	case errors.Is(err, doclet.ErrConflict):
+		// A LOST RACE, without the store's own words, which name the
+		// page's subject and the framework's error after it. A tool of
+		// another domain tells it in [lostRaceWords] ([WriterSentence]), and
+		// a person's surface in its code's own sentence (ADR-0060).
 		return refusedBy(tools.RefusalConflict, err, fmt.Sprintf("%s could not land: "+
-			"%v. Somebody else is editing this page. Read it again before "+
-			"retrying.", name, err))
+			"somebody else is editing this page, so nothing was written. Read it "+
+			"again before retrying.", name))
 	case errors.Is(err, doclet.ErrNotFound):
-		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("%s: %v", name, err))
+		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("%s: %s.", name,
+			doclet.Sentence(err)))
 	}
 	if class, ok := WriterClass(err); ok {
-		// ANY OTHER REFUSAL A DOMAIN DECIDED, in its own class — see
-		// [writeFailure]'s same arm.
-		return refusedBy(class, err, fmt.Sprintf("%s was refused: %s.", name,
-			doclet.Sentence(err)))
+		// ANY OTHER REFUSAL A DOMAIN DECIDED, in its own class and the
+		// deciding domain's words — see [writeFailure]'s same arm.
+		return refusedBy(class, err, domainRefusal(name, err))
 	}
 	if why, ok := Condition(err); ok {
 		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s did not "+
