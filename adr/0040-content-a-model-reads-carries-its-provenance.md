@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/provenance`
-- **Enforced-by:** `internal/provenance.TestAFenceCannotBeClosedByItsContent`, `internal/agent/builtin.TestEveryUntrustedReadIsFenced`, `internal/agent/builtin.TestEveryArtifactToolResultIsFenced`, `internal/engine.TestEveryWakeSurfaceFencesWhatSomebodyWrote`, `internal/engine.TestEveryWakeTypeFencesSomebodyElsesWords`, `internal/engine.TestTheTurnsAskIsFencedAsItsTriggerIs`, `internal/agent/prefetch.TestTheTurnStartJudgementsReadSomebodyElsesWordsFenced`
+- **Enforced-by:** `internal/provenance.TestAFenceCannotBeClosedByItsContent`, `internal/agent/builtin.TestEveryUntrustedReadIsFenced`, `internal/agent/builtin.TestEveryArtifactToolResultIsFenced`, `internal/engine.TestEveryWakeSurfaceFencesWhatSomebodyWrote`, `internal/engine.TestEveryPromptBuilderIsAWakeSurface`, `internal/engine.TestEveryWakeTypeFencesSomebodyElsesWords`, `internal/engine.TestTheTurnsAskIsFencedAsItsTriggerIs`, `internal/agent/prefetch.TestTheTurnStartJudgementsReadSomebodyElsesWordsFenced`
 - **Cost-when-tried:** before this record, a page body, a work item's comments, a project file and the chat thread handed to a turn all reached the model as plain text in a tool answer or a prompt block, with no boundary the text could not also write and nothing saying who wrote it or that it was data. Anybody who could write a page, comment on an item or speak in a thread a seat reads could address the seat in the voice of its instructions.
 - **Tag-status:** unreleased
 
@@ -56,7 +56,8 @@ and the run it carries on reads it fenced as the message that woke a turn is,
 under its own turn's token: a fence is a model's, and what a person reads back
 as their reply carries none. A tool that returns such text and does not
 go through the package fails a walk, and so does a wake surface or a kind of
-wake whose foreign text does not reach the turn fenced. A schedule's task is
+wake whose foreign text does not reach the turn fenced, and a type anywhere in
+the tree that builds a wake's trigger without being one of those surfaces. A schedule's task is
 the company's own instruction to the seat, not somebody else's words, and is
 not fenced.
 
