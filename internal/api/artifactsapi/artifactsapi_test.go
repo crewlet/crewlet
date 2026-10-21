@@ -869,6 +869,7 @@ func TestEveryRefusalOfAPublishHasItsOwnAnswer(t *testing.T) {
 		{artifactsdomain.ErrUploadStale, 409, "upload_expired"},
 		{artifactupload.ErrUploadConsumed, 409, "upload_consumed"},
 		{artifactsdomain.ErrLabelTaken, 409, "label_taken"},
+		{artifactsdomain.ErrLabelsFull, 409, "labels_full"},
 		{artifactsdomain.ErrTrashed, 409, "artifact_trashed"},
 		{artifactsdomain.ErrPurging, 409, "artifact_purging"},
 		{artifactsdomain.ErrAboveOwnRole, 403, "forbidden"},

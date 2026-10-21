@@ -151,8 +151,11 @@ var domainErrors = map[string]map[string]classRow{
 		"ErrBadCursor":         {err: artifactsdomain.ErrBadCursor, means: malformed},
 		"ErrConflict":          {err: artifactsdomain.ErrConflict, means: lostRace},
 		"ErrInvalid":           {err: artifactsdomain.ErrInvalid, means: malformed},
-		"ErrLabelTaken":        {err: artifactsdomain.ErrLabelTaken, means: objectState},
-		"ErrNotFound":          {err: artifactsdomain.ErrNotFound, means: absent},
+		// A LABEL ANOTHER VERSION HOLDS is a collision, and every kept
+		// label in use is the artifact's own contents at their cap.
+		"ErrLabelTaken": {err: artifactsdomain.ErrLabelTaken, means: taken},
+		"ErrLabelsFull": {err: artifactsdomain.ErrLabelsFull, means: objectState},
+		"ErrNotFound":   {err: artifactsdomain.ErrNotFound, means: absent},
 		"ErrNotInTrash": {err: artifactsdomain.ErrNotInTrash,
 			why: "the trash reaper's own purge, made as the engine, never a caller's request"},
 		"ErrPurged":      {err: artifactsdomain.ErrPurged, means: absent},

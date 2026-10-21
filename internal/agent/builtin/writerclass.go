@@ -244,15 +244,17 @@ func pageClass(err error) (tools.Refusal, bool) {
 // AS THE TOOLS CLASS IT ([publishFailure]) AND AS THE ARTIFACTS API ANSWERS IT
 // (internal/api/artifactsapi's writeFailed): one class per refusal, whose
 // status is the API's, which internal/api/artifactsapi's cross-surface case
-// holds. An artifact in the trash, one whose purge has begun and a label
-// another version holds (or the labels it keeps, all used) are each the
-// ARTIFACT'S STATE, which the gesture collided with — a conflict, as a
-// tracker restore with nothing in the trash is, and never a permission
-// (`forbidden` told a model to go and ask for one) or an argument (`invalid`
-// told it to send another, which a label somebody holds is only by luck). A
-// quota is what the company holds at its plan's limit: `quota_exceeded`,
-// which nobody's permission lifts. An upload past its term, or carried bytes
-// the artifact no longer names, is the same call made again.
+// holds. An artifact in the trash, one whose purge has begun and the labels
+// it keeps, all in use, are each the ARTIFACT'S STATE, which the gesture
+// collided with — a conflict, as a tracker restore with nothing in the trash
+// is, and never a permission (`forbidden` told a model to go and ask for one)
+// or an argument. A label another version holds and a source address another
+// artifact holds are COLLISIONS — `exists`, as a page title and a room name
+// another object holds are: the same value lands once its holder gives it
+// up, and another value lands now. A quota is what the company holds at its
+// plan's limit: `quota_exceeded`, which nobody's permission lifts. An upload
+// past its term, or carried bytes the artifact no longer names, is the same
+// call made again.
 func artifactClass(err error) (tools.Refusal, bool) {
 	var (
 		moved *artifactsdomain.VersionMoved
@@ -264,7 +266,7 @@ func artifactClass(err error) (tools.Refusal, bool) {
 		return tools.RefusalNotFound, true
 	case errors.As(err, &moved):
 		return tools.RefusalStaleVersion, true
-	case errors.Is(err, artifactsdomain.ErrSourceTaken):
+	case errors.Is(err, artifactsdomain.ErrSourceTaken), errors.Is(err, artifactsdomain.ErrLabelTaken):
 		return tools.RefusalExists, true
 	case errors.As(err, &quota):
 		return tools.RefusalQuotaExceeded, true
@@ -272,7 +274,7 @@ func artifactClass(err error) (tools.Refusal, bool) {
 		errors.Is(err, artifactsdomain.ErrAboveOwnRole):
 		return tools.RefusalForbidden, true
 	case errors.Is(err, artifactsdomain.ErrConflict), errors.Is(err, artifactsdomain.ErrPurging),
-		errors.Is(err, artifactsdomain.ErrTrashed), errors.Is(err, artifactsdomain.ErrLabelTaken),
+		errors.Is(err, artifactsdomain.ErrTrashed), errors.Is(err, artifactsdomain.ErrLabelsFull),
 		errors.Is(err, artifactsdomain.ErrUploadStale), errors.As(err, &gone):
 		return tools.RefusalConflict, true
 	case errors.Is(err, artifactsdomain.ErrInvalid), errors.Is(err, artifactsdomain.ErrBadCursor):
