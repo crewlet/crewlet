@@ -39,6 +39,18 @@
 // under the budget ([ErrOverBudget]), or an input past what one compaction may
 // spend ([ErrTooLarge]).
 //
+// # A rewrite reads its text as somebody's
+//
+// What a rewrite is handed is as often as not somebody else's words — a
+// thread, a page, a task — and what it writes back lands where they were
+// going, a seat's prompt among them. So every completion reads its text inside
+// a fence of a token minted for that one call (ADR-0040), labelled with what
+// the caller says the text is ([Request.Label], [Bound.Labelled]; the zero
+// label says nothing and reads as text nothing vouches for), its system prompt
+// ends with the standing sentence that says what a fence means, and its answer
+// is neutralised under that token, so nothing it echoes opens or closes a
+// fence wherever the caller puts it.
+//
 // # Cost
 //
 // Every rewrite is a completion on the seat's own auxiliary chain, resolved
@@ -70,6 +82,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 )
@@ -243,6 +256,15 @@ type Request struct {
 	// key, because the same page compacted for two questions is two
 	// different rewrites.
 	Focus string
+
+	// Label is who wrote the text and how far to rely on it, as the rewrite
+	// reads it inside its fence (ADR-0040): the caller's own label where it
+	// has one — a thread's speakers, a page's, the asker of a past turn —
+	// and the zero label otherwise, which says nothing and reads as text
+	// nothing vouches for. For a rewrite that is enough, since everything it
+	// is handed is data to rewrite and never an instruction to it. Part of
+	// the cache key, because a different label is a different prompt.
+	Label provenance.Label
 }
 
 // Result is a text that fits.
@@ -325,9 +347,18 @@ func (c *Compactor) For(seat *org.Role, use auxspend.Use) Bound {
 // Bound is a compactor bound to one seat and one attribution. Its zero value —
 // and one bound from a nil compactor — rewrites nothing.
 type Bound struct {
-	c    *Compactor
-	seat *org.Role
-	use  auxspend.Use
+	c     *Compactor
+	seat  *org.Role
+	use   auxspend.Use
+	label provenance.Label
+}
+
+// Labelled is this binding with its rewrites reading their text under label —
+// see [Request.Label]: the caller that knows who wrote the text says so, and
+// the rewrite is fenced as such.
+func (b Bound) Labelled(label provenance.Label) Bound {
+	b.label = label
+	return b
 }
 
 // Tallied is this binding with its rewrites tallied on spend instead: the same
@@ -341,14 +372,15 @@ func (b Bound) Tallied(spend *auxspend.Tally) Bound {
 
 // Fit is [Compactor.Fit] for the bound seat.
 func (b Bound) Fit(ctx context.Context, kind Kind, text string, budget int) (Result, error) {
-	return b.c.Fit(ctx, Request{Seat: b.seat, Use: b.use, Kind: kind, Text: text, Budget: budget})
+	return b.c.Fit(ctx, Request{Seat: b.seat, Use: b.use, Kind: kind, Text: text, Budget: budget,
+		Label: b.label})
 }
 
 // Focused is [Compactor.Fit] for the bound seat with a question the text is
 // read to answer — a [KindSource] document.
 func (b Bound) Focused(ctx context.Context, kind Kind, text string, budget int, focus string) (Result, error) {
 	return b.c.Fit(ctx, Request{Seat: b.seat, Use: b.use, Kind: kind, Text: text,
-		Budget: budget, Focus: focus})
+		Budget: budget, Focus: focus, Label: b.label})
 }
 
 // Omitted is how a caller renders a text it could neither carry nor rewrite:
@@ -492,14 +524,23 @@ func (p *pass) rewrite(ctx context.Context, text string, budget int) (string, er
 }
 
 // complete runs one completion and returns its visible answer.
+//
+// THE TEXT IS FENCED UNDER A TOKEN MINTED FOR THIS CALL ALONE (ADR-0040), and
+// the answer is neutralised under it: a rewrite reads text somebody else wrote
+// as often as not — a thread, a page, a task — and what it writes back lands
+// where that text was going, a seat's prompt among them. It used to be
+// bracketed by a FIXED marker, `<<<TEXT` and `TEXT>>>`, which is exactly the
+// delimiter the record rejects: a text that spelled the closer and then an
+// instruction had stepped outside the text it was being rewritten from.
 func (p *pass) complete(ctx context.Context, text string, budget int, retry string) (string, error) {
 	call, cancel := context.WithTimeout(ctx, p.c.timeout)
 	defer cancel()
 	p.calls.Add(1)
+	fence := provenance.NewBoundary()
 	completion, err := p.member.Provider.Complete(call, llm.Request{
 		Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: systemPrompt(p.req.Kind, p.req.Focus, budget)},
-			{Role: llm.RoleUser, Content: userPrompt(text, retry)},
+			{Role: llm.RoleUser, Content: userPrompt(fence, p.req.Label, text, retry)},
 		},
 		// NO TOOLS: a rewrite is text back, and a tool on the surface
 		// invites a model to call it and answer nothing. NO CAP either:
@@ -525,7 +566,9 @@ func (p *pass) complete(ctx context.Context, text string, budget int, retry stri
 		// render the damage as replacement characters.
 		return "", fmt.Errorf("%w: %s answered invalid UTF-8", ErrUnavailable, p.member.Key)
 	}
-	return answer, nil
+	// NOTHING IT ECHOES OPENS OR CLOSES A FENCE wherever the caller puts it:
+	// the call's own token is removed and every marker-shaped run escaped.
+	return provenance.Neutralise(fence, answer), nil
 }
 
 // Split divides text into pieces of at most limit bytes, preferring a
@@ -584,12 +627,17 @@ func seatHandle(seat *org.Role) string {
 	return seat.Handle()
 }
 
-// cacheKey is the request's identity: kind, budget, focus and text. The seat
-// is NOT in it — the input is the seat's own and the rewrite is derived from
-// nothing else, so two seats reading one thread share one rewrite.
+// cacheKey is the request's identity: kind, budget, focus, label and text. The
+// seat is NOT in it — the input is the seat's own and the rewrite is derived
+// from nothing else, so two seats reading one thread share one rewrite.
 func cacheKey(req Request) string {
 	h := sha256.New()
-	fmt.Fprintf(h, "%s\x00%d\x00%s\x00", req.Kind, req.Budget, req.Focus)
+	fmt.Fprintf(h, "%s\x00%d\x00%s\x00%s\x00%s\x00", req.Kind, req.Budget, req.Focus,
+		req.Label.Source, req.Label.Trust)
+	for _, a := range req.Label.Authors {
+		fmt.Fprintf(h, "%s:%s\x00", a.Kind, a.Seat)
+	}
+	h.Write([]byte{0})
 	h.Write([]byte(req.Text))
 	return hex.EncodeToString(h.Sum(nil))
 }
