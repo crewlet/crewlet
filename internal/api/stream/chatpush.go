@@ -393,7 +393,7 @@ type ChatHubOptions struct {
 // join, its frames and its leave, an agent's working line touched and
 // withdrawn, and the fan-out.
 type ChatPresenceHub interface {
-	Join(room presence.Room, who presence.Local) (string, presence.Roster, error)
+	Join(room presence.Room, who presence.Local, hand presence.Hand) (string, error)
 	Update(room presence.Room, session string, activity presence.Activity,
 		focus presence.Focus) error
 	Leave(room presence.Room, session string)
@@ -1260,37 +1260,40 @@ func (h *ChatHub) presenceFrame(ctx context.Context, client *Client, channelID s
 		held.viewer, channelID) {
 		return
 	}
-	// THE JOIN, THE SOCKET'S PLACE IN THE ROOM AND THE ROSTER IT IS HANDED
-	// ARE ONE STEP UNDER THE HUB'S LOCK, which every fan-out of the room's
-	// presence holds while it chooses its sockets and sends
-	// ([ChatHub.presenceChanged]): a fan-out the presence hub computed before
-	// the join reaches the socket before its roster or not at all, and one
-	// computed after it reaches it after. Taken apart, the room's own
-	// fan-out of this join could reach the tab ahead of the roster it is part
-	// of, and one computed in between — another member moving — reached
-	// nobody, so the tab showed that member as they were until they moved
-	// again. The presence hub never holds its own lock across a sink, so the
-	// two locks are always taken in this order and never the other.
-	h.mu.Lock()
-	w, watching = h.watchers[client]
-	if !watching || w.session != "" {
-		// THE SOCKET LEFT while the room's visibility was being decided.
-		h.mu.Unlock()
+	// THE ROSTER IS HANDED IN THE ROOM'S DELIVERY ORDER ([presence.Hub.Join]):
+	// every fan-out the presence hub handed this hub before the join is one
+	// the roster holds, and every one after reaches the socket after it. The
+	// hand places the socket in the room and sends it the roster under this
+	// hub's lock, which a fan-out holds while it chooses its sockets and
+	// sends ([ChatHub.presenceChanged]) and a withdrawal while it takes a
+	// socket out ([ChatHub.withdrawPresence]) — so the join is NEVER asked
+	// with this hub's lock held: a fan-out in its sink waiting on that lock
+	// holds the one the join waits on.
+	session, err := h.opts.Presence.Join(presence.ChatRoom(room),
+		presence.Local{Seat: held.viewer, Kind: iam.ActorHuman},
+		func(session string, roster presence.Roster) bool {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			cur, still := h.watchers[client]
+			if !still || cur.session != "" {
+				// THE SOCKET LEFT, or joined another room, while this
+				// room's visibility was being decided.
+				return false
+			}
+			cur.room, cur.session = room, session
+			fanOut([]*Client{client}, Push(KindChatPresence, ChatPresence{
+				ChannelID: channelID, Roster: true, Upsert: roster.Members, Leave: []string{},
+				Counts: roster.Counts, Truncated: roster.Truncated}, h.now()))
+			return true
+		})
+	switch {
+	case errors.Is(err, presence.ErrDeclined):
 		return
-	}
-	session, roster, err := h.opts.Presence.Join(presence.ChatRoom(room),
-		presence.Local{Seat: held.viewer, Kind: iam.ActorHuman})
-	if err != nil {
-		h.mu.Unlock()
+	case err != nil:
 		log.WarnContext(ctx, "chat_presence_join_refused", "channel", channelID,
 			"error", err.Error())
 		return
 	}
-	w.room, w.session = room, session
-	fanOut([]*Client{client}, Push(KindChatPresence, ChatPresence{
-		ChannelID: channelID, Roster: true, Upsert: roster.Members, Leave: []string{},
-		Counts: roster.Counts, Truncated: roster.Truncated}, h.now()))
-	h.mu.Unlock()
 	if activity != presence.Viewing || focus != (presence.Focus{}) {
 		if err := h.opts.Presence.Update(presence.ChatRoom(room), session, activity,
 			focus); err != nil {
@@ -1304,7 +1307,7 @@ func (h *ChatHub) presenceFrame(ctx context.Context, client *Client, channelID s
 // still in that one, and empties the room it was shown: a roster naming nobody.
 //
 // THE EMPTY ROSTER IS SENT UNDER THE LOCK THAT TAKES THE SOCKET OUT, as a
-// join's roster is sent under the lock that puts it in: a withdrawal decided
+// join's hand sends its roster under the lock that puts it in: a withdrawal decided
 // on the fan-out's goroutine can meet the socket's own next frame joining the
 // room again, and sent after the lock the roster naming nobody could overtake
 // the join's and leave a tab in the room showing it empty. A fan-out of the
@@ -1336,11 +1339,12 @@ func (h *ChatHub) withdrawPresence(client *Client, room uuid.UUID) {
 // visibility admitted its viewer, and is taken out by the record that narrows
 // it ([ChatHub.redecidePresence]).
 //
-// CHOSEN AND SENT UNDER THE HUB'S LOCK, which a join holds while it hands its
-// socket the room's roster and a withdrawal while it hands its socket a roster
-// naming nobody: so this fan-out reaches a socket wholly before either or
-// wholly after, and a socket taken out of the room in between is never sent
-// it. Sending is a non-blocking hand-off to each socket's queue
+// CHOSEN AND SENT UNDER THE HUB'S LOCK, which a join's hand holds while it
+// hands its socket the room's roster and a withdrawal while it hands its
+// socket a roster naming nobody: so this fan-out reaches a socket wholly
+// before either or wholly after, and a socket taken out of the room in
+// between is never sent it. Which side of a join's roster it falls on is the
+// presence hub's delivery order ([presence.Hub.Join]). Sending is a non-blocking hand-off to each socket's queue
 // ([Client.send]), so the lock is never held across a slow reader.
 func (h *ChatHub) presenceChanged(c presence.Change) {
 	if c.Room.Kind != presence.RoomChat {

@@ -136,7 +136,23 @@ var (
 
 	// ErrStopped is a join on a hub that has stopped.
 	ErrStopped = errors.New("presence: the hub has stopped")
+
+	// ErrDeclined is a join whose [Hand] declined the room — the socket
+	// went away, or moved elsewhere, while its join was being decided.
+	// The join is undone; nothing was shown.
+	ErrDeclined = errors.New("presence: the joiner declined the room, and the join is undone")
 )
+
+// Hand is what a joiner does with its session and its roster, in the room's
+// delivery order ([Hub.Join]): place its socket where the caller's own sink
+// ([Hub.OnChange]) will find it, and send the socket the roster. It answers
+// false where the socket can no longer take the room, and the join is undone.
+//
+// IT RUNS UNDER [Hub.delivering], the lock every fan-out holds while it is in
+// its sinks, so it must not block and must not call back into the hub — and a
+// caller must never call [Hub.Join] holding a lock its hand or its sink takes,
+// since a fan-out waiting on that lock holds the one the join waits on.
+type Hand func(session string, roster Roster) bool
 
 // Hub is this node's presence: the rooms its sockets and its agents are in,
 // what its peers last told it about the same rooms, and the frames between.
@@ -145,8 +161,8 @@ var (
 // broadcast, listen, withdrawal, ask and fan-out runs after it is released, so
 // a handler of the queue's (which takes it) can never wait on a call made
 // under it. The one lock held across a sink is [Hub.delivering], taken by a
-// fan-out alone and always before the first, which orders what the sinks are
-// handed and nothing else.
+// fan-out and by a join's hand alone and always before the first, which
+// orders what the sinks and the joiners are handed and nothing else.
 type Hub struct {
 	queue     Queue
 	wire      *Wire
@@ -166,13 +182,17 @@ type Hub struct {
 	running bool
 	stopped bool
 
-	// delivering serialises the fan-outs this hub hands its sinks: every
-	// flush takes it before mu and holds it until its sinks have returned
-	// ([Hub.flush]). Two fan-outs of a room are two timers, and the second
-	// can fire while the first is still in its sinks — taking its change
-	// after the first did and handing it over before, so a member's leave
-	// reached a socket ahead of the upsert taken before it and the socket
-	// went on showing the member until they moved again.
+	// delivering serialises the fan-outs this hub hands its sinks, and the
+	// rosters it hands its joiners among them: every flush takes it before
+	// mu and holds it until its sinks have returned ([Hub.flush]), and so
+	// does a join until its hand has ([Hub.Join]). Two fan-outs of a room
+	// are two timers, and the second can fire while the first is still in
+	// its sinks — taking its change after the first did and handing it over
+	// before, so a member's leave reached a socket ahead of the upsert taken
+	// before it and the socket went on showing the member until they moved
+	// again. A roster is the same hazard: answered to the joiner after the
+	// lock, a fan-out taken after it could reach the socket first, and the
+	// roster arriving behind it put back what the fan-out had moved on.
 	delivering sync.Mutex
 
 	// listening is the rooms this node is a listener for:
@@ -230,7 +250,8 @@ func (h *Hub) Domain() string { return h.wire.Domain() }
 // OnChange registers what this node does with a room's fan-out, and answers
 // the function that unregisters it. fn must not block: it is called after the
 // hub's lock is released, on the fan-out's own goroutine, one fan-out at a
-// time and in the order the changes were taken.
+// time and in the order the changes were taken — joiners' hands among them
+// ([Hub.Join]).
 func (h *Hub) OnChange(fn func(Change)) (stop func()) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -326,25 +347,45 @@ func (h *Hub) Stop(ctx context.Context) {
 	h.setRooms(0)
 }
 
-// Join puts one socket in a room and answers the session it is known by there
-// and the room as this node's sockets were last shown it, the socket's own
-// member included ([room.rosterFor]): every fan-out after it is the difference
-// from that, so the socket's screen is right from the first. The
-// caller has decided the socket may be in the room (for an artifact's, that it
-// may read the artifact); the hub decides nothing about who may be in a room.
-func (h *Hub) Join(id Room, who Local) (string, Roster, error) {
+// Join puts one socket in a room and HANDS the joiner its session and the room
+// as this node's sockets were last shown it, the socket's own member included
+// ([room.rosterFor]): every fan-out after it is the difference from that, so
+// the socket's screen is right from the first. The caller has decided the
+// socket may be in the room (for an artifact's, that it may read the
+// artifact); the hub decides nothing about who may be in a room.
+//
+// THE ROSTER IS HANDED IN THE ROOM'S DELIVERY ORDER, under [Hub.delivering]:
+// every fan-out handed to the sinks before hand runs is one the roster
+// already holds, and every one taken after the join is handed over after hand
+// returns, by which time hand has put the socket where the caller's sink
+// finds it. Answered as a return value instead, the roster reached the socket
+// after the lock, whenever its caller got to it: a fan-out taken after the
+// join could reach the socket first, and the roster behind it put back what
+// the fan-out had moved on — or, sent before the caller had placed the socket,
+// reached nobody, and the screen showed that member as they were until they
+// moved again. Every surface that joins a room took the same care for itself
+// or did not; here it is one rule, and no caller can have a roster outside it.
+//
+// A hand that declines undoes the join and answers [ErrDeclined].
+func (h *Hub) Join(id Room, who Local, hand Hand) (string, error) {
 	member := Member{Session: newSession(), Seat: who.Seat, Kind: who.Kind,
 		Activity: Viewing}
+	if hand == nil {
+		return "", errors.New("presence: a join is handed its roster, and this one has " +
+			"nothing to hand it to")
+	}
 	if err := id.check(); err != nil {
-		return "", Roster{}, err
+		return "", err
 	}
 	if err := checkMember(id.Kind, member); err != nil {
-		return "", Roster{}, err
+		return "", err
 	}
+	h.delivering.Lock()
+	defer h.delivering.Unlock()
 	h.mu.Lock()
 	if h.stopped {
 		h.mu.Unlock()
-		return "", Roster{}, ErrStopped
+		return "", ErrStopped
 	}
 	now := h.now()
 	member.At = now
@@ -365,8 +406,12 @@ func (h *Hub) Join(id Room, who Local) (string, Roster, error) {
 	if created {
 		h.setRooms(rooms)
 	}
+	if !hand(member.Session, roster) {
+		h.Leave(id, member.Session)
+		return "", ErrDeclined
+	}
 	h.poke()
-	return member.Session, roster, nil
+	return member.Session, nil
 }
 
 // Update is a socket's presence frame: what it is doing in the room and where

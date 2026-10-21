@@ -137,7 +137,7 @@ func TestARoomIsItsKindAndItsID(t *testing.T) {
 		if r.check() == nil {
 			t.Errorf("%s was accepted as a room", name)
 		}
-		if _, _, err := n.hub.Join(r, dana); err == nil {
+		if _, _, err := joined(n.hub, r, dana); err == nil {
 			t.Errorf("a socket joined %s", name)
 		}
 		n.hub.Touch(r, Agent{Seat: "agent-cto", Turn: "run-1", Activity: Editing})

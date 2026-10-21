@@ -144,7 +144,7 @@ func TestAJoinIsTimedFromItsFirstSocketToItsPeersShown(t *testing.T) {
 	b := startJudged(t, replying{Queue: startedClient(t, broker),
 		onReply: func() { clockB.Advance(answerTakes) }}, "node-b", clockB, judgeB, testLapse)
 
-	if _, _, err := a.hub.Join(room1, erin); err != nil {
+	if _, _, err := joined(a.hub, room1, erin); err != nil {
 		t.Fatal(err)
 	}
 	waitUntil(t, "node-a's own join timed", func() bool {
@@ -155,7 +155,7 @@ func TestAJoinIsTimedFromItsFirstSocketToItsPeersShown(t *testing.T) {
 		t.Errorf("a join nobody answered was timed %+v, want shown as its ask went out", joins[0])
 	}
 
-	if _, _, err := b.hub.Join(room1, dana); err != nil {
+	if _, _, err := joined(b.hub, room1, dana); err != nil {
 		t.Fatal(err)
 	}
 	b.seen.waitFor(t, "node-b", room1, "dana:viewing", "erin:viewing")
@@ -168,7 +168,7 @@ func TestAJoinIsTimedFromItsFirstSocketToItsPeersShown(t *testing.T) {
 			"answer that showed it erin", joins[0], answerTakes)
 	}
 
-	if _, _, err := b.hub.Join(room1, Local{Seat: "fay", Kind: dana.Kind}); err != nil {
+	if _, _, err := joined(b.hub, room1, Local{Seat: "fay", Kind: dana.Kind}); err != nil {
 		t.Fatal(err)
 	}
 	b.seen.waitFor(t, "node-b", room1, "dana:viewing", "erin:viewing", "fay:viewing")
@@ -202,7 +202,7 @@ func TestAMoveIsTimedFromItsStampAndARosterRestatedIsNone(t *testing.T) {
 	b := startJudged(t, startedClient(t, broker), "node-b", clockB, judgeB, lapse)
 	chat := ChatRoom(uuid.NewSHA1(uuid.NameSpaceURL, []byte("presence-objectives-chat")))
 
-	sessionA, _, err := a.hub.Join(chat, erin)
+	sessionA, _, err := joined(a.hub, chat, erin)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +211,7 @@ func TestAMoveIsTimedFromItsStampAndARosterRestatedIsNone(t *testing.T) {
 	// one more move of erin's than the case counts: a loaded runner held
 	// node-a's frame past node-b's ask and failed the case on exactly that.
 	waitUntil(t, "node-a's join of erin sent", func() bool { return sentA.Load() > 0 })
-	if _, _, err := b.hub.Join(chat, dana); err != nil {
+	if _, _, err := joined(b.hub, chat, dana); err != nil {
 		t.Fatal(err)
 	}
 	b.seen.waitFor(t, "node-b", chat, "dana:viewing", "erin:viewing")

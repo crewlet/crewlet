@@ -8,8 +8,8 @@
 // the coalescing, the expiry, the large-room bound and the agents. What a kind
 // owns is where its members can be looking ([Focus], checked per kind by
 // [CheckFocus]), and the decision of who may be in one of its rooms, which is
-// never this package's. An artifact's room is the only kind this build keeps
-// ([RoomArtifact]).
+// never this package's. An artifact's room and a chat room are the two kinds
+// this build keeps ([RoomArtifact], [RoomChat]).
 //
 // # Presence is told, never stored
 //
@@ -60,6 +60,12 @@
 //     changes only on a frame newer than the one that last said it, and a
 //     late answer fills in what the room has not heard since and undoes
 //     nothing.
+//   - A JOINER IS HANDED ITS ROSTER IN THE ROOM'S DELIVERY ORDER ([Hub.Join],
+//     [Hand]): under the one lock the fan-outs hold while they are in their
+//     sinks, so every fan-out before the roster is one it holds and every
+//     one after reaches the socket after it. A roster answered to the
+//     caller instead was sent whenever the caller got to it, and a fan-out
+//     taken after it could arrive first and be undone by it.
 //   - A NODE STOPPING tells the fleet its members left before it goes.
 //
 // # Large rooms present the most recent fifty

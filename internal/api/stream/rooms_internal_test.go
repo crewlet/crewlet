@@ -77,8 +77,11 @@ func (quietStores) Through(context.Context, artifacts.ID) (int64, int64, error) 
 
 type quietPresence struct{}
 
-func (quietPresence) Join(presence.Room, presence.Local) (string, presence.Roster, error) {
-	return "s", presence.Roster{}, nil
+func (quietPresence) Join(_ presence.Room, _ presence.Local, hand presence.Hand) (string, error) {
+	if !hand("s", presence.Roster{}) {
+		return "", presence.ErrDeclined
+	}
+	return "s", nil
 }
 func (quietPresence) Update(presence.Room, string, presence.Activity, presence.Focus) error {
 	return nil
