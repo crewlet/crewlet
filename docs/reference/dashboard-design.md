@@ -7475,7 +7475,14 @@ create judges the configuration alone), how it runs
 there is one for the company or one per seat granted it, the command and its
 arguments one per line (or the address), and the environment or headers as
 `NAME: value` rows whose value is a secret field (`$` offers the sealed
-entries). Add checks the whole company with the server in it (the create-only
+entries), each with its own **may be unset** box: ticked, the row's key is
+sent in the server's `optional_keys`, so a value whose secret has no value is
+left out rather than keeping the server from starting — said once above the
+rows, and refused before the round trip for a row whose value names no secret,
+since nothing in a literal can be unset. Two header rows spelling one header
+apart (`Authorization`, `authorization`) are refused the same way, since HTTP
+and the engine read them as one. Add checks the whole company with the
+server in it (the create-only
 `PUT /config/mcp-servers/{name}` with `If-None-Match: *` and `dry_run`), says
 any warning the add introduces — not one the company already carried — and
 places a refusal beside its field; then it stores the revision. A tool's own
