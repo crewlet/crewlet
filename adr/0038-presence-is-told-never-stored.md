@@ -88,15 +88,16 @@ read back.
 **Each node polling every other** turns a room into many-to-many requests on a
 timer, which is the broadcast with worse latency and more traffic.
 
-**Unsigned frames**, as the live relay sends, would let anything on the broker
-put a colleague in a room they are not in. The relay is unsigned for its stated
-reason (internal/engine's live relay), that it is a read whose answer each
-socket's own filters decide and whose effect a screen's next read of the room
-undoes; a presence frame IS the display, with no read behind it to correct it,
-so that reasoning does not carry over. Chat's presence was once exactly that: an
-unsigned fleet-wide scatter, `crewlet.chat.presence`, each node answering from
-its own sockets, so anybody who could reach the cluster port could show anybody
-typing in any room. It is gone, and a chat room is a room here.
+**Unsigned frames** would let anything on the broker put a colleague in a room
+they are not in. A presence frame IS the display, with no read behind it to
+correct it, so nothing short of a seal makes it believable. Chat's presence was
+once exactly that: an unsigned fleet-wide scatter, `crewlet.chat.presence`, each
+node answering from its own sockets, so anybody who could reach the cluster port
+could show anybody typing in any room. It is gone, and a chat room is a room
+here. The live relay once leaned on the opposite reasoning — a read whose answer
+each socket's own filters decide and a screen's next read undoes — and is sealed
+now too, because what it relays is likewise shown as somebody's words
+([ADR-0031](0031-every-state-log-record-is-signed.md)'s amendment).
 
 ## Amendments to earlier records
 

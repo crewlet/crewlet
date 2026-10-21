@@ -236,6 +236,11 @@ type Engine struct {
 	// liverelay.go.
 	liveRelay       atomic.Pointer[liveRelay]
 	stopLiveRelayFn func(context.Context)
+	// relayWire signs every ask and answer of that relay and verifies its
+	// peers', built ONCE in [New] from the fleet keyring on every node —
+	// the relay itself exists only on a data node, and is refused rather
+	// than armed unsigned ([newRelayWire]).
+	relayWire *relayWire
 
 	// onIdentity is told whose credentials each committed identity batch
 	// moved on this node. Nil tells nobody — see
@@ -1137,7 +1142,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	if err != nil {
 		return nil, err
 	}
-	// AND EVERY OTHER CHANNEL A PEER CARRIES OUT A REQUEST ON, the same way:
+	// AND THE TWO OTHER INSTRUCTION CHANNELS THE ENGINE SERVES, the same way:
 	// the broker's membership, which a member changes through its own system
 	// account, and a note to a running turn, which the running node offers
 	// as the person who sent it (internal/signedask).
@@ -1152,6 +1157,13 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// AND THE PRESENCE CHANNEL, which carries no instruction and is sealed
 	// all the same: a frame names a person (presence.go).
 	presenceWire, err := newPresenceWire(recordKeyring(opts.Bootstrap))
+	if err != nil {
+		return nil, err
+	}
+	// AND THE LIVE RELAY'S, which is no instruction either and is signed
+	// for the same reason: what it answers is pushed to a peer's sockets as
+	// this node's appliers' work (liverelay.go).
+	relayWire, err := newRelayWire(recordKeyring(opts.Bootstrap))
 	if err != nil {
 		return nil, err
 	}
@@ -1302,6 +1314,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		auxSpend:            auxspend.NewLedger(backends.Queue),
 		steers:              steers,
 		presenceWire:        presenceWire,
+		relayWire:           relayWire,
 		dataTurns:           builtin.NewDataTurns(nil),
 		folderTurns:         builtin.NewFolderTurns(nil),
 		mcpRetryBase:        opts.mcpRetryBase,

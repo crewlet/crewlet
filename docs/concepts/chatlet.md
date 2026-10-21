@@ -328,7 +328,10 @@ for the inbox
 ([Humans in the org chart](humans-in-the-org.md#how-a-person-learns-they-have-work)),
 and every switch between its own applier and a peer's asks every chat screen on
 it to read its rooms again, so a gap in what it heard is a re-read rather than
-a hole in the transcript.
+a hole in the transcript. What the peer relays is signed under the fleet
+keyring and bound to the ask it answers, because it is shown as what somebody
+said: a relayed answer the fleet did not sign is passed over, and no screen
+sees it.
 
 ## Presence, typing and the working indicator
 

@@ -24,6 +24,13 @@ import (
 // `mcpbridge.frame` (internal/httprelay).
 const relayName = "mcpbridge"
 
+// RelayDomains is every key domain the bridge's relay signs under
+// ([httprelay.Domains]), for the gate that holds every channel of the fleet
+// apart from every other's and from every state log's (internal/engine).
+func RelayDomains(ring statelog.Keyring) (open, frame [2]string, err error) {
+	return httprelay.Domains(relayName, ring)
+}
+
 // Leases reads which incarnation holds a seat: the half of the coordination
 // store routing a call needs.
 type Leases interface {

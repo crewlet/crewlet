@@ -135,16 +135,15 @@
 // every request and every reply is framed and signed under the fleet keyring,
 // by the state log's own [statelog.Signer] under domains of the estate's own,
 // and read with its verdicts ([Envelopes]) — the rule internal/signedask keeps
-// for every channel a node carries a request out on, this one, the fleet
-// broker's membership and a note to a running turn alike: a request that does
-// not verify is never dispatched, the actor a write runs as and the viewer a
-// read answers for are the ones inside the signed body, and a key a node does
-// not hold is "did not run" — the router moves on to a node that holds it. A
-// request carries an id and a deadline under the signature, so a data node
-// refuses a replay of one; a reply names the request it answers, so an asker
-// believes no answer to somebody else's question. A reply it cannot believe is
-// no answer — never "did not run" — so a once-write met with one is
-// [ErrOutcomeUnknown].
+// for every channel a node carries a request out on, this one among them: a
+// request that does not verify is never dispatched, the actor a write runs as
+// and the viewer a read answers for are the ones inside the signed body, and a
+// key a node does not hold is "did not run" — the router moves on to a node
+// that holds it. A request carries an id and a deadline under the signature,
+// so a data node refuses a replay of one; a reply names the request it
+// answers, so an asker believes no answer to somebody else's question. A reply
+// it cannot believe is no answer — never "did not run" — so a once-write met
+// with one is [ErrOutcomeUnknown].
 //
 // # What does not cross the wire, and who supplies it
 //

@@ -158,10 +158,15 @@ flowchart TD
   run**, so the router asks the next data node; one whose MAC fails under a
   key it holds is refused and logged, because no data node will ever accept
   it. A custody batch is outside the rule: it carries events a data node
-  keeps, not an instruction it acts on. The rule is not the estate's alone:
-  every request one node asks another to carry out — a broker member removing
-  a voter, the node running a turn taking a person's note — is signed and
-  bound the same way, by one implementation.
+  keeps, not an instruction it acts on. The rule is not the estate's alone.
+  Every request one node asks another to carry out is signed and bound the
+  same way, by one implementation: a broker member removing a voter, the node
+  running a turn taking a person's note, the node holding a box's session
+  running a tool call relayed to it, and the node running an assistant turn
+  replaying or stopping it. So is the live relay a data node whose own copy is
+  out of service hears a sound peer's appliers through, because what it
+  relays reaches its dashboards as somebody's chat messages and datastore
+  documents.
 - **Nobody answering is an answer that says so**, with what each data node said
   — never an empty list, which would say the company has none of what was asked
   for. A write that went **unanswered** is the other kind of answer: a node

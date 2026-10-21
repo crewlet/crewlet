@@ -94,13 +94,9 @@ func New(opts Options) (*Relay, error) {
 	case opts.Admit == nil || opts.Handler == nil:
 		return nil, errors.New("httprelay: a relay needs what admits a request and what answers it")
 	}
-	opens, err := signedask.New[openRequest, openReply](opts.Name+".open", opts.Keyring)
+	opens, frames, err := newChannels(opts.Name, opts.Keyring)
 	if err != nil {
-		return nil, fmt.Errorf("httprelay: %w", err)
-	}
-	frames, err := signedask.New[frameRequest, frameReply](opts.Name+".frame", opts.Keyring)
-	if err != nil {
-		return nil, fmt.Errorf("httprelay: %w", err)
+		return nil, err
 	}
 	now := opts.Now
 	if now == nil {
@@ -112,6 +108,40 @@ func New(opts Options) (*Relay, error) {
 		opens: opens, frames: frames, taken: signedask.NewGuard(),
 		served: map[string]*exchange{}, ended: map[string]time.Time{},
 	}, nil
+}
+
+// newChannels builds a relay's two signed channels from the fleet keyring, in
+// the key domains its name scopes: `<name>.open` for an OPEN and its CLOSE, and
+// `<name>.frame` for the frames of an answer, each split into a request and a
+// reply by internal/signedask. [New] builds a relay's channels here and
+// [Domains] reads them here, so the domains the fleet's channel gate holds
+// apart are the ones a relay signs under.
+func newChannels(name string, ring statelog.Keyring) (*signedask.Channel[openRequest, openReply],
+	*signedask.Channel[frameRequest, frameReply], error) {
+	opens, err := signedask.New[openRequest, openReply](name+".open", ring)
+	if err != nil {
+		return nil, nil, fmt.Errorf("httprelay: %w", err)
+	}
+	frames, err := signedask.New[frameRequest, frameReply](name+".frame", ring)
+	if err != nil {
+		return nil, nil, fmt.Errorf("httprelay: %w", err)
+	}
+	return opens, frames, nil
+}
+
+// Domains is every key domain a relay named name signs under: an OPEN's
+// request and reply, then a frame's. It is for the gate that holds every
+// channel of the fleet apart from every other's and from every state log's
+// (internal/engine), because a domain shared with any of them would let a
+// message captured off one verify on the other.
+func Domains(name string, ring statelog.Keyring) (open, frame [2]string, err error) {
+	opens, frames, err := newChannels(name, ring)
+	if err != nil {
+		return open, frame, err
+	}
+	open[0], open[1] = opens.Domains()
+	frame[0], frame[1] = frames.Domains()
+	return open, frame, nil
 }
 
 // Owner is the incarnation this relay answers for.

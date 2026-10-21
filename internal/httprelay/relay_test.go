@@ -329,6 +329,35 @@ func TestAnOpenTheFleetDidNotSignRunsNothing(t *testing.T) {
 	}
 }
 
+// A RELAY SIGNS IN THE DOMAINS IT REPORTS: the fleet's channel gate
+// (internal/engine) holds the domains [Domains] reports apart from every other
+// channel's and every state log's, so a relay that signed under any others
+// would be held to nothing.
+func TestARelaySignsInTheDomainsItReports(t *testing.T) {
+	t.Parallel()
+	rl, err := New(Options{
+		Fabric: memory.NewBroker().Client(), Name: "testrelay", Node: "node",
+		Owner: "node:incarnation", Keyring: ring,
+		Admit:   func(*http.Request) Verdict { return Serve },
+		Handler: http.NotFoundHandler(),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	open, frame, err := Domains("testrelay", ring)
+	if err != nil {
+		t.Fatalf("Domains: %v", err)
+	}
+	if req, rep := rl.opens.Domains(); [2]string{req, rep} != open {
+		t.Errorf("an OPEN is signed in %s and %s, and Domains reports %s and %s",
+			req, rep, open[0], open[1])
+	}
+	if req, rep := rl.frames.Domains(); [2]string{req, rep} != frame {
+		t.Errorf("a frame is signed in %s and %s, and Domains reports %s and %s",
+			req, rep, frame[0], frame[1])
+	}
+}
+
 // A HANDLER THAT PANICS BEFORE IT ANSWERED is answered 500, as a server would
 // answer it, and the holder stays up.
 func TestAHandlerThatPanicsIsAnswered500(t *testing.T) {
