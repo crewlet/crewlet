@@ -148,6 +148,10 @@ func TestANodeLeftOnARebuiltLogAdoptsTheReanchoredGeneration(t *testing.T) {
 	t.Parallel()
 	e, back, q := bootRejoinNode(t)
 	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
+	// NOTHING BUT THIS CASE APPENDS to the tracker's log from here: a pin of
+	// the collector's landing on the rebuilt log ahead of the peer's record
+	// would be the record the donor's checkpoint sits on.
+	quietTheCollector(t, e)
 	s := e.native.Load().log
 	running := s.Domain(tracker.Domain{}.Name())
 	if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-before", "node-x"); err != nil ||
@@ -171,6 +175,11 @@ func TestANodeLeftOnARebuiltLogAdoptsTheReanchoredGeneration(t *testing.T) {
 	// first record, in the next generation, keyed to the live stream — and
 	// it has written since.
 	peerRecord := appendEviction(t, running, "op-peer", "node-z")
+	if peerRecord != 1 {
+		t.Fatalf("the peer's record landed at %d on the rebuilt log, want its first "+
+			"— something else appended to it, and the donor's checkpoint below the "+
+			"record would sit on that", peerRecord)
+	}
 	next := running.runner.Committed().Generation + 1
 	standUpDonor(t, e, q, rows, statelog.Position{
 		Stream: running.spec.Name, Generation: next, Seq: peerRecord - 1,
@@ -238,20 +247,36 @@ func TestANodeARestoredReanchorLeftBehindStopsOnItsRecordAndAdopts(t *testing.T)
 	t.Parallel()
 	e, back, q := bootRejoinNode(t)
 	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
+	// NOTHING BUT THIS CASE APPENDS to the tracker's log from here, because
+	// the case is a log whose end is the copy's checkpoint with the peer's
+	// generation record right after it.
+	quietTheCollector(t, e)
 	s := e.native.Load().log
 	running := s.Domain(tracker.Domain{}.Name())
-	if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-before", "node-x"); err != nil ||
-		res.Outcome != statelog.OutcomeApplied {
+	res, err := e.native.Load().writer.EvictNode(t.Context(), "op-before", "node-x")
+	if err != nil || res.Outcome != statelog.OutcomeApplied {
 		t.Fatalf("a write: %+v, %v", res, err)
 	}
 	rows := copyEstate(t, back)
+	// THE DONOR STANDS WHERE THE COPY DOES — on the copy's own checkpoint row,
+	// never the live runner's read after the copy, which may already have
+	// moved past the rows copied: the donor's artefact would then name that
+	// later sequence beside the record the copy's checkpoint names, and the
+	// adoption stops on the mismatch as a diverged log. And the copy holds
+	// the write: a copy taken once the write answered applied has its rows.
+	copied := copiedCheckpoint(t, rows, running.spec.Name)
+	if copied.Seq != res.Position.Seq {
+		t.Fatalf("the copy's checkpoint is at %d, want the write's own %d — a copy "+
+			"taken after a write answered applied did not hold it",
+			copied.Seq, res.Position.Seq)
+	}
 	stats, err := running.log.Stats(t.Context())
 	if err != nil {
 		t.Fatalf("read the log: %v", err)
 	}
 	live := stats.CreatedAt.UTC()
-	end := running.runner.Committed().Seq
-	next := running.runner.Committed().Generation + 1
+	end := copied.Seq
+	next := copied.Generation + 1
 
 	// THE PEER'S REANCHOR, the restored case: its checkpoint at the log's end
 	// in the next generation, and its generation record right after it.
@@ -271,6 +296,11 @@ func TestANodeARestoredReanchorLeftBehindStopsOnItsRecordAndAdopts(t *testing.T)
 		spec.SubjectPrefix+"."+record.Subject.String(), record.OpID, &zero, record.Payload)
 	if err != nil {
 		t.Fatalf("append the peer's generation record: %v", err)
+	}
+	if genSeq != end+1 {
+		t.Fatalf("the peer's generation record landed at %d, want %d right after "+
+			"the copy's checkpoint — something else appended to the tracker's log "+
+			"during the case", genSeq, end+1)
 	}
 
 	// THE RECORD STOPS THIS NODE before it is applied, and refuses the domain.
@@ -316,6 +346,26 @@ func copyEstate(t *testing.T, back *Backends) string {
 		t.Fatalf("copy the replicated estate: %v", err)
 	}
 	return path
+}
+
+// copiedCheckpoint is the checkpoint a copy of the estate holds for stream —
+// the position its rows were applied through, which is where a donor serving
+// that copy stands.
+func copiedCheckpoint(t *testing.T, rows, stream string) statelog.Position {
+	t.Helper()
+	copyDB, err := store.OpenEstate(t.Context(), store.EstateReplicated, rows, store.Options{})
+	if err != nil {
+		t.Fatalf("open the copy: %v", err)
+	}
+	defer func() { _ = copyDB.Close() }()
+	var gen, seq int64
+	if err := copyDB.Read(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(), `SELECT generation, seq FROM statelog_cursor
+			WHERE stream = ?`, stream).Scan(&gen, &seq)
+	}); err != nil {
+		t.Fatalf("read the copy's checkpoint: %v", err)
+	}
+	return statelog.Position{Stream: stream, Generation: uint32(gen), Seq: uint64(seq)}
 }
 
 // standUpDonor serves a snapshot of rows — with one domain's checkpoint moved to

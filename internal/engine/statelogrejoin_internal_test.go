@@ -317,16 +317,9 @@ func appendPastTheNode(t *testing.T, e *Engine, q *jetstream.Queue) (
 		t.Fatal("the tracker domain is not running")
 	}
 
-	// THE OBJECT COLLECTOR FINISHES ITS FIRST PASS AND STOPS: each pass pins
-	// the tracker's estate with a barrier of its own, and its first runs as
-	// the node boots — so left running, a pin lands between the two staged
-	// below and moves where they land. Stopping it mid-pass is not enough:
-	// a barrier's publish outlives the read that asked for it.
-	waitUntil(t, 20*time.Second, "the collector's first pass to be recorded", func() bool {
-		_, found, err := e.backends.ObjectCollection(t.Context())
-		return err == nil && found
-	})
-	e.stopObjectCollector()
+	// Left running, the collector's boot pass pins between the two staged
+	// below and moves where they land.
+	quietTheCollector(t, e)
 
 	// Settle: whatever the boot wrote to the tracker's log is applied.
 	waitUntil(t, 20*time.Second, "the node to catch up on its own log", func() bool {
@@ -420,6 +413,29 @@ func copyAdvancedTo(t *testing.T, back *Backends, running *runningLog,
 	if err := store.QuiesceCopy(t.Context(), path); err != nil {
 		t.Fatalf("quiesce the copy: %v", err)
 	}
+}
+
+// quietTheCollector lets the object collector finish its first pass and stops
+// it, so nothing but the case itself appends to the tracker's log from here.
+//
+// EACH PASS PINS THE TRACKER'S ESTATE WITH A BARRIER of its own, and the first
+// runs as the node boots, on its own goroutine, whenever its duty claim and
+// its decline check come back — under load, now and then after the node
+// admits seats and after a case's first write. A case that reads the log's
+// end, or stages records at chosen sequences, around a pin landing where it
+// pleases is reading a log it does not know: a probe of the restored reanchor
+// case caught the pin 46 ms after the case's own write, between its copy of
+// the estate and its read of the checkpoint, and the donor it stood up named
+// a record the log did not hold at that sequence. Stopping it mid-pass is not
+// enough: a barrier's publish outlives the read that asked for it, so the
+// pass is waited out first.
+func quietTheCollector(t testing.TB, e *Engine) {
+	t.Helper()
+	waitUntil(t, 20*time.Second, "the collector's first pass to be recorded", func() bool {
+		_, found, err := e.backends.ObjectCollection(t.Context())
+		return err == nil && found
+	})
+	e.stopObjectCollector()
 }
 
 func waitUntil(t testing.TB, within time.Duration, what string, cond func() bool) {
