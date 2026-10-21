@@ -657,11 +657,14 @@ type ActivationRequest struct {
 	//
 	// The comparison is "if a pointer exists, it must still name this".
 	// With no pointer at all there is nothing to have lost a race to, and
-	// refusing would break the state a node reaches legitimately and often:
-	// a node seeded from a file has a locally-active revision before it has
-	// published anything, and every config write on it would fail until it
-	// did. The lost-update this exists to catch needs a winner, and an
-	// empty pointer has none.
+	// refusing would break a state a node reaches without doing anything
+	// wrong: its own store holds an active revision, which every config
+	// write on it names here, while the coordination store holds no pointer
+	// — one lost under the running node (an external cluster rebuilt, its
+	// bucket removed), which the node's next boot publishes again from its
+	// own copy. Every config write on it would fail until that boot. The
+	// lost-update this exists to catch needs a winner, and an empty pointer
+	// has none.
 	Expect string
 
 	// ExpectAbsent is the create-only compare-and-set: publish this only

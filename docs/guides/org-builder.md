@@ -888,9 +888,9 @@ builder are two writers of one document, and the flag a node starts with
 decides which one wins a restart
 ([Configuration](../concepts/configuration.md)):
 
-- `crewlet run -company company.yaml` only fills an empty store. Once a
-  company exists the file is ignored, so a restart never undoes a builder
-  save.
+- `crewlet run -company company.yaml` only starts a company that does not
+  exist yet. Once a company exists the file is ignored, so a restart never
+  undoes a builder save.
 - `crewlet run -import-company company.yaml` makes the file the company again
   at every start. A restart with it replaces whatever the builder saved since
   the file last changed.

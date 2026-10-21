@@ -1710,11 +1710,13 @@ func (f *FleetStore) expectedSeq(ctx context.Context, req coord.ActivationReques
 	case err != nil:
 		return 0, time.Time{}, err
 	case !held:
-		// NOTHING TO HAVE RACED WITH. A node seeded from a file holds a
-		// locally-active revision before it has published anything, and
-		// treating that as a race would refuse every config write on it
-		// until it did. See [coord.ActivationRequest.Expect]. It is also
-		// exactly what a create-only write is waiting to see.
+		// NOTHING TO HAVE RACED WITH. A node whose store holds an active
+		// revision while the pointer is gone — lost under the running
+		// node, and published again only at its next boot — names that
+		// revision in every config write, and treating that as a race
+		// would refuse each of them until the boot. See
+		// [coord.ActivationRequest.Expect]. It is also exactly what a
+		// create-only write is waiting to see.
 		return 0, time.Time{}, nil
 	case req.ExpectAbsent:
 		return 0, time.Time{}, fmt.Errorf("%w: expected no activation, the fleet is on %s",

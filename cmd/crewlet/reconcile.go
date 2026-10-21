@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -32,11 +33,16 @@ import (
 //
 // # A bootstrap seed does not overwrite a company that exists
 //
-// `-company` imports only into an EMPTY store. It used to import whenever its
-// content differed from the active revision, which quietly made a restart a
-// write: an operator edits the company live, restarts a node whose file is a
-// month old, and the file wins — a deleted role returns, a changed model
-// reverts, and nothing says so.
+// `-company` imports only where NO COMPANY EXISTS: none in this node's store
+// and none the fleet runs, the fleet's half decided create-only at the
+// pointer. It used to import whenever its content differed from the active
+// revision, which quietly made a restart a write: an operator edits the
+// company live, restarts a node whose file is a month old, and the file wins
+// — a deleted role returns, a changed model reverts, and nothing says so. And
+// it used to decide "no company" from this node's store alone, which a fresh
+// node joining a fleet and every boot of a node without `data` find empty:
+// such a node replaced the fleet's running company with its file, on every
+// node at once.
 //
 // The rule that replaced it is not "silently ignore an edited file", which was
 // the failure the old behaviour was itself guarding against. An edited file
@@ -99,10 +105,10 @@ func startReconciler(ctx context.Context, e *engine.Engine, boot *config.Bootstr
 // seedCompany carries out the decided seed against the store and the fleet.
 //
 // Idempotent by CONTENT, not by a marker: an unchanged file imports nothing
-// however many times the node boots. What happens to a CHANGED one was decided
-// with the boot ([decideSeed]): a bootstrap the store's company outranks
-// imports nothing and publishes what the store holds, and an override imports
-// it.
+// however many times the node boots. What happens to a CHANGED one is the
+// seed's act: a bootstrap a company outranks imports nothing — the store's
+// company, decided with the boot ([decideSeed]), or the fleet's, decided here
+// where its pointer can be read — and an override imports it.
 //
 // A revision the seed writes is the NODE's, recorded under the node's own id:
 // nobody ran a command, the node read its -company file at boot, and which
@@ -113,17 +119,56 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 	configs := db.Configs()
 	switch plan.act {
 	case seedBootstrap:
-		// NOTHING TO COMPARE WITH: the plan was made on a store holding no
-		// company — an empty one, or a scratch one the engine discarded
-		// as it opened it — and one process owns the store.
+		// ONLY WHERE NO COMPANY EXISTS, and this node's store is the half
+		// of that the plan could read: it found it empty, or it is a
+		// scratch one the engine discarded as it opened it. The FLEET is
+		// the other half, and an empty store says nothing about it — a
+		// fresh data node joining a running fleet has one, and so does
+		// every boot of a node without `data` — so it is asked here, where
+		// its pointer can be read, and the write is create-only.
+		target, pointed, err := plane.Target(ctx)
+		if err != nil {
+			return fmt.Errorf("read the activation pointer: %w", err)
+		}
+		if pointed {
+			fleetOutranks(ctx, plane, plan.file, target, cipher, log)
+			return nil
+		}
 		return importSeed(ctx, configs, plane, pub, plan.file, "", cipher, nodeID, log)
 	case seedImport:
+		target, pointed, err := plane.Target(ctx)
+		if err != nil {
+			return fmt.Errorf("read the activation pointer: %w", err)
+		}
 		active, found, err := configs.Active(ctx)
 		if err != nil {
 			return fmt.Errorf("read the active revision: %w", err)
 		}
-		parent := ""
-		if found {
+		switch {
+		case pointed:
+			// AGAINST THE REVISION THE FLEET RUNS, which is what the
+			// override replaces: compared with this node's own copy, a
+			// node that was down while a peer changed the company, and
+			// restarted with -import-company naming its old file, found
+			// the file equal to that stale copy and replaced nothing.
+			same, uncompared := plan.file.isFleets(ctx, plane, target, cipher)
+			if uncompared != nil {
+				// NOT SHOWN TO BE THE FILE, so it is replaced, as the
+				// override asks — and said, because a fleet revision
+				// this node cannot open is usually a keyring that
+				// differs from the one the fleet sealed it under.
+				log.WarnContext(ctx, "company_import_uncompared", "file", plan.file.Path,
+					"fleet_revision", target.RevisionID, "epoch", target.Epoch,
+					"error", uncompared,
+					"detail", "the file replaces the fleet's revision without a comparison")
+			}
+			if same {
+				log.InfoContext(ctx, "company_import_unchanged", "file", plan.file.Path,
+					"fleet_revision", target.RevisionID, "epoch", target.Epoch,
+					"detail", "the fleet already runs this file; nothing is imported")
+				return nil
+			}
+		case found:
 			current, err := openStored(cipher, active)
 			if err != nil {
 				return err
@@ -133,12 +178,17 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 				return err
 			}
 			if same {
-				// The file IS the active revision, so there is nothing
-				// to import. The node may still owe the fleet a
-				// POINTER — see publishLocalActive for the case that
-				// puts it there.
+				// The file IS this node's revision and the fleet has
+				// none, so there is nothing to import — only a pointer
+				// this node owes the fleet. See publishLocalActive.
 				return publishLocalActive(ctx, plane, pub, configs, active, cipher, log)
 			}
+		}
+		// CHAINED TO THE REVISION THIS NODE HOLDS, as an edit through its
+		// API is: the parent is a foreign key into this node's own
+		// history, which may not hold the fleet's newer revision yet.
+		parent := ""
+		if found {
 			parent = active.ID
 		}
 		return importSeed(ctx, configs, plane, pub, plan.file, parent, cipher, nodeID, log)
@@ -160,6 +210,30 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 	}
 }
 
+// fleetOutranks says that a -company file is not imported because the fleet
+// already runs a company — unless the fleet runs this very file, which is no
+// news: every node of a fleet started from one company.yaml carries it.
+func fleetOutranks(ctx context.Context, plane coord.Plane, seed tierBSeed,
+	target coord.Activation, cipher secrets.Cipher, log *slog.Logger) {
+
+	same, err := seed.isFleets(ctx, plane, target, cipher)
+	if same {
+		return
+	}
+	attrs := []any{"file", seed.Path, "fleet_revision", target.RevisionID,
+		"epoch", target.Epoch,
+		"reason", "the fleet already runs a company, and -company only " +
+			"bootstraps a company that does not exist yet",
+		"hint", "to make this file the company, restart with -import-company " +
+			seed.Path + "; to change the running fleet with no restart, run " +
+			"`crewlet config import " + seed.Path + "`"}
+	if err != nil {
+		// NOT COMPARED, so not shown to be the file: said, with why.
+		attrs = append(attrs, "compare_error", err)
+	}
+	log.WarnContext(ctx, "company_seed_ignored", attrs...)
+}
+
 // importSeed writes the seed's file as a new revision, chained to parent, and
 // points the fleet at it.
 func importSeed(ctx context.Context, configs *store.Configs, plane coord.Plane,
@@ -174,7 +248,7 @@ func importSeed(ctx context.Context, configs *store.Configs, plane coord.Plane,
 	// THE FILE IS BEING WRITTEN, so it meets every rule a written document
 	// meets. It was loaded against the runnable rules only, because most
 	// boots never write it: unchanged from the active revision, or a
-	// bootstrap the store's own company outranks. Here it is a new
+	// bootstrap a company that exists outranks. Here it is a new
 	// revision, the same act as `crewlet config import`, and admitting a
 	// duplicate here would store exactly what every other write refuses.
 	// Nothing has been stored or activated yet.
@@ -192,17 +266,7 @@ func importSeed(ctx context.Context, configs *store.Configs, plane coord.Plane,
 	if seed.Override {
 		summary = "imported from " + seed.Path + " at boot"
 	}
-	// ONE INSTANT FOR THE ROW AND THE POINTER. The local row's
-	// `activated_at` is what this node's config history shows for the
-	// activation, what the reconciler holds against the pointer's instant
-	// on every tick, and what the next boot compares with the pointer to
-	// decide whether this node holds a newer revision to publish — so it
-	// is the instant the pointer carries, not a second reading of the
-	// clock. See [keepPointersInstant] for when the pointer moves it.
 	at := time.Now().UTC()
-	// STORED FIRST, then pointed at: a crash between the two leaves a
-	// revision nothing points at, which the next boot re-seeds over. The
-	// other order would point the fleet at a payload no node can read.
 	// THE NODE IS THE AUTHOR: a boot imported this file, and no credential
 	// made the write. Named by the node's own id, because which node read
 	// its -company file is the fact somebody reading the history later
@@ -213,16 +277,18 @@ func importSeed(ctx context.Context, configs *store.Configs, plane coord.Plane,
 		CreatedByKind: by.Kind, Summary: summary, Payload: payload,
 		CreatedAt: at,
 	}
-	id, err := configs.InsertActive(ctx, seeded)
+	// STORED AS HISTORY FIRST, and made this node's active revision only
+	// once the fleet has taken it — the order an edit through the API
+	// keeps, for its reason: this node's active revision is what its next
+	// boot publishes over the fleet's whenever it reads as the newer, so a
+	// bootstrap that lost to a peer's first company and stayed active here
+	// would be published over that company one restart later. A crash
+	// between the two leaves a revision nothing points at, inert.
+	id, err := configs.Insert(ctx, seeded)
 	if err != nil {
 		return fmt.Errorf("seed the company config: %w", err)
 	}
 	seeded.ID = id
-	// UNCONDITIONAL, and that is the seed's whole posture: it is asserting
-	// what this node booted with, not editing something it read. There is
-	// no earlier revision it derived from, so there is nothing it could
-	// have raced with — and an expectation here would make a first boot
-	// fail against a fleet that had moved on for perfectly good reasons.
 	published, err := plane.Activate(ctx, coord.ActivationRequest{
 		RevisionID: id, Summary: summary, Payload: payload, At: at,
 		// THE ORIGIN RIDES THE POINTER, so every peer that adopts this
@@ -230,11 +296,44 @@ func importSeed(ctx context.Context, configs *store.Configs, plane coord.Plane,
 		// instant it was written — rather than itself, at the instant it
 		// happened to apply it.
 		Origin: originOf(seeded),
+		// A BOOTSTRAP IS CREATE-ONLY: it lands only while the fleet has no
+		// activation at all, so of two nodes booting a fleet's first
+		// company at once one wins and the other defers to it, and a node
+		// that read no pointer an instant before a peer wrote one does not
+		// replace that peer's company. An OVERRIDE is unconditional, and
+		// that is its whole posture: it asserts what this node was told to
+		// make the company, over whatever the fleet is running.
+		ExpectAbsent: !seed.Override,
 	})
+	if errors.Is(err, coord.ErrActivationRaced) {
+		// THE REVISION IS KEPT, inactive, as history: the fleet's first
+		// company is whichever landed, and this node converges on it.
+		current, _, terr := plane.Target(ctx)
+		if terr != nil {
+			return fmt.Errorf("activate the seeded company config: %w; "+
+				"and the pointer that won could not be read: %w", err, terr)
+		}
+		fleetOutranks(ctx, plane, seed, current, cipher, log)
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("activate the seeded company config: %w", err)
 	}
-	keepPointersInstant(ctx, configs, id, at, published, log)
+	// THE FLEET TOOK IT, so it is this node's company too — AT THE
+	// POINTER'S INSTANT, which may be later than the one asked for
+	// ([coord.ActivationAt]): the local row's `activated_at` is what this
+	// node's config history shows for the activation, what the reconciler
+	// holds against the pointer's on every tick, and what the next boot
+	// compares with the pointer to decide whether this node holds a newer
+	// revision to publish. BEST EFFORT, because the activation has landed
+	// and cannot be taken back: the reconciler marks the fleet's revision
+	// active here when it applies the epoch.
+	if _, err := configs.Activate(ctx, id, published.At); err != nil {
+		log.WarnContext(ctx, "local_revision_not_marked_active",
+			"revision", id, "epoch", published.Epoch, "error", err,
+			"detail", "the fleet is running this revision; this node marks "+
+				"it active when its reconciler applies the epoch")
+	}
 	nudge(ctx, pub, seeded, log)
 	// THE KEY IT WAS SEALED UNDER, read off the envelope: a `sealed` flag
 	// said `true` on every line, since nothing is stored unsealed.
@@ -300,12 +399,19 @@ func publishLocalActive(ctx context.Context, plane coord.Plane, pub queue.Publis
 	// The payload goes up with it. This node is telling the fleet to serve
 	// a revision only it holds, so the body has to travel or every peer
 	// converges on a pointer whose revision it cannot read.
-	// UNCONDITIONAL for the same reason as the seed. Two nodes booting at
-	// once may both decide to publish, and last-write-wins is the right
-	// answer there: each is offering the revision IT holds, both are
-	// legitimate, and every node converges on whichever landed. A
-	// compare-and-set would turn that into a boot-time failure to retry
-	// for nothing. It is the EDIT path that must not lose a write.
+	//
+	// UNCONDITIONAL, unlike a bootstrap seed's create-only write, because
+	// what it offers is a company somebody ACTIVATED here — an offline
+	// `crewlet config import`, which is the case this exists for, or what
+	// the fleet itself once pointed this node at — and it has just read
+	// that the fleet holds nothing newer. A seed proposes a first company
+	// from a file nobody activated, so it must not land over one that
+	// exists; this asserts one that was. Two nodes booting at once may both
+	// decide to publish, and last-write-wins is the right answer there:
+	// each is offering the revision IT holds, both are legitimate, and
+	// every node converges on whichever landed. A compare-and-set would
+	// turn that into a boot-time failure to retry for nothing. It is the
+	// EDIT path that must not lose a write.
 	//
 	// THE REVISION'S OWN ORIGIN goes up with it, never this node's: an
 	// offline `crewlet config import` is an operator's write that only
