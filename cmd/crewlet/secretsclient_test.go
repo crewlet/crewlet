@@ -15,10 +15,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/config"
+	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/httpx"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
@@ -699,8 +704,11 @@ func TestCLIClientsRideTheSharedTransport(t *testing.T) {
 // every stored secret and holds no value, and it used to share the bound of
 // one credential's answer: about 300 rows passed it, and every command that
 // resolves a company through a running node — they all start with the
-// listing — failed before reading one, blaming a credential. A credential's
-// answer keeps its own bound, since a clipped one would be worse than none.
+// listing — failed before reading one, blaming a credential. `crewlet secrets
+// rekey` counts the engine's keys from the same listing, and was refused with
+// it. A credential's answer keeps its own bound
+// ([secretsapi.RevealAnswerBytes]), since a clipped one would be worse than
+// none.
 func TestAListingOfHundredsOfSecretsIsReadWhole(t *testing.T) {
 	t.Parallel()
 	node := newFakeSecretsNode(t)
@@ -711,8 +719,8 @@ func TestAListingOfHundredsOfSecretsIsReadWhole(t *testing.T) {
 			`"updated_by_kind":"operator","source":"api"}`, i))
 	}
 	node.body = `{"secrets":[` + strings.Join(rows, ",") + `]}`
-	if len(node.body) <= maxSecretResponseBytes {
-		t.Fatalf("the premise: a listing of %d bytes is within one credential's bound", len(node.body))
+	if len(node.body) <= maxRowAnswerBytes {
+		t.Fatalf("the premise: a listing of %d bytes is within a row answer's bound", len(node.body))
 	}
 	listed, err := node.client(t).List(t.Context())
 	if err != nil {
@@ -721,11 +729,42 @@ func TestAListingOfHundredsOfSecretsIsReadWhole(t *testing.T) {
 	if len(listed) != len(rows) || listed[len(listed)-1].Name != "SEAT_TOKEN_1999" {
 		t.Errorf("listed %d rows, want all %d", len(listed), len(rows))
 	}
+	if _, err := node.client(t).EngineKeys(t.Context()); err != nil {
+		t.Errorf("the count a rekey reads was refused: %v", err)
+	}
 
-	node.body = `{"value":"` + strings.Repeat("x", maxSecretResponseBytes) + `"}`
+	node.body = `{"value":"` + strings.Repeat("x", secretsapi.RevealAnswerBytes("TOO_LONG")) + `"}`
 	if _, err := node.client(t).Get(t.Context(), "TOO_LONG"); err == nil ||
 		!strings.Contains(err.Error(), "a credential this long") {
 		t.Errorf("a reveal past one credential's bound = %v, want it refused as one", err)
+	}
+}
+
+// A REKEY OF THOUSANDS OF SECRETS IS READ WHOLE. Its answer names every row it
+// moved, so it grows with the company as the listing does, and it was held to
+// the bound every one-value answer shared (68 KiB): a rotation the node had
+// finished came back to `crewlet secrets rekey` as a failure.
+//
+// Mutation: read the rekey to the row bound, and its answer is refused.
+func TestARekeyOfThousandsOfSecretsIsReadWhole(t *testing.T) {
+	t.Parallel()
+	node := newFakeSecretsNode(t)
+	var names []string
+	for i := range 5000 {
+		names = append(names, fmt.Sprintf(`"SEAT_TOKEN_%04d"`, i))
+	}
+	node.body = `{"moved":[` + strings.Join(names, ",") +
+		`],"engine_keys_moved":0,"identity":null}`
+	if len(node.body) <= maxRowAnswerBytes {
+		t.Fatalf("the premise: a rekey answer of %d bytes is within a row answer's bound",
+			len(node.body))
+	}
+	moved, err := node.client(t).Rekey(t.Context(), "k2")
+	if err != nil {
+		t.Fatalf("a rekey that moved %d rows was refused: %v", len(names), err)
+	}
+	if len(moved.Moved) != len(names) || moved.Moved[len(moved.Moved)-1] != "SEAT_TOKEN_4999" {
+		t.Errorf("the rekey reported %d moved, want all %d", len(moved.Moved), len(names))
 	}
 }
 
@@ -802,5 +841,77 @@ func TestARefusedBatchFailsTheWholeRead(t *testing.T) {
 	}
 	if !refusedTheToken(err) {
 		t.Errorf("the node's refusal of the token was lost: %v", err)
+	}
+}
+
+// secretsNode is a real /secrets surface over a memory fleet, served the way a
+// node serves it to a Tier A token holding admin — so a case about what the
+// client reads back reads exactly what the node writes, escaping included.
+func secretsNode(t *testing.T) *secretsClient {
+	t.Helper()
+	sum := make([]byte, 32)
+	sum[0] = 1
+	cipher, err := secrets.NewCipher(secrets.Keyring{ActiveID: "k1",
+		Keys: map[string][]byte{"k1": sum}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc, err := secretsapi.New(secretsapi.Options{Fleet: coordmem.NewFleet(),
+		Cipher: cipher, ActiveKeyID: "k1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	if err := svc.Routes(mux); err != nil {
+		t.Fatal(err)
+	}
+	caller := iam.Principal{
+		ID:    uuid.NewSHA1(auth.TokenNamespace, []byte("ops")),
+		Login: iam.TokenLogin("ops"), Kind: iam.KindMachine,
+		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantAdmin},
+		ReauthAt: time.Now().Add(time.Hour),
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mux.ServeHTTP(w, r.WithContext(iam.WithPrincipal(r.Context(), caller)))
+	}))
+	t.Cleanup(server.Close)
+	client, err := newSecretsClient(tokenEnviron("ops-token"),
+		bootWithAPI(t, "127.0.0.1", 1, "ops-token"), server.URL, secretsList)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client
+}
+
+// A VALUE THE STORE TOOK COMES BACK, HOWEVER JSON SPELLS IT.
+//
+// Both reveals answer a value as a JSON string, which spells `&`, `<`, `>` and
+// every control byte as a six-byte escape — so the largest value the write
+// admits can come back six times as long. The single reveal was read to the
+// write's limit plus room for the JSON around it (68 KiB) and refused that
+// value as "a credential this long is not one this build stores":
+// `crewlet secrets get -reveal`, the break-glass read, could not hand back a
+// credential the store had taken.
+func TestTheLargestValueTheStoreTakesIsRevealedBothWays(t *testing.T) {
+	t.Parallel()
+	client := secretsNode(t)
+	for _, tc := range []struct{ name, value string }{
+		{"AMPERSANDS", strings.Repeat("&", secretsapi.MaxValueBytes)},
+		{"CONTROL_BYTES", strings.Repeat("\x01", secretsapi.MaxValueBytes)},
+	} {
+		if _, err := client.Set(t.Context(), tc.name, tc.value, secrets.Author{},
+			"", time.Time{}); err != nil {
+			t.Fatalf("set %s: %v", tc.name, err)
+		}
+		got, err := client.Get(t.Context(), tc.name)
+		if err != nil || got != tc.value {
+			t.Errorf("GET reveal of %s: %d bytes, %v; want the %d stored",
+				tc.name, len(got), err, len(tc.value))
+		}
+		values, err := client.Values(t.Context(), []string{tc.name})
+		if err != nil || values[tc.name] != tc.value {
+			t.Errorf("POST reveal of %s: %d bytes, %v; want the %d stored",
+				tc.name, len(values[tc.name]), err, len(tc.value))
+		}
 	}
 }

@@ -139,12 +139,19 @@ func (c *secretsClient) Set(ctx context.Context, name, value string, _ secrets.A
 //
 // `crewlet secrets get -reveal` is its one caller: a run reading the values a
 // command resolves asks for them together ([secretsClient.Values]).
+//
+// READ TO THE LENGTH THE ROUTE CAN ANSWER FOR THIS NAME
+// ([secretsapi.RevealAnswerBytes]), which is not the write's limit: the value
+// comes back as a JSON string, which spells each byte it escapes in six, so a
+// reader held to the stored length refused a value the store had taken.
 func (c *secretsClient) Get(ctx context.Context, name string) (string, error) {
 	var body struct {
 		Value string `json:"value"`
 	}
-	err := c.call(ctx, http.MethodGet,
-		"/secrets/"+url.PathEscape(name)+"?reveal=true", nil, &body)
+	err := c.callWithin(ctx, http.MethodGet, "/secrets/"+url.PathEscape(name)+"?reveal=true",
+		"", nil, &body, secretsapi.RevealAnswerBytes(name),
+		"a credential this long is not one this build stores, and a clipped one "+
+			"would be worse than none")
 	if err != nil {
 		return "", err
 	}
@@ -210,14 +217,21 @@ func (c *secretsClient) Unset(ctx context.Context, name string) (bool, error) {
 // names a different active key than the node's is an operator rekeying onto a
 // key the fleet will not be sealing with — silent success there would report
 // a completed rotation over rows sealed under something else.
+//
+// READ TO THE LISTING'S BOUND ([maxListingBytes]), not one row's: the answer
+// names every row the rekey moved, so it grows with the company as the listing
+// does. Held to the bound every one-value answer shared (68 KiB), a rotation
+// the node had finished was reported as a failure once its names passed it — a
+// few thousand of them.
 func (c *secretsClient) Rekey(ctx context.Context, activeKeyID string) (rotation, error) {
 	var body struct {
 		Moved      []string                     `json:"moved"`
 		EngineKeys int                          `json:"engine_keys_moved"`
 		Identity   *secretsapi.IdentityResealed `json:"identity"`
 	}
-	err := c.call(ctx, http.MethodPost,
-		"/secrets/rekey?key_id="+url.QueryEscape(activeKeyID), nil, &body)
+	err := c.callWithin(ctx, http.MethodPost,
+		"/secrets/rekey?key_id="+url.QueryEscape(activeKeyID), "", nil, &body, maxListingBytes,
+		"a rekey this long names more secrets than this build reads at once")
 	if err != nil {
 		return rotation{}, err
 	}
@@ -242,17 +256,18 @@ func (c *secretsClient) EngineKeys(ctx context.Context) (engineHeld, error) {
 }
 
 // call performs one request whose body, where it has one, is a credential, and
-// whose answer is at most one credential, and decodes it, or explains the
-// refusal.
+// whose answer is about one row — the author a write was stamped with, whether
+// an unset removed anything — read to [maxRowAnswerBytes], and decodes it, or
+// explains the refusal.
 //
 // OCTET-STREAM, because the body IS the credential: bytes, not a document.
 // Labelling it text/plain would invite a proxy to re-encode a value the vendor
 // will compare byte for byte.
 func (c *secretsClient) call(ctx context.Context, method, path string, body []byte, out any) error {
 	return c.callWithin(ctx, method, path, "application/octet-stream", body, out,
-		maxSecretResponseBytes,
-		"a credential this long is not one this build stores, and a clipped "+
-			"one would be worse than none")
+		maxRowAnswerBytes,
+		"no answer about one row is this long, and a clipped one would be worse "+
+			"than none")
 }
 
 // listing reads GET /secrets, which names every stored secret and holds no
@@ -288,10 +303,11 @@ func (c *secretsClient) callWithin(ctx context.Context, method, path, contentTyp
 			"-api names its address", c.base, err)
 	}
 	defer resp.Body.Close()
-	// BOUNDED, AND REFUSED PAST THE BOUND, by what the route returns: a
-	// small JSON object or one credential, whose value is capped by the same
-	// limit the write is, the values of one batch of names
-	// ([secretsapi.MaxRevealAnswerBytes]), or the listing ([maxListingBytes]).
+	// BOUNDED, AND REFUSED PAST THE BOUND, by the longest answer the route
+	// can give: one row's metadata ([maxRowAnswerBytes]), one credential as
+	// JSON spells it ([secretsapi.RevealAnswerBytes]), the credentials of one
+	// batch of names ([secretsapi.MaxRevealAnswerBytes]), or every row's name
+	// ([maxListingBytes]).
 	//
 	// The refusal is what the bound needs to be worth having: io.LimitReader
 	// stops at its cap and reports a clean EOF, so an over-long answer used
@@ -318,16 +334,22 @@ func (c *secretsClient) callWithin(ctx context.Context, method, path, contentTyp
 	return nil
 }
 
-// maxSecretResponseBytes bounds one answer.
+// maxRowAnswerBytes bounds an answer about one row, and the refusal of a route
+// that answers one: the author a write was stamped with, whether an unset
+// removed anything, and the engine's envelope for a refusal of either — each
+// well under a kibibyte. Sixty-four kibibytes is room for the error page a
+// proxy in front of the node answers in their place, so that its status still
+// reaches the operator.
 //
-// The write limit plus room for the JSON around it: the largest thing this
-// client ever reads back is a revealed credential, and one the node refused
-// to store cannot come back out of it.
-const maxSecretResponseBytes = (64 << 10) + (4 << 10)
+// NOT a credential's bound, which every route once shared: a revealed value
+// comes back as JSON spells it, up to six times its stored length, and is read
+// to its own ([secretsapi.RevealAnswerBytes]).
+const maxRowAnswerBytes = 64 << 10
 
-// maxListingBytes bounds the answer to GET /secrets.
+// maxListingBytes bounds an answer naming every row: GET /secrets, and the
+// names POST /secrets/rekey moved.
 //
-// NOT the credential bound above, which the listing used to share: a row is
+// NOT a credential's bound, which the listing used to share: a row is
 // some 224 bytes and a name, so a fleet of about 300 stored values passed it,
 // and every command that resolves a company through a running node — they
 // all start with the listing — failed before reading one, blaming a

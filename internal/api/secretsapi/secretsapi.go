@@ -129,6 +129,15 @@ const MaxRevealBodyBytes = MaxRevealNames << 10
 // of up to [MaxJSONValueBytes] and its punctuation, inside the envelope.
 const MaxRevealAnswerBytes = MaxRevealBodyBytes + MaxRevealNames*(MaxJSONValueBytes+8) + 64
 
+// RevealAnswerBytes is the longest answer `GET /secrets/{name}?reveal=true`
+// can give for name: the name and its value, each at the length JSON spells it
+// in — six bytes a byte at worst, the value's at [MaxJSONValueBytes] — inside
+// the envelope. A function of the name because nothing else bounds one: the
+// reader knows the name it asked for, and the value is the write's to bound.
+func RevealAnswerBytes(name string) int {
+	return 6*len(name) + 2 + MaxJSONValueBytes + 64
+}
+
 // Identity is the identity estate's half of a keyring rotation: the personal
 // values — names, addresses, second factors — the same keyring seals in rows
 // no store write can reach. The engine's `IdentityKeyring` is what a running
