@@ -215,7 +215,7 @@ func (f *Fetcher) counterpartyProfile(ctx context.Context, r Request) string {
 			// for a first interaction and not worth a line saying so.
 			continue
 		}
-		blocks = append(blocks, renderProfile(profile))
+		blocks = append(blocks, renderProfile(r.Boundary, profile))
 	}
 	// "\n\n", not "\n": each element is a MULTI-LINE block, and a single
 	// newline runs the second sender's opening line straight onto the end of
@@ -233,7 +233,17 @@ func (f *Fetcher) counterpartyProfile(ctx context.Context, r Request) string {
 // conversational context around it, so a list of traits with no name on it
 // tells the executor what somebody prefers without saying who, which is
 // worse than nothing, because it invites applying it to whoever is asking.
-func renderProfile(p learning.Profile) string {
+//
+// NEUTRALISED under fence, the turn's token (ADR-0040): the name is the one
+// the person chose and every trait is what the profiler's model concluded
+// from their words, so nothing here may open or close one of the turn's
+// fences.
+func renderProfile(fence provenance.Boundary, p learning.Profile) string {
+	return provenance.Neutralise(fence, profileText(p))
+}
+
+// profileText is [renderProfile]'s text before it is neutralised.
+func profileText(p learning.Profile) string {
 	var b strings.Builder
 	b.WriteString("Subject: " + firstNonEmpty(p.Subject.Label(), "(unknown)"))
 	if p.Subject.Platform != "" {
@@ -314,7 +324,7 @@ func (f *Fetcher) synthesizedSkills(ctx context.Context, r Request) (string, []s
 	bullets := make([]string, 0, len(skills)+1)
 	ids := make([]string, 0, len(skills))
 	for _, skill := range skills {
-		line := renderSkill(skill)
+		line := renderSkill(r.Boundary, skill)
 		if line == "" {
 			// A skill with no name renders nothing, so it was not
 			// offered and must not be reported as used.
@@ -334,15 +344,17 @@ func (f *Fetcher) synthesizedSkills(ctx context.Context, r Request) (string, []s
 		"before doing the work it covers.", ids
 }
 
-// renderSkill renders one skill as a menu line.
-func renderSkill(s learning.Skill) string {
+// renderSkill renders one skill as a menu line, its name and description
+// neutralised under b, the turn's token (ADR-0040): both are what the
+// synthesizer's model wrote after reading the turns it drew on.
+func renderSkill(b provenance.Boundary, s learning.Skill) string {
 	name := strings.TrimSpace(s.Name)
 	if name == "" {
 		return ""
 	}
-	line := "- **" + name + "**"
+	line := "- **" + provenance.Neutralise(b, name) + "**"
 	if description := collapse(s.Description); description != "" {
-		line += ": " + description
+		line += ": " + provenance.Neutralise(b, description)
 	}
 	if s.State == learning.SkillStale {
 		// MARKED, not hidden. The seat can still load it — loading is

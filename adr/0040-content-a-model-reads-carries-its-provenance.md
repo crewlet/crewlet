@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/provenance`
-- **Enforced-by:** `internal/provenance.TestAFenceCannotBeClosedByItsContent`, `internal/agent/builtin.TestEveryUntrustedReadIsFenced`, `internal/agent/builtin.TestEveryArtifactToolResultIsFenced`, `internal/engine.TestEveryWakeSurfaceFencesWhatSomebodyWrote`, `internal/engine.TestEveryPromptBuilderIsAWakeSurface`, `internal/engine.TestEveryWakeTypeFencesSomebodyElsesWords`, `internal/engine.TestTheTurnsAskIsFencedAsItsTriggerIs`, `internal/agent/prefetch.TestTheTurnStartJudgementsReadSomebodyElsesWordsFenced`, `internal/knowledge.TestRenderFencesEveryHitUnderItsBackendsLabel`, `internal/estate.TestAKnowledgeHitsLabelCrossesTheWire`, `internal/compact.TestARewriteReadsItsTextFencedUnderATokenOfItsOwn`, `internal/learning.TestAPastTurnsAskIsFencedAsWhoeverWroteIt`, `internal/agent/prefetch.TestAPastTurnsAskIsFencedWhereverItIsRead`, `internal/agent/builtin.TestQueryEpisodesFencesWhatAPastTurnWasAskedAsWhoeverWroteIt`, `internal/learning.TestEveryPostTurnWorkerReadsWhatItsTurnWasToldFenced`
+- **Enforced-by:** `internal/provenance.TestAFenceCannotBeClosedByItsContent`, `internal/agent/builtin.TestEveryUntrustedReadIsFenced`, `internal/agent/builtin.TestEveryArtifactToolResultIsFenced`, `internal/engine.TestEveryWakeSurfaceFencesWhatSomebodyWrote`, `internal/engine.TestEveryPromptBuilderIsAWakeSurface`, `internal/engine.TestEveryWakeTypeFencesSomebodyElsesWords`, `internal/engine.TestTheTurnsAskIsFencedAsItsTriggerIs`, `internal/agent/prefetch.TestTheTurnStartJudgementsReadSomebodyElsesWordsFenced`, `internal/knowledge.TestRenderFencesEveryHitUnderItsBackendsLabel`, `internal/estate.TestAKnowledgeHitsLabelCrossesTheWire`, `internal/compact.TestARewriteReadsItsTextFencedUnderATokenOfItsOwn`, `internal/learning.TestAPastTurnsAskIsFencedAsWhoeverWroteIt`, `internal/agent/prefetch.TestAPastTurnsAskIsFencedWhereverItIsRead`, `internal/agent/builtin.TestQueryEpisodesFencesWhatAPastTurnWasAskedAsWhoeverWroteIt`, `internal/learning.TestEveryPostTurnWorkerReadsWhatItsTurnWasToldFenced`, `internal/agent/prefetch.TestEveryBlockDefusesWhatItReads`, `internal/agent/builtin.TestWhatASeatRemembersReachesItDefused`
 - **Cost-when-tried:** before this record, a page body, a work item's comments, a project file and the chat thread handed to a turn all reached the model as plain text in a tool answer or a prompt block, with no boundary the text could not also write and nothing saying who wrote it or that it was data. Anybody who could write a page, comment on an item or speak in a thread a seat reads could address the seat in the voice of its instructions.
 - **Tag-status:** unreleased
 
@@ -71,7 +71,9 @@ or a practice note into the seat's memory — read what the turn was told the
 same way, each message under the label the turn read it under and the ask
 under the turn's record of it, under a token minted for that call and beside
 the standing sentence, because what they write the seat later reads as its
-own. A model that rewrites a text to fit a budget reads it the
+own — and what they wrote, wherever it is handed back to a seat (a memory, a
+trait, a skill, a past turn's account), is defused under the turn's token,
+since a model that read a fence can echo it. A model that rewrites a text to fit a budget reads it the
 same way, fenced under a token minted for that rewrite and labelled as its
 caller says, and its rewrite is defused before the caller places it. A tool that returns such text and does not
 go through the package fails a walk, and so does a wake surface or a kind of

@@ -135,7 +135,7 @@ func (f *Fetcher) personalMemory(ctx context.Context, r Request, vector turnVect
 	}
 	bullets := make([]string, 0, len(selected))
 	for _, entry := range selected {
-		bullets = append(bullets, renderMemory(entry))
+		bullets = append(bullets, renderMemory(r.Boundary, entry))
 	}
 	return joinBullets(bullets)
 }
@@ -277,8 +277,12 @@ func memoryFilterPrompt(r Request, candidates []learning.DiaryEntry) string {
 		// the filter could SEE, so a rule whose scope clause sat past the
 		// cut was judged on its opening and excluded — and the seat then
 		// behaved as if it had never been written.
+		//
+		// NEUTRALISED under the call's token: a memory is what a model
+		// wrote after reading other people's words, and no line of it may
+		// open or close the task's fence.
 		b.WriteString(strconv.Itoa(i) + ". " + memoryKindLabel(entry) +
-			collapse(entry.Content) + "\n")
+			provenance.Neutralise(token, collapse(entry.Content)) + "\n")
 	}
 	b.WriteString("\nRelevant indices (JSON array):")
 	return b.String()
@@ -316,9 +320,12 @@ func memoryKindLabel(entry learning.DiaryEntry) string {
 	return ""
 }
 
-// renderMemory renders one selected memory as a bullet.
-func renderMemory(entry learning.DiaryEntry) string {
-	content := collapse(entry.Content)
+// renderMemory renders one selected memory as a bullet, neutralised under b,
+// the turn's token (ADR-0040): a memory is what a post-turn model concluded
+// from other people's words, or what the seat noted mid-turn, and it is
+// shown beside the turn's fences, which nothing in it may open or close.
+func renderMemory(b provenance.Boundary, entry learning.DiaryEntry) string {
+	content := provenance.Neutralise(b, collapse(entry.Content))
 	if content == "" {
 		return ""
 	}
