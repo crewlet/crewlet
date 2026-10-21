@@ -3,6 +3,7 @@ package worklet
 import (
 	"cmp"
 	"slices"
+	"time"
 )
 
 // HOW A PERSON LEARNS THEY HAVE WORK.
@@ -39,9 +40,9 @@ import (
 // InboxMovement is one seat's inbox having moved in one committed batch on
 // this node.
 //
-// EXACTLY FOUR FIELDS, and a test holds the set: every one of them is an
-// identifier, and a field that carried content would be a read path the inbox
-// question's own authority never decided.
+// EXACTLY FIVE FIELDS, and a test holds the set: four identifiers and the
+// broker's instant, and a field that carried content would be a read path the
+// inbox question's own authority never decided.
 type InboxMovement struct {
 	// Handle is whose inbox moved.
 	Handle string `json:"handle"`
@@ -65,6 +66,16 @@ type InboxMovement struct {
 
 	// Reason is the one reason that notice reached them under.
 	Reason Reason `json:"reason"`
+
+	// At is the broker's own instant for the OLDEST record of the batch
+	// that moved this inbox — when the first of its notices was stored,
+	// which every node reads alike — and what the socket's push is timed
+	// from (internal/objectives' change visibility). The oldest because
+	// one push answers every record in the batch, and the person waited
+	// longest for the first of them. An instant, never content, and it
+	// crosses the live relay with the rest, so a peer's movement is timed
+	// from the same instant as this node's.
+	At time.Time `json:"at,omitzero"`
 }
 
 // inboxNote is one notice a batch wrote or deleted, until the commit is known.
@@ -72,6 +83,9 @@ type inboxNote struct {
 	record, handle, subject string
 	reason                  Reason
 	position                int64
+
+	// at is the broker's instant for the record that wrote or deleted it.
+	at time.Time
 
 	// removed is a notice the batch DELETED rather than wrote — a purge's
 	// ([Applier.forgetRecords]). It moves its recipient's inbox and adds
@@ -109,6 +123,9 @@ func (a *Applier) drainInbox() []InboxMovement {
 		}
 		if !n.removed {
 			m.UnreadDelta++
+		}
+		if !n.at.IsZero() && (m.At.IsZero() || n.at.Before(m.At)) {
+			m.At = n.at
 		}
 		// THE NEWEST BY POSITION, a tie broken on the record id: a map's
 		// iteration order is not an answer, and the same batch must

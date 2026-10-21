@@ -60,9 +60,12 @@ func TestACommittedBatchSaysWhoseInboxMoved(t *testing.T) {
 		t.Fatalf("a movement was announced before the commit: %v", got)
 	}
 	h.applier.Committed(context.Background())
+	// EACH CARRIES THE BROKER'S INSTANT for the record that moved it, which
+	// the socket's push is timed from.
+	stored := time.Unix(1_700_000_200, 0).UTC()
 	want := []worklet.InboxMovement{
-		{Handle: "bo", UnreadDelta: 1, Subject: "t-1", Reason: worklet.ReasonAssignee},
-		{Handle: "cy", UnreadDelta: 1, Subject: "t-1", Reason: worklet.ReasonWatcher},
+		{Handle: "bo", UnreadDelta: 1, Subject: "t-1", Reason: worklet.ReasonAssignee, At: stored},
+		{Handle: "cy", UnreadDelta: 1, Subject: "t-1", Reason: worklet.ReasonWatcher, At: stored},
 	}
 	if len(got) != 1 || !slices.Equal(got[0], want) {
 		t.Fatalf("the loud commit announced %v, want %v", got, want)
@@ -98,7 +101,8 @@ func TestACommittedBatchSaysWhoseInboxMoved(t *testing.T) {
 	}
 
 	// TWO NOTICES FOR ONE PERSON IN ONE BATCH are one movement of two,
-	// naming the newer.
+	// naming the newer and timed from the OLDER: one push answers both, and
+	// the person waited longest for the first.
 	second := taskRecord("t-2", worklet.OpCreate, newTask("t-2"), &worklet.Notify{
 		Kind: worklet.ChangeCreated, Snapshot: worklet.Snapshot{Key: "ENG-2", Assignee: "bo"},
 	})
@@ -107,8 +111,8 @@ func TestACommittedBatchSaysWhoseInboxMoved(t *testing.T) {
 		Kind: worklet.ChangeCreated, Snapshot: worklet.Snapshot{Key: "ENG-3", Assignee: "bo"},
 	})
 	third.Subject = worklet.TaskSubject("t-3")
-	for _, rec := range []worklet.MutationRecord{second, third} {
-		if _, err := h.apply(rec, time.Unix(1_700_000_300, 0).UTC()); err != nil {
+	for i, rec := range []worklet.MutationRecord{second, third} {
+		if _, err := h.apply(rec, time.Unix(1_700_000_300+int64(i)*50, 0).UTC()); err != nil {
 			t.Fatalf("create %s: %v", rec.Subject.ID, err)
 		}
 	}
@@ -116,8 +120,10 @@ func TestACommittedBatchSaysWhoseInboxMoved(t *testing.T) {
 	if len(got) != 1 || len(got[0]) != 1 {
 		t.Fatalf("one batch for one person announced %v, want one movement", got)
 	}
-	if m := got[0][0]; m.Handle != "bo" || m.UnreadDelta != 2 || m.Subject != "t-3" {
-		t.Errorf("the batch announced %+v, want bo moved by 2 with t-3 newest", m)
+	if m := got[0][0]; m.Handle != "bo" || m.UnreadDelta != 2 || m.Subject != "t-3" ||
+		!m.At.Equal(time.Unix(1_700_000_300, 0)) {
+		t.Errorf("the batch announced %+v, want bo moved by 2 with t-3 newest, timed "+
+			"from t-2's instant", m)
 	}
 }
 
@@ -166,10 +172,13 @@ func TestAPurgeSaysWhoseInboxItEmptied(t *testing.T) {
 		t.Fatalf("the purge left %d of the task's notices", left)
 	}
 	h.applier.Committed(context.Background())
+	// TIMED FROM THE PURGE, the record that moved every one of them — not
+	// from the create that wrote the notices it deleted.
+	purged := time.Unix(1_700_000_200, 0).UTC()
 	want := []worklet.InboxMovement{
-		{Handle: "bo", UnreadDelta: 0, Subject: "t-1", Reason: worklet.ReasonAssignee},
-		{Handle: "cy", UnreadDelta: 0, Subject: "t-1", Reason: worklet.ReasonWatcher},
-		{Handle: "lee", UnreadDelta: 1, Subject: "t-1", Reason: worklet.ReasonPurged},
+		{Handle: "bo", UnreadDelta: 0, Subject: "t-1", Reason: worklet.ReasonAssignee, At: purged},
+		{Handle: "cy", UnreadDelta: 0, Subject: "t-1", Reason: worklet.ReasonWatcher, At: purged},
+		{Handle: "lee", UnreadDelta: 1, Subject: "t-1", Reason: worklet.ReasonPurged, At: purged},
 	}
 	if len(got) != 1 || !slices.Equal(got[0], want) {
 		t.Fatalf("the purge announced %v, want %v — every inbox it emptied "+
@@ -201,19 +210,19 @@ func TestAnInboxMovementCarriesNoContent(t *testing.T) {
 	t.Parallel()
 	want := map[string]string{
 		"Handle": "handle", "UnreadDelta": "unread_delta",
-		"Subject": "subject", "Reason": "reason",
+		"Subject": "subject", "Reason": "reason", "At": "at,omitzero",
 	}
 	typ := reflect.TypeFor[worklet.InboxMovement]()
 	if typ.NumField() != len(want) {
-		t.Fatalf("an inbox movement has %d fields, want exactly %d identifiers",
-			typ.NumField(), len(want))
+		t.Fatalf("an inbox movement has %d fields, want exactly %d — four "+
+			"identifiers and the broker's instant", typ.NumField(), len(want))
 	}
 	for i := range typ.NumField() {
 		field := typ.Field(i)
 		tag, ok := want[field.Name]
 		if !ok {
 			t.Errorf("an inbox movement carries %s, which is not one of the four "+
-				"identifiers it may name", field.Name)
+				"identifiers or the instant it may name", field.Name)
 			continue
 		}
 		if got := field.Tag.Get("json"); got != tag {

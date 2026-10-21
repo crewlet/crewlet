@@ -565,6 +565,12 @@ type Options struct {
 	// else leaves out; `crewlet run` always wires it.
 	Rooms *Rooms
 
+	// Objectives is the node's service objective meter, which every
+	// committed change the socket pushes is timed into (change visibility,
+	// [stream.Objectives]). Nil records nothing; `crewlet run` always wires
+	// the engine's.
+	Objectives stream.Objectives
+
 	// Secrets serves /secrets, normally a secretsapi.Service: the fleet's
 	// credential store.
 	Secrets guardedMounter
@@ -773,9 +779,13 @@ func New(opts Options) (*App, error) {
 		},
 
 		// THE ARTIFACT ROOMS, every half or none ([Rooms]).
-		Rooms:      opts.Rooms.streamRooms(),
-		Metrics:    opts.Rooms.metrics(),
-		Objectives: opts.Rooms.objectives(),
+		Rooms:   opts.Rooms.streamRooms(),
+		Metrics: opts.Rooms.metrics(),
+		// THE NODE'S OBJECTIVE METER, whatever the company keeps: every
+		// committed change the socket pushes is timed into it, an inbox
+		// movement as much as a room's, and a meter carried by the rooms
+		// left the inbox untimed on every node that serves none.
+		Objectives: opts.Objectives,
 
 		Now:            now,
 		HealthInterval: opts.HealthInterval,
@@ -1379,7 +1389,7 @@ func (a *App) pushInboxMoved(moved []worklet.InboxMovement) {
 	for _, m := range moved {
 		a.stream.InboxChanged(stream.InboxChange{
 			Handle: m.Handle, UnreadDelta: m.UnreadDelta,
-			Subject: m.Subject, Reason: string(m.Reason),
+			Subject: m.Subject, Reason: string(m.Reason), Stored: m.At,
 		})
 	}
 }

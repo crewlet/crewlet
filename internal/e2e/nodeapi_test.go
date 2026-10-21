@@ -285,6 +285,7 @@ func wireAPI(
 		Inbox:        e,
 		Credentials:  e,
 		ChatLive:     chatLive,
+		Objectives:   e.Objectives(),
 		QueueBackend: backends.Queue.Backend(),
 		Sources: queries.Sources{
 			// THE ENGINE'S OWN fleet reader, as cmd/crewlet wires it, so

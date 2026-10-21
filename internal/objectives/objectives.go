@@ -254,13 +254,15 @@ var catalogue = []Objective{
 	{
 		Name:     ChangeVisibility,
 		Measures: "Change visibility",
-		Where: "the socket's push of a committed batch (`internal/api/stream`): an artifact's " +
-			"movement, a datastore's changed documents and a chat record, on every node " +
-			"pushing to a watching socket, whether from its own applier or a peer's relayed",
+		Where: "the socket's push of a committed batch (`internal/api/stream`): a seat's " +
+			"inbox movement, an artifact's movement, a datastore's changed documents and a " +
+			"chat record, on every node pushing to a watching socket, whether from its own " +
+			"applier or a peer's relayed",
 		GoodEvent: "the broker storing the record to its push to the sockets watching it",
 		Within:    ChangeVisibleWithin,
 		Target:    TargetChangeVisible,
-		Reason:    "past a second a collaborator stops reading the sheet or the conversation as live",
+		Reason: "past a second a collaborator stops reading the sheet, the conversation or " +
+			"their inbox as live",
 	},
 	{
 		Name:     WakeLatency,

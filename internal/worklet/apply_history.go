@@ -486,7 +486,7 @@ func (a *Applier) writeInbox(ctx context.Context, tx *sql.Tx, c applyContext,
 			a.noteInbox(inboxNote{
 				record: historyID(c), handle: candidate.Handle,
 				subject: c.subject().ID, reason: candidate.Reason,
-				position: c.packed,
+				position: c.packed, at: c.brokerAt,
 			})
 		}
 		written += n
