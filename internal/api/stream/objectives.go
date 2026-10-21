@@ -8,10 +8,11 @@ import (
 
 // Objectives is the node's service objective meter, as the socket's pushes
 // record into it: one CHANGE VISIBILITY event for every committed change this
-// node pushes to the sockets watching it — an artifact's movement
-// ([Service.ArtifactsMoved]), a datastore's changed documents
-// ([Service.ArtifactDataMoved]) and a chat record ([ChatHub.fan]) — timed from
-// the broker's own instant for the record to the push.
+// node pushes to the sockets watching it — a seat's inbox movement
+// ([Service.InboxChanged]), an artifact's movement ([Service.ArtifactsMoved]),
+// a datastore's changed documents ([Service.ArtifactDataMoved]) and a chat
+// record ([ChatHub.fan]) — timed from the broker's own instant for the record
+// to the push.
 //
 // AT THE PUSH, not at each socket's write: the push is the last thing the
 // engine does for every viewer at once, and what a socket's writer waits on

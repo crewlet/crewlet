@@ -86,3 +86,40 @@ func TestAPushedChangeIsTimedFromItsRecordWhenSomebodyIsShownIt(t *testing.T) {
 		t.Errorf("fred was pushed %d frames, want the three he was timed for", got)
 	}
 }
+
+// AN INBOX MOVEMENT IS TIMED FROM ITS RECORDS' INSTANT, AND ONLY WHEN A
+// SOCKET WATCHING THE SEAT WAS HANDED IT.
+//
+// An `inbox_changed` frame is how a person at the dashboard learns they have
+// work, and it is a committed change pushed to the sockets watching it like
+// any room's — so it is a change visibility event, from the broker's instant
+// for the oldest record that moved the inbox to the push. A seat nobody
+// watches was shown to nobody, and the re-read a switch of source asks every
+// watched inbox for is no committed change at all.
+//
+// Mutation: drop the timing from InboxChanged, and the watched movement is
+// not timed; time the push from its own clock, or time one nobody watches,
+// and the stamps are not these.
+func TestAnInboxMovementIsTimedFromItsRecordsWhenSomebodyWatches(t *testing.T) {
+	t.Parallel()
+	judge := &visibility{}
+	svc := buildService(t, stream.Options{Objectives: judge})
+	stored := time.Date(2026, 10, 18, 9, 0, 0, 0, time.UTC)
+	lead := stream.NewClient(reader)
+	svc.Hub().Register(lead)
+	svc.Hub().Watch(lead, "lead")
+
+	svc.InboxChanged(stream.InboxChange{Handle: "coder", UnreadDelta: 1, Subject: "t-1",
+		Reason: "assignee", Stored: stored.Add(time.Second)})
+	svc.InboxChanged(stream.InboxChange{Handle: "lead", UnreadDelta: 2, Subject: "t-2",
+		Reason: "assignee", Stored: stored.Add(2 * time.Second)})
+	svc.InboxReread()
+
+	if got, want := judge.seen(), []time.Time{stored.Add(2 * time.Second)}; !slices.Equal(got, want) {
+		t.Errorf("inbox pushes were timed from %v, want %v: the movement the lead's "+
+			"socket was shown, and neither the unwatched seat's nor the re-read", got, want)
+	}
+	if got := len(drain(lead)); got != 2 {
+		t.Errorf("the lead's socket was pushed %d frames, want its movement and the re-read", got)
+	}
+}
