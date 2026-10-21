@@ -403,6 +403,12 @@ reads the company's values through it, as `CREWLET_API_TOKEN` — one of its
 Tier A tokens carrying `admin`, since that read is the node's break-glass
 reveal and refuses a machine token. See
 [where a command reads the company's values](../reference/cli.md#where-a-command-reads-the-companys-values).
+A running engine reads the tokens at its next apply and not before, so a run
+that minted one says what is left on its `Next:` line: for `-secret-store`,
+re-activating the current revision (`POST /config/reload` to a node that is
+up). Where the block itself is new to the running company, the
+`crewlet config import` that applies it is that apply. A re-run that kept
+every token prints no `Next:` line.
 
 For every Mattermost-enabled agent seat the command:
 

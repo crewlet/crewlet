@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/slack"
 )
 
@@ -217,9 +218,12 @@ func printSlackPlan(w io.Writer, plans []slack.SeatPlan, ledger *slack.Ledger, l
 	printNotes(w, notes)
 }
 
-// printSlackResult renders what a run did.
-func printSlackResult(w io.Writer, res *slack.Result, ledgerPath string, sink interface{ Describe() string }) {
+// printSlackResult renders what a run did, and — where it recorded a value a
+// running engine does not hold yet — what has to happen for the engine to
+// read it ([printNextStep]).
+func printSlackResult(w io.Writer, res *slack.Result, ledgerPath string, sink provision.TokenSink) {
 	fmt.Fprintf(w, "\nRecorded in %s; app ledger in %s.\n", sink.Describe(), ledgerPath)
+	printNextStep(w, res.Recorded, sink)
 	// SAID EVERY RUN, because the ledger holds client secrets Slack
 	// serves once and an operator who commits it has published them.
 	fmt.Fprintf(w, "%s holds app client secrets — keep it out of version control.\n",

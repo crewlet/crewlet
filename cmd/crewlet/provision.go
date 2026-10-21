@@ -655,13 +655,19 @@ func runMattermostProvision(environ config.Source, args []string, stdout, stderr
 	if err != nil {
 		return err
 	}
-	printChatResult(stdout, res, sink.Describe())
+	printChatResult(stdout, res, sink)
 	return nil
 }
 
 // printChatResult renders what a Mattermost run did.
-func printChatResult(w io.Writer, res *mattermost.Result, where string) {
-	fmt.Fprintf(w, "\nRecorded in %s.\n", where)
+//
+// WITH THE NEXT STEP, as GitLab's report has it ([printNextStep]): a token
+// minted into the secret store reaches a running engine at its next apply and
+// not before, and a report that stopped at "Recorded in the encrypted secret
+// store" read as finished while every new bot stayed offline.
+func printChatResult(w io.Writer, res *mattermost.Result, sink provision.TokenSink) {
+	fmt.Fprintf(w, "\nRecorded in %s.\n", sink.Describe())
+	printNextStep(w, res.Recorded, sink)
 	if len(res.Created) > 0 {
 		fmt.Fprintf(w, "Created %d bot(s): %s\n",
 			len(res.Created), strings.Join(res.Created, ", "))

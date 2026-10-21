@@ -2193,8 +2193,11 @@ such as two sandbox setup steps of one name a newer peer admitted, reloads: that
 is how a credential rotation still reaches a company carrying one. Its
 answer lists each violation as an `admission` warning.
 
-The command-line equivalent is [`crewlet config activate <UUID>`](cli.md#crewlet-config-activate)
-naming the revision that is already current.
+On a **stopped** node the same gesture is
+[`crewlet config activate <UUID>`](cli.md#crewlet-config-activate) naming the
+revision that is already current. It opens the node's own store, so it cannot
+run beside that node's engine, and the node publishes the activation at its
+next start; a running fleet takes this route.
 
 **Open on a managed document.** A reload changes no byte of the company, so
 [`api.auth.company_writers`](../concepts/configuration.md#managed-configuration)

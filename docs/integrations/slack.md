@@ -125,15 +125,15 @@ For every Slack-enabled agent seat (a role whose `integrations.slack` credential
 
 **One seat failing does not cost the others.** A mistyped code paste or a refused manifest is recorded against that handle, the remaining seats still provision, and the command exits non-zero naming what failed. Everything completed is durable — the ledger is written after every mutation — so re-running resumes rather than starting over.
 
-Afterwards: invite each bot to its channels (`/invite @handle`) and restart `crewlet run` so the engine reads the new credentials.
+Afterwards: invite each bot to its channels (`/invite @handle`), and do what the run's `Next:` line says so the engine reads the new credentials — with `-secret-store`, re-activate the current revision on a running node (`POST /config/reload`), or apply the company document that adds the seats' blocks (`crewlet config import`), since an apply is when the engine reads its secret store; with `-env-file`, source the file into the engine's environment and restart it. The line is printed only when the run recorded a value a running engine does not hold yet: a re-run that kept every app has nothing to say.
 
-> **A bot token carries only the scopes it was minted with.** Pushing a new manifest does not give an existing token a new scope — the app has to be installed again, which is what `-reinstall` is for. It is destructive on its own: the new install revokes the token every running node is currently authenticating with, so plan the restart that follows it.
+> **A bot token carries only the scopes it was minted with.** Pushing a new manifest does not give an existing token a new scope — the app has to be installed again, which is what `-reinstall` is for. It is destructive on its own: the new install revokes the token every running node is currently authenticating with, so plan the step the run's `Next:` line names straight after it — a reload with `-secret-store`, a restart with `-env-file` or `-print`.
 
 ### Where the secrets go
 
 The same three-way choice every provisioning command in Crewlet takes, and there is **no default** — a run with nowhere to put what it mints would create live credentials and print none of them:
 
-- `-secret-store` — the node's [encrypted secret store](../concepts/secret-store.md). The running engine rebuilds its resolver on apply, so re-activate the current revision afterwards ([`crewlet config activate`](../reference/cli.md#crewlet-config-activate)).
+- `-secret-store` — the fleet's [encrypted secret store](../concepts/secret-store.md). The running engine rebuilds its resolver on apply, so re-activate the current revision afterwards with `POST /config/reload` to a node that is up — [`crewlet config activate`](../reference/cli.md#crewlet-config-activate) opens this node's store, so it runs only while the engine is stopped, when the next start reads the store anyway.
 - `-env-file PATH` — a `.env` file, which then has to be sourced and the engine restarted.
 - `-print` — stdout, for moving the values into a password manager or a deployment system this binary knows nothing about.
 
