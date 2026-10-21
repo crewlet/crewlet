@@ -158,6 +158,14 @@ type Refusal struct {
 	Grants []string `json:"grants,omitempty"`
 	// Detail is the route's own account of the refusal, for the model only.
 	Detail string `json:"-"`
+	// Said is the route's `detail` where the route marked it as written for a
+	// person, by telling the tool's own sentence beside it in process, never
+	// on the answer (internal/assistant/exec's Response.ModelDetail): a
+	// refusal in the words internal/caveat's refusal catalog wrote for a
+	// person (ADR-0060). Empty for every other refusal, whose detail is the
+	// model's. Never serialised: the assistant decides once whether a person
+	// reads it (internal/assistant/cards.PersonRefusal).
+	Said string `json:"-"`
 }
 
 // ForModel is the refusal as the model reads it: the route's own account where

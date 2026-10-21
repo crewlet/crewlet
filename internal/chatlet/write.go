@@ -275,13 +275,13 @@ var (
 	ErrNotFound = errors.New("chatlet: no such record")
 
 	// ErrNameTaken reports a channel name the company already holds.
-	ErrNameTaken = errors.New("chatlet: that channel name is taken")
+	ErrNameTaken = errors.New("chatlet: another room already has that name")
 
 	// ErrRoomExists reports a room whose own id is already claimed, which
 	// is a DIRECT conversation's create and nothing else: a named room's
 	// create contends for its address, and answering "that room exists"
 	// for one would name an object nobody asked about.
-	ErrRoomExists = errors.New("chatlet: that conversation already exists")
+	ErrRoomExists = errors.New("chatlet: that conversation is already open")
 
 	// ErrConflict reports a write that lost its race too many times.
 	ErrConflict = errors.New("chatlet: the room kept changing under this write")
@@ -289,7 +289,7 @@ var (
 	// ErrArchived reports a room that takes no new messages: a post or a
 	// reply. An edit, a delete and a reaction are still taken there — see
 	// the head of this file for why an archive closes nothing else.
-	ErrArchived = errors.New("chatlet: that room is archived")
+	ErrArchived = errors.New("chatlet: this room is archived")
 
 	// ErrReactionsFull reports a reaction that would put a
 	// [MaxReactionEmoji] + 1st distinct emoji on a message. Decided by the
@@ -300,7 +300,7 @@ var (
 	// the same emoji lands the moment somebody takes one off, and only then.
 	// It was a field refusal of `emoji`, which told a caller to send another
 	// emoji — the one call that is refused the same way.
-	ErrReactionsFull = errors.New("chatlet: that message carries all the emoji it may")
+	ErrReactionsFull = errors.New("chatlet: this message has all the emoji it can")
 
 	// ErrForbidden reports a gesture this actor may not make.
 	ErrForbidden = errors.New("chatlet: that is not this actor's to do")
@@ -325,6 +325,17 @@ var (
 	ErrNoActivation = errors.New("chatlet: a unit room's chart must name the " +
 		"instant its configuration was activated")
 )
+
+// archivedRoom is the sentence a post into an archived room is refused with:
+// what refuses it, and [reopenRoom].
+const archivedRoom = "this room is archived, so it takes no new messages. " + reopenRoom
+
+// reopenRoom is who changes an archived room, said at the write and at the
+// verdict alike: the archive's own relation (authz's chat.channel.archive —
+// the room's creator, the lead of the unit whose room it is or of a unit above
+// it, or an administrator), named because a room has no owner of its own a
+// person could be sent to.
+const reopenRoom = "Whoever created it, its team's lead or an administrator can reopen it"
 
 // Actor is who is making a write.
 //
@@ -1882,11 +1893,11 @@ func (s *Store) post(ctx context.Context, actor Actor, channelID, replyTo string
 			}
 			out = room
 			if room.ArchivedAt != nil {
-				return statelog.Decision{}, fmt.Errorf("%w: %s was archived "+
-					"on %s — every word of it is still readable and it takes "+
-					"no new messages; reopen it before posting",
-					ErrArchived, room.ID,
-					room.ArchivedAt.UTC().Format(time.RFC3339))
+				// EVERY WORD OF IT IS STILL READABLE; it takes nothing
+				// new until somebody reopens it, and who may is the
+				// archive's own relation (authz's chat.channel.archive).
+				return statelog.Decision{}, fmt.Errorf("%w: %s", ErrArchived,
+					archivedRoom)
 			}
 			held, err := readMembersTx(ctx, tx, room.ID)
 			if err != nil {
@@ -2547,7 +2558,9 @@ func (s *Store) publish(ctx context.Context, req statelog.Request) (statelog.Res
 		return result, nil
 	case errors.Is(err, statelog.ErrExists):
 		if ObjectKind(req.Subject.Kind) == KindChannelName {
-			return result, fmt.Errorf("%w: %s", ErrNameTaken, req.Subject.ID)
+			// THE ROOM THAT HAS IT is often the one meant.
+			return result, fmt.Errorf("%w: %s. Open that room, or pick another name",
+				ErrNameTaken, req.Subject.ID)
 		}
 		return result, fmt.Errorf("%w: %s", ErrRoomExists, req.Subject.ID)
 	case errors.Is(err, statelog.ErrConflict):

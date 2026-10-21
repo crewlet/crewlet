@@ -265,8 +265,10 @@ func (w *Writer) RestoreTask(ctx context.Context, opID, id, project string,
 		return result, err
 	}
 	if live && len(removedWith) == 0 {
-		return result, fmt.Errorf("worklet: task %s is not in the trash and "+
-			"nothing is in the trash with it: %w", id, ErrNothingToRestore)
+		// THE TASK'S STATE, said to the person a screen shows it to beside
+		// the task, so its id adds nothing.
+		return result, fmt.Errorf("%w: this task isn't in the trash, and nothing "+
+			"went in with it", ErrNothingToRestore)
 	}
 	for i, descendant := range removedWith {
 		var already bool

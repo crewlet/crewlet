@@ -358,7 +358,11 @@ func refusal(err error, subject statelog.Subject) error {
 	}
 	switch {
 	case errors.Is(err, statelog.ErrExists):
-		return fmt.Errorf("%w: %s", ErrTitleTaken, subject.ID)
+		// NOT THE SUBJECT: a title's is its container and a digest of the
+		// title, which says nothing to the person reading this beside the
+		// title they typed. The page that holds it is often the one meant.
+		return fmt.Errorf("%w. Open that page and edit it, or pick another title",
+			ErrTitleTaken)
 	case errors.Is(err, statelog.ErrConflict):
 		// The retry bound lives in the framework, which is where the
 		// rounds are counted; what does not live there is that a page is
@@ -449,7 +453,7 @@ var (
 	ErrNotFound = errors.New("doclet: no such record")
 
 	// ErrTitleTaken reports a title another page in the container holds.
-	ErrTitleTaken = errors.New("doclet: that title is taken in this container")
+	ErrTitleTaken = errors.New("doclet: a page in this space already has that title")
 
 	// ErrStaleVersion reports a save against a version that has moved.
 	ErrStaleVersion = errors.New("doclet: the page has changed since it was read")

@@ -368,12 +368,13 @@ func (w *Writer) WritePins(ctx context.Context, opID, handle string,
 		// leave does not until something is unpinned.
 		switch {
 		case len(views) > MaxPinnedViews:
-			return refusedByState("%s would pin %d views and the maximum "+
-				"is %d — a strip where everything is first has no first; "+
-				"unpin one first", named, len(views), MaxPinnedViews)
+			// A STRIP WHERE EVERYTHING IS FIRST HAS NO FIRST, which is
+			// what the cap is for.
+			return refusedByState("that would make %d pinned views for %s, "+
+				"and %d is the most. Unpin one first", len(views), named, MaxPinnedViews)
 		case len(favorites) > MaxFavorites:
-			return refusedByState("%s would star %d things and the maximum "+
-				"is %d; unstar one first", named, len(favorites), MaxFavorites)
+			return refusedByState("that would make %d starred things for %s, "+
+				"and %d is the most. Unstar one first", len(favorites), named, MaxFavorites)
 		}
 		post.PinnedViews, post.Favorites = views, favorites
 		return nil

@@ -101,10 +101,13 @@ func (e *TagClash) Error() string { return "worklet: " + e.sentence() }
 // Unwrap classes the clash as the collision it is.
 func (e *TagClash) Unwrap() error { return ErrTaken }
 
+// sentence names the tag that holds the label and the two ways past it. Two
+// tags a person cannot tell apart split the work between them at random, which
+// is the whole rule, so it is the remedy rather than the reason that is said.
 func (e *TagClash) sentence() string {
-	return fmt.Sprintf("%s already has a tag %s labelled %q — two tags a "+
-		"person cannot tell apart split the work between them at random",
-		e.Project, e.Other.Slug, e.Other.Label)
+	return fmt.Sprintf("%s already has a tag labelled %q (%s). Use that tag if "+
+		"it means the same, or give %s a label of its own", e.Project,
+		e.Other.Label, e.Other.Slug, e.Slug)
 }
 
 // TagsFull is an add refused because the project already keeps
@@ -122,9 +125,8 @@ func (e *TagsFull) Error() string { return "worklet: " + e.sentence() }
 func (e *TagsFull) Unwrap() error { return ErrState }
 
 func (e *TagsFull) sentence() string {
-	return fmt.Sprintf("%s already has %d tags, which is the most a project "+
-		"keeps — archive what is no longer filed under before declaring more",
-		e.Project, MaxTagsPerProject)
+	return fmt.Sprintf("%s already has %d tags, the most a project can. "+
+		"Archive one it no longer files under first", e.Project, MaxTagsPerProject)
 }
 
 // TagAuthority is what a caller may do to a tag set.

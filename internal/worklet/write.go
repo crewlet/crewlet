@@ -220,6 +220,40 @@ func refusedByState(format string, args ...any) error {
 	return &Refusal{Mark: ErrState, Err: fmt.Errorf(format, args...)}
 }
 
+// inTheTrash is the refusal of a gesture on a task in the trash — the task's
+// state, which a restore changes — naming who put it there and what to do
+// before the gesture ("moving it"), or before anything where before is empty.
+//
+// WRITTEN FOR THE PERSON WHO READS IT, and a model reads it as well: it used to
+// name the task by its id and the removal by its RFC 3339 instant, neither of
+// which a screen showing the refusal beside the task has any use for.
+func inTheTrash(task Task, before string) error {
+	restore := "Restore it first"
+	if before != "" {
+		restore = "Restore it before " + before
+	}
+	if task.Removed == nil || task.Removed.By == "" {
+		return refusedByState("this task is in the trash. %s", restore)
+	}
+	return refusedByState("this task is in the trash, put there by %s. %s",
+		task.Removed.By, restore)
+}
+
+// unarchiveProject is who changes an archived project, said wherever a gesture
+// meets one: the archive's own relation (authz's work.project.archive, the
+// project's lead or an administrator), because "unarchive it first" told a
+// person to do what most people reading it may not.
+const unarchiveProject = "Its lead or an administrator can unarchive it"
+
+// nameOf is how a refusal names a task other than the one it is about: its
+// key, or its id where it has none yet.
+func nameOf(task Task) string {
+	if task.Key != "" {
+		return task.Key
+	}
+	return task.ID
+}
+
 // forbidden is [invalid] for a write that is not this actor's to make, marked
 // [ErrForbidden]. The sentence names who may.
 func forbidden(format string, args ...any) error {
@@ -977,10 +1011,7 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 				// removal an entirely local decision with no walk
 				// behind it. Asked before anything about a new parent,
 				// because it is the answer whatever the parent is.
-				return statelog.Decision{}, refusedByState("task %s was "+
-					"removed by %s at %s; restore it first",
-					id, current.Removed.By,
-					current.Removed.At.Format(time.RFC3339))
+				return statelog.Decision{}, inTheTrash(current, "")
 			}
 			if patch.Parent != nil {
 				// A TASK A MOVE HAS NOT CARRIED KEEPS ITS PLACE until it

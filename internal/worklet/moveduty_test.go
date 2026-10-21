@@ -212,7 +212,7 @@ func TestAMoveRefusesASubtreeWithATaskInTheTrash(t *testing.T) {
 			end := r.logEnd(t)
 			_, err := r.writer.MoveTaskToProject(t.Context(),
 				statelog.NewOpID(time.Now(), "move"), "m-root", "OPS", nil)
-			if err == nil || !strings.Contains(err.Error(), tc.want) {
+			if err == nil || !strings.Contains(strings.ToLower(err.Error()), tc.want) {
 				t.Fatalf("the move = %v, want a refusal saying %q", err, tc.want)
 			}
 			if got := r.logEnd(t); got != end {

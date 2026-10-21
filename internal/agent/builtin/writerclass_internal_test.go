@@ -11,6 +11,7 @@ import (
 	"path"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -460,6 +461,58 @@ func TestNoDomainRefusalReadsAsAGoError(t *testing.T) {
 			t.Errorf("%v is told in the deciding domain's words as %q (%v)", err, said, ok)
 		}
 	}
+}
+
+// A STATE OR A COLLISION IS WORDED FOR A PERSON: every error each native
+// domain declares whose meaning is the object's state, a lost race or a
+// collision, as [WriterSentence] words it, carries no em dash, no snake_case
+// name outside backticks (a tool's, an argument's, a code's) and no Go package
+// prefix. The words are a person's, though a person's act route and human
+// write surface answer these at ADR-0060's floor rather than in them, and a
+// tool's fallback tells them to a model ([domainRefusal]). The tools' own
+// sentences for the same refusals are a model's and are held to nothing here.
+//
+// Mutation: tell a lost race in the tracker's tool words again, or put an em
+// dash back in a domain's state sentence, and a row goes red.
+func TestAStateOrACollisionIsWordedForAPerson(t *testing.T) {
+	t.Parallel()
+	snake := regexp.MustCompile(`\b[a-z]+_[a-z_]+\b`)
+	for _, domain := range slices.Sorted(maps.Keys(domainErrors)) {
+		for _, name := range slices.Sorted(maps.Keys(domainErrors[domain])) {
+			row := domainErrors[domain][name]
+			switch row.means {
+			case objectState, lostRace, taken:
+			default:
+				continue
+			}
+			said, ok := WriterSentence(row.err)
+			if !ok {
+				t.Errorf("%s.%s is a refusal no domain words", domain, name)
+				continue
+			}
+			prose := outsideBackticks(said)
+			switch {
+			case strings.Contains(said, "—"):
+				t.Errorf("%s.%s is told with an em dash: %s", domain, name, said)
+			case snake.MatchString(prose):
+				t.Errorf("%s.%s names %q in words for a person: %s", domain, name,
+					snake.FindString(prose), said)
+			case strings.Contains(said, ": ") && strings.HasSuffix(strings.SplitN(said, ": ", 2)[0], domain):
+				t.Errorf("%s.%s opens with its package: %s", domain, name, said)
+			}
+		}
+	}
+}
+
+// outsideBackticks is text with every backticked span taken out: a value a
+// sentence names on purpose is marked as one.
+func outsideBackticks(text string) string {
+	parts := strings.Split(text, "`")
+	var prose strings.Builder
+	for i := 0; i < len(parts); i += 2 {
+		prose.WriteString(parts[i])
+	}
+	return prose.String()
 }
 
 // namedFor is why an error's NAME and the meaning its row states disagree, or

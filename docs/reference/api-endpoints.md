@@ -6071,7 +6071,11 @@ surface](#the-human-write-surface) answers with too. The transport's own codes:
 | `starting` | `503` | This node is [still starting](#while-a-node-is-starting): its listener is bound and the surface that serves this route is not up yet; `Retry-After: 10` |
 
 And the tool's own refusal, carrying its person's words as `detail` where it
-has them:
+has them, never the tool's sentence, which is written for a model and names
+the tool to call next. A `conflict` or an `exists` a native domain decided (a
+room archived, an item in the trash, a label another tag carries, a write that
+lost its race) has none yet, so its code's own `message` stands alone: read the
+object again to see what refused the change. Its class decides its status:
 
 | `error` | Status |
 |---|---|
@@ -6273,7 +6277,7 @@ for one; otherwise its `message`, the code's own sentence, stands alone
 | `403` | `unauthorized` / `step_up_required` | The authority table refused, or the verb needs a fresher proof | `reason` and `grants` (or the window), and the verb in `action` where the route decided it itself |
 | `403` | `forbidden` | The domain forbids this caller the gesture, such as rewriting somebody else's remark | `detail` in a person's words, where the refusal has them |
 | `404` | `not_found` | The item, page or comment does not exist — or it was purged | |
-| `409` | `stale_version`, `conflict`, `exists`, `reassignment_budget`, `inbox_full`, … | Somebody changed it after you read it (a stale `if_match` or `base_version` in the body, a title taken, a race lost), or the object is in a state that refuses it: archived, frozen in the trash, its contents at their cap ([which class a refusal is](#which-class-a-refusal-is)) | `message`: read it again, or change what is in the way |
+| `409` | `stale_version`, `conflict`, `exists`, `reassignment_budget`, `inbox_full`, … | Somebody changed it after you read it (a stale `if_match` or `base_version` in the body, a race lost), or a name it gives is another object's already (a title, a room's name, a tag's label: `exists`), or the object is in a state that refuses it: archived, frozen in the trash, its contents at their cap ([which class a refusal is](#which-class-a-refusal-is)) | `message`: read it again, or change what is in the way; and `detail` in a person's words, where the refusal has them (a `conflict` or an `exists` a native domain decided has none yet) |
 | `412` | `version_moved` | The version the request's `If-Match` header named is not the one it holds: the same refusal as a stale `if_match` in the body, answered as HTTP answers a precondition that failed (RFC 9110 §13.1.1), as a project file's and an artifact's are | `message`: read it again and decide again |
 | `409` | `invalid_input` | The `Idempotency-Key` already names a write to another object | send it under a new key |
 | `409` | `reader_changed` | The request names, in `X-Crewlet-Reader`, a principal its credential is not, and the guard refused it before it ran | nothing; ask `GET /auth/session` who the credential is — see [Auth](#routes) |
@@ -7785,14 +7789,19 @@ asked, and a card is built by the engine from the route's own answer.
 
 A step or a card a request was refused on carries the refusal as a person
 reads it, `{code, message, hint?, reason?, grants?}`. `message` is the
-engine's sentence for that kind of refusal, never the route's `detail`, which
-names tools and fields and goes to the model alone: where the [authority
-table](#which-permission-a-route-needs) refused, the sentence the envelope
-says for the rule its `reason` names; otherwise one chosen by the code and
-the status. `hint` is the engine's own next step where it has one. `reason`
-and `grants` (the rule that refused, and the permissions any one of which
-would have admitted you) are there where the authority table refused, and
-the grants alone never say whether access is the way past: a
+engine's sentence for that kind of refusal, never a `detail` the route wrote
+for a model, which names tools and fields and goes to the model alone: where
+the [authority table](#which-permission-a-route-needs) refused, the sentence
+the envelope says for the rule its `reason` names; where the route answered
+the refusal in a person's words (its `detail`, ADR-0060), those words;
+otherwise one chosen by the code, and by the status for a code with
+none of its own. A `409` is a race only where its code is one
+(`stale_version`, `version_moved`, `revision_advanced`, `proposal_stale`,
+`stale`): the state of what a write is about, such as `artifact_trashed` or
+`quota_exceeded`, says what it is. `hint` is the engine's own next step where
+it has one. `reason` and `grants` (the rule that refused, and the permissions
+any one of which would have admitted you) are there where the authority table
+refused, and the grants alone never say whether access is the way past: a
 `step_up_required` refusal names the grants that admitted you.
 
 | Status | Code | Meaning |
