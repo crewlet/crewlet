@@ -981,9 +981,9 @@ func TestRecallShowsWhatAPastTurnWasAskedAndDidBesideItsLabel(t *testing.T) {
 		}}}},
 		Embed: embeds,
 	}, request(t)).EpisodeRecall
-	want := "- Woken by: Message from Ana: Slack message _(outcome: done)_\n" +
-		"  Asked: The staging deploy keeps failing.\n" +
-		"  What it did: Rolled staging back to v41 and posted the runbook fix in #ops."
+	want := "- woken by: Message from Ana: Slack message (outcome: done)\n" +
+		"  asked: The staging deploy keeps failing.\n" +
+		"  what it did: Rolled staging back to v41 and posted the runbook fix in #ops."
 	if got != want {
 		t.Fatalf("recall =\n%s\nwant\n%s", got, want)
 	}
@@ -1029,7 +1029,7 @@ func TestAnAccountNoModelCanCondenseIsNamedNotCut(t *testing.T) {
 		}}}},
 		Embed: embeds,
 	}, request(t)).EpisodeRecall
-	if strings.Contains(got, "OPENING-") || !strings.Contains(got, "What it did: (") ||
+	if strings.Contains(got, "OPENING-") || !strings.Contains(got, "what it did: (") ||
 		!strings.Contains(got, "not shown") {
 		t.Fatalf("recall = %q, want the account named by its size", got)
 	}
@@ -1116,7 +1116,7 @@ func TestTheEpisodeSummaryReadsTheAccountsWholeAndPaysNoRewrite(t *testing.T) {
 		Models:  models{provider: failing},
 		Compact: compact.New(models{provider: rewriter}, compact.NewCache()),
 	}, request(t)).EpisodeRecall
-	if !strings.Contains(got, "What it did: fixed the cache key") || strings.Contains(got, "OPENING-") {
+	if !strings.Contains(got, "what it did: fixed the cache key") || strings.Contains(got, "OPENING-") {
 		t.Fatalf("after a failed summary, recall = %q, want the condensed bullet", got)
 	}
 }
@@ -1175,7 +1175,7 @@ func TestTheEpisodeBlockHoldsItsSummaryAndItsRewritesToOneDeadline(t *testing.T)
 		SummarizeEpisodes: true, Models: models{provider: summary},
 		Compact: compact.New(models{provider: rewrites}, compact.NewCache()),
 	}, request(t)).EpisodeRecall
-	if !strings.Contains(got, "What it did: condensed") {
+	if !strings.Contains(got, "what it did: condensed") {
 		t.Fatalf("after a failed summary, recall = %q, want the condensed bullets", got)
 	}
 	asked, rewritten := summary.seen(), rewrites.seen()
