@@ -169,6 +169,7 @@ var sentinels = []sentinel{
 	{"artifactsdomain.ErrConflict", artifactsdomain.ErrConflict},
 	{"artifactsdomain.ErrInvalid", artifactsdomain.ErrInvalid},
 	{"artifactsdomain.ErrLabelTaken", artifactsdomain.ErrLabelTaken},
+	{"artifactsdomain.ErrLabelsFull", artifactsdomain.ErrLabelsFull},
 	{"artifactsdomain.ErrNotFound", artifactsdomain.ErrNotFound},
 	{"artifactsdomain.ErrNotInTrash", artifactsdomain.ErrNotInTrash},
 	{"artifactsdomain.ErrPurged", artifactsdomain.ErrPurged},

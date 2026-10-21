@@ -59,3 +59,6 @@ func ClaimUpload(ctx context.Context, s *Service, c artifactsdomain.Call, upload
 	_, err := s.claim(ctx, c, c.Authority.Actor.Name, upload, purposePublish, id)
 	return err
 }
+
+// ReasonOf is the refusals counter's reason for err.
+func ReasonOf(err error) string { return reasonOf(err) }

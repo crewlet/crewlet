@@ -43,10 +43,20 @@ var (
 	ErrAboveOwnRole = errors.New("artifactsdomain: a share may not grant a role " +
 		"above the sharer's own")
 
-	// ErrLabelTaken reports a label another version of the artifact holds,
-	// or a label past the labelled versions an artifact keeps.
-	ErrLabelTaken = errors.New("artifactsdomain: another version of this " +
-		"artifact holds that label")
+	// ErrLabelTaken reports a label another version of the artifact holds: a
+	// COLLISION, so the same label lands on this version once that one gives
+	// it up, and another label lands now.
+	ErrLabelTaken = errors.New("artifactsdomain: another version has that label")
+
+	// ErrLabelsFull reports a label for a version when the artifact already
+	// keeps [artifacts.MaxLabels] labelled versions: the ARTIFACT'S STATE,
+	// its own labels at their cap, so the same label lands once one is
+	// removed. Its own sentinel beside [ErrLabelTaken] because the two send
+	// a caller to different places — another label for a collision, a
+	// removal for a full set — and one sentinel for both told a caller
+	// choosing a label to choose another when no label would land.
+	ErrLabelsFull = errors.New("artifactsdomain: every label this artifact " +
+		"keeps is in use")
 
 	// ErrInvalid reports a write whose input the domain refuses, naming the
 	// field and what to change.
