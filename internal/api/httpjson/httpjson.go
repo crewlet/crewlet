@@ -373,7 +373,9 @@ const (
 	CodeNoActiveRevision Code = "no_active_revision"
 
 	// CodeRevisionAdvanced is a conditional write that lost: another write
-	// was activated after the one this was based on.
+	// was activated after the one this was based on. 412 where the request
+	// named that base in its If-Match header, a precondition that failed,
+	// and 409 where it named none (`configapi.RevisionStatus`).
 	CodeRevisionAdvanced Code = "revision_advanced"
 
 	// CodeAlreadyConfigured is a create-only write (If-None-Match: *) that
@@ -630,7 +632,9 @@ const (
 	// CodeInvalid is an argument the tool refused, and its detail names
 	// which: the only class whose fix is to send something different.
 	CodeInvalid Code = "invalid"
-	// CodeStaleVersion is an object that changed after the caller read it.
+	// CodeStaleVersion is an object that changed after the caller read it,
+	// the version stated as a tool's argument or a body field. 409. The same
+	// version stated as an If-Match header is [CodeVersionMoved].
 	CodeStaleVersion Code = "stale_version"
 	// CodeConflict is a write that lost its race against other writers, or
 	// another gesture holding the object; it clears on its own.
@@ -836,10 +840,11 @@ const (
 	// 400.
 	CodeBadIfMatch Code = "bad_if_match"
 	// CodeVersionMoved is a write whose If-Match names a version the thing
-	// it writes has moved past: a project file, or an artifact whose head
-	// is past the version a publish was based on. 412: read it again and
-	// decide again. An artifact's carries the live head and its entry's
-	// text to merge onto.
+	// it writes has moved past: a project file, a work item or a page whose
+	// tool version the header stated, or an artifact whose head is past the
+	// version a publish was based on. 412: read it again and decide again.
+	// An artifact's carries the live head and its entry's text to merge
+	// onto.
 	CodeVersionMoved Code = "version_moved"
 	// CodeUploadExpired is an upload whose bytes cannot be recorded any
 	// more: stored, and older than a write may name its object after (409),

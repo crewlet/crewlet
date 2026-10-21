@@ -194,7 +194,12 @@ export class Engine {
     ) {
       const expected = request.headers["If-Match"];
       if ((request.method === "PATCH" || unit !== null) && expected !== `"${this.revision}"`) {
-        return json({ error: "revision_advanced", current_revision_id: this.revision }, 409);
+        // 412 for a revision the header named, as the engine answers it, and
+        // 409 for a write that named none.
+        return json(
+          { error: "revision_advanced", current_revision_id: this.revision },
+          expected ? 412 : 409,
+        );
       }
       if (request.method === "PUT" && request.headers["If-None-Match"] === "*" && this.document) {
         return json({ error: "already_configured", current_revision_id: this.revision }, 412);

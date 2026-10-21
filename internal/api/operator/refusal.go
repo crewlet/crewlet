@@ -133,6 +133,32 @@ var classAnswers = map[crewletmcp.Refusal]classAnswer{
 // invites is the same operation — and about the fields that name what the
 // call was about (`tool`, an item's key), written beneath the envelope's own.
 func Fail(w http.ResponseWriter, cause error, sentence, key string, about httpjson.Detail) {
+	fail(w, cause, sentence, key, about, false)
+}
+
+// FailIfMatched is [Fail] for a call whose version the request stated in its
+// If-Match HEADER — a version a tool takes as an argument, which an HTTP route
+// folds the header into.
+//
+// THE ONE REFINEMENT OF THE MAPPING, and it is HTTP's: a stale version a
+// request stated as a header precondition is `412 version_moved` (RFC 9110
+// §13.1.1 — a server whose If-Match condition is false MUST NOT perform the
+// method, and answers 412), where the same version stated as an argument is
+// the class's own `409 stale_version`. One refusal of one tool; the status
+// says only whether the request made it an HTTP condition, as every route
+// that reads If-Match itself answers a moved version (a project file, an
+// artifact's head) and as the configuration answers a moved revision. Every
+// other refusal — an unknown outcome, a reused key and the authority table's
+// own answer among them, each decided BEFORE the class — is [Fail]'s, byte
+// for byte.
+func FailIfMatched(w http.ResponseWriter, cause error, sentence, key string, about httpjson.Detail) {
+	fail(w, cause, sentence, key, about, true)
+}
+
+// fail is [Fail] and [FailIfMatched]; conditioned is the second's.
+func fail(w http.ResponseWriter, cause error, sentence, key string, about httpjson.Detail,
+	conditioned bool) {
+
 	detail := httpjson.Detail{}
 	for k, v := range about {
 		detail[k] = v
@@ -202,7 +228,7 @@ func Fail(w http.ResponseWriter, cause error, sentence, key string, about httpjs
 		// roster.
 		httpjson.FailWithFields(w, http.StatusNotFound, httpjson.CodeNotFound, detail)
 	default:
-		failClass(w, cause, key, detail, about)
+		failClass(w, cause, key, detail, about, conditioned)
 	}
 }
 
@@ -220,7 +246,7 @@ func Fail(w http.ResponseWriter, cause error, sentence, key string, about httpjs
 // and with no sentence at all, because nothing vouches that it was written to
 // leave the error out.
 func failClass(w http.ResponseWriter, cause error, key string, detail,
-	about httpjson.Detail) {
+	about httpjson.Detail, conditioned bool) {
 
 	class := classOf(cause)
 	answer, known := classAnswers[class]
@@ -241,6 +267,9 @@ func failClass(w http.ResponseWriter, cause error, key string, detail,
 		detail["op_id"] = key
 		httpjson.UnavailableWith(w, answer.code,
 			httpjson.RetrySeconds(statelog.RetryAfter(cause, otherwise)), detail)
+	case conditioned && class == crewletmcp.RefusalStaleVersion:
+		httpjson.FailWithFields(w, http.StatusPreconditionFailed,
+			httpjson.CodeVersionMoved, detail)
 	default:
 		httpjson.FailWithFields(w, answer.status, answer.code, detail)
 	}

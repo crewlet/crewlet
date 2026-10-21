@@ -129,7 +129,7 @@ curl -X PUT $CREWLET_URL/config \
   -H "Content-Type: application/yaml" \
   -H "X-Summary: bootstrap Nimbus" \
   --data-binary @examples/nimbus.company.yaml
-# 409 revision_advanced if the active revision moved past $REV between read + write
+# 412 revision_advanced if the active revision moved past $REV between read + write
 ```
 
 ---
@@ -458,8 +458,9 @@ classified, beside the `detail` that renders them.
 | `404` | `no_route` | A path under `/config` this surface does not serve |
 | `405` | `method_not_allowed` | A `/config` path under a method it does not take; `Allow` names the ones it does |
 | `409` | `no_active_revision` | A per-entity write before the first PUT: there is nothing to splice into |
-| `409` | `revision_advanced` | Stale `If-Match`, a concurrent writer won the race, or the write was built on an empty store while the fleet is running a company |
+| `409` | `revision_advanced` | A write that named no revision in `If-Match` (or sent `If-Match: *`) lost: a concurrent writer won the race, or the write was built on an empty store while the fleet is running a company |
 | `409` | `seat_held` | A write that removes a human seat, or makes it an agent's, while the identity directory binds somebody to it or an open invitation names it; `held` names the one thing holding each seat. Move or remove a person, unbind a service account, or cancel the invitation first |
+| `412` | `revision_advanced` | `If-Match: <revision>` names a revision that is not the active one — when the write arrived, or because another write was activated first. Re-read `/config` and send the edit again |
 | `412` | `no_active_revision` | `If-Match: <revision>` sent while the node has no active revision; retry without `If-Match`, or send `If-None-Match: *` |
 | `412` | `already_configured` | `If-None-Match: *` on `PUT /config` sent while a revision is active on this node or anywhere in the fleet |
 | `412` | `entity_exists` | A per-entity create (`If-None-Match: *`) naming an MCP server or LLM provider the active revision already has |

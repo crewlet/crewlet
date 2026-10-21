@@ -641,7 +641,7 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 	}
 	prepared, err := s.prepare(r.Context(), d)
 	if err != nil {
-		s.refuseWrite(w, err, createOnly)
+		s.refuseWrite(w, r, err, createOnly)
 		return
 	}
 	if dryRun {
@@ -655,7 +655,7 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 	}
 	applied, err := s.commit(r.Context(), prepared, summary)
 	if err != nil {
-		s.refuseWrite(w, err, createOnly)
+		s.refuseWrite(w, r, err, createOnly)
 		return
 	}
 	writeApplied(w, applied)
@@ -726,7 +726,7 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 	}
 	prepared, err := s.prepare(r.Context(), d)
 	if err != nil {
-		s.refuseApply(w, err)
+		s.refuseApply(w, r, err)
 		return
 	}
 	if dryRun {
@@ -741,7 +741,7 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 	}
 	applied, err := s.commit(r.Context(), prepared, summary)
 	if err != nil {
-		s.refuseApply(w, err)
+		s.refuseApply(w, r, err)
 		return
 	}
 	writeApplied(w, applied)
@@ -775,7 +775,7 @@ func writeApplied(w http.ResponseWriter, applied Applied) {
 // A create-only write that finds a revision where it expected none is not a
 // lost edit to re-derive; it is a company that exists, so it is answered as
 // its precondition would have been had the revision been there to see.
-func (s *Service) refuseWrite(w http.ResponseWriter, err error, createOnly bool) {
+func (s *Service) refuseWrite(w http.ResponseWriter, r *http.Request, err error, createOnly bool) {
 	var raced *RacedError
 	if createOnly && errors.As(err, &raced) {
 		body := httpjson.Detail{
@@ -797,14 +797,14 @@ func (s *Service) refuseWrite(w http.ResponseWriter, err error, createOnly bool)
 			httpjson.CodeAlreadyConfigured, body)
 		return
 	}
-	s.refuseApply(w, err)
+	s.refuseApply(w, r, err)
 }
 
 // refuseApply maps a write's failure onto this surface's answers.
 //
 // ONE MAPPING, so a programmatic caller and an HTTP one cannot disagree about
 // what a stale base, an unreadable patch or an invalid company means.
-func (s *Service) refuseApply(w http.ResponseWriter, err error) {
+func (s *Service) refuseApply(w http.ResponseWriter, r *http.Request, err error) {
 	var raced *RacedError
 	var patchErr *PatchError
 	var invalid *ValidationError
@@ -842,7 +842,7 @@ func (s *Service) refuseApply(w http.ResponseWriter, err error) {
 		if raced.Current != "" {
 			body["current_revision_id"] = raced.Current
 		}
-		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeRevisionAdvanced, body)
+		httpjson.FailWithFields(w, RevisionStatus(r), httpjson.CodeRevisionAdvanced, body)
 	case errors.As(err, &patchErr):
 		refuseDocument(w, httpjson.CodeInvalidPatch, patchErr.Err.Error(),
 			"the patched document was refused; an unknown key in a "+
@@ -906,7 +906,7 @@ func (s *Service) reload(w http.ResponseWriter, r *http.Request) {
 	// answering 400.
 	applied, err := s.Reload(r.Context(), strings.TrimSpace(r.Header.Get("X-Summary")), attributionOf(r))
 	if err != nil {
-		s.refuseApply(w, err)
+		s.refuseApply(w, r, err)
 		return
 	}
 	writeApplied(w, applied)
@@ -974,7 +974,7 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 				"corrected document with PUT /config instead", err)
 		return
 	case err != nil:
-		s.refuseApply(w, err)
+		s.refuseApply(w, r, err)
 		return
 	}
 	// HEADER ONLY, and no [takeSummary]: this route reads no body, so there
@@ -987,7 +987,7 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 	}
 	applied, err := s.commit(r.Context(), prepared, summary)
 	if err != nil {
-		s.refuseApply(w, err)
+		s.refuseApply(w, r, err)
 		return
 	}
 	writeApplied(w, applied)
@@ -1035,7 +1035,7 @@ func (s *Service) nudge(ctx context.Context, revisionID, summary string, by iam.
 //
 // Two operators editing one company through a full-document PUT is a
 // last-writer-wins race that silently discards the other's change. If-Match
-// turns it into a 409 the loser can see, and the document they need to re-read
+// turns it into a 412 the loser can see, and the document they need to re-read
 // is named in the answer.
 //
 // createOnly reports that the request asked for create-only semantics
@@ -1087,12 +1087,39 @@ func (s *Service) checkPrecondition(w http.ResponseWriter, r *http.Request, acti
 			})
 		return false, false
 	case !matchesTag(expected, etagOf(active)):
-		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeRevisionAdvanced,
+		// THE CALLER'S OWN CONDITION FAILED, so 412 — as an If-Match
+		// against no company is above and If-None-Match against one is,
+		// and as a commit the tag lost to after this check is
+		// ([RevisionStatus]).
+		httpjson.FailWithFields(w, http.StatusPreconditionFailed, httpjson.CodeRevisionAdvanced,
 			httpjson.Detail{"current_revision_id": active.ID, "your_base": expected})
 		return false, false
 	default:
 		return false, true
 	}
+}
+
+// RevisionStatus is the status a write whose revision advanced past the one it
+// was built on is refused with: `412` when the request named that revision in
+// its If-Match header, and `409` when it did not.
+//
+// HTTP'S RULE, the one every surface here answers a moved version by (RFC
+// 9110 §13.1.1): a condition the request stated as a header that turned out
+// false is a FAILED PRECONDITION, whether it was false when the request
+// arrived or became false before the activation's compare-and-set landed —
+// either way the server did not perform what was conditioned on it. A write
+// that named no revision lost a race it never declared a condition for, which
+// is a conflict: a PATCH or a revert built on the revision this node read for
+// it, a setup step whose base was a body field, and `If-Match: *`, whose
+// condition — that a company exists — is still true of the company that won.
+// The code is `revision_advanced` either way, because what moved is the
+// company's revision; crewlet-operator and the dashboard read the code, and
+// the status says only which kind of request lost.
+func RevisionStatus(r *http.Request) int {
+	if tag := strings.TrimSpace(r.Header.Get("If-Match")); tag != "" && tag != "*" {
+		return http.StatusPreconditionFailed
+	}
+	return http.StatusConflict
 }
 
 // checkFleetAbsent reports whether the FLEET has no activation, answering the

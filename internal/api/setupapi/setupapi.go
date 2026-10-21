@@ -2259,7 +2259,7 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 		Expect:  strings.TrimSpace(r.Header.Get("If-Match")),
 	})
 	if err != nil {
-		s.refuse(w, r, err, setup.Result{})
+		s.refuseConditioned(w, r, err, setup.Result{}, true)
 		return
 	}
 	// FORCED, so whatever the third-party app still holds is now the operator's to
@@ -2287,8 +2287,27 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 
 // refuse maps a write failure onto this surface's answers.
 func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, partial setup.Result) {
+	s.refuseConditioned(w, r, err, partial, false)
+}
+
+// refuseConditioned is [Service.refuse] for a write whose base revision may
+// have been the request's If-Match header (headerBase): a disconnect's is, and
+// every other write here states its base as the body's `if_match` and reads
+// no header at all.
+//
+// 412 WHERE THE BASE WAS THE HEADER, 409 where it was the body: the config
+// surface's one rule ([configapi.RevisionStatus]), asked only of the write
+// that evaluated the header — asked of every write, a connect that ignored an
+// If-Match header and lost on its body's base was told its header failed.
+func (s *Service) refuseConditioned(w http.ResponseWriter, r *http.Request, err error,
+	partial setup.Result, headerBase bool) {
+
+	stale := http.StatusConflict
+	if headerBase {
+		stale = configapi.RevisionStatus(r)
+	}
 	var literal *setup.ErrLiteralInConfig
-	var stale *setup.ErrStaleBase
+	var staleBase *setup.ErrStaleBase
 	var raced *configapi.RacedError
 	var invalid *configapi.ValidationError
 	var patchErr *configapi.PatchError
@@ -2303,12 +2322,12 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 				"there is no variable to write the credential into",
 			"hint": "replace it with a whole ${VAR} reference, or clear it and submit again",
 		})
-	case errors.As(err, &stale):
+	case errors.As(err, &staleBase):
 		// REFUSED BEFORE ANYTHING WAS WRITTEN, which is the difference
 		// from the config surface's own raced answer: there is no stored
 		// revision to name, because nothing was stored.
-		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeRevisionAdvanced, map[string]string{
-			"your_base": stale.Base, "current_revision_id": stale.Current,
+		httpjson.FailWith(w, stale, httpjson.CodeRevisionAdvanced, map[string]string{
+			"your_base": staleBase.Base, "current_revision_id": staleBase.Current,
 			"hint": "the configuration changed since you read it; re-read the " +
 				"setup state and submit again",
 		})
@@ -2324,7 +2343,7 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 		if raced.Stored != "" {
 			extra["stored_revision_id"] = raced.Stored
 		}
-		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeRevisionAdvanced, extra)
+		httpjson.FailWith(w, stale, httpjson.CodeRevisionAdvanced, extra)
 	case errors.As(err, &invalid):
 		// THE CONFIG SURFACE'S OWN STRUCTURE, located problems and the
 		// derived hierarchy, so a screen placing a refusal on the field it

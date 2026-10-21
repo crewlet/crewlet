@@ -506,7 +506,7 @@ node means nothing was done.
 > | `Authorization` | the guard: the bearer token |
 > | `Content-Type` | every route that takes a body |
 > | `Idempotency-Key` | [`/operator/act`](#operatoract--the-dashboards-write-surface), which requires it, and `/work`, `/pages`, `/chat` and `/iam`, which make a retry the same write by it |
-> | `If-Match`, `If-None-Match` | `/config` and its entities, a work item, a project file and `/setup`'s disconnect — see [Conditional requests](#conditional-requests) |
+> | `If-Match`, `If-None-Match` | `/config` and its entities, a work item, a page, a project file, an artifact's publish and `/setup`'s forced disconnect — see [Conditional requests](#conditional-requests) |
 > | `X-Summary` | a `/config` write's revision summary |
 > | `X-Crewlet-Invite-Secret`, `X-Crewlet-Reset-Secret` | `GET /auth/invite/{id}` and `GET /auth/reset/{id}`: a link's secret, kept out of the URL |
 >
@@ -1970,7 +1970,7 @@ A valid check answers `200`:
 - **`dry_run` is read before anything else**, and takes exactly `true` or `false`, or nothing. Any other value (`1`, `yes`, an empty value, the parameter twice) is `400 invalid_query`: the two readings of a guess differ by whether the fleet's configuration changes.
 - **No summary is needed**, because nothing is stored to record one on. A `_summary` key in the body is still lifted out, so the document checked is the one the write reads.
 - **`base_revision_id`** is the revision the check was built on, and `""` when nothing is active. A client whose draft was built on a different revision learns that the configuration moved without a second request.
-- **Every other refusal is the write's, in the write's order**: `409 no_active_revision` for a patch with nothing to patch, `409 revision_advanced` for a stale `If-Match`, `412 already_configured` for `If-None-Match: *` on a configured company, and `400` with [problems](#refusals-carry-located-problems) for a document the write would refuse.
+- **Every other refusal is the write's, in the write's order**: `409 no_active_revision` for a patch with nothing to patch, `412 revision_advanced` for a stale `If-Match`, `412 already_configured` for `If-None-Match: *` on a configured company, and `400` with [problems](#refusals-carry-located-problems) for a document the write would refuse.
 - A dry run needs the same token a write does, and a [lead's](#a-lead-edits-their-own-team) is judged as the write would be: a part that is not theirs is `403` with the `refused` list. One answer differs: a seat or unit sent back **unchanged** to its own address is checked for its lead, though the write would be refused as a re-publish, because the check stores nothing and is how a lead reads what the engine derives of their unit as it stands. The whole document sent back unchanged stays refused, since no address decided whose check it is.
 
 #### Refusals carry located problems
@@ -2015,7 +2015,7 @@ The [`/setup`](#setting-an-integration-up) submissions that change the document 
 | Header | On | Meaning |
 |--------|-----|---------|
 | `If-None-Match: <etag>` | `GET` | `304 Not Modified` when the document has not moved |
-| `If-Match: <etag>` | writes | Proceed only against that revision; `409 revision_advanced` otherwise |
+| `If-Match: <etag>` | writes | Proceed only against that revision; `412 revision_advanced` otherwise — when the request arrives, or when another write is activated before this one can be |
 | `If-Match: *` | writes | Proceed only if *something* is active; `412` on an unconfigured node |
 | `If-None-Match: *` | `/config` writes | Proceed only if **nothing** is configured, on this node **or anywhere in the fleet**; `412 already_configured` otherwise, naming the revision it lost to |
 | `If-None-Match: *` | entity `PUT` | Proceed only if **that entity** does not exist: the create-only write that adds an MCP server or an LLM provider. `412 entity_exists` when one does; `400 conflicting_preconditions` beside an `If-Match` |
@@ -2197,7 +2197,7 @@ why the CLI goes through a running node rather than writing the KV itself.
 
 **There is no leader** — any node's API can write the config, and the coordination KV is the shared truth. Writes are **not** serialized by a lock, but a concurrent one is *detected*: the activation is a compare-and-set.
 
-- Every write on this surface reads the active revision, derives from it, and names it as the new revision's parent. That parent is what the flip compares against, so a write that lost is refused with **`409 revision_advanced`** — **whether or not the caller sent `If-Match`**, because the server knows what it read.
+- Every write on this surface reads the active revision, derives from it, and names it as the new revision's parent. That parent is what the flip compares against, so a write that lost is refused **`revision_advanced`** — **whether or not the caller sent `If-Match`**, because the server knows what it read. The status says which kind of write lost, as HTTP has it (RFC 9110 §13.1.1): **`412`** for one whose `If-Match` named a revision, since the condition the request stated is false, and **`409`** for one that named none, or sent `If-Match: *` — whose condition, that a company exists, is still true of the company that won.
 - `If-Match: <revision_id>` is still worth sending: it is checked before any work is done, so a caller editing a revision that has already moved is told so without a document being built, validated and stored first.
 - A losing write's revision **is kept**, and the `409` (or `412`) names it as `stored_revision_id`. It is stored in the history, valid and inert, so the operator's work survives as history they can revert to. Inert means on the node that served the write too: a revision becomes that node's active one only once the fleet has taken it, so the node goes on serving what it served, never offers the loser to the fleet at a restart, and adopts whichever revision actually won. Unwinding it instead would mean a second write that can itself fail, on the path where something has already gone wrong.
 - **A node's active revision follows the fleet.** Once a node applies the fleet's epoch, the fleet's revision is its active one, which is what its `GET /config` serves and what it boots on; its reconciler checks that on every tick and corrects a copy that says otherwise.
@@ -2205,7 +2205,7 @@ why the CLI goes through a running node rather than writing the KV itself.
 - **A write built on nothing is a create.** A node whose own store is empty answers `404 no_active_revision` on `GET /config`, and it reaches that state while its fleet runs a company: it joined and has not reconciled yet, or its best-effort copy of the fleet's pointer failed. A write there was derived from nothing, so its activation is a **create-only compare-and-set**: it lands only while the fleet has no activation. `If-None-Match: *` also consults the fleet's pointer before anything is built, and answers `412 already_configured` naming the revision the fleet is on. Without both, the dashboard's create flow on such a node replaced the running company outright, which renames it, changes every seat id derived from the name and orphans all of their memory.
 - The **boot publish** is deliberately unconditional. Two nodes starting at once may both offer the revision they hold; both are legitimate, last-write-wins is the right answer, and every node converges. It is the *edit* path that must not lose a write.
 
-On a `409`, re-read `/config` and send the edit again.
+On either, re-read `/config` and send the edit again.
 
 ### Status codes
 
@@ -2216,8 +2216,8 @@ On a `409`, re-read `/config` and send the edit again.
 - `403 Forbidden`: `unauthorized` when the credential holds neither the grant nor, on the org chart, the lead relation — its `reason` the rule that refused the write, with a `refused` list for [a lead's write](#a-lead-edits-their-own-team) — and `step_up_required` for a write whose proof of identity is older than `step_up`, whether the route or the write's parts found it; and `config_managed` when `api.auth.company_writers` names the document's writers and this credential is not one of them — a person's session, a machine token and a lead's write among them — with `managed_by`, `detail` and `hint`, a write and its dry run alike, never a read or a reload, and asked before the body is read (see [Managed configuration](../concepts/configuration.md#managed-configuration))
 - `404 Not Found`: a revision that is not there, `no_active_revision` on a read before the first write, `no_such_entity` on a per-entity read or write naming an id the active revision does not carry (of a seat or a unit, told only to `admin`, and anybody else is refused `403` as for one outside their team), or `no_route` for a path under `/config` this surface does not serve
 - `405 Method Not Allowed`: `method_not_allowed` for a `/config` path under a method it does not take, with `Allow`
-- `409 Conflict`: `revision_advanced` (a stale `If-Match`, or a race with a concurrent writer) or `no_active_revision` (a `PATCH` or a per-entity write on an unconfigured node, or a reload)
-- `412 Precondition Failed`: `already_configured` when `If-None-Match: *` meets an active revision, or `no_active_revision` when `If-Match` names a revision and none is active
+- `409 Conflict`: `revision_advanced` (a race with a concurrent writer, for a write that named no revision in `If-Match`) or `no_active_revision` (a `PATCH` or a per-entity write on an unconfigured node, or a reload)
+- `412 Precondition Failed`: `revision_advanced` when `If-Match` names a revision that is not the active one, or stops being so before the write is activated; `already_configured` when `If-None-Match: *` meets an active revision; or `no_active_revision` when `If-Match` names a revision and none is active
 - `415 Unsupported Media Type`: `unsupported_patch_media_type` when a `PATCH` body is a patch format other than a JSON Merge Patch, with `Accept-Patch`
 - `503 Service Unavailable`: `draining` when the node has been told to stop, with a `Retry-After` — see [During a drain](#during-a-drain)
 
@@ -2654,7 +2654,8 @@ What the route does, in this order:
 
 Answers `201 {"revision_id", "epoch", "wrote_secrets", "reloaded", "state"}`.
 Refusals: `400 invalid_input`, `400 validation_error`, `404 unknown_kind`,
-`409 revision_advanced`, `409 literal_in_config`, `409 no_active_revision`.
+`409 revision_advanced` (the body's `if_match` is stale), `409 literal_in_config`,
+`409 no_active_revision`.
 
 ### Checking a credential before it is stored
 
@@ -2780,7 +2781,11 @@ it.
 `force` drops the block immediately without waiting for the third-party app,
 answers `200`, and is the way out of a teardown that can never succeed: a
 revoked credential, an instance that is gone. It is the operator saying they
-will remove what the third-party app holds themselves.
+will remove what the third-party app holds themselves. A forced disconnect may
+carry `If-Match` naming the revision it was decided on, and one the
+configuration has moved past is `412 revision_advanced`, with nothing dropped
+— the status `/config` answers the same header with, where a connect, whose
+base is the body's `if_match`, loses as `409`.
 
 **Either way the removal is recorded as yours.** The intent carries who asked
 — the author, their kind and the credential they asked through — and the loop
@@ -5771,12 +5776,12 @@ route.
 | Method | Path | Does | Decided by |
 |---|---|---|---|
 | `POST` | `/work/items` | `create_work_item` | `tracker` |
-| `PATCH` | `/work/items/{key}` | `update_work_item`. `If-Match` is its `if_match` | `tracker`; re-routing asks the project's lead |
+| `PATCH` | `/work/items/{key}` | `update_work_item`. `If-Match` is its `if_match`, and an item somebody changed since is `412 version_moved` | `tracker`; re-routing asks the project's lead |
 | `POST` | `/work/items/{key}/comments` | `comment_on_work_item` | the route admits everybody (`work.thread`) and the tool decides once the item is read: `tracker`, or — for **the answer to an open ask that names the caller**, and nothing else — the person asked, with no app ([You may answer what you were asked](../concepts/identity-and-access.md#what-each-app-opens)) |
 | `PATCH` | `/work/items/{key}/comments/{cid}` | Rewrite a remark's words: `{"body": …}`. Only the words change — what the remark asked, the answer that closed it and whom it woke are kept, so an answered question is not reopened | its **author**, with `tracker` — the table admits `admin` too, and the tracker then refuses anybody but the author, because a remark somebody else can rewrite is one attributed to a person who did not make it |
-| `POST` | `/work/items/{key}/rank` | `place_work_item` — a board drag: `{"after": ref}` or `{"before": ref}` (one neighbour, never both) and the `status` lane it was dropped into. `If-Match` is its required `if_match`, and a move of an item somebody changed since is `409 stale_version` | `tracker`, and **never a seat** |
-| `POST` | `/work/items/{key}/depend` | `update_work_item`'s `waiting_on`, `blocking` and `dependency_note`, and nothing else | `tracker` |
-| `POST` | `/work/items/{key}/relate` | `update_work_item`'s `linked` and `linked_pages`, and nothing else | `tracker` |
+| `POST` | `/work/items/{key}/rank` | `place_work_item` — a board drag: `{"after": ref}` or `{"before": ref}` (one neighbour, never both) and the `status` lane it was dropped into. `If-Match` is its required `if_match`, and a move of an item somebody changed since is `412 version_moved` | `tracker`, and **never a seat** |
+| `POST` | `/work/items/{key}/depend` | `update_work_item`'s `waiting_on`, `blocking` and `dependency_note`, and nothing else; `If-Match` is its `if_match` | `tracker` |
+| `POST` | `/work/items/{key}/relate` | `update_work_item`'s `linked` and `linked_pages`, and nothing else; `If-Match` is its `if_match` | `tracker` |
 | `DELETE` | `/work/items/{key}` | `remove_work_item` (`{"subtree": true}` takes its children) | the item's **reporter**, the lead of the item's **own** project, or `admin`, with `tracker`; `subtree` is the lead's or `admin`'s alone |
 | `POST` | `/work/items/{key}/restore` | `restore_work_item` | the same |
 | `POST` | `/work/items/{key}/move` | `move_work_item`: `{"project": "OPS"}` moves the item and everything under it. A move whose walk stopped after the item itself moved answers `200` with the item's receipt, `subtree_followed` of `subtree_total`, and a `move_stopped` instruction — the **same** `Idempotency-Key` finishes it (the answer's `op_id`, sent back as that header, which is the key even when the request sent none), and a new one is refused as somebody else's move | the lead of the item's **own** project, or `admin`, with `tracker` |
@@ -5789,7 +5794,7 @@ route.
 | `PUT` | `/work/people/{handle}/pins` | `set_pins` | the person, or `admin`, with `tracker` |
 | `PUT` | `/work/people/{handle}/priorities` | `set_priorities` (`{"items": [...]}`) | the person, whoever leads them, or `admin`, with `tracker`; never a seat reordering a colleague |
 | `POST` | `/pages` | `write_page` | `knowledge` — and only in a space the company declares ([Who may write where](../concepts/knowledge-system.md#who-may-write-where)) |
-| `PUT` | `/pages/{id}` | `save_page`. `If-Match` is its required `base_version` | `knowledge`; a `title` in the body is a rename, and asks what a rename asks |
+| `PUT` | `/pages/{id}` | `save_page`. `If-Match` is its required `base_version`, and a page saved since is `412 version_moved` | `knowledge`; a `title` in the body is a rename, and asks what a rename asks |
 | `POST` | `/pages/{id}/rename` | Move the page to a new title — its address: `{"title": …, "quiet": false}` | the page's **creator**, the lead of the page's container, or `admin`, with `knowledge` |
 | `POST` | `/pages/{id}/comments` | `comment_on_page` | `knowledge` |
 | `PATCH` | `/pages/{id}/comments/{cid}` | Rewrite a remark: `{"body": …}` | its **author**, with `knowledge` — for the work comment's reason |
@@ -5846,7 +5851,8 @@ mean the same thing on every write surface:
 | `403` | `unauthorized` / `step_up_required` | The authority table refused, or the verb needs a fresher proof | `detail`, worded exactly as a seat and your assistant are told it, beside `reason` and `grants` (or the window) |
 | `403` | `forbidden` | The domain forbids this caller the gesture — rewriting somebody else's remark | `detail`: the domain's own sentence |
 | `404` | `not_found` | The item, page or comment does not exist — or it was purged | |
-| `409` | `stale_version`, `conflict`, `exists`, `reassignment_budget`, `inbox_full`, … | Somebody changed it after you read it — a stale `If-Match`, a title taken, a race lost — or the state the request needs is not there | `detail`: read it again, or change what is in the way |
+| `409` | `stale_version`, `conflict`, `exists`, `reassignment_budget`, `inbox_full`, … | Somebody changed it after you read it — a stale `if_match` or `base_version` in the body, a title taken, a race lost — or the state the request needs is not there | `detail`: read it again, or change what is in the way |
+| `412` | `version_moved` | The version the request's `If-Match` header named is not the one it holds: the same refusal as a stale `if_match` in the body, answered as HTTP answers a precondition that failed (RFC 9110 §13.1.1), as a project file's and an artifact's are | `detail`: read it again and decide again |
 | `409` | `invalid_input` | The `Idempotency-Key` already names a write to another object | send it under a new key |
 | `409` | `reader_changed` | The request names, in `X-Crewlet-Reader`, a principal its credential is not, and the guard refused it before it ran | nothing; ask `GET /auth/session` who the credential is — see [Auth](#routes) |
 | `422` | `invalid` | The domain refused the write on its own rules — a purge whose `?confirm=` names another item, an erase whose count or a prune whose cutoff it does not repeat, among them | `detail`: the domain's own sentence |

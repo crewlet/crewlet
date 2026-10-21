@@ -588,7 +588,7 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 		if err != nil {
 			// A create of a kind that has none is the caller's request to
 			// correct, answered like every other entity refusal.
-			s.refuseEntity(w, kind, id, err)
+			s.refuseEntity(w, r, kind, id, err)
 			return
 		}
 		if d.principal, ok = principalOf(w, r); !ok {
@@ -598,7 +598,7 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 		d.by = attributionOf(r)
 		prepared, err := s.prepare(r.Context(), d)
 		if err != nil {
-			s.refuseEntity(w, kind, id, err)
+			s.refuseEntity(w, r, kind, id, err)
 			return
 		}
 		if dryRun {
@@ -615,7 +615,7 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 		}
 		applied, err := s.commit(r.Context(), prepared, summary)
 		if err != nil {
-			s.refuseApply(w, err)
+			s.refuseApply(w, r, err)
 			return
 		}
 		writeApplied(w, applied)
@@ -656,11 +656,11 @@ func (s *Service) entityPrecondition(w http.ResponseWriter, r *http.Request, act
 
 // refuseEntity answers an entity write's own refusals, and every other one as
 // [Service.refuseApply] does.
-func (s *Service) refuseEntity(w http.ResponseWriter, kind, id string, err error) {
+func (s *Service) refuseEntity(w http.ResponseWriter, r *http.Request, kind, id string, err error) {
 	var entityErr *EntityError
 	switch {
 	case !errors.As(err, &entityErr):
-		s.refuseApply(w, err)
+		s.refuseApply(w, r, err)
 	case errors.Is(err, ErrNoSuchEntity):
 		// NEVER CREATED. A PUT naming an id nothing carries is far more
 		// often a typo than an intent to add one, and adding through this

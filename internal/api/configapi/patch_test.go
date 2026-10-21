@@ -209,8 +209,9 @@ func TestAPatchHonoursIfMatch(t *testing.T) {
 
 	res := s.do(t, http.MethodPatch, "/config", `{"mission": "x"}`,
 		map[string]string{"X-Summary": "a patch", "If-Match": "not-the-active-one"})
-	if res.Code != http.StatusConflict {
-		t.Fatalf("PATCH = %d %s, want 409", res.Code, res.Body.String())
+	if res.Code != http.StatusPreconditionFailed {
+		t.Fatalf("PATCH = %d %s, want 412: the condition the request stated is false",
+			res.Code, res.Body.String())
 	}
 	if !strings.Contains(res.Body.String(), "current_revision_id") {
 		t.Errorf("the conflict does not name what to re-read: %s", res.Body.String())
@@ -323,6 +324,54 @@ func TestAWriteThatLostTheRaceIsRefused(t *testing.T) {
 	if got := s.do(t, http.MethodGet, "/config", "", nil); got.Header().Get("ETag") != `"`+base+`"` {
 		t.Errorf("GET /config after the refusal serves %s, want the base %s it served before",
 			got.Header().Get("ETag"), base)
+	}
+}
+
+// A LOST RACE IS A FAILED PRECONDITION EXACTLY WHERE THE REQUEST NAMED A
+// REVISION (RFC 9110 §13.1.1, [RevisionStatus]): an If-Match that matched
+// this node's revision and lost the activation's compare-and-set stated a
+// condition that was false before the write could land — 412, as the same tag
+// refused at the check is — while a write that named none lost a race it never
+// declared a condition for, and `If-Match: *` declared one ("a company
+// exists") the company that won still satisfies — 409, both. One code
+// throughout, because what moved is the company's revision either way.
+func TestALostRaceIsAFailedPreconditionOnlyWhereARevisionWasNamed(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		ifMatch func(base string) string
+		want    int
+	}{
+		{"no If-Match", func(string) string { return "" }, http.StatusConflict},
+		{"If-Match: *", func(string) string { return "*" }, http.StatusConflict},
+		{"If-Match naming the base", func(base string) string { return `"` + base + `"` },
+			http.StatusPreconditionFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := newSurface(t)
+			base := s.seed(t, companyDoc)
+			if _, err := s.plane.Activate(t.Context(), coord.ActivationRequest{
+				RevisionID: "from-a-peer", Summary: "a peer got there first",
+				Payload: []byte("{}"), At: pinned, Expect: base,
+				Origin: coord.RevisionOrigin{Author: "maya", AuthorKind: "operator",
+					Source: "api", CreatedAt: pinned},
+			}); err != nil {
+				t.Fatalf("peer activate: %v", err)
+			}
+			headers := map[string]string{"X-Summary": "a patch"}
+			if v := tc.ifMatch(base); v != "" {
+				headers["If-Match"] = v
+			}
+			res := s.do(t, http.MethodPatch, "/config", `{"mission": "mine"}`, headers)
+			if res.Code != tc.want {
+				t.Fatalf("PATCH = %d %s, want %d", res.Code, res.Body.String(), tc.want)
+			}
+			body := decode(t, res)
+			if body["error"] != "revision_advanced" || body["current_revision_id"] != "from-a-peer" {
+				t.Errorf("refusal = %v, want revision_advanced naming from-a-peer", body)
+			}
+		})
 	}
 }
 

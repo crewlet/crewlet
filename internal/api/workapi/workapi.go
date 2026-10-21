@@ -650,6 +650,35 @@ func (s *Service) pageActor(w http.ResponseWriter, r *http.Request,
 func (s *served) call(w http.ResponseWriter, r *http.Request, verb string,
 	args map[string]any) {
 
+	s.dispatch(w, r, verb, args, false)
+}
+
+// callIfMatched is [served.call] for a tool whose version argument (field) a
+// request may state as an If-Match header instead, which is folded into it
+// ([ifMatch]).
+//
+// A STALE VERSION THE HEADER STATED IS HTTP'S FAILED PRECONDITION, `412
+// version_moved` (RFC 9110 §13.1.1: the server MUST NOT perform the method,
+// and answers 412), where the same version stated in the body is the tools'
+// `409 stale_version` ([operator.FailIfMatched]). The two are one refusal of
+// one tool; what differs is whether the request stated it as an HTTP
+// condition — which only the fold knows, so the fold and the answer are one
+// call and no route can fold a header and answer its failure as a body's.
+func (s *served) callIfMatched(w http.ResponseWriter, r *http.Request, verb string,
+	args map[string]any, field string) {
+
+	conditioned, ok := ifMatch(w, r, args, field)
+	if !ok {
+		return
+	}
+	s.dispatch(w, r, verb, args, conditioned)
+}
+
+// dispatch makes one tool call and answers it; conditioned says the call's
+// version came from the request's If-Match header.
+func (s *served) dispatch(w http.ResponseWriter, r *http.Request, verb string,
+	args map[string]any, conditioned bool) {
+
 	if !operator.NoOperationArg(args) {
 		operator.RefuseOperationArg(w, verb)
 		return
@@ -661,12 +690,13 @@ func (s *served) call(w http.ResponseWriter, r *http.Request, verb string,
 	result, err := s.operator.Dispatch(r.Context(), operator.Call{
 		Transport: types.TransportWork, Key: key, Tool: verb, Args: args,
 	})
-	s.answerDispatched(w, r, key, verb, operator.About(verb, args), result, err)
+	s.answerDispatched(w, r, key, verb, operator.About(verb, args), result, err, conditioned)
 }
 
-// answerDispatched renders what the dispatch answered one call with.
+// answerDispatched renders what the dispatch answered one call with;
+// conditioned is [served.dispatch]'s.
 func (s *served) answerDispatched(w http.ResponseWriter, r *http.Request, key,
-	verb string, about httpjson.Detail, result tools.Result, err error) {
+	verb string, about httpjson.Detail, result tools.Result, err error, conditioned bool) {
 
 	switch {
 	case errors.Is(err, operator.ErrNotUp):
@@ -690,14 +720,22 @@ func (s *served) answerDispatched(w http.ResponseWriter, r *http.Request, key,
 		// again under a fresh one.
 		operator.Interrupted(w, r, key, verb, err)
 	default:
-		answerTool(w, key, about, result)
+		answerTool(w, key, about, result, conditioned)
 	}
 }
 
 // answerTool renders one tool's receipt, or its failure beside about.
+//
+// A call whose version an If-Match header stated (conditioned) is answered by
+// [operator.FailIfMatched], which answers a stale one as HTTP's failed
+// precondition.
 func answerTool(w http.ResponseWriter, key string, about httpjson.Detail,
-	result tools.Result) {
+	result tools.Result, conditioned bool) {
 
+	if result.Failed && conditioned {
+		operator.FailIfMatched(w, result.Cause, result.Output, key, about)
+		return
+	}
 	if result.Failed {
 		operator.Fail(w, result.Cause, result.Output, key, about)
 		return
@@ -1012,7 +1050,8 @@ func contains(list []string, s string) bool {
 }
 
 // ifMatch folds an `If-Match` header into the argument a tool takes for it,
-// refusing a request that states two different versions.
+// refusing a request that states two different versions: stated says the
+// header carried a version, and ok is false once the refusal is written.
 //
 // THE BODY'S VERSION IS READ AS ITS TEXT, exactly: the arguments arrive as
 // json.Number ([readArgs]), and a body that states anything but the header's
@@ -1022,26 +1061,26 @@ func contains(list []string, s string) bool {
 // and a negative one converted to whatever the platform made of it. The
 // header's version is written back in the same form, as the tool reads one.
 func ifMatch(w http.ResponseWriter, r *http.Request, args map[string]any,
-	field string) bool {
+	field string) (stated, ok bool) {
 
 	header := strings.Trim(strings.TrimSpace(r.Header.Get("If-Match")), `"`)
 	if header == "" {
-		return true
+		return false, true
 	}
 	version, err := strconv.ParseUint(header, 10, 64)
 	if err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
 			map[string]string{"detail": "If-Match carries the version you read, " +
 				"as a number — " + strconv.Quote(header) + " is not one"})
-		return false
+		return false, false
 	}
-	stated := json.Number(strconv.FormatUint(version, 10))
-	if held, ok := args[field]; ok && held != nil && held != stated {
+	folded := json.Number(strconv.FormatUint(version, 10))
+	if held, present := args[field]; present && held != nil && held != folded {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
 			map[string]string{"detail": fmt.Sprintf("If-Match says %d and the "+
 				"body's %s says %v; send one", version, field, held)})
-		return false
+		return false, false
 	}
-	args[field] = stated
-	return true
+	args[field] = folded
+	return true, true
 }

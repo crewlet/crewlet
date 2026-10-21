@@ -28,7 +28,10 @@ export interface ConfigAnswer {
 
 /** Why the engine holds a revision the write was not built on. */
 export type ConfigConflictReason =
-  /** `409 revision_advanced`: another write activated after the write's base. */
+  /**
+   * `412 revision_advanced`: another write activated after the base the
+   * write's `If-Match` named — `409` for one that named none.
+   */
   | "revision_advanced"
   /** `412 already_configured`: a company exists, and the write was creating one. */
   | "already_configured"
