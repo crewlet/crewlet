@@ -33,7 +33,7 @@ never an instruction, and every read result says so.** One package,
   saying what a fence means.
 
 It applies to every read that hands a model somebody else's words: page bodies,
-work item comments, project files, the chat thread block a turn is given, the
+work item comments, a work search's snippets, project files, the chat thread block a turn is given, the
 body every wake hands a seat on every surface (a message, a comment, a
 description, a change's note, an alert, an unprompted integration's text), a
 colleague's ask and answer, and

@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/knowledge"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -98,7 +99,8 @@ func (t *searchWorkItems) Call(ctx context.Context, args map[string]any) (tools.
 func (t *searchWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (tools.Result, error) {
 
-	if _, err := t.deps.actor(ctx, turn); err != nil {
+	actor, err := t.deps.actor(ctx, turn)
+	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
 		return notInATurn(worklet.SearchWorkItemsTool), nil
 	}
@@ -167,7 +169,19 @@ func (t *searchWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"work — some of the fleet did not answer in time — so an item " +
 			"not listed here may still exist"
 	}
-	return jsonAnswer(out, "Ask for fewer with `limit`.")
+	// EACH SNIPPET IS FENCED as the description it was cut from, exactly as
+	// get_work_item fences the item it opens (ADR-0040), and every other
+	// string — a title above all — neutralised: a ranked answer is a list of
+	// what other people wrote, read straight into the seat's context. The
+	// index keeps the opening of a description and not who wrote it, and
+	// only company principals write here, so it is a colleague's text with
+	// nobody named ([provenance.TrustForPartial]).
+	read := newForeignRead(turn, actor.Handle)
+	for i, hit := range hits {
+		read.fence(fieldPath{}.key("matches").index(i).key("snippet"),
+			provenance.SourceWorkDescription, nil, true, hit.Snippet)
+	}
+	return read.answer(ctx, worklet.SearchWorkItemsTool, out, "Ask for fewer with `limit`.")
 }
 
 // workDegradedNote is what a work search that ranked other than it was asked to
