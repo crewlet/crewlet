@@ -162,6 +162,33 @@ func TestALateNoticeSaysWhyItIsLate(t *testing.T) {
 	}
 }
 
+// EVERY COMMENT WAKE CARRIES THE COMMENT, whatever reason routed it.
+//
+// A remark reaches the item's assignee, reporter and watchers as well as
+// whoever it names, and to all of them the change is the remark. The wake
+// reports itself as carrying its text (no recon needed) and the "what changed"
+// block leaves a comment to the opener, so an opener that quoted it for the
+// four "somebody said something to you" reasons alone handed every other
+// recipient "a comment was added" and nothing of what it said.
+func TestEveryCommentWakeCarriesTheComment(t *testing.T) {
+	t.Parallel()
+	const said = "please also cover the rollback path"
+	for _, kind := range []worklet.ChangeKind{worklet.ChangeComment, worklet.ChangeCommentEdited} {
+		for _, reason := range worklet.Reasons {
+			n := promptNotification(reason, kind)
+			n.Body = said
+			if (worklet.Prompt{}).RequiresRecon(n) {
+				t.Errorf("a %s wake routed as %s asks for recon although it carries its text",
+					kind, reason)
+			}
+			if got := (worklet.Prompt{}).Build(n, nil); !strings.Contains(got, said) {
+				t.Errorf("a %s wake routed as %s does not say what was said:\n%s",
+					kind, reason, got)
+			}
+		}
+	}
+}
+
 // THE ONE REASON THAT WAKES ITS OWN ACTOR IS THE ONE THAT IS A CONSEQUENCE.
 //
 // A person who closed a blocker learns from this that the task it was blocking
