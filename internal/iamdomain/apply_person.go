@@ -97,11 +97,7 @@ func (a *Applier) writeDocument(ctx context.Context, tx *sql.Tx, at applyContext
 	// them out: a content record that wrote one would be a record
 	// overwriting a decision the directory made, in a domain where the
 	// columns are somebody's identity.
-	result, err := tx.ExecContext(ctx, `
-		UPDATE iam_people
-		SET kind = ?, stage = ?, name_sealed = ?, email_sealed = ?,
-		    updated_at = ?, version = ?, document = ?
-		WHERE id = ? AND version < ?`,
+	result, err := tx.ExecContext(ctx, writePersonStatement,
 		string(person.Kind), string(person.Stage),
 		[]byte(person.NameSealed), []byte(person.EmailSealed),
 		at.unix(), at.packed, document, id, at.packed)
@@ -133,6 +129,18 @@ func (a *Applier) writeDocument(ctx context.Context, tx *sql.Tx, at applyContext
 	return int(written) + credentials, nil
 }
 
+// writePersonStatement writes a person's own content to their row, by its key
+// under the version guard — every column but the directory's three.
+const writePersonStatement = `
+	UPDATE iam_people
+	SET kind = ?, stage = ?, name_sealed = ?, email_sealed = ?,
+	    updated_at = ?, version = ?, document = ?
+	WHERE id = ? AND version < ?`
+
+// personVersionStatement is the version one person's row stands at, by its
+// key: what [Applier.writeCredentials] guards its delete by.
+const personVersionStatement = `SELECT version FROM iam_people WHERE id = ?`
+
 // writeCredentials replaces a person's credential rows from the payload.
 func (a *Applier) writeCredentials(ctx context.Context, tx *sql.Tx,
 	at applyContext, id string, credentials []Credential) (int, error) {
@@ -142,8 +150,7 @@ func (a *Applier) writeCredentials(ctx context.Context, tx *sql.Tx,
 	// delete the credentials a newer record wrote. Reading the person's
 	// committed version back is what makes the pair one decision.
 	var live int64
-	err := tx.QueryRowContext(ctx,
-		`SELECT version FROM iam_people WHERE id = ?`, id).Scan(&live)
+	err := tx.QueryRowContext(ctx, personVersionStatement, id).Scan(&live)
 	switch {
 	case err != nil && !errorsIsNoRows(err):
 		return 0, fmt.Errorf("iamdomain: read person %s's version: %w", id, err)
@@ -228,6 +235,17 @@ func credentialsCreated(ctx context.Context, tx *sql.Tx, id string) (
 	return out, rows.Err()
 }
 
+// The two statements [Applier.writeStage] runs, each by the person's key under
+// the version guard: the document the row held, and the stage it moves to.
+const (
+	stageBeforeStatement = `
+		SELECT document FROM iam_people WHERE id = ? AND version < ?`
+	writeStageStatement = `
+		UPDATE iam_people
+		SET stage = ?, document = ?, updated_at = ?, version = ?
+		WHERE id = ? AND version < ?`
+)
+
 // writeStage moves a person between enrolment stages.
 //
 // ITS OWN OP AND ITS OWN NARROW WRITE, so suspending somebody does not carry
@@ -258,8 +276,7 @@ func (a *Applier) writeStage(ctx context.Context, tx *sql.Tx, at applyContext,
 			at.position, err)
 	}
 	var document []byte
-	err = tx.QueryRowContext(ctx, `
-		SELECT document FROM iam_people WHERE id = ? AND version < ?`,
+	err = tx.QueryRowContext(ctx, stageBeforeStatement,
 		id, at.packed).Scan(&document)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -281,10 +298,7 @@ func (a *Applier) writeStage(ctx context.Context, tx *sql.Tx, at applyContext,
 		// can neither admit the person nor be re-published over them.
 		restaged = document
 	}
-	result, err := tx.ExecContext(ctx, `
-		UPDATE iam_people
-		SET stage = ?, document = ?, updated_at = ?, version = ?
-		WHERE id = ? AND version < ?`,
+	result, err := tx.ExecContext(ctx, writeStageStatement,
 		string(change.Stage), restaged, at.unix(), at.packed, id, at.packed)
 	if err != nil {
 		return 0, fmt.Errorf("iamdomain: set person %s's stage: %w", id, err)
