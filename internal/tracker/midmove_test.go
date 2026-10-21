@@ -109,9 +109,11 @@ func TestAMoveKeepsItsMarkOverATaskFiledBehindItThatItCannotCarry(t *testing.T) 
 	})
 	_, err := lossy.MoveTaskToProject(t.Context(),
 		statelog.NewOpID(time.Now(), "move"), "m-root", "OPS", nil)
-	if err == nil || !strings.Contains(err.Error(), "m-late") {
+	// NAMED BY ITS KEY, which is how the person reading it knows it.
+	late := oneTask(t, r, "m-late").Key
+	if err == nil || late == "" || !strings.Contains(err.Error(), late) {
 		t.Fatalf("a move over a task in the trash it cannot carry = %v, want an "+
-			"error naming m-late", err)
+			"error naming m-late by its key %q", err, late)
 	}
 	r.drain()
 	if !oneTask(t, r, "m-root").Moving {

@@ -107,9 +107,8 @@ func (v Verdict) Landed() bool { return v == VerdictApplied || v == VerdictRepea
 func (v Verdict) refusal(op OpKind, opID, channelID string) error {
 	switch v {
 	case VerdictArchived:
-		return fmt.Errorf("%w: %s was archived before this message reached it, "+
-			"and an archived room takes no new messages; nothing was said",
-			ErrArchived, channelID)
+		return fmt.Errorf("%w: this room was archived before the message "+
+			"reached it, so nothing was said. %s", ErrArchived, reopenRoom)
 	case VerdictNotMember:
 		return fmt.Errorf("%w: the author was taken out of %s before this message "+
 			"reached it, and the room admits its members only; nothing was said",
@@ -121,9 +120,9 @@ func (v Verdict) refusal(op OpKind, opID, channelID string) error {
 		return fmt.Errorf("%w: the message was taken back before this edit "+
 			"reached it, and there is nothing left to rewrite", ErrNotFound)
 	case VerdictReactionsFull:
-		return fmt.Errorf("%w: the message reached its %d distinct emoji before "+
-			"this reaction did — add to one it already carries, or take one back",
-			ErrReactionsFull, MaxReactionEmoji)
+		return fmt.Errorf("%w: this message reached %d different emoji, the most "+
+			"it can, before the reaction did. Add to one it already has, or take "+
+			"one off", ErrReactionsFull, MaxReactionEmoji)
 	}
 	// A VERDICT THIS BUILD DOES NOT KNOW, written by a newer peer's applier
 	// about a record that landed: it decided something this build cannot

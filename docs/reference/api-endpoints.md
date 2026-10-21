@@ -5695,7 +5695,13 @@ transport's own codes:
 | `draining` | `503` | This node is [draining](#during-a-drain) |
 | `starting` | `503` | This node is [still starting](#while-a-node-is-starting): its listener is bound and the surface that serves this route is not up yet; `Retry-After: 10` |
 
-And the tool's own refusal, carrying the tool's sentence as `detail`:
+And the tool's own refusal, carrying the tool's sentence as `detail` — except a
+`conflict` or an `exists` a native domain decided (a room archived, an item in
+the trash, a label another tag carries, a write that lost its race), whose
+`detail` is the domain's own sentence: what refused the change and what changes
+it, written for the person reading it. The tool's sentence for those is written
+for a model, naming the tool to call next and what to send it, and travels
+beside it as `tool_detail`:
 
 | `error` | Status |
 |---|---|
@@ -5892,7 +5898,7 @@ mean the same thing on every write surface:
 | `403` | `unauthorized` / `step_up_required` | The authority table refused, or the verb needs a fresher proof | `detail`, worded exactly as a seat and your assistant are told it, beside `reason` and `grants` (or the window) |
 | `403` | `forbidden` | The domain forbids this caller the gesture — rewriting somebody else's remark | `detail`: the domain's own sentence |
 | `404` | `not_found` | The item, page or comment does not exist — or it was purged | |
-| `409` | `stale_version`, `conflict`, `exists`, `reassignment_budget`, `inbox_full`, … | Somebody changed it after you read it — a stale `if_match` or `base_version` in the body, a title taken, a race lost — or the object is in a state that refuses it: archived, frozen in the trash, its contents at their cap ([which class a refusal is](#which-class-a-refusal-is)) | `detail`: read it again, or change what is in the way |
+| `409` | `stale_version`, `conflict`, `exists`, `reassignment_budget`, `inbox_full`, … | Somebody changed it after you read it — a stale `if_match` or `base_version` in the body, a race lost — or a name it gives is another object's already (a title, a room's name, a tag's label: `exists`), or the object is in a state that refuses it: archived, frozen in the trash, its contents at their cap ([which class a refusal is](#which-class-a-refusal-is)) | `detail`: what refused it and what to do, in the domain's own words for a `conflict` or an `exists` — a race says to look again and try again, a state names who changes it, a collision names what holds the name — with the tool's own sentence, written for a model, as `tool_detail` |
 | `412` | `version_moved` | The version the request's `If-Match` header named is not the one it holds: the same refusal as a stale `if_match` in the body, answered as HTTP answers a precondition that failed (RFC 9110 §13.1.1), as a project file's and an artifact's are | `detail`: read it again and decide again |
 | `409` | `invalid_input` | The `Idempotency-Key` already names a write to another object | send it under a new key |
 | `409` | `reader_changed` | The request names, in `X-Crewlet-Reader`, a principal its credential is not, and the guard refused it before it ran | nothing; ask `GET /auth/session` who the credential is — see [Auth](#routes) |

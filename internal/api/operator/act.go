@@ -263,7 +263,7 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 	if result.Failed {
 		log.InfoContext(r.Context(), "operator_act", append(logged,
 			"refused", true)...)
-		Fail(w, result.Cause, result.Output, key, About(name, args))
+		FailResult(w, result, key, About(name, args))
 		return
 	}
 	answer := receiptOf(name, result.Output)

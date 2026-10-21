@@ -152,7 +152,7 @@ func TestAMergeRefusesARemovedItemAndSaysToRestoreIt(t *testing.T) {
 	if err == nil {
 		t.Fatal("a removed item was folded")
 	}
-	if !strings.Contains(err.Error(), "restore") {
+	if !strings.Contains(strings.ToLower(err.Error()), "restore") {
 		t.Errorf("the refusal is %q and does not name the move that would "+
 			"make the fold possible", err)
 	}

@@ -227,9 +227,11 @@ func (t *steerTurn) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"it has ended or parked, so no later round will read a note. Nothing was sent.",
 			clip(turnID))), nil
 	case steer.StatusFull:
-		return refused(tools.RefusalConflict, fmt.Sprintf("Turn %s already holds %d "+
-			"notes it has not read yet. Nothing was sent: once it has read them — at "+
-			"its next round — this note may be sent again.", clip(turnID), steer.MaxPendingNotes)), nil
+		// THE TURN'S STATE, which clears on its own: it reads its notes
+		// at its next round.
+		return refused(tools.RefusalConflict, fmt.Sprintf("This turn already has %d "+
+			"notes it hasn't read yet, so nothing was sent. Send it again once it "+
+			"reads them, at its next round.", steer.MaxPendingNotes)), nil
 	case steer.StatusUnsupported:
 		return refused(tools.RefusalSteerUnsupported, fmt.Sprintf("Turn %s cannot "+
 			"take a note: %s's executor runs as a coding CLI's own agentic loop, "+

@@ -202,6 +202,76 @@ func TestADomainsRefusalIsToldInItsOwnWords(t *testing.T) {
 	}
 }
 
+// A STATE OR A COLLISION A DOMAIN DECIDED IS TOLD TO A PERSON IN THE DOMAIN'S
+// WORDS, and the tool's own sentence travels beside it as `tool_detail`.
+//
+// The tool's sentence for a refusal is a model's — "post_message refused that:
+// … say it somewhere that is still open, or say nothing", "write_project on ENG
+// with tags_add: …" — so the dashboard drew every conflict in one fixed
+// sentence ending "retry", which re-trying an archived room's post never
+// changes, and every collision as "That already exists". The domain's sentence
+// says what refused the call and what changes it, for the person a screen
+// shows it to; a lost race says to try again, and a state names who changes
+// it. Every other refusal keeps the tool's sentence, which is already worded
+// for a person, and a conflict no domain decided (a turn's note box) is the
+// tool's own too.
+//
+// Mutation: answer result.Output for every class in Said, or drop the
+// tool_detail, and a row goes red.
+func TestAStateOrACollisionIsToldToAPersonInTheDomainsWords(t *testing.T) {
+	t.Parallel()
+	model := "post_message refused that: the model's sentence, naming the tool to call next."
+	for name, tc := range map[string]struct {
+		cause      error
+		status     int
+		says, tool string
+	}{
+		"an archived room": {crewletmcp.Classify(crewletmcp.RefusalConflict,
+			fmt.Errorf("%w: this room is archived, so it takes no new messages. "+
+				"Whoever created it, its team's lead or an administrator can reopen it",
+				chat.ErrArchived)), http.StatusConflict,
+			"This room is archived, so it takes no new messages. Whoever created it, " +
+				"its team's lead or an administrator can reopen it.",
+			model},
+		"a task in the trash": {crewletmcp.Classify(crewletmcp.RefusalConflict,
+			&tracker.Refusal{Mark: tracker.ErrState,
+				Err: errors.New("this task is in the trash, put there by ana. Restore it first")}),
+			http.StatusConflict, "This task is in the trash, put there by ana. Restore it first.",
+			model},
+		"a lost race": {crewletmcp.Classify(crewletmcp.RefusalConflict,
+			fmt.Errorf("%w: crewlet.tracker.task.x kept changing", statelog.ErrConflict)),
+			http.StatusConflict, "Someone else changed this at the same moment", model},
+		"a label another tag carries": {crewletmcp.Classify(crewletmcp.RefusalExists,
+			&tracker.TagClash{Project: "ENG", Slug: "api", Label: "API",
+				Other: tracker.Tag{Slug: "backend-api", Label: "API"}}), http.StatusConflict,
+			`ENG already has a tag labelled "API" (backend-api).`, model},
+		"an argument refused": {crewletmcp.Classify(crewletmcp.RefusalInvalid,
+			&chat.InvalidError{Field: "body", Why: "a message is at most 32768 bytes"}),
+			http.StatusUnprocessableEntity, "post_message refused that: the model's", ""},
+		"a turn's note box": {crewletmcp.RefusalConflict, http.StatusConflict,
+			"post_message refused that: the model's", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rec := httptest.NewRecorder()
+			operator.FailResult(rec, crewletmcp.Result{Failed: true, Output: model,
+				Cause: tc.cause}, newKey(), httpjson.Detail{"tool": "post_message"})
+			body := decode(t, rec)
+			detail, _ := body["detail"].(string)
+			if rec.Code != tc.status || !strings.HasPrefix(detail, tc.says) {
+				t.Errorf("answered %d with detail %q, want %d opening %q", rec.Code,
+					detail, tc.status, tc.says)
+			}
+			if got, _ := body["tool_detail"].(string); got != tc.tool {
+				t.Errorf("tool_detail is %q, want %q", got, tc.tool)
+			}
+			if body["tool"] != "post_message" {
+				t.Errorf("the answer lost what it was about: %v", body)
+			}
+		})
+	}
+}
+
 // THE CLASS OF A WRITER'S ERROR IS THE TOOLS' OWN RULE: a content refusal the
 // domain marked keeps its class, a condition waiting clears is `unavailable` —
 // an estate the router found nobody to serve among them — and anything

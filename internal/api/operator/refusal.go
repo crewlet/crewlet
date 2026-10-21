@@ -3,6 +3,7 @@ package operator
 import (
 	"context"
 	"errors"
+	"maps"
 	"net/http"
 	"strings"
 	"time"
@@ -83,6 +84,72 @@ func About(tool string, args map[string]any) httpjson.Detail {
 	}
 	return about
 }
+
+// Said is what a PERSON is told about a tool call that did not do what it was
+// asked — the `detail` [Fail] answers it under — and the tool's own sentence
+// beside it where the two differ, which a caller carries as `tool_detail`.
+//
+// A CONFLICT OR A COLLISION A NATIVE DOMAIN DECIDED is told in that domain's own
+// sentence ([builtin.WriterSentence]): what refused the call — a room archived,
+// a task in the trash, a label another tag carries, a write that lost its race
+// — and what changes it, written for the person a screen shows it to. The
+// tool's sentence for the same refusal is a MODEL's: it names the tool to call
+// next and the arguments to send, which a person has no use for, and a screen
+// that showed it read "post_message refused that: …" — so the dashboard drew
+// every one of them in one fixed sentence ending "retry", which re-trying an
+// archived room's post never changes. The tool's sentence still travels, for a
+// client that wants it.
+//
+// EVERY OTHER REFUSAL is told in the tool's own sentence: an argument refused
+// or a rule that forbade the call is worded by the tools for the person who
+// typed it already (the writer's sentence, or one composed from a typed
+// refusal's fields where the writer's would quote an id), and the remaining
+// classes are drawn by the surfaces in words of their own.
+func Said(result crewletmcp.Result) (detail, toolDetail string) {
+	switch crewletmcp.RefusalOf(result) {
+	case crewletmcp.RefusalConflict, crewletmcp.RefusalExists:
+		if said, ok := builtin.WriterSentence(result.Cause); ok && said != result.Output {
+			return said, result.Output
+		}
+	}
+	return result.Output, ""
+}
+
+// FailResult is [Fail] for a tool call's failed result, in the words [Said]
+// gives a person, the tool's own beside them as `tool_detail`.
+func FailResult(w http.ResponseWriter, result crewletmcp.Result, key string,
+	about httpjson.Detail) {
+
+	detail, fields := saidAbout(result, about)
+	fail(w, result.Cause, detail, key, fields, false)
+}
+
+// FailResultIfMatched is [FailIfMatched] for a tool call's failed result.
+func FailResultIfMatched(w http.ResponseWriter, result crewletmcp.Result, key string,
+	about httpjson.Detail) {
+
+	detail, fields := saidAbout(result, about)
+	fail(w, result.Cause, detail, key, fields, true)
+}
+
+// saidAbout is [Said]'s detail, and about with the tool's own sentence beside
+// it as `tool_detail` where the two differ — a copy, so the caller's map is not
+// written to.
+func saidAbout(result crewletmcp.Result, about httpjson.Detail) (string, httpjson.Detail) {
+	detail, tool := Said(result)
+	fields := maps.Clone(about)
+	if tool != "" {
+		if fields == nil {
+			fields = httpjson.Detail{}
+		}
+		fields[keyToolDetail] = tool
+	}
+	return detail, fields
+}
+
+// keyToolDetail is where a refusal carries the tool's own sentence beside the
+// one a person is told, as an unknown outcome carries it.
+const keyToolDetail = "tool_detail"
 
 // classAnswer is how one refusal class is answered.
 type classAnswer struct {

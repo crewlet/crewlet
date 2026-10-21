@@ -726,18 +726,19 @@ func (s *served) answerDispatched(w http.ResponseWriter, r *http.Request, key,
 
 // answerTool renders one tool's receipt, or its failure beside about.
 //
-// A call whose version an If-Match header stated (conditioned) is answered by
-// [operator.FailIfMatched], which answers a stale one as HTTP's failed
+// A failure is answered in the words a person is told ([operator.Said]). A call
+// whose version an If-Match header stated (conditioned) is answered by
+// [operator.FailResultIfMatched], which answers a stale one as HTTP's failed
 // precondition.
 func answerTool(w http.ResponseWriter, key string, about httpjson.Detail,
 	result tools.Result, conditioned bool) {
 
 	if result.Failed && conditioned {
-		operator.FailIfMatched(w, result.Cause, result.Output, key, about)
+		operator.FailResultIfMatched(w, result, key, about)
 		return
 	}
 	if result.Failed {
-		operator.Fail(w, result.Cause, result.Output, key, about)
+		operator.FailResult(w, result, key, about)
 		return
 	}
 	var receipt map[string]any

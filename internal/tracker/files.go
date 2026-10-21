@@ -250,9 +250,12 @@ func checkFilePut(put *FilePut) error {
 // would be uploads failing from a node whose clock runs ahead.
 func checkUploadAge(put FilePut, now time.Time) error {
 	if age := now.Sub(put.Object.Key.Minted()); age > objstore.RecordWithin {
-		return fmt.Errorf("%w: %s's content was uploaded under a key minted %s ago, "+
-			"and a write may name one minted at most %s before it — upload it again",
-			ErrUploadStale, put.Path, age.Truncate(time.Second), objstore.RecordWithin)
+		// SAID TO THE PERSON WHO UPLOADED IT, in hours rather than a key's
+		// minting instant: the bound is [objstore.RecordWithin], the most a
+		// write may lag the upload its object was minted for.
+		return fmt.Errorf("%w: %s was uploaded more than %d hours before this "+
+			"write, so its upload has expired. Upload it again", ErrUploadStale,
+			put.Path, int(objstore.RecordWithin.Hours()))
 	}
 	return nil
 }
@@ -394,8 +397,8 @@ func (w *Writer) refuseFileProject(ctx context.Context, tx *sql.Tx, key string) 
 // refused here — one sentence for both, so the two refusals cannot drift.
 func AcceptFiles(project string, archived bool) error {
 	if archived {
-		return refusedByState("project %s is archived, so it takes no new files; "+
-			"unarchive it first", project)
+		return refusedByState("project %s is archived, so it takes no new files. "+
+			"%s", project, unarchiveProject)
 	}
 	return nil
 }

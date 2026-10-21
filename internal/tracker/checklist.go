@@ -153,7 +153,11 @@ func ApplyChecklist(lists []Checklist, c ChecklistIntent) ([]Checklist, error) {
 		case c.List == "":
 			return nil, invalid("an add_list gesture mints no list id")
 		case slices.ContainsFunc(out, func(l Checklist) bool { return l.ID == c.List }):
-			return nil, collision("this task already has a checklist %q", c.List)
+			// AN ID MINTED FROM THE GESTURE'S OWN OPERATION (the tools'
+			// checklistIntent), so one the task holds is this gesture made
+			// again: said without the id, which nobody reading it chose.
+			return nil, collision("this task already has that checklist. Look at " +
+				"the task rather than adding it again")
 		}
 		if err := checkChecklistName(c.Name, MaxChecklistName, "checklist name"); err != nil {
 			return nil, err
@@ -273,7 +277,9 @@ func newItem(lists []Checklist, adding []ChecklistItem, item ChecklistItem) (Che
 		})
 	}
 	if taken {
-		return ChecklistItem{}, collision("this task already has a checklist item %q", item.ID)
+		// THE SAME GESTURE AGAIN, as a list's id is: said without the id.
+		return ChecklistItem{}, collision("this task already has that checklist " +
+			"line. Look at the task rather than adding it again")
 	}
 	if err := checkChecklistName(item.Name, MaxChecklistItemName, "checklist item name"); err != nil {
 		return ChecklistItem{}, err

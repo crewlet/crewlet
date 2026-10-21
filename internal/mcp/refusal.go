@@ -14,9 +14,12 @@ import (
 // [Result.Output] and is expected to act on its words — that is why the output
 // is the whole story for it, and why the refusal text names the argument to
 // change. A PERSON's surface cannot: the dashboard has to decide whether to
-// show the tool's sentence at all (it names a field only for [RefusalInvalid]
-// and [RefusalForbidden]), which HTTP status the write surface answers, and
-// whether a retry could ever help — and every one of those decisions, made by
+// show the engine's sentence at all (the tool's for [RefusalInvalid] and
+// [RefusalForbidden], which name a field or a rule; the deciding domain's own
+// for a [RefusalConflict] or a [RefusalExists], which internal/api/operator's
+// Said puts in front of a person, since the tool's names the next call for a
+// model), which HTTP status the write surface answers, and whether a retry
+// could ever help — and every one of those decisions, made by
 // matching the prose, is a decision that changes when somebody rewords a
 // refusal for the model's benefit. The prompt text is tuned against observed
 // model behaviour; it cannot also be a wire contract.
