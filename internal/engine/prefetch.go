@@ -292,7 +292,7 @@ func turnAsk(evs []*events.Event) string {
 // turnAskFor is [turnAsk] part by part, each part able to put the words somebody
 // else wrote inside a fence for the auxiliary model that reads it
 // ([prefetch.Ask]): a notification's salient body labelled exactly as its
-// source labelled the body the trigger fenced ([notify.SalientProvenance]) at
+// source labelled the body the trigger fenced ([notify.SalientLabel]) at
 // the trust its writers earn from self, and a colleague's ask or answer as its
 // fenced brief. A subject line and a schedule's task hold nobody's words but
 // the company's and are only neutralised.
@@ -329,9 +329,8 @@ func eventAsk(prompts notify.Prompts, parties notify.Parties, self string,
 		return prefetch.AskPart{Text: text, Fenced: func(b provenance.Boundary) string {
 			fenced := provenance.Neutralise(b, subject)
 			if body != "" {
-				source, trust, authors := notify.SalientProvenance(prompts, *n, parties, self)
-				fenced = strings.TrimSpace(fenced + "\n\n" +
-					provenance.Fence(b, source, trust, authors, body))
+				label := notify.SalientLabel(prompts, *n, parties, self)
+				fenced = strings.TrimSpace(fenced + "\n\n" + label.Fence(b, body))
 			}
 			return fenced
 		}}, true
