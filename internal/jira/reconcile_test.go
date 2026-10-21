@@ -509,6 +509,76 @@ func TestTheWebhookIsRegisteredAndItsSecretRecorded(t *testing.T) {
 	}
 }
 
+// BUT AN EMPTY ANSWER THE RUN COULD NOT VOUCH FOR IS NOT MINTED OVER. A
+// `crewlet jira provision` run on a node whose engine is stopped reads only
+// that node's own rows, and the fleet's store may hold the secret every node
+// verifies deliveries with: a hook registered with a fresh one would be
+// refused by all of them. So the pass refuses before it registers anything.
+func TestAnEmptySecretTheRunCannotVouchForIsNotMintedOver(t *testing.T) {
+	t.Parallel()
+	inst := newInstance(t)
+	inst.accounts["Bearer org-token"] = "acct-org"
+	sink := newSink()
+
+	_, err := run(t, inst, func(opts *jira.Options) {
+		opts.Sink = sink
+		opts.WebhookBase = "https://engine.example.com/"
+		opts.Value = func(v string) string {
+			if v == "${JIRA_WEBHOOK_SECRET}" {
+				return ""
+			}
+			return v
+		}
+		opts.Unvouched = func(name string) error {
+			return fmt.Errorf("%w: %s is out of this run's sight",
+				provision.ErrUnvouched, name)
+		}
+	})
+	if !errors.Is(err, provision.ErrUnvouched) {
+		t.Fatalf("Reconcile = %v, want the unknown secret refused", err)
+	}
+	if minted := sink.value("JIRA_WEBHOOK_SECRET"); minted != "" {
+		t.Errorf("a secret was minted over one the run could not see: %q", minted)
+	}
+	if len(inst.created) != 0 {
+		t.Errorf("a hook was registered by a run that refused its secret: %v", inst.created)
+	}
+}
+
+// NOR IS A SECRET THE RUN'S OWN ENVIRONMENT FILLED IN FOR SUCH A VARIABLE.
+// What a stopped node's shell exports for a name its own rows lack is a guess
+// at the key the fleet holds, which the store outranks in the engine — so
+// registering it re-points the hook exactly as a fresh mint would, and the
+// answer is settled like an empty one: refused where nothing records it.
+func TestASecretFromOutsideTheStoreIsNotRegistered(t *testing.T) {
+	t.Parallel()
+	inst := newInstance(t)
+	inst.accounts["Bearer org-token"] = "acct-org"
+	sink := newSink()
+
+	_, err := run(t, inst, func(opts *jira.Options) {
+		opts.Sink = sink
+		opts.WebhookBase = "https://engine.example.com/"
+		opts.Value = func(v string) string {
+			if v == "${JIRA_WEBHOOK_SECRET}" {
+				return "what-this-shell-exports"
+			}
+			return v
+		}
+		opts.Unvouched = func(name string) error {
+			return fmt.Errorf("%w: %s is out of this run's sight",
+				provision.ErrUnvouched, name)
+		}
+	})
+	if !errors.Is(err, provision.ErrUnvouched) {
+		t.Fatalf("Reconcile = %v, want the guessed secret refused", err)
+	}
+	if len(inst.created)+len(inst.updated) != 0 {
+		t.Errorf("a hook was written with a secret the run could not vouch for: "+
+			"created %v, updated %v", inst.created, inst.updated)
+	}
+}
+
 // A SECRET THAT ALREADY RESOLVES IS USED AS IT IS.
 //
 // The tempting shape is to mint every run, and it is an outage: the engine

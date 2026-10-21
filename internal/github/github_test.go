@@ -1650,6 +1650,87 @@ func TestAnUnsetSecretIsMintedIntoItsOwnVariable(t *testing.T) {
 	}
 }
 
+// BUT NOT ONE THE RUN COULD NOT SEE. A `crewlet github provision` run on a
+// node whose engine is stopped reads only that node's own rows, and an empty
+// answer there says nothing about the fleet's store, which every node
+// verifies deliveries against: minting on it would re-point the hook at a key
+// no node holds. So the pass refuses, and registers nothing.
+func TestAnEmptySecretTheRunCannotVouchForIsNotMintedOver(t *testing.T) {
+	t.Parallel()
+	var writes atomic.Int32
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writes.Add(1)
+		}
+		_, _ = w.Write([]byte(`[]`))
+	})
+
+	sink := &recordingSink{}
+	_, err := github.Reconcile(context.Background(), github.Options{
+		Client: client,
+		Config: &config.GitHub{
+			Enabled: true, WebhookSecret: "${GH_SECRET}",
+			Provisioning: &config.GitHubProvisioning{Org: "acme"},
+		},
+		Value: func(string) string { return "" },
+		Unvouched: func(name string) error {
+			return fmt.Errorf("%w: %s is out of this run's sight",
+				provision.ErrUnvouched, name)
+		},
+		Sink: sink, WebhookBase: "https://x",
+	})
+	if !errors.Is(err, provision.ErrUnvouched) {
+		t.Fatalf("Reconcile = %v, want the unknown secret refused", err)
+	}
+	if len(sink.recorded) != 0 {
+		t.Errorf("a secret was minted over one the run could not see: %v", sink.recorded)
+	}
+	if n := writes.Load(); n != 0 {
+		t.Errorf("%d write(s) reached GitHub from a run that refused its secret", n)
+	}
+}
+
+// NOR ONE THE RUN'S OWN ENVIRONMENT FILLED IN. What a stopped node's shell
+// exports for a name its own rows lack is a guess at the key the fleet holds,
+// which the store outranks in the engine — so registering it re-points the
+// hook exactly as a fresh mint would. Settled like an empty answer: the sink's
+// record where it holds one, and refused where it does not.
+func TestASecretFromOutsideTheStoreIsNotRegistered(t *testing.T) {
+	t.Parallel()
+	var writes atomic.Int32
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writes.Add(1)
+		}
+		_, _ = w.Write([]byte(`[]`))
+	})
+
+	_, err := github.Reconcile(context.Background(), github.Options{
+		Client: client,
+		Config: &config.GitHub{
+			Enabled: true, WebhookSecret: "${GH_SECRET}",
+			Provisioning: &config.GitHubProvisioning{Org: "acme"},
+		},
+		Value: func(v string) string {
+			if v == "${GH_SECRET}" {
+				return "what-this-shell-exports"
+			}
+			return v
+		},
+		Unvouched: func(name string) error {
+			return fmt.Errorf("%w: %s is out of this run's sight",
+				provision.ErrUnvouched, name)
+		},
+		Sink: &recordingSink{}, WebhookBase: "https://x",
+	})
+	if !errors.Is(err, provision.ErrUnvouched) {
+		t.Fatalf("Reconcile = %v, want the guessed secret refused", err)
+	}
+	if n := writes.Load(); n != 0 {
+		t.Errorf("%d write(s) reached GitHub with a secret the run could not vouch for", n)
+	}
+}
+
 // A LITERAL SECRET THAT RESOLVES TO NOTHING HAS NOWHERE TO MINT INTO, and
 // saying so beats registering a hook nothing can verify.
 func TestALiteralSecretWithNoValueIsRefused(t *testing.T) {

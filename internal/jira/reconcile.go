@@ -100,6 +100,15 @@ type Options struct {
 	// stays out of the config resolver's import graph.
 	Value func(string) string
 
+	// Unvouched answers, for a variable Value resolved, why that answer —
+	// empty, or filled from the run's own environment — is not one this run
+	// can mint over or register as the deployment's secret, or nil where it
+	// is. Nil for the engine's own pass, whose resolver reads the whole
+	// secret store; a `crewlet jira provision` run reading a stopped node's
+	// own rows sets it, because the fleet's store may hold what those rows
+	// lack (see [provision.Unvouched]).
+	Unvouched provision.Unvouched
+
 	// Sink records a minted webhook secret. Required only when one has to
 	// be minted, which is why it is not checked up front: a run against an
 	// instance whose secret is already set has nothing to record.
@@ -701,12 +710,22 @@ type webhookKey struct {
 func webhookSecret(
 	ctx context.Context, opts Options, target string,
 ) (webhookKey, error) {
-	var resolved string
-	if opts.Value != nil {
-		resolved = strings.TrimSpace(opts.Value(opts.Config.WebhookSecret))
-	}
-	if resolved != "" && !opts.RecreateWebhook {
-		return webhookKey{Secret: resolved}, nil
+	if !opts.RecreateWebhook {
+		var resolved string
+		if opts.Value != nil {
+			resolved = opts.Value(opts.Config.WebhookSecret)
+		}
+		// SETTLED BEFORE IT IS USED, and not only when it is empty: a
+		// value a stopped node's run filled in from its own environment
+		// may not be the key the fleet holds ([provision.Resolved]).
+		held, ok, err := provision.Resolved(ctx, opts.Sink,
+			opts.Config.WebhookSecret, resolved, opts.Unvouched)
+		if err != nil {
+			return webhookKey{}, fmt.Errorf("jira: %w", err)
+		}
+		if ok {
+			return webhookKey{Secret: held}, nil
+		}
 	}
 	secretVar, ok := provision.SoleVar(opts.Config.WebhookSecret)
 	if !ok {
@@ -724,7 +743,8 @@ func webhookSecret(
 			setup.BaseKey(opts.WebhookBaseKey), target)
 	}
 	secret, err := provision.MintSecret(ctx, opts.Sink, secretVar,
-		opts.RecreateWebhook, func() (string, error) { return rand.Text(), nil })
+		opts.RecreateWebhook, opts.Unvouched,
+		func() (string, error) { return rand.Text(), nil })
 	if err != nil {
 		return webhookKey{}, fmt.Errorf("jira: %w", err)
 	}

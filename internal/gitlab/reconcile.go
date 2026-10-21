@@ -229,6 +229,15 @@ type Options struct {
 	// config's reference is what says where the value belongs.
 	SigningSecretVar string
 
+	// Unvouched answers, for a variable SigningSecret was resolved from, why
+	// that answer — empty, or filled from the run's own environment — is not
+	// one this run can mint over or register as the deployment's key, or nil
+	// where it is. Nil for the engine's own pass, whose resolver reads the
+	// whole secret store; a `crewlet gitlab provision` run reading a stopped
+	// node's own rows sets it, because the fleet's store may hold what those
+	// rows lack (see [provision.Unvouched]).
+	Unvouched provision.Unvouched
+
 	// Mode is where service accounts are owned — see [Mode]. The zero
 	// value is [ModeGroup], which is the only shape GitLab.com has.
 	Mode Mode
@@ -1093,7 +1102,18 @@ func signingSecret(ctx context.Context, opts Options) (secret, note string, fres
 		true, opts.WebhookBaseKey)
 	switch plan.Action {
 	case SigningReuse:
-		return strings.TrimSpace(opts.SigningSecret), plan.Note, false, nil
+		// SETTLED BEFORE IT IS REGISTERED, and not only when it is empty:
+		// a value a stopped node's run filled in from its own environment
+		// may not be the key the fleet holds, and registering it re-points
+		// the hook exactly as a mint would. A non-empty answer comes back
+		// used, read back from the sink, or refused — never as nothing
+		// ([provision.Resolved]).
+		secret, _, err = provision.Resolved(ctx, opts.Sink, opts.Config.SigningSecret,
+			opts.SigningSecret, opts.Unvouched)
+		if err != nil {
+			return "", "", false, fmt.Errorf("gitlab: %w", err)
+		}
+		return secret, plan.Note, false, nil
 	case SigningBlocked:
 		return "", "", false, errors.New("gitlab: " + plan.Note)
 	}
@@ -1107,8 +1127,8 @@ func signingSecret(ctx context.Context, opts Options) (secret, note string, fres
 	// /webhooks/gitlab route verifies with the snapshot, so each rotation
 	// moved the instance further from the value the running process holds,
 	// on the reconcile loop's timer.
-	minted, err := provision.MintSecret(
-		ctx, opts.Sink, plan.Var, plan.Action == SigningRotate, whsec.Mint)
+	minted, err := provision.MintSecret(ctx, opts.Sink, plan.Var,
+		plan.Action == SigningRotate, opts.Unvouched, whsec.Mint)
 	if err != nil {
 		return "", "", false, fmt.Errorf("gitlab: %w", err)
 	}

@@ -45,6 +45,15 @@ type Options struct {
 	// Value resolves a config value to what it holds.
 	Value func(string) string
 
+	// Unvouched answers, for a variable Value resolved, why that answer —
+	// empty, or filled from the run's own environment — is not one this run
+	// can mint over or register as the deployment's secret, or nil where it
+	// is. Nil for the engine's own pass, whose resolver reads the whole
+	// secret store; a `crewlet confluence provision` run reading a stopped node's
+	// own rows sets it, because the fleet's store may hold what those rows
+	// lack (see [provision.Unvouched]).
+	Unvouched provision.Unvouched
+
 	// Sink records a minted token. Required only when one has to be
 	// minted, which is why it is not checked up front.
 	Sink provision.TokenSink
@@ -547,12 +556,21 @@ func dataCenterSecret(ctx context.Context, opts Options, res *Result) (string, b
 func mintInto(
 	ctx context.Context, opts Options, res *Result, ref, field, role string,
 ) (string, bool, error) {
-	var resolved string
-	if opts.Value != nil {
-		resolved = strings.TrimSpace(opts.Value(ref))
-	}
-	if resolved != "" && !opts.Recreate {
-		return resolved, false, nil
+	if !opts.Recreate {
+		var resolved string
+		if opts.Value != nil {
+			resolved = opts.Value(ref)
+		}
+		// SETTLED BEFORE IT IS USED, and not only when it is empty: a
+		// value a stopped node's run filled in from its own environment
+		// may not be the one the fleet holds ([provision.Resolved]).
+		held, ok, err := provision.Resolved(ctx, opts.Sink, ref, resolved, opts.Unvouched)
+		if err != nil {
+			return "", false, fmt.Errorf("confluence: %w", err)
+		}
+		if ok {
+			return held, false, nil
+		}
 	}
 	variable, ok := provision.SoleVar(ref)
 	if !ok {
@@ -568,7 +586,7 @@ func mintInto(
 			field, provision.Shape(ref))
 	}
 	secret, err := provision.MintSecret(ctx, opts.Sink, variable, opts.Recreate,
-		func() (string, error) { return rand.Text(), nil })
+		opts.Unvouched, func() (string, error) { return rand.Text(), nil })
 	if err != nil {
 		return "", false, fmt.Errorf("confluence: %w", err)
 	}

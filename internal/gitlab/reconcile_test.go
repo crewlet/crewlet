@@ -1465,6 +1465,95 @@ func TestAFailedHookRollsBackASecretItHadNoTokensToRevoke(t *testing.T) {
 	}
 }
 
+// A SIGNING SECRET THE RUN COULD NOT SEE IS NOT MINTED OVER. A `crewlet
+// gitlab provision` run on a node whose engine is stopped reads only that
+// node's own rows, and the fleet's store may hold the key every node verifies
+// GitLab's deliveries with: a hook re-pointed at a fresh one would be refused
+// by all of them. So the pass refuses, rolls back what it minted for the
+// seats, and writes no hook.
+func TestASigningSecretTheRunCannotVouchForIsNotMintedOver(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	sink := newRecordingSink()
+	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE"}
+
+	_, err := reconcileWith(t, f, sink, seats, func(o *gitlab.Options) {
+		o.SigningSecret = ""
+		o.SigningSecretVar = "GITLAB_SIGNING_SECRET"
+		o.Unvouched = func(name string) error {
+			return fmt.Errorf("%w: %s is out of this run's sight",
+				provision.ErrUnvouched, name)
+		}
+	})
+	if !errors.Is(err, provision.ErrUnvouched) {
+		t.Fatalf("Reconcile = %v, want the unknown signing secret refused", err)
+	}
+	if got := sink.value("GITLAB_SIGNING_SECRET"); got != "" {
+		t.Errorf("a signing secret was minted over one the run could not see: %q", got)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.hooks)+len(f.projectHooks) != 0 {
+		t.Errorf("a hook was written by a run that refused its signing secret: %+v", f.hooks)
+	}
+}
+
+// NOR IS ONE THE RUN'S OWN ENVIRONMENT FILLED IN REGISTERED IN ITS PLACE.
+//
+// On a stopped node the resolver reads the node's own rows and then this
+// shell's environment, as the engine reads the store and then its own. For a
+// variable the rows lack, the exported value is a guess: the fleet may hold
+// another key, and the store outranks the environment in the engine, so the
+// hook would be re-pointed at a key no node verifies with — the outage the
+// mint's refusal prevents, reached through a value that merely was not empty.
+// So the answer is settled like an empty one: the sink's record, or refused.
+func TestASigningSecretFromOutsideTheStoreIsNotRegistered(t *testing.T) {
+	t.Parallel()
+	unknown := func(name string) error {
+		return fmt.Errorf("%w: %s is out of this run's sight",
+			provision.ErrUnvouched, name)
+	}
+
+	t.Run("nothing recorded: refused", func(t *testing.T) {
+		t.Parallel()
+		f := newAdminInstance()
+		_, err := reconcileWith(t, f, newRecordingSink(),
+			map[string]string{"swe": "GITLAB_TOKEN_SWE"}, func(o *gitlab.Options) {
+				o.SigningSecretVar = "GITLAB_SIGNING_SECRET"
+				o.Unvouched = unknown
+			})
+		if !errors.Is(err, provision.ErrUnvouched) {
+			t.Fatalf("Reconcile = %v, want the guessed key refused", err)
+		}
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if len(f.hookBodies) != 0 {
+			t.Errorf("a hook was written with a key the run could not vouch for: %v",
+				f.hookBodies)
+		}
+	})
+
+	t.Run("the sink's record is registered instead", func(t *testing.T) {
+		t.Parallel()
+		const recorded = "whsec_cmVjb3JkZWQtYnktdGhlLXNpbmstMzItYnl0ZXMhISE="
+		f := newAdminInstance()
+		sink := newRecordingSink()
+		sink.values["GITLAB_SIGNING_SECRET"] = recorded
+		if _, err := reconcileWith(t, f, sink,
+			map[string]string{"swe": "GITLAB_TOKEN_SWE"}, func(o *gitlab.Options) {
+				o.SigningSecretVar = "GITLAB_SIGNING_SECRET"
+				o.Unvouched = unknown
+			}); err != nil {
+			t.Fatalf("Reconcile: %v", err)
+		}
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if len(f.hookBodies) != 1 || f.hookBodies[0]["signing_token"] != recorded {
+			t.Errorf("the hook was not registered with the sink's record: %v", f.hookBodies)
+		}
+	})
+}
+
 // AND WHEN THE CLEANUP ITSELF FAILS, the report says so loudly: those
 // credentials are live, nothing can use them, and only a human can remove
 // them.
