@@ -184,11 +184,11 @@ func (f *Fetcher) relevantKnowledge(ctx context.Context, r Request) knowledgeBlo
 		}
 		return knowledgeBlock{text: EmptyKnowledgeHint}
 	}
-	bullets := make([]string, 0, len(hits)+1)
-	for _, hit := range hits {
-		bullets = append(bullets, renderHit(hit))
-	}
-	rendered := joinBullets(bullets)
+	// FENCED, under the turn's own token and the label the backend that
+	// found the pages stamped on them ([knowledge.Render], ADR-0040): a
+	// page's title and opening are somebody else's words, in the system
+	// prompt.
+	rendered := knowledge.Render(r.Boundary, hits)
 	if rendered == "" {
 		return knowledgeBlock{text: EmptyKnowledgeHint}
 	}
@@ -233,26 +233,6 @@ func (f *Fetcher) knowledgeQuery(ctx context.Context, r Request) string {
 		}
 	}
 	return ""
-}
-
-// renderHit renders one page as a bullet.
-//
-// Falls back to the title alone where a page has no snippet — an empty page,
-// or one whose body is a table the extractor could not read — because the
-// title is still enough to decide whether to open it.
-func renderHit(hit knowledge.Hit) string {
-	title := strings.TrimSpace(hit.Title)
-	snippet := collapse(hit.Snippet)
-	switch {
-	case title == "" && snippet == "":
-		return ""
-	case title == "":
-		title = "(untitled)"
-	}
-	if snippet == "" {
-		return "- **" + title + "**"
-	}
-	return "- **" + title + "**: " + snippet
 }
 
 // auxRequest is the shape every auxiliary pass here sends.

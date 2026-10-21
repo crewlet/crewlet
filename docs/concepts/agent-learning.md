@@ -260,7 +260,7 @@ flowchart TD
     B -->|no| SKIP["skip — no aux call"]
     B -->|yes| C["aux-LLM generates a keyword query (role.llm_auxiliary)<br/>in: the turn's ask · out: a short plain-text query,<br/>e.g. 'hotfix deploy rollback'"]
     C --> D["Searcher.Search(knowledge.Query)<br/>scope derived internally: Confluence CQL,<br/>read scope from the org, agent's own backend auth"]
-    D --> E["render bullets: one per hit, title + snippet"]
+    D --> E["render bullets: one per hit, title + snippet,<br/>inside one fence of the turn's token, labelled by the backend"]
     E --> F["bake into the executor prompt's '## Relevant knowledge' block<br/>(frozen at turn start)"]
 ```
 
@@ -273,6 +273,7 @@ The bullets render title + snippet — enough for the executor to decide which p
 - **Show-nothing on a failed query.** When query generation fails there is nothing to search with, and the block renders nothing rather than erroring the turn.
 - **A search that did not run says so.** When the search never ran — the backend could not be reached, or no copy of the knowledge base answered it, so the outcome served no mode (`ServedMode` empty) — the block renders the **could-not-be-searched hint** (`UnsearchedKnowledgeHint`), never `EmptyKnowledgeHint`. "Nothing surfaced" is a claim about what the company has written down, and a search that never ran makes none: a seat told it concludes the page does not exist and writes a duplicate of one that does. Neither path errors the turn — `Search` is best-effort by the seam's contract — and `search_knowledge` answers a search that served no mode the same way.
 - **The gate-path hints** rendered when the block would otherwise go silently empty, each pointing the agent at `search_knowledge` as the mid-turn escape hatch. `EmptyKnowledgeHint` when the thin-trigger gate skipped the search or the search ran and returned nothing — it mirrors `personal_memory`'s hint — and `UnsearchedKnowledgeHint` beside it when the search did not run at all, which says nothing about whether a page exists.
+- **Fenced as somebody else's words.** A page's title and its opening are written by whoever wrote the page, so the bullets sit inside one [fence](agent-runtime.md#text-somebody-else-wrote) of the turn's token (`knowledge.Render`, the one renderer `search_knowledge` shares), labelled `page_body` at the trust the backend that found them decides: the engine's own pages are a colleague's with nobody named — every write there is a company principal's, and the index does not say which — and a Confluence page is `external` with nobody named, because a search result never says one person wrote every word and the site is not the company's alone. The backend stamps that label on every hit (`knowledge.Hit.Provenance`), so a node rendering a hit another node found renders it under the label the finding backend decided. A page that spells the turn's closer stays inside; the pointer sentence after the list stays outside, because it is the engine speaking.
 - **Frozen at turn start.** The block is part of the system-prompt prefix, so a `self_iterate` round reuses the same prefix and the LLM provider's prompt cache stays valid.
 - **Once per turn.** The query is generated and the search runs once; anything more the agent needs it asks for.
 
