@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/statelog`
-- **Enforced-by:** `internal/statelog.TestTheApplierIsHandedTheBodyAndTheTableTheFrame`, `internal/statelog.TestATamperedRecordIsRefusedPermanently`, `internal/engine.TestTheChangeFeedOpensTheFrameBeforeADomainDecodes`, `internal/estate.TestARequestTheFleetDidNotSignRunsNothing`, `internal/estate.TestARequestUnderAKeyThisNodeDoesNotHoldIsAskedElsewhere`, `internal/estate.TestAReplyTheRouterCannotBelieveIsNoAnswer`, `internal/estate.TestEnvelopeDomainsNeverVerifyAsEachOther`, `internal/signedask.TestARequestTheFleetDidNotSignIsBelievedInNothing`, `internal/signedask.TestAReplyIsBelievedOnlyWhenBoundToTheQuestion`, `internal/engine.TestARemovalTheFleetDidNotSignRemovesNothing`, `internal/engine.TestOnlyANoteTheFleetSignedReachesATurn`, `internal/engine.TestEveryInstructionChannelSignsInDomainsOfItsOwn`
+- **Enforced-by:** `internal/statelog.TestTheApplierIsHandedTheBodyAndTheTableTheFrame`, `internal/statelog.TestATamperedRecordIsRefusedPermanently`, `internal/engine.TestTheChangeFeedOpensTheFrameBeforeADomainDecodes`, `internal/estate.TestARequestTheFleetDidNotSignRunsNothing`, `internal/estate.TestARequestUnderAKeyThisNodeDoesNotHoldIsAskedElsewhere`, `internal/estate.TestAReplyTheRouterCannotBelieveIsNoAnswer`, `internal/estate.TestEnvelopeDomainsNeverVerifyAsEachOther`, `internal/signedask.TestARequestTheFleetDidNotSignIsBelievedInNothing`, `internal/signedask.TestAReplyIsBelievedOnlyWhenBoundToTheQuestion`, `internal/engine.TestARemovalTheFleetDidNotSignRemovesNothing`, `internal/engine.TestOnlyANoteTheFleetSignedReachesATurn`, `internal/engine.TestEveryInstructionChannelSignsInDomainsOfItsOwn`, `internal/engine.TestARelayedAnswerTheFleetDidNotSignNeverReachesASocket`, `internal/engine.TestARelayServerAnswersOnlyAnAskTheFleetSigned`
 - **Cost-when-tried:** both readers shipped handing the frame on, and neither failed as a signature bug. The applier put the framed bytes on `Record.Payload`, which every domain decodes, so every record came back `invalid character 'c' looking for beginning of value` from inside the apply transaction — the position never moved, health read the node as BEHIND rather than broken, and it shed its seats to a peer that would have done the same. The change feed read the same bytes and acknowledged each one under its own rule for a record it cannot decode, so every notification in the company stopped.
 - **Tag-status:** unreleased
 
@@ -117,7 +117,15 @@ The scatters that only READ — the fleet's history, a search slice, a held
 seat's memory, a sandbox's live tail — are not instructions and are not signed
 by this decision; what a party on the broker can do there is what it can do on
 any subject it reaches, and keeping both ports private is the operator's half
-(SECURITY.md).
+(SECURITY.md). The exemption is for an answer that is READ: handed back to the
+one caller that asked, as the answer to the question it put, and asked again
+the next time it is wanted. A scatter whose answer a node DISPLAYS as another
+node's content of its own accord — pushes, unasked, to every screen it holds as
+what somebody just said, wrote or is doing, with no question of the viewer's
+behind it and nothing but a later re-read to correct it — is not exempt,
+however much it only reads, because a forged answer there is not a wrong reply
+to one question but words shown under somebody's name to everybody watching;
+the two amendments below are the channels that rule reaches.
 
 It does not decide what a reader does once verification fails — only that it
 must not decode. The change feed acknowledges and derives no wake; the applier
@@ -134,3 +142,30 @@ broadcasts is sealed one way under the fleet keyring, in a key domain of its
 own, with a short validity inside the seal, through the same
 `internal/signedask` implementation (which gains a one-way form beside request
 and reply); a frame that does not open shows nobody.
+
+## Amendment: the live relay is sealed too
+
+The live relay (internal/engine, `liverelay.go`) is a scatter that only reads:
+a data node whose own copy is out of service asks a sound peer what that peer's
+appliers committed, so its sockets hear the company while its own appliers are
+not trusted. It shipped unsigned under the exemption above, and it is not one
+of its readers: what a follower takes from an answer is pushed to every socket
+on its node as the peer's appliers' work — a chat batch's excerpts and the
+people it mentions, a datastore batch's documents whole — so anybody who could
+reach the cluster or the leaf port could answer a follower before its server
+did and show words in a room under anybody's name, or values in a shared
+table, on every screen of that node until each read the rows again.
+
+So the relay is a request-and-reply channel of `internal/signedask`, in key
+domains of its own (`live.relay.request` and `live.relay.reply`): every ask is
+signed and bound to an id drawn for it and a deadline, a server answers from
+its ring only an ask the fleet signed and has not answered before, and a
+follower believes only an answer signed for the ask it sent. A channel rather
+than the one-way form presence uses, because the relay is an ask and one
+answer to it, and an answer is worth believing only as the answer to THIS ask:
+one way, a captured answer would be believed by any follower asking inside its
+validity. An answer a follower cannot believe is no answer — passed over while
+the follower goes on waiting for its server's own, since the transport names no
+sender and a forged reply that ended the ask would let anybody move every
+follower off every server — and a server that never sends a believable one is
+a silent peer, which the relay already handles by asking another.

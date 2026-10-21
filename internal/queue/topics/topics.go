@@ -193,11 +193,14 @@ const (
 	// (internal/engine, liverelay.go).
 	//
 	// NOT EVENTS, for SearchPrefix's reason: a relay is the ephemeral
-	// request and reply of [queue.EventQueue.Ask], and what it carries —
-	// whose inbox moved, what landed in a room — is a hint about rows every
-	// data node already holds, so a durable copy would be a second record
-	// of the same facts. And NOT under AgentInboxPrefix, whose `.inbox`
-	// subjects are seats' durable mailboxes: nothing here is anybody's mail.
+	// request and reply of [queue.EventQueue.AskEach], and what it carries —
+	// whose inbox moved, what landed in a room, what moved on an artifact —
+	// is what every data node's own rows already hold, so a durable copy
+	// would be a second record of the same facts. Every ask and answer is
+	// SIGNED (internal/signedask), because what it carries is shown on a
+	// screen as somebody's words. And NOT under AgentInboxPrefix, whose
+	// `.inbox` subjects are seats' durable mailboxes: nothing here is
+	// anybody's mail.
 	RelayPrefix = "crewlet.relay."
 	// LiveRelayPrefix is followed by one data node's id, escaped as a
 	// subject token, and that node alone serves it: a follower reads ONE

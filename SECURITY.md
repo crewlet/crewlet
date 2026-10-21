@@ -310,15 +310,19 @@ A few things worth knowing when deploying Crewlet:
   person it names). Unsigned, each would let anybody who reaches either port
   write as anybody, change the broker's quorum past every check the operator's
   route makes, or put words in front of a running agent under anybody's name.
-  Each request is bound to an id and a deadline inside its signature, so one
+  So is the live relay, which only reads but whose answers a data node whose
+  own copy is out of service pushes to its dashboards as a sound peer's
+  committed chat messages and datastore documents: unsigned, anybody on either
+  port could show words in a room, or values in a shared table, under anybody's
+  name. Each request is bound to an id and a deadline inside its signature, so one
   captured off the wire is not carried out twice. A frame under a key the
   receiver does not hold is not applied, or not run; one that fails under a key
   it holds is refused and logged. Signing authenticates and does not encrypt:
   the records, the event stream and the coordination store are readable by
   anything that reaches those ports, the coordination store's writes are
   guarded by compare-and-set rather than a signature, and the scatters that
-  only READ — history, search, a seat's memory, a sandbox's tail — are not
-  signed. Keep both ports on a private network. The decision is
+  only answer the question their asker put — history, search, a seat's
+  memory, a sandbox's tail — are not signed. Keep both ports on a private network. The decision is
   [ADR-0031](adr/0031-every-state-log-record-is-signed.md).
 - **Removing a person erases their values from every data node's rows — and not
   from the identity log or a backup until those let go of them.** A person's

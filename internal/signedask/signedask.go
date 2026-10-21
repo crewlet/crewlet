@@ -91,15 +91,30 @@
 // ([OneWay]): the same frame, a key domain of its own, and an expiry inside the
 // signed body in place of the id and deadline a reply would be bound to.
 //
+// # And a read whose answer is shown
+//
+// One request-and-reply channel carries no instruction either: the LIVE RELAY
+// (internal/engine, liverelay.go), on which a data node whose own copy is out
+// of service asks a sound peer what that peer's appliers committed. It only
+// reads, and it is a [Channel] all the same, because what the asker does with
+// the answer is PUSH it to every socket it holds as the peer's work — a chat
+// batch's excerpts and mentions, a datastore batch's documents — so a forged
+// answer is words shown under somebody's name. Its asks are bound like any
+// request, so the answer a follower believes is the one to the ask it just
+// sent; a one-way seal would let a captured answer be believed by any follower
+// asking inside its validity.
+//
 // # What it does not cover
 //
-// The scatters that only READ — the fleet's history, a search slice, a held
-// seat's memory, a sandbox's live tail — carry no instruction a node carries
-// out, so they are not channels here; and the queue's own event envelopes,
-// custody batches among them, carry what a node observed rather than what it
-// must do (ADR-0031). A broker that anybody can reach can read and forge on
-// those as it can on any subject: keeping both ports private is the operator's
-// half of the rule (SECURITY.md).
+// The scatters whose answer is READ — the fleet's history, a search slice, a
+// held seat's memory, a sandbox's live tail, each handed back to the one
+// caller that asked as the answer to its question — carry no instruction a
+// node carries out and nothing a node shows as another's content, so they are
+// not channels here; and the queue's own event envelopes, custody batches
+// among them, carry what a node observed rather than what it must do
+// (ADR-0031). A broker that anybody can reach can read and forge on those as
+// it can on any subject: keeping both ports private is the operator's half of
+// the rule (SECURITY.md).
 package signedask
 
 import (

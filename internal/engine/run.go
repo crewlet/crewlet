@@ -226,6 +226,11 @@ type Engine struct {
 	// liverelay.go.
 	liveRelay       atomic.Pointer[liveRelay]
 	stopLiveRelayFn func(context.Context)
+	// relayWire signs every ask and answer of that relay and verifies its
+	// peers', built ONCE in [New] from the fleet keyring on every node —
+	// the relay itself exists only on a data node, and is refused rather
+	// than armed unsigned ([newRelayWire]).
+	relayWire *relayWire
 
 	// onIdentity is told whose credentials each committed identity batch
 	// moved on this node. Nil tells nobody — see
@@ -1088,6 +1093,13 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	if err != nil {
 		return nil, err
 	}
+	// AND THE LIVE RELAY'S, which is no instruction either and is signed
+	// for the same reason: what it answers is pushed to a peer's sockets as
+	// this node's appliers' work (liverelay.go).
+	relayWire, err := newRelayWire(recordKeyring(opts.Bootstrap))
+	if err != nil {
+		return nil, err
+	}
 	// THE COMPLETION POLL'S CADENCE, whether or not this node will ever run a
 	// sandbox: an apply can bring it its first, and the poll starts there.
 	// See [checkSandboxPollInterval].
@@ -1212,6 +1224,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		auxSpend:            auxspend.NewLedger(backends.Queue),
 		steers:              steers,
 		presenceWire:        presenceWire,
+		relayWire:           relayWire,
 		dataTurns:           builtin.NewDataTurns(nil),
 		mcpRetryBase:        opts.mcpRetryBase,
 		sandboxOtel:         otel,

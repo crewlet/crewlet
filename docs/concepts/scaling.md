@@ -161,7 +161,10 @@ flowchart TD
   keeps, not an instruction it acts on. The rule is not the estate's alone:
   every request one node asks another to carry out — a broker member removing
   a voter, the node running a turn taking a person's note — is signed and
-  bound the same way, by one implementation.
+  bound the same way, by one implementation, and so is the live relay a data
+  node whose own copy is out of service hears a sound peer's appliers through,
+  because what it relays reaches its dashboards as somebody's chat messages
+  and datastore documents.
 - **Nobody answering is an answer that says so**, with what each data node said
   — never an empty list, which would say the company has none of what was asked
   for. A write that went **unanswered** is the other kind of answer: a node
