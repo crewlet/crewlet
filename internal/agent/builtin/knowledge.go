@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -200,10 +201,15 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"shortly, or work from what you have."}, nil
 	}
 	partial := partialNote(result.Coverage) + degraded
+	// THE QUERY ECHOED BACK is the seat's own words and only neutralised, so
+	// even a query that spells the turn's token or a marker opens no fence
+	// beside the hits' own.
+	fence := turn.FenceBoundary()
 	if len(hits) == 0 {
 		return tools.Result{Output: fmt.Sprintf(
 			"No team documents match %q. Try different keywords, or work from what "+
-				"you have — not everything is written down.%s", clip(query), partial)}, nil
+				"you have — not everything is written down.%s",
+			provenance.Neutralise(fence, clip(query)), partial)}, nil
 	}
 	// EVERY HIT THE MODEL WAS SHOWN, in the order it was shown them. A
 	// search is a read of titles and snippets rather than of pages, and
@@ -213,13 +219,15 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	note(ctx, t.events, turn, knowledgeRead(turn, types.ReadViaSearch,
 		hits[0].Backend, query, knowledge.ReadPages(hits)))
 
+	// FENCED, under the turn's token and the label the backend stamped on
+	// its pages ([knowledge.Render], ADR-0040), exactly as the turn-start
+	// block renders them.
 	var b strings.Builder
-	fmt.Fprintf(&b, "%d team documents match %q:\n", len(hits), clip(query))
-	for _, hit := range hits {
-		if line := renderHit(hit); line != "" {
-			b.WriteString(line)
-			b.WriteString("\n")
-		}
+	fmt.Fprintf(&b, "%d team documents match %q:\n", len(hits),
+		provenance.Neutralise(fence, clip(query)))
+	if listed := knowledge.Render(fence, hits); listed != "" {
+		b.WriteString(listed)
+		b.WriteString("\n")
 	}
 	// THE POINTER IS THE POINT: these are titles and snippets, not the
 	// pages. A seat that acted on a snippet would be acting on the first
@@ -288,24 +296,4 @@ func partialNote(c knowledge.Coverage) string {
 	}
 	return "\n\nThis search covered only part of the knowledge base — some of the " +
 		"fleet did not answer in time — so a page not listed here may still exist."
-}
-
-// renderHit renders one page as a bullet.
-//
-// Falls back to the title alone where a page has no snippet — an empty page,
-// or one whose body is a table the extractor could not read — because the
-// title is still enough to decide whether to open it.
-func renderHit(hit knowledge.Hit) string {
-	title := strings.TrimSpace(hit.Title)
-	snippet := strings.Join(strings.Fields(hit.Snippet), " ")
-	switch {
-	case title == "" && snippet == "":
-		return ""
-	case title == "":
-		title = "(untitled)"
-	}
-	if snippet == "" {
-		return "- **" + title + "**"
-	}
-	return "- **" + title + "**: " + snippet
 }

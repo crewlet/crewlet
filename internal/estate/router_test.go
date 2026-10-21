@@ -13,8 +13,10 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/search"
@@ -175,7 +177,7 @@ func (f *fakeNode) Answer(_ context.Context, q knowledge.Query) (knowledge.Resul
 	f.queries = append(f.queries, q)
 	f.mu.Unlock()
 	return knowledge.Result{
-		Hits: []knowledge.Hit{{Title: "found on " + f.name}},
+		Hits: []knowledge.Hit{{Title: "found on " + f.name, Provenance: hitLabel}},
 		Outcome: knowledge.Outcome{ServedMode: knowledge.ModeKeyword,
 			Coverage: knowledge.Coverage{Nodes: []knowledge.NodeCoverage{}, Complete: true}},
 	}, nil
@@ -862,6 +864,28 @@ func TestAWriteThatNamesNobodyIsRefused(t *testing.T) {
 	}
 	if f.nodes["data-a"].askedFor("create") || local.askedFor("create") {
 		t.Error("a serving node ran it")
+	}
+}
+
+// hitLabel is the provenance every fake node's hit carries: one no zero value
+// or default could stand in for, so a label lost on the wire cannot pass.
+var hitLabel = provenance.Label{Source: provenance.SourcePageBody, Trust: provenance.TrustColleague,
+	Authors: []provenance.Author{{Kind: iam.ActorHuman, Seat: "ana"}}}
+
+// A HIT'S PROVENANCE CROSSES WITH IT. The backend that found a page is the only
+// one that knows who can write there (ADR-0040), and the node rendering the
+// hit into a seat's prompt is, on a node without data, never that backend: a
+// label left behind would reach the seat as the zero label's `external`, or a
+// colleague's page as nothing at all.
+func TestAKnowledgeHitsLabelCrossesTheWire(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a")
+	got := f.client.Knowledge().Search(t.Context(), knowledge.Query{Text: "deploys", Limit: 5})
+	if len(got.Hits) != 1 {
+		t.Fatalf("search = %+v, want the data node's hit", got)
+	}
+	if !reflect.DeepEqual(got.Hits[0].Provenance, hitLabel) {
+		t.Fatalf("the hit arrived labelled %+v, want %+v", got.Hits[0].Provenance, hitLabel)
 	}
 }
 
