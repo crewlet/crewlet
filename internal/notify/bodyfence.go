@@ -1,8 +1,10 @@
 package notify
 
 import (
+	"slices"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/provenance"
 )
@@ -91,6 +93,55 @@ func FenceBody(p Prompt, n Inbound, parties Parties) string {
 		return n.Body
 	}
 	return p.Provenance(n, parties).Fence(n.Fence, n.Metadata[RecipientField], n.Body)
+}
+
+// SalientProvenance is who wrote a delivered notification's SALIENT body — the
+// raw text its turn was asked, which a model other than the woken seat's
+// executor reads (the turn-start relevance judgements) — and where it was read
+// from, at the trust its writers earn from self.
+//
+// THE SOURCE'S OWN ANSWER, [Prompt.Provenance] over the notification as it was
+// delivered, so the text is labelled exactly as the body the trigger fenced. A
+// COALESCED notification's salient body is every constituent's message, so its
+// label names every constituent's writers at the LEAST trust any of them earns
+// — a stranger's line in a burst of colleagues' makes the whole of it
+// `external` — under the surface they share, or an integration's notification
+// where they differ. Every constituent counts, the ones the merge's supersede
+// rule left out of the text included, which can only lower the trust.
+func SalientProvenance(prompts Prompts, n types.ExternalNotification, parties Parties,
+	self string) (provenance.Source, provenance.Trust, []provenance.Author) {
+
+	prompt := prompts.For(n.NotificationSource)
+	copies := []Inbound{{Source: n.NotificationSource, EventType: n.SourceEventType,
+		Sender: n.Sender, Subject: n.Subject, Metadata: n.Metadata}}
+	if len(n.Messages) > 0 {
+		copies = copies[:0]
+		for _, m := range n.Messages {
+			copies = append(copies, Inbound{Source: n.NotificationSource,
+				EventType: m.SourceEventType, Sender: m.Sender, Metadata: m.Metadata})
+		}
+	}
+	var (
+		source  provenance.Source
+		trusts  []provenance.Trust
+		authors []provenance.Author
+	)
+	for i, in := range copies {
+		p := prompt.Provenance(in, parties)
+		switch {
+		case i == 0:
+			source = p.Source
+		case p.Source != source:
+			source = provenance.SourceNotification
+		}
+		trusts = append(trusts, provenance.TrustFor(self, p.Authors))
+		for _, a := range p.Authors {
+			if !slices.Contains(authors, a) {
+				authors = append(authors, a)
+			}
+		}
+	}
+	return source, provenance.Least(trusts...), authors
 }
 
 // Stated is the provenance a parser stamped on n: the surface it named, or

@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/provenance`
-- **Enforced-by:** `internal/provenance.TestAFenceCannotBeClosedByItsContent`, `internal/agent/builtin.TestEveryUntrustedReadIsFenced`, `internal/agent/builtin.TestEveryArtifactToolResultIsFenced`, `internal/engine.TestEveryWakeSurfaceFencesWhatSomebodyWrote`, `internal/engine.TestEveryWakeTypeFencesSomebodyElsesWords`
+- **Enforced-by:** `internal/provenance.TestAFenceCannotBeClosedByItsContent`, `internal/agent/builtin.TestEveryUntrustedReadIsFenced`, `internal/agent/builtin.TestEveryArtifactToolResultIsFenced`, `internal/engine.TestEveryWakeSurfaceFencesWhatSomebodyWrote`, `internal/engine.TestEveryWakeTypeFencesSomebodyElsesWords`, `internal/engine.TestTheTurnsAskIsFencedAsItsTriggerIs`, `internal/agent/prefetch.TestTheTurnStartJudgementsReadSomebodyElsesWordsFenced`
 - **Cost-when-tried:** before this record, a page body, a work item's comments, a project file and the chat thread handed to a turn all reached the model as plain text in a tool answer or a prompt block, with no boundary the text could not also write and nothing saying who wrote it or that it was data. Anybody who could write a page, comment on an item or speak in a thread a seat reads could address the seat in the voice of its instructions.
 - **Tag-status:** unreleased
 
@@ -44,7 +44,13 @@ so it is fenced under a token minted for the wake, which the turn moves onto its
 own; the notification service fences the body before the surface's prompt
 renders it, so a prompt is never handed the words bare. A wake names a body's
 writer only where its payload says one person wrote every word, and otherwise
-names nobody, which reads `external`. A tool that returns such text and does not
+names nobody, which reads `external`. The same words reach the models that
+judge for a turn before it starts — the memory filter, the knowledge-query
+writer and the episode summary, each handed what the turn was asked — fenced as
+the trigger labels them, under a token minted for that call rather than the
+turn's, beside the standing sentence; what those calls answer decides what the
+seat is shown, and the briefing the summary writes is defused before it reaches
+the seat's prompt. A tool that returns such text and does not
 go through the package fails a walk, and so does a wake surface or a kind of
 wake whose foreign text does not reach the turn fenced. A schedule's task is
 the company's own instruction to the seat, not somebody else's words, and is

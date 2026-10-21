@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // Personal memory: what this seat has learned and kept.
@@ -251,16 +252,23 @@ func (f *Fetcher) markRetrieved(ctx context.Context, ids []string) {
 // every chat turn. What the brief adds that the filter needs is the surface,
 // and the ask carries it in the notification's subject ("Slack message", an
 // issue's key and title).
+//
+// THE TASK ARRIVES FENCED, under a token minted for this call ([Ask]): the
+// filter's answer decides which of the seat's own memories the seat is shown,
+// so a task that addresses the filter must read as somebody's words. The
+// sender line is a display name somebody chose and is neutralised under the
+// same token.
 func memoryFilterPrompt(r Request, candidates []learning.DiaryEntry) string {
+	token := provenance.NewBoundary()
 	var b strings.Builder
-	b.WriteString("Agent's current task:\n" + r.Ask + "\n")
+	b.WriteString("Agent's current task:\n" + r.Ask.For(token) + "\n")
 	// THE SENDER, STRUCTURED. Without it the filter has only whatever
 	// platform ids appear in the task body to reason from, and rule 3 —
 	// the one hard subject filter — becomes unenforceable: it cannot tell
 	// a preference about the person asking from a preference about
 	// somebody else entirely.
 	if line := senderLine(r.Senders); line != "" {
-		b.WriteString(line + "\n")
+		b.WriteString(provenance.Neutralise(token, line) + "\n")
 	}
 	b.WriteString("\nStored memories:\n")
 	for i, entry := range candidates {

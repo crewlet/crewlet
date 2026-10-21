@@ -110,8 +110,10 @@ func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
 		Task: task, Aux: aux,
 		// WHAT IT WAS ASKED, which every relevance judgement is made
 		// against while the executor is handed the task — see
-		// [prefetch.Request.Ask] and [turnAsk].
-		Ask: turnAsk(req.Ask()),
+		// [prefetch.Request.Ask] and [turnAskFor] — with somebody else's words
+		// labelled as the trigger labelled them, for the auxiliary models
+		// that read it.
+		Ask: turnAskFor(e.notifyPrompts(), e.liveParties(), req.Handle, req.Ask()),
 		// OFF THE ASK, which for a coalesced conversation is the merged
 		// digest and for everything else is the partition itself. One
 		// shape rather than two: the merge is where a conversation's
@@ -279,34 +281,74 @@ func (e *Engine) publishPrefetchSummary(ctx context.Context, seat *org.Role,
 // An event with none of those contributes nothing — not its type name, which
 // DescribeTrigger hands the executor so it is never given a blank ask, and
 // which here would be a word every such turn is judged against.
+//
+// THE TEXT ALONE: what the turn records as asked, and what a parked run carries
+// for the segment that finishes it. The relevance judgements read [turnAskFor],
+// which is the same text part by part with who wrote each.
 func turnAsk(evs []*events.Event) string {
-	var parts []string
+	return turnAskFor(notify.Prompts{}, nil, "", evs).Text()
+}
+
+// turnAskFor is [turnAsk] part by part, each part able to put the words somebody
+// else wrote inside a fence for the auxiliary model that reads it
+// ([prefetch.Ask]): a notification's salient body labelled exactly as its
+// source labelled the body the trigger fenced ([notify.SalientProvenance]) at
+// the trust its writers earn from self, and a colleague's ask or answer as its
+// fenced brief. A subject line and a schedule's task hold nobody's words but
+// the company's and are only neutralised.
+func turnAskFor(prompts notify.Prompts, parties notify.Parties, self string,
+	evs []*events.Event) prefetch.Ask {
+
+	var ask prefetch.Ask
 	for _, ev := range evs {
 		if ev == nil {
 			continue
 		}
-		if text := strings.TrimSpace(eventAsk(ev)); text != "" {
-			parts = append(parts, text)
+		if part, ok := eventAsk(prompts, parties, self, ev); ok {
+			ask = append(ask, part)
 		}
 	}
-	return strings.Join(parts, "\n\n")
+	return ask
 }
 
-// eventAsk is one trigger event's part of [turnAsk].
-func eventAsk(ev *events.Event) string {
+// eventAsk is one trigger event's part of [turnAskFor], or false for an event that
+// asked nothing.
+func eventAsk(prompts notify.Prompts, parties notify.Parties, self string,
+	ev *events.Event) (prefetch.AskPart, bool) {
+
 	if n, ok := events.DataAs[*types.ExternalNotification](ev); ok && n != nil {
 		body := strings.TrimSpace(salientBody(n))
+		subject := strings.TrimSpace(n.Subject)
 		if n.SubjectIsLabel {
-			return body
+			subject = ""
 		}
-		return strings.TrimSpace(strings.TrimSpace(n.Subject) + "\n\n" + body)
-	}
-	if brief, ok := ev.Data.(events.Briefer); ok {
-		if b := strings.TrimSpace(brief.Brief()); b != "" {
-			return b
+		text := strings.TrimSpace(subject + "\n\n" + body)
+		if text == "" {
+			return prefetch.AskPart{}, false
 		}
+		return prefetch.AskPart{Text: text, Fenced: func(b provenance.Boundary) string {
+			fenced := provenance.Neutralise(b, subject)
+			if body != "" {
+				source, trust, authors := notify.SalientProvenance(prompts, *n, parties, self)
+				fenced = strings.TrimSpace(fenced + "\n\n" +
+					provenance.Fence(b, source, trust, authors, body))
+			}
+			return fenced
+		}}, true
 	}
-	return ""
+	brief, ok := ev.Data.(events.Briefer)
+	if !ok {
+		return prefetch.AskPart{}, false
+	}
+	text := strings.TrimSpace(brief.Brief())
+	if text == "" {
+		return prefetch.AskPart{}, false
+	}
+	part := prefetch.AskPart{Text: text}
+	if fenced, ok := ev.Data.(fencedBriefer); ok {
+		part.Fenced = fenced.FencedBrief
+	}
+	return part, true
 }
 
 // requiresRecon reports that ANY constituent of the trigger is a bare
