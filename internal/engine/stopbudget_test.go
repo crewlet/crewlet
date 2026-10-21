@@ -36,12 +36,12 @@ import (
 // own, so the stop spent their sum, close to an orchestrator's kill grace and
 // past it once the flushes behind them ran. Here every read and give-back the
 // lease and fleet stores are asked for stalls once the stop begins — until the
-// deadline its context carries, or for five seconds, a client's own timeout,
-// where it carries none — against a lease TTL of three: an allowance of one
-// second, the admission's share included, so the old sum is past half a
-// minute and one allowance is a second. (The stream stays up: the native
-// backends this company runs are reached through the broker's own client,
-// which a stand-in cannot be.)
+// deadline its context carries or, where it carries none, for a bound of the
+// stand-in's own: a whole lease TTL, past which every lease the stop races has
+// lapsed anyway. The TTL is [startedLeaseTTL], so the allowance is a third of
+// it, the admission's share included, where the old sum was a bound per step.
+// (The stream stays up: the native backends this company runs are reached
+// through the broker's own client, which a stand-in cannot be.)
 //
 // A RECONCILE PASS IS IN FLIGHT WHEN THE STOP BEGINS, under the hold on its
 // surface: the integration loop's first grant is held back until then. The
@@ -72,13 +72,13 @@ import (
 // whose deadline is latest the covered time is time a step was in flight, and
 // from there that step was handed what was left — and the admission's own
 // bound adds at most its share. So the verdict is that measure, and that no
-// round trip ended on the client's own timeout: a step the stop left
+// round trip ended on the stand-in's own bound: a step the stop left
 // unbounded, whose span no deadline covers.
 func TestAStopAgainstAnUnreachableStoreSpendsOneAllowance(t *testing.T) {
 	t.Parallel()
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
-		b.Coordination.LeaseTTLSeconds = 3
+		b.Coordination.LeaseTTLSeconds = startedLeaseTTL.Seconds()
 	})
 	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, companyDoc))
 	if err != nil {
@@ -91,7 +91,7 @@ func TestAStopAgainstAnUnreachableStoreSpendsOneAllowance(t *testing.T) {
 		return e != nil && e.ShuttingDown()
 	}
 	pass := &heldPass{granted: make(chan struct{})}
-	record := &stalls{}
+	record := &stalls{ownBound: startedLeaseTTL}
 	back.Coord = stallingLeases{coordBackend: back.Coord, gone: gone, pass: pass, stalls: record}
 	back.Fleet = stallingFleet{fleet: back.Fleet, gone: gone, stalls: record}
 
@@ -150,16 +150,16 @@ func TestAStopAgainstAnUnreachableStoreSpendsOneAllowance(t *testing.T) {
 				want.what, calls)
 		}
 	}
-	// NO ROUND TRIP WAITED OUT A BOUND OF ITS OWN: one stalled call is five
-	// seconds, five times the whole allowance.
+	// NO ROUND TRIP WAITED OUT A BOUND OF ITS OWN: one stalled call is a
+	// whole TTL, three times the whole allowance.
 	for _, c := range calls {
 		if c.ended == endedByOwnBound {
-			t.Errorf("%s %s carried no deadline and waited out the client's own %v: "+
-				"the stop left it a bound of its own", c.op, c.resource, clientTimeout)
+			t.Errorf("%s %s carried no deadline and waited out the store's own %v: "+
+				"the stop left it a bound of its own", c.op, c.resource, record.ownBound)
 		}
 	}
 	// AND THE STEPS' DEADLINES COVER ONE ALLOWANCE BETWEEN THEM.
-	allowance := seat.StopAllowance(3 * time.Second)
+	allowance := seat.StopAllowance(startedLeaseTTL)
 	if covered := coveredByDeadlines(calls); covered > allowance {
 		t.Errorf("the stop's round trips were handed deadlines covering %v between "+
 			"them, past its %v allowance: its steps did not share one: %v",
@@ -169,10 +169,6 @@ func TestAStopAgainstAnUnreachableStoreSpendsOneAllowance(t *testing.T) {
 
 // errGone is what the stalled store answers once its stall is over.
 var errGone = errors.New("the coordination store has lost quorum")
-
-// clientTimeout is what a coordination client waits for a request whose
-// context carries no deadline of its own.
-const clientTimeout = 5 * time.Second
 
 // stallEnd is how a round trip to the gone store ended.
 type stallEnd int
@@ -187,7 +183,7 @@ const (
 	// own.
 	endedByCaller
 	// endedByOwnBound is one that carried no deadline and waited out the
-	// client's own timeout.
+	// stand-in's own bound ([stalls.ownBound]).
 	endedByOwnBound
 )
 
@@ -221,6 +217,15 @@ func (c stalled) String() string {
 
 // stalls records every round trip the gone store answers.
 type stalls struct {
+	// ownBound is how long a request whose context carries no deadline is
+	// held before it fails on its own: the stand-in for a client's own
+	// timeout, set far past every wait a caller ends. The longest of those
+	// is a give-back the teardown ends when the allowance runs out, an
+	// allowance and the stop's own local steps after the stall began, so a
+	// request held a whole TTL — three allowances — is one the stop left a
+	// bound of its own.
+	ownBound time.Duration
+
 	mu    sync.Mutex
 	calls []stalled
 }
@@ -229,8 +234,8 @@ type stalls struct {
 //
 // A CONTEXT WITH A DEADLINE IS ANSWERED ONLY WHEN IT ENDS — no timer of the
 // stand-in's races it, so a goroutine the scheduler starves cannot pick the
-// client's bound over the deadline it was handed. One with none ends with its
-// context or the client's own timeout, whichever comes first.
+// stand-in's own bound over the deadline it was handed. One with none ends
+// with its context or [stalls.ownBound], whichever comes first.
 func (s *stalls) stall(ctx context.Context, op, resource string) error {
 	c := stalled{op: op, resource: resource, start: time.Now()}
 	c.deadline, _ = ctx.Deadline()
@@ -244,7 +249,7 @@ func (s *stalls) stall(ctx context.Context, op, resource string) error {
 		select {
 		case <-ctx.Done():
 			c.ended = endedByCaller
-		case <-time.After(clientTimeout):
+		case <-time.After(s.ownBound):
 			c.ended = endedByOwnBound
 		}
 	}
@@ -393,8 +398,9 @@ func (f stallingFleet) ForgetAdmission(ctx context.Context, nodeID, incarnation 
 // AND THE ANNOUNCEMENT RUNS BESIDE THE DRAIN, so the stream's silence costs
 // the stop one of its bounds while the seats' run, not one after the other.
 //
-// The lease TTL is fifteen seconds — an allowance of five — so a lease a stop
-// failed to give back is still held when the case reads it, seconds later.
+// The lease TTL is [startedLeaseTTL] — an allowance of a third of it — so a
+// lease a stop failed to give back is still held when the case reads it,
+// seconds later.
 //
 // EACH "BESIDE" IS READ OFF THE RECORDED WAITS, never off the stop's clock: the
 // seat's last event and its held memory publish overlap, and the announcement
@@ -406,7 +412,7 @@ func TestAStopOnAStreamThatWillNotAcknowledgeLeavesNothingHeld(t *testing.T) {
 	t.Parallel()
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
-		b.Coordination.LeaseTTLSeconds = 15
+		b.Coordination.LeaseTTLSeconds = startedLeaseTTL.Seconds()
 	})
 	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, companyDoc))
 	if err != nil {
