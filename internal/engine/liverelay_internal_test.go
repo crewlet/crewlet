@@ -319,8 +319,9 @@ func TestAnOutOfServiceNodeHearsAPeersAppliers(t *testing.T) {
 	b.engine.chatApplied(posted("m-from-b-own-applier"))
 	b.engine.artifactsMoved(versioned("from-b-own-applier"))
 	b.engine.artifactDataMoved(written("from-b-own-applier"))
+	stored := time.Date(2026, 10, 17, 9, 0, 0, 0, time.UTC)
 	a.engine.inboxMoved([]worklet.InboxMovement{{Handle: "ana", UnreadDelta: 1,
-		Subject: "t-1", Reason: worklet.ReasonAssignee}})
+		Subject: "t-1", Reason: worklet.ReasonAssignee, At: stored}})
 	a.engine.chatApplied(posted("m-1"))
 	a.engine.artifactsMoved(versioned("plan"))
 	a.engine.artifactDataMoved(written("row-1"))
@@ -332,7 +333,10 @@ func TestAnOutOfServiceNodeHearsAPeersAppliers(t *testing.T) {
 		t.Fatalf("b's sockets heard %v, want a's movement for ana alone — b's own "+
 			"applier is not the source while its copy is out of service", h)
 	}
-	if got.moved[0].Subject != "t-1" || got.moved[0].Reason != worklet.ReasonAssignee {
+	// EVERY FIELD CROSSES, the broker's instant among them: b times its push
+	// from the instant a's record was stored, as a's own push is.
+	if got.moved[0].Subject != "t-1" || got.moved[0].Reason != worklet.ReasonAssignee ||
+		!got.moved[0].At.Equal(stored) {
 		t.Errorf("the relayed movement lost its fields: %+v", got.moved[0])
 	}
 	if m := messages(got.chat); len(m) != 1 || m[0] != "m-1" {

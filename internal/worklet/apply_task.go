@@ -1526,7 +1526,7 @@ func (a *Applier) forgetRecords(ctx context.Context, tx *sql.Tx, c applyContext,
 	for _, notice := range gone {
 		a.noteInbox(inboxNote{
 			record: notice.record, handle: notice.recipient, subject: id,
-			reason: notice.reason, position: c.packed, removed: true,
+			reason: notice.reason, position: c.packed, at: c.brokerAt, removed: true,
 		})
 	}
 	if err = exec(forgetNoticesStatement, id, kind, keep); err != nil {

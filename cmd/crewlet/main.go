@@ -1928,8 +1928,7 @@ func artifactDataSurfaces(e *engine.Engine, boot *config.Bootstrap) (
 	// runs: a node with none serves no room rather than rooms that never
 	// say who is there.
 	if hub := e.Presence(); hub != nil {
-		rooms = &api.Rooms{Gate: gate, Stores: data, Presence: hub, Feed: e,
-			Objectives: e.Objectives()}
+		rooms = &api.Rooms{Gate: gate, Stores: data, Presence: hub, Feed: e}
 		if m := e.Recorder(); m != nil {
 			rooms.Metrics = m
 		}
@@ -2284,6 +2283,9 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// WHOSE INBOX MOVED, from this engine's own Worklet applier: how a
 		// person at the dashboard learns they have work.
 		Inbox: e,
+		// THE NODE'S OBJECTIVE METER, which every committed change the
+		// socket pushes is timed into.
+		Objectives: e.Objectives(),
 		// WHOSE CREDENTIALS MOVED, from this engine's own identity
 		// applier — what closes the open tab of a session that ended.
 		Credentials: e,
