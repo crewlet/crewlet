@@ -865,16 +865,28 @@ func (e *enrolment) alreadyEnrolled() error {
 
 // isEnrolled reports whether a person row exists, read inside a decide's
 // snapshot.
+//
+// A seek of the person's own key ([enrolledStatement]).
 func isEnrolled(ctx context.Context, tx *sql.Tx, personID string) (bool, error) {
 	var enrolled bool
-	if err := tx.QueryRowContext(ctx,
-		`SELECT EXISTS(SELECT 1 FROM iam_people WHERE id = ?)`, personID).
+	if err := tx.QueryRowContext(ctx, enrolledStatement, personID).
 		Scan(&enrolled); err != nil {
 		return false, fmt.Errorf("iamdomain: read whether %s is enrolled: %w",
 			personID, err)
 	}
 	return enrolled, nil
 }
+
+// enrolledStatement is whether a row holds one person's key.
+const enrolledStatement = `SELECT EXISTS(SELECT 1 FROM iam_people WHERE id = ?)`
+
+// invitationStateStatement is one invitation's address, deadline, redemption
+// and document, by its key: what a redemption is judged against
+// ([Writer.redeemable]) and what a retried issue compares its terms with
+// ([Writer.issuedBefore]).
+const invitationStateStatement = `
+	SELECT email_blind, expires_at, redeemed_at, document
+	  FROM iam_invites WHERE id = ?`
 
 // validateEnrolment is the half of a create's and a redemption's validation
 // that is the same rule for both: an id and an operation to publish under, a
@@ -969,9 +981,7 @@ func (w *Writer) redeemable(ctx context.Context, tx *sql.Tx,
 		expires, spent int64
 		document       []byte
 	)
-	err := tx.QueryRowContext(ctx, `
-		SELECT email_blind, expires_at, redeemed_at, document
-		  FROM iam_invites WHERE id = ?`, e.invitation).
+	err := tx.QueryRowContext(ctx, invitationStateStatement, e.invitation).
 		Scan(&held, &expires, &spent, &document)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -1463,14 +1473,18 @@ func (w *Writer) Remove(ctx context.Context, personID, opID, reason string) (
 		decide)
 }
 
+// heldIdentifiersStatement is the three unique values one person's row holds,
+// by its key.
+const heldIdentifiersStatement = `
+	SELECT email_blind, login, seat_id FROM iam_people WHERE id = ?`
+
 // heldIdentifiers reads the unique values a person holds in one snapshot —
 // nothing, for a person this snapshot does not hold.
 func heldIdentifiers(ctx context.Context, tx *sql.Tx, personID string) (
 	Identifiers, error) {
 
 	var held Identifiers
-	err := tx.QueryRowContext(ctx, `
-		SELECT email_blind, login, seat_id FROM iam_people WHERE id = ?`,
+	err := tx.QueryRowContext(ctx, heldIdentifiersStatement,
 		personID).Scan(&held.EmailBlind, &held.Login, &held.SeatID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Identifiers{}, nil
@@ -1731,28 +1745,21 @@ func (w *Writer) missingKeys() string {
 // taken refuses a value somebody other than except holds, read INSIDE a
 // directory decide's snapshot, naming who holds it.
 //
-// THE COLUMN IS CHOSEN HERE, by a switch over the three values, never from a
-// caller's string: a column name built at a call site is a string this package
-// would be interpolating into SQL from somewhere it cannot see.
+// THE STATEMENT IS CHOSEN HERE, by a switch over the three values, and each is
+// spelled whole ([takenStatements]): nothing a caller passes reaches the SQL,
+// and every statement the switch can pick is one the plan gate reads — a
+// column interpolated here was a statement the gate could only copy, and the
+// copy it kept had drifted from this one.
 func taken(ctx context.Context, tx *sql.Tx, field Unique, value,
 	except string) error {
 
-	var column string
-	switch field {
-	case UniqueEmail:
-		column = "email_blind"
-	case UniqueLogin:
-		column = "login"
-	case UniqueSeat:
-		column = "seat_id"
-	default:
+	statement, ok := takenStatements[field]
+	if !ok {
 		return fmt.Errorf("iamdomain: %q is not a value the directory keeps "+
 			"to one holder", field)
 	}
 	var holder string
-	err := tx.QueryRowContext(ctx,
-		`SELECT id FROM iam_people WHERE `+column+` = ? AND id <> ? LIMIT 1`,
-		value, except).Scan(&holder)
+	err := tx.QueryRowContext(ctx, statement, value, except).Scan(&holder)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return nil
@@ -1763,6 +1770,21 @@ func taken(ctx context.Context, tx *sql.Tx, field Unique, value,
 	return &ErrTaken{Field: field, Value: value, Person: holder}
 }
 
+// takenStatements is who other than one person holds each of the directory's
+// three values, one statement per value, each a seek of that value's own plain
+// index: a PARTIAL one over the non-empty rows cannot serve a bound value,
+// which implies nothing about being non-empty.
+var takenStatements = map[Unique]string{
+	UniqueEmail: `SELECT id FROM iam_people WHERE email_blind = ? AND id <> ? LIMIT 1`,
+	UniqueLogin: `SELECT id FROM iam_people WHERE login = ? AND id <> ? LIMIT 1`,
+	UniqueSeat:  `SELECT id FROM iam_people WHERE seat_id = ? AND id <> ? LIMIT 1`,
+}
+
+// identityOfStatement is one person's kind and the three unique values their
+// row holds, by its key.
+const identityOfStatement = `
+	SELECT kind, email_blind, login, seat_id FROM iam_people WHERE id = ?`
+
 // identityOf is an enrolled person's kind and the unique values they hold,
 // read inside a decide's snapshot, or [ErrNotFound].
 func identityOf(ctx context.Context, tx *sql.Tx, personID string) (
@@ -1772,8 +1794,7 @@ func identityOf(ctx context.Context, tx *sql.Tx, personID string) (
 		kind string
 		held Identifiers
 	)
-	err := tx.QueryRowContext(ctx, `
-		SELECT kind, email_blind, login, seat_id FROM iam_people WHERE id = ?`,
+	err := tx.QueryRowContext(ctx, identityOfStatement,
 		personID).Scan(&kind, &held.EmailBlind, &held.Login, &held.SeatID)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -1848,6 +1869,10 @@ func (w *Writer) humanSeat(ctx context.Context, handle string) (string, error) {
 	return seat.Handle, nil
 }
 
+// heldPersonStatement is one person's document and the stage their row's
+// column holds, by its key.
+const heldPersonStatement = `SELECT document, stage FROM iam_people WHERE id = ?`
+
 // heldPerson is one person's document as a read-modify-write forms the next
 // one from, read inside the caller's snapshot — carrying the stage the ROW
 // holds.
@@ -1870,8 +1895,7 @@ func heldPerson(ctx context.Context, tx *sql.Tx, personID, forming string) (
 		document []byte
 		stage    string
 	)
-	err := tx.QueryRowContext(ctx,
-		`SELECT document, stage FROM iam_people WHERE id = ?`, personID).
+	err := tx.QueryRowContext(ctx, heldPersonStatement, personID).
 		Scan(&document, &stage)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -2328,8 +2352,7 @@ func (w *Writer) mayMintFor(in TokenMint, owner Person) error {
 // loginOf is one person's login, read inside a decide's snapshot.
 func loginOf(ctx context.Context, tx *sql.Tx, personID string) (string, error) {
 	var login string
-	err := tx.QueryRowContext(ctx,
-		`SELECT login FROM iam_people WHERE id = ?`, personID).Scan(&login)
+	err := tx.QueryRowContext(ctx, personLoginStatement, personID).Scan(&login)
 	if err != nil {
 		return "", fmt.Errorf("iamdomain: read person %s's login: %w",
 			personID, err)
@@ -2605,9 +2628,7 @@ func (w *Writer) issuedBefore(ctx context.Context, tx *sql.Tx, id, blind, seat s
 		expires, redeemed int64
 		document          []byte
 	)
-	err := tx.QueryRowContext(ctx, `
-		SELECT email_blind, expires_at, redeemed_at, document
-		  FROM iam_invites WHERE id = ?`, id).
+	err := tx.QueryRowContext(ctx, invitationStateStatement, id).
 		Scan(&held, &expires, &redeemed, &document)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -2689,8 +2710,8 @@ type InviteIssued struct {
 // reads an invitation as outstanding by and the redemption's own refusals
 // mirror ([InvitationRow.Spent]).
 //
-// THE COLUMN IS CHOSEN HERE, by a switch, as [taken] chooses its own — never
-// from a caller's string.
+// THE STATEMENT IS CHOSEN HERE, by a switch, as [taken] chooses its own
+// ([invitedStatements]) — never from a caller's string.
 //
 // THE WRITER'S CLOCK DECIDES THE EXPIRY HERE, which is the one place in this
 // domain that is acceptable: every instant an applier stores is the BROKER's,
@@ -2703,22 +2724,13 @@ type InviteIssued struct {
 func heldByInvitation(ctx context.Context, tx *sql.Tx, field Unique, value string,
 	now time.Time) error {
 
-	var column string
-	switch field {
-	case UniqueEmail:
-		column = "email_blind"
-	case UniqueSeat:
-		column = "seat_id"
-	default:
+	statement, ok := invitedStatements[field]
+	if !ok {
 		return fmt.Errorf("iamdomain: an invitation holds an address and a "+
 			"seat, and %q is neither", field)
 	}
 	var id string
-	err := tx.QueryRowContext(ctx, `
-		SELECT id FROM iam_invites
-		WHERE `+column+` = ? AND `+openInvitation+`
-		ORDER BY created_at DESC LIMIT 1`,
-		value, now.UnixMilli()).Scan(&id)
+	err := tx.QueryRowContext(ctx, statement, value, now.UnixMilli()).Scan(&id)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return nil
@@ -2733,6 +2745,17 @@ func heldByInvitation(ctx context.Context, tx *sql.Tx, field Unique, value strin
 // `iam_invites` and one bound instant: not redeemed, and not aged out — a zero
 // expiry included, which no writer forms. See [heldByInvitation].
 const openInvitation = `redeemed_at = 0 AND expires_at > ?`
+
+// invitedStatements is the newest open invitation holding each of the two
+// values an invitation holds, one statement per value, each a seek of that
+// value's index (0041's address index, 0042's seat index), which is in the
+// order the statement takes the newest by.
+var invitedStatements = map[Unique]string{
+	UniqueEmail: `SELECT id FROM iam_invites WHERE email_blind = ? AND ` +
+		openInvitation + ` ORDER BY created_at DESC LIMIT 1`,
+	UniqueSeat: `SELECT id FROM iam_invites WHERE seat_id = ? AND ` +
+		openInvitation + ` ORDER BY created_at DESC LIMIT 1`,
+}
 
 // InviteMint is what issuing an invitation needs.
 type InviteMint struct {
@@ -2820,6 +2843,11 @@ func (w *Writer) CancelInvitation(ctx context.Context, id, opID, reason string) 
 	return w.publishDirectory(ctx, OpCancel, "", opID, reason, scopeOf, decide)
 }
 
+// invitationInStatement is one invitation's address blind and the person its
+// redemption created, by its key.
+const invitationInStatement = `
+	SELECT email_blind, person_id FROM iam_invites WHERE id = ?`
+
 // invitationIn is the address blind one invitation holds and the person a
 // redemption created, read inside a decide's snapshot — and false for an id it
 // does not hold.
@@ -2827,8 +2855,7 @@ func invitationIn(ctx context.Context, tx *sql.Tx, id string) (
 	InvitationRow, bool, error) {
 
 	var held InvitationRow
-	err := tx.QueryRowContext(ctx, `
-		SELECT email_blind, person_id FROM iam_invites WHERE id = ?`, id).
+	err := tx.QueryRowContext(ctx, invitationInStatement, id).
 		Scan(&held.Blind, &held.Person)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):

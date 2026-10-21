@@ -210,6 +210,13 @@ func (w *Writer) PlanSweep(ctx context.Context, horizons Horizons) (SweepPlan, e
 	return plan, nil
 }
 
+// trailBoundStatement is the position of a class's newest trail row below an
+// instant, sought through (class, broker_at).
+const trailBoundStatement = `
+	SELECT version FROM iam_history
+	WHERE class = ? AND broker_at < ?
+	ORDER BY broker_at DESC LIMIT 1`
+
 // trailBound is the exclusive position below which a class's trail rows are
 // older than cutoff, or zero when none is.
 //
@@ -221,10 +228,7 @@ func trailBound(ctx context.Context, tx *sql.Tx, class HistoryClass,
 	cutoff time.Time) (uint64, error) {
 
 	var version int64
-	err := tx.QueryRowContext(ctx, `
-		SELECT version FROM iam_history
-		WHERE class = ? AND broker_at < ?
-		ORDER BY broker_at DESC LIMIT 1`,
+	err := tx.QueryRowContext(ctx, trailBoundStatement,
 		string(class), cutoff.UnixMilli()).Scan(&version)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -236,12 +240,36 @@ func trailBound(ctx context.Context, tx *sql.Tx, class HistoryClass,
 	return uint64(version) + 1, nil
 }
 
+// dueTrailStatement is [bucketDue]'s probe of one class of one bucket's trail
+// below a position: the sweep's own predicate, a seek of the index its delete
+// uses ([sweepTrailStatement]).
+const dueTrailStatement = `
+	SELECT 1 FROM iam_history
+	WHERE bucket = ? AND class = ? AND version < ? LIMIT 1`
+
+// The two probes [bucketDue] asks of one bucket's invitations, each the
+// apply's own predicate ([sweepOpenInvitationsStatement],
+// [sweepSpentInvitationsStatement]) at the slack's bound, and each a seek of
+// the partial index that predicate is served by.
+const (
+	dueOpenInvitationsStatement = `
+		SELECT 1 FROM iam_invites
+		WHERE bucket = ? AND redeemed_at = 0 AND expires_at < ? LIMIT 1`
+	dueSpentInvitationsStatement = `
+		SELECT 1 FROM iam_invites
+		WHERE bucket = ? AND redeemed_at > 0 AND redeemed_at < ? LIMIT 1`
+)
+
 // bucketDue reports whether one bucket holds anything at least a slack past
 // its horizon.
 //
 // EVERY PREDICATE IS THE APPLY'S OWN, at the slack's bound rather than the
 // horizon's, and each is a seek on the index its delete uses — so this costs
 // ten probes a bucket and never reads a row it will not report.
+//
+// The invitations' two probes are named ([dueOpenInvitationsStatement],
+// [dueSpentInvitationsStatement]), because the plan gate reads every statement
+// over the invitations.
 func bucketDue(ctx context.Context, tx *sql.Tx, b Bucket, changes, sessions uint64,
 	over int64) (bool, error) {
 
@@ -252,13 +280,9 @@ func bucketDue(ctx context.Context, tx *sql.Tx, b Bucket, changes, sessions uint
 		query string
 		args  []any
 	}{
-		{"the change trail", changes == 0, `
-			SELECT 1 FROM iam_history
-			WHERE bucket = ? AND class = ? AND version < ? LIMIT 1`,
+		{"the change trail", changes == 0, dueTrailStatement,
 			[]any{bucket, string(ClassChange), int64(changes)}},
-		{"the session trail", sessions == 0, `
-			SELECT 1 FROM iam_history
-			WHERE bucket = ? AND class = ? AND version < ? LIMIT 1`,
+		{"the session trail", sessions == 0, dueTrailStatement,
 			[]any{bucket, string(ClassSession), int64(sessions)}},
 		{"ended sessions", over <= 0, `
 			SELECT 1 FROM iam_sessions
@@ -270,16 +294,12 @@ func bucketDue(ctx context.Context, tx *sql.Tx, b Bucket, changes, sessions uint
 			  AND absolute_expires_at > 0 AND absolute_expires_at < ? LIMIT 1`,
 			[]any{bucket, over}},
 		// An invitation with no expiry included, as the apply collects it.
-		{"invitations", over <= 0, `
-			SELECT 1 FROM iam_invites
-			WHERE bucket = ? AND redeemed_at = 0 AND expires_at < ? LIMIT 1`,
+		{"invitations", over <= 0, dueOpenInvitationsStatement,
 			[]any{bucket, over}},
 		// AND WHAT WAS SPENT, which a sweep collects too, so a bucket
 		// holding nothing but a spent invitation or a revoked token is a
 		// bucket with something due.
-		{"redeemed invitations", over <= 0, `
-			SELECT 1 FROM iam_invites
-			WHERE bucket = ? AND redeemed_at > 0 AND redeemed_at < ? LIMIT 1`,
+		{"redeemed invitations", over <= 0, dueSpentInvitationsStatement,
 			[]any{bucket, over}},
 		{"revoked credentials", over <= 0, `
 			SELECT 1 FROM iam_credentials
