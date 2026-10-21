@@ -1,6 +1,7 @@
 package secrets
 
 import (
+	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -88,5 +89,34 @@ func TestEverySourceConstantIsListed(t *testing.T) {
 		t.Errorf("record.go declares %q and Sources lists %q; each constant "+
 			"is a write path's word, and Sources is what every store admits",
 			declared, listed)
+	}
+}
+
+// A VALUE IS HELD TO ONE SIZE, AND ITS REFUSAL NAMES THE SIZE, NEVER THE
+// VALUE.
+//
+// Every store asks this one function at the write, because every reader of a
+// revealed value through a node is sized from the same number: a store that
+// took more could hold a credential a reveal cannot give back, which is what
+// an offline `crewlet secrets set` past the API's limit could leave on the
+// fleet. A value exactly at the limit is a value, or the guard is an outage at
+// its own boundary.
+func TestAValueIsHeldToTheSizeEveryReaderIsSizedFor(t *testing.T) {
+	t.Parallel()
+	if err := CheckValue(strings.Repeat("Q", MaxValueBytes)); err != nil {
+		t.Fatalf("a value of exactly MaxValueBytes was refused: %v", err)
+	}
+	if err := CheckValue(""); err != nil {
+		t.Fatalf("the empty value was refused: %v", err)
+	}
+	err := CheckValue(strings.Repeat("Q", MaxValueBytes+1))
+	if !errors.Is(err, ErrValueTooLarge) {
+		t.Fatalf("a value a byte past MaxValueBytes answered %v, want ErrValueTooLarge", err)
+	}
+	if !strings.Contains(err.Error(), strconv.Itoa(MaxValueBytes)) {
+		t.Errorf("the refusal %q does not name the limit", err)
+	}
+	if strings.Contains(err.Error(), "QQQQ") {
+		t.Error("the refusal quotes the value it refused")
 	}
 }

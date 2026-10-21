@@ -988,3 +988,37 @@ func equalNames(got, want []string) bool {
 	}
 	return true
 }
+
+// A VALUE PAST THE SIZE EVERY STORE KEEPS IS REFUSED ON THE FLEET, BY EITHER
+// VIEW, AND NOTHING IS WRITTEN.
+//
+// The fleet's store is what every node resolves through and what both reveals
+// read back, to a length sized from [secrets.MaxValueBytes]; a row past it can
+// be longer than a reveal gives back, a credential possibly unreadable through
+// the node. The API route bounded its body to that size, but this store did
+// not, so a migration carried a stopped node's oversized row straight onto the
+// fleet. A value exactly at the limit is stored.
+func TestAValuePastTheSizeEveryStoreKeepsIsRefusedOnTheFleet(t *testing.T) {
+	t.Parallel()
+	s, fleet := fleetStore(t, ring(t, "k1"))
+	past := strings.Repeat("&", secrets.MaxValueBytes+1)
+	if err := s.Set(t.Context(), "PAST_IT", past, sam, secrets.SourceAPI, clock); !errors.Is(err, secrets.ErrValueTooLarge) {
+		t.Errorf("Set of a value a byte past the limit answered %v, want ErrValueTooLarge", err)
+	}
+	if created, err := s.Estate().Create(t.Context(), "iam/blind-index-key", past,
+		nodeA, secrets.SourceIAM, clock); !errors.Is(err, secrets.ErrValueTooLarge) || created {
+		t.Errorf("Create of a value a byte past the limit answered %v (created %v)", err, created)
+	}
+	rows, err := fleet.SecretValues(t.Context())
+	if err != nil {
+		t.Fatalf("SecretValues: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("a refused write left %d row(s) on the fleet", len(rows))
+	}
+	atLimit := past[1:]
+	mustSet(t, s, "AT_THE_LIMIT", atLimit)
+	if got, err := s.Get(t.Context(), "AT_THE_LIMIT"); err != nil || got != atLimit {
+		t.Errorf("the value at the limit read back as %d bytes, %v", len(got), err)
+	}
+}

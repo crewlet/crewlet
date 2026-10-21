@@ -31,6 +31,16 @@ import (
 // or fill its disk. One mebibyte is two orders of magnitude above the largest
 // real login (a Claude credential file is under 2 KB) and small enough that
 // the worst case is nothing.
+//
+// A BUNDLE KEPT IN THE SECRET STORE MEETS A SECOND BOUND, on different bytes:
+// [github.com/crewlet/crewlet/internal/secrets.MaxValueBytes] caps what the
+// store keeps, the bundle once packed (base64 of gzip), and `crewlet llm
+// export -secret-store` checks a bundle against it before writing one, while
+// this caps what a restore unpacks. A stored bundle must pass both, and
+// neither implies the other: a directory that compresses well packs far
+// smaller than it unpacks. This one is not tied to the store's because the
+// store is not the only way in — `crewlet llm import` reads a bundle from
+// stdin, and auth.credential_bundle can resolve from the engine's environment.
 const maxBundle = 1 << 20
 
 // ErrNoLoginCommand is returned when a profile declares no way to do what

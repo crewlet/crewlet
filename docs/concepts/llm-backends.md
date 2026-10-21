@@ -2080,6 +2080,13 @@ table and reaches the fleet at that start: like `list`, `status` and `doctor`,
 it restores the configured bundle before it reads the login, so on any other
 stopped node it is refused, naming the running engine and `-api` ([CLI
 reference](../reference/cli.md#where-a-command-reads-the-companys-values)).
+A stored bundle is a stored value, held to the [64 KiB every store
+keeps](secret-store.md#the-design) once packed: a login is a few kilobytes,
+but a CLI whose credentials directory packs to more than that has its export
+refused before anything is written, and the error names what carries
+the bundle instead — `crewlet llm export default` to stdout, kept in your own
+secret manager and piped to `crewlet llm import` on each host, or a login on
+each host.
 Each node restores the bundle
 into its own empty directory: `CREWLET_LLM_CLI_<KEY>_CREDENTIALS` by convention,
 or whatever variable the entry's `auth.credential_bundle` names. Each node then

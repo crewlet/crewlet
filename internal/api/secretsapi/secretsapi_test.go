@@ -316,7 +316,7 @@ func TestAnOversizedValueIsRefused(t *testing.T) {
 	t.Parallel()
 	h, _ := surface(t, cipherFor(t, "k1"), "k1")
 	code, _ := call(t, h, http.MethodPut, "/secrets/BIG",
-		strings.Repeat("x", secretsapi.MaxValueBytes+1))
+		strings.Repeat("x", secrets.MaxValueBytes+1))
 	if code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("PUT = %d, want 413", code)
 	}
@@ -586,7 +586,7 @@ func TestAWriteThatNamesItsProvenanceIsRefused(t *testing.T) {
 		{"source=operator", "v", []string{`"source"`}},
 		{"source=api", "v", []string{`"source"`}},
 		{"by=ops&source=cli", "v", []string{`"by"`, `"source"`}},
-		{"source=operator", strings.Repeat("x", secretsapi.MaxValueBytes+1),
+		{"source=operator", strings.Repeat("x", secrets.MaxValueBytes+1),
 			[]string{`"source"`}},
 	} {
 		code, raw := call(t, h, http.MethodPut, "/secrets/A?"+tc.query, tc.body)
@@ -689,7 +689,7 @@ func TestAWriteRefusesANameNoReferenceCanEverName(t *testing.T) {
 func TestABadNameIsRefusedBeforeTheValueIsRead(t *testing.T) {
 	h, _ := surface(t, cipherFor(t, "k1"), "k1")
 	code, body := call(t, h, http.MethodPut, "/secrets/bad-name",
-		strings.Repeat("x", secretsapi.MaxValueBytes+1))
+		strings.Repeat("x", secrets.MaxValueBytes+1))
 	if code != http.StatusBadRequest || !strings.Contains(body, "invalid_name") {
 		t.Fatalf("PUT with a bad name and an oversized body = %d %s, want 400 invalid_name",
 			code, body)

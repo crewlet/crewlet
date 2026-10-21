@@ -95,6 +95,7 @@ func operatorName(name string) error {
 // Set seals a value and writes it for the whole fleet, recording its author
 // and the credential beside them — see [secrets.Author] — and the write path
 // it arrived by, which [secrets.CheckSource] holds to the paths' own words.
+// The value is held to [secrets.MaxValueBytes], as every store holds it.
 func (s *Store) Set(ctx context.Context, name, value string, by secrets.Author,
 	source secrets.Source, now time.Time) error {
 
@@ -111,6 +112,11 @@ func (s *Store) Set(ctx context.Context, name, value string, by secrets.Author,
 		return err
 	}
 	if err := secrets.CheckSource(source); err != nil {
+		return err
+	}
+	// THE SIZE EVERY STORE KEEPS, which every reader of a revealed value
+	// through a node is sized from: see [secrets.MaxValueBytes].
+	if err := secrets.CheckValue(value); err != nil {
 		return err
 	}
 	return s.put(ctx, name, value, by, source, now)
@@ -580,6 +586,9 @@ func (e *Estate) Create(ctx context.Context, name, value string, by secrets.Auth
 		return false, err
 	}
 	if err := secrets.CheckSource(source); err != nil {
+		return false, err
+	}
+	if err := secrets.CheckValue(value); err != nil {
 		return false, err
 	}
 	rec, err := e.store.seal(provenance(name, by, source, now), value)

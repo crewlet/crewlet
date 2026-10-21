@@ -610,14 +610,9 @@ func loginLLM(ctx context.Context, req loginRequest, stdout, stderr io.Writer) e
 		}
 		var token string
 		if req.tokenStdin {
-			//nolint:govet // shadow: scoped to this block; see .golangci.yml
-			raw, err := io.ReadAll(req.stdin)
+			token, err = tokenFromReader(req.stdin)
 			if err != nil {
-				return fmt.Errorf("reading the token from stdin: %w", err)
-			}
-			token = strings.TrimSpace(string(raw))
-			if token == "" {
-				return errors.New("stdin held no token")
+				return err
 			}
 		} else {
 			token, err = p.CaptureToken(ctx, req.stdin, stderr)
@@ -824,6 +819,25 @@ func refuseAPIKeyToken(p *cliagent.Provider, key string, sign cliagent.ModeSignI
 		key, tokenVar, sign.Reads, sign.Supply)
 }
 
+// tokenFromReader reads the headless token piped to `-token-stdin`: trimmed of
+// the whitespace around it, refused when there is none, and held to the size
+// every store keeps a value to — before the rest of it is read, like every
+// value piped to be stored ([readPipedValue]).
+func tokenFromReader(r io.Reader) (string, error) {
+	raw, err := readPipedValue(r)
+	if err != nil {
+		return "", fmt.Errorf("reading the token from stdin: %w", err)
+	}
+	token := strings.TrimSpace(raw)
+	if token == "" {
+		return "", errors.New("stdin held no token")
+	}
+	if err := secrets.CheckValue(token); err != nil {
+		return "", fmt.Errorf("the token on stdin: %w", err)
+	}
+	return token, nil
+}
+
 func exportLLM(ctx context.Context, providers []cliAgentProvider, key string, toStore bool,
 	companySecrets *companyStore, stdout io.Writer) error {
 	p, err := oneProvider(providers, key)
@@ -849,6 +863,27 @@ func exportLLM(ctx context.Context, providers []cliAgentProvider, key string, to
 		// clear, and the reminder is the honest thing to print beside it.
 		fmt.Fprintln(stdout, bundle)
 		return nil
+	}
+	// A BUNDLE NO STORE KEEPS IS REFUSED HERE, IN A BUNDLE'S WORDS, before
+	// anything is written. Every store holds a value to
+	// [secrets.MaxValueBytes], and refuses a longer one as most likely the
+	// wrong input, because a credential is a few kilobytes. A bundle is not
+	// a pasted credential: it is this entry's whole credentials directory,
+	// packed as it is, and a CLI whose directory packs to more than the
+	// store holds is not fixed by other input. What works is a route that
+	// does not go through the store: the bundle on stdout, kept wherever the
+	// operator keeps such things, or a login on each host. This caps the
+	// bundle as the store keeps it, packed; a restore holds what it unpacks
+	// to cliagent's own bound, which measures different bytes, so a stored
+	// bundle must pass both.
+	if len(bundle) > secrets.MaxValueBytes {
+		return fmt.Errorf("%w: %s's credential bundle is %d bytes once packed, and the store "+
+			"keeps a value of at most %d (%d KiB), so nothing was stored. Export it to stdout "+
+			"instead (`crewlet llm export %s`, without -secret-store), keep it in your own "+
+			"secret manager and pipe it to `crewlet llm import %s` on each host — or sign %s "+
+			"in on each host with `crewlet llm login %s`",
+			secrets.ErrValueTooLarge, key, len(bundle), secrets.MaxValueBytes,
+			secrets.MaxValueBytes>>10, key, key, key, key)
 	}
 	name := cliprofile.BundleVarName(key)
 	target, err := storeLLMSecret(ctx, companySecrets, name, bundle)

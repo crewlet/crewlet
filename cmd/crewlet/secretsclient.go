@@ -119,9 +119,17 @@ func (c *secretsClient) List(ctx context.Context) ([]secrets.Record, error) {
 // its route's own source, `api`, and it refuses a write that names either:
 // the route takes no query at all. It answers with what it stamped, which is
 // what the command prints.
+//
+// A VALUE PAST [secrets.MaxValueBytes] IS REFUSED BEFORE IT IS SENT, in the
+// words a stopped node's own table refuses it in: the node would refuse it
+// too, with a 413 that names a body rather than a value, after the whole of it
+// had crossed the network.
 func (c *secretsClient) Set(ctx context.Context, name, value string, _ secrets.Author,
 	_ secrets.Source, _ time.Time) (secrets.Author, error) {
 
+	if err := secrets.CheckValue(value); err != nil {
+		return secrets.Author{}, err
+	}
 	var body struct {
 		UpdatedBy     string `json:"updated_by"`
 		UpdatedByKind string `json:"updated_by_kind"`

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"slices"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // bundleProvider is a provider with a credential directory of its own and
@@ -268,6 +270,31 @@ func TestDoctorNamesTheEntriesItExamines(t *testing.T) {
 	err = runLLM(noEnviron, []string{"doctor", "-company", company, "-config", filepath.Join(dir, "absent.yaml")}, &out, &notes)
 	if err == nil || !strings.Contains(err.Error(), "declares no providers.llm entries") {
 		t.Errorf("err = %v", err)
+	}
+}
+
+// A TOKEN PIPED TO -token-stdin IS HELD TO THE SIZE EVERY STORE KEEPS, before
+// the rest of it is read: it was read whole, however much arrived, only for
+// the store to refuse it — and a stream that never ended was never refused.
+// The whitespace around a token is not part of it, and nothing but whitespace
+// is no token.
+func TestATokenPipedToBeStoredIsBounded(t *testing.T) {
+	t.Parallel()
+	if got, err := tokenFromReader(strings.NewReader("  sk-not-real\r\n")); err != nil || got != "sk-not-real" {
+		t.Errorf("a token with whitespace around it read as %q, %v", got, err)
+	}
+	if _, err := tokenFromReader(strings.NewReader(" \n")); err == nil {
+		t.Error("whitespace alone was taken as a token")
+	}
+	endless := &endlessReader{}
+	if _, err := tokenFromReader(endless); !errors.Is(err, secrets.ErrValueTooLarge) {
+		t.Fatalf("a stream that never ends answered %v, want ErrValueTooLarge", err)
+	}
+	if most := secrets.MaxValueBytes + 2; endless.read > most {
+		t.Errorf("read %d bytes of a stream to refuse it, want at most %d", endless.read, most)
+	}
+	if _, err := tokenFromReader(strings.NewReader(strings.Repeat("t", secrets.MaxValueBytes+1))); !errors.Is(err, secrets.ErrValueTooLarge) {
+		t.Errorf("a token a byte past the limit answered %v, want ErrValueTooLarge", err)
 	}
 }
 
@@ -991,6 +1018,116 @@ func TestAnLLMWriteSaysWhenARunningEngineReadsIt(t *testing.T) {
 					}
 				}
 			})
+		})
+	}
+}
+
+// A TOKEN PIPED TO `crewlet llm login -token-stdin` IS REFUSED HAVING READ NO
+// MORE THAN THE SIZE EVERY STORE KEEPS, AND NOTHING IS STORED.
+//
+// The login read its stdin to the end before the store saw the token, so a
+// pipe pointed at the wrong file was read whole only to be refused, and one
+// that never ended was never refused at all. [TestATokenPipedToBeStoredIsBounded]
+// holds the token's reader to the bound; this holds the login to that reader.
+//
+// Mutation: read the login's stdin whole again, and the endless stream runs
+// into its reader's guard and is answered as a failed read, not as a token
+// too long, having read far past the bound.
+func TestATokenPipedToLoginIsBoundedBeforeItIsStored(t *testing.T) {
+	t.Parallel()
+	cfg := bootstrapWithKeyring(t, "k1")
+	endless := &endlessReader{}
+	var out, errOut bytes.Buffer
+	err := loginLLM(t.Context(), loginRequest{
+		providers: tokenLoginProvider(t, cliagent.AuthSubscription), key: "claude",
+		tokenStdin: true, companySecrets: llmStoreAt(t, noEnviron, "login", "-config", cfg),
+		stdin: endless,
+	}, &out, &errOut)
+	if !errors.Is(err, secrets.ErrValueTooLarge) {
+		t.Fatalf("a token on a stream that never ends answered %v, want ErrValueTooLarge", err)
+	}
+	if most := secrets.MaxValueBytes + 2; endless.read > most {
+		t.Errorf("read %d bytes of the stream to refuse it, want at most %d", endless.read, most)
+	}
+	if out.Len() != 0 {
+		t.Errorf("the refused login said:\n%s", out.String())
+	}
+	if got, _, getErr := secretsCmd(t, cfg, "get", "CLAUDE_CODE_OAUTH_TOKEN", "-reveal"); getErr == nil {
+		t.Errorf("the refused token was stored, %d bytes of it", len(got))
+	}
+}
+
+// A CREDENTIAL BUNDLE NO STORE KEEPS IS REFUSED BEFORE IT IS WRITTEN, NAMING
+// THE ROUTES THAT DO CARRY ONE.
+//
+// Every store holds a value to [secrets.MaxValueBytes], and its refusal says
+// a credential is a few kilobytes, so the input is most likely the wrong one.
+// A bundle is not a pasted credential but the entry's whole credentials
+// directory, packed as it is, so an operator told to find the right input
+// had none to find. `crewlet llm export -secret-store` now refuses it itself,
+// on either route, naming what carries a bundle that size — stdout into the
+// operator's own secret manager and `crewlet llm import` on each host, or a
+// login on each host — and stores nothing.
+//
+// Mutation: drop the export's own check, and the store's refusal names none
+// of those routes.
+func TestABundleNoStoreKeepsIsRefusedInABundlesWords(t *testing.T) {
+	t.Parallel()
+	const name = "CREWLET_LLM_CLI_SUB_CREDENTIALS"
+	for _, route := range []struct {
+		name string
+		// open is the export's store on this route, and held answers whether
+		// it then holds the bundle's name.
+		open func(t *testing.T) (*companyStore, func() bool)
+	}{
+		{"through a running node", func(t *testing.T) (*companyStore, func() bool) {
+			node := newRevealNode(t, nil)
+			return llmStoreAt(t, tokenEnviron(cliFixtureToken), "export", "-api", node.server.URL),
+				func() bool { _, ok := node.holds(name); return ok }
+		}},
+		{"this node's own rows", func(t *testing.T) (*companyStore, func() bool) {
+			cfg := bootstrapWithKeyring(t, "k1")
+			return llmStoreAt(t, noEnviron, "export", "-config", cfg), func() bool {
+				_, ok := rowsOf(t, cfg)[name]
+				return ok
+			}
+		}},
+	} {
+		t.Run(route.name, func(t *testing.T) {
+			t.Parallel()
+			store, held := route.open(t)
+			providers := bundleProvider(t)
+			creds := filepath.Join(providers[0].provider.Workspace().CredentialsDir(), "creds.json")
+			if err := os.MkdirAll(filepath.Dir(creds), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			// INCOMPRESSIBLE, so the packed bundle is longer than the file:
+			// gzip cannot shrink it and base64 spells it a third longer.
+			login := make([]byte, secrets.MaxValueBytes)
+			_, _ = rand.NewChaCha8([32]byte{}).Read(login)
+			if err := os.WriteFile(creds, login, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var stdout bytes.Buffer
+			err := exportLLM(t.Context(), providers, "sub", true, store, &stdout)
+			if !errors.Is(err, secrets.ErrValueTooLarge) {
+				t.Fatalf("an export past the limit answered %v, want ErrValueTooLarge", err)
+			}
+			for _, want := range []string{"credential bundle", "without -secret-store",
+				"`crewlet llm import sub`", "`crewlet llm login sub`"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal does not say %q: %v", want, err)
+				}
+			}
+			if strings.Contains(err.Error(), "wrong input") {
+				t.Errorf("the refusal calls a bundle the wrong input: %v", err)
+			}
+			if stdout.Len() != 0 {
+				t.Errorf("the refused export said:\n%s", stdout.String())
+			}
+			if held() {
+				t.Errorf("the refused bundle was stored as %s", name)
+			}
 		})
 	}
 }
