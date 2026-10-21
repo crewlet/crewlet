@@ -208,15 +208,24 @@ type MCPServerStatus struct {
 	Unlisted []string
 }
 
-// MaxMCPErrorBytes bounds [MCPServerStatus.Error] on the wire.
+// MaxMCPErrorBytes bounds [MCPServerStatus.Error] and [MCPServerStatus.Wait]
+// on the wire.
 //
-// A start failure's text is a handshake error or a child's last stderr line,
-// and the useful part — "command not found", "401", "connection refused" — is
-// at its head. 240 bytes carries that for every server a company runs while
-// keeping each row a small fraction of a lease payload re-sent every
-// heartbeat; the full text is in the node's own log line
-// (`mcp_server_failed`), which is where a person fixing it reads anyway.
-const MaxMCPErrorBytes = 240
+// Two kinds of text arrive here. A start failure's is a handshake error or a
+// child's last stderr line, whose useful part — "command not found", "401",
+// "connection refused" — is at its head. The engine's own sentence for a
+// server it held back, for a value that resolves to nothing, is the other,
+// and its useful part is all of it: the variable, then each remedy, the last
+// naming the key to declare optional where a server can run without a host's
+// setting. At 240 bytes that last remedy never arrived: the tools guide's own
+// `NPM_CONFIG_REGISTRY` case is about 300 bytes, and a per-role child missing
+// a setting while its seat's token is being minted about 380. 512 carries
+// both under names of ordinary length. A row carries text only while
+// an instance has failed or waits, so the bound costs a healthy server's row
+// nothing on the heartbeat it is re-sent with; the full text is in the node's
+// own log line either way (`mcp_server_failed`,
+// `mcp_server_credential_missing`), which is where a person fixing it reads.
+const MaxMCPErrorBytes = 512
 
 // Meta renders the status for a lease's Meta map.
 func (s NodeStatus) Meta() map[string]any {

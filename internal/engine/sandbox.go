@@ -186,8 +186,8 @@ func buildSandboxProvider(spec *config.SandboxProvider, env *config.Resolver, pl
 
 // localOptions maps the local block onto the backend's options for one cell.
 //
-// runtime_env IS RESOLVED HERE, at the edge, exactly as an MCP server's `env:`
-// is ([serverSpec]): Tier B stores its references verbatim, so a backend handed
+// runtime_env IS RESOLVED HERE, at the edge, as an MCP server's `env:` is
+// ([resolveServer]): Tier B stores its references verbatim, so a backend handed
 // the block's map would put the literal "${SSH_AUTH_SOCK}" into the runtime's
 // environment, and the sandbox package must not be able to read the secret
 // store to do better.
@@ -201,6 +201,18 @@ func localOptions(local *config.LocalSandbox, env *config.Resolver, placement co
 		RunArgs:    local.RunArgs,
 		RuntimeEnv: resolveMap(env, local.RuntimeEnv),
 	}
+}
+
+// resolveMap expands every ${VAR} in a config map.
+func resolveMap(env *config.Resolver, in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = env.Value(v)
+	}
+	return out
 }
 
 // resolvedOr reads a config value through this node's chain, falling back to
@@ -1397,64 +1409,71 @@ func sandboxHeadroom(ctx context.Context, remaining runner.Remaining, floor int)
 // The credentials are the seat's OWN, inherited down the org chart at build
 // time, so a seat gets the tokens it is entitled to and no others.
 //
-// AND A SERVER WHOSE CREDENTIALS DO NOT RESOLVE IS NOT OFFERED, by the rule a
-// seat's own child is started by (seatcredentials.go): an in-box server handed
-// an empty token refuses to start or acts as nobody, and the agent would
-// spend a round finding that out — the reason [sandbox.RenderMCP] skips a
-// server it cannot render. It used to be offered with a warning that it
-// "will not authenticate". What was withheld comes back beside the servers,
-// for the caller to judge and say ([Engine.boxServers]); minted is what the
-// seat's provisioning passes mint ([Engine.mintedFor]).
+// RESOLVED HERE, like the run env and for the same reason: an in-box server
+// has to authenticate, and Tier B stores its references verbatim. Only the
+// scoped servers': a block the box is not given is nothing this run resolves
+// or reports. And resolved by the rule every start of a server passes
+// ([resolveServer]), from the same values the engine's own child of the
+// server is started with: the server's own env, headers and url as well as the
+// seat's block. They were once handed over verbatim, `${VAR}` and all, and
+// written into the CLI's config that way — OpenCode reads `{env:VAR}` and not
+// `${VAR}`, and Claude Code expands one from the run env, which holds none of
+// the company's secrets.
+//
+// SO A SERVER WITH A VALUE THAT DOES NOT RESOLVE IS NOT OFFERED: an in-box
+// server handed an empty token refuses to start or acts as nobody, and the
+// agent would spend a round finding that out — the reason [sandbox.RenderMCP]
+// skips a server it cannot render. It used to be offered with a warning that
+// it "will not authenticate". What was withheld comes back beside the
+// servers, for the caller to judge and say ([Engine.boxServers]); minted is
+// what the seat's provisioning passes mint ([Engine.mintedFor]).
 func sandboxMCP(
 	env *config.Resolver, c *Company, seat *org.Role, gate *org.RoleSandbox,
 	minted map[string]integration.Kind,
-) (map[string]sandbox.MCPServer, []*seatCredentialMissing) {
+) (map[string]sandbox.MCPServer, []*credentialMissing) {
 	if len(gate.MCP.Servers) == 0 {
 		return nil, nil
 	}
-	// RESOLVED HERE, like the run env and for the same reason: an in-box
-	// server has to authenticate, and Tier B stores its references
-	// verbatim. Only the scoped servers': a block the box is not given is
-	// nothing this run resolves or reports.
-	//
-	// THE SERVER'S OWN VALUES AS WELL AS THE SEAT'S. They were handed over
-	// verbatim, `${VAR}` and all, and written into the CLI's config that
-	// way: OpenCode reads `{env:VAR}` and not `${VAR}`, so a shared key
-	// reached its server as the literal text, and Claude Code expands one
-	// from its own environment — the run env, which holds none of the
-	// company's secrets unless a seat repeats them there. The engine's own
-	// child of the same server reads each through the secret store
-	// ([serverSpec]), and a box's is the same server.
-	scopedNames := make(map[string]struct{}, len(gate.MCP.Servers))
-	for _, name := range gate.MCP.Servers {
-		scopedNames[name] = struct{}{}
+	configured := make(map[string]*config.MCPServer, len(c.Config.MCPServers))
+	for i := range c.Config.MCPServers {
+		configured[c.Config.MCPServers[i].Name] = &c.Config.MCPServers[i]
 	}
-	servers := make([]sandbox.MCPServer, 0, len(c.Config.MCPServers))
-	for _, s := range c.Config.MCPServers {
-		box := sandbox.MCPServer{
-			Name: s.Name, Transport: sandbox.Transport(s.Kind()),
-			Command: s.Command, Args: s.Args,
-		}
-		if _, given := scopedNames[s.Name]; given {
-			box.Env, box.URL, box.Headers =
-				resolveMap(env, s.Env), env.Value(s.URL), resolveMap(env, s.Headers)
-		}
-		servers = append(servers, box)
-	}
-	scoped := make([]string, 0, len(gate.MCP.Servers))
-	credentials := make(map[string]map[string]string, len(gate.MCP.Servers))
-	var withheld []*seatCredentialMissing
+	var (
+		servers  []sandbox.MCPServer
+		scoped   = make([]string, 0, len(gate.MCP.Servers))
+		withheld []*credentialMissing
+		seen     = make(map[string]struct{}, len(gate.MCP.Servers))
+	)
 	for _, name := range gate.MCP.Servers {
-		values := seat.MCPEnv[name]
-		if missing := seatCredentialsMissing(seat.Handle(), name, "", values, env, minted); missing != nil {
+		if _, dup := seen[name]; dup {
+			continue
+		}
+		seen[name] = struct{}{}
+		server, known := configured[name]
+		if !known {
+			// LEFT IN THE SCOPE, so the renderer says what it says of a
+			// name the company declares no server under.
+			scoped = append(scoped, name)
+			continue
+		}
+		values, missing := resolveServer(server, seat.Handle(), "", seat.MCPEnv[name], env, minted)
+		if missing != nil {
 			withheld = append(withheld, missing)
 			continue
 		}
+		box := sandbox.MCPServer{
+			Name: server.Name, Transport: sandbox.Transport(server.Kind()),
+			Command: server.Command, Args: server.Args, URL: values.url,
+		}
+		if server.Kind() == config.TransportHTTP {
+			box.Headers = values.values
+		} else {
+			box.Env = values.values
+		}
+		servers = append(servers, box)
 		scoped = append(scoped, name)
-		resolved, _ := env.Map("mcp_env."+name, values)
-		credentials[name] = resolved
 	}
-	return sandbox.RenderMCP(servers, scoped, credentials), withheld
+	return sandbox.RenderMCP(servers, scoped), withheld
 }
 
 // boxServers is the scoped MCP surface one coding run's box is given
@@ -1501,7 +1520,7 @@ func (e *Engine) boxServers(
 //
 // A nil c is a box launched with no company to read a plan from — a case
 // driving the launch by hand — and every variable is then the operator's.
-func (e *Engine) boxGap(ctx context.Context, c *Company, handle string, names []string) *seatCredentialMissing {
+func (e *Engine) boxGap(ctx context.Context, c *Company, handle string, names []string) *credentialMissing {
 	var minted map[string]integration.Kind
 	if c != nil {
 		minted = e.mintedFor(c, handle)
@@ -1510,7 +1529,7 @@ func (e *Engine) boxGap(ctx context.Context, c *Company, handle string, names []
 	if gap == nil {
 		return nil
 	}
-	return gap.judged(e.mintingStates(ctx, []*seatCredentialMissing{gap}))
+	return gap.judged(e.mintingStates(ctx, []*credentialMissing{gap}))
 }
 
 // pauseTTL reads the seat's override, distinguishing "inherit" from "never".

@@ -366,7 +366,7 @@ func TestASeatChildWithoutItsCredentialIsHeldBackNotStarted(t *testing.T) {
 	e.secretsMu.Unlock()
 	e.convergeSeat(t.Context(), ceo, true)
 	outcomes := seatOutcomes(e, "ceo")
-	var missing *seatCredentialMissing
+	var missing *credentialMissing
 	if len(outcomes) != 1 || outcomes[0].err == nil || errors.As(outcomes[0].err, &missing) {
 		t.Fatalf("outcomes once the credentials are sealed = %+v: want the child's start "+
 			"attempted (and failed, its binary being absent)", outcomes)

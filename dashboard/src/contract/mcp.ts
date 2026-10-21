@@ -42,12 +42,12 @@ export interface McpServerNode {
   waiting: number;
   /** Tools one serving instance serves. */
   tools: number;
-  /** One failed instance's reason, cut to 240 bytes, or "". */
+  /** One failed instance's reason, cut to 512 bytes, or "". */
   error: string;
   /** The seat that instance was launched for, or "" for a shared server. */
   error_seat: string;
   /** What one waiting instance waits for — the variables and the integration
-   *  minting them — cut to 240 bytes, or "". */
+   *  minting them — cut to 512 bytes, or "". */
   wait: string;
   /** The seat that waiting instance belongs to, or "". */
   wait_seat: string;

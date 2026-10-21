@@ -63,7 +63,7 @@ mcp_servers:
 
 On **Cloud**, `crewlet confluence provision` registers token-bearing hooks on `/webhooks/confluence/{event}` through an endpoint Atlassian has never documented; the [Forge app](https://github.com/crewlet/forge) is the supported alternative and delivers to `POST /webhooks/forge`. `webhook_secret` signs Data Center deliveries; `webhook_token` authenticates Cloud ones. See [Webhooks](#webhooks-confluence-pushes-to-agents).
 
-Since Jira and Confluence share the Atlassian platform, they use the **same** `mcp-atlassian` server — declare it **once** in `mcp_servers` as `atlassian` and set both `JIRA_URL` and `CONFLUENCE_URL` in its `env`; the engine does not derive them from the `jira:` / `confluence:` sections.
+Since Jira and Confluence share the Atlassian platform, they use the **same** `mcp-atlassian` server — declare it **once** in `mcp_servers` as `atlassian` and set the address of each product the company uses in its `env`, `JIRA_URL` and `CONFLUENCE_URL`; the engine does not derive them from the `jira:` / `confluence:` sections. Leave out the one the company does not run: every `${VAR}` a server is started with must resolve, so a `JIRA_URL: "${JIRA_URL}"` with `JIRA_URL` set nowhere holds every seat's `atlassian` server back rather than starting it with Jira off ([Tools & MCP](../guides/tools-and-mcp.md#a-key-that-may-go-without-its-value) has the declaration for a setting a server can run without).
 
 ---
 

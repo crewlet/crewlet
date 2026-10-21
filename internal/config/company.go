@@ -262,11 +262,12 @@ func (c *Company) ValidateRunnable() error {
 // whose code work hands a cli-agent entry to another CLI's coding agent
 // ([Company.validateSandboxCodingAgents]), a sandbox gate saying what nothing
 // reads ([Company.validateSandboxGates]), a setup step writing a file a box
-// it reaches refuses ([Company.validateSetupFileHomes]), and the three
-// WHOLE-DOCUMENT rules
-// in [Company.validateFileRules] — an `mcp_env` key naming no server, two
-// seats declaring one email, and a reference that is shaped like neither a
-// handle nor a key.
+// it reaches refuses ([Company.validateSetupFileHomes]), and the five
+// WHOLE-DOCUMENT rules in [Company.validateFileRules] — an `mcp_env` key
+// naming no server, an `optional_keys` entry leaving nothing out, one http
+// header spelled two ways where nothing says which is sent, two seats
+// declaring one email, and a reference that is shaped like neither a handle
+// nor a key.
 func (c *Company) ValidateAdmission() error {
 	o, index := c.organization()
 	return index.locate(c.validateAdmission(o))

@@ -30,7 +30,7 @@ import (
 // restart claimed it again. The helper server here refuses an empty token the
 // same way (toolServerRequireEnv), which is what a case that lets a start
 // happen with one would see — none may now: a seat's child whose credential
-// does not resolve is not started at all (seatcredentials.go).
+// does not resolve is not started at all (toolcredentials.go).
 
 // convergingCompany is a company whose per-role tracker refuses to start
 // without the seat's token. The CEO's token is the ${CEO_TRACKER_TOKEN} a case

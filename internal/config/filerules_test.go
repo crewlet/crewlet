@@ -9,7 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 )
 
-// THE THREE RULES ONLY A WHOLE FILE CAN CHECK.
+// THE FIVE RULES ONLY A WHOLE FILE CAN CHECK.
 //
 // Each one is a fault with no run-time symptom: nothing crashes, nothing
 // logs, and the company runs — wrongly, quietly, until somebody notices that
@@ -89,6 +89,339 @@ units:
 			if !strings.Contains(err.Error(), "per SERVER") {
 				t.Errorf("the message must say why the block is never read; got:\n%v", err)
 			}
+		})
+	}
+}
+
+// AN optional_keys ENTRY THAT LEAVES NOTHING OUT IS REFUSED, and says which
+// mistake it is.
+//
+// An entry naming nothing is never consulted, so the key it was meant for
+// stays required and the server is not started wherever that key's value
+// resolves to nothing — on a document that reads as though somebody said it
+// could run without it. The likeliest slip is the VARIABLE's name where the
+// key's belongs, which is told apart because its fix is the key it names.
+func TestAnOptionalKeyThatLeavesNothingOutIsRefused(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name, doc, path string
+		kind            error
+		want            []string
+	}{
+		{
+			"a variable named where its key belongs",
+			`
+name: Acme
+mcp_servers:
+  - name: search
+    command: search-mcp
+    env: {REGISTRY: "${NPM_CONFIG_REGISTRY}"}
+    optional_keys: [NPM_CONFIG_REGISTRY]
+`,
+			"mcp_servers[0].optional_keys[0]", ErrUnknownValue,
+			[]string{"is a variable", "not a key", "(REGISTRY)"},
+		},
+		{
+			"a key nothing carries",
+			`
+name: Acme
+mcp_servers:
+  - name: search
+    command: search-mcp
+    env: {NPM_CONFIG_REGISTRY: "${NPM_CONFIG_REGISTRY}"}
+    optional_keys: [NPM_CONFIG_REGISTRI]
+`,
+			"mcp_servers[0].optional_keys[0]", ErrUnknownValue,
+			[]string{"is not a key of this server's env", "stays required"},
+		},
+		{
+			"a header nothing carries, on an http server",
+			`
+name: Acme
+mcp_servers:
+  - name: docs
+    transport: http
+    url: "https://docs.example.com/mcp"
+    headers: {X-Region: "${DOCS_REGION}"}
+    optional_keys: [X-Regoin]
+`,
+			"mcp_servers[0].optional_keys[0]", ErrUnknownValue,
+			[]string{"is not a key of this server's headers"},
+		},
+		{
+			"a variable only the url references",
+			`
+name: Acme
+mcp_servers:
+  - name: docs
+    transport: http
+    url: "https://${DOCS_HOST}/mcp"
+    headers: {X-Region: "${DOCS_REGION}"}
+    optional_keys: [DOCS_HOST]
+`,
+			"mcp_servers[0].optional_keys[0]", ErrUnknownValue,
+			[]string{"the url references", "the url is never optional"},
+		},
+		{
+			// ONLY THIS SERVER'S BLOCKS: the seat's block for another
+			// server lands in that server's environment, never this one's.
+			"a key only another server's seat block writes",
+			`
+name: Acme
+mcp_servers:
+  - {name: tracker, shared: false, command: tracker-mcp, optional_keys: [REGION]}
+  - {name: wiki, shared: false, command: wiki-mcp}
+roles:
+  - name: Dev
+    handle: dev
+    mcp_env:
+      tracker: {TOKEN: "${DEV_TRACKER_TOKEN}"}
+      wiki: {REGION: "${DEV_WIKI_REGION}"}
+`,
+			"mcp_servers[0].optional_keys[0]", ErrUnknownValue,
+			[]string{"is not a key of this server's env"},
+		},
+		{
+			"one header listed twice in two spellings",
+			`
+name: Acme
+mcp_servers:
+  - name: docs
+    transport: http
+    url: "https://docs.example.com/mcp"
+    headers: {X-Region: "${DOCS_REGION}"}
+    optional_keys: [X-Region, x-region]
+`,
+			"mcp_servers[0].optional_keys[1]", ErrConflict,
+			[]string{"listed twice"},
+		},
+		{
+			"a key whose values reference nothing",
+			`
+name: Acme
+mcp_servers:
+  - name: code
+    command: glab
+    env: {GLAB_CHECK_UPDATE: "false"}
+    optional_keys: [GLAB_CHECK_UPDATE]
+`,
+			"mcp_servers[0].optional_keys[0]", ErrUnknownValue,
+			[]string{"carries a ${VAR} reference", "take it out of optional_keys"},
+		},
+		{
+			"a key listed twice",
+			`
+name: Acme
+mcp_servers:
+  - name: search
+    command: search-mcp
+    env: {NPM_CONFIG_REGISTRY: "${NPM_CONFIG_REGISTRY}"}
+    optional_keys: [NPM_CONFIG_REGISTRY, NPM_CONFIG_REGISTRY]
+`,
+			"mcp_servers[0].optional_keys[1]", ErrConflict,
+			[]string{"listed twice"},
+		},
+		{
+			"an empty entry",
+			`
+name: Acme
+mcp_servers:
+  - name: search
+    command: search-mcp
+    env: {NPM_CONFIG_REGISTRY: "${NPM_CONFIG_REGISTRY}"}
+    optional_keys: [" "]
+`,
+			"mcp_servers[0].optional_keys[0]", ErrMissing,
+			[]string{"names the key"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := rejects(t, tc.doc, tc.path)
+			if !errors.Is(err, tc.kind) {
+				t.Fatalf("want %v, got %v", tc.kind, err)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the message must say %q; got:\n%v", want, err)
+				}
+			}
+			// AN ADMISSION RULE: a stored revision carrying it still runs,
+			// since the engine merely never consults the entry.
+			cfg, perr := ParseCompanyDocument([]byte(tc.doc))
+			if perr != nil {
+				t.Fatalf("decode: %v", perr)
+			}
+			if rerr := cfg.ValidateRunnable(); rerr != nil {
+				t.Errorf("a stored revision carrying it was refused to run: %v", rerr)
+			}
+		})
+	}
+}
+
+// AN OPTIONAL KEY ONLY A SEAT OR A UNIT WRITES IS A KEY THE SERVER READS, so
+// it is accepted.
+//
+// A seat's block for a server lands in the same environment as the server's
+// own env, and a unit's block in every agent seat under it, so a per-seat
+// template that carries no env of its own is the ordinary place for such a
+// key. A rule that looked at the server alone would refuse it.
+func TestAnOptionalKeyOnlyASeatOrAUnitWritesIsAccepted(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct{ name, doc string }{
+		{"a seat inside a unit", `
+name: Acme
+mcp_servers:
+  - {name: tracker, shared: false, command: tracker-mcp, optional_keys: [TRACKER_REGION]}
+units:
+  - name: Eng
+    id: eng
+    roles:
+      - name: Dev
+        handle: dev
+        mcp_env: {tracker: {TOKEN: "${DEV_TOKEN}", TRACKER_REGION: "${DEV_REGION}"}}
+`},
+		{"a nested unit", `
+name: Acme
+mcp_servers:
+  - {name: tracker, shared: false, command: tracker-mcp, optional_keys: [TRACKER_REGION]}
+units:
+  - name: Eng
+    id: eng
+    children:
+      - name: Core
+        id: core
+        mcp_env: {tracker: {TRACKER_REGION: "${CORE_REGION}"}}
+`},
+		{"the server's own env", `
+name: Acme
+mcp_servers:
+  - name: search
+    command: search-mcp
+    env: {NPM_CONFIG_REGISTRY: "${NPM_CONFIG_REGISTRY}"}
+    optional_keys: [NPM_CONFIG_REGISTRY]
+`},
+		{"an http server's own header", `
+name: Acme
+mcp_servers:
+  - name: docs
+    transport: http
+    url: "https://docs.example.com/mcp"
+    headers: {X-Region: "${DOCS_REGION}"}
+    optional_keys: [X-Region]
+`},
+		// HTTP NAMES A HEADER IN ANY CASE, and so does the list.
+		{"a header named in another case than it is written", `
+name: Acme
+mcp_servers:
+  - name: docs
+    transport: http
+    url: "https://docs.example.com/mcp"
+    headers: {X-Region: "${DOCS_REGION}"}
+    optional_keys: [x-region]
+`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			mustCompany(t, tc.doc)
+		})
+	}
+}
+
+// ONE HEADER SPELLED TWO WAYS IN ONE PLACE IS REFUSED, and only there.
+//
+// HTTP does not tell `authorization` from `Authorization`, so a server is sent
+// one value for the two. The engine lays a seat's values over its template's
+// by the header rather than by the spelling, so those two may differ; but two
+// keys of one map, or a unit's block and a member's — which the org chart
+// lays one under the other as written, keeping both — leave nothing to say
+// which value is sent, and the request carried whichever came last out of a
+// map. Seats are started apart, and an environment does tell the two
+// spellings apart, so neither is refused.
+func TestOneHeaderSpelledTwoWaysInOnePlaceIsRefused(t *testing.T) {
+	t.Parallel()
+
+	const server = `
+name: Acme
+mcp_servers:
+  - name: code
+    transport: http
+    shared: false
+    url: "https://code.example.com/mcp"
+`
+	for _, tc := range []struct{ name, doc, path, want string }{
+		{"in the server's own headers", `
+name: Acme
+mcp_servers:
+  - name: code
+    transport: http
+    url: "https://code.example.com/mcp"
+    headers: {Authorization: "Bearer ${A}", authorization: "Bearer ${B}"}
+`, "mcp_servers[0].headers.authorization", `"authorization" and "Authorization" name one header`},
+		{"in one seat's block", server + `
+roles:
+  - name: Dev
+    handle: dev
+    mcp_env: {code: {X-Token: "${DEV_A}", x-token: "${DEV_B}"}}
+`, "roles[0].mcp_env.code.x-token", `"x-token" and "X-Token" name one header`},
+		{"between a unit's block and a member's", server + `
+units:
+  - name: Eng
+    id: eng
+    mcp_env: {code: {authorization: "Bearer ${ENG_TOKEN}"}}
+    roles:
+      - name: Dev
+        handle: dev
+        mcp_env: {code: {Authorization: "Bearer ${DEV_TOKEN}"}}
+`, "units[0].roles[0].mcp_env.code.Authorization", `its unit's block writes as "authorization"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := rejects(t, tc.doc, tc.path)
+			if !errors.Is(err, ErrConflict) || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("want a conflict saying %q, got:\n%v", tc.want, err)
+			}
+		})
+	}
+
+	for _, tc := range []struct{ name, doc string }{
+		{"a seat's header over its template's", `
+name: Acme
+mcp_servers:
+  - name: code
+    transport: http
+    shared: false
+    url: "https://code.example.com/mcp"
+    headers: {Authorization: "Bearer ${SHARED_TOKEN}"}
+roles:
+  - name: Dev
+    handle: dev
+    mcp_env: {code: {authorization: "Bearer ${DEV_TOKEN}"}}
+`},
+		{"two seats spelling one header apart", server + `
+roles:
+  - name: Dev
+    handle: dev
+    mcp_env: {code: {authorization: "Bearer ${DEV_TOKEN}"}}
+  - name: Ops
+    handle: ops
+    mcp_env: {code: {Authorization: "Bearer ${OPS_TOKEN}"}}
+`},
+		{"a stdio server's two variables", `
+name: Acme
+mcp_servers:
+  - {name: search, shared: false, command: search-mcp}
+roles:
+  - name: Dev
+    handle: dev
+    mcp_env: {search: {TOKEN: "${DEV_A}", token: "${DEV_B}"}}
+`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			mustCompany(t, tc.doc)
 		})
 	}
 }

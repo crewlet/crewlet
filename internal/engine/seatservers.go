@@ -25,12 +25,12 @@ import (
 //   - A credential the child is started from can be sealed AFTER the claim.
 //     On a first boot under an integration that provisions seat identities,
 //     the engine claims its seats before the provisioning pass has minted
-//     their tokens. Such a child is not started at all while its seat's
-//     block references a variable that resolves to nothing — waiting, not
-//     failed, where the pass will mint it (seatcredentials.go). The pass
-//     that seals asks for a pass over this node's seats as soon as it has
-//     refreshed the snapshot ([refreshingSink.Flush]), and re-activates the
-//     revision so every other node's apply does the same
+//     their tokens. Such a child is not started at all while a value it is
+//     started with references a variable that resolves to nothing —
+//     waiting, not failed, where the pass will mint it (toolcredentials.go).
+//     The pass that seals asks for a pass over this node's seats as soon as
+//     it has refreshed the snapshot ([refreshingSink.Flush]), and
+//     re-activates the revision so every other node's apply does the same
 //     ([Engine.rebuildForSealedSecrets]); either is where the child starts.
 //     Before that rule a claim spawned it with the credential empty, the
 //     vendor's server refused to start, and the pass after the seal had to
@@ -47,9 +47,9 @@ import (
 // new epoch and the snapshot it just refreshed produce, exactly as the shared
 // servers are reconciled into each epoch: a child whose resolved spec is
 // unchanged is left running and never learns an apply happened, one whose
-// spec moved is restarted, one that is not running is started — unless its
-// seat's credential does not resolve, when it is held back, unstarted
-// (seatcredentials.go) — and one the seat no longer declares, or whose
+// spec moved is restarted, one that is not running is started — unless a
+// value it is started with does not resolve, when it is held back, unstarted
+// (toolcredentials.go) — and one the seat no longer declares, or whose
 // credential has stopped resolving, is stopped. A provisioning pass that
 // seals asks for the same pass as soon as this node's snapshot holds what it
 // sealed ([refreshingSink.Flush]). And a pass that leaves a child failed to
@@ -550,7 +550,7 @@ func (e *Engine) seatPass(ctx context.Context, s *seatChildren, retryNow bool) b
 // deleted — by a disconnect that removed the seats' accounts, or by an
 // operator — leaves a child running on the value it was started with, acting
 // at the vendor as an identity the company no longer holds a credential for;
-// the rule that would not start it (seatcredentials.go) is the rule that
+// the rule that would not start it (toolcredentials.go) is the rule that
 // stops it. Logged as the seat no longer declaring the server, it sent the
 // reader to the configuration, which still declares it, while the status beside
 // the line said what was actually missing.
@@ -559,13 +559,7 @@ func retireUndeclared(ctx context.Context, s *seatChildren, specs []mcp.Spec, he
 	for _, spec := range specs {
 		desired[spec.Name] = struct{}{}
 	}
-	withheld := make(map[string]*seatCredentialMissing, len(held))
-	for _, o := range held {
-		var missing *seatCredentialMissing
-		if errors.As(o.err, &missing) {
-			withheld[missing.instance] = missing
-		}
-	}
+	withheld := withheldByInstance(held)
 	for _, name := range s.bridge.Servers() {
 		if _, keep := desired[name]; keep {
 			continue
@@ -578,9 +572,8 @@ func retireUndeclared(ctx context.Context, s *seatChildren, specs []mcp.Spec, he
 		}
 		if missing, ok := withheld[name]; ok {
 			log.InfoContext(ctx, "mcp_server_retired", "server", name, "seat", s.handle,
-				"detail", "the credential the seat's block names no longer resolves, so "+
-					"the child is not left acting on the value it was started with: "+
-					missing.reason())
+				"detail", "a value the child is started with no longer resolves, so it "+
+					"is not left acting on the one it was started with: "+missing.reason())
 			continue
 		}
 		log.InfoContext(ctx, "mcp_server_retired", "server", name, "seat", s.handle,
