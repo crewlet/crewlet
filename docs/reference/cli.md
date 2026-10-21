@@ -1972,8 +1972,12 @@ across it so two runs are comparable.
 **It reads a file, not a running node.** The replicated estate is exclusively
 owned by the running engine, so pass the copy inside a
 [backup](../guides/backup.md) — which needs nothing stopped and measures the
-same rows — or the node's own file with the engine stopped. With neither
-`-store` nor a reachable Tier A file it has nothing to open.
+same rows — or the node's own file with the engine stopped. Pointed at a file
+a running engine holds, it is refused naming that way around it. With neither
+`-store` nor a reachable Tier A file it has nothing to open, and a path that
+holds no file is refused rather than created: opening it would make an empty
+estate there and report a corpus of nothing, which reads as a company with no
+vectors rather than as a mistyped path.
 
 ```console
 $ crewlet search eval -store /var/backups/crewlet/2026-09-01/store-replicated.db
