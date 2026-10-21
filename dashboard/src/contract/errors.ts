@@ -52,11 +52,18 @@ export type QueryErrorCode =
  * told to sign in again, never to set anything.
  *
  * THE SENTENCE IS SECOND PERSON, and it is ours — except where it is `null`,
- * which means "show the tool's own `detail`". Those are the two classes whose
- * sentence names the argument that was wrong (`invalid`) or the rule that
- * forbade it (`forbidden`); every other class's sentence is written for a
- * model reading a tool result, and a person reading it would be told about
- * `if_match` and record ids.
+ * which means "show the engine's own `detail`". Those are the four classes
+ * whose `detail` is written for the person reading it: the argument that was
+ * wrong (`invalid`), the rule that forbade it (`forbidden`), and — in the words
+ * of the domain that decided it, since the tool's own names the next call for
+ * a model (`internal/api/operator`'s `Said`) — the state that refused the
+ * change and who changes it (`conflict`: a room archived, an item in the
+ * trash, a write that lost its race and may be made again), or what already
+ * holds the name it asked for (`exists`). One fixed sentence for every
+ * `conflict` ended "retry", which re-trying an archived room's post never
+ * changes. Every other class's `detail` is written for a model reading a tool
+ * result, and a person reading it would be told about `if_match` and record
+ * ids.
  */
 export const ACT_ERRORS = {
   // Who is asking — the request guard's, before any tool is named.
@@ -94,9 +101,8 @@ export const ACT_ERRORS = {
   not_found: "It is not there any more. Somebody may have removed or moved it.",
   forbidden: null,
   stale_version: "Changed by somebody else since you opened it. Look again, then retry.",
-  conflict:
-    "It collided with another change, or its state no longer takes this. Look again, then retry.",
-  exists: "That already exists.",
+  conflict: null,
+  exists: null,
   already_answered: "Somebody has already answered it.",
   reassignment_budget:
     "It has been handed between seats too many times. A person has to pick it up now.",
