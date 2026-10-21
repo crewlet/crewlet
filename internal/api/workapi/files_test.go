@@ -494,7 +494,9 @@ func TestAnUploadRefusedByWhatIsKnownReadsNothing(t *testing.T) {
 		s.upload(bytes.NewReader([]byte("x")), rec)
 		answer := answerOf(t, rec)
 		detail, _ := answer["detail"].(string)
-		if rec.Code != http.StatusBadRequest || answer["error"] != "invalid" ||
+		// THE PROJECT'S STATE, answered as every surface answers it: `409
+		// conflict` in the writer's sentence, never a request to fix.
+		if rec.Code != http.StatusConflict || answer["error"] != "conflict" ||
 			!strings.Contains(detail, "archived") {
 			t.Fatalf("an upload into an archived project answered %d: %s", rec.Code, rec.Body.String())
 		}
@@ -529,8 +531,9 @@ func TestAnUploadRefusedByWhatIsKnownReadsNothing(t *testing.T) {
 // an upload too old to be named is `409 upload_expired` — the bytes are stored
 // and the write may no longer name them, and sending the request again is the
 // one thing that lands, where a 503 would invite the same doomed retry of the
-// record alone. A conflict the domain names goes through the one refusal
-// mapping ([operator.Fail]), as it would from any tool; the byte routes used to
+// record alone. A conflict the domain names, the project's state and a value
+// it refuses go through the one refusal mapping ([operator.Fail]), as they
+// would from any tool; the byte routes used to
 // answer every refusal they did not name with a 503, so a fault told a client
 // to retry for ever.
 func TestTheWritersRefusalsReadAsTheFileRoutesDocument(t *testing.T) {
@@ -549,6 +552,15 @@ func TestTheWritersRefusalsReadAsTheFileRoutesDocument(t *testing.T) {
 			http.StatusNotFound, httpjson.CodeNoProject},
 		{"a race the domain names", fmt.Errorf("%w: another write landed", statelog.ErrConflict),
 			http.StatusConflict, httpjson.CodeConflict},
+		// THE ONE RULE, BY THE ONE MAPPING: a project archived since the
+		// early read is its state, `409 conflict`, and a content type no
+		// row may hold is the request's, `422 invalid` — this route
+		// answered both `400 invalid` from an arm of its own.
+		{"a project archived since the early read", tracker.AcceptFiles("ENG", true),
+			http.StatusConflict, httpjson.CodeConflict},
+		{"a value the writer refuses", &tracker.Refusal{Mark: tracker.ErrInvalid,
+			Err: errors.New("the content type spans lines")},
+			http.StatusUnprocessableEntity, httpjson.CodeInvalid},
 		{"a fault of the node's own", errors.New("disk I/O error"),
 			http.StatusInternalServerError, httpjson.CodeInternalError},
 	} {

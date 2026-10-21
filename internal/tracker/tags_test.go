@@ -491,20 +491,28 @@ func (r *roundTrip) tagSlugs(project string) []string {
 //
 // [tracker.TagClash] and [tracker.TagsFull] are types so a caller several
 // steps away — a cross-project move declaring its subtree's tags — can name
-// the tags involved. They must still be what every content refusal here is:
-// [tracker.ErrInvalid] under errors.Is, and worded by [tracker.Sentence]
-// without the package prefix, or a surface that does not look for the type
-// classes a person's fixable refusal as the engine's own failure and shows
-// them "tracker:" in front of it.
+// the tags involved. They must still be what every refusal here is: marked
+// under errors.Is — a clash [tracker.ErrInvalid], the label to change, and a
+// full set [tracker.ErrState], the project's state, which the same add meets
+// until a tag is archived — and worded by [tracker.Sentence] without the
+// package prefix, or a surface that does not look for the type classes a
+// person's refusal as the engine's own failure and shows them "tracker:" in
+// front of it.
 func TestATypedTagRefusalIsClassedAndWordedAsARefusal(t *testing.T) {
 	t.Parallel()
-	for name, err := range map[string]error{
-		"a clash": &tracker.TagClash{Project: "OPS", Slug: "api", Label: "API",
+	for name, c := range map[string]struct {
+		err       error
+		mark, not error
+	}{
+		"a clash": {&tracker.TagClash{Project: "OPS", Slug: "api", Label: "API",
 			Other: tracker.Tag{Slug: "backend-api", Label: "API"}},
-		"a full set": &tracker.TagsFull{Project: "OPS", Slug: "api"},
+			tracker.ErrInvalid, tracker.ErrState},
+		"a full set": {&tracker.TagsFull{Project: "OPS", Slug: "api"},
+			tracker.ErrState, tracker.ErrInvalid},
 	} {
-		if !errors.Is(err, tracker.ErrInvalid) {
-			t.Errorf("%s is not ErrInvalid: %v", name, err)
+		err := c.err
+		if !errors.Is(err, c.mark) || errors.Is(err, c.not) {
+			t.Errorf("%s is not %v alone: %v", name, c.mark, err)
 		}
 		sentence := tracker.Sentence(err)
 		if strings.HasPrefix(sentence, "tracker:") || err.Error() != "tracker: "+sentence {

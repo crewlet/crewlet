@@ -3007,7 +3007,9 @@ func labelFailure(ctx context.Context, actor Actor, write labelWrite, opID, proj
 			clash.Other.Slug, clash.Slug, clash.Slug, clash.Project,
 			clash.Project, clash.Slug, clash.Project))
 	case errors.As(err, &full):
-		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s was refused, "+
+		// THE TARGET PROJECT'S STATE ([tracker.ErrState]): the label is
+		// fine, and the declaration lands once a tag is archived there.
+		return refusedBy(tools.RefusalConflict, err, fmt.Sprintf("%s was refused, "+
 			"and nothing was written: to use "+
 			"the label %s it has to declare it in %s, which already keeps %d "+
 			"tags, the most a project may. Use a tag %s already has "+
@@ -3733,9 +3735,12 @@ func readFailure(ctx context.Context, name string, err error) tools.Result {
 //
 // A CONTENT REFUSAL IS MARKED AND EVERYTHING UNMARKED IS THE NODE'S. The
 // tracker's writer wraps [tracker.ErrInvalid] on every refusal it writes about
-// what was asked — a custom-field value it will not round, a tombstoned item
-// that must be restored first, a rank key that is not well formed — and its
-// sentence names what to change. A text past its cap is TYPED
+// what was asked — a custom-field value it will not round, a parent in the
+// trash, a rank key that is not well formed — and its sentence names what to
+// change; and [tracker.ErrState] on every refusal the item or project the
+// write is about makes by what it is now — a task frozen in the trash, an
+// archived project, a set at its cap — whose sentence names the state and who
+// changes it. A text past its cap is TYPED
 // ([tracker.TextCapError]) and gets a sentence composed from its fields, since
 // it is the content refusal a person filing by hand reaches most. What the
 // writer does NOT write arrives unmarked from places it does not own: a SQL
@@ -3799,7 +3804,9 @@ func writeFailure(ctx context.Context, actor Actor, name string, err error) tool
 			clash.Other.Label, clash.Other.Slug, clash.Slug, clash.Project,
 			clash.Project, clash.Slug, clash.Project))
 	case errors.As(err, &full):
-		return out(tools.RefusalInvalid, fmt.Sprintf("%s was refused, and nothing was written: %s already "+
+		// THE PROJECT'S STATE, not the call's: the add is well formed and
+		// lands once a tag is archived to make room ([tracker.ErrState]).
+		return out(tools.RefusalConflict, fmt.Sprintf("%s was refused, and nothing was written: %s already "+
 			"keeps %d tags, the most a project may, and %s is not among them. "+
 			"Archive tags %s no longer files under ("+tracker.WriteProjectTool+"'s "+
 			"tags_archive — its lead's decision), or take %s off the items with "+
@@ -3901,6 +3908,16 @@ func writeFailure(ctx context.Context, actor Actor, name string, err error) tool
 	var capped *tracker.TextCapError
 	if errors.As(err, &capped) {
 		return out(tools.RefusalInvalid, textCapRefusal(capped))
+	}
+	if errors.Is(err, tracker.ErrState) {
+		// WHAT THE OBJECT IS NOW — an archived project, a task frozen in
+		// the trash, a set at its cap — in the writer's sentence, which
+		// names the state and who changes it. Not the race's words above:
+		// re-reading shows the same state until somebody changes it, and
+		// not the content refusal's below, because nothing about the call
+		// is wrong.
+		return out(tools.RefusalConflict, fmt.Sprintf("%s refused that: %s",
+			name, tracker.Sentence(err)))
 	}
 	if errors.Is(err, tracker.ErrInvalid) {
 		// WHAT WAS ASKED, and the sentence is the writer's, which names

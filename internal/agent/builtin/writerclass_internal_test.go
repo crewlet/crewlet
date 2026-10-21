@@ -1,6 +1,7 @@
 package builtin
 
 import (
+	"context"
 	"errors"
 	"go/ast"
 	"go/parser"
@@ -55,138 +56,224 @@ func TestEveryRoutedDomainIsDeclaredToTheSurfaces(t *testing.T) {
 	}
 }
 
+// meaning is what a refusal a domain decided MEANS to its caller, as a row
+// declares it: the one rule every domain's refusals are classed by
+// (internal/mcp's [tools.Refusal]), held here as values so that a row states
+// what its error IS and the class follows from [meaning.class] alone. A row
+// stating a class instead let one domain class the state of the object a call
+// is about as `invalid` while another classed the same kind of refusal
+// `conflict`, and both rows passed — the table agreed with whatever its domain
+// decided.
+type meaning int
+
+const (
+	// malformed is the REQUEST: an argument outside its grammar, a value
+	// past a limit of its own, or an argument naming another object that
+	// cannot take part. The same request never lands; another one does.
+	malformed meaning = iota + 1
+	// absent is the object the call is about not being there, or gone for
+	// good.
+	absent
+	// notPermitted is a gesture that is not this caller's to make.
+	notPermitted
+	// staleRead is an object that moved since the caller read it.
+	staleRead
+	// lostRace is a write that lost its compare-and-set rounds.
+	lostRace
+	// objectState is the object the call is about refusing the gesture by
+	// what it is now — archived, in the trash, being purged, frozen, its own
+	// contents at their cap, nothing to restore — until somebody changes
+	// it, after which the same request lands.
+	objectState
+	// taken is a create, or a name, another object already holds.
+	taken
+	// answered is a question that already has its answer.
+	answered
+	// inboxCeiling, handOffs and companyQuota are the limits the
+	// vocabulary names a class of its own for, because a surface names the
+	// remedy and it is not a change of the object.
+	inboxCeiling
+	handOffs
+	companyQuota
+	// nodeCondition is this node, which waiting clears.
+	nodeCondition
+)
+
+// class is the one rule: the class a refusal of this meaning is, on every
+// domain and every surface. A race and a state are one class for one reason —
+// the request is not wrong, the object is what refuses it, and reading it again
+// is the move — while a malformed request is another, because nothing done to
+// the object makes it land.
+func (m meaning) class() tools.Refusal {
+	switch m {
+	case malformed:
+		return tools.RefusalInvalid
+	case absent:
+		return tools.RefusalNotFound
+	case notPermitted:
+		return tools.RefusalForbidden
+	case staleRead:
+		return tools.RefusalStaleVersion
+	case lostRace, objectState:
+		return tools.RefusalConflict
+	case taken:
+		return tools.RefusalExists
+	case answered:
+		return tools.RefusalAlreadyAnswered
+	case inboxCeiling:
+		return tools.RefusalInboxFull
+	case handOffs:
+		return tools.RefusalReassignmentBudget
+	case companyQuota:
+		return tools.RefusalQuotaExceeded
+	case nodeCondition:
+		return tools.RefusalUnavailable
+	}
+	return ""
+}
+
 // classRow is what one declared error of a domain is, as a writer's refusal:
-// its class, or — `why` set — the reason it is not a refusal at all.
+// what it means to its caller, or — `why` set — the reason it is not a refusal
+// at all.
 type classRow struct {
 	err   error
-	class tools.Refusal
+	means meaning
 	why   string
 }
 
 // domainErrors is every exported sentinel and error type each native domain
-// declares, with the class its writer's refusal is — keyed by the domain's
+// declares, with what its writer's refusal MEANS — keyed by the domain's
 // state-log name, then by the Go identifier.
 var domainErrors = map[string]map[string]classRow{
 	artifactsdomain.Domain{}.Name(): {
-		"ErrAboveOwnRole":      {err: artifactsdomain.ErrAboveOwnRole, class: tools.RefusalForbidden},
-		"ErrAgentCompanyShare": {err: artifactsdomain.ErrAgentCompanyShare, class: tools.RefusalForbidden},
-		"ErrBadCursor":         {err: artifactsdomain.ErrBadCursor, class: tools.RefusalInvalid},
-		"ErrConflict":          {err: artifactsdomain.ErrConflict, class: tools.RefusalConflict},
-		"ErrInvalid":           {err: artifactsdomain.ErrInvalid, class: tools.RefusalInvalid},
-		"ErrLabelTaken":        {err: artifactsdomain.ErrLabelTaken, class: tools.RefusalConflict},
-		"ErrNotFound":          {err: artifactsdomain.ErrNotFound, class: tools.RefusalNotFound},
+		"ErrAboveOwnRole":      {err: artifactsdomain.ErrAboveOwnRole, means: notPermitted},
+		"ErrAgentCompanyShare": {err: artifactsdomain.ErrAgentCompanyShare, means: notPermitted},
+		"ErrBadCursor":         {err: artifactsdomain.ErrBadCursor, means: malformed},
+		"ErrConflict":          {err: artifactsdomain.ErrConflict, means: lostRace},
+		"ErrInvalid":           {err: artifactsdomain.ErrInvalid, means: malformed},
+		"ErrLabelTaken":        {err: artifactsdomain.ErrLabelTaken, means: objectState},
+		"ErrNotFound":          {err: artifactsdomain.ErrNotFound, means: absent},
 		"ErrNotInTrash": {err: artifactsdomain.ErrNotInTrash,
 			why: "the trash reaper's own purge, made as the engine, never a caller's request"},
-		"ErrPurged":      {err: artifactsdomain.ErrPurged, class: tools.RefusalNotFound},
-		"ErrPurging":     {err: artifactsdomain.ErrPurging, class: tools.RefusalConflict},
-		"ErrSourceTaken": {err: artifactsdomain.ErrSourceTaken, class: tools.RefusalExists},
-		"ErrTrashed":     {err: artifactsdomain.ErrTrashed, class: tools.RefusalConflict},
-		"ErrUploadStale": {err: artifactsdomain.ErrUploadStale, class: tools.RefusalConflict},
+		"ErrPurged":      {err: artifactsdomain.ErrPurged, means: absent},
+		"ErrPurging":     {err: artifactsdomain.ErrPurging, means: objectState},
+		"ErrSourceTaken": {err: artifactsdomain.ErrSourceTaken, means: taken},
+		"ErrTrashed":     {err: artifactsdomain.ErrTrashed, means: objectState},
+		"ErrUploadStale": {err: artifactsdomain.ErrUploadStale, means: objectState},
 
-		"CarriedObjectGone": {err: &artifactsdomain.CarriedObjectGone{}, class: tools.RefusalConflict},
+		"CarriedObjectGone": {err: &artifactsdomain.CarriedObjectGone{}, means: objectState},
 		"ErrFutureVersion": {err: &artifactsdomain.ErrFutureVersion{},
 			why: "a record a newer build wrote, which the framework defers rather than refuses"},
-		"QuotaExceeded": {err: &artifactsdomain.QuotaExceeded{}, class: tools.RefusalQuotaExceeded},
-		"VersionMoved":  {err: &artifactsdomain.VersionMoved{}, class: tools.RefusalStaleVersion},
+		"QuotaExceeded": {err: &artifactsdomain.QuotaExceeded{}, means: companyQuota},
+		"VersionMoved":  {err: &artifactsdomain.VersionMoved{}, means: staleRead},
 	},
 	artifactdata.Domain{}.Name(): {
-		"ErrBadCursor":         {err: artifactdata.ErrBadCursor, class: tools.RefusalInvalid},
-		"ErrConflict":          {err: artifactdata.ErrConflict, class: tools.RefusalConflict},
-		"ErrForbidden":         {err: artifactdata.ErrForbidden, class: tools.RefusalForbidden},
-		"ErrGone":              {err: artifactdata.ErrGone, class: tools.RefusalNotFound},
-		"ErrInvalid":           {err: artifactdata.ErrInvalid, class: tools.RefusalInvalid},
-		"ErrMigrationTooLarge": {err: artifactdata.ErrMigrationTooLarge, class: tools.RefusalInvalid},
-		"ErrNotFound":          {err: artifactdata.ErrNotFound, class: tools.RefusalNotFound},
-		"ErrNotUndoable":       {err: artifactdata.ErrNotUndoable, class: tools.RefusalConflict},
+		"ErrBadCursor":         {err: artifactdata.ErrBadCursor, means: malformed},
+		"ErrConflict":          {err: artifactdata.ErrConflict, means: lostRace},
+		"ErrForbidden":         {err: artifactdata.ErrForbidden, means: notPermitted},
+		"ErrGone":              {err: artifactdata.ErrGone, means: absent},
+		"ErrInvalid":           {err: artifactdata.ErrInvalid, means: malformed},
+		"ErrMigrationTooLarge": {err: artifactdata.ErrMigrationTooLarge, means: malformed},
+		"ErrNotFound":          {err: artifactdata.ErrNotFound, means: absent},
+		"ErrNotUndoable":       {err: artifactdata.ErrNotUndoable, means: objectState},
 
 		"ErrFutureVersion": {err: &artifactdata.ErrFutureVersion{},
 			why: "a record a newer build wrote, which the framework defers rather than refuses"},
-		"RateLimited": {err: &artifactdata.RateLimited{}, class: tools.RefusalUnavailable},
+		"RateLimited": {err: &artifactdata.RateLimited{}, means: nodeCondition},
 	},
 	tracker.Domain{}.Name(): {
-		"ErrAlreadyAnswered":        {err: tracker.ErrAlreadyAnswered, class: tools.RefusalAlreadyAnswered},
-		"ErrBadQuery":               {err: tracker.ErrBadQuery, class: tools.RefusalInvalid},
-		"ErrForbidden":              {err: tracker.ErrForbidden, class: tools.RefusalForbidden},
-		"ErrInboxFull":              {err: tracker.ErrInboxFull, class: tools.RefusalInboxFull},
-		"ErrIndexBuilding":          {err: tracker.ErrIndexBuilding, class: tools.RefusalUnavailable},
-		"ErrInvalid":                {err: tracker.ErrInvalid, class: tools.RefusalInvalid},
+		"ErrAlreadyAnswered":        {err: tracker.ErrAlreadyAnswered, means: answered},
+		"ErrBadQuery":               {err: tracker.ErrBadQuery, means: malformed},
+		"ErrForbidden":              {err: tracker.ErrForbidden, means: notPermitted},
+		"ErrInboxFull":              {err: tracker.ErrInboxFull, means: inboxCeiling},
+		"ErrIndexBuilding":          {err: tracker.ErrIndexBuilding, means: nodeCondition},
+		"ErrInvalid":                {err: tracker.ErrInvalid, means: malformed},
 		"ErrNoChartActivation":      {err: tracker.ErrNoChartActivation, why: "a chart apply's wiring, never a caller's request"},
-		"ErrNoComment":              {err: tracker.ErrNoComment, class: tools.RefusalNotFound},
-		"ErrNoFile":                 {err: tracker.ErrNoFile, class: tools.RefusalNotFound},
-		"ErrNoProject":              {err: tracker.ErrNoProject, class: tools.RefusalNotFound},
-		"ErrNoTask":                 {err: tracker.ErrNoTask, class: tools.RefusalNotFound},
-		"ErrNoType":                 {err: tracker.ErrNoType, class: tools.RefusalInvalid},
-		"ErrNotAuthor":              {err: tracker.ErrNotAuthor, class: tools.RefusalForbidden},
-		"ErrNothingToRestore":       {err: tracker.ErrNothingToRestore, class: tools.RefusalConflict},
-		"ErrReassignmentBudget":     {err: tracker.ErrReassignmentBudget, class: tools.RefusalReassignmentBudget},
-		"ErrReparentAcrossProjects": {err: tracker.ErrReparentAcrossProjects, class: tools.RefusalInvalid},
+		"ErrNoComment":              {err: tracker.ErrNoComment, means: absent},
+		"ErrNoFile":                 {err: tracker.ErrNoFile, means: absent},
+		"ErrNoProject":              {err: tracker.ErrNoProject, means: absent},
+		"ErrNoTask":                 {err: tracker.ErrNoTask, means: absent},
+		"ErrNoType":                 {err: tracker.ErrNoType, means: malformed},
+		"ErrNotAuthor":              {err: tracker.ErrNotAuthor, means: notPermitted},
+		"ErrNothingToRestore":       {err: tracker.ErrNothingToRestore, means: objectState},
+		"ErrReassignmentBudget":     {err: tracker.ErrReassignmentBudget, means: handOffs},
+		"ErrReparentAcrossProjects": {err: tracker.ErrReparentAcrossProjects, means: malformed},
 		"ErrRestoresOthers": {err: &tracker.Refusal{Mark: tracker.ErrForbidden,
-			Also: tracker.ErrRestoresOthers, Err: errors.New("x")}, class: tools.RefusalForbidden},
-		"ErrStaleVersion":   {err: tracker.ErrStaleVersion, class: tools.RefusalStaleVersion},
+			Also: tracker.ErrRestoresOthers, Err: errors.New("x")}, means: notPermitted},
+		"ErrStaleVersion": {err: tracker.ErrStaleVersion, means: staleRead},
+		// THE ITEM OR PROJECT THE WRITE IS ABOUT, refusing by what it is:
+		// archived, frozen in the trash, its tags or pins at their cap.
+		"ErrState": {err: &tracker.Refusal{Mark: tracker.ErrState, Err: errors.New("x")},
+			means: objectState},
 		"ErrStepUnresolved": {err: tracker.ErrStepUnresolved, why: "an unknown outcome, answered as one (UnknownCause)"},
 		"ErrStepUnvouched": {err: errors.Join(tracker.ErrStepUnresolved, tracker.ErrStepUnvouched),
 			why: "an unknown outcome, answered as one (UnknownCause)"},
-		"ErrTooBroad":    {err: tracker.ErrTooBroad, class: tools.RefusalInvalid},
-		"ErrUploadStale": {err: tracker.ErrUploadStale, class: tools.RefusalUnavailable},
+		"ErrTooBroad": {err: tracker.ErrTooBroad, means: malformed},
+		// AN UPLOAD TOO OLD TO NAME is the upload's state, as the
+		// artifacts' is: no wait changes it, and uploading again does.
+		"ErrUploadStale": {err: tracker.ErrUploadStale, means: objectState},
 
-		"AlreadyAnsweredError": {err: &tracker.AlreadyAnsweredError{}, class: tools.RefusalAlreadyAnswered},
-		"ErrAmbiguous":         {err: &tracker.ErrAmbiguous{}, class: tools.RefusalInvalid},
-		"ErrAmbiguousAnswer":   {err: &tracker.ErrAmbiguousAnswer{}, class: tools.RefusalInvalid},
+		"AlreadyAnsweredError": {err: &tracker.AlreadyAnsweredError{}, means: answered},
+		"ErrAmbiguous":         {err: &tracker.ErrAmbiguous{}, means: malformed},
+		"ErrAmbiguousAnswer":   {err: &tracker.ErrAmbiguousAnswer{}, means: malformed},
 		"ErrFutureVersion": {err: &tracker.ErrFutureVersion{},
 			why: "a record a newer build wrote, which the framework defers rather than refuses"},
 		"MoveStopped": {err: &tracker.MoveStopped{Err: errors.New("x")},
 			why: "a gesture that stopped part of the way, answered with what it did"},
 		"Refusal": {err: &tracker.Refusal{Mark: tracker.ErrInvalid, Err: errors.New("x")},
-			class: tools.RefusalInvalid},
+			means: malformed},
 		"SubtreeStopped": {err: &tracker.SubtreeStopped{Err: errors.New("x")},
 			why: "a gesture that stopped part of the way, answered with what it did"},
-		"TagClash":     {err: &tracker.TagClash{}, class: tools.RefusalInvalid},
-		"TagsFull":     {err: &tracker.TagsFull{}, class: tools.RefusalInvalid},
-		"TextCapError": {err: &tracker.TextCapError{}, class: tools.RefusalInvalid},
+		"TagClash":     {err: &tracker.TagClash{}, means: malformed},
+		"TagsFull":     {err: &tracker.TagsFull{}, means: objectState},
+		"TextCapError": {err: &tracker.TextCapError{}, means: malformed},
 	},
 	pages.Domain{}.Name(): {
-		"ErrBadCursor":    {err: pages.ErrBadCursor, class: tools.RefusalInvalid},
-		"ErrConflict":     {err: pages.ErrConflict, class: tools.RefusalConflict},
-		"ErrInvalid":      {err: pages.ErrInvalid, class: tools.RefusalInvalid},
+		"ErrBadCursor":    {err: pages.ErrBadCursor, means: malformed},
+		"ErrConflict":     {err: pages.ErrConflict, means: lostRace},
+		"ErrInvalid":      {err: pages.ErrInvalid, means: malformed},
 		"ErrNoActivation": {err: pages.ErrNoActivation, why: "a configuration apply's wiring, never a caller's request"},
-		"ErrNotFound":     {err: pages.ErrNotFound, class: tools.RefusalNotFound},
-		"ErrParent":       {err: pages.ErrParent, class: tools.RefusalInvalid},
-		"ErrReserved":     {err: pages.ErrReserved, class: tools.RefusalForbidden},
+		"ErrNotFound":     {err: pages.ErrNotFound, means: absent},
+		"ErrParent":       {err: pages.ErrParent, means: malformed},
+		"ErrReserved":     {err: pages.ErrReserved, means: notPermitted},
 		"ErrNotInTrash": {err: pages.ErrNotInTrash,
 			why: "the trash reaper's own purge, made as the engine, never a caller's request"},
-		"ErrStaleVersion": {err: pages.ErrStaleVersion, class: tools.RefusalStaleVersion},
-		"ErrTitleTaken":   {err: pages.ErrTitleTaken, class: tools.RefusalExists},
+		"ErrStaleVersion": {err: pages.ErrStaleVersion, means: staleRead},
+		"ErrTitleTaken":   {err: pages.ErrTitleTaken, means: taken},
 		// A LISTING ORDER IS AN ARGUMENT: newest first is served for the
 		// tool-skill pages alone, so what fixes the call is the other order
 		// or the skills filter, exactly as a cursor from another listing.
-		"ErrUnservedOrder": {err: pages.ErrUnservedOrder, class: tools.RefusalInvalid},
+		"ErrUnservedOrder": {err: pages.ErrUnservedOrder, means: malformed},
 
 		"ErrFutureVersion": {err: &pages.ErrFutureVersion{},
 			why: "a record a newer build wrote, which the framework defers rather than refuses"},
 		"ErrUnknownVersion": {err: pages.ErrUnknownVersion{},
 			why: "a document version this build cannot read, a fault of the copy"},
-		"InvalidError": {err: &pages.InvalidError{}, class: tools.RefusalInvalid},
+		"InvalidError": {err: &pages.InvalidError{}, means: malformed},
 	},
 	chat.Domain{}.Name(): {
-		// AN ARCHIVED ROOM IS AN ARGUMENT TO CHANGE: it takes nothing more
-		// from anybody, and what fixes the call is a room still open.
-		"ErrArchived":   {err: chat.ErrArchived, class: tools.RefusalInvalid},
-		"ErrConflict":   {err: chat.ErrConflict, class: tools.RefusalConflict},
-		"ErrForbidden":  {err: chat.ErrForbidden, class: tools.RefusalForbidden},
-		"ErrInvalid":    {err: chat.ErrInvalid, class: tools.RefusalInvalid},
-		"ErrNameTaken":  {err: chat.ErrNameTaken, class: tools.RefusalExists},
-		"ErrNotFound":   {err: chat.ErrNotFound, class: tools.RefusalNotFound},
-		"ErrRoomExists": {err: chat.ErrRoomExists, class: tools.RefusalExists},
+		// AN ARCHIVED ROOM IS THE ROOM'S STATE, and a message carrying all
+		// the emoji it may is the message's: each refuses the same request
+		// until somebody reopens the room or takes an emoji off, as an
+		// artifact in the trash does.
+		"ErrArchived":      {err: chat.ErrArchived, means: objectState},
+		"ErrReactionsFull": {err: chat.ErrReactionsFull, means: objectState},
+		"ErrConflict":      {err: chat.ErrConflict, means: lostRace},
+		"ErrForbidden":     {err: chat.ErrForbidden, means: notPermitted},
+		"ErrInvalid":       {err: chat.ErrInvalid, means: malformed},
+		"ErrNameTaken":     {err: chat.ErrNameTaken, means: taken},
+		"ErrNotFound":      {err: chat.ErrNotFound, means: absent},
+		"ErrRoomExists":    {err: chat.ErrRoomExists, means: taken},
 		// THIS NODE'S CONDITION, NOT A PERMISSION: the same call lands
 		// once the node is upgraded.
-		"ErrUnknownKind":  {err: chat.ErrUnknownKind, class: tools.RefusalUnavailable},
+		"ErrUnknownKind":  {err: chat.ErrUnknownKind, means: nodeCondition},
 		"ErrNoActivation": {err: chat.ErrNoActivation, why: "a configuration apply's wiring, never a caller's request"},
 
 		"ErrFutureVersion": {err: &chat.ErrFutureVersion{},
 			why: "a record a newer build wrote, which the framework defers rather than refuses"},
 		"ErrUnknownVersion": {err: chat.ErrUnknownVersion{},
 			why: "a document version this build cannot read, a fault of the copy"},
-		"InvalidError": {err: &chat.InvalidError{}, class: tools.RefusalInvalid},
+		"InvalidError": {err: &chat.InvalidError{}, means: malformed},
 	},
 }
 
@@ -199,9 +286,17 @@ var domainErrors = map[string]map[string]classRow{
 // domain's own source, as the estate wire's registration gate is, so a
 // sentinel added to a domain is red here until somebody says what it is.
 //
+// AND EVERY ROW SAYS WHAT ITS ERROR MEANS, never which class it is: the class
+// follows from the meaning by the one rule ([meaning.class]), on the domains'
+// table and on every domain's own tools ([toolFailures]) alike — so a room
+// archived before a post, a project archived before a task is filed into it
+// and an artifact in the trash cannot be three classes, which they were.
+//
 // Mutation: drop any arm from trackerClass, pageClass or chatClass and its
-// rows go red;
-// add an exported sentinel to either domain and the gate names it.
+// rows go red; class chat.ErrArchived `invalid` again, in chatClass or in a
+// row, and it goes red; class tracker.TagsFull `invalid` in writeFailure alone
+// and the tools' half goes red; add an exported sentinel to any domain and the
+// gate names it.
 func TestEveryDomainRefusalIsClassed(t *testing.T) {
 	t.Parallel()
 	root := sourcetree.Root(t)
@@ -237,13 +332,28 @@ func TestEveryDomainRefusalIsClassed(t *testing.T) {
 				continue
 			}
 			class, ok := WriterClass(row.err)
+			want := row.means.class()
 			switch {
 			case row.why != "" && ok:
 				t.Errorf("%s.%s is classed %q, and its row says it is no refusal: %s",
 					domain, name, class, row.why)
-			case row.why == "" && (!ok || class != row.class):
-				t.Errorf("%s.%s is classed %q (%v), want %q", domain, name, class, ok,
-					row.class)
+			case row.why != "":
+				continue
+			case want == "":
+				t.Errorf("%s.%s states no meaning: say what the refusal means to "+
+					"its caller, and the class follows", domain, name)
+				continue
+			case !ok || class != want:
+				t.Errorf("%s.%s is classed %q (%v) by the domains' table, and what it "+
+					"means is %q", domain, name, string(class), ok, string(want))
+			}
+			// AND BY THE DOMAIN'S OWN TOOLS, which word each refusal and
+			// state its class again where they do: the same error is one
+			// class whichever surface it reaches, so a seat, an assistant
+			// and a person's write surface are told the same thing.
+			if got := tools.RefusalOf(toolFailures[domain](row.err)); got != want {
+				t.Errorf("%s.%s is classed %q by the domain's tools, and what it "+
+					"means is %q", domain, name, string(got), string(want))
 			}
 		}
 	}
@@ -306,6 +416,27 @@ func exportedErrors(t *testing.T, dir string) []string {
 	}
 	slices.Sort(out)
 	return slices.Compact(out)
+}
+
+// toolFailures is the failure each native domain's tools answer a writer's
+// refusal with — the function its write tools fall back to — keyed by the
+// domain's state-log name.
+var toolFailures = map[string]func(error) tools.Result{
+	tracker.Domain{}.Name(): func(err error) tools.Result {
+		return writeFailure(context.Background(), Actor{}, tracker.UpdateWorkItemTool, err)
+	},
+	pages.Domain{}.Name(): func(err error) tools.Result {
+		return pageWriteFailure(context.Background(), "save_page", err, "")
+	},
+	chat.Domain{}.Name(): func(err error) tools.Result {
+		return chatWriteFailure(context.Background(), PostMessageTool, err, "")
+	},
+	artifactsdomain.Domain{}.Name(): func(err error) tools.Result {
+		return publishFailure(context.Background(), "publish_artifact", artifactCaller{}, err)
+	},
+	artifactdata.Domain{}.Name(): func(err error) tools.Result {
+		return dataFailure(context.Background(), "write_artifact_data", err)
+	},
 }
 
 // domainPackages is each native domain's package, relative to internal/, read

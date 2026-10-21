@@ -637,7 +637,11 @@ const (
 	// version stated as an If-Match header is [CodeVersionMoved].
 	CodeStaleVersion Code = "stale_version"
 	// CodeConflict is a write that lost its race against other writers, or
-	// another gesture holding the object; it clears on its own.
+	// another gesture holding the object, which clears on its own — or the
+	// object the write is about refusing it by its state (archived, in the
+	// trash, its contents at their cap) until somebody changes it, which the
+	// detail names. Either way the request was not wrong and reading the
+	// object again is the move.
 	CodeConflict Code = "conflict"
 	// CodeExists is a create of something that already exists.
 	CodeExists Code = "exists"
@@ -1108,8 +1112,9 @@ var codes = map[Code]string{
 		"names what to send differently.",
 	CodeStaleVersion: "Somebody changed this after you read it, so nothing was " +
 		"written. Read it again and decide from what it says now.",
-	CodeConflict: "This collided with another change landing at the same " +
-		"moment, and nothing was written. Read it again, then retry.",
+	CodeConflict: "This collided with another change, or with the state the " +
+		"object is in now, and nothing was written. Read it again: the detail " +
+		"says which, and what has to change before the same request lands.",
 	CodeExists:          "That already exists, so nothing was created.",
 	CodeAlreadyAnswered: "Somebody has already answered it.",
 	CodeReassignmentBudget: "It has been handed between seats as often as it " +

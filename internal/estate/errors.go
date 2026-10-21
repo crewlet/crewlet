@@ -79,6 +79,7 @@ var sentinels = []sentinel{
 	{"tracker.ErrReparentAcrossProjects", tracker.ErrReparentAcrossProjects},
 	{"tracker.ErrRestoresOthers", tracker.ErrRestoresOthers},
 	{"tracker.ErrStaleVersion", tracker.ErrStaleVersion},
+	{"tracker.ErrState", tracker.ErrState},
 	{"tracker.ErrStepUnresolved", tracker.ErrStepUnresolved},
 	{"tracker.ErrStepUnvouched", tracker.ErrStepUnvouched},
 	{"tracker.ErrTooBroad", tracker.ErrTooBroad},
@@ -103,6 +104,7 @@ var sentinels = []sentinel{
 	{"chat.ErrNameTaken", chat.ErrNameTaken},
 	{"chat.ErrNoActivation", chat.ErrNoActivation},
 	{"chat.ErrNotFound", chat.ErrNotFound},
+	{"chat.ErrReactionsFull", chat.ErrReactionsFull},
 	{"chat.ErrRoomExists", chat.ErrRoomExists},
 	{"chat.ErrUnknownKind", chat.ErrUnknownKind},
 

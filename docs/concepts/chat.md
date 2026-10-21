@@ -70,7 +70,11 @@ which the node it was written on could not yet see:
 Each is refused, and the person or seat that wrote it is told exactly as they
 would have been had the earlier change already reached them: the room is
 archived, they are not in it, the message is gone, the message carries all the
-emoji it can. Every node reaches the same decision and records it, so a retry
+emoji it can. An archived room and a full message are each the STATE of what
+the gesture is about, so they are refused as a conflict — the same request
+lands once somebody reopens the room or takes an emoji off — exactly as an
+artifact in the trash and a project archived before a task is filed into it
+are; see [which class a refusal is](../reference/api-endpoints.md#which-class-a-refusal-is). Every node reaches the same decision and records it, so a retry
 of a refused message is refused again rather than reported as said, and a
 refused message wakes nobody. Each decision is kept for thirty days, the
 operation ledger's own horizon, and every node records how far back it has let

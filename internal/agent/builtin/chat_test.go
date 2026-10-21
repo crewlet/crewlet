@@ -1739,8 +1739,10 @@ var chatWriteRefusals = []struct {
 }{
 	{"invalid", tools.RefusalInvalid,
 		fmt.Errorf("%w: body: a message is 40960 bytes", chat.ErrInvalid)},
-	{"archived", tools.RefusalInvalid,
+	{"archived", tools.RefusalConflict,
 		fmt.Errorf("%w: room-1 was archived", chat.ErrArchived)},
+	{"reactions full", tools.RefusalConflict,
+		fmt.Errorf("%w: the message reached its 32 distinct emoji", chat.ErrReactionsFull)},
 	{"forbidden", tools.RefusalForbidden,
 		fmt.Errorf("%w: room-1 is a private room", chat.ErrForbidden)},
 	{"name taken", tools.RefusalExists, fmt.Errorf("%w: launch", chat.ErrNameTaken)},
