@@ -1675,14 +1675,22 @@ func partitionKeyOf(evs []*events.Event) string { return notify.KeyOfAll(evs) }
 // payload still names itself rather than reaching a seat as a blank ask.
 //
 // A NOTIFICATION'S FENCES ARE MOVED ONTO fence, the turn's own token: its
-// prompt fenced what somebody said under a token minted for the wake, because
-// no turn existed where it was built, and everything around those fences — a
-// display name, a room's name — is neutralised, as a tool answer's other
-// strings are ([provenance.Rekey]). A reader with no turn of its own (the
-// conversation ledger) passes no token, which keeps the wake's and still
-// neutralises the rest. A parked run's answer is no reader of the trigger: it
-// records what the reply says ([replyWords]), and the run it carries on fences
-// those words under its own turn's token.
+// body was fenced under a token minted for the wake, because no turn existed
+// where it was built, and everything around those fences — a display name, a
+// room's name — is neutralised, as a tool answer's other strings are
+// ([provenance.Rekey]). A reader with no turn of its own (the conversation
+// ledger) passes no token, which keeps the wake's and still neutralises the
+// rest. A parked run's answer is no reader of the trigger: it records what the
+// reply says ([replyWords]), and the run it carries on fences those words under
+// its own turn's token.
+//
+// EVERY OTHER WAKE IS RENDERED HERE, so its fences are the turn's from the
+// start: a colleague's ask and a colleague's answer put the colleague's words
+// inside a fence of fence ([fencedBriefer]) — a reader with no turn of its own
+// gets a token minted for that one rendering — and every other brief, a
+// schedule's task among them, is neutralised whole: it is the company's own
+// instruction to the seat, which no fence labels as somebody else's, and which
+// nothing it says may open or close one.
 func DescribeTrigger(evs []*events.Event, fence provenance.Boundary) string {
 	var parts []string
 	for _, ev := range evs {
@@ -1696,14 +1704,20 @@ func DescribeTrigger(evs []*events.Event, fence provenance.Boundary) string {
 				continue
 			}
 		}
+		if brief, ok := ev.Data.(fencedBriefer); ok {
+			if b := strings.TrimSpace(brief.FencedBrief(fence)); b != "" {
+				parts = append(parts, b)
+				continue
+			}
+		}
 		if brief, ok := ev.Data.(events.Briefer); ok {
-			if b := strings.TrimSpace(brief.Brief()); b != "" {
+			if b := strings.TrimSpace(provenance.Neutralise(fence, brief.Brief())); b != "" {
 				parts = append(parts, b)
 				continue
 			}
 		}
 		if summary, ok := ev.Data.(events.Summarizer); ok {
-			if s := summary.Summary(); s != "" {
+			if s := provenance.Neutralise(fence, summary.Summary()); s != "" {
 				parts = append(parts, s)
 				continue
 			}
@@ -1717,6 +1731,12 @@ func DescribeTrigger(evs []*events.Event, fence provenance.Boundary) string {
 		return ""
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+// fencedBriefer is a wake whose ask carries somebody else's words: its brief,
+// with those words inside a fence of the token it is handed (ADR-0040).
+type fencedBriefer interface {
+	FencedBrief(provenance.Boundary) string
 }
 
 // wallClockOf is the cap this partition's triggers carried.
