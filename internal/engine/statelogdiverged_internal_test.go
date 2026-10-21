@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -93,9 +96,7 @@ func stageRestoredBroker(t *testing.T) divergedBroker {
 	back.Close(context.Background())
 
 	// THE COPY, and B: A's own store at the same moment.
-	if err := os.CopyFS(copyDir, os.DirFS(d.a.Stream.StoreDir)); err != nil {
-		t.Fatalf("copy the broker's store: %v", err)
-	}
+	copyStoppedBroker(t, copyDir, d.a.Stream.StoreDir)
 	d.b = d.a
 	d.b.Node.ID = "node-b"
 	d.b.Store.Path = filepath.Join(base, "b", "crewlet.db")
@@ -122,13 +123,95 @@ func stageRestoredBroker(t *testing.T) divergedBroker {
 	back2.Close(context.Background())
 
 	// THE RESTORE.
-	if err := os.RemoveAll(d.a.Stream.StoreDir); err != nil {
-		t.Fatalf("remove the broker's store: %v", err)
+	restoreBroker(t, copyDir, &d.a, &d.b)
+	return d
+}
+
+// copyStoppedBroker copies the store directory of an embedded broker whose
+// server has just stopped IN THIS PROCESS, leaving out the temporaries of the
+// server's atomic writes.
+//
+// A STOPPED SERVER CAN STILL BE WRITING ITS DIRECTORY. nats-server 2.15.0
+// writes a consumer's state from a flusher goroutine that clears the state's
+// dirty flag before it writes o.dat.tmp and renames it over o.dat, outside the
+// store's lock (filestore.go, consumerFileStore.writeState), and its Stop
+// waits for that flusher only while the state is still dirty, and then for at
+// most 100 ms (Stop, waitOnFlusher). So a flush begun just before the shutdown
+// can still be running when WaitForShutdown returns, and os.CopyFS listed
+// o.dat.tmp and found it renamed away when it opened it:
+// TestANodeWhosePeerStandsPastARestoredLogRefusesItsWrites failed at this copy
+// once in six race runs of this package beside two go build/vet loops.
+// 2.15.1 waits for the flusher whether or not the state is dirty, but still
+// for at most 100 ms, so a flush the scheduler holds longer than that outlives
+// the stop there too.
+//
+// A temporary is never state: the rename is what publishes the write, and the
+// server reads o.dat. So the copy leaves every *.tmp out, and an o.dat renamed
+// over while the copy runs is copied as the one before the flush or the one
+// after it, each written whole. A process that exits ends its flusher with it,
+// so an operator's copy of a stopped node's directory never meets one.
+func copyStoppedBroker(t *testing.T, dst, src string) {
+	t.Helper()
+	err := filepath.WalkDir(src, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		switch {
+		case entry.IsDir():
+			return os.MkdirAll(target, 0o755)
+		case strings.HasSuffix(entry.Name(), ".tmp"):
+			return nil
+		case !entry.Type().IsRegular():
+			return fmt.Errorf("%s is not a regular file", path)
+		}
+		return copyFile(target, path)
+	})
+	if err != nil {
+		t.Fatalf("copy the broker's store: %v", err)
 	}
-	if err := os.CopyFS(d.a.Stream.StoreDir, os.DirFS(copyDir)); err != nil {
+}
+
+// copyFile copies one file to a path that must not exist yet.
+func copyFile(dst, src string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
+}
+
+// restoreBroker brings an embedded broker's store back from a copy into a
+// directory of its own, and points the nodes' bootstraps at it.
+//
+// A FRESH DIRECTORY rather than the one the copy was taken from, because a
+// server that stopped in this process may still be finishing a consumer's
+// flush ([copyStoppedBroker]). Its writes name paths under the directory it
+// ran in, so a restore removed and copied back in place could have a flush
+// land in the restored store, or fail its removal on a file created while
+// the removal ran. A restore beside that directory can meet neither.
+func restoreBroker(t *testing.T, from string, nodes ...*config.Bootstrap) {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "restored")
+	if err := os.CopyFS(dir, os.DirFS(from)); err != nil {
 		t.Fatalf("restore the broker's store from the copy: %v", err)
 	}
-	return d
+	for _, b := range nodes {
+		b.Stream.StoreDir = dir
+	}
 }
 
 // writePast boots B on the restored broker — its rows are the copy's age, so

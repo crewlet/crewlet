@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -502,9 +501,7 @@ func TestARestoredBrokerIsReanchoredAtItsEndReplayingNothing(t *testing.T) {
 	})
 	e.Stop(context.Background())
 	back.Close(context.Background())
-	if err := os.CopyFS(copyDir, os.DirFS(b.Stream.StoreDir)); err != nil {
-		t.Fatalf("take the copy of the broker's store: %v", err)
-	}
+	copyStoppedBroker(t, copyDir, b.Stream.StoreDir)
 
 	// SECOND BOOT: the tail the copy never had.
 	e2, back2 := bootNode(t, &b, cfg)
@@ -523,12 +520,7 @@ func TestARestoredBrokerIsReanchoredAtItsEndReplayingNothing(t *testing.T) {
 	back2.Close(context.Background())
 
 	// THE RESTORE: the broker's store directory brought back from the copy.
-	if err := os.RemoveAll(b.Stream.StoreDir); err != nil {
-		t.Fatalf("remove the broker's store: %v", err)
-	}
-	if err := os.CopyFS(b.Stream.StoreDir, os.DirFS(copyDir)); err != nil {
-		t.Fatalf("restore the broker's store from the copy: %v", err)
-	}
+	restoreBroker(t, copyDir, &b)
 
 	// THIRD BOOT: the same stream, ending below this node's checkpoint.
 	e3, _ := bootNode(t, &b, cfg)
