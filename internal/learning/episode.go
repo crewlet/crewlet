@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -74,6 +75,15 @@ type Episode struct {
 	// compacted row, and on a turn that was told nothing, whose vector is
 	// then of its label and what it did.
 	Ask string
+
+	// AskProvenance is who wrote Ask ([Turn.AskLabel], ADR-0040): the label
+	// the turn read it under, kept with it so every later reader — the
+	// turn-start recall, the episode summary, query_episodes — fences the
+	// same words the same way rather than handing a model a stranger's
+	// message as the seat's own memory. Nil for an ask that is the
+	// company's or the seat's own words, for an empty one and on a
+	// compacted row.
+	AskProvenance *provenance.Label
 
 	ToolSequence  []string
 	SkillsUsed    []string
@@ -144,8 +154,9 @@ INSERT INTO episodes (
 	plan_summary, task_summary, ask, tool_sequence, skills_used, review_outcome,
 	duration_ms, embedding, embedding_model, kind, count, exemplar_turn_ids,
 	consolidated_into_skill_id, common_task_pattern, common_outcome,
-	success_rate, subjects_involved, notable_patterns, work_key, conversation_key
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	success_rate, subjects_involved, notable_patterns, work_key, conversation_key,
+	ask_provenance
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (agent_handle, work_key) DO NOTHING`
 
 // Append records one episode, at most once per (seat, work key).
@@ -214,7 +225,39 @@ func episodeInsertArgs(ep Episode, blob, model any) []any {
 		store.NullText(ep.ConsolidatedInto), ep.CommonTaskPattern, ep.CommonOutcome,
 		ep.SuccessRate, jsonList(ep.SubjectsInvolved), ep.NotablePatterns,
 		store.NullText(ep.WorkKey), store.NullText(ep.ConversationKey),
+		encodeLabel(ep.AskProvenance),
 	}
+}
+
+// encodeLabel is an ask's label as its column holds it: the label as JSON, or
+// the empty string for none.
+func encodeLabel(l *provenance.Label) string {
+	if l == nil {
+		return ""
+	}
+	data, err := json.Marshal(l)
+	if err != nil {
+		// A value of strings alone always marshals; unreachable.
+		return ""
+	}
+	return string(data)
+}
+
+// decodeLabel reads an ask's label back, nil for an empty column. A column
+// that does not decode is logged and read as the ZERO label, never as none: no
+// label is the seat's own words, which a reader neutralises and does not
+// fence, while the zero label is fenced as text nothing vouches for — the
+// direction to err in for an ask somebody may well have written.
+func decodeLabel(episode, column string) *provenance.Label {
+	if column == "" {
+		return nil
+	}
+	var l provenance.Label
+	if err := json.Unmarshal([]byte(column), &l); err != nil {
+		log.Warn("episode_ask_label_undecodable", "episode", episode, "error", err.Error())
+		return &provenance.Label{}
+	}
+	return &l
 }
 
 // encodeEmbedding packs a vector, refusing one of the wrong width and
@@ -285,7 +328,7 @@ const episodeColumns = `id, agent_handle, agent_role, work_item, turn_id,
 	skills_used, review_outcome, duration_ms, embedding, embedding_model, kind,
 	count, exemplar_turn_ids, consolidated_into_skill_id, common_task_pattern,
 	common_outcome, success_rate, subjects_involved, notable_patterns,
-	work_key, conversation_key`
+	work_key, conversation_key, ask_provenance`
 
 func scanEpisode(rows interface{ Scan(...any) error }) (Episode, error) {
 	var (
@@ -296,6 +339,7 @@ func scanEpisode(rows interface{ Scan(...any) error }) (Episode, error) {
 		kind                                   string
 		toolSeq, skills, exemplars, subjects   string
 		consolidated, workKey, conversationKey sql.NullString
+		askLabel                               string
 	)
 	if err := rows.Scan(
 		&ep.ID, &ep.Handle, &ep.Role, &ep.WorkItem, &ep.TurnID,
@@ -304,10 +348,11 @@ func scanEpisode(rows interface{ Scan(...any) error }) (Episode, error) {
 		&kind, &ep.Count,
 		&exemplars, &consolidated, &ep.CommonTaskPattern,
 		&ep.CommonOutcome, &ep.SuccessRate, &subjects, &ep.NotablePatterns,
-		&workKey, &conversationKey,
+		&workKey, &conversationKey, &askLabel,
 	); err != nil {
 		return Episode{}, err
 	}
+	ep.AskProvenance = decodeLabel(ep.ID, askLabel)
 	ep.StartedAt = store.DecodeTime(started)
 	ep.EndedAt = store.DecodeTime(ended)
 	ep.Duration = time.Duration(durationMS) * time.Millisecond

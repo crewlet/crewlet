@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/learning"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -210,6 +211,8 @@ func TestAFilledEpisodeAndItsAskReachAPeerHoldingTheVectorlessRow(t *testing.T) 
 		ID: "e1", Handle: seat.Handle, Role: "Engineer", TurnID: "t1",
 		StartedAt: at, EndedAt: at, TaskSummary: "Message from Ana: Slack message",
 		Ask: "The staging deploy keeps failing.", PlanSummary: "rolled back the cache change",
+		AskProvenance: &provenance.Label{Source: provenance.SourceChatThread,
+			Trust: provenance.TrustExternal},
 		ReviewOutcome: "done",
 	}); err != nil {
 		t.Fatalf("append: %v", err)
@@ -229,6 +232,14 @@ func TestAFilledEpisodeAndItsAskReachAPeerHoldingTheVectorlessRow(t *testing.T) 
 	}
 	if ask != "The staging deploy keeps failing." {
 		t.Fatalf("the peer holds the ask %q", ask)
+	}
+	// AND WHO WROTE IT, with it (ADR-0040): a peer that took the seat with
+	// the ask and not its label would show the seat a stranger's message
+	// as its own words.
+	carried, err := learning.NewEpisodes(peer).Recent(ctx, seat.Handle, 1)
+	if err != nil || len(carried) != 1 || carried[0].AskProvenance == nil ||
+		carried[0].AskProvenance.Trust != provenance.TrustExternal {
+		t.Fatalf("the peer holds the ask under %+v (%v)", carried, err)
 	}
 
 	if filled, err := learning.NewEpisodes(holder).FillEmbeddings(ctx, []learning.VectorFill{{

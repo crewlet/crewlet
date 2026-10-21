@@ -144,7 +144,7 @@ var tables = []table{
 			"embedding", "embedding_model", "kind", "count", "exemplar_turn_ids",
 			"consolidated_into_skill_id", "common_task_pattern",
 			"common_outcome", "success_rate", "subjects_involved",
-			"notable_patterns", "work_key", "conversation_key",
+			"notable_patterns", "work_key", "conversation_key", "ask_provenance",
 		},
 		blobs:       []string{"embedding"},
 		watermark:   "change_seq",

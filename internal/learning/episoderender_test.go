@@ -11,7 +11,9 @@ import (
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 )
@@ -202,5 +204,45 @@ func TestARenderHoldsEveryRewriteToOneDeadline(t *testing.T) {
 		t.Fatalf("the render's deadline is %v after the call began and %v after it returned, "+
 			"want %v from an instant inside the call", first.Sub(start), first.Sub(end),
 			EpisodeRewriteTimeout)
+	}
+}
+
+// promptModel answers every rewrite with a short text and keeps every prompt.
+type promptModel struct {
+	mu    sync.Mutex
+	users []string
+}
+
+func (m *promptModel) Model() string { return "aux-small" }
+
+func (m *promptModel) Complete(_ context.Context, r llm.Request) (*llm.Completion, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.users = append(m.users, r.Messages[len(r.Messages)-1].Content)
+	return &llm.Completion{Model: "aux-small", Content: "condensed"}, nil
+}
+
+func (m *promptModel) Auxiliary(*org.Role, auxspend.Use) (chain.Member, error) {
+	return chain.Member{Key: "aux", Provider: m}, nil
+}
+
+// A REWRITE OF A PAST ASK READS IT AS ITS WRITERS' WORDS (ADR-0040): the model
+// condensing a long ask is handed it fenced under the label it was asked with,
+// not as the zero label's nothing-vouched-for and not bare — and an ask of the
+// company's own words is handed under none.
+func TestAPastAsksRewriteReadsItUnderItsLabel(t *testing.T) {
+	t.Parallel()
+	model := &promptModel{}
+	fit := compact.New(model, compact.NewCache()).For(nil, auxspend.Use{Stage: types.AuxStageTurn})
+	long := strings.Repeat("the staging deploy keeps failing on the cache key ", 40)
+	label := provenance.Label{Source: provenance.SourceWorkComment, Trust: provenance.TrustColleague,
+		Authors: []provenance.Author{{Kind: iam.ActorHuman, Seat: "ana"}}}
+	PastTurns(context.Background(), []Episode{{Kind: KindRaw, TaskSummary: "a comment",
+		Ask: "ask " + long, AskProvenance: &label}}, fit, EpisodeAccountBytes)
+	if len(model.users) != 1 {
+		t.Fatalf("%d rewrites, want the ask's", len(model.users))
+	}
+	if !strings.Contains(model.users[0], " source=work_comment trust=colleague authors=human:ana]\n") {
+		t.Fatalf("the ask's rewrite was not handed it under its label:\n%s", model.users[0])
 	}
 }
