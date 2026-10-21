@@ -1564,10 +1564,12 @@ func resumeReply(run sandbox.PendingRun) (turn.Reply, error) {
 // turn has measured of itself so far (execstate.State.SoFar), for the record
 // that ends it to state the whole turn. And so does what
 // the turn was ASKED (execstate.State.Ask), which the finishing segment's
-// completed-turn event carries and is woken by something else entirely — and
-// who said it, its interactions (execstate.State.Interactions), which that
-// event carries for the post-turn workers that read a settled turn, and which
-// every later segment reads who asked off, as a dispatch does.
+// completed-turn event carries and is woken by something else entirely, with
+// who wrote it (execstate.State.AskProvenance), which nothing the finishing
+// segment reads could say again — and who said it, its interactions
+// (execstate.State.Interactions), which that event carries for the post-turn
+// workers that read a settled turn, and which every later segment reads who
+// asked off, as a dispatch does.
 func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID string,
 	tel turnTelemetry, charge segmentCharge,
 ) (bool, error) {
@@ -1587,6 +1589,7 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 	suspension.State.Uncharged = charge.carry
 	suspension.State.SoFar = charge.soFar
 	suspension.State.Ask = tel.ask
+	suspension.State.AskProvenance = tel.askLabel
 	suspension.State.Interactions = tel.interactions
 	suspension.State.Deadline = tel.deadline
 	blob, err := execstate.Encode(suspension.State)

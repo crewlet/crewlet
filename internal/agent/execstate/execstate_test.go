@@ -3,6 +3,7 @@ package execstate_test
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strconv"
 	"testing"
 	"time"
@@ -10,11 +11,19 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // parked is a well-formed state: a turn parked on its executor's run in its
 // second round, with a closed first round behind it.
 func parked() execstate.State {
+	// The founder's words, as the turn read them: a person who holds a seat,
+	// writing in a direct message's thread.
+	founder := provenance.Label{
+		Source: provenance.SourceChatThread, Trust: provenance.TrustColleague,
+		Authors: []provenance.Author{{Kind: iam.ActorHuman, Seat: "founder"}},
+	}
 	return execstate.State{
 		Version:      execstate.Version,
 		ActiveTools:  []string{"send_message", "submit_work"},
@@ -25,11 +34,13 @@ func parked() execstate.State {
 		Iterations: []ledger.Iteration{{Iteration: 1, Intent: "fix it", Calls: []ledger.Call{
 			{Name: "read_file", Args: map[string]any{"path": "flake_test.go"}, Result: "…"},
 		}}},
-		Task: "fix the flake",
-		Ask:  "the login test flakes on main",
+		Task:          "fix the flake",
+		Ask:           "the login test flakes on main",
+		AskProvenance: &founder,
 		Interactions: []types.InboundInteraction{{
 			Sender:      types.CanonicalIdentity{Handle: "founder", ExternalID: "U0FOUNDER", Platform: "slack"},
 			Body:        "the login test flakes on main",
+			Provenance:  founder,
 			ChannelKind: types.ChannelDM,
 		}},
 		Written:     []types.WorkItem{{Backend: types.WorkWorklet, ID: "T-1"}},
@@ -78,9 +89,18 @@ func TestAStateRoundTripsThroughTheRow(t *testing.T) {
 	if len(got.Iterations) != 1 || len(got.Iterations[0].Calls) != 1 {
 		t.Fatalf("the closed rounds were lost: %+v", got.Iterations)
 	}
-	if got.Task != want.Task || got.Ask != want.Ask || len(got.Interactions) != 1 ||
-		got.Interactions[0] != want.Interactions[0] {
+	// Each interaction whole, the label its body was read under included: the
+	// post-turn workers fence a body under it, and they read the interactions
+	// off the segment that settles the turn, which re-reads no trigger.
+	if got.Task != want.Task || got.Ask != want.Ask ||
+		!reflect.DeepEqual(got.Interactions, want.Interactions) {
 		t.Fatalf("what the turn was asked, and who said it, was lost: %+v", got)
+	}
+	// WHAT IT WAS ASKED, AND WHO ASKED IT IN WHAT WORDS: the segment that
+	// records the ask reads no trigger, so a label lost here is somebody's
+	// words recorded as nobody's.
+	if got.Ask != want.Ask || !reflect.DeepEqual(got.AskProvenance, want.AskProvenance) {
+		t.Fatalf("the ask came back as %q under %+v", got.Ask, got.AskProvenance)
 	}
 	if len(got.Written) != 1 || !got.WrittenMany {
 		t.Fatalf("the turn's write set was lost: %+v", got)

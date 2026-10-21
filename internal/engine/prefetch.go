@@ -93,7 +93,7 @@ func (e *Engine) prefetchSources(company *Company) prefetch.Sources {
 // else a turn is built from: a prefetch resolved against a revision the turn
 // is not running would surface another company's memory.
 func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
-	task string, aux auxspend.Use, boundary provenance.Boundary,
+	task string, ask prefetch.Ask, aux auxspend.Use, boundary provenance.Boundary,
 ) prefetch.Blocks {
 	seat := company.Org.AgentSeatByHandle(req.Handle)
 	if seat == nil {
@@ -112,8 +112,10 @@ func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
 		// against while the executor is handed the task — see
 		// [prefetch.Request.Ask] and [turnAskFor] — with somebody else's words
 		// labelled as the trigger labelled them, for the auxiliary models
-		// that read it.
-		Ask: turnAskFor(e.notifyPrompts(), e.liveParties(), req.Handle, req.Ask()),
+		// that read it. The TELEMETRY'S OWN, read once when the turn was
+		// described, so the judgements and the turn's record of what it was
+		// asked carry one answer about who wrote it.
+		Ask: ask,
 		// OFF THE ASK, which for a coalesced conversation is the merged
 		// digest and for everything else is the partition itself. One
 		// shape rather than two: the merge is where a conversation's
@@ -282,9 +284,8 @@ func (e *Engine) publishPrefetchSummary(ctx context.Context, seat *org.Role,
 // DescribeTrigger hands the executor so it is never given a blank ask, and
 // which here would be a word every such turn is judged against.
 //
-// THE TEXT ALONE: what the turn records as asked, and what a parked run carries
-// for the segment that finishes it. The relevance judgements read [turnAskFor],
-// which is the same text part by part with who wrote each.
+// THE TEXT ALONE. What the turn records and parks is [turnAskFor] — the same
+// text part by part with who wrote each, whose [prefetch.Ask.Text] this is.
 func turnAsk(evs []*events.Event) string {
 	return turnAskFor(notify.Prompts{}, nil, "", evs).Text()
 }
@@ -311,6 +312,12 @@ func turnAskFor(prompts notify.Prompts, parties notify.Parties, self string,
 	return ask
 }
 
+// askOf is what req's turn was asked, part by part with who wrote each, as the
+// seat req names reads it ([turnAskFor] over this node's prompts and parties).
+func (e *Engine) askOf(req Request) prefetch.Ask {
+	return turnAskFor(e.notifyPrompts(), e.liveParties(), req.Handle, req.Ask())
+}
+
 // eventAsk is one trigger event's part of [turnAskFor], or false for an event that
 // asked nothing.
 func eventAsk(prompts notify.Prompts, parties notify.Parties, self string,
@@ -322,18 +329,29 @@ func eventAsk(prompts notify.Prompts, parties notify.Parties, self string,
 		if n.SubjectIsLabel {
 			subject = ""
 		}
-		text := strings.TrimSpace(subject + "\n\n" + body)
-		if text == "" {
+		if subject == "" && body == "" {
 			return prefetch.AskPart{}, false
 		}
-		return prefetch.AskPart{Text: text, Fenced: func(b provenance.Boundary) string {
-			fenced := provenance.Neutralise(b, subject)
-			if body != "" {
-				label := notify.SalientLabel(prompts, *n, parties, self)
-				fenced = strings.TrimSpace(fenced + "\n\n" + label.Fence(b, body))
-			}
-			return fenced
-		}}, true
+		part := prefetch.AskPart{Lead: subject, Text: body}
+		if body != "" {
+			label := notify.SalientLabel(prompts, *n, parties, self)
+			part.Label = &label
+		}
+		return part, true
+	}
+	// A COLLEAGUE'S ASK OR ANSWER is the colleague's words under the line
+	// naming them, labelled as the trigger fences them.
+	if quoted, ok := ev.Data.(quotedBriefer); ok {
+		lead, words, label := quoted.Quoted()
+		lead, words = strings.TrimSpace(lead), strings.TrimSpace(words)
+		if lead == "" && words == "" {
+			return prefetch.AskPart{}, false
+		}
+		part := prefetch.AskPart{Lead: lead, Text: words}
+		if words != "" {
+			part.Label = &label
+		}
+		return part, true
 	}
 	brief, ok := ev.Data.(events.Briefer)
 	if !ok {
@@ -343,11 +361,14 @@ func eventAsk(prompts notify.Prompts, parties notify.Parties, self string,
 	if text == "" {
 		return prefetch.AskPart{}, false
 	}
-	part := prefetch.AskPart{Text: text}
-	if fenced, ok := ev.Data.(fencedBriefer); ok {
-		part.Fenced = fenced.FencedBrief
-	}
-	return part, true
+	return prefetch.AskPart{Text: text}, true
+}
+
+// quotedBriefer is a wake whose ask is somebody else's words under a line the
+// engine writes: its lead, the words, and the label they are fenced under —
+// the parts [fencedBriefer] renders.
+type quotedBriefer interface {
+	Quoted() (lead, words string, label provenance.Label)
 }
 
 // requiresRecon reports that ANY constituent of the trigger is a bare
@@ -497,23 +518,44 @@ func subjectOf(registry *notify.Registry, source, sender string, metadata map[st
 // EVERY constituent of a coalesced trigger, in the order they spoke — the
 // same rule sendersOf states, and for the same reason. A turn woken by four
 // people is not a turn about the last of them.
-func (e *Engine) interactionsOf(evs []*events.Event) []types.InboundInteraction {
-	registry := e.Registry()
+//
+// EACH BODY CARRIES ITS LABEL — who wrote it, at the trust its writers earn
+// from the seat self, by the source's own prompt ([notify.SalientLabels]) —
+// because the worker that reads it runs after the turn, wherever the seat is
+// held, and has no notification to ask: the label is decided here, where the
+// delivery is in hand, exactly as the trigger and the turn-start judgements
+// read it, and every worker fences the body under it.
+func (e *Engine) interactionsOf(evs []*events.Event, self string) []types.InboundInteraction {
+	return interactionsFor(e.Registry(), e.notifyPrompts(), self, evs)
+}
+
+// interactionsFor is [Engine.interactionsOf] over a given registry and the
+// prompts that say who wrote each body.
+func interactionsFor(registry *notify.Registry, prompts notify.Prompts, self string,
+	evs []*events.Event) []types.InboundInteraction {
+
+	// THE REGISTRY IS THE PARTIES, or none: a nil *Registry would satisfy
+	// the interface and then be dereferenced.
+	var parties notify.Parties
+	if registry != nil {
+		parties = registry
+	}
 	var out []types.InboundInteraction
 	for _, n := range notificationsIn(evs) {
+		labels := notify.SalientLabels(prompts, *n, parties, self)
 		if len(n.Messages) == 0 {
 			out = append(out, interaction(registry, n.NotificationSource,
 				n.SourceEventType, n.Sender, salientBody(n), n.Metadata,
-				n.ContextRequiresRecon))
+				n.ContextRequiresRecon, labels[0]))
 			continue
 		}
 		// A COALESCED EVENT'S FLAT FIELDS MIRROR THE LATEST constituent,
 		// so taking them as well would double-count that one message and
 		// weight it against the others in every worker that joins bodies.
-		for _, m := range n.Messages {
+		for i, m := range n.Messages {
 			out = append(out, interaction(registry, n.NotificationSource,
 				m.SourceEventType, m.Sender, m.Body, m.Metadata,
-				m.ContextRequiresRecon))
+				m.ContextRequiresRecon, labels[i]))
 		}
 	}
 	return out
@@ -521,7 +563,7 @@ func (e *Engine) interactionsOf(evs []*events.Event) []types.InboundInteraction 
 
 // interaction assembles one, resolving its sender the way a profile is keyed.
 func interaction(registry *notify.Registry, source, rawType, sender, body string,
-	metadata map[string]string, requiresRecon bool,
+	metadata map[string]string, requiresRecon bool, label provenance.Label,
 ) types.InboundInteraction {
 	subject := subjectOf(registry, source, sender, metadata)
 	return types.InboundInteraction{
@@ -529,7 +571,8 @@ func interaction(registry *notify.Registry, source, rawType, sender, body string
 			Handle: subject.Handle, ExternalID: subject.ExternalID,
 			Platform: subject.Platform, DisplayName: subject.Name,
 		},
-		Body: body,
+		Body:       body,
+		Provenance: label,
 		// UNKNOWN when the source stamped nothing, which is the honest
 		// answer for a tracker or a code host rather than a gap — see
 		// notify.ChannelKindField.

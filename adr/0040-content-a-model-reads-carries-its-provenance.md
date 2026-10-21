@@ -46,19 +46,24 @@ so it is fenced under a token minted for the wake, which the turn moves onto its
 own; the notification service fences the body before the surface's prompt
 renders it, so a prompt is never handed the words bare. A wake names a body's
 writer only where its payload says one person wrote every word, and otherwise
-names nobody, which reads `external`. The same words reach the models that
+names nobody, which reads `external`. A chat reply that answers a coding run
+parked on a question is recorded as what was written, and the run it carries
+on reads it fenced as the trigger labels the same body, under its own turn's
+token: a fence is a model's, and what a person reads back as their reply
+carries none. The same words reach the models that
 judge for a turn before it starts — the memory filter, the knowledge-query
 writer and the episode summary, each handed what the turn was asked — fenced as
 the trigger labels them, under a token minted for that call rather than the
 turn's, beside the standing sentence; what those calls answer decides what the
 seat is shown, and the briefing the summary writes is defused before it reaches
-the seat's prompt. A model that rewrites a text to fit a budget reads it the
+the seat's prompt. The label each of those words was read under is a value
+(`provenance.Label`) decided once, where the delivery is in hand, and carried
+on the turn's record of what it was asked — each inbound body's, and the ask's
+merged — across a suspension too, so every reader after the turn fences the
+same words the same way rather than deciding again from what it can no longer
+see. A model that rewrites a text to fit a budget reads it the
 same way, fenced under a token minted for that rewrite and labelled as its
-caller says, and its rewrite is defused before the caller places it. A chat reply that
-answers a coding run parked on a question is recorded as what was written,
-and the run it carries on reads it fenced as the message that woke a turn is,
-under its own turn's token: a fence is a model's, and what a person reads back
-as their reply carries none. A tool that returns such text and does not
+caller says, and its rewrite is defused before the caller places it. A tool that returns such text and does not
 go through the package fails a walk, and so does a wake surface or a kind of
 wake whose foreign text does not reach the turn fenced, and a type anywhere in
 the tree that builds a wake's trigger without being one of those surfaces. A schedule's task is

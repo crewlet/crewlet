@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // The agent turn: its phases, its live progress, and its two completion
@@ -529,6 +530,14 @@ type TurnCompleted struct {
 	// No larger than the trigger it was read from, which crossed the queue
 	// in one message already.
 	Ask string `json:"ask,omitempty"`
+	// AskProvenance is who wrote Ask, as ONE label over the whole of it
+	// ([provenance.Label], ADR-0040): the labels of every part of the ask
+	// that is somebody else's words, merged — a colleague's question, or the
+	// ask a parked turn was given, carried across its suspension. NIL where
+	// Ask holds nobody's words but the company's or the seat's own (a
+	// schedule's task) and wherever Ask is empty, so a worker reading Ask
+	// neutralises it rather than fencing it as a stranger's.
+	AskProvenance *provenance.Label `json:"ask_provenance,omitempty"`
 	// PlanSummary is what the turn DID, in the agent's words: the last
 	// review's account of what had landed where it wrote one — which a
 	// review sending the turn back for another round does — and otherwise

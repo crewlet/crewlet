@@ -3124,7 +3124,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// thin trigger whose turn-start search was skipped — is served by the
 	// executor calling search_knowledge over the same seam, on a query it
 	// writes once it knows what the task needs.
-	blocks := e.prefetchFor(ctx, company, req, task, tel.aux(), tel.boundary)
+	blocks := e.prefetchFor(ctx, company, req, task, tel.askParts, tel.aux(), tel.boundary)
 	// The skills OFFERED to this turn, carried onto its completion so the
 	// curator ages a skill on when it was last put in front of a model
 	// rather than archiving the ones a seat reads every turn.

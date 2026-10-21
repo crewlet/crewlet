@@ -325,15 +325,41 @@ func (r Request) judgeable() bool {
 type Ask []AskPart
 
 // AskPart is one trigger event's part of a turn's [Ask].
+//
+// DATA, NOT A RENDERING: the part says what stands before somebody else's
+// words, the words, and who wrote them, so the same part can be fenced for an
+// auxiliary model now, embedded and recorded as plain text, and carried — its
+// label with it — onto the turn's record of what it was asked, which a
+// learning worker reads long after any notification could be asked again.
 type AskPart struct {
-	// Text is the part as it reads, with no fence.
+	// Lead is what the engine or the company says before somebody else's
+	// words — a notification's subject line, the line naming the colleague
+	// who asks, the question an answer comes back under. Always neutralised
+	// and never fenced; empty for most parts.
+	Lead string
+
+	// Text is the part's own words: somebody else's when Label is set, and
+	// the company's or the seat's own otherwise — a schedule's task, a
+	// seat's hint.
 	Text string
 
-	// Fenced is the same part with somebody else's words inside a fence of
-	// the token it is handed. Nil for a part that holds none — a
-	// schedule's task, which is the company's own instruction, or a seat's
-	// own hint — which [Ask.For] neutralises instead.
-	Fenced func(provenance.Boundary) string
+	// Label is who wrote Text and how far to rely on it, decided where the
+	// part was read ([provenance.Label]); nil for words that are the
+	// company's or the seat's own, which [Ask.For] neutralises instead.
+	Label *provenance.Label
+}
+
+// plain is the part as it reads, with no fence: its lead, then its words.
+func (p AskPart) plain() string {
+	return joinParas(strings.TrimSpace(p.Lead), strings.TrimSpace(p.Text))
+}
+
+// fenced is the part as an auxiliary model reads it: its lead neutralised
+// under b, then its words inside a fence of b under their label — or, with
+// none, neutralised too.
+func (p AskPart) fenced(b provenance.Boundary) string {
+	return joinParas(strings.TrimSpace(provenance.Neutralise(b, p.Lead)),
+		strings.TrimSpace(provenance.Present(b, p.Label, strings.TrimSpace(p.Text))))
 }
 
 // PlainAsk is an ask holding no words but the company's or the seat's own.
@@ -349,11 +375,9 @@ func PlainAsk(text string) Ask {
 func (a Ask) Text() string {
 	parts := make([]string, 0, len(a))
 	for _, p := range a {
-		if text := strings.TrimSpace(p.Text); text != "" {
-			parts = append(parts, text)
-		}
+		parts = append(parts, p.plain())
 	}
-	return strings.Join(parts, "\n\n")
+	return joinParas(parts...)
 }
 
 // For is the ask as an auxiliary model reads it: every part's somebody else's
@@ -362,20 +386,40 @@ func (a Ask) Text() string {
 func (a Ask) For(b provenance.Boundary) string {
 	parts := make([]string, 0, len(a))
 	for _, p := range a {
-		if strings.TrimSpace(p.Text) == "" {
-			continue
-		}
-		var text string
-		if p.Fenced != nil {
-			text = p.Fenced(b)
-		} else {
-			text = provenance.Neutralise(b, p.Text)
-		}
-		if text = strings.TrimSpace(text); text != "" {
-			parts = append(parts, text)
+		parts = append(parts, p.fenced(b))
+	}
+	return joinParas(parts...)
+}
+
+// Label is who wrote the ask, as ONE label over the whole of it: the labels of
+// every part holding somebody else's words, merged ([provenance.Merge]) — the
+// least trust any of them earns, every writer once — or nil when no part does,
+// an ask that is the company's or the seat's own throughout. It is what the
+// ask is labelled under once its parts are joined into one text: the record of
+// what a turn was asked, and every later reading of that record.
+func (a Ask) Label() *provenance.Label {
+	var labels []provenance.Label
+	for _, p := range a {
+		if p.Label != nil && strings.TrimSpace(p.Text) != "" {
+			labels = append(labels, *p.Label)
 		}
 	}
-	return strings.Join(parts, "\n\n")
+	if len(labels) == 0 {
+		return nil
+	}
+	merged := provenance.Merge(labels...)
+	return &merged
+}
+
+// joinParas joins the non-empty texts as paragraphs.
+func joinParas(texts ...string) string {
+	kept := make([]string, 0, len(texts))
+	for _, t := range texts {
+		if t != "" {
+			kept = append(kept, t)
+		}
+	}
+	return strings.Join(kept, "\n\n")
 }
 
 // EmbedBudget bounds embedding the text a similarity search is run against:
