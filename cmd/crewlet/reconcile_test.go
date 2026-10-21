@@ -408,8 +408,13 @@ func bootSeedSaying(t *testing.T, db *store.DB, plane coord.Plane, seed tierBSee
 	if err != nil {
 		return err
 	}
-	return seedCompany(t.Context(), db, plane, nil, plan, cipher, testNode, log)
+	return seedCompany(t.Context(), db, plane, nil, plan, cipher, testNode, builds, log)
 }
+
+// builds is a node on which every file builds: the cases that take it are
+// about what the seed writes, and [TestAFileThisNodeCannotBuildIsNeverImported]
+// is about the build.
+func builds(*config.Company) error { return nil }
 
 // storeOf is a [storedReader] over a store a case holds open: what
 // [storeAt] reads off disk for `crewlet run`.
@@ -646,7 +651,7 @@ func TestABootstrapSeedNeverReplacesTheFleetsCompany(t *testing.T) {
 				t.Fatal(err)
 			}
 			if err := seedCompany(t.Context(), db, fleet, nil, plan, fixtureCipher,
-				testNode, quiet()); err != nil {
+				testNode, builds, quiet()); err != nil {
 				t.Fatalf("boot: %v", err)
 			}
 			assertFleetOn(t, fleet, live)
@@ -815,4 +820,151 @@ func TestAnOverrideIsJudgedAgainstTheFleetsRevision(t *testing.T) {
 				len(revisions))
 		}
 	})
+}
+
+// A FILE THIS NODE CANNOT BUILD IS NEVER IMPORTED, and one it is not importing
+// is never built.
+//
+// The engine boots unconfigured where the file is to be imported, so nothing
+// builds the file until the first reconcile applies it — after the seed has
+// stored it and pointed the fleet at it. A company valid on paper that this
+// node could not build (an E2B key that resolves to nothing) was therefore
+// the fleet's company, an override over the company every peer ran included,
+// refused by this node's every apply and by its next boot, while the boot
+// that wrote it went on serving nothing. So the seed builds the file first
+// and a refusal writes nothing, the way the boot on the file once refused with
+// nothing written.
+//
+// The other half matters as much: a node restarting into a running fleet with
+// a stale file it ignores must not be refused over that file. The build is the
+// import's, never the boot's.
+//
+// Mutations: build after the activation and the fleet moves; build in the
+// bootstrap branch before the pointer is read and the ignored file refuses the
+// boot.
+func TestAFileThisNodeCannotBuildIsNeverImported(t *testing.T) {
+	t.Parallel()
+	unbuildable := errors.New("e2b: providers.sandbox.api_key resolved empty")
+	refuses := func(*config.Company) error { return unbuildable }
+	file := parse(t, companyYAML)
+
+	boot := func(t *testing.T, db *store.DB, fleet coord.Plane, seed tierBSeed,
+		build revisionBuild) error {
+		t.Helper()
+		plan, err := decideSeed(t.Context(), &config.Bootstrap{}, seed,
+			storeOf(db, fixtureCipher), quiet())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return seedCompany(t.Context(), db, fleet, nil, plan, fixtureCipher, testNode,
+			build, quiet())
+	}
+	unwritten := func(t *testing.T, db *store.DB) {
+		t.Helper()
+		if revisions, _ := db.Configs().List(t.Context(), 0, 0); len(revisions) != 0 {
+			t.Errorf("%d revisions stored, want none", len(revisions))
+		}
+	}
+
+	t.Run("a first company", func(t *testing.T) {
+		t.Parallel()
+		db := seedStore(t)
+		fleet := coordmemory.NewFleet()
+		err := boot(t, db, fleet, seedOf(file), refuses)
+		if !errors.Is(err, unbuildable) || !strings.Contains(err.Error(), "company.yaml") {
+			t.Fatalf("a bootstrap this node cannot build = %v, want the build's refusal "+
+				"naming the file", err)
+		}
+		unwritten(t, db)
+		if _, found, err := fleet.Target(t.Context()); err != nil || found {
+			t.Errorf("the fleet was pointed at a company this node cannot build "+
+				"(%v, %v)", found, err)
+		}
+	})
+
+	t.Run("an override over the fleet's company", func(t *testing.T) {
+		t.Parallel()
+		db := seedStore(t)
+		fleet := coordmemory.NewFleet()
+		live := activateAsPeer(t, fleet, "live-revision", []byte(`{"name":"Live"}`))
+		if err := boot(t, db, fleet, overrideOf(file), refuses); !errors.Is(err, unbuildable) {
+			t.Fatalf("an override this node cannot build = %v, want the build's refusal", err)
+		}
+		unwritten(t, db)
+		assertFleetOn(t, fleet, live)
+	})
+
+	t.Run("an ignored file is not built", func(t *testing.T) {
+		t.Parallel()
+		db := seedStore(t)
+		fleet := coordmemory.NewFleet()
+		live := activateAsPeer(t, fleet, "live-revision", []byte(`{"name":"Live"}`))
+		asked := func(*config.Company) error {
+			t.Error("a file the fleet's company outranks was built")
+			return unbuildable
+		}
+		if err := boot(t, db, fleet, seedOf(file), asked); err != nil {
+			t.Fatalf("a node restarting into a fleet refused over a file it ignores: %v", err)
+		}
+		unwritten(t, db)
+		assertFleetOn(t, fleet, live)
+	})
+
+	t.Run("a seed with no build to hold it to", func(t *testing.T) {
+		// NOT READ AS "NO CHECK": the one wiring that omitted the build would
+		// import whatever it was handed.
+		t.Parallel()
+		db := seedStore(t)
+		fleet := coordmemory.NewFleet()
+		if err := boot(t, db, fleet, seedOf(file), nil); err == nil {
+			t.Fatal("a seed with no build imported its file")
+		}
+		unwritten(t, db)
+	})
+}
+
+// A FAILED FIRST RECONCILE SAYS WHAT THE NODE IS SERVING INSTEAD, which on a
+// node that booted unconfigured is nothing.
+//
+// The hint was written for a node that booted on a company, and every node
+// that imports its file at this boot boots on none, as every node without
+// `data` does at every boot — so it told the operator the node was "serving
+// the configuration it booted with" while it served no company at all. Where
+// the document itself is what has to change, a managed deployment changes it
+// through its writers, never through an import its Tier A refuses.
+//
+// Mutation: answer the configured node's hint for every node and the
+// unconfigured cases fail.
+func TestAFailedFirstReconcileSaysWhatTheNodeServes(t *testing.T) {
+	t.Parallel()
+	open := &config.Bootstrap{}
+	managed := &config.Bootstrap{API: config.API{Auth: config.APIAuth{
+		CompanyWriters: []string{"gitops"}}}}
+	for _, tc := range []struct {
+		name       string
+		boot       *config.Bootstrap
+		configured bool
+		want, not  []string
+	}{
+		{"a node serving a company", open, true,
+			[]string{"the configuration it booted with"}, []string{"no company"}},
+		{"a node that booted with none", open, false,
+			[]string{"no company", "serves none", "crewlet config import"},
+			[]string{"the configuration it booted with"}},
+		{"a managed node that booted with none", managed, false,
+			[]string{"no company", "managing system", "gitops"},
+			[]string{"the configuration it booted with", "crewlet config import"}},
+	} {
+		hint := reconcileHint(tc.boot, tc.configured)
+		for _, want := range tc.want {
+			if !strings.Contains(hint, want) {
+				t.Errorf("%s: the hint does not say %q: %s", tc.name, want, hint)
+			}
+		}
+		for _, not := range tc.not {
+			if strings.Contains(hint, not) {
+				t.Errorf("%s: the hint says %q: %s", tc.name, not, hint)
+			}
+		}
+	}
 }

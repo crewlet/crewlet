@@ -52,7 +52,12 @@ import (
 // only on the cases the old rule got wrong: the import can still be refused
 // after the engine is up (a file is held to every rule where it is written),
 // and a boot that fails then has already restored the file's credential
-// bundles into the logins its successor's seats share.
+// bundles into the logins its successor's seats share. What booting on the
+// file did buy — a file this node cannot build refused before anything was
+// written — the import keeps by building the file before it writes it
+// ([engine.Engine.Buildable]), and only a file it is about to write: a stale
+// one the fleet's company outranks is never built, so it cannot refuse the
+// boot of a node that ignores it.
 //
 // Not booting on the file is also what keeps `-import-company` a repair: the
 // store's revision is not read, so one this build cannot run does not refuse

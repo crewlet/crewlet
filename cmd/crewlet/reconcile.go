@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -75,7 +76,7 @@ func startReconciler(ctx context.Context, e *engine.Engine, boot *config.Bootstr
 		return nil, fmt.Errorf("node identity: %w", err)
 	}
 	if err = seedCompany(ctx, db, plane, e.Backends().Queue, plan, cipher,
-		nodeID, log); err != nil {
+		nodeID, e.Buildable, log); err != nil {
 		return nil, err
 	}
 	reconciler, err := e.NewReconciler(engine.ReconcilerOptions{
@@ -96,10 +97,36 @@ func startReconciler(ctx context.Context, e *engine.Engine, boot *config.Bootstr
 	// is the whole point of publishing an epoch rather than mutating one.
 	if err := reconciler.Tick(ctx); err != nil {
 		log.WarnContext(ctx, "initial_reconcile_failed", "error", err,
-			"hint", "this node is serving the configuration it booted with; "+
-				"it will keep trying on its reconcile interval")
+			"hint", reconcileHint(boot, e.Company() != nil))
 	}
 	return reconciler, nil
+}
+
+// reconcileHint is what a failed first reconcile tells the operator, which
+// depends on whether the node has a company to fall back on.
+//
+// A NODE THAT BOOTED UNCONFIGURED HAS NONE — every node that imported its file
+// at this boot, and every node without `data` — so "the configuration it
+// booted with" would be a company it never had. What it runs instead is
+// nothing, until an apply lands; a revision the import wrote was built before
+// it was written ([engine.Engine.Buildable]), so what failed here is a part
+// the apply starts, which the next tick starts again, or a fleet revision this
+// node did not write. Where the document itself is what must change, the way
+// to change it differs on a managed deployment, whose writers are named.
+func reconcileHint(boot *config.Bootstrap, configured bool) string {
+	if configured {
+		return "this node is serving the configuration it booted with; " +
+			"it will keep trying on its reconcile interval"
+	}
+	correct := "correct it with `crewlet config import` through any node's API"
+	if boot.API.Auth.CompanyManaged() {
+		correct = "the managing system (api.auth.company_writers: " +
+			strings.Join(boot.API.Auth.CompanyWriters, ", ") + ") writes a corrected one"
+	}
+	return "this node booted with no company and serves none until the fleet's " +
+		"revision applies here; it will keep trying on its reconcile interval. " +
+		"If the error names the revision itself rather than something this node " +
+		"could not start, " + correct
 }
 
 // seedCompany carries out the decided seed against the store and the fleet.
@@ -114,8 +141,15 @@ func startReconciler(ctx context.Context, e *engine.Engine, boot *config.Bootstr
 // nobody ran a command, the node read its -company file at boot, and which
 // node did it is the fact somebody reading the history later needs.
 func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue.Publisher,
-	plan seedPlan, cipher secrets.Cipher, nodeID string, log *slog.Logger,
+	plan seedPlan, cipher secrets.Cipher, nodeID string, build revisionBuild, log *slog.Logger,
 ) error {
+	if build == nil {
+		// REFUSED, never read as "no check": an import with nothing to build
+		// the file first would store and activate a company this node may
+		// not be able to run. See [importSeed].
+		return errors.New("the Tier B seed has no build to hold its file to; " +
+			"this is a defect in `crewlet run`, not in either config file")
+	}
 	configs := db.Configs()
 	switch plan.act {
 	case seedBootstrap:
@@ -134,7 +168,8 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 			fleetOutranks(ctx, plane, plan.file, target, cipher, log)
 			return nil
 		}
-		return importSeed(ctx, configs, plane, pub, plan.file, "", cipher, nodeID, log)
+		return importSeed(ctx, configs, plane, pub, plan.file, "", cipher, nodeID,
+			build, log)
 	case seedImport:
 		target, pointed, err := plane.Target(ctx)
 		if err != nil {
@@ -191,7 +226,8 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 		if found {
 			parent = active.ID
 		}
-		return importSeed(ctx, configs, plane, pub, plan.file, parent, cipher, nodeID, log)
+		return importSeed(ctx, configs, plane, pub, plan.file, parent, cipher, nodeID,
+			build, log)
 	case seedNone:
 		// No file to import. The store is authoritative, so this is a
 		// normal way to run a node — it serves whatever the fleet
@@ -234,11 +270,15 @@ func fleetOutranks(ctx context.Context, plane coord.Plane, seed tierBSeed,
 	log.WarnContext(ctx, "company_seed_ignored", attrs...)
 }
 
+// revisionBuild builds a company as this node's apply would build it before
+// changing anything, and discards it ([engine.Engine.Buildable]).
+type revisionBuild func(*config.Company) error
+
 // importSeed writes the seed's file as a new revision, chained to parent, and
 // points the fleet at it.
 func importSeed(ctx context.Context, configs *store.Configs, plane coord.Plane,
 	pub queue.Publisher, seed tierBSeed, parent string, cipher secrets.Cipher,
-	nodeID string, log *slog.Logger,
+	nodeID string, build revisionBuild, log *slog.Logger,
 ) error {
 	document, err := json.Marshal(seed.Company)
 	if err != nil {
@@ -257,6 +297,21 @@ func importSeed(ctx context.Context, configs *store.Configs, plane coord.Plane,
 			"a document written as a new revision must meet every rule, and "+
 			"this one breaks an admission rule. Correct the file and start "+
 			"again: %w", seed.Path, invalid)
+	}
+	// AND THIS NODE MUST BE ABLE TO BUILD IT, before anything is written:
+	// the activation below is the whole fleet's, and nothing builds the
+	// file until an apply does, after it has landed. A company valid on
+	// paper can still fail to build here — a ${VAR} that resolves to
+	// nothing where a backend refuses an empty value (an E2B key), a coding
+	// CLI whose profile or directory cannot be had, a sandbox cell this
+	// host cannot run — and written first it would be the fleet's company,
+	// refused by this node's every apply and its next boot. The engine
+	// booted on the file once, which made the same refusal the boot's with
+	// nothing written; this is that order kept.
+	if err = build(seed.Company); err != nil {
+		return fmt.Errorf("company config %s cannot be imported: this node cannot "+
+			"build it, so nothing was stored or activated. Correct the file and "+
+			"start again: %w", seed.Path, err)
 	}
 	payload, err := secrets.Seal(cipher, document)
 	if err != nil {
