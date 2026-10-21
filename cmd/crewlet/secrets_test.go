@@ -549,11 +549,12 @@ func TestOpeningTheSecretStoreAlwaysRoutesALockedOne(t *testing.T) {
 // OUT.
 //
 // `secrets` routes through the API, `config import` points at PUT /config,
-// and `migrate` has no route around it because a schema change under a live
-// engine is precisely what the lock exists to prevent. Three different
-// remedies, so a shared "the file is locked" message would be wrong for at
-// least two of them — which is why this asserts the wrapper carries the
-// caller's own text rather than a fixed one.
+// `search eval` measures a backup's copy, and `migrate` has no route around
+// it because a schema change under a live engine is precisely what the lock
+// exists to prevent. Four different remedies, so a shared "the file is
+// locked" message would be wrong for at least three of them — which is why
+// this asserts the wrapper carries the caller's own text rather than a fixed
+// one.
 func TestALockedStoreIsAnsweredInEachCommandsOwnTerms(t *testing.T) {
 	t.Parallel()
 	locked := fmt.Errorf("%w: /var/lib/crewlet/index.db is held by pid 41",
@@ -601,12 +602,13 @@ func TestEveryStoreOpenerAnswersALockedStore(t *testing.T) {
 	t.Parallel()
 	// Each opener, and the function that must appear in it. The secret
 	// store's two — the write and the read every command that resolves the
-	// company makes — route to the API; the other two explain.
+	// company makes — route to the API; the other three explain.
 	openers := map[string]map[string]string{
 		"secrets.go":    {"openSecretStore": "throughTheRunningNode"},
 		"provision.go":  {"companyResolver": "storedThroughTheRunningNode"},
 		"config_cmd.go": {"openConfigStore": "engineHoldsTheStore"},
 		"ops.go":        {"runMigrate": "engineHoldsTheStore"},
+		"search.go":     {"runSearchEval": "engineHoldsTheStore"},
 	}
 	for file, want := range openers {
 		fset := token.NewFileSet()
