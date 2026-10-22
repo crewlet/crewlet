@@ -701,8 +701,22 @@ func (h *Host) stampBeat() {
 
 // --- lifecycle ------------------------------------------------------------
 
-// Start announces this node, takes a first share of the seats, and spins the
-// heartbeat and sweep loops.
+// Start spins the heartbeat loop, announces this node, takes a first share of
+// the seats, and spins the sweep loop.
+//
+// THE HEARTBEAT FIRST, before anything the start claims. The first pass runs
+// each claimed seat's acquire hook inline, and a hook spawns MCP children,
+// hydrates the seat's memory and recovers its interrupted sandbox run, which
+// can outlast a TTL: the seat is in the held set while it does precisely so
+// that the heartbeat renews its lease throughout ([heldSeat]). Started after
+// that pass, as it was, the heartbeat renewed nothing on the one pass where
+// every seat is new — a hook that ran past the TTL let the lease lapse under a
+// seat this node was halfway through building, and the presence lease with it
+// — and the watchdog, which reads this loop's beat, read the whole pass as the
+// heartbeat wedged: every beat gap past two seconds measured across 126
+// started engines under load was that pass, 5.1 s the longest, and past the
+// TTL the watchdog ends the process. The sweep loop still starts after the
+// pass, which is the start's own.
 //
 // Presence is announced BEFORE the first sweep: capacity divides by the live
 // node count, and a node that has not registered itself would compute a
@@ -734,10 +748,9 @@ func (h *Host) Start(ctx context.Context) {
 	h.resweep = asks
 	h.mu.Unlock()
 
+	h.wg.Go(func() { h.heartbeatLoop(loopCtx) })
 	h.renewNodePresence(ctx)
 	h.Sweep(ctx)
-
-	h.wg.Go(func() { h.heartbeatLoop(loopCtx) })
 	h.wg.Go(func() { h.sweepLoop(loopCtx, asks) })
 
 	log.InfoContext(ctx, "seat_host_started", "node", h.nodeID, "owner", h.owner, "held", len(h.Held()))
