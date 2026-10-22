@@ -9,14 +9,17 @@ import "errors"
 // its compare-and-set rounds ([ErrConflict]) and a create of what is already
 // there ([ErrExists]). What the error itself says about each is the subject it
 // met, a broker path nobody can act on, so every surface that tells one of
-// them tells it in the words below: the agent's tools, to a model, in words a
-// person can read as they stand. A person's act route and the human write
-// surface answer each in its code's own sentence instead (ADR-0060).
+// them tells it in the words below: the agent's tools, to a model, and every
+// surface that answers a person in words of its own, the identity directory
+// first among them. A person's act route and the human write surface answer
+// each in its code's own sentence instead (ADR-0060).
 //
 // HERE, BESIDE THE SENTINELS, because this is the one package every surface
 // that meets them already imports. The words lived in internal/agent/builtin,
-// which the API's surfaces outside the operator's do not import, so a surface
-// there had no way to say them but a second copy, kept in step by nothing.
+// which the API's surfaces outside the operator's do not import, so the
+// identity directory answered a lost race with the framework's own text, the
+// subject it met included. A second copy there would have been the same
+// sentence kept in step by nothing.
 //
 // Every other refusal of this package is a condition of the node that met it,
 // whose [Unavailable.Detail] and [Refused.Detail] are composed for whoever
