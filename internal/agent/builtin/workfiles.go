@@ -241,7 +241,7 @@ func (t *readProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	filePath, err = worklet.NormalizeFilePath(filePath)
 	if err != nil {
-		return failed(fmt.Sprintf("%s: %v", t.Name(), err)), nil
+		return failed(fmt.Sprintf("%s: %s.", t.Name(), worklet.Sentence(err))), nil
 	}
 	encoding := strings.TrimSpace(argString(args, "encoding"))
 	if encoding != "" && encoding != "text" && encoding != "base64" {
@@ -466,7 +466,7 @@ func (t *writeProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	filePath, err := worklet.NormalizeFilePath(rawPath)
 	if err != nil {
-		return failed(fmt.Sprintf("%s: %v", t.Name(), err)), nil
+		return failed(fmt.Sprintf("%s: %s.", t.Name(), worklet.Sentence(err))), nil
 	}
 	content := []byte(argString(args, "content"))
 	encoding := strings.TrimSpace(argString(args, "encoding"))
@@ -647,7 +647,7 @@ func (t *removeProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	filePath, err := worklet.NormalizeFilePath(rawPath)
 	if err != nil {
-		return failed(fmt.Sprintf("%s: %v", t.Name(), err)), nil
+		return failed(fmt.Sprintf("%s: %s.", t.Name(), worklet.Sentence(err))), nil
 	}
 	// THE PROJECT IT IS KEPT IN DECIDES, once the call has settled which
 	// that is — see the `inTool` entries in authority.go. A colleague may

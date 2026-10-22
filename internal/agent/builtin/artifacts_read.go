@@ -592,7 +592,8 @@ func (t *getArtifact) readFile(ctx context.Context, read *foreignRead, c artifac
 
 	clean, err := manifest.CleanPath(path)
 	if err != nil {
-		r := failed(fmt.Sprintf(GetArtifactTool+": %q is not a published path: %v", clip(path), err))
+		r := failed(fmt.Sprintf(GetArtifactTool+": %q is not a published path: %s.", clip(path),
+			domainSentence(err)))
 		return nil, &r
 	}
 	e, ok := manifest.EntryAt(v.Manifest, clean)

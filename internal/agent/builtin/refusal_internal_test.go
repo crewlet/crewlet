@@ -449,6 +449,35 @@ func TestTheSharedRefusalsCarryTheirClass(t *testing.T) {
 	}
 }
 
+// A READ REFUSED FOR WHAT IT ASKED IS TOLD WITHOUT A PACKAGE'S NAME, wherever
+// in the message it sits: a feed's `since` on another log is the tracker's
+// refusal wrapping the framework's ("worklet: this read's request cannot be
+// run: since: statelog: a position on another log: …"), and readFailure
+// printed it whole. The log it is on stays named, because that is what to
+// change.
+//
+// Mutation: print the error with %v again in readFailure, or drop "statelog: "
+// from ReadRefusalSentence, and a row goes red.
+func TestARefusedReadIsToldWithoutAPackagesName(t *testing.T) {
+	t.Parallel()
+	floor := statelog.Position{Stream: "CREWLET_PAGES_LOG", Generation: 1, Seq: 4}
+	foreign := floor.On("CREWLET_TRACKER_LOG")
+	for name, err := range map[string]error{
+		"a feed's since on another log": fmt.Errorf("%w: since: %w", worklet.ErrBadQuery, foreign),
+		"a read's floor on another log": fmt.Errorf("this read's floor: %w", foreign),
+	} {
+		got := readFailure(context.Background(), ListWorkItemsTool, err)
+		switch {
+		case tools.RefusalOf(got) != tools.RefusalInvalid:
+			t.Errorf("%s is classed %q, want invalid", name, tools.RefusalOf(got))
+		case strings.Contains(got.Output, "worklet:") || strings.Contains(got.Output, "statelog:"):
+			t.Errorf("%s tells a model a package's name: %s", name, got.Output)
+		case !strings.Contains(got.Output, "CREWLET_PAGES_LOG"):
+			t.Errorf("%s does not name the log the position is on: %s", name, got.Output)
+		}
+	}
+}
+
 // AN `answers` THE READER REFUSES IS NOT A READ FAILURE. Each of these used to
 // reach the model as "could not read the tracker — try again", a retry that
 // refused identically; each has its own class because each asks a different

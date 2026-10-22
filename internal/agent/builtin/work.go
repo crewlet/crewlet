@@ -3720,6 +3720,24 @@ func jsonResult(v any) (tools.Result, error) {
 	return jsonAnswer(v, "Narrow what you asked for.")
 }
 
+// ReadRefusalSentence is a read's refusal of what it was asked — a work item or
+// a page that is not there, a query the tracker cannot run, a floor, cursor or
+// `since` on another log — in the words its packages wrote, without the package
+// names those words carry ("worklet: ", "doclet: ", "statelog: "), wherever in
+// the message they sit: a feed's foreign `since` reads "worklet: this read's
+// request cannot be run: since: statelog: a position on another log: …", so a
+// prefix cut from the front alone left the framework's in the middle.
+//
+// EXPORTED for the work surface's read routes (internal/api/workapi), which
+// answered a person's refused read with the error's whole text.
+func ReadRefusalSentence(err error) string {
+	msg := err.Error()
+	for _, prefix := range []string{"worklet: ", "doclet: ", "statelog: "} {
+		msg = strings.ReplaceAll(msg, prefix, "")
+	}
+	return msg
+}
+
 // readFailure explains a read that could not be served.
 //
 // IT NEVER SAYS "NOTHING FOUND". A copy that has not caught up with its log
@@ -3750,8 +3768,9 @@ func jsonResult(v any) (tools.Result, error) {
 func readFailure(ctx context.Context, name string, err error) tools.Result {
 	if errors.Is(err, worklet.ErrBadQuery) || errors.Is(err, statelog.ErrForeignPosition) {
 		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused "+
-			"what it was asked: %v. Nothing is wrong with Worklet; change the "+
-			"arguments, because the same ones are refused again.", name, err))
+			"what it was asked: %s. Nothing is wrong with Worklet; change the "+
+			"arguments, because the same ones are refused again.", name,
+			ReadRefusalSentence(err)))
 	}
 	if why, ok := Condition(err); ok {
 		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s could not "+

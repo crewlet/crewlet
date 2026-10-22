@@ -589,11 +589,14 @@ func (s *fileSources) find(p string) (artifactFile, bool) {
 }
 
 // domainSentence is a refusal the artifacts packages composed for a caller,
-// without the package names their errors carry.
+// without the package names their errors carry — the tracker's among them,
+// because a version's paths are held to the engine's one file-path rule
+// ([worklet.NormalizeFilePath], which manifest.CleanPath wraps), so a path
+// refused there read "invalid: tracker: the path …".
 func domainSentence(err error) string {
 	msg := err.Error()
 	for _, prefix := range []string{"artifactupload: ", "artifactsdomain: ", "manifest: ",
-		"mediatype: ", "lint: ", "edits: ", "artifacts: "} {
+		"mediatype: ", "lint: ", "edits: ", "artifacts: ", "tracker: "} {
 		msg = strings.ReplaceAll(msg, prefix, "")
 	}
 	return msg

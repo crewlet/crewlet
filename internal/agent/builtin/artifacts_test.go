@@ -90,6 +90,32 @@ func decode(t *testing.T, res tools.Result) map[string]any {
 	return out
 }
 
+// A PATH THE FILE-PATH RULE REFUSES IS TOLD WITHOUT A PACKAGE'S NAME: a
+// version's paths are held to the tracker's rule through manifest.CleanPath,
+// and get_artifact printed the error whole, so a model read "manifest:
+// invalid: tracker: the path …".
+//
+// Mutation: print CleanPath's error with %v again in get_artifact, or drop
+// "tracker: " from domainSentence, and this goes red.
+func TestAPathTheFilePathRuleRefusesIsToldInItsWords(t *testing.T) {
+	t.Parallel()
+	r := newArtifactRig(t, artifactChart{}, requesters{"founder": founderPrincipal(iam.Apps...)}, nil)
+	turn := asked(t)
+	h := r.f.seed("founder", iam.ActorHuman, founder,
+		[]artifacts.Share{shareWith("agent-cto", artifacts.RoleEditor)},
+		[2]string{"index.html", "<p>hello</p>"})
+	got := r.call(t, turn, builtin.GetArtifactTool, map[string]any{
+		"artifact": h.ID.String(), "path": "pages//index.html"})
+	switch {
+	case !got.Failed:
+		t.Fatalf("a path with an empty folder in it was read: %s", got.Output)
+	case !strings.Contains(got.Output, "empty folder"):
+		t.Errorf("the refusal does not say what is wrong with the path: %s", got.Output)
+	case strings.Contains(got.Output, "tracker:") || strings.Contains(got.Output, "manifest:"):
+		t.Errorf("the refusal tells a model a package's name: %s", got.Output)
+	}
+}
+
 // TestEveryArtifactToolResultIsFenced: every text an artifact tool hands a
 // model that somebody else wrote (a version's file, a condensed account of
 // one, the live version a stale publish is handed) arrives inside a fence
