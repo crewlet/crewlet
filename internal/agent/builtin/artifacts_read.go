@@ -467,20 +467,20 @@ func (t *getArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return *refusal, nil
 	}
 	if h.Status == artifactsdomain.StatusTrashed {
-		return artifactTrashed(t.Name(), h), nil
+		return artifactTrashed(t.Name(), ref, h), nil
 	}
 	number := argInt(args, "version", h.HeadNumber)
 	if number < 1 || number > h.HeadNumber {
-		return failed(fmt.Sprintf(GetArtifactTool+": artifact %s has versions 1..%d.",
-			h.ID, h.HeadNumber)), nil
+		return failed(fmt.Sprintf(GetArtifactTool+": artifact %q has versions 1..%d.",
+			clip(ref), h.HeadNumber)), nil
 	}
 	t.deps.present(c, h.ID, presence.Viewing, presence.Focus{Version: number})
 	version, err := t.deps.Reader.Version(ctx, h.ID, number)
 	if err != nil {
 		if errors.Is(err, artifactsdomain.ErrNotFound) {
 			return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf(GetArtifactTool+": "+
-				"artifact %s no longer keeps version %d. Read the head, or one of the "+
-				"versions its answer lists.", h.ID, number)), nil
+				"artifact %q no longer keeps version %d. Read the head, or one of the "+
+				"versions its answer lists.", clip(ref), number)), nil
 		}
 		return artifactReadFailure(ctx, t.Name(), ref, err), nil
 	}
@@ -541,7 +541,7 @@ func (t *getArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		path = version.Manifest.Entry
 	}
 	if path != "" {
-		file, refusal := t.readFile(ctx, read, c, h, version, path, offset, offsetGiven,
+		file, refusal := t.readFile(ctx, read, c, version, path, offset, offsetGiven,
 			maxBytes, strings.TrimSpace(argString(args, "focus")), writers, partial)
 		if refusal != nil {
 			return *refusal, nil
@@ -596,7 +596,7 @@ func (t *getArtifact) headAnswer(h artifactsdomain.Head, v artifactsdomain.Versi
 // readFile is one page of a version's file, fenced under its writers, or a
 // condensed account of a long one a colleague wrote.
 func (t *getArtifact) readFile(ctx context.Context, read *foreignRead, c artifactCaller,
-	h artifactsdomain.Head, v artifactsdomain.Version, path string, offset int,
+	v artifactsdomain.Version, path string, offset int,
 	offsetGiven bool, maxBytes int, focus string, writers []provenance.Author,
 	partial bool) (map[string]any, *tools.Result) {
 
@@ -609,8 +609,8 @@ func (t *getArtifact) readFile(ctx context.Context, read *foreignRead, c artifac
 	e, ok := manifest.EntryAt(v.Manifest, clean)
 	if !ok {
 		r := refusedBy(tools.RefusalNotFound, artifactsdomain.ErrNotFound, fmt.Sprintf(
-			GetArtifactTool+": version %d of artifact %s has no file %q; its `files` list "+
-				"what it holds.", v.Number, h.ID, clean))
+			GetArtifactTool+": version %d has no file %q; its `files` list what it "+
+				"holds.", v.Number, clean))
 		return nil, &r
 	}
 	file := map[string]any{"path": e.Path, "content_type": e.ContentType, "size": e.Object.Size}

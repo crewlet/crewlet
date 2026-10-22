@@ -21,8 +21,14 @@ import (
 // NOT IN THE APPLIER'S FILES, which read no other domain: it is a surface's
 // wording of what a writer or a reader refused, and the artifact's words are
 // another domain's.
+//
+// A PURGED STORE IS SAID WITHOUT ITS ARTIFACT'S ID, which [ErrGone]'s error
+// names for the log, as the artifact's own purge is
+// ([artifactsdomain.CutArtifactID]); and so is an undo on an artifact whose
+// datastore was never written, which [ErrNotFound]'s names the same way.
 func Sentence(err error) string {
-	text := artifactsdomain.Sentence(err)
+	text := artifactsdomain.CutArtifactID(artifactsdomain.CutArtifactID(
+		artifactsdomain.Sentence(err), ErrGone), ErrNotFound)
 	for _, cut := range sentenceCuts {
 		text = strings.ReplaceAll(text, cut, "")
 	}

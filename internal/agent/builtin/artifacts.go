@@ -759,10 +759,15 @@ func artifactNotFound(tool, ref string) tools.Result {
 // THE ARTIFACT'S STATE, A CONFLICT, as every gesture on a trashed artifact is
 // and as the API's `409 artifact_trashed` says — never `not_found`: the
 // artifact is there, and a caller told it is not makes another.
-func artifactTrashed(tool string, h artifactsdomain.Head) tools.Result {
+//
+// THE ARTIFACT AS THE MODEL NAMED IT (ref), the rule [artifactNotFound]
+// keeps: the argument it passed may be a link or a label, and a uuid it never
+// typed is not how it knows the artifact. The owner by their handle, which is
+// how a seat names a colleague.
+func artifactTrashed(tool, ref string, h artifactsdomain.Head) tools.Result {
 	return refusedBy(tools.RefusalConflict, artifactsdomain.ErrTrashed, fmt.Sprintf("%s: "+
-		"artifact %s is in the trash, and its content is not served until its owner (%s) "+
-		"restores it. Nothing was read.", tool, h.ID, h.Owner))
+		"artifact %q is in the trash, and its content is not served until its owner (%s) "+
+		"restores it. Nothing was read.", tool, clip(ref), h.Owner))
 }
 
 // artifactReadFailure explains a read of the artifacts domain that did not

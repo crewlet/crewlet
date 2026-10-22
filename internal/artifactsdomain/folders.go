@@ -321,7 +321,7 @@ func (w *Writer) CreateFolders(ctx context.Context, c Call, in FolderCreateInput
 		return answer, err
 	}
 	if e.outcome == OutcomeRefused {
-		return answer, w.refusal(ctx, "", e.reason, HistorySummary{})
+		return answer, w.refusal(ctx, "", e.reason, HistorySummary{}, 0)
 	}
 	chain, err := w.createdChain(ctx, in.Parent, e.summary.Created)
 	if err != nil {
@@ -845,7 +845,7 @@ func (w *Writer) folderWritten(ctx context.Context, opID string, res statelog.Re
 	if err != nil || !found || e.outcome != OutcomeRefused {
 		return Written{Result: res}, err
 	}
-	return Written{Result: res}, w.refusal(ctx, "", e.reason, HistorySummary{})
+	return Written{Result: res}, w.refusal(ctx, "", e.reason, HistorySummary{}, 0)
 }
 
 // ---- the reader's folder questions ---------------------------------------- //

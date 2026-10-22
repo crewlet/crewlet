@@ -165,12 +165,64 @@ func (e *FolderAmbiguous) Error() string {
 // neither list knew the class words. The publish pipeline's own refusals
 // carry its names too, which internal/artifactupload's Sentence cuts before
 // this one.
+//
+// AND NEVER AN ID THE READER DID NOT CHOOSE. A refusal about the artifact
+// itself — not there, in the trash, being purged, purged, moved past a base, a
+// version or an asset it does not keep, a restore of one that is not in the
+// trash, an asset store at its cap — carries the artifact's id for the log
+// ("the artifact was purged: 0192f…"), and a person reads it on a screen that
+// already shows the artifact, or as the answer to a link; the id goes, the
+// sentence stays, and the error a log prints keeps it ([CutArtifactID],
+// [VersionMoved]).
 func Sentence(err error) string {
 	text := err.Error()
+	var moved *VersionMoved
+	if errors.As(err, &moved) {
+		text = strings.Replace(text, moved.Error(), moved.sentence(), 1)
+	}
+	for _, about := range aboutTheArtifact {
+		text = CutArtifactID(text, about)
+	}
 	for _, cut := range sentenceCuts {
 		text = strings.ReplaceAll(text, cut, "")
 	}
 	return text
+}
+
+// aboutTheArtifact are the refusals that name the artifact they are about by
+// its id, after the sentinel's own sentence: `<sentinel>: <id>`, or
+// `<sentinel>: <id>: <a sentence of its own>`.
+var aboutTheArtifact = []error{ErrNotFound, ErrTrashed, ErrPurging, ErrPurged, ErrInvalid}
+
+// CutArtifactID is what a person reads of a refusal whose error names, for the
+// log, the artifact the reader is already looking at: text with the artifact
+// id that follows sentinel's own words cut, and text unchanged where no id
+// follows them.
+//
+// TWO SHAPES. `<sentinel>: <id>` is told as the sentinel's words ("the
+// artifact was purged"). `<sentinel>: <id>: <sentence>` is told as the
+// sentence alone, which says more than the sentinel and would contradict it
+// beside it: a version the artifact does not keep is ErrNotFound, whose own
+// words are "no such artifact".
+//
+// Exported for the datastore's purge
+// ([github.com/crewlet/crewlet/internal/artifactdata.ErrGone]), which names
+// its artifact the same way.
+func CutArtifactID(text string, sentinel error) string {
+	lead := sentinel.Error() + ": "
+	at := strings.Index(text, lead)
+	if at < 0 {
+		return text
+	}
+	rest := text[at+len(lead):]
+	id, after, more := strings.Cut(rest, ":")
+	if _, err := artifacts.ParseID(id); err != nil {
+		return text
+	}
+	if !more {
+		return text[:at] + sentinel.Error()
+	}
+	return text[:at] + strings.TrimPrefix(after, " ")
 }
 
 // sentenceCuts are what [Sentence] removes, the class words before the package
@@ -214,6 +266,15 @@ func (e *VersionMoved) Error() string {
 	return fmt.Sprintf("artifactsdomain: artifact %s is at version %d and this "+
 		"publish was based on an older one: merge the change onto version %d and "+
 		"publish again based on it", e.Head.ID, e.Head.HeadNumber, e.Head.HeadNumber)
+}
+
+// sentence is the refusal as a person reads it ([Sentence]): the error less
+// the artifact's id, which the screen the publish came from already shows and
+// the answer carries as `head`.
+func (e *VersionMoved) sentence() string {
+	return fmt.Sprintf("this artifact is at version %d, and this publish was "+
+		"based on an older one. Merge the change onto version %d and publish "+
+		"again based on it", e.Head.HeadNumber, e.Head.HeadNumber)
 }
 
 // CarriedObjectGone is a publish carrying files this artifact no longer names

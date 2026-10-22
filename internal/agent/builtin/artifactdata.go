@@ -221,7 +221,7 @@ func (d dataTools) admit(ctx context.Context, turn *turnctx.Turn, tool string,
 	// content (D03), which stops being served the moment it is trashed.
 	// A write is refused on the same status by the tool, naming the write.
 	if !writes && h.Status == artifactsdomain.StatusTrashed {
-		r := artifactTrashed(tool, h)
+		r := artifactTrashed(tool, ref, h)
 		return dataAdmission{}, &r
 	}
 	a := dataAdmission{head: h, ref: ref, c: c, dec: dec}

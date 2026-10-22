@@ -887,16 +887,16 @@ func (t *publishArtifact) baseEntry(ctx context.Context, h artifactsdomain.Head,
 	ref string) (string, *tools.Result) {
 
 	if base > h.HeadNumber {
-		r := failed(fmt.Sprintf(PublishArtifactTool+": artifact %s is at version %d, and "+
-			"`base_version` %d is past it.", h.ID, h.HeadNumber, base))
+		r := failed(fmt.Sprintf(PublishArtifactTool+": artifact %q is at version %d, and "+
+			"`base_version` %d is past it.", clip(ref), h.HeadNumber, base))
 		return "", &r
 	}
 	v, err := t.deps.Reader.Version(ctx, h.ID, base)
 	if err != nil {
 		if errors.Is(err, artifactsdomain.ErrNotFound) {
-			r := failed(fmt.Sprintf(PublishArtifactTool+": artifact %s no longer keeps "+
+			r := failed(fmt.Sprintf(PublishArtifactTool+": artifact %q no longer keeps "+
 				"version %d. Read the head with "+GetArtifactTool+" and publish based on it.",
-				h.ID, base))
+				clip(ref), base))
 			return "", &r
 		}
 		r := artifactReadFailure(ctx, t.Name(), ref, err)
@@ -1026,9 +1026,9 @@ func (t *publishArtifact) stale(ctx context.Context, turn *turnctx.Turn, c artif
 		"time with "+GetArtifactTool+".")
 	if err != nil || rendered.Failed {
 		return refusedBy(tools.RefusalStaleVersion, cause, fmt.Sprintf(PublishArtifactTool+" "+
-			"refused: artifact %s is at version %d and you based on %d. Read it with "+
+			"refused: the artifact is at version %d and you based on %d. Read it with "+
 			GetArtifactTool+", merge your change onto it, and publish again with base_version %d.",
-			moved.Head.ID, moved.Head.HeadNumber, base, moved.Head.HeadNumber))
+			moved.Head.HeadNumber, base, moved.Head.HeadNumber))
 	}
 	return tools.Result{Output: rendered.Output, Failed: true,
 		Cause: tools.Classify(tools.RefusalStaleVersion, cause)}

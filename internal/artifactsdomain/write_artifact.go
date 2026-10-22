@@ -358,8 +358,8 @@ func versionFor(ctx context.Context, tx *sql.Tx, head Head, in PublishInput,
 			return VersionPayload{}, err
 		}
 		if !found {
-			return VersionPayload{}, fmt.Errorf("%w: artifact %s keeps no version %d",
-				ErrNotFound, id, in.RestoredFrom)
+			return VersionPayload{}, fmt.Errorf("%w: %s: this artifact doesn't keep "+
+				"version %d", ErrNotFound, id, in.RestoredFrom)
 		}
 		m = from.Manifest
 		for i := range m.Files {
@@ -518,8 +518,8 @@ func patchFor(ctx context.Context, tx *sql.Tx, head Head, p Patch) (PatchPayload
 		return PatchPayload{}, false, err
 	}
 	if !found {
-		return PatchPayload{}, false, fmt.Errorf("%w: artifact %s keeps no version %d",
-			ErrNotFound, id, p.Label.Number)
+		return PatchPayload{}, false, fmt.Errorf("%w: %s: this artifact doesn't keep "+
+			"version %d", ErrNotFound, id, p.Label.Number)
 	}
 	if v.Label == p.Label.Label {
 		return out, changed, nil
