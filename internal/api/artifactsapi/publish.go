@@ -223,8 +223,12 @@ func (s *Service) transfer(w http.ResponseWriter, r *http.Request) {
 	body := paced.NewBody(r.Body, http.NewResponseController(w), s.pace)
 	if err := pipe.Transfer(r.Context(), c, upload, r.PathValue("path"), body, size); err != nil {
 		if errors.Is(err, paced.ErrBody) {
+			// THE READ'S OWN FAILURE TO THE LOG, as Go spelled it; the
+			// person is told what to do ([paced.Unread]).
+			log.InfoContext(r.Context(), "api_artifact_body_unread",
+				"upload", upload, "error", err.Error())
 			httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeUnreadableBody,
-				map[string]string{"detail": err.Error()})
+				map[string]string{"detail": paced.Unread})
 			return
 		}
 		writeFailed(w, r, "", "transfer the file", err)
