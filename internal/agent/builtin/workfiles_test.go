@@ -331,6 +331,34 @@ func TestAMissingFileIsNamedAndAFailedReadIsNot(t *testing.T) {
 	}
 }
 
+// A PATH THE TRACKER REFUSES IS TOLD IN THE TRACKER'S WORDS, without the
+// "worklet:" its error opens with: the read, write and remove tools printed the
+// path refusal whole, so a model read the package's name in front of what to
+// change.
+//
+// Mutation: print NormalizeFilePath's error with %v again in any of the three
+// tools and its row goes red.
+func TestAPathTheTrackerRefusesIsToldInItsWords(t *testing.T) {
+	t.Parallel()
+	files, objects := newFakeFiles(), newFakeObjects()
+	reg := workRegistry(t, fileDeps(files, objects))
+	for tool, args := range map[string]map[string]any{
+		worklet.ReadProjectFileTool:   {"path": "reports//q3.md"},
+		worklet.WriteProjectFileTool:  {"path": "reports//q3.md", "content": "# Q3"},
+		worklet.RemoveProjectFileTool: {"path": "reports//q3.md"},
+	} {
+		got := callWork(t, reg, tool, args)
+		switch {
+		case !got.Failed:
+			t.Errorf("%s took a path with an empty folder in it: %s", tool, got.Output)
+		case !strings.Contains(got.Output, "empty folder"):
+			t.Errorf("%s does not say what is wrong with the path: %s", tool, got.Output)
+		case strings.Contains(got.Output, "worklet:"):
+			t.Errorf("%s tells a model the package's name: %s", tool, got.Output)
+		}
+	}
+}
+
 // A LIVE FILE NAMING NO OBJECT IS THE ENGINE'S FAULT, NOT A FILE THAT IS GONE:
 // the applier refuses to write one, so a read that meets one says the content
 // cannot be returned and a retry will not help — internal_error, never
