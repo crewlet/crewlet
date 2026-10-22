@@ -938,15 +938,20 @@ func names[T ~string](values []T) []string {
 }
 
 // badParams refuses a filter naming the value and what would have been valid.
+//
+// "THE <NAME> PARAMETER", never the bare name: a refusal reaches a person
+// through httpjson.Sentence, which capitalises a plain leading word, so a
+// parameter called `suspended` or `kind` read as "Suspended is required", a
+// word the parameter is not; and the set in words ([choices]).
 func badParams(field, got string, allowed []string) error {
 	if got == "" {
-		return fmt.Errorf("%w: %s is required", ErrBadParams, field)
+		return fmt.Errorf("%w: the %s parameter is required", ErrBadParams, field)
 	}
 	if len(allowed) == 0 {
-		return fmt.Errorf("%w: %s=%q", ErrBadParams, field, got)
+		return fmt.Errorf("%w: the %s parameter can't be %q", ErrBadParams, field, got)
 	}
-	return fmt.Errorf("%w: %s=%q (want one of %s)",
-		ErrBadParams, field, got, strings.Join(allowed, ", "))
+	return fmt.Errorf("%w: the %s parameter is one of %s, and %q isn't",
+		ErrBadParams, field, choices(allowed), got)
 }
 
 // ---- projects ----------------------------------------------------------- //

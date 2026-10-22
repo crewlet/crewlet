@@ -43,20 +43,26 @@ func (s Sources) configDocument(ctx context.Context, _ Params) (any, error) {
 func (s Sources) configEntities(ctx context.Context, p Params) (any, error) {
 	kind := p.String("kind")
 	if kind == "" {
-		return nil, fmt.Errorf("%w: config_entities needs a kind (one of %v)",
-			ErrBadParams, configapi.EntityKinds())
+		return nil, fmt.Errorf("%w: config_entities needs a kind, one of %s",
+			ErrBadParams, choices(configapi.EntityKinds()))
 	}
+	// THE REFUSALS IN WORDS OF THIS SURFACE'S: the document service's open
+	// with its package's name and list the kinds as Go prints a slice.
+	unknownKind := fmt.Errorf("%w: the kind parameter is one of %s, and %q isn't", ErrBadParams,
+		choices(configapi.EntityKinds()), kind)
 	if id := p.String("id"); id != "" {
 		entity, err := s.Config.Entity(ctx, kind, id)
 		switch {
 		case errors.Is(err, configapi.ErrNoActiveRevision):
 			return nil, nil
-		case errors.Is(err, configapi.ErrUnknownEntityKind),
-			errors.Is(err, configapi.ErrNoSuchEntity):
-			// A BAD REQUEST, not a server fault: both are things the
-			// caller named, and reporting them as failures would have the
-			// room show "the query failed" for a typo.
-			return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
+		// A BAD REQUEST, not a server fault: both are things the caller
+		// named, and reporting them as failures would have the room show
+		// "the query failed" for a typo.
+		case errors.Is(err, configapi.ErrUnknownEntityKind):
+			return nil, unknownKind
+		case errors.Is(err, configapi.ErrNoSuchEntity):
+			return nil, fmt.Errorf("%w: nothing in the running company's %s "+
+				"is called %q", ErrBadParams, kind, id)
 		case err != nil:
 			return nil, err
 		}
@@ -67,7 +73,7 @@ func (s Sources) configEntities(ctx context.Context, p Params) (any, error) {
 	case errors.Is(err, configapi.ErrNoActiveRevision):
 		return nil, nil
 	case errors.Is(err, configapi.ErrUnknownEntityKind):
-		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
+		return nil, unknownKind
 	case err != nil:
 		return nil, err
 	}

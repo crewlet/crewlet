@@ -217,9 +217,9 @@ func (s Sources) attemptsOf(ctx context.Context, id string,
 func (s Sources) phases(ctx context.Context, p Params) (any, error) {
 	var before *store.Cursor
 	if id := p.String("before_id"); id != "" {
-		at, err := time.Parse(time.RFC3339Nano, p.String("before_time"))
+		at, err := cursorTime(p)
 		if err != nil {
-			return nil, fmt.Errorf("%w: before_id needs a before_time: %w", ErrBadParams, err)
+			return nil, err
 		}
 		before = &store.Cursor{Time: at, ID: id}
 	}

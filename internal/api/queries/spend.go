@@ -99,8 +99,11 @@ func (s Sources) spendWindowOf(p Params) (spendWindow, error) {
 		}
 		r, err := tokens.DaysBetween(since, until, loc)
 		if err != nil {
+			// WHAT WAS SENT, NEVER THE PARSER'S ERROR, which opens with a
+			// package's name ("tokens: 2026-06-08 is before …").
 			return w, fmt.Errorf("%w: since and until are company dates written "+
-				"2026-06-01, the first no later than the second: %w", ErrBadParams, err)
+				"2026-06-01, the first no later than the second, and %q to %q "+
+				"isn't", ErrBadParams, since, until)
 		}
 		if n := r.Days(); n > tokens.MaxSpendRangeDays {
 			return w, refuseAs(tokens.ErrWindowLength, "%s to %s is %d days, and a "+
@@ -344,9 +347,8 @@ func (s Sources) tokenSeries(ctx context.Context, p Params) (any, error) {
 		group = tokens.GroupPhase
 	}
 	if !group.Valid() {
-		return nil, fmt.Errorf("%w: group must be one of %v, and %q is not — a "+
-			"chart legended by one dimension over another's bands is worse "+
-			"than an error", ErrBadParams, tokens.Groups, group)
+		return nil, fmt.Errorf("%w: the group parameter is one of %s, and %q isn't",
+			ErrBadParams, choices(tokens.Groups), group)
 	}
 	if group.AdminOnly() && !readsConfig(ctx) {
 		// ITS BANDS ARE THE COMPANY'S ENTRIES, which only an admin reads
@@ -359,9 +361,11 @@ func (s Sources) tokenSeries(ctx context.Context, p Params) (any, error) {
 		interval = tokens.IntervalDay
 	}
 	if !interval.Valid() {
-		return nil, fmt.Errorf("%w: bucket must be one of %v, and %q is not — a "+
-			"company day is the finest thing every data node's usage agrees on",
-			ErrBadParams, tokens.Intervals, interval)
+		// IN WORDS, never Go's slice ("[day week month]"): the set the
+		// one helper lists every closed set in.
+		return nil, fmt.Errorf("%w: the bucket parameter is one of %s, and %q isn't. "+
+			"Spend is counted by the company day, so nothing finer is kept",
+			ErrBadParams, choices(tokens.Intervals), interval)
 	}
 	w, err := s.spendWindowOf(p)
 	if err != nil {
