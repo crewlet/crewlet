@@ -903,7 +903,11 @@ sequenceDiagram
   on what a fence means, so a page that addresses the model is read as the
   page's words; a long source is condensed reading it under the same label, and
   the answer has the fence's two escapes applied before anybody reads it. Source `[n]` is the n-th entry
-  of the answer's `sources`, so a screen links every citation. A question
+  of the answer's `sources`, so a screen links every citation; each source's
+  title is its writers' words and has the same escapes applied, and the
+  answer's `provenance` envelope says what the sources were read as — the
+  least trust among them and every writer they name — since a person's
+  assistant reading the answer reads those titles too. A question
   nothing matches is answered without a model at all, and costs nothing.
 - **A person's, not a seat's, and only what the asker uses.** It takes either
   app and a caller who holds a seat: it searches the pages only for a
