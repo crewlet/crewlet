@@ -324,6 +324,11 @@ type MaintenanceAck struct {
 // NO TTL, EVER. A key that forgets is a key that admits: a node whose
 // admission expired while it went on publishing is invisible to the
 // coordinator's check, which is the whole failure the handshake replaces.
+// What retires the admission of a process that crashed is its node booting
+// again as a process the admission does not name: into a maintenance mode,
+// which withdraws it once the fleet's presence shows the process it names is
+// not running (its presence lease lapsed, or another process of the node holds
+// it), or in service as a data node, whose own admission replaces it.
 type Admission struct {
 	// NodeID is who admitted itself, and the key.
 	NodeID string `json:"node_id"`
@@ -366,9 +371,13 @@ type MaintenanceRegister interface {
 	CloseMaintenance(ctx context.Context, stream, operationID string, revision uint64) error
 
 	// PutAdmission records that a node is about to publish, and
-	// ForgetAdmission withdraws it — by its own node on an orderly
-	// shutdown after publishers drain, or by a coordinator against a
-	// node's own strictly-later acknowledgement.
+	// ForgetAdmission withdraws it: by its own process on an orderly
+	// shutdown after publishers drain, by the node's NEXT process as it
+	// boots into a maintenance mode (a new incarnation of the node, while
+	// the one the admission names holds no presence lease, is the evidence
+	// that one is gone), or with an operator's exclusion, which asserts the
+	// same thing on their word. Always conditional on the incarnation, so
+	// none of the three can remove a newer process's.
 	PutAdmission(ctx context.Context, a Admission) error
 	Admissions(ctx context.Context) ([]Admission, error)
 	ForgetAdmission(ctx context.Context, nodeID, incarnation string) error

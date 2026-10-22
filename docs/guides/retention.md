@@ -1287,6 +1287,21 @@ coordinator refuses to take the exclusion while any admission is held. Either
 order is then safe: a node that slipped between a check and its own start has
 left a durable record, where a silence would have let the coordinator proceed.
 
+An admission names the process that wrote it, and it never expires. A node
+gives its own back when it stops cleanly, after its publishers have drained. A
+process that crashed never does, so a node's **next boot into a maintenance
+mode**, the first step of every window, withdraws the admission its last
+process left before it starts anything, and logs `admission_superseded`
+naming it. It does that only once the fleet's presence shows the old process
+isn't running: its presence lease has lapsed, or another process of the node
+holds it. A process that still holds the node's presence may still be
+publishing, so a second process started under a live node's id leaves its
+admission alone and logs `admission_not_superseded`. (A boot in service needs
+no such step: a data node's own admission replaces the old one, and a node
+without `data` publishes nothing.) So a node that crashed in service only has
+to be restarted with the window's `-mode`, once its lease has lapsed: within
+the coordination lease TTL (`coordination.lease_ttl_seconds`) of the crash.
+
 ### Where it stands, and what is holding it
 
 ```
