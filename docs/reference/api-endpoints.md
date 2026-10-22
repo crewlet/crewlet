@@ -7506,7 +7506,11 @@ The API origin **never renders an artifact**:
   engine answer is kept for 30 seconds per principal and arguments; a node
   answers at most two live reads a second per viewer on one artifact (a burst
   of 64) and twenty a second for everybody on it (a burst of 320), past which
-  it is `429 read_budget` with a `Retry-After`.
+  it is `429 read_budget` with a `Retry-After`. A read this node could not make
+  for a condition of its own is `503 unavailable`, its `detail` the
+  condition's words and its `Retry-After` the condition's (none where no wait
+  clears it); a failure that is no condition is `500 internal_error`, its
+  reason in this node's log.
 - `GET /artifacts/sources` answers the **engine source catalogue** a
   dashboard's `engine` datasets may read: each source's name, domain, purpose,
   who may read it, its typed parameters, its columns and key, the push that

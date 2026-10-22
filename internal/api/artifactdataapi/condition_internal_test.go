@@ -19,10 +19,12 @@ import (
 // artifact's data" — whatever the condition was, a log at its ceiling under no
 // Retry-After included, and logged nothing at all. Now a condition is told in
 // [builtin.ConditionSentence], whose advice agrees with the hint, and anything
-// else keeps the fixed sentence (the control).
+// else is the node's own fault (the control): `500` with no Retry-After, where
+// it was a 503 in the fixed sentence, which asked a person to come back for a
+// fault no wait clears.
 //
 // Mutation: answer a condition in the fixed sentence again and its rows go
-// red; tell the control a condition's words and its row does.
+// red; answer the control as a 503 and its row does.
 func TestAConditionIsToldInAPersonsWords(t *testing.T) {
 	t.Parallel()
 	const detail = "raise stream.artifact_data_max_bytes on 10.0.0.7"
@@ -35,24 +37,28 @@ func TestAConditionIsToldInAPersonsWords(t *testing.T) {
 	behindSaid, _ := builtin.ConditionSentence(behind)
 	for name, c := range map[string]struct {
 		answer func(http.ResponseWriter, *http.Request)
-		says   string
+		status int
+		says   any
 	}{
 		"a write on a full log": {func(w http.ResponseWriter, r *http.Request) {
 			writeFailed(w, r, "op-1", full)
-		}, fullSaid},
+		}, http.StatusServiceUnavailable, fullSaid},
 		"a read on a node behind": {func(w http.ResponseWriter, r *http.Request) {
 			readFailed(w, r, behind)
-		}, behindSaid},
+		}, http.StatusServiceUnavailable, behindSaid},
 		"a read that faulted": {func(w http.ResponseWriter, r *http.Request) {
 			readFailed(w, r, fmt.Errorf("read /var/lib/crewlet/replicated.db: disk I/O"))
-		}, "This node could not read the artifact's data."},
+		}, http.StatusInternalServerError, nil},
 	} {
 		rec := httptest.NewRecorder()
 		c.answer(rec, httptest.NewRequest(http.MethodGet, "/artifacts/a/data", nil))
 		var body map[string]any
 		_ = json.Unmarshal(rec.Body.Bytes(), &body)
-		if rec.Code != http.StatusServiceUnavailable || body["detail"] != c.says {
-			t.Errorf("%s answered %d %v, want 503 with %q", name, rec.Code, body, c.says)
+		if rec.Code != c.status || body["detail"] != c.says {
+			t.Errorf("%s answered %d %v, want %d with %v", name, rec.Code, body, c.status, c.says)
+		}
+		if c.status == http.StatusInternalServerError && rec.Header().Get("Retry-After") != "" {
+			t.Errorf("%s carried a Retry-After for a fault", name)
 		}
 		if text := rec.Body.String(); strings.Contains(text, "10.0.0.7") ||
 			strings.Contains(text, "statelog") || strings.Contains(text, "/var/lib") {

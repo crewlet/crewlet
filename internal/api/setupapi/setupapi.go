@@ -108,7 +108,6 @@ import (
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/slack"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 var log = logging.Get("api.setup")
@@ -2541,8 +2540,9 @@ type disconnectRequest struct {
 	Force bool `json:"force"`
 }
 
-// refuseDisconnect answers a disconnect this node could not record: always
-// 503, since the same request may then work.
+// refuseDisconnect answers a disconnect this node could not record: `503`
+// where the same request may then work, and `500` for a failure no condition
+// claims, which is this node's own fault and which no wait clears.
 //
 // TRANSIENT SAID AS TRANSIENT: a concurrent pass holding the surface is
 // `surface_busy` under its own short wait, because only that one is a race the
@@ -2556,10 +2556,9 @@ type disconnectRequest struct {
 // sentence ([builtin.ConditionSentence]) under its own hint, which is none
 // where no wait clears it.
 func refuseDisconnect(w http.ResponseWriter, r *http.Request, kind integration.Kind, err error) {
-	log.WarnContext(r.Context(), "setup_disconnect_unrecorded",
-		"integration", kind, "error", err.Error())
-	code, after := httpjson.CodeUnavailable, authz.RetryUndecidedSeconds
-	said := "This node couldn't start the disconnect. Try again in a moment."
+	code := httpjson.CodeUnavailable
+	var after int
+	var said string
 	switch condition, isCondition := builtin.ConditionSentence(err); {
 	case errors.Is(err, errSurfaceBusy):
 		code, after = httpjson.CodeSurfaceBusy, httpjson.RetrySeconds(RetryBusy)
@@ -2567,9 +2566,19 @@ func refuseDisconnect(w http.ResponseWriter, r *http.Request, kind integration.K
 			"disconnect didn't start. Try again in a moment."
 	case isCondition:
 		said = condition
-		after = httpjson.RetrySeconds(statelog.RetryAfter(err,
+		after = httpjson.RetrySeconds(builtin.RetryAfter(err,
 			time.Duration(authz.RetryUndecidedSeconds)*time.Second))
+	default:
+		// A FAILURE NO CONDITION CLAIMS is this node's own fault, which no
+		// wait clears: it was a 503 telling a person to try again in a
+		// moment.
+		log.ErrorContext(r.Context(), "setup_disconnect_failed",
+			"integration", kind, "error", err.Error())
+		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
+		return
 	}
+	log.WarnContext(r.Context(), "setup_disconnect_unrecorded",
+		"integration", kind, "error", err.Error())
 	httpjson.UnavailableWith(w, code, after, httpjson.Detail{"detail": said})
 }
 
