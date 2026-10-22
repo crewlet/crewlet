@@ -118,6 +118,8 @@ func Run(t *testing.T, newDB func(t *testing.T) *store.DB) {
 		{"ActivatingAMissingRevisionChangesNothing", testActivatingAMissingRevisionChangesNothing},
 		{"ALocalActivationNeverMovesTheCopyBack", testALocalActivationNeverMovesTheCopyBack},
 		{"AnAdoptionNeverMovesTheCopyBack", testAnAdoptionNeverMovesTheCopyBack},
+		{"AnInsertedActiveRevisionIsActiveFromTheInstantItClaims",
+			testAnInsertedActiveRevisionIsActiveFromTheInstantItClaims},
 		{"PayloadRoundTrips", testPayloadRoundTrips},
 		{"RevisionsListInInsertionOrder", testRevisionsListInInsertionOrder},
 		{"ARevisionRecordsWhatWroteIt", testARevisionRecordsWhatWroteIt},

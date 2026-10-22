@@ -182,7 +182,10 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 	// decide whether this node holds a newer revision to publish — so it
 	// is the instant the pointer carries, not a second reading of the
 	// clock. See [keepPointersInstant] for when the pointer moves it.
-	at := time.Now().UTC()
+	//
+	// AND DATED AFTER THE ACTIVATION IT REPLACES ([claimedAt]), as every
+	// claim this node makes of its own is, so its copy never moves back.
+	at := claimedAt(active, found)
 	// STORED FIRST, then pointed at: a crash between the two leaves a
 	// revision nothing points at, which the next boot re-seeds over. The
 	// other order would point the fleet at a payload no node can read.
@@ -194,7 +197,7 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 	seeded := store.Revision{
 		ParentID: parent, Source: "file", CreatedBy: by.Name,
 		CreatedByKind: by.Kind, Summary: summary, Payload: payload,
-		CreatedAt: at,
+		CreatedAt: time.Now().UTC(), ActivatedAt: at,
 	}
 	id, err := configs.InsertActive(ctx, seeded)
 	if err != nil {
@@ -245,11 +248,22 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 // revision is published only when the fleet has nothing, or when it was
 // activated AFTER the pointer was.
 //
-// Both instants are written by the same node in the offline case, which is
-// the case this exists for. Across a fleet they come from different clocks,
-// and the consequence is bounded and stated: a node whose clock is ahead can
-// republish its own revision once, which every peer then converges on — the
-// same outcome as an operator re-activating it deliberately.
+// THE SAME REVISION ACTIVATED LATER IS PUBLISHED TOO. An offline `crewlet
+// config activate` of the revision the fleet already runs is the offline twin
+// of POST /config/reload, the gesture a rotated credential needs, and its
+// whole effect is the new epoch every node applies. This returned early
+// whenever the pointer named the revision this node held, so the
+// re-activation never left the node.
+//
+// Every offline command dates its activation after the one this node's copy
+// holds ([claimedAt]), and the copy holds the pointer's own instant, so an
+// offline change is later than the pointer the node last saw whatever this
+// machine's clock says. The pointer can still be later than that when the
+// fleet moved on while this node was stopped, and it then wins, which is the
+// rule above. Across a fleet the instants come from different clocks, and the
+// consequence is bounded and stated: a node whose clock is ahead can republish
+// its own revision once, which every peer then converges on — the same
+// outcome as an operator re-activating it deliberately.
 //
 // # AUTHENTICATED BEFORE IT IS PUBLISHED
 //
@@ -265,15 +279,26 @@ func publishLocalActive(ctx context.Context, plane coord.Plane, pub queue.Publis
 	if err != nil {
 		return fmt.Errorf("read the activation pointer: %w", err)
 	}
-	switch {
-	case found && target.RevisionID == active.ID:
-		return nil
-	case found && !active.ActivatedAt.After(target.At):
+	if found && !active.ActivatedAt.After(target.At) {
+		if target.RevisionID == active.ID {
+			// The fleet runs this very activation: the restart of a node
+			// with nothing done offline.
+			return nil
+		}
 		// The fleet is on something else and decided it later. Converging
 		// on the pointer is the reconciler's job, not this function's.
-		log.InfoContext(ctx, "local_revision_superseded", "local", active.ID,
+		//
+		// WARN, because this is where an offline change is dropped: an
+		// offline import, rekey or activate told whoever ran it that this
+		// start would publish it, and the fleet activated something later
+		// while the node was stopped. A node that was merely behind lands
+		// here too, which the detail says.
+		log.WarnContext(ctx, "local_revision_superseded", "local", active.ID,
 			"fleet", target.RevisionID, "epoch", target.Epoch,
-			"detail", "this node converges on the fleet's revision")
+			"detail", "the fleet activated a revision later than this node's own, so "+
+				"this node's is not published and the node runs the fleet's; if it "+
+				"was imported, rekeyed or activated offline while the node was "+
+				"stopped, that change is not live: make it again on a running node")
 		return nil
 	}
 	if _, err = openStored(cipher, active); err != nil {

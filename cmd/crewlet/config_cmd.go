@@ -321,7 +321,7 @@ func importConfig(ctx context.Context, cs *configStore, path string,
 	id, err := cs.configs.InsertActive(ctx, store.Revision{
 		ParentID: parent, Source: "file", CreatedBy: hostActor().Name,
 		CreatedByKind: hostActor().Kind, Summary: summary,
-		Payload: payload,
+		Payload: payload, ActivatedAt: claimedAt(active, found),
 	})
 	if err != nil {
 		return fmt.Errorf("import %s: %w", path, err)
@@ -351,7 +351,8 @@ func importConfig(ctx context.Context, cs *configStore, path string,
 // below are several rather than one: `PUT /config` stores and activates a
 // document, but it activates nothing that is already stored and re-seals
 // nothing.
-const offlinePublish = "This node will publish it to the fleet at its next start."
+const offlinePublish = "This node will publish it to the fleet at its next " +
+	"start, unless the fleet has activated something later by then."
 
 // importPublishNote is an offline import's: the route to a running fleet is
 // `PUT /config` on a node that is up, which this same command takes while a
@@ -641,21 +642,11 @@ func activateRevision(ctx context.Context, cs *configStore, revisionID string, s
 	if err := refuseManagedActivation(ctx, cs, revisionID); err != nil {
 		return err
 	}
-	// DATED AFTER THE ACTIVATION IT REPLACES, by the pointer's own forward
-	// rule. This node's copy refuses an activation older than the one it
-	// holds, and the one it holds carries the instant of whichever node's
-	// clock made it: an operator's activation here, on a clock behind that
-	// one, would be refused, and published at the next start it would read
-	// as older than the fleet's and never reach it.
-	at := time.Now().UTC()
 	active, found, err := cs.configs.Active(ctx)
 	if err != nil {
 		return fmt.Errorf("read the active revision: %w", err)
 	}
-	if found {
-		at = coord.ActivationAt(at, active.ActivatedAt)
-	}
-	if _, err := cs.configs.Activate(ctx, revisionID, at); err != nil {
+	if _, err := cs.configs.Activate(ctx, revisionID, claimedAt(active, found)); err != nil {
 		return err
 	}
 	// RE-ACTIVATING THE CURRENT REVISION IS NOT A NO-OP, and that is worth
@@ -665,6 +656,24 @@ func activateRevision(ctx context.Context, cs *configStore, revisionID string, s
 	fmt.Fprintf(stdout, "marked %s active on this node\n", revisionID)
 	fmt.Fprintln(stdout, activatePublishNote(revisionID))
 	return nil
+}
+
+// claimedAt is the instant an offline command marks a revision active at: now,
+// or just after the activation this node's copy holds (held, when found),
+// whichever is later — the forward rule the fleet's pointer applies to every
+// activation ([coord.ActivationAt]).
+//
+// The copy carries the instant of whichever node's clock made the activation
+// it holds. Dated by this machine's clock alone, an offline activation on a
+// clock behind that one was refused by the copy, which never moves back, and
+// an offline import or rekey read at the next start as older than the fleet's
+// pointer, so the boot dropped what the command had promised to publish.
+func claimedAt(held store.Revision, found bool) time.Time {
+	at := time.Now().UTC()
+	if found {
+		at = coord.ActivationAt(at, held.ActivatedAt)
+	}
+	return at
 }
 
 // revisionOrActive resolves an id, or the active revision for an empty one.

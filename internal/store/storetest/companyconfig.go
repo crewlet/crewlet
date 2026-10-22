@@ -253,6 +253,41 @@ func testAnAdoptionNeverMovesTheCopyBack(t *testing.T, db *store.DB) {
 	}
 }
 
+func testAnInsertedActiveRevisionIsActiveFromTheInstantItClaims(t *testing.T, db *store.DB) {
+	// AN OFFLINE CLAIM IS DATED AFTER THE ACTIVATION IT REPLACES, which on a
+	// clock behind the fleet's is later than the revision's creation: the
+	// boot publishes it only when it was activated after the pointer. The
+	// creation instant stays the revision's own.
+	configs := db.Configs()
+	activated := base.Add(time.Hour)
+	id, err := configs.InsertActive(t.Context(), store.Revision{
+		CreatedByKind: iam.ActorOperator, Summary: "claimed",
+		Payload: json.RawMessage(`{"n":1}`), CreatedAt: base, ActivatedAt: activated,
+	})
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	got, found, err := configs.Get(t.Context(), id)
+	if err != nil || !found || !got.Active || !got.ActivatedAt.Equal(activated) ||
+		!got.CreatedAt.Equal(base) {
+		t.Fatalf("stored %+v (found=%v err=%v), want active from %s, created %s",
+			got, found, err, activated, base)
+	}
+	// And with no claim it is active from its creation, as before.
+	plain, err := configs.InsertActive(t.Context(), store.Revision{
+		CreatedByKind: iam.ActorOperator, Summary: "plain",
+		Payload: json.RawMessage(`{"n":2}`), CreatedAt: base.Add(2 * time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if got, _, err := configs.Get(t.Context(), plain); err != nil ||
+		!got.ActivatedAt.Equal(base.Add(2*time.Hour)) {
+		t.Errorf("a revision claiming no instant is active from %s (err %v), want its creation",
+			got.ActivatedAt, err)
+	}
+}
+
 func testPayloadRoundTrips(t *testing.T, db *store.DB) {
 	// The payload is opaque: the sealed envelope every writer stores, under
 	// the keyring every node holds. What comes back must be what went in,

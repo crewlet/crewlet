@@ -329,6 +329,13 @@ what is live and make it live (`GET /config/revisions/<UUID>/diff` and
 
 With the engine **stopped** it writes to this node's own store and marks the
 revision active there, which the node publishes to the fleet at its next start.
+It is dated after the activation this node's copy holds, so a clock running
+behind the fleet's does not hold it back. **The later activation wins**: a
+change the fleet activated while this node was stopped but before the command
+ran is replaced by this revision when the node starts, and one activated after
+the command keeps this revision from being published, which the node logs at
+its start (`local_revision_superseded`, a warning). Run it against a running
+node to avoid both.
 The line it prints says which of the two happened.
 
 `-summary` is the audit note recorded with the revision (default
@@ -450,7 +457,7 @@ to read a long diff was the one a shared cap kept it from.
 crewlet config activate <UUID> [-config PATH]
 ```
 
-Marks a revision active in **this node's** store, which the node publishes to the fleet at its next start; every node then applies it on its next reconcile. It opens the store, so it runs while the engine is stopped. On a **running** fleet, `POST /config/revisions/<UUID>/revert` to a node that is up does the same without a restart — it stores that revision's document again and activates it — and the note this command prints names it. The activation is dated after the one it replaces, by the rule the fleet's pointer applies to every activation, so it still reaches the fleet when this machine's clock is behind the node that made the last one.
+Marks a revision active in **this node's** store, which the node publishes to the fleet at its next start; every node then applies it on its next reconcile. It opens the store, so it runs while the engine is stopped. On a **running** fleet, `POST /config/revisions/<UUID>/revert` to a node that is up does the same without a restart — it stores that revision's document again and activates it — and the note this command prints names it. The activation is dated after the one it replaces, by the rule the fleet's pointer applies to every activation, so it still reaches the fleet when this machine's clock is behind the node that made the last one. The later activation wins, as for [an offline import](#crewlet-config-import): one the fleet makes after this command keeps it from being published.
 
 **Re-activating the revision that is already active is not a no-op**, and that is the point: the pointer is append-only, so it mints a new epoch. A node's reconciler skips on the *epoch* it has applied, never on the payload, so the apply always runs — re-reading the [secret store](../concepts/secret-store.md) and rebuilding every provider, transport and MCP child that captured a resolved value. It is the documented way to make a rotated credential take effect; on a running fleet the same gesture is `POST /config/reload`.
 
@@ -469,7 +476,7 @@ Rotates the master key: re-encrypts the active revision's config document under 
 
 **Run this and [`crewlet secrets rekey`](#crewlet-secrets-rekey) together.** They are the two halves of one rotation — the company document and the secret store are sealed with the same keyring — and doing only one, then dropping the retired key, makes whatever the other still holds unreadable.
 
-It opens the store directly, so it runs on a **stopped** node, and the node publishes the re-sealed document at its next start. While the engine holds the store it refuses and names the running node's equivalent, `POST /config/reload`, which stores the active document again under that node's active key. Workflow, in outline: `crewlet secrets keygen -key-id <new>` → add the new key to `secrets.keys` on every node and restart → set `active_key_id: <new>` and restart again → `crewlet secrets rekey` **and** this command, or a reload → drop the old key only once [the rotation runbook](../concepts/secret-store.md#rotating-the-keyring-with-nothing-in-flight-lost)'s conditions hold.
+It opens the store directly, so it runs on a **stopped** node, and the node publishes the re-sealed document at its next start, unless the fleet has activated something later by then. While the engine holds the store it refuses and names the running node's equivalent, `POST /config/reload`, which stores the active document again under that node's active key. Workflow, in outline: `crewlet secrets keygen -key-id <new>` → add the new key to `secrets.keys` on every node and restart → set `active_key_id: <new>` and restart again → `crewlet secrets rekey` **and** this command, or a reload → drop the old key only once [the rotation runbook](../concepts/secret-store.md#rotating-the-keyring-with-nothing-in-flight-lost)'s conditions hold.
 
 `-dry-run` reports what would move by reading the key id off the envelope, decrypting nothing. Idempotent: a document already under the active key is skipped and says so. A **plaintext** revision is refused like every other reader refuses one: it has no key to rotate, and nothing vouches for who wrote it, so the refusal names `crewlet config import`, which stores the document sealed again from your own copy. Fails clearly, naming the key, if the document is sealed under one no longer in the keyring.
 

@@ -147,6 +147,13 @@ func (c *Configs) insert(ctx context.Context, r Revision, active bool) (string, 
 	if at.IsZero() {
 		at = now()
 	}
+	// ACTIVE FROM THE INSTANT THE WRITER CLAIMS, where it names one: an
+	// offline command dates its activation after the one this node's copy
+	// holds, which a clock behind the fleet's puts later than its creation.
+	activated := r.ActivatedAt
+	if activated.IsZero() {
+		activated = at
+	}
 	payload := r.Payload
 	if len(payload) == 0 {
 		payload = json.RawMessage("{}")
@@ -155,7 +162,7 @@ func (c *Configs) insert(ctx context.Context, r Revision, active bool) (string, 
 	// about every row a later activation deactivated too.
 	isActive, activatedAt := 0, sql.NullInt64{}
 	if active {
-		isActive, activatedAt = 1, sql.NullInt64{Int64: EncodeTime(at), Valid: true}
+		isActive, activatedAt = 1, sql.NullInt64{Int64: EncodeTime(activated), Valid: true}
 	}
 	err := c.db.Tx(ctx, func(tx *sql.Tx) error {
 		if active {

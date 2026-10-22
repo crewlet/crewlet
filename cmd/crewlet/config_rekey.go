@@ -87,9 +87,13 @@ func reseal(ctx context.Context, cs *configStore, parent store.Revision,
 		// one would report success over a document still in the clear.
 		return "", errors.New("config: the keyring produced no sealed payload")
 	}
+	// THE PARENT IS THE ACTIVE REVISION, and the new one is dated after it
+	// ([claimedAt]), or a clock behind the fleet's makes the next start read
+	// the rekey as older than the pointer and leave it unpublished.
 	id, err := cs.configs.InsertActive(ctx, store.Revision{
 		ParentID: parent.ID, Source: "rekey", CreatedBy: hostActor().Name,
 		CreatedByKind: hostActor().Kind, Summary: summary, Payload: payload,
+		ActivatedAt: claimedAt(parent, true),
 	})
 	if err != nil {
 		return "", fmt.Errorf("store the re-sealed revision: %w", err)
