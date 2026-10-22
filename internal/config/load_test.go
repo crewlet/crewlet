@@ -305,9 +305,9 @@ func TestAFractionInAWholeNumberFieldIsRefused(t *testing.T) {
 			t.Errorf("api.port: %s = (%v, %v), want 8080 — a whole number in another spelling", whole, cfg, err)
 		}
 	}
-	cfg, err := ParseRunnableBootstrap([]byte("coordination:\n  lease_ttl_seconds: 12.5\n"), NewResolver(MapSource{}))
-	if err != nil || cfg.Coordination.LeaseTTLSeconds != 12.5 {
-		t.Errorf("a fractional lease TTL = (%v, %v), want 12.5 — that field takes fractions", cfg, err)
+	cfg, err := ParseRunnableBootstrap([]byte("coordination:\n  lease_ttl_seconds: 22.5\n"), NewResolver(MapSource{}))
+	if err != nil || cfg.Coordination.LeaseTTLSeconds != 22.5 {
+		t.Errorf("a fractional lease TTL = (%v, %v), want 22.5 — that field takes fractions", cfg, err)
 	}
 }
 

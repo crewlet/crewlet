@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	"path/filepath"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -15,7 +14,6 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue"
-	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -142,30 +140,29 @@ func (s *heldPublishes) asked() []heldPublish {
 //   - begun during the drain and still in flight when the TEARDOWN begins, it
 //     ends with the allowance, because the teardown is what waits for it;
 //   - begun once the teardown has, it ends with the allowance too.
+//
+// AN ENGINE LITERAL, as the cases beside it build, rather than one New wires:
+// what is measured is the stop's allowance — [Engine.workerHold], the
+// [holdLeases] it takes its holds through, [Engine.stepOnceTornDown] and
+// [Engine.stopping], none of which reads anything New builds beyond the lease
+// store and the TTL. And the TTL has to be short enough to wait four stalls
+// of four allowances out, below the floor a deployment's Tier A may set
+// ([config.MinLeaseTTL]), which New holds every bootstrap to: at the floor the
+// case would wait out forty seconds of stalls to say what it says at 1.5 s,
+// since every bound it reads is a fraction of the TTL.
 func TestAHoldGivenBackDuringTheTeardownIsAStepOfItsAllowance(t *testing.T) {
 	t.Parallel()
 	const ttl = 1500 * time.Millisecond
-	b := testBootstrap(t)
-	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
-	b.Coordination.LeaseTTLSeconds = ttl.Seconds()
-	SeedStore(t, &b)
-	company, err := config.ParseCompany([]byte(watchdogCompanyDoc))
-	if err != nil {
-		t.Fatalf("parse: %v", err)
+	if ttl >= config.MinLeaseTTL {
+		t.Fatalf("the premise: %v is no shorter than the %v floor a booted engine "+
+			"is held to, so this case could build its engine through New", ttl, config.MinLeaseTTL)
 	}
-	back, err := OpenBackends(t.Context(), &b, company)
-	if err != nil {
-		t.Fatalf("OpenBackends: %v", err)
+	slow := &slowReleases{Backend: coordmemory.New(), entered: make(chan struct{}, 1)}
+	e := &Engine{
+		backends: &Backends{Coord: slow},
+		id:       "node-0", incarnation: "node-0:first",
+		leaseTTL: ttl,
 	}
-	t.Cleanup(func() { back.Close(context.Background()) })
-	slow := &slowReleases{Backend: back.Coord, entered: make(chan struct{}, 1)}
-	back.Coord = slow
-	e, err := New(t.Context(), Options{Bootstrap: &b, Company: company, Backends: back})
-	if err != nil {
-		t.Fatalf("engine.New: %v", err)
-	}
-	t.Cleanup(func() { e.Stop(context.Background()) })
 
 	allowance := seat.StopAllowance(ttl)
 	stall := 4 * allowance

@@ -833,8 +833,8 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 }
 
 // startedLeaseTTL is the lease TTL a case here STARTS an engine at when it
-// shortens the lease: fifteen seconds, the shortest the measurement below
-// leaves a margin at.
+// shortens the lease: the shortest a deployment may set ([config.MinLeaseTTL]),
+// because [engine.New] holds every bootstrap to it.
 //
 // THE TTL IS ALSO THE WATCHDOG'S THRESHOLD. [engine.New] arms the seat
 // watchdog at the host's own TTL ([seat.Watchdog] says why the two are one
@@ -842,31 +842,16 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 // that without a beat it ends the PROCESS with status 75 — here the test
 // binary, and every case running in it. So a TTL shortened to make a lapse or
 // an allowance quick inside one case is also how close the whole binary sits
-// to that exit on a loaded runner.
-//
-// MEASURED with the host's beats and the watchdog's polls instrumented: this
-// package under the race detector on four CPUs, beside cmd/crewlet,
-// internal/api, internal/worklet and internal/iamdomain kept running the way
-// `make test`'s -p of four keeps packages running, at a load average of 10 to
-// 33 with other work on the machine, over four runs and 126 engines that beat
-// (cmd/crewlet's included). The longest any host went without a beat was
-// 5.1 s, and every gap past two seconds was the FIRST: [seat.Host.Start]
-// stamped a beat, then renewed its presence and made its first placement pass
-// before its heartbeat loop ran, so that pass was charged to the first beat.
-// The watchdog's first poll lands about as that beat does, and it read the gap
-// whole whenever it polled first — one did, 2.41 s against a three-second
-// TTL, 0.2 ms before the beat. A quarter of the first gaps (31) passed three
-// seconds, the TTL two cases here ran at. Between beats the worst was 2.0 s.
-// Fifteen seconds is nearly three times the worst gap of all. The start now
-// runs its heartbeat beside that first pass, so the pass is charged to nothing;
-// the margin is kept against the gaps between beats, which nothing has
-// re-measured under the same load since.
+// to that exit on a loaded runner, and the floor's margin, measured on this
+// package's own engines under load, is the doc of [config.MinLeaseTTL]: it
+// used to be stated here, as the shortest TTL a case started an engine at,
+// before the floor existed and two cases here started theirs at three seconds.
 //
 // So no case waits out what it needs a short TTL for: it reads the renew or
-// the deadline it is about off the host or its store. A case that builds an
-// engine without starting it arms no watchdog and is not held to this
+// the deadline it is about off the host or its store. A case whose subject is
+// a fraction of a shorter TTL builds an Engine literal rather than booting one
 // (TestAHoldGivenBackDuringTheTeardownIsAStepOfItsAllowance runs at 1.5 s).
-const startedLeaseTTL = 15 * time.Second
+const startedLeaseTTL = config.MinLeaseTTL
 
 // CANCELLING THE START CONTEXT DOES NOT STOP THE ENGINE.
 //
