@@ -945,6 +945,10 @@ func TestAFloorOnAnotherLogIsBadParamsAndARebuiltStreamIsNot(t *testing.T) {
 				t.Errorf("answered %v, which is also unavailable — a request "+
 					"every node refuses is not this node's to come back to", err)
 			}
+			if detail := queries.RefusalDetail(err); errors.Is(tc.want, queries.ErrBadParams) &&
+				(strings.Contains(detail, "worklet:") || strings.Contains(detail, "statelog")) {
+				t.Errorf("the refusal is told %q, a package's words", detail)
+			}
 		})
 	}
 }
@@ -977,6 +981,10 @@ func TestAFeedsRequestMistakeIsBadParamsAndItsFaultIsNot(t *testing.T) {
 				what.name, what.args)
 			if !errors.Is(err, queries.ErrBadParams) {
 				t.Errorf("a refused request answered %v, want %v", err, queries.ErrBadParams)
+			}
+			if detail := queries.RefusalDetail(err); strings.Contains(detail, "worklet:") ||
+				strings.Contains(detail, "statelog") {
+				t.Errorf("a refused request is told %q, a package's words", detail)
 			}
 			_, err = askAsOperator(t, queries.Sources{Work: &stubWork{err: fault}},
 				what.name, what.args)
@@ -1260,6 +1268,10 @@ func TestAProjectDetailClassesWhatIsMissing(t *testing.T) {
 		}
 		if errors.Is(tc.want, queries.ErrBadParams) && errors.Is(err, queries.ErrNotFound) {
 			t.Errorf("%s: an unknown type is also classed not-found", tc.name)
+		}
+		if detail := queries.RefusalDetail(err); errors.Is(tc.want, queries.ErrBadParams) &&
+			strings.Contains(detail, "worklet:") {
+			t.Errorf("%s: told %q, a package's words", tc.name, detail)
 		}
 	}
 }

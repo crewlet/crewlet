@@ -3781,8 +3781,9 @@ func jsonResult(v any) (tools.Result, error) {
 // request cannot be run: since: statelog: a position on another log: …", so a
 // prefix cut from the front alone left the framework's in the middle.
 //
-// EXPORTED for the work surface's read routes (internal/api/workapi), which
-// answered a person's refused read with the error's whole text.
+// EXPORTED for the work surface's read routes (internal/api/workapi) and the
+// questions (internal/api/queries), which answered a person's refused read
+// with the error's whole text.
 func ReadRefusalSentence(err error) string {
 	msg := err.Error()
 	for _, prefix := range []string{"worklet: ", "doclet: ", "statelog: "} {

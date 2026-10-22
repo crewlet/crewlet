@@ -579,7 +579,9 @@ func invalid(field, why string, args ...any) error {
 // A model, in the chat tools' answers: a seat's, a person's own assistant's
 // over the operator's MCP surface, and the Dashboard Assistant's, told in
 // process. Chat's refusals reached it as "chatlet: invalid: body: …", a
-// package path where an instruction belongs. A person whose chat gesture the
+// package path where an instruction belongs. And a person whose chat QUESTION
+// was refused for what it asked: the read answers its `invalid` as the detail
+// the screen draws (internal/api/queries). A person whose chat gesture the
 // dashboard sends is answered the refusal's class in its code's own words,
 // never a tool's sentence, until the refusal catalog words it for them
 // (ADR-0060).
