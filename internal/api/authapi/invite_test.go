@@ -278,6 +278,14 @@ func TestARefusedRedemptionSaysWhoseProblemItIs(t *testing.T) {
 				"this node has no company yet. Try again shortly",
 				statelog.ErrUnavailable),
 			http.StatusServiceUnavailable, ""},
+		// A REDEMPTION WHOSE RECORD LOST ITS RACE is the gesture made
+		// again, told in this surface's words for a gesture: the invitee
+		// has nothing to look at again, which the state log's words for
+		// an edit would send them to do.
+		{"a redemption whose record lost its race",
+			fmt.Errorf("iamdomain: publish: %w: iam.directory kept "+
+				"changing under this write", statelog.ErrConflict),
+			http.StatusConflict, authapi.GestureRaced},
 		// THE CONTROL: a failure that is not the caller's stays 503, or the
 		// cases above would pass on a surface that answered 400 to
 		// everything.

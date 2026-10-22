@@ -342,10 +342,51 @@ func built(result statelog.Result) bool {
 	return landed(result) && !result.Collapsed
 }
 
-// writeFailed answers a write the identity estate REFUSED or could not make:
+// writeFailed answers an ACCOUNT EDIT the identity estate REFUSED or could
+// not make — a password change, an authenticator's enrolment, a set of
+// recovery codes, a sign-out — through [failWrite], a lost race told in the
+// state log's words for a person ([statelog.LostRace]), as it is on /iam and
+// /worklet: somebody's account changed under the edit, so looking at it again
+// before making it again is the remedy.
+func writeFailed(w http.ResponseWriter, r *http.Request, event, opID string,
+	err error) {
+
+	failWrite(w, r, statelog.LostRace, event, opID, err)
+}
+
+// gestureFailed answers a GESTURE the identity estate refused or could not
+// make — a sign-in, a step-up, a token exchange, an invitation's redemption, a
+// reset link's spend — through [failWrite], a lost race told in this
+// surface's own words ([gestureRaced]).
+//
+// NOT [statelog.LostRace], whose "look at it again, then make the change
+// again if it still needs making" is advice about an object somebody edits:
+// a person at the sign-in form, or redeeming a link, has nothing to look at
+// and nothing they changed. What clears it is the same gesture made again.
+func gestureFailed(w http.ResponseWriter, r *http.Request, event, opID string,
+	err error, attrs ...any) {
+
+	failWrite(w, r, gestureRaced, event, opID, err, attrs...)
+}
+
+// gestureRaced is what a gesture whose record lost its race is answered with.
+const gestureRaced = "Something changed at the same moment, so this didn't " +
+	"go through. Try again."
+
+// failWrite answers a write the identity estate REFUSED or could not make:
 // 503 carrying the operation it was published under — so the trail can find
 // it — and the Retry-After the refusal's own rule gives ([auth.RetryIdentity]),
 // none for one waiting cannot clear.
+//
+// A LOST RACE IS NOT ONE OF THEM: a write whose snapshot kept moving under it
+// until the framework gave up ([statelog.ErrConflict]) is `409 stale` in
+// raced, the words its caller chose for the person making it, as it is on
+// /iam and /worklet and as this surface's own documentation already said.
+// Nothing about the request or the node was wrong: the record it wrote kept
+// changing under it, and the same gesture, made again, decides on a fresh
+// snapshot and lands. It was the 503 below, whose "this node couldn't make
+// that change" sent the person to wait for a node that had nothing wrong with
+// it.
 //
 // THE OPERATION ID ON EVERY ONE, because the refusals here used to carry
 // nothing but the code, and a refused write is the one an operator reading
@@ -356,7 +397,7 @@ func built(result statelog.Result) bool {
 // ([statelog.ConditionSentence]), whose advice agrees with the Retry-After:
 // one fixed sentence asked every refusal to be tried again in a moment, a
 // full log and an evicted node among them, under no Retry-After at all.
-func writeFailed(w http.ResponseWriter, r *http.Request, event, opID string,
+func failWrite(w http.ResponseWriter, r *http.Request, raced, event, opID string,
 	err error, attrs ...any) {
 
 	var refused *statelog.Unavailable
@@ -365,6 +406,11 @@ func writeFailed(w http.ResponseWriter, r *http.Request, event, opID string,
 	}
 	log.WarnContext(r.Context(), event,
 		append([]any{"op_id", opID, "error", err}, attrs...)...)
+	if errors.Is(err, statelog.ErrConflict) {
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeStale,
+			map[string]string{"detail": raced, "op_id": opID})
+		return
+	}
 	detail := "This node couldn't make that change. Try again in a moment."
 	if said, ok := statelog.ConditionSentence(err); ok {
 		detail = said
