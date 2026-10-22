@@ -313,7 +313,7 @@ func (t *turn) runDeep(ctx context.Context, dc deepCall) (toolloop.ToolResult, e
 	t.svc.deep.Discard(context.WithoutCancel(ctx), outcome.Box)
 	state, stepState, summary, reason := deepEnding(outcome, len(files))
 	run.end(state, stepState, summary, reason)
-	t.tainted(catalog.Tool{Fence: true, Source: provenance.SourceDeepWork}, provenance.TrustExternal)
+	t.tainted(catalog.Tool{Fence: true, Source: deepReport.Source}, deepReport.Trust)
 	return toolloop.ToolResult{Output: deepAnswer(t.boundary, outcome, files, notes),
 		Failed: state != wire.DeepFinished, Cause: deepCause(outcome)}, nil
 }
@@ -373,10 +373,16 @@ func deepEnding(o DeepOutcome, files int) (wire.DeepState, wire.StepState, strin
 	return wire.DeepFailed, wire.StepFailed, "Did not finish", redact.Secrets(reason)
 }
 
+// deepReport is the label a run's report is read under, decided once for the
+// fence the model reads it in and for the taint every proposal after it
+// carries: a coding CLI's own words, written after it read pages and files
+// nobody in the company wrote (ADR-0054), which nobody in the company vouches
+// for.
+var deepReport = provenance.Label{Source: provenance.SourceDeepWork, Trust: provenance.TrustExternal}
+
 // deepAnswer is what the model reads of a run that did not park: how it ended,
-// its report fenced as the run's own (a CLI's words after it read pages nobody
-// in the company wrote), and the files it delivered by id, which a later
-// proposal names to put one into Crewlet.
+// its report fenced as the run's own ([deepReport]), and the files it
+// delivered by id, which a later proposal names to put one into Crewlet.
 func deepAnswer(b provenance.Boundary, o DeepOutcome, files []wire.FileRef, notes []string) string {
 	var out strings.Builder
 	switch o.End {
@@ -396,8 +402,7 @@ func deepAnswer(b provenance.Boundary, o DeepOutcome, files []wire.FileRef, note
 		if len(report) > ModelResultBytes {
 			report = textcut.Within(report, ModelResultBytes)
 		}
-		out.WriteString(" Its report:\n" + provenance.Fence(b, provenance.SourceDeepWork,
-			provenance.TrustExternal, nil, report))
+		out.WriteString(" Its report:\n" + deepReport.Fence(b, report))
 	}
 	if len(files) > 0 {
 		out.WriteString("\nFiles it delivered, shown to the person to download:")

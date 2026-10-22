@@ -612,17 +612,16 @@ func (t *getArtifact) readFile(ctx context.Context, read *foreignRead, c artifac
 		read.attribute(writers, partial)
 		return file, nil
 	}
-	trust := read.trustOf(writers, partial)
+	label := read.label(provenance.SourceArtifactFile, writers, partial)
 	at := fieldPath{}.key("file")
 	// ANOTHER PRINCIPAL'S PAGE PAST ONE READ PAGE IS CONDENSED, unless the
 	// call asked for the source by its offset: a page is markup a model reads
 	// to learn what it shows, and the source an edit quotes is one `offset`
 	// away. Data and code are never condensed, since what they say is
 	// exactly their bytes.
-	if !offsetGiven && trust != provenance.TrustOwn && typ.Essence() == "text/html" &&
+	if !offsetGiven && label.Trust != provenance.TrustOwn && typ.Essence() == "text/html" &&
 		e.Object.Size > artifacts.ToolReadPageBytes &&
 		c.turn != nil && c.turn.Seat != nil && t.deps.compact != nil {
-		label := provenance.Label{Source: provenance.SourceArtifactFile, Trust: trust, Authors: writers}
 		if summary, ok := t.condense(ctx, c, e, focus, label); ok {
 			file["summary_note"] = summary.Note() + " Pass `offset` to read the source, " +
 				"which an edit's `old_str` must quote exactly."

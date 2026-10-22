@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/provenance`
-- **Enforced-by:** `internal/provenance.TestAFenceCannotBeClosedByItsContent`, `internal/agent/builtin.TestEveryUntrustedReadIsFenced`, `internal/agent/builtin.TestEveryArtifactToolResultIsFenced`, `internal/engine.TestEveryWakeSurfaceFencesWhatSomebodyWrote`, `internal/engine.TestEveryPromptBuilderIsAWakeSurface`, `internal/engine.TestEveryWakeTypeFencesSomebodyElsesWords`, `internal/engine.TestTheTurnsAskIsFencedAsItsTriggerIs`, `internal/agent/prefetch.TestTheTurnStartJudgementsReadSomebodyElsesWordsFenced`, `internal/knowledge.TestRenderFencesEveryHitUnderItsBackendsLabel`, `internal/estate.TestAKnowledgeHitsLabelCrossesTheWire`, `internal/compact.TestARewriteReadsItsTextFencedUnderATokenOfItsOwn`, `internal/learning.TestAPastTurnsAskIsFencedAsWhoeverWroteIt`, `internal/agent/prefetch.TestAPastTurnsAskIsFencedWhereverItIsRead`, `internal/agent/builtin.TestQueryEpisodesFencesWhatAPastTurnWasAskedAsWhoeverWroteIt`, `internal/learning.TestEveryPostTurnWorkerReadsWhatItsTurnWasToldFenced`, `internal/agent/prefetch.TestEveryBlockDefusesWhatItReads`, `internal/agent/builtin.TestWhatASeatRemembersReachesItDefused`, `internal/agent/builtin.TestAnAnswerReadsItsSourcesAsTheirWritersWords`, `internal/agent/extension.TestTheJudgeReadsForeignWordsUnderItsOwnTokenAndItsReasonIsDefused`, `internal/agent/runner.TestTheJudgeIsToldTheTurnsTokenAndItsReasonReachesTheSeatDefused`, `internal/provenance.TestEveryModelCallIsAccountedFor`
+- **Enforced-by:** `internal/provenance.TestAFenceCannotBeClosedByItsContent`, `internal/agent/builtin.TestEveryUntrustedReadIsFenced`, `internal/agent/builtin.TestEveryArtifactToolResultIsFenced`, `internal/engine.TestEveryWakeSurfaceFencesWhatSomebodyWrote`, `internal/engine.TestEveryPromptBuilderIsAWakeSurface`, `internal/engine.TestEveryWakeTypeFencesSomebodyElsesWords`, `internal/engine.TestTheTurnsAskIsFencedAsItsTriggerIs`, `internal/agent/prefetch.TestTheTurnStartJudgementsReadSomebodyElsesWordsFenced`, `internal/knowledge.TestRenderFencesEveryHitUnderItsBackendsLabel`, `internal/estate.TestAKnowledgeHitsLabelCrossesTheWire`, `internal/compact.TestARewriteReadsItsTextFencedUnderATokenOfItsOwn`, `internal/learning.TestAPastTurnsAskIsFencedAsWhoeverWroteIt`, `internal/agent/prefetch.TestAPastTurnsAskIsFencedWhereverItIsRead`, `internal/agent/builtin.TestQueryEpisodesFencesWhatAPastTurnWasAskedAsWhoeverWroteIt`, `internal/learning.TestEveryPostTurnWorkerReadsWhatItsTurnWasToldFenced`, `internal/agent/prefetch.TestEveryBlockDefusesWhatItReads`, `internal/agent/builtin.TestWhatASeatRemembersReachesItDefused`, `internal/agent/builtin.TestAnAnswerReadsItsSourcesAsTheirWritersWords`, `internal/agent/extension.TestTheJudgeReadsForeignWordsUnderItsOwnTokenAndItsReasonIsDefused`, `internal/agent/runner.TestTheJudgeIsToldTheTurnsTokenAndItsReasonReachesTheSeatDefused`, `internal/provenance.TestEveryModelCallIsAccountedFor`, `internal/provenance.TestTextOnAHostedSurfaceIsTrustedByOneRule`, `internal/provenance.TestEveryTrustDecisionIsAccountedFor`, `internal/engine.TestEveryWakeSurfaceReadsAnUnnamedWriterByWhoHostsIt`, `internal/agent/prefetch.TestAThreadsUnnamedSenderIsReadByWhoHostsIt`, `internal/agent/builtin.TestAReadNamingNoWriterIsAColleagues`, `internal/notify.TestAHostedSurfaceVouchesForAWriterItsRecordDoesNotName`
 - **Cost-when-tried:** before this record, a page body, a work item's comments, a project file and the chat thread handed to a turn all reached the model as plain text in a tool answer or a prompt block, with no boundary the text could not also write and nothing saying who wrote it or that it was data. Anybody who could write a page, comment on an item or speak in a thread a seat reads could address the seat in the voice of its instructions.
 - **Tag-status:** unreleased
 
@@ -46,7 +46,23 @@ so it is fenced under a token minted for the wake, which the turn moves onto its
 own; the notification service fences the body before the surface's prompt
 renders it, so a prompt is never handed the words bare. A wake names a body's
 writer only where its payload says one person wrote every word, and otherwise
-names nobody, which reads `external`. The same words reach the models that
+names nobody. What nobody named earns depends on whose surface the words are
+on, and there is ONE RULE for a surface the engine hosts — its own tracker,
+knowledge base, chat, artifacts, project files and agent-to-agent channels —
+whichever door the text comes through (a wake, a read tool, a search hit, the
+thread handed to a turn): every write there is authenticated as a company
+principal, so text whose record names every writer earns what those writers
+earn, and text whose record names some or none of them is never `own` and,
+with nobody named, a colleague's (`provenance.TrustForHosted`); a writer such a
+record carries no handle and no kind for is one it could not name, never an
+outside party. On a vendor's surface, which the company shares with the rest
+of the world, nobody named is `external`. Before the rule one Doclet page
+reached a seat as `external` through its wake and as a colleague's through a
+search, so a text's trust was decided by the door it came through; now every
+door that decides a trust is found by a walk and held to the rule its surface
+takes, the adopted brand's voice (the one hosted text an administrator vouches
+for) to `company` alone, and what a page's script reports it applied (which
+the engine cannot verify) to `page` alone. The same words reach the models that
 judge for a turn before it starts — the memory filter, the knowledge-query
 writer and the episode summary, each handed what the turn was asked — fenced as
 the trigger labels them, under a token minted for that call rather than the

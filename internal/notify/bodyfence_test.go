@@ -1,6 +1,7 @@
 package notify_test
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -139,6 +140,39 @@ func TestAStatedSourceWithNoAuthorIsNobodys(t *testing.T) {
 	got := notify.Stated(n, registry(t), provenance.SourceNotification)
 	if got.Source != provenance.SourceWorkDescription || len(got.Authors) != 0 {
 		t.Fatalf("Stated = %+v, want a description by nobody named", got)
+	}
+}
+
+// A SURFACE THE ENGINE HOSTS VOUCHES FOR A WRITER ITS RECORD DOES NOT NAME
+// (ADR-0040, [provenance.TrustForHosted]): the same record read as a vendor's
+// names nobody and is `external`, and read through [notify.StatedHosted] is a
+// colleague's nobody named — while a first-party record that names its writer
+// by kind alone, the engine or an operator credential, names that kind on
+// either reading.
+//
+// Mutation: drop the Hosted flag [notify.StatedHosted] sets and the hosted
+// case reads `external`; drop the kind-only arm of Stated and the engine's
+// change names nobody.
+func TestAHostedSurfaceVouchesForAWriterItsRecordDoesNotName(t *testing.T) {
+	t.Parallel()
+	nobody := notify.Inbound{Source: "work", Metadata: map[string]string{
+		notify.BodySourceField: string(provenance.SourceChangeNote)}}
+	if got := notify.Stated(nobody, nil, "").Label("swe"); got.Trust != provenance.TrustExternal {
+		t.Errorf("a vendor's reading of a body nobody wrote is %+v, want external", got)
+	}
+	got := notify.StatedHosted(nobody, nil, "").Label("swe")
+	if got.Trust != provenance.TrustColleague || len(got.Authors) != 0 {
+		t.Errorf("a hosted reading of a body nobody wrote is %+v, want a colleague nobody named", got)
+	}
+	for _, kind := range []iam.ActorKind{iam.ActorSystem, iam.ActorOperator} {
+		byKind := notify.Inbound{Source: "work", Metadata: map[string]string{
+			notify.BodySourceField:     string(provenance.SourceChangeNote),
+			notify.BodyAuthorKindField: string(kind)}}
+		label := notify.StatedHosted(byKind, nil, "").Label("swe")
+		if label.Trust != provenance.TrustColleague ||
+			!reflect.DeepEqual(label.Authors, []provenance.Author{{Kind: kind}}) {
+			t.Errorf("a %s change naming no handle reads %+v, want it named by its kind", kind, label)
+		}
 	}
 }
 

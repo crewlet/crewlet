@@ -64,6 +64,25 @@
 // sentence an assistant without the seat prompt needs to read the fences
 // correctly.
 //
+// # One rule for the engine's own surfaces
+//
+// Text on a surface the ENGINE hosts — its tracker, knowledge base, chat,
+// artifacts, project files and agent-to-agent channels — is trusted by
+// [TrustForHosted] ([LabelForHosted]) whichever door it reaches a model
+// through: a wake, a read tool, a search hit, the thread a turn is handed.
+// Named in full, it earns what its writers earn; short of that it is
+// [TrustForPartial] — a colleague's when nobody is named, because only company
+// principals write there — and a writer its record carries no handle and no
+// kind for is one the record could not name, never an outside party. The
+// one hosted text read otherwise is what an administrator adopted as the
+// company's own, the adopted brand's voice: it is [TrustCompany], which no set
+// of writers is ever inferred to be; and what a page's script reports it
+// applied, which the engine cannot verify, is [TrustPage] alone. A vendor's
+// surface takes [TrustFor], where nobody named is `external`. Every
+// door that decides a trust is found by a walk of the tree and held to the
+// rule its surface takes, so one page cannot be a stranger's through its wake
+// and a colleague's through a search, as it was.
+//
 // # A label travels with its text
 //
 // A fence's three facts — the surface, the trust, the writers — are a value,

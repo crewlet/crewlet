@@ -209,8 +209,8 @@ type Tool struct {
 	// Trust is how far the model may rely on a read's answer: the least
 	// its writers earn. Colleague where every text the card carries was
 	// written by the company's own principals (agents and people alike,
-	// as provenance.TrustFor counts them); external where it originates
-	// outside the company.
+	// by provenance.TrustForHosted, the one rule for a surface the engine
+	// hosts); external where it originates outside the company.
 	Trust provenance.Trust
 	// TrustOf, for a read whose answer may or may not carry text from
 	// outside the company, decides the answer's trust from what it holds

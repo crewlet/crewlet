@@ -611,11 +611,12 @@ func appNames(apps []iam.Grant) []string {
 	return out
 }
 
-// outsideTrusts are the trusts a read's answer is written by somebody the
-// company cannot vouch for under: a proposal made after one names its source
-// (D25).
-var outsideTrusts = map[provenance.Trust]bool{
-	provenance.TrustExternal: true, provenance.TrustPage: true,
+// outsideTrust reports whether a read's answer was fenced at a trust that says
+// somebody the company cannot vouch for wrote it: a proposal made after one
+// names its source (D25). A comparison and never a decision: the answer's
+// trust was decided where it was fenced.
+func outsideTrust(trust provenance.Trust) bool {
+	return trust == provenance.TrustExternal || trust == provenance.TrustPage
 }
 
 // refusalSummary is a refused step's outcome in a few words.

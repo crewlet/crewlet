@@ -65,6 +65,13 @@ type ChatPrompt struct {
 	// backend whose record states the author's kind (the engine's own chat)
 	// answers from it for a sender the registry no longer names.
 	Author func(metadata map[string]string, parties Parties) provenance.Author
+
+	// Hosted says this backend is one the engine hosts itself, where every
+	// message's sender authenticated as a company principal: a message whose
+	// sender nobody can name reads as a colleague's
+	// ([provenance.TrustForHosted]). A vendor's backend leaves it false, and
+	// there such a message is an outside party's.
+	Hosted bool
 }
 
 // Source implements [Prompt].
@@ -361,11 +368,13 @@ func (p ChatPrompt) Build(n Inbound, parties Parties) string {
 }
 
 // Provenance implements [Prompt]: a message in a room or a thread, written by
-// its sender — every chat event IS a message, and its author is who sent it.
+// its sender — every chat event IS a message, and its author is who sent it —
+// on a surface the engine hosts or a vendor's ([ChatPrompt.Hosted]).
 func (p ChatPrompt) Provenance(n Inbound, parties Parties) Provenance {
 	return Provenance{
 		Source:  provenance.SourceChatThread,
 		Authors: []provenance.Author{p.author(n.Metadata, parties)},
+		Hosted:  p.Hosted,
 	}
 }
 

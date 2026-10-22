@@ -2,6 +2,7 @@ package provenance
 
 import (
 	"math/rand/v2"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -236,6 +237,53 @@ func TestOwnTrustNeedsEveryAuthorToBeTheReader(t *testing.T) {
 	if got := TrustForPartial("analyst", nil); got != TrustColleague {
 		t.Fatalf("TrustForPartial with nobody named = %q, want colleague: the surface vouches "+
 			"for its writers", got)
+	}
+}
+
+// TestTextOnAHostedSurfaceIsTrustedByOneRule: text on a surface the engine
+// hosts is read the same whichever door it comes through — named in full, by
+// who wrote it; short of that, never `own` and a colleague's with nobody named,
+// because only company principals write there; and a writer a record left
+// unnamed is dropped as one it could not name, never read as an outside party.
+// The control is the vendor's reading of the same records ([TrustFor]), where
+// nobody named is `external`.
+func TestTextOnAHostedSurfaceIsTrustedByOneRule(t *testing.T) {
+	me := Author{Kind: iam.ActorAgent, Seat: "analyst"}
+	ana := Author{Kind: iam.ActorHuman, Seat: "ana"}
+	nobody := Author{}
+	cases := []struct {
+		name     string
+		named    []Author
+		complete bool
+		hosted   Trust
+		authors  []Author
+		vendor   Trust
+	}{
+		{"every writer named, only me", []Author{me}, true, TrustOwn, []Author{me}, TrustOwn},
+		{"every writer named, a colleague", []Author{ana}, true, TrustColleague, []Author{ana}, TrustColleague},
+		{"only me named, others unnamed", []Author{me}, false, TrustColleague, []Author{me}, TrustOwn},
+		{"nobody named", nil, false, TrustColleague, nil, TrustExternal},
+		{"nobody named though said complete", nil, true, TrustColleague, nil, TrustExternal},
+		{"a writer nobody recorded", []Author{nobody}, true, TrustColleague, nil, TrustExternal},
+		{"me and a writer nobody recorded", []Author{me, nobody}, true, TrustColleague, []Author{me}, TrustExternal},
+		{"a person under no seat", []Author{{Kind: iam.ActorHuman}}, true, TrustColleague, nil, TrustExternal},
+		{"the engine", []Author{{Kind: iam.ActorSystem}}, true, TrustColleague,
+			[]Author{{Kind: iam.ActorSystem}}, TrustColleague},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := TrustForHosted("analyst", c.named, c.complete); got != c.hosted {
+				t.Errorf("TrustForHosted = %q, want %q", got, c.hosted)
+			}
+			label := LabelForHosted("analyst", SourceWorkComment, c.named, c.complete)
+			if label.Trust != c.hosted || label.Source != SourceWorkComment ||
+				!reflect.DeepEqual(label.Authors, c.authors) {
+				t.Errorf("LabelForHosted = %+v, want trust %q naming %v", label, c.hosted, c.authors)
+			}
+			if got := TrustFor("analyst", c.named); c.complete && got != c.vendor {
+				t.Errorf("the vendor control TrustFor = %q, want %q", got, c.vendor)
+			}
+		})
 	}
 }
 

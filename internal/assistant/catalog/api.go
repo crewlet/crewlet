@@ -347,7 +347,9 @@ func (g generic) describe() Tool {
 func (g generic) read() Tool {
 	return Tool{
 		Name: APIRequestTool, Kind: KindRead, Tier: TierRead, Phrase: "read from the API",
-		Source: provenance.SourceAPIAnswer, Trust: provenance.TrustColleague,
+		// THE ENGINE'S OWN RECORDS, by the one rule for a surface the engine
+		// hosts, as a curated read's are; TrustOf reads the route a call named.
+		Source: provenance.SourceAPIAnswer, Trust: provenance.TrustForHosted("", nil, false),
 		Description: "Read anything else this person can read in the engine's API: a GET " +
 			"or HEAD on any route describe_api lists, with its path values and query " +
 			"parameters. Use a dedicated read tool whenever one answers the question, since " +

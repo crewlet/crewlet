@@ -69,6 +69,10 @@ func NewPrompt() Prompt {
 		// seat for the handle the record carries, and otherwise what the
 		// record says they were — see [messageAuthor].
 		Author: messageAuthor,
+		// THE ENGINE'S OWN SURFACE: every sender here authenticated as a
+		// seat, a person or the engine, so a message whose sender the
+		// record no longer names is still a colleague's.
+		Hosted: true,
 	}}
 }
 

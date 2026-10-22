@@ -256,6 +256,13 @@ func TestAChatletThreadIsReadAsTheSeatItWoke(t *testing.T) {
 		t.Fatalf("the transcript holds %d messages, want the root and four replies",
 			len(got.Messages))
 	}
+	// THE ENGINE HOSTS THIS SURFACE, and the transcript says so: only company
+	// principals send here, so a line whose sender the roster no longer
+	// names is a colleague's to the block that fences it (ADR-0040).
+	if !got.Hosted {
+		t.Error("a Chatlet transcript does not say the engine hosts it, so the turn's " +
+			"block would read a sender nobody can name as an outside party")
+	}
 	// EVERY MESSAGE CARRIES ITS OWN ID, the value a Chatlet wake stamps as
 	// the trigger's `ts`: it is how the block says which waiting messages a
 	// turn was shown, and a transcript without it matched nothing.

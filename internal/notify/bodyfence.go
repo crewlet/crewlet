@@ -30,10 +30,14 @@ import (
 // payload says one person wrote every word ([BodySourceField],
 // [BodyAuthorField], [BodyAuthorKindField]), and a source's prompt reads them
 // back ([Stated]). An author the payload cannot name — a description others
-// may have edited, an edited comment, a monitor — is NOBODY, which the fence
-// labels `external`: nothing vouches for it, and the error in the safe
-// direction is a colleague read with more care rather than a stranger read as
-// a colleague.
+// may have edited, an edited comment, a monitor — is NOBODY, which on a
+// vendor's surface the fence labels `external`: nothing vouches for it, and
+// the error in the safe direction is a colleague read with more care rather
+// than a stranger read as a colleague. On a surface the ENGINE hosts — its own
+// tracker, knowledge base and chat ([Provenance.Hosted], [StatedHosted]) —
+// nobody named is a colleague's ([provenance.TrustForHosted]): only company
+// principals write there, so the surface vouches for whoever wrote it, and
+// that text reads alike whether it reaches a seat as a wake or as a read.
 
 // Metadata keys a parser stamps about the body it produced.
 const (
@@ -65,11 +69,23 @@ const (
 type Provenance struct {
 	Source  provenance.Source
 	Authors []provenance.Author
+
+	// Hosted says the body is on a surface the engine hosts, where every
+	// writer authenticated as a company principal: what it says about
+	// writers [Provenance.Authors] does not name is
+	// [provenance.TrustForHosted]'s. A vendor's surface leaves it false.
+	Hosted bool
 }
 
 // Label is this provenance at the trust its authors earn from the reading seat
-// self ([provenance.LabelFor]).
+// self: [provenance.LabelFor] on a vendor's surface, and on the engine's own
+// [provenance.LabelForHosted] with the authors named in full — a parser names
+// a body's author only where one person wrote every word of it, so a body that
+// names one names them all.
 func (p Provenance) Label(self string) provenance.Label {
+	if p.Hosted {
+		return provenance.LabelForHosted(self, p.Source, p.Authors, len(p.Authors) > 0)
+	}
 	return provenance.LabelFor(self, p.Source, p.Authors)
 }
 
@@ -155,15 +171,38 @@ func SalientLabel(prompts Prompts, n types.ExternalNotification, parties Parties
 // seat holds reads as that colleague and a first-party handle as the seat it
 // is. One the registry does not name is the kind a first-party record stated
 // ([FirstPartyAuthor]), and otherwise an outside party: an account nobody in
-// the company holds. No author stamped is nobody, which the fence labels
-// `external`.
+// the company holds. A first-party record stating only a kind — the engine,
+// an operator credential — names that kind. No author stamped is nobody,
+// which the fence labels `external` on a vendor's surface; the engine's own
+// sources read it through [StatedHosted].
 func Stated(n Inbound, parties Parties, fallback provenance.Source) Provenance {
+	return stated(n, parties, fallback)
+}
+
+// StatedHosted is [Stated] for a source the engine hosts itself — its own
+// tracker, knowledge base and chat — whose body nobody named is a colleague's
+// rather than an outside party's ([Provenance.Hosted]).
+func StatedHosted(n Inbound, parties Parties, fallback provenance.Source) Provenance {
+	p := stated(n, parties, fallback)
+	p.Hosted = true
+	return p
+}
+
+func stated(n Inbound, parties Parties, fallback provenance.Source) Provenance {
 	source := provenance.Source(n.Metadata[BodySourceField])
 	if !source.Valid() {
 		source = fallback
 	}
 	id := strings.TrimSpace(n.Metadata[BodyAuthorField])
+	kind := iam.ActorKind(n.Metadata[BodyAuthorKindField])
 	if id == "" {
+		// A FIRST-PARTY RECORD MAY NAME ITS WRITER BY KIND ALONE: a change
+		// the engine made, or an operator credential's, carries no handle,
+		// and the kind it states is still a writer the company vouches for.
+		switch kind {
+		case iam.ActorSystem, iam.ActorOperator:
+			return Provenance{Source: source, Authors: []provenance.Author{{Kind: kind}}}
+		}
 		return Provenance{Source: source}
 	}
 	if parties != nil {
@@ -171,7 +210,6 @@ func Stated(n Inbound, parties Parties, fallback provenance.Source) Provenance {
 			return Provenance{Source: source, Authors: []provenance.Author{PartyAuthor(party)}}
 		}
 	}
-	kind := iam.ActorKind(n.Metadata[BodyAuthorKindField])
 	return Provenance{Source: source, Authors: []provenance.Author{FirstPartyAuthor(id, kind, nil)}}
 }
 
