@@ -110,7 +110,8 @@ func (t *listProjects) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// THE IDENTITY CHECK IS ON A READ TOO, exactly as it is on
 	// get_work_catalogue beside it: outside a turn a seat's registry has
 	// no seat, and a tool that answered anyway would answer as nobody.
-	if _, err := t.deps.actor(ctx, turn); err != nil {
+	actor, err := t.deps.actor(ctx, turn)
+	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
 		return notInATurn(worklet.ListProjectsTool), nil
 	}
@@ -147,7 +148,15 @@ func (t *listProjects) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if err != nil {
 		return readFailure(ctx, worklet.ListProjectsTool, err), nil
 	}
-	return jsonResult(listing)
+	// A PROJECT'S NAME AND PURPOSE are words whoever set them wrote, and
+	// the row records who changed the project last rather than who wrote
+	// either (ADR-0040).
+	read := newForeignRead(turn, actor.Handle)
+	if len(listing.Projects) > 0 {
+		namesBy(read)
+	}
+	return read.answer(ctx, worklet.ListProjectsTool, listing,
+		"Ask for fewer with `limit`, or narrow with `unit` or `archived`.")
 }
 
 type describeProject struct{ deps WorkDeps }
@@ -232,5 +241,12 @@ func (t *describeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	case err != nil:
 		return readFailure(ctx, worklet.DescribeProjectTool, err), nil
 	}
-	return jsonResult(detail)
+	// ITS NAME, ITS PURPOSE AND ITS OWN STATUSES AND LABELS are words
+	// whoever set its policy wrote, which the project records no writer of
+	// (ADR-0040); the catalogue's types and fields beside them are the
+	// company's own configuration and are only neutralised.
+	read := newForeignRead(turn, actor.Handle)
+	namesBy(read)
+	return read.answer(ctx, worklet.DescribeProjectTool, detail,
+		"Narrow it with `for_type`.")
 }

@@ -213,8 +213,11 @@ The seat learns what a fence means from one constant sentence in its prompt, und
 Which reads are fenced:
 
 - `get_page`: the body, under every writer its kept revisions name, and each comment under its author.
-- `get_work_item`: the description, under its last writer, and each comment under its author.
+- `get_work_item`: the description, under its last writer, each comment under its author, and each history entry's excerpt under who made that change.
 - `search_work_items`: each hit's snippet, which is the opening of its description, as `work_description` at a colleague's trust with nobody named — only company principals write the tracker, and the index keeps no writer. The titles beside it have the two escapes applied.
+- `task_activity` and `work_inbox`: each change's excerpt — the comment, the description or the note it carried — under whoever made the change, as `work_comment`, `work_description` or `change_note` by its kind; an excerpt summing up an answer that chose quotes the asker's option, so it is never the reader's own alone.
+- `my_work`: each ask waiting on the seat, under the person who asked it.
+- **A tracker listing's names** — a task's title in every listing (`list_work_items`, `my_work`, `search_work_items`, `get_work_item`), a project's name and purpose (`list_projects`, `describe_project`), a view's name and saved filter (`list_work_views`), a file's path (`list_project_files`), a checklist line, what a change moved — are somebody's words too, which no row records the writer of: they have the two escapes applied and the answer's envelope reads them as a colleague's with nobody named, so an answer carrying one is never the reader's own.
 - `read_project_file`: text content, under the file's writers. Content read as base64 is not fenced (it is bytes, and its alphabet holds no bracket) but the envelope still labels it.
 - `read_channel`: each message of the room or of the thread, under its author and the kind the transcript recorded for them, the engine's own narration as `system`. A deleted message says nothing and is not fenced.
 - `search_messages`: each hit's snippet, which is the message itself cut only where it is long, under its author.

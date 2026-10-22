@@ -233,7 +233,7 @@ func (Prompt) WakesActor(n notify.Inbound) bool {
 // as a colleague's, as every other door this text comes through reads it
 // ([provenance.TrustForHosted]).
 func (Prompt) Provenance(n notify.Inbound, parties notify.Parties) notify.Provenance {
-	return notify.StatedHosted(n, parties, excerptSource(ChangeKind(n.EventType)))
+	return notify.StatedHosted(n, parties, ExcerptSource(ChangeKind(n.EventType)))
 }
 
 // DigestBody implements [notify.Prompt]: comments keep their text, field and

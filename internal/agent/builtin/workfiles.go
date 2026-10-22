@@ -172,10 +172,23 @@ func (t *listProjectFiles) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if err != nil {
 		return fileReadFailure(ctx, t.Name(), project, "", err), nil
 	}
-	return jsonResult(map[string]any{
+	// A FILE'S PATH is a name its writers chose (ADR-0040): each row names
+	// who created the file and who wrote it last, and a path renamed between
+	// them had a writer neither names.
+	read := newForeignRead(turn, actor.Handle)
+	for _, f := range listing.Files {
+		var named []provenance.Author
+		for _, handle := range []string{f.CreatedBy, f.UpdatedBy} {
+			if handle = strings.TrimSpace(handle); handle != "" {
+				named = append(named, read.writer(handle, ""))
+			}
+		}
+		namesBy(read, named...)
+	}
+	return read.answer(ctx, t.Name(), map[string]any{
 		"project": project, "count": len(listing.Files), "files": listing.Files,
 		"next": listing.Next, "read_level": listing.Level, "complete": listing.Complete,
-	})
+	}, "Ask for fewer with `limit`, or narrow with `folder`.")
 }
 
 type readProjectFile struct{ deps WorkDeps }
