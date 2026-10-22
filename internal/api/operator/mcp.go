@@ -84,7 +84,10 @@ func (s *Server) handlerFor(cat catalogue, name string) mcp.ToolHandler {
 		// 2^53 reaches the tool as the caller sent it.
 		args, err := toolargs.Decode(req.Params.Arguments)
 		if err != nil {
-			return nil, fmt.Errorf("operator: %s: bad arguments: %w", name, err)
+			// THE ARGUMENTS' OWN WORDS ([toolargs.Decode]) after the
+			// tool's name, which is what the assistant called: an
+			// "operator:" in front named this package to it.
+			return nil, fmt.Errorf("%s: %w", name, err)
 		}
 		result, err := s.run(ctx, cat, Call{
 			Transport: types.TransportMCP, Tool: name, Args: args,

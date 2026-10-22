@@ -522,3 +522,26 @@ func TestChatsRoutesAreAbsentWhereChatIsNotTheEngines(t *testing.T) {
 		t.Errorf("an absent route recorded %+v", acted)
 	}
 }
+
+// A DESTRUCTION'S BODY THAT DOES NOT DECODE IS TOLD IN WORDS
+// ([plainjson.Unreadable]): the detail ended in encoding/json's own sentence
+// ("invalid character …", "json: cannot unmarshal array into Go value of type
+// map[string]interface {}") after the verb's shape. Mutation: answer
+// err.Error() again and every row goes red.
+func TestADestructionsBodyThatDoesNotDecodeIsToldInWords(t *testing.T) {
+	t.Parallel()
+	const shape = " Send one JSON object of this route's arguments."
+	for _, tc := range []struct{ body, says string }{
+		{`{"message_ids":`, "The body isn't valid JSON: it ends too soon." + shape},
+		{`["m-1"]`, "The body is a list where an object belongs." + shape},
+		{`{} {}`, "The body has more after its JSON value, which is all it may hold." + shape},
+	} {
+		r := newRig(t, chart{})
+		got := r.do(as(admin("ana")), http.MethodPost,
+			"/chatlet/channels/"+theRoom+"/erase?confirm=1", tc.body)
+		if got.status != http.StatusBadRequest || got.detail() != tc.says {
+			t.Errorf("%s answered %d %v, want 400 saying %q", tc.body, got.status,
+				got.body, tc.says)
+		}
+	}
+}

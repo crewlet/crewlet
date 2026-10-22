@@ -94,6 +94,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
@@ -462,7 +463,7 @@ func (s *Service) revealMany(w http.ResponseWriter, r *http.Request) {
 	decoder.DisallowUnknownFields()
 	if err = decoder.Decode(&req); err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody, map[string]string{
-			"detail": "the body is not {\"names\": [...]}: " + err.Error(),
+			"detail": plainjson.Unreadable("the body", err),
 			"hint":   "send the variables to read as a JSON list under names",
 		})
 		return

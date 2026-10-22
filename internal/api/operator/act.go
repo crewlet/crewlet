@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/modelnote"
+	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tools/toolargs"
@@ -353,15 +354,15 @@ func decodeAct(raw []byte) (map[string]any, error) {
 	var req actRequest
 	switch err := httpjson.DecodeStrict(raw, &req); {
 	case errors.Is(err, httpjson.ErrTrailingData):
-		return nil, err
+		return nil, errors.New(plainjson.Unreadable("the body", plainjson.ErrTrailing))
 	case err != nil:
-		return nil, fmt.Errorf("the body must be one JSON object "+
-			"{\"args\": {…}}, with the operation in the %s header: %w",
-			opkey.Header, err)
+		return nil, fmt.Errorf("%s. Send one JSON object, {\"args\": {…}}, "+
+			"with the operation in the %s header",
+			plainjson.Unreadable("the body", err), opkey.Header)
 	}
 	args, err := toolargs.Decode(req.Args)
 	if err != nil {
-		return nil, fmt.Errorf("the body's `args`: %w", err)
+		return nil, errors.New(plainjson.Unreadable(`"args" in the body`, err))
 	}
 	return args, nil
 }

@@ -1227,3 +1227,45 @@ func TestAnOperatorCallsNumbersArriveExactly(t *testing.T) {
 		filedExactly(t, work)
 	})
 }
+
+// A BODY THAT DOES NOT DECODE IS ANSWERED BY ITS CODE, AND LOGGED IN WORDS
+// ([plainjson.Unreadable]). The route's own refusal names the tool and says
+// nothing else (ADR-0060), so a person reads invalid_body's own sentence; what
+// the body got wrong is what this node logs (operator_act_body_refused), which
+// carried encoding/json's own sentence after the envelope's shape (`invalid
+// character '}' looking for beginning of value`, `json: unknown field
+// "op_id"`, "json: cannot unmarshal array into Go value of type
+// map[string]interface {}"). Mutation: wrap the decoder's error again in
+// decodeAct, or the arguments' error, and its row goes red; answer the error
+// as the refusal's detail, and every row does.
+func TestAnActBodyThatDoesNotDecodeIsToldInWords(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ body, says string }{
+		{`{"args":`, "the body isn't valid JSON: it ends too soon. Send one JSON " +
+			`object, {"args": {…}}, with the operation in the Idempotency-Key header`},
+		{`{"args":{},"tool":"x"}`, `in the body, "tool" isn't a field this takes. ` +
+			`Send one JSON object, {"args": {…}}, with the operation in the ` +
+			"Idempotency-Key header"},
+		{`{"args":[1]}`, `"args" in the body is a list where an object belongs`},
+		{`{"args":{}} {}`, "the body has more after its JSON value, which is all it " +
+			"may hold"},
+		{`{"args":{}}}`, "the body has more after its JSON value, which is all it " +
+			"may hold"},
+	} {
+		if _, err := operator.DecodeAct([]byte(tc.body)); err == nil || err.Error() != tc.says {
+			t.Errorf("%s is logged as %v, want %q", tc.body, err, tc.says)
+		}
+		work := &recordingWork{}
+		status, answer := act(t, guarded(actSurface(t, work)), "founder",
+			worklet.CreateWorkItemTool, "application/json", tc.body, newKey())
+		if status != http.StatusBadRequest || answer["error"] != string(httpjson.CodeInvalidBody) ||
+			answer["tool"] != worklet.CreateWorkItemTool {
+			t.Errorf("%s answered %d %v, want 400 invalid_body naming the tool", tc.body,
+				status, answer)
+		}
+		if detail, has := answer["detail"]; has {
+			t.Errorf("%s answered the detail %v: the route's own refusal says its "+
+				"code's sentence alone", tc.body, detail)
+		}
+	}
+}

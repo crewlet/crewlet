@@ -2905,3 +2905,44 @@ func TestEverySetupRouteIsAdmins(t *testing.T) {
 		})
 	}
 }
+
+// A SUBMISSION THAT DOES NOT DECODE IS TOLD IN WORDS ([plainjson.Unreadable]):
+// the detail was encoding/json's own sentence (`json: unknown field
+// "valuez"`, "json: cannot unmarshal string into Go struct field .values of
+// type map[string]string"). Mutation: answer err.Error() again and both rows
+// go red; answer the App's begin under `hint` again and its case does.
+func TestASubmissionThatDoesNotDecodeIsToldInWords(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t)
+	for _, tc := range []struct{ body, says string }{
+		{`{"valuez": {}}`, `In the body, "valuez" isn't a field this takes.`},
+		{`{"values": "route_to"}`, `In the body, "values" holds text where an object belongs.`},
+	} {
+		res := s.do(t, http.MethodPost, "/setup/integrations/datadog/inputs", tc.body, nil)
+		body := decode(t, res)
+		if res.Code != http.StatusBadRequest || body["detail"] != tc.says {
+			t.Errorf("%s answered %d %v, want 400 saying %q", tc.body, res.Code,
+				body, tc.says)
+		}
+	}
+	// THE GITHUB APP'S BEGIN TOO, under `detail` as every other setup route
+	// answers it: under `hint` a screen read the code's own sentence first
+	// and this one after it.
+	res := s.do(t, http.MethodPost, "/setup/integrations/github/app", `{"seat": 5}`, nil)
+	body := decode(t, res)
+	if res.Code != http.StatusBadRequest ||
+		body["detail"] != `In the body, "seat" holds a number where text belongs.` ||
+		body["hint"] != nil {
+		t.Errorf("the App's begin answered %d %v, want 400 saying it in detail", res.Code, body)
+	}
+	// THE CHECK OF A TYPED VALUE TOO, which reads its body as a submission
+	// does.
+	res = s.do(t, http.MethodPost, "/setup/integrations/datadog/verify",
+		`{"field": "api_key", "value": "x", "store": true}`, nil)
+	body = decode(t, res)
+	if res.Code != http.StatusBadRequest ||
+		body["detail"] != `In the body, "store" isn't a field this takes.` {
+		t.Errorf("the check answered %d %v, want 400 saying it in words", res.Code, body)
+	}
+}

@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -190,7 +191,7 @@ func readBody[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 	}
 	if err := json.Unmarshal(raw, &out); err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-			map[string]string{"detail": err.Error()})
+			map[string]string{"detail": plainjson.Unreadable("the body", err)})
 		return out, false
 	}
 	return out, true

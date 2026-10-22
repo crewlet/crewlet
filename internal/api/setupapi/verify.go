@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/setup"
 )
 
@@ -66,7 +67,7 @@ func (s *Service) verify(w http.ResponseWriter, r *http.Request) {
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := decode(body, &req); err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody, map[string]string{
-			"detail": err.Error(),
+			"detail": plainjson.Unreadable("the body", err),
 		})
 		return
 	}

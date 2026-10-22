@@ -515,7 +515,7 @@ func TestArgumentsThatDoNotParseAreAnsweredNotRun(t *testing.T) {
 		t.Errorf("the CLI was answered %+v, want the refusal saying why", got)
 	}
 	if first := res.Executions[0]; first.Name != "post" || !first.Failed ||
-		!strings.Contains(first.Output, "not a JSON object") || !first.StartedAt.IsZero() {
+		!strings.Contains(first.Output, "is a list where an object belongs") || !first.StartedAt.IsZero() {
 		t.Errorf("first execution %+v, want a failed, untimed row naming why", first)
 	}
 	answer := toolResults(res.Messages)["bad"]

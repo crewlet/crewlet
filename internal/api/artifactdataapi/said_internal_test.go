@@ -1,7 +1,10 @@
 package artifactdataapi
 
 import (
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -46,6 +49,32 @@ func TestADatastoresRefusalIsToldInItsSentence(t *testing.T) {
 			if strings.Contains(said(c.err), leak) {
 				t.Errorf("%s is told with %q in it: %s", name, leak, said(c.err))
 			}
+		}
+	}
+}
+
+// A BODY THAT DOES NOT DECODE IS TOLD IN WORDS ([plainjson.Unreadable]): the
+// detail was encoding/json's own sentence (`json: unknown field "bogus"`).
+// Mutation: answer err.Error() again and this goes red.
+func TestABodyThatDoesNotDecodeIsToldInWords(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ body, says string }{
+		{`{"bogus":1}`, `In the body, "bogus" isn't a field this takes.`},
+		{`{"ops":"x"}`, `In the body, "ops" holds text where a list belongs.`},
+	} {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(tc.body))
+		var into struct {
+			Ops []string `json:"ops"`
+		}
+		if decode(w, r, &into) {
+			t.Fatalf("%s decoded", tc.body)
+		}
+		var answer map[string]any
+		_ = json.Unmarshal(w.Body.Bytes(), &answer)
+		if w.Code != http.StatusBadRequest || answer["detail"] != tc.says {
+			t.Errorf("%s answered %d %v, want 400 saying %q", tc.body, w.Code,
+				answer, tc.says)
 		}
 	}
 }

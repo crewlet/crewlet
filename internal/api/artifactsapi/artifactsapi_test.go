@@ -819,6 +819,27 @@ func TestATransferWhoseBodyStoppedIsToldInAPersonsWords(t *testing.T) {
 	}
 }
 
+// A BODY THAT DOES NOT DECODE IS TOLD IN WORDS ([plainjson.Unreadable]): the
+// detail was encoding/json's own sentence (`json: unknown field "bogus"`,
+// "invalid character … looking for beginning of value"). Mutation: answer
+// err.Error() again and both rows go red.
+func TestABodyThatDoesNotDecodeIsToldInWords(t *testing.T) {
+	t.Parallel()
+	g := newRig(t, true)
+	for _, tc := range []struct{ body, says string }{
+		{`{"kind":"html","title":"Plan","bogus":1}`,
+			`In the body, "bogus" isn't a field this takes.`},
+		{`{"kind":`, "The body isn't valid JSON: it ends too soon."},
+	} {
+		w := g.do(person("dana"), "POST", "/artifacts", tc.body, keyed()...)
+		if w.Code != http.StatusBadRequest || fields(t, w)["error"] !=
+			string(httpjson.CodeInvalidBody) || fields(t, w)["detail"] != tc.says {
+			t.Errorf("%s answered %d %s, want 400 invalid_body saying %q", tc.body,
+				w.Code, w.Body, tc.says)
+		}
+	}
+}
+
 // A CREATE IS OWNED BY ITS CREATOR and asks the artifacts app: a person without
 // it is refused naming the app, and a person with it creates an artifact they
 // own, with the shares and the work item they named.
