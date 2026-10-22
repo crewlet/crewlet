@@ -4096,7 +4096,7 @@ var ACT_ERRORS = {
 	invalid_body: "The dashboard sent a change the engine could not read.",
 	body_too_large: "The change is larger than the engine accepts in one request.",
 	unreadable_body: "The change could not be read in full by the engine.",
-	no_active_revision: "This node has not been handed a company yet, so there is nothing to change. Try again once it has.",
+	no_active_revision: "This node isn’t running a company yet, so there’s nothing to change. Try again once it is.",
 	draining: "This node is shutting down and takes no changes now. Try again in a moment.",
 	starting: "This node is still starting and takes no changes yet. Try again in a moment.",
 	invalid: null,

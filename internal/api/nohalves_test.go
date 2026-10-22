@@ -21,8 +21,10 @@ import (
 // told about the others: it named the tracker and the knowledge base while
 // chat answered it too, and a Chatlet verb on such a node was told two halves it
 // never asked for were not running. Read from the source, so a fourth half is
-// held the day its first call lands. Mutation: drop chat from the sentence, and
-// this fails.
+// held the day its first call lands. And IN A PERSON'S WORDS: it said the node
+// "has not been handed a company" and that the halves "come up with its first
+// revision", the engine's account of its own bring-up. Mutation: drop chat
+// from the sentence, or put either phrase back, and this fails.
 func TestTheNoCompanySentenceNamesEveryHalfItAnswersFor(t *testing.T) {
 	t.Parallel()
 	file, err := parser.ParseFile(token.NewFileSet(), "native.go", nil, 0)
@@ -58,6 +60,11 @@ func TestTheNoCompanySentenceNamesEveryHalfItAnswersFor(t *testing.T) {
 		if !strings.Contains(httpjson.NativeHalvesNotUp, half) {
 			t.Errorf("the %s answers a node with no company %q, which never names "+
 				"it", half, httpjson.NativeHalvesNotUp)
+		}
+	}
+	for _, engines := range []string{"handed", "revision"} {
+		if strings.Contains(httpjson.NativeHalvesNotUp, engines) {
+			t.Errorf("a person reads %q, which says %q", httpjson.NativeHalvesNotUp, engines)
 		}
 	}
 }

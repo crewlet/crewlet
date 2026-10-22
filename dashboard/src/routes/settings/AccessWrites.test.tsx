@@ -1318,7 +1318,7 @@ test("an unclaimed node running no company says to create the company first", as
   invitations = { invitations: [], next: "" };
   seatsAnswer = json(409, {
     error: "no_active_revision",
-    message: "This node has not been handed a company yet.",
+    message: "This node isn't running a company yet.",
     hint: "this node runs no company yet",
   });
   engine();
