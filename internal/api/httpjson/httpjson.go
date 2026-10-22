@@ -392,6 +392,18 @@ const (
 	// and this one depends on which revision it is, which the hint names.
 	CodeUnsealedRevision Code = "unsealed_revision"
 
+	// CodeUnreadableFleetRevision is the fleet's revision, met only through
+	// its pointer, sealed under a key this node's keyring was never given.
+	// Its own code rather than [CodeUnreadableRevision], whose message tells
+	// the reader to put back a key the deployment lost: here the deployment
+	// holds it and this node does not.
+	CodeUnreadableFleetRevision Code = "unreadable_fleet_revision"
+
+	// CodeUnsealedFleetRevision is the fleet's revision arriving on its
+	// pointer without a seal. Every node seals what it activates, so it came
+	// from outside the fleet, and no node reads it.
+	CodeUnsealedFleetRevision Code = "unsealed_fleet_revision"
+
 	// CodeInvalidRevisionID is a revision route with no revision named.
 	CodeInvalidRevisionID Code = "invalid_revision_id"
 
@@ -1365,6 +1377,11 @@ var codes = map[Code]string{
 		"build older than the mandatory keyring wrote, and a node reads only " +
 		"sealed revisions because the seal is what authenticates one. The hint " +
 		"says what brings its document back.",
+	CodeUnreadableFleetRevision: "This node doesn't hold the key the fleet " +
+		"sealed its revision under, so it can't read it. The hint says what " +
+		"fixes it.",
+	CodeUnsealedFleetRevision: "The fleet's revision arrived without a seal, " +
+		"so this node won't read it. The hint says what to do.",
 	CodeInvalidRevisionID: "Name the revision this is about.",
 	CodeAgainstNotFound:   "The revision to compare against is not held here.",
 	CodeUnsupportedPatchMediaType: "This endpoint takes a JSON Merge Patch: an " +

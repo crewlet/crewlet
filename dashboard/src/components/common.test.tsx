@@ -176,6 +176,23 @@ test("a bad_params refusal with the engine's sentence shows the sentence, not th
   expect(screen.getByText("The engine refused this request.")).toBeTruthy();
 });
 
+// A REVISION THE NODE CANNOT OPEN SHOWS THE ENGINE'S SENTENCE, which names the
+// key or the document that brings it back; without one, the screen's own line
+// for the code. It was `query_failed`'s "the engine failed to answer".
+test("a revision the node cannot open shows what fixes it", () => {
+  render(
+    <QueryState
+      error="unreadable_fleet_revision"
+      detail="Add the key to this node's secrets.keys and restart it."
+      loading={false}
+    />,
+  );
+  expect(screen.getByText("Add the key to this node's secrets.keys and restart it.")).toBeTruthy();
+  cleanup();
+  render(<QueryState error="unsealed_fleet_revision" loading={false} />);
+  expect(screen.getByText(/arrived without a seal/)).toBeTruthy();
+});
+
 // A REFUSAL NO ACCESS WOULD CLEAR SAYS WHICH RULE DECIDED, in that rule's own
 // sentence (`contract/authority.ts`): a credential bound to no seat is told the
 // binding, a token the person it acts for, somebody else's record that it is

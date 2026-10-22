@@ -429,7 +429,7 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 		// build's struct and marshalling it back silently drops every field
 		// this build does not know, and the older node then publishes the
 		// result as the fleet's configuration.
-		if b.document, b.prior, err = s.openDocument(active); err != nil {
+		if b.document, b.prior, err = s.openDocument(cur); err != nil {
 			return nil, fmt.Errorf("configapi: open the active revision: %w", err)
 		}
 	}

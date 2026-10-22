@@ -423,7 +423,7 @@ func (s *Service) getActive(w http.ResponseWriter, r *http.Request) {
 	company, revision, err := s.documentOf(r.Context())
 	switch {
 	case errors.Is(err, ErrNoActiveRevision):
-		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNoActiveRevision)
+		refuseNoCompany(w)
 	case err != nil:
 		s.fail(w, r, "read the active revision", err)
 	default:
@@ -443,7 +443,7 @@ func (s *Service) references(w http.ResponseWriter, r *http.Request) {
 	refs, revision, err := s.References(r.Context())
 	switch {
 	case errors.Is(err, ErrNoActiveRevision):
-		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNoActiveRevision)
+		refuseNoCompany(w)
 	case err != nil:
 		s.fail(w, r, "read the active revision", err)
 	default:
@@ -626,7 +626,7 @@ func (s *Service) getRevision(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, "read the fleet's revision", err)
 		return
 	}
-	body := meta(revision, cur.revision.ID)
+	body := meta(revision.revision, cur.revision.ID)
 	body["payload"] = company.Redact()
 	writeJSON(w, http.StatusOK, body)
 }
@@ -642,7 +642,7 @@ func (s *Service) diff(w http.ResponseWriter, r *http.Request) {
 	case err == nil:
 		writeJSON(w, http.StatusOK, body)
 	case errors.Is(err, ErrNoActiveRevision):
-		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNoActiveRevision)
+		refuseNoCompany(w)
 	case errors.Is(err, store.ErrNoRevision):
 		// WHICH side is missing, read off the error rather than guessed
 		// from the request — see [missingRevision].
@@ -1193,7 +1193,7 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.As(err, &invalid):
 		refuseDocument(w, httpjson.CodeValidationError, invalid.Err.Error(),
-			"revision "+target.ID+" does not pass this build's "+
+			"revision "+target.revision.ID+" does not pass this build's "+
 				"validation, so it cannot be re-activated as it stands; send a "+
 				"corrected document with PUT /config instead", err)
 		return
@@ -1207,7 +1207,7 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 	// answering 400, the one write here that can name itself.
 	summary := r.Header.Get("X-Summary")
 	if summary == "" {
-		summary = "revert to " + target.ID
+		summary = "revert to " + target.revision.ID
 	}
 	applied, err := s.commit(r.Context(), prepared, summary)
 	if err != nil {
@@ -1407,7 +1407,7 @@ func (s *Service) checkPrecondition(w http.ResponseWriter, r *http.Request, acti
 // document an operator needs to see and replace is the one thing the surface
 // refuses to serve. A caller that ACTIVATES what it opened (reload, revert)
 // validates it itself; see [config.DecodeCompany].
-func (s *Service) open(revision store.Revision) (*config.Company, error) {
+func (s *Service) open(revision fleetRevision) (*config.Company, error) {
 	_, company, err := s.openDocument(revision)
 	return company, err
 }
@@ -1415,11 +1415,13 @@ func (s *Service) open(revision store.Revision) (*config.Company, error) {
 // openDocument is [Service.open] plus the unsealed bytes it decoded, which is
 // what a write that must keep fields this build cannot represent works from.
 //
-// A revision the keyring does not open is an [UnreadableRevisionError].
-func (s *Service) openDocument(revision store.Revision) ([]byte, *config.Company, error) {
-	document, err := secrets.Open(s.cipher, revision.Payload)
+// A revision the keyring does not open is an [UnreadableRevisionError], told by
+// where it came from: this node's own history, or a body off the fleet's
+// pointer this node holds no row for ([fleetRevision.fleet]).
+func (s *Service) openDocument(revision fleetRevision) ([]byte, *config.Company, error) {
+	document, err := secrets.Open(s.cipher, revision.revision.Payload)
 	if err != nil {
-		return nil, nil, &UnreadableRevisionError{ID: revision.ID, Err: err}
+		return nil, nil, &UnreadableRevisionError{ID: revision.revision.ID, Fleet: revision.fleet, Err: err}
 	}
 	company, err := config.DecodeCompany(document)
 	if err != nil {
@@ -1428,22 +1430,34 @@ func (s *Service) openDocument(revision store.Revision) ([]byte, *config.Company
 	return document, company, nil
 }
 
+// refuseNoCompany answers a read of the company where there is none: the
+// fleet has no activation, and this node knows no company either
+// ([Service.current]). 404 under the code whose message ends "The detail says
+// how.", WITH the detail that says it: the reads answered the bare code, so
+// nothing did.
+func refuseNoCompany(w http.ResponseWriter) {
+	httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoActiveRevision, map[string]string{
+		"detail": "The fleet runs no company, and this node knows none. Send one with " +
+			"PUT /config, or import a file with `crewlet config import`.",
+	})
+}
+
 // lookup fetches a revision by id, answering the refusal itself.
 func (s *Service) lookup(w http.ResponseWriter, r *http.Request, id string,
-	missing httpjson.Code) (store.Revision, bool) {
+	missing httpjson.Code) (fleetRevision, bool) {
 
 	if id == "" {
 		httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeInvalidRevisionID)
-		return store.Revision{}, false
+		return fleetRevision{}, false
 	}
 	revision, found, err := s.revision(r.Context(), id)
 	if err != nil {
 		s.fail(w, r, "read revision", err)
-		return store.Revision{}, false
+		return fleetRevision{}, false
 	}
 	if !found {
 		httpjson.Fail(w, http.StatusNotFound, missing)
-		return store.Revision{}, false
+		return fleetRevision{}, false
 	}
 	return revision, true
 }
@@ -1561,8 +1575,14 @@ func (s *Service) fail(w http.ResponseWriter, r *http.Request, what string, err 
 // UnreadableRevisionError is a stored revision this node's keyring does not
 // open: stored without a seal, or sealed under a key the keyring does not hold.
 type UnreadableRevisionError struct {
-	ID  string
-	Err error
+	ID string
+	// Fleet reports a body this node holds no copy of: the fleet's revision,
+	// read off its pointer ([fleetRevision.fleet]). Its causes are the
+	// fleet's rather than this node's history: a key the fleet seals under
+	// that this node was never given, or a body somebody put on the pointer
+	// without a seal.
+	Fleet bool
+	Err   error
 }
 
 func (e *UnreadableRevisionError) Error() string {
@@ -1578,41 +1598,91 @@ func (e *UnreadableRevisionError) Unsealed() bool {
 	return errors.Is(e.Err, secrets.ErrUnsealedWithKey)
 }
 
-// Remedy is what brings the revision's document back.
+// Code is the refusal code: one per cause and origin, because an envelope's
+// message is the code's sentence and the four share no remedy.
+func (e *UnreadableRevisionError) Code() httpjson.Code {
+	switch {
+	case e.Fleet && e.Unsealed():
+		return httpjson.CodeUnsealedFleetRevision
+	case e.Fleet:
+		return httpjson.CodeUnreadableFleetRevision
+	case e.Unsealed():
+		return httpjson.CodeUnsealedRevision
+	default:
+		return httpjson.CodeUnreadableRevision
+	}
+}
+
+// Said is what happened, in a person's words: the refusal's `detail`, where
+// the keyring's own error, the secrets package's words, names nothing a person
+// changes and goes to the log.
+func (e *UnreadableRevisionError) Said() string {
+	switch {
+	case e.Fleet && e.Unsealed():
+		return "The fleet's revision arrived without a seal, so this node won't read it."
+	case e.Fleet:
+		return "This node doesn't hold the key the fleet sealed this revision under."
+	case e.Unsealed():
+		return "This node's copy of that revision is stored without a seal, so " +
+			"nothing vouches for who wrote it."
+	default:
+		return "This node's keyring doesn't hold the key that revision is sealed under."
+	}
+}
+
+// Remedy is what brings the revision's document back: the refusal's `hint`.
 func (e *UnreadableRevisionError) Remedy() string {
-	if !e.Unsealed() {
+	switch {
+	case e.Fleet && e.Unsealed():
+		return "every node seals what it activates, so this body came from " +
+			"outside the fleet; send the document again with PUT /config, which " +
+			"activates it sealed"
+	case e.Fleet:
+		return "add the key the fleet seals under to this node's secrets.keys " +
+			"and restart it"
+	case e.Unsealed():
+		return "it is stored without a seal, so nothing vouches for who wrote it " +
+			"and it is neither shown nor reverted to; to have its document again, " +
+			"import it from your own copy with PUT /config or `crewlet config " +
+			"import`, which stores it sealed"
+	default:
 		return "it is sealed under a key that is no longer in the keyring; " +
 			"restore that key to the node's secrets.keys first"
 	}
-	return "it is stored without a seal, so nothing vouches for who wrote it " +
-		"and it is neither shown nor reverted to; to have its document again, " +
-		"import it from your own copy with PUT /config or `crewlet config " +
-		"import`, which stores it sealed"
 }
 
 // RefuseUnreadable answers a revision this node cannot open, and reports
 // whether err was one: on this surface, and on a surface built on it that
 // reads the fleet's revision through [Service.FleetCompany].
 //
-// 409 with the code the cause names — [httpjson.CodeUnsealedRevision] or
-// [httpjson.CodeUnreadableRevision] — and the remedy as the hint. Two codes
-// and not one with two hints, because an envelope's message is the table's
-// sentence and always wins: under one code, an unsealed revision was answered
-// with a message telling the caller to put a key back that was never involved.
+// 409 under the code its cause and origin name ([UnreadableRevisionError.Code])
+// — four codes and not one with four hints, because an envelope's message is
+// the table's sentence and always wins: under one code, an unsealed revision
+// was answered with a message telling the caller to put a key back that was
+// never involved, and a body this node never held with one telling it to put
+// back a key the deployment still has. It names the revision, what happened in
+// a person's words as the detail ([UnreadableRevisionError.Said]) and the
+// remedy as the hint; the keyring's own error goes to the log.
 func RefuseUnreadable(w http.ResponseWriter, err error) bool {
+	return RefuseUnreadableWith(w, err, nil)
+}
+
+// RefuseUnreadableWith is [RefuseUnreadable] with a surface's own detail beside
+// it, nil for none: what a `/setup` submission sealed before it met the
+// revision (`wrote_secrets`), which it must still be told.
+func RefuseUnreadableWith(w http.ResponseWriter, err error, extra httpjson.Detail) bool {
 	var unreadable *UnreadableRevisionError
 	if !errors.As(err, &unreadable) {
 		return false
 	}
-	code := httpjson.CodeUnreadableRevision
-	if unreadable.Unsealed() {
-		code = httpjson.CodeUnsealedRevision
-	}
-	httpjson.FailWith(w, http.StatusConflict, code, map[string]string{
-		"revision_id": unreadable.ID,
-		"detail":      unreadable.Err.Error(),
-		"hint":        unreadable.Remedy(),
-	})
+	log.Warn("config_revision_unreadable", "revision", unreadable.ID,
+		"fleet", unreadable.Fleet, "error", err)
+	detail := httpjson.Detail{}
+	maps.Copy(detail, extra)
+	detail["revision_id"] = unreadable.ID
+	detail["detail"] = unreadable.Said()
+	detail["hint"] = unreadable.Remedy()
+	httpjson.FailWithFields(w, http.StatusConflict, unreadable.Code(), detail)
 	return true
 }
 

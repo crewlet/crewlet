@@ -536,6 +536,12 @@ func TestEachQueryFailureCarriesItsOwnCode(t *testing.T) {
 		// node as though its own health were in question.
 		{stream.ErrBadParams, stream.CodeBadParams},
 		{stream.ErrUnavailable, stream.CodeUnavailable},
+		// A REVISION THIS NODE CANNOT OPEN, under the /config route's own
+		// code: answered `query_failed`, a missing key read as a failure
+		// nobody could explain.
+		{&stream.RevisionError{What: "config", Code: stream.CodeUnreadableFleetRevision,
+			Detail: "This node doesn't hold the key the fleet sealed this revision under."},
+			stream.CodeUnreadableFleetRevision},
 		{errors.New("the store fell over at /var/lib/crewlet/crewlet.db"), stream.CodeQueryFailed},
 	} {
 		f := newSocket(t, nil, func(context.Context, string, map[string]any) (any, error) {
@@ -557,6 +563,12 @@ func TestEachQueryFailureCarriesItsOwnCode(t *testing.T) {
 		// does not make a reader somebody that path is meant for.
 		if raw, _ := json.Marshal(got); strings.Contains(string(raw), "/var/lib") {
 			t.Errorf("the failure leaked its detail to the client: %s", raw)
+		}
+		// AND ITS WORDS, where the engine wrote them for the reader.
+		var revision *stream.RevisionError
+		if errors.As(tc.err, &revision) && got["detail"] != revision.Detail {
+			t.Errorf("a revision refusal carried detail %v, want %q", got["detail"],
+				revision.Detail)
 		}
 	}
 }

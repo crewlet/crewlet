@@ -492,7 +492,7 @@ classified, beside the `detail` that renders them.
 | `403` | `unauthorized` | The credential holds neither `admin`, which the route takes, nor, on the org chart, the lead relation; `reason` names the rule that refused the write. A lead's write that reaches outside their team names every part under `refused` |
 | `403` | `config_managed` | The document is [managed by another system](#when-another-system-manages-the-document) and this credential is not one of the Tier A tokens `api.auth.company_writers` lists; `managed_by` names the writers. A write and its dry run alike, asked once the grant has admitted the caller and before the body is read |
 | `403` | `step_up_required` | A write whose proof of identity is older than `step_up` when it arrived: confirm who you are and send it again. A proof fresh when the write arrived is not judged again part-way through it |
-| `404` | `no_active_revision` | Reading `/config` before the company exists: the fleet has no activation, and this node knows no company |
+| `404` | `no_active_revision` | Reading `/config` before the company exists: the fleet has no activation, and this node knows no company. The `detail` says how to start one |
 | `404` | `no_such_entity` | A per-entity `PUT` naming an id the active revision does not carry — a plain `PUT` never creates; send `If-None-Match: *` to add an MCP server or an LLM provider. Of a seat or a unit, only `admin` is told: a lead is refused `403` as for one outside their team |
 | `404` | `no_route` | A path under `/config` this surface does not serve |
 | `405` | `method_not_allowed` | A `/config` path under a method it does not take; `Allow` names the ones it does |

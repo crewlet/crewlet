@@ -37,7 +37,12 @@ import { PhaseTag } from "~/ui/primitives.tsx";
 import { href } from "~/app/router.tsx";
 import { fmtDateTime, fmtTime, humanize, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import { confirmStepUp, isLogRefusal } from "~/protocol/index.ts";
+import {
+  confirmStepUp,
+  DETAILED_QUERY_ERRORS,
+  isLogRefusal,
+  queryErrorCode,
+} from "~/protocol/index.ts";
 import { goSignIn, page } from "~/lib/session.ts";
 import { needsWords } from "~/lib/access.ts";
 import { remedyFor, type AuthorityAction } from "~/lib/authorityRemedy.ts";
@@ -373,7 +378,7 @@ export function Section({
  * What each refusal MEANS, in the reader's terms.
  *
  * A TABLE OVER THE TYPE, not a chain of string comparisons, and the type is
- * the point: `QueryErrorCode` names the nine codes the engine can send and was
+ * the point: `QueryErrorCode` names the codes the engine can send and was
  * declared, documented and never used to type anything — so a branch comparing
  * against `"unavaliable"` compiled cleanly and quietly rendered the generic
  * failure for a projection that was merely catching up. Two of the nine had no
@@ -420,6 +425,28 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
   not_found: <Callout variant="neutral">Not found. It may have been removed.</Callout>,
   artifact_trashed: (
     <Callout variant="neutral">This artifact is in the trash. Its owner can restore it.</Callout>
+  ),
+  // A REVISION THIS NODE CANNOT OPEN. The engine's own sentence, which names
+  // the key or the document that brings it back, is drawn in its place
+  // whenever the answer carries one (see `QueryState`); these are what is
+  // left when it does not.
+  unreadable_revision: (
+    <Callout variant="warning">
+      This node’s keyring doesn’t hold the key that revision is sealed under.
+    </Callout>
+  ),
+  unsealed_revision: (
+    <Callout variant="warning">That revision is stored without a seal, so it isn’t shown.</Callout>
+  ),
+  unreadable_fleet_revision: (
+    <Callout variant="warning">
+      This node doesn’t hold the key the fleet sealed this revision under.
+    </Callout>
+  ),
+  unsealed_fleet_revision: (
+    <Callout variant="warning">
+      The fleet’s revision arrived without a seal, so this node won’t read it.
+    </Callout>
   ),
   timeout: (
     <Callout variant="warning" icon={<ClockGlyph size="md" />}>
@@ -606,6 +633,10 @@ export function QueryState({
   }
   if (error === "bad_params" && detail) {
     return <Callout variant="warning">The engine refused this request: {detail}</Callout>;
+  }
+  const code = queryErrorCode(error);
+  if (code !== null && code !== "bad_params" && DETAILED_QUERY_ERRORS.has(code) && detail) {
+    return <Callout variant="warning">{detail}</Callout>;
   }
   const banner = error ? REFUSALS[error as QueryErrorCode] : undefined;
   if (banner) return <>{banner}</>;

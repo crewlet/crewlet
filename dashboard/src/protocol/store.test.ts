@@ -988,6 +988,26 @@ describe("a refused query", () => {
     expect(err.detail).toMatch(/ask for at most 90/);
   });
 
+  // A REVISION THE NODE CANNOT OPEN SAYS WHAT FIXES IT. The engine writes
+  // that refusal for the reader too — which key, or which document — and a
+  // rejection carrying only the code left the config screen a fixed line.
+  test("a revision refusal's sentence reaches the rejection", async () => {
+    const store = new Store();
+    const socket = new LiveSocket(store);
+    const asked = socket.query("config");
+    socket.onMessage(
+      JSON.stringify({
+        kind: "error",
+        id: 1,
+        error: "unreadable_fleet_revision",
+        detail: "Add the key the fleet seals under to this node's secrets.keys and restart it.",
+      }),
+    );
+    const err = (await asked.catch((e: unknown) => e)) as QueryError;
+    expect(err.message).toBe("unreadable_fleet_revision");
+    expect(err.detail).toMatch(/secrets\.keys/);
+  });
+
   test("a refusal that names no wait carries none", async () => {
     const store = new Store();
     const socket = new LiveSocket(store);

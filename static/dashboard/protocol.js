@@ -2305,6 +2305,10 @@ var QUERY_ERROR_CODES = {
 	not_found: true,
 	unavailable: true,
 	artifact_trashed: true,
+	unreadable_revision: true,
+	unsealed_revision: true,
+	unreadable_fleet_revision: true,
+	unsealed_fleet_revision: true,
 	timeout: true,
 	closed: true
 };
@@ -2338,11 +2342,12 @@ var QueryError = class extends Error {
 	*/
 	refusal;
 	/**
-	* The refusal's own sentence on a `bad_params` refusal — the parameter to
-	* change and what it accepts — and null everywhere else. The engine writes
-	* that one refusal FOR the caller and keeps every other failure's text in
-	* its log, so this is never a path or a driver's message. An `unavailable`
-	* answer's words are its {@link LogRefusal}'s.
+	* The refusal's own sentence where the engine wrote one for the reader
+	* ({@link DETAILED_QUERY_ERRORS}): on `bad_params`, the parameter to change
+	* and what it accepts; on a revision the node cannot open, the key or the
+	* document that brings it back. Null everywhere else: the engine keeps every
+	* other failure's text in its log, so this is never a path or a driver's
+	* message. An `unavailable` answer's words are its {@link LogRefusal}'s.
 	*/
 	detail;
 	constructor(code, refusal = null, detail = null) {
@@ -2376,12 +2381,26 @@ function unavailableRetryMs(refusal) {
 	return retryAfterMs(refusal.retryAfter);
 }
 /**
-* A `bad_params` frame's sentence, or null for any other frame. The engine
-* writes that one refusal for the caller; an `unavailable` frame's words are
-* its refusal's ({@link refusalOf}), and every other frame carries none.
+* The {@link QueryErrorCode}s whose frame carries the engine's own sentence in
+* `detail`: a refusal written for the reader, which a screen shows rather than
+* a line of its own. Every other code's text stays in the engine's log.
 */
-function badParamsDetail(msg) {
-	return msg.error === "bad_params" && typeof msg.detail === "string" && msg.detail !== "" ? msg.detail : null;
+var DETAILED_QUERY_ERRORS = /* @__PURE__ */ new Set([
+	"bad_params",
+	"unreadable_revision",
+	"unsealed_revision",
+	"unreadable_fleet_revision",
+	"unsealed_fleet_revision"
+]);
+/**
+* The sentence a refusal written for the reader carries — a `bad_params`
+* frame's, or a revision the node cannot open ({@link DETAILED_QUERY_ERRORS})
+* — or null for any other frame. An `unavailable` frame's words are its
+* refusal's ({@link refusalOf}), and every other frame carries none.
+*/
+function framedDetail(msg) {
+	const code = queryErrorCode(msg.error);
+	return code !== null && DETAILED_QUERY_ERRORS.has(code) && typeof msg.detail === "string" && msg.detail !== "" ? msg.detail : null;
 }
 /**
 * The refusal an error frame carries, or null — for a frame that is neither a
@@ -2824,7 +2843,7 @@ var LiveSocket = class {
 				this.sendJoin(artifact);
 			}, wait);
 		}
-		const error = new QueryError(code, refusal, badParamsDetail(msg));
+		const error = new QueryError(code, refusal, framedDetail(msg));
 		for (const listener of [...room.listeners]) listener.refused?.(error);
 	}
 	/** Hands a room's push to its listeners, reading the room off the payload's own `artifact`. */
@@ -3179,7 +3198,7 @@ var LiveSocket = class {
 					this.joinRefused(msg);
 					break;
 				}
-				this.settle(msg.id, msg.error || "query_failed", null, refusalOf$1(msg), badParamsDetail(msg));
+				this.settle(msg.id, msg.error || "query_failed", null, refusalOf$1(msg), framedDetail(msg));
 				break;
 			case "pong": break;
 			default: this.store.noteUnknownPush(msg.kind);
@@ -4387,4 +4406,4 @@ function refusalOf(tool, opId, err, floors) {
 	};
 }
 //#endregion
-export { BROKER_FINDING_KINDS, BROKER_KINDS, BROKER_REMOVE_TIMEOUT_MS, LiveSocket, QueryError, REQUEST_TIMEOUT_MS, RestError, SESSION_KEEPALIVE_MS, SessionFloors, SessionKeepAlive, Store, act, api, auth, confirmStepUp, currentSessionNeed, domainOf, isAbort, isLogRefusal, keepsOperation, lastAnsweredAt, layoutOpID, needSession, newActOpID, newGateOpID, onSessionNeed, onStepUpAsked, queryErrorCode, refusedGrants, rest, retryAfterMs, retryAfterSeconds, sessionNeedsEnrolment, sessionRestored, setStepUpConfirmer, setTabReader, stepUpAsked, unavailableRetryMs, whenRequestsSettle };
+export { BROKER_FINDING_KINDS, BROKER_KINDS, BROKER_REMOVE_TIMEOUT_MS, DETAILED_QUERY_ERRORS, LiveSocket, QueryError, REQUEST_TIMEOUT_MS, RestError, SESSION_KEEPALIVE_MS, SessionFloors, SessionKeepAlive, Store, act, api, auth, confirmStepUp, currentSessionNeed, domainOf, isAbort, isLogRefusal, keepsOperation, lastAnsweredAt, layoutOpID, needSession, newActOpID, newGateOpID, onSessionNeed, onStepUpAsked, queryErrorCode, refusedGrants, rest, retryAfterMs, retryAfterSeconds, sessionNeedsEnrolment, sessionRestored, setStepUpConfirmer, setTabReader, stepUpAsked, unavailableRetryMs, whenRequestsSettle };

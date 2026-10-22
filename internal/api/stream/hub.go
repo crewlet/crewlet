@@ -729,9 +729,11 @@ type Envelope struct {
 
 	// Detail is the refusal's own sentence, written FOR the caller: a
 	// `bad_params` refusal's (see [BadParamsError]) — which names the
-	// parameter to change and the values it accepts — or an `unavailable`
-	// one's state-log refusal words ([Unavailable.Detail]). ONE KEY for
-	// both, as the REST envelope carries both under `detail`; set through
+	// parameter to change and the values it accepts — a revision this node
+	// cannot open ([RevisionError]), which names the key or the document that
+	// brings it back, or an `unavailable` one's state-log refusal words
+	// ([Unavailable.Detail]). ONE KEY for every one, as the REST envelope
+	// carries each under `detail`; set through
 	// [Envelope.unavailable] on the second, so the two halves of an
 	// `unavailable` frame cannot be built apart. Omitted on every other
 	// frame — a query failure's own text can carry a database path, and
