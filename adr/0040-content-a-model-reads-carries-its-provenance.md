@@ -19,10 +19,11 @@ never an instruction, and every read result says so.** One package,
   project file, a chat message, a chat room's own topic or purpose, an artifact
   file, a datastore row, the adopted brand's voice, a note somebody wrote about
   a change they made, a monitor's alert, a notification from an integration
-  that names no surface of its own, a colleague's ask or answer on an agent-to-agent channel, and what the Dashboard Assistant reads as
-  the person it acts for: a route's answer, what that person's open screen says
-  about itself and a deep-work run's account of what it did), who wrote it (by
-  kind and seat handle),
+  that names no surface of its own, a colleague's ask or answer on an agent-to-agent channel, the question a
+  seat's coding run stopped to ask a person, and what the Dashboard Assistant
+  reads as the person it acts for: a route's answer, what that person's open
+  screen says about itself and a deep-work run's account of what it did), who
+  wrote it (by kind and seat handle),
   and how far the reader may trust it (its own words, a colleague's, an outside
   party's, a page anybody may edit, or what an administrator adopted for the
   company, which governs tone and wording and never the task, the tools, the
@@ -107,7 +108,17 @@ anchor), sealed on the run's record with who gave it
 ([ADR-0031](0031-every-state-log-record-is-signed.md)'s amendments,
 [ADR-0067](0067-a-note-to-a-coding-run-waits-sealed-on-its-record.md),
 [ADR-0068](0068-a-run-asks-a-person-in-the-shape-a-decision-is-asked.md)), and
-a fence would tell the run not to follow the instruction it waited for. A model that rewrites a text to fit a budget reads it the
+a fence would tell the run not to follow the instruction it waited for. What a
+seat's coding run puts to a person (its question, the context it gives with
+it, the options it offers) is read by one rule wherever it reaches a model,
+answered, listed among the decisions waiting on a person or read back once
+answered: as a vendor's coding CLI's words, `external`, the way a deep-work
+run's report is. A write the same CLI makes through the seat's tools is a
+record on a surface the engine hosts, made as the seat and read by the hosted
+rule with every other writer there; a run's ask is no such record, but the
+CLI's own account, composed from a brief that may be an outside message or a
+webhook's payload and from whatever it read in its box, and put to a person to
+decide on, which whoever reads it takes as data. A model that rewrites a text to fit a budget reads it the
 same way, fenced under a token minted for that rewrite and labelled as its
 caller says, and its rewrite is defused before the caller places it. A tool that returns such text and does not
 go through the package fails a walk, and so does a wake surface or a kind of

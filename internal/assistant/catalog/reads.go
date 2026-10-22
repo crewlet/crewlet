@@ -363,9 +363,9 @@ func readTools() []Tool {
 				"is the Inbox screen's Needs you.",
 			schema: object(nil, map[string]*schema{}),
 			Routes: []string{"GET /worklet/decisions"}, Fence: true,
-			// An ask is a colleague's; a coding run's question is not (see
-			// list_coding_runs), so an answer holding one is external.
-			TrustOf: outsideWhere("items", "run.question"),
+			// An ask is a colleague's; a coding run's is not, and is read by
+			// the one rule for a coding run's words (provenance.CodingRun).
+			TrustOf: outsideWhere(decisionRows, runAskField),
 			Build: func(map[string]any) (exec.Request, error) {
 				return get("GET /worklet/decisions", nil, nil)
 			},
@@ -558,7 +558,8 @@ func readTools() []Tool {
 			Routes:      []string{"GET /sandbox-runs"}, Fence: true,
 			// A RUN'S QUESTION IS THE CODING CLI'S, a third party's model
 			// working from a brief that may be an outside chat message or a
-			// webhook's payload: outside the company, whoever runs it.
+			// webhook's payload, read by the one rule for a coding run's
+			// words (provenance.CodingRun) wherever it is read.
 			TrustOf: outsideWhere("runs", "question"),
 			Build: func(map[string]any) (exec.Request, error) {
 				return get("GET /sandbox-runs", nil, nil)
@@ -954,20 +955,30 @@ func artifactKinds() []string {
 	return out
 }
 
-// outsideWhere is the trust of an answer whose rows (at rows) may carry text
-// from outside the company at field: external where any row carries some, and
-// where none does the engine's own records, a colleague's by the one rule for a
-// surface the engine hosts.
+// outsideWhere is the trust of an answer whose rows (at rows) may carry a
+// coding run's question at field: the one trust decided for a coding run's
+// words (provenance.CodingRun) where any row carries one, and where none does
+// the engine's own records, a colleague's by the one rule for a surface the
+// engine hosts.
 func outsideWhere(rows, field string) func(Args, any) provenance.Trust {
 	return func(_ Args, answer any) provenance.Trust {
-		list, _ := cards.Lookup(answer, rows).([]any)
-		for _, row := range list {
-			if strings.TrimSpace(cards.Text(cards.Lookup(row, field))) != "" {
-				return provenance.TrustExternal
-			}
+		if carriesRunAsk(answer, rows, field) {
+			return provenance.CodingRun("").Trust
 		}
 		return provenance.TrustForHosted("", nil, false)
 	}
+}
+
+// carriesRunAsk reports whether any row of answer at rows carries a coding
+// run's question at field.
+func carriesRunAsk(answer any, rows, field string) bool {
+	list, _ := cards.Lookup(answer, rows).([]any)
+	for _, row := range list {
+		if strings.TrimSpace(cards.Text(cards.Lookup(row, field))) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // knowledgeTrust is a knowledge search's trust, as each backend labels its own

@@ -141,6 +141,26 @@ func (t *turn) tainted(tool catalog.Tool, trust provenance.Trust) {
 	t.outside = tool.Source
 }
 
+// readAnswer notes an answer the turn's model is handed outside a step, a
+// resumed segment's decision ([resultOf]): from src, at the trust it is fenced
+// at, tainting the turn exactly as a step's read does.
+func (t *turn) readAnswer(src provenance.Source, trust provenance.Trust) {
+	t.tainted(catalog.Tool{Fence: true, Source: src}, trust)
+}
+
+// taintedBy carries the taint the turn's earlier segment parked with
+// ([parked.Outside]) onto this one: the loop it continues still holds the
+// answer that tainted it, so a proposal it makes names that answer's source as
+// the earlier segment's would have.
+func (t *turn) taintedBy(source provenance.Source) {
+	if source == "" {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.outside = source
+}
+
 // taint is the outside source a proposal made now names, "" for none.
 func (t *turn) taint() string {
 	t.mu.Lock()
@@ -747,6 +767,11 @@ type parked struct {
 	// runs on when its decision carried none. A decision that carries one
 	// replaces it ([Service.Resume]).
 	Page *wire.PageContext `json:"page,omitempty"`
+	// Outside is the source of the last answer the segment read that
+	// somebody the company cannot vouch for wrote ([turn.taint]), empty for
+	// none: the loop a resumed segment continues still holds that answer
+	// ([turn.taintedBy]).
+	Outside string `json:"outside,omitempty"`
 }
 
 // parkedTail is how many frames a segment tells after its park record has
@@ -762,7 +787,7 @@ func (t *turn) park(ctx context.Context, res *toolloop.Result) error {
 	keep := parked{V: parkedVersion, Messages: res.Messages, PendingCall: res.PendingToolCallID,
 		PendingTool: res.PendingToolName, Steps: t.steps, Cards: t.cards, Count: t.messages,
 		Boundary: string(t.boundary), Seq: t.log.Last() + parkedTail, Deep: t.deep.parked,
-		Page: t.page}
+		Page: t.page, Outside: string(t.outside)}
 	if t.anchor != uuid.Nil {
 		keep.Anchor = t.anchor.String()
 	}

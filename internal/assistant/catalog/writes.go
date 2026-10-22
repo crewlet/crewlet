@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // The write tools. Every call is a PROPOSAL and never an effect (ADR-0051):
@@ -57,6 +58,15 @@ func write(name string, verb authz.Action, destructive bool, phrase, description
 			return act(tool, Args(a))
 		},
 	}
+}
+
+// answersRun is a write whose request answers with a coding run's question
+// beside its receipt: what the resumed turn reads of it is fenced by the one
+// rule for a coding run's words (provenance.CodingRun), as every read of that
+// question is.
+func answersRun(t Tool) Tool {
+	t.Trust = provenance.CodingRun("").Trust
+	return t
 }
 
 // appsOf is the app a verb's row asks, as a list.
@@ -148,12 +158,12 @@ func writeTools() []Tool {
 				"turn_id": text("The running turn's id.", nameBytes),
 				"note":    text("The note, verbatim.", 8<<10),
 			})),
-		write("answer_coding_run", authz.ActionRunAnswer, false, "answer coding runs",
+		answersRun(write("answer_coding_run", authz.ActionRunAnswer, false, "answer coding runs",
 			"Propose an answer to a coding run parked on a question for the person.",
 			object([]string{"turn_id", "answer"}, map[string]*schema{
 				"turn_id": text("The run's turn id.", nameBytes),
 				"answer":  text("The answer, verbatim.", 32<<10),
-			})),
+			}))),
 		write("create_page", authz.ActionPageCreate, false, "write pages",
 			"Propose a new knowledge page.",
 			object([]string{"title", "body"}, map[string]*schema{

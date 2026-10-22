@@ -105,9 +105,11 @@ var trustDoors = map[string]trustDoor{
 		"internal/assistant/catalog.TestAGenericReadIsFencedAtTheTrustItsRouteEarns",
 	}},
 	"internal/assistant/catalog/api.go:trustOf": {vendor, []string{
-		// The routes whose answers carry a vendor's chat and what quoted it;
-		// every other route's answer is knowledgeTrust's to decide.
+		// The routes whose answers carry a vendor's chat and what quoted it,
+		// and any answer carrying a coding run's question (CodingRun); every
+		// other route's answer is knowledgeTrust's to decide.
 		"internal/assistant/catalog.TestAGenericReadIsFencedAtTheTrustItsRouteEarns",
+		"internal/agent/builtin.TestACodingRunsAskIsReadAtOneTrustThroughEveryDoor",
 	}},
 	"internal/assistant/catalog/reads.go:knowledgeTrust": {either, []string{
 		// Doclet's pages by the hosted rule and a connected knowledge base's
@@ -116,16 +118,31 @@ var trustDoors = map[string]trustDoor{
 	}},
 	"internal/assistant/catalog/reads.go:outsideWhere": {either, []string{
 		// The engine's own rows, unless one carries a coding run's question,
-		// which the assistant reads as a third-party coding CLI's words.
+		// read by the one rule for a coding CLI's words (CodingRun).
 		"internal/assistant/catalog.TestAnAnswerIsFencedAtTheTrustItsTextEarns",
 		"internal/assistant.TestAProposalAfterOutsideTextIsTainted",
+		"internal/agent/builtin.TestACodingRunsAskIsReadAtOneTrustThroughEveryDoor",
+	}},
+	// A CODING RUN'S ASK, a coding CLI's words, through every door it
+	// reaches a model by: answer_run's receipt, and the answer of the
+	// assistant's write that sends it.
+	"internal/agent/builtin/answerrun.go:CallForTurn": {vendor, []string{
+		"internal/agent/builtin.TestEveryUntrustedReadIsFenced",
+		"internal/agent/builtin.TestACodingRunsAskIsReadAtOneTrustThroughEveryDoor",
+	}},
+	"internal/assistant/catalog/writes.go:answersRun": {vendor, []string{
+		"internal/agent/builtin.TestACodingRunsAskIsReadAtOneTrustThroughEveryDoor",
+		"internal/assistant.TestARunAnswersReceiptIsReadAtTheRunsTrust",
 	}},
 	"internal/assistant/prompt.go:pageFence": {hosted, []string{
 		"internal/assistant.TestThePageContextIsFencedAndARemovedPageIsAbsent",
 		"internal/assistant.TestTheOpenDraftReachesTheModelFencedAndRedacted",
 	}},
-	"internal/assistant/resume.go:resultOf": {hosted, []string{
+	"internal/assistant/resume.go:answerTrust": {hosted, []string{
+		// The engine's own records, unless the write's catalogue tool says
+		// its answer carries a coding run's words (writes.go:answersRun).
 		"internal/assistant.TestAnApprovalResumesTheParkedTurn",
+		"internal/assistant.TestARunAnswersReceiptIsReadAtTheRunsTrust",
 	}},
 	"internal/assistant/resume.go:pageReport": {scripted, []string{
 		"internal/assistant.TestAResumedTurnRunsOnTheScreenTheDecisionWasMadeFrom",
@@ -142,8 +159,10 @@ var trustDoors = map[string]trustDoor{
 // and the two levels no writer earns, each read only by the one door that
 // knows its text is that: an adoption, and a page script's report.
 var (
-	hostedRule   = []string{"TrustForHosted", "LabelForHosted"}
-	vendorRule   = []string{"TrustFor", "TrustForPartial", "LabelFor", "EnvelopeFor"}
+	hostedRule = []string{"TrustForHosted", "LabelForHosted"}
+	// The vendor rule's, and the one rule for a coding CLI's words, which
+	// are a vendor's model's whoever's seat the run works for (CodingRun).
+	vendorRule   = []string{"TrustFor", "TrustForPartial", "LabelFor", "EnvelopeFor", "CodingRun"}
 	trustLevel   = []string{"TrustOwn", "TrustColleague", "TrustExternal"}
 	adoptedLevel = []string{"TrustCompany"}
 	pageLevel    = []string{"TrustPage"}

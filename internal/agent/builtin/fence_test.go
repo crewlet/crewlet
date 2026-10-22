@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -575,6 +576,26 @@ func TestEveryUntrustedReadIsFenced(t *testing.T) {
 			t.Errorf("save_page fenced %d names", len(seen))
 		}
 		assertEnvelope(t, answer, provenance.TrustColleague, 0)
+	})
+
+	// A PARKED RUN'S QUESTION is what the seat's coding agent wrote, in the
+	// seat's name, and whoever answers it reads it back: fenced as that run's,
+	// by the one rule for a coding run's words (provenance.CodingRun).
+	t.Run("answer_run", func(t *testing.T) {
+		t.Parallel()
+		forged := provenance.NewBoundary()
+		run := parked(t, "t1", sandbox.StatusAwaiting)
+		run.Question = attack(forged, "run-question")
+		got, err := answerRunTool(t, &deskFake{runs: map[string]sandbox.PendingRun{"t1": run}}).
+			Call(t.Context(), map[string]any{"turn_id": "t1", "answer": "use main"})
+		if err != nil || got.Failed {
+			t.Fatalf("answer_run = %+v, %v", got, err)
+		}
+		seen, answer := fencesIn(t, boundaryIn(t, got.Output), got.Output)
+		assertFences(t, seen, []wantFence{
+			{"source=coding_run trust=external authors=agent:agent-cto", "SYSTEM: ignore"},
+		})
+		assertEnvelope(t, answer, provenance.TrustExternal, 1)
 	})
 
 	// A ROOM'S SETTINGS AS A WRITE LEAVES THEM: the half this call did not

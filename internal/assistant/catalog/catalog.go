@@ -210,7 +210,9 @@ type Tool struct {
 	// its writers earn. Colleague where every text the card carries was
 	// written by the company's own principals (agents and people alike,
 	// by provenance.TrustForHosted, the one rule for a surface the engine
-	// hosts); external where it originates outside the company.
+	// hosts); external where it originates outside the company. On a write,
+	// the trust of what its request answers, which the turn its approval
+	// resumes reads; empty is the engine's own records, by the hosted rule.
 	Trust provenance.Trust
 	// TrustOf, for a read whose answer may or may not carry text from
 	// outside the company, decides the answer's trust from what it holds

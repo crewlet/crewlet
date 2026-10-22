@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -287,7 +288,16 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if choice != "" {
 		result["choice"] = choice
 	}
-	return jsonResult(result)
+	// THE QUESTION IS THE RUN'S WORDS, written by the seat's coding agent in
+	// the seat's name, and whoever answers it is usually reading through an
+	// assistant: it goes back fenced by the one rule for a coding run's words
+	// ([provenance.CodingRun]), as every other door to them reads them
+	// (ADR-0040), not as a line of the engine's receipt.
+	read := newForeignRead(turn, actor.Handle)
+	asked := provenance.CodingRun(parties.handle)
+	read.fenceAt(fieldPath{}.key("question"), asked.Source, asked.Trust, asked.Authors,
+		run.Question)
+	return read.answer(ctx, AnswerRunTool, result, "")
 }
 
 // answeredAlready is the refusal an answer gets for a question already
