@@ -1871,11 +1871,39 @@ func ThrottledWith(w http.ResponseWriter, code Code, retryAfter time.Duration, d
 // THE ONLY OTHER WAY a 503 is written, so a route with something to say beside
 // the code cannot reach for [FailWithFields] and drop the header — which is how
 // a dozen of them came to answer "come back" without saying when.
+//
+// AND THE MESSAGE FOLLOWS THE HINT: a code whose own sentence invites a wait
+// reads its [waitless] sentence under no Retry-After, because the header and
+// the sentence beside it are one answer to "should I come back". A full log, a
+// full file store and an evicted node went out with no Retry-After and the
+// message "Try again in a moment", so a client that read the message rather
+// than the header sent the same request into the same refusal.
 func UnavailableWith(w http.ResponseWriter, code Code, retryAfterSeconds int, detail Detail) {
 	if retryAfterSeconds > 0 {
 		w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds))
+		FailWithFields(w, http.StatusServiceUnavailable, code, detail)
+		return
 	}
-	FailWithFields(w, http.StatusServiceUnavailable, code, detail)
+	body := Envelope(code, detail)
+	if said, ok := waitless[code]; ok && detail[keyOutcome] != OutcomeUnknown {
+		body[keyMessage] = said
+	}
+	Write(w, http.StatusServiceUnavailable, body)
+}
+
+// waitless are the sentences of the codes a caller writes under a hint it
+// derived (one that is zero where no wait clears the cause), as each reads
+// when it is zero: what happened, and that waiting does not change it — the
+// detail beside it says what does.
+//
+// NOT FOR A WRITE WHOSE OUTCOME NOBODY KNOWS ([UnknownOutcome]): it may have
+// landed, so "this can't be done" would be false, and it keeps the code's own
+// sentence, which sends the caller to retry the same operation or ask another
+// node.
+var waitless = map[Code]string{
+	CodeUnavailable: "This can't be done here, and waiting won't change that.",
+	CodeIdentityUnavailable: "Can't check who you are here, and waiting won't " +
+		"change that.",
 }
 
 // OutcomeUnknown is the `outcome` a write nobody on this node can account for
