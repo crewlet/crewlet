@@ -132,7 +132,7 @@ type Group struct {
 	// option id — and Label what a person reads, which differ exactly
 	// where the store keeps an id and a person knows a word.
 	Key   string `json:"key"`
-	Label string `json:"label,omitempty"`
+	Label string `json:"label,omitempty" untrusted:"name"`
 
 	// Count is over the WHOLE set, never over Rows: a column with four
 	// hundred tasks says four hundred and carries twenty.

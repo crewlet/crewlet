@@ -1163,11 +1163,11 @@ const MaxExcerpt = 600
 // "+18 more" leaving. What a set's commit changed is what joined and what
 // left, and that is always small; the whole set is on the row's document.
 type Delta struct {
-	From string `json:"from"`
-	To   string `json:"to"`
+	From string `json:"from" untrusted:"name"`
+	To   string `json:"to" untrusted:"name"`
 	// Added and Removed are what a set gained and lost — see [Delta].
-	Added   []string `json:"added,omitempty"`
-	Removed []string `json:"removed,omitempty"`
+	Added   []string `json:"added,omitempty" untrusted:"name"`
+	Removed []string `json:"removed,omitempty" untrusted:"name"`
 }
 
 // TaskParty is one task and who is on it, for the two lists that name
@@ -1435,7 +1435,7 @@ func (a *AnsweredDecision) check() error {
 type AnsweredDecision struct {
 	// Question is the decision's own question, at most
 	// [MaxDecisionQuestion] bytes.
-	Question string `json:"question"`
+	Question string `json:"question" untrusted:"name"`
 
 	// Choice is the option the answer chose. Nil for an answer in prose,
 	// which is an answer too — "none of these" is one.

@@ -103,7 +103,7 @@ var optionIDPattern = regexp.MustCompile(`^[a-z0-9_-]{1,32}$`)
 // Decision is the structure an ask carries when it needs somebody to choose.
 type Decision struct {
 	// Question is what is being decided, in one sentence.
-	Question string `json:"question"`
+	Question string `json:"question" untrusted:"name"`
 
 	// Options are the choices, in the order the asker put them.
 	Options []Option `json:"options"`
@@ -113,7 +113,7 @@ type Decision struct {
 	Recommended string `json:"recommended,omitempty"`
 
 	// Rationale is why it recommends that one.
-	Rationale string `json:"rationale,omitempty"`
+	Rationale string `json:"rationale,omitempty" untrusted:"name"`
 
 	// Evidence is what the asker looked at.
 	Evidence []Evidence `json:"evidence,omitempty"`
@@ -129,8 +129,8 @@ type Decision struct {
 // Option is one choice.
 type Option struct {
 	ID     string `json:"id"`
-	Label  string `json:"label"`
-	Detail string `json:"detail,omitempty"`
+	Label  string `json:"label" untrusted:"name"`
+	Detail string `json:"detail,omitempty" untrusted:"name"`
 }
 
 // Role is what the person asked is being asked as.
@@ -184,7 +184,7 @@ func (k EvidenceKind) Valid() bool {
 type Evidence struct {
 	Kind  EvidenceKind `json:"kind"`
 	Ref   string       `json:"ref"`
-	Label string       `json:"label,omitempty"`
+	Label string       `json:"label,omitempty" untrusted:"name"`
 }
 
 // Inform is the chat channel the asker will report the decision in.

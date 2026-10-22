@@ -69,8 +69,8 @@ type Head struct {
 	ID          artifacts.ID    `json:"id"`
 	Label       artifacts.Label `json:"label"`
 	Kind        artifacts.Kind  `json:"kind"`
-	Title       string          `json:"title"`
-	Description string          `json:"description,omitempty"`
+	Title       string          `json:"title" untrusted:"name"`
+	Description string          `json:"description,omitempty" untrusted:"name"`
 	Icon        string          `json:"icon,omitempty"`
 	Owner       string          `json:"owner"`
 	OwnerKind   iam.ActorKind   `json:"owner_kind"`
@@ -122,7 +122,7 @@ type VersionSummary struct {
 	Base         int                    `json:"base"`
 	RestoredFrom int                    `json:"restored_from,omitempty"`
 	Forced       bool                   `json:"forced,omitempty"`
-	Label        string                 `json:"label,omitempty"`
+	Label        string                 `json:"label,omitempty" untrusted:"name"`
 	Entry        string                 `json:"entry,omitempty"`
 	Contract     string                 `json:"contract,omitempty"`
 	Capabilities []artifacts.Capability `json:"capabilities"`
@@ -153,7 +153,7 @@ type VersionPage struct {
 type Asset struct {
 	Artifact    artifacts.ID    `json:"artifact"`
 	ID          uuid.UUID       `json:"id"`
-	Name        string          `json:"name"`
+	Name        string          `json:"name" untrusted:"name"`
 	ContentType string          `json:"content_type"`
 	Object      objstore.Object `json:"object"`
 	AddedBy     iam.Actor       `json:"added_by"`

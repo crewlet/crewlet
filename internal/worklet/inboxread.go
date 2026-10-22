@@ -123,7 +123,7 @@ type InboxNotice struct {
 	// handle as though it were a task.
 	SubjectKeyCollision bool `json:"subject_key_collision,omitempty"`
 
-	Excerpt string `json:"excerpt,omitempty"`
+	Excerpt string `json:"excerpt,omitempty" untrusted:"fence"`
 
 	// Actor is who made the change, joined from the history row. A notice
 	// whose history row has been reanchored away carries none rather than

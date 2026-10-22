@@ -1897,10 +1897,11 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 			// tell a model its item was not filed, and the next
 			// attempt would file a second one — which is also what
 			// the generic failure text's "call it again" did.
-			return caveated(answer, caveats, partial(answer, DependenciesFailedKey,
-				caveat.DependenciesNotRecorded(worklet.ItemAddress(task.ID, got.Key,
-					got.KeyCollision), dependencyFailure(task.ID, got.Key,
-					got.KeyCollision, writeTold(ctx, actor, t.Name(), err)))))
+			return ownReceipt(ctx, turn, actor, t.Name(), answer, caveats,
+				partial(answer, DependenciesFailedKey, caveat.DependenciesNotRecorded(
+					worklet.ItemAddress(task.ID, got.Key, got.KeyCollision),
+					dependencyFailure(task.ID, got.Key, got.KeyCollision,
+						writeTold(ctx, actor, t.Name(), err)))))
 		}
 		t.deps.settle(ctx, result.Position)
 		// THE CALL ANSWERS FOR BOTH RECORDS, never for the create alone:
@@ -1918,7 +1919,7 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 			answer["dependencies_pending_mirror"] = len(result.OneSided)
 		}
 	}
-	return caveated(answer, caveats)
+	return ownReceipt(ctx, turn, actor, t.Name(), answer, caveats)
 }
 
 // joinDepend folds a dependency sequence that ran AFTER a call's first record
@@ -3652,10 +3653,37 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// assignee — unaddressed, which a turn is entitled to absorb without
 	// replying. A commenter expecting an answer therefore gets silence,
 	// and nothing about the call says so.
+	var caveats []caveat.Caveat
 	if unaddressed := unaddressedCaveat(before.Task, actor, comment); !unaddressed.IsZero() {
-		return caveated(answer, []caveat.Caveat{unaddressed})
+		caveats = append(caveats, unaddressed)
 	}
-	return jsonResult(answer)
+	return ownReceipt(ctx, turn, actor, CommentOnWorkTool, answer, caveats)
+}
+
+// ownReceipt answers a write's receipt, which may echo what the caller has
+// just written — an ask's question and options — and so answers through a
+// [foreignRead] that labels those words as the caller's own (ADR-0040): the
+// records declare them somebody's words, and here the somebody is the
+// caller. A receipt echoing nothing of the kind is answered as it always was.
+//
+// WITH THE CAVEATS THE WRITE PRODUCED, cs and the partial outcomes partials
+// already wrote under their own keys, on either path: a create that asks a
+// decision can also have its labels' near-duplicates or its dependencies to
+// tell, and the fenced path is [caveated]'s too ([caveatedBy]), so the one
+// writer of a tool's warnings stays the one and no caveat is dropped for the
+// answer having echoed an ask.
+func ownReceipt(ctx context.Context, turn *turnctx.Turn, actor Actor, tool string,
+	answer map[string]any, cs []caveat.Caveat, partials ...caveat.Caveat) (tools.Result, error) {
+
+	declared, err := declaredIn(answer)
+	if err != nil || len(declared) == 0 {
+		return caveated(answer, cs, partials...)
+	}
+	read := newForeignRead(turn, actor.Handle)
+	read.attribute([]provenance.Author{read.writer(actor.Handle, iam.ActorKind(actor.Kind))}, false)
+	return caveatedBy(func(v any) (tools.Result, error) {
+		return read.answer(ctx, tool, v, "")
+	}, answer, cs, partials...)
 }
 
 // unaddressedCaveat says when a comment will wake somebody who is not being

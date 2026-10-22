@@ -246,7 +246,7 @@ type AnswerSource struct {
 	// Ref addresses it: a page's id, a work item's key.
 	Ref string `json:"ref"`
 	// Title is its writers' words, as every source's text is.
-	Title string `json:"title"`
+	Title string `json:"title" untrusted:"name"`
 	// URL is a page's own link where its backend has one — an external
 	// wiki's page, which the dashboard has no route for.
 	URL string `json:"url,omitempty"`

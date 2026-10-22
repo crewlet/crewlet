@@ -101,8 +101,8 @@ type LastChange struct {
 // ProjectRow is one project as a listing renders it.
 type ProjectRow struct {
 	Key     string `json:"key"`
-	Name    string `json:"name"`
-	Purpose string `json:"purpose,omitempty"`
+	Name    string `json:"name" untrusted:"name"`
+	Purpose string `json:"purpose,omitempty" untrusted:"name"`
 
 	Unit UnitRef `json:"unit"`
 	Lead LeadRef `json:"lead"`
@@ -733,9 +733,9 @@ type FieldGroup struct {
 // StatusDef is one of the fixed six with what a model chooses BY.
 type StatusDef struct {
 	Status      Status      `json:"status"`
-	Label       string      `json:"label"`
+	Label       string      `json:"label" untrusted:"name"`
 	Group       StatusGroup `json:"group"`
-	Description string      `json:"description"`
+	Description string      `json:"description" untrusted:"name"`
 }
 
 // ProjectDetail is one project in full — what a seat learns its vocabulary

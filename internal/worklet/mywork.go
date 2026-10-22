@@ -88,7 +88,7 @@ type AskRow struct {
 	Comment string    `json:"comment"`
 	AskedBy string    `json:"asked_by"`
 	AskedAt time.Time `json:"asked_at"`
-	Body    string    `json:"body"`
+	Body    string    `json:"body" untrusted:"fence"`
 
 	// BodyNotIncluded says the body was left out of this answer, how large
 	// it is, and the call that reads it — set only where a block's byte
@@ -131,10 +131,10 @@ type ChecklistRow struct {
 	// [ChecklistRow.Task]. See [ItemAddress].
 	TaskKeyCollision bool `json:"task_key_collision,omitempty"`
 
-	TaskTitle string `json:"task_title"`
-	Checklist string `json:"checklist"`
+	TaskTitle string `json:"task_title" untrusted:"name"`
+	Checklist string `json:"checklist" untrusted:"name"`
 	Item      string `json:"item"`
-	Name      string `json:"name"`
+	Name      string `json:"name" untrusted:"name"`
 	Done      bool   `json:"done"`
 }
 

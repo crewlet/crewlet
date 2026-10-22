@@ -261,7 +261,41 @@ func (r *foreignRead) render(v any) (json.RawMessage, error) {
 				"the answer does not hold as a string", readablePath(path))
 		}
 	}
+	if err := r.labelsDeclared(v, w.written); err != nil {
+		return nil, err
+	}
 	return w.out.Bytes(), nil
+}
+
+// labelsDeclared refuses an answer v that leaves a field its records declare
+// somebody's words unlabelled: one to fence must be among the fenced paths
+// written, and one that is a name needs an envelope saying whose it is. A
+// tool that answers a record without labelling what the record declares is
+// refused here rather than heard from in a transcript ([declaredIn]).
+func (r *foreignRead) labelsDeclared(v any, written map[string]bool) error {
+	declared, err := declaredIn(v)
+	if err != nil {
+		return err
+	}
+	_, labelled := r.envelope()
+	for _, f := range declared {
+		switch f.kind {
+		case provenance.FieldFence:
+			if !written[f.path.id()] {
+				return fmt.Errorf("builtin: the answer carries %q, which its record "+
+					"declares somebody's words, outside a fence", readablePath(f.path.id()))
+			}
+		case provenance.FieldName:
+			if !labelled {
+				return fmt.Errorf("builtin: the answer carries %q, which its record "+
+					"declares somebody's words, and says nobody wrote it", readablePath(f.path.id()))
+			}
+		default:
+			return fmt.Errorf("builtin: %q is declared %s:%q, which is no kind of field "+
+				"this package knows", readablePath(f.path.id()), provenance.FieldTag, f.kind)
+		}
+	}
+	return nil
 }
 
 // pathSep joins the steps of a path; a byte no JSON key a record writes holds.

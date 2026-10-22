@@ -158,13 +158,13 @@ type Summary struct {
 	ID         string    `json:"id"`
 	Container  string    `json:"container"`
 	ParentID   string    `json:"parent_id,omitempty"`
-	Title      string    `json:"title"`
+	Title      string    `json:"title" untrusted:"name"`
 	Status     Status    `json:"status"`
 	Author     string    `json:"author,omitempty"`
 	Version    int       `json:"version"`
 	Skill      bool      `json:"skill,omitempty"`
 	Onboarding bool      `json:"onboarding,omitempty"`
-	Labels     []string  `json:"labels,omitempty"`
+	Labels     []string  `json:"labels,omitempty" untrusted:"name"`
 	Updated    time.Time `json:"updated_at"`
 	Revision   uint64    `json:"revision"`
 
@@ -858,7 +858,7 @@ type Detail struct {
 type RevisionSummary struct {
 	Version   int       `json:"version"`
 	Author    string    `json:"author,omitempty"`
-	Message   string    `json:"message,omitempty"`
+	Message   string    `json:"message,omitempty" untrusted:"name"`
 	CreatedAt time.Time `json:"created_at"`
 }
 

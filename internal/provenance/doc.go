@@ -83,6 +83,19 @@
 // rule its surface takes, so one page cannot be a stranger's through its wake
 // and a colleague's through a search, as it was.
 //
+// # Which fields are somebody's words
+//
+// A record says so where the field is declared, with [FieldTag]:
+// `untrusted:"fence"` on words at length (a body, a comment, a change's text),
+// `untrusted:"name"` on a short line somebody chose (a title, a name, a
+// label), which a reader neutralises in place and names the writers of on its
+// envelope rather than fencing. The tag is the declaration everything that
+// answers a record reads, so a field added to a record is labelled because it
+// was declared, not because somebody remembered to add it to a list; a walk
+// holds every tag in the tree to [FieldKinds] and to a shape that holds text,
+// and the agent runtime's read tools refuse to answer a declared field they
+// did not label.
+//
 // # A label travels with its text
 //
 // A fence's three facts — the surface, the trust, the writers — are a value,

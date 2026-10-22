@@ -39,6 +39,20 @@ const ToolAnswerBytes = 64 << 10
 // what would make its own answer smaller — `include` on a detail read, a
 // filter on a listing, a page size on a catalogue.
 func jsonAnswer(v any, narrowWith string) (tools.Result, error) {
+	// NOT AN ANSWER THAT CARRIES SOMEBODY'S WORDS: a record declaring a field
+	// another principal wrote ([provenance.FieldTag]) is answered through a
+	// [foreignRead], which fences and labels it, and never here, where it
+	// would reach the model bare and unattributed.
+	switch declared, err := declaredIn(v); {
+	case err != nil:
+		//nolint:nilerr // A tool failure is a RESULT the model reads, not a Go error.
+		return refused(tools.RefusalInternalError, "The result could not be rendered."), nil
+	case len(declared) > 0:
+		log.Error("builtin_answer_unlabelled", "field", readablePath(declared[0].path.id()),
+			"kind", declared[0].kind)
+		return refused(tools.RefusalInternalError, "The result could not be rendered: it "+
+			"carries text somebody else wrote that this tool does not label."), nil
+	}
 	data, err := encodeAnswer(v)
 	if err != nil {
 		// A tool failure is a RESULT the model reads: the surface's Go

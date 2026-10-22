@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/provenance`
-- **Enforced-by:** `internal/provenance.TestAFenceCannotBeClosedByItsContent`, `internal/agent/builtin.TestEveryUntrustedReadIsFenced`, `internal/agent/builtin.TestEveryArtifactToolResultIsFenced`, `internal/engine.TestEveryWakeSurfaceFencesWhatSomebodyWrote`, `internal/engine.TestEveryPromptBuilderIsAWakeSurface`, `internal/engine.TestEveryWakeTypeFencesSomebodyElsesWords`, `internal/engine.TestTheTurnsAskIsFencedAsItsTriggerIs`, `internal/agent/prefetch.TestTheTurnStartJudgementsReadSomebodyElsesWordsFenced`, `internal/knowledge.TestRenderFencesEveryHitUnderItsBackendsLabel`, `internal/estate.TestAKnowledgeHitsLabelCrossesTheWire`, `internal/compact.TestARewriteReadsItsTextFencedUnderATokenOfItsOwn`, `internal/learning.TestAPastTurnsAskIsFencedAsWhoeverWroteIt`, `internal/agent/prefetch.TestAPastTurnsAskIsFencedWhereverItIsRead`, `internal/agent/builtin.TestQueryEpisodesFencesWhatAPastTurnWasAskedAsWhoeverWroteIt`, `internal/learning.TestEveryPostTurnWorkerReadsWhatItsTurnWasToldFenced`, `internal/agent/prefetch.TestEveryBlockDefusesWhatItReads`, `internal/agent/builtin.TestWhatASeatRemembersReachesItDefused`, `internal/agent/builtin.TestAnAnswerReadsItsSourcesAsTheirWritersWords`, `internal/agent/extension.TestTheJudgeReadsForeignWordsUnderItsOwnTokenAndItsReasonIsDefused`, `internal/agent/runner.TestTheJudgeIsToldTheTurnsTokenAndItsReasonReachesTheSeatDefused`, `internal/provenance.TestEveryModelCallIsAccountedFor`, `internal/provenance.TestTextOnAHostedSurfaceIsTrustedByOneRule`, `internal/provenance.TestEveryTrustDecisionIsAccountedFor`, `internal/engine.TestEveryWakeSurfaceReadsAnUnnamedWriterByWhoHostsIt`, `internal/agent/prefetch.TestAThreadsUnnamedSenderIsReadByWhoHostsIt`, `internal/agent/builtin.TestAReadNamingNoWriterIsAColleagues`, `internal/notify.TestAHostedSurfaceVouchesForAWriterItsRecordDoesNotName`
+- **Enforced-by:** `internal/provenance.TestAFenceCannotBeClosedByItsContent`, `internal/agent/builtin.TestEveryUntrustedReadIsFenced`, `internal/agent/builtin.TestEveryToolThatHandsOverSomebodysWordsIsFenced`, `internal/agent/builtin.TestARecordsDeclaredWordsAreNeverAnsweredUnlabelled`, `internal/provenance.TestEveryDeclaredFieldHoldsText`, `internal/agent/builtin.TestEveryArtifactToolResultIsFenced`, `internal/engine.TestEveryWakeSurfaceFencesWhatSomebodyWrote`, `internal/engine.TestEveryPromptBuilderIsAWakeSurface`, `internal/engine.TestEveryWakeTypeFencesSomebodyElsesWords`, `internal/engine.TestTheTurnsAskIsFencedAsItsTriggerIs`, `internal/agent/prefetch.TestTheTurnStartJudgementsReadSomebodyElsesWordsFenced`, `internal/knowledge.TestRenderFencesEveryHitUnderItsBackendsLabel`, `internal/estate.TestAKnowledgeHitsLabelCrossesTheWire`, `internal/compact.TestARewriteReadsItsTextFencedUnderATokenOfItsOwn`, `internal/learning.TestAPastTurnsAskIsFencedAsWhoeverWroteIt`, `internal/agent/prefetch.TestAPastTurnsAskIsFencedWhereverItIsRead`, `internal/agent/builtin.TestQueryEpisodesFencesWhatAPastTurnWasAskedAsWhoeverWroteIt`, `internal/learning.TestEveryPostTurnWorkerReadsWhatItsTurnWasToldFenced`, `internal/agent/prefetch.TestEveryBlockDefusesWhatItReads`, `internal/agent/builtin.TestWhatASeatRemembersReachesItDefused`, `internal/agent/builtin.TestAnAnswerReadsItsSourcesAsTheirWritersWords`, `internal/agent/extension.TestTheJudgeReadsForeignWordsUnderItsOwnTokenAndItsReasonIsDefused`, `internal/agent/runner.TestTheJudgeIsToldTheTurnsTokenAndItsReasonReachesTheSeatDefused`, `internal/provenance.TestEveryModelCallIsAccountedFor`, `internal/provenance.TestTextOnAHostedSurfaceIsTrustedByOneRule`, `internal/provenance.TestEveryTrustDecisionIsAccountedFor`, `internal/engine.TestEveryWakeSurfaceReadsAnUnnamedWriterByWhoHostsIt`, `internal/agent/prefetch.TestAThreadsUnnamedSenderIsReadByWhoHostsIt`, `internal/agent/builtin.TestAReadNamingNoWriterIsAColleagues`, `internal/notify.TestAHostedSurfaceVouchesForAWriterItsRecordDoesNotName`
 - **Cost-when-tried:** before this record, a page body, a work item's comments, a project file and the chat thread handed to a turn all reached the model as plain text in a tool answer or a prompt block, with no boundary the text could not also write and nothing saying who wrote it or that it was data. Anybody who could write a page, comment on an item or speak in a thread a seat reads could address the seat in the voice of its instructions.
 - **Tag-status:** unreleased
 
@@ -34,7 +34,11 @@ never an instruction, and every read result says so.** One package,
   saying what a fence means.
 
 It applies to every read that hands a model somebody else's words: page bodies,
-work item comments, a work search's snippets, project files, the chat thread block a turn is given, the
+work item comments, a work search's snippets, the tracker's listings, its
+activity feed and a person's inbox and queue (a change's text under whoever
+made the change, every title and name neutralised with its writers on the
+envelope), project files, a knowledge answer's sources, a parked coding run's
+question, the chat thread block a turn is given, the
 body every wake hands a seat on every surface (a message, a comment, a
 description, a change's note, an alert, an unprompted integration's text), a
 colleague's ask and answer, and
@@ -120,8 +124,18 @@ CLI's own account, composed from a brief that may be an outside message or a
 webhook's payload and from whatever it read in its box, and put to a person to
 decide on, which whoever reads it takes as data. A model that rewrites a text to fit a budget reads it the
 same way, fenced under a token minted for that rewrite and labelled as its
-caller says, and its rewrite is defused before the caller places it. A tool that returns such text and does not
-go through the package fails a walk, and so does a wake surface or a kind of
+caller says, and its rewrite is defused before the caller places it. Which tools return such text is derived rather
+than listed: a record declares the fields that hold somebody's words where they
+are declared (`untrusted:"fence"` for words at length, `untrusted:"name"` for a
+title, a name or a label, which is neutralised in place and named on the
+envelope rather than fenced), a tool that answers a declared field without
+labelling it is refused, and a sweep calls every tool a seat or the operator
+catalogue registers against stores whose every declared field and every stored
+body spells a forged closer, so a tool whose answer carries those words
+unfenced, unlabelled or with no case holding its labels fails the build — the
+tracker's listings, a person's inbox, the activity feed, a knowledge answer's
+sources and a parked coding run's question were each handed over bare before
+it. So does a wake surface or a kind of
 wake whose foreign text does not reach the turn fenced, and a type anywhere in
 the tree that builds a wake's trigger without being one of those surfaces. A schedule's task is
 the company's own instruction to the seat, not somebody else's words, and is
