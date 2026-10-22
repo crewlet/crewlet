@@ -7,6 +7,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -223,67 +224,170 @@ func toPerson(r tools.Result, words caveat.Refusal) tools.Result {
 // asked of ([estate.ErrOutcomeUnknown]) — may have landed, and is an unknown
 // outcome ([UnknownCause]), told in [Unanswered].
 //
-// # Why the words are chosen rather than the error's own
+// # Two readers, and the words each is told
 //
-// The state log composes every refusal's words for the caller who receives
-// them ([statelog.Unavailable]'s detail and [statelog.Refused]'s are never an
-// error's own text), so the REFUSAL's message is told — the refusal itself,
-// read out of the chain, and never the chain's whole message, because a
-// wrapper is free to join an error of its own beside it (`%w: %w`), and that
-// one may be a driver's. Everything else is told in fixed words: a
-// coordination backend wraps its transport's error, which names hosts and
-// ports, a queue's names its broker, and the router's names every node it
-// asked and what each said — which it logs where it concludes it.
+// A condition reaches a MODEL inside a tool's sentence ("Could not read your
+// notes (…). Try again shortly."), and a PERSON on a screen, through every
+// surface that answers one: the operator's, the human write surface, the
+// identity directory, the artifacts. So each condition is told twice, from one
+// classification ([condition]), and the two can never cover different sets:
+// [Condition] is the model's clause and [ConditionSentence] the person's
+// whole sentence, what happened and what to do, in the short voice a screen
+// is written in.
+//
+// NEITHER IS EVER THE ERROR'S OWN TEXT. A state-log refusal is told in the
+// state log's own words for it ([statelog.ConditionWords]), one per code: its
+// error opens with the framework's name and its reason's spelling, and its
+// detail ([statelog.Unavailable.Detail], [statelog.Refused.Detail]) names
+// positions, settings and the broker's words, written for whoever runs the
+// node — so it goes to the node's log, where the surface answering it puts
+// it, and to nobody's prompt or screen. It used to be handed whole to both,
+// so a model read "statelog: unavailable (behind): …" and a person read the
+// same under "this node could not read what the decision is about". Every
+// other condition is told in fixed words: a coordination backend wraps its
+// transport's error, which names hosts and ports, a queue's names its broker,
+// and the router's names every node it asked and what each said — which it
+// logs where it concludes it.
+//
+// WHAT TO DO IS THE CONDITION'S TO SAY where waiting does not clear it
+// ([conditionNext]): a tool's sentence told a model to try again shortly
+// whatever the condition was, so a full log or an evicted node was retried for
+// as long as the turn lasted.
 //
 // EXPORTED for the human write surface, whose tool-less writers class their
 // writers' errors by this same rule (internal/api/operator's ClassifyWrite).
 func Condition(err error) (words string, ok bool) {
-	switch {
-	case err == nil:
-		return "", false
-	case errors.Is(err, statelog.ErrUnavailable):
-		return stateLogWords(err), true
-	case errors.Is(err, coord.ErrUnavailable):
-		return "the coordination store did not answer", true
-	case errors.As(err, new(*estate.ErrUnserved)):
-		return "no data node could serve it right now — every node holding the " +
-			"company's records answered that its copy is out of service or " +
-			"behind, or, asked to read, did not answer at all", true
-	case errors.Is(err, store.ErrNoEstate):
-		return "this node's store is closed while it adopts a peer's snapshot " +
-			"or shuts down", true
-	case errors.Is(err, store.ErrBusy):
-		return "this node's store was busy with other writes and could not take " +
-			"this one in time", true
-	case errors.Is(err, queue.ErrNotLive):
-		return "this node's event queue is not running — it is starting or " +
-			"shutting down", true
-	case errors.Is(err, queue.ErrUnavailable):
-		return "this node could not reach its event broker — the connection is " +
-			"reconnecting, or the broker did not answer in time", true
-	case errors.Is(err, context.DeadlineExceeded):
-		return "it ran out of time", true
-	case errors.Is(err, context.Canceled):
-		return "it was abandoned before it finished", true
-	}
-	return "", false
+	said, ok := condition(err)
+	return said.clause, ok
 }
 
-// stateLogWords is how a state-log refusal reads to a caller: the refusal's
-// own message, composed by internal/statelog for whoever receives it — a read
-// refused ([statelog.Refused]) or a write ([statelog.Unavailable]) — or, for
-// a bare sentinel somebody wrapped, fixed words, since nothing composed that
-// chain for a reader.
-func stateLogWords(err error) string {
-	var unavailable *statelog.Unavailable
-	if errors.As(err, &unavailable) {
-		return unavailable.Error()
+// ConditionSentence is the condition err is, as a PERSON is told it: what
+// happened and what to do, with nothing of the error's own text — see
+// [Condition], which is the same classification told to a model. False for a
+// fault, and for anything else no condition claims.
+func ConditionSentence(err error) (string, bool) {
+	said, ok := condition(err)
+	return said.person, ok
+}
+
+// conditionSaid is one condition as each of its two readers is told it.
+type conditionSaid struct {
+	// clause is what happened, a clause a tool's sentence carries, for a
+	// model.
+	clause string
+
+	// person is what happened and what to do, a whole sentence, for a
+	// person.
+	person string
+
+	// stuck is a condition no wait clears ([statelog.RetryAfter] is zero):
+	// a tool then says so in place of its own invitation to try again, in
+	// words of a model's own ([stuckRead], [stuckWrite]) — never the
+	// person's advice beside [statelog.ConditionSentence], which sends them
+	// to another node or an administrator, neither of which a model can
+	// reach.
+	stuck bool
+}
+
+// condition is the one classification [Condition] and [ConditionSentence]
+// read: the condition err is, or false for a fault.
+func condition(err error) (conditionSaid, bool) {
+	switch {
+	case err == nil:
+		return conditionSaid{}, false
+	case errors.Is(err, statelog.ErrUnavailable):
+		return stateLogSaid(err), true
+	case errors.Is(err, coord.ErrUnavailable):
+		return conditionSaid{clause: "the coordination store did not answer",
+			person: "This node couldn't reach the rest of the fleet. " +
+				statelog.TryAgainSoon}, true
+	case errors.As(err, new(*estate.ErrUnserved)):
+		return conditionSaid{clause: "no data node could serve it right now — " +
+			"every node holding the company's records answered that its copy is " +
+			"out of service or behind, or, asked to read, did not answer at all",
+			person: "No node could serve this right now. " + statelog.TryAgainSoon}, true
+	case errors.Is(err, store.ErrNoEstate):
+		return conditionSaid{clause: "this node's store is closed while it adopts " +
+			"a peer's snapshot or shuts down",
+			person: "This node is catching up from another node or shutting " +
+				"down. " + statelog.TryAgainSoon}, true
+	case errors.Is(err, store.ErrBusy):
+		return conditionSaid{clause: "this node's store was busy with other writes " +
+			"and could not take this one in time",
+			person: "This node was too busy to take this in time. " +
+				statelog.TryAgainSoon}, true
+	case errors.Is(err, queue.ErrNotLive):
+		return conditionSaid{clause: "this node's event queue is not running — it " +
+			"is starting or shutting down",
+			person: "This node is starting up or shutting down. " +
+				statelog.TryAgainSoon}, true
+	case errors.Is(err, queue.ErrUnavailable):
+		return conditionSaid{clause: "this node could not reach its event broker — " +
+			"the connection is reconnecting, or the broker did not answer in time",
+			person: "This node lost touch with the rest of the fleet. " +
+				statelog.TryAgainSoon}, true
+	case errors.Is(err, context.DeadlineExceeded):
+		return conditionSaid{clause: "it ran out of time",
+			person: "This took too long, so it stopped. " + statelog.TryAgainSoon}, true
+	case errors.Is(err, context.Canceled):
+		return conditionSaid{clause: "it was abandoned before it finished",
+			person: "This stopped before it finished. " + statelog.TryAgainSoon}, true
 	}
-	var refused *statelog.Refused
-	if errors.As(err, &refused) {
-		return refused.Error()
+	return conditionSaid{}, false
+}
+
+// stateLogSaid is how a state-log refusal reads: the refusal read out of the
+// chain — a read refused ([statelog.Refused]), a write ([statelog.Unavailable])
+// or a bare sentinel somebody wrapped — in the state log's own words for it
+// ([statelog.ConditionWords]), and never its error or its detail, which are
+// the log's.
+//
+// THE REFUSAL ITSELF, never the chain's whole message: a wrapper is free to
+// join an error of its own beside it (`%w: %w`), and that one may be a
+// driver's.
+func stateLogSaid(err error) conditionSaid {
+	what, _, _ := statelog.ConditionWords(err)
+	person, _ := statelog.ConditionSentence(err)
+	return conditionSaid{clause: what, person: person,
+		stuck: statelog.RetryAfter(err, time.Second) == 0}
+}
+
+// What a model is told about a condition no wait clears, in place of a tool's
+// invitation to try again: that trying again does not help, and what to say
+// instead — the one thing a model can do about a full log or an evicted node,
+// since it neither chooses the node a call goes to nor has an administrator to
+// ask.
+const (
+	// stuckRead is a read's: it says it could not check, as every read
+	// failure's sentence asks.
+	stuckRead = "Trying again won't clear this, so say you could not check, " +
+		"and why."
+
+	// stuckWrite is a write's, or a call's that may be either.
+	stuckWrite = "Trying again won't clear this, so say it could not be done, " +
+		"and why."
+)
+
+// conditionNext is what a tool's sentence about a condition advises: soon, the
+// tool's own invitation to try again, where waiting clears it — and where it
+// does not, stuck ([stuckRead] or [stuckWrite]), since a model told to try
+// again shortly retries a full log or an evicted node for as long as its turn
+// lasts.
+func conditionNext(err error, soon, stuck string) string {
+	if said, ok := condition(err); ok && said.stuck {
+		return stuck
 	}
-	return "the state log refused it on this node"
+	return soon
+}
+
+// rightNow is " right now" for a condition waiting clears and nothing for one
+// it does not, so a sentence saying a tool could not do something "right now"
+// does not promise a wait its own advice rules out.
+func rightNow(err error) string {
+	if said, ok := condition(err); ok && said.stuck {
+		return ""
+	}
+	return " right now"
 }
 
 // faultSaid is the clause a FAULT is told in, wherever a sentence names one:
@@ -360,7 +464,8 @@ func toldOf(failure tools.Result, err error) string {
 func nodeFailure(ctx context.Context, tool string, err error, stopped, fact string) tools.Result {
 	if why, ok := Condition(err); ok {
 		return refusedBy(tools.RefusalUnavailable, err,
-			sentence(stopped+" ("+why+").", fact, "Try again shortly."))
+			sentence(stopped+" ("+why+").", fact, conditionNext(err, "Try again shortly.",
+				stuckWrite)))
 	}
 	return faulted(ctx, tool, err, sentence(stopped+": "+faultSaid+".", fact))
 }

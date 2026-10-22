@@ -246,7 +246,8 @@ func folderNotFound(tool, ref string, nearest []string) tools.Result {
 func folderReadFailure(ctx context.Context, tool string, err error) tools.Result {
 	if why, ok := Condition(err); ok {
 		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s could not read the "+
-			"folders right now (%s). Nothing was changed. Try again shortly.", tool, why))
+			"folders%s (%s). Nothing was changed. %s", tool, rightNow(err), why,
+			conditionNext(err, "Try again shortly.", stuckRead)))
 	}
 	return faulted(ctx, tool, err, fmt.Sprintf("%s could not read the folders: %s. Nothing "+
 		"was changed: say you could not check.", tool, faultSaid))
