@@ -1270,6 +1270,13 @@ A **leaf** or a client of an external cluster that holds no data is not asked:
 its broker queues nothing, and its seats publish through a data node, which is.
 Each node's broker kind is on `crewlet fleet broker list`.
 
+The set is read when the window opens and **again at the baseline, before any
+request is sent**, and the second read only adds to the first. A window can
+wait at `opened` for a while, so a node that came up in the meantime is asked
+too, and a node the window already named stays named until it acknowledges or
+you exclude it. A coordinator that resumes a window already baselined sends its
+request on the set the baseline recorded.
+
 ### What excludes a publisher
 
 On the default embedded topology, **nothing outside these processes can reach
