@@ -987,7 +987,8 @@ func (t *publishArtifact) stale(ctx context.Context, turn *turnctx.Turn, c artif
 	var omitted []string
 	budget := staleTextBudget
 	inline := changed
-	if !t.deps.discloses(ctx, c, moved.Head, moved.Head.HeadNumber) {
+	discloses := t.deps.discloses(ctx, c, moved.Head, moved.Head.HeadNumber)
+	if !discloses {
 		inline = nil
 		out["live_files_withheld"] = "The live version's text is not shown in this answer: " +
 			"this turn may not read the artifact's content. Merge from what you published " +
@@ -1034,10 +1035,19 @@ func (t *publishArtifact) stale(ctx context.Context, turn *turnctx.Turn, c artif
 	rendered, err := read.answer(ctx, t.Name(), out, "Read the changed files one at a "+
 		"time with "+GetArtifactTool+".")
 	if err != nil || rendered.Failed {
+		// THE ONE SENTENCE, told as the answer it stands in for tells it: a
+		// turn that may not read the live version is told to merge from
+		// what it published, since the read this sentence would send it to
+		// is the one the requester ceiling refuses.
+		merge := "Read it with " + GetArtifactTool + ", merge your change onto it"
+		if !discloses {
+			merge = "This turn may not read its content, so merge your change from " +
+				"what you published"
+		}
 		return refusedBy(tools.RefusalStaleVersion, cause, fmt.Sprintf(PublishArtifactTool+" "+
-			"refused: the artifact is at version %d and you based on %d. Read it with "+
-			GetArtifactTool+", merge your change onto it, and publish again with base_version %d.",
-			moved.Head.HeadNumber, base, moved.Head.HeadNumber))
+			"refused: the artifact is at version %d and you based on %d. %s, and publish "+
+			"again with base_version %d.", moved.Head.HeadNumber, base, merge,
+			moved.Head.HeadNumber))
 	}
 	return tools.Result{Output: rendered.Output, Failed: true,
 		Cause: tools.Classify(tools.RefusalStaleVersion, cause)}

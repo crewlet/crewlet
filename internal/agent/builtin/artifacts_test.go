@@ -257,6 +257,74 @@ func TestAStalePublishHandsBackTheLiveVersionToMerge(t *testing.T) {
 	}
 }
 
+// A STALE PUBLISH WHOSE ANSWER CANNOT BE HANDED BACK STILL SAYS WHAT TO DO: a
+// live version too wide for one tool answer — here every one of its files
+// changed, under paths long enough that their names alone pass the limit — is
+// told as one sentence naming the live version and the base to publish on,
+// and never the artifact's id, which the model named itself and the sentence
+// used to repeat. The fallback is the one branch no other test reaches.
+// Mutations: put the id back into the sentence, or drop the base it names, and
+// this fails.
+func TestAStalePublishTooWideToHandBackStillSaysWhatToDo(t *testing.T) {
+	t.Parallel()
+	r := newArtifactRig(t, artifactChart{}, requesters{}, nil)
+	turn := turnFor(t, "agent-cto")
+	h := r.f.seed("agent-cto", iam.ActorAgent, cto, nil, [2]string{"index.html", "<p>v1</p>"})
+	var wide [][2]string
+	for i := range 200 {
+		wide = append(wide, [2]string{fmt.Sprintf("assets/%s-%03d.png",
+			strings.Repeat("frame", 80), i), "png"})
+	}
+	r.f.republish(h.ID, ceo, wide...)
+
+	got := r.call(t, turn, builtin.PublishArtifactTool, map[string]any{
+		"artifact": h.ID.String(), "base_version": 1, "content": "<p>v3</p>"})
+	if !got.Failed || tools.RefusalOf(got) != tools.RefusalStaleVersion {
+		t.Fatalf("answered %v %q, want a stale_version refusal", tools.RefusalOf(got), got.Output)
+	}
+	if strings.HasPrefix(strings.TrimSpace(got.Output), "{") {
+		t.Fatalf("the answer was handed back whole (%d bytes), so the fallback was "+
+			"never reached: widen the live version", len(got.Output))
+	}
+	for _, says := range []string{"version 2", "you based on 1", "base_version 2",
+		builtin.GetArtifactTool} {
+		if !strings.Contains(got.Output, says) {
+			t.Errorf("the fallback %q does not say %q", got.Output, says)
+		}
+	}
+	if strings.Contains(got.Output, h.ID.String()) || strings.Contains(got.Output, string(h.Label)) {
+		t.Errorf("the fallback %q names the artifact's id", got.Output)
+	}
+}
+
+// AND A TURN THAT MAY NOT READ THE LIVE VERSION IS NOT SENT TO READ IT: the
+// fallback told every turn to read it with get_artifact, which the requester
+// ceiling refuses for one whose requester the artifact is not shared with, as
+// the whole answer's `live_files_withheld` already said. Mutation: drop the
+// withheld wording from the fallback and this fails.
+func TestAStalePublishTooWideToHandBackSendsNoTurnToARefusedRead(t *testing.T) {
+	t.Parallel()
+	r := newArtifactRig(t, artifactChart{}, requesters{"founder": founderPrincipal(iam.Apps...)}, nil)
+	h := r.f.seed("agent-cto", iam.ActorAgent, cto, nil, [2]string{"index.html", "<p>v1</p>"})
+	var wide [][2]string
+	for i := range 200 {
+		wide = append(wide, [2]string{fmt.Sprintf("assets/%s-%03d.png",
+			strings.Repeat("frame", 80), i), "png"})
+	}
+	r.f.republish(h.ID, cto, wide...)
+	got := r.call(t, asked(t), builtin.PublishArtifactTool, map[string]any{
+		"artifact": h.ID.String(), "base_version": 1, "content": "<p>v3</p>"})
+	if tools.RefusalOf(got) != tools.RefusalStaleVersion ||
+		strings.HasPrefix(strings.TrimSpace(got.Output), "{") {
+		t.Fatalf("answered %v %q, want the stale fallback", tools.RefusalOf(got), got.Output)
+	}
+	if !strings.Contains(got.Output, "merge your change from what you published") ||
+		!strings.Contains(got.Output, "base_version 2") ||
+		strings.Contains(got.Output, builtin.GetArtifactTool) {
+		t.Errorf("the withheld fallback %q sends the turn to a read it may not make", got.Output)
+	}
+}
+
 // FORCE IS NEVER OFFERED TO A SEAT: discarding a colleague's newer version is a
 // present person's decision, so no tool takes it and a call sending it is
 // refused by name before anything is read.
