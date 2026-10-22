@@ -6265,7 +6265,8 @@ origin.
 | `409` | `upload_expired` | The upload took longer than a write may name its object after (twelve hours from when its key was minted); send it again |
 | `413` | `body_too_large` | The content is over 1 GiB — refused before reading where `Content-Length` says so, and otherwise once the body passes it |
 | `500` | `content_corrupt` | The store answered with content that is not what the file records; trying again reads the same bytes, so restore the file from a backup or upload it again |
-| `503` | `unavailable` / `content_unavailable` | The tracker or the object store could not be reached, or the file's content could not be read right now |
+| `500` | `internal_error` | An upload failed in this node itself, in a way the store classed as neither of the two below (a store that stopped reading the content before its end); trying again doesn't clear it, and the reason is in the node's log |
+| `503` | `unavailable` / `content_unavailable` | The tracker or the object store could not be reached, or the file's content could not be read right now. An upload the store did not take is `unavailable` under an election's `Retry-After`, and one it refused because it is full is `unavailable` with no `Retry-After`: no wait clears it, and an administrator makes room (see [its byte reservation](../concepts/object-store.md#its-byte-reservation)). An artifact's upload, `write_project_file` and the artifact tools answer both the same way |
 
 The byte routes are mounted only where the tracker is native **and** the node
 runs the object store. A company on Jira has no project files to serve.

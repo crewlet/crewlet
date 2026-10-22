@@ -56,7 +56,7 @@ type Unavailable struct {
 	Detail string `json:"-"`
 
 	// RetryAfter is how many whole seconds to wait before asking THIS node
-	// again, by [statelog.RetryAfter]'s rule — the refusal's own derived
+	// again, by [builtin.RetryAfter]'s rule — the refusal's own derived
 	// hint, [HealthInterval] where there is none — and ZERO when waiting
 	// cannot change the answer: ask another node, or an operator acts.
 	// Never omitted on a frame that carries it, because its zero is the
@@ -91,7 +91,7 @@ var ErrNoCompany = errors.New("stream: this node has not been handed a company y
 // is the one switch every person surface tells a condition through.
 func UnavailableOf(err error) Unavailable {
 	u := Unavailable{
-		RetryAfter: httpjson.RetrySeconds(statelog.RetryAfter(err, HealthInterval)),
+		RetryAfter: httpjson.RetrySeconds(builtin.RetryAfter(err, HealthInterval)),
 	}
 	var read *statelog.Refused
 	var write *statelog.Unavailable
