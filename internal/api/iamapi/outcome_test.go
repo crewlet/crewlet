@@ -345,6 +345,41 @@ func TestADirectoryWriteThatFaultedKeepsItsWordsInTheLog(t *testing.T) {
 	}
 }
 
+// A LOST RACE IS TOLD IN WORDS FOR A PERSON.
+//
+// The state log's error for a lost race names the subject it met, a broker
+// path, and the directory answered "statelog: conflict: crewlet.iam.directory
+// kept changing under this write" as the `detail` an administrator reads. It
+// is told in the state log's own sentence for a person ([statelog.Sentence])
+// under the status it always had.
+//
+// Mutation: answer the lost race's `detail` with the error's own text again
+// and its row goes red.
+func TestALostRaceIsToldInWordsForAPerson(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		err    error
+		status int
+		says   string
+	}{
+		{"a lost race", fmt.Errorf("%w: crewlet.iam.directory kept changing under "+
+			"this write", statelog.ErrConflict), http.StatusConflict, statelog.LostRace},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t)
+			r.writer.err = tc.err
+			got := r.as(administrator(), http.MethodDelete,
+				"/iam/people/"+bob.String()+"/sessions", nil)
+			if got.status != tc.status || got.body["detail"] != tc.says {
+				t.Errorf("answered %d with detail %q, want %d with %q", got.status,
+					got.body["detail"], tc.status, tc.says)
+			}
+		})
+	}
+}
+
 // A LINK WITH NO ADDRESS TO POINT AT IS A FAULT, NOT AN OUTAGE — an
 // invitation's, and a created person's first password link alike.
 //
