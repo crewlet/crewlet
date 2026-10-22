@@ -120,9 +120,9 @@ one JSON object, and it always has the same three parts in the same places:
   (`log_full`), a record larger than the broker takes in one message
   (`record_too_large`), one the broker refused for a reason of its own
   (`broker_refused`), a deleted object — on every surface that answers one
-  with a `503` (`/work`, `/pages`, `/chat`, `/iam`, `/auth`, and every
-  question the query registry answers, `/query/{what}` and its named read
-  routes): the same request is
+  with a `503` (`/work`, `/pages`, `/chat`, `/iam`, `/auth`, `/config`,
+  `/secrets`, and every question the query registry answers, `/query/{what}`
+  and its named read routes): the same request is
   refused however often it is sent, so the answer is to ask another node, to
   split the change, or for an operator to readmit, upgrade or resize, never to
   poll this one. The detail says which in a sentence for the person reading
@@ -2230,7 +2230,7 @@ On either, re-read `/config` and send the edit again.
 - `409 Conflict`: `revision_advanced` (a race with a concurrent writer, for a write that named no revision in `If-Match`) or `no_active_revision` (a `PATCH` or a per-entity write on an unconfigured node, or a reload)
 - `412 Precondition Failed`: `revision_advanced` when `If-Match` names a revision that is not the active one, or stops being so before the write is activated; `already_configured` when `If-None-Match: *` meets an active revision; or `no_active_revision` when `If-Match` names a revision and none is active
 - `415 Unsupported Media Type`: `unsupported_patch_media_type` when a `PATCH` body is a patch format other than a JSON Merge Patch, with `Accept-Patch`
-- `503 Service Unavailable`: `draining` when the node has been told to stop, with a `Retry-After` — see [During a drain](#during-a-drain)
+- `503 Service Unavailable`: `draining` when the node has been told to stop, with a `Retry-After` — see [During a drain](#during-a-drain); `unavailable` for a condition of the node (a coordination store that did not answer, a state-log refusal behind a read the route makes), in a sentence for the person reading it and with a `Retry-After` exactly where waiting clears it; and `unavailable` with `"outcome": "unknown"`, the `stored_revision_id` and **no** `Retry-After` for a write whose activation was sent and never answered — the fleet may be running that revision or may not, so read `/config` back before sending the edit again, which from the same base would otherwise be refused `revision_advanced` by its own first attempt
 
 ### The `config_audit` query
 

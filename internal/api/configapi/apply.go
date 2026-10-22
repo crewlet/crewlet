@@ -91,6 +91,29 @@ func (e *RacedError) Error() string {
 	return fmt.Sprintf("configapi: the active revision advanced from %q to %q", e.Base, e.Current)
 }
 
+// ActivationUnknownError reports an activation that was SENT and whose answer
+// was lost — the coordination store took the write and did not say so
+// ([coord.ErrWriteUnknown]), or the request's time ran out while it waited —
+// so the fleet may be running the revision it named, or may not.
+//
+// NOT A CONDITION OF THE NODE: told as one ("couldn't reach the rest of the
+// fleet, try again"), an administrator whose activation had landed sent it
+// again from the same base and was refused as having lost a race to a write
+// that was their own. What clears it is reading the configuration back, never
+// a wait.
+type ActivationUnknownError struct {
+	// Stored is the revision the write stored and asked the fleet to run.
+	Stored string
+	Err    error
+}
+
+func (e *ActivationUnknownError) Error() string {
+	return fmt.Sprintf("configapi: whether revision %s was activated is unknown: %v",
+		e.Stored, e.Err)
+}
+
+func (e *ActivationUnknownError) Unwrap() error { return e.Err }
+
 // DocumentError reports a submitted document this build could not read: it
 // is not YAML or JSON, or its shape is not a company's. Distinct from a
 // validation failure, because there is no company to validate.
@@ -430,6 +453,14 @@ func (s *Service) commit(ctx context.Context, p *prepared, summary string) (Appl
 			raced.Current = current.RevisionID
 		}
 		return Applied{}, raced
+	}
+	if errors.Is(err, coord.ErrWriteUnknown) || errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, context.Canceled) {
+		// SENT AND UNANSWERED: the pointer may name this revision now, and
+		// only a read of it says. Kept, as a lost race keeps it.
+		log.WarnContext(ctx, "config_activation_unknown", "revision", id,
+			"expected", p.base, "by", by.Name, "operator", by.OperatorID, "error", err)
+		return Applied{}, &ActivationUnknownError{Stored: id, Err: err}
 	}
 	if err != nil {
 		return Applied{}, fmt.Errorf("configapi: activate the config: %w", err)

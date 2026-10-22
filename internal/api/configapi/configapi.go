@@ -47,6 +47,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -312,7 +313,7 @@ func (s *Service) getActive(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrNoActiveRevision):
 		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNoActiveRevision)
 	case err != nil:
-		s.fail(w, "read the active revision", err)
+		s.fail(w, r, "read the active revision", err)
 	default:
 		if serveConditional(w, r, revision) {
 			return
@@ -332,7 +333,7 @@ func (s *Service) references(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrNoActiveRevision):
 		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNoActiveRevision)
 	case err != nil:
-		s.fail(w, "read the active revision", err)
+		s.fail(w, r, "read the active revision", err)
 	default:
 		// THE SAME VALIDATOR the document itself carries: the index is
 		// derived from the revision and changes exactly when it does.
@@ -417,7 +418,7 @@ func (s *Service) writeDocument(w http.ResponseWriter, r *http.Request, company 
 	}
 	body, err := yaml.Marshal(company)
 	if err != nil {
-		s.fail(w, "encode the config as yaml", err)
+		s.fail(w, r, "encode the config as yaml", err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/yaml")
@@ -490,7 +491,7 @@ func (s *Service) listRevisions(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := s.Revisions(r.Context(), limit, offset)
 	if err != nil {
-		s.fail(w, "list revisions", err)
+		s.fail(w, r, "list revisions", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -505,7 +506,7 @@ func (s *Service) getRevision(w http.ResponseWriter, r *http.Request) {
 	}
 	company, err := s.open(revision)
 	if err != nil {
-		s.fail(w, "open revision", err)
+		s.fail(w, r, "open revision", err)
 		return
 	}
 	body := meta(revision)
@@ -530,7 +531,7 @@ func (s *Service) diff(w http.ResponseWriter, r *http.Request) {
 		// from the request — see [missingRevision].
 		httpjson.Fail(w, http.StatusNotFound, missingSide(err))
 	default:
-		s.fail(w, "diff revisions", err)
+		s.fail(w, r, "diff revisions", err)
 	}
 }
 
@@ -624,7 +625,7 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 
 	active, found, err := s.configs.Active(r.Context())
 	if err != nil {
-		s.fail(w, "read the active revision", err)
+		s.fail(w, r, "read the active revision", err)
 		return
 	}
 	createOnly, ok := s.checkPrecondition(w, r, active, found)
@@ -703,7 +704,7 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 
 	active, found, err := s.configs.Active(r.Context())
 	if err != nil {
-		s.fail(w, "read the active revision", err)
+		s.fail(w, r, "read the active revision", err)
 		return
 	}
 	if !found {
@@ -800,6 +801,11 @@ func (s *Service) refuseWrite(w http.ResponseWriter, r *http.Request, err error,
 	s.refuseApply(w, r, err)
 }
 
+// activationUnknown is what a person is told about an activation whose answer
+// was lost ([ActivationUnknownError]).
+const activationUnknown = "Couldn't confirm this change was saved. Reload " +
+	"the configuration to see whether it's active before sending it again."
+
 // refuseApply maps a write's failure onto this surface's answers.
 //
 // ONE MAPPING, so a programmatic caller and an HTTP one cannot disagree about
@@ -812,6 +818,7 @@ func (s *Service) refuseApply(w http.ResponseWriter, r *http.Request, err error)
 	var unknown *HoldersUnavailableError
 	var refused *AdmissionError
 	var managed *ManagedError
+	var activation *ActivationUnknownError
 	switch {
 	// THE CREDENTIAL'S REFUSAL FIRST, as [Service.prepare] decides it: a
 	// managed document refuses whoever is asking before anything they sent
@@ -868,6 +875,16 @@ func (s *Service) refuseApply(w http.ResponseWriter, r *http.Request, err error)
 					"cancel an open invitation (DELETE /iam/invitations/{id}) — " +
 					"each an admin's gesture — then send the write again",
 			})
+	case errors.As(err, &activation):
+		// AN ACTIVATION WHOSE ANSWER WAS LOST is an unknown outcome, never
+		// a condition: "try again in a moment" sent an administrator whose
+		// activation had landed back to send it again, refused as having
+		// lost a race to their own write. No Retry-After, since no wait
+		// tells them which it was; reading the configuration does.
+		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, 0, httpjson.Detail{
+			"outcome": "unknown", "stored_revision_id": activation.Stored,
+			"detail": activationUnknown,
+		})
 	case errors.As(err, &unknown):
 		log.Warn("config_seat_holders_unreadable",
 			"seats", unknown.Seats, "error", unknown.Err)
@@ -879,7 +896,7 @@ func (s *Service) refuseApply(w http.ResponseWriter, r *http.Request, err error)
 					"nothing was written",
 			})
 	default:
-		s.fail(w, "apply the config", err)
+		s.fail(w, r, "apply the config", err)
 	}
 }
 
@@ -933,7 +950,7 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 	document, company, err := s.openDocument(target)
 	if err != nil {
 		if !refuseUnreadable(w, err) {
-			s.fail(w, "open the revision to revert to", err)
+			s.fail(w, r, "open the revision to revert to", err)
 		}
 		return
 	}
@@ -1138,7 +1155,7 @@ func (s *Service) checkFleetAbsent(w http.ResponseWriter, r *http.Request) bool 
 	target, found, err := s.plane.Target(r.Context())
 	switch {
 	case err != nil:
-		s.fail(w, "read the fleet's activation", err)
+		s.fail(w, r, "read the fleet's activation", err)
 		return false
 	case !found:
 		return true
@@ -1194,7 +1211,7 @@ func (s *Service) lookup(w http.ResponseWriter, r *http.Request, id string,
 	}
 	revision, found, err := s.configs.Get(r.Context(), id)
 	if err != nil {
-		s.fail(w, "read revision", err)
+		s.fail(w, r, "read revision", err)
 		return store.Revision{}, false
 	}
 	if !found {
@@ -1268,7 +1285,7 @@ func intParam(w http.ResponseWriter, r *http.Request, name string, fallback int)
 // The reason reaches the LOG, never the caller: a store error can carry a
 // database path or a driver's own message, and this surface is the one an
 // operator reaches from a browser.
-func (s *Service) fail(w http.ResponseWriter, what string, err error) {
+func (s *Service) fail(w http.ResponseWriter, r *http.Request, what string, err error) {
 	// A REVISION THIS NODE CANNOT OPEN IS NOT A FAULT, and every route that
 	// reads one reaches here: GET /config, a revision read, a diff, the
 	// references, an entity, and a write whose prior is the active
@@ -1277,7 +1294,16 @@ func (s *Service) fail(w http.ResponseWriter, what string, err error) {
 	if refuseUnreadable(w, err) {
 		return
 	}
-	log.Error("config_request_failed", "what", what, "error", err)
+	// NOR IS A CONDITION OF THE NODE: a coordination store that did not
+	// answer (the fleet's activation is kept there) or a state-log refusal
+	// clears by waiting, or says what does, and was `500 internal_error`
+	// here, which told an administrator the engine had broken over a store
+	// that blinked.
+	if operator.AnswerCondition(r.Context(), w, log, "config_request_unavailable", err,
+		"what", what) {
+		return
+	}
+	log.ErrorContext(r.Context(), "config_request_failed", "what", what, "error", err)
 	httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
 }
 

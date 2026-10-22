@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -254,4 +255,50 @@ type mutePlane struct {
 
 func (p mutePlane) Target(context.Context) (coord.Activation, bool, error) {
 	return coord.Activation{}, false, p.err
+}
+
+// AN ACTIVATION WHOSE ANSWER WAS LOST IS AN UNKNOWN OUTCOME, NEVER A CONDITION.
+//
+// The coordination store took the pointer's write and its answer never came
+// back, so the fleet may be running the revision. Answered as a condition of
+// the node ("couldn't reach the rest of the fleet, try again in a moment") an
+// administrator sent it again from the same base and was refused as having
+// lost a race — to their own write. It says it could not confirm the change,
+// to read the configuration back, names the revision it stored, and carries no
+// Retry-After, since no wait tells which it was.
+//
+// Mutation: drop the unknown arm from commit and the write answers the
+// condition's sentence under a Retry-After.
+func TestAnActivationWhoseAnswerWasLostIsUnknown(t *testing.T) {
+	t.Parallel()
+	lost := &lostPlane{}
+	s := newSurfaceWith(t, func(o *configapi.Options) {
+		lost.Plane = o.Plane
+		o.Plane = lost
+	})
+	res := s.do(t, http.MethodPut, "/config", companyJSONDoc,
+		map[string]string{"X-Summary": "create", "If-None-Match": "*"})
+	body := decode(t, res)
+	if res.Code != http.StatusServiceUnavailable || body["outcome"] != "unknown" ||
+		body["stored_revision_id"] == nil || res.Header().Get("Retry-After") != "" ||
+		!strings.HasPrefix(fmt.Sprint(body["detail"]), "Couldn't confirm this change was saved.") {
+		t.Fatalf("a lost activation answered %d %v (Retry-After %q), want 503 unknown "+
+			"naming the stored revision, with no Retry-After", res.Code, body,
+			res.Header().Get("Retry-After"))
+	}
+	if strings.Contains(res.Body.String(), "nats") {
+		t.Errorf("the answer carries the store's own words: %s", res.Body)
+	}
+}
+
+// lostPlane activates on the plane beneath it and then answers as a store whose
+// answer was lost: the write landed, and nobody heard.
+type lostPlane struct{ coord.Plane }
+
+func (p *lostPlane) Activate(ctx context.Context, req coord.ActivationRequest) (coord.Activation, error) {
+	if _, err := p.Plane.Activate(ctx, req); err != nil {
+		return coord.Activation{}, err
+	}
+	return coord.Activation{}, fmt.Errorf("%w: %w: publish the activation: nats: timeout",
+		coord.ErrUnavailable, coord.ErrWriteUnknown)
 }

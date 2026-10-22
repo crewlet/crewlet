@@ -400,6 +400,28 @@ func logCondition(event string, err error, fields ...any) {
 	log.Info(event, fields...)
 }
 
+// AnswerCondition answers err as the condition of the node it is, for a
+// surface whose every other failure is a fault: `503` in a person's words for
+// it ([builtin.ConditionSentence]), under its own hint ([statelog.RetryAfter]:
+// none where no wait clears it, this node's undecided hint where it derived
+// none), its error to the surface's own log ([LogCondition]) under event with
+// fields. It writes nothing and reports false for an error no condition
+// claims, which the caller answers as the fault it is.
+func AnswerCondition(ctx context.Context, w http.ResponseWriter, logger *slog.Logger,
+	event string, err error, fields ...any) bool {
+
+	said, ok := builtin.ConditionSentence(err)
+	if !ok {
+		return false
+	}
+	LogCondition(ctx, logger, event, err, fields...)
+	httpjson.UnavailableWith(w, httpjson.CodeUnavailable,
+		httpjson.RetrySeconds(statelog.RetryAfter(err,
+			time.Duration(authz.RetryUndecidedSeconds)*time.Second)),
+		httpjson.Detail{"detail": said})
+	return true
+}
+
 // classOf is the refusal class a cause states, or "" where it states none.
 func classOf(cause error) crewletmcp.Refusal {
 	return crewletmcp.RefusalOf(crewletmcp.Result{Failed: true, Cause: cause})

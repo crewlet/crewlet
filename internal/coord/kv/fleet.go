@@ -1863,6 +1863,11 @@ func (f *FleetStore) pointer(ctx context.Context) (activationRecord, uint64, boo
 //
 // previous is the instant of the pointer seq names, which an expecting write
 // read in [FleetStore.expectedSeq].
+//
+// A WRITE THAT FAILED FOR ANY OTHER REASON IS UNKNOWN ([writeUnknown]): it was
+// sent, so the pointer may name it, and an unavailable store alone read as
+// "nothing moved" told an administrator to send again an activation that had
+// landed — refused, next time, as a race lost to their own write.
 func (f *FleetStore) flip(ctx context.Context, req coord.ActivationRequest,
 	payload json.RawMessage, seq uint64, previous time.Time) (uint64, time.Time, error) {
 
@@ -1879,7 +1884,7 @@ func (f *FleetStore) flip(ctx context.Context, req coord.ActivationRequest,
 				return 0, time.Time{}, fmt.Errorf("%w: an activation was published "+
 					"while this write was being prepared", coord.ErrActivationRaced)
 			}
-			return 0, time.Time{}, unavailable("publish the activation", err)
+			return 0, time.Time{}, writeUnknown("publish the activation", err)
 		}
 		return revision, at, nil
 	case req.Expect == "":
@@ -1899,7 +1904,7 @@ func (f *FleetStore) flip(ctx context.Context, req coord.ActivationRequest,
 			return 0, time.Time{}, fmt.Errorf("%w: %s was replaced while this "+
 				"write was being prepared", coord.ErrActivationRaced, req.Expect)
 		}
-		return 0, time.Time{}, unavailable("publish the activation", err)
+		return 0, time.Time{}, writeUnknown("publish the activation", err)
 	}
 	return revision, at, nil
 }
@@ -1948,7 +1953,7 @@ func (f *FleetStore) assert(ctx context.Context, req coord.ActivationRequest,
 			}
 			continue
 		default:
-			return 0, time.Time{}, unavailable("publish the activation", err)
+			return 0, time.Time{}, writeUnknown("publish the activation", err)
 		}
 	}
 }

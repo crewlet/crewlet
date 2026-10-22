@@ -483,7 +483,7 @@ func (s *Service) getEntity(kind string) http.HandlerFunc {
 				})
 			return
 		case err != nil:
-			s.fail(w, "read the active revision", err)
+			s.fail(w, r, "read the active revision", err)
 			return
 		}
 		// A SEAT OR A UNIT IS READ BY ITS LEAD as well as by the admin
@@ -549,7 +549,7 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 
 		active, found, err := s.configs.Active(r.Context())
 		if err != nil {
-			s.fail(w, "read the active revision", err)
+			s.fail(w, r, "read the active revision", err)
 			return
 		}
 		if !found {
@@ -573,7 +573,7 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 		if inOrgChart(kind) {
 			var company *config.Company
 			if company, err = s.open(active); err != nil {
-				s.fail(w, "open the active revision", err)
+				s.fail(w, r, "open the active revision", err)
 				return
 			}
 			if !s.mayReach(w, r, authz.ActionOrgWrite, company, kind, id) {
