@@ -346,7 +346,10 @@ func publishError(subject statelog.Subject, err error) error {
 		}
 		return fmt.Errorf("%w: %s", ErrPurged, artifact)
 	case errors.Is(err, statelog.ErrConflict):
-		return fmt.Errorf("%w: %s: %w", ErrConflict, subject.ID, err)
+		// THE FRAMEWORK'S SENTINEL AND NOT ITS ERROR, whose text names the
+		// subject the race was lost on, and not the subject either: a
+		// caller that printed this error would show a person a broker path.
+		return fmt.Errorf("%w: %w", ErrConflict, statelog.ErrConflict)
 	// THE COLLISION IS THE WHOLE OF WHAT HAPPENED, so the framework's own
 	// words, which name the subject's broker path, are not carried after
 	// it: a person reads this error on the artifacts API.

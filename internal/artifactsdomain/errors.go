@@ -174,7 +174,16 @@ func (e *FolderAmbiguous) Error() string {
 // already shows the artifact, or as the answer to a link; the id goes, the
 // sentence stays, and the error a log prints keeps it ([CutArtifactID],
 // [VersionMoved]).
+//
+// AND THE FRAMEWORK'S OWN THREE IN ITS WORDS — a lost race ([ErrConflict] wraps
+// it), a create of what is there ([AlreadyExists] carries it) and a write a
+// deletion keeps deleted — as every surface that asks the state log first
+// tells them ([statelog.Sentence]), so a caller asking only this one never
+// prints a subject the framework met.
 func Sentence(err error) string {
+	if said, ok := statelog.Sentence(err); ok {
+		return said
+	}
 	text := err.Error()
 	var moved *VersionMoved
 	if errors.As(err, &moved) {
