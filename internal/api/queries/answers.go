@@ -1320,9 +1320,9 @@ func (s Sources) events(ctx context.Context, p Params) (any, error) {
 	q.Limit = Clamp(p.Int("limit", 0), DefaultEventPage, MaxEventPage)
 	if before := p.String("before_id"); before != "" {
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		at, err := time.Parse(time.RFC3339Nano, p.String("before_time"))
+		at, err := cursorTime(p)
 		if err != nil {
-			return nil, fmt.Errorf("%w: before_id needs a before_time: %w", ErrBadParams, err)
+			return nil, err
 		}
 		q.Before = &store.Cursor{Time: at, ID: before}
 	}
@@ -1365,19 +1365,27 @@ func (s Sources) eventSeries(ctx context.Context, p Params) (any, error) {
 	}
 	bucket := store.EventBucket(p.String("bucket"))
 	if !bucket.Valid() {
-		return nil, fmt.Errorf("%w: bucket %q is not one of %v",
-			ErrBadParams, bucket, store.EventBuckets)
+		return nil, fmt.Errorf("%w: the bucket parameter is one of %s, and %q isn't",
+			ErrBadParams, choices(store.EventBuckets), bucket)
 	}
 	got, coverage, err := s.Events.Histogram(ctx, store.HistogramQuery{ListQuery: filters, Bucket: bucket})
 	switch {
-	case errors.Is(err, store.ErrHistogramBucket),
-		errors.Is(err, store.ErrHistogramSpan),
-		errors.Is(err, store.ErrHistogramRelated):
-		// A REQUEST THIS SURFACE UNDERSTOOD AND REFUSED, so it answers
-		// 400 with the store's own sentence rather than 500 with
-		// "something went wrong": every one of these names the parameter
-		// the caller has to change.
-		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
+	// A REQUEST THIS SURFACE UNDERSTOOD AND REFUSED, so it answers 400
+	// rather than 500 with "something went wrong", each naming the
+	// parameter the caller has to change — in words of this surface's,
+	// because the store's open with its package's name and say the window
+	// as Go prints a duration ("hour over 2160h0m0s is 2160 buckets").
+	case errors.Is(err, store.ErrHistogramBucket):
+		return nil, fmt.Errorf("%w: the bucket parameter is one of %s, and %q isn't",
+			ErrBadParams, choices(store.EventBuckets), bucket)
+	case errors.Is(err, store.ErrHistogramSpan):
+		return nil, fmt.Errorf("%w: that window holds more %s bars than a "+
+			"chart shows, which is %d at most. Pick a coarser bucket or a "+
+			"shorter window", ErrBadParams, bucket, store.MaxHistogramBuckets)
+	case errors.Is(err, store.ErrHistogramRelated):
+		return nil, fmt.Errorf("%w: a chart can't be narrowed to a related "+
+			"agent, since its bars would disagree with the events they "+
+			"count. Leave related_agent out of it", ErrBadParams)
 	case err != nil:
 		return nil, err
 	}
@@ -1586,10 +1594,37 @@ func instantParam(p Params, name string) (time.Time, error) {
 	}
 	at, err := time.Parse(time.RFC3339, raw)
 	if err != nil {
+		// NEVER THE PARSE ERROR, which says the value against Go's layout
+		// ("cannot parse \"x\" as \"2006\""): what the caller sent and
+		// what it should be are the whole of it.
 		return time.Time{}, fmt.Errorf("%w: %s must be an RFC 3339 instant "+
-			"(2026-04-16T09:00:00Z), and %q is not: %w", ErrBadParams, name, raw, err)
+			"(2026-04-16T09:00:00Z), and %q isn't", ErrBadParams, name, raw)
 	}
 	return at.UTC(), nil
+}
+
+// cursorTime is the before_time a before_id pages from, refused as
+// [instantParam] refuses one, and required: a cursor is the pair.
+func cursorTime(p Params) (time.Time, error) {
+	at, err := instantParam(p, "before_time")
+	switch {
+	case err != nil:
+		return time.Time{}, err
+	case at.IsZero():
+		return time.Time{}, fmt.Errorf("%w: before_id needs a before_time, an "+
+			"RFC 3339 instant (2026-04-16T09:00:00Z)", ErrBadParams)
+	}
+	return at, nil
+}
+
+// choices is a closed set as a sentence lists it — "minute, hour, day" —
+// and never as Go prints a slice, "[minute hour day]".
+func choices[T ~string](set []T) string {
+	words := make([]string, len(set))
+	for i, v := range set {
+		words[i] = string(v)
+	}
+	return strings.Join(words, ", ")
 }
 
 // cursorOf is the position a caller resumes from, or nil at the end.

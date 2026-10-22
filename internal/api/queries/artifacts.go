@@ -151,7 +151,7 @@ func artifactID(p Params) (artifacts.ID, error) {
 func versionNumber(p Params) (int, error) {
 	n, ok := p.WholeInt("n")
 	if !ok || n < 1 {
-		return 0, fmt.Errorf("%w: n is a version number, 1 or more", ErrBadParams)
+		return 0, fmt.Errorf("%w: the n parameter is a version number, 1 or more", ErrBadParams)
 	}
 	return int(n), nil
 }
