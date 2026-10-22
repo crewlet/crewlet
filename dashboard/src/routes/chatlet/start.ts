@@ -157,9 +157,9 @@ function roomOf(receipt: unknown): string {
  * THE REFUSAL'S OWN TEXT SURVIVES, and that is deliberate: the act transport
  * carries the tool's sentence where it names the field and the rule that
  * refused it — "this company holds 1000 live channels and the maximum is
- * 1000", "a private room's membership is the only way into it" — and that
- * sentence is the whole of its value. A screen that replaced it with a
- * category would throw away the only part a person can act on.
+ * 1000", "#platform is a unit's own room, and the org chart decides who's in
+ * it" — and that sentence is the whole of its value. A screen that replaced
+ * it with a category would throw away the only part a person can act on.
  */
 export function reportFor(kind: StartKind, result: ActResult): StartReport {
   switch (result.kind) {

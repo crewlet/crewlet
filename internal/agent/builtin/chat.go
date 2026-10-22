@@ -475,9 +475,10 @@ func chatWriteFailure(ctx context.Context, name string, err error, next string) 
 		return refusedBy(class, err, fmt.Sprintf("%s could not be served on this "+
 			"node: %s. Nothing was written.", name, chatlet.Sentence(err)))
 	case errors.Is(err, chatlet.ErrNameTaken):
+		// THE DOMAIN'S SENTENCE NAMES THE ROOM AND THE TWO WAYS ON; what
+		// this adds is where a seat finds the room that holds it.
 		return refusedBy(class, err, fmt.Sprintf("%s: %s. A room's name is its "+
-			"address and that one is held — open the room that has it "+
-			"("+ListChannelsTool+" names the ones you are in), or choose another name.",
+			"address, and "+ListChannelsTool+" names the rooms you are in.",
 			name, chatlet.Sentence(err)))
 	case class == tools.RefusalExists:
 		return refusedBy(class, err, fmt.Sprintf("%s: %s.", name, chatlet.Sentence(err)))

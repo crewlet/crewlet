@@ -229,7 +229,11 @@ nothing was sent.
 **A private room refuses every write from outside it except moderation.**
 Posting, joining, changing the topic and reacting all take the room's own
 membership rule, a reaction included, so nothing can be attached to a
-conversation you cannot open. An edit is narrower: it is the message's author's
+conversation you cannot open. Somebody outside the room is told there's no
+such room, the same answer a read gives them and the same as for an id
+nothing holds, so a refusal never says what a private room is called or, for
+a direct conversation whose id anybody can work out from two names, that
+those two talk. A member joining a room they're already in changes nothing. An edit is narrower: it is the message's author's
 alone. A delete is the author's, or an administrator's as a moderator. The
 author's half is narrower too, and it is what lets somebody take their own
 words back out of a room they have since left. The administrator's half is

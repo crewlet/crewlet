@@ -330,12 +330,21 @@ var (
 // what refuses it, and [reopenRoom].
 const archivedRoom = "this room is archived, so it takes no new messages. " + reopenRoom
 
+// archivers is who archives a room and opens it again: the archive's own
+// relation (authz's chat.channel.archive — the room's creator, the lead of the
+// unit whose room it is or of a unit above it, or an administrator), named
+// because a room has no owner of its own a person could be sent to.
+//
+// ONE PHRASE FOR BOTH REFUSALS that say it, an archive refused and a post into
+// an archived room, because they were two and each left somebody out: neither
+// named the lead of a team above, and they called the same person an admin in
+// one and an administrator in the other.
+const archivers = "whoever created it, the lead of its team or of a team " +
+	"above it, or an admin"
+
 // reopenRoom is who changes an archived room, said at the write and at the
-// verdict alike: the archive's own relation (authz's chat.channel.archive —
-// the room's creator, the lead of the unit whose room it is or of a unit above
-// it, or an administrator), named because a room has no owner of its own a
-// person could be sent to.
-const reopenRoom = "Whoever created it, its team's lead or an administrator can reopen it"
+// verdict alike ([archivers]).
+const reopenRoom = "Only " + archivers + " can reopen it"
 
 // Actor is who is making a write.
 //
@@ -749,6 +758,17 @@ func (s *Store) CreateChannel(ctx context.Context, actor Actor, in NewChannel) (
 			return decide(stamp, actor, subject, OpCreate, scope, opID, payload, nil, at)
 		},
 	})
+	if errors.Is(err, ErrNameTaken) {
+		// THE ROOM THAT HAS IT is often the one meant, and it is named
+		// by the name the creator typed: the subject the create lost on
+		// is a digest of it. ANOTHER NAME LEADS, because it always
+		// works: names are one namespace for the whole company, so the
+		// room holding this one may be a private room the creator is
+		// not in and cannot open.
+		return Written{}, fmt.Errorf("%w: #%s is already another room's name, "+
+			"so pick another one (or open #%s if you're in it)", ErrNameTaken,
+			name, name)
+	}
 	if err != nil {
 		return Written{}, err
 	}
@@ -1008,17 +1028,19 @@ type ChannelAuthority struct {
 
 // archives refuses an archive this authority does not admit on room as the
 // decide's own snapshot holds it.
+//
+// THE ROOM'S NEW UNIT IS NOT NAMED: a unit's key is minted by a write, never
+// typed by the person reading this, and "another team" is the whole of what
+// changes their next move.
 func (a ChannelAuthority) archives(room Channel) error {
 	if !a.Archive {
-		return fmt.Errorf("%w: archiving %s, or opening it again, closes the "+
-			"conversation for everybody in it, so it is the room's creator's, "+
-			"its unit's lead's or an admin's to do — and this patch was "+
-			"admitted for none of them", ErrForbidden, room.ID)
+		return fmt.Errorf("%w: archiving %s, or reopening it, changes it for "+
+			"everyone in it. Only %s can do that", ErrForbidden, room.called(),
+			archivers)
 	}
 	if room.Unit != a.ArchiveUnit {
-		return fmt.Errorf("%w: room %s is recorded under unit %q, not %q where "+
-			"its archive was decided — read it again and decide on %q",
-			ErrConflict, room.ID, room.Unit, a.ArchiveUnit, room.Unit)
+		return fmt.Errorf("%w: %s moved to another team after this was decided. "+
+			"Read it again, then try again", ErrConflict, room.called())
 	}
 	return nil
 }
@@ -1050,11 +1072,11 @@ func (s *Store) SetMembers(ctx context.Context, actor Actor, channelID string,
 		// holds the store directly and calls [Store.SetUnitMembers],
 		// which is the one writer this refusal makes room for.
 		if room.Kind == KindUnit {
-			return nil, fmt.Errorf("%w: %s is a unit's own room and its "+
-				"membership comes from the org chart — a set written here "+
-				"would be undone by the next apply, with nothing to say so. "+
-				"Change the unit in the company document instead",
-				ErrForbidden, room.ID)
+			return nil, fmt.Errorf("%w: %s is a unit's own room, and the "+
+				"org chart decides who's in it. A change here would be undone "+
+				"the next time the company's configuration is applied. Change "+
+				"the unit in the company document instead",
+				ErrForbidden, room.called())
 		}
 		return members, nil
 	})
@@ -1062,12 +1084,20 @@ func (s *Store) SetMembers(ctx context.Context, actor Actor, channelID string,
 
 // Join puts the actor in a room.
 //
-// THREE KINDS REFUSE IT, each for its own reason: a private room's membership
-// is the only way in, so joining one on your own authority is letting yourself
-// in; a direct conversation's membership IS its identity, so adding somebody
-// does not widen the room, it names a different one; and a unit's room is the
-// ORG CHART'S, which is the rule [Store.Leave] already stated from the other
-// side.
+// A SEAT ALREADY IN THE ROOM IS TOLD IT IS IN THE ROOM, whatever its kind: the
+// set it would publish is the set the room holds, which is the no-op every
+// membership write answers ([Store.setMembership]). Asked after the kinds
+// below, a member re-joining their own private room was told only someone
+// already in it could add them, and a seat the chart put in its unit's room
+// that the chart decides who is in it.
+//
+// THREE KINDS REFUSE EVERYBODY ELSE, each for its own reason: a private room's
+// membership is the only way in, and somebody outside it is answered as
+// though it were not there, by the rule every write into it takes
+// ([reachable]); a direct conversation's membership IS its identity, so adding
+// somebody does not widen the room, it names a different one; and a unit's
+// room is the ORG CHART'S, which is the rule [Store.Leave] already stated from
+// the other side.
 //
 // THE UNIT REFUSAL IS THE SAME SENTENCE AS LEAVE'S, and it has to be. Leave
 // refuses because "leaving it would be undone by the next apply, with nothing
@@ -1084,16 +1114,14 @@ func (s *Store) Join(ctx context.Context, actor Actor, channelID string) (Writte
 		return Written{}, opErr
 	}
 	return s.members(ctx, actor, channelID, opID, func(room Channel, held []Member) ([]Member, error) {
-		if room.Kind == KindPrivate {
-			return nil, fmt.Errorf("%w: %s is a private room, and its "+
-				"membership is the only way into it — somebody already in it "+
-				"adds you", ErrForbidden, room.ID)
+		if slices.ContainsFunc(held, func(m Member) bool { return m.Handle == actor.Name() }) {
+			return held, nil
 		}
 		if room.Kind == KindUnit {
-			return nil, fmt.Errorf("%w: %s is a unit's own room and its "+
-				"membership comes from the org chart — joining it would be "+
-				"undone by the next apply, with nothing to say so. Move the "+
-				"seat into the unit instead", ErrForbidden, room.ID)
+			return nil, fmt.Errorf("%w: %s is a unit's own room, and the "+
+				"org chart decides who's in it. Joining it would be undone the "+
+				"next time the company's configuration is applied. Move the "+
+				"seat into the unit instead", ErrForbidden, room.called())
 		}
 		return withMember(held, Member{Handle: actor.Name()}), nil
 	})
@@ -1115,10 +1143,10 @@ func (s *Store) Leave(ctx context.Context, actor Actor, channelID string) (Writt
 	}
 	return s.members(ctx, actor, channelID, opID, func(room Channel, held []Member) ([]Member, error) {
 		if room.Kind == KindUnit {
-			return nil, fmt.Errorf("%w: %s is a unit's own room and its "+
-				"membership is maintained by the org chart — leaving it would "+
-				"be undone by the next apply, with nothing to say so",
-				ErrForbidden, room.ID)
+			return nil, fmt.Errorf("%w: %s is a unit's own room, and the "+
+				"org chart decides who's in it. Leaving it would be undone the "+
+				"next time the company's configuration is applied",
+				ErrForbidden, room.called())
 		}
 		return withoutMember(held, actor.Name()), nil
 	})
@@ -1258,10 +1286,10 @@ func (s *Store) chartMembership(ctx context.Context, actor Actor, channelID stri
 	return s.setMembership(ctx, actor, channelID, s.newOpID(), chart,
 		func(room Channel, _ []Member) ([]Member, error) {
 			if room.Kind != KindUnit {
-				return nil, fmt.Errorf("%w: %s is a %s room, and the org chart "+
-					"maintains only a %s room's membership — a set written here "+
-					"would take a room somebody else owns", ErrForbidden,
-					room.ID, room.Kind, KindUnit)
+				return nil, fmt.Errorf("%w: %s isn't a unit's own room, and the "+
+					"org chart decides who's in a unit's room only. A change "+
+					"here would take over a room someone else owns", ErrForbidden,
+					room.called())
 			}
 			return members, nil
 		})
@@ -1362,18 +1390,6 @@ func (s *Store) setMembership(ctx context.Context, actor Actor, channelID, opID 
 				return statelog.Decision{}, err
 			}
 			out, read = room, revision
-			if room.Kind.Direct() {
-				// A DIRECT CONVERSATION'S IDENTITY IS ITS
-				// PARTICIPANT SET. Its id was derived from exactly
-				// these handles, so adding one does not widen this
-				// room — it names a different room, which
-				// [Store.OpenDirect] is how you reach.
-				return statelog.Decision{}, fmt.Errorf("%w: %s is a %s, whose "+
-					"id IS its participant set — changing who is in it does "+
-					"not widen this conversation, it names a different one, "+
-					"which OpenDirect is how you reach",
-					ErrForbidden, room.ID, room.Kind)
-			}
 			held, err := readMembersTx(ctx, tx, room.ID)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -1381,6 +1397,24 @@ func (s *Store) setMembership(ctx context.Context, actor Actor, channelID, opID 
 			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			if err := reachable(room, held, actor); err != nil {
 				return statelog.Decision{}, err
+			}
+			if room.Kind.Direct() {
+				// A DIRECT CONVERSATION'S IDENTITY IS ITS
+				// PARTICIPANT SET. Its id was derived from exactly
+				// these handles, so adding one does not widen this
+				// room — it names a different room, which
+				// [Store.OpenDirect] is how you reach.
+				//
+				// AFTER [reachable], and only for somebody in it:
+				// anybody can derive a conversation's id from two
+				// handles, so refused before it, this sentence
+				// told whoever asked that those two talk to each
+				// other, where the reader answers that it is not
+				// there.
+				return statelog.Decision{}, fmt.Errorf("%w: a direct "+
+					"conversation is the people in it, so changing who's in it "+
+					"would make it a different conversation. Open one with the "+
+					"people you want instead", ErrForbidden)
 			}
 			set, err := next(room, held)
 			if err != nil {
@@ -1543,11 +1577,12 @@ func (s *Store) Erase(ctx context.Context, actor Actor, opID, channelID string,
 			}
 			for _, id := range ids {
 				if !known[id] {
-					return statelog.Decision{}, fmt.Errorf("%w: message %s is "+
-						"not in room %s — an erase names exactly what it "+
-						"removes, and one that named a message it could not "+
-						"remove would be audited as removing it", ErrNotFound,
-						id, room.ID)
+					// THE MESSAGE BY THE ID THE CALLER NAMED, which is the
+					// one way to say which of its list is missing; the room
+					// as a person knows it.
+					return statelog.Decision{}, fmt.Errorf("%w: message %s isn't "+
+						"in %s. An erase removes exactly what it names, so "+
+						"nothing was removed", ErrNotFound, id, room.called())
 				}
 			}
 			return decide(stamp, actor, subject, OpErase, scope, opID, MessageErase{
@@ -2140,17 +2175,13 @@ func (s *Store) Edit(ctx context.Context, actor Actor, channelID, messageID stri
 				return statelog.Decision{}, err
 			}
 			if held.Author != actor.Name() {
-				return statelog.Decision{}, fmt.Errorf("%w: message %s was "+
-					"written by %s and only its author may edit it — a remark "+
-					"somebody else can rewrite is a remark attributed to a "+
-					"person who did not make it", ErrForbidden, messageID,
-					held.Author)
+				return statelog.Decision{}, fmt.Errorf("%w: this message was "+
+					"written by %s, and only its author can edit it",
+					ErrForbidden, held.Author)
 			}
 			if held.DeletedAt != nil {
-				return statelog.Decision{}, fmt.Errorf("%w: message %s was "+
-					"removed, and its row survives so the thread hung off it "+
-					"still has its root — there is nothing left to rewrite",
-					ErrNotFound, messageID)
+				return statelog.Decision{}, fmt.Errorf("%w: this message was "+
+					"taken back, so there's nothing left to edit", ErrNotFound)
 			}
 			// THE LINKS THE MESSAGE ENDS WITH, resolved against the row
 			// in this snapshot, so the record carries them whole and
@@ -2274,10 +2305,10 @@ func (s *Store) Delete(ctx context.Context, actor Actor, channelID,
 				return statelog.Decision{}, err
 			}
 			if held.Author != actor.Name() && !authority.Moderate {
-				return statelog.Decision{}, fmt.Errorf("%w: message %s was "+
-					"written by %s — its author may take it back, and removing "+
-					"somebody else's words is moderation, which is an admin's",
-					ErrForbidden, messageID, held.Author)
+				return statelog.Decision{}, fmt.Errorf("%w: this message was "+
+					"written by %s. Only its author can take it back, and "+
+					"removing someone else's words needs an admin",
+					ErrForbidden, held.Author)
 			}
 			message = held
 			message.DeletedBy, message.DeletedByKind = actor.Name(), actor.Kind
@@ -2419,7 +2450,7 @@ func (s *Store) react(ctx context.Context, actor Actor, channelID, messageID,
 				}
 				if full {
 					return statelog.Decision{}, VerdictReactionsFull.refusal(OpReact,
-						opID, room.ID)
+						room)
 				}
 			}
 			// A REACTION NEVER WAKES ANYBODY and never discharges a
@@ -2522,7 +2553,7 @@ func (s *Store) decided(ctx context.Context, op OpKind, channelID, messageID str
 	// REFUSED: nothing of this gesture is in the room, so the answer names
 	// the room and the operation and no message.
 	return Written{Channel: w.Channel, ChangeID: w.ChangeID, Outcome: w.Outcome,
-		Verdict: v}, v.refusal(op, w.ChangeID, channelID)
+		Verdict: v}, v.refusal(op, w.Channel)
 }
 
 // ---- forming and publishing one record --------------------------------- //
@@ -2558,11 +2589,12 @@ func (s *Store) publish(ctx context.Context, req statelog.Request) (statelog.Res
 		return result, nil
 	case errors.Is(err, statelog.ErrExists):
 		if ObjectKind(req.Subject.Kind) == KindChannelName {
-			// THE ROOM THAT HAS IT is often the one meant.
-			return result, fmt.Errorf("%w: %s. Open that room, or pick another name",
-				ErrNameTaken, req.Subject.ID)
+			// THE NAME IS THE CREATE'S TO SAY ([Store.CreateChannel]):
+			// this subject's id is a digest of it, which no reader can
+			// place.
+			return result, ErrNameTaken
 		}
-		return result, fmt.Errorf("%w: %s", ErrRoomExists, req.Subject.ID)
+		return result, ErrRoomExists
 	case errors.Is(err, statelog.ErrConflict):
 		return result, fmt.Errorf("%w: %s: %w", ErrConflict, req.Subject.ID, err)
 	}
@@ -2845,7 +2877,7 @@ func readRoomTx(ctx context.Context, tx *sql.Tx, channelID string) (Channel, uin
 		channelID).Scan(&document, &revision)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return Channel{}, 0, fmt.Errorf("%w: room %s", ErrNotFound, channelID)
+		return Channel{}, 0, notFound()
 	case err != nil:
 		return Channel{}, 0, fmt.Errorf("chatlet: read room %s: %w", channelID, err)
 	}
@@ -2905,8 +2937,8 @@ func readMessageTx(ctx context.Context, tx *sql.Tx, channelID, messageID string)
 		messageID, channelID).Scan(&document)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return Message{}, fmt.Errorf("%w: message %s in room %s",
-			ErrNotFound, messageID, channelID)
+		return Message{}, fmt.Errorf("%w: there's no such message in this room",
+			ErrNotFound)
 	case err != nil:
 		return Message{}, fmt.Errorf("chatlet: read message %s: %w", messageID, err)
 	}
@@ -3055,6 +3087,13 @@ func eraseableTx(ctx context.Context, tx *sql.Tx, channelID string, ids []string
 // refuses nobody, which is what makes a unit's room the place work addressed
 // to nobody in particular lands.
 //
+// SOMEBODY OUTSIDE A PRIVATE ROOM IS TOLD IT IS NOT THERE ([notFound]), the
+// answer the reader gives them, and never that they may not: a private room's
+// existence is itself information, and a direct conversation's id is derived
+// from the two people in it, so a refusal that said "members only" — the room's
+// name included — told anybody holding an id, or two handles, who talks to whom
+// and what the room is called.
+//
 // FOUR GESTURES DO NOT TAKE IT, because each has an authority of its own for
 // which membership is the wrong question — and they are not all narrower.
 //
@@ -3097,8 +3136,7 @@ func reachable(room Channel, members []Member, actor Actor) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("%w: %s is a %s room and %s is not in it — its membership "+
-		"is the only way in", ErrForbidden, room.ID, room.Kind, actor.Name())
+	return notFound()
 }
 
 // reachableTx is [reachable] where the caller has not already read the
@@ -3131,12 +3169,15 @@ func (s *Store) reachableTx(ctx context.Context, tx *sql.Tx, room Channel, actor
 // is wrong: the gesture is well formed and the actor is entitled to it, and
 // what is missing is this node's knowledge of what the room IS — which is why
 // it is [ErrUnknownKind] and not [ErrForbidden].
+//
+// AND IT NEVER SAYS THE ROOM'S NAME: this node cannot tell who may read the
+// room, so it cannot tell whether the caller may know what it is called either,
+// and a name said here would reach somebody holding only the room's id.
 func unknownKind(room Channel) error {
-	return fmt.Errorf("%w: %s is a %q room — a newer node in this fleet "+
-		"created it, and whether its transcript is reachable without being in "+
-		"it is exactly what this build cannot say. Upgrade this node; until "+
-		"then it serves and accepts nothing in that room", ErrUnknownKind,
-		room.ID, room.Kind)
+	return fmt.Errorf("%w: a newer node made this room a %q room, a kind this "+
+		"node doesn't know, so it can't tell who may read it. Upgrade this node. "+
+		"Until then it serves and takes nothing in that room", ErrUnknownKind,
+		room.Kind)
 }
 
 // applyPatch moves a room's document by a patch, so a caller's answer is what

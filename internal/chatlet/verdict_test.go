@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -266,7 +267,16 @@ func TestAPostIntoARoomArchivedAheadOfItIsRefusedAndSoIsItsRetry(t *testing.T) {
 // snapshot still had her in, and a room that admits its members only takes no
 // word from somebody who is not one at the post's position.
 //
-// Mutation: stop carrying MembersOnly on the post and the message lands.
+// AND THE REFUSAL NAMES THE ROOM AS A PERSON KNOWS IT, `#deal-room`, for the
+// model in a tool's answer, a seat's or a person's assistant's: it named the
+// room by its id, which nobody chose. It is the author's own post, decided
+// while she was in the room, so the name is hers to read — but the CLASS is the
+// one the decide gives somebody outside a private room, not found, since a
+// surface answers the verdict and the decide the same way.
+//
+// Mutation: stop carrying MembersOnly on the post and the message lands; name
+// the room by its id again and the sentence does; refuse it as forbidden and
+// the class does.
 func TestAPostByAnAuthorTakenOutOfAPrivateRoomAheadOfItIsRefused(t *testing.T) {
 	t.Parallel()
 	r := newWriteRound(t, agents().withPeople("jane", "kim"))
@@ -287,7 +297,11 @@ func TestAPostByAnAuthorTakenOutOfAPrivateRoomAheadOfItIsRefused(t *testing.T) {
 				room.Channel.ID, chatlet.NewMessage{Body: "my last word"})
 		})
 	refused(t, r, "a post by an author taken out of the room", got, err,
-		chatlet.ErrForbidden, chatlet.VerdictNotMember)
+		chatlet.ErrNotFound, chatlet.VerdictNotMember)
+	if said := chatlet.Sentence(err); !strings.Contains(said, "#deal-room") ||
+		strings.Contains(said, room.Channel.ID) {
+		t.Errorf("the refusal reads %q, want it to name #deal-room and no id", said)
+	}
 	if n := r.count(`SELECT COUNT(*) FROM chat_messages WHERE channel_id = ?`,
 		room.Channel.ID); n != 0 {
 		t.Fatalf("the private room holds %d messages from an author not in it", n)
