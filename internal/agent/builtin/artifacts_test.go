@@ -96,7 +96,8 @@ func decode(t *testing.T, res tools.Result) map[string]any {
 // invalid: tracker: the path …".
 //
 // Mutation: print CleanPath's error with %v again in get_artifact, or drop
-// "tracker: " from domainSentence, and this goes red.
+// "worklet: " or the manifest's class word from the artifacts' Sentence, and
+// this goes red.
 func TestAPathTheFilePathRuleRefusesIsToldInItsWords(t *testing.T) {
 	t.Parallel()
 	r := newArtifactRig(t, artifactChart{}, requesters{"founder": founderPrincipal(iam.Apps...)}, nil)
@@ -111,7 +112,8 @@ func TestAPathTheFilePathRuleRefusesIsToldInItsWords(t *testing.T) {
 		t.Fatalf("a path with an empty folder in it was read: %s", got.Output)
 	case !strings.Contains(got.Output, "empty folder"):
 		t.Errorf("the refusal does not say what is wrong with the path: %s", got.Output)
-	case strings.Contains(got.Output, "tracker:") || strings.Contains(got.Output, "manifest:"):
+	case strings.Contains(got.Output, "worklet:") || strings.Contains(got.Output, "manifest:") ||
+		strings.Contains(got.Output, "invalid:"):
 		t.Errorf("the refusal tells a model a package's name: %s", got.Output)
 	}
 }

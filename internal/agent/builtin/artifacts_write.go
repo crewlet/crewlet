@@ -587,7 +587,7 @@ func publishFailure(ctx context.Context, tool string, c artifactCaller, err erro
 		quota    *artifactsdomain.QuotaExceeded
 		gone     *artifactsdomain.CarriedObjectGone
 	)
-	said := domainSentence(err)
+	said := artifactupload.Sentence(err)
 	switch {
 	case errors.Is(err, estate.ErrOutcomeUnknown):
 		return tools.Result{Output: fmt.Sprintf("%s: %s. It may have landed and it may "+

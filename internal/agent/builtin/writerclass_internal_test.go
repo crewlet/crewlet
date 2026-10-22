@@ -17,7 +17,13 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/artifactdata"
+	"github.com/crewlet/crewlet/internal/artifactdata/query"
+	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/canvasformat"
+	"github.com/crewlet/crewlet/internal/artifacts/foldername"
+	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/artifactupload"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/estate"
@@ -168,6 +174,7 @@ var domainErrors = map[string]map[string]classRow{
 		"ErrUploadStale": {err: artifactsdomain.ErrUploadStale, means: objectState},
 
 		"CarriedObjectGone": {err: &artifactsdomain.CarriedObjectGone{}, means: objectState},
+		"AlreadyExists":     {err: &artifactsdomain.AlreadyExists{What: "a-1"}, means: taken},
 		"ErrFutureVersion": {err: &artifactsdomain.ErrFutureVersion{},
 			why: "a record a newer build wrote, which the framework defers rather than refuses"},
 		"QuotaExceeded": {err: &artifactsdomain.QuotaExceeded{}, means: companyQuota},
@@ -459,6 +466,84 @@ func TestNoDomainRefusalReadsAsAGoError(t *testing.T) {
 		}
 		if said, ok := WriterSentence(err); !ok || leaks(said) != "" {
 			t.Errorf("%v is told in the deciding domain's words as %q (%v)", err, said, ok)
+		}
+	}
+}
+
+// NO ARTIFACT OR DATASTORE REFUSAL READS AS A GO ERROR, on any surface: a
+// refusal as the artifacts' and the datastores' writers and readers really
+// build it — a sentinel wrapping the sentence, one wrapping the refusal of the
+// package that decided it (a manifest's path, an audience, a format's
+// starter), a lost race carrying the framework's error after it — answered by
+// the domain's tools and in the deciding domain's words ([WriterSentence]),
+// carries no package name, no class word and no framework error.
+//
+// [TestNoDomainRefusalReadsAsAGoError] asks the same of every declared error,
+// and the sentinels are bare there: "artifactsdomain: invalid" cut of its
+// package reads "invalid" and leaks nothing it looks for. Wrapped as every
+// refusal is, the artifacts' tools told a model "publish_artifact refused
+// that: invalid: kind …" and a manifest's path "invalid: invalid: the path
+// …", the class word kept after the package name was cut.
+//
+// Mutation: drop a class word from the artifacts' or the datastore's
+// sentence cuts, or word a tool's refusal with the error's text again, and a
+// row goes red.
+func TestNoArtifactRefusalReadsAsAGoError(t *testing.T) {
+	t.Parallel()
+	leaks := func(text string) string {
+		for _, p := range []string{"artifactsdomain:", "artifactupload:", "artifactdata:",
+			"manifest:", "artifacts:", "worklet:", "foldername:", "query:", "canon:", "canvasformat:",
+			"statelog", "invalid:", "forbidden:", "%!"} {
+			if strings.Contains(text, p) {
+				return p
+			}
+		}
+		return ""
+	}
+	_, badPath := manifest.CleanPath("pages//index.html")
+	_, badAudience := artifacts.ParseAudience("nobody")
+	_, _, badName := foldername.Check("..")
+	if badPath == nil || badAudience == nil || badName == nil {
+		t.Fatal("the refusals this gate wraps were not refused")
+	}
+	lostOn := fmt.Errorf("%w: crewlet.artifacts.artifact.a-1 kept changing under this write",
+		statelog.ErrConflict)
+	for domain, rows := range map[string]map[string]error{
+		artifactsdomain.Domain{}.Name(): {
+			"a field": fmt.Errorf("%w: kind %q is not one of %v",
+				artifactsdomain.ErrInvalid, "zine", artifacts.Kinds),
+			"a manifest's path": fmt.Errorf("%w: %w", artifactsdomain.ErrInvalid, badPath),
+			"a folder's name":   fmt.Errorf("%w: %w", artifactsdomain.ErrInvalid, badName),
+			"an audience":       fmt.Errorf("%w: %w", artifactsdomain.ErrInvalid, badAudience),
+			"the pipeline's": fmt.Errorf("%w: a layout is a design's starter, and a "+
+				"design starts from one", artifactupload.ErrInvalid),
+			"a starter's": fmt.Errorf("%w: %w", artifactupload.ErrInvalid,
+				fmt.Errorf("%w: boards: a board needs a path", canvasformat.ErrInvalid)),
+			"a lost race": fmt.Errorf("%w: a-1: %w", artifactsdomain.ErrConflict, lostOn),
+		},
+		artifactdata.Domain{}.Name(): {
+			"a field": fmt.Errorf("%w: collection %q is not in the schema",
+				artifactdata.ErrInvalid, "rows"),
+			"a standing": fmt.Errorf("%w: only an editor undoes another's write",
+				artifactdata.ErrForbidden),
+			"a query":     fmt.Errorf("%w: 9 filters is more than 8", query.ErrInvalid),
+			"a lost race": fmt.Errorf("%w: a-1: %w", artifactdata.ErrConflict, lostOn),
+		},
+	} {
+		for name, err := range rows {
+			for tool, failure := range toolFailures[domain] {
+				if out := failure(err).Output; leaks(out) != "" {
+					t.Errorf("%s's %s, answered by %s, carries %q: %s", domain, name, tool,
+						leaks(out), out)
+				}
+			}
+			// THE DECIDING DOMAIN'S WORDS, for every refusal a domain writer
+			// decided: the pipeline's own and a query's are no domain's,
+			// and the surfaces that answer them word them themselves.
+			if said, ok := WriterSentence(err); ok && leaks(said) != "" {
+				t.Errorf("%s's %s is told in the deciding domain's words as %q",
+					domain, name, said)
+			}
 		}
 	}
 }

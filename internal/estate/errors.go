@@ -272,6 +272,7 @@ var typedKinds = []typedKind{
 
 	{"iam.LookRefused", reflect.TypeFor[*iam.LookRefused]()},
 
+	{"artifactsdomain.AlreadyExists", reflect.TypeFor[*artifactsdomain.AlreadyExists]()},
 	{"artifactsdomain.BrandContrast", reflect.TypeFor[*artifactsdomain.BrandContrast]()},
 	{"artifactsdomain.BrandIncomplete", reflect.TypeFor[*artifactsdomain.BrandIncomplete]()},
 	{"artifactsdomain.CarriedObjectGone", reflect.TypeFor[*artifactsdomain.CarriedObjectGone]()},
