@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts/mediatype"
 	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/artifactupload"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -508,7 +509,7 @@ func (t *getArtifact) readFile(ctx context.Context, read *foreignRead, c artifac
 	clean, err := manifest.CleanPath(path)
 	if err != nil {
 		r := failed(fmt.Sprintf(GetArtifactTool+": %q is not a published path: %s.", clip(path),
-			domainSentence(err)))
+			artifactupload.Sentence(err)))
 		return nil, &r
 	}
 	e, ok := manifest.EntryAt(v.Manifest, clean)

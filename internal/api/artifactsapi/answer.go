@@ -127,16 +127,28 @@ func trashed(w http.ResponseWriter) {
 		"detail": "the artifact is in the trash; its owner restores it first"})
 }
 
-// prefixes are the package names a refusal's text begins with, which the
-// person reading the detail has no use for.
-var prefixes = []string{"artifactsdomain: ", "artifactupload: ", "artifactsapi: ", "artifactserve: ",
-	"artifacts: ", "objectives: "}
+// prefixes are the names of the packages beside the publish pipeline a
+// refusal here may open with — this surface's own, the artifact origin's and
+// the objectives' — which the person reading the detail has no use for.
+var prefixes = []string{"artifactsapi: ", "artifactserve: ", "objectives: "}
 
-// say is err's text as a detail a person reads.
+// say is err as a detail a person reads.
+//
+// A LOST RACE AND A CREATE OF WHAT IS THERE are told in the state log's words
+// for a person ([statelog.Sentence]), as every surface tells them: the
+// artifacts' own text for a lost race carries the framework's after it, the
+// broker subject the race was lost on. Every other refusal of the artifacts is
+// worded by the publish pipeline ([artifactupload.Sentence]), which cuts every
+// package name and class word wherever it sits: this surface trimmed package
+// names from the front only, so a refusal read "invalid: kind …" and a
+// manifest's "invalid: manifest: invalid: …".
 func say(err error) string {
-	text := err.Error()
+	if said, ok := statelog.Sentence(err); ok {
+		return said
+	}
+	text := artifactupload.Sentence(err)
 	for _, p := range prefixes {
-		text = strings.TrimPrefix(text, p)
+		text = strings.ReplaceAll(text, p, "")
 	}
 	return text
 }

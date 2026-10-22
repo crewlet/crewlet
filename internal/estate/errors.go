@@ -256,6 +256,7 @@ var typedKinds = []typedKind{
 
 	{"artifactsdomain.CarriedObjectGone", reflect.TypeFor[*artifactsdomain.CarriedObjectGone]()},
 	{"artifactsdomain.ErrFutureVersion", reflect.TypeFor[*artifactsdomain.ErrFutureVersion]()},
+	{"artifactsdomain.AlreadyExists", reflect.TypeFor[*artifactsdomain.AlreadyExists]()},
 	{"artifactsdomain.QuotaExceeded", reflect.TypeFor[*artifactsdomain.QuotaExceeded]()},
 	{"artifactsdomain.VersionMoved", reflect.TypeFor[*artifactsdomain.VersionMoved]()},
 

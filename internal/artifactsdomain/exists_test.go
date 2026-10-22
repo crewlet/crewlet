@@ -3,6 +3,7 @@ package artifactsdomain_test
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
@@ -19,8 +20,14 @@ import (
 // malformed request; a source address keeps its own collision, which names the
 // address rather than an id nobody chose.
 //
+// AND IT IS THE FRAMEWORK'S REFUSAL TOO, in its chain and not its words: a
+// person is told a create of what is there in the state log's sentence on
+// every domain ([statelog.Sentence]), and the framework's own text names the
+// subject's broker path.
+//
 // Mutation: drop the ErrExists arm from publishError, or tell RefusedExists as
-// ErrInvalid again, and a case goes red.
+// ErrInvalid again, or take statelog.ErrExists out of the chain, and a case
+// goes red.
 func TestACreateOfWhatIsThereIsACollision(t *testing.T) {
 	t.Parallel()
 	guard := fmt.Errorf("%w: artifact.x", statelog.ErrExists)
@@ -43,6 +50,14 @@ func TestACreateOfWhatIsThereIsACollision(t *testing.T) {
 	} {
 		if !errors.Is(c.err, c.want) || errors.Is(c.err, c.not) {
 			t.Errorf("%s is told %v, want %v and not %v", name, c.err, c.want, c.not)
+		}
+		if !errors.Is(c.want, artifactsdomain.ErrExists) {
+			continue
+		}
+		if said, _ := statelog.Sentence(c.err); said != statelog.AlreadyThere ||
+			strings.Contains(c.err.Error(), "statelog") {
+			t.Errorf("%s is told %q to a person and %q to a log, want %q and no "+
+				"framework words", name, said, c.err, statelog.AlreadyThere)
 		}
 	}
 	// AND A LOST RACE STAYS THE DOMAIN'S CONFLICT.
