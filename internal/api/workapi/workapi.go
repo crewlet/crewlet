@@ -961,15 +961,20 @@ func failErr(w http.ResponseWriter, r *http.Request, err error, key string) {
 // `400 bad_params` as every read surface answers it. It is neither a condition
 // nor a fault, and it reached the fault's arm: a download floored on the wrong
 // log answered `500 internal_error` and logged an error about a request.
+//
+// EACH IS TOLD IN ITS PACKAGES' WORDS WITHOUT THEIR NAMES
+// ([builtin.ReadRefusalSentence]): a person was handed the error's whole text,
+// "worklet: no such task: ENG-42", and a floor on another log carried
+// "statelog: " in the middle of its sentence.
 func readFailed(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, worklet.ErrNoTask) || errors.Is(err, doclet.ErrNotFound) {
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound,
-			map[string]string{"detail": err.Error()})
+			map[string]string{"detail": builtin.ReadRefusalSentence(err)})
 		return
 	}
 	if errors.Is(err, statelog.ErrForeignPosition) {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams,
-			map[string]string{"detail": err.Error()})
+			map[string]string{"detail": builtin.ReadRefusalSentence(err)})
 		return
 	}
 	if why, ok := builtin.Condition(err); ok {

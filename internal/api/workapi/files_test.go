@@ -518,6 +518,10 @@ func TestAnUploadRefusedByWhatIsKnownReadsNothing(t *testing.T) {
 			answerOf(t, rec)["error"] != string(httpjson.CodeNoProject) {
 			t.Fatalf("an upload into no project answered %d: %s", rec.Code, rec.Body.String())
 		}
+		// IN THE TRACKER'S WORDS, never its package's name.
+		if strings.Contains(rec.Body.String(), "worklet:") {
+			t.Errorf("the refusal tells a person the package's name: %s", rec.Body.String())
+		}
 		if fake.objects != 0 {
 			t.Error("the body was streamed into the store before the refusal")
 		}
@@ -866,10 +870,12 @@ func TestADownloadNoDataNodeServedIsUnavailable(t *testing.T) {
 // refuses a `min_position` on another domain's log before it waits for
 // anything, and every node refuses it the same, so it is `400 bad_params`
 // naming the log, as every read surface answers it: never a fault of this
-// node.
+// node — and in the framework's words without its name, which the error
+// carries in the middle of its sentence.
 //
 // Mutation: drop the foreign-position arm from readFailed and the download is
-// a `500 internal_error`.
+// a `500 internal_error`; answer it with the error's own text and the
+// package's name reaches the person.
 func TestADownloadFlooredOnAnotherLogIsBadParams(t *testing.T) {
 	t.Parallel()
 	fake := newFakeFiles(t)
@@ -886,6 +892,9 @@ func TestADownloadFlooredOnAnotherLogIsBadParams(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), topics.PagesLogStream) {
 		t.Errorf("the refusal does not name the log the floor is on: %s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "statelog:") {
+		t.Errorf("the refusal tells a person the package's name: %s", rec.Body.String())
 	}
 }
 
