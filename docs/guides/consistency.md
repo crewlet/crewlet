@@ -273,8 +273,8 @@ A **write** refused by the log names a reason from the same vocabulary, and a
 reason spelled like one of the codes above agrees with it about waiting — the
 two describe one state of one node. Every surface that writes to a state log
 (`/worklet`, `/doclet/pages`, `/chatlet`, `/artifacts` with its datastore's
-`/artifacts/{id}/data`, `/artifact-folders`, `/brand`, `/operator/act`, `/iam` and
-`/auth`) answers every one of them
+`/artifacts/{id}/data`, `/artifact-folders`, `/brand`, `/operator/act`, `/iam`,
+`/auth` and `/assistant`) answers every one of them
 `503`, with a `Retry-After` only for the four that clear on their own; the
 other thirteen carry none, because the same write is refused the same however
 often it is sent here.

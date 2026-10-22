@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/assistant/proposal/approval"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
@@ -181,6 +182,12 @@ func pageValid(w http.ResponseWriter, page *wire.PageContext) bool {
 
 // refuse answers a decision's error in the engine's envelope: the one mapping
 // every decision route refuses by.
+//
+// A DECISION THE STORE REFUSED WROTE NOTHING, so it is no unknown outcome: a
+// condition of the node is told as one ([operator.AnswerCondition]), in a
+// person's words under its own hint, and anything no condition claims is a
+// fault. Only a decision nobody can confirm ([approval.Unconfirmed]) is
+// answered `outcome: unknown`.
 func (s *Decisions) refuse(w http.ResponseWriter, r *http.Request, key string, err error) {
 	var (
 		decided     *approval.Decided
@@ -223,6 +230,9 @@ func (s *Decisions) refuse(w http.ResponseWriter, r *http.Request, key string, e
 			"op_id", key, "error", err)
 		httpjson.UnknownOutcome(w, authz.RetryUndecidedSeconds, key, false,
 			httpjson.Detail{"detail": opkey.UnknownDetail(false)})
+	case operator.AnswerCondition(r.Context(), w, s.log, "assistant_decision_condition", err,
+		nil, "path", r.URL.Path, "op_id", key):
+		// A CONDITION, in a person's words and under its own hint.
 	default:
 		s.log.ErrorContext(r.Context(), "assistant_decision_failed", "path", r.URL.Path,
 			"error", err)

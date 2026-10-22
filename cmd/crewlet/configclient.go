@@ -178,6 +178,15 @@ func (c *configClient) refusal(status int, contentType string, raw []byte) error
 		return lostRace(c.base, body.Current, body.Stored, body.Node)
 	case status == http.StatusServiceUnavailable && body.Outcome == httpjson.OutcomeUnknown:
 		return unansweredImport(c.base, body.Stored, body.Node)
+	case status == http.StatusServiceUnavailable && body.Error == string(httpjson.CodeUnavailable) &&
+		body.Reason == "" && body.Detail != "":
+		// ANY OTHER CONDITION OF THE NODE — a store too busy to take the
+		// revision, one closed for a snapshot, a log at its ceiling — is told
+		// in the node's own words for a person, which say whether waiting
+		// clears it: blaming every 503 on a leader election sent an operator
+		// waiting for one that was never coming.
+		return fmt.Errorf("%s could not take the import, so nothing was written. %s",
+			c.base, body.Detail)
 	case status == http.StatusServiceUnavailable && body.Error == string(httpjson.CodeUnavailable):
 		// THE FLEET'S POINTER COULD NOT BE READ, which every write is built
 		// on: nothing was written, and it clears within a leader election.

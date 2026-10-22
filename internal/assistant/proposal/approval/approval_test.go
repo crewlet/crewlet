@@ -792,6 +792,71 @@ func TestARepeatedDecisionTheStoreCannotAnswerIsUnconfirmed(t *testing.T) {
 	}
 }
 
+// A DECISION THE STORE REFUSED IS THE STORE'S OWN ERROR, never one nobody can
+// confirm: the record was not written, so the surface tells the refusal as
+// the condition or the fault it is. Every store error once came back as
+// Unconfirmed, and a person whose approval a full log refused was told it may
+// have landed and asked to approve again into the same refusal. So is a read
+// of the proposal, or of whether its turn may carry on, that failed before
+// anything was decided. A settlement the store refuses after the write was
+// SENT is still unconfirmed, because the write's own outcome stands whatever
+// kept its record out.
+//
+// Mutation: answer a failed move as Unconfirmed (as move did) and the first
+// two rows go red; answer either failed read as Unconfirmed and its row does;
+// return a failed settlement's error as it is and the last case does.
+func TestADecisionTheStoreRefusedIsTheStoresOwnError(t *testing.T) {
+	t.Parallel()
+	ada := approvaltest.Person(approvaltest.Noon.Add(time.Hour))
+	ctx := approvaltest.As(t.Context(), ada)
+	refused := errors.New("the log refused the record")
+	approve := func(a *approval.Approver, ap approval.Approval) error {
+		_, err := a.Approve(ctx, ap)
+		return err
+	}
+	for _, tc := range []struct {
+		name   string
+		fail   func(*approvaltest.Fleet)
+		decide func(*approval.Approver, approval.Approval) error
+	}{
+		{"an approval", func(f *approvaltest.Fleet) { f.Store.FailMoves(refused) }, approve},
+		{"a decline", func(f *approvaltest.Fleet) { f.Store.FailMoves(refused) },
+			func(a *approval.Approver, ap approval.Approval) error {
+				_, err := a.Decline(ctx, ap)
+				return err
+			}},
+		{"a read of the proposal", func(f *approvaltest.Fleet) { f.Store.FailReads(refused) },
+			approve},
+		{"a read of whether its turn carries on",
+			func(f *approvaltest.Fleet) { f.Turns.FailCarries(refused) }, approve},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := approvaltest.NewFleet()
+			p := f.Propose(t, ada, nil)
+			tc.fail(f)
+			err := tc.decide(f.Node(t), approvaltest.Approve(p))
+			var unconfirmed *approval.Unconfirmed
+			if !errors.Is(err, refused) || errors.As(err, &unconfirmed) {
+				t.Errorf("a decision the store refused answered %v, want the store's own error", err)
+			}
+			if len(f.API.Sent()) != 0 || f.Store.State(p.ID) != wire.ProposalProposed {
+				t.Errorf("a refused decision sent %d writes and left the proposal %s",
+					len(f.API.Sent()), f.Store.State(p.ID))
+			}
+		})
+	}
+	f := approvaltest.NewFleet()
+	p := f.Propose(t, ada, nil)
+	f.Store.FailMovesAfter(2, refused)
+	_, err := f.Node(t).Approve(ctx, approvaltest.Approve(p))
+	var unconfirmed *approval.Unconfirmed
+	if !errors.As(err, &unconfirmed) || len(f.API.Sent()) != 1 {
+		t.Errorf("a settlement the store refused after the write was sent answered %v "+
+			"after %d sends, want Unconfirmed after one", err, len(f.API.Sent()))
+	}
+}
+
 // A SETTLEMENT HAS A DEADLINE OF ITS OWN: the settle record and the
 // resumption run detached from the approving request, which has none, and
 // within SettleTimeout, so a store that hangs never pins the approval for

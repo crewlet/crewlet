@@ -179,7 +179,7 @@ func (s *Service) getCharter(w http.ResponseWriter, r *http.Request) {
 		return
 	case err != nil:
 		if !RefuseUnreadable(w, err) {
-			s.fail(w, "read the active revision", err)
+			s.fail(w, r, "read the active revision", err)
 		}
 		return
 	}
@@ -244,14 +244,14 @@ func (s *Service) putCharter(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if err != nil {
-			s.refuseApply(w, err)
+			s.refuseApply(w, r, err)
 			return
 		}
 		if done {
 			return
 		}
 	}
-	s.refuseApply(w, raced)
+	s.refuseApply(w, r, raced)
 }
 
 // charterWrite is one attempt of a charter write.

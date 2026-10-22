@@ -361,7 +361,7 @@ func (s *Service) mayReach(w http.ResponseWriter, r *http.Request, a authz.Actio
 
 	o, err := company.Organization()
 	if err != nil {
-		s.fail(w, "build the organization the request is decided on", err)
+		s.fail(w, r, "build the organization the request is decided on", err)
 		return false
 	}
 	p, ok := principalOf(w, r)

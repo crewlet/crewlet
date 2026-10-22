@@ -474,18 +474,23 @@ func TestATurnWhoseCloseDidNotLandIsSettled(t *testing.T) {
 
 // AN INTERRUPTED CLOSE THAT DID NOT LAND IS NOT REPORTED AS ONE: the stream
 // fails rather than telling the person the turn ended, and the next stream
-// closes it.
+// closes it. It fails with the close's unknown outcome as itself, never as
+// the assistant's own Unavailable, which carried a wait of two seconds
+// whatever the outcome was.
 //
 // Mutation: log the failed close and answer interrupted (the old behaviour)
-// and the first stream ends a turn the record still says runs.
+// and the first stream ends a turn the record still says runs; wrap the
+// unknown outcome in an Unavailable again (writeFailure) and it fails as one.
 func TestAnInterruptedCloseThatDidNotLandIsSurfaced(t *testing.T) {
 	t.Parallel()
 	a, _ := fleetOf(t, evals.RigOptions{}, evals.RigOptions{})
 	turn := orphan(t, a)
 	a.Store.FailCloses(1)
 	c, done := stream(t, a, turn, 0)
-	if err := <-done; !errors.Is(err, assistant.ErrUnavailable) {
-		t.Fatalf("a stream whose close did not land: err = %v, want unavailable", err)
+	if err := <-done; !errors.Is(err, assistant.ErrOutcomeUnknown) ||
+		errors.Is(err, assistant.ErrUnavailable) {
+		t.Fatalf("a stream whose close did not land: err = %v, want its unknown outcome "+
+			"as itself", err)
 	}
 	if d := evals.Last(c.Frames(), wire.EventDone); d != nil {
 		t.Fatalf("the stream told the person the turn ended %s though nothing recorded it",

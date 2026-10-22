@@ -1072,9 +1072,12 @@ const (
 	// CodeAssistantBusy is a person past their running turns or their turn
 	// rate. 429 with a Retry-After.
 	CodeAssistantBusy Code = "assistant_busy"
-	// CodeAssistantUnavailable is an assistant this node cannot run now:
-	// every model in its chain failing, or the turn's runner out of
-	// reach. 503, with a Retry-After where a wait is known to help.
+	// CodeAssistantUnavailable is an assistant this node cannot run now for
+	// a reason of its own: no model chain it can build, the node shutting
+	// down, or the turn's runner on a node this one cannot reach. 503 with
+	// no Retry-After, since no wait it knows clears any of them. A
+	// condition of the node is answered as one instead (unavailable, in a
+	// person's words under its own hint).
 	CodeAssistantUnavailable Code = "assistant_unavailable"
 	// CodeAssistantModelNotReady is a question refused before its first
 	// round because every model in the assistant's chain is known unusable
@@ -1484,7 +1487,7 @@ var codes = map[Code]string{
 		"Wait for it to finish, or stop it, then ask again.",
 	CodeAssistantBusy: "You have asked the assistant too much at once. Wait the moment " +
 		"Retry-After names, then ask again.",
-	CodeAssistantUnavailable:   "The assistant cannot answer right now. Try again in a moment.",
+	CodeAssistantUnavailable:   "The assistant can't answer here, and waiting won't change that.",
 	CodeAssistantModelNotReady: "The assistant's model cannot answer right now.",
 	CodeAssistantFileRefused: "This file cannot be attached. Attach a PNG, JPEG, WebP " +
 		"or GIF image.",

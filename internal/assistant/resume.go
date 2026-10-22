@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -114,7 +113,8 @@ func (s *Service) Resume(ctx context.Context, r approval.Resumption) (wire.TurnA
 	floor := s.continuing(ctx, r.Owner, r.Turn, keep.Seq)
 	acts, err := s.acts(ctx, person)
 	if err != nil {
-		return wire.TurnAccepted{}, &Unavailable{RetryAfter: 2 * time.Second, Cause: err}
+		return wire.TurnAccepted{}, fmt.Errorf("assistant: the writes the person may "+
+			"propose: %w", err)
 	}
 	if err = s.admit(ctx, person); err != nil {
 		return wire.TurnAccepted{}, err
@@ -128,7 +128,7 @@ func (s *Service) Resume(ctx context.Context, r approval.Resumption) (wire.TurnA
 	}()
 	meter, err := s.budget.Meter(ctx, person)
 	if err != nil {
-		return wire.TurnAccepted{}, &Unavailable{RetryAfter: 2 * time.Second, Cause: err}
+		return wire.TurnAccepted{}, fmt.Errorf("assistant: the turn's budget meter: %w", err)
 	}
 	if refusal := budgetRefusal(ctx, meter); refusal != nil {
 		return wire.TurnAccepted{}, refusal

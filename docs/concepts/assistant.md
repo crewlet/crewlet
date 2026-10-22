@@ -362,6 +362,11 @@ model cannot answer rather than leaving you waiting:
   signed out, it reached its usage limit, it took too long, or it could not be
   started. **Try again** is offered only where asking again can help: after a
   usage limit resets, or after a model that took too long.
+- **When Crewlet cannot take it.** A question, an image or an approval that
+  Crewlet cannot take right now (its copy of the records is behind, the room
+  for them is full, or a store did not answer) is refused in words that say
+  what happened and who clears it. It asks you to try again only where waiting
+  helps.
 
 | You see | What to do |
 |---|---|
