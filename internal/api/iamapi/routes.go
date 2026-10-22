@@ -342,7 +342,7 @@ func (s *Service) unavailable(w http.ResponseWriter, r *http.Request,
 
 	log.Log(r.Context(), auth.UnreadLevel(r.Context()), "api_iam_read_failed",
 		"what", what, "error", err)
-	httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(err))
+	auth.UnavailableIdentity(w, err)
 }
 
 // sequence folds the answers of a gesture that is several records — an edit's
@@ -411,6 +411,16 @@ func ownLanding(result statelog.Result) bool {
 // good", which nobody does to a person here.
 const personRemoved = "This person was removed, so nothing was written."
 
+// What an administrator is told about a create or an invitation that landed
+// and whose answer this node cannot read back yet ([iamdomain.NotReadBack]).
+const (
+	notReadBackPerson = "They were added, but this node can't show their " +
+		"first password link yet. Send the same request again in a moment " +
+		"to get it."
+	notReadBackInvitation = "The invitation was sent, but this node can't " +
+		"show its link yet. Send the same request again in a moment to get it."
+)
+
 // answerWrite renders one identity write's outcome, `200` on success.
 func (s *Service) answerWrite(w http.ResponseWriter, r *http.Request, opID string,
 	result statelog.Result, err error, extra map[string]any) {
@@ -463,6 +473,10 @@ func (s *Service) answerWrite(w http.ResponseWriter, r *http.Request, opID strin
 //   - A LOST RACE, [statelog.ErrConflict]: 409 `stale`, which the same request
 //     resolves once read again.
 //   - THE PERSON REMOVED between the route's read and the record: 404.
+//   - A WRITE THAT LANDED AND CANNOT BE READ BACK HERE YET,
+//     [iamdomain.NotReadBack]: 503 with the op id and the write's own
+//     outcome (`pending` or `applied`, never `unknown`), saying what landed —
+//     the same request again under the same key hands back what it made.
 //   - AN ESTATE THAT COULD NOT DECIDE: 503 WITH the operation id and the
 //     Retry-After the refusal's own rule gives ([auth.RetryIdentity]). It used
 //     to be a bare 503, which a client cannot tell from a node that is gone
@@ -502,6 +516,7 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 		taken   *iamdomain.ErrTaken
 		record  *iamdomain.Refusal
 		refused *statelog.Unavailable
+		unread  *iamdomain.NotReadBack
 	)
 	// A REFUSAL CARRIES WHAT THE CALLER PASSED TOO — the id it was about,
 	// and, for an edit refused partway, the steps that landed before it and
@@ -624,20 +639,52 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 		refuse(http.StatusNotFound, httpjson.CodeNotFound,
 			httpjson.Detail{"detail": personRemoved, "op_id": opID})
 		return
+	case errors.As(err, &unread):
+		// A WRITE THAT LANDED and whose answer this node cannot read back
+		// yet: a person's create whose first password link, or an
+		// invitation's issue whose terms, are rows it has not applied. NOT
+		// A CONDITION, and never told as one: "couldn't do this right now"
+		// told an administrator a create that had landed had not, and a
+		// screen that replaces its key after any answer but an unknown one
+		// sent the retry under a new key, which the address and the seat
+		// the first attempt now hold refused — losing the link. So it says
+		// what landed, carries the write's own outcome beside the op id,
+		// and asks for the SAME request again, which a client keeps its
+		// key for; under the identity estate's hint, since applying the
+		// rows is what clears it.
+		log.InfoContext(r.Context(), "api_iam_write_unread", "op_id", opID,
+			"error", err)
+		outcome := unread.Result.Outcome
+		if outcome == "" {
+			outcome = statelog.OutcomePending
+		}
+		said := notReadBackPerson
+		if unread.Invitation {
+			said = notReadBackInvitation
+		}
+		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, auth.RetryIdentity(err),
+			withExtra(extra, httpjson.Detail{"detail": said, "op_id": opID,
+				"outcome": string(outcome)}))
+		return
 	case errors.Is(err, statelog.ErrUnavailable):
 		// THE REFUSAL'S OWN HINT: the identity estate's two seconds for
 		// one that clears here, and NONE for one no wait clears — a
 		// record too large, a full log, a refusal the broker named, an
 		// evicted node — so a client is not sent back to be refused the
-		// same way.
+		// same way. TOLD IN A PERSON'S WORDS for the refusal
+		// ([statelog.ConditionSentence]), whose advice agrees with that
+		// hint, and its own text to the log: it was the detail, so an
+		// administrator read "statelog: unavailable (behind): " and a
+		// position.
 		step := opID
 		if errors.As(err, &refused) && refused.OpID != "" {
 			step = refused.OpID
 		}
 		log.WarnContext(r.Context(), "api_iam_write_unavailable",
 			"op_id", opID, "step_op_id", step, "error", err)
+		said, _ := statelog.ConditionSentence(err)
 		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, auth.RetryIdentity(err),
-			withExtra(extra, httpjson.Detail{"detail": err.Error(), "op_id": opID}))
+			withExtra(extra, httpjson.Detail{"detail": said, "op_id": opID}))
 		return
 	case err != nil:
 		// THE FAULT'S OWN WORDS GO TO THE LOG, which is where the

@@ -105,6 +105,18 @@ func TestAStoreFaultIsAFiveHundredWithNoRetryAfter(t *testing.T) {
 	if after := header.Get("Retry-After"); after != "9" {
 		t.Errorf("Retry-After = %q, want the refusal's own 9 seconds", after)
 	}
+	// IN ITS CODE'S OWN WORDS, and the refusal's own text nowhere: the
+	// tool's sentence for it carried the refusal's message, framework,
+	// detail and all, and nobody has worded the condition for a person yet
+	// (ADR-0060), so the answer carries no detail and no tool_detail.
+	said, has := answer["detail"]
+	if has || answer["message"] != httpjson.CodeUnavailable.Message() ||
+		answer["tool_detail"] != nil || strings.Contains(fmt.Sprint(answer), "40 records") ||
+		strings.Contains(fmt.Sprint(answer), "statelog") {
+
+		t.Errorf("a refusal the state log made answered %v (detail %v), want its "+
+			"code's own message and nothing of its own text", answer, said)
+	}
 }
 
 // A WRITER'S ERROR IS NEVER THE DETAIL, on the surfaces that call a writer
@@ -144,6 +156,11 @@ func TestAWritersErrorIsWordedForWhoeverReadsIt(t *testing.T) {
 		{"an estate nobody served",
 			&estate.ErrUnserved{Detail: "10.0.0.7: out_of_service: applier halted"},
 			http.StatusServiceUnavailable, httpjson.CodeUnavailable, "", true},
+		// A STATE-LOG REFUSAL, in its code's own words and never its own
+		// text, which names the framework and its detail.
+		{"a log at its ceiling", fmt.Errorf("worklet: %w", &statelog.Unavailable{
+			Reason: statelog.ReasonLogFull, Detail: "raise stream.tracker_max_bytes on 10.0.0.7"}),
+			http.StatusServiceUnavailable, httpjson.CodeUnavailable, "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -160,7 +177,9 @@ func TestAWritersErrorIsWordedForWhoeverReadsIt(t *testing.T) {
 			if body["message"] != tc.code.Message() {
 				t.Errorf("message = %v, want the code's own sentence", body["message"])
 			}
-			for _, never := range []string{"/var/lib", "10.0.0.7", "`body`"} {
+			for _, never := range []string{"/var/lib", "10.0.0.7", "`body`", "statelog",
+				"tracker_max"} {
+
 				if strings.Contains(fmt.Sprint(body), never) {
 					t.Errorf("the answer %v carries the error's own %q", body, never)
 				}

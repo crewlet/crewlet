@@ -650,16 +650,21 @@ func TestARefusalFrameCarriesTheMappingsCodeAndFields(t *testing.T) {
 // caller — it names the parameter to change — and it reached the debug log and
 // nothing else, so a person who asked for a window past the spend history read
 // "the engine refused this request" with no word of which field or why. An
-// `unavailable` answer carries its STATE LOG's words, under the same key, and
-// never the error behind them. Every other code stays bare: its text can carry
-// a path, and a detail on it would be the leak the loop above guards against.
+// `unavailable` answer carries the STATE LOG's sentence for its refusal, under
+// the same key ([statelog.ConditionSentence]), and never the error behind it
+// or the refusal's own detail, which is written for whoever runs the node.
+// Every other code stays bare: its text can carry a path, and a detail on it
+// would be the leak the loop above guards against.
 //
 // Mutation: build the `unavailable` frame by setting its Unavailable alone,
-// and the state log's words never reach the frame.
+// and the state log's words never reach the frame; read the refusal's detail
+// into it, and the operator's remedy does.
 func TestARefusalCarriesItsSentenceAndNothingElseDoes(t *testing.T) {
 	t.Parallel()
 	const sentence = "days is 91, and a spend window is 1 to 90 company days — ask for at most 90"
 	const remedy = "raise the stream's byte ceiling"
+	full := &statelog.Refused{Code: statelog.RefuseLogFull, Detail: remedy}
+	told, _ := statelog.ConditionSentence(full)
 	for _, tc := range []struct {
 		err  error
 		want string
@@ -668,8 +673,7 @@ func TestARefusalCarriesItsSentenceAndNothingElseDoes(t *testing.T) {
 		{stream.ErrBadParams, ""},
 		{fmt.Errorf("%w: tokens: %w", stream.ErrUnavailable,
 			errors.New("open /var/lib/crewlet/crewlet.db: busy")), ""},
-		{fmt.Errorf("%w: tokens: %w", stream.ErrUnavailable,
-			&statelog.Refused{Code: statelog.RefuseLogFull, Detail: remedy}), remedy},
+		{fmt.Errorf("%w: tokens: %w", stream.ErrUnavailable, full), told},
 		{errors.New("open /var/lib/crewlet/crewlet.db: " + sentence), ""},
 	} {
 		f := newSocket(t, nil, func(context.Context, string, map[string]any) (any, error) {
@@ -689,6 +693,9 @@ func TestARefusalCarriesItsSentenceAndNothingElseDoes(t *testing.T) {
 			t.Errorf("%v: the frame carried a detail it has no business carrying: %v", tc.err, got)
 		case tc.want != "" && detail != httpjson.Sentence(tc.want):
 			t.Errorf("%v: detail = %v, want the refusal's own sentence %q", tc.err, detail, tc.want)
+		}
+		if text, _ := detail.(string); strings.Contains(text, remedy) {
+			t.Errorf("%v: the frame carried the refusal's own detail: %v", tc.err, got)
 		}
 		if tc.want == sentence && got["error"] != stream.CodeBadParams {
 			t.Errorf("%v: code = %v, want bad_params", tc.err, got["error"])

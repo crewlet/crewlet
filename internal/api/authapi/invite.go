@@ -145,7 +145,7 @@ func (s *Service) ViewInvite(w http.ResponseWriter, r *http.Request) {
 	}
 	email, err := s.openSealed(r, held)
 	if err != nil {
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(err))
+		auth.UnavailableIdentity(w, err)
 		return
 	}
 	view := inviteView{
@@ -251,7 +251,7 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 	opID := redemptionOpID(held.ID)
 	email, err := s.openSealed(r, held)
 	if err != nil {
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(err))
+		auth.UnavailableIdentity(w, err)
 		return
 	}
 	verifier, hashed := s.hash(w, r, adm, in.Password, "invite")
@@ -429,7 +429,7 @@ func (s *Service) presentedInvitation(w http.ResponseWriter, r *http.Request,
 	held, err := s.directory.InvitationByID(r.Context(), id)
 	if err != nil {
 		log.WarnContext(r.Context(), "api_invite_lookup_failed", "error", err)
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(err))
+		auth.UnavailableIdentity(w, err)
 		return iamdomain.InvitationRow{}, false
 	}
 	switch {

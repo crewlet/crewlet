@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/operator"
@@ -98,39 +99,59 @@ func TestEachOutcomeIsItsOwnStatus(t *testing.T) {
 // evicted node, a read refused by a node holding a record it cannot decode —
 // both answer the same however often they are asked, and a client told to come
 // back in two seconds polls them until somebody readmits or upgrades the node.
+//
+// AND A READ THIS SURFACE TAKES ITSELF IS TOLD IN A PERSON'S WORDS FOR IT
+// ([builtin.ConditionSentence]), whose advice agrees with that hint. A refusal
+// answered through the operator surface's one mapping, a tool's or a tool-less
+// write's, answers its code's own message instead: nobody has worded the
+// condition for a person there (ADR-0060). Neither is ever told in its own
+// text: a tool's sentence for it carried the refusal's message, framework,
+// detail and all, and a read this surface takes answered "this node could not
+// read what the decision is about: " and the same.
+//
+// Mutation: answer a read this surface takes in [builtin.Condition]'s words
+// again, or a tool's failure in the tool's own sentence, and its rows go red.
 func TestARefusalWaitingCannotClearSaysNothingAboutComingBack(t *testing.T) {
 	t.Parallel()
+	const detail = "the write needs 3:4182 on crewlet.tracker.task.ENG-1"
+	write := func(err error) func(*rig) { return func(r *rig) { r.writes.err = err } }
+	read := func(err error) func(*rig) { return func(r *rig) { r.reader.err = err } }
 	for _, c := range []struct {
 		name       string
-		setup      func(*rig)
+		err        error
+		setup      func(error) func(*rig)
 		method     string
 		target     string
 		body       any
 		retryAfter string
+		// told is a read this surface takes itself, answered in words for
+		// the condition rather than through the one refusal mapping.
+		told bool
 	}{
 		{"a write refused by an evicted node",
-			func(r *rig) {
-				r.writes.err = &statelog.Unavailable{Reason: statelog.ReasonEvicted}
-			}, http.MethodPost, "/worklet/items",
-			map[string]any{"title": "rotate the key", "project": "ENG"}, ""},
+			&statelog.Unavailable{Reason: statelog.ReasonEvicted, Detail: detail},
+			write, http.MethodPost, "/worklet/items",
+			map[string]any{"title": "rotate the key", "project": "ENG"}, "", false},
 		{"a write refused because this node is behind",
-			func(r *rig) {
-				r.writes.err = &statelog.Unavailable{Reason: statelog.ReasonBehind}
-			}, http.MethodPost, "/worklet/items",
+			&statelog.Unavailable{Reason: statelog.ReasonBehind, Detail: detail},
+			write, http.MethodPost, "/worklet/items",
 			map[string]any{"title": "rotate the key", "project": "ENG"},
-			strconv.Itoa(authz.RetryUndecidedSeconds)},
+			strconv.Itoa(authz.RetryUndecidedSeconds), false},
 		{"a read refused by a node holding a record it cannot decode",
-			func(r *rig) {
-				r.reader.err = &statelog.Refused{Code: statelog.RefuseDeferred,
-					Level: statelog.ReadSession}
-			}, http.MethodPost, "/worklet/items/ENG-1/rank",
-			map[string]any{"after": "ENG-2", "if_match": 3}, ""},
+			&statelog.Refused{Code: statelog.RefuseDeferred, Level: statelog.ReadSession,
+				Detail: detail},
+			read, http.MethodPost, "/worklet/items/ENG-1/rank",
+			map[string]any{"after": "ENG-2", "if_match": 3}, "", false},
 		{"a read refused by a node behind its log, from its own backlog",
-			func(r *rig) {
-				r.reader.err = &statelog.Refused{Code: statelog.RefuseBehind,
-					Level: statelog.ReadSession, RetryAfter: 9 * time.Second}
-			}, http.MethodPost, "/worklet/items/ENG-1/rank",
-			map[string]any{"after": "ENG-2", "if_match": 3}, "9"},
+			&statelog.Refused{Code: statelog.RefuseBehind, Level: statelog.ReadSession,
+				RetryAfter: 9 * time.Second, Detail: detail},
+			read, http.MethodPost, "/worklet/items/ENG-1/rank",
+			map[string]any{"after": "ENG-2", "if_match": 3}, "9", false},
+		{"a read this surface takes refused by a node at its log's ceiling",
+			&statelog.Refused{Code: statelog.RefuseLogFull, Level: statelog.ReadSession,
+				Detail: detail},
+			read, http.MethodPost, "/worklet/items/ENG-1/purge?confirm=ENG-1&reason=why", nil, "",
+			true},
 		// AN ESTATE NO DATA NODE SERVED clears when one serves again, so it
 		// is this node's undecided hint — never the `500` it answered while
 		// the router's refusal wrapped nothing the tools' rule knew. On a
@@ -139,34 +160,45 @@ func TestARefusalWaitingCannotClearSaysNothingAboutComingBack(t *testing.T) {
 		// every node REFUSING it: one no node answered is an unknown
 		// outcome instead (TestAWriteNoDataNodeAnsweredIsAnUnknownCarryingItsKey).
 		{"a read this surface takes that no data node served",
-			func(r *rig) { r.reader.err = &estate.ErrUnserved{Detail: "data-b: no answer"} },
-			http.MethodPost, "/worklet/items/ENG-1/purge?confirm=ENG-1&reason=why", nil,
-			strconv.Itoa(authz.RetryUndecidedSeconds)},
+			&estate.ErrUnserved{Detail: "data-b: no answer"},
+			read, http.MethodPost, "/worklet/items/ENG-1/purge?confirm=ENG-1&reason=why", nil,
+			strconv.Itoa(authz.RetryUndecidedSeconds), true},
 		{"a read a tool takes that no data node served",
-			func(r *rig) { r.reader.err = &estate.ErrUnserved{Detail: "data-b: no answer"} },
-			http.MethodPost, "/worklet/items/ENG-1/rank",
+			&estate.ErrUnserved{Detail: "data-b: no answer"},
+			read, http.MethodPost, "/worklet/items/ENG-1/rank",
 			map[string]any{"after": "ENG-2", "if_match": 3},
-			strconv.Itoa(authz.RetryUndecidedSeconds)},
+			strconv.Itoa(authz.RetryUndecidedSeconds), false},
 		{"a write a tool makes that no data node served",
-			func(r *rig) { r.writes.err = &estate.ErrUnserved{Detail: "data-b: out_of_service"} },
-			http.MethodPost, "/worklet/items",
+			&estate.ErrUnserved{Detail: "data-b: out_of_service"},
+			write, http.MethodPost, "/worklet/items",
 			map[string]any{"title": "rotate the key", "project": "ENG"},
-			strconv.Itoa(authz.RetryUndecidedSeconds)},
+			strconv.Itoa(authz.RetryUndecidedSeconds), false},
 		{"a write this surface makes that no data node served",
-			func(r *rig) { r.writes.err = &estate.ErrUnserved{Detail: "data-b: out_of_service"} },
-			http.MethodPost, "/worklet/items/ENG-1/purge?confirm=ENG-1&reason=why", nil,
-			strconv.Itoa(authz.RetryUndecidedSeconds)},
+			&estate.ErrUnserved{Detail: "data-b: out_of_service"},
+			write, http.MethodPost, "/worklet/items/ENG-1/purge?confirm=ENG-1&reason=why", nil,
+			strconv.Itoa(authz.RetryUndecidedSeconds), false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			r := newRig(t, chart{})
-			c.setup(r)
+			c.setup(c.err)(r)
 			got := r.do(as(admin("ana")), c.method, c.target, c.body)
 			if got.status != http.StatusServiceUnavailable {
 				t.Fatalf("answered %d, want 503: %v", got.status, got.body)
 			}
 			if after := got.header.Get("Retry-After"); after != c.retryAfter {
 				t.Errorf("Retry-After = %q, want %q", after, c.retryAfter)
+			}
+			want := ""
+			if c.told {
+				want, _ = builtin.ConditionSentence(c.err)
+			}
+			if detail, _ := got.body["detail"].(string); detail != want {
+				t.Errorf("detail = %q, want %q", detail, want)
+			}
+			if text := fmt.Sprint(got.body["detail"]); strings.Contains(text, "3:4182") ||
+				strings.Contains(text, "statelog") || strings.Contains(text, "data-b") {
+				t.Errorf("detail = %q carries the refusal's own text", text)
 			}
 		})
 	}

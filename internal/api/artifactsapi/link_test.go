@@ -230,12 +230,14 @@ func TestALinkAfterItsCreateWaitsForTheTrackerToApplyIt(t *testing.T) {
 
 // A CREATE THIS NODE NEVER APPLIES IS THE TRACKER'S OWN `behind`. The read
 // waits out the read budget and is refused as every tracker read floored past
-// this node is: `503 unavailable`, naming the refusal, with its Retry-After,
-// and nothing is linked.
+// this node is: `503 unavailable`, naming the refusal, in the state log's
+// sentence for it and never the position it waited for (the log's), with its
+// Retry-After, and nothing is linked.
 //
 // Mutation: answer the refusal with this surface's fixed sentence and the
-// refusal's code is lost; drop the floor and the link lands on an item the
-// node cannot vouch was filed after the caller's create.
+// refusal's code is lost; answer its detail and the position reaches the
+// person; drop the floor and the link lands on an item the node cannot vouch
+// was filed after the caller's create.
 func TestALinkWhoseCreateNeverAppliesIsRefusedBehind(t *testing.T) {
 	t.Parallel()
 	g := newRig(t, true)
@@ -247,9 +249,11 @@ func TestALinkWhoseCreateNeverAppliesIsRefusedBehind(t *testing.T) {
 	if w.Code != http.StatusServiceUnavailable || errorOf(t, w) != "unavailable" {
 		t.Fatalf("a link whose create never applied: %d %s", w.Code, w.Body)
 	}
+	said, _ := statelog.ConditionSentence(&statelog.Refused{Code: statelog.RefuseBehind})
 	if f := fields(t, w); f["refusal"] != string(statelog.RefuseBehind) ||
-		!strings.Contains(f["detail"].(string), trackerAt(50).String()) {
-		t.Errorf("the refusal says %v, want `behind` naming the position", f)
+		f["detail"] != said || strings.Contains(f["detail"].(string), trackerAt(50).String()) {
+		t.Errorf("the refusal says %v, want `behind` in the state log's sentence %q, "+
+			"naming no position", f, said)
 	}
 	if w.Header().Get("Retry-After") == "" {
 		t.Errorf("a `behind` refusal carries no Retry-After: %v", w.Header())

@@ -300,10 +300,14 @@ func writeFailed(w http.ResponseWriter, r *http.Request, key, verb string, err e
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		operator.Interrupted(w, r, key, verb, err)
 	default:
-		if words, ok := builtin.Condition(err); ok {
-			log.WarnContext(r.Context(), "artifacts_write_unavailable", "verb", verb,
-				"op_id", key, "error", err.Error())
-			unavailable(w, err, "this node could not "+verb+" right now: "+words)
+		// A CONDITION OF THE NODE, in a person's words for it
+		// ([builtin.ConditionSentence]) and its error to the log: it was
+		// "this node could not <verb> right now: " followed by the model's
+		// clause, which for a state-log refusal was the refusal's own text.
+		if said, ok := builtin.ConditionSentence(err); ok {
+			operator.LogCondition(r.Context(), log, "artifacts_write_unavailable", err,
+				"verb", verb, "op_id", key)
+			unavailable(w, err, said)
 			return
 		}
 		// A FAILURE THE DOMAIN DID NOT NAME is this node's own fault, and
@@ -324,6 +328,15 @@ func readFailed(w http.ResponseWriter, r *http.Request, err error, what string) 
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams,
 			map[string]string{"detail": say(err)})
 	default:
+		// A CONDITION in a person's words for it, which say whether to come
+		// back exactly as the Retry-After does: "right now" told a person
+		// to come back to a log at its ceiling.
+		if said, ok := builtin.ConditionSentence(err); ok {
+			operator.LogCondition(r.Context(), log, "artifacts_read_unavailable", err,
+				"what", what)
+			unavailable(w, err, said)
+			return
+		}
 		log.WarnContext(r.Context(), "artifacts_read_unavailable", "what", what, "error", err.Error())
 		unavailable(w, err, "this node could not read "+what+" right now")
 	}

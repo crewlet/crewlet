@@ -359,7 +359,9 @@ describe("a seat's holding", () => {
       await settle();
       expect(eng.reads("/iam/seats")).toBeGreaterThan(before);
       if (refused)
-        expect(screen.getByText("Couldn’t load this on this node. Try another node.")).toBeTruthy();
+        expect(
+          screen.getByText("Couldn’t load this here, and waiting won’t change that."),
+        ).toBeTruthy();
       expect(screen.getAllByRole("dialog")).toHaveLength(1);
       expect(
         screen.getByText("https://crewlet.example.com/dashboard#/reset/c-first.s3cret"),

@@ -137,7 +137,13 @@ func (w refusingRevoke) Revoke(context.Context, string, string, string) (statelo
 // HINT. A full log or a record too large answers the same retry the same, and
 // the identity hint told a browser to come back in two seconds for ever; the
 // refusal's own rule answers it with no Retry-After, as /worklet does.
-// A node that is behind is the control, and keeps the hint.
+// A node that is behind is the control, and keeps the hint. Each is told in
+// the state log's sentence for its reason ([statelog.ConditionSentence]),
+// whose advice agrees with that hint, and never the refusal's own detail: one
+// fixed sentence asked all three to be tried again in a moment.
+//
+// Mutation: answer the fixed sentence again and the full log's and the large
+// record's rows go red.
 func TestASignOutEverywhereTheLogRefusedSaysWhetherToRetry(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -167,6 +173,12 @@ func TestASignOutEverywhereTheLogRefusedSaysWhetherToRetry(t *testing.T) {
 				t.Errorf("a %s refusal answered %d with Retry-After %q, want 503 "+
 					"with %q", tc.reason, rec.Code, rec.Header().Get("Retry-After"),
 					tc.retry)
+			}
+			want, _ := statelog.ConditionSentence(&statelog.Unavailable{Reason: tc.reason})
+			if body := rec.Body.String(); !strings.Contains(body, want) ||
+				strings.Contains(body, "what the refusal is about") {
+				t.Errorf("a %s refusal answered %s, want the state log's sentence %q "+
+					"and nothing of the refusal's detail", tc.reason, body, want)
 			}
 		})
 	}

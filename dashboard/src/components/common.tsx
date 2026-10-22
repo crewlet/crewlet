@@ -509,19 +509,31 @@ function AuthorityRemedy({ action }: { action: AuthorityAction }) {
 }
 
 /**
- * A refusal by this node's STATE LOG that waiting will not clear — its log at
- * the byte ceiling, a record it cannot decode, a barrier its broker refused —
- * said as what it is rather than as the node catching up.
+ * A condition of the node, told in the engine's own sentence for it: what
+ * happened and what to do, which agrees with whether the answer carries a
+ * `Retry-After`, so a screen draws it as it stands rather than a guess of its
+ * own.
  *
- * `unavailable` covers both, and the generic banner promises "this screen asks
- * again on its own", which for these would be a promise of a loop: the same
- * read is refused until an admin acts or another node is asked. So the
- * banner says the one thing the reader can do: ask another node.
+ * `unavailable` covers a node catching up and a refusal no wait clears — a log
+ * at its ceiling, a record a node cannot decode, a barrier the storage
+ * refused — and the generic banner promises "this screen retries on its own",
+ * which for the second would be a promise of a loop. It used to be one fixed
+ * sentence sending the reader to another node, which contradicted the engine's
+ * own words where every node is refused alike (a full log, maintenance). Drawn
+ * for every answer with a sentence, and for one no wait clears without one,
+ * which says only what it is.
  */
-function RefusedByTheLog() {
+function RefusedByTheNode({ refusal }: { refusal: LogRefusal }) {
+  if (refusal.retryAfter > 0) {
+    return (
+      <Callout variant="neutral" icon={<ClockGlyph size="md" />}>
+        {refusal.detail}
+      </Callout>
+    );
+  }
   return (
     <Callout variant="warning" icon={<TriangleAlertGlyph size="md" />}>
-      Couldn’t load this on this node. Try another node.
+      {refusal.detail ?? "Couldn’t load this here, and waiting won’t change that."}
     </Callout>
   );
 }
@@ -546,9 +558,9 @@ export function QueryState({
   /**
    * Why the answer was refused — `useQuery`'s and `useRest`'s own `refusal`.
    * For an `unauthorized` answer the banner then says which grant would have
-   * admitted the reader, or that none would; for an `unavailable` one the
-   * state log refused and waiting will not change, it says so and what the
-   * refusal names, rather than that the node is catching up.
+   * admitted the reader, or that none would; for an `unavailable` one it
+   * says the engine's own sentence for the condition, which names what to do
+   * and agrees with whether waiting changes it.
    */
   refusal?: QueryRefusal | LogRefusal | null;
   /**
@@ -584,8 +596,13 @@ export function QueryState({
   if (error === "unauthorized" && refusal && !isLogRefusal(refusal)) {
     return <RefusedOnAuthority refusal={refusal} />;
   }
-  if (error === "unavailable" && refusal && isLogRefusal(refusal) && refusal.retryAfter === 0) {
-    return <RefusedByTheLog />;
+  if (
+    error === "unavailable" &&
+    refusal &&
+    isLogRefusal(refusal) &&
+    (refusal.detail || refusal.retryAfter === 0)
+  ) {
+    return <RefusedByTheNode refusal={refusal} />;
   }
   if (error === "bad_params" && detail) {
     return <Callout variant="warning">The engine refused this request: {detail}</Callout>;

@@ -304,6 +304,12 @@ func (s *Service) PostPeople(w http.ResponseWriter, r *http.Request) {
 		OpID: published, Reason: reason,
 	})
 	switch {
+	case errors.As(err, new(*iamdomain.NotReadBack)):
+		// A CREATE THAT LANDED and whose first password link this node
+		// cannot read back yet: the person exists, so the answer names
+		// them beside the op id the same request is sent again under.
+		s.answerWrite(w, r, opID, created.Result, err, map[string]any{"id": person})
+		return
 	case err != nil:
 		// THE ID ONLY BESIDE A CREATE THAT MAY HAVE LANDED: a refused one
 		// created nobody, and naming the person it would have made reads

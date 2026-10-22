@@ -3,6 +3,7 @@ package operator
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"maps"
 	"net/http"
 	"strings"
@@ -246,6 +247,7 @@ func fail(w http.ResponseWriter, cause error, said caveat.Refusal, key string,
 	case errors.Is(cause, builtin.ErrUndecidable):
 		// THIS NODE COULD NOT DECIDE — the organisation it runs or the
 		// caller's identity could not be read — so waiting can clear it.
+		logCondition("operator_call_unavailable", cause, "op_id", key)
 		detail["op_id"] = key
 		httpjson.UnavailableWith(w, httpjson.CodeUnavailable,
 			authz.RetryUndecidedSeconds, detail)
@@ -299,15 +301,50 @@ func failClass(w http.ResponseWriter, cause error, key string, detail,
 		// node's undecided hint ([statelog.RetryAfter]'s rule, which
 		// every surface answering a refusal reads).
 		otherwise := time.Duration(authz.RetryUndecidedSeconds) * time.Second
+		after := httpjson.RetrySeconds(statelog.RetryAfter(cause, otherwise))
+		logCondition("operator_call_unavailable", cause, "op_id", key)
 		detail["op_id"] = key
-		httpjson.UnavailableWith(w, answer.code,
-			httpjson.RetrySeconds(statelog.RetryAfter(cause, otherwise)), detail)
+		httpjson.UnavailableWith(w, answer.code, after, detail)
 	case conditioned && class == crewletmcp.RefusalStaleVersion:
 		httpjson.FailWithFields(w, http.StatusPreconditionFailed,
 			httpjson.CodeVersionMoved, detail)
 	default:
 		httpjson.FailWithFields(w, answer.status, answer.code, detail)
 	}
+}
+
+// LogCondition writes what a node's condition says for whoever runs the node
+// — a state-log refusal's own detail, which names positions, settings and the
+// broker's words, or a backend's error naming its hosts — to the one reader
+// it is for: every surface that answers a condition answers it without the
+// error, in a person's sentence for it ([builtin.ConditionSentence]) or, on the
+// act route and the human write surface, in its code's own (ADR-0060), so this
+// line is the only place the error goes.
+//
+// THROUGH THE SURFACE'S OWN LOGGER AND WITH ITS OWN FIELDS — the verb and the
+// operation an artifact write was, the read a configuration route made, the
+// board and the dataset a reading was for — because a line that carries the
+// error alone, under this package's component, says that something failed and
+// nothing about what. Only the level is decided once, for every surface:
+// [statelog.ConditionLevel], WARN where no wait clears the condition and INFO
+// where one does, since a gesture somebody made once is worth its line.
+func LogCondition(ctx context.Context, logger *slog.Logger, event string, err error,
+	fields ...any) {
+
+	logger.Log(ctx, statelog.ConditionLevel(err, slog.LevelInfo), event,
+		append(fields[:len(fields):len(fields)], "error", err.Error())...)
+}
+
+// logCondition is [LogCondition] on this surface, for a writer that holds no
+// request context — [Fail] and its kin, which every surface answers a refusal
+// through and none hands a context to.
+func logCondition(event string, err error, fields ...any) {
+	fields = append(fields[:len(fields):len(fields)], "error", err.Error())
+	if statelog.ConditionLevel(err, slog.LevelInfo) == slog.LevelWarn {
+		log.Warn(event, fields...)
+		return
+	}
+	log.Info(event, fields...)
 }
 
 // classOf is the refusal class a cause states, or "" where it states none.
@@ -477,7 +514,8 @@ func ClassifyWrite(err error) error {
 // none, so the code's own sentence stands alone. A writer's error text is
 // never the detail: a domain refusal's is written for a model, a condition's
 // names the node's internals, and a store's is a driver's message or a
-// database path. A FAULT's error is logged here, the one place it is read.
+// database path. A FAULT's error is logged here, the one place it is read,
+// and a condition's where [Fail] answers it ([LogCondition]).
 func FailWrite(ctx context.Context, w http.ResponseWriter, err error, key string,
 	about httpjson.Detail) {
 

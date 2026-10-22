@@ -228,6 +228,8 @@ func (s *Service) liveWorkItem(w http.ResponseWriter, r *http.Request, ref strin
 			worklet.Domain{}.Stream().Name))
 		return worklet.Task{}, false
 	case errors.As(err, new(*statelog.Refused)):
+		operator.LogCondition(r.Context(), log, "artifacts_work_item_unread", err,
+			"work_item", ref)
 		u := stream.UnavailableOf(err)
 		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, u.RetryAfter, u.Fields())
 		return worklet.Task{}, false

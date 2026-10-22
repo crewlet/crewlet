@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/artifactdataapi"
 	"github.com/crewlet/crewlet/internal/api/artifactsapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
@@ -384,9 +385,24 @@ func settle(w http.ResponseWriter, r *http.Request, res result, out *Reading, wh
 		httpjson.ThrottledWith(w, httpjson.CodeReadBudget, budget.refusal.RetryAfter,
 			httpjson.Detail{"detail": spent})
 		return false
-	case errors.Is(res.err, queries.ErrUnavailable):
-		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, httpjson.RetrySeconds(statelog.ElectionRetryHint),
-			httpjson.Detail{"detail": "this node could not read " + what + " right now"})
+	case errors.Is(res.err, queries.ErrUnavailable) || isCondition(res.err):
+		// A CONDITION OF THE NODE — a source's question it could not answer
+		// here, or a store dataset whose read the state log refused — in a
+		// person's words for it where there are any
+		// ([builtin.ConditionSentence]) and under its own hint, which is
+		// none where no wait clears it: every one of these was "could not
+		// read X right now" under an election's four seconds, so a log at
+		// its ceiling was polled for ever and a refusal's error, wrapped
+		// in nothing, fell to the arm below and was logged as a failure.
+		operator.LogCondition(r.Context(), log, "dashboard_dataset_unavailable", res.err,
+			logged...)
+		said, ok := builtin.ConditionSentence(res.err)
+		if !ok {
+			said = "this node could not read " + what + " right now"
+		}
+		httpjson.UnavailableWith(w, httpjson.CodeUnavailable,
+			httpjson.RetrySeconds(statelog.RetryAfter(res.err, statelog.ElectionRetryHint)),
+			httpjson.Detail{"detail": said})
 		return false
 	default:
 		log.WarnContext(r.Context(), "dashboard_dataset_failed", append(logged, "error", res.err.Error())...)
@@ -395,6 +411,13 @@ func settle(w http.ResponseWriter, r *http.Request, res result, out *Reading, wh
 		return false
 	}
 	return true
+}
+
+// isCondition reports a condition of the node waiting may clear, which is no
+// fault of the board or of the node ([builtin.Condition]).
+func isCondition(err error) bool {
+	_, ok := builtin.Condition(err)
+	return ok
 }
 
 // read answers dataset id of rd's board, memoised for the request.

@@ -1621,7 +1621,7 @@ func (a *App) serveQuery(w http.ResponseWriter, r *http.Request) {
 	data, err := a.queries.AnswerWith(r.Context(), what,
 		queries.FromQuery(r.URL.Query()))
 	if err != nil {
-		writeQueryError(w, what, err)
+		writeQueryError(w, r, what, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, data)
@@ -1638,7 +1638,7 @@ func (a *App) serveQuery(w http.ResponseWriter, r *http.Request) {
 // objects, so the one family of routes a dashboard reads most often was the
 // one whose refusals carried no sentence, and the code a client branched on
 // was the only thing it had to show.
-func writeQueryError(w http.ResponseWriter, what string, err error) {
+func writeQueryError(w http.ResponseWriter, r *http.Request, what string, err error) {
 	var refusal *queries.Refusal
 	switch {
 	case errors.Is(err, queries.ErrUnknown):
@@ -1735,13 +1735,18 @@ func writeQueryError(w http.ResponseWriter, what string, err error) {
 		// AND THE REFUSAL SAYS WHAT IT IS — its code and its words, the
 		// remedy — through [stream.UnavailableOf], the same reading the
 		// socket's error frame is built from.
+		//
+		// THE REFUSAL'S OWN DETAIL GOES TO THE LOG ([stream.LogUnavailable]):
+		// it names positions and settings for whoever runs the node, and
+		// the answer's words are a person's sentence for the refusal.
+		stream.LogUnavailable(r.Context(), log, "api_query_unavailable", err, "what", what)
 		u := stream.UnavailableOf(err)
 		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, u.RetryAfter, u.Fields())
 	default:
 		// The reason reaches the LOG, not the caller: it can carry a
 		// database path or a driver's own message, and nothing about
 		// holding a grant makes a caller somebody that path is for.
-		log.Warn("api_query_failed", "what", what, "error", err)
+		log.WarnContext(r.Context(), "api_query_failed", "what", what, "error", err)
 		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeQueryFailed)
 	}
 }
