@@ -955,8 +955,9 @@ func artifactKinds() []string {
 }
 
 // outsideWhere is the trust of an answer whose rows (at rows) may carry text
-// from outside the company at field: external where any row carries some,
-// colleague where none does.
+// from outside the company at field: external where any row carries some, and
+// where none does the engine's own records, a colleague's by the one rule for a
+// surface the engine hosts.
 func outsideWhere(rows, field string) func(Args, any) provenance.Trust {
 	return func(_ Args, answer any) provenance.Trust {
 		list, _ := cards.Lookup(answer, rows).([]any)
@@ -965,18 +966,19 @@ func outsideWhere(rows, field string) func(Args, any) provenance.Trust {
 				return provenance.TrustExternal
 			}
 		}
-		return provenance.TrustColleague
+		return provenance.TrustForHosted("", nil, false)
 	}
 }
 
-// knowledgeTrust is a knowledge search's trust: colleague from Doclet (whose
-// answers carry the stored backend name "native", doclet.Backend), external
-// from a connected knowledge base, whose pages people outside the company may
-// write.
+// knowledgeTrust is a knowledge search's trust, as each backend labels its own
+// hits: Doclet's (whose answers carry the stored backend name "native",
+// doclet.Backend) by the one rule for a surface the engine hosts, a
+// colleague's with nobody named; a connected knowledge base's external, since
+// people outside the company may write its pages and the answer names nobody.
 func knowledgeTrust(answer any) provenance.Trust {
 	switch cards.Text(cards.Lookup(answer, "backend")) {
 	case "", "native":
-		return provenance.TrustColleague
+		return provenance.TrustForHosted("", nil, false)
 	}
 	return provenance.TrustExternal
 }

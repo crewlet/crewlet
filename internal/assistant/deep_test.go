@@ -136,10 +136,12 @@ func TestDeepWorkIsOfferedOnlyWhereItCanRun(t *testing.T) {
 // A RUN REACHES CREWLET ONLY THROUGH THE TURN'S OWN SURFACE: its read is one
 // request through the dispatcher on the turn's grant, drawn as a step nested
 // under the run's; the run's step is re-sent with its progress and closed with
-// its outcome; its report reaches the model fenced as the run's own words; its
-// files are kept and carded; and its box is discarded. Mutation: execute the
-// bridged call through anything but the turn's surface and the dispatcher
-// sees no request on the turn's grant.
+// its outcome; its report reaches the model fenced as the run's own words, at
+// the trust of text nobody in the company wrote (ADR-0054); its files are kept
+// and carded; and its box is discarded. Mutation: execute the bridged call
+// through anything but the turn's surface and the dispatcher sees no request
+// on the turn's grant; fence the report at any trust but external and its
+// label fails.
 func TestADeepRunReachesCrewletOnlyThroughTheTurnsSurface(t *testing.T) {
 	t.Parallel()
 	script := evals.NewDeepScript(evals.DeepRunScript{
@@ -192,7 +194,8 @@ func TestADeepRunReachesCrewletOnlyThroughTheTurnsSurface(t *testing.T) {
 	}
 	answer, ok := toolAnswer(f, "c-deep")
 	if !ok || !strings.Contains(answer.Content, "Three teams cover the work") ||
-		!strings.Contains(answer.Content, "deep_work") || !strings.Contains(answer.Content, "teams.md") {
+		!strings.Contains(answer.Content, " source=deep_work trust=external ") ||
+		!strings.Contains(answer.Content, "teams.md") {
 		t.Fatalf("the model read the run as %q", answer.Content)
 	}
 	if kept, discarded := script.Kept(), script.Discarded(); len(kept) != 0 || len(discarded) != 1 {

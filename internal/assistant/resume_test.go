@@ -70,10 +70,14 @@ func parkedRig(t *testing.T) (*assistanttest.Rig, wire.TurnAccepted, assistantdo
 
 // AN APPROVAL RESUMES THE PARKED TURN where it stopped: the call it suspended
 // on is answered with what became of the proposal, the card updates in place,
-// and the turn finishes on the grant the approving request derived.
+// and the turn finishes on the grant the approving request derived. The
+// route's answer to the write is the engine's own records, which the model
+// reads fenced as an API answer at a colleague's trust, by the one rule for a
+// surface the engine hosts (ADR-0040).
 //
 // Mutation: answer the pending call with nothing (drop resultOf) and the
-// model never reads that the change was applied.
+// model never reads that the change was applied; fence the route's answer at
+// another trust, or not at all, and its label fails.
 func TestAnApprovalResumesTheParkedTurn(t *testing.T) {
 	t.Parallel()
 	f, accepted, p := parkedRig(t)
@@ -89,6 +93,7 @@ func TestAnApprovalResumesTheParkedTurn(t *testing.T) {
 		Conversation: f.Conversation, Turn: accepted.TurnID, Proposal: p.ID,
 		Read: f.Grant("approve"), State: wire.ProposalApplied,
 		Receipt: &wire.Receipt{Summary: "Created ENG-7."},
+		Answer:  []byte(`{"key":"ENG-7","title":"Rotate keys"}`),
 		Card:    cardAt(p, wire.ProposalApplied)})
 	if err != nil {
 		t.Fatal(err)
@@ -113,6 +118,14 @@ func TestAnApprovalResumesTheParkedTurn(t *testing.T) {
 	if !strings.Contains(tool.Content, "approved the change") ||
 		!strings.Contains(tool.Content, "Created ENG-7.") || tool.Failed {
 		t.Errorf("the model read the approval as %+v", tool)
+	}
+	if at := strings.Index(tool.Content, " source=api_answer trust=colleague "); at < 0 ||
+		!strings.Contains(tool.Content[at:], `"key":"ENG-7"`) {
+		t.Errorf("the route's answer is not fenced as the engine's own records:\n%s", tool.Content)
+	}
+	if at := strings.Index(tool.Content, " source=api_answer trust=colleague "); at < 0 ||
+		!strings.Contains(tool.Content[at:], `"key":"ENG-7"`) {
+		t.Errorf("the route's answer is not fenced as the engine's own records:\n%s", tool.Content)
 	}
 }
 

@@ -78,7 +78,9 @@ func newForeignRead(turn *turnctx.Turn, self string) *foreignRead {
 // item's body author, a file's writer) is resolved against the turn's chart;
 // a handle the chart does not hold is a seat that has left it when it is
 // shaped like a seat handle, and a credential's login otherwise. An empty
-// handle with no kind is a writer nobody recorded, which nothing vouches for.
+// handle with no kind is a writer nobody recorded: on the surfaces these reads
+// are of, that is a colleague nobody named ([foreignRead.label]), never an
+// outside party.
 func (r *foreignRead) writer(handle string, kind iam.ActorKind) provenance.Author {
 	handle = strings.TrimSpace(handle)
 	switch kind {
@@ -104,22 +106,28 @@ func (r *foreignRead) writer(handle string, kind iam.ActorKind) provenance.Autho
 	return provenance.Author{Kind: iam.ActorOperator}
 }
 
-// trustOf is the trust text by writers earns from this reader: [provenance.TrustFor],
-// or [provenance.TrustForPartial] when the record says other writers it does
-// not name had a hand in it.
-func (r *foreignRead) trustOf(writers []provenance.Author, partial bool) provenance.Trust {
-	if partial {
-		return provenance.TrustForPartial(r.self, writers)
-	}
-	return provenance.TrustFor(r.self, writers)
+// label is what text by writers, read from src, is fenced under for this
+// reader: partial when the record says other writers it does not name had a
+// hand in it.
+//
+// EVERY READ HERE IS OF A SURFACE THE ENGINE HOSTS — its own tracker, knowledge
+// base, chat, artifacts and project files — so the label is the one rule every
+// door to such a surface reads by ([provenance.LabelForHosted]): a writer the
+// record does not name is a colleague, never an outside party, exactly as the
+// same text reads when it wakes a seat or comes back as a search hit.
+func (r *foreignRead) label(src provenance.Source, writers []provenance.Author,
+	partial bool) provenance.Label {
+
+	return provenance.LabelForHosted(r.self, src, writers, !partial)
 }
 
 // attribute records that the answer carries text by writers without fencing
 // it: content the answer holds in a form a model does not read as prose (a
 // file's bytes as base64), which still needs its label on the envelope.
 func (r *foreignRead) attribute(writers []provenance.Author, partial bool) {
-	r.trusts = append(r.trusts, r.trustOf(writers, partial))
-	for _, w := range writers {
+	label := r.label("", writers, partial)
+	r.trusts = append(r.trusts, label.Trust)
+	for _, w := range label.Authors {
 		r.name(w)
 	}
 }
@@ -154,7 +162,7 @@ func (r *foreignRead) fence(path fieldPath, src provenance.Source,
 		return
 	}
 	r.attribute(writers, partial)
-	r.fences[path.id()] = provenance.Fence(r.boundary, src, r.trustOf(writers, partial), writers, text)
+	r.fences[path.id()] = r.label(src, writers, partial).Fence(r.boundary, text)
 }
 
 // fenceAt registers the string at path in the answer as text by writers, read

@@ -14,13 +14,16 @@ import (
 var all = sync.OnceValues(func() ([]Tool, error) {
 	var out []Tool
 	for _, t := range slices.Concat(readTools(), chatReads()) {
-		// EVERY READ IS A ROUTE'S OWN ANSWER, labelled as one, and
-		// colleague unless the tool says its text comes from outside the
-		// company (Trust or TrustOf).
+		// EVERY READ IS A ROUTE'S OWN ANSWER, labelled as one, and read by
+		// the one rule for a surface the engine hosts unless the tool says
+		// its text comes from outside the company (Trust or TrustOf): the
+		// engine's own records, which only its principals write and whose
+		// answer names none of them, are a colleague's. The assistant is
+		// nobody of its own (ADR-0050), so no text is its own either.
 		t.Kind, t.Tier = KindRead, TierRead
 		t.Source = provenance.SourceAPIAnswer
 		if t.Trust == "" {
-			t.Trust = provenance.TrustColleague
+			t.Trust = provenance.TrustForHosted("", nil, false)
 		}
 		out = append(out, t)
 	}

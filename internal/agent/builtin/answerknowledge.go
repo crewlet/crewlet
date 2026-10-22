@@ -691,10 +691,10 @@ func (t *answerKnowledge) taskText(ctx context.Context, hit worklet.Ranked) stri
 
 // workDescription is the label a work item's description is read under here:
 // a colleague's words with nobody named, as `search_work_items` reads the same
-// text — only the company's principals write the tracker, and neither the
-// index nor the search says which of them wrote what it holds.
-var workDescription = provenance.Label{Source: provenance.SourceWorkDescription,
-	Trust: provenance.TrustColleague}
+// text — the engine hosts the tracker, so only the company's principals write
+// it, and neither the index nor the search says which of them wrote what it
+// holds ([provenance.LabelForHosted]).
+var workDescription = provenance.LabelForHosted("", provenance.SourceWorkDescription, nil, false)
 
 func snippetOnly(snippet string) string {
 	if strings.TrimSpace(snippet) == "" {

@@ -572,6 +572,63 @@ func TrustForPartial(self string, named []Author) Trust {
 	return TrustColleague
 }
 
+// TrustForHosted is THE ONE RULE for text on a surface the engine hosts — its
+// own tracker, knowledge base, chat, artifacts, project files and
+// agent-to-agent channels — whichever door the text comes through: a wake, a
+// read tool, a search hit, a thread handed to a turn.
+//
+// named is who the record says wrote the text, and complete says the record
+// names EVERY writer. Named in full, it is [TrustFor]. Short of that — a body
+// edited by writers its row no longer lists, a title the row records no
+// writer for, a hit an index keeps no writer for, a change whose record names
+// no actor — it is [TrustForPartial]: never `own`, and `colleague` with nobody
+// named at all, because the SURFACE vouches for whoever wrote it. Every write
+// to it is authenticated as a seat, a person, an operator credential or the
+// engine, so text nobody named was still written by somebody in the company.
+//
+// A NAMED WRITER WHO IS NO COMPANY PRINCIPAL is a writer the record could not
+// name, not an outside party — a row that carried neither a handle nor a kind
+// — because nothing outside the company writes these surfaces: such an author
+// is dropped, and the text is read as partly attributed. The same text on a
+// VENDOR's surface (a Confluence page, a Jira comment, a Slack message) takes
+// [TrustFor] instead, where nobody named is `external`: a site the company
+// shares with the rest of the world vouches for nobody.
+//
+// ONE RULE because the same page reached a seat two ways before it: as a wake
+// whose record named nobody it read `external`, and as a search hit naming
+// nobody `colleague`, so one text was trusted by the door it came through.
+func TrustForHosted(self string, named []Author, complete bool) Trust {
+	known, unnamed := hostedWriters(named)
+	if !complete || unnamed || len(known) == 0 {
+		return TrustForPartial(self, known)
+	}
+	return TrustFor(self, known)
+}
+
+// LabelForHosted is the label text on src, a surface the engine hosts, earns
+// from the seat self by [TrustForHosted], naming the writers its record named
+// who are company principals and nobody else.
+func LabelForHosted(self string, src Source, named []Author, complete bool) Label {
+	known, _ := hostedWriters(named)
+	return Label{Source: src, Trust: TrustForHosted(self, named, complete), Authors: known}
+}
+
+// hostedWriters is named without the writers that are no company principal,
+// and whether there were any: on a hosted surface each is a writer the record
+// did not name (see [TrustForHosted]).
+func hostedWriters(named []Author) ([]Author, bool) {
+	var known []Author
+	unnamed := false
+	for _, a := range named {
+		if a.outside() {
+			unnamed = true
+			continue
+		}
+		known = append(known, a)
+	}
+	return known, unnamed
+}
+
 // trustRank orders the levels by how far a reader may rely on them, so the
 // least of several is a comparison. `page` sits above `external` because a
 // page script ran on the engine's own origin on somebody's behalf, while

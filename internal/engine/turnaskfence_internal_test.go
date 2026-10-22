@@ -160,19 +160,21 @@ func labelOrZero(l *provenance.Label) provenance.Label {
 //
 // A coalesced trigger's salient body is every constituent's words joined into
 // one text, so the ask is one fence over all of them: its authors are every
-// writer the constituents name, and its trust is the lowest — one line nobody
-// vouches for makes the whole of it data a judgement relies on least, which is
-// the direction to err in.
+// writer the constituents name, and its trust is the lowest — one line its
+// reader cannot call its own makes the whole of it data a judgement relies on
+// as a colleague's, which is the direction to err in. A line nobody is named
+// for is a colleague's on the tracker, as on every surface the engine hosts
+// (ADR-0040's one rule), and names nobody.
 //
 // Mutation: label the merged text by its latest constituent alone, and the
 // earlier writer goes unnamed; take the highest trust instead of the least,
-// and the unnamed line reads as a colleague's.
+// and the seat's own line beside a colleague's reads as its own.
 func TestAMergedAsksFenceNamesEveryWriterAtTheLeastTrust(t *testing.T) {
 	t.Parallel()
 	o := firstPartyChart(t)
 	reg := partyRegistry(o, nil)
 	prompts := notify.NewPrompts(worklet.Prompt{})
-	comment := func(author, said string) func(*testing.T) *events.Event {
+	comment := func(author, kind, said string) func(*testing.T) *events.Event {
 		meta := map[string]string{
 			worklet.MetaVia: string(worklet.ReasonMention), worklet.MetaTaskKey: "ENG-1",
 			worklet.MetaTaskID: "t-1", worklet.MetaChangeKind: string(worklet.ChangeComment),
@@ -180,7 +182,7 @@ func TestAMergedAsksFenceNamesEveryWriterAtTheLeastTrust(t *testing.T) {
 		}
 		if author != "" {
 			meta[notify.BodyAuthorField] = author
-			meta[notify.BodyAuthorKindField] = "human"
+			meta[notify.BodyAuthorKindField] = kind
 		}
 		wake := routedWake(worklet.Source, worklet.Prompt{}, string(worklet.ChangeComment), meta)
 		return func(t *testing.T) *events.Event { return wake(t, o, reg, said) }
@@ -205,12 +207,18 @@ func TestAMergedAsksFenceNamesEveryWriterAtTheLeastTrust(t *testing.T) {
 		want  string
 	}{
 		"two colleagues": {
-			[]func(*testing.T) *events.Event{comment("ada", probe), comment("bo", "agreed")},
+			[]func(*testing.T) *events.Event{comment("ada", "human", probe), comment("bo", "human", "agreed")},
 			"source=work_comment trust=colleague authors=human:ada,human:bo]",
 		},
+		"the seat's own, then a colleague": {
+			[]func(*testing.T) *events.Event{comment("swe", "agent", "my own line"),
+				comment("ada", "human", probe)},
+			"source=work_comment trust=colleague authors=agent:swe,human:ada]",
+		},
 		"nobody named, then a colleague": {
-			[]func(*testing.T) *events.Event{comment("", "+1 from outside"), comment("ada", probe)},
-			"source=work_comment trust=external authors=human:ada]",
+			[]func(*testing.T) *events.Event{comment("", "", "+1 from somebody"),
+				comment("ada", "human", probe)},
+			"source=work_comment trust=colleague authors=human:ada]",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

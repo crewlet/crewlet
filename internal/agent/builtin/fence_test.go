@@ -514,6 +514,64 @@ func TestAPageWithWritersItCannotNameIsNeverOwn(t *testing.T) {
 	}
 }
 
+// TestAReadNamingNoWriterIsAColleagues: every read here is of a surface the
+// engine hosts, so a comment, a description or a message whose record names no
+// writer — no handle and no kind — is a colleague's nobody named, by the one
+// rule every door to such a surface takes ([provenance.TrustForHosted]), and
+// never an outside party's: nothing outside the company writes there. It read
+// `external` before, while the same text through a search hit or a wake read
+// as a colleague's.
+//
+// Mutation: fence with [provenance.TrustFor] in [foreignRead] and every case
+// reads `trust=external authors=external`.
+func TestAReadNamingNoWriterIsAColleagues(t *testing.T) {
+	t.Parallel()
+	const want = "trust=colleague authors=unknown"
+
+	t.Run("a work item's comment and description", func(t *testing.T) {
+		t.Parallel()
+		turn, b := readerTurn(t)
+		trk := newFakeTracker()
+		d := trk.tasks["ENG-1"]
+		d.Task.Body = "the spec"
+		d.Comments = []worklet.Comment{{ID: "cm-1", Body: "a remark nobody signed"}}
+		trk.tasks["ENG-1"] = d
+		reg := workRegistry(t, builtin.WorkDeps{Reader: trk})
+		seen, answer := fencesIn(t, b, callIn(t, reg, turn, builtin.GetWorkItemTool,
+			map[string]any{"item": "ENG-1"}).Output)
+		assertFences(t, seen, []wantFence{
+			{"source=work_description " + want, "the spec"},
+			{"source=work_comment " + want, "a remark nobody signed"},
+		})
+		assertEnvelope(t, answer, provenance.TrustColleague, 0)
+	})
+
+	t.Run("a page's comment", func(t *testing.T) {
+		t.Parallel()
+		turn, b := readerTurn(t)
+		kb := newFakeKB()
+		kb.page.Page.Body, kb.page.Page.Author, kb.page.Page.Version = "the runbook", "founder", 1
+		kb.page.History = []doclet.RevisionSummary{{Version: 1, Author: "founder"}}
+		kb.page.Comments = []doclet.Comment{{ID: "c1", Body: "a remark nobody signed"}}
+		reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb})
+		seen, _ := fencesIn(t, b, callIn(t, reg, turn, builtin.GetPageTool,
+			map[string]any{"page": "p1"}).Output)
+		assertFences(t, seen, []wantFence{{"source=page_comment " + want, "a remark nobody signed"}})
+	})
+
+	t.Run("a room's message", func(t *testing.T) {
+		t.Parallel()
+		turn, b := readerTurn(t)
+		f := newFakeChat()
+		f.transcript = []chatlet.MessageView{{Message: chatlet.Message{ID: "m1", ChannelID: chatRoomID,
+			Body: "a line nobody signed"}}}
+		got := callChat(t, chatRegistry(t, chatDeps(f)), builtin.ReadChannelTool, turn,
+			map[string]any{"channel": chatRoomID})
+		seen, _ := fencesIn(t, b, got.Output)
+		assertFences(t, seen, []wantFence{{"source=chat_thread " + want, "a line nobody signed"}})
+	})
+}
+
 // TestABodySentBackInItsFenceIsStoredWithoutIt: a model that saves the body it
 // read with the fence still round it stores the body, on every write a fenced
 // read feeds, and a fence of any other token is the writer's own text.

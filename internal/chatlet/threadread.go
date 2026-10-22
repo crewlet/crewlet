@@ -117,6 +117,10 @@ func (r ThreadReader) ReadThread(ctx context.Context, handle, channel, root stri
 		// and the renderer says so rather than implying the thread is
 		// whole.
 		Older: thread.Earlier + thread.Unreadable,
+		// THE ENGINE'S OWN SURFACE: every sender authenticated as a seat,
+		// a person or the engine, so a line whose sender the roster no
+		// longer names reads as a colleague's.
+		Hosted: true,
 	}
 	out.Messages = append(out.Messages, r.message(thread.Root.Message, handle, parties))
 	for _, reply := range thread.Replies {

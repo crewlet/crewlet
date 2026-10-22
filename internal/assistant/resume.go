@@ -265,14 +265,24 @@ func resultOf(r approval.Resumption, b provenance.Boundary) string {
 		if len(answer) > ModelResultBytes {
 			answer = textcut.Within(answer, ModelResultBytes)
 		}
+		// THE ENGINE'S OWN RECORDS, as every route's answer is, naming none
+		// of their writers: a colleague's by the one rule for a surface the
+		// engine hosts.
 		out.WriteString("\n" + provenance.Fence(b, provenance.SourceAPIAnswer,
-			provenance.TrustColleague, nil, answer))
+			provenance.TrustForHosted("", nil, false), nil, answer))
 	}
 	if r.ClientReported && r.Receipt != nil {
-		out.WriteString("\n" + provenance.Fence(b, provenance.SourcePageContext,
-			provenance.TrustPage, nil, redact.Secrets(r.Receipt.Summary)))
+		out.WriteString("\n" + pageReport(b, r.Receipt.Summary))
 	}
 	return out.String()
+}
+
+// pageReport is what a page reported of a page action it applied, as the model
+// reads it: fenced at the page's own trust, which no set of writers earns,
+// because the engine cannot verify what a page says it did.
+func pageReport(b provenance.Boundary, summary string) string {
+	return provenance.Fence(b, provenance.SourcePageContext, provenance.TrustPage, nil,
+		redact.Secrets(summary))
 }
 
 // Emit appends frames to a turn that stays parked, or that the person asked
