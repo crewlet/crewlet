@@ -48,7 +48,8 @@ func (f *fakeFiles) Files(_ context.Context, q worklet.FileQuery) (worklet.FileL
 	for _, file := range f.files {
 		if !file.Removed() && file.Project == q.Project {
 			out.Files = append(out.Files, worklet.FileRow{Project: file.Project, Path: file.Path,
-				Size: file.Size, Version: file.Version})
+				Size: file.Size, Version: file.Version,
+				CreatedBy: file.CreatedBy, UpdatedBy: file.UpdatedBy})
 		}
 	}
 	out.Complete, out.Level = true, q.Freshness.Level

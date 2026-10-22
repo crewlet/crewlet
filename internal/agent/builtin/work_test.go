@@ -144,6 +144,8 @@ type fakeTracker struct {
 	// viewQuery is the last strip the view listing asked for, so a case
 	// can assert WHOSE strip a caller was shown.
 	viewQuery worklet.ViewQuery
+	// viewListing is the strip Views answers.
+	viewListing worklet.ViewListing
 	// myWorkZone is the clock the last day was cut on, which is the half
 	// of that read a tool decides rather than the tracker.
 	myWorkZone *time.Location
@@ -158,6 +160,9 @@ type fakeTracker struct {
 	// to.
 	personQuery worklet.PersonQuery
 	inboxQuery  worklet.InboxQuery
+	// inbox is the page Inbox answers, where a case sets one; nil answers
+	// its one placeholder notice.
+	inbox *worklet.InboxAnswer
 
 	readErr  error
 	writeErr error
@@ -239,7 +244,7 @@ func (f *fakeTracker) Task(_ context.Context, idOrKey string, want worklet.Detai
 
 func (f *fakeTracker) Views(_ context.Context, q worklet.ViewQuery) (worklet.ViewListing, error) {
 	f.viewQuery = q
-	return worklet.ViewListing{}, nil
+	return f.viewListing, nil
 }
 
 func (f *fakeTracker) ExpandedQuery(_ context.Context, params map[string]any,
@@ -1590,6 +1595,9 @@ func (f *fakeTracker) Inbox(_ context.Context, q worklet.InboxQuery,
 	_ time.Time) (worklet.InboxAnswer, error) {
 
 	f.inboxQuery = q
+	if f.inbox != nil {
+		return *f.inbox, nil
+	}
 	return worklet.InboxAnswer{
 		Handle:         q.Handle,
 		PrimaryReasons: worklet.DefaultPrimaryReasons,

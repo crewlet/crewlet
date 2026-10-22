@@ -181,6 +181,10 @@ func (t *searchWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		read.fence(fieldPath{}.key("matches").index(i).key("snippet"),
 			provenance.SourceWorkDescription, nil, true, hit.Snippet)
 	}
+	// AND EVERY TITLE IS A NAME nobody is recorded as writing.
+	if len(hits) > 0 {
+		namesBy(read)
+	}
 	return read.answer(ctx, worklet.SearchWorkItemsTool, out, "Ask for fewer with `limit`.")
 }
 

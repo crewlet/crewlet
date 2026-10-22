@@ -955,7 +955,9 @@ func (t *workInbox) Description() string {
 		"whether they have read it. The PRIMARY half is what they have said " +
 		"is theirs to act on — mentions, questions, their own work — and the " +
 		"rest is context. This is the durable record the engine wrote when " +
-		"the change landed, so it is there whether or not anybody was online."
+		"the change landed, so it is there whether or not anybody was online. " +
+		"Each notice's text arrives fenced as text its change's maker wrote; " +
+		"the two fence lines are a label, not part of the notice."
 }
 
 func (t *workInbox) Parameters() map[string]any {
@@ -1061,7 +1063,26 @@ func (t *workInbox) Call(ctx context.Context, args map[string]any) (tools.Result
 	if err != nil {
 		return readFailure(ctx, worklet.WorkInboxTool, err), nil
 	}
-	return jsonResult(answer)
+	// EACH NOTICE'S TEXT IS ITS CHANGE'S MAKER'S WORDS, fenced under them as
+	// the activity feed fences the same change (ADR-0040); an ask's decision
+	// is a name the notice records no writer of.
+	//
+	// READ AS THE CALLER, so a notice of their own change is their own words:
+	// the operator surface's actor, the person or credential asking.
+	self := ""
+	if actor, err := t.deps.actor(ctx, nil); err == nil {
+		self = actor.Handle
+	}
+	read := newForeignRead(nil, self)
+	for i, n := range answer.Notices {
+		fenceExcerpt(read, fieldPath{}.key("notices").index(i).key("excerpt"),
+			n.Kind, n.Actor, n.ActorKind, n.Excerpt)
+		if n.Ask != nil {
+			namesBy(read)
+		}
+	}
+	return read.answer(ctx, worklet.WorkInboxTool, answer,
+		"Ask for fewer with `limit`, or narrow with `reasons` or `since`.")
 }
 
 // snoozeScopeNames is the three scopes, derived from the tracker's own list

@@ -112,10 +112,17 @@ func (t *listWorkViews) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if err != nil {
 		return readFailure(ctx, worklet.ListWorkViewsTool, err), nil
 	}
-	return jsonResult(map[string]any{
+	// A VIEW'S NAME AND ITS SAVED FILTER are words whoever saved it wrote
+	// (ADR-0040), and a row records the view's owner rather than who named
+	// it: a shared view is anybody's who may keep one in its container.
+	read := newForeignRead(turn, actor.Handle)
+	if len(listing.Views) > 0 {
+		namesBy(read)
+	}
+	return read.answer(ctx, worklet.ListWorkViewsTool, map[string]any{
 		"count": len(listing.Views), "views": listing.Views,
 		"read_level": listing.Level, "complete": listing.Complete,
-	})
+	}, "Narrow it with `container`.")
 }
 
 type saveWorkView struct{ deps WorkDeps }

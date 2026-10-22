@@ -1117,6 +1117,33 @@ over the project's [files](#a-projects-files):
 | `write_project_file` | put a file at a path — created, or its content replaced — with `if_version` to refuse the write if somebody changed it since you read it |
 | `remove_project_file` | take a file out of a project; its content is deleted from storage |
 
+### Whose words a read hands over
+
+Most of what these tools answer was written by somebody other than the seat
+reading it, and every read labels it so (see [Text somebody else
+wrote](../concepts/agent-runtime.md#text-somebody-else-wrote)):
+
+- **A change's text** — a feed row's in `task_activity`, a history entry's in
+  `get_work_item`, a notice's in `work_inbox` — is the comment, the description
+  or the note (a hand-off's reason, a purge's line) the change carried, and is
+  fenced under **whoever made the change**, as `work_comment`,
+  `work_description` or `change_note` by the change's kind. A line summing up an
+  answer that chose an option quotes the asker's option too, so it is never the
+  answerer's own words alone.
+- **An ask** in `my_work` is fenced under the person who asked it, and its
+  decision is theirs; **a description and a comment** in `get_work_item` under
+  who wrote them.
+- **A name** — a task's title, a project's name and purpose, a view's name and
+  saved filter, a file's path, a checklist line, what a change moved — is
+  somebody's words too, and no row records who wrote it (a title may have been
+  edited by anybody since it was filed). It is defused in place rather than
+  fenced, and the answer's `provenance` envelope reads it as a colleague's with
+  nobody named. So a task the seat filed and commented on alone is never
+  labelled wholly its own: its title may not be.
+
+The catalogue (`get_work_catalogue`) is the company's own configuration, which
+only an administrator writes, and is defused but not labelled as anybody's.
+
 ### When a task is due and how big it is
 
 Both write tools take four scheduling arguments, and every one of them is the

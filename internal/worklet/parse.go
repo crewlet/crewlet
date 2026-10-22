@@ -331,7 +331,7 @@ func wakeBody(record MutationRecord) (string, provenance.Source) {
 		Body    string   `json:"body"`
 	}
 	if json.Unmarshal(record.Mutation, &carried) != nil {
-		return excerpt, excerptSource(record.Notify.Kind)
+		return excerpt, ExcerptSource(record.Notify.Kind)
 	}
 	type candidate struct {
 		text   string
@@ -355,14 +355,19 @@ func wakeBody(record MutationRecord) (string, provenance.Source) {
 			return whole.text, whole.source
 		}
 	}
-	return excerpt, excerptSource(record.Notify.Kind)
+	return excerpt, ExcerptSource(record.Notify.Kind)
 }
 
-// excerptSource is what an excerpt the payload does not explain is: the cut of
-// a comment on a comment's change, of a description on a create, and otherwise
-// the note its author wrote about the change (a hand-off's reason, a purge's
-// line, a re-prioritisation's line).
-func excerptSource(kind ChangeKind) provenance.Source {
+// ExcerptSource is what a change's excerpt is, by the kind of change that
+// carried it: the cut of a comment on a comment's change, of a description on
+// a create, and otherwise the note its author wrote about the change (a
+// hand-off's reason, a purge's line, a re-prioritisation's line).
+//
+// ONE RULE for every reader of an excerpt — the wake whose payload does not
+// explain its excerpt, and the activity feed, a task's history and a person's
+// inbox, which hold the excerpt and never the payload — so a change's text is
+// labelled the same wherever a seat reads it.
+func ExcerptSource(kind ChangeKind) provenance.Source {
 	switch kind {
 	case ChangeComment, ChangeCommentEdited:
 		return provenance.SourceWorkComment

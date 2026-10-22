@@ -1158,7 +1158,15 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		// on that by filing a duplicate.
 		result["incomplete"] = incompleteNote(answer.Incomplete)
 	}
-	return jsonResult(result)
+	// EVERY TITLE IS SOMEBODY'S WORDS and no row says whose: neutralised,
+	// with the answer labelled as the company's writers' (ADR-0040). A
+	// group's label is a value somebody gave the rows it gathers.
+	read := newForeignRead(turn, actor.Handle)
+	rowNames(read, answer.Rows)
+	if len(answer.Groups) > 0 {
+		namesBy(read)
+	}
+	return read.answer(ctx, ListWorkItemsTool, result, "Narrow what you asked for.")
 }
 
 // incompleteNote is what a model is told when the answer could not account
@@ -1419,9 +1427,26 @@ func fenceTask(read *foreignRead, at fieldPath, d worklet.TaskDetail) {
 	read.fence(at.key("task").key("body"), provenance.SourceWorkDescription, writers,
 		partial, d.Task.Body)
 	for i, c := range d.Comments {
+		author := read.writer(c.Author, iam.ActorKind(c.AuthorKind))
 		read.fence(at.key("comments").index(i).key("body"), provenance.SourceWorkComment,
-			[]provenance.Author{read.writer(c.Author, iam.ActorKind(c.AuthorKind))}, false,
-			c.Body)
+			[]provenance.Author{author}, false, c.Body)
+		if c.Decision != nil {
+			// THE ASK'S OPTIONS ARE ITS AUTHOR'S, written with it.
+			read.attribute([]provenance.Author{author}, false)
+		}
+	}
+	// THE HISTORY'S EXCERPTS are the changes' own text — a comment, a
+	// hand-off's reason — each under who made it, as the activity feed
+	// labels the same rows.
+	for i, h := range d.History {
+		fenceExcerpt(read, at.key("history").index(i).key("excerpt"),
+			worklet.ChangeKind(h.Kind), h.Actor, h.ActorKind, h.Excerpt)
+	}
+	// AND ITS NAMES: the title, the titles and notes of what it links to,
+	// its checklists, its custom fields' values and what its history's
+	// changes moved, none of which a row records a writer of.
+	if d.Task.Title != "" {
+		namesBy(read)
 	}
 }
 
