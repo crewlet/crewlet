@@ -1130,9 +1130,10 @@ opens (spent, revoked or aged out), no `url` and a `detail` saying to issue a
 instead. Because the key names what a create creates, it is a **uuid7**, as
 every `op_id` is, and any other value is `400 op_id_invalid` naming the header.
 The same key with a *different* body — another address, another login, other
-grants — is `409 bad_params` carrying the `op_id`, and so is the key of an
-invitation since redeemed or aged out: a retry is the same request, and a new
-person or a new link is a new key.
+grants — is `409 invalid_input` naming `Idempotency-Key` as its `field` and
+carrying the `op_id`, as every surface that takes a key answers one, and so is
+the key of an invitation since redeemed or aged out: a retry is the same
+request, and a new person or a new link is a new key.
 
 An address, a login or a seat somebody else holds is `409 invalid` **naming who
 holds it** — `field` says which value, `held_by` is the holder's id, and the
@@ -1276,7 +1277,7 @@ carries no `url` and a `detail` saying to issue a password reset link. An
 | `403 unauthorized` | A permission the caller does not hold |
 | `403 token_refused` | The request presented a machine token: an enrolment is an administrative record, refused through a token whatever it carries |
 | `409 invalid` | An address, a login or a seat somebody holds (`held_by`), or an open invitation holds (`invitation`) |
-| `409 bad_params` | The key of an earlier create sent with a different body |
+| `409 invalid_input` | The key of an earlier create sent with a different body (`field: Idempotency-Key`) |
 | `409 no_active_revision` | A node that runs no company yet: it holds no human seat to create anybody on, and the `hint` says to import or create a company that declares one |
 | `500 no_external_url` | A person's create on a node with no `api.external_url` |
 | `503 unavailable` | A create nothing can confirm (`"outcome": "unknown"`, with `id` and `op_id`), or a node that refused to decide it — send the same request again under that `op_id` |

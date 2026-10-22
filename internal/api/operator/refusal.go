@@ -205,13 +205,17 @@ func fail(w http.ResponseWriter, cause error, said caveat.Refusal, key string,
 		// AN OPERATION THIS REQUEST DERIVES ALREADY NAMES A WRITE TO
 		// ANOTHER OBJECT — what the request names moved since the key
 		// was first sent — and nothing was written. A conflict the
-		// caller resolves with a new key, never by waiting.
-		// The field and the key name the cause for a client; the
-		// person reads [ReusedKey], since what the tool refused for
-		// is not why nothing was written.
+		// caller resolves with a new key, never by waiting. The field
+		// and the key name the cause for a client; the person reads
+		// [opkey.Reused] ALONE, the one sentence every surface taking a
+		// key answers it with, in a person's words: the sentence the call
+		// was refused with is the framework's (a writer's) or the tool's
+		// restatement of it for a model (a tool's), and either names the
+		// operation, the subject it landed on and the one this request is
+		// about, which is not why nothing was written.
 		detail["field"] = opkey.Header
 		detail["op_id"] = key
-		detail["detail"] = ReusedKey
+		detail["detail"] = opkey.Reused
 		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeInvalidInput, detail)
 	case refusedFor(cause, statelog.ReasonDeleted):
 		// A PERMANENT DELETION MARKER on what the write is about: it was
@@ -485,12 +489,6 @@ func FailWrite(ctx context.Context, w http.ResponseWriter, err error, key string
 // KeyFields names the arguments a call carried that its tool does not read, on
 // its `400 invalid_body`: values a client fixes its request by.
 const KeyFields = "fields"
-
-// ReusedKey is what a person is told of a write refused because its operation
-// key already names a different change: what the request was about moved
-// since it was first sent.
-const ReusedKey = "What this change was about moved since it was first sent, " +
-	"so nothing was written. Look again, then make the change."
 
 // writeClass is the class a writer's error is refused under: the class its
 // domain decided ([builtin.WriterClass] — the one table the tools' own

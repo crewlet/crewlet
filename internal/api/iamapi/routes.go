@@ -569,9 +569,23 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 	case errors.Is(err, iamdomain.ErrOperationReused):
 		// A KEY THAT ALREADY NAMES SOMETHING ELSE: another request's
 		// invitation or person, or one no longer open. A conflict the
-		// caller resolves with a new key, never by waiting.
-		refuse(http.StatusConflict, httpjson.CodeBadParams,
-			httpjson.Detail{"detail": err.Error(), "op_id": opID})
+		// caller resolves with a new key, never by waiting — answered as
+		// every surface that takes a key answers one, `409 invalid_input`
+		// naming the header as the field to change: it was `bad_params`
+		// here, whose sentence is about a query parameter, while the act
+		// route said `invalid_input`, so one refusal read two ways under
+		// two codes. Where the STATE LOG refused it rather than the
+		// directory's own decide — an operation the key derives already
+		// names a write to another object — the domain's sentinel carries
+		// the framework's refusal after it, which names the operation and
+		// the subjects, so it is told in [opkey.Reused] as every surface
+		// taking a key tells it.
+		said := err.Error()
+		if errors.As(err, &refused) && refused.Reason == statelog.ReasonOpReused {
+			said = opkey.Reused
+		}
+		refuse(http.StatusConflict, httpjson.CodeInvalidInput,
+			httpjson.Detail{"detail": said, "field": opkey.Header, "op_id": opID})
 		return
 	case errors.As(err, &taken):
 		refuse(http.StatusConflict, httpjson.CodeInvalid, s.takenDetail(r, taken))

@@ -323,22 +323,29 @@ func TestAStateOrACollisionIsToldToAPersonInItsCodesOwnWords(t *testing.T) {
 	}
 }
 
-// A DELETION IS TOLD WITHOUT THE FRAMEWORK'S WORDS, through a tool and around
-// one alike.
+// A DELETION AND A REUSED KEY ARE TOLD WITHOUT THE FRAMEWORK'S WORDS, through
+// a tool and around one alike.
 //
-// The state log's refusal names the subject it met: "statelog: unavailable
-// (deleted): crewlet.tracker.task.t-1 was deleted and stays deleted". A
-// tool-less write handed that to a person as its `detail`, and a tool-backed
-// one handed them the tool's restatement of it for a model. Nobody has worded
-// a deletion for a person yet, so both answer `404 not_found` with no detail,
-// in its code's own message (ADR-0060).
+// Both are the state log's refusals, and its error names the subject each met
+// and the operation each was about: "statelog: unavailable (deleted):
+// crewlet.tracker.task.t-1 was deleted and stays deleted". A tool-less write
+// handed that to a person as its `detail`, and a tool-backed one handed them
+// the tool's restatement of it for a model; a reused key's answer opened with
+// either before saying which header to change. Nobody has worded a deletion
+// for a person yet, so it answers `404 not_found` with no detail, in its
+// code's own message (ADR-0060); a reused key is told in the one sentence
+// every surface taking a key answers it with ([opkey.Reused]), alone.
 //
 // Mutation: answer a deletion's `detail` with the writer's error or the tool's
-// sentence again, and a row goes red.
-func TestADeletionIsToldWithoutTheFrameworksWords(t *testing.T) {
+// sentence again, or put the sentence back in front of the reused key's
+// words, and a row goes red.
+func TestADeletionAndAReusedKeyAreToldWithoutTheFrameworksWords(t *testing.T) {
 	t.Parallel()
 	deleted := &statelog.Unavailable{Reason: statelog.ReasonDeleted,
 		Detail: "crewlet.tracker.task.t-1 was deleted and stays deleted"}
+	reused := &statelog.Unavailable{Reason: statelog.ReasonOpReused,
+		Detail: `operation "op" landed on crewlet.tracker.task.t-2 at 3:4, and ` +
+			`this write is to crewlet.tracker.task.t-1`}
 	model := func(err error) string {
 		return "update_work_item did not land (" + err.Error() + ")."
 	}
@@ -362,6 +369,12 @@ func TestADeletionIsToldWithoutTheFrameworksWords(t *testing.T) {
 		{"a deletion, through a tool", func(w http.ResponseWriter) {
 			tool(w, deleted)
 		}, http.StatusNotFound, httpjson.CodeNotFound, ""},
+		{"a reused key, around a tool", func(w http.ResponseWriter) {
+			operator.FailWrite(t.Context(), w, reused, newKey(), nil)
+		}, http.StatusConflict, httpjson.CodeInvalidInput, opkey.Reused},
+		{"a reused key, through a tool", func(w http.ResponseWriter) {
+			tool(w, reused)
+		}, http.StatusConflict, httpjson.CodeInvalidInput, opkey.Reused},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
