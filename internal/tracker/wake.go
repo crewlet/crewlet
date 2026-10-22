@@ -969,10 +969,24 @@ func (w Wake) chosen() *DecisionOption {
 // choiceExcerpt is the card line an answer that chose is summed up as.
 func choiceExcerpt(label, body string) string {
 	if body == "" {
-		return "Chose “" + label + "”"
+		return choicePrefix + label + "”"
 	}
-	return "Chose “" + label + "”: " + body
+	return choicePrefix + label + "”: " + body
 }
+
+// choicePrefix opens the line [choiceExcerpt] sums a choosing answer up as.
+const choicePrefix = "Chose “"
+
+// ExcerptQuotesAChoice reports whether a change's excerpt is the line
+// [choiceExcerpt] wrote for an answer that chose: one that quotes the ASKER's
+// option label before the answerer's own words, so the answerer is not the
+// only writer of it.
+//
+// READ OFF THE LINE ITSELF, because the readers that hold an excerpt — the
+// activity feed, a task's history, a person's inbox — hold no payload to say
+// which comment it was cut from, and a remark that happens to open the same
+// way is read as quoting somebody too, which is the safe direction.
+func ExcerptQuotesAChoice(excerpt string) bool { return strings.HasPrefix(excerpt, choicePrefix) }
 
 // without is a minus b, order preserved.
 func without(all, muted []string) []string {
