@@ -27,7 +27,8 @@ import (
 // dataset whose read the state log refused — an error no question wrapped —
 // was logged as a failure. Now each is told in [builtin.ConditionSentence]
 // under its own hint, none where no wait clears it, and a failure that is no
-// condition keeps the fixed sentence (the control).
+// condition is the node's own fault: `500`, with no Retry-After, where it was
+// a 503 under the same four seconds and a board polled a fault for ever.
 //
 // AND A CONDITION'S ERROR GOES TO THIS SURFACE'S LOG with the board and the
 // dataset it was for, which the fields the caller hands settle carry: a line
@@ -36,8 +37,9 @@ import (
 // Not parallel: it installs the process's log sink.
 //
 // Mutation: answer the question's arm under the election hint again, or leave
-// a bare state-log refusal to the arm below it, and their rows go red; log the
-// condition without the caller's fields and the log rows do.
+// a bare state-log refusal to the arm below it, and their rows go red; answer
+// the fault as a 503 and its row does; log the condition without the caller's
+// fields and the log rows do.
 func TestADatasetsConditionSaysWhichAndWhenToComeBack(t *testing.T) {
 	var out syncBuffer
 	logging.Configure(slog.LevelInfo, logging.FormatText, &out)
@@ -47,16 +49,17 @@ func TestADatasetsConditionSaysWhichAndWhenToComeBack(t *testing.T) {
 		Detail: detail}
 	fullSaid, _ := builtin.ConditionSentence(full)
 	for name, c := range map[string]struct {
-		err   error
-		says  string
-		retry string
+		err    error
+		status int
+		says   any
+		retry  string
 	}{
 		"a source's question on a full log": {fmt.Errorf("%w: %w", queries.ErrUnavailable,
-			full), fullSaid, ""},
+			full), http.StatusServiceUnavailable, fullSaid, ""},
 		"a store dataset on a full log": {fmt.Errorf("artifactdata: docs: %w", full),
-			fullSaid, ""},
+			http.StatusServiceUnavailable, fullSaid, ""},
 		"a failure that is no condition": {fmt.Errorf("read /var/lib/crewlet/replicated.db: disk I/O"),
-			"This node could not read open_items right now.", "4"},
+			http.StatusInternalServerError, nil, ""},
 	} {
 		out.Reset()
 		rec := httptest.NewRecorder()
@@ -64,8 +67,9 @@ func TestADatasetsConditionSaysWhichAndWhenToComeBack(t *testing.T) {
 			&Reading{}, "open_items", "spent", "artifact", "art-zz", "dataset", "ds-zz")
 		var body map[string]any
 		_ = json.Unmarshal(rec.Body.Bytes(), &body)
-		if ok || rec.Code != http.StatusServiceUnavailable || body["detail"] != c.says {
-			t.Errorf("%s answered %v %d %v, want 503 with %q", name, ok, rec.Code, body, c.says)
+		if ok || rec.Code != c.status || body["detail"] != c.says {
+			t.Errorf("%s answered %v %d %v, want %d with %v", name, ok, rec.Code, body,
+				c.status, c.says)
 		}
 		if after := rec.Header().Get("Retry-After"); after != c.retry {
 			t.Errorf("%s: Retry-After %q, want %q", name, after, c.retry)

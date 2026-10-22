@@ -1,7 +1,6 @@
 package setupapi_test
 
 import (
-	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -436,13 +436,14 @@ func TestADisconnectRefusedByAConcurrentPassSaysItIsRetryable(t *testing.T) {
 // this as busy sends a caller round a loop the fault may not end. Both
 // answers are 503 and both carry a Retry-After, because both may clear (a
 // coordination store that could not be reached usually comes back within
-// seconds); only one of them is a race worth retrying without being asked.
+// seconds, which is what the store's three-valued answer says); only one of
+// them is a race worth retrying without being asked.
 func TestADisconnectRefusedForAnyOtherReasonIsNotABusySurface(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
 	s.seedDocument(t, identityDoc)
 	s.status.mu.Lock()
-	s.status.loadErr = errors.New("the coordination store could not be reached")
+	s.status.loadErr = fmt.Errorf("read the status row: %w", coord.ErrUnavailable)
 	s.status.mu.Unlock()
 
 	out := s.do(t, http.MethodDelete, "/setup/integrations/gitlab", `{}`, nil)
