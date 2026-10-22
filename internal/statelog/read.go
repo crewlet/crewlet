@@ -198,9 +198,11 @@ type Refused struct {
 	Level ReadLevel
 
 	// Detail names the specific thing — the deferred record's version and
-	// position, the field an operator has to change. Written for a CALLER,
-	// since every surface sends it on, so it is never an error's own text
-	// — see [Unavailable]'s detail, held to the same rule.
+	// position, the field an operator has to change. Written for WHOEVER
+	// RUNS THE NODE: it goes to the node's log and to the gate and
+	// retention tooling, never to a screen, where a person is told the
+	// code in [ConditionSentence]'s words. Never an error's own text — see
+	// [Unavailable]'s detail, held to the same rule.
 	Detail string
 
 	// RetryAfter is DERIVED rather than fixed where it can be: how far
