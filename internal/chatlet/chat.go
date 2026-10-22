@@ -100,6 +100,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // The content caps, in bytes. Refused at the WRITE naming the field, never
@@ -594,10 +596,16 @@ func invalid(field, why string, args ...any) error {
 // ([ErrUnknownKind]), a room, a message or a thread that is not there
 // ([ErrNotFound]), a name another room holds ([ErrNameTaken]) and a room that
 // changed under a decision ([ErrConflict]). Each names a room as a person
-// knows it ([Channel.called]) and never by its id. A lost race carries the
-// framework's own error after the mark, and is told to a person in the state
-// log's words before this is asked (internal/agent/builtin's WriterSentence).
+// knows it ([Channel.called]) and never by its id. THE FRAMEWORK'S OWN THREE —
+// a lost race (the conflict beneath [ErrConflict]), a create of what is there
+// and a write a deletion keeps deleted — are told in the state log's words for
+// a person ([statelog.Sentence]), here as well as by every surface that asks
+// the state log first (internal/agent/builtin's WriterSentence), so a caller
+// that asks only this one cannot print the framework's words after the mark.
 func Sentence(err error) string {
+	if said, ok := statelog.Sentence(err); ok {
+		return said
+	}
 	var refusal *InvalidError
 	if errors.As(err, &refusal) && refusal.Error() == err.Error() {
 		return "`" + refusal.Field + "`: " + refusal.Why
