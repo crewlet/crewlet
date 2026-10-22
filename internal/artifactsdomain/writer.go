@@ -328,8 +328,23 @@ func (w *Writer) publish(ctx context.Context, req statelog.Request) (statelog.Re
 // ([ErrSourceTaken]); on anything else, what the create makes is there
 // ([ErrExists]). The framework's bare sentinel reached the artifacts API's
 // fallback and was answered as this node's fault.
+//
+// AND A WRITE THE DELETION GATE DROPPED IS A PURGE ([ErrPurged]): the decide
+// passed, and the artifact's purge landed ahead of the record, so its deletion
+// marker held the record on every node ([Gates.GatedAt]). That is the same
+// fact the decide reports when it is the one that finds the marker, and it is
+// told the same way — the framework states it as one of its conditions, which
+// the artifacts API answered `503` "try again" and a tool "try again
+// shortly", about an artifact nothing will ever write again.
 func publishError(subject statelog.Subject, err error) error {
+	var refused *statelog.Unavailable
 	switch {
+	case errors.As(err, &refused) && refused.Reason == statelog.ReasonDeleted:
+		artifact, ok := gatedArtifact(subject.Kind, subject.ID)
+		if !ok {
+			artifact = subject.ID
+		}
+		return fmt.Errorf("%w: %s", ErrPurged, artifact)
 	case errors.Is(err, statelog.ErrConflict):
 		return fmt.Errorf("%w: %s: %w", ErrConflict, subject.ID, err)
 	// THE COLLISION IS THE WHOLE OF WHAT HAPPENED, so the framework's own

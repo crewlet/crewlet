@@ -314,18 +314,28 @@ func faulted(ctx context.Context, tool string, err error, sentence string) tools
 // toldOf is how a failed result's reason reads inside a sentence that names
 // what it stopped: [faultSaid] for a fault, whose error is the log's;
 // [Unanswered] for a write no data node answered, whose error names every node
-// it was sent to; a condition's words ([Condition]); and otherwise the error's
-// own — a refusal the domain composed for a caller.
+// it was sent to; a refusal a native domain or the framework decided, in the
+// deciding one's words ([WriterSentence]); a condition's words ([Condition]);
+// and otherwise the error's own.
 //
 // THE UNANSWERED WRITE GOES BEFORE THE CONDITION, because one whose caller's
 // context ended while it waited carries that context's error too, and "it ran
 // out of time" read beside "did not finish" says the write did not land.
+//
+// AND THE DECIDED REFUSAL GOES BEFORE IT TOO: a write about what a deletion
+// keeps deleted is a refusal the framework states as one of its conditions, so
+// asked second it was told as the framework's whole text, the deleted object's
+// broker subject included, and the domain's own refusals as their Go error,
+// package name and all.
 func toldOf(failure tools.Result, err error) string {
 	if tools.RefusalOf(failure) == tools.RefusalInternalError {
 		return faultSaid
 	}
 	if errors.Is(err, estate.ErrOutcomeUnknown) {
 		return Unanswered
+	}
+	if said, ok := WriterSentence(err); ok {
+		return said
 	}
 	if why, ok := Condition(err); ok {
 		return why
