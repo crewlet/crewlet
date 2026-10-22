@@ -487,6 +487,44 @@ func TestMaintenanceStatusNamesWhatIsHoldingTheSeal(t *testing.T) {
 	}
 }
 
+// A RESTART THAT BOUND NO WINDOW IS PRINTED AS ONE, not as attempt 0.
+//
+// A node restarted into maintenance mode while no window was open records its
+// restart bound to none, and a node acknowledged an earlier window carries
+// that window's attempt. Neither is an acknowledgement of this window, and
+// printed as numbers they read as one. Mutation: print the attempt as a
+// number again and this goes red.
+func TestTheStatusPrintsARestartBeforeTheWindowAsOne(t *testing.T) {
+	t.Parallel()
+	node := newFakeCapacityNode(t)
+	node.status = map[string]any{
+		"stream": "CREWLET_TRACKER_LOG", "open": true, "mode": "maintenance",
+		"sealed": false, "operation": node.op(),
+		"acks": []map[string]any{
+			{"node_id": "node-1", "operation_id": "", "attempt": 0,
+				"incarnation": "node-1:early", "mode": "maintenance"},
+			{"node_id": "node-2", "operation_id": "op-0", "attempt": 3,
+				"incarnation": "node-2:earlier", "mode": "seal"},
+		},
+	}
+	stdout, _, err := cli(t, "retention", "maintenance", "status",
+		bootstrapForURL(t, node.server.URL), "-stream", "CREWLET_TRACKER_LOG")
+	if err != nil {
+		t.Fatalf("maintenance status: %v", err)
+	}
+	for incarnation, want := range map[string]string{
+		"node-1:early": "no window", "node-2:earlier": "another window",
+	} {
+		printed := false
+		for _, line := range strings.Split(stdout, "\n") {
+			printed = printed || strings.Contains(line, incarnation) && strings.Contains(line, want)
+		}
+		if !printed {
+			t.Errorf("the row acknowledged as %s never says %q:\n%s", incarnation, want, stdout)
+		}
+	}
+}
+
 // THE STATUS NAMES WHO EXCLUDED A NODE AND WHO ABANDONED THE WINDOW.
 //
 // An exclusion is the one fact the seal takes on somebody's word, and it

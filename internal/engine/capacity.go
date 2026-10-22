@@ -1288,7 +1288,11 @@ func capacityMembers(held []coord.Lease) []string {
 }
 
 // capacityIncarnations is each participant's identity as of the baseline, read
-// from the acknowledgements every maintenance-mode node writes at boot.
+// from the acknowledgements every maintenance-mode node writes at boot: bound
+// to the window open when it booted, or WINDOWLESS where none was, which is
+// the ordinary case for a fleet restarted before the verb ran. Either names
+// the process, and that is all a baseline needs; which one the seal takes is
+// [statelog.SealHolds]'s question.
 //
 // A PARTICIPANT WITH NO ACKNOWLEDGEMENT HAS NO RESTART RECORDED into the mode
 // ([statelog.BaselineMissing], the one rule the status pages read too), and is

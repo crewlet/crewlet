@@ -300,7 +300,16 @@ type MaintenanceAck struct {
 
 	// OperationID and Attempt bind the acknowledgement. An ack that named
 	// neither would be satisfied by a restart that happened for an
-	// unrelated reason.
+	// unrelated reason, so the seal takes none that does not name its own.
+	//
+	// BOTH EMPTY on the record a node writes as it boots into a maintenance
+	// mode while no window is open ([MaintenanceAck.Windowless]). It says
+	// which process the node restarted as and in which mode, which is all
+	// a BASELINE reads, and it binds nothing, which is why no seal accepts
+	// it: the fleet restarts into maintenance mode before anybody runs the
+	// verb, and a baseline that read only bound acknowledgements found
+	// none from any node but the coordinator and sent the operator to
+	// restart a fleet that had just restarted.
 	OperationID string `json:"operation_id"`
 	Attempt     int    `json:"attempt"`
 
@@ -321,6 +330,10 @@ type MaintenanceAck struct {
 
 	At time.Time `json:"at"`
 }
+
+// Windowless reports an acknowledgement made while no window was open, which
+// names no operation and no attempt.
+func (a MaintenanceAck) Windowless() bool { return a.OperationID == "" && a.Attempt == 0 }
 
 // Admission is one node's positive record that it is about to publish.
 //
@@ -463,19 +476,23 @@ func (a MaintenanceAck) Validate() error {
 	case strings.TrimSpace(a.NodeID) == "":
 		return fmt.Errorf("coord: a maintenance acknowledgement names no node — " +
 			"it is the key, and the barrier is about which processes restarted")
-	case strings.TrimSpace(a.OperationID) == "":
-		return fmt.Errorf("coord: node %s acknowledged no operation: an ack that "+
-			"named none would be satisfied by a restart for an unrelated "+
-			"reason", a.NodeID)
-	case a.Attempt < 1:
-		return fmt.Errorf("coord: node %s acknowledged attempt %d, and prior "+
-			"attempts are invalidated by the number rather than deleted — so a "+
-			"zero is an ack for every attempt at once", a.NodeID, a.Attempt)
 	case strings.TrimSpace(a.Incarnation) == "":
 		return fmt.Errorf("coord: node %s acknowledged with no incarnation, "+
 			"which is the whole evidence: the seal establishes that the process "+
 			"holding a request is gone, and an empty identity establishes "+
 			"nothing", a.NodeID)
+	case a.Windowless():
+		// A RESTART MADE WHILE NO WINDOW WAS OPEN, which binds nothing and
+		// which no seal accepts ([MaintenanceAck.OperationID]).
+	case strings.TrimSpace(a.OperationID) == "":
+		return fmt.Errorf("coord: node %s acknowledged attempt %d of no "+
+			"operation: an attempt is a number within one operation, and one "+
+			"that named none would be satisfied by a restart for an unrelated "+
+			"reason", a.NodeID, a.Attempt)
+	case a.Attempt < 1:
+		return fmt.Errorf("coord: node %s acknowledged attempt %d, and prior "+
+			"attempts are invalidated by the number rather than deleted — so a "+
+			"zero is an ack for every attempt at once", a.NodeID, a.Attempt)
 	}
 	return nil
 }

@@ -223,6 +223,11 @@ func SealHolds(op coord.MaintenanceOperation, acks []coord.MaintenanceAck) (bool
 		switch {
 		case !acked:
 			missing = append(missing, node+" has not acknowledged")
+		case ack.Windowless():
+			// A RESTART MADE WHILE NO WINDOW WAS OPEN binds nothing: it
+			// is what a baseline reads, never what a seal takes.
+			missing = append(missing, node+" restarted before this operation "+
+				"opened and has not acknowledged it")
 		case ack.OperationID != op.OperationID:
 			missing = append(missing, node+" acknowledged another operation")
 		case ack.Attempt != op.Attempt:

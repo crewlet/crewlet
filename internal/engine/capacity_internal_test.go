@@ -467,10 +467,17 @@ func TestAnAcknowledgementCarriesTheModeItWasMadeIn(t *testing.T) {
 	e, fleet := capacityFixture(t, "node-1", statelog.ModeSeal)
 
 	// NO OPERATION IS NOT A FAILURE — a fleet restarted into maintenance
-	// mode before the verb ran is the ordinary first step.
+	// mode before the verb ran is the ordinary first step — and the boot
+	// still records which process it is, in which mode, bound to nothing.
 	e.acknowledge(ctx, []string{"CREWLET_TRACKER_LOG"})
-	if acks, _ := fleet.MaintenanceAcks(ctx); len(acks) != 0 {
-		t.Fatalf("an acknowledgement was written against no operation: %+v", acks)
+	acks, err := fleet.MaintenanceAcks(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(acks) != 1 || !acks[0].Windowless() || acks[0].Mode != string(statelog.ModeSeal) ||
+		acks[0].Incarnation != e.incarnation {
+		t.Fatalf("a boot with no window open recorded %+v, want one windowless "+
+			"acknowledgement of this process in seal mode", acks)
 	}
 
 	if _, _, err := fleet.OpenMaintenance(ctx, coord.MaintenanceOperation{
@@ -481,7 +488,7 @@ func TestAnAcknowledgementCarriesTheModeItWasMadeIn(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.acknowledge(ctx, []string{"CREWLET_TRACKER_LOG"})
-	acks, err := fleet.MaintenanceAcks(ctx)
+	acks, err = fleet.MaintenanceAcks(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -500,6 +507,123 @@ func TestAnAcknowledgementCarriesTheModeItWasMadeIn(t *testing.T) {
 	}
 	if got.OperationID != "op-1" || got.Incarnation != e.incarnation {
 		t.Errorf("the ack does not identify what restarted: %+v", got)
+	}
+}
+
+// A BOOT THAT COULD NOT READ A STREAM RECORDS NO WINDOWLESS RESTART: a window
+// may be open there, and an acknowledgement saying none was is a claim this
+// boot cannot make. It records nothing, and the window's baseline names it.
+func TestABootThatCouldNotReadAWindowRecordsNoWindowlessRestart(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fleet := coordmem.NewFleet()
+	e := nodeOn(&blindFleet{fleetStore: fleet, readErr: errors.New("store unreachable")},
+		"node-1", "boot-1", statelog.ModeMaintenance, dataNode)
+	e.acknowledge(ctx, []string{"CREWLET_TRACKER_LOG"})
+	if acks, _ := fleet.MaintenanceAcks(ctx); len(acks) != 0 {
+		t.Fatalf("a boot that could not read the window recorded %+v", acks)
+	}
+}
+
+// THE CAPACITY PROCEDURE RUNS IN THE RESTARTS IT NAMES, on a fleet with a node
+// that crashed in service.
+//
+// This is the whole of what went wrong, end to end. node-a crashed holding its
+// admission; every node is restarted into maintenance mode, as the procedure's
+// first step says, before anybody runs the verb; the verb runs from node-b.
+// The window used to refuse to open over node-a's admission and tell the
+// operator to restart node-a into the mode it was in. With that fixed, the
+// baseline found no acknowledgement from anyone but the coordinator, since a
+// boot with no window open recorded nothing, and sent the operator to restart
+// the whole fleet again. Now the verb baselines in the one call, and the seal
+// holds after the one seal restart.
+//
+// Mutation: drop the windowless acknowledgement and the baseline refuses
+// node-a and node-c; drop the boot's admission retirement and it refuses
+// node-a's admission.
+func TestTheCapacityProcedureRunsInTheRestartsItNames(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fleet := coordmem.NewFleet()
+	streams := []string{"CREWLET_TRACKER_LOG"}
+	nodes := []string{"node-a", "node-b", "node-c"}
+
+	// IN SERVICE: three data nodes, each admitted and each with a position.
+	for _, id := range nodes {
+		e := nodeOn(fleet, id, "service", statelog.ModeNormal, dataNode)
+		if err := e.handshake(ctx, streams); err != nil {
+			t.Fatal(err)
+		}
+		if err := fleet.PutPositions(ctx, coord.NodePositions{
+			NodeID: id, At: time.Now().UTC(), Domains: map[string]coord.DomainPosition{},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		// node-a CRASHES; the other two stop cleanly and give theirs back.
+		if id != "node-a" {
+			if err := e.withdraw(ctx); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	// RESTART 1: every node into maintenance mode, before the verb.
+	maintenance := map[string]*Engine{}
+	for _, id := range nodes {
+		maintenance[id] = nodeOn(fleet, id, "maintenance", statelog.ModeMaintenance, dataNode)
+		if err := maintenance[id].handshake(ctx, streams); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// THE VERB, from node-b: it opens the window and baselines it.
+	op := openWindow(t, maintenance["node-b"])
+	baselined, err := maintenance["node-b"].advanceCapacity(ctx, nil, op)
+	if err != nil {
+		t.Fatalf("the first run of the verb did not baseline the window: %v", err)
+	}
+	if baselined.Phase != coord.PhaseBaselined {
+		t.Fatalf("the window stands at %s, want baselined", baselined.Phase)
+	}
+	for _, id := range nodes {
+		if got := baselined.WriteIncarnations[id]; got != maintenance[id].incarnation {
+			t.Errorf("%s is baselined as %q, want the process it restarted as (%s)",
+				id, got, maintenance[id].incarnation)
+		}
+	}
+
+	// THE APPLY needs a broker; what it leaves is the phase and its own
+	// journal record resolved.
+	applied := baselined
+	applied.Phase = coord.PhaseApplied
+	applied.Journal = completeJournal(baselined.Journal, baselined.Attempt,
+		maintenance["node-b"].incarnation)
+	if err := fleet.UpdateMaintenance(ctx, applied); err != nil {
+		t.Fatal(err)
+	}
+
+	// THE WINDOWLESS RECORDS ARE NOT A SEAL, before the seal restart.
+	acks, err := fleet.MaintenanceAcks(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if held, _ := statelog.SealHolds(applied, acks); held {
+		t.Fatal("the seal held on the maintenance restarts that preceded the apply")
+	}
+
+	// RESTART 2: every node into seal mode, and the barrier holds.
+	for _, id := range nodes {
+		e := nodeOn(fleet, id, "seal", statelog.ModeSeal, dataNode)
+		if err := e.handshake(ctx, streams); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if acks, err = fleet.MaintenanceAcks(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if held, missing := statelog.SealHolds(applied, acks); !held {
+		t.Fatalf("the seal does not hold after every node restarted into seal "+
+			"mode: %s", missing)
 	}
 }
 
