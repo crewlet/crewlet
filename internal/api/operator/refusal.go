@@ -254,12 +254,14 @@ func fail(w http.ResponseWriter, cause error, sentence, key string, about httpjs
 		// AN OPERATION THIS REQUEST DERIVES ALREADY NAMES A WRITE TO
 		// ANOTHER OBJECT — what the request names moved since the key
 		// was first sent — and nothing was written. A conflict the
-		// caller resolves with a new key, never by waiting.
+		// caller resolves with a new key, never by waiting. TOLD IN
+		// [opkey.Reused] ALONE: the sentence the call was refused with
+		// is the framework's (a writer's) or the tool's restatement of
+		// it for a model (a tool's), and either names the operation, the
+		// subject it landed on and the one this request is about.
 		detail["field"] = opkey.Header
 		detail["op_id"] = key
-		detail["detail"] = strings.TrimSuffix(sentence, ".") + ". This " +
-			opkey.Header + " was already used for a different change. Read it " +
-			"again and send it with a new key."
+		detail["detail"] = opkey.Reused
 		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeInvalidInput, detail)
 	case refusedFor(cause, statelog.ReasonDeleted):
 		// A PERMANENT DELETION MARKER on what the write is about: it was

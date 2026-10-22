@@ -272,20 +272,26 @@ func TestAStateOrACollisionIsToldToAPersonInTheDomainsWords(t *testing.T) {
 	}
 }
 
-// A DELETION IS TOLD WITHOUT THE FRAMEWORK'S WORDS, through a tool and around
-// one alike.
+// A DELETION AND A REUSED KEY ARE TOLD WITHOUT THE FRAMEWORK'S WORDS, through
+// a tool and around one alike.
 //
-// The state log's refusal names the subject it met: "statelog: unavailable
-// (deleted): crewlet.tracker.task.t-1 was deleted and stays deleted". A
-// tool-less write handed that to a person as its `detail`, and a tool-backed
-// one handed them the tool's restatement of it for a model.
+// Both are the state log's refusals, and its error names the subject each met
+// and the operation each was about: "statelog: unavailable (deleted):
+// crewlet.tracker.task.t-1 was deleted and stays deleted". A tool-less write
+// handed that to a person as its `detail`, and a tool-backed one handed them
+// the tool's restatement of it for a model; a reused key's answer opened with
+// either before saying which header to change.
 //
 // Mutation: answer a deletion's `detail` with the writer's sentence again in
-// Said or in writeSentence, and a row goes red.
-func TestADeletionIsToldWithoutTheFrameworksWords(t *testing.T) {
+// Said or in writeSentence, or put the sentence back in front of the reused
+// key's words, and a row goes red.
+func TestADeletionAndAReusedKeyAreToldWithoutTheFrameworksWords(t *testing.T) {
 	t.Parallel()
 	deleted := &statelog.Unavailable{Reason: statelog.ReasonDeleted,
 		Detail: "crewlet.tracker.task.t-1 was deleted and stays deleted"}
+	reused := &statelog.Unavailable{Reason: statelog.ReasonOpReused,
+		Detail: `operation "op" landed on crewlet.tracker.task.t-2 at 3:4, and ` +
+			`this write is to crewlet.tracker.task.t-1`}
 	model := func(err error) string {
 		return "update_work_item did not land (" + err.Error() + ")."
 	}
@@ -303,6 +309,14 @@ func TestADeletionIsToldWithoutTheFrameworksWords(t *testing.T) {
 				Cause: crewletmcp.Classify(crewletmcp.RefusalUnavailable, deleted)},
 				newKey(), httpjson.Detail{"tool": "update_work_item"})
 		}, http.StatusNotFound, statelog.Deleted},
+		{"a reused key, around a tool", func(w http.ResponseWriter) {
+			operator.FailWrite(t.Context(), w, reused, newKey(), nil)
+		}, http.StatusConflict, "This " + opkey.Header + " was already used"},
+		{"a reused key, through a tool", func(w http.ResponseWriter) {
+			operator.FailResult(w, crewletmcp.Result{Failed: true, Output: model(reused),
+				Cause: crewletmcp.Classify(crewletmcp.RefusalUnavailable, reused)},
+				newKey(), httpjson.Detail{"tool": "update_work_item"})
+		}, http.StatusConflict, "This " + opkey.Header + " was already used"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
