@@ -1518,12 +1518,13 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	//
 	// A NODE IN A MAINTENANCE MODE SKIPS IT AND ACKNOWLEDGES INSTEAD: it
 	// is not admitting itself to publish, it is offering the evidence the
-	// capacity barrier is established from. See maintenance_mode.go.
+	// capacity barrier is established from, and it first retires the
+	// admission a previous process of this node left. See
+	// maintenance_mode.go.
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
-	if err := e.admit(ctx, maintenanceStreams()); err != nil {
+	if err := e.handshake(ctx, maintenanceStreams()); err != nil {
 		return nil, err
 	}
-	e.acknowledge(ctx, maintenanceStreams())
 
 	// SERVING BEFORE ANY SEAT, and in every mode: a node restarted into a
 	// maintenance mode still answers reads, and its writers are what
@@ -2560,7 +2561,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	if err := e.withdraw(ctx); err != nil {
 		log.WarnContext(ctx, "admission_not_withdrawn", "err", err,
 			"detail", "a capacity operation will see this node as a possible "+
-				"publisher until an operator excludes it")
+				"publisher until it boots again or an operator excludes it")
 	}
 	e.stopIntegrations()
 	// AFTER the integration loop, which is what runs the passes that ask
