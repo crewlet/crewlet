@@ -224,10 +224,13 @@ const (
 	// and then never again: a seat could be out of service for a week with
 	// the only evidence a single line that had long since rotated out.
 	//
-	// Twenty heartbeats. Frequent enough that the alarm outlives log
+	// Five minutes: twenty heartbeats at the shipped TTL, and a DURATION
+	// rather than a count of this host's heartbeats, because both of its
+	// reasons are about time. Frequent enough that the alarm outlives log
 	// rotation and that a stranded seat is still visible to whoever comes
 	// on shift next; rare enough that one stuck seat cannot fill a log with
-	// its own retries.
+	// its own retries — which at the 15 s floor a count of twenty would
+	// have made every minute and forty seconds.
 	UndeadAlarmInterval = HeartbeatInterval * 20
 )
 
