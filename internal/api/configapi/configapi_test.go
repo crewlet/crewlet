@@ -257,7 +257,9 @@ func companyJSON(t *testing.T, doc string) []byte {
 	return document
 }
 
-// seedPayload stores payload as the active revision, byte for byte.
+// seedPayload stores payload as the active revision, byte for byte, and
+// points the fleet at it, as a node's boot seed does: the active revision this
+// surface answers is the one the fleet's pointer names.
 func (s *surface) seedPayload(t *testing.T, payload []byte) string {
 	t.Helper()
 	id, err := s.configs.InsertActive(t.Context(), store.Revision{
@@ -268,7 +270,21 @@ func (s *surface) seedPayload(t *testing.T, payload []byte) string {
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
+	s.publish(t, id, payload)
 	return id
+}
+
+// publish points the fleet at a revision this node stored, as the node that
+// stored it does once it is written.
+func (s *surface) publish(t *testing.T, id string, payload []byte) {
+	t.Helper()
+	if _, err := s.plane.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: id, Summary: "seed", Payload: payload, At: pinned,
+		Origin: coord.RevisionOrigin{Author: "operator", AuthorKind: iam.ActorOperator,
+			Source: "test", CreatedAt: pinned},
+	}); err != nil {
+		t.Fatalf("point the fleet at the seeded revision: %v", err)
+	}
 }
 
 func decode(t *testing.T, res *httptest.ResponseRecorder) map[string]any {
@@ -1022,13 +1038,19 @@ func TestADiffOfAMissingRevisionSaysSo(t *testing.T) {
 func TestADiffAgainstTheActiveOfAnUnconfiguredNode(t *testing.T) {
 	t.Parallel()
 	// There is no active revision to compare against, which is a different
-	// answer from "the revision you named does not exist".
+	// answer from "the revision you named does not exist". The revision is
+	// history the fleet never activated, as a write that lost its
+	// compare-and-set leaves one.
 	s := newSurface(t)
-	id := s.seed(t, companyDoc)
-	// Deactivate everything, which is what a node looks like before its
-	// first import.
-	if _, err := s.db.SQL().ExecContext(t.Context(),
-		`UPDATE company_config SET is_active = 0`); err != nil {
+	payload, err := secrets.Seal(s.cipher, companyJSON(t, companyDoc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := s.configs.Insert(t.Context(), store.Revision{
+		CreatedByKind: iam.ActorOperator, Source: "test", CreatedBy: "operator",
+		Summary: "never activated", Payload: payload, CreatedAt: pinned,
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
 	res := s.do(t, http.MethodGet, "/config/revisions/"+id+"/diff", "", nil)

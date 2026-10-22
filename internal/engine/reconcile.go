@@ -522,8 +522,10 @@ func (r *Reconciler) Tick(ctx context.Context) error {
 		return fmt.Errorf("engine: reconcile: %w", err)
 	}
 	if !found {
-		// Nothing has been activated. Not an error and not a state to
-		// report: a fresh deployment sits here until the first import.
+		// Nothing has been activated: a fresh deployment sits here until
+		// the first import. Or the pointer is GONE while this node holds
+		// the company it runs, which this node offers back.
+		r.restorePointer(ctx)
 		return nil
 	}
 	progress := r.snapshot()
@@ -563,6 +565,61 @@ func (r *Reconciler) Tick(ctx context.Context) error {
 	return r.apply(ctx, target)
 }
 
+// restorePointer offers this node's own active revision to a fleet whose
+// activation pointer names nothing, and only then: published create-only, so
+// the first node to offer one is the fleet's and every other converges on it.
+//
+// A POINTER CAN GO WHILE THE FLEET RUNS: a coordination store recreated under
+// running nodes keeps no activation. Every node went on running its company
+// while /config, which answers the pointer, told an operator nothing was
+// configured, and a create-only import landed over the running company
+// unrefused. A node restarting republishes its copy at boot, and nothing did
+// until one did. Every node holding a copy now offers it on its next tick,
+// which is the same offer the boot makes, with the same seal check: a copy
+// stored without one is never published, since every peer would refuse it.
+//
+// A node holding no copy offers nothing: that is the fresh deployment, which
+// waits for its first import.
+func (r *Reconciler) restorePointer(ctx context.Context) {
+	active, found, err := r.configs.Active(ctx)
+	if err != nil {
+		r.log.WarnContext(ctx, "local_revision_unread", "error", err,
+			"detail", "the fleet has no activation, and this node could not read "+
+				"its own active revision to offer it; the next tick tries again")
+		return
+	}
+	if !found {
+		return
+	}
+	if _, err = secrets.Open(r.cipher, active.Payload); err != nil {
+		r.log.WarnContext(ctx, "fleet_activation_not_restored", "revision", active.ID,
+			"error", openRefusal(active.ID, true, err))
+		return
+	}
+	published, err := r.plane.Activate(ctx, coord.ActivationRequest{
+		RevisionID: active.ID, Summary: active.Summary, Payload: active.Payload,
+		At: active.ActivatedAt, ExpectAbsent: true,
+		Origin: coord.RevisionOrigin{
+			Author: active.CreatedBy, AuthorKind: active.CreatedByKind,
+			OperatorID: active.OperatorID, Source: active.Source,
+			CreatedAt: active.CreatedAt,
+		},
+	})
+	switch {
+	case errors.Is(err, coord.ErrActivationRaced):
+		// Another node offered its copy first, which is the fleet's now.
+		return
+	case err != nil:
+		r.log.WarnContext(ctx, "fleet_activation_not_restored", "revision", active.ID,
+			"error", err, "detail", "the fleet has no activation and this node's "+
+				"offer of its own did not land; the next tick tries again")
+		return
+	}
+	r.log.WarnContext(ctx, "fleet_activation_restored", "revision", active.ID,
+		"epoch", published.Epoch, "detail", "the fleet had no activation while "+
+			"this node ran a company, so this node published the revision it runs")
+}
+
 // apply loads, opens, parses and publishes one revision, then records what
 // happened for the rest of the fleet to read.
 //
@@ -593,14 +650,14 @@ func (r *Reconciler) apply(ctx context.Context, target coord.Activation) error {
 // holdLocalCopy makes the revision the fleet is on this node's active one,
 // once this node serves it.
 //
-// This node's active revision is what its GET /config answers, what it boots
-// on, and what it offers the whole fleet at its next start whenever that
-// revision is newer than the pointer. So once the node runs the fleet's epoch
-// it has to be the fleet's revision, and two ordinary paths leave it
+// This node's active revision is its copy of the fleet's pointer: what it
+// boots on, and what it offers the whole fleet at its next start whenever
+// that revision is newer than the pointer. So once the node runs the fleet's
+// epoch it has to be the fleet's revision, and two ordinary paths leave it
 // otherwise: an API write whose own local activation failed after the fleet
 // took it, and an offline import the fleet had already superseded when the
 // node started. Each is corrected here, every tick, rather than trusted to
-// the path that caused it, and each left alone was a node serving, and one
+// the path that caused it, and each left alone was a node booting on, and one
 // restart later republishing, a company the fleet is not running.
 //
 // IT NEVER MOVES THE COPY BACK. target is the epoch this tick read, and an
@@ -608,9 +665,9 @@ func (r *Reconciler) apply(ctx context.Context, target coord.Activation) error {
 // on this node that lands meanwhile has already made ITS revision this node's
 // active one by the time the apply ends. Marking target active then was the
 // copy going back to the revision that write replaced, which is what this
-// node's GET /config answered after the write's 201. The store refuses it
-// ([store.SupersededError]) inside the transaction that would make it, and
-// the next tick reads the pointer the write moved.
+// node's GET /config answered after the write's 201 while it read the copy.
+// The store refuses it ([store.SupersededError]) inside the transaction that
+// would make it, and the next tick reads the pointer the write moved.
 //
 // Best effort, like every local copy: the epoch is applied either way, and
 // the next tick tries again.

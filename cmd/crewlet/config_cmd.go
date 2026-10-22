@@ -57,6 +57,11 @@ Flags:
   -config PATH   Tier A config naming the store and its keyring (default %q)
   -dry-run       Report what a rekey would do without writing
 
+show, export, revisions, diff, activate and rekey read this node's own store,
+so "active" is this node's copy: the revision it boots on. import goes through
+the running node when there is one, and builds on the fleet's revision. What a
+running fleet runs is GET /config on any node.
+
 A keyring rotation needs BOTH halves: "crewlet config rekey" moves the company
 document and "crewlet secrets rekey" moves the secret store. Run both before
 dropping a retired key from secrets.keys, or whatever is still sealed under it

@@ -178,7 +178,6 @@ func wireAPI(
 		return fail("integration status", err)
 	}
 	setupSurface, err := setupapi.New(setupapi.Options{
-		Company: company,
 		Config:  configSurface,
 		Secrets: fleetsecrets.New(backends.Fleet, cipher),
 		Resolve: e.LookupSecret,

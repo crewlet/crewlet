@@ -31,7 +31,6 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/mattermost"
-	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
@@ -120,7 +119,6 @@ type surface struct {
 	mux     *http.ServeMux
 	config  *configapi.Service
 	vault   *vault
-	company func() (*config.Company, *org.Organization)
 	configs *store.Configs
 	// plane is the fleet's activation pointer the config surface answers
 	// from, which a revision the case plants is pointed at.
@@ -172,7 +170,7 @@ func newConfigSurface(t *testing.T, writers ...string) (*configapi.Service, *sto
 	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "c.db"), store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 	cipher := testCipher(t)
-	plane := coordmemory.NewFleet()
+	plane := newBlinkingPlane(coordmemory.NewFleet())
 	cfg, err := configapi.New(configapi.Options{
 		Store: db, Plane: plane, Cipher: cipher,
 		Holders: func(context.Context, []string, time.Time) (
@@ -209,9 +207,6 @@ const oneListener = "api.external_url"
 func newService(t *testing.T, opts setupapi.Options) *setupapi.Service {
 	t.Helper()
 	v := &vault{}
-	if opts.Company == nil {
-		opts.Company = companySource(t, nil)
-	}
 	if opts.Config == nil {
 		opts.Config, _, _, _ = newConfigSurface(t)
 	}
@@ -267,7 +262,6 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 	v := &vault{}
 	complete := func() setupapi.Options {
 		return setupapi.Options{
-			Company:        companySource(t, nil),
 			Config:         cfg,
 			Secrets:        v,
 			Resolve:        v.get,
@@ -285,7 +279,6 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 		t.Fatalf("the premise is wrong: a complete set was refused: %v", err)
 	}
 	for field, strip := range map[string]func(*setupapi.Options){
-		"Company":        func(o *setupapi.Options) { o.Company = nil },
 		"Config":         func(o *setupapi.Options) { o.Config = nil },
 		"Secrets":        func(o *setupapi.Options) { o.Secrets = nil },
 		"Resolve":        func(o *setupapi.Options) { o.Resolve = nil },
@@ -342,24 +335,8 @@ func buildSurface(t *testing.T, apps map[string]string, webhookBase, webhookBase
 		plane: plane, cipher: cipher,
 		status: &statusStore{}, webhookBase: webhookBase, webhookBaseKey: webhookBaseKey,
 	}
-	// THE ACTIVE DOCUMENT, read fresh on every call, the same way the
-	// engine hands it over: a screen bound to the company this process
-	// booted on would describe one that is no longer running.
-	s.company = func() (*config.Company, *org.Organization) {
-		doc, err := cfg.Document(t.Context())
-		if err != nil {
-			return nil, nil
-		}
-		// THE ORG THE DOCUMENT DESCRIBES, which is what the engine builds
-		// from the revision it applies.
-		o, err := doc.Organization()
-		if err != nil {
-			return doc, nil
-		}
-		return doc, o
-	}
 	s.setup = newService(t, setupapi.Options{
-		Company: s.company, Config: cfg, Secrets: v,
+		Config: cfg, Secrets: v,
 		// The resolution chain: what the vault holds is what resolved.
 		Resolve:        v.get,
 		Status:         s.status,
@@ -1139,7 +1116,7 @@ func (s *surface) withPassSink(
 	s.mux = http.NewServeMux()
 	s.status = status
 	s.setup = newService(t, setupapi.Options{
-		Company: s.company, Config: s.config, Secrets: s.vault,
+		Config: s.config, Secrets: s.vault,
 		Resolve:        s.vault.get,
 		Passes:         runner,
 		Sink:           sink,

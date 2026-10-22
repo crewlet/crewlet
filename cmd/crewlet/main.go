@@ -1988,8 +1988,9 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// and the pointer to it lands through the same merge, validation and
 	// activation PATCH /config performs.
 	setupSurface, err := setupapi.New(setupapi.Options{
-		Company: func() (*config.Company, *org.Organization) { return companyConfig(e) },
-		Config:  configSurface,
+		// THE COMPANY IT DESCRIBES IS READ THROUGH THIS SURFACE: the fleet's
+		// active revision, as /config answers it, never this node's epoch.
+		Config: configSurface,
 		// The fleet's own store, sealed with the same keyring — the one
 		// every node holds, since Tier A refuses a file without it.
 		Secrets: fleetsecrets.New(e.Backends().Fleet, cipher),

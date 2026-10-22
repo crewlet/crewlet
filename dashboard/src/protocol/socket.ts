@@ -164,6 +164,10 @@ const QUERY_ERROR_CODES: Record<QueryErrorCode, true> = {
   not_found: true,
   unavailable: true,
   artifact_trashed: true,
+  unreadable_revision: true,
+  unsealed_revision: true,
+  unreadable_fleet_revision: true,
+  unsealed_fleet_revision: true,
   timeout: true,
   closed: true,
 };
@@ -199,11 +203,12 @@ export class QueryError extends Error {
    */
   readonly refusal: QueryRefusal | LogRefusal | null;
   /**
-   * The refusal's own sentence on a `bad_params` refusal — the parameter to
-   * change and what it accepts — and null everywhere else. The engine writes
-   * that one refusal FOR the caller and keeps every other failure's text in
-   * its log, so this is never a path or a driver's message. An `unavailable`
-   * answer's words are its {@link LogRefusal}'s.
+   * The refusal's own sentence where the engine wrote one for the reader
+   * ({@link DETAILED_QUERY_ERRORS}): on `bad_params`, the parameter to change
+   * and what it accepts; on a revision the node cannot open, the key or the
+   * document that brings it back. Null everywhere else: the engine keeps every
+   * other failure's text in its log, so this is never a path or a driver's
+   * message. An `unavailable` answer's words are its {@link LogRefusal}'s.
    */
   readonly detail: string | null;
 
@@ -245,12 +250,30 @@ export function unavailableRetryMs(refusal: QueryRefusal | LogRefusal | null): n
 }
 
 /**
- * A `bad_params` frame's sentence, or null for any other frame. The engine
- * writes that one refusal for the caller; an `unavailable` frame's words are
- * its refusal's ({@link refusalOf}), and every other frame carries none.
+ * The {@link QueryErrorCode}s whose frame carries the engine's own sentence in
+ * `detail`: a refusal written for the reader, which a screen shows rather than
+ * a line of its own. Every other code's text stays in the engine's log.
  */
-function badParamsDetail(msg: Frame): string | null {
-  return msg.error === "bad_params" && typeof msg.detail === "string" && msg.detail !== ""
+export const DETAILED_QUERY_ERRORS: ReadonlySet<QueryErrorCode> = new Set<QueryErrorCode>([
+  "bad_params",
+  "unreadable_revision",
+  "unsealed_revision",
+  "unreadable_fleet_revision",
+  "unsealed_fleet_revision",
+]);
+
+/**
+ * The sentence a refusal written for the reader carries — a `bad_params`
+ * frame's, or a revision the node cannot open ({@link DETAILED_QUERY_ERRORS})
+ * — or null for any other frame. An `unavailable` frame's words are its
+ * refusal's ({@link refusalOf}), and every other frame carries none.
+ */
+function framedDetail(msg: Frame): string | null {
+  const code = queryErrorCode(msg.error);
+  return code !== null &&
+    DETAILED_QUERY_ERRORS.has(code) &&
+    typeof msg.detail === "string" &&
+    msg.detail !== ""
     ? msg.detail
     : null;
 }
@@ -751,7 +774,7 @@ export class LiveSocket {
         }, wait);
       }
     }
-    const error = new QueryError(code, refusal, badParamsDetail(msg));
+    const error = new QueryError(code, refusal, framedDetail(msg));
     for (const listener of [...room.listeners]) listener.refused?.(error);
   }
 
@@ -1231,13 +1254,7 @@ export class LiveSocket {
         }
         // An error frame always carries a code. One that does not is still
         // a failure nobody explained, which is what `query_failed` means.
-        this.settle(
-          msg.id,
-          msg.error || "query_failed",
-          null,
-          refusalOf(msg),
-          badParamsDetail(msg),
-        );
+        this.settle(msg.id, msg.error || "query_failed", null, refusalOf(msg), framedDetail(msg));
         break;
       case "pong":
         break;

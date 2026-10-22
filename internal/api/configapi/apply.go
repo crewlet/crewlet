@@ -278,11 +278,12 @@ type draft struct {
 // not read, built, validated and checked for a control plane first.
 type prepared struct {
 	// base is the active revision the write was built on, empty when
-	// nothing was active.
-	base     string
-	document []byte
-	warnings []config.Warning
-	derived  config.Derived
+	// nothing was active, and baseRevision the revision itself.
+	base         string
+	baseRevision store.Revision
+	document     []byte
+	warnings     []config.Warning
+	derived      config.Derived
 	// by is the draft's party, carried rather than passed again to
 	// [Service.commit], so the author stored is the one prepare judged.
 	by iam.Actor
@@ -321,7 +322,7 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 			return nil, err
 		}
 	}
-	active, found, err := s.configs.Active(ctx)
+	active, found, err := s.active(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("configapi: read the active revision: %w", err)
 	}
@@ -349,7 +350,7 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 		// build's struct and marshalling it back silently drops every field
 		// this build does not know, and the older node then publishes the
 		// result as the fleet's configuration.
-		if b.document, b.prior, err = s.openDocument(active); err != nil {
+		if b.document, b.prior, err = s.openDocument(ctx, active); err != nil {
 			return nil, fmt.Errorf("configapi: open the active revision: %w", err)
 		}
 	}
@@ -378,7 +379,7 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 		document: document, warnings: company.Warnings(), derived: derived, by: d.by,
 	}
 	if found {
-		p.base = active.ID
+		p.base, p.baseRevision = active.ID, active
 	}
 	return p, nil
 }
@@ -393,9 +394,9 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 // STORED AS HISTORY, and made this node's active revision only once the fleet
 // has taken it. Until the compare-and-set lands nobody has accepted the write,
 // and a revision marked active locally is a claim this node acts on without
-// asking: it serves it from GET /config, and offers it to the whole fleet at
-// its next start whenever it is newer than the pointer. A loser stored that
-// way was published one restart after its 409, over the write that won.
+// asking: it boots on it, and offers it to the whole fleet at its next start
+// whenever it is newer than the pointer. A loser stored that way was published
+// one restart after its 409, over the write that won.
 //
 // The plane is there: [Service.prepare] refused the write otherwise, and a
 // prepared write comes from nowhere else.
@@ -411,6 +412,9 @@ func (s *Service) commit(ctx context.Context, p *prepared, summary string) (Appl
 	payload, err := secrets.Seal(s.cipher, p.document)
 	if err != nil {
 		return Applied{}, fmt.Errorf("configapi: seal the config: %w", err)
+	}
+	if err = s.keepBase(ctx, p); err != nil {
+		return Applied{}, err
 	}
 	at := s.now()
 	id, err := s.configs.Insert(ctx, store.Revision{
@@ -498,6 +502,34 @@ func (s *Service) commit(ctx context.Context, p *prepared, summary string) (Appl
 		RevisionID: id, Epoch: published.Epoch, Parent: p.base,
 		Warnings: p.warnings, Derived: p.derived,
 	}, nil
+}
+
+// keepBase stores the revision a write was built on in this node's history
+// when the node met it only through the fleet's pointer, before the write's
+// own revision names it as its parent.
+//
+// A WRITE CAN BE BUILT ON A REVISION THIS NODE DOES NOT HOLD YET: the active
+// revision is the pointer's ([Service.active]), and a node meets a peer's
+// revision through the pointer a moment before its reconciler keeps it. The
+// parent link is a foreign key, so the new revision cannot be stored until
+// its parent is; kept here exactly as the reconciler keeps it, which also
+// makes it this node's active copy unless a later one is already held.
+func (s *Service) keepBase(ctx context.Context, p *prepared) error {
+	if p.base == "" {
+		return nil
+	}
+	_, held, err := s.configs.Get(ctx, p.base)
+	if err != nil {
+		return fmt.Errorf("configapi: read the revision this write is built on: %w", err)
+	}
+	if held {
+		return nil
+	}
+	var superseded *store.SupersededError
+	if err := s.configs.Adopt(ctx, p.baseRevision); err != nil && !errors.As(err, &superseded) {
+		return fmt.Errorf("configapi: keep the revision this write is built on: %w", err)
+	}
+	return nil
 }
 
 // patchDraft is a JSON Merge Patch over the active document.

@@ -137,7 +137,7 @@ func (nobodyHolds) HolderRecord(_ context.Context, login string) (string, error)
 type noAppFlow struct{}
 
 func (noAppFlow) Complete(context.Context, string, string) (string, error) { return "", nil }
-func (noAppFlow) InstallURL(string) string                                 { return "" }
+func (noAppFlow) InstallURL(context.Context, string) string                { return "" }
 
 // active is a company revision that is active, for the cases about a
 // configured node.

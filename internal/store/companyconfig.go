@@ -96,9 +96,10 @@ const revisionColumns = `revision_id, parent_revision_id, created_at, created_by
 //
 // # Active on the way in is a claim, and only the offline paths may make it
 //
-// This node's active revision is what it serves from GET /config, what it
-// boots on, and what it offers the fleet at its next start when the pointer
-// it finds is older (see the boot publish in cmd/crewlet). So marking a
+// This node's active revision is its copy of the fleet's activation pointer:
+// what it boots on, what offline commands read, and what it offers the fleet
+// at its next start when the pointer it finds is older (see the boot publish
+// in cmd/crewlet). The API answers the pointer itself. So marking a
 // revision active here says "this is the company", and that is true for a
 // command run while the engine is stopped, which cannot move the pointer and
 // leaves the publish to the next boot. A write through a running node's API
@@ -115,11 +116,10 @@ func (c *Configs) InsertActive(ctx context.Context, r Revision) (string, error) 
 // only once the FLEET has taken it, with [Configs.Activate] after the pointer
 // moved. A revision that lost the activation's compare-and-set stays here,
 // readable and revertable, and nothing on this node treats it as the
-// company. Inserted active, the loser was what GET /config served until the
-// next activation, and what this node published to the whole fleet at its
-// next start, since a locally active revision newer than the pointer is
-// exactly what the boot publish offers: a write answered with a 409 or a 412
-// landed after all, one restart later.
+// company. Inserted active, the loser was what this node published to the
+// whole fleet at its next start, since a locally active revision newer than
+// the pointer is exactly what the boot publish offers: a write answered with a
+// 409 or a 412 landed after all, one restart later.
 func (c *Configs) Insert(ctx context.Context, r Revision) (string, error) {
 	return c.insert(ctx, r, false)
 }
@@ -210,9 +210,9 @@ func (c *Configs) insert(ctx context.Context, r Revision, active bool) (string, 
 // revision active once the fleet has taken it, and the reconciler marks the
 // revision of the epoch it has just applied. When the apply of one epoch ended
 // after a write had activated the next, the reconciler marked the older
-// revision active again, and the node's GET /config answered the revision the
-// write had replaced. A check the caller made first could not close that: the
-// write lands between its read and its update.
+// revision active again, and a restart then booted on the revision the write
+// had replaced. A check the caller made first could not close that: the write
+// lands between its read and its update.
 //
 // An activation AT the held instant is not older, so marking the same
 // activation again is the no-op it should be.

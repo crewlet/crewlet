@@ -18,6 +18,7 @@ export {
   QueryError,
   isLogRefusal,
   queryErrorCode,
+  DETAILED_QUERY_ERRORS,
   unavailableRetryMs,
 } from "./socket.ts";
 export type { RoomListener } from "./socket.ts";

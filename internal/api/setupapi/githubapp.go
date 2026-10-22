@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -295,13 +296,11 @@ func (s *Service) beginApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	company, roster := s.company()
-	if company == nil {
-		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision, map[string]string{
-			"hint": "no company configuration is active",
-		})
+	current, ok := s.serve(w, r, "import a company before creating an app for a seat")
+	if !ok {
 		return
 	}
+	company, roster := current.company, current.roster
 	seat := seatByHandle(roster, handle)
 	if seat == nil {
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoSuchSeat, map[string]string{
@@ -383,10 +382,18 @@ func (f *AppFlow) Complete(ctx context.Context, code, state string) (string, err
 		return handle, err
 	}
 	s := f.service
-	company, roster := s.company()
-	if company == nil || seatByHandle(roster, handle) == nil {
+	current, err := s.serving(ctx)
+	switch {
+	case errors.Is(err, configapi.ErrNoActiveRevision):
+		return handle, fmt.Errorf("setupapi: no company is configured, so it has "+
+			"no agent seat %q", handle)
+	case err != nil:
+		return handle, fmt.Errorf("setupapi: read the company to find seat %q: %w",
+			handle, err)
+	case seatByHandle(current.roster, handle) == nil:
 		return handle, fmt.Errorf("setupapi: this company has no agent seat %q", handle)
 	}
+	company := current.company
 	// ASKED AGAIN BEFORE THE EXCHANGE, which is the last moment a refusal
 	// costs nothing: the begin route asked on the node that minted the
 	// state, and the callback may land on a node whose Tier A names the
@@ -515,12 +522,22 @@ func authorOf(by iam.Actor) secrets.Author {
 // BUILT FROM THE SLUG GITHUB RETURNED, never from the name that was asked
 // for: GitHub slugifies a name and disambiguates a collision, so the app that
 // exists may not be the one whose name was requested.
-func (f *AppFlow) InstallURL(handle string) string {
-	company, roster := f.service.company()
-	if company == nil {
+//
+// READ FROM THE FLEET'S REVISION, so the slug the callback just wrote is the
+// one read here at once: read from the company this node had applied, the
+// return page that follows a completed creation asked for a slug the apply had
+// not reached yet and offered no install link. A company it cannot read offers
+// none, which the page already says how to find.
+func (f *AppFlow) InstallURL(ctx context.Context, handle string) string {
+	current, err := f.service.serving(ctx)
+	if err != nil {
+		if !errors.Is(err, configapi.ErrNoActiveRevision) {
+			log.WarnContext(ctx, "setup_install_url_unread", "seat", handle, "error", err)
+		}
 		return ""
 	}
-	seat := seatByHandle(roster, handle)
+	company := current.company
+	seat := seatByHandle(current.roster, handle)
 	if seat == nil || seat.GitHub == nil {
 		return ""
 	}

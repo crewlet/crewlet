@@ -80,7 +80,7 @@ func (s *surface) withProbe(t *testing.T, kind integration.Kind, probe setup.Pro
 	probes[kind] = probe
 	s.mux = http.NewServeMux()
 	s.setup = newService(t, setupapi.Options{
-		Company: s.company, Config: s.config, Secrets: s.vault,
+		Config: s.config, Secrets: s.vault,
 		Resolve:        s.vault.get,
 		Status:         s.status,
 		Probes:         probes,
@@ -481,7 +481,7 @@ func TestNewRefusesAProbeSetMissingAKind(t *testing.T) {
 	cfg, _, _, _ := newConfigSurface(t)
 	v := &vault{}
 	_, err := setupapi.New(setupapi.Options{
-		Company: companySource(t, nil), Config: cfg, Secrets: v, Resolve: v.get,
+		Config: cfg, Secrets: v, Resolve: v.get,
 		Passes: setup.NewRunner(nil, nil, nil), Probes: probes,
 		Sink:   func(iam.Actor) (provision.TokenSink, error) { return nil, nil },
 		Status: &statusStore{}, SlackApps: func() map[string]string { return nil },

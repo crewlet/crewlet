@@ -510,13 +510,10 @@ func (s *Service) getEntity(kind string) http.HandlerFunc {
 		company, revision, err := s.documentOf(r.Context())
 		switch {
 		case errors.Is(err, ErrNoActiveRevision):
-			httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoActiveRevision,
-				map[string]string{
-					"hint": "this node has no active company revision to read",
-				})
+			refuseNoCompany(w)
 			return
 		case err != nil:
-			s.fail(w, r, "read the active revision", err)
+			s.failRead(w, r, "read the active revision", err)
 			return
 		}
 		// A SEAT OR A UNIT IS READ BY ITS LEAD as well as by the admin
@@ -578,7 +575,7 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 			return
 		}
 
-		active, found, err := s.configs.Active(r.Context())
+		active, found, err := s.active(r.Context())
 		if err != nil {
 			s.fail(w, r, "read the active revision", err)
 			return
@@ -589,8 +586,10 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 			// route would build a company out of one provider or server.
 			httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision,
 				map[string]string{
-					"hint": "this node has no active company revision to edit: " +
-						"import one with `crewlet config import`",
+					"detail": "No company has been configured yet, so there's " +
+						"nothing to edit one entity of",
+					"hint": "import a whole document first, with PUT /config or " +
+						"`crewlet config import`",
 				})
 			return
 		}
@@ -603,7 +602,7 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 		// admission's 403 naming its unit, and a missing id 404.
 		if inOrgChart(kind) {
 			var company *config.Company
-			if company, err = s.open(active); err != nil {
+			if company, err = s.open(r.Context(), active); err != nil {
 				s.fail(w, r, "open the active revision", err)
 				return
 			}

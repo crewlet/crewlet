@@ -393,7 +393,7 @@ Dumps the active revision (or `-revision <UUID>`) as YAML to stdout. It does **n
 crewlet config show [-config PATH]
 ```
 
-Prints the whole active revision as **redacted** YAML — exactly `crewlet config export -redact`, with no way to ask for the unredacted form. Use it to read what the fleet is actually running; use `crewlet config revisions` for the id, author and audit note.
+Prints the whole active revision as **redacted** YAML — exactly `crewlet config export -redact`, with no way to ask for the unredacted form; use `crewlet config revisions` for the id, author and audit note. It reads this node's own store, so the active revision is **this node's copy**: the one it boots on, which the fleet may have moved past while the node was stopped. What the fleet is running is [`GET /config`](api-endpoints.md#config--live-config-management-auth-gated) on any running node.
 
 Errors with ``no revision is active; run `crewlet config import` `` when nothing is active.
 
@@ -403,7 +403,7 @@ Errors with ``no revision is active; run `crewlet config import` `` when nothing
 crewlet config revisions [-config PATH] [-limit 20]
 ```
 
-Lists recent revisions. The active revision is marked with `*`. `BY` is the
+Lists recent revisions. This node's copy of the active revision is marked with `*`, as `crewlet config show` reads it. `BY` is the
 revision's author, with the credential it was written through beside them where
 that names something the author does not — `jane.doe (through pat:…)` for a
 person's machine token; a Tier A token's `token:<id>` is both, and says so once.

@@ -1545,6 +1545,7 @@ func (a *App) serveQuery(w http.ResponseWriter, r *http.Request) {
 // was the only thing it had to show.
 func writeQueryError(w http.ResponseWriter, r *http.Request, what string, err error) {
 	var refusal *queries.Refusal
+	var revision *stream.RevisionError
 	switch {
 	case errors.Is(err, queries.ErrUnknown):
 		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeUnknownQuery)
@@ -1594,6 +1595,11 @@ func writeQueryError(w http.ResponseWriter, r *http.Request, what string, err er
 			httpjson.Detail{"detail": queries.RefusalDetail(err)})
 	case errors.Is(err, queries.ErrNotFound):
 		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
+	case errors.As(err, &revision):
+		// A REVISION THIS NODE CANNOT OPEN, under the /config route's own
+		// code and words, as the socket's frame carries them.
+		httpjson.FailWith(w, http.StatusConflict, revision.Code,
+			map[string]string{"detail": revision.Detail})
 	case errors.Is(err, queries.ErrArtifactTrashed):
 		// THE ARTIFACTS ROUTES' OWN ANSWER for the same artifact, so a
 		// question and the route beside it say one thing about it.

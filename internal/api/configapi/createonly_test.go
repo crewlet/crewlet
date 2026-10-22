@@ -2,6 +2,7 @@ package configapi_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -11,26 +12,33 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // A node whose own store is empty is not a node whose FLEET is unconfigured.
 //
 // It reaches that state legitimately: it joined a fleet and has not reconciled
-// yet, or the best-effort copy of the pointer into its own database failed. Its
-// GET /config answers 404, which is what the dashboard's create flow opens on,
-// so "create the company" on that node used to store a company built on nothing
-// and activate it unconditionally over the one the fleet was running. The
-// company name changes, so every seat id derived from it changes, and all of
-// their memory is orphaned, with nothing refusing any of it.
+// yet, or the best-effort copy of the pointer into its own database failed.
+// Read from that store, its GET /config answered 404, which is what the
+// dashboard's create flow opens on, so "create the company" on that node
+// stored a company built on nothing and activated it unconditionally over the
+// one the fleet was running. The company name changes, so every seat id
+// derived from it changes, and all of their memory is orphaned. Every read
+// here asks the fleet's pointer now, so that node answers the fleet's company,
+// a create-only write is refused naming it, and a write is built on it.
 
 // laggingNode is a surface with an empty store whose fleet is running a
 // company, and the revision id the fleet is on.
 func laggingNode(t *testing.T) (*counted, string) {
 	t.Helper()
 	s := newCountedSurface(t)
+	payload, err := secrets.Seal(s.cipher, []byte(companyJSONDoc))
+	if err != nil {
+		t.Fatal(err)
+	}
 	published, err := s.plane.Activate(t.Context(), coord.ActivationRequest{
 		RevisionID: "the-fleets-company", Summary: "written on another node",
-		Payload: []byte(`{"name":"Acme"}`), At: pinned,
+		Payload: payload, At: pinned,
 		Origin: coord.RevisionOrigin{Author: "maya", AuthorKind: "operator", Source: "api", CreatedAt: pinned},
 	})
 	if err != nil {
@@ -70,39 +78,82 @@ func TestACreateOnlyWriteIsRefusedByTheFleetsActivation(t *testing.T) {
 	}
 }
 
-// AND SO IS A WRITE BUILT ON NOTHING THAT SENT NO PRECONDITION.
+// A NODE THAT HAS NOT MET THE FLEET'S COMPANY ANSWERS IT, AND BUILDS ON IT.
+//
+// Its store is empty, and the fleet's pointer carries the company's body: GET
+// /config answers that revision, and a write takes it as its base, keeps it in
+// this node's history and names it as its parent, exactly as on the node that
+// wrote it. Built on this node's empty store instead, the same write was a
+// create over the fleet's company.
+func TestANodeThatHasNotMetTheFleetsCompanyBuildsOnIt(t *testing.T) {
+	t.Parallel()
+	for _, write := range []struct{ method, body string }{
+		{http.MethodPut, strings.Replace(companyJSONDoc, `"name":"Acme"`, `"name":"Acme Renamed"`, 1)},
+		{http.MethodPatch, `{"mission": "written on a node that had not caught up"}`},
+	} {
+		s, fleetRevision := laggingNode(t)
+		read := s.do(t, http.MethodGet, "/config", "", nil)
+		if read.Code != http.StatusOK || read.Header().Get("ETag") != `"`+fleetRevision+`"` {
+			t.Fatalf("GET /config = %d with ETag %s, want 200 naming the fleet's %s: %s",
+				read.Code, read.Header().Get("ETag"), fleetRevision, read.Body)
+		}
+		res := s.do(t, write.method, "/config", write.body,
+			map[string]string{"X-Summary": "an edit", "If-Match": `"` + fleetRevision + `"`})
+		if res.Code != http.StatusCreated {
+			t.Fatalf("%s = %d, want 201: %s", write.method, res.Code, res.Body)
+		}
+		written, _ := decode(t, res)["revision_id"].(string)
+		stored, found, err := s.configs.Get(t.Context(), written)
+		if err != nil || !found || stored.ParentID != fleetRevision {
+			t.Errorf("%s stored %+v (found=%v err=%v), want a revision whose parent is %s",
+				write.method, stored, found, err, fleetRevision)
+		}
+		if _, found, err := s.configs.Get(t.Context(), fleetRevision); err != nil || !found {
+			t.Errorf("%s did not keep the revision it was built on (found=%v err=%v)",
+				write.method, found, err)
+		}
+		if got := s.do(t, http.MethodGet, "/config", "", nil).Header().Get("ETag"); got != `"`+written+`"` {
+			t.Errorf("GET /config after %s's 201 names %s, want %s", write.method, got, written)
+		}
+	}
+}
+
+// AND SO IS A WRITE BUILT ON NOTHING THAT SENT NO PRECONDITION, when a company
+// is activated between its read and its compare-and-set.
 //
 // Every write names what it was built on as the activation's expectation, and
-// a write with no base was built on an empty store. Unconditional there means
-// "replace whatever the fleet is running with a company nobody has seen", so
-// it is a create-only compare-and-set like any other, and the loser is told.
+// a write with no base was built on a fleet with nothing activated.
+// Unconditional there means "replace whatever the fleet is running with a
+// company nobody has seen", so it is a create-only compare-and-set like any
+// other, and the loser is told.
 func TestAWriteBuiltOnNothingIsRefusedWhenTheFleetHasOne(t *testing.T) {
 	t.Parallel()
-	s, fleetRevision := laggingNode(t)
+	racing := &racingPlane{winner: "the-company-that-appeared"}
+	s := newSurfaceWith(t, func(o *configapi.Options) {
+		racing.Plane, racing.cipher = o.Plane, o.Cipher
+		o.Plane = racing
+	})
 
 	res := s.do(t, http.MethodPut, "/config", companyJSONDoc, summaryHeader)
 	if res.Code != http.StatusConflict {
 		t.Fatalf("PUT = %d, want 409: %s", res.Code, res.Body)
 	}
 	body := decode(t, res)
-	if body["error"] != "revision_advanced" || body["current_revision_id"] != fleetRevision {
-		t.Errorf("refusal = %v, want revision_advanced naming %s", body, fleetRevision)
+	if body["error"] != "revision_advanced" || body["current_revision_id"] != racing.winner {
+		t.Errorf("refusal = %v, want revision_advanced naming %s", body, racing.winner)
 	}
 	// The revision is kept, inert, as every other lost race keeps it.
 	s.assertKeptInert(t, body)
-	if target, _, err := s.plane.Target(t.Context()); err != nil || target.RevisionID != fleetRevision {
-		t.Errorf("the fleet's activation moved to %+v (err %v)", target, err)
-	}
 }
 
 // assertKeptInert checks that a write refused at the activation left its
 // revision in the history and did not make it this node's company.
 //
 // INERT IS THE WHOLE POINT, and it is a property of this node as much as of
-// the fleet. A node's active revision is what it serves from GET /config and
-// what it offers the fleet at its next start whenever it is newer than the
-// pointer, so a loser left active here was served straight after its refusal
-// and published one restart later, over the company that won.
+// the fleet. A node's active revision is what it boots on and what it offers
+// the fleet at its next start whenever it is newer than the pointer, so a
+// loser left active here was published one restart after its refusal, over
+// the company that won.
 func (s *surface) assertKeptInert(t *testing.T, refusal map[string]any) {
 	t.Helper()
 	stored, _ := refusal["stored_revision_id"].(string)
@@ -174,7 +225,7 @@ func TestACreateOnlyWriteLosingAtTheActivationIsAlreadyConfigured(t *testing.T) 
 	t.Parallel()
 	racing := &racingPlane{winner: "the-company-that-appeared"}
 	s := newSurfaceWith(t, func(o *configapi.Options) {
-		racing.Plane = o.Plane
+		racing.Plane, racing.cipher = o.Plane, o.Cipher
 		o.Plane = racing
 	})
 
@@ -187,11 +238,13 @@ func TestACreateOnlyWriteLosingAtTheActivationIsAlreadyConfigured(t *testing.T) 
 	if body["error"] != "already_configured" || body["current_revision_id"] != racing.winner {
 		t.Errorf("refusal = %v, want already_configured naming %s", body, racing.winner)
 	}
-	// The revision is kept, inert, as every lost race keeps it: the node
-	// still has no company of its own, so it answers as it did before.
+	// The revision is kept, inert, as every lost race keeps it, and what
+	// this node answers is the company that won.
 	s.assertKeptInert(t, body)
-	if got := s.do(t, http.MethodGet, "/config", "", nil); got.Code != http.StatusNotFound {
-		t.Errorf("GET /config after the refusal = %d, want 404 as before: %s", got.Code, got.Body)
+	if got := s.do(t, http.MethodGet, "/config", "", nil); got.Code != http.StatusOK ||
+		got.Header().Get("ETag") != `"`+racing.winner+`"` {
+		t.Errorf("GET /config after the refusal = %d naming %s, want 200 naming the winner %s: %s",
+			got.Code, got.Header().Get("ETag"), racing.winner, got.Body)
 	}
 }
 
@@ -225,10 +278,21 @@ func TestACreateOnlyWriteLosingToAnUnreadableWinnerNamesNone(t *testing.T) {
 type racingPlane struct {
 	coord.Plane
 	winner string
+	// cipher seals the winner's body, which the pointer carries as every
+	// activation's does.
+	cipher secrets.Cipher
 	// unreadableAfter makes the pointer unreadable once the activation has
 	// been refused, so the refusal cannot say what won.
 	unreadableAfter bool
 	lost            atomic.Bool
+}
+
+func (p *racingPlane) Payload(_ context.Context, revisionID string) (json.RawMessage, bool, error) {
+	if !p.lost.Load() || revisionID != p.winner {
+		return nil, false, nil
+	}
+	body, err := secrets.Seal(p.cipher, []byte(companyJSONDoc))
+	return body, err == nil, err
 }
 
 func (p *racingPlane) Activate(context.Context, coord.ActivationRequest) (coord.Activation, error) {
@@ -244,7 +308,7 @@ func (p *racingPlane) Target(context.Context) (coord.Activation, bool, error) {
 	case p.unreadableAfter:
 		return coord.Activation{}, false, errors.New("the coordination store stopped answering")
 	}
-	return coord.Activation{RevisionID: p.winner}, true, nil
+	return coord.Activation{RevisionID: p.winner, Epoch: 1, At: pinned}, true, nil
 }
 
 // mutePlane is a plane whose activation pointer cannot be read.
