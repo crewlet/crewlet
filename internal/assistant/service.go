@@ -285,7 +285,8 @@ func (s *Service) Start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 		case <-first.done:
 			return first.accepted, first.err
 		case <-ctx.Done():
-			return wire.TurnAccepted{}, &Unavailable{RetryAfter: time.Second, Cause: ctx.Err()}
+			return wire.TurnAccepted{}, fmt.Errorf("assistant: wait for the first "+
+				"attempt at turn %s: %w", id, ctx.Err())
 		}
 	}
 	a := &attempt{done: make(chan struct{})}
@@ -369,7 +370,7 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 	case turnErr == nil:
 		return accepted, nil
 	case !errors.Is(turnErr, assistantdomain.ErrNotFound):
-		return wire.TurnAccepted{}, &Unavailable{RetryAfter: 2 * time.Second, Cause: turnErr}
+		return wire.TurnAccepted{}, s.readFailure(turnErr)
 	}
 	// A MODEL KNOWN UNUSABLE REFUSES THE QUESTION HERE, before anything is
 	// recorded or counted, in the words a failed round would have used
@@ -400,7 +401,8 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 	}
 	acts, err := s.acts(ctx, ts.Person)
 	if err != nil {
-		return wire.TurnAccepted{}, &Unavailable{RetryAfter: 2 * time.Second, Cause: err}
+		return wire.TurnAccepted{}, fmt.Errorf("assistant: the writes the person may "+
+			"propose: %w", err)
 	}
 	if err = s.admit(ctx, ts.Person); err != nil {
 		return wire.TurnAccepted{}, err
@@ -415,7 +417,7 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 
 	meter, err := s.budget.Meter(ctx, ts.Person)
 	if err != nil {
-		return wire.TurnAccepted{}, &Unavailable{RetryAfter: 2 * time.Second, Cause: err}
+		return wire.TurnAccepted{}, fmt.Errorf("assistant: the turn's budget meter: %w", err)
 	}
 	if refusal := budgetRefusal(ctx, meter); refusal != nil {
 		return wire.TurnAccepted{}, refusal
@@ -832,7 +834,7 @@ func (s *Service) Stop(ctx context.Context, owner, turnID uuid.UUID, key string)
 		case errors.Is(err, ErrNotFound):
 			return wire.StopAnswer{}, err
 		case err != nil:
-			return wire.StopAnswer{}, &Unavailable{RetryAfter: 2 * time.Second, Cause: err}
+			return wire.StopAnswer{}, &Unavailable{Cause: err}
 		case reach == live.ReachServed:
 			return wire.StopAnswer{State: state}, nil
 		case reach == live.ReachGone:
@@ -846,7 +848,7 @@ func (s *Service) Stop(ctx context.Context, owner, turnID uuid.UUID, key string)
 			return wire.StopAnswer{State: state}, nil
 		}
 	}
-	return wire.StopAnswer{}, &Unavailable{RetryAfter: 2 * time.Second, Cause: fmt.Errorf(
+	return wire.StopAnswer{}, &Unavailable{Cause: fmt.Errorf(
 		"turn %s runs on node %s, which this node cannot reach", turnID, row.Node)}
 }
 
@@ -1161,7 +1163,16 @@ func (s *Service) streamClosed(owner uuid.UUID) {
 	s.metrics.Set(metrics.AssistantStreamsActive, float64(n), nil)
 }
 
-// readFailure maps a read of the assistant's domain to what a caller acts on.
+// readFailure maps a read of the assistant's domain to what a caller acts on: a
+// conversation, turn or card that is gone is [ErrNotFound], and one refused as
+// written is [ErrInvalid].
+//
+// ANYTHING ELSE IS THE STORE'S OWN ERROR, returned as it is: a condition of
+// the node (a copy behind its log, a log that refused the append, a store too
+// busy to take it) or a fault. The surface tells the first in a person's words
+// under its own hint, none where no wait clears it, and the second as a fault
+// (internal/api/assistantapi). Told as [Unavailable], each read as "try again
+// in two seconds" whatever it was.
 func (s *Service) readFailure(err error) error {
 	switch {
 	case errors.Is(err, assistantdomain.ErrNotFound), errors.Is(err, assistantdomain.ErrPurged),
@@ -1170,16 +1181,21 @@ func (s *Service) readFailure(err error) error {
 	case errors.Is(err, assistantdomain.ErrInvalid):
 		return fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
-	return &Unavailable{RetryAfter: 2 * time.Second, Cause: err}
+	return err
 }
 
 // writeFailure maps a write of the assistant's domain to what a caller acts on.
+//
+// A WRITE WHOSE OUTCOME NOBODY KNOWS ([ErrOutcomeUnknown]) is returned as
+// itself: it may have landed, so it is no condition of the node, and the
+// surface answers it as the unknown it is, naming the operation a retry sends
+// again. Everything else reads as [Service.readFailure] maps it.
 func (s *Service) writeFailure(err error) error {
 	switch {
 	case errors.Is(err, assistantdomain.ErrTurnRunning), errors.Is(err, assistantdomain.ErrTurnMoved):
 		return fmt.Errorf("%w: %w", ErrTurnRunning, err)
 	case errors.Is(err, ErrOutcomeUnknown):
-		return &Unavailable{RetryAfter: 2 * time.Second, Cause: err}
+		return err
 	}
 	return s.readFailure(err)
 }

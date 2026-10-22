@@ -37,7 +37,12 @@
 // reconciler's facts (configplane's package doc, ADR-0057), and the fleet
 // view says them per node. A coordination store that cannot be read answers
 // 503 with Retry-After rather than a guess, because "the fleet has no
-// company" sends a write to replace it. NO READ WRITES: a revision this node
+// company" sends a write to replace it. Every other condition of the node, a
+// store too busy to take a write's revision, one closed for a snapshot, a
+// request out of time, is 503 too, in a person's words for it
+// ([operator.AnswerCondition]) and under a Retry-After exactly where waiting
+// clears it: only an error no condition claims is the fault a 500 says. NO
+// READ WRITES: a revision this node
 // holds no row for yet is answered from the body the pointer carries, and the
 // reconciler keeps it.
 //
@@ -74,6 +79,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -419,7 +425,7 @@ func (s *Service) getActive(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrNoActiveRevision):
 		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNoActiveRevision)
 	case err != nil:
-		s.fail(w, "read the active revision", err)
+		s.fail(w, r, "read the active revision", err)
 	default:
 		if serveConditional(w, r, revision) {
 			return
@@ -439,7 +445,7 @@ func (s *Service) references(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrNoActiveRevision):
 		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNoActiveRevision)
 	case err != nil:
-		s.fail(w, "read the active revision", err)
+		s.fail(w, r, "read the active revision", err)
 	default:
 		// THE SAME VALIDATOR the document itself carries: the index is
 		// derived from the revision and changes exactly when it does.
@@ -524,7 +530,7 @@ func (s *Service) writeDocument(w http.ResponseWriter, r *http.Request, company 
 	}
 	body, err := yaml.Marshal(company)
 	if err != nil {
-		s.fail(w, "encode the config as yaml", err)
+		s.fail(w, r, "encode the config as yaml", err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/yaml")
@@ -597,7 +603,7 @@ func (s *Service) listRevisions(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := s.Revisions(r.Context(), limit, offset)
 	if err != nil {
-		s.fail(w, "list revisions", err)
+		s.fail(w, r, "list revisions", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -612,12 +618,12 @@ func (s *Service) getRevision(w http.ResponseWriter, r *http.Request) {
 	}
 	company, err := s.open(revision)
 	if err != nil {
-		s.fail(w, "open revision", err)
+		s.fail(w, r, "open revision", err)
 		return
 	}
 	cur, _, err := s.current(r.Context())
 	if err != nil {
-		s.fail(w, "read the fleet's revision", err)
+		s.fail(w, r, "read the fleet's revision", err)
 		return
 	}
 	body := meta(revision, cur.revision.ID)
@@ -642,7 +648,7 @@ func (s *Service) diff(w http.ResponseWriter, r *http.Request) {
 		// from the request — see [missingRevision].
 		httpjson.Fail(w, http.StatusNotFound, missingSide(err))
 	default:
-		s.fail(w, "diff revisions", err)
+		s.fail(w, r, "diff revisions", err)
 	}
 }
 
@@ -757,7 +763,7 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 
 	cur, found, err := s.current(r.Context())
 	if err != nil {
-		s.fail(w, "read the fleet's revision", err)
+		s.fail(w, r, "read the fleet's revision", err)
 		return
 	}
 	cond, ok := s.checkPrecondition(w, r, cur.revision, found)
@@ -778,7 +784,7 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 	}
 	prepared, err := s.prepare(r.Context(), d)
 	if err != nil {
-		s.refuseWrite(w, err, cond.createOnly)
+		s.refuseWrite(w, r, err, cond.createOnly)
 		return
 	}
 	if dryRun {
@@ -792,7 +798,7 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 	}
 	applied, err := s.commit(r.Context(), prepared, summary)
 	if err != nil {
-		s.refuseWrite(w, err, cond.createOnly)
+		s.refuseWrite(w, r, err, cond.createOnly)
 		return
 	}
 	writeApplied(w, applied)
@@ -840,7 +846,7 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 
 	cur, found, err := s.current(r.Context())
 	if err != nil {
-		s.fail(w, "read the fleet's revision", err)
+		s.fail(w, r, "read the fleet's revision", err)
 		return
 	}
 	if !found {
@@ -865,7 +871,7 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 	}
 	prepared, err := s.prepare(r.Context(), d)
 	if err != nil {
-		s.refuseApply(w, err)
+		s.refuseApply(w, r, err)
 		return
 	}
 	if dryRun {
@@ -880,7 +886,7 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 	}
 	applied, err := s.commit(r.Context(), prepared, summary)
 	if err != nil {
-		s.refuseApply(w, err)
+		s.refuseApply(w, r, err)
 		return
 	}
 	writeApplied(w, applied)
@@ -915,7 +921,7 @@ func writeApplied(w http.ResponseWriter, applied Applied) {
 // A create-only write that finds a revision where it expected none is not a
 // lost edit to re-derive; it is a company that exists, so it is answered as
 // its precondition would have been had the revision been there to see.
-func (s *Service) refuseWrite(w http.ResponseWriter, err error, createOnly bool) {
+func (s *Service) refuseWrite(w http.ResponseWriter, r *http.Request, err error, createOnly bool) {
 	var raced *RacedError
 	if createOnly && errors.As(err, &raced) {
 		hint := "If-None-Match asked for this write to land only on a " +
@@ -937,14 +943,14 @@ func (s *Service) refuseWrite(w http.ResponseWriter, err error, createOnly bool)
 			httpjson.CodeAlreadyConfigured, body)
 		return
 	}
-	s.refuseApply(w, err)
+	s.refuseApply(w, r, err)
 }
 
 // refuseApply maps a write's failure onto this surface's answers.
 //
 // ONE MAPPING, so a programmatic caller and an HTTP one cannot disagree about
 // what a stale base, an unreadable patch or an invalid company means.
-func (s *Service) refuseApply(w http.ResponseWriter, err error) {
+func (s *Service) refuseApply(w http.ResponseWriter, r *http.Request, err error) {
 	var raced *RacedError
 	var patchErr *PatchError
 	var invalid *ValidationError
@@ -1022,7 +1028,7 @@ func (s *Service) refuseApply(w http.ResponseWriter, err error) {
 					"nothing was written",
 			})
 	default:
-		s.fail(w, "apply the config", err)
+		s.fail(w, r, "apply the config", err)
 	}
 }
 
@@ -1124,7 +1130,7 @@ func (s *Service) reload(w http.ResponseWriter, r *http.Request) {
 	applied, err := s.Reload(r.Context(), strings.TrimSpace(r.Header.Get("X-Summary")),
 		attributionOf(r), "")
 	if err != nil {
-		s.refuseApply(w, err)
+		s.refuseApply(w, r, err)
 		return
 	}
 	writeApplied(w, applied)
@@ -1151,7 +1157,7 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 	document, company, err := s.openDocument(target)
 	if err != nil {
 		if !RefuseUnreadable(w, err) {
-			s.fail(w, "open the revision to revert to", err)
+			s.fail(w, r, "open the revision to revert to", err)
 		}
 		return
 	}
@@ -1192,7 +1198,7 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 				"corrected document with PUT /config instead", err)
 		return
 	case err != nil:
-		s.refuseApply(w, err)
+		s.refuseApply(w, r, err)
 		return
 	}
 	// HEADER ONLY, and no [takeSummary]: this route reads no body, so there
@@ -1205,7 +1211,7 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 	}
 	applied, err := s.commit(r.Context(), prepared, summary)
 	if err != nil {
-		s.refuseApply(w, err)
+		s.refuseApply(w, r, err)
 		return
 	}
 	writeApplied(w, applied)
@@ -1432,7 +1438,7 @@ func (s *Service) lookup(w http.ResponseWriter, r *http.Request, id string,
 	}
 	revision, found, err := s.revision(r.Context(), id)
 	if err != nil {
-		s.fail(w, "read revision", err)
+		s.fail(w, r, "read revision", err)
 		return store.Revision{}, false
 	}
 	if !found {
@@ -1512,7 +1518,14 @@ func intParam(w http.ResponseWriter, r *http.Request, name string, fallback int)
 // The reason reaches the LOG, never the caller: a store error can carry a
 // database path or a driver's own message, and this surface is the one an
 // operator reaches from a browser.
-func (s *Service) fail(w http.ResponseWriter, what string, err error) {
+//
+// A CONDITION OF THE NODE IS ANSWERED AS ONE, never as the fault `500` says:
+// a store busy with other writes, one closed while the node adopts a snapshot
+// or shuts down, a deadline the request ran out of. Each is `503` in a
+// person's words for it ([operator.AnswerCondition]), under a Retry-After
+// exactly where waiting clears it; only an error no condition claims is a
+// fault.
+func (s *Service) fail(w http.ResponseWriter, r *http.Request, what string, err error) {
 	// A REVISION THIS NODE CANNOT OPEN IS NOT A FAULT, and every route that
 	// reads one reaches here: GET /config, a revision read, a diff, the
 	// references, an entity, and a write whose prior is the active
@@ -1537,7 +1550,11 @@ func (s *Service) fail(w http.ResponseWriter, what string, err error) {
 				"from the coordination store"})
 		return
 	}
-	log.Error("config_request_failed", "what", what, "error", err)
+	if operator.AnswerCondition(r.Context(), w, log, "config_request_unavailable", err, nil,
+		"what", what) {
+		return
+	}
+	log.ErrorContext(r.Context(), "config_request_failed", "what", what, "error", err)
 	httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
 }
 

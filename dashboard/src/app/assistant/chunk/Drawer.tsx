@@ -99,6 +99,7 @@ import type { InAppTarget } from "./openInApp.ts";
 import {
   approve,
   clearConversation,
+  clearRefusal,
   decline,
   newConversation,
   openConversation,
@@ -178,7 +179,7 @@ export function Drawer({
   const [removed, setRemoved] = useState<string | null>(null);
   const [recents, setRecents] = useState<Recent[] | null>(null);
   const [confirming, setConfirming] = useState(false);
-  const [clearFailed, setClearFailed] = useState(false);
+  const [clearFailed, setClearFailed] = useState<string | null>(null);
   const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set());
   const running = openTurn(view);
   // THE SHELL'S ONE CLOCK, as every relative time on screen reads it. The
@@ -614,9 +615,9 @@ export function Drawer({
           />
         ) : (
           <ChatThread ref={thread} label="Conversation" busy={running !== null}>
-            {clearFailed ? (
+            {clearFailed !== null ? (
               <Callout variant="warning" role="alert">
-                The conversation could not be cleared. Try again from Conversations.
+                {clearFailed}
               </Callout>
             ) : null}
             {view.turns.length === 0 ? (
@@ -656,15 +657,15 @@ export function Drawer({
         onConfirm={async () => {
           try {
             await clearConversation();
-            setClearFailed(false);
+            setClearFailed(null);
             setConfirming(false);
             toast.show({
               variant: "success",
               title: "Conversation cleared",
               message: "It is no longer in your history.",
             });
-          } catch {
-            setClearFailed(true);
+          } catch (err) {
+            setClearFailed(clearRefusal(err));
             setConfirming(false);
           }
         }}

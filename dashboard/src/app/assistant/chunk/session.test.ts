@@ -64,7 +64,8 @@ vi.mock("./pageActions.ts", async (importOriginal) => ({
   takeAction: vi.fn(async () => true),
 }));
 
-const { approve, send, resetSessionForTest } = await import("./session.ts");
+const { approve, clearRefusal, decisionFailure, send, sendRefusalOf, resetSessionForTest } =
+  await import("./session.ts");
 const { RestError } = await import("~/protocol/rest.ts");
 
 afterEach(() => {
@@ -145,6 +146,119 @@ test("with no screen published, an approval carries none", async () => {
     ([route]) => route === "POST /assistant/proposals/{id}/approve",
   );
   expect(sent?.[1]).not.toHaveProperty("page_context");
+});
+
+test("a refused question is said in the engine's words wherever a fixed one could contradict it", () => {
+  // THE ASSISTANT'S OWN REASON carries no Retry-After, and its sentence says
+  // waiting won't help: no fixed "try again in a moment" is drawn over it.
+  const own = sendRefusalOf(
+    new RestError(503, {
+      error: "assistant_unavailable",
+      message: "The assistant can't answer here, and waiting won't change that.",
+    }),
+  );
+  expect(own).toMatchObject({
+    sentence: "The assistant can't answer here, and waiting won't change that.",
+    retryAfterSeconds: null,
+  });
+
+  // A CONDITION OF THE NODE is told in the engine's words for the person, in
+  // step with its wait.
+  const full =
+    "There's no room left to save this kind of change. An administrator needs to make room for it.";
+  expect(
+    sendRefusalOf(
+      new RestError(503, {
+        error: "unavailable",
+        message: "This can't be done here, and waiting won't change that.",
+        detail: full,
+      }),
+    ),
+  ).toMatchObject({ sentence: full, retryAfterSeconds: null });
+  const behind =
+    "The node handling this change hasn't caught up with the latest changes yet. Try again in a moment.";
+  expect(
+    sendRefusalOf(
+      new RestError(
+        503,
+        {
+          error: "unavailable",
+          message: "Can't answer right now. Try again in a moment, or ask another node.",
+          detail: behind,
+        },
+        2,
+      ),
+    ),
+  ).toMatchObject({ sentence: behind, retryAfterSeconds: 2 });
+
+  // A QUESTION WHOSE OUTCOME IS UNKNOWN keeps the code's sentence: its detail
+  // is written for a program, which sends the same key again.
+  expect(
+    sendRefusalOf(
+      new RestError(
+        503,
+        {
+          error: "unavailable",
+          message: "Can't answer right now. Try again in a moment, or ask another node.",
+          detail: "Send it again with the same Idempotency-Key.",
+          outcome: "unknown",
+          op_id: "op-1",
+        },
+        2,
+      ),
+    ).sentence,
+  ).toBe("Can't answer right now. Try again in a moment, or ask another node.");
+});
+
+test("a decision a condition of the node refused is said in the engine's words for it", () => {
+  // THE CONDITION'S OWN WORDS on the card, which say who clears it: the code's
+  // fixed sentence asked for a wait whatever the condition was.
+  const full =
+    "There's no room left to save this kind of change. An administrator needs to make room for it.";
+  expect(
+    decisionFailure(
+      new RestError(503, {
+        error: "unavailable",
+        message: "This can't be done here, and waiting won't change that.",
+        detail: full,
+      }),
+    ),
+  ).toEqual({ refusal: { sentence: full, hint: null }, unknown: false });
+
+  // A DECISION NOBODY CAN CONFIRM is still the card's unknown, approved again
+  // under the same key.
+  expect(
+    decisionFailure(
+      new RestError(
+        503,
+        {
+          error: "unavailable",
+          message: "Can't answer right now. Try again in a moment, or ask another node.",
+          detail: "Couldn't confirm this change was saved.",
+          outcome: "unknown",
+          op_id: "op-1",
+        },
+        2,
+      ),
+    ).unknown,
+  ).toBe(true);
+});
+
+test("a Clear a condition of the node refused is said in the engine's words for it", () => {
+  const full =
+    "There's no room left to save this kind of change. An administrator needs to make room for it.";
+  expect(
+    clearRefusal(
+      new RestError(503, {
+        error: "unavailable",
+        message: "This can't be done here, and waiting won't change that.",
+        detail: full,
+      }),
+    ),
+  ).toBe(`The conversation could not be cleared. ${full}`);
+  expect(clearRefusal(new Error("offline"))).toBe(
+    "The conversation could not be cleared. Try again from Conversations.",
+  );
 });
 
 /** The frames of a stream the engine's own route wrote, as the client parses them. */

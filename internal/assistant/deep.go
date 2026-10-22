@@ -851,7 +851,7 @@ func (s *Service) attachmentsOf(ctx context.Context, ts TurnStart) ([]StoredFile
 		case errors.Is(err, ErrNotFound):
 			return nil, invalid("attachment %s is no file of this conversation: upload it again", id)
 		case err != nil:
-			return nil, &Unavailable{RetryAfter: 2 * time.Second, Cause: err}
+			return nil, fmt.Errorf("assistant: attachment %s: %w", id, err)
 		case f.Origin != wire.FileAttached || !slices.Contains(wire.AttachmentMediaTypes, f.MediaType):
 			return nil, invalid("attachment %s is not an image the person attached", id)
 		}

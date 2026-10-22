@@ -6,7 +6,7 @@
  */
 
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, onTestFinished, test, vi } from "vitest";
 import { ASSISTANT_ATTACHMENTS_PER_TURN, ASSISTANT_FILE_MAX_BYTES } from "~/contract/assistant.ts";
 
 const { call } = vi.hoisted(() => ({
@@ -134,6 +134,51 @@ test("a refused file is said above the composer and never uploaded", () => {
     "notes.txt cannot be attached. Attach a PNG, JPEG, WebP or GIF image.",
   );
   expect(call).not.toHaveBeenCalled();
+});
+
+test("an upload a condition of the node kept out is said in the engine's words for it", async () => {
+  // THE ENGINE'S DETAIL, which says who clears the condition and asks for a
+  // wait only where one helps: here a log at its byte ceiling, which no wait
+  // clears. The code's own sentence beside it says only that.
+  const { RestError } = await import("~/protocol/rest.ts");
+  const original = call.getMockImplementation()!;
+  onTestFinished(() => {
+    call.mockImplementation(original);
+  });
+  const refuse = (body: Record<string, unknown>) => {
+    call.mockImplementation(async (route, ...rest) => {
+      if (route === "POST /assistant/conversations/{id}/files") {
+        throw new RestError(503, body, null);
+      }
+      return original(route, ...rest);
+    });
+  };
+  const full =
+    "There's no room left to save this kind of change. An administrator needs to make room for it.";
+  refuse({
+    error: "unavailable",
+    message: "This can't be done here, and waiting won't change that.",
+    detail: full,
+  });
+  const { result } = renderHook(() => useAttachments(null));
+  act(() => result.current.add([png("chart.png")]));
+  await waitFor(() => expect(result.current.drafts[0]?.state).toBe("failed"));
+  expect(result.current.refusal).toBe(`chart.png could not be attached. ${full}`);
+
+  // A WRITE WHOSE OUTCOME IS UNKNOWN keeps the code's sentence: its detail is
+  // written for a program, which sends the same key again.
+  refuse({
+    error: "unavailable",
+    message: "Can't answer right now. Try again in a moment, or ask another node.",
+    detail: "Send it again with the same Idempotency-Key.",
+    outcome: "unknown",
+    op_id: "op-1",
+  });
+  act(() => result.current.add([png("photo.png")]));
+  await waitFor(() => expect(result.current.drafts[1]?.state).toBe("failed"));
+  expect(result.current.refusal).toBe(
+    "photo.png could not be attached. Can't answer right now. Try again in a moment, or ask another node.",
+  );
 });
 
 test("a question with nothing attached sends no attachments member", async () => {

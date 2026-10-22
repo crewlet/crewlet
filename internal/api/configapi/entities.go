@@ -485,7 +485,7 @@ func (s *Service) getEntity(kind string) http.HandlerFunc {
 				})
 			return
 		case err != nil:
-			s.fail(w, "read the active revision", err)
+			s.fail(w, r, "read the active revision", err)
 			return
 		}
 		// A SEAT OR A UNIT IS READ BY ITS LEAD as well as by the admin
@@ -508,7 +508,7 @@ func (s *Service) getEntity(kind string) http.HandlerFunc {
 		// not on the whole document.
 		tag, err := entityTag(kind, entity)
 		if err != nil {
-			s.fail(w, "tag the entity", err)
+			s.fail(w, r, "tag the entity", err)
 			return
 		}
 		w.Header().Set("ETag", tag)
@@ -578,7 +578,7 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 				return
 			}
 		}
-		s.refuseApply(w, raced)
+		s.refuseApply(w, r, raced)
 	}
 }
 
@@ -611,7 +611,7 @@ func (s *Service) writeEntity(w http.ResponseWriter, r *http.Request, e entityWr
 	ctx := r.Context()
 	cur, found, err := s.current(ctx)
 	if err != nil {
-		s.fail(w, "read the fleet's revision", err)
+		s.fail(w, r, "read the fleet's revision", err)
 		return true, nil
 	}
 	active := cur.revision
@@ -629,7 +629,7 @@ func (s *Service) writeEntity(w http.ResponseWriter, r *http.Request, e entityWr
 	company, err := s.open(active)
 	if err != nil {
 		if !RefuseUnreadable(w, err) {
-			s.fail(w, "open the active revision", err)
+			s.fail(w, r, "open the active revision", err)
 		}
 		return true, nil
 	}
@@ -647,7 +647,7 @@ func (s *Service) writeEntity(w http.ResponseWriter, r *http.Request, e entityWr
 		if current, held := entityKinds[e.kind].find(company.Redact(), e.id); held {
 			tag, tagErr := entityTag(e.kind, current)
 			if tagErr != nil {
-				s.fail(w, "tag the entity", tagErr)
+				s.fail(w, r, "tag the entity", tagErr)
 				return true, nil
 			}
 			if !matchesTag(e.expected, tag) {
@@ -669,7 +669,7 @@ func (s *Service) writeEntity(w http.ResponseWriter, r *http.Request, e entityWr
 	if err != nil {
 		// A create of a kind that has none is the caller's request to
 		// correct, answered like every other entity refusal.
-		s.refuseEntity(w, e.kind, e.id, err)
+		s.refuseEntity(w, r, e.kind, e.id, err)
 		return true, nil
 	}
 	d.principal = e.principal
@@ -681,7 +681,7 @@ func (s *Service) writeEntity(w http.ResponseWriter, r *http.Request, e entityWr
 	case errors.As(err, &lost):
 		return false, err
 	case err != nil:
-		s.refuseEntity(w, e.kind, e.id, err)
+		s.refuseEntity(w, r, e.kind, e.id, err)
 		return true, nil
 	}
 	if e.dryRun {
@@ -700,7 +700,7 @@ func (s *Service) writeEntity(w http.ResponseWriter, r *http.Request, e entityWr
 	case errors.As(err, &lost):
 		return false, err
 	case err != nil:
-		s.refuseApply(w, err)
+		s.refuseApply(w, r, err)
 		return true, nil
 	}
 	writeApplied(w, applied)
@@ -796,11 +796,11 @@ func EntityAbsent(kind string) *authz.Absent {
 
 // refuseEntity answers an entity write's own refusals, and every other one as
 // [Service.refuseApply] does.
-func (s *Service) refuseEntity(w http.ResponseWriter, kind, id string, err error) {
+func (s *Service) refuseEntity(w http.ResponseWriter, r *http.Request, kind, id string, err error) {
 	var entityErr *EntityError
 	switch {
 	case !errors.As(err, &entityErr):
-		s.refuseApply(w, err)
+		s.refuseApply(w, r, err)
 	case errors.Is(err, ErrNoSuchEntity):
 		// NEVER CREATED. A PUT naming an id nothing carries is far more
 		// often a typo than an intent to add one, and adding through this

@@ -88,6 +88,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/atlassian"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
@@ -755,6 +756,10 @@ func (s *Service) companyFor(w http.ResponseWriter, r *http.Request, hint string
 		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, authz.RetryUndecidedSeconds,
 			httpjson.Detail{"reason": "the fleet's activation could not be read " +
 				"from the coordination store"})
+	case operator.AnswerCondition(r.Context(), w, log, "setup_company_unavailable", err, nil):
+		// ANY OTHER CONDITION OF THE NODE (a store busy or closed, a request
+		// out of time) is told as one, in a person's words, never as the
+		// engine having broken: the config surface's own rule.
 	default:
 		log.ErrorContext(r.Context(), "setup_company_unread", "error", err.Error())
 		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
@@ -2490,6 +2495,13 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, authz.RetryUndecidedSeconds,
 			with(httpjson.Detail{"reason": "the fleet's activation could not be read " +
 				"from the coordination store"}))
+	case operator.AnswerCondition(r.Context(), w, log, "setup_write_unavailable", err, sealed,
+		"secrets", strings.Join(partial.Secrets, ",")):
+		// ANY OTHER CONDITION OF THE NODE — a store too busy to take the
+		// revision, one closed for a snapshot, a request out of time — is
+		// the config surface's own `503` in a person's words, with what was
+		// sealed before it beside them: never "the engine broke", and never
+		// "nothing was written".
 	default:
 		// THE DETAIL GOES TO THE LOG, never to the caller: a third-party app's own
 		// refusal can quote the config value it was given, which on a

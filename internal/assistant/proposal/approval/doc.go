@@ -33,6 +33,18 @@
 // declared here and implemented by the API (the grants, over the person's own
 // session) and the assistant's service (the turns).
 //
+// # A refusal is not an outcome in doubt
+//
+// A record the store refused, or a read of the assistant's records it could not
+// make before anything was decided, wrote nothing, so it is returned as the
+// store's own error, and the surface tells it as the condition of the node or
+// the fault it is. [Unconfirmed] is kept for a record that was sent and never
+// answered, and for one that states what already happened (a sent write's
+// settlement, a decision sent again to learn whose it was), whose outcome
+// stands whatever kept the record out. Told as unconfirmed, a refused approval
+// read as one that may have landed, and a person was asked to approve again
+// into a log a wait cannot clear.
+//
 // # A decision resumes the turn it parked
 //
 // Applied, failed, declined and stale proposals hand their outcome to the
