@@ -98,6 +98,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 var log = logging.Get("doclet")
@@ -312,8 +313,16 @@ func invalid(field, why string, args ...any) error {
 // invalid:" a Go error opens with, which says where the error came from and
 // nothing about what to change. Any other error this package wrote loses the
 // "doclet:" it opens with and keeps every word after it; one a caller wrapped
-// in context of its own is its whole message.
+// in context of its own is its whole message. THE FRAMEWORK'S OWN THREE — a
+// lost race ([ErrConflict] wraps it), a create of what is there and a write a
+// deletion keeps deleted — are told in the state log's words for a person
+// ([statelog.Sentence]), as every surface that asks the state log first tells
+// them, so a caller asking only this one never prints the framework's words
+// after the mark.
 func Sentence(err error) string {
+	if said, ok := statelog.Sentence(err); ok {
+		return said
+	}
 	var r *InvalidError
 	if errors.As(err, &r) && r.Error() == err.Error() {
 		return "`" + r.Field + "`: " + r.Why
