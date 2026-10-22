@@ -447,13 +447,35 @@ func (e *Engine) advanceCapacity(ctx context.Context, running *runningLog,
 // AND IT IS WHERE THE ADMISSIONS ARE READ ([Engine.admissionsClear]), because it
 // is the last step before a request leaves and the first that runs with the
 // window's record already written.
+//
+// # Who takes part is taken again here
+//
+// The set the window recorded when it opened, UNION the set the fleet shows
+// now ([Engine.capacityParticipants]). A window can wait at `opened` for as
+// long as an admission or a missing acknowledgement holds it, and a broker
+// member that came up in the meantime holds the request this step is about to
+// send as surely as one that was there at the open: left out, the seal never
+// waited for its restart, and its broker could apply the request after the
+// window confirmed. Never narrowed, because a node recorded at the open that
+// has gone silent since is a process nobody has shown stopped; only an
+// exclusion waives one.
 func (e *Engine) baseline(ctx context.Context, op coord.MaintenanceOperation) (
 	coord.MaintenanceOperation, error) {
 
 	if err := e.admissionsClear(ctx, op); err != nil {
 		return op, err
 	}
-	incarnations, participants, err := e.capacityIncarnations(ctx, op)
+	now, err := e.capacityParticipants(ctx)
+	if err != nil {
+		return op, err
+	}
+	everyone := map[string]bool{}
+	for _, node := range append(cloneStrings(op.Participants), now...) {
+		everyone[node] = true
+	}
+	widened := op
+	widened.Participants = sortedKeys(everyone)
+	incarnations, participants, err := e.capacityIncarnations(ctx, widened)
 	if err != nil {
 		return op, err
 	}
@@ -1159,7 +1181,8 @@ func (e *Engine) reread(ctx context.Context, stream string) (
 	return op, nil
 }
 
-// capacityParticipants is who must acknowledge.
+// capacityParticipants is who must acknowledge: read when the window opens, and
+// again at its baseline, where the two are joined ([Engine.baseline]).
 //
 // EVERY NODE THE FLEET HAS A POSITION FOR, union every live node whose PROCESS
 // could hold an outstanding request, union this node — NOT the retention

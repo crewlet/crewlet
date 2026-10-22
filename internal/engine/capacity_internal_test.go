@@ -859,6 +859,73 @@ func TestEveryMachineThatCouldHoldARequestMustAcknowledge(t *testing.T) {
 	}
 }
 
+// A NODE THAT CAME UP WHILE THE WINDOW WAITED TAKES PART IN IT, and one the
+// window recorded stays in it.
+//
+// A window waits at `opened` for as long as an admission or a missing
+// acknowledgement holds it, and its participants were read once, as it opened.
+// A broker member that came up in that time was never waited for: the seal
+// passed without its restart, and its broker could still hold the request the
+// window sent. Read again at the baseline and joined with what the window
+// recorded, it is asked for, and a node recorded at the open is not dropped
+// for having gone quiet since.
+//
+// Mutation: baseline over the recorded set alone and the first refusal goes
+// missing; over the set read now alone and the second does.
+func TestANodeThatCameUpWhileTheWindowWaitedTakesPart(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	streams := []string{"CREWLET_TRACKER_LOG"}
+	fleet := coordmem.NewFleet()
+	coordinator := nodeOn(fleet, "node-1", "boot-1", statelog.ModeMaintenance, dataNode)
+	op := openWindow(t, coordinator)
+	if !slices.Equal(op.Participants, []string{"node-1"}) {
+		t.Fatalf("participants = %v, want node-1 alone", op.Participants)
+	}
+
+	// NODE-7 COMES UP while the window waits, a data node publishing its
+	// position.
+	if err := fleet.PutPositions(ctx, coord.NodePositions{
+		NodeID: "node-7", At: time.Now().UTC(), Domains: map[string]coord.DomainPosition{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := coordinator.advanceCapacity(ctx, nil, op); err == nil ||
+		!strings.Contains(err.Error(), "node-7") {
+		t.Fatalf("the window baselined without node-7, which came up while it "+
+			"waited (err %v)", err)
+	}
+	late := nodeOn(fleet, "node-7", "boot-1", statelog.ModeMaintenance, dataNode)
+	if err := late.handshake(ctx, streams); err != nil {
+		t.Fatal(err)
+	}
+	next, err := coordinator.advanceCapacity(ctx, nil, op)
+	if err != nil {
+		t.Fatalf("the window still refuses with node-7 acknowledged: %v", err)
+	}
+	if !slices.Contains(next.Participants, "node-7") ||
+		next.WriteIncarnations["node-7"] != late.incarnation {
+		t.Errorf("node-7 is not baselined as the process it acknowledged as: "+
+			"participants %v, incarnations %v", next.Participants, next.WriteIncarnations)
+	}
+
+	// AND A NODE THE WINDOW RECORDED IS NOT DROPPED for being nowhere now.
+	recorded := coord.MaintenanceOperation{
+		Stream: "CREWLET_PAGES_LOG", OperationID: "op-2", TargetMaxBytes: 1 << 33,
+		Phase: coord.PhaseOpened, Attempt: 1, Participants: []string{"node-1", "node-9"},
+		EnteredAt: time.Now().UTC(), By: "ops-3",
+	}
+	held, _, err := fleet.OpenMaintenance(ctx, recorded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := coordinator.advanceCapacity(ctx, nil, held); err == nil ||
+		!strings.Contains(err.Error(), "node-9") {
+		t.Fatalf("the window dropped node-9, which it recorded at the open and "+
+			"nobody has shown stopped (err %v)", err)
+	}
+}
+
 // TestAnUnreadablePositionRegisterRefusesRatherThanShrinkingTheSet: a
 // participant set read from a store that failed is a set with nodes silently
 // missing, and every one of them is a machine that may be publishing.
