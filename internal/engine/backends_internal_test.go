@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/seat/placement"
@@ -63,6 +64,24 @@ func TestTheLeaseTTLInForceBeatsThisNodesOwnConfig(t *testing.T) {
 	// TTL, which is a lease that has already lapsed.
 	if got := effectiveLeaseTTL(&b, ttlBackend{ttl: 0}); got != configured {
 		t.Errorf("a backend reporting no TTL resolved to %v, want %v", got, configured)
+	}
+}
+
+// THE DEFAULT LEASE TTL IS ONE A DEPLOYMENT COULD HAVE WRITTEN.
+//
+// An unset coordination.lease_ttl_seconds takes the seat layer's measured
+// constant here ([leaseTTL]), because config must not import it, and Tier A
+// refuses anything set below [config.MinLeaseTTL] for the watchdog's sake. The
+// two live in packages that cannot see each other, so a default lowered past
+// the floor would boot every deployment that set nothing on a TTL the floor
+// exists to refuse — the one place the rule would not reach.
+func TestTheDefaultLeaseTTLIsNotBelowTheFloor(t *testing.T) {
+	t.Parallel()
+	b := testBootstrap(t)
+	b.Coordination.LeaseTTLSeconds = 0
+	if got := leaseTTL(&b); got < config.MinLeaseTTL {
+		t.Fatalf("an unset lease TTL takes %v, below the %v floor Tier A holds a set "+
+			"one to", got, config.MinLeaseTTL)
 	}
 }
 
