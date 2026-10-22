@@ -13,6 +13,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Backing this file up ONLINE, and why it is VACUUM INTO.
@@ -337,9 +339,9 @@ func verifyBackup(ctx context.Context, path string, want []string) ([]string, er
 	// would migrate forward from the wrong place, whether that number is
 	// zero or twelve.
 	if !slices.Equal(applied, want) {
-		return nil, fmt.Errorf("store: backup verify: the copy at %s records schema %v "+
-			"but the database it was copied from has applied %v, so a restore of it "+
-			"would migrate forward from the wrong place", path, applied, want)
+		return nil, fmt.Errorf("store: backup verify: the copy at %s records schema %s "+
+			"but the database it was copied from has applied %s, so a restore of it "+
+			"would migrate forward from the wrong place", path, words.And(applied), words.And(want))
 	}
 	return applied, nil
 }
@@ -371,7 +373,7 @@ func integrityCheck(ctx context.Context, pool *sql.DB) error {
 		return fmt.Errorf("store: integrity check: %w", err)
 	}
 	if len(faults) > 0 {
-		return fmt.Errorf("store: integrity check failed: %v", faults)
+		return fmt.Errorf("store: integrity check failed: %s", words.And(faults))
 	}
 	return nil
 }

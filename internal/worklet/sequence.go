@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The FIVE sequences that stay genuinely cross-object — a create (1), a
@@ -1348,8 +1349,8 @@ func declaredType(ctx context.Context, tx *sql.Tx, task Task) error {
 	}
 	sort.Strings(live)
 	return invalid("%q is not a task type this company declares — "+
-		"the types are %v, and a new one is declared in the workspace "+
-		"catalogue rather than invented at the create", task.Type, live)
+		"the types are %s, and a new one is declared in the workspace "+
+		"catalogue rather than invented at the create", task.Type, words.And(live))
 }
 
 // requiredFields refuses a task missing a field its company or its project
@@ -1399,8 +1400,8 @@ func requiredFields(ctx context.Context, tx *sql.Tx, project Project, task Task)
 		return nil
 	}
 	sort.Strings(missing)
-	return invalid("a %s in project %s requires %v, which this task "+
-		"does not set", task.Type, project.Key, missing)
+	return invalid("a %s in project %s requires %s, which this task "+
+		"does not set", task.Type, project.Key, words.And(missing))
 }
 
 // bodyCaveats is what a writer is told and not refused for.

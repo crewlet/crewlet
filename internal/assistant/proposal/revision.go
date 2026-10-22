@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/assistant/exec"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // RevisionKind is what a source revision is a revision of.
@@ -133,8 +134,8 @@ func ParseRevision(s string) (Revision, error) {
 	}
 	r := Revision{Kind: RevisionKind(kind), ID: rest[:at], Version: rest[at+1:]}
 	if !r.Kind.Valid() {
-		return Revision{}, fmt.Errorf("%w: revision kind %q is not one of %v", ErrInvalid,
-			kind, RevisionKinds)
+		return Revision{}, fmt.Errorf("%w: revision kind %q is not one of %s", ErrInvalid,
+			kind, words.Or(RevisionKinds))
 	}
 	return r, nil
 }

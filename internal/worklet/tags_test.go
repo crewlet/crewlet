@@ -147,12 +147,31 @@ func TestUndeclaredTagIsRefused(t *testing.T) {
 		t.Fatal("a create invented a tag the project never declared")
 	}
 	// THE REFUSAL CARRIES BOTH WAYS OUT and the near miss, because the
-	// caller is usually a model with one round left.
-	for _, want := range []string{"regresion", "regression",
-		"write_project(tags.add)", "labels_create_missing"} {
+	// caller is usually a model with one round left — each way out by the
+	// argument that takes it, since `tags.add` named one nothing reads.
+	for _, want := range []string{`"regresion"`, `Did you mean "regression"?`,
+		"Add it to ENG's tags first (`tags_add`)", "set `labels_create_missing` to add it"} {
 
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal does not mention %q: %v", want, err)
+		}
+	}
+
+	// AND IT AGREES IN NUMBER with what it is about: several tags are
+	// "them", where the sentence said "one" and "it" whatever it named.
+	// Mutation: put "it" back for several and this fails.
+	several := newTask("t-typos")
+	several.Key = ""
+	several.Tags = []string{"regresion", "perf"}
+	_, err = r.writer.CreateTask(t.Context(), "op-typos", several, nil)
+	if err == nil {
+		t.Fatal("a create invented two tags the project never declared")
+	}
+	for _, want := range []string{`the tags "perf" and "regresion"`, "Add them to ENG's tags",
+		"to add them as this work is filed"} {
+
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal of two tags does not say %q: %v", want, err)
 		}
 	}
 }

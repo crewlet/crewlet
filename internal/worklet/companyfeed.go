@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The tracker's half of the company feed — the completions, the creates and
@@ -223,7 +224,7 @@ func (r *Reader) CompanyFeed(ctx context.Context, q FeedQuery) (FeedPage, error)
 	for _, kind := range kinds {
 		if !kind.Valid() {
 			return FeedPage{}, invalid("%q is not a feed kind; Worklet "+
-				"answers %v", kind, FeedKinds)
+				"answers %s", kind, words.And(FeedKinds))
 		}
 	}
 	var out FeedPage

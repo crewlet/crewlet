@@ -25,6 +25,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A person's note to a turn whose coding run is out: it waits sealed on the
@@ -283,8 +284,8 @@ func (s *runSteers) openSeat(run sandbox.PendingRun) builtin.RunSeat {
 	case statelog.Verified:
 	case statelog.KeyUnknown:
 		return builtin.RunSeat{Unverified: fmt.Sprintf("its run's record names its seat under a key "+
-			"this node does not hold (it holds %v) — add the key to secrets.keys",
-			s.seat.verifier.KeyIDs())}
+			"this node does not hold (it holds %s) — add the key to secrets.keys",
+			words.And(s.seat.verifier.KeyIDs()))}
 	default:
 		log.Error("steer_seat_unverified", "turn_id", run.TurnID,
 			"detail", "the seat its run's record names does not verify under the key it names; "+

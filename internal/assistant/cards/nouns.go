@@ -11,9 +11,9 @@ var spelled = map[string]string{
 	"xlsx": "XLSX", "yaml": "YAML", "config": "configuration",
 }
 
-// words is one path segment or field key as words: "mcp-servers" is "MCP
+// asWords is one path segment or field key as words: "mcp-servers" is "MCP
 // servers", "agent_id" is "agent ID", "export.csv" is "export CSV".
-func words(key string) string {
+func asWords(key string) string {
 	parts := strings.FieldsFunc(key, func(r rune) bool { return r == '-' || r == '_' || r == '.' })
 	for i, w := range parts {
 		if s, ok := spelled[strings.ToLower(w)]; ok {
@@ -31,7 +31,7 @@ func words(key string) string {
 // work". ONE RULE for every name drawn from the API's own spelling: a generic
 // request's title (internal/assistant/catalog's RequestTitle), a call on the
 // act route by the tool it names ("Open DM") and an inferred card's labels.
-func Humanise(key string) string { return capitalise(words(key)) }
+func Humanise(key string) string { return capitalise(asWords(key)) }
 
 // capitalise is s with its first letter in capitals.
 func capitalise(s string) string {

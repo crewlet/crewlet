@@ -31,6 +31,7 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/usage"
 	"github.com/crewlet/crewlet/internal/version"
+	"github.com/crewlet/crewlet/internal/words"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -2520,8 +2521,8 @@ func (e *Engine) join(ctx context.Context, s *stateLog,
 		return joinUnable, want, nil
 	case err != nil:
 		return "", statelog.OfferRequest{}, fmt.Errorf("engine: this node cannot "+
-			"replay its way to the fleet on %v and the join failed: %w",
-			slices.Concat(behind, passed), err)
+			"replay its way to the fleet on %s and the join failed: %w",
+			words.And(slices.Concat(behind, passed)), err)
 	}
 	// NO LINE OF ITS OWN: the adopter writes `statelog_adopted` with the
 	// donor, the artefact's checksum and when it was taken, and a second

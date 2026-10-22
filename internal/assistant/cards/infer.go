@@ -441,7 +441,7 @@ func FieldLabel(path string) string {
 	}
 	keys := strings.Split(path, ".")
 	for i, k := range keys {
-		keys[i] = words(k)
+		keys[i] = asWords(k)
 	}
 	return capitalise(strings.Join(keys, " › "))
 }

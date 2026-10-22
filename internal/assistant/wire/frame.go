@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/caveat"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // ErrInvalid is wrapped by every refusal of a value this package validates.
@@ -278,7 +279,8 @@ func (f Frame) Validate() error {
 	case f.At.IsZero():
 		return fmt.Errorf("%w: frame at is the zero instant", ErrInvalid)
 	case !f.Kind.Valid():
-		return fmt.Errorf("%w: frame kind %q is not one of %v", ErrInvalid, f.Kind, EventKinds)
+		return fmt.Errorf("%w: frame kind %q is not one of %s", ErrInvalid, f.Kind,
+			words.Or(EventKinds))
 	}
 	for kind, set := range f.payloads() {
 		if set != (kind == f.Kind) {
@@ -295,8 +297,8 @@ func (f Frame) validatePayload() error {
 	switch f.Kind {
 	case EventStatus:
 		if !f.Status.State.Valid() {
-			return fmt.Errorf("%w: status state %q is not one of %v", ErrInvalid,
-				f.Status.State, StatusStates)
+			return fmt.Errorf("%w: status state %q is not one of %s", ErrInvalid,
+				f.Status.State, words.Or(StatusStates))
 		}
 	case EventDelta:
 		if f.Delta.MessageID == uuid.Nil {
@@ -317,8 +319,8 @@ func (f Frame) validatePayload() error {
 		}
 	case EventError:
 		if !f.Error.Code.Valid() {
-			return fmt.Errorf("%w: error code %q is not one of %v", ErrInvalid,
-				f.Error.Code, ErrorCodes)
+			return fmt.Errorf("%w: error code %q is not one of %s", ErrInvalid,
+				f.Error.Code, words.Or(ErrorCodes))
 		}
 	case EventSnapshot:
 		for _, s := range f.Snapshot.Steps {
@@ -336,8 +338,8 @@ func (f Frame) validatePayload() error {
 		}
 		for _, m := range f.Snapshot.Messages {
 			if !m.Role.Valid() {
-				return fmt.Errorf("%w: message role %q is not one of %v", ErrInvalid,
-					m.Role, MessageRoles)
+				return fmt.Errorf("%w: message role %q is not one of %s", ErrInvalid,
+					m.Role, words.Or(MessageRoles))
 			}
 		}
 	}
@@ -354,7 +356,8 @@ func (s StepEvent) Validate() error {
 	case s.Tool == "" || s.Label == "":
 		return fmt.Errorf("%w: step %d names no tool or no label", ErrInvalid, s.Index)
 	case !s.State.Valid():
-		return fmt.Errorf("%w: step state %q is not one of %v", ErrInvalid, s.State, StepStates)
+		return fmt.Errorf("%w: step state %q is not one of %s", ErrInvalid, s.State,
+			words.Or(StepStates))
 	case s.State == StepRefused && s.Refusal == nil:
 		return fmt.Errorf("%w: a refused step carries no refusal", ErrInvalid)
 	case s.Parent < 0 || s.Parent >= s.Index && s.Parent != 0:
@@ -401,8 +404,8 @@ func (a ActionEvent) Validate() error {
 	case a.ProposalID == nil:
 		return fmt.Errorf("%w: page action %s names no proposal_id", ErrInvalid, a.Name)
 	case !a.Confirm.Valid():
-		return fmt.Errorf("%w: page action %s confirm %q is not one of %v", ErrInvalid,
-			a.Name, a.Confirm, ActionConfirms)
+		return fmt.Errorf("%w: page action %s confirm %q is not one of %s", ErrInvalid,
+			a.Name, a.Confirm, words.Or(ActionConfirms))
 	}
 	return nil
 }

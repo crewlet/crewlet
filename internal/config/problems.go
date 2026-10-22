@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Problem is one validation failure, located in the document and classified:
@@ -656,7 +657,7 @@ func (c *Company) channelAdvisories() []Warning {
 				"of them lands in the other's room, and every seat in both is "+
 				"told that channel is its team's own. Give one of them a "+
 				"channel of its own, or leave the child's empty and let it "+
-				"inherit", u.Name, u.DeclaredChannel, quotedList(others)))
+				"inherit", u.Name, u.DeclaredChannel, words.And(others)))
 		w.Unit = u.Name
 		out = append(out, w)
 	}
@@ -688,23 +689,6 @@ func (c *Company) channelAdvisories() []Warning {
 		out = append(out, w)
 	}
 	return out
-}
-
-// quotedList renders names for a warning's prose: "A" and "B", or "A", "B"
-// and "C". A list a person reads, rather than a Go slice printed with %v.
-func quotedList(names []string) string {
-	quoted := make([]string, len(names))
-	for i, name := range names {
-		quoted[i] = strconv.Quote(name)
-	}
-	switch len(quoted) {
-	case 0:
-		return ""
-	case 1:
-		return quoted[0]
-	default:
-		return strings.Join(quoted[:len(quoted)-1], ", ") + " and " + quoted[len(quoted)-1]
-	}
 }
 
 // peoplelessWarnings is the one warning a company declaring no human seat

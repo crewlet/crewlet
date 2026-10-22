@@ -27,6 +27,7 @@ import (
 	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The listing page: twenty-five rows by default and a hundred at most. A row
@@ -169,10 +170,10 @@ func (t *listArtifacts) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return failed(fmt.Sprintf(ListArtifactsTool+" takes `delimiter` as %q alone, or none.",
 			artifactsdomain.ListDelimiter)), nil
 	case q.Scope != "" && !q.Scope.Valid():
-		return failed(fmt.Sprintf(ListArtifactsTool+" takes `scope` as one of %v.",
-			artifactsdomain.ListScopes)), nil
+		return failed(fmt.Sprintf(ListArtifactsTool+" takes `scope` as one of %s.",
+			words.Or(artifactsdomain.ListScopes))), nil
 	case q.Kind != "" && !q.Kind.Valid():
-		return failed(fmt.Sprintf(ListArtifactsTool+" takes `kind` as one of %v.", artifacts.Kinds)), nil
+		return failed(fmt.Sprintf(ListArtifactsTool+" takes `kind` as one of %s.", words.Or(artifacts.Kinds))), nil
 	case q.Sort != "" && (!q.Sort.Valid() || q.Sort == artifactsdomain.SortOpened):
 		return failed(ListArtifactsTool + " sorts by `updated`, `created` or `title`."), nil
 	case len(q.Q) > maxArtifactQuery:

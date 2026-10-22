@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A person's answer to a parked run is sealed onto the run's row.
@@ -224,8 +225,8 @@ func (s *AnswerSeal) Open(run PendingRun) (AnswerWords, error) {
 	switch verdict {
 	case statelog.Verified:
 	case statelog.KeyUnknown:
-		return AnswerWords{}, fmt.Errorf("%w (it holds %v) — add the key the fleet sealed it "+
-			"under to secrets.keys", ErrAnswerKeyUnknown, s.verifier.KeyIDs())
+		return AnswerWords{}, fmt.Errorf("%w (it holds %s) — add the key the fleet sealed it "+
+			"under to secrets.keys", ErrAnswerKeyUnknown, words.And(s.verifier.KeyIDs()))
 	default:
 		return AnswerWords{}, fmt.Errorf("%w: the frame does not verify under the key it names",
 			ErrAnswerUnopened)
@@ -241,8 +242,8 @@ func (s *AnswerSeal) Open(run PendingRun) (AnswerWords, error) {
 		return AnswerWords{}, fmt.Errorf("%w: it was sealed for the question launch %q asked, "+
 			"and the run's job is %q", ErrAnswerUnopened, sealed.LaunchID, run.LaunchID)
 	case !slices.Equal(sealed.EventIDs, answer.EventIDs):
-		return AnswerWords{}, fmt.Errorf("%w: it was sealed for deliveries %v, and the row names %v",
-			ErrAnswerUnopened, sealed.EventIDs, answer.EventIDs)
+		return AnswerWords{}, fmt.Errorf("%w: it was sealed for deliveries %s, and the row names %s",
+			ErrAnswerUnopened, words.And(sealed.EventIDs), words.And(answer.EventIDs))
 	case sealed.Via != answer.Via:
 		return AnswerWords{}, fmt.Errorf("%w: it was sealed as come by %q, and the row says %q",
 			ErrAnswerUnopened, sealed.Via, answer.Via)

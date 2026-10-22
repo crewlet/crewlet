@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // What happened to the company's pages, and what one revision actually said.
@@ -170,7 +171,7 @@ func (r *Reader) Activity(ctx context.Context, q PageActivityQuery) (PageActivit
 	for _, kind := range q.ActorKinds {
 		if !kind.Valid() {
 			return PageActivity{}, fmt.Errorf("doclet: %q is not an author kind; "+
-				"the three are %v", kind, AuthorKinds())
+				"the three are %s", kind, words.And(AuthorKinds()))
 		}
 	}
 	limit := q.Limit

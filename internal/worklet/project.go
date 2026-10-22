@@ -113,9 +113,11 @@ func (w *Writer) WriteProject(ctx context.Context, opID, key string,
 	case key == "":
 		return WriteResult{}, invalid("a project edit names no project")
 	case edit.Empty():
-		return WriteResult{}, invalid("a project edit of %s sets "+
-			"nothing — the name, purpose and owning unit come from the org "+
-			"chart, and the tags are %s(tags.add)", key, WriteProjectTool)
+		// THE ARGUMENT THAT ADDS A TAG BY ITS OWN NAME: it said
+		// "write_project(tags.add)", an argument nothing reads.
+		return WriteResult{}, invalid("a project edit of %s sets nothing. Its "+
+			"name, purpose and owning unit come from the org chart, and a tag "+
+			"is added with `tags_add`", key)
 	case !authority.Policy:
 		return WriteResult{}, forbidden("%s's field declarations, default "+
 			"assignee and target date are the project lead's, or an admin's — "+

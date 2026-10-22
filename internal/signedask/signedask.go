@@ -147,6 +147,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Request is a channel's request as the envelope binds it.
@@ -301,7 +302,7 @@ func (c *Channel[Q, R]) Admit(sealed []byte, seen *Guard, now time.Time) Admissi
 	case statelog.KeyUnknown:
 		out.Disposition = KeyUnknown
 		out.Why = fmt.Sprintf("the request is signed under a key this node does not hold "+
-			"(it holds %v) — add the key to secrets.keys", c.HeldKeys())
+			"(it holds %s) — add the key to secrets.keys", words.And(c.HeldKeys()))
 		var claimed Q
 		if err := json.Unmarshal(body, &claimed); err == nil {
 			out.Request = claimed
@@ -359,7 +360,7 @@ func (c *Channel[Q, R]) OpenReply(sealed []byte, asked string) (rep R, why strin
 		return zero, "its reply is not signed by this fleet", nil
 	case statelog.KeyUnknown:
 		return zero, fmt.Sprintf("its reply is signed under a key this node does not "+
-			"hold (it holds %v) — add the key to secrets.keys", c.repliesOpened.KeyIDs()), nil
+			"hold (it holds %s) — add the key to secrets.keys", words.And(c.repliesOpened.KeyIDs())), nil
 	}
 	if err := json.Unmarshal(body, &rep); err != nil {
 		return zero, "", fmt.Errorf("signedask: decode the reply: %w", err)

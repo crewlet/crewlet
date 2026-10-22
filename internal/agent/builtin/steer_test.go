@@ -527,7 +527,7 @@ func TestANoteTheRunningNodeCouldNotVerifyIsRefusedAsUnavailable(t *testing.T) {
 	t.Parallel()
 	unverified := steer.Reply{Version: 1, TurnID: "run-1",
 		Unverified: "the node running turn run-1 does not hold the key the note is " +
-			"signed under (it holds [k0]) — add the key to its secrets.keys"}
+			"signed under (it holds \"k0\") — add the key to its secrets.keys"}
 	for name, caller := range map[string]iam.Principal{
 		"the offer, by the deployment's operator": operatorCaller,
 		"the probe, by a lead":                    boundTo("jane"),
@@ -638,11 +638,11 @@ func TestAuthorityIsDecidedOnTheAnchoredSeat(t *testing.T) {
 		t.Parallel()
 		asker := &fleetAsker{}
 		runs := &runRecords{recorded: true, seat: builtin.RunSeat{
-			Unverified: "the record's seat is sealed under a key this node does not hold (it holds [k1])"}}
+			Unverified: "the record's seat is sealed under a key this node does not hold (it holds \"k1\")"}}
 		res, _ := steerCall(t, newSteerRigOn(t, asker, runs, requestKey(), boundTo("jane"), seatLeads),
 			"run-1", "use staging")
 		if !res.Failed || tools.RefusalOf(res) != tools.RefusalUnavailable ||
-			!strings.Contains(res.Output, "it holds [k1]") {
+			!strings.Contains(res.Output, `it holds "k1"`) {
 			t.Fatalf("answered %s: %q, want unavailable naming why", tools.RefusalOf(res), res.Output)
 		}
 		if len(asker.asked) != 0 || len(runs.filedNotes()) != 0 {

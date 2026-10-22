@@ -71,6 +71,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // As is how a curated tool is built on one surface.
@@ -395,7 +396,7 @@ func (t Tool) Request(args map[string]any) (exec.Request, error) {
 	}
 	if _, ok := t.RouteOf(req); !ok {
 		return exec.Request{}, fmt.Errorf("catalog: %s built %s %s, which is none of its "+
-			"routes %v", t.Name, req.Method, req.Path, t.Routes)
+			"routes %s", t.Name, req.Method, req.Path, words.And(t.Routes))
 	}
 	return req, nil
 }

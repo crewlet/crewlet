@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A project's tag set — the one catalogue any seat may add to.
@@ -660,12 +661,26 @@ func declaredTags(ctx context.Context, tx *sql.Tx, project string, tags []string
 	near := nearTags(set.Tags, unknown[0])
 	hint := ""
 	if len(near) > 0 {
-		hint = fmt.Sprintf(" Did you mean %s?", strings.Join(near, " or "))
+		hint = fmt.Sprintf(" Did you mean %s?", words.Or(near))
 	}
-	return invalid("%s does not declare the tag %v — its tags are "+
-		"%v.%s Declare one with %s(tags.add), or pass "+
-		"`labels_create_missing` to declare it at this write",
-		project, unknown, declared, hint, WriteProjectTool)
+	// ONE SENTENCE FOR BOTH READERS, as every content refusal here is: a
+	// model reads it in a tool's answer and a person on a write surface
+	// reads it as it stands, so the remedy names the two ARGUMENTS that
+	// declare a tag (the body a person's surface sends is the tool's own
+	// arguments) and agrees in number with what it is about. It used to say
+	// "Declare one with write_project(tags.add) … declare it" for several
+	// tags, naming an argument nothing reads.
+	named, it := "the tag "+words.And(unknown), "it"
+	if len(unknown) > 1 {
+		named, it = "the tags "+words.And(unknown), "them"
+	}
+	its := " Its tags are " + words.And(declared) + "."
+	if len(declared) == 0 {
+		its = " It has no tags yet."
+	}
+	return invalid("%s doesn't have %s.%s%s Add %s to %s's tags first (`tags_add`), "+
+		"or set `labels_create_missing` to add %s as this work is filed",
+		project, named, its, hint, it, project, it)
 }
 
 // EnsureTags declares the tags a write is about to use that the project lacks.
@@ -719,10 +734,10 @@ func (w *Writer) EnsureTags(ctx context.Context, opID, project string,
 	// pass the flag it had passed — about a tag that may have landed.
 	result, err := w.WriteTags(ctx, opID, project, TagEdit{Add: add},
 		TagAuthority{})
-	if err = resolved(fmt.Sprintf("the declaration of %v in %s", created,
+	if err = resolved(fmt.Sprintf("the declaration of %s in %s", words.And(created),
 		project), result, err); err != nil {
-		return nil, nil, fmt.Errorf("worklet: declare %v in %s: %w",
-			created, project, err)
+		return nil, nil, fmt.Errorf("worklet: declare %s in %s: %w",
+			words.And(created), project, err)
 	}
 	// WHAT THE WRITE DECLARED, never what the read above guessed: the read
 	// is outside any snapshot, so a colleague declaring the same word in

@@ -359,11 +359,11 @@ func TestANameIsMatchedAsAWordOfItsOwn(t *testing.T) {
 
 // THIS PACKAGE IMPORTS NOTHING, and that is what lets every package that must
 // name a tool read it here: the prompts import only the org model and the
-// provenance fence, the skill guard only the prompts, the logger and the tool
-// layer's argument leaves, and a name kept anywhere that imports more is a
-// name one of them cannot reach. The suite may import what it likes; the
-// source the build compiles may not. Mutation: add any import to toolname.go
-// and this is red.
+// provenance fence, the skill guard only the prompts, the logger,
+// internal/words and the tool layer's argument leaves, and a name kept
+// anywhere that imports more is a name one of them cannot reach. The suite
+// may import what it likes; the source the build compiles may not. Mutation:
+// add any import to toolname.go and this is red.
 func TestThePackageImportsNothing(t *testing.T) {
 	t.Parallel()
 	pkg, err := build.ImportDir(".", 0)

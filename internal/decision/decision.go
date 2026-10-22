@@ -42,6 +42,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The decision caps. Each is refused at write naming the field, never cut,
@@ -329,7 +331,7 @@ func (d Decision) Validate() error {
 	if d.Inform != nil {
 		if !d.Inform.Surface.Valid() {
 			note(invalid("decision.inform.surface is %q and must be one of "+
-				"%v", d.Inform.Surface, InformSurfaces()))
+				"%s", d.Inform.Surface, words.Or(InformSurfaces())))
 		}
 		note(CheckText("decision.inform.channel", d.Inform.Channel,
 			MaxInformChannel, true))

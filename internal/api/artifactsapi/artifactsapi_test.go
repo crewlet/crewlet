@@ -636,7 +636,7 @@ func TestAShareNamesOnlyAnAudienceTheCompanyHolds(t *testing.T) {
 		{`{"kind":"seat","id":"maya.ortiz"}`, "is not a seat handle"},
 		{`{"kind":"seat","id":"ghost"}`, `the company has no seat "ghost"`},
 		{`{"kind":"unit","id":"NOPE"}`, `the company has no unit "NOPE"`},
-		{`{"kind":"link","id":"x"}`, "not one this build shares with"},
+		{`{"kind":"link","id":"x"}`, `"link" isn't someone you can share with. Use `},
 	} {
 		grant := `{"audience":` + c.audience + `,"role":"viewer"}`
 		w := g.do(person("jane"), "PUT", at(page, "/shares"), grant, keyed()...)

@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A person's note to a running turn, carried out on the node running it.
@@ -493,8 +494,8 @@ func (d *steerDesk) unverified(ctx context.Context, admitted signedask.Admission
 	return d.wire.SealReply(steer.Reply{
 		Version: steer.WireVersion, Request: admitted.ID, TurnID: turnID,
 		Unverified: fmt.Sprintf("the node running turn %s does not hold the key the "+
-			"note is signed under (it holds %v) — add the key to its secrets.keys",
-			turnID, d.wire.HeldKeys()),
+			"note is signed under (it holds %s) — add the key to its secrets.keys",
+			turnID, words.And(d.wire.HeldKeys())),
 	})
 }
 

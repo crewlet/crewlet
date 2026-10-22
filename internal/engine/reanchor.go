@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // REANCHORING: the one recovery for a stream that was genuinely recreated.
@@ -188,7 +189,7 @@ func (e *Engine) Reanchor(ctx context.Context, req ReanchorRequest) (statelog.Re
 	}, in, statelog.ReanchorGuard{Confirm: req.Confirm, Force: req.Force, Discard: req.Discard})
 	if err != nil {
 		if len(peers) > 0 {
-			return statelog.ReanchorPlan{}, fmt.Errorf("%w (re-anchored peers: %v)", err, peers)
+			return statelog.ReanchorPlan{}, fmt.Errorf("%w (re-anchored peers: %s)", err, words.And(peers))
 		}
 		return statelog.ReanchorPlan{}, err
 	}
@@ -570,8 +571,8 @@ func (e *Engine) runningStream(stream string) (*runningLog, error) {
 	}
 	running := s.logOf(stream)
 	if running == nil {
-		return nil, fmt.Errorf("%w: %q — the streams this build runs are %v",
-			ErrUnknownStream, stream, maintenanceStreams())
+		return nil, fmt.Errorf("%w: %q — the streams this build runs are %s",
+			ErrUnknownStream, stream, words.And(maintenanceStreams()))
 	}
 	return running, nil
 }

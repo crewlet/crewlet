@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // ---- api ------------------------------------------------------------- //
@@ -1015,7 +1016,7 @@ func (a *APIAuth) validateAdmin(path Path, serving bool) error {
 		}
 	case !a.Admin.Valid():
 		p.add(at(path, "admin"), ErrUnknownValue,
-			"%q isn't a valid value. Use one of %v", a.Admin, iam.AdminPostures)
+			"%q isn't a valid value. Use %s", a.Admin, words.Or(iam.AdminPostures))
 	}
 	return p.err()
 }
@@ -1088,8 +1089,8 @@ func (a *APIAuth) validateTokens(path Path, serving bool) error {
 
 		if len(t.Grants) == 0 {
 			p.add(at(tp, "grants"), ErrMissing,
-				"required. List the permissions this token gets, from %v",
-				iam.AllGrants)
+				"required. List the permissions this token gets, from %s",
+				words.And(iam.AllGrants))
 		}
 		p.wrap(checkGrants(at(tp, "grants"), t.Grants, a.Admin))
 	}
@@ -1130,7 +1131,7 @@ func checkGrants(path Path, grants []iam.Grant, admin iam.AdminPosture) error {
 		gp := idx(path, i)
 		if !g.Valid() {
 			p.add(gp, ErrUnknownValue,
-				"%q isn't a permission. Use one of %v", g, iam.AllGrants)
+				"%q isn't a permission. Use one of %s", g, words.Or(iam.AllGrants))
 		}
 	}
 	if admin == iam.AdminRefuse && slices.Contains(iam.Expand(grants), iam.GrantAdmin) {

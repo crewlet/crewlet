@@ -8,6 +8,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Card is one engine-built card: its [CardKind] and exactly that kind's body.
@@ -340,7 +342,7 @@ func (c Card) bodies() map[CardKind]bool {
 // the kind's, and every closed set inside it.
 func (c Card) Validate() error {
 	if !c.Type.Valid() {
-		return fmt.Errorf("%w: card type %q is not one of %v", ErrInvalid, c.Type, CardKinds)
+		return fmt.Errorf("%w: card type %q is not one of %s", ErrInvalid, c.Type, words.Or(CardKinds))
 	}
 	for kind, set := range c.bodies() {
 		if set != (kind == c.Type) {
@@ -355,13 +357,13 @@ func (c Card) Validate() error {
 		return c.Table.validate()
 	case CardEntity:
 		if c.Entity.Kind != "" && !c.Entity.Kind.Valid() {
-			return fmt.Errorf("%w: entity kind %q is not one of %v", ErrInvalid,
-				c.Entity.Kind, ResourceKinds)
+			return fmt.Errorf("%w: entity kind %q is not one of %s", ErrInvalid,
+				c.Entity.Kind, words.Or(ResourceKinds))
 		}
 		for _, f := range c.Entity.Facts {
 			if f.Type != "" && !f.Type.Valid() {
-				return fmt.Errorf("%w: fact %q type %q is not one of %v", ErrInvalid,
-					f.Label, f.Type, ColumnTypes)
+				return fmt.Errorf("%w: fact %q type %q is not one of %s", ErrInvalid,
+					f.Label, f.Type, words.Or(ColumnTypes))
 			}
 		}
 		if n := c.Entity.ItemsNoun; n != nil && (n.One == "" || n.Many == "") {
@@ -369,16 +371,16 @@ func (c Card) Validate() error {
 		}
 		for _, item := range c.Entity.Items {
 			if item.Kind != "" && !item.Kind.Valid() {
-				return fmt.Errorf("%w: entity item kind %q is not one of %v", ErrInvalid,
-					item.Kind, ResourceKinds)
+				return fmt.Errorf("%w: entity item kind %q is not one of %s", ErrInvalid,
+					item.Kind, words.Or(ResourceKinds))
 			}
 		}
 	case CardProposal:
 		return c.Proposal.validate()
 	case CardOpenInApp:
 		if c.OpenInApp.Reason != "" && !c.OpenInApp.Reason.Valid() {
-			return fmt.Errorf("%w: open reason %q is not one of %v", ErrInvalid,
-				c.OpenInApp.Reason, OpenReasons)
+			return fmt.Errorf("%w: open reason %q is not one of %s", ErrInvalid,
+				c.OpenInApp.Reason, words.Or(OpenReasons))
 		}
 		if c.OpenInApp.Permitted != (c.OpenInApp.Reason == "") {
 			return fmt.Errorf("%w: an open in app card is permitted exactly when it names "+
@@ -394,8 +396,8 @@ func (c Card) Validate() error {
 		}
 	case CardNotice:
 		if !c.Notice.Tone.Valid() {
-			return fmt.Errorf("%w: notice tone %q is not one of %v", ErrInvalid,
-				c.Notice.Tone, NoticeTones)
+			return fmt.Errorf("%w: notice tone %q is not one of %s", ErrInvalid,
+				c.Notice.Tone, words.Or(NoticeTones))
 		}
 	}
 	return nil
@@ -404,8 +406,8 @@ func (c Card) Validate() error {
 func (t *TableCard) validate() error {
 	for _, col := range t.Columns {
 		if col.Key == "" || !col.Type.Valid() || (col.Align != "" && !col.Align.Valid()) {
-			return fmt.Errorf("%w: table column %q is not a key with a type of %v", ErrInvalid,
-				col.Key, ColumnTypes)
+			return fmt.Errorf("%w: table column %q is not a key with a type of %s", ErrInvalid,
+				col.Key, words.Or(ColumnTypes))
 		}
 	}
 	for i, row := range t.Rows {
@@ -430,11 +432,11 @@ func (p *ProposalCard) validate() error {
 	case p.ProposalID == uuid.Nil:
 		return fmt.Errorf("%w: a proposal names no proposal_id", ErrInvalid)
 	case !p.Scope.Valid():
-		return fmt.Errorf("%w: proposal scope %q is not one of %v", ErrInvalid, p.Scope,
-			ProposalScopes)
+		return fmt.Errorf("%w: proposal scope %q is not one of %s", ErrInvalid, p.Scope,
+			words.Or(ProposalScopes))
 	case !p.State.Valid():
-		return fmt.Errorf("%w: proposal state %q is not one of %v", ErrInvalid, p.State,
-			ProposalStates)
+		return fmt.Errorf("%w: proposal state %q is not one of %s", ErrInvalid, p.State,
+			words.Or(ProposalStates))
 	case !ValidDigest(p.Digest):
 		return fmt.Errorf("%w: proposal digest %q is not %s and 64 lowercase hex digits",
 			ErrInvalid, p.Digest, DigestPrefix)
@@ -446,20 +448,20 @@ func (p *ProposalCard) validate() error {
 		return fmt.Errorf("%w: only a page-scope proposal names a page action, and "+
 			"it names it", ErrInvalid)
 	case p.Risk != "" && !p.Risk.Valid():
-		return fmt.Errorf("%w: proposal risk %q is not one of %v", ErrInvalid, p.Risk,
-			ProposalRisks)
+		return fmt.Errorf("%w: proposal risk %q is not one of %s", ErrInvalid, p.Risk,
+			words.Or(ProposalRisks))
 	case p.Technical != nil && (p.Technical.Method == "" || p.Technical.Path == ""):
 		return fmt.Errorf("%w: a proposal's technical details name the method and the path",
 			ErrInvalid)
 	}
 	for _, ch := range p.Changes {
 		if !ch.Kind.Valid() {
-			return fmt.Errorf("%w: change kind %q is not one of %v", ErrInvalid, ch.Kind,
-				ChangeKinds)
+			return fmt.Errorf("%w: change kind %q is not one of %s", ErrInvalid, ch.Kind,
+				words.Or(ChangeKinds))
 		}
 		for _, w := range ch.Words {
 			if !w.Op.Valid() {
-				return fmt.Errorf("%w: word op %q is not one of %v", ErrInvalid, w.Op, WordOps)
+				return fmt.Errorf("%w: word op %q is not one of %s", ErrInvalid, w.Op, words.Or(WordOps))
 			}
 		}
 		if (ch.Kind == ChangeText) != (len(ch.Words) > 0) {
@@ -617,8 +619,8 @@ func (b *BriefCard) Validate() error {
 			return fmt.Errorf("%w: brief need %d's detail is not one line of at most %d "+
 				"characters", ErrInvalid, i, BriefDetailMaxRunes)
 		case !n.Tone.Valid():
-			return fmt.Errorf("%w: brief need %d tone %q is not one of %v", ErrInvalid, i,
-				n.Tone, BriefTones)
+			return fmt.Errorf("%w: brief need %d tone %q is not one of %s", ErrInvalid, i,
+				n.Tone, words.Or(BriefTones))
 		case n.Action == nil:
 			return fmt.Errorf("%w: brief need %d offers no action", ErrInvalid, i)
 		}
@@ -644,8 +646,8 @@ func (b *BriefCard) Validate() error {
 func (a *BriefAction) validate() error {
 	switch {
 	case !a.Kind.Valid():
-		return fmt.Errorf("%w: brief action kind %q is not one of %v", ErrInvalid, a.Kind,
-			BriefActionKinds)
+		return fmt.Errorf("%w: brief action kind %q is not one of %s", ErrInvalid, a.Kind,
+			words.Or(BriefActionKinds))
 	case a.Label == "" || !briefText(a.Label, briefLabelMaxRunes):
 		return fmt.Errorf("%w: a brief action's label is not one line of 1 to %d characters",
 			ErrInvalid, briefLabelMaxRunes)

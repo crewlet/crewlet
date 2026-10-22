@@ -33,6 +33,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/learning/memread"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Errors a query surface reports precisely. Everything else a query returns is
@@ -611,10 +612,10 @@ func (r *Registry) register(name string, e entry) {
 	if !e.posture.Valid() {
 		panic(fmt.Sprintf("queries: %q registered with the posture %s, which "+
 			"is not one a question may declare — Everybody, Requires(admin or "+
-			"one of %v), or DecidedBy(a verb internal/authz has a row for). A "+
+			"one of %s), or DecidedBy(a verb internal/authz has a row for). A "+
 			"question with no posture answers to any credential at all, and "+
 			"looks exactly like one somebody decided to leave open",
-			name, e.posture.debug(), iam.Apps))
+			name, e.posture.debug(), words.Or(iam.Apps)))
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()

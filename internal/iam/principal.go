@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Stage is how far through enrolment a principal is.
@@ -262,10 +264,10 @@ func (p Principal) Validate() error {
 		return fmt.Errorf("%w: id is the nil uuid — a principal no row can key on", ErrInvalidPrincipal)
 	}
 	if !p.Kind.Valid() {
-		return fmt.Errorf("%w: kind %q is not one of %v", ErrInvalidPrincipal, p.Kind, Kinds)
+		return fmt.Errorf("%w: kind %q is not one of %s", ErrInvalidPrincipal, p.Kind, words.Or(Kinds))
 	}
 	if !p.Stage.Valid() {
-		return fmt.Errorf("%w: stage %q is not one of %v", ErrInvalidPrincipal, p.Stage, Stages)
+		return fmt.Errorf("%w: stage %q is not one of %s", ErrInvalidPrincipal, p.Stage, words.Or(Stages))
 	}
 	switch p.Kind {
 	case KindSeat:
@@ -318,7 +320,7 @@ func (p Principal) Validate() error {
 			"only a person's own session derives", ErrInvalidPrincipal, p.Kind, p.Via)
 	case assisted && !p.AssistScope.Valid():
 		return fmt.Errorf("%w: the assistant grant %q carries scope %q, which is "+
-			"not one of %v", ErrInvalidPrincipal, p.Via, p.AssistScope, AssistScopes)
+			"not one of %s", ErrInvalidPrincipal, p.Via, p.AssistScope, words.Or(AssistScopes))
 	case !assisted && p.AssistScope != "":
 		return fmt.Errorf("%w: assist scope %q set on a principal acting through "+
 			"no assistant grant", ErrInvalidPrincipal, p.AssistScope)
