@@ -380,7 +380,7 @@ type MessagePreview struct {
 	// Excerpt is at most [MaxExcerpt] bytes, cut rune-safely by [Excerpt]
 	// — a rail must not carry thirty-two kibibytes per room to draw one
 	// line each.
-	Excerpt string `json:"excerpt,omitempty"`
+	Excerpt string `json:"excerpt,omitempty" untrusted:"fence"`
 
 	// ChannelSeq is the number this message landed at, so a live frame
 	// carrying the next one can be applied rather than refetched.

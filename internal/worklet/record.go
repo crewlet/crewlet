@@ -325,7 +325,7 @@ func (k RelationKind) Valid() bool { return slices.Contains(RelationKinds, k) }
 type Relation struct {
 	Kind      RelationKind `json:"kind"`
 	Other     string       `json:"other"`
-	Note      string       `json:"note,omitempty"`
+	Note      string       `json:"note,omitempty" untrusted:"name"`
 	CreatedBy string       `json:"created_by,omitempty"`
 	CreatedAt time.Time    `json:"created_at,omitzero"`
 
@@ -346,7 +346,7 @@ type Relation struct {
 // ChecklistItem is one line of a checklist.
 type ChecklistItem struct {
 	ID       string  `json:"id"`
-	Name     string  `json:"name"`
+	Name     string  `json:"name" untrusted:"name"`
 	Done     bool    `json:"done,omitempty"`
 	Assignee string  `json:"assignee,omitempty"`
 	Parent   *string `json:"parent,omitempty"`
@@ -356,7 +356,7 @@ type ChecklistItem struct {
 // Checklist is a group of items. It mints no object and appears on no board.
 type Checklist struct {
 	ID    string          `json:"id"`
-	Name  string          `json:"name"`
+	Name  string          `json:"name" untrusted:"name"`
 	Items []ChecklistItem `json:"items,omitempty"`
 }
 
@@ -401,8 +401,8 @@ type Task struct {
 	Depth  int     `json:"depth,omitempty"`
 
 	Type  string `json:"type"`
-	Title string `json:"title"`
-	Body  string `json:"body,omitempty"`
+	Title string `json:"title" untrusted:"name"`
+	Body  string `json:"body,omitempty" untrusted:"fence"`
 
 	// BodyVersion, BodyAuthor and BodyAt say who wrote the CURRENT body,
 	// and are copied into the revision the next write replaces — so every
@@ -439,7 +439,7 @@ type Task struct {
 	// Fields are keyed by field ID ONLY — agents type the slug, and the
 	// write path resolves it — so a rename or a re-declaration never
 	// re-points a stored value.
-	Fields map[string]json.RawMessage `json:"fields,omitempty"`
+	Fields map[string]json.RawMessage `json:"fields,omitempty" untrusted:"name"`
 
 	Relations  []Relation  `json:"relations,omitempty"`
 	Dependents []string    `json:"dependents,omitempty"`
@@ -537,7 +537,7 @@ type Comment struct {
 	Task       string     `json:"task"`
 	Author     string     `json:"author"`
 	AuthorKind AuthorKind `json:"author_kind"`
-	Body       string     `json:"body"`
+	Body       string     `json:"body" untrusted:"fence"`
 
 	// Mentions are resolved at WRITE — a unit to its effective lead, and
 	// the assignee and watcher shorthands expanded — because a mention
@@ -1108,9 +1108,9 @@ func (t TaskType) Label() string { return t.Name }
 // Tag is one label in a project's tag set.
 type Tag struct {
 	Slug        string    `json:"slug"`
-	Label       string    `json:"label"`
+	Label       string    `json:"label" untrusted:"name"`
 	Color       string    `json:"color,omitempty"`
-	Description string    `json:"description,omitempty"`
+	Description string    `json:"description,omitempty" untrusted:"name"`
 	Archived    bool      `json:"archived,omitempty"`
 	CreatedBy   string    `json:"created_by,omitempty"`
 	CreatedAt   time.Time `json:"created_at,omitzero"`

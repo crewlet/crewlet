@@ -94,6 +94,15 @@ func (f *fakeArtifacts) seed(owner string, ownerKind iam.ActorKind, author iam.A
 	return h
 }
 
+// retitle gives a seeded artifact a title and a description.
+func (f *fakeArtifacts) retitle(id artifacts.ID, title, description string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	h := f.heads[id]
+	h.Title, h.Description = title, description
+	f.heads[id] = h
+}
+
 // setKind makes a seeded artifact one of kind.
 func (f *fakeArtifacts) setKind(id artifacts.ID, kind artifacts.Kind) {
 	f.mu.Lock()

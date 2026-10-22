@@ -86,8 +86,8 @@ type Channel struct {
 	// has no address at all.
 	Name string `json:"name,omitempty"`
 
-	Topic   string `json:"topic,omitempty"`
-	Purpose string `json:"purpose,omitempty"`
+	Topic   string `json:"topic,omitempty" untrusted:"fence"`
+	Purpose string `json:"purpose,omitempty" untrusted:"fence"`
 
 	// Unit is the unit whose room this is, empty for every other kind. It
 	// is IDENTITY — what the lead fallback resolves through — and never a
@@ -145,12 +145,12 @@ type Message struct {
 	Author     string     `json:"author"`
 	AuthorKind AuthorKind `json:"author_kind"`
 
-	Body string `json:"body,omitempty"`
+	Body string `json:"body,omitempty" untrusted:"fence"`
 
 	// Links are what the message points at, at most [MaxLinks]. There are
 	// no attachments — see the package doc — so this is the whole of what
 	// a message carries besides its own prose.
-	Links []string `json:"links,omitempty"`
+	Links []string `json:"links,omitempty" untrusted:"name"`
 
 	// Mentions are the RESOLVED handles the body named, IN THE ORDER IT
 	// named them. Also exploded into `chat_mentions`, which is a person's

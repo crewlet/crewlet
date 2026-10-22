@@ -434,6 +434,12 @@ func fencePage(read *foreignRead, at fieldPath, d doclet.Detail) {
 	}
 	read.fence(at.key("page").key("body"), provenance.SourcePageBody, writers, partial,
 		d.Page.Body)
+	// ITS NAMES — the title, its labels, its revisions' notes — are its
+	// writers' too, and a rename is no revision, so the revisions this read
+	// holds never name every writer of the title.
+	if d.Page.Title != "" {
+		read.attribute(writers, true)
+	}
 	for i, c := range d.Comments {
 		read.fence(at.key("comments").index(i).key("body"), provenance.SourcePageComment,
 			[]provenance.Author{read.writer(c.Author, iam.ActorKind(c.AuthorKind))}, false,
