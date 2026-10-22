@@ -2298,7 +2298,8 @@ Four rules follow from that:
   and store the seat with its goal silently gone.
 - **A plain `PUT` never creates.** An id nothing carries is `404 no_such_entity`
   (on `roles` and `units`, to an administrator alone — anybody else
-  is refused `403` as for a seat outside their team), not a new entity: naming
+  is refused `403` as for a seat outside their team), its `hint` saying how
+  that collection is added to, not a new entity: naming
   one that is not there is far more often a typo than
   an intent to add one. The intent is SAID with `If-None-Match: *` — the
   create-only write, for the two flat collections (`mcp-servers`,

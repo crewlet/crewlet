@@ -26,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // --- the rig ------------------------------------------------------------- //
@@ -1200,7 +1201,7 @@ func TestAPersonIsNeverCreatedOrInvitedWithoutGrants(t *testing.T) {
 					"naming grants", got.status, got.body)
 			}
 			if detail, _ := got.body["detail"].(string); !strings.Contains(detail,
-				"admin, worklet, doclet, artifacts, chatlet") {
+				"from "+words.And(iam.AllGrants)+", or [] for the overview only") {
 				t.Errorf("the refusal reads %q, want the permissions named", detail)
 			}
 			if len(r.writer.calls) != 0 {
@@ -1215,10 +1216,14 @@ func TestAPersonIsNeverCreatedOrInvitedWithoutGrants(t *testing.T) {
 			unknown := maps.Clone(tc.body)
 			unknown["grants"] = []string{"worklet", "billing"}
 			got = r.as(administrator(), http.MethodPost, tc.target, unknown)
+			// IN THE ONE SENTENCE EVERY SURFACE REFUSES IT WITH: this route
+			// answers before the record would, and its own hand-joined
+			// list was the only words /iam ever told. Mutation: put
+			// that list back and this fails.
 			if got.status != http.StatusBadRequest || got.body["field"] != "grants" ||
-				!strings.Contains(fmt.Sprint(got.body["detail"]), `"billing"`) {
+				got.body["detail"] != iam.NotAGrant("billing")+"." {
 				t.Errorf("a name this build does not know answered %d %v, want "+
-					"400 naming it and the set", got.status, got.body)
+					"400 with %q", got.status, got.body, iam.NotAGrant("billing"))
 			}
 			if len(r.writer.calls) != 0 {
 				t.Errorf("an unknown name published %v", r.writer.calls)
@@ -1331,9 +1336,9 @@ func TestAnUnknownGrantMayBeRemovedButNotAddedOverHTTP(t *testing.T) {
 				t.Fatalf("answered %d %v, want %d", got.status, got.body, tc.status)
 			}
 			if tc.status != http.StatusOK {
-				if !strings.Contains(fmt.Sprint(got.body["detail"]), `"payroll"`) ||
-					!strings.Contains(fmt.Sprint(got.body["detail"]), "admin, worklet, doclet, artifacts, chatlet") {
-					t.Errorf("the refusal reads %v, want the name and the set", got.body)
+				if got.body["detail"] != iam.NotAGrant("payroll")+"." {
+					t.Errorf("the refusal reads %v, want %q", got.body,
+						iam.NotAGrant("payroll"))
 				}
 				if len(r.writer.calls) != 0 {
 					t.Errorf("an unknown addition published %v", r.writer.calls)

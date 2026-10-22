@@ -104,9 +104,9 @@ Flags:
   -json          Print the node's answer as JSON rather than a table
   -reason TEXT   Saved with the change for the audit trail
   -op-id OP      Retry a write whose outcome was unknown, as the same operation
-  -grants G,...  On invite, create, grant and token:
-                 %[2]s, comma-separated, or none
-                 (overview only). admin includes every app. Defaults:
+  -grants G,...  On invite, create, grant and token: any of
+                 %[2]s, separated by commas,
+                 or none (overview only). admin includes every app. Defaults:
                  %[3]s for people; for a token, the owner's
                  permissions you may give. Required for a service account
   -seat SEAT     On invite and create: the vacant human seat they'll hold
@@ -180,7 +180,7 @@ func runIAM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 	asJSON := fs.Bool("json", false, "print the node's answer as JSON")
 	reason := fs.String("reason", "", "recorded on the change")
 	grants := fs.String("grants", "",
-		iamGrantWords()+", comma-separated, or `none`. admin includes "+
+		"any of "+iamGrantWords()+", separated by commas, or `none`. admin includes "+
 			"every app. If left out: every app on invite and a "+
 			"person's create, the owner's permissions on token. Required on a "+
 			"service account's create")
@@ -422,8 +422,8 @@ func runIAM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 	case "grant":
 		body := granted.body()
 		if len(body) == 0 {
-			return fmt.Errorf("say what to give with -grants: %s, "+
-				"comma-separated, or none", iamGrantWords())
+			return fmt.Errorf("say what to give with -grants: any of %s, "+
+				"separated by commas, or none", iamGrantWords())
 		}
 		body["reason"] = *reason
 		return out.written(client.patch(ctx, "/iam/people/"+subject, body))
@@ -548,7 +548,7 @@ func iamNewcomer(sub, kind, email, login, seat string, granted bool) error {
 			}
 			if !granted {
 				return fmt.Errorf("name what the service account gets with "+
-					"-grants: %s (comma-separated), or none", iamGrantWords())
+					"-grants: any of %s, separated by commas, or none", iamGrantWords())
 			}
 		case "", iam.KindPerson:
 			if strings.TrimSpace(email) == "" {
@@ -724,13 +724,13 @@ func iamGrants(flagged string) (iamGrantList, error) {
 				"list the permissions")
 		case !g.Valid():
 			return iamGrantList{}, fmt.Errorf("-grants: %q isn't a permission. "+
-				"Use %s, comma-separated, or none", g, iamGrantWords())
+				"Use any of %s, separated by commas, or none", g, iamGrantWords())
 		}
 		named = append(named, g)
 	}
 	if len(named) == 0 {
-		return iamGrantList{}, fmt.Errorf("-grants is empty. Use %s, "+
-			"comma-separated, or none", iamGrantWords())
+		return iamGrantList{}, fmt.Errorf("-grants is empty. Use any of %s, "+
+			"separated by commas, or none", iamGrantWords())
 	}
 	expanded := iam.Expand(named)
 	out := make([]iam.Grant, 0, len(iam.AllGrants))
@@ -749,19 +749,28 @@ func iamGrants(flagged string) (iamGrantList, error) {
 // and each refusal — because a list typed into one of them is the copy that
 // goes on naming three permissions after there are four;
 // TestTheCLINeverSpellsTheGrantListByHand reads the source for one.
-func iamGrantWords() string { return iamWords(iam.AllGrants) }
+//
+// THE BARE NAMES THE FLAG TAKES, the last joined with "or", and the sentence
+// around it says how they are joined: it read "Use admin, worklet, doclet,
+// artifacts, chatlet, comma-separated, or none", where "comma-separated" was one
+// more member of the list.
+func iamGrantWords() string { return iamWords(iam.AllGrants, "or") }
 
 // iamAppWords is the APPS among them ([iam.Apps]), which is what a person's
 // invitation or create carries when -grants is left out — read off the same
-// list, for the same reason.
-func iamAppWords() string { return iamWords(iam.Apps) }
+// list, for the same reason, and joined with "and", since it is every one of
+// them.
+func iamAppWords() string { return iamWords(iam.Apps, "and") }
 
-func iamWords(set []iam.Grant) string {
-	words := make([]string, 0, len(set))
+func iamWords(set []iam.Grant, conjunction string) string {
+	names := make([]string, 0, len(set))
 	for _, g := range set {
-		words = append(words, string(g))
+		names = append(names, string(g))
 	}
-	return strings.Join(words, ", ")
+	if len(names) < 2 {
+		return strings.Join(names, "")
+	}
+	return strings.Join(names[:len(names)-1], ", ") + " " + conjunction + " " + names[len(names)-1]
 }
 
 // iamHelp is [iamUsage] with its blanks filled: the default config path, and
