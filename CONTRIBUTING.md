@@ -600,6 +600,19 @@ fuller one whatever the change. Only a case whose subject is the derived
 limit, or a refusal below the floor, states a size of its own; one that
 reserves nothing, or only what the broker reports it has left, needs none.
 
+A case that starts an engine never runs below `internal/engine`'s
+`startedLeaseTTL`, which is `config.MinLeaseTTL` and the floor `engine.New`
+holds every bootstrap to anyway. The lease TTL is also the seat watchdog's
+threshold, and once a host goes that long without a beat the watchdog ends the
+process with status 75: in a test, the whole binary and every case running in
+it, which no assertion reports. Two cases at three seconds sat one loaded
+runner from it, and the one meant to catch a start context cancelling the
+renewer could never fail, because the watchdog ended the binary first. So a
+case reads the renew or the deadline it is about off the host or its store
+(`seat.Host.MayStart`, a lease's deadline) rather than waiting for a lease to
+lapse, and a case whose subject is a fraction of a shorter TTL builds an
+`Engine` literal that starts no seat host.
+
 What a query plan says is read in `storetest`, once. The pinned driver may
 rewrite a correlated scalar subquery that selects one aggregate into a join
 against its whole child table, grouped by the correlation columns, and whether
@@ -687,6 +700,19 @@ states with their reasons:
   field, the file or the variable they have to change — not just what failed.
 - **Comments explain WHY**, and especially why an obvious alternative is
   wrong. The diff shows what the code does.
+- **A field holding words somebody else wrote is declared on the field**, as a
+  credential's `secret:"true"` is: a read type tags it `untrusted:"fence"`
+  (words at length: a body, a comment, a message, an excerpt) or
+  `untrusted:"name"` (a title, a name, a label), the tag `provenance.FieldTag`
+  names. The agent runtime's read tools refuse to answer a declared field they
+  did not fence or name the writers of,
+  `provenance.TestEveryDeclaredFieldHoldsText` holds every tag in the tree to
+  those two kinds and to a type that holds text, and `agent/builtin`'s sweep
+  (`TestEveryToolThatHandsOverSomebodysWordsIsFenced`) derives from the
+  declarations which tools hand such words to a model. So a new read type that
+  carries somebody's words declares them, or a tool answering it is never held
+  to the fence — see
+  [`adr/0040`](adr/0040-content-a-model-reads-carries-its-provenance.md).
 - **Every piece of state answers "who has to agree on it?"** — *this node
   alone* is the node's own database file; *every node, identically, derived
   from an ordered log* is the replicated estate, written only by a state log's
