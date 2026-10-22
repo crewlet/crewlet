@@ -227,10 +227,13 @@ func (Prompt) WakesActor(n notify.Inbound) bool {
 
 // Provenance implements [notify.Prompt]: what the parser stated — the comment,
 // the description or the change note the body is, by the change's author
-// ([notify.Stated]) — and, for a wake built without the parser, the surface
-// the change kind produces.
+// ([notify.StatedHosted]) — and, for a wake built without the parser, the
+// surface the change kind produces. HOSTED, because only company principals
+// write the engine's own tracker: a change whose record names nobody is read
+// as a colleague's, as every other door this text comes through reads it
+// ([provenance.TrustForHosted]).
 func (Prompt) Provenance(n notify.Inbound, parties notify.Parties) notify.Provenance {
-	return notify.Stated(n, parties, excerptSource(ChangeKind(n.EventType)))
+	return notify.StatedHosted(n, parties, excerptSource(ChangeKind(n.EventType)))
 }
 
 // DigestBody implements [notify.Prompt]: comments keep their text, field and

@@ -76,9 +76,13 @@ func (Prompt) WakesActor(notify.Inbound) bool { return false }
 
 // Provenance implements [notify.Prompt]: the remark, the page's opening line or
 // the note saved with it, as the change kind says ([excerptSource]), by the
-// author the parser stated ([notify.Stated]).
+// author the parser stated ([notify.StatedHosted]). HOSTED, because only
+// company principals write the engine's own knowledge base: a change whose
+// record names nobody reads as a colleague's — as the same page does as a
+// search hit ([HitLabel]) and through get_page — rather than a stranger's
+// ([provenance.TrustForHosted]).
 func (Prompt) Provenance(n notify.Inbound, parties notify.Parties) notify.Provenance {
-	return notify.Stated(n, parties, excerptSource(ChangeKind(n.EventType)))
+	return notify.StatedHosted(n, parties, excerptSource(ChangeKind(n.EventType)))
 }
 
 // DigestBody implements [notify.Prompt]: comments keep their text, saves

@@ -141,10 +141,15 @@ func (e A2ARequest) lead() string {
 
 // colleagueLabel is what a colleague seat's words on an agent-to-agent channel
 // are: an a2a message by that agent, read as a colleague's — the channel joins
-// two agent seats and nothing else, so its writer is always one.
+// two agent seats and nothing else, so its writer is always one, and the
+// engine hosts it ([provenance.LabelForHosted]): a message whose record names
+// no seat is still a colleague's.
 func colleagueLabel(handle string) provenance.Label {
-	return provenance.LabelFor("", provenance.SourceA2AMessage,
-		[]provenance.Author{{Kind: iam.ActorAgent, Seat: handle}})
+	var writers []provenance.Author
+	if handle != "" {
+		writers = []provenance.Author{{Kind: iam.ActorAgent, Seat: handle}}
+	}
+	return provenance.LabelForHosted("", provenance.SourceA2AMessage, writers, true)
 }
 
 // fencedBrief is a brief's lead, neutralised under b, above its words inside a

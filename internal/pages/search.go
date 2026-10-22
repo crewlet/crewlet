@@ -264,14 +264,14 @@ func (s *Searcher) Answer(ctx context.Context, q knowledge.Query) (knowledge.Res
 // writers would be a read of every hit's revisions for a bullet the seat opens
 // in full anyway, where `get_page` names them.
 //
-// A COLLEAGUE'S TRUST ALL THE SAME ([provenance.TrustForPartial]), because the
-// surface vouches for it: every write to a page here is authenticated as a
-// seat, a person, an operator credential or the engine, so whoever wrote it was
-// a company principal, though never `own` — the unnamed writer may be anybody
+// A COLLEAGUE'S TRUST ALL THE SAME, by the one rule for a surface the engine
+// hosts ([provenance.LabelForHosted]) that the same page's wake and get_page
+// read by too: every write to a page here is authenticated as a seat, a
+// person, an operator credential or the engine, so whoever wrote it was a
+// company principal, though never `own` — the unnamed writer may be anybody
 // who could write there.
 func HitLabel() provenance.Label {
-	return provenance.Label{Source: provenance.SourcePageBody,
-		Trust: provenance.TrustForPartial("", nil)}
+	return provenance.LabelForHosted("", provenance.SourcePageBody, nil, false)
 }
 
 // failed is the answer to a search this node could not run at all: no hits,

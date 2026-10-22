@@ -24,7 +24,10 @@ type threads struct {
 	older        int
 	stoppedShort bool
 	refuse       bool
-	asked        []notify.Thread
+	// hosted is what the engine's own chat says of its transcripts: every
+	// sender authenticated as a company principal.
+	hosted bool
+	asked  []notify.Thread
 }
 
 func (s *threads) ReadThread(_ context.Context, _ string, t notify.Thread) (notify.Transcript, bool) {
@@ -33,7 +36,7 @@ func (s *threads) ReadThread(_ context.Context, _ string, t notify.Thread) (noti
 		return notify.Transcript{}, false
 	}
 	return notify.Transcript{
-		Messages: s.messages, Older: s.older, StoppedShort: s.stoppedShort,
+		Messages: s.messages, Older: s.older, StoppedShort: s.stoppedShort, Hosted: s.hosted,
 	}, true
 }
 
