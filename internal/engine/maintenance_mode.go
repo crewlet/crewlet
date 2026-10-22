@@ -412,26 +412,42 @@ func (e *Engine) admissionShare() time.Duration {
 // the two the participant set counts ([Engine.capacityParticipants]). A member
 // that holds no data and did not acknowledge would be named a participant the
 // seal waits on for ever, since nothing else it could write says it restarted.
+//
+// # And a boot with no window open still says it restarted
+//
+// A fleet restarted into maintenance mode before the verb ran is the ordinary
+// first step of the procedure, so this boot finds no window, and it used to
+// write nothing. The baseline then found no record for any node but the
+// coordinator, refused every other one as never having restarted into a
+// maintenance mode, and sent the operator to restart a fleet that just had:
+// a fourth fleet-wide restart the procedure does not have. So a boot that read
+// every stream and found no window open writes a WINDOWLESS acknowledgement
+// ([coord.MaintenanceAck.Windowless]): the process and its mode, bound to
+// nothing. A baseline reads which process a node is from it, and no seal takes
+// it, so the evidence the seal stands on is exactly what it was. A boot that
+// could not read a stream writes none, since a window may be open there.
 func (e *Engine) acknowledge(ctx context.Context, streams []string) {
 	if e.backends == nil || e.backends.Fleet == nil || e.mode == statelog.ModeNormal ||
 		!acknowledges(e.profile) {
 		return
 	}
+	open, unread := 0, false
 	for _, stream := range streams {
 		op, found, err := e.backends.Fleet.Maintenance(ctx, stream)
 		if err != nil {
+			unread = true
 			log.WarnContext(ctx, "maintenance_operation_unreadable",
 				"stream", stream, "err", err,
-				"detail", "this node cannot acknowledge an operation it cannot "+
-					"read, so the seal will report it as not having restarted")
+				"detail", "this node can't acknowledge an operation it can't "+
+					"read, and records no restart either since a window may be "+
+					"open there, so a window's baseline and its seal will both "+
+					"see no restart from this node until it restarts again")
 			continue
 		}
 		if !found {
-			// NO OPERATION IS NOT A FAILURE. A fleet restarted into
-			// maintenance mode before the verb ran is the ordinary
-			// first step of the procedure.
 			continue
 		}
+		open++
 		ack := coord.MaintenanceAck{
 			NodeID: e.id, OperationID: op.OperationID, Attempt: op.Attempt,
 			Incarnation: e.incarnation, Mode: string(e.mode), At: time.Now().UTC(),
@@ -439,14 +455,31 @@ func (e *Engine) acknowledge(ctx context.Context, streams []string) {
 		if err := e.backends.Fleet.PutMaintenanceAck(ctx, ack); err != nil {
 			log.WarnContext(ctx, "maintenance_ack_not_recorded",
 				"stream", stream, "operation", op.OperationID, "err", err,
-				"detail", "the seal is established from these, so the operation "+
-					"will report this node as not having restarted")
+				"detail", "the baseline and the seal are established from these, "+
+					"so the window will find no restart recorded for this node")
 			continue
 		}
 		log.InfoContext(ctx, "maintenance_acknowledged",
 			"stream", stream, "operation", op.OperationID, "attempt", op.Attempt,
 			"mode", e.mode, "incarnation", e.incarnation)
 	}
+	if open > 0 || unread {
+		return
+	}
+	restart := coord.MaintenanceAck{
+		NodeID: e.id, Incarnation: e.incarnation, Mode: string(e.mode),
+		At: time.Now().UTC(),
+	}
+	if err := e.backends.Fleet.PutMaintenanceAck(ctx, restart); err != nil {
+		log.WarnContext(ctx, "maintenance_ack_not_recorded", "err", err,
+			"detail", "a window opened before this node restarts again will "+
+				"find no restart into a maintenance mode recorded for it")
+		return
+	}
+	log.InfoContext(ctx, "maintenance_acknowledged",
+		"mode", e.mode, "incarnation", e.incarnation,
+		"detail", "no window is open, so this records the restart for the "+
+			"baseline of the next one and binds nothing")
 }
 
 // acknowledges reports whether a node's restart into a maintenance mode is

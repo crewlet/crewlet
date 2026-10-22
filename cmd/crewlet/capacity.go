@@ -370,8 +370,11 @@ func maintenanceStatus(environ config.Source, args []string, stdout, stderr io.W
 			fmt.Fprintf(w, "%s\t%s\t—\t\t\n", node, baseline)
 			continue
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\n", node, baseline,
-			answer.Acks[i].Incarnation, answer.Acks[i].Attempt, answer.Acks[i].Mode)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", node, baseline,
+			answer.Acks[i].Incarnation,
+			ackAttempt(answer.Acks[i].OperationID, answer.Acks[i].Attempt,
+				answer.Operation.OperationID),
+			answer.Acks[i].Mode)
 	}
 	if len(answer.Operation.Journal) > 0 {
 		fmt.Fprintln(w, "\nWRITE ATTEMPT\tSTATE\tBY\tEVIDENCE")
@@ -460,6 +463,24 @@ func itStandsOrOneStands(nodes []string) string {
 		return "it stands"
 	}
 	return "one stands"
+}
+
+// ackAttempt is the ATTEMPT column of one acknowledgement against the window
+// on the page.
+//
+// A NUMBER ONLY FOR THIS WINDOW'S OWN. A node that restarted while no window
+// was open records its restart bound to none, which the baseline reads and the
+// seal never takes, and one bound to an earlier window carries that window's
+// attempt: printed as numbers, the first read as attempt 0 and the second as
+// an attempt of this window it never was.
+func ackAttempt(ackOperation string, attempt int, window string) string {
+	switch ackOperation {
+	case "":
+		return "no window"
+	case window:
+		return strconv.Itoa(attempt)
+	}
+	return "another window"
 }
 
 // maintenanceAbandon changes what the operation is trying to reach.

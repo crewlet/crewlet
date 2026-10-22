@@ -1270,6 +1270,15 @@ A **leaf** or a client of an external cluster that holds no data is not asked:
 its broker queues nothing, and its seats publish through a data node, which is.
 Each node's broker kind is on `crewlet fleet broker list`.
 
+Each of them records which process it restarted as the moment it boots into
+either mode. With a window already open, that record **acknowledges** the
+window and its attempt. With none open yet, which is the ordinary case for the
+first restart, it names no window, and the baseline still reads it, so the
+fleet restarts into `maintenance` once, before you run the verb, and the verb
+then goes ahead. The seal takes only an acknowledgement a node made by booting
+into `seal` while this window's attempt was open, so a restart from before the
+window never stands in for one.
+
 The set is read when the window opens and **again at the baseline, before any
 request is sent**, and the second read only adds to the first. A window can
 wait at `opened` for a while, so a node that came up in the meantime is asked
