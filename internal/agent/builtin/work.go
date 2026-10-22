@@ -3937,7 +3937,7 @@ func writeFailure(ctx context.Context, actor Actor, name string, err error) tool
 	case errors.Is(err, statelog.ErrConflict):
 		// A LOST RACE, IN WORDS RATHER THAN THE ERROR: what the framework
 		// says is the subject it lost on, a broker path nobody can act on.
-		// A tool of another domain tells it in [lostRaceWords]
+		// A tool of another domain tells it in [statelog.LostRace]
 		// ([WriterSentence]), and a person's surface in its code's own
 		// sentence (ADR-0060); this tool tells its model which read decides
 		// what to do next.
