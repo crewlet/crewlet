@@ -85,7 +85,8 @@ func (f *fakeKB) List(_ context.Context, _ pages.Filter,
 		return pages.Listing{}, f.readErr
 	}
 	return pages.Listing{
-		Pages:    []pages.Summary{{ID: f.page.Page.ID, Title: f.page.Page.Title}},
+		Pages: []pages.Summary{{ID: f.page.Page.ID, Title: f.page.Page.Title,
+			Author: f.page.Page.Author, Labels: f.page.Page.Labels}},
 		Level:    fresh.Level,
 		Complete: true,
 	}, nil
