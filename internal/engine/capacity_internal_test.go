@@ -172,6 +172,272 @@ func TestOnlyANormalNodeAdmitsAndOnlyAMaintenanceNodeAcknowledges(t *testing.T) 
 	}
 }
 
+// nodeOn is one process of the node id on a shared fleet store, as a boot of
+// it in mode, holding profile, would be: process names its incarnation, which
+// every process mints afresh.
+func nodeOn(fleet coord.Fleet, id, process string, mode statelog.MaintenanceMode,
+	profile placement.NodeProfile) *Engine {
+
+	profile.ID = id
+	return &Engine{
+		id: id, incarnation: id + ":" + process, mode: mode, profile: profile,
+		backends: &Backends{Fleet: fleet},
+	}
+}
+
+// dataNode and seatsNode are the two profiles a capacity window tells apart:
+// one that holds the estate, and so admits itself to publish, and one that
+// does not.
+var (
+	dataNode  = placement.NodeProfile{Roles: placement.Roles(placement.RoleData, placement.RoleSeats)}
+	seatsNode = placement.NodeProfile{Roles: placement.Roles(placement.RoleSeats)}
+)
+
+// THE ADMISSION A CRASHED PROCESS LEFT IS GONE BY THE BOOT THAT ENTERS A
+// WINDOW, and nothing else is touched.
+//
+// An admission says one process may be publishing. A crashed process never ran
+// the orderly stop that withdraws it, and the key has no age, so a node
+// restarted into a maintenance mode (which admits nothing) left the dead
+// process's claim standing for good. Each case boots a new incarnation of the
+// node while nobody holds the node's presence (no lease store here), which is
+// the evidence that the old one is gone: into a maintenance mode it retires
+// the claim; in service a data node's own
+// admission replaces it, as it always did, and a node without data leaves it
+// to the window's first restart, which then retires it. That last row is
+// pinned on purpose: a boot in service makes no coordination read for a key
+// that is almost never there, so the bounds a deployment sizes a boot by
+// count no such step.
+//
+// Mutation: make supersede return at once and the two maintenance cases, and
+// every case's window restart, fail.
+func TestABootRetiresTheAdmissionItsNodesCrashedProcessLeft(t *testing.T) {
+	t.Parallel()
+	streams := []string{"CREWLET_TRACKER_LOG"}
+	for _, tc := range []struct {
+		name    string
+		mode    statelog.MaintenanceMode
+		profile placement.NodeProfile
+		// holder is the process whose admission node-a holds once the
+		// restart has booted: "" for none.
+		holder string
+	}{
+		{"restarted into maintenance mode", statelog.ModeMaintenance, dataNode, ""},
+		{"restarted into seal mode", statelog.ModeSeal, dataNode, ""},
+		{"restarted in normal mode with data", statelog.ModeNormal, dataNode, "restarted"},
+		{"restarted in normal mode without data", statelog.ModeNormal, seatsNode, "crashed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			fleet := coordmem.NewFleet()
+			crashed := nodeOn(fleet, "node-a", "crashed", statelog.ModeNormal, dataNode)
+			if err := crashed.handshake(ctx, streams); err != nil {
+				t.Fatalf("the first boot was refused: %v", err)
+			}
+			// KILLED: nothing withdraws its admission. And a live peer's
+			// stands beside it, which no other node's boot may touch.
+			if err := fleet.PutAdmission(ctx, coord.Admission{
+				NodeID: "node-b", Incarnation: "node-b:live",
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			restarted := nodeOn(fleet, "node-a", "restarted", tc.mode, tc.profile)
+			if err := restarted.handshake(ctx, streams); err != nil {
+				t.Fatalf("the restart was refused: %v", err)
+			}
+			admissions, err := fleet.Admissions(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			held := map[string]string{}
+			for _, a := range admissions {
+				held[a.NodeID] = a.Incarnation
+			}
+			want := ""
+			if tc.holder != "" {
+				want = "node-a:" + tc.holder
+			}
+			if held["node-a"] != want {
+				t.Errorf("node-a holds an admission as %q after the restart, want %q: "+
+					"a crashed process's claim left by a maintenance boot is a "+
+					"publisher a window sees that no longer exists", held["node-a"], want)
+			}
+			if held["node-b"] != "node-b:live" {
+				t.Errorf("node-a's boot withdrew node-b's admission, a claim about a "+
+					"process it knows nothing of (%+v)", admissions)
+			}
+
+			// THE WINDOW'S FIRST RESTART, into maintenance mode, leaves
+			// node-a holding nothing whatever the boot before it left.
+			window := nodeOn(fleet, "node-a", "window", statelog.ModeMaintenance, tc.profile)
+			if err := window.handshake(ctx, streams); err != nil {
+				t.Fatalf("the window's restart was refused: %v", err)
+			}
+			if held, found, err := heldAdmission(ctx, fleet, "node-a"); err != nil || found {
+				t.Errorf("node-a still holds %+v after restarting into maintenance "+
+					"mode (err %v)", held, err)
+			}
+			if held, _, _ := heldAdmission(ctx, fleet, "node-b"); held.Incarnation != "node-b:live" {
+				t.Errorf("node-a's boot withdrew node-b's admission (%+v)", held)
+			}
+		})
+	}
+}
+
+// A BOOT THAT CANNOT READ THE ADMISSIONS STILL BOOTS INTO A MAINTENANCE MODE,
+// AND SAYS WHAT IT LEFT.
+//
+// The node publishes nothing there, so refusing its boot over a key it could
+// not clear would cost the window the participant it needs to hear from: it
+// still acknowledges the window. The key does what it always did, standing in
+// the window's way by name, and the boot's log says so.
+//
+// Process-wide logging, so not parallel. Mutation: return from supersede before
+// its warning, or drop the acknowledgement from the handshake, and this fails.
+func TestAnUnreadableAdmissionDoesNotRefuseAMaintenanceBoot(t *testing.T) {
+	logs := captureEngineLogs(t)
+	ctx := context.Background()
+	fleet := coordmem.NewFleet()
+	window := coord.MaintenanceOperation{
+		Stream: "CREWLET_TRACKER_LOG", OperationID: "capacity:open",
+		TargetMaxBytes: 1 << 33, Phase: coord.PhaseOpened, Attempt: 1,
+		Participants: []string{"node-a"},
+	}
+	if _, _, err := fleet.OpenMaintenance(ctx, window); err != nil {
+		t.Fatal(err)
+	}
+	blind := &blindFleet{fleetStore: fleet, admissionsErr: errors.New("store unreachable")}
+	e := nodeOn(blind, "node-a", "restarted", statelog.ModeMaintenance, dataNode)
+	if err := e.handshake(ctx, []string{"CREWLET_TRACKER_LOG"}); err != nil {
+		t.Fatalf("a maintenance-mode boot was refused over an admission it could "+
+			"not read: %v", err)
+	}
+	acks, err := fleet.MaintenanceAcks(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(acks) != 1 || acks[0].Incarnation != "node-a:restarted" ||
+		acks[0].OperationID != window.OperationID {
+		t.Errorf("acknowledgements %+v: want node-a:restarted's, for the open "+
+			"window, whatever the admission read did", acks)
+	}
+	if lines := logs.about("admission_not_superseded", "node", "node-a"); len(lines) != 1 {
+		t.Errorf("admission_not_superseded = %v: a boot that left a claim it "+
+			"could not read has to say so", lines)
+	}
+}
+
+// A MAINTENANCE BOOT WITHDRAWS ANOTHER PROCESS'S ADMISSION ONLY WHEN THAT
+// PROCESS IS NOT RUNNING.
+//
+// A new incarnation of a node is not on its own proof that the one the
+// admission names is gone: a second process under a live node's id boots
+// exactly like a restart, and withdrawing on its word baselined a window past
+// a publisher that was still running. So the boot reads who holds the node's
+// presence, which a running process renews in every mode. Held by the
+// process the admission names, the claim stays; lapsed, or held by another
+// process of the node, it goes; and a presence nobody can read leaves it,
+// since nobody can say its process is gone.
+//
+// Mutation: drop the presence check from supersede and the first row fails;
+// treat an unreadable presence as nobody's and the last row fails.
+func TestAMaintenanceBootLeavesTheAdmissionOfAProcessStillRunning(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		// present is the process holding node-a's presence lease: "" for
+		// none.
+		present string
+		blind   bool
+		// stays is whether node-a:live's admission survives the boot.
+		stays bool
+	}{
+		{name: "the process it names holds the presence", present: "node-a:live", stays: true},
+		{name: "nobody holds the presence", present: "", stays: false},
+		{name: "another process holds the presence", present: "node-a:other", stays: false},
+		{name: "the presence can't be read", present: "node-a:live", blind: true, stays: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			fleet := coordmem.NewFleet()
+			backend := coordmem.New()
+			live := nodeOn(fleet, "node-a", "live", statelog.ModeNormal, dataNode)
+			if err := live.handshake(ctx, []string{"CREWLET_TRACKER_LOG"}); err != nil {
+				t.Fatal(err)
+			}
+			if tc.present != "" {
+				if _, _, err := backend.TryAcquire(ctx, coord.NodeResource("node-a"),
+					coord.AcquireOptions{Owner: tc.present, TTL: time.Minute}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			twin := nodeOn(fleet, "node-a", "twin", statelog.ModeMaintenance, dataNode)
+			twin.backends.Coord = backend
+			if tc.blind {
+				twin.backends.Coord = blindPresence{Backend: backend}
+			}
+			if err := twin.handshake(ctx, []string{"CREWLET_TRACKER_LOG"}); err != nil {
+				t.Fatalf("the maintenance boot was refused: %v", err)
+			}
+			held, found, err := heldAdmission(ctx, fleet, "node-a")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if found != tc.stays || (found && held.Incarnation != "node-a:live") {
+				t.Errorf("node-a holds %+v (found %v) after the boot, want it held "+
+					"by node-a:live: %v", held, found, tc.stays)
+			}
+		})
+	}
+}
+
+// A CRASHED NODE RESTARTED INTO MAINTENANCE MODE NO LONGER HOLDS THE WINDOW
+// SHUT, which is the restart the refusal tells the operator to make.
+//
+// node-a crashes in normal mode, holding its admission. While that process
+// might still be running, its admission keeps the window shut: that is what
+// the key is evidence of. Restarted into maintenance mode, as the refusal says,
+// it used to leave the dead process's claim behind, so the window stayed shut
+// and its refusal sent the operator to make the same restart again, for ever.
+func TestACrashedNodeRestartedIntoMaintenanceLetsTheWindowOpen(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fleet := coordmem.NewFleet()
+	streams := []string{"CREWLET_TRACKER_LOG"}
+	req := CapacityRequest{Stream: "CREWLET_TRACKER_LOG", TargetMaxBytes: 1 << 33, By: "ops-3"}
+	current := jetstream.LogStats{MaxBytes: 1 << 32}
+
+	crashed := nodeOn(fleet, "node-a", "crashed", statelog.ModeNormal, dataNode)
+	if err := crashed.handshake(ctx, streams); err != nil {
+		t.Fatal(err)
+	}
+	coordinator := nodeOn(fleet, "node-b", "boot-1", statelog.ModeMaintenance, dataNode)
+	if err := coordinator.handshake(ctx, streams); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := coordinator.openCapacity(ctx, req, current, unstatedRoom); err == nil ||
+		!strings.Contains(err.Error(), "node-a") {
+		t.Fatalf("the window opened while node-a's process might still be "+
+			"publishing (err %v)", err)
+	}
+
+	restarted := nodeOn(fleet, "node-a", "restarted", statelog.ModeMaintenance, dataNode)
+	if err := restarted.handshake(ctx, streams); err != nil {
+		t.Fatal(err)
+	}
+	op, err := coordinator.openCapacity(ctx, req, current, unstatedRoom)
+	if err != nil {
+		t.Fatalf("node-a restarted into maintenance mode as it was told to, and "+
+			"the window is still refused: %v", err)
+	}
+	if op.Phase != coord.PhaseOpened {
+		t.Errorf("the window opened in phase %s, want opened", op.Phase)
+	}
+}
+
 // TestAnAcknowledgementCarriesTheModeItWasMadeIn.
 //
 // The seal is established only from SEAL mode, because that mode cannot write
@@ -974,10 +1240,11 @@ type fleetStore = coordmem.Fleet
 // as an absence are reachable.
 type blindFleet struct {
 	*fleetStore
-	readErr      error
-	positionsErr error
-	openFailures int
-	openedIDs    []string
+	readErr       error
+	positionsErr  error
+	admissionsErr error
+	openFailures  int
+	openedIDs     []string
 }
 
 func (b *blindFleet) Maintenance(ctx context.Context, stream string) (
@@ -987,6 +1254,13 @@ func (b *blindFleet) Maintenance(ctx context.Context, stream string) (
 		return coord.MaintenanceOperation{}, false, b.readErr
 	}
 	return b.fleetStore.Maintenance(ctx, stream)
+}
+
+func (b *blindFleet) Admissions(ctx context.Context) ([]coord.Admission, error) {
+	if b.admissionsErr != nil {
+		return nil, b.admissionsErr
+	}
+	return b.fleetStore.Admissions(ctx)
 }
 
 func (b *blindFleet) Positions(ctx context.Context) ([]coord.NodePositions, error) {
