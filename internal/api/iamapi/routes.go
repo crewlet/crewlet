@@ -403,6 +403,14 @@ func ownLanding(result statelog.Result) bool {
 	return landed(result) && !result.Collapsed
 }
 
+// personRemoved is a write about a person somebody removed between the read a
+// route decided on and the record ([statelog.ReasonDeleted], whose only author
+// in the directory is a removal's tombstone). It says REMOVED, the word every
+// screen and page uses for taking somebody out of the directory: the
+// framework's own sentence for a deletion says something was "deleted for
+// good", which nobody does to a person here.
+const personRemoved = "This person was removed, so nothing was written."
+
 // answerWrite renders one identity write's outcome, `200` on success.
 func (s *Service) answerWrite(w http.ResponseWriter, r *http.Request, opID string,
 	result statelog.Result, err error, extra map[string]any) {
@@ -597,8 +605,10 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 		// and the record — and nothing will ever write them again: the
 		// person this route names does not exist, which is a 404 and not a
 		// 503 sending an administrator to find a node that will take it.
+		// Told as [personRemoved], never the framework's own refusal, which
+		// names the person's broker subject.
 		refuse(http.StatusNotFound, httpjson.CodeNotFound,
-			httpjson.Detail{"detail": err.Error(), "op_id": opID})
+			httpjson.Detail{"detail": personRemoved, "op_id": opID})
 		return
 	case errors.Is(err, statelog.ErrUnavailable):
 		// THE REFUSAL'S OWN HINT: the identity estate's two seconds for

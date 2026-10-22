@@ -2,12 +2,13 @@ package statelog
 
 import "errors"
 
-// TWO REFUSALS AS A PERSON READS THEM.
+// THREE REFUSALS AS A PERSON READS THEM.
 //
-// Two of this framework's refusals mean one thing whatever the domain and
+// Three of this framework's refusals mean one thing whatever the domain and
 // whatever the object, and say what to do next on their own: a write that lost
-// its compare-and-set rounds ([ErrConflict]) and a create of what is already
-// there ([ErrExists]). What the error itself says about each is the subject it
+// its compare-and-set rounds ([ErrConflict]), a create of what is already there
+// ([ErrExists]) and a write about what a deletion marker keeps deleted
+// ([ReasonDeleted]). What the error itself says about each is the subject it
 // met, a broker path nobody can act on, so every surface that tells one of
 // them tells it in the words below: the agent's tools, to a model, and every
 // surface that answers a person in words of its own, the identity directory
@@ -39,13 +40,18 @@ const LostRace = "Someone else changed this at the same moment, so nothing " +
 const AlreadyThere = "What this creates is already there, so nothing was " +
 	"written. Look at what's there rather than making it again."
 
-// Sentence is one of the two refusals above as a person reads it, and false
+// Deleted is a write about something a deletion marker keeps deleted
+// ([ReasonDeleted]): nothing will ever write it again, on any node.
+const Deleted = "This was deleted for good, so nothing was written."
+
+// Sentence is one of the three refusals above as a person reads it, and false
 // for any other error, a condition of the node among them.
 //
 // A DOMAIN'S OWN WRAP IS THE SAME REFUSAL: a domain that wraps [ErrConflict]
 // in a sentinel of its own ("the page kept changing under this write") lost
 // the same race, and is told in the same words.
 func Sentence(err error) (string, bool) {
+	var refused *Unavailable
 	switch {
 	case err == nil:
 		return "", false
@@ -53,6 +59,8 @@ func Sentence(err error) (string, bool) {
 		return LostRace, true
 	case errors.Is(err, ErrExists):
 		return AlreadyThere, true
+	case errors.As(err, &refused) && refused.Reason == ReasonDeleted:
+		return Deleted, true
 	}
 	return "", false
 }

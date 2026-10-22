@@ -250,6 +250,22 @@ func (w *Writer) decision(stamp statelog.Stamp, c Call, subject Subject, op OpKi
 	return statelog.Decision{Payload: encoded}, nil
 }
 
+// published is a store write's publish answer in this domain's terms: a write
+// the deletion gate dropped is a purged store ([ErrGone]), as the decide says
+// when it is the one that finds the marker.
+//
+// THE GATE FINDS IT WHEN THE PURGE LANDED AHEAD OF THE RECORD, after the decide
+// passed: the framework states that as one of its conditions, which the
+// datastore API answered `503` "try again" and a tool "try again shortly",
+// about a store nothing will ever write again.
+func published(id artifacts.ID, err error) error {
+	var refused *statelog.Unavailable
+	if errors.As(err, &refused) && refused.Reason == statelog.ReasonDeleted {
+		return fmt.Errorf("%w: %s", ErrGone, id)
+	}
+	return err
+}
+
 // request is one write's framework request on a store's subject.
 func request(id artifacts.ID, opID string, pattern statelog.Pattern,
 	decide func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error)) statelog.Request {
@@ -302,7 +318,7 @@ func (w *Writer) write(ctx context.Context, c Call, id artifacts.ID, in artifact
 			return w.decision(stamp, c, StoreSubject(id), OpWrite, opID, payload)
 		}))
 	if err != nil {
-		return WriteResult{Result: res}, err
+		return WriteResult{Result: res}, published(id, err)
 	}
 	return w.verdict(ctx, c, id, opID, res)
 }
@@ -621,7 +637,7 @@ func (w *Writer) undo(ctx context.Context, c Call, id artifacts.ID, seq int64) (
 			return w.decision(stamp, c, StoreSubject(id), OpUndo, opID, payload)
 		}))
 	if err != nil {
-		return WriteResult{Result: res}, err
+		return WriteResult{Result: res}, published(id, err)
 	}
 	return w.verdict(ctx, c, id, opID, res)
 }
@@ -806,7 +822,7 @@ func (w *Writer) Configure(ctx context.Context, c Call, id artifacts.ID,
 		return WriteResult{Result: res}, fmt.Errorf("%w: %s: %w", ErrConflict, id, err)
 	}
 	if err != nil {
-		return WriteResult{Result: res}, err
+		return WriteResult{Result: res}, published(id, err)
 	}
 	return w.verdict(ctx, c, id, opID, res)
 }

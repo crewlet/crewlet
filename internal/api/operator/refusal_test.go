@@ -323,6 +323,71 @@ func TestAStateOrACollisionIsToldToAPersonInItsCodesOwnWords(t *testing.T) {
 	}
 }
 
+// A DELETION IS TOLD WITHOUT THE FRAMEWORK'S WORDS, through a tool and around
+// one alike.
+//
+// The state log's refusal names the subject it met: "statelog: unavailable
+// (deleted): crewlet.tracker.task.t-1 was deleted and stays deleted". A
+// tool-less write handed that to a person as its `detail`, and a tool-backed
+// one handed them the tool's restatement of it for a model. Nobody has worded
+// a deletion for a person yet, so both answer `404 not_found` with no detail,
+// in its code's own message (ADR-0060).
+//
+// Mutation: answer a deletion's `detail` with the writer's error or the tool's
+// sentence again, and a row goes red.
+func TestADeletionIsToldWithoutTheFrameworksWords(t *testing.T) {
+	t.Parallel()
+	deleted := &statelog.Unavailable{Reason: statelog.ReasonDeleted,
+		Detail: "crewlet.tracker.task.t-1 was deleted and stays deleted"}
+	model := func(err error) string {
+		return "update_work_item did not land (" + err.Error() + ")."
+	}
+	tool := func(w http.ResponseWriter, err error) {
+		r := httptest.NewRequestWithContext(t.Context(), http.MethodPost,
+			operator.ActPathPrefix+"update_work_item", nil)
+		operator.FailTool(w, r, crewletmcp.Result{Failed: true, Output: model(err),
+			Cause: crewletmcp.Classify(crewletmcp.RefusalUnavailable, err)},
+			newKey(), httpjson.Detail{"tool": "update_work_item"})
+	}
+	for _, tc := range []struct {
+		name   string
+		answer func(w http.ResponseWriter)
+		status int
+		code   httpjson.Code
+		says   string
+	}{
+		{"a deletion, around a tool", func(w http.ResponseWriter) {
+			operator.FailWrite(t.Context(), w, deleted, newKey(), nil)
+		}, http.StatusNotFound, httpjson.CodeNotFound, ""},
+		{"a deletion, through a tool", func(w http.ResponseWriter) {
+			tool(w, deleted)
+		}, http.StatusNotFound, httpjson.CodeNotFound, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rec := httptest.NewRecorder()
+			tc.answer(rec)
+			body := decode(t, rec)
+			if rec.Code != tc.status || body["error"] != string(tc.code) ||
+				body["message"] != tc.code.Message() {
+
+				t.Errorf("answered %d %v, want %d %s in its code's own message", rec.Code,
+					body, tc.status, tc.code)
+			}
+			if detail, _ := body["detail"].(string); detail != tc.says {
+				t.Errorf("detail = %q, want %q", detail, tc.says)
+			}
+			for key, value := range body {
+				for _, leak := range []string{"statelog", "crewlet.", "update_work_item"} {
+					if key != "tool" && strings.Contains(fmt.Sprint(value), leak) {
+						t.Errorf("%s, which a person reads, carries %q: %v", key, leak, value)
+					}
+				}
+			}
+		})
+	}
+}
+
 // THE CLASS OF A WRITER'S ERROR IS THE TOOLS' OWN RULE: a content refusal the
 // domain marked keeps its class, a condition waiting clears is `unavailable` —
 // an estate the router found nobody to serve among them — and anything

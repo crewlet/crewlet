@@ -131,12 +131,25 @@ func WriterClass(err error) (tools.Refusal, bool) {
 	}
 	// THE STATE LOG'S OWN REFUSALS, which every domain's writer returns as
 	// the framework wrote them where it has no word of its own: an object
-	// that already exists, and a write that lost its compare-and-set rounds.
+	// that already exists, a write that lost its compare-and-set rounds, and
+	// a write about what a deletion marker keeps deleted — the three
+	// [statelog.Sentence] tells a person, each in the class its words state.
+	//
+	// THE DELETION IS NOT FOUND, never the condition [Condition] would call
+	// it: it is a refusal the framework states as [statelog.ErrUnavailable],
+	// and classed by that it told a model "try again shortly" about
+	// something nothing will ever write again, on any node. Classed here,
+	// every tool whose failure falls back to this table tells it in the
+	// framework's words for a person ([domainRefusal]), and the person's
+	// write surface answers it `404` as it always did.
+	var refused *statelog.Unavailable
 	switch {
 	case errors.Is(err, statelog.ErrExists):
 		return tools.RefusalExists, true
 	case errors.Is(err, statelog.ErrConflict):
 		return tools.RefusalConflict, true
+	case errors.As(err, &refused) && refused.Reason == statelog.ReasonDeleted:
+		return tools.RefusalNotFound, true
 	}
 	return "", false
 }
@@ -146,11 +159,14 @@ func WriterClass(err error) (tools.Refusal, bool) {
 // with for a model — and false for an error no domain decided: a
 // condition, a fault, or an outcome nobody can vouch for.
 //
-// A WRITE THAT LOST ITS RACE, AND A CREATE OF WHAT IS THERE, are told in the
-// state log's own words for a person on every domain ([statelog.Sentence]) —
-// the framework's refusals, and every domain's that wraps them — because what
-// the framework says about them is the subject it met, a broker path nobody
-// can act on, and the tool-less verbs used to hand it to a person whole.
+// A WRITE THAT LOST ITS RACE, A CREATE OF WHAT IS THERE AND A WRITE ABOUT WHAT
+// A DELETION KEEPS DELETED are told in the state log's own words for a person
+// on every domain ([statelog.Sentence]) — the framework's refusals, and every
+// domain's that wraps them — because what the framework says about them is the
+// subject it met, a broker path nobody can act on, and the tool-less verbs
+// used to hand it to a person whole. The deletion is no refusal a domain
+// decided, and is told here all the same: it is a fact about the object, the
+// same on every node, which the person's write surface answers `404`.
 //
 // A MODEL'S WORDS, and the human write surface's tool-less verbs do not
 // answer them: a purge's or a rename's refusal is told to a person in the
@@ -175,12 +191,14 @@ func WriterSentence(err error) (string, bool) {
 }
 
 // domainRefusal is a refusal some native domain decided, as a tool's fallback
-// arm words it: the framework's own whole ([statelog.Sentence]), and any
-// other as "<tool> was refused: <the deciding domain's sentence>." — the
-// DECIDING domain's, through [WriterSentence], because a tool's fallback meets
-// refusals other domains wrote too, and worded by its own domain's Sentence
-// one of them reached a model as "save_page was refused: chat: the room kept
-// changing under this write: room-1: statelog: conflict".
+// arm words it: the framework's own whole ([statelog.Sentence]) — a lost race,
+// a create of what is there, or a write about what a deletion keeps deleted,
+// which [WriterClass] classes as the framework's own; and any other as "<tool>
+// was refused: <the deciding domain's sentence>." — the DECIDING domain's,
+// through [WriterSentence], because a
+// tool's fallback meets refusals other domains wrote too, and worded by its
+// own domain's Sentence one of them reached a model as "save_page was refused:
+// chat: the room kept changing under this write: room-1: statelog: conflict".
 func domainRefusal(tool string, err error) string {
 	if said, ok := statelog.Sentence(err); ok {
 		return said

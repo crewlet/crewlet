@@ -290,9 +290,12 @@ func TestAWriteNoDataNodeAnsweredIsAnUnknownCarryingItsKey(t *testing.T) {
 //
 // A write refused because its object carries a permanent deletion marker will
 // be refused on every node for ever; answered 503 it sent a client looking for
-// a node that would take it.
+// a node that would take it. And it carries none of the framework's words,
+// which name the subject it met: nobody has worded it for a person, so its
+// code's own message stands alone (ADR-0060).
 //
-// Mutation: drop the deletion arm and both answer 503.
+// Mutation: drop the deletion arm and both answer 503; tell it in the
+// writer's or the tool's sentence again and both name the refusal.
 func TestAWriteOnWhatAPurgeDestroyedIsNotFound(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -309,8 +312,15 @@ func TestAWriteOnWhatAPurgeDestroyedIsNotFound(t *testing.T) {
 			r := newRig(t, chart{})
 			r.writes.err = &statelog.Unavailable{Reason: statelog.ReasonDeleted,
 				Detail: "ENG-1 was purged"}
-			if got := r.do(as(admin("ana")), c.method, c.target, c.body); got.status != http.StatusNotFound {
-				t.Errorf("answered %d %v, want 404", got.status, got.body)
+			got := r.do(as(admin("ana")), c.method, c.target, c.body)
+			if got.status != http.StatusNotFound ||
+				got.body["error"] != string(httpjson.CodeNotFound) {
+				t.Errorf("answered %d %v, want 404 not_found", got.status, got.body)
+			}
+			if detail, has := got.body["detail"]; has ||
+				strings.Contains(fmt.Sprint(got.body), "purged") {
+				t.Errorf("answered %v (detail %v), want the code's own message alone",
+					got.body, detail)
 			}
 		})
 	}
