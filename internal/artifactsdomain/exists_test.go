@@ -60,10 +60,26 @@ func TestACreateOfWhatIsThereIsACollision(t *testing.T) {
 				"framework words", name, said, c.err, statelog.AlreadyThere)
 		}
 	}
-	// AND A LOST RACE STAYS THE DOMAIN'S CONFLICT.
+	// AND A LOST RACE STAYS THE DOMAIN'S CONFLICT, carrying the framework's
+	// sentinel and neither its words nor the subject, which a caller
+	// printing it would show a person; its sentence is the state log's.
+	// Mutations: wrap the framework's error, or name the subject, and the
+	// text row goes red; drop the statelog arm from Sentence and the
+	// sentence rows do.
 	race := artifactsdomain.PublishError(statelog.Subject{Kind: "artifact", ID: "x"},
-		statelog.ErrConflict)
-	if !errors.Is(race, artifactsdomain.ErrConflict) {
+		fmt.Errorf("%w: crewlet.artifacts.artifact.x kept changing under this write",
+			statelog.ErrConflict))
+	if !errors.Is(race, artifactsdomain.ErrConflict) || !errors.Is(race, statelog.ErrConflict) {
 		t.Errorf("a lost race is told %v", race)
+	}
+	if strings.Contains(race.Error(), "artifact.x") || strings.Contains(race.Error(), ": x") {
+		t.Errorf("a lost race's error is %q, which names the subject", race)
+	}
+	if said := artifactsdomain.Sentence(race); said != statelog.LostRace {
+		t.Errorf("a lost race is told %q, want %q", said, statelog.LostRace)
+	}
+	if said := artifactsdomain.Sentence(&artifactsdomain.AlreadyExists{What: "x"}); said !=
+		statelog.AlreadyThere {
+		t.Errorf("a create of what is there is told %q, want %q", said, statelog.AlreadyThere)
 	}
 }
