@@ -415,7 +415,7 @@ func refuseEnrolment(w http.ResponseWriter, r *http.Request, event, opID,
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeBadParams,
 			map[string]string{"detail": detail})
 	default:
-		writeFailed(w, r, event, opID, err, "invitation", invitation)
+		gestureFailed(w, r, event, opID, err, "invitation", invitation)
 	}
 }
 

@@ -1106,10 +1106,17 @@ a record it cannot decode — is `503 unavailable` with the op id, and a
 floor carries the identity estate's two seconds, while one that is evicted or
 holds a record it cannot decode, a log at its byte ceiling, a record larger
 than the broker takes and a refusal the broker named carry **none** — the same
-request is refused the same however often it is sent, as on `/worklet`. The sign-in surface, `/auth`, follows the same rule on every write it
-makes. A write whose snapshot kept moving under it until the framework
-gave up is `409 stale`, as on `/worklet`: nothing about the request
-was wrong, and the same request read again lands.
+request is refused the same however often it is sent, as on `/worklet`. The
+sign-in surface, `/auth`, follows the same rule on every write it makes. On
+both, a write whose snapshot kept moving under it until the framework gave up
+is `409 stale`, as on `/worklet`: nothing about the request or the node was
+wrong, so it carries no `Retry-After`, and the same request sent again decides
+afresh and lands. An edit — of a person here, or of your own account on
+`/auth` (a password change, a second factor, a set of recovery codes, a
+sign-out) — is told in the words every surface tells a lost race in, which
+ask you to look at it again first. A gesture on `/auth` that edits nothing
+you can look at — a sign-in, a step-up, a token exchange, an invitation's
+redemption, a reset link's spend — is told only to try again.
 
 **A gesture that is several records answers its weakest.** An edit that moves a
 login and a stage, and a reset followed by its revocation, are each a sequence,

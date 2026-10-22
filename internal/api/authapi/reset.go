@@ -174,7 +174,7 @@ func (s *Service) SpendReset(w http.ResponseWriter, r *http.Request) {
 		s.refuseReset(w, r, adm, true)
 		return
 	case err != nil:
-		writeFailed(w, r, "api_reset_failed", opID, err)
+		gestureFailed(w, r, "api_reset_failed", opID, err)
 		return
 	case !landed(set):
 		unresolved(w, r, "api_reset_unresolved", set)
