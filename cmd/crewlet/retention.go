@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // `crewlet retention` — what the log is holding, why, and the gestures that
@@ -140,6 +141,7 @@ type maintenanceRow struct {
 	By                  string    `json:"by"`
 	OperatorID          string    `json:"operator_id"`
 	ParticipantsMissing []string  `json:"participants_missing"`
+	AdmissionsBlocking  []string  `json:"admissions_blocking"`
 	Blocked             string    `json:"blocked"`
 
 	// AbandonedBy is who abandoned it, once somebody has.
@@ -348,10 +350,18 @@ func retentionStatus(environ config.Source, args []string, stdout, stderr io.Wri
 		if m.AbandonedBy.By != "" {
 			fmt.Fprintf(stdout, "  abandoned by %s.\n", m.AbandonedBy.describe())
 		}
+		// AN ADMISSION FIRST: it holds a window at opened whoever has
+		// restarted, and it is the one thing no participant owes, so a
+		// page that named only who it waits on read as every node owing
+		// something while one node's stale claim held the window.
+		if len(m.AdmissionsBlocking) > 0 {
+			fmt.Fprintf(stdout, "  held by an admission from %s: nothing is "+
+				"sent while it stands.\n", words.And(m.AdmissionsBlocking))
+		}
 		if len(m.ParticipantsMissing) > 0 {
 			fmt.Fprintf(stdout, "  waiting on %s.\n",
 				strings.Join(m.ParticipantsMissing, ", "))
-		} else {
+		} else if len(m.AdmissionsBlocking) == 0 {
 			// NOBODY OUTSTANDING IS NOT PROGRESS: it is the
 			// operation waiting on whoever ran the verb, and
 			// printing nothing here reads as "nearly done".

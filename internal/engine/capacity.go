@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -236,6 +237,13 @@ func smallestTargetAbove(bytes uint64, reservation statelog.Reservation, floor u
 // create establishes nothing: the request may never have been received and may
 // still be outstanding, so a retry with a fresh id would open a SECOND window
 // on a stream that may already have one.
+//
+// IT READS NO ADMISSION BEFORE THE RECORD EXISTS. The window's record is this
+// side's half of the handshake, so it is written before the admissions are
+// read ([Engine.keepOpen]). Read before the record existed, they were a check
+// a node could slip past (it admitted itself after the read and found no
+// window before the create), and they kept the window shut over a dead node's
+// admission, which only an exclusion on an open window can withdraw.
 func (e *Engine) openCapacity(ctx context.Context, req CapacityRequest,
 	current jetstream.LogStats, room jetstream.StorageBudget) (coord.MaintenanceOperation, error) {
 
@@ -324,26 +332,6 @@ func (e *Engine) openCapacity(ctx context.Context, req CapacityRequest,
 		}
 	}
 
-	// EVERY ADMISSION BLOCKS. A node that read the operation absent and
-	// started publishing in the interval has left a durable record here,
-	// which is the whole reason the handshake is two-sided.
-	admissions, err := e.backends.Fleet.Admissions(ctx)
-	if err != nil {
-		return coord.MaintenanceOperation{}, fmt.Errorf(
-			"engine: read the admissions before taking the exclusion: an "+
-				"unreadable one is a publisher this operation cannot see: %w", err)
-	}
-	if blocking := statelog.AdmissionBlocks(admissions, nil); len(blocking) > 0 {
-		// NO EXCLUSION TO OFFER: no window is open yet, and excluding a
-		// participant is a gesture on one (`crewlet retention maintenance
-		// exclude` answers "there is no capacity operation" here). A node
-		// gives its admission back when it stops cleanly.
-		return coord.MaintenanceOperation{}, fmt.Errorf(
-			"engine: these nodes still hold an admission, so they may be "+
-				"publishing: %s. Restart each with `-mode maintenance`. A node "+
-				"withdraws its admission when it stops", words.And(blocking))
-	}
-
 	participants, err := e.capacityParticipants(ctx)
 	if err != nil {
 		return coord.MaintenanceOperation{}, err
@@ -377,10 +365,10 @@ func (e *Engine) openCapacity(ctx context.Context, req CapacityRequest,
 				"target", op.TargetMaxBytes, "was", op.OriginalMaxBytes,
 				"participants", op.Participants, "by", op.By,
 				"operator", op.OperatorID)
-			return held, nil
+			return e.keepOpen(ctx, held)
 		case held.OperationID == op.OperationID:
 			// AN EARLIER ATTEMPT OF MINE WON and its answer was lost.
-			return held, nil
+			return e.keepOpen(ctx, held)
 		default:
 			return coord.MaintenanceOperation{}, fmt.Errorf(
 				"engine: another capacity operation (%s, opened by %s) holds %s",
@@ -455,9 +443,16 @@ func (e *Engine) advanceCapacity(ctx context.Context, running *runningLog,
 // The order is the whole of it. Recorded after the read-back, a crash in
 // between leaves an operation that may have written with nothing to compare
 // against, and an abandonment before any apply has no defined outcome at all.
+//
+// AND IT IS WHERE THE ADMISSIONS ARE READ ([Engine.admissionsClear]), because it
+// is the last step before a request leaves and the first that runs with the
+// window's record already written.
 func (e *Engine) baseline(ctx context.Context, op coord.MaintenanceOperation) (
 	coord.MaintenanceOperation, error) {
 
+	if err := e.admissionsClear(ctx, op); err != nil {
+		return op, err
+	}
 	incarnations, participants, err := e.capacityIncarnations(ctx, op)
 	if err != nil {
 		return op, err
@@ -477,6 +472,244 @@ func (e *Engine) baseline(ctx context.Context, op coord.MaintenanceOperation) (
 		"operation", op.OperationID, "attempt", op.Attempt,
 		"participants", participants)
 	return e.reread(ctx, op.Stream)
+}
+
+// keepOpen decides whether a window this node has just opened may stand, now
+// that its record is written and the admissions can be read against it: the
+// coordinator's half of the handshake is to write the window and then read the
+// admissions ([Engine.admissionsClear] says why that order).
+//
+// # A running publisher closes it again
+//
+// A node whose admission names the process holding its presence is running,
+// and may be publishing ([Engine.judgeAdmissions]). A window left open over it
+// would refuse every node that started in service meanwhile and tell it to
+// restart into maintenance mode, taking a serving node out of service, while
+// the fleet went on writing beneath a window whose alarm says nothing is. So
+// the window is closed again at the revision it was opened at, which sends
+// nothing since nothing has been sent at `opened`, and the verb is refused as
+// it was before the window existed. A presence or an admission this node
+// cannot read closes it too: nobody can say the fleet stopped.
+//
+// # A stopped one keeps it open
+//
+// An admission whose process isn't running is a node that stopped without
+// giving it back, the case the window exists to get past: it stays open at
+// `opened`, where the node's restart into maintenance mode or an operator's
+// exclusion retires the claim, and the baseline names it until then.
+//
+// A CLOSE THAT DOES NOT LAND leaves the window standing, and the refusal says
+// how to close it, since a running publisher is still behind it.
+func (e *Engine) keepOpen(ctx context.Context, op coord.MaintenanceOperation) (
+	coord.MaintenanceOperation, error) {
+
+	standing, err := e.judgeAdmissions(ctx, op)
+	if err == nil && len(standing.running) == 0 {
+		return op, nil
+	}
+	if closeErr := e.backends.Fleet.CloseMaintenance(ctx, op.Stream,
+		op.OperationID, op.Revision); closeErr != nil {
+		log.WarnContext(ctx, "capacity_operation_not_closed", "stream", op.Stream,
+			"operation", op.OperationID, "running", standing.running,
+			"err", closeErr, "judged", err,
+			"detail", "the window was opened while a node may be publishing and "+
+				"could not be closed again, so it stands and refuses every boot "+
+				"in service until somebody abandons it")
+		return op, fmt.Errorf("engine: the capacity window on %s was opened while "+
+			"a node may still be publishing, and closing it again failed, so it "+
+			"is still open and refuses every node that starts in service. Close "+
+			"it with `crewlet retention maintenance abandon -stream %s -confirm %s`: %w",
+			op.Stream, op.Stream, op.OperationID, closeErr)
+	}
+	log.InfoContext(ctx, "capacity_operation_closed", "stream", op.Stream,
+		"operation", op.OperationID, "running", standing.running, "err", err,
+		"detail", "a node holding an admission may be publishing, so the window "+
+			"was closed again before anything was sent")
+	if err != nil {
+		return coord.MaintenanceOperation{}, fmt.Errorf("engine: couldn't tell "+
+			"whether the nodes holding an admission are running, so no window "+
+			"was opened on %s and nothing was sent. Run this again in a moment: %w",
+			op.Stream, err)
+	}
+	return coord.MaintenanceOperation{}, fmt.Errorf("engine: %s, so no window was "+
+		"opened on %s and nothing was sent. Restart %s with `-mode maintenance`, "+
+		"then run this again", runningAdmissions(standing.running), op.Stream,
+		eachOrIt(standing.running))
+}
+
+// admissionStanding is what the fleet's presence says of the processes the
+// admissions a window has not excluded name ([Engine.judgeAdmissions]).
+type admissionStanding struct {
+	// running is every node whose admission names the process that holds
+	// the node's presence: a process that is running, and may be
+	// publishing.
+	running []string
+	// silent is every node whose admission names a process nobody can see
+	// running, because nobody holds the node's presence: a process that
+	// stopped without giving its admission back, or one still starting
+	// that has not taken its lease yet. Only a restart of the node or an
+	// operator's word can retire it.
+	silent []string
+}
+
+// judgeAdmissions reads the admissions a window has not excluded against who
+// holds each node's presence now ([Engine.presenceHolders]), the evidence
+// [Engine.supersede] reads at boot.
+//
+// AN ADMISSION WHOSE NODE ANOTHER PROCESS NOW HOLDS IS WITHDRAWN HERE. The
+// process it names is gone on that evidence, and a boot that could not see it
+// yet is the ordinary case: a node restarted into maintenance mode inside its
+// crashed process's lease TTL found the old process still present and left
+// its claim, and nothing else would come back for it. Withdrawn conditional on
+// the incarnation it names, so a newer process's claim is never touched.
+//
+// UNREADABLE IS AN ERROR, the admissions or the presence alike: an admission
+// nobody can read may be a publisher's, and a presence nobody can read makes
+// every process look stopped.
+func (e *Engine) judgeAdmissions(ctx context.Context, op coord.MaintenanceOperation) (
+	admissionStanding, error) {
+
+	admissions, err := e.backends.Fleet.Admissions(ctx)
+	if err != nil {
+		return admissionStanding{}, fmt.Errorf("read the admissions: %w", err)
+	}
+	owners, err := e.presenceHolders(ctx)
+	if err != nil {
+		return admissionStanding{}, fmt.Errorf("read which process holds each "+
+			"node's presence: %w", err)
+	}
+	byNode := make(map[string]coord.Admission, len(admissions))
+	for _, a := range admissions {
+		byNode[a.NodeID] = a
+	}
+	var out admissionStanding
+	for _, node := range statelog.AdmissionBlocks(admissions, op.Excluded) {
+		held, owner := byNode[node], owners[node]
+		switch {
+		case owner == held.Incarnation:
+			out.running = append(out.running, node)
+		case owner == "":
+			out.silent = append(out.silent, node)
+		default:
+			if err := e.backends.Fleet.ForgetAdmission(ctx, node, held.Incarnation); err != nil {
+				return admissionStanding{}, fmt.Errorf("withdraw the admission "+
+					"%s's earlier process left: %w", node, err)
+			}
+			log.InfoContext(ctx, "admission_superseded", "node", node,
+				"previous", held.Incarnation, "present", owner,
+				"stream", op.Stream, "operation", op.OperationID,
+				"detail", "another process of this node holds its presence, so "+
+					"the process its admission named is gone, and the window "+
+					"withdrew the admission")
+		}
+	}
+	return out, nil
+}
+
+// admissionsClear refuses while any node the window has not excluded holds an
+// admission: a process that may be publishing.
+//
+// # Read with the window's record already written, and that is the rule
+//
+// The handshake is two writes and two reads. A node writes its admission and
+// then reads the window ([Engine.admit]); the coordinator writes the window and
+// then reads the admissions, at its open ([Engine.keepOpen]) and again here,
+// before the first request. Whichever write lands second, its writer's read
+// sees the other's, so either the node refuses to publish or this refuses to
+// issue a request. The opposite order on this side (read the admissions, then
+// write the window) was a check-then-act: a node could admit itself just after
+// the read, find no window just before the create, and publish through the
+// resize unseen.
+//
+// # And it leaves the window open
+//
+// A window at `opened` has issued nothing, so keeping it while an admission
+// stands costs no request, and keeping it is what gives the operator a way
+// out: a node restarted into a maintenance mode retires its own last
+// process's admission ([Engine.supersede], or [Engine.judgeAdmissions] here
+// once the restart holds the node's presence), and one that will never come
+// back is excluded on the operator's word ([Engine.ExcludeParticipant]), which
+// only an open window can record. Refused before the window existed, a dead
+// node's admission kept the fleet out of every window for good. What it does
+// cost is every boot in service, which an open window refuses, so the refusal
+// names the abandonment that closes it.
+func (e *Engine) admissionsClear(ctx context.Context, op coord.MaintenanceOperation) error {
+	standing, err := e.judgeAdmissions(ctx, op)
+	if err != nil {
+		return fmt.Errorf("engine: couldn't read which nodes hold an admission, "+
+			"so nothing was sent: one nobody can read may be a publisher's. Run "+
+			"this again in a moment: %w", err)
+	}
+	if len(standing.running) == 0 && len(standing.silent) == 0 {
+		return nil
+	}
+	var said []string
+	if len(standing.running) > 0 {
+		said = append(said, fmt.Sprintf("%s, so %s may be publishing: restart %s "+
+			"with `-mode maintenance`", runningAdmissions(standing.running),
+			itOrThey(standing.running), eachOrIt(standing.running)))
+	}
+	if len(standing.silent) > 0 {
+		exclude := "<node-id>"
+		if len(standing.silent) == 1 {
+			exclude = standing.silent[0]
+		}
+		said = append(said, fmt.Sprintf("%s and no process of %s is running: "+
+			"restart %s with `-mode maintenance`, or if %s gone for good, record "+
+			"that with `crewlet retention maintenance exclude -stream %s -node %s "+
+			"-confirm %s`", holdAdmission(standing.silent), itOrThem(standing.silent),
+			eachOrIt(standing.silent), oneIsOrItIs(standing.silent), op.Stream,
+			exclude, exclude))
+	}
+	return fmt.Errorf("engine: %s. Nothing has been sent. The window stays open "+
+		"at opened meanwhile and refuses every node that starts in service; "+
+		"`crewlet retention maintenance abandon -stream %s -confirm %s` closes it",
+		strings.Join(said, ". And "), op.Stream, op.OperationID)
+}
+
+// runningAdmissions, holdAdmission and the rest say a set of nodes as the
+// subject or object of a sentence, in the number the set has: one node is
+// "it", never "these nodes".
+func runningAdmissions(nodes []string) string {
+	if len(nodes) == 1 {
+		return words.And(nodes) + " is running and holds an admission"
+	}
+	return words.And(nodes) + " are running and hold an admission"
+}
+
+func holdAdmission(nodes []string) string {
+	if len(nodes) == 1 {
+		return words.And(nodes) + " holds an admission"
+	}
+	return words.And(nodes) + " hold an admission"
+}
+
+func itOrThey(nodes []string) string {
+	if len(nodes) == 1 {
+		return "it"
+	}
+	return "they"
+}
+
+func itOrThem(nodes []string) string {
+	if len(nodes) == 1 {
+		return "it"
+	}
+	return "them"
+}
+
+func eachOrIt(nodes []string) string {
+	if len(nodes) == 1 {
+		return "it"
+	}
+	return "each"
+}
+
+func oneIsOrItIs(nodes []string) string {
+	if len(nodes) == 1 {
+		return "it's"
+	}
+	return "one is"
 }
 
 // apply issues the configuration request and reads the ceiling back.
@@ -745,11 +978,17 @@ func (e *Engine) release(ctx context.Context, op coord.MaintenanceOperation) (
 // cross, and a paused coordinator's request is outstanding whether or not a
 // person has read a status page.
 //
+// OPERATIONID IS THE CONFIRMATION, checked against the operation this read
+// finds BEFORE anything changes: it says the person read which window they are
+// abandoning, so one that names another operation abandons nothing
+// ([ConfirmMismatchError]). Checked by the caller after the fact, as the CLI
+// did, it reported a mismatch for an abandonment that had already run.
+//
 // BY IS WHO ABANDONED IT, recorded on the operation while it lives
 // ([coord.MaintenanceOperation.AbandonedBy]) and on the log line when it does
 // not.
-func (e *Engine) AbandonCapacity(ctx context.Context, stream string, by iam.Actor) (
-	coord.MaintenanceOperation, error) {
+func (e *Engine) AbandonCapacity(ctx context.Context, stream, operationID string,
+	by iam.Actor) (coord.MaintenanceOperation, error) {
 
 	op, found, err := e.backends.Fleet.Maintenance(ctx, stream)
 	if err != nil {
@@ -758,6 +997,10 @@ func (e *Engine) AbandonCapacity(ctx context.Context, stream string, by iam.Acto
 	if !found {
 		return coord.MaintenanceOperation{}, fmt.Errorf(
 			"engine: there is no capacity operation on %s to abandon", stream)
+	}
+	if op.OperationID != operationID {
+		return op, &ConfirmMismatchError{Stream: stream, Open: op.OperationID,
+			Named: operationID}
 	}
 	phase, clears, err := statelog.AbandonPhase(op)
 	if err != nil {
@@ -793,11 +1036,32 @@ func (e *Engine) AbandonCapacity(ctx context.Context, stream string, by iam.Acto
 	return e.reread(ctx, stream)
 }
 
+// ConfirmMismatchError is an abandonment whose confirmation names another
+// operation than the one open on the stream: nothing was abandoned.
+type ConfirmMismatchError struct {
+	Stream string
+	// Open is the operation open on the stream, and Named the one the
+	// confirmation repeated.
+	Open, Named string
+}
+
+func (e *ConfirmMismatchError) Error() string {
+	return fmt.Sprintf("engine: the capacity operation open on %s is %s, and "+
+		"the confirmation named %s, so nothing was abandoned", e.Stream, e.Open,
+		e.Named)
+}
+
 // ExcludeParticipant records an operator's assertion that a participant's
 // process is stopped and holds no outstanding request.
 //
 // THE ONLY THING THAT WAIVES AN ACKNOWLEDGEMENT. An eviction does not: that is
 // about whose records apply, and this is about whose process is running.
+//
+// AND THE ONE WAY A DEAD NODE'S ADMISSION IS WITHDRAWN: a node that never boots
+// again never retires its last process's claim ([Engine.supersede]), so the
+// window opens with the claim standing, sends nothing while it does
+// ([Engine.admissionsClear]), and the exclusion withdraws it. A node need not
+// be a participant to be excluded for that.
 //
 // BY IS WHO ASSERTED IT, recorded against the node it names
 // ([coord.MaintenanceOperation.ExcludedBy]).
@@ -829,9 +1093,7 @@ func (e *Engine) ExcludeParticipant(ctx context.Context, stream, node string,
 	}
 	// AND ITS ADMISSION GOES WITH IT, because an operator asserting a
 	// process is stopped is asserting exactly what the admission denies.
-	if err := e.backends.Fleet.ForgetAdmission(ctx, node, admissionOf(ctx, e, node)); err != nil {
-		log.WarnContext(ctx, "excluded_admission_not_withdrawn", "node", node, "err", err)
-	}
+	e.withdrawExcluded(ctx, node)
 	log.WarnContext(ctx, "capacity_participant_excluded", "stream", stream,
 		"operation", op.OperationID, "node", node,
 		"by", by.Name, "operator", by.OperatorID,
@@ -840,20 +1102,22 @@ func (e *Engine) ExcludeParticipant(ctx context.Context, stream, node string,
 	return e.reread(ctx, stream)
 }
 
-// admissionOf is the incarnation currently holding a node's admission, so the
-// conditional withdrawal has something to condition on. Empty when there is
-// none, which makes the withdrawal a no-op.
-func admissionOf(ctx context.Context, e *Engine, node string) string {
-	admissions, err := e.backends.Fleet.Admissions(ctx)
+// withdrawExcluded withdraws an excluded node's admission, whichever process of
+// it holds one.
+//
+// ONE IT CANNOT READ OR CLEAR IS LOGGED AND LEFT: the window passes over an
+// excluded node's admission ([statelog.AdmissionBlocks]), so the key no longer
+// stops anything and the warning is the whole of what it leaves behind. It
+// read the admissions through a helper that answered a failed read as no
+// admission at all, so a failure here withdrew nothing and said nothing.
+func (e *Engine) withdrawExcluded(ctx context.Context, node string) {
+	held, found, err := heldAdmission(ctx, e.backends.Fleet, node)
+	if err == nil && found {
+		err = e.backends.Fleet.ForgetAdmission(ctx, node, held.Incarnation)
+	}
 	if err != nil {
-		return ""
+		log.WarnContext(ctx, "excluded_admission_not_withdrawn", "node", node, "err", err)
 	}
-	for _, a := range admissions {
-		if a.NodeID == node {
-			return a.Incarnation
-		}
-	}
-	return ""
 }
 
 // CapacityStatus is the operation as an operator reads it, or the absence of
@@ -1003,10 +1267,14 @@ func capacityMembers(held []coord.Lease) []string {
 // capacityIncarnations is each participant's identity as of the baseline, read
 // from the acknowledgements every maintenance-mode node writes at boot.
 //
-// A PARTICIPANT WITH NO ACKNOWLEDGEMENT HAS NOT RESTARTED into the mode, and
-// is refused rather than baselined at an empty string: an empty baseline
-// compares unequal to every later ack, so the seal would be satisfied by a
-// node that never came back.
+// A PARTICIPANT WITH NO ACKNOWLEDGEMENT HAS NO RESTART RECORDED into the mode
+// ([statelog.BaselineMissing], the one rule the status pages read too), and is
+// refused rather than baselined at an empty string: an empty baseline compares
+// unequal to every later ack, so the seal would be satisfied by a node that
+// never came back. Said as no restart RECORDED rather than as no restart,
+// because a node that restarted and could not write its acknowledgement (its
+// boot could not read the window, or the write failed) is the same refusal,
+// and its own log says which.
 func (e *Engine) capacityIncarnations(ctx context.Context, op coord.MaintenanceOperation) (
 	map[string]string, []string, error) {
 
@@ -1014,34 +1282,35 @@ func (e *Engine) capacityIncarnations(ctx context.Context, op coord.MaintenanceO
 	if err != nil {
 		return nil, nil, err
 	}
+	// THIS NODE AS IT IS, last so it wins over any record of its own.
+	acks = append(acks, coord.MaintenanceAck{
+		NodeID: e.id, Incarnation: e.incarnation, Mode: string(e.mode),
+	})
+	if missing := statelog.BaselineMissing(op, acks); len(missing) > 0 {
+		exclude := "<node-id>"
+		if len(missing) == 1 {
+			exclude = missing[0]
+		}
+		return nil, nil, fmt.Errorf("engine: no restart into a maintenance mode "+
+			"is recorded for %s, so this operation has no baseline for %s. A "+
+			"baseline of nothing compares unequal to every later "+
+			"acknowledgement, which would let the seal be satisfied by a node "+
+			"that never came back. Restart %s with `-mode maintenance` (a node "+
+			"that did restart says in its log why it wasn't recorded), or if %s "+
+			"gone for good, record that with `crewlet retention maintenance "+
+			"exclude -stream %s -node %s -confirm %s`",
+			words.And(missing), itOrThem(missing), eachOrIt(missing),
+			oneIsOrItIs(missing), op.Stream, exclude, exclude)
+	}
 	byNode := map[string]string{}
 	for _, ack := range acks {
 		byNode[ack.NodeID] = ack.Incarnation
 	}
-	byNode[e.id] = e.incarnation
-
 	incarnations := map[string]string{}
-	var missing []string
 	for _, node := range op.Participants {
-		if contains(op.Excluded, node) {
-			continue
+		if !contains(op.Excluded, node) {
+			incarnations[node] = byNode[node]
 		}
-		incarnation, acked := byNode[node]
-		if !acked {
-			missing = append(missing, node)
-			continue
-		}
-		incarnations[node] = incarnation
-	}
-	if len(missing) > 0 {
-		return nil, nil, fmt.Errorf("engine: these nodes haven't restarted "+
-			"into a maintenance mode, so this operation has no baseline for "+
-			"them: %s. A baseline of nothing compares unequal to every later "+
-			"acknowledgement, which would let the seal be satisfied by a node "+
-			"that never came back. Restart each with `-mode maintenance`, or "+
-			"record that one is gone with `crewlet retention maintenance "+
-			"exclude -stream %s -node <node-id> -confirm <node-id>`",
-			words.And(missing), op.Stream)
 	}
 	return incarnations, op.Participants, nil
 }

@@ -136,9 +136,10 @@ func (e *Engine) handshake(ctx context.Context, streams []string) error {
 // # A process that crashed a moment ago
 //
 // Its presence lease runs out its TTL first, so a restart inside that TTL
-// finds the dead process still present and leaves the claim, which then
-// stands in the window's way by name, as any admission does, until the node's
-// next restart into a maintenance mode finds the lease lapsed.
+// finds the dead process still present and leaves the claim. A window retires
+// it on the same evidence once this process holds the node's presence in its
+// place ([Engine.judgeAdmissions]); until then it stands in the window's way
+// by name, as any admission does.
 //
 // # Why in the modes that enter a window, and only there
 //
@@ -189,9 +190,9 @@ func (e *Engine) supersede(ctx context.Context) {
 			"previous", held.Incarnation, "mode", e.Mode(),
 			"detail", "the process this node's admission names still holds the "+
 				"node's presence, so it may still be running and publishing; "+
-				"the admission stays until this node restarts into a "+
-				"maintenance mode once that presence has lapsed, or an "+
-				"operator excludes the node")
+				"the admission stays until a capacity window sees this process "+
+				"hold the presence in its place, or an operator excludes the "+
+				"node")
 		return
 	}
 	if err == nil {

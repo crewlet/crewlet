@@ -62,11 +62,14 @@ var ErrMaintenanceMoved = errors.New("coord: the maintenance operation moved sin
 //     partitioned has not finished its operation.
 //   - AN ADMISSION is one node's positive record that it intends to publish.
 //     Admission is a HANDSHAKE rather than an absence check: a node writes
-//     [Admission] and then re-reads this record, and a coordinator establishes
-//     exclusion only when no admission exists. Either order is safe, which is
-//     the point — a node that slipped between the coordinator's check and its
-//     own start leaves a durable key that blocks the coordinator, where an
-//     absence would have let it proceed.
+//     [Admission] and then re-reads this record, and a coordinator writes this
+//     record and then reads the admissions: it deletes the record again over
+//     one whose process still holds its node's presence, and issues no
+//     request while any other stands. Either order is safe, which is the
+//     point — a node that slipped
+//     between the coordinator's write and its own start leaves a durable key
+//     the coordinator's later read sees, where an absence would have let it
+//     proceed.
 //   - AN ACK is one participant's evidence that its process restarted for this
 //     operation's current attempt. It is what the seal is established from,
 //     and it is per node because the barrier is about processes rather than
