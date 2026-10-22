@@ -28,11 +28,18 @@ import (
 // bare [iamdomain.ErrRefused], which the domain never builds, is unclassified
 // and answered as the fault it is.
 //
+// Either kind's `detail` is the domain's SENTENCE ([iamdomain.Sentence]):
+// never the class word in front of it, and never what the refusal was about
+// by id ([iamdomain.Refusal.About]) — the person the token was asked for, the
+// party's own permissions — which goes to the log.
+//
 // Walked over a create, an edit, an invitation and a mint, each refused in the
 // record's own decide. Mutations: answer both kinds `unauthorized` and the
 // forbidden rows go red; drop the grants from the first arm and the sentence
 // names every permission; match the refusal arms before the token arm and the
-// token rows of [TestATokenWritingAnAdministrativeRecordIsTokenRefused] go red.
+// token rows of [TestATokenWritingAnAdministrativeRecordIsTokenRefused] go red;
+// answer err.Error() as the detail again and both kinds go red on the class
+// word and the id.
 func TestARecordRefusalSaysWhetherAPermissionWouldLiftIt(t *testing.T) {
 	t.Parallel()
 	gestures := []struct {
@@ -58,7 +65,8 @@ func TestARecordRefusalSaysWhetherAPermissionWouldLiftIt(t *testing.T) {
 			r := newRig(t)
 			r.writer.refusals = map[string]error{g.call: &iamdomain.Refusal{
 				Grants: []iam.Grant{iam.GrantAdmin},
-				Err:    errors.New("this needs admin, and you have [tracker]")}}
+				Err:    errors.New("only an admin can do that"),
+				About:  "update, by a party holding tracker"}}
 			got := r.as(administrator(), g.method, g.target, g.body)
 			if got.status != http.StatusForbidden ||
 				got.body["error"] != string(httpjson.CodeUnauthorized) ||
@@ -75,13 +83,18 @@ func TestARecordRefusalSaysWhetherAPermissionWouldLiftIt(t *testing.T) {
 			if !strings.Contains(message, "(Admin)") {
 				t.Errorf("the refusal says %q, want it to name Admin alone", message)
 			}
+			if detail, _ := got.body["detail"].(string); detail != "Only an admin can do that." {
+				t.Errorf("the refusal's detail is %q, want the domain's sentence "+
+					"alone", detail)
+			}
 
 			// THE RECORD'S OWN RULE.
 			r = newRig(t)
 			r.writer.refusals = map[string]error{g.call: &iamdomain.Refusal{
 				Grants: []iam.Grant{},
-				Err: errors.New("bob is a person, so only they can create " +
-					"their personal access tokens")}}
+				Err: errors.New("only they can create their own access " +
+					"tokens"),
+				About: "owner " + bob.String() + ", a person"}}
 			got = r.as(administrator(), g.method, g.target, g.body)
 			if got.status != http.StatusForbidden ||
 				got.body["error"] != string(httpjson.CodeForbidden) {
@@ -94,10 +107,10 @@ func TestARecordRefusalSaysWhetherAPermissionWouldLiftIt(t *testing.T) {
 						got.body[key])
 				}
 			}
-			if detail, _ := got.body["detail"].(string); !strings.Contains(detail,
-				"only they can create their personal access tokens") {
-				t.Errorf("the refusal's detail is %q, want the domain's sentence",
-					detail)
+			if detail, _ := got.body["detail"].(string); detail !=
+				"Only they can create their own access tokens." {
+				t.Errorf("the refusal's detail is %q, want the domain's sentence "+
+					"alone, with neither its class word nor the owner's id", detail)
 			}
 			for _, handed := range []string{"url", "token"} {
 				if _, ok := got.body[handed]; ok {

@@ -2009,11 +2009,19 @@ func TestEveryRouteMountsWithAVerbTheTableKnows(t *testing.T) {
 // The domain refuses a person's `token:ops` and a kind it does not enrol with
 // sentinels of their own, and this surface used to fall through to a 500 on
 // both — telling an administrator who typed a login the engine was broken, and
-// sending them looking for an outage instead of at the field.
+// sending them looking for an outage instead of at the field. The detail is
+// the domain's sentence without the sentinel a value's refusal opens with
+// ([iamdomain.Sentence]): "invalid login: …" said what errors.Is finds, in
+// front of what the administrator has to change. Mutation: answer err.Error()
+// again and the login and value rows go red.
 func TestARefusedLoginOrKindIsABadRequestAndNotAFault(t *testing.T) {
 	t.Parallel()
-	for _, refusal := range []error{iamdomain.ErrInvalidLogin,
-		iamdomain.ErrNotEnrollable, iamdomain.ErrInvalid} {
+	for refusal, want := range map[error]string{
+		iamdomain.ErrInvalidLogin: "The domain's own sentence.",
+		iamdomain.ErrNotEnrollable: "Only people and service accounts can be " +
+			"added: the domain's own sentence.",
+		iamdomain.ErrInvalid: "The domain's own sentence.",
+	} {
 		r := newRig(t)
 		r.writer.err = fmt.Errorf("%w: the domain's own sentence", refusal)
 		got := r.as(administrator(), http.MethodPost, "/iam/people", map[string]any{
@@ -2024,10 +2032,8 @@ func TestARefusedLoginOrKindIsABadRequestAndNotAFault(t *testing.T) {
 			t.Errorf("%v answered %d, want 400 (body %v)", refusal, got.status,
 				got.body)
 		}
-		if detail, _ := got.body["detail"].(string); !strings.Contains(detail,
-			"the domain's own sentence") {
-			t.Errorf("%v: the detail %q does not carry the domain's reason",
-				refusal, detail)
+		if detail, _ := got.body["detail"].(string); detail != want {
+			t.Errorf("%v: the detail is %q, want %q", refusal, detail, want)
 		}
 	}
 }
@@ -2465,12 +2471,15 @@ func TestAGesturesOwnReasonSaysWhatWasDoneAndByWhom(t *testing.T) {
 // `bad_params`, whose sentence is about a query parameter. It is `invalid`
 // now, naming the value and the holder by their login, with the ids beside the
 // sentence rather than in it. A value held by an open invitation names the
-// invitation and how to cancel it — and WHICH value: an invitation holds its
+// invitation in its field and says to cancel it, with neither the
+// invitation's id nor the route that cancels it in the sentence a person
+// reads — and WHICH value: an invitation holds its
 // seat as well as its address, and "that address" said of a seat told an
 // administrator a value they never typed was taken. Mutation: answer the
 // domain's error as the detail and every case goes red; name the holder by id
 // and the login cases do; word every invitation's value as an address and the
-// seat's case does.
+// seat's case does; put the invitation's id back in its sentence and both
+// invitation cases do.
 func TestAValueSomebodyHoldsIsRefusedInWordsAPersonReads(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -2488,11 +2497,11 @@ func TestAValueSomebodyHoldsIsRefusedInWordsAPersonReads(t *testing.T) {
 		{"an address an invitation holds", &iamdomain.ErrTaken{
 			Field: iamdomain.UniqueEmail, Value: "0123456789abcdef",
 			Invitation: "inv-1"}, "That address belongs to an open invitation. " +
-			"Cancel it first (DELETE /iam/invitations/inv-1)", "seat"},
+			"Cancel the invitation first, or wait for it to expire.", "seat"},
 		{"a seat an invitation holds", &iamdomain.ErrTaken{
 			Field: iamdomain.UniqueSeat, Value: "platform-lead",
 			Invitation: "inv-1"}, "The seat platform-lead belongs to an open " +
-			"invitation. Cancel it first (DELETE /iam/invitations/inv-1)",
+			"invitation. Cancel the invitation first",
 			"that address"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2508,7 +2517,8 @@ func TestAValueSomebodyHoldsIsRefusedInWordsAPersonReads(t *testing.T) {
 				strings.Contains(detail, tc.absent) ||
 				strings.Contains(detail, "iamdomain") ||
 				strings.Contains(detail, tc.taken.Value) && tc.taken.Field == iamdomain.UniqueEmail ||
-				strings.Contains(detail, bob.String()) {
+				strings.Contains(detail, bob.String()) ||
+				tc.taken.Invitation != "" && strings.Contains(detail, tc.taken.Invitation) {
 				t.Errorf("answered %d %v, want 409 `invalid` saying %q", got.status,
 					got.body, tc.want)
 			}

@@ -349,20 +349,22 @@ func built(result statelog.Result) bool {
 //
 // THE OPERATION ID ON EVERY ONE, because the refusals here used to carry
 // nothing but the code, and a refused write is the one an operator reading
-// the identity trail most needs to find.
+// the identity trail most needs to find. attrs are what else the log line
+// names — the object the write was about, by an id the answer never carries.
 //
 // A STATE-LOG REFUSAL IS TOLD IN A PERSON'S WORDS FOR IT
 // ([statelog.ConditionSentence]), whose advice agrees with the Retry-After:
 // one fixed sentence asked every refusal to be tried again in a moment, a
 // full log and an evicted node among them, under no Retry-After at all.
 func writeFailed(w http.ResponseWriter, r *http.Request, event, opID string,
-	err error) {
+	err error, attrs ...any) {
 
 	var refused *statelog.Unavailable
 	if errors.As(err, &refused) && refused.OpID != "" {
 		opID = refused.OpID
 	}
-	log.WarnContext(r.Context(), event, "op_id", opID, "error", err)
+	log.WarnContext(r.Context(), event,
+		append([]any{"op_id", opID, "error", err}, attrs...)...)
 	detail := "This node couldn't make that change. Try again in a moment."
 	if said, ok := statelog.ConditionSentence(err); ok {
 		detail = said
