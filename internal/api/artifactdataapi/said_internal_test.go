@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactdata/query"
+	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -40,12 +41,20 @@ func TestADatastoresRefusalIsToldInItsSentence(t *testing.T) {
 		"a lost race": {fmt.Errorf("%w: d-1: %w", artifactdata.ErrConflict,
 			fmt.Errorf("%w: crewlet.artifacts.data.d-1 kept changing under this write",
 				statelog.ErrConflict)), statelog.LostRace},
+		// A PURGED STORE WITHOUT ITS ARTIFACT'S ID, which the error names for
+		// the log (artifactsdomain.CutArtifactID).
+		"a purged store": {fmt.Errorf("%w: %s", artifactdata.ErrGone,
+			artifacts.IDFor("binned")), "the datastore was purged"},
+		// AN UNDO ON A STORE NEVER WRITTEN, the same way.
+		"an undo with no store": {fmt.Errorf("%w: %s: this artifact's data has no "+
+			"write 5 to undo", artifactdata.ErrNotFound, artifacts.IDFor("binned")),
+			"this artifact's data has no write 5 to undo"},
 	} {
 		if got := said(c.err); got != c.says {
 			t.Errorf("%s is told %q, want %q", name, got, c.says)
 		}
 		for _, leak := range []string{"artifactdata", "query:", "statelog", "invalid:",
-			"forbidden:", "crewlet."} {
+			"forbidden:", "crewlet.", artifacts.IDFor("binned").String()} {
 			if strings.Contains(said(c.err), leak) {
 				t.Errorf("%s is told with %q in it: %s", name, leak, said(c.err))
 			}

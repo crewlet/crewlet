@@ -45,7 +45,7 @@ func TestACreateOfWhatIsThereIsACollision(t *testing.T) {
 		"an artifact the applier found made": {
 			err: artifactsdomain.RefusalError(t.Context(), &artifactsdomain.Writer{},
 				artifacts.IDFor("op").String(), artifactsdomain.RefusedExists,
-				artifactsdomain.HistorySummary{}),
+				artifactsdomain.HistorySummary{}, 0),
 			want: artifactsdomain.ErrExists, not: artifactsdomain.ErrInvalid},
 	} {
 		if !errors.Is(c.err, c.want) || errors.Is(c.err, c.not) {

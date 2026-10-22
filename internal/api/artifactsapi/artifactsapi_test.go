@@ -120,7 +120,10 @@ func TestAPublishNamesTheVersionItWasBasedOn(t *testing.T) {
 }
 
 // A PUBLISH BASED ON A MOVED HEAD CARRIES WHAT A MERGE NEEDS: 412
-// version_moved, the live head and its manifest, and the live entry's text.
+// version_moved, the live head and its manifest, and the live entry's text —
+// and a detail that names the artifact as the screen does, never by its id
+// (artifactsdomain.Sentence): it read "artifact 0192f… is at version 2".
+// Mutation: answer the moved head's Error as the detail and this goes red.
 func TestAPublishBasedOnAMovedHeadCarriesTheLiveEntry(t *testing.T) {
 	t.Parallel()
 	g := newRig(t, true)
@@ -129,6 +132,11 @@ func TestAPublishBasedOnAMovedHeadCarriesTheLiveEntry(t *testing.T) {
 	w := g.do(person("sam"), "POST", at(page, "/versions"), publishV3, append(keyed(), "If-Match", `"1"`)...)
 	if w.Code != http.StatusPreconditionFailed || errorOf(t, w) != "version_moved" {
 		t.Fatalf("a publish on a moved head: %d %s", w.Code, w.Body)
+	}
+	if detail, _ := fields(t, w)["detail"].(string); !strings.HasPrefix(detail,
+		"This artifact is at version 2") || strings.Contains(detail, page.String()) {
+		t.Errorf("a publish on a moved head is told %q, want the artifact named "+
+			"as the screen names it", detail)
 	}
 	var body struct {
 		Head struct {
