@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -157,6 +158,19 @@ func assertEnvelope(t *testing.T, answer map[string]any, trust provenance.Trust,
 	if note, _ := raw["note"].(string); !strings.Contains(note, "[untrusted:TOKEN") {
 		t.Errorf("the envelope's note does not say how a fence is read: %q", note)
 	}
+}
+
+// tokenIn is the token of the first fence output carries, or a token nothing
+// carries when it carries none — a read outside a turn mints its own, which no
+// caller can know before it reads.
+func tokenIn(output string) provenance.Boundary {
+	const opener = "[untrusted:"
+	if at := strings.Index(output, opener); at >= 0 && len(output) >= at+len(opener)+16 {
+		if b := provenance.Boundary(output[at+len(opener) : at+len(opener)+16]); b.Valid() {
+			return b
+		}
+	}
+	return provenance.NewBoundary()
 }
 
 // boundaryIn is the token the first fence in output carries: what a read
@@ -576,6 +590,30 @@ func TestEveryUntrustedReadIsFenced(t *testing.T) {
 			t.Errorf("save_page fenced %d names", len(seen))
 		}
 		assertEnvelope(t, answer, provenance.TrustColleague, 0)
+	})
+
+	// A KNOWLEDGE ANSWER'S SOURCES are named by their titles, which are their
+	// writers' words: neutralised, and the envelope says what each source was
+	// read as — the label the backend that found it gave it, so a vendor's
+	// page nobody named reads as an outside party's beside a colleague's.
+	t.Run("answer_knowledge", func(t *testing.T) {
+		t.Parallel()
+		forged := provenance.NewBoundary()
+		rig := newAnswerRig()
+		rig.search.hits[0].Title = attack(forged, "source-title")
+		rig.search.hits[0].Provenance = provenance.LabelFor("", provenance.SourcePageBody, nil)
+		rig.search.hits[1].Provenance = provenance.LabelForHosted("", provenance.SourcePageBody,
+			[]provenance.Author{{Kind: iam.ActorHuman, Seat: "founder"}}, true)
+		got, _, _ := ask(t, rig.tool(t), "How do we deploy?")
+		if got.Failed {
+			t.Fatalf("answer_knowledge failed: %s", got.Output)
+		}
+		seen, answer := fencesIn(t, tokenIn(got.Output), got.Output)
+		if len(seen) != 0 {
+			t.Errorf("answer_knowledge fenced %d names", len(seen))
+		}
+		// THE LEAST OF ITS SOURCES, and every writer they name once.
+		assertEnvelope(t, answer, provenance.TrustExternal, 1)
 	})
 
 	// A PARKED RUN'S QUESTION is what the seat's coding agent wrote, in the

@@ -352,8 +352,12 @@ func TestTheAnswerNamesItsSources(t *testing.T) {
 		t.Fatalf("sources = %+v, want %+v", answer.Sources, want)
 	}
 	for i := range want {
-		if answer.Sources[i] != want[i] {
-			t.Errorf("source [%d] = %+v, want %+v", i+1, answer.Sources[i], want[i])
+		// ON THE WIRE, which is what a reader is handed: what each source
+		// was read as travels on the envelope, never per source.
+		got := answer.Sources[i]
+		if got.Kind != want[i].Kind || got.Ref != want[i].Ref || got.Title != want[i].Title ||
+			got.URL != want[i].URL {
+			t.Errorf("source [%d] = %+v, want %+v", i+1, got, want[i])
 		}
 	}
 	user := rig.model.asked[0].Messages[1].Content

@@ -244,11 +244,18 @@ type AnswerSource struct {
 	// Kind is [AnswerSourcePage] or [AnswerSourceTask].
 	Kind string `json:"kind"`
 	// Ref addresses it: a page's id, a work item's key.
-	Ref   string `json:"ref"`
+	Ref string `json:"ref"`
+	// Title is its writers' words, as every source's text is.
 	Title string `json:"title"`
 	// URL is a page's own link where its backend has one — an external
 	// wiki's page, which the dashboard has no route for.
 	URL string `json:"url,omitempty"`
+
+	// Written is what the source was read as — the label the door that found
+	// it gave it, which the model writing the answer read it under — and
+	// what the answer's envelope says of it ([answerKnowledge.answered]).
+	// Not on the wire: the envelope says it once for the whole answer.
+	Written provenance.Label `json:"-"`
 }
 
 // AnswerTokens is what THIS call spent. Zero on a cached answer.
@@ -381,7 +388,7 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			hit.Cached, hit.Tokens = true, AnswerTokens{}
 			log.InfoContext(ctx, "knowledge_answered", "seat", actor.Handle,
 				"cached", true, "sources", len(hit.Sources))
-			return jsonResult(hit)
+			return t.answered(ctx, turn, actor, hit)
 		}
 	}
 
@@ -418,7 +425,7 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		if cacheable {
 			t.deps.Cache.put(key, answer)
 		}
-		return jsonResult(answer)
+		return t.answered(ctx, turn, actor, answer)
 	}
 
 	// THE OPERATOR STAGE, which the seam charges to the company's windows
@@ -476,7 +483,23 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	log.InfoContext(ctx, "knowledge_answered", "seat", actor.Handle, "cached", false,
 		"model", answer.Model, "input_tokens", answer.Tokens.Input,
 		"output_tokens", answer.Tokens.Output, "sources", len(sources))
-	return jsonResult(answer)
+	return t.answered(ctx, turn, actor, answer)
+}
+
+// answered is the tool's answer, labelled with whose words it carries: each
+// source's title is its writers', and the answer itself a model's account of
+// them — so it goes out through a [foreignRead], every string defused and the
+// envelope saying what the sources were read as, each by the label the door
+// that found it gave it (ADR-0040). A person asking at the dashboard is the
+// usual caller, and the reader of this answer is often their assistant.
+func (t *answerKnowledge) answered(ctx context.Context, turn *turnctx.Turn, actor Actor,
+	answer KnowledgeAnswer) (tools.Result, error) {
+
+	read := newForeignRead(turn, actor.Handle)
+	for _, source := range answer.Sources {
+		read.adopt(source.Written)
+	}
+	return read.answer(ctx, AnswerKnowledgeTool, answer, "")
 }
 
 // answerReach is which of the two corpora one asker may be answered from.
@@ -561,6 +584,7 @@ func (t *answerKnowledge) retrieve(ctx context.Context, question string,
 			}
 			sources = append(sources, AnswerSource{
 				Kind: AnswerSourcePage, Ref: hit.PageID, Title: title, URL: hit.URL,
+				Written: hit.Provenance,
 			})
 			excerpts = append(excerpts, prompts.KnowledgeSource{
 				Kind: "page", Label: title, Text: t.pageText(ctx, hit),
@@ -590,6 +614,7 @@ func (t *answerKnowledge) retrieve(ctx context.Context, question string,
 				}
 				sources = append(sources, AnswerSource{
 					Kind: AnswerSourceTask, Ref: ref, Title: hit.Title,
+					Written: workDescription,
 				})
 				excerpts = append(excerpts, prompts.KnowledgeSource{
 					Kind: "work item", Label: strings.TrimSpace(ref + " " + hit.Title),

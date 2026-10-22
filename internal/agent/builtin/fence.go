@@ -132,6 +132,17 @@ func (r *foreignRead) attribute(writers []provenance.Author, partial bool) {
 	}
 }
 
+// adopt records text another door labelled — a knowledge hit, which the
+// backend that found it labels, a vendor's as a vendor's — on the envelope as
+// that label says, rather than deciding again here as though every source were
+// a surface the engine hosts.
+func (r *foreignRead) adopt(label provenance.Label) {
+	r.trusts = append(r.trusts, label.Trust)
+	for _, w := range label.Authors {
+		r.name(w)
+	}
+}
+
 // name adds w to the envelope's writers once. ONE SEAT IS ONE WRITER, whether
 // a record named its kind or only its handle: outside a turn there is no chart
 // to resolve a bare handle against, and an envelope listing `agent-cto` and
