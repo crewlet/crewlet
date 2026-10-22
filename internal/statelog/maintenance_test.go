@@ -290,6 +290,24 @@ func TestTheSealNeedsARestartRatherThanAnAcknowledgement(t *testing.T) {
 	}
 }
 
+// A RESTART MADE BEFORE THE WINDOW OPENED IS NOT A SEAL, whatever its mode and
+// incarnation: it binds no operation, and the seal takes only an
+// acknowledgement a boot made while this operation's attempt was open. It is
+// what a baseline reads, and it says so when it is all a node has.
+func TestARestartBeforeTheWindowIsNotASeal(t *testing.T) {
+	t.Parallel()
+	op := operation(coord.PhaseSealing)
+	early := sealed(1)
+	early[1].OperationID, early[1].Attempt = "", 0
+	held, missing := statelog.SealHolds(op, early)
+	if held {
+		t.Fatal("the seal held on a restart that bound no operation")
+	}
+	if !strings.Contains(missing, "node-2 restarted before this operation opened") {
+		t.Fatalf("the refusal says %q, which does not name what is wrong", missing)
+	}
+}
+
 // TestAnAcknowledgementFromAPublishingModeIsNotEvidence: a node that started
 // its publishers has not established that it cannot have issued the request.
 func TestAnAcknowledgementFromAPublishingModeIsNotEvidence(t *testing.T) {

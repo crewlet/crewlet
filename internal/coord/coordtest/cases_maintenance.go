@@ -339,18 +339,43 @@ var maintenanceCases = []fleetCase{
 		}{
 			{"no node", coord.MaintenanceAck{
 				OperationID: "op-1", Attempt: 1, Incarnation: "x"}},
-			{"no operation", coord.MaintenanceAck{
+			{"an attempt of no operation", coord.MaintenanceAck{
 				NodeID: "node-1", Attempt: 1, Incarnation: "x"}},
 			{"attempt zero", coord.MaintenanceAck{
 				NodeID: "node-1", OperationID: "op-1", Incarnation: "x"}},
 			{"no incarnation", coord.MaintenanceAck{
 				NodeID: "node-1", OperationID: "op-1", Attempt: 1}},
+			{"no incarnation and no window", coord.MaintenanceAck{
+				NodeID: "node-1", Mode: "maintenance"}},
 		} {
 			if err := h.f.PutMaintenanceAck(h.ctx, c.ack); err == nil {
 				h.t.Errorf("an acknowledgement with %s was written", c.name)
 			}
 		}
 	}},
+
+	{name: "a restart made before any window round-trips as one",
+		fn: func(h *fleetHarness) {
+			// NO OPERATION AND NO ATTEMPT is the record of a node that
+			// restarted into a maintenance mode while no window was
+			// open. It has to be written, because a baseline reads which
+			// process each node is from it, and it has to come back
+			// naming no window, because a seal must never take it for an
+			// acknowledgement of one.
+			ack := coord.MaintenanceAck{
+				NodeID: "node-1", Incarnation: "node-1:new", Mode: "maintenance",
+			}
+			if err := h.f.PutMaintenanceAck(h.ctx, ack); err != nil {
+				h.t.Fatalf("a restart made before any window was refused: %v", err)
+			}
+			acks, err := h.f.MaintenanceAcks(h.ctx)
+			if err != nil || len(acks) != 1 {
+				h.t.Fatalf("MaintenanceAcks = %v (err %v)", acks, err)
+			}
+			if !acks[0].Windowless() || acks[0].Incarnation != "node-1:new" {
+				h.t.Fatalf("the restart came back %+v", acks[0])
+			}
+		}},
 }
 
 // window is a capacity operation as a coordinator first writes it.
