@@ -228,10 +228,10 @@ func TestAStateOrACollisionIsToldToAPersonInTheDomainsWords(t *testing.T) {
 	}{
 		"an archived room": {crewletmcp.Classify(crewletmcp.RefusalConflict,
 			fmt.Errorf("%w: this room is archived, so it takes no new messages. "+
-				"Whoever created it, its team's lead or an administrator can reopen it",
-				chat.ErrArchived)), http.StatusConflict,
-			"This room is archived, so it takes no new messages. Whoever created it, " +
-				"its team's lead or an administrator can reopen it.",
+				"Only whoever created it, the lead of its team or of a team above it, "+
+				"or an admin can reopen it", chat.ErrArchived)), http.StatusConflict,
+			"This room is archived, so it takes no new messages. Only whoever created " +
+				"it, the lead of its team or of a team above it, or an admin can reopen it.",
 			model},
 		"a task in the trash": {crewletmcp.Classify(crewletmcp.RefusalConflict,
 			&tracker.Refusal{Mark: tracker.ErrState,

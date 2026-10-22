@@ -1529,8 +1529,11 @@ func TestADirectConversationsMembershipCannotBePatched(t *testing.T) {
 	if !errors.Is(err, chat.ErrForbidden) {
 		t.Fatalf("a conversation's participants were patched: %v", err)
 	}
+	// SOMEBODY OUTSIDE IT IS TOLD IT IS NOT THERE, as a reader is: its id
+	// is derived from the two people in it, so "you may not" would say they
+	// talk.
 	if _, err := r.store.Join(t.Context(), person("bob"), opened.Channel.ID); !errors.
-		Is(err, chat.ErrForbidden) {
+		Is(err, chat.ErrNotFound) {
 		t.Fatalf("somebody let themselves into a conversation: %v", err)
 	}
 	if got := r.count(`SELECT COUNT(*) FROM chat_members WHERE channel_id = ?`,
@@ -2086,7 +2089,7 @@ func TestARoomOfAnUnknownKindRefusesEveryWrite(t *testing.T) {
 		},
 		Actor: "jane", ActorKind: chat.AuthorHuman,
 		Mutation: mustJSON(t, chat.ChannelCreate{
-			V: chat.DocumentVersion, ChannelID: id, Kind: kind,
+			V: chat.DocumentVersion, ChannelID: id, Kind: kind, Name: "guild-hall",
 			Members:   []chat.Member{{Handle: "jane"}},
 			CreatedBy: "jane", CreatedByKind: chat.AuthorHuman,
 		}),
@@ -2122,6 +2125,13 @@ func TestARoomOfAnUnknownKindRefusesEveryWrite(t *testing.T) {
 		strings.HasPrefix(chat.Sentence(err), "chat:") {
 
 		t.Fatalf("the refusal reads to a person as %q", chat.Sentence(err))
+	}
+	// AND IT NEVER SAYS THE ROOM'S NAME: this node cannot tell who may read
+	// the room, so it cannot tell whether the caller may know what it is
+	// called either.
+	if said := chat.Sentence(err); strings.Contains(said, "guild-hall") ||
+		!strings.Contains(said, "this room") {
+		t.Fatalf("the refusal names a room whose readers this node cannot state: %q", said)
 	}
 	if _, err := r.store.Join(t.Context(), person("jane"), id); !errors.Is(
 		err, chat.ErrUnknownKind) {
@@ -2272,8 +2282,9 @@ func TestAPrivateRoomRefusesAnOutsidersReaction(t *testing.T) {
 	room := made.Channel.ID
 	said := r.say(person("jane"), room, "the number is confidential", "k-1")
 
+	// REFUSED AS NOT THERE, which is what a reader outside it is told.
 	if _, err := r.store.React(t.Context(), person("bob"), room,
-		said.Message.ID, ":eyes:"); !errors.Is(err, chat.ErrForbidden) {
+		said.Message.ID, ":eyes:"); !errors.Is(err, chat.ErrNotFound) {
 		t.Fatalf("an outsider reacted in a private room: %v", err)
 	}
 	r.drain()

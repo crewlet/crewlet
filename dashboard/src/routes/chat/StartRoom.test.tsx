@@ -110,7 +110,7 @@ test("a name somebody else holds comes back as a name to change", async () => {
   reply = refused(
     "create_channel",
     "exists",
-    "Another room already has that name: launch. Open that room, or pick another name.",
+    "#launch is already another room's name, so pick another one (or open #launch if you're in it).",
     409,
   );
   const { onClose } = mount();
