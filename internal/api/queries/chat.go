@@ -167,7 +167,7 @@ func chatFailure(err error) error {
 		// THE TEXT SURVIVES, because it is written for the caller: it
 		// says what a cursor looks like and where the last answer put
 		// one.
-		return fmt.Errorf("%w: %w", ErrBadParams, err)
+		return refusedBy(err, chat.Sentence(err))
 	}
 	return err
 }

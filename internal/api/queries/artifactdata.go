@@ -118,7 +118,7 @@ func dataFailure(err error) error {
 		return fmt.Errorf("%w: %w", ErrNotFound, err)
 	case errors.Is(err, artifactdata.ErrInvalid), errors.Is(err, artifactdata.ErrBadCursor),
 		errors.Is(err, query.ErrInvalid), errors.Is(err, query.ErrNotIndexed):
-		return fmt.Errorf("%w: %w", ErrBadParams, err)
+		return refusedBy(err, artifactdata.Sentence(err))
 	}
 	return err
 }

@@ -95,7 +95,7 @@ func artifactFailure(what string, err error) error {
 	case errors.Is(err, artifactsdomain.ErrNotFound), errors.Is(err, artifactsdomain.ErrPurged):
 		return fmt.Errorf("%w: %w", ErrNotFound, err)
 	case errors.Is(err, artifactsdomain.ErrInvalid), errors.Is(err, artifactsdomain.ErrBadCursor):
-		return fmt.Errorf("%w: %w", ErrBadParams, err)
+		return refusedBy(err, artifactsdomain.Sentence(err))
 	}
 	return err
 }
