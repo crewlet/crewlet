@@ -146,6 +146,37 @@ func TestAFullStoreSaysWhoMakesRoom(t *testing.T) {
 	}
 }
 
+// A FAILURE NO CONDITION CLAIMS IS THE NODE'S OWN FAULT: `500` with no
+// Retry-After and none of its own text, on a read and a write alike — a read's
+// was a 503 telling a person to come back for it. Mutation: answer a read's
+// fault as a 503 again and its row fails.
+func TestAFaultIsTheNodesOwn(t *testing.T) {
+	t.Parallel()
+	fault := fmt.Errorf("artifactsdomain: read /var/lib/crewlet/replicated.db: disk I/O")
+	for name, answer := range map[string]func(http.ResponseWriter, *http.Request){
+		"a read's fault": func(w http.ResponseWriter, r *http.Request) {
+			readFailed(w, r, fault, "version 3")
+		},
+		"a write's fault": func(w http.ResponseWriter, r *http.Request) {
+			writeFailed(w, r, "op-1", "publish", fault)
+		},
+	} {
+		rec := httptest.NewRecorder()
+		answer(rec, httptest.NewRequest(http.MethodGet, "/artifacts/a", nil))
+		var body map[string]any
+		_ = json.Unmarshal(rec.Body.Bytes(), &body)
+		if rec.Code != http.StatusInternalServerError || body["error"] != "internal_error" {
+			t.Errorf("%s answered %d %v, want 500 internal_error", name, rec.Code, body)
+		}
+		if got := rec.Header().Get("Retry-After"); got != "" {
+			t.Errorf("%s: Retry-After %q, and no wait clears it", name, got)
+		}
+		if text := rec.Body.String(); strings.Contains(text, "/var/lib") {
+			t.Errorf("%s carried its error's own text: %s", name, text)
+		}
+	}
+}
+
 // syncBuffer is a log sink the logger may write from any goroutine.
 type syncBuffer struct {
 	mu  sync.Mutex

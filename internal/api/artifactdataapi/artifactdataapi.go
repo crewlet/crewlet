@@ -643,9 +643,11 @@ func invalid(w http.ResponseWriter, detail string) {
 // failed: a CONDITION of the node is told in a person's words for it
 // ([builtin.ConditionSentence]), which say whether to come back exactly as the
 // Retry-After does, and its error goes to the log ([operator.LogCondition]);
-// anything else is told in detail, its error logged as a failure. Neither
-// sent the error anywhere before, and "could not write the artifact's data"
-// was the whole answer to a log at its ceiling, under no Retry-After.
+// anything else is this node's own fault, `500` with its error logged as one,
+// which no wait clears — it was a 503 in detail, so a client came back for a
+// fault. Neither sent the error anywhere before, and "could not write the
+// artifact's data" was the whole answer to a log at its ceiling, under no
+// Retry-After.
 func unavailableAbout(w http.ResponseWriter, r *http.Request, err error, detail string) {
 	if said, ok := builtin.ConditionSentence(err); ok {
 		operator.LogCondition(r.Context(), log, "artifact_data_unavailable", err,
@@ -653,13 +655,14 @@ func unavailableAbout(w http.ResponseWriter, r *http.Request, err error, detail 
 		unavailable(w, err, said)
 		return
 	}
-	log.WarnContext(r.Context(), "artifact_data_failed", "error", err.Error())
-	unavailable(w, err, detail)
+	log.ErrorContext(r.Context(), "artifact_data_failed", "artifact", r.PathValue("id"),
+		"what", detail, "error", err.Error())
+	httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
 }
 
 // unavailable is a 503 whose cause says whether, and when, to come back.
 func unavailable(w http.ResponseWriter, cause error, detail string) {
 	httpjson.UnavailableWith(w, httpjson.CodeUnavailable,
-		httpjson.RetrySeconds(statelog.RetryAfter(cause, authz.RetryUndecidedSeconds*time.Second)),
+		httpjson.RetrySeconds(builtin.RetryAfter(cause, authz.RetryUndecidedSeconds*time.Second)),
 		httpjson.Detail{"detail": detail})
 }

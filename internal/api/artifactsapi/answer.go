@@ -343,7 +343,9 @@ func readFailed(w http.ResponseWriter, r *http.Request, err error, what string) 
 			unavailable(w, err, said)
 			return
 		}
-		log.WarnContext(r.Context(), "artifacts_read_unavailable", "what", what, "error", err.Error())
-		unavailable(w, err, "this node could not read "+what+" right now")
+		// A FAILURE NO CONDITION CLAIMS is this node's own fault, which no
+		// wait clears: it was a 503 telling a person to come back for it.
+		log.ErrorContext(r.Context(), "artifacts_read_failed", "what", what, "error", err.Error())
+		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
 	}
 }

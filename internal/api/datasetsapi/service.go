@@ -401,13 +401,15 @@ func settle(w http.ResponseWriter, r *http.Request, res result, out *Reading, wh
 			said = "this node could not read " + what + " right now"
 		}
 		httpjson.UnavailableWith(w, httpjson.CodeUnavailable,
-			httpjson.RetrySeconds(statelog.RetryAfter(res.err, statelog.ElectionRetryHint)),
+			httpjson.RetrySeconds(builtin.RetryAfter(res.err, statelog.ElectionRetryHint)),
 			httpjson.Detail{"detail": said})
 		return false
 	default:
-		log.WarnContext(r.Context(), "dashboard_dataset_failed", append(logged, "error", res.err.Error())...)
-		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, httpjson.RetrySeconds(statelog.ElectionRetryHint),
-			httpjson.Detail{"detail": "this node could not read " + what + " right now"})
+		// A FAILURE NO CONDITION CLAIMS is this node's own fault, which no
+		// wait clears: it was a 503 under an election's four seconds, so a
+		// board polled a fault for ever.
+		log.ErrorContext(r.Context(), "dashboard_dataset_failed", append(logged, "error", res.err.Error())...)
+		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
 		return false
 	}
 	return true
