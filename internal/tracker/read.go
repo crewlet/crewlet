@@ -54,7 +54,7 @@ type TaskRow struct {
 	// hands it.
 	KeyCollision bool `json:"key_collision,omitempty"`
 
-	Title string `json:"title"`
+	Title string `json:"title" untrusted:"name"`
 
 	// Type is the slug a card is drawn under. On the ROW rather than only
 	// on the document, because a board draws an icon per card and a column

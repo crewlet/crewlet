@@ -48,7 +48,7 @@ type FieldValue struct {
 	ID string `json:"id"`
 
 	Type  FieldType       `json:"type,omitempty"`
-	Value json.RawMessage `json:"value"`
+	Value json.RawMessage `json:"value" untrusted:"name"`
 
 	// Hidden is a value whose declaration was ARCHIVED. It stays on the
 	// task and leaves every filter, which is what makes the archive

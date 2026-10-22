@@ -95,7 +95,7 @@ type File struct {
 	Version uint64 `json:"version"`
 
 	Project     string `json:"project"`
-	Path        string `json:"path"`
+	Path        string `json:"path" untrusted:"name"`
 	ContentType string `json:"content_type,omitempty"`
 
 	// Hash and Size are the whole content's, and Object the key of the

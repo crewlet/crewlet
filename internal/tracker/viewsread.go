@@ -35,7 +35,7 @@ type ViewRow struct {
 	// [ViewRow.Key] instead.
 	ID   string   `json:"id,omitempty"`
 	Key  string   `json:"key"`
-	Name string   `json:"name"`
+	Name string   `json:"name" untrusted:"name"`
 	Type ViewType `json:"type"`
 
 	Container Container `json:"container"`
@@ -60,7 +60,7 @@ type ViewRow struct {
 
 	Rank   Rank              `json:"rank,omitempty"`
 	Icon   string            `json:"icon,omitempty"`
-	Params map[string]string `json:"params,omitempty"`
+	Params map[string]string `json:"params,omitempty" untrusted:"name"`
 
 	// Count is how many tasks this view selects when it is RUN — the
 	// `total_hint` a `work_items{view, container}` read of it answers, with

@@ -89,7 +89,7 @@ type ActivityRecord struct {
 
 	Project string `json:"project,omitempty"`
 
-	Excerpt   string           `json:"excerpt,omitempty"`
+	Excerpt   string           `json:"excerpt,omitempty" untrusted:"fence"`
 	Fields    map[string]Delta `json:"fields,omitempty"`
 	CommentID string           `json:"comment_id,omitempty"`
 	TurnID    string           `json:"turn_id,omitempty"`

@@ -1430,7 +1430,7 @@ type chatHitRow struct {
 	ChannelID  string    `json:"channel_id"`
 	ThreadRoot string    `json:"thread_root,omitempty"`
 	Author     string    `json:"author,omitempty"`
-	Snippet    string    `json:"snippet"`
+	Snippet    string    `json:"snippet" untrusted:"fence"`
 	At         time.Time `json:"at"`
 	Score      float64   `json:"score"`
 }
@@ -1474,8 +1474,8 @@ type channelRow struct {
 	Name string    `json:"name,omitempty"`
 	Kind chat.Kind `json:"kind"`
 
-	Topic   string `json:"topic,omitempty"`
-	Purpose string `json:"purpose,omitempty"`
+	Topic   string `json:"topic,omitempty" untrusted:"fence"`
+	Purpose string `json:"purpose,omitempty" untrusted:"fence"`
 	Unit    string `json:"unit,omitempty"`
 
 	Archived bool `json:"archived,omitempty"`

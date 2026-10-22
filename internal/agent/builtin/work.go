@@ -1887,7 +1887,7 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 			// the generic failure text's "call it again" did.
 			answer["dependencies_failed"] = dependencyFailure(task.ID, got.Key,
 				got.KeyCollision, writeTold(ctx, actor, t.Name(), err))
-			return jsonResult(answer)
+			return ownReceipt(ctx, turn, actor, t.Name(), answer)
 		}
 		t.deps.settle(ctx, result.Position)
 		// THE CALL ANSWERS FOR BOTH RECORDS, never for the create alone:
@@ -1904,7 +1904,7 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 			answer["dependencies_pending_mirror"] = len(result.OneSided)
 		}
 	}
-	return jsonResult(answer)
+	return ownReceipt(ctx, turn, actor, t.Name(), answer)
 }
 
 // joinDepend folds a dependency sequence that ran AFTER a call's first record
@@ -3621,7 +3621,24 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if warning := unansweredWarning(before.Task, actor, comment); warning != "" {
 		answer["warnings"] = []string{warning}
 	}
-	return jsonResult(answer)
+	return ownReceipt(ctx, turn, actor, CommentOnWorkTool, answer)
+}
+
+// ownReceipt answers a write's receipt, which may echo what the caller has
+// just written — an ask's question and options — and so answers through a
+// [foreignRead] that labels those words as the caller's own (ADR-0040): the
+// records declare them somebody's words, and here the somebody is the
+// caller. A receipt echoing nothing of the kind is answered as it always was.
+func ownReceipt(ctx context.Context, turn *turnctx.Turn, actor Actor, tool string,
+	answer map[string]any) (tools.Result, error) {
+
+	declared, err := declaredIn(answer)
+	if err != nil || len(declared) == 0 {
+		return jsonResult(answer)
+	}
+	read := newForeignRead(turn, actor.Handle)
+	read.attribute([]provenance.Author{read.writer(actor.Handle, iam.ActorKind(actor.Kind))}, false)
+	return read.answer(ctx, tool, answer, "")
 }
 
 // unansweredWarning says when a comment will wake somebody who is not being

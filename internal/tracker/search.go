@@ -48,7 +48,7 @@ type Ranked struct {
 	// [ItemAddress].
 	KeyCollision bool `json:"key_collision,omitempty"`
 
-	Title    string `json:"title"`
+	Title    string `json:"title" untrusted:"name"`
 	Project  string `json:"project"`
 	Type     string `json:"type"`
 	Status   Status `json:"status"`
@@ -71,7 +71,7 @@ type Ranked struct {
 
 	// Snippet is the index's own excerpt, which is what makes a ranked
 	// answer readable without opening every hit.
-	Snippet string `json:"snippet,omitempty"`
+	Snippet string `json:"snippet,omitempty" untrusted:"fence"`
 }
 
 // RankedDoc is one candidate as the INDEX knows it, before this package says

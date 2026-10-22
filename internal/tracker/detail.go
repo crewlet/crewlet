@@ -327,7 +327,7 @@ type TaskRef struct {
 	// that task and this one is reached by its id. See [ItemAddress].
 	KeyCollision bool `json:"key_collision,omitempty"`
 
-	Title  string `json:"title"`
+	Title  string `json:"title" untrusted:"name"`
 	Status Status `json:"status"`
 }
 
@@ -370,7 +370,7 @@ type DetailLink struct {
 	// Key, Title and Status are the other end's, resolved here so a
 	// renderer does not fetch a row per link.
 	Key    string `json:"key,omitempty"`
-	Title  string `json:"title,omitempty"`
+	Title  string `json:"title,omitempty" untrusted:"name"`
 	Status Status `json:"status,omitempty"`
 
 	// KeyCollision is the other end's [TaskRow.KeyCollision]: its key is
@@ -379,7 +379,7 @@ type DetailLink struct {
 	// [ItemAddress]. Always false on a page link, which has no task row.
 	KeyCollision bool `json:"key_collision,omitempty"`
 
-	Note string `json:"note,omitempty"`
+	Note string `json:"note,omitempty" untrusted:"name"`
 
 	// Derived marks the half nobody authored, so an editor knows which end
 	// to change and a renderer can say so.
@@ -399,11 +399,11 @@ type HistoryEntry struct {
 	ActorKind  AuthorKind `json:"actor_kind,omitempty"`
 	OperatorID string     `json:"operator_id,omitempty"`
 	CommentID  string     `json:"comment_id,omitempty"`
-	Excerpt    string     `json:"excerpt,omitempty"`
+	Excerpt    string     `json:"excerpt,omitempty" untrusted:"fence"`
 	TurnID     string     `json:"turn_id,omitempty"`
 
 	// Fields is what changed, as the notification snapshot recorded it.
-	Fields map[string]any `json:"fields,omitempty"`
+	Fields map[string]any `json:"fields,omitempty" untrusted:"name"`
 
 	// Reassignments is the task's hand-off counter as this commit left it
 	// — the "3" of "hand-off 3 of 8" on a row that moved the assignee, and

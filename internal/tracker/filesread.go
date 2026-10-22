@@ -45,7 +45,7 @@ const (
 // bytes are in, which only a reader of the bytes needs.
 type FileRow struct {
 	Project     string     `json:"project"`
-	Path        string     `json:"path"`
+	Path        string     `json:"path" untrusted:"name"`
 	ContentType string     `json:"content_type,omitempty"`
 	Hash        string     `json:"hash,omitempty"`
 	Size        int64      `json:"size"`
