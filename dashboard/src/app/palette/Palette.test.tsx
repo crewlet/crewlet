@@ -690,6 +690,36 @@ describe("the knowledge answer", () => {
     expect(lead.textContent).not.toMatch(/[$€£¥]|USD|cost|price/i);
   });
 
+  // A REFUSAL IS TOLD IN THE ENGINE'S OWN WORDS: answer_knowledge words each
+  // for the person who asked, and the act route's sentence for its class is
+  // about a change ("could not make the change just now. Try again in a
+  // moment"), which is wrong for a question and invites a retry the engine
+  // said no wait clears (it sent no Retry-After).
+  test("a refused question is told in the engine's words", async () => {
+    vi.useFakeTimers();
+    const said =
+      "No model is set up to answer questions, so nothing was spent. An administrator needs to set one up.";
+    engine((tool) =>
+      tool === "answer_knowledge"
+        ? json(
+            {
+              error: "unavailable",
+              message: "This can't be done here, and waiting won't change that.",
+              detail: said,
+              op_id: "op-1",
+            },
+            503,
+          )
+        : json({ error: "not_found", detail: "no" }, 404),
+    );
+    const p = mount();
+    await p.type(QUESTION);
+    await settle(ANSWER_IDLE_MS);
+    await settle(0);
+    expect(screen.getByText(said)).toBeDefined();
+    expect(screen.queryByText(/could not make the change/)).toBeNull();
+  });
+
   test("a new term abandons the question before it, which is never drawn", async () => {
     vi.useFakeTimers();
     let release: (r: Response) => void = () => {};

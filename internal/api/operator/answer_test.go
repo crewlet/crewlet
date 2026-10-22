@@ -239,3 +239,70 @@ func TestASpentBudgetAnswersBudgetExhausted(t *testing.T) {
 		t.Errorf("the model was asked %d times past a spent budget", model.asked())
 	}
 }
+
+// failingModel is a model behind the auxiliary seam that fails as it is told:
+// the seam resolving none (auxErr), or the call failing (err).
+type failingModel struct{ auxErr, err error }
+
+func (m failingModel) Model() string { return "aux" }
+
+func (m failingModel) Complete(context.Context, llm.Request) (*llm.Completion, error) {
+	return nil, m.err
+}
+
+func (m failingModel) Auxiliary(*org.Role, auxspend.Use) (chain.Member, error) {
+	if m.auxErr != nil {
+		return chain.Member{}, m.auxErr
+	}
+	return chain.Member{Key: "aux", Provider: m}, nil
+}
+
+// AN ANSWER NO WAIT GETS IS NOT ANSWERED "COME BACK". A chain with no model,
+// credentials the service refused, a model that declined and a request it
+// will never accept are each told in words that say who acts or that it
+// won't answer, and they went out over this route as `503` under a two-second
+// Retry-After beside "Try again in a moment": the tool stated the class and no
+// cause, so the mapping read this node's undecided hint. They carry no
+// Retry-After now and a message that says waiting won't help, while a busy
+// model, a slow one and a failing service keep theirs. Mutation: drop the
+// waitless mark from the tool, or stop the mapping reading it, and the first
+// rows fail.
+func TestAnAnswerNoWaitGetsIsNotAnsweredComeBack(t *testing.T) {
+	t.Parallel()
+	fail := func(kind llm.ErrorKind) error {
+		return &llm.Error{Kind: kind, Provider: "anthropic", Model: "aux", Err: errors.New("x")}
+	}
+	for name, c := range map[string]struct {
+		model failingModel
+		waits bool
+	}{
+		"no model set up":            {model: failingModel{auxErr: errors.New("no providers configured")}},
+		"a rejected key":             {model: failingModel{err: fail(llm.KindAuth)}},
+		"a declined question":        {model: failingModel{err: fail(llm.KindRefusal)}},
+		"a request it never accepts": {model: failingModel{err: fail(llm.KindFatal)}},
+		"a busy model":               {model: failingModel{err: fail(llm.KindRateLimit)}, waits: true},
+		"a slow model":               {model: failingModel{err: fail(llm.KindTimeout)}, waits: true},
+		"a failing service":          {model: failingModel{err: fail(llm.KindServer)}, waits: true},
+	} {
+		h := guarded(newSurface(t, operator.Options{
+			Halves:    fixed(operator.Halves{Knowledge: oneRunbook{}}),
+			Org:       company,
+			Answer:    builtin.AnswerDeps{Models: c.model, Budget: &companyWindows{}},
+			Authorize: builtin.Decide(leadsNobody{}),
+		}))
+		status, answer, header := actAnswer(t, h, builtin.AnswerKnowledgeTool, askBody())
+		if status != http.StatusServiceUnavailable ||
+			answer["error"] != string(crewletmcp.RefusalUnavailable) {
+			t.Errorf("%s answered %d %v, want 503 unavailable", name, status, answer)
+			continue
+		}
+		if after := header.Get("Retry-After"); (after != "") != c.waits {
+			t.Errorf("%s: Retry-After %q, and a wait helps: %v", name, after, c.waits)
+		}
+		message, _ := answer["message"].(string)
+		if invites := strings.Contains(message, "in a moment"); invites != c.waits {
+			t.Errorf("%s: the message %q invites a wait: %v, want %v", name, message,
+				invites, c.waits)
+		}
+	}
+}

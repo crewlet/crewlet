@@ -164,7 +164,14 @@ export function useKnowledgeAnswer(term: string, wanted: boolean): AnswerState {
               state = { kind: "unknown", reason: result.reason };
               break;
             case "refused":
-              state = { kind: "refused", sentence: result.sentence };
+              // IN THE ENGINE'S OWN WORDS: answer_knowledge words every
+              // refusal for the person who asked (no model is set up, the
+              // model's service refused the company's credentials), and the
+              // act route's sentence for the class is about a change —
+              // "could not make the change just now. Try again in a moment"
+              // — which is wrong for a question and invites a retry the
+              // engine said no wait clears.
+              state = { kind: "refused", sentence: result.detail || result.sentence };
               break;
           }
           setSettled({ key, state });

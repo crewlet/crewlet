@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -88,6 +89,8 @@ type answerModel struct {
 	// failRewrite fails the condensing calls only — the ones made with the
 	// compactor's instructions — and answers the question as usual.
 	failRewrite bool
+	// auxErr is the seam's refusal to resolve a model at all.
+	auxErr error
 }
 
 func (m *answerModel) Model() string { return "aux-small" }
@@ -106,6 +109,9 @@ func (m *answerModel) Complete(_ context.Context, req llm.Request) (*llm.Complet
 }
 
 func (m *answerModel) Auxiliary(role *org.Role, use auxspend.Use) (chain.Member, error) {
+	if m.auxErr != nil {
+		return chain.Member{}, m.auxErr
+	}
 	m.role = role
 	m.uses = append(m.uses, use)
 	return chain.Member{Key: "aux", Provider: m}, nil
@@ -864,5 +870,64 @@ func TestAnAnswerReadsItsSourcesAsTheirWritersWords(t *testing.T) {
 	}
 	if len(rewrite.Messages) < 2 || !strings.Contains(rewrite.Messages[1].Content, " source=page_body trust=external") {
 		t.Errorf("the long source was condensed under no label of its own:\n%v", rewrite.Messages)
+	}
+}
+
+// A FAILED ANSWER IS TOLD IN WORDS FOR THE PERSON WHO ASKED: whether a model is
+// set up, and what kind of failure the provider met, never the error, which
+// named the provider, the model, the status and the vendor's own message — the
+// whole of the sentence was "The model could not answer (llm
+// anthropic/aux-small: rate_limit: …)". Mutation: put the error back into
+// either sentence and its rows fail.
+func TestAFailedAnswerIsToldInWordsNotTheError(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		aux, complete error
+		says          string
+		// waits is whether the answer invites a retry: no wait gets past a
+		// chain with no model, credentials the service refused, a model
+		// that declined or a request it will never accept, and one told
+		// "an administrator needs to" was answered under a two-second
+		// Retry-After all the same. Mutation: drop the waitless mark from
+		// any of them and its row fails.
+		waits bool
+	}{
+		"no model set up": {aux: fmt.Errorf("engine: seat founder's auxiliary chain: %w",
+			errors.New("phase: no providers configured")),
+			says: "No model is set up to answer questions"},
+		"a rate limit": {complete: &llm.Error{Kind: llm.KindRateLimit, Provider: "anthropic",
+			Model: "aux-small", Status: 429, Err: errors.New("429 Too Many Requests")},
+			says: "The model is busy or out of quota right now. Try again shortly.", waits: true},
+		"a rejected key": {complete: &llm.Error{Kind: llm.KindAuth, Provider: "anthropic",
+			Model: "aux-small", Status: 401, Err: errors.New("401 invalid x-api-key")},
+			says: "An administrator needs to check them."},
+		"a declined question": {complete: &llm.Error{Kind: llm.KindRefusal, Provider: "anthropic",
+			Model: "aux-small", Err: errors.New("stop_reason: refusal")},
+			says: "The model declined to answer this question."},
+		"a failing service": {complete: &llm.Error{Kind: llm.KindServer, Provider: "anthropic",
+			Model: "aux-small", Status: 529, Err: errors.New("529 overloaded")},
+			says: "The model's service failed. Try again shortly.", waits: true},
+		"a timeout": {complete: fmt.Errorf("post https://api.example.com/v1: %w",
+			context.DeadlineExceeded), says: "The model took too long to answer.", waits: true},
+		"a fault nothing classified": {complete: errors.New("decode the reply: unexpected EOF"),
+			says: "The model couldn't answer this question."},
+	} {
+		rig := newAnswerRig()
+		rig.model.auxErr, rig.model.err = c.aux, c.complete
+		res, _, _ := ask(t, rig.tool(t), "How do we deploy?")
+		if !res.Failed || tools.RefusalOf(res) != tools.RefusalUnavailable ||
+			!strings.Contains(res.Output, c.says) {
+			t.Errorf("%s: answered %s %q, want unavailable saying %q", name,
+				tools.RefusalOf(res), res.Output, c.says)
+		}
+		if waits := builtin.RetryAfter(res.Cause, time.Second) > 0; waits != c.waits {
+			t.Errorf("%s: invites a retry: %v, want %v", name, waits, c.waits)
+		}
+		for _, theirs := range []string{"engine:", "phase:", "llm ", "anthropic", "429",
+			"x-api-key", "api.example.com", "EOF", "deadline", "stop_reason", "529"} {
+			if strings.Contains(res.Output, theirs) {
+				t.Errorf("%s: told the person %q, which carries %q", name, res.Output, theirs)
+			}
+		}
 	}
 }

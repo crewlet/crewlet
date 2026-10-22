@@ -100,6 +100,13 @@ export type ActResult =
       code: ActErrorCode | "";
       /** The sentence a person is shown. */
       sentence: string;
+      /**
+       * The engine's own `detail`, verbatim — `""` where it sent none. The
+       * sentence above is the dashboard's for most codes, written about a
+       * change; a screen shows this instead where the tool that refused
+       * words every refusal for the person asking (`answer_knowledge`).
+       */
+      detail: string;
       /** The engine's own remedy, where it sent one. */
       hint: string;
       /**
@@ -265,6 +272,7 @@ function refusalOf(
     opId,
     code,
     sentence,
+    detail: err.detail,
     hint: err.hint,
     grants: err.grants,
     // THE ENGINE SAYS WHETHER WAITING CHANGES IT: a `503` it wrote carries a

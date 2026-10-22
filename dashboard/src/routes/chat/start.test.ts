@@ -41,6 +41,7 @@ function refused(code: ActErrorCode | "", sentence = "", hint = ""): ActResult {
     opId: "r-1",
     code,
     sentence,
+    detail: "",
     hint,
     grants: [],
     retryable: false,

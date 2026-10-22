@@ -4070,6 +4070,7 @@ function refusalOf(tool, opId, err, floors) {
 		opId,
 		code,
 		sentence: (code === "" ? null : ACT_ERRORS[code]) ?? (err.detail || err.sentence || `The engine refused the change (status ${err.status}).`),
+		detail: err.detail,
 		hint: err.hint,
 		grants: err.grants,
 		retryable: err.retryHint !== null && retryAfterMs(err.retryHint) !== null

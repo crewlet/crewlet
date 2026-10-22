@@ -450,8 +450,12 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// the tokens are spent at the vendor the moment it replies.
 	member, err := t.deps.Models.Auxiliary(role, answerUse.For(types.AuxAnswerKnowledge))
 	if err != nil {
-		return refused(tools.RefusalUnavailable, fmt.Sprintf("No model is configured "+
-			"to answer with (%v). Nothing was spent.", err)), nil
+		// WHY IS THE LOG'S: the seam's error names the chain it resolved and
+		// the configuration it read, nothing the person asking acts on.
+		log.WarnContext(ctx, "knowledge_answer_no_model", "seat", actor.Handle,
+			"error", err.Error())
+		return refusedBy(tools.RefusalUnavailable, waitless(), "No model is set up to "+
+			"answer questions, so nothing was spent. An administrator needs to set one up."), nil
 	}
 	call, cancel := context.WithTimeout(ctx, AnswerTimeout)
 	defer cancel()
@@ -476,8 +480,11 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 		log.WarnContext(ctx, "knowledge_answer_failed", "seat", actor.Handle,
 			"model", member.Key, "error", reason)
-		return refused(tools.RefusalUnavailable, fmt.Sprintf("The model could not "+
-			"answer (%s). Try again shortly.", reason)), nil
+		words, waits := modelFailed(err)
+		if !waits {
+			return refusedBy(tools.RefusalUnavailable, waitless(), words), nil
+		}
+		return refused(tools.RefusalUnavailable, words), nil
 	}
 	// THE ANSWER IS DEFUSED under the caller's token: it is a model's
 	// rewording of pages somebody else wrote, read next by a person or by
@@ -828,4 +835,36 @@ func (c *AnswerCache) len() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.order.Len()
+}
+
+// modelFailed is a failed answer as the person who asked reads it, by the
+// kind of failure the provider layer classified ([llm.KindOf]) — what
+// happened, and whether trying again can help — and whether a wait can clear
+// it, which the answer's Retry-After follows: a model that took too long, a
+// busy one and a failing service may answer next time, while no retry gets
+// past credentials the service refused, a model that declined this question,
+// or a request it will never accept.
+//
+// NEVER THE ERROR ITSELF, which went to the log: it names the provider, the
+// model, the status and what the vendor said, which was the whole of the
+// sentence ("The model could not answer (llm anthropic/aux-small: rate_limit:
+// 429 …). Try again shortly.") and nothing a person acts on.
+func modelFailed(err error) (string, bool) {
+	if err == nil {
+		return "The model answered nothing. Try again shortly.", true
+	}
+	switch llm.KindOf(err) {
+	case llm.KindTimeout:
+		return "The model took too long to answer. Try again shortly.", true
+	case llm.KindRateLimit:
+		return "The model is busy or out of quota right now. Try again shortly.", true
+	case llm.KindAuth:
+		return "The model's service refused the company's credentials. An " +
+			"administrator needs to check them.", false
+	case llm.KindServer:
+		return "The model's service failed. Try again shortly.", true
+	case llm.KindRefusal:
+		return "The model declined to answer this question.", false
+	}
+	return "The model couldn't answer this question.", false
 }

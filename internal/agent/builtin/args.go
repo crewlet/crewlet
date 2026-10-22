@@ -365,11 +365,27 @@ type conditionSaid struct {
 	after time.Duration
 }
 
+// errWaitless is the mark beneath an unavailable refusal that no wait clears
+// and no condition names ([waitless]).
+var errWaitless = errors.New("builtin: no wait clears this")
+
+// waitless is the cause of an unavailable refusal no wait clears and no
+// condition names: a company that runs no model for the call, a provider that
+// refused the company's credentials, a model that declined the question. The
+// class says "this node cannot serve it", which is true, and it was answered
+// as every unavailable refusal is, under this node's undecided hint, so a
+// person told "an administrator needs to set one up" was told in the same
+// answer to come back in two seconds. [RetryAfter] answers the mark with no
+// hint. The mark carries no error of its own: the tool logs what it met, and
+// one beneath the mark could be read as a condition with its own words.
+func waitless() error { return errWaitless }
+
 // RetryAfter is how long somebody told about err should wait before asking
 // again: NONE for a condition no wait clears ([condition]'s stuck — a log at
-// its ceiling, a company whose file storage is full), the condition's own
-// soonest where it knows one, and otherwise [statelog.RetryAfter]'s reading of
-// err, with otherwise as this node's hint where nothing derived one.
+// its ceiling, a company whose file storage is full) and for a refusal a tool
+// marked as one ([waitless]), the condition's own soonest where it knows one,
+// and otherwise [statelog.RetryAfter]'s reading of err, with otherwise as this
+// node's hint where nothing derived one.
 //
 // THE ONE HINT every surface answering a refusal or a condition in status
 // codes takes, BESIDE [ConditionSentence], so the words and the Retry-After
@@ -379,6 +395,9 @@ type conditionSaid struct {
 // that did not answer was told an election's wait on one surface and none on
 // the next.
 func RetryAfter(err error, otherwise time.Duration) time.Duration {
+	if errors.Is(err, errWaitless) {
+		return 0
+	}
 	if said, ok := condition(err); ok {
 		switch {
 		case said.stuck:

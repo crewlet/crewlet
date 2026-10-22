@@ -278,6 +278,7 @@ describe("whether a flush is still owed", () => {
     opId: "r",
     code: retryable ? "unavailable" : "invalid",
     sentence: "",
+    detail: "",
     hint: "",
     grants: [],
     retryable,

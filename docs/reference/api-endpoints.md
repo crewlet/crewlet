@@ -5409,7 +5409,11 @@ binds or a seat the chart no longer has, `budget_exhausted` as above, and
 `unavailable` for a counter it cannot read (nothing is spent), a knowledge base
 and tracker that could not be searched at all, no model configured, or a model
 that failed or wrote nothing — a reply that spent tokens and wrote nothing is
-still charged.
+still charged. Each `unavailable` is worded for the person who asked, and the
+dashboard shows that `detail` as it stands. One that no wait clears carries no
+`Retry-After`: no model set up, credentials the model's service refused, a
+model that declined the question, or a request it won't ever accept. A busy,
+slow or failing model, and the rest, carry one.
 
 ### One catalogue, and how a retry is the same call
 
