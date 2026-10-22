@@ -2,6 +2,8 @@ package artifactsapi_test
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -11,6 +13,8 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/artifactsapi"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/paced"
 	"github.com/crewlet/crewlet/internal/api/pagepolicy"
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
@@ -795,6 +799,23 @@ func TestTheTransferLegIsDecidedAgainOnTheUploadsOwnVerb(t *testing.T) {
 	}
 	if !slices.Equal(g.pipeline.transfers, []string{"u-1/img/logo one.svg=<svg/>"}) {
 		t.Errorf("the pipeline was handed %v", g.pipeline.transfers)
+	}
+}
+
+// A TRANSFER WHOSE BODY STOPPED IS TOLD IN A PERSON'S WORDS ([paced.Unread]):
+// the detail was the read's own failure as Go spells it ("the body could not
+// be read: unexpected EOF"), which goes to the log. Mutation: answer
+// err.Error() again and this goes red.
+func TestATransferWhoseBodyStoppedIsToldInAPersonsWords(t *testing.T) {
+	t.Parallel()
+	g := newRig(t, true)
+	g.pipeline.upload = artifactupload.Upload{ID: "u-1", Artifact: page}
+	g.pipeline.err = fmt.Errorf("%w: %w", paced.ErrBody, io.ErrUnexpectedEOF)
+	w := g.do(person("sam"), "PUT", artifactupload.TransferPath("u-1", "a.css"), "b{}")
+	if w.Code != http.StatusBadRequest || fields(t, w)["error"] !=
+		string(httpjson.CodeUnreadableBody) || fields(t, w)["detail"] != paced.Unread {
+		t.Errorf("a transfer whose body stopped answered %d %s, want 400 "+
+			"unreadable_body saying %q", w.Code, w.Body, paced.Unread)
 	}
 }
 
