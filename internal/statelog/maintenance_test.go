@@ -1,6 +1,7 @@
 package statelog_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -472,10 +473,11 @@ func TestAnUnknownDeleteIsResolvedByReadingNotByAssuming(t *testing.T) {
 	}
 }
 
-// TestAnAdmissionBlocksTheExclusion: a positive record from each side is what
-// makes either order safe. A node that slipped between the coordinator's check
-// and its own start leaves a durable key rather than a silence.
-func TestAnAdmissionBlocksTheExclusion(t *testing.T) {
+// TestAnAdmissionBlocksTheFirstRequest: a positive record from each side is
+// what makes either order safe. A node that slipped between the coordinator's
+// write and its own start leaves a durable key rather than a silence, and only
+// the operator's exclusion, recorded on the window, stops it counting.
+func TestAnAdmissionBlocksTheFirstRequest(t *testing.T) {
 	t.Parallel()
 	admissions := []coord.Admission{
 		{NodeID: "node-2", Incarnation: "node-2:x"},
@@ -487,6 +489,36 @@ func TestAnAdmissionBlocksTheExclusion(t *testing.T) {
 	}
 	if got := statelog.AdmissionBlocks(admissions, []string{"node-1", "node-2"}); len(got) != 0 {
 		t.Fatalf("excluded nodes still blocked: %v", got)
+	}
+}
+
+// TestAWindowAtOpenedWaitsOnlyOnRestartsNobodyRecorded: what holds a window
+// before its baseline is a participant with no restart into a maintenance mode
+// recorded at all. A restart made before the window opened counts, and so does
+// one bound to another window, since the baseline only reads which process a
+// node is; an excluded participant waits on nothing.
+//
+// Mutation: count only acknowledgements bound to this window and the
+// windowless row fails; ignore the exclusions and the excluded row fails.
+func TestAWindowAtOpenedWaitsOnlyOnRestartsNobodyRecorded(t *testing.T) {
+	t.Parallel()
+	op := coord.MaintenanceOperation{
+		OperationID: "capacity:now", Attempt: 1, Phase: coord.PhaseOpened,
+		Participants: []string{"node-windowless", "node-elsewhere", "node-silent",
+			"node-excluded", "node-bound", "node-another-silent"},
+		Excluded: []string{"node-excluded"},
+	}
+	acks := []coord.MaintenanceAck{
+		{NodeID: "node-windowless", Incarnation: "node-windowless:2", Mode: "maintenance"},
+		{NodeID: "node-elsewhere", OperationID: "capacity:before", Attempt: 3,
+			Incarnation: "node-elsewhere:2", Mode: "seal"},
+		{NodeID: "node-bound", OperationID: "capacity:now", Attempt: 1,
+			Incarnation: "node-bound:2", Mode: "maintenance"},
+	}
+	got := statelog.BaselineMissing(op, acks)
+	want := []string{"node-another-silent", "node-silent"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("BaselineMissing = %v, want %v", got, want)
 	}
 }
 

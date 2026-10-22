@@ -282,6 +282,31 @@ test("an open capacity operation is rendered as an outage in progress", () => {
   expect(screen.getByText(/Waiting on node-b, node-c/)).toBeTruthy();
 });
 
+// A WINDOW HELD BY AN ADMISSION SAYS SO, ahead of who it waits on. Every node
+// can have restarted and the window still wait on one node's stale admission,
+// which no participant owes, and such a window is not waiting on its operator.
+test("a window held by an admission names it and not its operator", () => {
+  render(
+    <MaintenanceBanner
+      op={{
+        stream: "CREWLET_TRACKER",
+        operation_id: "op-1",
+        phase: "opened",
+        attempt: 1,
+        target_max_bytes: 2_000_000_000,
+        original_max_bytes: 1_000_000_000,
+        since: new Date(Date.now() - 60_000).toISOString(),
+        admissions_blocking: ["node-c"],
+      }}
+      now={Date.now()}
+    />,
+  );
+  expect(
+    screen.getByText(/Held by an admission from node-c: nothing is sent while it stands/),
+  ).toBeTruthy();
+  expect(screen.queryByText(/Waiting on its operator/)).toBeNull();
+});
+
 // NOBODY OUTSTANDING IS NOT PROGRESS — it is the operation waiting on whoever
 // ran the verb. An empty list rendered as a list reads as "nearly done", which
 // is the one reading that stops somebody finishing it.

@@ -61,6 +61,17 @@ type fakeStateLog struct {
 	abandoned iam.Actor
 	excluded  iam.Actor
 
+	// confirmed is the operation the last abandon's confirmation named, and
+	// abandonErr what the engine answers it.
+	confirmed  string
+	abandonErr error
+
+	// window is the operation the capacity status reads, with the
+	// acknowledgements and admissions beside it; a nil one is unread.
+	window     *coord.MaintenanceOperation
+	acks       []coord.MaintenanceAck
+	admissions []coord.Admission
+
 	// unreadable is the broker's answer to a LIVE read of a stream's
 	// instant, nil while it answers.
 	unreadable error
@@ -129,12 +140,17 @@ func (f *fakeStateLog) SetCapacity(_ context.Context, req engine.CapacityRequest
 	return coord.MaintenanceOperation{}, errors.New("not exercised here")
 }
 
-func (f *fakeStateLog) AbandonCapacity(_ context.Context, _ string, by iam.Actor) (
-	coord.MaintenanceOperation, error) {
+func (f *fakeStateLog) AbandonCapacity(_ context.Context, _, operationID string,
+	by iam.Actor) (coord.MaintenanceOperation, error) {
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.abandoned = by
+	f.confirmed = operationID
+	if f.abandonErr != nil {
+		return coord.MaintenanceOperation{Stream: "CREWLET_TRACKER_LOG",
+			OperationID: "capacity:open", Phase: coord.PhaseBaselined}, f.abandonErr
+	}
 	return coord.MaintenanceOperation{}, errors.New("not exercised here")
 }
 
@@ -150,7 +166,12 @@ func (f *fakeStateLog) ExcludeParticipant(_ context.Context, _, _ string,
 func (f *fakeStateLog) CapacityStatus(context.Context, string) (
 	coord.MaintenanceOperation, []coord.MaintenanceAck, []coord.Admission, bool, error) {
 
-	return coord.MaintenanceOperation{}, nil, nil, false, errors.New("not exercised here")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.window == nil {
+		return coord.MaintenanceOperation{}, nil, nil, false, errors.New("not exercised here")
+	}
+	return *f.window, f.acks, f.admissions, true, nil
 }
 
 func (f *fakeStateLog) Mode() statelog.MaintenanceMode { return statelog.ModeNormal }
@@ -226,7 +247,8 @@ func TestTheFleetControlsRecordWhoPressedThem(t *testing.T) {
 		t.Errorf("the reanchor was handed %+v, want %+v", log.reanchored.By, want)
 	}
 
-	postAck(t, a, "/worklet/retention/maintenance/abandon?stream=CREWLET_TRACKER_LOG")
+	postAck(t, a, "/worklet/retention/maintenance/abandon?stream=CREWLET_TRACKER_LOG"+
+		"&confirm=capacity:open")
 	if log.abandoned != want {
 		t.Errorf("the abandon was handed %+v, want %+v", log.abandoned, want)
 	}
@@ -234,6 +256,127 @@ func TestTheFleetControlsRecordWhoPressedThem(t *testing.T) {
 		"&node=n1&confirm=n1")
 	if log.excluded != want {
 		t.Errorf("the exclusion was handed %+v, want %+v", log.excluded, want)
+	}
+}
+
+// AN ABANDONMENT IS CONFIRMED BEFORE IT RUNS.
+//
+// ?confirm= repeats the open operation's id. The route refuses one that is
+// missing before the engine is asked, and answers the engine's refusal of one
+// naming another operation as the same refusal, carrying the operation that is
+// open, rather than as a refused capacity change. The CLI used to compare the
+// id after the abandonment had already run.
+//
+// Mutation: drop the missing-confirm check and the first half fails (the
+// engine is asked); map the mismatch through the generic refusal and the
+// second half fails.
+func TestAnAbandonmentIsConfirmedBeforeItRuns(t *testing.T) {
+	t.Parallel()
+	log := &fakeStateLog{}
+	b := closedPosture()
+	a := newApp(t, api.Options{Bootstrap: &b, Retention: &fakeBackupRegister{},
+		Capacity: log, Nodes: &fakeNodeGate{}})
+
+	code, body := postAck(t, a, "/worklet/retention/maintenance/abandon?stream=CREWLET_TRACKER_LOG")
+	if code != http.StatusBadRequest || body["error"] != "confirm_required" {
+		t.Fatalf("an abandonment with no confirmation answered %d %v, want 400 "+
+			"confirm_required", code, body)
+	}
+	if log.abandoned != (iam.Actor{}) {
+		t.Fatalf("the engine was asked to abandon with no confirmation: %+v", log.abandoned)
+	}
+
+	log.abandonErr = &engine.ConfirmMismatchError{Stream: "CREWLET_TRACKER_LOG",
+		Open: "capacity:open", Named: "capacity:other"}
+	code, body = postAck(t, a, "/worklet/retention/maintenance/abandon?stream=CREWLET_TRACKER_LOG"+
+		"&confirm=capacity:other")
+	if code != http.StatusBadRequest || body["error"] != "confirm_required" {
+		t.Fatalf("a confirmation naming another operation answered %d %v, want "+
+			"400 confirm_required", code, body)
+	}
+	if log.confirmed != "capacity:other" {
+		t.Errorf("the engine was handed confirmation %q, want the one sent", log.confirmed)
+	}
+	detail, _ := body["detail"].(string)
+	if !strings.Contains(detail, "capacity:open") {
+		t.Errorf("the refusal %q doesn't name the operation that is open", detail)
+	}
+	if op, _ := body["operation"].(map[string]any); op["operation_id"] != "capacity:open" {
+		t.Errorf("the refusal carries operation %v, want the open one", body["operation"])
+	}
+}
+
+// A WINDOW'S STATUS ANSWERS WHAT ITS NEXT STEP WAITS ON.
+//
+// At opened the next step is the baseline, which reads a restart into a
+// maintenance mode from every participant and the admissions, so that is what
+// the status names. The seal's list there named every node restarted before
+// the window as owing a seal restart the procedure hadn't asked for yet. Past
+// opened the seal is the next step and no step reads an admission again, so
+// the answer swaps.
+//
+// Mutation: answer the seal's list at every phase and the opened half fails;
+// answer the admissions at every phase and the baselined half fails.
+func TestAWindowsStatusAnswersWhatItsNextStepWaitsOn(t *testing.T) {
+	t.Parallel()
+	log := &fakeStateLog{
+		window: &coord.MaintenanceOperation{
+			Stream: "CREWLET_TRACKER_LOG", OperationID: "capacity:open",
+			Phase: coord.PhaseOpened, Attempt: 1,
+			Participants: []string{"node-1", "node-2", "node-3"},
+		},
+		acks: []coord.MaintenanceAck{
+			{NodeID: "node-1", Incarnation: "node-1:2", Mode: "maintenance"},
+		},
+		admissions: []coord.Admission{{NodeID: "node-3", Incarnation: "node-3:1"}},
+	}
+	b := closedPosture()
+	a := newApp(t, api.Options{Bootstrap: &b, Retention: &fakeBackupRegister{},
+		Capacity: log, Nodes: &fakeNodeGate{}})
+	read := func() map[string]any {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet,
+			"/worklet/retention/maintenance?stream=CREWLET_TRACKER_LOG", nil)
+		req.Header.Set("Authorization", "Bearer secret")
+		rec := httptest.NewRecorder()
+		a.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("the status answered %d: %s", rec.Code, rec.Body)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		return body
+	}
+
+	opened := read()
+	if got := fmt.Sprint(opened["restarts_missing"]); got != "[node-2 node-3]" {
+		t.Errorf("restarts_missing at opened = %s, want node-2 and node-3", got)
+	}
+	if got := fmt.Sprint(opened["admissions_blocking"]); got != "[node-3]" {
+		t.Errorf("admissions_blocking at opened = %s, want node-3", got)
+	}
+	if _, said := opened["blocking"]; said {
+		t.Errorf("the status at opened names the seal's list: %v", opened["blocking"])
+	}
+
+	log.mu.Lock()
+	log.window.Phase = coord.PhaseBaselined
+	log.window.WriteIncarnations = map[string]string{"node-1": "node-1:2",
+		"node-2": "node-2:2", "node-3": "node-3:2"}
+	log.mu.Unlock()
+	baselined := read()
+	if blocking, _ := baselined["blocking"].(string); !strings.Contains(blocking, "node-2") {
+		t.Errorf("blocking past opened = %q, want the seal's list naming node-2", blocking)
+	}
+	if _, said := baselined["admissions_blocking"]; said {
+		t.Errorf("the status past opened names admissions no step reads: %v",
+			baselined["admissions_blocking"])
+	}
+	if _, said := baselined["restarts_missing"]; said {
+		t.Errorf("the status past opened names the baseline's list: %v",
+			baselined["restarts_missing"])
 	}
 }
 

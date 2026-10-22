@@ -48,7 +48,8 @@ func capacityFixture(t *testing.T, id string, mode statelog.MaintenanceMode) (
 // TestANormalNodeWritesItsAdmissionBeforeItReadsTheOperation.
 //
 // The order IS the guarantee. A node that read the operation absent and then
-// started publishing has a gap in which a coordinator can take the exclusion;
+// started publishing has a gap in which a coordinator can open a window and
+// send its request;
 // writing first means whichever write lands first wins and the loser can see
 // that it did. So the admission must be durable even on the path that then
 // refuses — and must be withdrawn again before the refusal returns, or a node
@@ -398,17 +399,16 @@ func TestAMaintenanceBootLeavesTheAdmissionOfAProcessStillRunning(t *testing.T) 
 // SHUT, which is the restart the refusal tells the operator to make.
 //
 // node-a crashes in normal mode, holding its admission. While that process
-// might still be running, its admission keeps the window shut: that is what
-// the key is evidence of. Restarted into maintenance mode, as the refusal says,
-// it used to leave the dead process's claim behind, so the window stayed shut
-// and its refusal sent the operator to make the same restart again, for ever.
-func TestACrashedNodeRestartedIntoMaintenanceLetsTheWindowOpen(t *testing.T) {
+// might still be running, its admission stops the window sending anything:
+// that is what the key is evidence of. Restarted into maintenance mode, as the
+// refusal says, it used to leave the dead process's claim behind, so the
+// window stayed shut and its refusal sent the operator to make the same
+// restart again, for ever.
+func TestACrashedNodeRestartedIntoMaintenanceLetsTheWindowProceed(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	fleet := coordmem.NewFleet()
 	streams := []string{"CREWLET_TRACKER_LOG"}
-	req := CapacityRequest{Stream: "CREWLET_TRACKER_LOG", TargetMaxBytes: 1 << 33, By: "ops-3"}
-	current := jetstream.LogStats{MaxBytes: 1 << 32}
 
 	crashed := nodeOn(fleet, "node-a", "crashed", statelog.ModeNormal, dataNode)
 	if err := crashed.handshake(ctx, streams); err != nil {
@@ -418,24 +418,41 @@ func TestACrashedNodeRestartedIntoMaintenanceLetsTheWindowOpen(t *testing.T) {
 	if err := coordinator.handshake(ctx, streams); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := coordinator.openCapacity(ctx, req, current, unstatedRoom); err == nil ||
+	op := openWindow(t, coordinator)
+	if _, err := coordinator.advanceCapacity(ctx, nil, op); err == nil ||
 		!strings.Contains(err.Error(), "node-a") {
-		t.Fatalf("the window opened while node-a's process might still be "+
-			"publishing (err %v)", err)
+		t.Fatalf("the window went past opened while node-a's process might still "+
+			"be publishing (err %v)", err)
 	}
 
 	restarted := nodeOn(fleet, "node-a", "restarted", statelog.ModeMaintenance, dataNode)
 	if err := restarted.handshake(ctx, streams); err != nil {
 		t.Fatal(err)
 	}
-	op, err := coordinator.openCapacity(ctx, req, current, unstatedRoom)
+	next, err := coordinator.advanceCapacity(ctx, nil, op)
 	if err != nil {
 		t.Fatalf("node-a restarted into maintenance mode as it was told to, and "+
 			"the window is still refused: %v", err)
 	}
-	if op.Phase != coord.PhaseOpened {
-		t.Errorf("the window opened in phase %s, want opened", op.Phase)
+	if next.Phase != coord.PhaseBaselined {
+		t.Errorf("the window stands at %s, want baselined", next.Phase)
 	}
+}
+
+// openWindow opens a capacity window on the tracker's log from e, as `crewlet
+// retention set-capacity` does, and fails the test if it does not open.
+func openWindow(t *testing.T, e *Engine) coord.MaintenanceOperation {
+	t.Helper()
+	op, err := e.openCapacity(context.Background(), CapacityRequest{
+		Stream: "CREWLET_TRACKER_LOG", TargetMaxBytes: 1 << 33, By: "ops-3",
+	}, jetstream.LogStats{MaxBytes: 1 << 32}, unstatedRoom)
+	if err != nil {
+		t.Fatalf("the window did not open: %v", err)
+	}
+	if op.Phase != coord.PhaseOpened {
+		t.Fatalf("the window opened in phase %s, want opened", op.Phase)
+	}
+	return op
 }
 
 // TestAnAcknowledgementCarriesTheModeItWasMadeIn.
@@ -590,7 +607,9 @@ func TestAnExcludedParticipantIsTheOnlyThingThatWaivesAnAcknowledgement(t *testi
 // restart; both used to be said only in the serving node's log, while the
 // window named the person who OPENED it — so the one record every node reads
 // showed its opener as the author of whatever it had become. Mutation: record
-// either gesture without its party and its half goes red.
+// either gesture without its party and its half goes red; check the
+// abandonment's confirmation after the update, or not at all, and the refused
+// abandonment changes the window.
 func TestWhoExcludedANodeAndWhoAbandonedTheWindowAreOnTheWindow(t *testing.T) {
 	ctx := context.Background()
 	e, fleet := capacityFixture(t, "node-1", statelog.ModeMaintenance)
@@ -617,7 +636,21 @@ func TestWhoExcludedANodeAndWhoAbandonedTheWindowAreOnTheWindow(t *testing.T) {
 		t.Errorf("node-2's exclusion is recorded as %+v, want %+v", got, want)
 	}
 
-	op, err = e.AbandonCapacity(ctx, "CREWLET_TRACKER_LOG", lead)
+	// A CONFIRMATION NAMING ANOTHER OPERATION ABANDONS NOTHING, and says
+	// which operation is open.
+	if held, err := e.AbandonCapacity(ctx, "CREWLET_TRACKER_LOG", "op-0", lead); err == nil {
+		t.Fatalf("an abandonment confirming op-0 ran against op-1: %+v", held)
+	} else if mismatch := (*ConfirmMismatchError)(nil); !errors.As(err, &mismatch) ||
+		mismatch.Open != "op-1" {
+		t.Fatalf("a confirmation naming another operation was refused as %v, want "+
+			"the mismatch naming op-1", err)
+	}
+	if held, _, _ := fleet.Maintenance(ctx, "CREWLET_TRACKER_LOG"); held.Phase != coord.PhaseApplied ||
+		held.AbandonedBy.By != "" {
+		t.Fatalf("a refused abandonment changed the window: %+v", held)
+	}
+
+	op, err = e.AbandonCapacity(ctx, "CREWLET_TRACKER_LOG", "op-1", lead)
 	if err != nil {
 		t.Fatalf("abandon: %v", err)
 	}
@@ -648,6 +681,77 @@ func TestWhoExcludedANodeAndWhoAbandonedTheWindowAreOnTheWindow(t *testing.T) {
 	}
 }
 
+// THE REPORT AT OPENED SAYS WHAT THE BASELINE WAITS ON.
+//
+// `crewlet retention status` and the dashboard's banner say who a window is
+// waiting on. At opened they said every participant, because they counted
+// acknowledgements bound to this window and no node writes one before the
+// verb runs, and they never named the admission actually holding it. So at
+// opened the report names the participants with no restart recorded and the
+// admissions; past it, the seal's acknowledgements, and no admission, since
+// no step reads one there.
+//
+// Mutation: count bound acknowledgements at opened, or drop the admissions,
+// and the opened half fails; keep the admissions past opened and the
+// baselined half does.
+func TestTheReportAtOpenedSaysWhatTheBaselineWaitsOn(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fleet := coordmem.NewFleet()
+	window := coord.MaintenanceOperation{
+		Stream: "CREWLET_TRACKER_LOG", OperationID: "capacity:now",
+		TargetMaxBytes: 1 << 33, Phase: coord.PhaseOpened, Attempt: 1,
+		Participants: []string{"node-1", "node-2", "node-3"},
+		EnteredAt:    time.Now().UTC(),
+	}
+	op, _, err := fleet.OpenMaintenance(ctx, window)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fleet.PutMaintenanceAck(ctx, coord.MaintenanceAck{
+		NodeID: "node-1", OperationID: "capacity:before", Attempt: 2,
+		Incarnation: "node-1:2", Mode: string(statelog.ModeMaintenance),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := fleet.PutAdmission(ctx, coord.Admission{
+		NodeID: "node-3", Incarnation: "node-3:1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r := &retention{fleet: fleet, state: runsLogs(&stateLog{},
+		&runningLog{domain: worklet.Domain{}, spec: worklet.Domain{}.Stream()})}
+
+	row := r.openMaintenance(ctx)
+	if row == nil {
+		t.Fatal("the report shows no window while one is open")
+	}
+	if !slices.Equal(row.ParticipantsMissing, []string{"node-2", "node-3"}) {
+		t.Errorf("at opened the report waits on %v, want node-2 and node-3, the "+
+			"nodes with no restart recorded", row.ParticipantsMissing)
+	}
+	if !slices.Equal(row.AdmissionsBlocking, []string{"node-3"}) {
+		t.Errorf("at opened the report names admissions %v, want node-3's",
+			row.AdmissionsBlocking)
+	}
+
+	op.Phase = coord.PhaseBaselined
+	op.WriteIncarnations = map[string]string{"node-1": "node-1:2",
+		"node-2": "node-2:1", "node-3": "node-3:1"}
+	if err := fleet.UpdateMaintenance(ctx, op); err != nil {
+		t.Fatal(err)
+	}
+	row = r.openMaintenance(ctx)
+	if !slices.Equal(row.ParticipantsMissing, []string{"node-1", "node-2", "node-3"}) {
+		t.Errorf("past opened the report waits on %v, want every node the seal "+
+			"has no acknowledgement from", row.ParticipantsMissing)
+	}
+	if len(row.AdmissionsBlocking) != 0 {
+		t.Errorf("past opened the report names admissions %v, which no step reads",
+			row.AdmissionsBlocking)
+	}
+}
+
 // TestABaselineOfNothingIsRefusedRatherThanRecorded.
 //
 // An empty baseline compares unequal to every later acknowledgement, so a
@@ -669,15 +773,22 @@ func TestABaselineOfNothingIsRefusedRatherThanRecorded(t *testing.T) {
 	if !strings.Contains(err.Error(), "node-2") {
 		t.Errorf("the refusal does not name who has not restarted: %v", err)
 	}
-	// THE COMMAND IT NAMES IS ONE THE CLI RUNS, for this window's stream,
-	// and the sentence reads right for one node: it named a `--exclude`
-	// flag nothing parses, and said `"node-2" have not restarted`.
-	// Mutation: put either back and this fails.
-	if want := "`crewlet retention maintenance exclude -stream CREWLET_TRACKER_LOG " +
-		"-node <node-id> -confirm <node-id>`"; !strings.Contains(err.Error(), want) {
-		t.Errorf("the refusal does not name %s: %v", want, err)
+	// THE COMMAND IT NAMES IS ONE THE CLI RUNS, for this window's stream
+	// and this node, and the sentence reads right for one node: it named a
+	// `--exclude` flag nothing parses, and said `"node-2" have not
+	// restarted`. And it says no restart is RECORDED, since a node that did
+	// restart and could not write its acknowledgement is the same refusal.
+	// Mutation: put any of them back and this fails.
+	for _, want := range []string{
+		"no restart into a maintenance mode is recorded for \"node-2\"",
+		"`crewlet retention maintenance exclude -stream CREWLET_TRACKER_LOG " +
+			"-node node-2 -confirm node-2`",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not say %s: %v", want, err)
+		}
 	}
-	if strings.Contains(err.Error(), "--exclude") || strings.Contains(err.Error(), `"node-2" have`) {
+	if strings.Contains(err.Error(), "--exclude") || strings.Contains(err.Error(), "these nodes") {
 		t.Errorf("the refusal names a flag the CLI lacks or reads wrong for one node: %v", err)
 	}
 
@@ -787,10 +898,20 @@ func TestAnUnreadablePresenceListingRefusesRatherThanShrinkingTheSet(t *testing.
 	}
 }
 
-// TestAnAdmissionBlocksTakingTheExclusion is the coordinator's half of the
-// handshake: a node that slipped between the check and its own start left a
-// durable record, and that record is what a silence could never be.
-func TestAnAdmissionBlocksTakingTheExclusion(t *testing.T) {
+// AN ADMISSION WHOSE PROCESS ISN'T RUNNING STOPS THE WINDOW'S FIRST REQUEST,
+// and the refusal names the way past it and the way out.
+//
+// node-9 holds an admission and nobody holds its presence: a process that
+// stopped without giving it back. The window opens, since it has sent nothing
+// and is where the operator's way past is recorded, and what it refuses is its
+// FIRST REQUEST: naming the node, the restart, the exclusion for that node,
+// and the abandonment that closes the window, because an open window refuses
+// every node that starts in service while it waits.
+//
+// Mutation: drop the admission check from the baseline and this goes red;
+// check it without the window's exclusions and
+// TestAnExcludedNodesAdmissionNoLongerStopsTheWindow does.
+func TestAnAdmissionStopsTheWindowsFirstRequest(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	e, fleet := capacityFixture(t, "node-1", statelog.ModeMaintenance)
@@ -800,25 +921,406 @@ func TestAnAdmissionBlocksTakingTheExclusion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := e.openCapacity(ctx, CapacityRequest{
-		Stream: "CREWLET_TRACKER_LOG", TargetMaxBytes: 1 << 33, By: "ops-3",
-	}, jetstream.LogStats{MaxBytes: 1 << 32}, unstatedRoom)
+	op := openWindow(t, e)
+	_, err := e.advanceCapacity(ctx, nil, op)
 	if err == nil {
-		t.Fatal("the exclusion was taken while a node held an admission")
+		t.Fatal("the window baselined while a node held an admission")
 	}
-	if !strings.Contains(err.Error(), "node-9") {
-		t.Errorf("the refusal does not name who is still admitted: %v", err)
+	// THE COMMANDS IT NAMES ARE ONES THE CLI RUNS, for this window's stream
+	// and this node, and the sentence reads right for one node.
+	for _, want := range []string{
+		`"node-9" holds an admission`, "-mode maintenance",
+		"`crewlet retention maintenance exclude -stream CREWLET_TRACKER_LOG " +
+			"-node node-9 -confirm node-9`",
+		"`crewlet retention maintenance abandon -stream CREWLET_TRACKER_LOG " +
+			"-confirm " + op.OperationID + "`",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not say %q: %v", want, err)
+		}
 	}
-	// NO EXCLUSION IS OFFERED, since no window is open for one to be made
-	// on, and the sentence reads right for one node. Mutation: name
-	// `crewlet retention maintenance exclude` again, or say
-	// `"node-9" still hold`, and this fails.
-	if strings.Contains(err.Error(), "exclude") || strings.Contains(err.Error(), `"node-9" still`) {
-		t.Errorf("the refusal offers an exclusion nothing can make yet, or reads "+
-			"wrong for one node: %v", err)
+	if strings.Contains(err.Error(), "these nodes") || strings.Contains(err.Error(), " hold an") {
+		t.Errorf("the refusal reads wrong for one node: %v", err)
 	}
-	if op, found, _ := fleet.Maintenance(ctx, "CREWLET_TRACKER_LOG"); found {
-		t.Fatalf("a window was opened anyway: %+v", op)
+	held, found, err := fleet.Maintenance(ctx, "CREWLET_TRACKER_LOG")
+	if err != nil || !found {
+		t.Fatalf("the window is gone (found %t, err %v)", found, err)
+	}
+	if held.Phase != coord.PhaseOpened || len(held.Journal) != 0 ||
+		len(held.WriteIncarnations) != 0 {
+		t.Fatalf("the window moved past opened, so a request may be on its way, "+
+			"while a node is admitted: %+v", held)
+	}
+}
+
+// stuckClose is a coordination store that cannot close a window.
+type stuckClose struct{ *fleetStore }
+
+func (stuckClose) CloseMaintenance(context.Context, string, string, uint64) error {
+	return errors.New("store unreachable")
+}
+
+// A SERVING NODE'S ADMISSION LEAVES NO WINDOW BEHIND.
+//
+// node-9 is running in service: it holds an admission and its process holds
+// the node's presence. A window left open over it waited at opened while the
+// fleet went on publishing, refused every node that restarted in service and
+// told it to restart into maintenance mode, taking a serving node out of
+// service. So the window is closed again as soon as it is opened and the verb
+// is refused, as it was before the window opened at all; and so it is when
+// nobody can read the admissions. A close that does not land leaves
+// the window, and the refusal says how to close it.
+//
+// Mutation: keep the window whatever the presence says, and the first row
+// fails; keep it when the admissions can't be read, and the second does.
+func TestAServingNodesAdmissionLeavesNoWindowBehind(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name        string
+		blind       bool
+		stuck       bool
+		wantWindow  bool
+		wantRefusal []string
+	}{
+		{name: "the node is running",
+			wantRefusal: []string{`"node-9" is running and holds an admission`,
+				"no window was opened", "-mode maintenance"}},
+		{name: "nobody can read the admissions", blind: true,
+			wantRefusal: []string{"couldn't tell", "no window was opened"}},
+		{name: "the window can't be closed again", stuck: true, wantWindow: true,
+			wantRefusal: []string{"still open",
+				"`crewlet retention maintenance abandon -stream CREWLET_TRACKER_LOG -confirm "}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			e, fleet := capacityFixture(t, "node-1", statelog.ModeMaintenance)
+			backend := coordmem.New()
+			e.backends.Coord = backend
+			if tc.blind {
+				e.backends.Fleet = &blindFleet{fleetStore: fleet,
+					admissionsErr: errors.New("store unreachable")}
+			}
+			if tc.stuck {
+				e.backends.Fleet = stuckClose{fleetStore: fleet}
+			}
+			serving := nodeOn(fleet, "node-9", "boot-1", statelog.ModeNormal, dataNode)
+			if err := serving.handshake(ctx, []string{"CREWLET_TRACKER_LOG"}); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := backend.TryAcquire(ctx, coord.NodeResource("node-9"),
+				coord.AcquireOptions{Owner: "node-9:boot-1", TTL: time.Minute}); err != nil {
+				t.Fatal(err)
+			}
+
+			op, err := e.openCapacity(ctx, CapacityRequest{
+				Stream: "CREWLET_TRACKER_LOG", TargetMaxBytes: 1 << 33, By: "ops-3",
+			}, jetstream.LogStats{MaxBytes: 1 << 32}, unstatedRoom)
+			if err == nil {
+				t.Fatalf("a window opened over a node that may be publishing: %+v", op)
+			}
+			for _, want := range tc.wantRefusal {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal does not say %q: %v", want, err)
+				}
+			}
+			_, found, readErr := fleet.Maintenance(ctx, "CREWLET_TRACKER_LOG")
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if found != tc.wantWindow {
+				t.Errorf("a window stands after the refusal: %t, want %t", found, tc.wantWindow)
+			}
+			if (op.OperationID != "") != tc.wantWindow {
+				t.Errorf("the refusal carries operation %+v, want one only while a "+
+					"window stands", op)
+			}
+			// THE SERVING NODE'S NEXT BOOT IN SERVICE IS ADMITTED, as it
+			// was before the window: nothing was left to refuse it.
+			if !tc.wantWindow {
+				again := nodeOn(fleet, "node-9", "boot-2", statelog.ModeNormal, dataNode)
+				if err := again.handshake(ctx, []string{"CREWLET_TRACKER_LOG"}); err != nil {
+					t.Errorf("a boot in service was refused after the window "+
+						"was closed again: %v", err)
+				}
+			}
+		})
+	}
+}
+
+// A NODE RUNNING AT THE BASELINE IS NAMED AS RUNNING, WITH THE WAY OUT.
+//
+// The window opened with nothing holding it, and node-9 then admitted itself
+// and took its presence before it read the window: the one order the open
+// cannot see. The baseline reads it as a process that may be publishing,
+// sends nothing, and names the restart and the abandonment that closes the
+// window, since the window refuses every boot in service while it stands.
+func TestANodeRunningAtTheBaselineIsNamedWithTheWayOut(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e, fleet := capacityFixture(t, "node-1", statelog.ModeMaintenance)
+	backend := coordmem.New()
+	e.backends.Coord = backend
+	op := openWindow(t, e)
+	if err := fleet.PutAdmission(ctx, coord.Admission{
+		NodeID: "node-9", Incarnation: "node-9:boot-1", At: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := backend.TryAcquire(ctx, coord.NodeResource("node-9"),
+		coord.AcquireOptions{Owner: "node-9:boot-1", TTL: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := e.advanceCapacity(ctx, nil, op)
+	if err == nil {
+		t.Fatal("the window baselined over a running node's admission")
+	}
+	for _, want := range []string{
+		`"node-9" is running and holds an admission, so it may be publishing`,
+		"Nothing has been sent", "refuses every node that starts in service",
+		"`crewlet retention maintenance abandon -stream CREWLET_TRACKER_LOG -confirm " +
+			op.OperationID + "`",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not say %q: %v", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), "exclude") {
+		t.Errorf("the refusal offers to exclude a node that is running: %v", err)
+	}
+}
+
+// A NODE RESTARTED INSIDE ITS CRASHED PROCESS'S LEASE IS RETIRED ONCE IT HOLDS
+// THE PRESENCE.
+//
+// node-a crashed in service and was restarted into maintenance mode at once,
+// so its boot found the crashed process still holding the node's presence and
+// left the admission: it could not tell the crash from a duplicate. A window
+// opened then sees a process that may be publishing and is closed again. Once
+// the old lease lapses and the restarted process holds the presence, the same
+// evidence says the crashed one is gone, and the window withdraws the
+// admission and goes on without anybody excluding a node that is running.
+//
+// Mutation: drop the withdrawal of a replaced admission and the window stays
+// shut on the second open.
+func TestARestartInsideItsCrashedProcesssLeaseIsRetiredByTheWindow(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fleet := coordmem.NewFleet()
+	backend := coordmem.New()
+	streams := []string{"CREWLET_TRACKER_LOG"}
+
+	crashed := nodeOn(fleet, "node-a", "crashed", statelog.ModeNormal, dataNode)
+	if err := crashed.handshake(ctx, streams); err != nil {
+		t.Fatal(err)
+	}
+	lease, _, err := backend.TryAcquire(ctx, coord.NodeResource("node-a"),
+		coord.AcquireOptions{Owner: "node-a:crashed", TTL: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted := nodeOn(fleet, "node-a", "restarted", statelog.ModeMaintenance, dataNode)
+	restarted.backends.Coord = backend
+	if err := restarted.handshake(ctx, streams); err != nil {
+		t.Fatal(err)
+	}
+	if held, _, _ := heldAdmission(ctx, fleet, "node-a"); held.Incarnation != "node-a:crashed" {
+		t.Fatalf("the premise failed: node-a holds %+v after a restart inside "+
+			"the crashed process's lease", held)
+	}
+
+	coordinator := nodeOn(fleet, "node-b", "boot-1", statelog.ModeMaintenance, dataNode)
+	coordinator.backends.Coord = backend
+	if err := coordinator.handshake(ctx, streams); err != nil {
+		t.Fatal(err)
+	}
+	request := CapacityRequest{Stream: "CREWLET_TRACKER_LOG", TargetMaxBytes: 1 << 33, By: "ops-3"}
+	if _, err := coordinator.openCapacity(ctx, request,
+		jetstream.LogStats{MaxBytes: 1 << 32}, unstatedRoom); err == nil {
+		t.Fatal("a window opened while the process node-a's admission names " +
+			"still held its presence")
+	}
+
+	// THE CRASHED PROCESS'S LEASE LAPSES, and the restarted one takes it.
+	if _, err := backend.Release(ctx, coord.NodeResource("node-a"), "node-a:crashed",
+		lease.Epoch); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := backend.TryAcquire(ctx, coord.NodeResource("node-a"),
+		coord.AcquireOptions{Owner: "node-a:restarted", TTL: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	op, err := coordinator.openCapacity(ctx, request,
+		jetstream.LogStats{MaxBytes: 1 << 32}, unstatedRoom)
+	if err != nil {
+		t.Fatalf("the window was refused once node-a's restarted process held "+
+			"its presence: %v", err)
+	}
+	if _, found, _ := heldAdmission(ctx, fleet, "node-a"); found {
+		t.Error("node-a's crashed process still holds an admission the window " +
+			"could see it no longer has")
+	}
+	// AND THE RESTARTED PROCESS ACKNOWLEDGES THE WINDOW, as its next boot
+	// would, so the baseline has a process to record for it.
+	if err := fleet.PutMaintenanceAck(ctx, coord.MaintenanceAck{
+		NodeID: "node-a", OperationID: op.OperationID, Attempt: op.Attempt,
+		Incarnation: "node-a:restarted", Mode: string(statelog.ModeMaintenance),
+		At: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	next, err := coordinator.advanceCapacity(ctx, nil, op)
+	if err != nil {
+		t.Fatalf("the baseline refused once node-a was retired: %v", err)
+	}
+	if next.Phase != coord.PhaseBaselined {
+		t.Errorf("the window stands at %s, want baselined", next.Phase)
+	}
+}
+
+// slipFleet is a coordination store a node admits itself through at the worst
+// moment there is: after the coordinator could have read the admissions and
+// before its window's record lands, so the node finds no window and starts.
+type slipFleet struct {
+	*fleetStore
+	slip coord.Admission
+}
+
+func (f *slipFleet) OpenMaintenance(ctx context.Context, op coord.MaintenanceOperation) (
+	coord.MaintenanceOperation, bool, error) {
+
+	if err := f.fleetStore.PutAdmission(ctx, f.slip); err != nil {
+		return coord.MaintenanceOperation{}, false, err
+	}
+	return f.fleetStore.OpenMaintenance(ctx, op)
+}
+
+// A NODE ADMITTED JUST BEFORE THE WINDOW EXISTED IS SEEN BY ITS FIRST REQUEST.
+//
+// The coordinator read the admissions and then wrote the window. A node that
+// wrote its admission between the two and read the window before the create
+// saw nothing either way: it started publishing, and the window baselined and
+// resized the log under it. Read after the window's record lands, as the
+// handshake needs, the admission is seen.
+func TestAnAdmissionWrittenBeforeTheWindowLandedIsSeen(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e, fleet := capacityFixture(t, "node-1", statelog.ModeMaintenance)
+	e.backends.Fleet = &slipFleet{fleetStore: fleet, slip: coord.Admission{
+		NodeID: "node-9", Incarnation: "node-9:boot-1", At: time.Now().UTC(),
+	}}
+
+	op := openWindow(t, e)
+	if _, err := e.advanceCapacity(ctx, nil, op); err == nil ||
+		!strings.Contains(err.Error(), "node-9") {
+		t.Fatalf("the window baselined over a node that admitted itself just "+
+			"before the window landed, and is publishing (err %v)", err)
+	}
+}
+
+// stuckAdmissions is a coordination store that cannot withdraw an admission.
+type stuckAdmissions struct{ *fleetStore }
+
+func (stuckAdmissions) ForgetAdmission(context.Context, string, string) error {
+	return errors.New("store unreachable")
+}
+
+// AN EXCLUDED NODE'S ADMISSION STOPS COUNTING EVEN WHERE IT COULD NOT BE
+// WITHDRAWN. The exclusion is the operator's word that the process is
+// stopped, recorded on the window, and the window's first request reads it
+// there: one that went on counting the key a store blip left would refuse
+// the very node it was told is gone. And the key it left is said in the log,
+// which is the whole of what it leaves behind: the exclusion once read the
+// admissions through a helper that answered a failed read as none, so a store
+// blip withdrew nothing and said nothing.
+//
+// Process-wide logging, so not parallel. Mutation: swallow the withdrawal's
+// failure and the log half fails.
+func TestAnExcludedNodesAdmissionNoLongerStopsTheWindow(t *testing.T) {
+	logs := captureEngineLogs(t)
+	ctx := context.Background()
+	e, fleet := capacityFixture(t, "node-1", statelog.ModeMaintenance)
+	if err := fleet.PutAdmission(ctx, coord.Admission{
+		NodeID: "node-9", Incarnation: "node-9:boot-1", At: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	e.backends.Fleet = stuckAdmissions{fleetStore: fleet}
+	op := openWindow(t, e)
+	excluded, err := e.ExcludeParticipant(ctx, op.Stream, "node-9", iam.Actor{Name: "dana.sre"})
+	if err != nil {
+		t.Fatalf("the exclusion was refused: %v", err)
+	}
+	if _, found, _ := heldAdmission(ctx, fleet, "node-9"); !found {
+		t.Fatal("the premise failed: node-9's admission was withdrawn")
+	}
+	if lines := logs.about("excluded_admission_not_withdrawn", "node", "node-9"); len(lines) != 1 {
+		t.Errorf("excluded_admission_not_withdrawn = %v: an exclusion that left "+
+			"the node's admission has to say so", lines)
+	}
+	if _, err := e.advanceCapacity(ctx, nil, excluded); err != nil {
+		t.Fatalf("an excluded node's admission still stops the window: %v", err)
+	}
+}
+
+// A DEAD NODE'S ADMISSION IS WITHDRAWN BY EXCLUDING IT.
+//
+// node-a crashed holding its admission and will never boot again, so nothing
+// retires its claim on its behalf. The window used to refuse to open over it,
+// and an exclusion is a gesture on an open window, so the fleet could never
+// resize that log again. Now the window opens, stops before its first request,
+// and the exclusion — the operator's word that the process is stopped,
+// recorded with their name — withdraws the admission and waives the dead
+// node's acknowledgement in the same breath.
+func TestADeadNodesAdmissionIsWithdrawnByExcludingIt(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fleet := coordmem.NewFleet()
+	streams := []string{"CREWLET_TRACKER_LOG"}
+
+	crashed := nodeOn(fleet, "node-a", "crashed", statelog.ModeNormal, dataNode)
+	if err := crashed.handshake(ctx, streams); err != nil {
+		t.Fatal(err)
+	}
+	// A DATA NODE PUBLISHES ITS POSITION, which is what makes it a
+	// participant whose acknowledgement the window waits for.
+	if err := fleet.PutPositions(ctx, coord.NodePositions{
+		NodeID: "node-a", At: time.Now().UTC(), Domains: map[string]coord.DomainPosition{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	coordinator := nodeOn(fleet, "node-b", "boot-1", statelog.ModeMaintenance, dataNode)
+	if err := coordinator.handshake(ctx, streams); err != nil {
+		t.Fatal(err)
+	}
+	op := openWindow(t, coordinator)
+	if !slices.Contains(op.Participants, "node-a") {
+		t.Fatalf("participants = %v, want node-a among them", op.Participants)
+	}
+	if _, err := coordinator.advanceCapacity(ctx, nil, op); err == nil {
+		t.Fatal("the window baselined over a dead node's admission")
+	}
+
+	sre := iam.Actor{Name: "dana.sre", OperatorID: "session:0192f00d-0000-7000-8000-0000000000dd"}
+	excluded, err := coordinator.ExcludeParticipant(ctx, op.Stream, "node-a", sre)
+	if err != nil {
+		t.Fatalf("the exclusion was refused: %v", err)
+	}
+	if party := excluded.ExcludedBy["node-a"]; party.By != sre.Name {
+		t.Errorf("the window records node-a as excluded by %+v, want %s", party, sre.Name)
+	}
+	if _, found, err := heldAdmission(ctx, fleet, "node-a"); err != nil || found {
+		t.Fatalf("node-a's admission outlived its exclusion (found %t, err %v)", found, err)
+	}
+	next, err := coordinator.advanceCapacity(ctx, nil, excluded)
+	if err != nil {
+		t.Fatalf("the window still refuses with node-a excluded: %v", err)
+	}
+	if next.Phase != coord.PhaseBaselined {
+		t.Errorf("the window stands at %s, want baselined", next.Phase)
+	}
+	if _, baselined := next.WriteIncarnations["node-a"]; baselined {
+		t.Errorf("an excluded node was baselined: %+v", next.WriteIncarnations)
 	}
 }
 

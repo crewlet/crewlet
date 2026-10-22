@@ -142,11 +142,23 @@ type MaintenanceReport struct {
 	By         string    `json:"by,omitempty"`
 	OperatorID string    `json:"operator_id,omitempty"`
 
-	// ParticipantsMissing names the nodes whose acknowledgement the seal
-	// is still waiting for. EMPTY IS NOT THE SAME AS UNKNOWN: an
-	// operation with nobody outstanding is one waiting on its operator,
-	// and that is the state an operator most needs to be able to see.
+	// ParticipantsMissing names the nodes the window's next step is still
+	// waiting for: at `opened`, those with no restart into a maintenance
+	// mode recorded, which is what the baseline reads ([BaselineMissing]);
+	// past it, those whose acknowledgement the seal is still waiting for.
+	// EMPTY IS NOT THE SAME AS UNKNOWN: an operation with nobody
+	// outstanding is one waiting on its operator, and that is the state an
+	// operator most needs to be able to see.
 	ParticipantsMissing []string `json:"participants_missing,omitempty"`
+
+	// AdmissionsBlocking names the nodes holding an admission that keeps a
+	// window at `opened` from sending anything ([AdmissionBlocks]). Empty
+	// past `opened`, where no step reads an admission. Said beside the
+	// missing participants because it is the one thing holding a window
+	// that no participant owes: every node can have restarted and the
+	// window still wait on a node that stopped without giving its
+	// admission back.
+	AdmissionsBlocking []string `json:"admissions_blocking,omitempty"`
 
 	// Blocked names why the operation cannot proceed without a person,
 	// empty while it can.

@@ -2304,7 +2304,18 @@ there the broker refuses such a raise when the window applies it.
 Run from a node in `normal` mode it refuses outright, naming the restart. Run
 from `maintenance` it opens, baselines and applies; run from `seal` it collects
 the barrier, seals, verifies and confirms. It prints the phase it reached and
-the next gesture, never the transition table.
+the next gesture, with the command to run in full, never the transition
+table. A node holding an **admission** (one that may be publishing) stops it in
+one of two ways. If the process that wrote the admission is still running, the
+window is closed again as it opens and nothing is sent: restart that node with
+`-mode maintenance` and run the verb again. If it isn't running, the window
+stays at `opened`, which has sent nothing for this attempt, and the first
+request is refused naming the node: restart it with `-mode maintenance`, or
+`exclude` one that will never boot again. While it waits the window refuses
+every node that starts in service, so that refusal names `abandon` too. An
+admission whose node now runs another process is withdrawn by the window
+itself. A later attempt back at `opened` says what the last one left the
+ceiling at.
 
 ### `crewlet retention maintenance`
 
@@ -2316,10 +2327,14 @@ crewlet retention maintenance abandon -stream CREWLET_TRACKER_LOG -confirm capac
 
 `status` is the one page an operator can see why a fleet is still excluded: the
 operation, its phase and attempt, every participant's baselined incarnation
-against what it acknowledged as, which acknowledgements are missing, any
-unresolved write attempt, and any admission still blocking activation. On a
-fleet with no window it says so — *no window* and *a window in phase `opened`*
-are different facts with different next steps.
+against what it acknowledged as, any unresolved write attempt, and what the
+window's next step is waiting on. At `opened` that is the baseline's: the
+participants with no restart into a maintenance mode recorded, and any
+admission still stopping the window's first request. From the baseline on it is
+the seal's: which acknowledgements are missing. On a fleet with no window it
+says so — *no window* and *a window in phase `opened`* are different facts with
+different next steps — and, on a node in a maintenance mode, names any node
+still holding an admission before you open one.
 
 `exclude` is your assertion that a participant's **process is stopped** and
 holds no outstanding request. It is the only thing that waives an
@@ -2327,13 +2342,19 @@ acknowledgement; an eviction does not, because that is about whose records
 apply and this is about whose process is running. The window records it as
 yours — `status` prints the participant as `excluded by` you, with the
 credential you used — and an `abandon` that leaves the window open is recorded
-and printed (`ABANDONED`) the same way.
+and printed (`ABANDONED`) the same way. It also withdraws the node's
+admission, which is how a window gets past a node that crashed and will never
+boot again: a node that does boot again withdraws its last process's admission
+itself. Any node can be excluded, whether or not it is a participant, and
+`-node` names it.
 
 `abandon` changes what the operation is trying to reach and never the barrier
 it must cross. From `opened` it clears outright — no request was issued. From
 anywhere else the fleet still has to restart into `seal`, because a paused
 coordinator's request is outstanding whether or not a person has read a status
-page. `-confirm` repeats the operation id from `status`.
+page. `-confirm` repeats the operation id from `status`, and the node checks it
+against the operation that is open before it abandons anything: one naming
+another operation is refused and nothing changes.
 
 ### `crewlet retention reanchor`
 

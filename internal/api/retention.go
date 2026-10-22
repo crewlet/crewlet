@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -347,7 +348,7 @@ type capacityRunner interface {
 	ReanchorStatus(ctx context.Context, stream string) (engine.ReanchorView, error)
 	StreamGeneration(stream string) (uint32, error)
 	SetCapacity(ctx context.Context, req engine.CapacityRequest) (coord.MaintenanceOperation, error)
-	AbandonCapacity(ctx context.Context, stream string, by iam.Actor) (coord.MaintenanceOperation, error)
+	AbandonCapacity(ctx context.Context, stream, operationID string, by iam.Actor) (coord.MaintenanceOperation, error)
 	ExcludeParticipant(ctx context.Context, stream, node string, by iam.Actor) (coord.MaintenanceOperation, error)
 	CapacityStatus(ctx context.Context, stream string) (
 		coord.MaintenanceOperation, []coord.MaintenanceAck, []coord.Admission, bool, error)
@@ -543,22 +544,47 @@ func (a *App) serveMaintenanceStatus(w http.ResponseWriter, r *http.Request) {
 	if found {
 		body["operation"] = op
 		// WHAT IS MISSING, computed here rather than left to a reader:
-		// the whole question an operator runs this for is why the seal
-		// has not held, and a list of acknowledgements is that answer
-		// only if you already know the rule.
-		held, missing := statelog.SealHolds(op, acks)
-		body["sealed"] = held
-		body["blocking"] = missing
-		body["admissions_blocking"] = statelog.AdmissionBlocks(admissions, op.Excluded)
+		// the whole question an operator runs this for is why the window
+		// hasn't moved, and a list of acknowledgements is that answer only
+		// if you already know the rule. WHICH LIST IS THE PHASE'S. At
+		// `opened` the next step is the baseline, which reads a restart
+		// into a maintenance mode from every participant and the
+		// admissions; the seal's list there named every node as owing a
+		// seal restart the procedure hadn't asked for yet. Past it, the
+		// seal is the next step and no step reads an admission again.
+		if op.Phase == coord.PhaseOpened {
+			body["restarts_missing"] = statelog.BaselineMissing(op, acks)
+			body["admissions_blocking"] = statelog.AdmissionBlocks(admissions, op.Excluded)
+		} else {
+			held, missing := statelog.SealHolds(op, acks)
+			body["sealed"] = held
+			body["blocking"] = missing
+		}
 	}
 	writeJSON(w, http.StatusOK, body)
 }
 
 // serveAbandon answers POST /worklet/retention/maintenance/abandon.
+//
+// THE CONFIRMATION IS CHECKED BEFORE ANYTHING IS ABANDONED: ?confirm= repeats
+// the open operation's id, which says the caller read which window they are
+// abandoning. Missing, it is refused here; naming another operation, the
+// engine refuses it against the operation it reads before changing anything
+// ([engine.ConfirmMismatchError]). It used to be compared by the CLI after the
+// abandonment had run.
 func (a *App) serveAbandon(w http.ResponseWriter, r *http.Request) {
+	confirm := r.URL.Query().Get("confirm")
+	if confirm == "" {
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeConfirmRequired, map[string]string{
+			"detail": "repeat the open operation's id in ?confirm=, which " +
+				"`crewlet retention maintenance status` shows: a window is " +
+				"abandoned knowing which one it is",
+		})
+		return
+	}
 	a.capacityGesture(w, r, "abandon", func(ctx context.Context, stream string,
 		by iam.Actor) (coord.MaintenanceOperation, error) {
-		return a.capacity.AbandonCapacity(ctx, stream, by)
+		return a.capacity.AbandonCapacity(ctx, stream, confirm, by)
 	})
 }
 
@@ -600,6 +626,17 @@ func (a *App) capacityGesture(w http.ResponseWriter, r *http.Request, what strin
 	}
 	by := iam.ActorFor(caller)
 	op, err := run(r.Context(), stream, by)
+	var mismatch *engine.ConfirmMismatchError
+	if errors.As(err, &mismatch) {
+		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeConfirmRequired, httpjson.Detail{
+			"detail": fmt.Sprintf("the operation open on %s is %s, not %s, so "+
+				"nothing was abandoned: read `crewlet retention maintenance "+
+				"status`, then repeat its id in ?confirm=",
+				mismatch.Stream, mismatch.Open, mismatch.Named),
+			"operation": operationOrNil(op),
+		})
+		return
+	}
 	if err != nil {
 		log.Warn("api_capacity_gesture_refused", "gesture", what,
 			"stream", stream, "by", by.Name, "operator", by.OperatorID,

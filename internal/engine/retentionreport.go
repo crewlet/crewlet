@@ -332,6 +332,7 @@ func (r *retention) openMaintenance(ctx context.Context) *statelog.MaintenanceRe
 			TargetMaxBytes: op.TargetMaxBytes, OriginalMaxBytes: op.OriginalMaxBytes,
 			Since: op.EnteredAt.UTC(), By: op.By, OperatorID: op.OperatorID,
 			ParticipantsMissing: outstanding(ctx, r.fleet, op),
+			AdmissionsBlocking:  holdingAdmissions(ctx, r.fleet, op),
 			Blocked:             op.Blocked,
 			AbandonedBy:         op.AbandonedBy,
 		}
@@ -342,8 +343,13 @@ func (r *retention) openMaintenance(ctx context.Context) *statelog.MaintenanceRe
 	return oldest
 }
 
-// outstanding names the participants whose acknowledgement the seal is still
-// waiting for.
+// outstanding names the participants the window's next step is still waiting
+// for: at `opened`, those with no restart into a maintenance mode recorded
+// ([statelog.BaselineMissing], what the baseline reads); past it, those whose
+// acknowledgement the seal is still waiting for. At `opened` the seal's reading
+// named every node as owing an acknowledgement bound to the window, which no
+// node writes before the verb runs, so a banner said the window was waiting on
+// the whole fleet while the next step was the operator's.
 //
 // AN UNREADABLE ACK REGISTER YIELDS THE WHOLE PARTICIPANT SET rather than an
 // empty one: "nobody is outstanding" is the state that says the operation is
@@ -352,17 +358,21 @@ func (r *retention) openMaintenance(ctx context.Context) *statelog.MaintenanceRe
 func outstanding(ctx context.Context, fleet coord.Fleet,
 	op coord.MaintenanceOperation) []string {
 
+	acks, err := fleet.MaintenanceAcks(ctx)
+	if err != nil {
+		acks = nil
+	}
+	if op.Phase == coord.PhaseOpened {
+		return statelog.BaselineMissing(op, acks)
+	}
 	excluded := map[string]bool{}
 	for _, node := range op.Excluded {
 		excluded[node] = true
 	}
 	acked := map[string]bool{}
-	acks, err := fleet.MaintenanceAcks(ctx)
-	if err == nil {
-		for _, ack := range acks {
-			if ack.OperationID == op.OperationID && ack.Attempt == op.Attempt {
-				acked[ack.NodeID] = true
-			}
+	for _, ack := range acks {
+		if ack.OperationID == op.OperationID && ack.Attempt == op.Attempt {
+			acked[ack.NodeID] = true
 		}
 	}
 	var missing []string
@@ -373,6 +383,23 @@ func outstanding(ctx context.Context, fleet coord.Fleet,
 	}
 	sort.Strings(missing)
 	return missing
+}
+
+// holdingAdmissions names the nodes whose admission keeps a window at `opened`
+// from sending anything ([statelog.AdmissionBlocks]), and none past it, where
+// no step reads one. An unreadable register names nobody: the banner carries
+// no claim it could not read, and the baseline itself refuses on one.
+func holdingAdmissions(ctx context.Context, fleet coord.Fleet,
+	op coord.MaintenanceOperation) []string {
+
+	if op.Phase != coord.PhaseOpened {
+		return nil
+	}
+	admissions, err := fleet.Admissions(ctx)
+	if err != nil {
+		return nil
+	}
+	return statelog.AdmissionBlocks(admissions, op.Excluded)
 }
 
 // decisionOf turns a published floor back into the decision that wrote it.

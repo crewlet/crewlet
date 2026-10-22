@@ -7110,10 +7110,10 @@ takes `admin`.
 
 | Route | What it does |
 |---|---|
-| `POST /worklet/retention/capacity?stream=NAME&bytes=N&confirm=N` | Opens or resumes the operation and drives it as far as this node's mode allows. `confirm` repeats `bytes` and a mismatch is `400`: the target is chosen once for the life of an operation. `assert_excluded=true` is required only on an external broker. |
-| `GET /worklet/retention/maintenance?stream=NAME` | The operation, every acknowledgement, every admission, and (computed here rather than by each client) whether the seal holds, what is blocking it, and which admissions block activation. |
-| `POST /worklet/retention/maintenance/abandon?stream=NAME` | From `opened` clears the operation outright; from anywhere else enters the seal, and the operation records who abandoned it as `abandoned_by`. |
-| `POST /worklet/retention/maintenance/exclude?stream=NAME&node=ID&confirm=ID` | Waives one participant's acknowledgement and withdraws its admission, and the operation records who asserted it under `excluded_by`, keyed by the node. |
+| `POST /worklet/retention/capacity?stream=NAME&bytes=N&confirm=N` | Opens or resumes the operation and drives it as far as this node's mode allows. `confirm` repeats `bytes` and a mismatch is `400`: the target is chosen once for the life of an operation. `assert_excluded=true` is required only on an external broker. An admission from a process that is still running (it holds its node's presence) closes the window again as it opens: `409 capacity_refused` naming the node, with no `operation`. An admission from a process that isn't running answers `409 capacity_refused` naming the node and the commands past it, with the window open at `opened` in `operation`: nothing is sent until that node restarts into a maintenance mode or is excluded, and the window refuses every node that starts in service until then. An admission whose node another process now holds is withdrawn by the window. |
+| `GET /worklet/retention/maintenance?stream=NAME` | The operation, every acknowledgement, every admission, and (computed here rather than by each client) what the window's next step is waiting on. At `opened` that is the baseline: `restarts_missing` (the participants with no restart into a maintenance mode recorded) and `admissions_blocking` (every admission but an excluded node's). From the baseline on it is the seal: `sealed` and `blocking`, which no longer reads an admission. |
+| `POST /worklet/retention/maintenance/abandon?stream=NAME&confirm=OPERATION-ID` | From `opened` clears the operation outright; from anywhere else enters the seal, and the operation records who abandoned it as `abandoned_by`. `confirm` repeats the open operation's id and is checked before anything changes: a missing one is `400 confirm_required`, and one naming another operation is `400 confirm_required` naming the open one in `detail`, with it in `operation`. |
+| `POST /worklet/retention/maintenance/exclude?stream=NAME&node=ID&confirm=ID` | Waives one node's acknowledgement and withdraws its admission, and the operation records who asserted it under `excluded_by`, keyed by the node. An excluded node's admission no longer stops the window, whether or not it could be withdrawn. |
 
 **Every gesture on the window names who made it**: `by` and `operator_id` for
 whoever opened it, and the same pair under `abandoned_by` and, per node, under
@@ -7128,10 +7128,10 @@ usage a resize is decided against has to be a quantity nothing can move. The
 three-mode boot is `crewlet run -mode`; see
 [the CLI reference](cli.md#crewlet-run).
 
-The `sealed` / `blocking` / `admissions_blocking` fields are **computed
-server-side**, from the same predicate the coordinator itself runs. A client
-that re-derived them would be a second opinion about one barrier, and the two
-would drift.
+The `restarts_missing` / `admissions_blocking` and `sealed` / `blocking`
+fields are **computed server-side**, from the same predicates the coordinator
+itself runs. A client that re-derived them would be a second opinion about one
+barrier, and the two would drift.
 
 ### Re-anchoring
 
