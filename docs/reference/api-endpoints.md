@@ -7522,7 +7522,10 @@ The API origin **never renders an artifact**:
   held to. This is how the dashboard draws a doc, which runs no author code:
   with its own element-constructing renderer, never as markup. Reading it
   records that the caller opened the doc. Any other kind is
-  `409 content_refused`.
+  `409 content_refused`, and so is a deck, a doc or a design whose version no
+  longer reads in its format: said in words that it can't be shown and that
+  publishing it again fixes that, with the format's own findings in the
+  node's log.
 - `GET /artifacts/{id}/versions/{n}/outline` answers a version's structure
   without every file: for a deck, its title, slide count, cover, sections and
   each slide's id, title and hidden flag, plus the cover slide's tree; for a
