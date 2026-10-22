@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // serving is a Tier A that binds a port and satisfies every rule that comes
@@ -274,7 +275,17 @@ func TestATokenMustStateWhatItMayDo(t *testing.T) {
 		t.Parallel()
 		b := serving()
 		b.API.Auth.Tokens[0].Grants = nil
-		refuses(t, b, "List the permissions this token gets")
+		refuses(t, b, "List the permissions this token gets, any of "+words.Or(iam.AllGrants))
+	})
+	// A NAME NOBODY KNOWS IS TOLD EVERY ONE IT COULD BE, as a sentence says
+	// them: the refusal printed Go's slice, `[admin worklet doclet …]`,
+	// to whoever runs `crewlet validate` and to every /config write.
+	// Mutation: print iam.AllGrants with %v and this fails.
+	t.Run("a name this build does not know", func(t *testing.T) {
+		t.Parallel()
+		b := serving()
+		b.API.Auth.Tokens[0].Grants = []iam.Grant{"swarm"}
+		refuses(t, b, iam.NotAGrant("swarm"))
 	})
 }
 

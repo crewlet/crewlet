@@ -1089,8 +1089,8 @@ func (a *APIAuth) validateTokens(path Path, serving bool) error {
 
 		if len(t.Grants) == 0 {
 			p.add(at(tp, "grants"), ErrMissing,
-				"required. List the permissions this token gets, from %s",
-				words.And(iam.AllGrants))
+				"required. List the permissions this token gets, any of %s",
+				words.Or(iam.AllGrants))
 		}
 		p.wrap(checkGrants(at(tp, "grants"), t.Grants, a.Admin))
 	}
@@ -1130,8 +1130,7 @@ func checkGrants(path Path, grants []iam.Grant, admin iam.AdminPosture) error {
 	for i, g := range grants {
 		gp := idx(path, i)
 		if !g.Valid() {
-			p.add(gp, ErrUnknownValue,
-				"%q isn't a permission. Use one of %s", g, words.Or(iam.AllGrants))
+			p.add(gp, ErrUnknownValue, "%s", iam.NotAGrant(g))
 		}
 	}
 	if admin == iam.AdminRefuse && slices.Contains(iam.Expand(grants), iam.GrantAdmin) {

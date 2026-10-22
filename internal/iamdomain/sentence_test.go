@@ -144,7 +144,7 @@ func TestARefusalTellsAPersonNoIdAndTheLogEveryOne(t *testing.T) {
 		{"a name this build does not know, on a token", func() error {
 			return mint(asOwner(rig, owner), iamdomain.TokenMint{PersonID: owner,
 				Grants: []iam.Grant{"swarm"}})
-		}, `"swarm" isn't a permission. Use "admin", "tracker"`, nil, nil},
+		}, iam.NotAGrant("swarm"), nil, nil},
 		{"an expired invitation's link", func() error {
 			_, err := redeemAs(t, rig, expired, expiredAt, expired.Secret, expiredSeat)
 			return err

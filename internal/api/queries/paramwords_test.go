@@ -76,7 +76,7 @@ func TestAParameterRefusalIsToldInWordsNeverInGos(t *testing.T) {
 			map[string]any{"kind": "gadgets"}, `the kind parameter is one of `},
 		{"an entity nobody declared", config, "config_entities",
 			map[string]any{"kind": "roles", "id": "nobody-here"},
-			`nothing in the running company's roles is called "nobody-here"`},
+			`no seat is called "nobody-here"`},
 		{"a skills order nobody knows", memory, "agent_memory",
 			map[string]any{"id": "cto", "skills_order": "alphabetical"},
 			`not "alphabetical"`},

@@ -538,10 +538,10 @@ func TestAMachineCreateNamesItsGrants(t *testing.T) {
 			[]string{"-grants", "or none"}},
 		{[]string{"create", "-kind", "machine", "-login", "ci:release",
 			"-grants", "trackr"},
-			[]string{`"trackr"`, "admin, worklet, doclet, artifacts, chatlet", "none"}},
+			[]string{`"trackr"`, "any of " + iamGrantWords() + ", separated by commas, or none"}},
 		{[]string{"invite", "lead@example.com", "-seat", "lead",
 			"-grants", "billing"},
-			[]string{`"billing"`, "admin, worklet, doclet, artifacts, chatlet"}},
+			[]string{`"billing"`, "any of " + iamGrantWords() + ", separated by commas"}},
 		{[]string{"grant", "p-1", "-grants", "none,admin"},
 			[]string{"none", "on its own"}},
 		{[]string{"suspend", "p-1", "-grants", "admin"},
@@ -1996,6 +1996,27 @@ func TestANextPageLineQuotesWhatAShellWouldSplit(t *testing.T) {
 	} {
 		if got := shellWord(value); got != want {
 			t.Errorf("shellWord(%q) = %s, want %s", value, got, want)
+		}
+	}
+}
+
+// THE FLAG'S NAMES ARE A LIST READ AS ONE, its last joined by the sentence's
+// own word: "a, b, c, comma-separated, or none" read "comma-separated" as a
+// fourth member. Mutation: join every name with a comma again and this fails.
+func TestThePermissionListReadsAsAList(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		set         []iam.Grant
+		conjunction string
+		want        string
+	}{
+		{[]iam.Grant{"a", "b", "c"}, "or", "a, b or c"},
+		{[]iam.Grant{"a", "b"}, "and", "a and b"},
+		{[]iam.Grant{"a"}, "or", "a"},
+		{nil, "or", ""},
+	} {
+		if got := iamWords(c.set, c.conjunction); got != c.want {
+			t.Errorf("iamWords(%v, %q) = %q, want %q", c.set, c.conjunction, got, c.want)
 		}
 	}
 }

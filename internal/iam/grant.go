@@ -1,6 +1,11 @@
 package iam
 
-import "slices"
+import (
+	"fmt"
+	"slices"
+
+	"github.com/crewlet/crewlet/internal/words"
+)
 
 // Grant is one permission a principal carries: ADMIN, or ONE APP.
 //
@@ -147,6 +152,19 @@ var Apps = []Grant{GrantWorklet, GrantDoclet, GrantArtifacts, GrantChatlet}
 // NOTHING ELSE HAPPENS: see [Principal.Can] for what that buys and
 // [Principal.Validate] for what it deliberately does not cost.
 func (g Grant) Valid() bool { return slices.Contains(AllGrants, g) }
+
+// NotAGrant is a name this build does not know as a permission, as every
+// surface refusing one tells it: the name, and every permission there is,
+// read off [AllGrants] so a permission the vocabulary gains is named without
+// anybody remembering where.
+//
+// ONE SENTENCE for Tier A's token grants, an identity record's conferral and
+// the identity directory's routes, which said it three ways: two in words,
+// and one hand-joined ("Use one of admin, worklet, …"), which answered first
+// on /iam so the other two never reached anybody there.
+func NotAGrant(g Grant) string {
+	return fmt.Sprintf("%q isn't a permission. Use %s", g, words.Or(AllGrants))
+}
 
 // IsApp reports whether g opens one app, rather than running the company.
 func (g Grant) IsApp() bool { return slices.Contains(Apps, g) }
