@@ -324,12 +324,17 @@ func DecodeArgs(raw []byte, tool string) (map[string]any, error) {
 	if err := dec.Decode(&args); err != nil {
 		log.Warn("tool_arguments_unparseable",
 			"tool", tool, "bytes", len(raw), "error", err.Error())
-		return map[string]any{}, fmt.Errorf("the arguments are not a JSON object: %w", err)
+		// IN WORDS ([plainjson.Unreadable]), because the model reads this
+		// as its call's failed result and fixes the call from it: the
+		// decoder's own words name Go's types, and the log line above
+		// keeps them.
+		return map[string]any{}, errors.New(plainjson.Unreadable("the arguments object", err))
 	}
 	if dec.More() {
 		// Two values back to back is not one object with a stray tail; it
 		// is a call nobody can say which half of to run.
-		return map[string]any{}, errors.New("the arguments are not a single JSON object")
+		return map[string]any{}, errors.New(plainjson.Unreadable("the arguments object",
+			plainjson.ErrTrailing))
 	}
 	if args == nil {
 		// A literal `null` unmarshals into a nil map without error.

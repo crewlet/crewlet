@@ -1006,3 +1006,34 @@ func TestAnOperatorCallsNumbersArriveExactly(t *testing.T) {
 		filedExactly(t, work)
 	})
 }
+
+// A BODY THAT DOES NOT DECODE IS TOLD IN WORDS ([plainjson.Unreadable]): the
+// detail carried encoding/json's own sentence after the envelope's shape
+// (`invalid character '}' looking for beginning of value`, `json: unknown
+// field "op_id"`, "json: cannot unmarshal array into Go value of type
+// map[string]interface {}"). Mutation: wrap the decoder's error again in
+// decodeAct, or the arguments' error, and its row goes red.
+func TestAnActBodyThatDoesNotDecodeIsToldInWords(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ body, says string }{
+		{`{"args":`, "The body isn't valid JSON: it ends too soon. Send one JSON " +
+			`object, {"args": {…}}, with the operation in the Idempotency-Key header.`},
+		{`{"args":{},"tool":"x"}`, `In the body, "tool" isn't a field this takes. ` +
+			`Send one JSON object, {"args": {…}}, with the operation in the ` +
+			"Idempotency-Key header."},
+		{`{"args":[1]}`, `"args" in the body is a list where an object belongs.`},
+		{`{"args":{}} {}`, "The body has more after its JSON value, which is all it " +
+			"may hold."},
+		{`{"args":{}}}`, "The body has more after its JSON value, which is all it " +
+			"may hold."},
+	} {
+		work := &recordingWork{}
+		status, answer := act(t, guarded(actSurface(t, work)), "founder",
+			tracker.CreateWorkItemTool, "application/json", tc.body, newKey())
+		if status != http.StatusBadRequest || answer["error"] != string(httpjson.CodeInvalidBody) ||
+			answer["detail"] != tc.says {
+			t.Errorf("%s answered %d %v, want 400 invalid_body saying %q", tc.body,
+				status, answer, tc.says)
+		}
+	}
+}

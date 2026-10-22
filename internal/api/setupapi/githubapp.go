@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
 )
@@ -281,7 +282,8 @@ func (s *Service) beginApp(w http.ResponseWriter, r *http.Request) {
 		Seat string `json:"seat"`
 	}
 	if err = json.Unmarshal(body, &in); err != nil {
-		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody, map[string]string{"hint": err.Error()})
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
+			map[string]string{"detail": plainjson.Unreadable("the body", err)})
 		return
 	}
 	handle := strings.TrimSpace(in.Seat)

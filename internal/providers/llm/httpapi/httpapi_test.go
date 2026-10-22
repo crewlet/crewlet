@@ -392,6 +392,17 @@ func TestDecodeArgs(t *testing.T) {
 			if (err != nil) != tc.invalid {
 				t.Fatalf("DecodeArgs error = %v, want invalid=%v", err, tc.invalid)
 			}
+			// THE MODEL FIXES ITS CALL FROM THIS, so it is said in words
+			// ([plainjson.Unreadable]) and never in encoding/json's ("the
+			// arguments are not a JSON object: unexpected end of JSON
+			// input"). Mutation: wrap the decoder's error again and every
+			// invalid row goes red.
+			if err != nil && (!strings.HasPrefix(err.Error(), "the arguments object ") ||
+				strings.Contains(err.Error(), "json:") ||
+				strings.Contains(err.Error(), "invalid character") ||
+				strings.Contains(err.Error(), "unexpected end")) {
+				t.Errorf("a model is told %q, want the arguments said in words", err)
+			}
 			if fmt.Sprint(got) != fmt.Sprint(tc.want) {
 				t.Fatalf("DecodeArgs = %v, want %v", got, tc.want)
 			}

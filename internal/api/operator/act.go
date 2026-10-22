@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -314,17 +315,16 @@ func decodeAct(raw []byte) (map[string]any, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
-		return nil, fmt.Errorf("the body must be one JSON object "+
-			"{\"args\": {…}}, with the operation in the %s header: %w",
-			opkey.Header, err)
+		return nil, fmt.Errorf("%s. Send one JSON object, {\"args\": {…}}, "+
+			"with the operation in the %s header",
+			plainjson.Unreadable("the body", err), opkey.Header)
 	}
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
-		return nil, errors.New("the body carries something after its " +
-			"JSON object; send exactly one")
+		return nil, errors.New(plainjson.Unreadable("the body", plainjson.ErrTrailing))
 	}
 	args, err := tools.DecodeCallArgs(req.Args)
 	if err != nil {
-		return nil, fmt.Errorf("the body's `args`: %w", err)
+		return nil, errors.New(plainjson.Unreadable(`"args" in the body`, err))
 	}
 	return args, nil
 }
