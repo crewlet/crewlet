@@ -290,8 +290,7 @@ func (w *Writer) firstLinkAs(ctx context.Context, result statelog.Result,
 		row   ResetRow
 	)
 	err := w.db.Read(ctx, func(tx *sql.Tx) error {
-		person, err := heldPerson(ctx, tx, personID,
-			"the first password link its create issued")
+		person, err := heldPerson(ctx, tx, personID)
 		switch {
 		case errors.Is(err, ErrNotFound):
 			return nil
@@ -497,10 +496,9 @@ func (w *Writer) Redeem(ctx context.Context, in Redemption) (statelog.Result, er
 		// is a node that has not applied it yet, and another node can
 		// redeem the link. Never the issue's "create a company first",
 		// which is advice to an administrator and not to an invitee.
-		return statelog.Result{}, fmt.Errorf("%w: invitation %s is for seat "+
-			"%q, and this node has no company yet. Try again shortly (%v)",
-			statelog.ErrUnavailable, in.Invitation,
-			in.Seat, err)
+		return statelog.Result{}, fmt.Errorf("%w: this invitation is for "+
+			"seat %q, and this node has no company yet. Try again shortly "+
+			"(%v)", statelog.ErrUnavailable, in.Seat, err)
 	case errors.Is(err, statelog.ErrUnavailable):
 		return statelog.Result{}, err
 	case err != nil:
@@ -508,8 +506,9 @@ func (w *Writer) Redeem(ctx context.Context, in Redemption) (statelog.Result, er
 		// own answer is an invalid value an administrator typed, and wrapped
 		// here it told a surface the invitee had sent a bad request, when
 		// what they hold is a link the company's chart has since retired.
-		return statelog.Result{}, forbidden("invitation %s is for a "+
-			"seat that's no longer available (%v)", in.Invitation, err)
+		return statelog.Result{}, forbidden("this invitation is for a "+
+			"seat that's no longer available").about("invitation %s: %v",
+			in.Invitation, err)
 	}
 	return w.enrol(ctx, enrolment{
 		personID: in.PersonID, kind: iam.KindPerson, stage: in.Stage,
@@ -590,16 +589,15 @@ func (in Redemption) validate() error {
 		// REFUSED rather than invalid: it is what a link without its
 		// secret comes to, and its remedy is the one every way a link
 		// stops working has — ask for a new one.
-		return forbidden("invitation %s needs the full "+
-			"link, not just its id", in.Invitation)
+		return forbidden("this invitation needs the full link, not just "+
+			"its id").about("invitation %s", in.Invitation)
 	case in.Seat == "":
 		// A CALLER'S FAULT, never the invitee's: every invitation holds a
 		// seat ([Writer.Invite]), and the surface redeeming one hands on the
 		// seat it read off the invitation. [ErrSeatRequired] would ask the
 		// invitee for a field their form does not have.
-		return fmt.Errorf("%w: redeeming invitation %s binds the human seat "+
-			"the invitation holds, and this redemption names none",
-			ErrInvalid, in.Invitation)
+		return fmt.Errorf("%w: redeeming an invitation binds the human seat "+
+			"it holds, and this redemption names none", ErrInvalid)
 	case in.Password.Method != MethodPassword || in.Password.ID == "" ||
 		in.Password.Verifier == "":
 		return fmt.Errorf("%w: a redemption carries the password the invitee "+
@@ -854,11 +852,14 @@ func (w *Writer) createsNobodyTwice(ctx context.Context, tx *sql.Tx,
 //     operation under a new key.
 func (e *enrolment) alreadyEnrolled() error {
 	if e.invitation != "" {
-		return forbidden("invitation %s has already been used", e.invitation)
+		return forbidden("this invitation has already been used").
+			about("invitation %s", e.invitation)
 	}
-	return fmt.Errorf("%w: person %s already exists, and request %s didn't "+
-		"create them. Use a new key to add someone new",
-		ErrOperationReused, e.personID, e.opID)
+	// NEITHER THE PERSON NOR THE REQUEST BY ID: the person is the one the
+	// key derives ([CreatedPersonID]) and the request is the key itself,
+	// which the answer carries as its op_id and the surface's log beside it.
+	return fmt.Errorf("%w: it already added somebody. Use a new key to add "+
+		"someone new", ErrOperationReused)
 }
 
 // isEnrolled reports whether a person row exists, read inside a decide's
@@ -983,8 +984,8 @@ func (w *Writer) redeemable(ctx context.Context, tx *sql.Tx,
 		Scan(&held, &expires, &spent, &document)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return "", forbidden("this node doesn't have invitation %s",
-			e.invitation)
+		return "", forbidden("this node doesn't have this invitation").
+			about("invitation %s", e.invitation)
 	case err != nil:
 		return "", fmt.Errorf("iamdomain: read invitation %s: %w", e.invitation, err)
 	}
@@ -999,16 +1000,17 @@ func (w *Writer) redeemable(ctx context.Context, tx *sql.Tx,
 		// naming an invitation's id — which every snapshot and proxy log
 		// holds — is not holding its link. An invitation issued before
 		// links carried a secret has no verifier and admits nobody.
-		return "", forbidden("that isn't the link for invitation %s",
-			e.invitation)
+		return "", forbidden("that isn't this invitation's link").
+			about("invitation %s", e.invitation)
 	case held != e.blind:
-		return "", forbidden("invitation %s is for a "+
-			"different email address", e.invitation)
+		return "", forbidden("this invitation is for a different email "+
+			"address").about("invitation %s", e.invitation)
 	case spent != 0:
-		return "", forbidden("invitation %s has already been used",
-			e.invitation)
+		return "", forbidden("this invitation has already been used").
+			about("invitation %s", e.invitation)
 	case expires == 0 || !w.Now().Before(time.UnixMilli(expires)):
-		return "", forbidden("invitation %s has expired", e.invitation)
+		return "", forbidden("this invitation has expired").
+			about("invitation %s", e.invitation)
 	}
 	// WHAT WAS OFFERED, READ THROUGH [iam.Expand]: an invitation offering
 	// admin offers every app with it, and an invitation carrying a name
@@ -1017,9 +1019,9 @@ func (w *Writer) redeemable(ctx context.Context, tx *sql.Tx,
 	offered := iam.Expand(invitation.Grants)
 	for _, g := range e.grants {
 		if !slices.Contains(offered, g) {
-			return "", forbidden("invitation %s gives %v, which "+
-				"doesn't include %s", e.invitation,
-				invitation.Grants, g)
+			return "", forbidden("this invitation doesn't give %s", g).
+				about("invitation %s gives %s", e.invitation,
+					grantWords(invitation.Grants))
 		}
 	}
 	// THE SEAT IS THE INVITATION'S, and exactly it: one the invitation
@@ -1027,8 +1029,8 @@ func (w *Writer) redeemable(ctx context.Context, tx *sql.Tx,
 	// offered, and one it carried and the enrolment dropped would spend
 	// the link without the binding its issuer decided on.
 	if e.seat != invitation.Seat {
-		return "", forbidden("invitation %s is for seat %q, not %q",
-			e.invitation, invitation.Seat, e.seat)
+		return "", forbidden("this invitation is for seat %q, not %q",
+			invitation.Seat, e.seat).about("invitation %s", e.invitation)
 	}
 	return invitation.InvitedBy, nil
 }
@@ -1204,9 +1206,9 @@ func (w *Writer) SetIdentity(ctx context.Context, in IdentityEdit) (
 			// ON THE KIND THIS SNAPSHOT HOLDS, and before anything else
 			// is formed: the rule is about what the row IS, never about
 			// what the caller says it is.
-			return nil, fmt.Errorf("%w: %s is a person, and a person's seat "+
-				"is moved to another human seat or freed by removing them — "+
-				"never cleared", ErrSeatRequired, in.PersonID)
+			return nil, fmt.Errorf("%w: they're a person, so their seat is "+
+				"moved to another human seat or freed by removing them, "+
+				"never cleared", ErrSeatRequired)
 		}
 		next := IdentityChange{V: DocumentVersion, Login: held.Login,
 			SeatID: held.SeatID}
@@ -1718,8 +1720,9 @@ func (w *Writer) CloseSession(ctx context.Context, lineage, person, reason,
 			return fmt.Errorf("iamdomain: read session %s's owner: %w",
 				lineage, err)
 		case owner != person:
-			return forbidden("session %s belongs to person %s, not %s",
-				lineage, owner, person)
+			return forbidden("that session isn't theirs").
+				about("session %s belongs to person %s, not %s", lineage,
+					owner, person)
 		}
 		return nil
 	}
@@ -1796,8 +1799,7 @@ func identityOf(ctx context.Context, tx *sql.Tx, personID string) (
 		personID).Scan(&kind, &held.EmailBlind, &held.Login, &held.SeatID)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return "", Identifiers{}, fmt.Errorf("%w on this node: %s",
-			ErrNotFound, personID)
+		return "", Identifiers{}, fmt.Errorf("%w on this node", ErrNotFound)
 	case err != nil:
 		return "", Identifiers{}, fmt.Errorf("iamdomain: read person %s: %w",
 			personID, err)
@@ -1884,9 +1886,7 @@ const heldPersonStatement = `SELECT document, stage FROM iam_people WHERE id = ?
 // column alone is `active`, so an administrator correcting a suspended
 // person's grants would silently let them back in. Taking the column is what
 // makes the copy unable to outvote the fact.
-//
-// forming names what the caller is building, for the refusal.
-func heldPerson(ctx context.Context, tx *sql.Tx, personID, forming string) (
+func heldPerson(ctx context.Context, tx *sql.Tx, personID string) (
 	Person, error) {
 
 	var (
@@ -1897,8 +1897,9 @@ func heldPerson(ctx context.Context, tx *sql.Tx, personID, forming string) (
 		Scan(&document, &stage)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return Person{}, fmt.Errorf("%w: person %q is not enrolled on this "+
-			"node, so %s cannot be formed here", ErrNotFound, personID, forming)
+		// THE SAME WORDS AS [identityOf]'s: the person's id is the one the
+		// caller passed, and what it was building is the gesture they made.
+		return Person{}, fmt.Errorf("%w on this node", ErrNotFound)
 	case err != nil:
 		return Person{}, fmt.Errorf("iamdomain: read person %q: %w", personID, err)
 	}
@@ -1943,7 +1944,7 @@ func (w *Writer) SetCredentials(ctx context.Context, in CredentialSet) (
 	}
 	var mutation []byte
 	decide := func(tx *sql.Tx) error {
-		person, err := heldPerson(ctx, tx, in.PersonID, "their credential set")
+		person, err := heldPerson(ctx, tx, in.PersonID)
 		if err != nil {
 			return err
 		}
@@ -2099,7 +2100,7 @@ func (w *Writer) MintToken(ctx context.Context, in TokenMint) (TokenMinted, erro
 	// THE LAST RUN'S ANSWER, which is what the landed record carries.
 	var minted TokenMinted
 	decide := func(tx *sql.Tx) (err error) {
-		owner, err := heldPerson(ctx, tx, in.PersonID, "a token for them")
+		owner, err := heldPerson(ctx, tx, in.PersonID)
 		if err != nil {
 			return err
 		}
@@ -2260,9 +2261,21 @@ func (w *Writer) tokenGrants(asked, owner []iam.Grant) ([]iam.Grant, error) {
 	}
 	holds := iam.Expand(owner)
 	for _, g := range grants {
-		if !g.Valid() || !slices.Contains(holds, g) {
-			return nil, forbidden("a token can only have its owner's "+
-				"access, and %s isn't in %v", g, owner)
+		switch {
+		case !g.Valid():
+			// A NAME THIS BUILD DOES NOT KNOW is no permission at all,
+			// as [Writer.MayConfer] says it: told as one the owner
+			// lacks, it named a permission nobody could hold.
+			return nil, forbidden("%q isn't a permission. Choose from %s",
+				g, grantWords(iam.AllGrants))
+		case !slices.Contains(holds, g):
+			// IN WORDS FOR EITHER READER: the owner minting their own
+			// token, who is the usual one, and an administrator minting
+			// a service account's — "they" read to the owner as
+			// somebody else.
+			return nil, forbidden("a token can only have what its owner "+
+				"has, and its owner doesn't have %s", g).
+				about("the owner holds %s", grantWords(owner))
 		}
 	}
 	if err := w.MayConfer(nil, grants); err != nil {
@@ -2275,10 +2288,11 @@ func (w *Writer) tokenGrants(asked, owner []iam.Grant) ([]iam.Grant, error) {
 func tokenOwnable(personID string, owner Person) error {
 	switch {
 	case owner.Kind != iam.KindPerson && owner.Kind != iam.KindMachine:
-		return forbidden("%s isn't a person or service account here", personID)
+		return forbidden("a token can only act for a person or a service "+
+			"account").about("owner %s is a %s", personID, owner.Kind)
 	case !owner.Stage.MayAct():
-		return forbidden("%s is %q, so a token can't act for them",
-			personID, owner.Stage)
+		return forbidden("they're %s, so a token can't act for them",
+			owner.Stage).about("owner %s", personID)
 	}
 	return nil
 }
@@ -2323,9 +2337,8 @@ func tokenOwnable(personID string, owner Person) error {
 // token's owner.
 func (w *Writer) mayMintFor(in TokenMint, owner Person) error {
 	if strings.HasPrefix(w.OperatorID, iam.MachineTokenPrefix) {
-		return forbidden("%w. You're using the access token %s, and a token "+
-			"can't create another. Sign in to create one",
-			ErrTokenRefused, w.OperatorID)
+		return forbidden("%w. A token can't create another, so sign in to "+
+			"create one", ErrTokenRefused).about("through %s", w.OperatorID)
 	}
 	if strings.HasPrefix(w.OperatorID, iam.AssistPrefix) {
 		return forbidden("%w. Create the token yourself from your account "+
@@ -2334,14 +2347,15 @@ func (w *Writer) mayMintFor(in TokenMint, owner Person) error {
 	switch owner.Kind {
 	case iam.KindPerson:
 		if w.Principal == "" || w.Principal != in.PersonID {
-			return forbidden("%s is a person, so only they can create "+
-				"their personal access tokens. Admins create tokens for "+
-				"service accounts only", in.PersonID)
+			return forbidden("only they can create their own access "+
+				"tokens. Admins create tokens for service accounts only").
+				about("owner %s, a person", in.PersonID)
 		}
 	case iam.KindMachine:
 		if !w.Can(iam.GrantAdmin) {
-			return needs([]iam.Grant{iam.GrantAdmin}, "creating a token for the "+
-				"service account %s needs %s", in.PersonID, iam.GrantAdmin)
+			return needs([]iam.Grant{iam.GrantAdmin}, "creating a token for "+
+				"a service account needs %s", iam.GrantAdmin).
+				about("service account %s", in.PersonID)
 		}
 	}
 	return nil
@@ -2587,10 +2601,9 @@ func (w *Writer) issuedAs(ctx context.Context, id, blind, seat string,
 	case err != nil:
 		return time.Time{}, err
 	case applied:
-		return time.Time{}, fmt.Errorf("%w: request %s already sent "+
-			"invitation %s, which has been used or expired. Send a new "+
-			"one with a new key", ErrOperationReused,
-			in.OpID, id)
+		return time.Time{}, fmt.Errorf("%w: the invitation it sent has been "+
+			"used or has expired. Send a new one with a new key",
+			ErrOperationReused)
 	}
 	return time.Time{}, &NotReadBack{Result: result, Invitation: true}
 }
@@ -2679,16 +2692,15 @@ func (w *Writer) issuedBefore(ctx context.Context, tx *sql.Tx, id, blind, seat s
 	switch {
 	case held != blind || !sameGrants(stored.Grants, in.Grants) ||
 		stored.Seat != seat:
-		return fmt.Errorf("%w: request %s already sent invitation %s with "+
-			"different details. Use a new key for a new invitation",
-			ErrOperationReused, in.OpID, id)
+		return fmt.Errorf("%w: it sent an invitation with different "+
+			"details. Use a new key for a new invitation", ErrOperationReused)
 	case redeemed != 0:
-		return fmt.Errorf("%w: the invitation from request %s has been used",
-			ErrOperationReused, in.OpID)
+		return fmt.Errorf("%w: the invitation it sent has been used",
+			ErrOperationReused)
 	case expires == 0 || !w.Now().Before(time.UnixMilli(expires)):
 		// NO EXPIRY IS AGED OUT, for [Writer.redeemable]'s reason.
-		return fmt.Errorf("%w: the invitation from request %s has expired. "+
-			"Send a new one with a new key", ErrOperationReused, in.OpID)
+		return fmt.Errorf("%w: the invitation it sent has expired. Send a "+
+			"new one with a new key", ErrOperationReused)
 	}
 	// THE DEADLINE IT WAS ISSUED WITH, which is the one its link keeps: a
 	// retry an hour later is not a later invitation.
@@ -2965,13 +2977,13 @@ func (w *Writer) SetPassword(ctx context.Context, in PasswordSet) (
 		return statelog.Result{}, err
 	}
 	decide := func(tx *sql.Tx) error {
-		person, err := heldPerson(ctx, tx, in.PersonID, "their new password")
+		person, err := heldPerson(ctx, tx, in.PersonID)
 		if err != nil {
 			return err
 		}
 		if person.Kind != iam.KindPerson {
-			return forbidden("%s is a %s, and only people have passwords",
-				in.PersonID, person.Kind)
+			return forbidden("only people have passwords").
+				about("%s is a %s", in.PersonID, person.Kind)
 		}
 		counters, err := countersOf(ctx, tx, in.PersonID)
 		if err != nil {
@@ -3141,7 +3153,7 @@ func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
 	// actually carries: a decide may run again against a fresh snapshot.
 	var before, after []iam.Grant
 	decide := func(tx *sql.Tx) (err error) {
-		person, err := heldPerson(ctx, tx, in.PersonID, "their row")
+		person, err := heldPerson(ctx, tx, in.PersonID)
 		if err != nil {
 			return err
 		}
@@ -3271,11 +3283,11 @@ func (w *Writer) MayConfer(before, after []iam.Grant) error {
 			continue
 		}
 		if !g.Valid() {
-			return forbidden("%q isn't a permission. Choose from %v",
-				g, iam.AllGrants)
+			return forbidden("%q isn't a permission. Choose from %s",
+				g, grantWords(iam.AllGrants))
 		}
 		return needs([]iam.Grant{g}, "you can't give %s because you don't "+
-			"have it (you have %v)", g, w.Grants)
+			"have it", g).about("the party holds %s", grantWords(w.Grants))
 	}
 	return nil
 }

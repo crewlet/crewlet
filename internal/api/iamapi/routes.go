@@ -524,7 +524,14 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 	// says. It used to carry none of it, so an edit refused at its last
 	// record answered that record's refusal alone and never said what had
 	// already changed.
+	//
+	// AND THE LOG CARRIES THE REST: the domain's whole error, which names
+	// by id what its sentence names as the caller knows it — an invitation,
+	// a session, the token a request came through ([iamdomain.Refusal.About])
+	// — beside the gesture's key and the path the caller asked on. The answer
+	// carries the sentence alone ([iamdomain.Sentence]).
 	refuse := func(status int, code httpjson.Code, fields httpjson.Detail) {
+		logRefused(r, opID, status, err)
 		for k, v := range extra {
 			if _, taken := fields[k]; !taken {
 				fields[k] = v
@@ -539,7 +546,7 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 		// token — a person signs in.
 		status, code, fields := authz.RefusalFields(authz.Decision{
 			Reason: authz.ReasonTokenRefused})
-		fields["detail"] = err.Error()
+		fields["detail"] = iamdomain.Sentence(err)
 		refuse(status, code, fields)
 		return
 	case errors.Is(err, iamdomain.ErrAssistRefused):
@@ -556,12 +563,12 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 		// table answers a missing one, naming that permission.
 		status, code, fields := authz.RefusalFields(authz.Decision{
 			Reason: authz.ReasonNoGrant, Grants: record.Grants})
-		fields["detail"] = err.Error()
+		fields["detail"] = iamdomain.Sentence(err)
 		refuse(status, code, fields)
 		return
 	case errors.As(err, &record):
 		refuse(http.StatusForbidden, httpjson.CodeForbidden,
-			httpjson.Detail{"detail": err.Error()})
+			httpjson.Detail{"detail": iamdomain.Sentence(err)})
 		return
 	case errors.Is(err, iamdomain.ErrSeatRequired):
 		// BEFORE THE INVALID ARM IT WRAPS: the remedy is always the same
@@ -595,7 +602,7 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 		// the framework's refusal after it, which names the operation and
 		// the subjects, so it is told in [opkey.Reused] as every surface
 		// taking a key tells it.
-		said := err.Error()
+		said := iamdomain.Sentence(err)
 		if errors.As(err, &refused) && refused.Reason == statelog.ReasonOpReused {
 			said = opkey.Reused
 		}
@@ -617,7 +624,7 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 		// for the same reason.
 		errors.Is(err, iamdomain.ErrInvalid):
 		refuse(http.StatusBadRequest, httpjson.CodeInvalidBody,
-			httpjson.Detail{"detail": err.Error()})
+			httpjson.Detail{"detail": iamdomain.Sentence(err)})
 		return
 	case errors.Is(err, statelog.ErrConflict):
 		// A LOST RACE — the write's snapshot kept moving under it — which
@@ -726,6 +733,14 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 	}
 }
 
+// logRefused is the log line every refusal [Service.answer] writes: the
+// gesture's key, the path the caller asked on and the domain's whole error,
+// which names by id what the answer's sentence names as the caller knows it.
+func logRefused(r *http.Request, opID string, status int, err error) {
+	log.InfoContext(r.Context(), "api_iam_write_refused", "op_id", opID,
+		"path", r.URL.Path, "status", status, "error", err)
+}
+
 // takenDetail is what an administrator is told about a value somebody else
 // holds: which value, in a sentence of the surface's own, and who holds it —
 // by the login this node's rows give them, and by id beside it.
@@ -748,11 +763,14 @@ func (s *Service) takenDetail(r *http.Request, taken *iamdomain.ErrTaken) httpjs
 		what = fmt.Sprintf("the %s %s", taken.Field, taken.Value)
 	}
 	if taken.Invitation != "" {
+		// THE INVITATION BY ITS FIELD, never in the sentence: its id is
+		// what `DELETE /iam/invitations/{id}` takes, and the sentence is
+		// what a person reads beside a button that cancels it — it named
+		// the id and the route, which no screen offers anybody to type.
 		return httpjson.Detail{"field": string(taken.Field),
 			"invitation": taken.Invitation,
-			"detail": what + " belongs to an open invitation. Cancel it " +
-				"first (DELETE /iam/invitations/" + taken.Invitation + "), or " +
-				"wait for it to expire."}
+			"detail": what + " belongs to an open invitation. Cancel the " +
+				"invitation first, or wait for it to expire."}
 	}
 	holder := "somebody else"
 	if row, err := s.directory.Person(r.Context(), taken.Person); err == nil &&

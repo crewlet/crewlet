@@ -305,7 +305,7 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 			httpjson.Fail(w, http.StatusGone, httpjson.CodeInviteSpent)
 			return
 		}
-		refuseEnrolment(w, r, "api_invite_enrol_failed", opID, err)
+		refuseEnrolment(w, r, "api_invite_enrol_failed", opID, held.ID, err)
 		return
 	}
 	if !landed(enrolled) {
@@ -377,23 +377,32 @@ const redemptionNamespace = "crewlet.authapi.invite-redeem"
 // [iamdomain.ErrRefused] and never [iamdomain.ErrSeatRequired]: the invitee
 // left nothing out, and the 400 that asks for a seat would send them looking
 // for a field the form does not have.
-func refuseEnrolment(w http.ResponseWriter, r *http.Request, event, opID string,
-	err error) {
+//
+// # The invitation by id goes to the log, and only there
+//
+// Every line here names the invitation the redemption was for, because the
+// domain's sentences name it as "this invitation" — what the invitee reads —
+// and the operation id a redemption is published under is derived from the
+// invitation one way: an operator holding the op id could not get back to it.
+func refuseEnrolment(w http.ResponseWriter, r *http.Request, event, opID,
+	invitation string, err error) {
 	var taken *iamdomain.ErrTaken
 	switch {
 	case errors.Is(err, iamdomain.ErrInvalidLogin),
 		errors.Is(err, iamdomain.ErrNotFindable),
 		errors.Is(err, iamdomain.ErrNotEnrollable),
 		errors.Is(err, iamdomain.ErrInvalid):
-		log.InfoContext(r.Context(), event, "refused", "invalid", "error", err)
+		log.InfoContext(r.Context(), event, "refused", "invalid",
+			"invitation", invitation, "error", err)
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-			map[string]string{"detail": err.Error()})
+			map[string]string{"detail": iamdomain.Sentence(err)})
 	case errors.As(err, &taken) && taken.Field == iamdomain.UniqueEmail:
-		log.InfoContext(r.Context(), event, "refused", "address enrolled")
+		log.InfoContext(r.Context(), event, "refused", "address enrolled",
+			"invitation", invitation)
 		httpjson.Fail(w, http.StatusGone, httpjson.CodeInviteSpent)
 	case errors.As(err, &taken):
 		log.InfoContext(r.Context(), event, "refused", "taken",
-			"field", string(taken.Field))
+			"invitation", invitation, "field", string(taken.Field))
 		detail := "That login is already taken. Choose another."
 		if taken.Field == iamdomain.UniqueSeat {
 			// NAMING NEITHER THE SEAT'S HOLDER NOR THE SEAT'S OTHER
@@ -406,7 +415,7 @@ func refuseEnrolment(w http.ResponseWriter, r *http.Request, event, opID string,
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeBadParams,
 			map[string]string{"detail": detail})
 	default:
-		writeFailed(w, r, event, opID, err)
+		writeFailed(w, r, event, opID, err, "invitation", invitation)
 	}
 }
 

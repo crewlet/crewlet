@@ -1152,8 +1152,9 @@ An address, a login or a seat somebody else holds is `409 invalid` **naming who
 holds it** — `field` says which value, `held_by` is the holder's id, and the
 `detail` names them by their login. An **open invitation** holds its address
 and its seat as surely as a person does, so a value one holds is the same
-`409 invalid` naming the `invitation` instead, its `detail` saying to cancel it
-(`DELETE /iam/invitations/{id}`) first or let it be redeemed or lapse. A seat
+`409 invalid` naming the `invitation` instead — the id
+`DELETE /iam/invitations/{id}` takes — its `detail` saying to cancel the
+invitation first or let it lapse. A seat
 is named in the `detail` — a handle is no secret — and an address never is,
 since the estate holds it only as a blind.
 

@@ -440,12 +440,37 @@ type Refusal struct {
 	Grants []iam.Grant
 
 	// Err is the refusal's sentence and its %w chain — [ErrTokenRefused]
-	// among it for a record asked through a machine token.
+	// among it for a record asked through a machine token. THE SENTENCE A
+	// PERSON READS ([Sentence]), so it names what it refuses as they know
+	// it — "this invitation", "that session", "their account" — and never by
+	// an id they did not choose.
 	Err error
+
+	// About is what the refusal was about, by the ids an operator reading
+	// the log needs and the person refused never chose: an invitation's id,
+	// a session's lineage, the access token a request came through. EMPTY
+	// where the sentence says it all. [Refusal.Error] carries it, which is
+	// what every log line prints; [Sentence] does not. It used to be written
+	// into the sentence, so a person was told "invitation 0192f… has
+	// already been used" and "session 4c1e… belongs to person 0192a…".
+	About string
 }
 
-func (e *Refusal) Error() string   { return ErrRefused.Error() + ": " + e.Err.Error() }
+func (e *Refusal) Error() string {
+	text := ErrRefused.Error() + ": " + e.Err.Error()
+	if e.About != "" {
+		text += " (" + e.About + ")"
+	}
+	return text
+}
 func (e *Refusal) Unwrap() []error { return []error{ErrRefused, e.Err} }
+
+// about sets what e was about for the log ([Refusal.About]), worded as
+// fmt.Sprintf words format and args, and returns e.
+func (e *Refusal) about(format string, args ...any) *Refusal {
+	e.About = fmt.Sprintf(format, args...)
+	return e
+}
 
 // needs is a refusal any one of grants would have lifted, worded as
 // fmt.Errorf words format and args.
@@ -520,8 +545,8 @@ func forbidden(format string, args ...any) *Refusal {
 // which its person takes themselves.
 func (w *Writer) mayAdminister(op OpKind) error {
 	if strings.HasPrefix(w.OperatorID, iam.MachineTokenPrefix) {
-		return forbidden("%w. Sign in and do it yourself (%s, token %s)",
-			ErrTokenRefused, op, w.OperatorID)
+		return forbidden("%w. Sign in and do it yourself", ErrTokenRefused).
+			about("%s, through %s", op, w.OperatorID)
 	}
 	if strings.HasPrefix(w.OperatorID, iam.AssistPrefix) && slices.Contains(assistRefusedOps, op) {
 		return forbidden("%w. Do it yourself from People & access (%s, %s)",
@@ -530,8 +555,8 @@ func (w *Writer) mayAdminister(op OpKind) error {
 	if w.Can(iam.GrantAdmin) {
 		return nil
 	}
-	return needs([]iam.Grant{iam.GrantAdmin}, "%s needs %s, and you have %v",
-		op, iam.GrantAdmin, w.Grants)
+	return needs([]iam.Grant{iam.GrantAdmin}, "only an admin can do that").
+		about("%s, by a party holding %s", op, grantWords(w.Grants))
 }
 
 // assistRefusedOps are the administrative records the Dashboard Assistant
@@ -700,9 +725,9 @@ func (w *Writer) record(subject Subject, op OpKind, person string,
 		return MutationRecord{}, err
 	}
 	if len(reason) > MaxReason {
-		return MutationRecord{}, fmt.Errorf("%w: the reason on this %s is %d "+
-			"bytes, and the limit is %d. Keep it to a short label",
-			ErrInvalid, op, len(reason), MaxReason)
+		return MutationRecord{}, fmt.Errorf("%w: the reason is %d bytes, and "+
+			"the limit is %d. Keep it to a short label",
+			ErrInvalid, len(reason), MaxReason)
 	}
 	rec := MutationRecord{
 		RecordEnvelope: RecordEnvelope{

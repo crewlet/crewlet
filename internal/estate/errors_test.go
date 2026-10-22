@@ -150,15 +150,21 @@ func TestATypedRefusalCrossesWithItsFieldsAndItsCause(t *testing.T) {
 // refusal is answered by its kind: one a permission lifts names it, one the
 // record's own rule made names none, and one asked through a machine token
 // says a person must be present. All three are read off the refusal's fields
-// and its chain, so all three must survive the wire. Mutation: drop the
-// refusal's typed row and errors.As finds nothing on the far side.
+// and its chain, so all three must survive the wire — and so must what it was
+// about ([iamdomain.Refusal.About]), which the asking node's log prints while
+// the person it answers reads the sentence alone ([iamdomain.Sentence]).
+// Mutations: drop the refusal's typed row and errors.As finds nothing on the
+// far side; leave About off the wire and the asking node's sentence carries
+// the ids again.
 func TestAnIdentityRefusalCrossesWithWhatLiftsIt(t *testing.T) {
 	t.Parallel()
 	for _, original := range []*iamdomain.Refusal{
 		{Grants: []iam.Grant{iam.GrantAdmin},
-			Err: errors.New("enrol needs admin, and you have [tracker]")},
+			Err:   errors.New("only an admin can do that"),
+			About: "enrol, by a party holding tracker"},
 		{Grants: []iam.Grant{},
-			Err: fmt.Errorf("%w: sign in and do it yourself", iamdomain.ErrTokenRefused)},
+			Err:   fmt.Errorf("%w. Sign in and do it yourself", iamdomain.ErrTokenRefused),
+			About: "remove, through pat:0192f"},
 	} {
 		got := throughWire(t, fmt.Errorf("write: %w", original))
 		var refusal *iamdomain.Refusal
@@ -175,6 +181,15 @@ func TestAnIdentityRefusalCrossesWithWhatLiftsIt(t *testing.T) {
 		if errors.Is(original, iamdomain.ErrTokenRefused) !=
 			errors.Is(got, iamdomain.ErrTokenRefused) {
 			t.Errorf("the token refusal's identity did not cross: %v", got)
+		}
+		if refusal.About != original.About || !strings.Contains(got.Error(),
+			original.About) {
+			t.Errorf("what the refusal was about crossed as %q in %q, want %q",
+				refusal.About, got.Error(), original.About)
+		}
+		if said := iamdomain.Sentence(got); said != "write: "+original.Err.Error() {
+			t.Errorf("the asking node tells a person %q, want %q", said,
+				"write: "+original.Err.Error())
 		}
 	}
 }

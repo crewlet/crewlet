@@ -185,20 +185,30 @@ func TestAMintTheDomainRefusesIsAnsweredForWhatItIs(t *testing.T) {
 		err    error
 		status int
 		code   httpjson.Code
+		detail string
 	}{
 		{"a grant the owner does not hold", &iamdomain.Refusal{
-			Grants: []iam.Grant{}, Err: errors.New("admin is not among [worklet]")},
-			http.StatusForbidden, httpjson.CodeForbidden},
+			Grants: []iam.Grant{}, Err: errors.New("a token can only have what " +
+				"its owner has, and its owner doesn't have admin"),
+			About: "the owner holds worklet"},
+			http.StatusForbidden, httpjson.CodeForbidden,
+			"A token can only have what its owner has, and its owner doesn't have admin."},
 		{"a person's token asked for by an administrator", &iamdomain.Refusal{
-			Grants: []iam.Grant{}, Err: errors.New("alice is a person, so only " +
-				"they can create their personal access tokens")},
-			http.StatusForbidden, httpjson.CodeForbidden},
+			Grants: []iam.Grant{}, Err: errors.New("only they can create " +
+				"their own access tokens"), About: "owner " + alice.String()},
+			http.StatusForbidden, httpjson.CodeForbidden,
+			"Only they can create their own access tokens."},
 		{"a service account's token asked for without admin", &iamdomain.Refusal{
 			Grants: []iam.Grant{iam.GrantAdmin},
-			Err:    errors.New("creating a token for the service account needs admin")},
-			http.StatusForbidden, httpjson.CodeUnauthorized},
+			Err:    errors.New("creating a token for a service account needs admin")},
+			http.StatusForbidden, httpjson.CodeUnauthorized,
+			"Creating a token for a service account needs admin."},
+		// THE SENTINEL A VALUE'S REFUSAL OPENS WITH IS CUT, as every other
+		// value refusal of the directory's is ([iamdomain.Sentence]).
+		// Mutation: answer err.Error() again and this row goes red.
 		{"an expiry already past", fmt.Errorf("%w: the expiry has passed",
-			iamdomain.ErrInvalidToken), http.StatusBadRequest, httpjson.CodeInvalidBody},
+			iamdomain.ErrInvalidToken), http.StatusBadRequest,
+			httpjson.CodeInvalidBody, "The expiry has passed."},
 	} {
 		r := newRig(t)
 		r.writer.err = tc.err
@@ -210,6 +220,10 @@ func TestAMintTheDomainRefusesIsAnsweredForWhatItIs(t *testing.T) {
 		}
 		if got.body["token"] != nil {
 			t.Errorf("%s answered a token value", tc.name)
+		}
+		if got.body["detail"] != tc.detail {
+			t.Errorf("%s: the detail is %q, want %q", tc.name, got.body["detail"],
+				tc.detail)
 		}
 	}
 }
