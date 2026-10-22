@@ -539,7 +539,11 @@ func TestAnUploadRefusedByWhatIsKnownReadsNothing(t *testing.T) {
 // it refuses go through the one refusal mapping ([operator.Fail]), as they
 // would from any tool; the byte routes used to
 // answer every refusal they did not name with a 503, so a fault told a client
-// to retry for ever.
+// to retry for ever. And each is told in the writer's sentence: the codes of
+// their own answered the error's text, which opens with the package's name.
+//
+// Mutation: answer any of the file's own codes with err.Error() again and its
+// row names the package.
 func TestTheWritersRefusalsReadAsTheFileRoutesDocument(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -583,7 +587,36 @@ func TestTheWritersRefusalsReadAsTheFileRoutesDocument(t *testing.T) {
 				strings.Contains(rec.Body.String(), "disk") {
 				t.Errorf("a fault's own words reached the client: %s", rec.Body.String())
 			}
+			if detail, _ := answerOf(t, rec)["detail"].(string); strings.Contains(detail,
+				"worklet:") || strings.Contains(detail, "statelog") {
+				t.Errorf("the detail a person reads names a package: %s", detail)
+			}
 		})
+	}
+}
+
+// A PATH THE TRACKER REFUSES IS TOLD IN ITS SENTENCE: `400 bad_path` naming
+// what is wrong with it, and never the error's text, which opens with the
+// package's name ("worklet: the path … ends in a slash").
+//
+// Mutation: answer the refusal with err.Error() again and the detail names
+// the package.
+func TestARefusedPathIsToldInTheTrackersSentence(t *testing.T) {
+	t.Parallel()
+	fake := newFakeFiles(t)
+	s := filesSurface(t, fake, chart{})
+	req := httptest.NewRequest(http.MethodPut, "/worklet/files/ENG/reports/",
+		bytes.NewReader([]byte("x")))
+	rec := httptest.NewRecorder()
+	if aborted := s.serve(rec, req, admin("ana")); aborted != nil {
+		t.Fatal(aborted)
+	}
+	answer := answerOf(t, rec)
+	detail, _ := answer["detail"].(string)
+	if rec.Code != http.StatusBadRequest || answer["error"] != string(httpjson.CodeBadPath) ||
+		!strings.Contains(detail, "ends in a slash") || strings.Contains(detail, "worklet") {
+		t.Errorf("a refused path answered %d %v, want 400 bad_path in the "+
+			"tracker's sentence", rec.Code, answer)
 	}
 }
 
