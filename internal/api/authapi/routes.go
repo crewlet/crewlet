@@ -192,7 +192,7 @@ func (s *Service) Token(w http.ResponseWriter, r *http.Request) {
 		// the counters a bearer carries are the decide's, and nothing can
 		// prove they are the landed record's — so no cookie, and the next
 		// exchange is a new session.
-		writeFailed(w, r, "api_token_exchange_failed", opID, err)
+		gestureFailed(w, r, "api_token_exchange_failed", opID, err)
 		return
 	}
 	if !landed(opened.Result) {
