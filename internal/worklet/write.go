@@ -295,7 +295,16 @@ func forbiddenAs(sentinel error, format string, args ...any) error {
 // context of its own opens with that context and is its whole message, because
 // context is never dropped to tidy a prefix away. The tools used to print such
 // an error whole, so a model read "worklet:" in front of what it was told.
+//
+// THE FRAMEWORK'S OWN THREE — a lost race, a create of what is there and a
+// write a deletion keeps deleted — are told in the state log's words for a
+// person ([statelog.Sentence]), as every surface that asks the state log first
+// tells them, so a caller asking only this one never prints the subject the
+// framework met.
 func Sentence(err error) string {
+	if said, ok := statelog.Sentence(err); ok {
+		return said
+	}
 	var r sentenced
 	if errors.As(err, &r) && r.Error() == err.Error() {
 		return r.sentence()
@@ -2107,15 +2116,26 @@ func (w *Writer) publish(ctx context.Context, req statelog.Request) (statelog.Re
 	req.Session = w.after
 	wrote := w.recording(ctx, &req)
 	result, err := w.publisher.Publish(ctx, req)
-	switch {
-	case err == nil:
-		w.report(wrote, result)
-		return result, nil
-	case errors.Is(err, statelog.ErrExists):
-		return result, fmt.Errorf("worklet: %s already exists: %w",
-			req.Subject.ID, err)
+	if err != nil {
+		return result, publishRefusal(err)
 	}
-	return result, err
+	w.report(wrote, result)
+	return result, nil
+}
+
+// publishRefusal is the framework's refusal of a publish in this package's
+// terms: a create it found already made is this package's to say, and any
+// other refusal travels unchanged.
+//
+// THE FRAMEWORK'S SENTINEL AND NOT ITS ERROR, whose text names the subject it
+// found made, and not the subject either: the translation carried both, so a
+// caller that printed this error would show a person a broker path and an id
+// they never chose.
+func publishRefusal(err error) error {
+	if errors.Is(err, statelog.ErrExists) {
+		return fmt.Errorf("worklet: that already exists: %w", statelog.ErrExists)
+	}
+	return err
 }
 
 // recording arranges for a task record's item to be reported to the turn's
