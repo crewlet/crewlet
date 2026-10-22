@@ -27,6 +27,10 @@ import (
 // reaches the writer without a name to resolve.
 const room = "0b8d6a50-9c1e-4c1f-8f43-1b7c2f6c2a11"
 
+// roomPurpose is the purpose somebody gave the room before these cases, which
+// a gesture that names none leaves standing.
+const roomPurpose = "Ship the launch on time."
+
 // chatDesk is chat as the operator surface reaches it — the router's rooms,
 // writer and search, and a person's read state — recording who every gesture
 // was made as and every flush it was asked for. Every write answers applied at
@@ -123,9 +127,20 @@ func (d *chatDesk) CreateChannel(_ context.Context, actor chatlet.Actor,
 	return d.wrote(actor)
 }
 
-func (d *chatDesk) PatchChannel(_ context.Context, actor chatlet.Actor, _ string,
-	_ chatlet.ChannelPatch, _ chatlet.ChannelAuthority) (chatlet.Written, error) {
-	return d.wrote(actor)
+// PatchChannel answers the room as the patch leaves it: the settings the call
+// named, and [roomPurpose] where it named no purpose.
+func (d *chatDesk) PatchChannel(_ context.Context, actor chatlet.Actor, id string,
+	patch chatlet.ChannelPatch, _ chatlet.ChannelAuthority) (chatlet.Written, error) {
+	written, err := d.wrote(actor)
+	written.Channel = chatlet.Channel{ID: id, Name: "launch", Kind: chatlet.KindPublic,
+		Purpose: roomPurpose}
+	if patch.Topic != nil {
+		written.Channel.Topic = *patch.Topic
+	}
+	if patch.Purpose != nil {
+		written.Channel.Purpose = *patch.Purpose
+	}
+	return written, err
 }
 
 func (d *chatDesk) SetMembers(_ context.Context, actor chatlet.Actor, _ string,

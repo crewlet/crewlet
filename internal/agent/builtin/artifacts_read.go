@@ -258,7 +258,13 @@ func (t *listArtifacts) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if !page.Complete {
 		out["complete"] = false
 	}
+	// A TITLE AND A DESCRIPTION are words the artifact's writers chose, and
+	// its head records who changed it last rather than who wrote either
+	// (ADR-0040).
 	read := newForeignRead(turn, c.self())
+	if len(rows) > 0 {
+		read.attribute(nil, true)
+	}
 	return read.answer(ctx, t.Name(), out, "Ask for fewer with `max_keys`, or narrow with "+
 		"`prefix` and `delimiter`, `kind` or `query`.")
 }
@@ -498,6 +504,9 @@ func (t *getArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		writer = true
 	}
 	out := t.headAnswer(h, version, dec.Standing.Role, writer)
+	// ITS TITLE, DESCRIPTION AND LABEL are its writers' words, which the head
+	// records no writer of (ADR-0040).
+	read.attribute(nil, true)
 	out["versions"] = versionRows(versions, answerVersions)
 	files := make([]map[string]any, 0, min(len(version.Manifest.Files), answerFiles))
 	for i, e := range version.Manifest.Files {

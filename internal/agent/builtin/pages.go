@@ -268,7 +268,8 @@ func (t *listPages) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 	// [PageDeps.actor] rather than the turn: a seat with no turn still
 	// refuses, and the operator surface, which supplies its own actor, is
 	// answered rather than told it is not in a turn.
-	if _, err := t.deps.actor(ctx, turn); err != nil {
+	actor, err := t.deps.actor(ctx, turn)
+	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the model reads.
 		return notInATurn(ListPagesTool), nil
 	}
@@ -306,7 +307,19 @@ func (t *listPages) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 	if !got.Complete {
 		out["complete"] = false
 	}
-	return jsonResult(out)
+	// A PAGE'S TITLE AND LABELS are words its writers chose (ADR-0040): the
+	// row names who saved the page last, and a title older than that save
+	// had a writer it does not name.
+	read := newForeignRead(turn, actor.Handle)
+	for _, page := range got.Pages {
+		var last []provenance.Author
+		if author := strings.TrimSpace(page.Author); author != "" {
+			last = append(last, read.writer(author, ""))
+		}
+		read.attribute(last, true)
+	}
+	return read.answer(ctx, ListPagesTool, out,
+		"Ask for fewer with `limit`, or narrow with `container`, `parent`, `title` or `label`.")
 }
 
 // ---- get_page ---------------------------------------------------------- //
@@ -552,12 +565,16 @@ func (t *writePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 		return pageUnknown(WritePageTool, got.Outcome, next), nil
 	}
 	t.deps.settle(ctx, got.Outcome.Position)
-	return jsonResult(map[string]any{
+	// THE TITLE IS THE CALLER'S OWN, written by this call, and read back as
+	// theirs rather than as nobody's (ADR-0040).
+	read := newForeignRead(turn, actor.Handle)
+	read.attribute([]provenance.Author{read.writer(actor.Handle, iam.ActorKind(actor.Kind))}, false)
+	return read.answer(ctx, WritePageTool, map[string]any{
 		"id": got.Page.ID, "container": got.Page.Container,
 		"title": got.Page.Title, "version": got.Page.Version,
 		"revision": got.Revision, "outcome": outcomeOf(got.Outcome),
 		"position": positionOf(got.Outcome.Position),
-	})
+	}, "")
 }
 
 // createStatus is the status a new page is written in, or the sentence that
@@ -822,11 +839,15 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 		}
 	}
 	t.deps.settle(ctx, at)
-	return jsonResult(map[string]any{
+	// THE TITLE IS THE PAGE'S, which this call may not have written: a name
+	// whose writers the page does not name (ADR-0040).
+	read := newForeignRead(turn, actor.Handle)
+	read.attribute(nil, true)
+	return read.answer(ctx, SavePageTool, map[string]any{
 		"id": got.Page.ID, "title": got.Page.Title,
 		"version": got.Page.Version, "revision": revision,
 		"outcome": outcomeOf(outcome), "position": positionOf(at),
-	})
+	}, "")
 }
 
 // ---- comment_on_page --------------------------------------------------- //
@@ -926,7 +947,7 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 			return pageUnknown(CommentOnPageTool, written.Outcome, editNext), nil
 		}
 		t.deps.settle(ctx, written.Outcome.Position)
-		return jsonResult(map[string]any{
+		return pageReceipt(ctx, turn, actor, map[string]any{
 			"comment_id": comment.ID, "page": detail.Page.Title,
 			"edited": true, "revision": written.Revision,
 			"outcome":  outcomeOf(written.Outcome),
@@ -964,7 +985,7 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 			commentNext(written.Outcome.Unvouched)), nil
 	}
 	t.deps.settle(ctx, written.Outcome.Position)
-	return jsonResult(map[string]any{
+	return pageReceipt(ctx, turn, actor, map[string]any{
 		"comment_id": comment.ID, "page": detail.Page.Title,
 		"mentioned": comment.Mentions, "revision": written.Revision,
 		"outcome":  outcomeOf(written.Outcome),
@@ -1122,4 +1143,15 @@ func pageReadFailure(ctx context.Context, name string, err error) tools.Result {
 	return faulted(ctx, name, err, fmt.Sprintf("%s could not read Doclet: %s. "+
 		"This is NOT an empty result: do not conclude the page does not exist. "+
 		"Say you could not check.", name, faultSaid))
+}
+
+// pageReceipt is a comment's receipt, which names the page it went on by its
+// title: somebody's words whose writers the page does not name, neutralised
+// and labelled as such (ADR-0040).
+func pageReceipt(ctx context.Context, turn *turnctx.Turn, actor doclet.Actor,
+	out map[string]any) (tools.Result, error) {
+
+	read := newForeignRead(turn, actor.Handle)
+	read.attribute(nil, true)
+	return read.answer(ctx, CommentOnPageTool, out, "")
 }

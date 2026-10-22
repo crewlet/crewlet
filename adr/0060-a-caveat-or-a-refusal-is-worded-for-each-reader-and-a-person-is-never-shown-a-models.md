@@ -28,7 +28,10 @@ and says the same to a person as a caveat of its own code
 (`dependencies_not_recorded`, `move_unfinished` or `move_waiting`,
 `subtree_unfinished`, `datastore_pending`). Those keys are model-only
 (`builtin.ModelOnlyKeys`), and every surface answering a person takes them off
-the receipt (`builtin.ForPerson`), as it takes off `warnings`.
+the receipt (`builtin.ForPerson`), as it takes off `warnings`. So is the
+`provenance` envelope a fenced answer carries beside the words it labels: its
+trust and its note tell a model how far to believe them, and the fields
+themselves stay on the receipt.
 
 **Each surface reads its own phrasing.** A builtin tool's answer carries the
 model's words under one top-level `warnings` list, written only by

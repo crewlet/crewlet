@@ -409,7 +409,8 @@ func receiptOf(name string, result tools.Result) ActAnswer {
 // PersonsReceipt is a tool call that landed, as every surface answering a
 // PERSON answers it (ADR-0060): the tool's receipt with every key that holds
 // its model's words taken off ([builtin.ModelOnlyKeys]: its caveats under
-// `warnings`, and a partial outcome's sentence under its own key), the rest
+// `warnings`, a partial outcome's sentence under its own key, and the
+// `provenance` envelope a fenced answer carries for its model), the rest
 // as the tool wrote it, and its caveats in a person's words, always a list. The act route and the
 // human write surface both answer through it, so neither can come to hand a
 // person what the other strips.
@@ -418,9 +419,15 @@ func receiptOf(name string, result tools.Result) ActAnswer {
 // write answers one, so this is a tool that changed shape, and what it said
 // instead is written for a model. It is logged here, under the tool's name,
 // and never answered; the caller says what the write came to without it.
+//
+// THE WORDS OTHER PRINCIPALS WROTE, AS THEY WERE STORED: where the tool wrote
+// its answer for a person apart ([tools.Result.PersonReceipt]), that is the
+// receipt answered, never Output, whose fences, escapes and envelope are a
+// model's framing of those words (ADR-0040). Read off Output, a room's topic
+// reached a person between a fence's two lines.
 func PersonsReceipt(tool string, result tools.Result) (json.RawMessage, []caveat.Shown, bool) {
 	caveats := caveat.ForPeople(result.Caveats)
-	receipt, readable := builtin.ForPerson(result.Output)
+	receipt, readable := builtin.ForPerson(result)
 	if !readable {
 		log.Warn("operator_receipt_unreadable", "tool", tool, "output", result.Output)
 		return nil, caveats, false

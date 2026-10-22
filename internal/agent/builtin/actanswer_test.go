@@ -758,9 +758,22 @@ func (f *ledgerFake) CreateChannel(_ context.Context, actor chatlet.Actor,
 	return f.chatWrite("create", actor)
 }
 
+// PatchChannel answers the room as the patch leaves it: the settings the call
+// named, and the purpose the room already had where it named none, which is
+// somebody else's — so the receipt echoing the room's settings has words other
+// principals wrote in it, labelled for a model and answered to a person as
+// they were stored.
 func (f *ledgerFake) PatchChannel(_ context.Context, actor chatlet.Actor, _ string,
-	_ chatlet.ChannelPatch, _ chatlet.ChannelAuthority) (chatlet.Written, error) {
-	return f.chatWrite("patch", actor)
+	patch chatlet.ChannelPatch, _ chatlet.ChannelAuthority) (chatlet.Written, error) {
+	written, err := f.chatWrite("patch", actor)
+	written.Channel.Purpose = "Ship the launch on time."
+	if patch.Topic != nil {
+		written.Channel.Topic = *patch.Topic
+	}
+	if patch.Purpose != nil {
+		written.Channel.Purpose = *patch.Purpose
+	}
+	return written, err
 }
 
 func (f *ledgerFake) SetMembers(_ context.Context, actor chatlet.Actor, _ string,

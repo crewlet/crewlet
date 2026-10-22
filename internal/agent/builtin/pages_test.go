@@ -85,7 +85,8 @@ func (f *fakeKB) List(_ context.Context, _ doclet.Filter,
 		return doclet.Listing{}, f.readErr
 	}
 	return doclet.Listing{
-		Pages:    []doclet.Summary{{ID: f.page.Page.ID, Title: f.page.Page.Title}},
+		Pages: []doclet.Summary{{ID: f.page.Page.ID, Title: f.page.Page.Title,
+			Author: f.page.Page.Author, Labels: f.page.Page.Labels}},
 		Level:    fresh.Level,
 		Complete: true,
 	}, nil

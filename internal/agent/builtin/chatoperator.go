@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tools/argval"
@@ -316,11 +317,21 @@ func (t *updateChannel) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return chatWriteFailure(ctx, name, err, restateNext(look)), nil
 	}
 	t.deps.settle(ctx, written.Outcome.Position)
-	return stated(name, written, look, map[string]any{
+	if written.Outcome.Outcome == statelog.OutcomeUnknown {
+		return stated(name, written, look, nil)
+	}
+	// THE ROOM'S SETTINGS AS THEY NOW STAND, which this call wrote only
+	// part of: the topic or the purpose it left alone is whoever set it
+	// last, so each is fenced as list_channels fences it — a room's label
+	// by writers the room does not name (ADR-0040).
+	read := newForeignRead(turn, actor.Name())
+	read.fence(fieldPath{}.key("topic"), provenance.SourceChatRoom, nil, true, written.Channel.Topic)
+	read.fence(fieldPath{}.key("purpose"), provenance.SourceChatRoom, nil, true, written.Channel.Purpose)
+	return read.answer(ctx, name, statedReceipt(written, map[string]any{
 		"channel": id, "name": written.Channel.Name,
 		"topic": written.Channel.Topic, "purpose": written.Channel.Purpose,
 		"archived": written.Channel.ArchivedAt != nil,
-	})
+	}), "")
 }
 
 // archiveAuthority decides whether the caller may archive the room, or open it

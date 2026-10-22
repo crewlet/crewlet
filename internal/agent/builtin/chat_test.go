@@ -397,7 +397,10 @@ func (f *fakeChat) wrote(seq uint64) chatlet.Written {
 		}
 	}
 	return chatlet.Written{
-		Channel:  chatlet.Channel{ID: chatRoomID, Name: chatRoomName},
+		// THE ROOM'S SETTINGS AS THEY STAND, which a settings write answers
+		// with whole.
+		Channel: chatlet.Channel{ID: chatRoomID, Name: chatRoomName,
+			Topic: f.room.Topic, Purpose: f.room.Purpose},
 		Revision: seq,
 		Outcome: statelog.Result{
 			Outcome:  statelog.OutcomeApplied,

@@ -15,6 +15,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/chatlet"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // modelVocabulary is each mark of a model's (or a wire protocol's) vocabulary,
@@ -109,10 +110,27 @@ var writtenForThePerson = map[string][]string{
 	builtin.AnswerKnowledgeTool: {".answer_md", ".receipt.answer_md"},
 }
 
+// modelFraming is each mark a model's framing of somebody's words leaves on a
+// string (internal/provenance): a fence's opening or closing line, the escape
+// a marker-shaped run is defused with, and the stand-in for a turn's token.
+// A person's answer carries none of it IN ANY FIELD, the value fields
+// included, because the fence goes round the very value a screen shows (a
+// room's topic, a run's question), and a walk that skipped the values
+// skipped it.
+var modelFraming = []struct {
+	pattern *regexp.Regexp
+	what    string
+}{
+	{regexp.MustCompile(`(?i)\[\s*/?\s*untrusted\s*:`), "a fence's line, which labels somebody's words for a model"},
+	{regexp.MustCompile(`(?i)\[escaped `), "the escape a fence's marker is defused with for a model"},
+	{regexp.MustCompile(regexp.QuoteMeta(provenance.TokenRemoved)), "the stand-in for a fence's token"},
+}
+
 // AnswerProblems is every sentence the decoded answer of tool carries that is
 // not worded for a person, each named by its path: every string at any depth
 // outside the value fields, so a receipt field a tool fills with a model's
-// sentence is found whatever it is called.
+// sentence is found whatever it is called; and a model's framing anywhere,
+// the value fields included ([framed]).
 func AnswerProblems(tool string, answer any) []string {
 	var out []string
 	sentences("", answer, func(path, text string) {
@@ -124,7 +142,39 @@ func AnswerProblems(tool string, answer any) []string {
 				path, problem, text))
 		}
 	})
+	framed("", answer, func(path, problem string) {
+		out = append(out, fmt.Sprintf("%s is a model's framing, never a person's: %s",
+			path, problem))
+	})
 	return out
+}
+
+// framed calls report with every place value carries a model's framing, at
+// any depth and under any key: a string with one of [modelFraming]'s marks,
+// and a key of [builtin.ModelOnlyKeys] (the envelope labelling a fenced
+// answer, the model's caveats, a partial outcome's sentence), which a person's
+// surface takes off the top of a receipt and which nothing nests deeper.
+func framed(path string, value any, report func(path, problem string)) {
+	switch v := value.(type) {
+	case string:
+		for _, mark := range modelFraming {
+			if found := mark.pattern.FindString(v); found != "" {
+				report(path, fmt.Sprintf("it carries %q, %s", found, mark.what))
+			}
+		}
+	case []any:
+		for i, item := range v {
+			framed(fmt.Sprintf("%s[%d]", path, i), item, report)
+		}
+	case map[string]any:
+		for key, item := range v {
+			if slices.Contains(builtin.ModelOnlyKeys(), key) {
+				report(path+"."+key, "it is a key that holds a model's words")
+				continue
+			}
+			framed(path+"."+key, item, report)
+		}
+	}
 }
 
 // sentences calls check with every string value carries outside the value

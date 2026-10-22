@@ -538,10 +538,16 @@ func stated(tool string, written chatlet.Written, look string,
 	if written.Outcome.Outcome == statelog.OutcomeUnknown {
 		return chatUnknown(tool, written.Outcome, restateNext(look)), nil
 	}
+	return jsonResult(statedReceipt(written, out))
+}
+
+// statedReceipt is out with what the write [stated] landed as: its revision,
+// its outcome and its position.
+func statedReceipt(written chatlet.Written, out map[string]any) map[string]any {
 	out["revision"] = written.Revision
 	out["outcome"] = outcomeOf(written.Outcome)
 	out["position"] = positionOf(written.Outcome.Position)
-	return jsonResult(out)
+	return out
 }
 
 // directUnknown is send_dm's answer when the conversation's OPEN came back

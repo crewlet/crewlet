@@ -196,8 +196,14 @@ func TestEveryArtifactToolResultIsFenced(t *testing.T) {
 			if got.Failed {
 				t.Fatalf("%s failed: %s", name, got.Output)
 			}
-			if seen, _ := fencesIn(t, b, got.Output); len(seen) != 0 {
+			seen, answer := fencesIn(t, b, got.Output)
+			if len(seen) != 0 {
 				t.Errorf("%s fenced %d fields it did not read from a file", name, len(seen))
+			}
+			// AND A LISTING THAT CARRIES THEM SAYS WHOSE THEY ARE: the head
+			// records no writer of its title or its description.
+			if name == builtin.ListArtifactsTool {
+				assertEnvelope(t, answer, provenance.TrustColleague, 0)
 			}
 		}
 	})

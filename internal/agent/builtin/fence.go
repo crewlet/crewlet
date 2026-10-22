@@ -193,13 +193,31 @@ func (r *foreignRead) envelope() (provenance.Envelope, bool) {
 // answer renders v as the tool's answer: every string neutralised, every
 // registered field fenced, and the envelope beside the top-level fields. v
 // must encode as a JSON object.
+//
+// AND v AS A PERSON READS IT, beside the model's answer
+// ([tools.Result.PersonReceipt]): the same fields as they were stored, with no
+// fence, no escape and no envelope, encoded as every other answer is
+// ([encodeAnswer]). The labels are for a model, which reads every word as a
+// possible instruction (ADR-0040); a person's surface answering the receipt
+// shows the words, and could not take the labels back off the model's answer,
+// whose escapes do not undo. Here rather than at each tool, and on a read's
+// answer as on a write's, so a receipt that comes to echo somebody's words
+// carries it without anybody remembering to add it.
 func (r *foreignRead) answer(ctx context.Context, tool string, v any, narrowWith string) (tools.Result, error) {
-	rendered, err := r.render(v)
+	plain, err := encodeAnswer(v)
+	var rendered json.RawMessage
+	if err == nil {
+		rendered, err = r.render(v)
+	}
 	if err != nil {
 		return faulted(ctx, tool, err, fmt.Sprintf("%s could not label what it "+
 			"read with who wrote it, so it is not answering at all: %s.", tool, faultSaid)), nil
 	}
-	return jsonAnswer(rendered, narrowWith)
+	res, err := jsonAnswer(rendered, narrowWith)
+	if err == nil && !res.Failed {
+		res.PersonReceipt = plain
+	}
+	return res, err
 }
 
 // render is [foreignRead.answer]'s encoding, kept apart so its refusals are

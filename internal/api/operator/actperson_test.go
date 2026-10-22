@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/caveat/caveattest"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -293,8 +294,16 @@ func (placingWork) PlaceTask(context.Context, string, worklet.Place,
 // depth, outside the value fields a screen reads as values, and holds it to a
 // person's words: a new field of prose fails here whatever it is named.
 //
+// AND A RECEIPT ECHOING WORDS SOMEBODY ELSE WROTE ANSWERS THEM AS THEY WERE
+// STORED: `update_channel` answers a model the room's topic and purpose
+// fenced, since the one it left alone is whoever set it last, and read off
+// that answer the act route handed a person the topic between a fence's two
+// lines, under a value field no walk read.
+//
 // Mutation, run when this was written: answer the missed place as the
-// receipt's `unplaced` again and the drag's row goes red on the tool's name.
+// receipt's `unplaced` again and the drag's row goes red on the tool's name;
+// answer a receipt from the model's Output again and the room's row goes red
+// on the fence round its topic and its purpose.
 func TestEveryAnswerTheActRouteGivesIsWordedForAPerson(t *testing.T) {
 	t.Parallel()
 	created := &recordingWork{caveats: []caveat.Caveat{
@@ -325,5 +334,21 @@ func TestEveryAnswerTheActRouteGivesIsWordedForAPerson(t *testing.T) {
 		for _, problem := range caveattest.AnswerProblems(tc.tool, answer) {
 			t.Errorf("%s: %s", tc.name, problem)
 		}
+	}
+
+	status, answer := act(t, guarded(chatSurface(t, &chatDesk{}, nil)), "founder",
+		chatlet.UpdateChannelTool, "application/json",
+		`{"args":{"channel":"`+room+`","topic":"Q3 launch"}}`, newKey())
+	if status != http.StatusOK {
+		t.Fatalf("a room's new topic answered %d %v", status, answer)
+	}
+	if receipt, _ := answer["receipt"].(map[string]any); receipt["topic"] != "Q3 launch" ||
+		receipt["purpose"] != roomPurpose {
+
+		t.Errorf("a room's new topic answered the receipt %v, want its topic and its "+
+			"purpose as they were stored", answer["receipt"])
+	}
+	for _, problem := range caveattest.AnswerProblems(chatlet.UpdateChannelTool, answer) {
+		t.Errorf("a room's new topic: %s", problem)
 	}
 }
