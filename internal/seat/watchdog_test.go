@@ -115,8 +115,12 @@ func TestTheHostBeatFitsFiveTimesInTheThreshold(t *testing.T) {
 			t.Errorf("ttl %s: beat %s does not fit %d times inside the threshold",
 				tc.ttl, beat, WatchdogBeatsPerThreshold)
 		}
-		if beat > tc.heartbeat {
-			t.Errorf("ttl %s: beat %s is slower than the pass it proves (%s)",
+		// HALF THE HEARTBEAT at most, which is also never slower than
+		// the pass it proves: the pass runs a beat inside the heartbeat
+		// ([Host.renewPeriod]), and a beat over half of it would leave
+		// the pass less than a beat after the one before.
+		if 2*beat > tc.heartbeat {
+			t.Errorf("ttl %s: beat %s is more than half the heartbeat (%s)",
 				tc.ttl, beat, tc.heartbeat)
 		}
 		if beat <= 0 {

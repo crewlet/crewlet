@@ -461,7 +461,10 @@ func (h *Host) WithHeldSeat(handle string, fn func(lease coord.Lease) error) (bo
 // inside one heartbeat interval. Every turn that starts is then certified
 // owned for at least ttl-heartbeat (30 s at the shipped constants), and the
 // first failed renew stops NEW turns immediately while the store-unavailable
-// grace still keeps the seat so in-flight work can finish.
+// grace still keeps the seat so in-flight work can finish. The window is the
+// heartbeat and the renews go out a beat inside it ([Host.renewPeriod]), so a
+// healthy node's own renews never leave it — widening the window instead would
+// admit on a proof older than that certificate.
 //
 // This is an OPTIMIZATION, not the safety property. Correctness comes from
 // epoch-fenced writes: the returned epoch is the fencing token, and a write
@@ -548,9 +551,12 @@ func (h *Host) EpochFor(handle string) (int64, bool) {
 // scheduled by a beat count rounded UP, so consecutive renews were one
 // heartbeat apart PLUS the rounding, and every cycle had a window where a
 // healthy, renewing seat answered false — a sixth of every cycle at a three
-// second TTL. [Host.ticksPerPass] is what removed that. This is still
-// required, because the window is now reached by real lateness rather than
-// by arithmetic.
+// second TTL. Rounded down, the pass still went out at the very instant the
+// window closed wherever the beat divided the heartbeat — the shipped 45 s
+// among them — so each on-time renew refused the seat for its own round trip.
+// [Host.renewPeriod] is what removed both: it sends each renew a beat early,
+// on a ticker no long pass can delay. This is still required, because the
+// window is now reached by real lateness rather than by arithmetic.
 //
 // Deliberately NOT inside MayStart. The in-turn fence calls that too, where
 // a refusal abandons a turn and stops no consumer — marking there would
@@ -591,11 +597,14 @@ func (h *Host) NoteDeliveryDeferred(handle string) {
 // the shipped number — which is the drift [HeartbeatRatio] exists to name.
 func (h *Host) TTL() time.Duration { return h.ttl }
 
-// HeartbeatInterval is how often this host renews its leases — the EFFECTIVE interval
-// [New] resolved — and therefore how long a [Host.MayStart] refusal for want of
-// a fresh renew can last on a seat it still holds: the next renew is what
-// re-proves it. A caller waiting for MayStart to admit a seat again waits this
-// long, rather than re-asking on a clock of its own.
+// HeartbeatInterval is the window this host admits a seat within after its last
+// renew — the EFFECTIVE interval [New] resolved — and so the longest a held
+// seat goes between two renews when nothing is late: the host sends each a beat
+// inside it ([Host.renewPeriod]), so that it is answered before the one it
+// replaces stops admitting. It is therefore also how long a [Host.MayStart]
+// refusal for want of a fresh renew can last on a seat it still holds: the next
+// renew is what re-proves it. A caller waiting for MayStart to admit a seat
+// again waits this long, rather than re-asking on a clock of its own.
 func (h *Host) HeartbeatInterval() time.Duration { return h.heartbeat }
 
 // Held is the seats whose leases this node holds, sorted.
