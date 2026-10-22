@@ -851,13 +851,16 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 // 33 with other work on the machine, over four runs and 126 engines that beat
 // (cmd/crewlet's included). The longest any host went without a beat was
 // 5.1 s, and every gap past two seconds was the FIRST: [seat.Host.Start]
-// stamps a beat, then renews its presence and makes its first placement pass
-// before its loops run, so that pass is charged to the first beat. The
-// watchdog's first poll lands about as that beat does, and it reads the gap
-// whole whenever it polls first — one did, 2.41 s against a three-second TTL,
-// 0.2 ms before the beat. A quarter of the first gaps (31) passed three
+// stamped a beat, then renewed its presence and made its first placement pass
+// before its heartbeat loop ran, so that pass was charged to the first beat.
+// The watchdog's first poll lands about as that beat does, and it read the gap
+// whole whenever it polled first — one did, 2.41 s against a three-second
+// TTL, 0.2 ms before the beat. A quarter of the first gaps (31) passed three
 // seconds, the TTL two cases here ran at. Between beats the worst was 2.0 s.
-// Fifteen seconds is nearly three times the worst gap of all.
+// Fifteen seconds is nearly three times the worst gap of all. The start now
+// runs its heartbeat beside that first pass, so the pass is charged to nothing;
+// the margin is kept against the gaps between beats, which nothing has
+// re-measured under the same load since.
 //
 // So no case waits out what it needs a short TTL for: it reads the renew or
 // the deadline it is about off the host or its store. A case that builds an
