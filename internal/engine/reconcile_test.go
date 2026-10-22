@@ -519,10 +519,10 @@ func TestTheNodesActiveRevisionFollowsTheFleetOnceApplied(t *testing.T) {
 		return active.ID
 	}
 
-	// A revision marked active on this node AFTER it applied the fleet's:
-	// a write that lost a race and marked itself anyway, or one whose
-	// local activation landed after this node adopted a newer revision.
-	t.Run("a stray revision marked active after the apply", func(t *testing.T) {
+	// A revision marked active on this node that the fleet's activation
+	// post-dates: an offline import the fleet had already superseded when
+	// the node started, which the boot leaves for this loop to replace.
+	t.Run("a stray revision the fleet's activation post-dates", func(t *testing.T) {
 		t.Parallel()
 		p := newPlane(t)
 		p.activate(t.Context(), t, grownCompanyDoc)
@@ -536,7 +536,7 @@ func TestTheNodesActiveRevisionFollowsTheFleetOnceApplied(t *testing.T) {
 		stray, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
 			CreatedByKind: iam.ActorOperator,
 			Source:        "test", CreatedBy: "operator", Summary: "stray",
-			Payload: yamlToJSON(t, companyDoc), CreatedAt: pinnedNow.Add(time.Hour),
+			Payload: yamlToJSON(t, companyDoc), CreatedAt: pinnedNow.Add(-time.Hour),
 		})
 		if err != nil {
 			t.Fatalf("store the stray revision: %v", err)

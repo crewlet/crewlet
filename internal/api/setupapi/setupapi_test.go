@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/confluence"
+	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/datadog"
 	"github.com/crewlet/crewlet/internal/github"
@@ -121,6 +122,9 @@ type surface struct {
 	vault   *vault
 	company func() (*config.Company, *org.Organization)
 	configs *store.Configs
+	// plane is the fleet's activation pointer the config surface answers
+	// from, which a revision the case plants is pointed at.
+	plane coord.Plane
 	// cipher is the keyring the config surface seals under, which a
 	// revision the case plants is sealed under too.
 	cipher secrets.Cipher
@@ -163,13 +167,14 @@ func newSurfaceWithNoExternalURL(t *testing.T) *surface {
 //
 // writers, when given, are the token ids Tier A names as the company
 // document's only writers (`api.auth.company_writers`).
-func newConfigSurface(t *testing.T, writers ...string) (*configapi.Service, *store.DB, secrets.Cipher) {
+func newConfigSurface(t *testing.T, writers ...string) (*configapi.Service, *store.DB, coord.Plane, secrets.Cipher) {
 	t.Helper()
 	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "c.db"), store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 	cipher := testCipher(t)
+	plane := coordmemory.NewFleet()
 	cfg, err := configapi.New(configapi.Options{
-		Store: db, Plane: coordmemory.NewFleet(), Cipher: cipher,
+		Store: db, Plane: plane, Cipher: cipher,
 		Holders: func(context.Context, []string, time.Time) (
 			map[string]configapi.SeatHolder, error) {
 
@@ -181,7 +186,7 @@ func newConfigSurface(t *testing.T, writers ...string) (*configapi.Service, *sto
 	if err != nil {
 		t.Fatalf("configapi.New: %v", err)
 	}
-	return cfg, db, cipher
+	return cfg, db, plane, cipher
 }
 
 // newService builds the service over whatever a case names, filling each
@@ -208,7 +213,7 @@ func newService(t *testing.T, opts setupapi.Options) *setupapi.Service {
 		opts.Company = companySource(t, nil)
 	}
 	if opts.Config == nil {
-		opts.Config, _, _ = newConfigSurface(t)
+		opts.Config, _, _, _ = newConfigSurface(t)
 	}
 	if opts.Secrets == nil {
 		opts.Secrets = v
@@ -258,7 +263,7 @@ func newService(t *testing.T, opts setupapi.Options) *setupapi.Service {
 // GitHub App refused. The constructor is where it has to surface.
 func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 	t.Parallel()
-	cfg, _, _ := newConfigSurface(t)
+	cfg, _, _, _ := newConfigSurface(t)
 	v := &vault{}
 	complete := func() setupapi.Options {
 		return setupapi.Options{
@@ -330,10 +335,11 @@ func buildSurface(t *testing.T, apps map[string]string, webhookBase, webhookBase
 	writers ...string) *surface {
 
 	t.Helper()
-	cfg, db, cipher := newConfigSurface(t, writers...)
+	cfg, db, plane, cipher := newConfigSurface(t, writers...)
 	v := &vault{}
 	s := &surface{
-		mux: http.NewServeMux(), config: cfg, vault: v, configs: db.Configs(), cipher: cipher,
+		mux: http.NewServeMux(), config: cfg, vault: v, configs: db.Configs(),
+		plane: plane, cipher: cipher,
 		status: &statusStore{}, webhookBase: webhookBase, webhookBaseKey: webhookBaseKey,
 	}
 	// THE ACTIVE DOCUMENT, read fresh on every call, the same way the
@@ -454,11 +460,22 @@ func (s *surface) seedDocument(t *testing.T, document string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.configs.InsertActive(t.Context(), store.Revision{
+	at := time.Now().UTC()
+	id, err := s.configs.InsertActive(t.Context(), store.Revision{
 		Source: "test", CreatedBy: "operator", CreatedByKind: iam.ActorOperator,
-		Summary: "first import", Payload: payload, CreatedAt: time.Now().UTC(),
-	}); err != nil {
+		Summary: "first import", Payload: payload, CreatedAt: at,
+	})
+	if err != nil {
 		t.Fatalf("seed: %v", err)
+	}
+	// AND THE FLEET POINTED AT IT, as a node's own seed does: the active
+	// revision the config surface answers is the one the pointer names.
+	if _, err := s.plane.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: id, Summary: "first import", Payload: payload, At: at,
+		Origin: coord.RevisionOrigin{Author: "operator", AuthorKind: iam.ActorOperator,
+			Source: "test", CreatedAt: at},
+	}); err != nil {
+		t.Fatalf("point the fleet at the seed: %v", err)
 	}
 }
 

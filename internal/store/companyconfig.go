@@ -185,56 +185,128 @@ func (c *Configs) insert(ctx context.Context, r Revision, active bool) (string, 
 	return id, nil
 }
 
-// Activate makes an existing revision the active one LOCALLY and returns its
-// summary, for the caller to publish with the pointer. See [Configs.InsertActive]
-// for why the two are separate steps.
+// Activate makes an existing revision the active one LOCALLY, as activated at
+// at, and returns its summary. See [Configs.InsertActive] for why storing a
+// revision and pointing the fleet at it are separate steps.
 //
 // Re-activating the revision that is ALREADY active is a supported gesture,
 // not a no-op: it is how an operator asks a running fleet to re-resolve its
 // ${VAR} references and pick up a rotated credential. The pointer append is
 // unconditional for exactly that reason — keyed on the revision id it could
 // never express "the same configuration, resolved again".
+//
+// # It never moves this node's copy BACK
+//
+// This node's active revision is its copy of the fleet's activation pointer.
+// Every copy of a fleet activation hands in the instant the pointer carries
+// for it, which is later on every activation than on the one it replaced (the
+// forward rule internal/coord's ActivationAt applies inside the pointer's own
+// compare-and-set), and an offline claim is dated after the activation it
+// replaces. So an activation older than the one the copy holds is one this
+// node has already moved past, and it is refused with a [*SupersededError],
+// decided inside the transaction that would have made the change.
+//
+// Two writers race here on every node that serves the API: a write marks its
+// revision active once the fleet has taken it, and the reconciler marks the
+// revision of the epoch it has just applied. When the apply of one epoch ended
+// after a write had activated the next, the reconciler marked the older
+// revision active again, and the node's GET /config answered the revision the
+// write had replaced. A check the caller made first could not close that: the
+// write lands between its read and its update.
+//
+// An activation AT the held instant is not older, so marking the same
+// activation again is the no-op it should be.
 func (c *Configs) Activate(ctx context.Context, revisionID string, at time.Time) (string, error) {
 	if at.IsZero() {
 		at = now()
 	}
 	var summary string
 	err := c.db.Tx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx,
+		// THE REVISION FIRST, in the transaction that activates it, so a
+		// missing one is reported as missing whatever is held, and nothing
+		// below can deactivate the company's configuration for an id that
+		// names nothing.
+		err := tx.QueryRowContext(ctx,
+			`SELECT summary FROM company_config WHERE revision_id = ?`,
+			revisionID).Scan(&summary)
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("%w: %s", ErrNoRevision, revisionID)
+		}
+		if err != nil {
+			return err
+		}
+		if err = refuseOlder(ctx, tx, revisionID, at); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx,
 			`UPDATE company_config SET is_active = 0 WHERE is_active <> 0`); err != nil {
 			return err
 		}
-		res, err := tx.ExecContext(ctx,
+		_, err = tx.ExecContext(ctx,
 			`UPDATE company_config SET is_active = 1, activated_at = ?
 			 WHERE revision_id = ?`, EncodeTime(at), revisionID)
-		if err != nil {
-			return err
-		}
-		// Checked through RowsAffected rather than RETURNING. That was
-		// once about the dialect intersection two drivers shared;
-		// with one driver it is simply the narrower thing that works,
-		// and it is what the statement needs — without the check
-		// the transaction commits having deactivated everything, which
-		// is a company with no config.
-		n, err := res.RowsAffected()
-		if err != nil {
-			return err
-		}
-		if n == 0 {
-			return fmt.Errorf("%w: %s", ErrNoRevision, revisionID)
-		}
-		return tx.QueryRowContext(ctx,
-			`SELECT summary FROM company_config WHERE revision_id = ?`,
-			revisionID).Scan(&summary)
+		return err
 	})
 	if err != nil {
-		if errors.Is(err, ErrNoRevision) {
+		var superseded *SupersededError
+		if errors.Is(err, ErrNoRevision) || errors.As(err, &superseded) {
 			return "", err
 		}
 		return "", fmt.Errorf("store: activate revision %s: %w", revisionID, err)
 	}
 	log.InfoContext(ctx, "config_revision_marked_active", "revision", revisionID)
 	return summary, nil
+}
+
+// SupersededError is a local activation [Configs.Activate] or [Configs.Adopt]
+// refused because this node's copy already holds a LATER one: the fleet's
+// pointer has moved past the activation being copied, and this node has seen
+// it move.
+//
+// NOT A FAILURE of whatever made the call. The activation it describes
+// happened; this node's copy is simply already further on, which is where it
+// belongs. It carries both sides, so the caller can say which revision is
+// held instead.
+type SupersededError struct {
+	// Revision is the revision the refused activation named, and At the
+	// instant it was activated at.
+	Revision string
+	At       time.Time
+	// Held is the revision this node's copy holds, and HeldAt the later
+	// instant it was activated at.
+	Held   string
+	HeldAt time.Time
+}
+
+func (e *SupersededError) Error() string {
+	return fmt.Sprintf("store: revision %s activated at %s is older than revision "+
+		"%s, which this node's copy already holds from %s", e.Revision,
+		e.At.Format(time.RFC3339Nano), e.Held, e.HeldAt.Format(time.RFC3339Nano))
+}
+
+// refuseOlder answers a [*SupersededError] when the active revision was
+// activated after at, inside the transaction about to replace it.
+//
+// At the store's own resolution, which is finer than the pointer's: two
+// activations of the fleet are a millisecond apart at least, so one that is
+// later is later here, and the same activation read back is equal.
+func refuseOlder(ctx context.Context, tx *sql.Tx, revisionID string, at time.Time) error {
+	var held string
+	var heldAt sql.NullInt64
+	err := tx.QueryRowContext(ctx,
+		`SELECT revision_id, activated_at FROM company_config WHERE is_active <> 0`).
+		Scan(&held, &heldAt)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil
+	case err != nil:
+		return err
+	case heldAt.Valid && heldAt.Int64 > EncodeTime(at):
+		return &SupersededError{
+			Revision: revisionID, At: at.UTC(), Held: held, HeldAt: DecodeTime(heldAt.Int64),
+		}
+	}
+	return nil
 }
 
 // Adopt records a revision this node fetched from the FLEET and makes it the
@@ -272,6 +344,12 @@ func (c *Configs) Activate(ctx context.Context, revisionID string, at time.Time)
 // A row that is already here keeps its body and its author: the row this node
 // wrote, or adopted first, is the authority on that write. Only its active
 // flag and activated_at move — to r.ActivatedAt, the fleet's instant.
+//
+// AND NEVER BACK, as [Configs.Activate] never moves it: an adoption older than
+// the activation this node's copy holds is kept as history and leaves the copy
+// where it is, answering a [*SupersededError]. A peer applying one epoch
+// fetches its revision first, and an activation of the next can land on this
+// node while it does.
 func (c *Configs) Adopt(ctx context.Context, r Revision) error {
 	if r.ID == "" {
 		return fmt.Errorf("store: adopting a revision needs its fleet id")
@@ -291,26 +369,38 @@ func (c *Configs) Adopt(ctx context.Context, r Revision) error {
 	if len(payload) == 0 {
 		payload = json.RawMessage("{}")
 	}
+	var superseded *SupersededError
 	err := c.db.Tx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE company_config SET is_active = 0 WHERE is_active <> 0`); err != nil {
-			return err
-		}
+		// Reset first, because fn may run again ([DB.Tx]).
+		superseded = nil
+		// INACTIVE ON THE WAY IN, and activated below only if nothing
+		// later is held: a revision this node met is history either way.
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO company_config
 			     (revision_id, parent_revision_id, created_at, created_by,
 			      created_by_kind, operator_id, source, summary, payload,
 			      is_active, activated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)
 			 ON CONFLICT (revision_id) DO NOTHING`,
 			r.ID, NullText(r.ParentID), EncodeTime(r.CreatedAt), r.CreatedBy,
 			string(r.CreatedByKind), r.OperatorID, r.Source, r.Summary,
-			string(payload), EncodeTime(r.ActivatedAt)); err != nil {
+			string(payload)); err != nil {
+			return err
+		}
+		if err := refuseOlder(ctx, tx, r.ID, r.ActivatedAt); err != nil {
+			if !errors.As(err, &superseded) {
+				return err
+			}
+			// COMMITTED all the same: the insert above is the history.
+			return nil
+		}
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE company_config SET is_active = 0 WHERE is_active <> 0`); err != nil {
 			return err
 		}
 		// The row may already have been here — the conflict above did
-		// nothing — and the deactivate above cleared its flag, so the
-		// activate is unconditional rather than part of the insert.
+		// nothing — so the activate is its own statement rather than part
+		// of the insert.
 		_, err := tx.ExecContext(ctx,
 			`UPDATE company_config SET is_active = 1, activated_at = ?
 			 WHERE revision_id = ?`, EncodeTime(r.ActivatedAt), r.ID)
@@ -318,6 +408,9 @@ func (c *Configs) Adopt(ctx context.Context, r Revision) error {
 	})
 	if err != nil {
 		return fmt.Errorf("store: adopt config revision %s: %w", r.ID, err)
+	}
+	if superseded != nil {
+		return superseded
 	}
 	log.InfoContext(ctx, "config_revision_adopted", "revision", r.ID, "source", r.Source,
 		"by", r.CreatedBy, "by_kind", string(r.CreatedByKind), "operator", r.OperatorID)

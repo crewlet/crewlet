@@ -17,6 +17,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -635,7 +636,21 @@ func activateRevision(ctx context.Context, cs *configStore, revisionID string, s
 	if err := refuseManagedActivation(ctx, cs, revisionID); err != nil {
 		return err
 	}
-	if _, err := cs.configs.Activate(ctx, revisionID, time.Now().UTC()); err != nil {
+	// DATED AFTER THE ACTIVATION IT REPLACES, by the pointer's own forward
+	// rule. This node's copy refuses an activation older than the one it
+	// holds, and the one it holds carries the instant of whichever node's
+	// clock made it: an operator's activation here, on a clock behind that
+	// one, would be refused, and published at the next start it would read
+	// as older than the fleet's and never reach it.
+	at := time.Now().UTC()
+	active, found, err := cs.configs.Active(ctx)
+	if err != nil {
+		return fmt.Errorf("read the active revision: %w", err)
+	}
+	if found {
+		at = coord.ActivationAt(at, active.ActivatedAt)
+	}
+	if _, err := cs.configs.Activate(ctx, revisionID, at); err != nil {
 		return err
 	}
 	// RE-ACTIVATING THE CURRENT REVISION IS NOT A NO-OP, and that is worth

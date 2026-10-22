@@ -596,13 +596,21 @@ func (r *Reconciler) apply(ctx context.Context, target coord.Activation) error {
 // This node's active revision is what its GET /config answers, what it boots
 // on, and what it offers the whole fleet at its next start whenever that
 // revision is newer than the pointer. So once the node runs the fleet's epoch
-// it has to be the fleet's revision, and three ordinary paths leave it
+// it has to be the fleet's revision, and two ordinary paths leave it
 // otherwise: an API write whose own local activation failed after the fleet
-// took it, a write that marked itself active a moment after this node had
-// adopted a newer one, and an offline import the fleet had already superseded
-// when the node started. Each is corrected here, every tick, rather than
-// trusted to the path that caused it, and each left alone was a node serving,
-// and one restart later republishing, a company the fleet is not running.
+// took it, and an offline import the fleet had already superseded when the
+// node started. Each is corrected here, every tick, rather than trusted to
+// the path that caused it, and each left alone was a node serving, and one
+// restart later republishing, a company the fleet is not running.
+//
+// IT NEVER MOVES THE COPY BACK. target is the epoch this tick read, and an
+// apply can take long enough for the fleet to move on while it runs: a write
+// on this node that lands meanwhile has already made ITS revision this node's
+// active one by the time the apply ends. Marking target active then was the
+// copy going back to the revision that write replaced, which is what this
+// node's GET /config answered after the write's 201. The store refuses it
+// ([store.SupersededError]) inside the transaction that would make it, and
+// the next tick reads the pointer the write moved.
 //
 // Best effort, like every local copy: the epoch is applied either way, and
 // the next tick tries again.
@@ -643,6 +651,9 @@ func (r *Reconciler) holdLocalCopy(ctx context.Context, target coord.Activation)
 		return
 	}
 	if _, err := r.configs.Activate(ctx, target.RevisionID, target.At); err != nil {
+		if r.logSuperseded(ctx, err, target) {
+			return
+		}
 		r.log.WarnContext(ctx, "local_revision_not_marked_active", "revision", target.RevisionID,
 			"error", err, "detail", "the fleet's revision is applied, and this node's "+
 				"own active revision is still another; the next tick tries again")
@@ -654,6 +665,21 @@ func (r *Reconciler) holdLocalCopy(ctx context.Context, target coord.Activation)
 	}
 	r.log.InfoContext(ctx, "local_revision_realigned", "revision", target.RevisionID,
 		"previous", previous, "epoch", target.Epoch)
+}
+
+// logSuperseded reports a local activation the store refused because this
+// node's copy already holds a later one, and whether err was that.
+//
+// DEBUG, because nothing is wrong: the fleet moved on while this node was
+// applying target, and the later revision is already this node's.
+func (r *Reconciler) logSuperseded(ctx context.Context, err error, target coord.Activation) bool {
+	var superseded *store.SupersededError
+	if !errors.As(err, &superseded) {
+		return false
+	}
+	r.log.DebugContext(ctx, "local_revision_newer", "revision", target.RevisionID,
+		"epoch", target.Epoch, "held", superseded.Held, "held_at", superseded.HeldAt)
+	return true
 }
 
 // applyRevision is the part that can fail, separated so every exit records.
@@ -829,7 +855,7 @@ func (r *Reconciler) fetchRevision(ctx context.Context, target coord.Activation)
 		return store.Revision{}, openRefusal(target.RevisionID, false, err)
 	}
 	revision := adopted(target, payload)
-	if err := r.configs.Adopt(ctx, revision); err != nil {
+	if err := r.configs.Adopt(ctx, revision); err != nil && !r.logSuperseded(ctx, err, target) {
 		r.log.WarnContext(ctx, "revision_not_cached", "revision", target.RevisionID,
 			"error", err, "detail", "the revision is applied; this node's config "+
 				"history will not show it and it will be re-fetched next time")

@@ -146,6 +146,113 @@ func testActivatingAMissingRevisionChangesNothing(t *testing.T, db *store.DB) {
 	}
 }
 
+func testALocalActivationNeverMovesTheCopyBack(t *testing.T, db *store.DB) {
+	// THIS NODE'S ACTIVE REVISION IS ITS COPY OF THE FLEET'S POINTER, and the
+	// pointer only moves forward. Two writers mark it on a running node: a
+	// write once the fleet has taken it, and the reconciler once it has
+	// applied an epoch. A reconciler finishing the apply of one epoch after
+	// a write on this node had activated the next marked the older revision
+	// active again, and the node answered GET /config with the revision the
+	// write had replaced. So an activation older than the one held is
+	// refused, inside the transaction, naming what is held.
+	configs := db.Configs()
+	older, err := configs.InsertActive(t.Context(), store.Revision{
+		CreatedByKind: iam.ActorOperator,
+		Summary:       "older", Payload: json.RawMessage(`{"n":1}`), CreatedAt: base,
+	})
+	if err != nil {
+		t.Fatalf("insert the older revision: %v", err)
+	}
+	newer, err := configs.Insert(t.Context(), store.Revision{
+		CreatedByKind: iam.ActorOperator, ParentID: older,
+		Summary: "newer", Payload: json.RawMessage(`{"n":2}`), CreatedAt: base,
+	})
+	if err != nil {
+		t.Fatalf("insert the newer revision: %v", err)
+	}
+	newerAt := base.Add(2 * time.Minute)
+	if _, err = configs.Activate(t.Context(), newer, newerAt); err != nil {
+		t.Fatalf("activate the newer revision: %v", err)
+	}
+
+	_, err = configs.Activate(t.Context(), older, base.Add(time.Minute))
+	var superseded *store.SupersededError
+	if !errors.As(err, &superseded) {
+		t.Fatalf("activating an older activation answered %v, want a *store.SupersededError", err)
+	}
+	if superseded.Revision != older || superseded.Held != newer || !superseded.HeldAt.Equal(newerAt) {
+		t.Errorf("superseded = %+v, want %s refused for %s held from %s",
+			superseded, older, newer, newerAt)
+	}
+	active, found, err := configs.Active(t.Context())
+	if err != nil || !found || active.ID != newer || !active.ActivatedAt.Equal(newerAt) {
+		t.Fatalf("active = %s at %s (found=%v err=%v), want %s kept at %s",
+			active.ID, active.ActivatedAt, found, err, newer, newerAt)
+	}
+
+	// The same revision at an OLDER instant is older too: re-activating an
+	// unchanged revision is the credential-rotation gesture, and a copy
+	// marked back to an earlier one describes an activation the fleet has
+	// moved past.
+	if _, err = configs.Activate(t.Context(), newer, base.Add(time.Minute)); !errors.As(err, &superseded) {
+		t.Errorf("the held revision at an older instant answered %v, want superseded", err)
+	}
+	// The same activation again is not older, and changes nothing.
+	if _, err = configs.Activate(t.Context(), newer, newerAt); err != nil {
+		t.Errorf("marking the held activation again: %v", err)
+	}
+	// A later one moves the copy, whichever revision it names.
+	laterAt := base.Add(3 * time.Minute)
+	if _, err := configs.Activate(t.Context(), older, laterAt); err != nil {
+		t.Fatalf("a later activation was refused: %v", err)
+	}
+	if active, _, err := configs.Active(t.Context()); err != nil || active.ID != older ||
+		!active.ActivatedAt.Equal(laterAt) {
+		t.Errorf("active = %s at %s (err %v), want %s at %s", active.ID, active.ActivatedAt,
+			err, older, laterAt)
+	}
+	// And a missing revision is missing, whatever its instant says.
+	if _, err := configs.Activate(t.Context(), "00000000-0000-0000-0000-000000000000",
+		base); !errors.Is(err, store.ErrNoRevision) {
+		t.Errorf("activating a missing revision at an older instant answered %v, want ErrNoRevision", err)
+	}
+}
+
+func testAnAdoptionNeverMovesTheCopyBack(t *testing.T, db *store.DB) {
+	// A PEER FETCHES THE REVISION OF THE EPOCH IT IS APPLYING, and an
+	// activation of the next can land on it meanwhile. The fetched revision
+	// is kept as history — this node met it — and the copy stays on the
+	// later activation.
+	configs := db.Configs()
+	heldAt := base.Add(time.Hour)
+	if err := configs.Adopt(t.Context(), store.Revision{
+		ID: "rev-later", CreatedBy: "maya", CreatedByKind: iam.ActorOperator,
+		Source: "api", Summary: "later", CreatedAt: base, ActivatedAt: heldAt,
+	}); err != nil {
+		t.Fatalf("adopt the later revision: %v", err)
+	}
+	err := configs.Adopt(t.Context(), store.Revision{
+		ID: "rev-earlier", CreatedBy: "maya", CreatedByKind: iam.ActorOperator,
+		Source: "api", Summary: "earlier", CreatedAt: base, ActivatedAt: base.Add(time.Minute),
+	})
+	var superseded *store.SupersededError
+	if !errors.As(err, &superseded) || superseded.Held != "rev-later" {
+		t.Fatalf("adopting an older activation answered %v, want superseded by rev-later", err)
+	}
+	active, found, err := configs.Active(t.Context())
+	if err != nil || !found || active.ID != "rev-later" || !active.ActivatedAt.Equal(heldAt) {
+		t.Fatalf("active = %s at %s (found=%v err=%v), want rev-later kept at %s",
+			active.ID, active.ActivatedAt, found, err, heldAt)
+	}
+	kept, found, err := configs.Get(t.Context(), "rev-earlier")
+	if err != nil || !found {
+		t.Fatalf("the earlier revision is not in the history: found=%v err=%v", found, err)
+	}
+	if kept.Active || !kept.ActivatedAt.IsZero() || kept.Summary != "earlier" {
+		t.Errorf("the earlier revision was kept as %+v, want inactive history", kept)
+	}
+}
+
 func testPayloadRoundTrips(t *testing.T, db *store.DB) {
 	// The payload is opaque: the sealed envelope every writer stores, under
 	// the keyring every node holds. What comes back must be what went in,

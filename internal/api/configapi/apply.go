@@ -476,7 +476,15 @@ func (s *Service) commit(ctx context.Context, p *prepared, summary string) (Appl
 	// holds the pointer against, and at the instant it asked for the
 	// reconciler would read the fleet's own activation as a re-activation
 	// this node had not applied.
-	if _, aerr := s.configs.Activate(ctx, id, published.At); aerr != nil {
+	//
+	// A LATER ACTIVATION ALREADY HELD is no failure either: the reconciler
+	// adopted one between this write's flip and this line, and the store
+	// keeps the copy where the fleet is ([store.SupersededError]).
+	var superseded *store.SupersededError
+	if _, aerr := s.configs.Activate(ctx, id, published.At); errors.As(aerr, &superseded) {
+		log.InfoContext(ctx, "config_revision_already_superseded",
+			"revision", id, "epoch", published.Epoch, "held", superseded.Held)
+	} else if aerr != nil {
 		log.WarnContext(ctx, "config_revision_not_marked_active",
 			"revision", id, "epoch", published.Epoch, "error", aerr,
 			"detail", "the fleet is running this revision; this node marks "+

@@ -478,7 +478,7 @@ func TestNewRefusesAProbeSetMissingAKind(t *testing.T) {
 	t.Parallel()
 	probes := inertProbes()
 	delete(probes, integration.KindGitLab)
-	cfg, _, _ := newConfigSurface(t)
+	cfg, _, _, _ := newConfigSurface(t)
 	v := &vault{}
 	_, err := setupapi.New(setupapi.Options{
 		Company: companySource(t, nil), Config: cfg, Secrets: v, Resolve: v.get,

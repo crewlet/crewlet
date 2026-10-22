@@ -7,10 +7,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 const cliCompanyDoc = `
@@ -457,6 +460,56 @@ func TestALockedConfigStoreNamesEachSubcommandsOwnRoute(t *testing.T) {
 		if sub != "import" && lockedStoreRemedy(sub) == "" {
 			t.Errorf("config %s has no remedy for a locked store", sub)
 		}
+	}
+}
+
+// AN OFFLINE ACTIVATION IS DATED AFTER THE ONE IT REPLACES, whatever this
+// machine's clock says.
+//
+// This node's copy of the active revision carries the instant the fleet's
+// pointer activated it at, which is whichever node's clock made that
+// activation, and the copy refuses an activation older than the one it holds.
+// An operator activating a revision here on a clock behind that one would be
+// refused, and published at the next start it would read as older than the
+// fleet's and never reach it.
+func TestAnOfflineActivationIsDatedAfterTheOneItReplaces(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	cfg := bootstrapForStore(t, dir)
+	if _, _, err := configCmd(t, cfg, "import", companyFile(t, dir, "company.yaml", nil)); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	first := activeRevisionID(t, cfg)
+	if _, _, err := configCmd(t, cfg, "import", companyFile(t, dir, "edited.yaml",
+		func(doc string) string { return strings.Replace(doc, "Nimbus", "Nimbus Two", 1) })); err != nil {
+		t.Fatalf("import the edit: %v", err)
+	}
+	second := activeRevisionID(t, cfg)
+	if second == first {
+		t.Fatal("the edited file did not make a revision of its own")
+	}
+
+	// The copy as a fleet activation leaves it when a node whose clock runs
+	// a day ahead of this one made it.
+	ahead := time.Now().UTC().Add(24 * time.Hour)
+	db := storetest.OpenNode(t, filepath.Join(dir, "index.db"), store.Options{})
+	if _, err := db.Configs().Activate(t.Context(), second, ahead); err != nil {
+		t.Fatalf("date the held copy ahead: %v", err)
+	}
+	_ = db.Close()
+
+	if _, _, err := configCmd(t, cfg, "activate", first); err != nil {
+		t.Fatalf("activating a revision under a copy dated ahead of this clock: %v", err)
+	}
+	db = storetest.OpenNode(t, filepath.Join(dir, "index.db"), store.Options{})
+	defer func() { _ = db.Close() }()
+	active, found, err := db.Configs().Active(t.Context())
+	if err != nil || !found {
+		t.Fatalf("no active revision (found=%v err=%v)", found, err)
+	}
+	if active.ID != first || !active.ActivatedAt.After(ahead) {
+		t.Errorf("active = %s activated at %s, want %s activated after the replaced %s",
+			active.ID, active.ActivatedAt, first, ahead)
 	}
 }
 
