@@ -387,15 +387,16 @@ func answerFile(w http.ResponseWriter, key string, result worklet.WriteResult,
 // fileReadFailed answers a read a byte route took — the file, or the project
 // an upload names — that could not be served: the two that are about the
 // RESOURCE under their own codes, and everything else as every read here is
-// answered ([readFailed]).
+// answered ([readFailed]), each in its package's words without its name
+// ([builtin.ReadRefusalSentence]).
 func fileReadFailed(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, worklet.ErrNoProject):
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoProject,
-			map[string]string{"detail": err.Error()})
+			map[string]string{"detail": builtin.ReadRefusalSentence(err)})
 	case errors.Is(err, worklet.ErrNoFile):
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoFile,
-			map[string]string{"detail": err.Error()})
+			map[string]string{"detail": builtin.ReadRefusalSentence(err)})
 	default:
 		readFailed(w, r, err)
 	}
