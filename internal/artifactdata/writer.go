@@ -823,13 +823,25 @@ func (w *Writer) Configure(ctx context.Context, c Call, id artifacts.ID,
 			}
 			return w.decision(stamp, c, StoreSubject(id), OpConfigure, opID, payload)
 		}))
-	if errors.Is(err, statelog.ErrConflict) {
-		return WriteResult{Result: res}, fmt.Errorf("%w: %s: %w", ErrConflict, id, err)
-	}
 	if err != nil {
-		return WriteResult{Result: res}, published(id, err)
+		return WriteResult{Result: res}, configured(id, err)
 	}
 	return w.verdict(ctx, c, id, opID, res)
+}
+
+// configured is a schema change's publish answer in this domain's terms: one
+// that lost its race on the store too many times is [ErrConflict], and any
+// other is a store write's ([published]).
+//
+// THE FRAMEWORK'S SENTINEL AND NOT ITS ERROR, whose text names the subject the
+// race was lost on, and not the store's id either: a caller that printed this
+// error would show a person a broker path and an id they never chose. The
+// operation the answer carries is what a log line finds the store by.
+func configured(id artifacts.ID, err error) error {
+	if errors.Is(err, statelog.ErrConflict) {
+		return fmt.Errorf("%w: %w", ErrConflict, statelog.ErrConflict)
+	}
+	return published(id, err)
 }
 
 // configRefusal is a schema change's decide-time refusal in the caller's terms.

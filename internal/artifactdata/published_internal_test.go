@@ -40,3 +40,31 @@ func TestAWriteTheDeletionGateDroppedIsAPurgedStore(t *testing.T) {
 		t.Errorf("a node behind its log is told %v, want the framework's refusal", got)
 	}
 }
+
+// A SCHEMA CHANGE THAT LOST ITS RACE NAMES NOTHING, carrying the domain's
+// conflict over the framework's sentinel: the framework's error names the
+// subject the race was lost on, and the translation used to carry it after
+// the store's id, which any caller printing the error would have shown a
+// person. Its sentence is the state log's. Mutations: wrap the framework's
+// error again, or the store's id, and the text check goes red.
+func TestASchemaChangeThatLostItsRaceNamesNothing(t *testing.T) {
+	t.Parallel()
+	id := artifacts.IDFor("op")
+	lost := errors.Join(statelog.ErrConflict,
+		errors.New("crewlet.artifacts.data."+id.String()+" kept changing under this write"))
+	err := configured(id, lost)
+	if !errors.Is(err, ErrConflict) || !errors.Is(err, statelog.ErrConflict) {
+		t.Fatalf("a lost race is told %v, want both sentinels in its chain", err)
+	}
+	if strings.Contains(err.Error(), id.String()) || strings.Contains(err.Error(), "crewlet.") {
+		t.Errorf("a lost race's error is %q, which names the store", err)
+	}
+	if said := Sentence(err); said != statelog.LostRace {
+		t.Errorf("a lost race is told %q, want %q", said, statelog.LostRace)
+	}
+	// ANY OTHER ANSWER IS A STORE WRITE'S.
+	gated := &statelog.Unavailable{Reason: statelog.ReasonDeleted}
+	if got := configured(id, gated); !errors.Is(got, ErrGone) {
+		t.Errorf("a gated deletion is told %v, want ErrGone", got)
+	}
+}
