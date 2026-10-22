@@ -26,16 +26,6 @@ const (
 	dataPageMax     = 100
 )
 
-// dataSentence is a datastore refusal's own words, without the packages'
-// prefixes.
-func dataSentence(err error) string {
-	msg := err.Error()
-	for _, prefix := range []string{"artifactdata: ", "query: "} {
-		msg = strings.ReplaceAll(msg, prefix, "")
-	}
-	return domainSentence(fmt.Errorf("%s", msg))
-}
-
 // ---- read_artifact_data -------------------------------------------------- //
 
 type readArtifactData struct{ d dataTools }

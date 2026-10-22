@@ -4,6 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/foldername"
+	"github.com/crewlet/crewlet/internal/artifacts/manifest"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // The sentinels. Each is a fact a caller acts on differently, which is why they
@@ -140,6 +145,62 @@ func (e *FolderAmbiguous) Error() string {
 	return fmt.Sprintf("artifactsdomain: %q names %d folders you can see (%s); "+
 		"name the one you mean by its id", e.Path, len(e.Candidates), strings.Join(ids, ", "))
 }
+
+// Sentence is a refusal this package wrote, as a person and a model read it:
+// the sentence, without the package names and the class word a Go error
+// carries in front of it.
+//
+// A REFUSAL HERE OPENS WITH ITS SENTINEL ("artifactsdomain: invalid: kind
+// \"x\" is not one of …"), and one about a manifest, a path or an audience
+// carries the refusal of the package that decided it after that
+// ("artifactsdomain: invalid: manifest: invalid: worklet: the path …"). The
+// package names say where it came from and the class word what [errors.Is]
+// finds, and neither is anything a reader acts on: stripped of the package
+// names alone, a refusal read "publish_artifact refused that: invalid: kind
+// …", the class word mid-sentence. Both go, wherever they sit, and every word
+// after them stays.
+//
+// THE ONE PLACE THE ARTIFACTS' WORDS ARE CUT, beside [ErrInvalid]: the tools
+// and the artifacts API each kept a list of package names to strip, and
+// neither list knew the class words. The publish pipeline's own refusals
+// carry its names too, which internal/artifactupload's Sentence cuts before
+// this one.
+func Sentence(err error) string {
+	text := err.Error()
+	for _, cut := range sentenceCuts {
+		text = strings.ReplaceAll(text, cut, "")
+	}
+	return text
+}
+
+// sentenceCuts are what [Sentence] removes, the class words before the package
+// names they open with: this package's own, and those of the packages whose
+// refusals this one carries — a manifest's, an artifact id's, a label's or an
+// audience's ("not an audience: \"nobody\" is not …", whose sentence names
+// what it is not on its own), a path's, which the manifest holds to Worklet's
+// one file-path rule, and a folder's name ([foldername.Check]).
+var sentenceCuts = []string{
+	ErrInvalid.Error() + ": ", manifest.ErrInvalid.Error() + ": ",
+	artifacts.ErrInvalidAudience.Error() + ": ", artifacts.ErrInvalidID.Error() + ": ",
+	artifacts.ErrInvalidLabel.Error() + ": ", foldername.ErrInvalid.Error() + ": ",
+	"artifactsdomain: ", "manifest: ", "artifacts: ", "worklet: ", "foldername: ",
+}
+
+// AlreadyExists is [ErrExists] naming What was already there. THE STATE LOG'S
+// [statelog.ErrExists] IS IN ITS CHAIN AND NOT IN ITS WORDS: what the
+// framework says names the subject's broker path, while a create of what is
+// already there is one refusal on every domain, and a surface telling a
+// person one tells it in the framework's words for a person
+// ([statelog.Sentence]).
+//
+// EXPORTED, WITH ITS FIELD, because it crosses the estate's wire: a node with
+// no data asks a data node to write, and the wire rebuilds an error type from
+// its exported fields and its registration (internal/estate's typedKinds),
+// so an unexported one would arrive as its message alone.
+type AlreadyExists struct{ What string }
+
+func (e *AlreadyExists) Error() string   { return ErrExists.Error() + ": " + e.What }
+func (e *AlreadyExists) Unwrap() []error { return []error{ErrExists, statelog.ErrExists} }
 
 // VersionMoved is a publish based on a head that has moved (412
 // `version_moved`): it carries the live head and its version, so the caller

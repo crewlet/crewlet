@@ -102,7 +102,7 @@ func (s *fileSources) cleanPath(raw string) (string, *tools.Result) {
 	p, err := manifest.CleanPath(raw)
 	if err != nil {
 		r := refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s: %q is not a path an "+
-			"artifact may publish: %s", s.tool, clip(raw), domainSentence(err)))
+			"artifact may publish: %s", s.tool, clip(raw), artifactupload.Sentence(err)))
 		return "", &r
 	}
 	return p, nil
@@ -586,20 +586,6 @@ func (s *fileSources) find(p string) (artifactFile, bool) {
 		}
 	}
 	return artifactFile{}, false
-}
-
-// domainSentence is a refusal the artifacts packages composed for a caller,
-// without the package names their errors carry — the tracker's among them,
-// because a version's paths are held to the engine's one file-path rule
-// ([worklet.NormalizeFilePath], which manifest.CleanPath wraps), so a path
-// refused there read "invalid: tracker: the path …".
-func domainSentence(err error) string {
-	msg := err.Error()
-	for _, prefix := range []string{"artifactupload: ", "artifactsdomain: ", "manifest: ",
-		"mediatype: ", "lint: ", "edits: ", "artifacts: ", "tracker: "} {
-		msg = strings.ReplaceAll(msg, prefix, "")
-	}
-	return msg
 }
 
 // streamedInline is an inline file as a stream of its own bytes, for the one

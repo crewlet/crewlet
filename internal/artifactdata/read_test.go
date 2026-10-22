@@ -454,7 +454,8 @@ func TestTheApplierReadsNoOtherDomain(t *testing.T) {
 	applier := []string{"apply.go", "evaluate.go", "configure.go", "history.go", "storerows.go",
 		"values.go", "rules.go", "payload.go", "record.go", "subject.go", "scope.go", "tables.go",
 		"domain.go", "moved.go", "errors.go", "meter.go"}
-	other := []string{"writer.go", "read.go", "export.go", "rows.go", "ratelimit.go", "doc.go"}
+	other := []string{"writer.go", "read.go", "export.go", "rows.go", "ratelimit.go", "doc.go",
+		"sentence.go"}
 	entries, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatal(err)

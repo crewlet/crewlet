@@ -83,6 +83,35 @@ func TestARefusalThatIsTwoSentinelsKeepsBoth(t *testing.T) {
 	}
 }
 
+// AN ARTIFACT'S CREATE OF WHAT IS THERE CROSSES AS BOTH OF ITS SENTINELS AND
+// ITS WORDS: the artifacts' own [artifactsdomain.ErrExists], which a tool and
+// the artifacts API class it by, and the framework's [statelog.ErrExists],
+// which a person's surface tells it by ([statelog.Sentence]) — the second in
+// its chain and not in its words, which [artifactsdomain.AlreadyExists] carries
+// as a type of its own. Rebuilt from its message alone, it would still answer
+// both on the far side, through the sentinels the chain carries; the type is
+// what a caller unwrapping it reads What from.
+//
+// Mutation: drop AlreadyExists from typedKinds and errors.As finds nothing.
+func TestAnArtifactsCreateOfWhatIsThereKeepsBothSentinels(t *testing.T) {
+	t.Parallel()
+	original := fmt.Errorf("publish: %w", &artifactsdomain.AlreadyExists{What: "a-1"})
+	got := throughWire(t, original)
+	if !errors.Is(got, artifactsdomain.ErrExists) || !errors.Is(got, statelog.ErrExists) {
+		t.Fatalf("a create of what is there lost a sentinel across the wire: %v", got)
+	}
+	var exists *artifactsdomain.AlreadyExists
+	if !errors.As(got, &exists) || exists.What != "a-1" {
+		t.Errorf("errors.As(*artifactsdomain.AlreadyExists) after the wire = %+v", exists)
+	}
+	if got.Error() != original.Error() || strings.Contains(got.Error(), "statelog") {
+		t.Errorf("the message became %q, want %q", got, original)
+	}
+	if said, _ := statelog.Sentence(got); said != statelog.AlreadyThere {
+		t.Errorf("the far side tells a person %q, want %q", said, statelog.AlreadyThere)
+	}
+}
+
 // A REFUSAL CROSSES WITH ITS REASON AND ITS CAUSE. A tool branches on the
 // reason (`op_reused` has a remedy of its own), and the cause is what still
 // answers errors.Is — a stream recreated behind `wrong_stream` — so a

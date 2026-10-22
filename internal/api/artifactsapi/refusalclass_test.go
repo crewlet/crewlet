@@ -62,6 +62,7 @@ func TestEveryArtifactRefusalIsOneClassOnBothSurfaces(t *testing.T) {
 		"ErrTrashed":           {err: artifactsdomain.ErrTrashed},
 		"ErrUploadStale":       {err: artifactsdomain.ErrUploadStale},
 		"CarriedObjectGone":    {err: &artifactsdomain.CarriedObjectGone{Paths: []string{"a.css"}}},
+		"AlreadyExists":        {err: &artifactsdomain.AlreadyExists{What: "a-1"}},
 		"QuotaExceeded": {err: &artifactsdomain.QuotaExceeded{Limit: 1, Usage: 2,
 			Key: "artifacts.limits.company_bytes"}},
 		"VersionMoved": {err: &artifactsdomain.VersionMoved{}},

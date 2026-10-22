@@ -393,7 +393,7 @@ func (s *Service) state(w http.ResponseWriter, r *http.Request) {
 	}
 	doc, err := artifactdata.StateDocID(iam.RecordOwner(a.Principal), body.Key)
 	if err != nil {
-		invalid(w, strings.TrimPrefix(err.Error(), artifactdata.ErrInvalid.Error()+": "))
+		invalid(w, said(err))
 		return
 	}
 	op := artifacts.DataOp{Op: artifacts.DataDelete, Collection: artifactdata.StateCollection,
@@ -573,11 +573,23 @@ func answer(w http.ResponseWriter, r *http.Request, key string, res artifactdata
 // [artifacts.DataVerdict].
 const verdictPending = "pending"
 
+// said is err as a detail a person reads: a lost race in the state log's words
+// for a person ([statelog.Sentence]), as every surface tells one, and any other
+// refusal in the datastore's own sentence ([artifactdata.Sentence]). This
+// surface cut "artifactdata: " from the front and left the rest, so a refusal
+// read "invalid: …" and a lost race carried the broker subject it was lost on.
+func said(err error) string {
+	if words, ok := statelog.Sentence(err); ok {
+		return words
+	}
+	return artifactdata.Sentence(err)
+}
+
 // writeFailed renders a write refused before anything was appended, or one
 // whose outcome nobody can establish.
 func writeFailed(w http.ResponseWriter, r *http.Request, key string, err error) {
 	var limited *artifactdata.RateLimited
-	detail := map[string]string{"detail": strings.TrimPrefix(err.Error(), "artifactdata: ")}
+	detail := map[string]string{"detail": said(err)}
 	switch {
 	case errors.As(err, &limited):
 		httpjson.ThrottledWith(w, httpjson.CodeWriteBudget, limited.RetryAfter, httpjson.Detail{
@@ -606,7 +618,7 @@ func writeFailed(w http.ResponseWriter, r *http.Request, key string, err error) 
 
 // readFailed renders a read that could not be answered.
 func readFailed(w http.ResponseWriter, err error) {
-	detail := map[string]string{"detail": strings.TrimPrefix(err.Error(), "artifactdata: ")}
+	detail := map[string]string{"detail": said(err)}
 	switch {
 	case errors.Is(err, artifactdata.ErrGone):
 		httpjson.FailWith(w, http.StatusGone, httpjson.CodeDataGone, detail)

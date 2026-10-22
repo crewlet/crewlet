@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/artifactupload"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -29,11 +30,10 @@ type nativeDomain struct {
 	// writer's own words, without the package prefix a Go error opens with
 	// ("worklet: invalid: …"), which says where the error came from and
 	// nothing about what to change. The function the domain's tools word
-	// every refusal with: the domain's own Sentence, or for the artifacts
-	// and their datastores this package's [domainSentence] and
-	// [dataSentence], which strip the prefix of every package a publish or
-	// a write passes through — a Sentence of the domain's own beside them
-	// would be a second wording of the same refusal.
+	// every refusal with: the domain's own Sentence — for the artifacts the
+	// publish pipeline's (internal/artifactupload), since every refusal of
+	// the artifacts' writer passes through it and a publish's refusals
+	// carry the names of every package it passes through.
 	sentence func(error) string
 
 	// objects are the argument names that name one of the domain's objects,
@@ -64,7 +64,7 @@ type nativeDomain struct {
 var nativeDomains = map[string]nativeDomain{
 	artifactsdomain.Domain{}.Name(): {
 		class:    artifactClass,
-		sentence: domainSentence,
+		sentence: artifactupload.Sentence,
 		// An artifact is named by its `artifact` id on every tool that
 		// changes one; create_artifact names none, because the artifact
 		// it makes has no id until it lands.
@@ -72,7 +72,7 @@ var nativeDomains = map[string]nativeDomain{
 	},
 	artifactdata.Domain{}.Name(): {
 		class:    artifactDataClass,
-		sentence: dataSentence,
+		sentence: artifactdata.Sentence,
 		// A datastore is its artifact's, named by the same `artifact`.
 		objects: []string{"artifact"},
 	},

@@ -353,7 +353,7 @@ func publishError(subject statelog.Subject, err error) error {
 	case errors.Is(err, statelog.ErrExists) && ObjectKind(subject.Kind) == KindSource:
 		return ErrSourceTaken
 	case errors.Is(err, statelog.ErrExists):
-		return fmt.Errorf("%w: %s", ErrExists, subject.ID)
+		return &AlreadyExists{What: subject.ID}
 	}
 	return err
 }
@@ -447,7 +447,7 @@ func (w *Writer) refusal(ctx context.Context, id string, reason Refusal, s Histo
 		return fmt.Errorf("%w: %s name objects another artifact or an asset already "+
 			"names; upload them again", ErrInvalid, strings.Join(s.Paths, ", "))
 	case RefusedExists:
-		return fmt.Errorf("%w: %s", ErrExists, id)
+		return &AlreadyExists{What: id}
 	case RefusedLive:
 		return fmt.Errorf("%w: artifact %s is not in the trash", ErrInvalid, id)
 	case RefusedPurging:

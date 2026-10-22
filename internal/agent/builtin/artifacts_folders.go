@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifacts/foldername"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/artifactupload"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/presence"
@@ -354,7 +355,7 @@ func folderWriteFailure(ctx context.Context, tool string, c artifactCaller, err 
 			"one folder). File into a folder that exists.", tool, artifacts.MaxFolders,
 			artifacts.MaxFolderChildren))
 	case errors.Is(err, artifactsdomain.ErrFolderNameTaken):
-		return refusedBy(tools.RefusalExists, err, fmt.Sprintf("%s: %s", tool, domainSentence(err)))
+		return refusedBy(tools.RefusalExists, err, fmt.Sprintf("%s: %s", tool, artifactupload.Sentence(err)))
 	}
 	return publishFailure(ctx, tool, c, err)
 }

@@ -337,10 +337,10 @@ func dataFailure(ctx context.Context, tool string, err error) tools.Result {
 		errors.Is(err, artifactdata.ErrMigrationTooLarge), errors.Is(err, query.ErrInvalid),
 		errors.Is(err, query.ErrNotIndexed):
 		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused that: %s", tool,
-			dataSentence(err)))
+			artifactdata.Sentence(err)))
 	case errors.Is(err, artifactdata.ErrForbidden):
 		return refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s refused that: %s", tool,
-			dataSentence(err)))
+			artifactdata.Sentence(err)))
 	case errors.Is(err, artifactdata.ErrNotFound):
 		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("%s: there is no such "+
 			"collection or document you can read. Read the schema with %s and no "+
