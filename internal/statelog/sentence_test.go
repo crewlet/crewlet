@@ -9,15 +9,15 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE TWO REFUSALS THAT MEAN ONE THING ARE TOLD IN WORDS FOR A PERSON,
+// THE THREE REFUSALS THAT MEAN ONE THING ARE TOLD IN WORDS FOR A PERSON,
 // however a domain wrapped them — and nothing else is.
 //
 // The framework's own text for each names the subject it met, a broker path;
 // a domain's wrap adds its own sentinel in front. Both are the same refusal,
 // and a surface asking [statelog.Sentence] about either is handed the same
 // words, with no package prefix and no subject in them. A condition of the node
-// is not one of the two, and a surface told it was would tell a person a lost
-// race where the node could not serve.
+// is not one of the three, and a surface told it was would tell a person a
+// lost race where the node could not serve.
 //
 // Mutation: drop any arm of [statelog.Sentence] and its rows go red; answer
 // the error's own text and every row carries the subject.
@@ -35,6 +35,10 @@ func TestTheFrameworksRefusalsAreToldInWordsForAPerson(t *testing.T) {
 			wrapped, statelog.ErrConflict), statelog.LostRace},
 		{"a create of what is there", fmt.Errorf("%w: crewlet.tracker.task.t-1",
 			statelog.ErrExists), statelog.AlreadyThere},
+		{"a deletion", fmt.Errorf("decide: %w", &statelog.Unavailable{
+			Reason: statelog.ReasonDeleted,
+			Detail: "crewlet.tracker.task.t-1 was deleted and stays deleted"}),
+			statelog.Deleted},
 	} {
 		said, ok := statelog.Sentence(c.err)
 		if !ok || said != c.want {
@@ -50,12 +54,11 @@ func TestTheFrameworksRefusalsAreToldInWordsForAPerson(t *testing.T) {
 		nil,
 		errors.New("disk I/O error"),
 		&statelog.Unavailable{Reason: statelog.ReasonBehind, Detail: "behind"},
-		&statelog.Unavailable{Reason: statelog.ReasonDeleted, Detail: "deleted"},
 		&statelog.Unavailable{Reason: statelog.ReasonOpReused, Detail: "reused"},
 		&statelog.Refused{Code: statelog.RefuseBehind},
 	} {
 		if said, ok := statelog.Sentence(err); ok {
-			t.Errorf("%v is told as one of the two: %q", err, said)
+			t.Errorf("%v is told as one of the three: %q", err, said)
 		}
 	}
 }

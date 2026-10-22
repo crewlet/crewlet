@@ -100,14 +100,20 @@ func About(tool string, args map[string]any) httpjson.Detail {
 // archived room's post never changes. The tool's sentence still travels, for a
 // client that wants it.
 //
+// SO IS A WRITE ABOUT WHAT A DELETION KEEPS DELETED, which no domain decided
+// and which is answered `404` whatever class the tool stated
+// ([statelog.Deleted]): a tool tells a model the framework's own refusal,
+// which names the deleted object's subject, a broker path.
+//
 // EVERY OTHER REFUSAL is told in the tool's own sentence: an argument refused
 // or a rule that forbade the call is worded by the tools for the person who
 // typed it already (the writer's sentence, or one composed from a typed
 // refusal's fields where the writer's would quote an id), and the remaining
 // classes are drawn by the surfaces in words of their own.
 func Said(result crewletmcp.Result) (detail, toolDetail string) {
-	switch crewletmcp.RefusalOf(result) {
-	case crewletmcp.RefusalConflict, crewletmcp.RefusalExists:
+	class := crewletmcp.RefusalOf(result)
+	if class == crewletmcp.RefusalConflict || class == crewletmcp.RefusalExists ||
+		refusedFor(result.Cause, statelog.ReasonDeleted) {
 		if said, ok := builtin.WriterSentence(result.Cause); ok && said != result.Output {
 			return said, result.Output
 		}

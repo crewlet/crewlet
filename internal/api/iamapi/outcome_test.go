@@ -345,17 +345,20 @@ func TestADirectoryWriteThatFaultedKeepsItsWordsInTheLog(t *testing.T) {
 	}
 }
 
-// A LOST RACE IS TOLD IN WORDS FOR A PERSON.
+// A LOST RACE AND A REMOVAL ARE TOLD IN WORDS FOR A PERSON.
 //
-// The state log's error for a lost race names the subject it met, a broker
-// path, and the directory answered "statelog: conflict: crewlet.iam.directory
-// kept changing under this write" as the `detail` an administrator reads. It
-// is told in the state log's own sentence for a person ([statelog.Sentence])
-// under the status it always had.
+// Both are the state log's refusals, and its error names the subject each met:
+// the directory answered a lost race with "statelog: conflict:
+// crewlet.iam.directory kept changing under this write", and a person removed
+// under the route with the framework's whole refusal, as the `detail` an
+// administrator reads. A lost race is told in the state log's own sentence for
+// a person ([statelog.Sentence]), and a removal as the removal it is — the
+// framework's own words for it say "deleted", which nobody does to a person
+// here — each under the status it always had.
 //
-// Mutation: answer the lost race's `detail` with the error's own text again
-// and its row goes red.
-func TestALostRaceIsToldInWordsForAPerson(t *testing.T) {
+// Mutation: answer either arm's `detail` with the error's own text again and
+// its row goes red.
+func TestALostRaceAndARemovalAreToldInWordsForAPerson(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name   string
@@ -365,6 +368,10 @@ func TestALostRaceIsToldInWordsForAPerson(t *testing.T) {
 	}{
 		{"a lost race", fmt.Errorf("%w: crewlet.iam.directory kept changing under "+
 			"this write", statelog.ErrConflict), http.StatusConflict, statelog.LostRace},
+		{"a removal", fmt.Errorf("iamdomain: publish: %w", &statelog.Unavailable{
+			Reason: statelog.ReasonDeleted,
+			Detail: "crewlet.iam.person.p-1 was deleted and stays deleted"}),
+			http.StatusNotFound, "This person was removed, so nothing was written."},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

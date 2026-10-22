@@ -272,6 +272,57 @@ func TestAStateOrACollisionIsToldToAPersonInTheDomainsWords(t *testing.T) {
 	}
 }
 
+// A DELETION IS TOLD WITHOUT THE FRAMEWORK'S WORDS, through a tool and around
+// one alike.
+//
+// The state log's refusal names the subject it met: "statelog: unavailable
+// (deleted): crewlet.tracker.task.t-1 was deleted and stays deleted". A
+// tool-less write handed that to a person as its `detail`, and a tool-backed
+// one handed them the tool's restatement of it for a model.
+//
+// Mutation: answer a deletion's `detail` with the writer's sentence again in
+// Said or in writeSentence, and a row goes red.
+func TestADeletionIsToldWithoutTheFrameworksWords(t *testing.T) {
+	t.Parallel()
+	deleted := &statelog.Unavailable{Reason: statelog.ReasonDeleted,
+		Detail: "crewlet.tracker.task.t-1 was deleted and stays deleted"}
+	model := func(err error) string {
+		return "update_work_item did not land (" + err.Error() + ")."
+	}
+	for _, tc := range []struct {
+		name   string
+		answer func(w http.ResponseWriter)
+		status int
+		says   string
+	}{
+		{"a deletion, around a tool", func(w http.ResponseWriter) {
+			operator.FailWrite(t.Context(), w, deleted, newKey(), nil)
+		}, http.StatusNotFound, statelog.Deleted},
+		{"a deletion, through a tool", func(w http.ResponseWriter) {
+			operator.FailResult(w, crewletmcp.Result{Failed: true, Output: model(deleted),
+				Cause: crewletmcp.Classify(crewletmcp.RefusalUnavailable, deleted)},
+				newKey(), httpjson.Detail{"tool": "update_work_item"})
+		}, http.StatusNotFound, statelog.Deleted},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rec := httptest.NewRecorder()
+			tc.answer(rec)
+			body := decode(t, rec)
+			detail, _ := body["detail"].(string)
+			if rec.Code != tc.status || !strings.HasPrefix(detail, tc.says) {
+				t.Errorf("answered %d with detail %q, want %d opening %q", rec.Code,
+					detail, tc.status, tc.says)
+			}
+			for _, leak := range []string{"statelog", "crewlet.", "update_work_item"} {
+				if strings.Contains(detail, leak) {
+					t.Errorf("the detail a person reads carries %q: %s", leak, detail)
+				}
+			}
+		})
+	}
+}
+
 // THE CLASS OF A WRITER'S ERROR IS THE TOOLS' OWN RULE: a content refusal the
 // domain marked keeps its class, a condition waiting clears is `unavailable` —
 // an estate the router found nobody to serve among them — and anything
