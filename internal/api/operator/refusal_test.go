@@ -174,8 +174,14 @@ func TestAWritersErrorIsWordedForWhoeverReadsIt(t *testing.T) {
 			if detail, _ := body["detail"].(string); detail != tc.says {
 				t.Errorf("detail = %q, want %q", detail, tc.says)
 			}
-			if body["message"] != tc.code.Message() {
-				t.Errorf("message = %v, want the code's own sentence", body["message"])
+			// THE CODE'S OWN SENTENCE, as the envelope words it under the
+			// answer's hint: a 503 no wait clears says so in its place.
+			want := tc.code.Message()
+			if tc.status == http.StatusServiceUnavailable && !tc.retry {
+				want = waitless(t, tc.code)
+			}
+			if body["message"] != want {
+				t.Errorf("message = %v, want the code's own sentence, %q", body["message"], want)
 			}
 			for _, never := range []string{"/var/lib", "10.0.0.7", "`body`", "statelog",
 				"tracker_max"} {
@@ -509,6 +515,17 @@ func TestAWriteNobodyAnsweredForIsAnsweredAsAnUnknown(t *testing.T) {
 	if strings.Contains(fmt.Sprint(body), "10.0.0.7") {
 		t.Errorf("the node the router asked reached the answer: %v", body)
 	}
+}
+
+// waitless is the message a 503 of code answers under no Retry-After: the
+// envelope's own sentence for what no wait clears, in place of the code's
+// "try again in a moment", which no wait would make true.
+func waitless(t *testing.T, code httpjson.Code) string {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	httpjson.UnavailableWith(rec, code, 0, nil)
+	said, _ := decode(t, rec)["message"].(string)
+	return said
 }
 
 // decode is a recorded answer's JSON body.

@@ -93,7 +93,11 @@ one JSON object, and it always has the same three parts in the same places:
   more to say says it in the detail rather than rewording the sentence. A code
   whose refusals have different remedies picks its sentence by the facts the
   detail carries, never by which route wrote it: `unauthorized` says the rule
-  its `reason` names ([below](#which-permission-a-route-needs)).
+  its `reason` names ([below](#which-permission-a-route-needs)), and a `503`
+  `unavailable` or `identity_unavailable` with no `Retry-After` says that
+  waiting won't change it, where the same code under a `Retry-After` says to
+  try again in a moment (a write whose `outcome` is `unknown` keeps the code's
+  own sentence, since it may have landed).
   Never match on it: the wording is copy and can be improved at any time. Every
   refusal carries one — `/config`, `/secrets` and `/setup` included,
   which used to build their own bodies with the code alone, and every
