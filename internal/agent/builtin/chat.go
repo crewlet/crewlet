@@ -485,7 +485,7 @@ func chatWriteFailure(ctx context.Context, name string, err error, next string) 
 	case class == tools.RefusalConflict:
 		// A LOST RACE, without the store's own words, which name the
 		// room's subject and the framework's error after it. A person is
-		// told it in [lostRaceWords] ([WriterSentence]).
+		// told it in [statelog.LostRace] ([WriterSentence]).
 		return refusedBy(class, err, fmt.Sprintf("%s could not land: the room "+
 			"kept changing under this write, so nothing was written. Read it again "+
 			"before retrying.", name))

@@ -1101,7 +1101,7 @@ func pageWriteFailure(ctx context.Context, name string, err error, next string) 
 	case errors.Is(err, pages.ErrConflict):
 		// A LOST RACE, without the store's own words, which name the
 		// page's subject and the framework's error after it. A person is
-		// told it in [lostRaceWords] ([WriterSentence]).
+		// told it in [statelog.LostRace] ([WriterSentence]).
 		return refusedBy(tools.RefusalConflict, err, fmt.Sprintf("%s could not land: "+
 			"somebody else is editing this page, so nothing was written. Read it "+
 			"again before retrying.", name))

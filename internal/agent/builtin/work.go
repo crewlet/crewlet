@@ -3887,7 +3887,7 @@ func writeFailure(ctx context.Context, actor Actor, name string, err error) tool
 	case errors.Is(err, statelog.ErrConflict):
 		// A LOST RACE, IN WORDS RATHER THAN THE ERROR: what the framework
 		// says is the subject it lost on, a broker path nobody can act on.
-		// A person is told it in [lostRaceWords] ([WriterSentence]); a
+		// A person is told it in [statelog.LostRace] ([WriterSentence]); a
 		// model is told which read decides what to do next.
 		return out(tools.RefusalConflict, fmt.Sprintf("%s could not land: somebody "+
 			"else is editing this item, so nothing was written. Read it again with "+

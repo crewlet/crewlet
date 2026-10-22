@@ -219,7 +219,7 @@ func (t *pauseSeat) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 	}
 	// A LOST RACE, in the words every surface tells it in.
-	return refused(tools.RefusalConflict, lostRaceWords), nil
+	return refused(tools.RefusalConflict, statelog.LostRace), nil
 }
 
 // resumeSeat lifts a seat's pause: it takes work again, the mail that waited
@@ -300,7 +300,7 @@ func (t *resumeSeat) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		})
 	}
 	// A LOST RACE, in the words every surface tells it in.
-	return refused(tools.RefusalConflict, lostRaceWords), nil
+	return refused(tools.RefusalConflict, statelog.LostRace), nil
 }
 
 // pauseTarget is the agent seat a pause or a resume is about: its chart role
