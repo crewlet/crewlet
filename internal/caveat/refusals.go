@@ -150,3 +150,17 @@ func TokenBudgetSpent(where Remedy) Refusal {
 	return Refusal{person: whose + " for this window is spent, so nothing was " +
 		"sent." + back, remedy: where}
 }
+
+// ModelAtLimit is a question no model was asked, because the model that
+// answers it has reached a usage limit it reported, carrying the company's
+// models as where it is given a fallback or its plan changed (ADR-0064). NO
+// TIME, for [AnsweredAlready]'s reason: an instant in these words is on no
+// reader's clock, and when the model is tried again rides beside them as the
+// answer's Retry-After, for a screen to say on its own. And NEVER "WAIT"
+// ALONE, for [TokenBudgetSpent]'s.
+func ModelAtLimit() Refusal {
+	return Refusal{person: "The model that answers questions has reached its " +
+		"usage limit, so this wasn't answered and nothing was spent. It answers " +
+		"again once the limit lifts, or sooner if the company's models change.",
+		remedy: ModelProviders()}
+}

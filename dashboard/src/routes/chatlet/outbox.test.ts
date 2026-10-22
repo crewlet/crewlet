@@ -50,6 +50,7 @@ const refusal = (code: "conflict" | "unavailable", retryable: boolean): ActResul
   kind: "refused",
   code,
   sentence: "The room is archived.",
+  detail: "",
   hint: "",
   grants: [],
   reason: "",

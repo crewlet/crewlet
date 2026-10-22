@@ -281,7 +281,14 @@ describe("what a change came to", () => {
         }),
     );
     const result = await act("set_pins", {}, { floors: new SessionFloors() });
-    expect(result).toMatchObject({ kind: "refused", code: "unavailable", retryable: true });
+    // AND IT CARRIES THE ENGINE'S OWN DETAIL beside the dashboard's
+    // sentence, for a screen whose tool words every refusal for a person.
+    expect(result).toMatchObject({
+      kind: "refused",
+      code: "unavailable",
+      retryable: true,
+      detail: "sealed",
+    });
   });
 
   test("an unavailable the engine says no wait clears is not worth retrying", async () => {

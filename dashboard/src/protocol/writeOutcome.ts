@@ -99,6 +99,15 @@ export type WriteFailed =
       code: ActErrorCode | "";
       /** The sentence a person is shown. */
       sentence: string;
+      /**
+       * The engine's own `detail`, verbatim, and `""` where it sent none; the
+       * act route sends one only in a person's words (ADR-0060). The
+       * sentence above is the dashboard's for most codes, written about a
+       * change; a screen asking a question shows this instead where there
+       * is one (`answer_knowledge`'s spent budget, or its model at a usage
+       * limit).
+       */
+      detail: string;
       /** The engine's own remedy, where it sent one. */
       hint: string;
       /**
@@ -115,7 +124,7 @@ export type WriteFailed =
       reason: string;
       /** Whether sending it again may succeed: the engine said waiting can change it. */
       retryable: boolean;
-      /** Where the limit that caused it is changed, for a refusal a limit caused (a spent budget). */
+      /** Where the limit that caused it is changed, for a refusal a limit caused (a spent budget, a model at its usage limit). */
       remedy: Remedy | null;
       /**
        * Whether the screen the press was made from is OUT OF DATE (see
@@ -222,6 +231,7 @@ export function writeFailed(err: RestError): WriteFailed {
       rule ||
       (own ??
         (err.detail || err.sentence || `The engine refused the change (status ${err.status}).`)),
+    detail: err.detail,
     hint: err.hint,
     grants: err.grants,
     reason: err.reason,

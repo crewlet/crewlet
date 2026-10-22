@@ -16,6 +16,7 @@ import { AssistantControlContext, type AssistantControl } from "../assistant/con
 import { ProjectSwitcherProvider } from "../header/ProjectSwitcher.tsx";
 import { forgetAnswersForTest } from "./answer.ts";
 import { ANSWER_IDLE_MS, destinationHits } from "./hits.ts";
+import { ACT_ERRORS } from "~/contract/errors.ts";
 import { COLLEAGUE_QUERY_MAX, SEARCH_QUERY_MAX } from "~/contract/wire.ts";
 import { Router, href } from "../router.tsx";
 import { DESTINATIONS } from "../nav.ts";
@@ -741,6 +742,38 @@ describe("the knowledge answer", () => {
       .closest(".palette-answer")!;
     expect(lead.textContent).toMatch(/tokens/);
     expect(lead.textContent).not.toMatch(/[$€£¥]|USD|cost|price/i);
+  });
+
+  // A REFUSAL IS TOLD IN THE ENGINE'S OWN WORDS where it has them: the act
+  // route answers a refusal's `detail` only in a person's words (ADR-0060),
+  // and a spent budget's says whose ceiling it was and that nothing was sent,
+  // which the dashboard's one sentence for the class cannot.
+  test("a refused question is told in the engine's words", async () => {
+    vi.useFakeTimers();
+    const said =
+      "The company's token budget for this window is spent, so nothing was sent. It comes back when the window resets, or as soon as the ceiling is raised.";
+    engine((tool) =>
+      tool === "answer_knowledge"
+        ? json(
+            {
+              error: "budget_exhausted",
+              message:
+                "The token budget for this window is spent, so nothing was spent on this. Raise it, or wait for the window to turn over.",
+              detail: said,
+              remedy: { setting: "company_token_budget" },
+              tool,
+              op_id: "op-1",
+            },
+            409,
+          )
+        : json({ error: "not_found", detail: "no" }, 404),
+    );
+    const p = mount();
+    await p.type(QUESTION);
+    await settle(ANSWER_IDLE_MS);
+    await settle(0);
+    expect(screen.getByText(said)).toBeDefined();
+    expect(screen.queryByText(ACT_ERRORS.budget_exhausted)).toBeNull();
   });
 
   test("a new term abandons the question before it, which is never drawn", async () => {

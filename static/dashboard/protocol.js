@@ -4246,6 +4246,7 @@ function writeFailed(err) {
 		kind: "refused",
 		code,
 		sentence: (code === "unauthorized" && err.reason !== "" ? err.sentence : "") || (own ?? (err.detail || err.sentence || `The engine refused the change (status ${err.status}).`)),
+		detail: err.detail,
 		hint: err.hint,
 		grants: err.grants,
 		reason: err.reason,

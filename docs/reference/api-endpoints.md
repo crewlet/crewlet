@@ -5755,7 +5755,20 @@ and
 `unavailable` for a counter it cannot read (nothing is spent), a knowledge base
 and tracker that could not be searched at all, no model configured, or a model
 that failed or wrote nothing — a reply that spent tokens and wrote nothing is
-still charged.
+still charged. Over `/operator/act` an `unavailable` other than a usage
+limit's (below) carries no `detail` (ADR-0060), so the person who asked reads
+its code's own sentence; the tool's words for which one it was are a model's,
+over `/operator/mcp`. One that no
+wait clears carries no
+`Retry-After`: no model set up, a login the model's CLI reports refused or
+missing, or a call this node can't make at all (a CLI it can't start, a
+prompt it can't render). A model at a usage limit its CLI reported is a wait
+rather than a failure: nothing is launched, and the refusal carries the
+seconds until the model is tried again as its `Retry-After`, a person's words
+for the limit as `detail`, and `remedy: {"setting": "model_providers"}`, the
+company's models, where an administrator gives it a fallback
+([ADR-0064](https://github.com/crewlet/crewlet/blob/main/adr/0064-a-model-at-its-limit-parks-the-seats-it-holds-and-a-seat-says-one-steady-thing.md)).
+A slow or failing model, and the rest, carry one.
 
 ### One catalogue, and how a retry is the same call
 

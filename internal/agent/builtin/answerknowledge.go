@@ -433,8 +433,12 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// the tokens are spent at the vendor the moment it replies.
 	member, err := t.deps.Models.Auxiliary(role, answerUse.For(types.AuxAnswerKnowledge))
 	if err != nil {
-		return refused(tools.RefusalUnavailable, fmt.Sprintf("No model is configured "+
-			"to answer with (%v). Nothing was spent.", err)), nil
+		// WHY IS THE LOG'S: the seam's error names the chain it resolved and
+		// the configuration it read, nothing the person asking acts on.
+		log.WarnContext(ctx, "knowledge_answer_no_model", "seat", actor.Handle,
+			"error", err.Error())
+		return refusedBy(tools.RefusalUnavailable, waitless(), "No model is set up to "+
+			"answer questions, so nothing was spent. An administrator needs to set one up."), nil
 	}
 	call, cancel := context.WithTimeout(ctx, AnswerTimeout)
 	defer cancel()
@@ -449,6 +453,19 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// No tools: the answer is the content, and a tool on the surface
 		// invites a model to call it and write nothing.
 	})
+	if retryAt, resetsAt, limited := llm.LimitedUntil(err); limited {
+		// A LIMIT ALREADY REPORTED IS A WAIT, NOT A FAILURE, as every
+		// auxiliary caller reads one: the backend sat the entry out and
+		// launched nothing. Logged at warn as a failure, each press during
+		// the limit was another line burying the one that reported it, and
+		// answered as "busy" under this node's two-second hint, a person was
+		// sent back every two seconds to a limit that lifts in an hour.
+		log.InfoContext(ctx, "knowledge_answer_limited", "seat", actor.Handle,
+			"model", member.Key, "retry_at", instantOrNone(retryAt),
+			"resets_at", instantOrNone(resetsAt))
+		return toPerson(refusedBy(tools.RefusalUnavailable, waitsUntil(retryAt),
+			limitedSentence(retryAt, resetsAt)), caveat.ModelAtLimit()), nil
+	}
 	if err != nil || completion == nil {
 		reason := "it answered nothing"
 		if err != nil {
@@ -456,8 +473,11 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 		log.WarnContext(ctx, "knowledge_answer_failed", "seat", actor.Handle,
 			"model", member.Key, "error", reason)
-		return refused(tools.RefusalUnavailable, fmt.Sprintf("The model could not "+
-			"answer (%s). Try again shortly.", reason)), nil
+		words, waits := modelFailed(err)
+		if !waits {
+			return refusedBy(tools.RefusalUnavailable, waitless(), words), nil
+		}
+		return refused(tools.RefusalUnavailable, words), nil
 	}
 	// THE ANSWER IS DEFUSED under the caller's token: it is a model's
 	// rewording of pages somebody else wrote, read next by a person or by
@@ -807,4 +827,58 @@ func (c *AnswerCache) len() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.order.Len()
+}
+
+// limitedSentence is a question no model was asked because the model that
+// answers it is at a usage limit, as the model reading the answer is told it:
+// when the limit lifts where its vendor said, and otherwise when the model is
+// tried again, each as an instant ([budgetSentence]'s form).
+func limitedSentence(retryAt, resetsAt time.Time) string {
+	const said = "The model that answers questions has reached its usage limit, so " +
+		"no answer was written and nothing was spent."
+	switch {
+	case !resetsAt.IsZero():
+		return said + " The limit lifts at " + resetsAt.UTC().Format(time.RFC3339) + "."
+	case !retryAt.IsZero():
+		return said + " Its vendor named no time it lifts; the model is tried again at " +
+			retryAt.UTC().Format(time.RFC3339) + "."
+	}
+	return said + " Its vendor named no time it lifts."
+}
+
+// instantOrNone is an instant for a log line, or "" where it is unknown.
+func instantOrNone(at time.Time) string {
+	if at.IsZero() {
+		return ""
+	}
+	return at.UTC().Format(time.RFC3339)
+}
+
+// modelFailed is a failed answer as the person who asked reads it, by the
+// kind of failure the provider layer classified ([llm.KindOf]) — what
+// happened, and whether trying again can help — and whether a wait can clear
+// it, which the answer's Retry-After follows: a model that took too long and a
+// CLI that ran and gave no usable answer may answer next time, while no retry
+// gets past a login the CLI reports expired or missing, or a call the engine
+// itself cannot make ([llm.KindFatal]). A model at its usage limit is not one
+// of these: it is the wait [limitedSentence] tells.
+//
+// NEVER THE ERROR ITSELF, which went to the log: it names the provider entry,
+// the model and what the CLI said, which was the whole of the sentence ("The
+// model could not answer (llm cli-agent/claude-code/aux-small: rate_limit:
+// usage limit reached …). Try again shortly.") and nothing a person acts on.
+func modelFailed(err error) (string, bool) {
+	if err == nil {
+		return "The model answered nothing. Try again shortly.", true
+	}
+	switch llm.KindOf(err) {
+	case llm.KindTimeout:
+		return "The model took too long to answer. Try again shortly.", true
+	case llm.KindAuth:
+		return "The model's service refused the company's credentials. An " +
+			"administrator needs to check them.", false
+	case llm.KindServer:
+		return "The model's service failed. Try again shortly.", true
+	}
+	return "The model couldn't answer this question.", false
 }
