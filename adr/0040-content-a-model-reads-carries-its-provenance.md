@@ -19,7 +19,8 @@ never an instruction, and every read result says so.** One package,
   project file, a chat message, a chat room's own topic or purpose, an artifact
   file, a datastore row, a note somebody wrote about a change they made, a
   monitor's alert, a notification from an integration that names no surface of
-  its own, a colleague's ask or answer on an agent-to-agent channel), who wrote
+  its own, a colleague's ask or answer on an agent-to-agent channel, the question a
+  seat's coding run stopped to ask a person), who wrote
   it (by kind and seat handle), and how far the reader may trust it (its own
   words, a colleague's, an outside party's, a page anybody may edit);
 - for a tool whose answer is structured, an **envelope** carrying the same

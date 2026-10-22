@@ -113,8 +113,13 @@ func TestAnswerRunDeliversTheAnswerAsThePersonAndAnswersPending(t *testing.T) {
 	if err := json.Unmarshal([]byte(result.Output), &answer); err != nil {
 		t.Fatal(err)
 	}
-	if answer["outcome"] != "pending" || answer["question"] != "which branch?" {
-		t.Errorf("answer = %v, want pending with the question it answered", answer)
+	if answer["outcome"] != "pending" {
+		t.Errorf("answer = %v, want pending", answer)
+	}
+	// THE QUESTION IT ANSWERED, as the run's words: fenced under the seat
+	// whose coding run asked it (ADR-0040).
+	if got := unfenced(t, answer["question"]); got != "which branch?" {
+		t.Errorf("the answer carries the question %q, want the one it answered", got)
 	}
 }
 

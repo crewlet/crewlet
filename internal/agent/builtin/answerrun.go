@@ -12,6 +12,8 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -220,10 +222,17 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"turn_id", run.TurnID, "seat", parties.handle, "error", err.Error())
 		outcome = statelog.OutcomeUnknown
 	}
-	return jsonResult(map[string]any{
+	// THE QUESTION IS THE RUN'S WORDS, written by the seat's coding agent in
+	// the seat's name, and whoever answers it is usually reading through an
+	// assistant: it goes back fenced as what that seat's run wrote
+	// (ADR-0040), not as a line of the engine's receipt.
+	read := newForeignRead(turn, actor.Handle)
+	read.fence(fieldPath{}.key("question"), provenance.SourceCodingRun,
+		[]provenance.Author{read.writer(parties.handle, iam.ActorAgent)}, false, run.Question)
+	return read.answer(ctx, AnswerRunTool, map[string]any{
 		"turn_id": run.TurnID, "agent_handle": parties.handle,
 		"question": run.Question, "outcome": string(outcome),
-	})
+	}, "")
 }
 
 // errUnreadableSeatID is the error a pending run's row carries when the seat

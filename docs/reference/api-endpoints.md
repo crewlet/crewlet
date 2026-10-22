@@ -5200,8 +5200,12 @@ answers any parked run by naming it:
 | `turn_id` | The parked run's `turn_id`, as [`GET /sandbox-runs`](#get-sandbox-runs) lists it. |
 | `answer` | What the coding agent should be told, at most 32 KiB — it is spliced into the run as one tool reply. |
 
-It answers `{"turn_id", "agent_handle", "question", "outcome": "pending"}`:
-the answer is on the inbox of the seat holding the run, and **that** node
+It answers `{"turn_id", "agent_handle", "question", "outcome": "pending"}`,
+with the question [fenced](../concepts/agent-runtime.md#text-somebody-else-wrote)
+as `coding_run` under the seat whose run asked it and the `provenance` envelope
+beside it — the coding agent wrote it in the seat's name, and the caller is
+often an assistant reading for the person answering. The answer is on the
+inbox of the seat holding the run, and **that** node
 resumes the run with it — so an answer given while the seat is paused waits
 for the resume, and one given while the seat is
 [busy with another coding run](../concepts/code-sandbox.md#how-a-coding-task-runs)
