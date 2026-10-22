@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tokens"
 	"github.com/crewlet/crewlet/internal/usage"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE SPEND ANSWERS, `tokens` and `token_series`, and where each one reads.
@@ -328,18 +329,18 @@ func (s Sources) tokenSeries(ctx context.Context, p Params) (any, error) {
 	}
 	if !group.Valid() {
 		return nil, fmt.Errorf("%w: the group parameter is one of %s, and %q isn't",
-			ErrBadParams, choices(tokens.Groups), group)
+			ErrBadParams, words.Or(tokens.Groups), group)
 	}
 	interval := tokens.Interval(p.String("bucket"))
 	if interval == "" {
 		interval = tokens.IntervalDay
 	}
 	if !interval.Valid() {
-		// IN WORDS, never Go's slice ("[day week month]"): the set the
-		// one helper lists every closed set in.
+		// IN WORDS, never Go's slice ("[day week month]"): internal/words
+		// says every closed set.
 		return nil, fmt.Errorf("%w: the bucket parameter is one of %s, and %q isn't. "+
 			"Spend is counted by the company day, so nothing finer is kept",
-			ErrBadParams, choices(tokens.Intervals), interval)
+			ErrBadParams, words.Or(tokens.Intervals), interval)
 	}
 	w, err := s.spendWindowOf(p)
 	if err != nil {

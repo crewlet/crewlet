@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE WRITE PATH: one record per caller gesture, published on the subject of
@@ -412,7 +413,7 @@ func (a Actor) IsHuman() bool { return a.Kind == AuthorHuman }
 // validate refuses an actor that cannot be recorded at all.
 func (a Actor) validate() error {
 	if !a.Kind.Valid() {
-		return invalid("actor.kind", "%q is not one of %v", a.Kind, AuthorKinds())
+		return invalid("actor.kind", "%q is not one of %s", a.Kind, words.Or(AuthorKinds()))
 	}
 	// A KEY IS AN OPERATION ID THE ENGINE MINTED, or no key — the wiki's
 	// rule ([Actor.OpKey]). Every id a gesture derives from it carries the

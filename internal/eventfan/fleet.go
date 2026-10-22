@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tokens"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // FleetReadBudget is how long a history read waits for the other nodes.
@@ -527,7 +528,7 @@ func (f *Fleet) ByID(ctx context.Context, id string) (store.EventRecord, Coverag
 	if !found {
 		if missing := g.coverage.Missing(); len(missing) > 0 {
 			return store.EventRecord{}, g.coverage, fmt.Errorf("%w: event %s is held by "+
-				"no node that answered, and %v did not answer", store.ErrNotFound, id, missing)
+				"no node that answered, and %s did not answer", store.ErrNotFound, id, words.And(missing))
 		}
 		return store.EventRecord{}, g.coverage, fmt.Errorf("%w: event %s", store.ErrNotFound, id)
 	}
@@ -679,8 +680,8 @@ func (f *Fleet) SeatPhases(ctx context.Context, agentID string, before *store.Cu
 func (f *Fleet) Turns(ctx context.Context, q store.TurnQuery) (TurnPage, Coverage, error) {
 	started := time.Now()
 	if !q.Sort.Valid() {
-		return TurnPage{}, Coverage{}, fmt.Errorf("%w: sort %q is not one of %v",
-			store.ErrTurnSort, q.Sort, store.TurnSorts)
+		return TurnPage{}, Coverage{}, fmt.Errorf("%w: sort %q is not one of %s",
+			store.ErrTurnSort, q.Sort, words.Or(store.TurnSorts))
 	}
 	byTokens := q.Sort == store.TurnSortTokens
 	if byTokens && q.Before != nil {

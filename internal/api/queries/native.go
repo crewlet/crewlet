@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The native tracker and knowledge base, read for a screen.
@@ -939,7 +940,7 @@ func badParams(field, got string, allowed []string) error {
 		return fmt.Errorf("%w: the %s parameter can't be %q", ErrBadParams, field, got)
 	}
 	return fmt.Errorf("%w: the %s parameter is one of %s, and %q isn't",
-		ErrBadParams, field, choices(allowed), got)
+		ErrBadParams, field, words.Or(allowed), got)
 }
 
 // ---- projects ----------------------------------------------------------- //

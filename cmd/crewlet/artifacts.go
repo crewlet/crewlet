@@ -30,6 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // `crewlet artifacts`: the company's artifacts from a shell, through the same
@@ -646,8 +647,8 @@ func artifactsShare(environ config.Source, args []string, stdout, stderr io.Writ
 			}
 			role := artifacts.Role(pos[2])
 			if !slices.Contains(artifacts.ShareableRoles, role) {
-				return "", writtenAnswer{}, fmt.Errorf("the role is one of %v: ownership moves only by transfer",
-					artifacts.ShareableRoles)
+				return "", writtenAnswer{}, fmt.Errorf("the role is one of %s: ownership moves only by transfer",
+					words.Or(artifacts.ShareableRoles))
 			}
 			var answer writtenAnswer
 			if err := c.write(context.Background(), http.MethodPut, "/artifacts/"+id.String()+"/shares",

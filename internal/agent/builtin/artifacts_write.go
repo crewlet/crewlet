@@ -23,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The stale answer's budget for the live version's text: the first
@@ -90,8 +91,8 @@ func capabilitiesArg(tool string, args map[string]any) ([]artifacts.Capability, 
 		name, _ := v.(string)
 		c := artifacts.Capability(strings.TrimSpace(name))
 		if !c.Valid() {
-			return nil, fmt.Sprintf("%s: %q is not a capability; the page may use %v.",
-				tool, clip(fmt.Sprint(v)), artifacts.Capabilities)
+			return nil, fmt.Sprintf("%s: %q is not a capability; the page may use %s.",
+				tool, clip(fmt.Sprint(v)), words.Or(artifacts.Capabilities))
 		}
 		if !slices.Contains(out, c) {
 			out = append(out, c)
@@ -239,7 +240,7 @@ func (t *createArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	kind := artifacts.Kind(strings.TrimSpace(argString(args, "kind")))
 	spec, ok := kind.Spec()
 	if !ok {
-		return failed(fmt.Sprintf(CreateArtifactTool+" takes `kind` as one of %v.", artifacts.Kinds)), nil
+		return failed(fmt.Sprintf(CreateArtifactTool+" takes `kind` as one of %s.", words.Or(artifacts.Kinds))), nil
 	}
 	title := strings.TrimSpace(argString(args, "title"))
 	if title == "" {

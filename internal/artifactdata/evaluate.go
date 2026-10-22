@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactdata/query"
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE DECISION A WRITE GETS: a pure function of the batch, the stamped
@@ -301,16 +302,16 @@ func checkAuthority(a artifacts.Authority) *refusal {
 // checkOpShape refuses an op whose names or operands no store holds.
 func checkOpShape(op artifacts.DataOp) error {
 	if !op.Op.Valid() {
-		return fmt.Errorf("%w: op %q is not one of %v", ErrInvalid, op.Op, artifacts.DataOpKinds)
+		return fmt.Errorf("%w: op %q is not one of %s", ErrInvalid, op.Op, words.Or(artifacts.DataOpKinds))
 	}
 	if op.Collection != StateCollection && !artifacts.ValidCollectionName(op.Collection) {
 		return fmt.Errorf("%w: collection %q is a lowercase letter, then lowercase letters, "+
-			"digits and `_`, at most %d bytes, and not one of %v", ErrInvalid, op.Collection,
-			artifacts.MaxCollectionNameBytes, artifacts.ReservedCollections)
+			"digits and `_`, at most %d bytes, and not one of %s", ErrInvalid, op.Collection,
+			artifacts.MaxCollectionNameBytes, words.Or(artifacts.ReservedCollections))
 	}
 	if !ValidDocID(op.Doc) {
 		return fmt.Errorf("%w: document id %q is 1..%d letters, digits, `_` and `-`, and "+
-			"not one of %v", ErrInvalid, op.Doc, artifacts.MaxDocIDBytes, reservedDocIDs)
+			"not one of %s", ErrInvalid, op.Doc, artifacts.MaxDocIDBytes, words.Or(reservedDocIDs))
 	}
 	if op.IfVersion != nil && *op.IfVersion < 0 {
 		return fmt.Errorf("%w: if_version is a version a read returned, never negative", ErrInvalid)

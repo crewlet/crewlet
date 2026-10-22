@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE WRITE PATHS, one record each.
@@ -108,7 +109,7 @@ func (s *Store) Create(ctx context.Context, actor Actor, in NewPage) (Written, e
 		in.Status = StatusPublished
 	}
 	if !in.Status.Valid() {
-		return Written{}, invalid("status", "%q is not one of %v", in.Status, Statuses())
+		return Written{}, invalid("status", "%q is not one of %s", in.Status, words.Or(Statuses()))
 	}
 	if len(in.Message) > MaxMessage {
 		return Written{}, invalid("message", "%d bytes, past the %d-byte cap",
@@ -257,8 +258,8 @@ func (s *Store) SavePage(ctx context.Context, actor Actor, pageID string,
 		}
 	}
 	if save.Status != nil && !save.Status.Valid() {
-		return Written{}, invalid("status", "%q is not one of %v",
-			*save.Status, Statuses())
+		return Written{}, invalid("status", "%q is not one of %s",
+			*save.Status, words.Or(Statuses()))
 	}
 
 	at := s.now()

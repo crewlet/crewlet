@@ -64,5 +64,5 @@ var goPackages = map[string]bool{
 	"tracker": true, "turn": true, "turnctx": true, "types": true,
 	"ticket": true, "trashreap": true,
 	"usage": true, "version": true, "webhooks": true, "whsec": true,
-	"workapi": true, "workkey": true,
+	"words": true, "workapi": true, "workkey": true,
 }

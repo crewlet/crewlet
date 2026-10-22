@@ -703,7 +703,7 @@ func TestAFleetsMostCaughtUpNodeCanReanchorALogEveryNodeLost(t *testing.T) {
 		Generation: own.Generation + 1, Seq: 3, AppliedThrough: 3, StreamCreatedAt: live,
 	})
 	if _, err := reanchor(); !errors.Is(err, statelog.ErrReanchorRefused) ||
-		!strings.Contains(err.Error(), "re-anchored peers: [reanchored]") {
+		!strings.Contains(err.Error(), `re-anchored peers: "reanchored"`) {
 		t.Fatalf("a reanchor with a peer at a later generation = %v, want a refusal "+
 			"naming it", err)
 	}

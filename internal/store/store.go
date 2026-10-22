@@ -138,6 +138,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/words"
 
 	// The driver registers itself under the name [driverName]. A blank
 	// import because nothing here touches its types — the whole point of
@@ -624,8 +625,8 @@ func OpenNode(ctx context.Context, path string, opts Options) (*DB, error) {
 // two estates happen to share.
 func OpenEstate(ctx context.Context, estate Estate, path string, opts Options) (*DB, error) {
 	if !estate.Valid() {
-		return nil, fmt.Errorf("store: open %s: %q is not an estate; the estates are %v",
-			path, estate, Estates)
+		return nil, fmt.Errorf("store: open %s: %q is not an estate; the estates are %s",
+			path, estate, words.And(Estates))
 	}
 	opts.pins = 0
 	return openEstate(ctx, estate, path, opts)

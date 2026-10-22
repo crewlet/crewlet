@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // DefaultRevisionPage is how many revisions a listing returns when the caller
@@ -136,7 +137,7 @@ func (c *Configs) Insert(ctx context.Context, r Revision) (string, error) {
 func (c *Configs) insert(ctx context.Context, r Revision, active bool) (string, error) {
 	if !r.CreatedByKind.Valid() {
 		return "", fmt.Errorf("store: a config revision needs its author's kind "+
-			"(one of %q), got %q", iam.ActorKinds, r.CreatedByKind)
+			"(one of %s), got %q", words.Or(iam.ActorKinds), r.CreatedByKind)
 	}
 	id := r.ID
 	if id == "" {

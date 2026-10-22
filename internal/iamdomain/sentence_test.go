@@ -140,11 +140,11 @@ func TestARefusalTellsAPersonNoIdAndTheLogEveryOne(t *testing.T) {
 			return mint(asOwner(rig, owner), iamdomain.TokenMint{PersonID: owner,
 				Grants: []iam.Grant{iam.GrantAdmin}})
 		}, "a token can only have what its owner has, and its owner doesn't have admin",
-			[]string{"tracker, knowledge"}, nil},
+			[]string{`"tracker" and "knowledge"`}, nil},
 		{"a name this build does not know, on a token", func() error {
 			return mint(asOwner(rig, owner), iamdomain.TokenMint{PersonID: owner,
 				Grants: []iam.Grant{"swarm"}})
-		}, `"swarm" isn't a permission. Choose from admin, tracker`, nil, nil},
+		}, `"swarm" isn't a permission. Use "admin", "tracker"`, nil, nil},
 		{"an expired invitation's link", func() error {
 			_, err := redeemAs(t, rig, expired, expiredAt, expired.Secret, expiredSeat)
 			return err
@@ -172,7 +172,7 @@ func TestARefusalTellsAPersonNoIdAndTheLogEveryOne(t *testing.T) {
 				Reason: "a pipeline",
 			})
 			return err
-		}, "Choose from admin, tracker", nil, nil},
+		}, `Use "admin", "tracker"`, nil, nil},
 		{"an administrative record through a machine token", func() error {
 			_, err := tokenAdmin.InvalidateAll(ctx, operationKey(), "a restore")
 			return err

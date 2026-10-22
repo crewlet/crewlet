@@ -3,7 +3,8 @@ package search
 import (
 	"context"
 	"database/sql"
-	"fmt"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // WHAT THE LEXICAL INDEX COVERS, as a seam rather than as SQL in the walk.
@@ -370,11 +371,12 @@ func liveIDs(ctx context.Context, tx *sql.Tx, statement string,
 	return out, rows.Err()
 }
 
-// sourceNames is every source name this indexer covers, for a message.
+// sourceNames is every source name this indexer covers, for a message: said as
+// a list ([words.And]), never as fmt prints a slice.
 func sourceNames(sources []LexicalSource) string {
 	names := make([]string, 0, len(sources))
 	for _, s := range sources {
 		names = append(names, s.Source())
 	}
-	return fmt.Sprint(names)
+	return words.And(names)
 }

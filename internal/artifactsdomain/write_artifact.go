@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The artifact's own writes: the create, a publish and a rollback, a patch,
@@ -109,7 +110,7 @@ func (w *Writer) Create(ctx context.Context, c Call, in CreateInput) (Published,
 // checkCreate refuses a create the domain would never write.
 func checkCreate(c Call, in CreateInput, at time.Time) error {
 	if !in.Kind.Valid() {
-		return fmt.Errorf("%w: kind %q is not one of %v", ErrInvalid, in.Kind, artifacts.Kinds)
+		return fmt.Errorf("%w: kind %q is not one of %s", ErrInvalid, in.Kind, words.Or(artifacts.Kinds))
 	}
 	if err := checkHead(&in.Title, &in.Description, &in.Icon, true); err != nil {
 		return err
@@ -200,8 +201,8 @@ func checkShare(c Call, s artifacts.Share, ceiling artifacts.Role) error {
 		return fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	if !slices.Contains(artifacts.ShareableRoles, s.Role) {
-		return fmt.Errorf("%w: role %q is not one a share grants (%v): ownership moves "+
-			"only by transfer", ErrInvalid, s.Role, artifacts.ShareableRoles)
+		return fmt.Errorf("%w: role %q is not one a share grants (%s): ownership moves "+
+			"only by transfer", ErrInvalid, s.Role, words.Or(artifacts.ShareableRoles))
 	}
 	if !ceiling.Valid() {
 		return fmt.Errorf("%w: the call's authority names no role on the artifact, so "+
@@ -353,8 +354,8 @@ func versionFor(ctx context.Context, tx *sql.Tx, head Head, in PublishInput,
 		return VersionPayload{}, err
 	}
 	if !ok {
-		return VersionPayload{}, fmt.Errorf("artifactsdomain: %s's retention list %v "+
-			"names a version it cannot retire", id, prune)
+		return VersionPayload{}, fmt.Errorf("artifactsdomain: %s's retention list (versions %s) "+
+			"names a version it cannot retire", id, words.And(prune))
 	}
 	plan, refusal, err := planObjects(ctx, tx, id, m.Files, retired)
 	if err != nil {

@@ -39,6 +39,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/provenance"
 	llm "github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Version is the format this build writes.
@@ -359,7 +360,7 @@ func (s State) Validate() error {
 				ErrNoPendingCall, dangling[0], s.PendingCallID)
 		}
 	default:
-		return fmt.Errorf("%w: %v", ErrDanglingCalls, dangling)
+		return fmt.Errorf("%w: %s", ErrDanglingCalls, words.And(dangling))
 	}
 	return nil
 }

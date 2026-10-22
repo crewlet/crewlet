@@ -122,7 +122,7 @@ func TestARequestUnderAKeyThisNodeDoesNotHoldNamesItsIDUntrusted(t *testing.T) {
 	if got.Disposition != KeyUnknown || got.ID != removal.ID || got.Request != removal {
 		t.Fatalf("a request under an unheld key = %+v, want it refused naming its id", got)
 	}
-	if !strings.Contains(got.Why, "[k1]") || !strings.Contains(got.Why, "secrets.keys") {
+	if !strings.Contains(got.Why, `it holds "k1"`) || !strings.Contains(got.Why, "secrets.keys") {
 		t.Errorf("the refusal does not say what this node holds or what to do: %q", got.Why)
 	}
 }

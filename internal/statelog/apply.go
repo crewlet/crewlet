@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // ReorderBufferBytes bounds what a strict loop holds while it waits for a
@@ -2562,9 +2563,9 @@ func (r *Runner) decode(ctx context.Context, batch []Message) ([]Record, error) 
 			})
 			return nil, r.stop(ctx, fmt.Errorf("%w: %s's record at sequence %d is not "+
 				"signed by this fleet — its frame fails under the keys this node "+
-				"holds (%v), so something that can reach the broker wrote it and "+
+				"holds (%s), so something that can reach the broker wrote it and "+
 				"this node will not apply it or anything after it",
-				ErrStopped, r.domain.Name(), m.Seq, r.verifier.KeyIDs()))
+				ErrStopped, r.domain.Name(), m.Seq, words.And(r.verifier.KeyIDs())))
 		}
 		env, err := r.domain.Envelope(body)
 		if err != nil {
@@ -2748,12 +2749,12 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 				// passing every fence it has.
 				if r.domain.InstallsGate(rec.Envelope) {
 					return fmt.Errorf("%w: %s at %s installs an apply gate and is "+
-						"signed under a key this node does not hold (it holds %v) "+
+						"signed under a key this node does not hold (it holds %s) "+
 						"— a gate this node cannot authenticate would license "+
 						"every record above it, so the applier halts and this "+
 						"node takes its copy of the estate out of service, so its "+
 						"seats read it from a data node that can",
-						ErrStopped, rec.Kind, rec.Position, r.verifier.KeyIDs())
+						ErrStopped, rec.Kind, rec.Position, words.And(r.verifier.KeyIDs()))
 				}
 				if err := r.tables.retain(ctx, tx, rec, r.spec.Replay == ReplayCompacted, opts.MaxVariables); err != nil {
 					return err

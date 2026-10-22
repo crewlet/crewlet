@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A DECISION IS A STRUCTURED ASK — ADR-0023.
@@ -326,7 +328,7 @@ func (d Decision) Validate() error {
 	if d.Inform != nil {
 		if !d.Inform.Surface.Valid() {
 			return invalid("decision.inform.surface is %q and must be one of "+
-				"%v", d.Inform.Surface, InformSurfaces())
+				"%s", d.Inform.Surface, words.Or(InformSurfaces()))
 		}
 		if err := checkText("decision.inform.channel", d.Inform.Channel,
 			MaxInformChannel, true); err != nil {

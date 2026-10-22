@@ -11,6 +11,7 @@ import (
 	"github.com/nats-io/nats.go"
 
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // AdoptPartSuffix is what a fetched artefact is called while it is being
@@ -399,8 +400,8 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer, began time.Time) (Mani
 	// forward either.
 	if ahead := aheadOf(schema.Applied, known); len(ahead) > 0 {
 		return Manifest{}, fmt.Errorf("statelog: the artefact carries migrations "+
-			"this binary does not: %v — its rows are shaped by code this node "+
-			"does not run", ahead)
+			"this binary does not: %s — its rows are shaped by code this node "+
+			"does not run", words.And(ahead))
 	}
 
 	// 5. VERIFY the bytes and the positions the file actually keeps.
@@ -424,10 +425,10 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer, began time.Time) (Mani
 		return Manifest{}, err
 	}
 	if len(empty) != len(offer.Manifest.Scrubbed) {
-		return Manifest{}, fmt.Errorf("statelog: the artefact claims %v scrubbed "+
-			"and only %v are empty — the safety argument for accepting it at all "+
+		return Manifest{}, fmt.Errorf("statelog: the artefact claims %s scrubbed "+
+			"and only %s are empty — the safety argument for accepting it at all "+
 			"is that everything still in it is fleet-visible",
-			offer.Manifest.Scrubbed, empty)
+			words.And(offer.Manifest.Scrubbed), words.And(empty))
 	}
 	if err := a.deps.Record(ctx, began, offer.Manifest.NodeID, offer.Manifest, AdoptionScrubbed); err != nil {
 		return Manifest{}, fmt.Errorf("statelog: record the adoption: %w", err)

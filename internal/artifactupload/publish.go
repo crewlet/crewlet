@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // FileSpec names one path of the next version and where its bytes come from:
@@ -153,8 +154,8 @@ func (s *Service) Create(ctx context.Context, c artifactsdomain.Call, req Create
 
 func (s *Service) create(ctx context.Context, c artifactsdomain.Call, req CreateRequest) (artifactsdomain.Published, Report, error) {
 	if !req.Kind.Valid() {
-		return artifactsdomain.Published{}, Report{}, fmt.Errorf("%w: kind %q is not one of %v",
-			ErrInvalid, req.Kind, artifacts.Kinds)
+		return artifactsdomain.Published{}, Report{}, fmt.Errorf("%w: kind %q is not one of %s",
+			ErrInvalid, req.Kind, words.Or(artifacts.Kinds))
 	}
 	if (req.Doc != nil || req.Deck != nil || req.Layout != nil) && !req.Starter {
 		return artifactsdomain.Published{}, Report{}, fmt.Errorf("%w: a doc's written text, a "+

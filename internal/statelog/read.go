@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // ReadLevel is how fresh an answer has to be, and there are four because
@@ -479,8 +480,8 @@ func NewReader(d ReaderDeps) (*Reader, error) {
 	case d.Health == nil:
 		return nil, fmt.Errorf("statelog: reader has no health source")
 	case !d.Mode.Valid():
-		return nil, fmt.Errorf("statelog: reader has no mode (%q; want one of %v): "+
-			"whether a read may append a barrier turns on it", d.Mode, MaintenanceModes)
+		return nil, fmt.Errorf("statelog: reader has no mode (%q; want one of %s): "+
+			"whether a read may append a barrier turns on it", d.Mode, words.Or(MaintenanceModes))
 	case !d.Mode.Publishes() && d.Index != nil:
 		return nil, fmt.Errorf("statelog: a reader in %s mode was given a read index, "+
 			"and a read index appends barriers to a log this mode publishes nothing to",
@@ -534,8 +535,8 @@ func NewReader(d ReaderDeps) (*Reader, error) {
 func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Answer, error) {
 	started := time.Now()
 	if !q.Level.Valid() {
-		return Answer{}, fmt.Errorf("statelog: %q is not a read level (want %v)",
-			q.Level, ReadLevels)
+		return Answer{}, fmt.Errorf("statelog: %q is not a read level (want %s)",
+			q.Level, words.Or(ReadLevels))
 	}
 	// THE CALLER'S FLOOR NAMES A STREAM, and it is checked before any
 	// level — or this node's own health — looks at anything.

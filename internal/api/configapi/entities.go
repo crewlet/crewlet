@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The config's addressable collections — what the dashboard's Config room
@@ -421,8 +422,8 @@ func EntityKinds() []string {
 func (s *Service) Entities(ctx context.Context, kind string) ([]string, error) {
 	access, ok := entityKinds[kind]
 	if !ok {
-		return nil, fmt.Errorf("%w: %q (want one of %v)",
-			ErrUnknownEntityKind, kind, EntityKinds())
+		return nil, fmt.Errorf("%w: %q (want one of %s)",
+			ErrUnknownEntityKind, kind, words.Or(EntityKinds()))
 	}
 	company, err := s.Document(ctx)
 	if err != nil {
@@ -443,8 +444,8 @@ func (s *Service) Entities(ctx context.Context, kind string) ([]string, error) {
 func (s *Service) Entity(ctx context.Context, kind, id string) (any, error) {
 	access, ok := entityKinds[kind]
 	if !ok {
-		return nil, fmt.Errorf("%w: %q (want one of %v)",
-			ErrUnknownEntityKind, kind, EntityKinds())
+		return nil, fmt.Errorf("%w: %q (want one of %s)",
+			ErrUnknownEntityKind, kind, words.Or(EntityKinds()))
 	}
 	// REDACTED, because Document redacts: this is a slice of the same
 	// document and a per-entity read that skipped the masking would be a
