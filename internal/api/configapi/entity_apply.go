@@ -81,7 +81,7 @@ func (e *EntityError) Unwrap() error { return e.Err }
 func entityDraft(kind, id string, body submitted, expect string, create bool) (draft, error) {
 	access, ok := entityKinds[kind]
 	if !ok {
-		return draft{}, &EntityError{Err: fmt.Errorf("%w: %q (want one of %s)",
+		return draft{}, &EntityError{Err: fmt.Errorf("%w: %q isn't one of %s",
 			ErrUnknownEntityKind, kind, words.Or(EntityKinds()))}
 	}
 	return draft{

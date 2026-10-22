@@ -62,8 +62,7 @@ func (s Sources) configEntities(ctx context.Context, p Params) (any, error) {
 		case errors.Is(err, configapi.ErrUnknownEntityKind):
 			return nil, unknownKind
 		case errors.Is(err, configapi.ErrNoSuchEntity):
-			return nil, fmt.Errorf("%w: nothing in the running company's %s "+
-				"is called %q", ErrBadParams, kind, id)
+			return nil, fmt.Errorf("%w: %s", ErrBadParams, configapi.NotFound(kind, id))
 		case err != nil:
 			return nil, err
 		}

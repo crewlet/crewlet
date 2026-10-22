@@ -104,12 +104,36 @@ var ErrIdentityMismatch = errors.New("configapi: identity mismatch")
 // identityMismatch names both halves, because the caller has to be able to
 // see which one they meant.
 func identityMismatch(field, pathID, bodyID string) error {
-	if bodyID == "" {
-		return fmt.Errorf("%w: this path addresses %q, and the body carries no %s",
-			ErrIdentityMismatch, pathID, field)
+	return &MismatchError{Field: field, Path: pathID, Body: bodyID}
+}
+
+// MismatchError is an [ErrIdentityMismatch]: the id a path addresses and the
+// one its body carries, under the field that carries it.
+//
+// TYPED, so the answer tells a person both halves without the package's name
+// and the sentinel's class words, which the log keeps: answered as its
+// Error(), a rename read "configapi: identity mismatch: this path addresses
+// …" on the screen.
+type MismatchError struct {
+	// Field is the body's identity field: handle, id or name.
+	Field string
+	// Path is the id the path addresses, and Body the one the body carries,
+	// empty where it carries none.
+	Path, Body string
+}
+
+func (e *MismatchError) Error() string {
+	return ErrIdentityMismatch.Error() + ": " + e.Sentence()
+}
+
+func (e *MismatchError) Unwrap() error { return ErrIdentityMismatch }
+
+// Sentence is the mismatch as a person reads it.
+func (e *MismatchError) Sentence() string {
+	if e.Body == "" {
+		return fmt.Sprintf("this address is %q, and the body has no %s", e.Path, e.Field)
 	}
-	return fmt.Errorf("%w: this path addresses %q, but the body's %s is %q",
-		ErrIdentityMismatch, pathID, field, bodyID)
+	return fmt.Sprintf("this address is %q, but the body's %s is %q", e.Path, e.Field, e.Body)
 }
 
 // entityAccess is how one collection is listed, read, replaced and added to.
@@ -125,6 +149,10 @@ func identityMismatch(field, pathID, bodyID string) error {
 // collection cannot join the table without saying how a member of it is
 // written — a nil anywhere else is a panic inside a request.
 type entityAccess struct {
+	// noun is what one member of the collection is called in a sentence a
+	// person reads ([NotFound]): its URL segment ("mcp-servers") is a path
+	// token, and a refusal that named one read like the path it came from.
+	noun string
 	// ids lists the identities in the document, in a stable order.
 	ids func(*config.Company) []string
 	// find returns the entity under an id, and whether it was there.
@@ -159,6 +187,7 @@ type entityAccess struct {
 // entities_client_test.go.
 var entityKinds = map[string]entityAccess{
 	EntityRoles: {
+		noun: "seat",
 		ids: func(c *config.Company) []string {
 			var out []string
 			for r := range c.EachRole() {
@@ -218,6 +247,7 @@ var entityKinds = map[string]entityAccess{
 		},
 	},
 	EntityUnits: {
+		noun: "unit",
 		ids: func(c *config.Company) []string {
 			var out []string
 			for u := range c.EachUnit() {
@@ -268,6 +298,7 @@ var entityKinds = map[string]entityAccess{
 		},
 	},
 	EntityLLMProviders: {
+		noun: "model provider",
 		ids: func(c *config.Company) []string {
 			out := slices.Collect(maps.Keys(c.Providers.LLM))
 			return sorted(out)
@@ -338,6 +369,7 @@ var entityKinds = map[string]entityAccess{
 		},
 	},
 	EntityMCPServers: {
+		noun: "tool server",
 		ids: func(c *config.Company) []string {
 			out := make([]string, 0, len(c.MCPServers))
 			for i := range c.MCPServers {
@@ -422,7 +454,7 @@ func EntityKinds() []string {
 func (s *Service) Entities(ctx context.Context, kind string) ([]string, error) {
 	access, ok := entityKinds[kind]
 	if !ok {
-		return nil, fmt.Errorf("%w: %q (want one of %s)",
+		return nil, fmt.Errorf("%w: %q isn't one of %s",
 			ErrUnknownEntityKind, kind, words.Or(EntityKinds()))
 	}
 	company, err := s.Document(ctx)
@@ -444,7 +476,7 @@ func (s *Service) Entities(ctx context.Context, kind string) ([]string, error) {
 func (s *Service) Entity(ctx context.Context, kind, id string) (any, error) {
 	access, ok := entityKinds[kind]
 	if !ok {
-		return nil, fmt.Errorf("%w: %q (want one of %s)",
+		return nil, fmt.Errorf("%w: %q isn't one of %s",
 			ErrUnknownEntityKind, kind, words.Or(EntityKinds()))
 	}
 	// REDACTED, because Document redacts: this is a slice of the same
@@ -497,9 +529,7 @@ func (s *Service) getEntity(kind string) http.HandlerFunc {
 		entity, found := entityKinds[kind].find(company, id)
 		if !found {
 			httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoSuchEntity,
-				map[string]string{
-					"hint": "no " + kind + " called " + id + " in the active revision",
-				})
+				map[string]string{"hint": NotFound(kind, id)})
 			return
 		}
 		// THE DOCUMENT'S TAG, because an entity is a slice of it: the
@@ -655,10 +685,23 @@ func (s *Service) entityPrecondition(w http.ResponseWriter, r *http.Request, act
 	return true, true
 }
 
+// NotFound says that nothing in kind is called id, as a person reads it: the
+// collection by what one of its members is called ("No tool server is called
+// \"zzz\""), never by its URL segment. EXPORTED for the query surface's
+// config_entities, which answers the same miss in the same words.
+func NotFound(kind, id string) string {
+	noun := entityKinds[kind].noun
+	if noun == "" {
+		noun = "entry"
+	}
+	return fmt.Sprintf("no %s is called %q", noun, id)
+}
+
 // refuseEntity answers an entity write's own refusals, and every other one as
 // [Service.refuseApply] does.
 func (s *Service) refuseEntity(w http.ResponseWriter, r *http.Request, kind, id string, err error) {
 	var entityErr *EntityError
+	var mismatch *MismatchError
 	switch {
 	case !errors.As(err, &entityErr):
 		s.refuseApply(w, r, err)
@@ -667,11 +710,17 @@ func (s *Service) refuseEntity(w http.ResponseWriter, r *http.Request, kind, id 
 		// often a typo than an intent to add one, and adding through this
 		// route would let a caller grow the company without ever seeing the
 		// document they changed.
+		//
+		// AND THE WAY TO ADD ONE IS THE COLLECTION'S: a seat or a unit is
+		// never created by id ([ErrNotCreatable]), so telling a caller to
+		// send If-None-Match: * for one sent them to a second refusal.
+		hint := NotFound(kind, id) + ". To add it, send the same request with If-None-Match: *"
+		if access := entityKinds[kind]; access.create == nil {
+			hint = NotFound(kind, id) + ". A " + access.noun + " is added by replacing the " +
+				"unit it sits in, or through PUT /config, where its place in the chart is visible"
+		}
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoSuchEntity,
-			map[string]string{
-				"hint": "no " + kind + " called " + id + " in the active revision; " +
-					"to add one, send the same request with If-None-Match: *",
-			})
+			map[string]string{"hint": hint})
 	case errors.Is(err, ErrEntityExists):
 		// A CREATE THAT FOUND ONE. 412 because it is the precondition the
 		// caller sent that failed, not the document.
@@ -688,13 +737,13 @@ func (s *Service) refuseEntity(w http.ResponseWriter, r *http.Request, kind, id 
 					"path cannot name; add it through PUT /config, or by " +
 					"replacing the unit it sits in, where the place is visible",
 			})
-	case errors.Is(err, ErrIdentityMismatch):
+	case errors.As(err, &mismatch):
 		// A RENAME, REFUSED. Not coerced back to the path's id either:
 		// silently keeping the old identity would land every other edit in
 		// the body and leave the caller believing the rename took, which is
 		// the same surprise one revision later.
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeIdentityMismatch, map[string]string{
-			"detail": entityErr.Err.Error(),
+			"detail": mismatch.Sentence(),
 			"hint": "the path is the address: send " + kind + "/" + id +
 				" back under the id it already has. A seat's handle and a " +
 				"unit's key are permanent — a seat's durable id derives from " +

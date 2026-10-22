@@ -1,6 +1,9 @@
 package configapi
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // EVERY COLLECTION STATES HOW A MEMBER OF IT IS LISTED, READ, REPLACED AND
 // ADDED, in the stored tree as well as the struct.
@@ -42,6 +45,23 @@ func TestEveryEntityKindStatesEveryAccess(t *testing.T) {
 				"cannot name", kind)
 		case !notCreatable[kind] && !creates:
 			t.Errorf("%s states no create, and its create-only write is mounted", kind)
+		}
+	}
+}
+
+// EVERY COLLECTION SAYS WHAT ONE OF ITS MEMBERS IS CALLED, because a refusal
+// naming a miss in it is read by a person ([NotFound]): named by its URL
+// segment, it read "nothing in the running company's mcp-servers". A kind
+// added without a noun fails here rather than answering "no entry".
+// Mutation: drop a row's noun and this fails naming the kind.
+func TestEveryEntityKindNamesItsMember(t *testing.T) {
+	t.Parallel()
+	if len(entityKinds) < 4 {
+		t.Fatalf("the table holds %d kinds; a walk that read nothing passes", len(entityKinds))
+	}
+	for kind, access := range entityKinds {
+		if access.noun == "" || strings.Contains(access.noun, "-") {
+			t.Errorf("%s names its member %q, which a sentence cannot say", kind, access.noun)
 		}
 	}
 }
