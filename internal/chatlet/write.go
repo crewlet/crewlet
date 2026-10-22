@@ -2572,10 +2572,13 @@ func (s *Store) decided(ctx context.Context, op OpKind, channelID, messageID str
 // participants, and "that already exists" is not a problem at all: it is the
 // conversation, which [Store.OpenDirect] reads back and returns.
 //
-// The conflict carries the framework's error along with this package's, so a
-// caller reasoning in either vocabulary matches. The two create refusals do
-// not: each is the whole of what happened, while the framework's wording for
-// them names an object nobody asked about.
+// The conflict carries the framework's SENTINEL along with this package's, so
+// a caller reasoning in either vocabulary matches — and not the framework's
+// error, whose text names the subject the race was lost on, a broker path
+// that is the room's id or a digest of its name: carried, every caller that
+// printed the error showed it to whoever read the answer. The two create
+// refusals carry neither: each is the whole of what happened, while the
+// framework's wording for them names an object nobody asked about.
 //
 // ROOMS AND MESSAGES ONLY. Every subject this store publishes on is an address,
 // a room or a room's messages, so a lost race here is always a room somebody
@@ -2584,21 +2587,27 @@ func (s *Store) decided(ctx context.Context, op OpKind, channelID, messageID str
 // name a room after a node id.
 func (s *Store) publish(ctx context.Context, req statelog.Request) (statelog.Result, error) {
 	result, err := s.publisher.Publish(ctx, req)
+	return result, publishRefusal(ObjectKind(req.Subject.Kind), err)
+}
+
+// publishRefusal is [Store.publish]'s translation of what the framework
+// answered a write on a subject of kind, nil for nil.
+func publishRefusal(kind ObjectKind, err error) error {
 	switch {
 	case err == nil:
-		return result, nil
+		return nil
 	case errors.Is(err, statelog.ErrExists):
-		if ObjectKind(req.Subject.Kind) == KindChannelName {
+		if kind == KindChannelName {
 			// THE NAME IS THE CREATE'S TO SAY ([Store.CreateChannel]):
 			// this subject's id is a digest of it, which no reader can
 			// place.
-			return result, ErrNameTaken
+			return ErrNameTaken
 		}
-		return result, ErrRoomExists
+		return ErrRoomExists
 	case errors.Is(err, statelog.ErrConflict):
-		return result, fmt.Errorf("%w: %s: %w", ErrConflict, req.Subject.ID, err)
+		return fmt.Errorf("%w: %w", ErrConflict, statelog.ErrConflict)
 	}
-	return result, err
+	return err
 }
 
 // decide builds one record inside the snapshot's own transaction.

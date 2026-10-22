@@ -483,10 +483,10 @@ func chatWriteFailure(ctx context.Context, name string, err error, next string) 
 	case class == tools.RefusalExists:
 		return refusedBy(class, err, fmt.Sprintf("%s: %s.", name, chatlet.Sentence(err)))
 	case class == tools.RefusalConflict:
-		// A LOST RACE, without the store's own words, which name the
-		// room's subject and the framework's error after it. A tool of
-		// another domain tells it in [statelog.LostRace] ([WriterSentence]), and
-		// a person's surface in its code's own sentence (ADR-0060).
+		// A LOST RACE, in words that say which read comes before a
+		// retry. A tool of another domain tells it in [statelog.LostRace]
+		// ([WriterSentence], [chatlet.Sentence]), and a person's surface in
+		// its code's own sentence (ADR-0060).
 		return refusedBy(class, err, fmt.Sprintf("%s could not land: the room "+
 			"kept changing under this write, so nothing was written. Read it again "+
 			"before retrying.", name))
