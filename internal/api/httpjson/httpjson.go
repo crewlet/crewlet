@@ -1664,9 +1664,14 @@ func NoActiveRevision(w http.ResponseWriter, detail Detail) {
 // named the tracker and the knowledge base alone, a chat verb on such a node —
 // `crewlet chat` prints the node's own words for it — was told that two halves
 // it never asked for were not running, and nothing about the one it had.
-const NativeHalvesNotUp = "this node has not been handed a company yet, so the " +
-	"company's own tracker, knowledge base and chat are not running here; those " +
-	"the company runs come up with its first revision, with no restart"
+//
+// IN A PERSON'S WORDS: it said the node "has not been handed a company" and
+// that the halves "come up with its first revision", which is how the engine
+// describes its own bring-up and nothing a person reading an empty screen acts
+// on.
+const NativeHalvesNotUp = "this node isn't running a company yet, so the " +
+	"company's own tracker, knowledge base and chat aren't up here. The ones " +
+	"the company uses start as soon as it's set up, with no restart"
 
 // Unavailable writes a 503 carrying a Retry-After, which is the pair a client
 // needs to tell "come back" from "do not come back".

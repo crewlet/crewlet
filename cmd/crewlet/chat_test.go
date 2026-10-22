@@ -322,8 +322,8 @@ func TestAChatVerbUnderACredentialActingAsItselfNamesTheBinding(t *testing.T) {
 // the catalogue does not carry, a route whose half is not up — and none names
 // the one thing that explains all three: chat exists only where `chat.backend`
 // is `native`, its writes only on a node that may publish, its routes only on a
-// node with the ingress role. A node that has not been handed a company says
-// THAT, which the axis sentence would bury.
+// node with the ingress role. A node running no company yet says THAT, which
+// the axis sentence would bury.
 func TestAChatVerbOnANodeServingNoChatNamesTheAxis(t *testing.T) {
 	t.Parallel()
 	for _, verb := range []struct {
@@ -358,10 +358,10 @@ func TestAChatVerbOnANodeServingNoChatNamesTheAxis(t *testing.T) {
 	}
 
 	none := newFakeChatNode(t, http.StatusServiceUnavailable,
-		`{"error":"no_active_revision","detail":"this node has not been handed a company yet"}`)
+		`{"error":"no_active_revision","detail":"this node isn't running a company yet"}`)
 	_, _, err := chatCLI(t, none.server.URL, "channels")
 	if err == nil || strings.Contains(err.Error(), "chat.backend") ||
-		!strings.Contains(err.Error(), "not been handed a company") {
+		!strings.Contains(err.Error(), "isn't running a company") {
 		t.Errorf("a node with no company yet reads %v, want its own words and not "+
 			"the chat axis", err)
 	}
