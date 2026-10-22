@@ -2025,9 +2025,15 @@ func (p *Publisher) resolve(ctx context.Context, req Request, at Position, lande
 		// A GATE THAT BLAMES THE WRITER: a deletion marker holds this node's
 		// own record as surely as the copy, and a writer named beside `deleted`
 		// read as a retry here that meets the marker for ever.
+		// AND WHEN TO COME BACK, for the copy: once the window has let go of
+		// the id, this node writes afresh under it, so the window's length
+		// is the hint — the longest the wait can be from when the copy
+		// landed — where its reason alone says no wait clears it.
 		var copyWriter string
+		var after time.Duration
 		if writer != p.nodeID && reason.BlamesWriter() {
 			copyWriter = writer
+			after = p.duplicates
 		}
 		return Result{}, &Unavailable{
 			Reason:     reason,
@@ -2035,6 +2041,7 @@ func (p *Publisher) resolve(ctx context.Context, req Request, at Position, lande
 			Position:   at,
 			OpID:       req.OpID,
 			CopyWriter: copyWriter,
+			RetryAfter: after,
 		}
 	}
 
