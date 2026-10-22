@@ -6,6 +6,8 @@ import (
 	"maps"
 	"slices"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // DefaultBoxTimeout is a box's TTL and keepalive window.
@@ -127,7 +129,7 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 	for placement, provider := range opts.Providers {
 		if !placement.Valid() {
 			return nil, &ConfigError{msg: fmt.Sprintf(
-				"providers.sandbox: %q is not a placement (have: %v)", placement, Placements)}
+				"providers.sandbox: %q is not a placement (have: %s)", placement, words.And(Placements))}
 		}
 		if provider == nil {
 			return nil, &ConfigError{msg: fmt.Sprintf(
@@ -166,8 +168,8 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 	if m.placement != "" {
 		if _, ok := m.providers[m.placement]; !ok {
 			return nil, &ConfigError{msg: fmt.Sprintf(
-				"providers.sandbox.default_run_in %q has no backend configured (have: %v)",
-				m.placement, slices.Sorted(maps.Keys(m.providers)))}
+				"providers.sandbox.default_run_in %q has no backend configured (have: %s)",
+				m.placement, words.And(slices.Sorted(maps.Keys(m.providers))))}
 		}
 	}
 	if m.timeout == 0 {
@@ -235,15 +237,15 @@ func (m *Manager) configured(placement Placement) (Provider, error) {
 		// the empty string".
 		return nil, &ConfigError{msg: fmt.Sprintf(
 			"no cell named for this run and providers.sandbox names no "+
-				"default_run_in (configured: %v): set one, or name the cell "+
+				"default_run_in (configured: %s): set one, or name the cell "+
 				"on the seat's role.sandbox.run_in or the entry's run_in",
-			slices.Sorted(maps.Keys(m.providers)))}
+			words.And(slices.Sorted(maps.Keys(m.providers))))}
 	}
 	provider, ok := m.providers[placement]
 	if !ok {
 		return nil, &ConfigError{msg: fmt.Sprintf(
-			"no sandbox backend configured for placement %q (have: %v)",
-			placement, slices.Sorted(maps.Keys(m.providers)))}
+			"no sandbox backend configured for placement %q (have: %s)",
+			placement, words.And(slices.Sorted(maps.Keys(m.providers))))}
 	}
 	return provider, nil
 }
@@ -316,8 +318,8 @@ func (m *Manager) RunnerFor(codingAgent string) (Runner, error) {
 	runner, ok := m.runners[codingAgent]
 	if !ok {
 		return nil, &ConfigError{msg: fmt.Sprintf(
-			"no coding-agent runner registered for %q (have: %v)",
-			codingAgent, slices.Sorted(maps.Keys(m.runners)))}
+			"no coding-agent runner registered for %q (have: %s)",
+			codingAgent, words.And(slices.Sorted(maps.Keys(m.runners))))}
 	}
 	return runner, nil
 }

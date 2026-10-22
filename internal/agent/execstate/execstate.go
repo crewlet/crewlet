@@ -58,6 +58,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/provenance"
 	llm "github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Version is the format this build writes, and the one it reads.
@@ -411,7 +412,7 @@ func (s State) Validate() error {
 		for _, open := range dangling {
 			ids = append(ids, open.call.ID)
 		}
-		return fmt.Errorf("%w: %v", ErrDanglingCalls, ids)
+		return fmt.Errorf("%w: %s", ErrDanglingCalls, words.And(ids))
 	}
 	return nil
 }

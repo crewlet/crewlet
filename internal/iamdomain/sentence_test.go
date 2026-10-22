@@ -21,7 +21,7 @@ import (
 // belongs to person 0192a…, not 0192b…", "0192c… is a person, so only they can
 // create…", "request 0192d… already sent invitation 0192e…", the token a
 // request came through by its credential id — and a set of permissions as Go
-// prints a slice, "[tracker knowledge]". The ids now ride
+// prints a slice, "[worklet doclet]". The ids now ride
 // [iamdomain.Refusal.About], which [iamdomain.Refusal.Error] — what a log line
 // prints — carries and [iamdomain.Sentence] does not; a reused key's ids are
 // the key itself and what it derives, which the answer and its log carry as
@@ -140,11 +140,11 @@ func TestARefusalTellsAPersonNoIdAndTheLogEveryOne(t *testing.T) {
 			return mint(asOwner(rig, owner), iamdomain.TokenMint{PersonID: owner,
 				Grants: []iam.Grant{iam.GrantAdmin}})
 		}, "a token can only have what its owner has, and its owner doesn't have admin",
-			[]string{"tracker, knowledge"}, nil},
+			[]string{`"worklet" and "doclet"`}, nil},
 		{"a name this build does not know, on a token", func() error {
 			return mint(asOwner(rig, owner), iamdomain.TokenMint{PersonID: owner,
 				Grants: []iam.Grant{"swarm"}})
-		}, `"swarm" isn't a permission. Choose from admin, tracker`, nil, nil},
+		}, `"swarm" isn't a permission. Use "admin", "tracker"`, nil, nil},
 		{"an expired invitation's link", func() error {
 			_, err := redeemAs(t, rig, expired, expiredAt, expired.Secret, expiredSeat)
 			return err
@@ -163,7 +163,7 @@ func TestARefusalTellsAPersonNoIdAndTheLogEveryOne(t *testing.T) {
 			// the directory's surface answers a PATCH conferring it with.
 			return asOwner(rig, owner, iam.GrantWorklet).MayConfer(
 				[]iam.Grant{iam.GrantWorklet}, []iam.Grant{iam.GrantAdmin})
-		}, "you can't give admin because you don't have it", []string{"tracker"}, nil},
+		}, "you can't give admin because you don't have it", []string{"worklet"}, nil},
 		{"a name this build does not know", func() error {
 			_, err := anAdmin(rig).Create(ctx, iamdomain.Creation{
 				PersonID: uuid.Must(uuid.NewV7()).String(), Kind: iam.KindMachine,
@@ -172,7 +172,7 @@ func TestARefusalTellsAPersonNoIdAndTheLogEveryOne(t *testing.T) {
 				Reason: "a pipeline",
 			})
 			return err
-		}, "Choose from admin, tracker", nil, nil},
+		}, `Use "admin", "worklet"`, nil, nil},
 		{"an administrative record through a machine token", func() error {
 			_, err := tokenAdmin.InvalidateAll(ctx, operationKey(), "a restore")
 			return err

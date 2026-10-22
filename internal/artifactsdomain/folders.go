@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE FOLDER TREE (ADR-0047: an artifact lives in one folder, and a folder
@@ -350,8 +351,8 @@ func checkFolderCreate(c Call, in FolderCreateInput) (names, keys []string, err 
 		return nil, nil, fmt.Errorf("%w: a person creates top-level folders; create this one "+
 			"inside a folder that already exists", ErrInvalid)
 	case in.Parent == "" && !in.Visibility.Valid():
-		return nil, nil, fmt.Errorf("%w: a top-level folder states who sees it, one of %v",
-			ErrInvalid, FolderVisibilities)
+		return nil, nil, fmt.Errorf("%w: a top-level folder states who sees it, one of %s",
+			ErrInvalid, words.Or(FolderVisibilities))
 	case in.Parent != "" && in.Visibility != "":
 		return nil, nil, fmt.Errorf("%w: a folder inside another is seen by whoever sees its "+
 			"top-level folder, so it states no visibility of its own", ErrInvalid)

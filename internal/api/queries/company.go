@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The questions answered from the epoch: what the company DECLARES, which is a
@@ -934,7 +935,7 @@ func (s Sources) agentMemory(ctx context.Context, p Params) (any, error) {
 	order := learning.SkillOrder(strings.TrimSpace(p.String("skills_order")))
 	if !order.Valid() {
 		return nil, fmt.Errorf("%w: agent_memory reads a seat's skills in one of %s, "+
-			"not %q", ErrBadParams, choices(learning.SkillOrders()), order)
+			"not %q", ErrBadParams, words.Or(learning.SkillOrders()), order)
 	}
 	seat, err := s.trailSeat(ctx, id)
 	if err != nil {

@@ -31,6 +31,7 @@ import (
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/toolsession"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Deps is what a [Service] is built from. Every field but Remote, Rate and Now is
@@ -345,7 +346,8 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 	}
 	switch {
 	case !ts.Mode.Valid():
-		return wire.TurnAccepted{}, invalid("mode %q is not one of %v", ts.Mode, wire.TurnModes)
+		return wire.TurnAccepted{}, invalid("mode %q is not one of %s", ts.Mode,
+			words.Or(wire.TurnModes))
 	case ts.Mode == wire.TurnBrief && page == nil:
 		return wire.TurnAccepted{}, invalid("mode brief needs the page_context it briefs")
 	case ts.Mode == wire.TurnBrief && len(ts.Attachments) > 0:

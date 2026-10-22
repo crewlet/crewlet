@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The case format. It is documented for operators in docs/reference/cli.md
@@ -216,7 +217,7 @@ func (c Case) Validate() error {
 	}
 	for i, app := range c.Person.Apps {
 		if !app.Valid() {
-			fail("person.apps[%d]: %q is not a permission (%v)", i, app, iam.AllGrants)
+			fail("person.apps[%d]: %q is not a permission (%s)", i, app, words.Or(iam.AllGrants))
 		}
 	}
 	if c.page != nil {
@@ -250,7 +251,7 @@ func (c Case) Validate() error {
 	}
 	switch {
 	case c.Mode != "" && !c.Mode.Valid():
-		fail("mode: %q is not a turn mode (%v)", c.Mode, wire.TurnModes)
+		fail("mode: %q is not a turn mode (%s)", c.Mode, words.Or(wire.TurnModes))
 	case c.Mode == wire.TurnBrief && c.page == nil:
 		fail("mode: a brief needs the page it briefs")
 	case c.Expect.Brief != nil && c.Mode != wire.TurnBrief:
@@ -262,7 +263,8 @@ func (c Case) Validate() error {
 		}
 		for i, tone := range b.Tones {
 			if !tone.Valid() {
-				fail("expect.brief.tones[%d]: %q is not a tone (%v)", i, tone, wire.BriefTones)
+				fail("expect.brief.tones[%d]: %q is not a tone (%s)", i, tone,
+					words.Or(wire.BriefTones))
 			}
 		}
 	}
@@ -277,7 +279,8 @@ func (c Case) Validate() error {
 		}
 	}
 	if c.Expect.State != "" && !c.Expect.State.Valid() {
-		fail("expect.state: %q is not a turn state (%v)", c.Expect.State, wire.TurnStates)
+		fail("expect.state: %q is not a turn state (%s)", c.Expect.State,
+			words.Or(wire.TurnStates))
 	}
 	return errors.Join(errs...)
 }

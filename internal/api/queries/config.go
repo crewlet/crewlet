@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The config family, answered through the SAME functions the /config routes
@@ -44,12 +45,12 @@ func (s Sources) configEntities(ctx context.Context, p Params) (any, error) {
 	kind := p.String("kind")
 	if kind == "" {
 		return nil, fmt.Errorf("%w: config_entities needs a kind, one of %s",
-			ErrBadParams, choices(configapi.EntityKinds()))
+			ErrBadParams, words.Or(configapi.EntityKinds()))
 	}
 	// THE REFUSALS IN WORDS OF THIS SURFACE'S: the document service's open
 	// with its package's name and list the kinds as Go prints a slice.
 	unknownKind := fmt.Errorf("%w: the kind parameter is one of %s, and %q isn't", ErrBadParams,
-		choices(configapi.EntityKinds()), kind)
+		words.Or(configapi.EntityKinds()), kind)
 	if id := p.String("id"); id != "" {
 		entity, err := s.Config.Entity(ctx, kind, id)
 		switch {

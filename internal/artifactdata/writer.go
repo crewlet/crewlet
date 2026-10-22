@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE DATASTORE WRITE PATH: one record per write, published to the store's
@@ -174,11 +175,11 @@ func validCall(c Call) error {
 	case strings.TrimSpace(a.Actor.Name) == "":
 		return fmt.Errorf("%w: the call names no actor: every record names who wrote it", ErrInvalid)
 	case !a.Actor.Kind.Valid():
-		return fmt.Errorf("%w: actor kind %q is not one of %v", ErrInvalid, a.Actor.Kind, iam.ActorKinds)
+		return fmt.Errorf("%w: actor kind %q is not one of %s", ErrInvalid, a.Actor.Kind, words.Or(iam.ActorKinds))
 	case a.Role != "" && !a.Role.Valid():
-		return fmt.Errorf("%w: role %q is not one of %v", ErrInvalid, a.Role, artifacts.Roles)
+		return fmt.Errorf("%w: role %q is not one of %s", ErrInvalid, a.Role, words.Or(artifacts.Roles))
 	case a.Origin != "" && !a.Origin.Valid():
-		return fmt.Errorf("%w: origin %q is not one of %v", ErrInvalid, a.Origin, artifacts.WriteOrigins)
+		return fmt.Errorf("%w: origin %q is not one of %s", ErrInvalid, a.Origin, words.Or(artifacts.WriteOrigins))
 	}
 	return nil
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // fileRecord is one file's record as the [FileStore] forms it: what the person
@@ -98,7 +99,7 @@ func checkNewFile(f NewFile) error {
 	case f.Conversation == uuid.Nil:
 		return invalid("the file's conversation is required")
 	case !f.Origin.Valid():
-		return invalid("origin %q is not one of %v", f.Origin, wire.FileOrigins)
+		return invalid("origin %q is not one of %s", f.Origin, words.Or(wire.FileOrigins))
 	case len(f.Content) == 0:
 		return invalid("file %s is empty", f.ID)
 	case len(f.Content) > wire.FileMaxBytes:
@@ -107,7 +108,7 @@ func checkNewFile(f NewFile) error {
 	}
 	if allowed := fileMediaTypes(f.Origin); !slices.Contains(allowed, f.MediaType) {
 		return invalid("a %s file of type %q is not kept: only %s are",
-			f.Origin, f.MediaType, strings.Join(allowed, ", "))
+			f.Origin, f.MediaType, words.And(allowed))
 	}
 	return checkFileName(f.Name)
 }

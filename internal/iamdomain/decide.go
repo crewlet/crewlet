@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE DECIDES: what a caller actually asks this domain to do.
@@ -2266,8 +2267,8 @@ func (w *Writer) tokenGrants(asked, owner []iam.Grant) ([]iam.Grant, error) {
 			// A NAME THIS BUILD DOES NOT KNOW is no permission at all,
 			// as [Writer.MayConfer] says it: told as one the owner
 			// lacks, it named a permission nobody could hold.
-			return nil, forbidden("%q isn't a permission. Choose from %s",
-				g, grantWords(iam.AllGrants))
+			return nil, forbidden("%q isn't a permission. Use %s",
+				g, words.Or(iam.AllGrants))
 		case !slices.Contains(holds, g):
 			// IN WORDS FOR EITHER READER: the owner minting their own
 			// token, who is the usual one, and an administrator minting
@@ -3283,8 +3284,8 @@ func (w *Writer) MayConfer(before, after []iam.Grant) error {
 			continue
 		}
 		if !g.Valid() {
-			return forbidden("%q isn't a permission. Choose from %s",
-				g, grantWords(iam.AllGrants))
+			return forbidden("%q isn't a permission. Use %s",
+				g, words.Or(iam.AllGrants))
 		}
 		return needs([]iam.Grant{g}, "you can't give %s because you don't "+
 			"have it", g).about("the party holds %s", grantWords(w.Grants))

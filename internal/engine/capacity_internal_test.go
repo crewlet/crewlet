@@ -403,6 +403,17 @@ func TestABaselineOfNothingIsRefusedRatherThanRecorded(t *testing.T) {
 	if !strings.Contains(err.Error(), "node-2") {
 		t.Errorf("the refusal does not name who has not restarted: %v", err)
 	}
+	// THE COMMAND IT NAMES IS ONE THE CLI RUNS, for this window's stream,
+	// and the sentence reads right for one node: it named a `--exclude`
+	// flag nothing parses, and said `"node-2" have not restarted`.
+	// Mutation: put either back and this fails.
+	if want := "`crewlet retention maintenance exclude -stream CREWLET_TRACKER_LOG " +
+		"-node <node-id> -confirm <node-id>`"; !strings.Contains(err.Error(), want) {
+		t.Errorf("the refusal does not name %s: %v", want, err)
+	}
+	if strings.Contains(err.Error(), "--exclude") || strings.Contains(err.Error(), `"node-2" have`) {
+		t.Errorf("the refusal names a flag the CLI lacks or reads wrong for one node: %v", err)
+	}
 
 	// EITHER an acknowledgement or an exclusion resolves it — and nothing
 	// else does.
@@ -531,6 +542,14 @@ func TestAnAdmissionBlocksTakingTheExclusion(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "node-9") {
 		t.Errorf("the refusal does not name who is still admitted: %v", err)
+	}
+	// NO EXCLUSION IS OFFERED, since no window is open for one to be made
+	// on, and the sentence reads right for one node. Mutation: name
+	// `crewlet retention maintenance exclude` again, or say
+	// `"node-9" still hold`, and this fails.
+	if strings.Contains(err.Error(), "exclude") || strings.Contains(err.Error(), `"node-9" still`) {
+		t.Errorf("the refusal offers an exclusion nothing can make yet, or reads "+
+			"wrong for one node: %v", err)
 	}
 	if op, found, _ := fleet.Maintenance(ctx, "CREWLET_TRACKER_LOG"); found {
 		t.Fatalf("a window was opened anyway: %+v", op)

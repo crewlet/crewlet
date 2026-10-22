@@ -13,17 +13,20 @@ import (
 
 // leafSet is everything this package may import beyond the standard library.
 //
-// ONE ENTRY, and it earns its place the way the tree's dependency rule asks:
-// the code convention is that an id is a uuid.UUID, and the alternative — a
-// string id, or a uuid type of this package's own — would make [Principal.ID]
-// the one id in the engine that does not compare with the others.
+// TWO ENTRIES, and each earns its place the way the tree's dependency rule
+// asks. The code convention is that an id is a uuid.UUID, and the alternative
+// — a string id, or a uuid type of this package's own — would make
+// [Principal.ID] the one id in the engine that does not compare with the
+// others. And a refusal here names the kinds and stages it takes as a
+// sentence says a set, through internal/words, which imports the standard
+// library alone and so opens nothing this package's readers could not reach.
 //
 // NOTHING ELSE GOES IN HERE WITHOUT THE LEAF PROPERTY BEING RE-ARGUED. The
 // reason this package holds values only is that config, the tool layer and the
 // query registry all have to be able to name a Principal, and the first store
 // client, coordination backend or password hasher admitted here is the import
 // that stops one of them being able to.
-var leafSet = []string{"github.com/google/uuid"}
+var leafSet = []string{"github.com/google/uuid", "github.com/crewlet/crewlet/internal/words"}
 
 // TestThePackageImportsNothingBeyondItsLeafSet is the guard that keeps this a
 // leaf when somebody later reaches for a store client to "just look the

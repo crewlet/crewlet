@@ -17,6 +17,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // `crewlet retention set-capacity`, `maintenance`, `reanchor` and
@@ -309,10 +310,10 @@ func maintenanceStatus(environ config.Source, args []string, stdout, stderr io.W
 		// AN `admitted` KEY IS A NODE THAT MAY BE PUBLISHING, which is
 		// the one thing that stops activation and the one an operator
 		// cannot deduce from anything else on this page.
-		fmt.Fprintf(stdout, "Admissions still held by %v — those nodes may be "+
+		fmt.Fprintf(stdout, "Admissions still held by %s — those nodes may be "+
 			"publishing. Restart them with `-mode maintenance`, or record that "+
 			"one is gone with `crewlet retention maintenance exclude`.\n",
-			answer.AdmissionsBlocking)
+			words.And(answer.AdmissionsBlocking))
 	}
 	return nil
 }

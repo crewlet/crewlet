@@ -27,6 +27,7 @@ import (
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/usage"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 var log = logging.Get("api.queries")
@@ -1360,7 +1361,7 @@ func (s Sources) eventSeries(ctx context.Context, p Params) (any, error) {
 	bucket := store.EventBucket(p.String("bucket"))
 	if !bucket.Valid() {
 		return nil, fmt.Errorf("%w: the bucket parameter is one of %s, and %q isn't",
-			ErrBadParams, choices(store.EventBuckets), bucket)
+			ErrBadParams, words.Or(store.EventBuckets), bucket)
 	}
 	got, coverage, err := s.Events.Histogram(ctx, store.HistogramQuery{ListQuery: filters, Bucket: bucket})
 	switch {
@@ -1371,7 +1372,7 @@ func (s Sources) eventSeries(ctx context.Context, p Params) (any, error) {
 	// as Go prints a duration ("hour over 2160h0m0s is 2160 buckets").
 	case errors.Is(err, store.ErrHistogramBucket):
 		return nil, fmt.Errorf("%w: the bucket parameter is one of %s, and %q isn't",
-			ErrBadParams, choices(store.EventBuckets), bucket)
+			ErrBadParams, words.Or(store.EventBuckets), bucket)
 	case errors.Is(err, store.ErrHistogramSpan):
 		return nil, fmt.Errorf("%w: that window holds more %s bars than a "+
 			"chart shows, which is %d at most. Pick a coarser bucket or a "+
@@ -1609,16 +1610,6 @@ func cursorTime(p Params) (time.Time, error) {
 			"RFC 3339 instant (2026-04-16T09:00:00Z)", ErrBadParams)
 	}
 	return at, nil
-}
-
-// choices is a closed set as a sentence lists it — "minute, hour, day" —
-// and never as Go prints a slice, "[minute hour day]".
-func choices[T ~string](set []T) string {
-	words := make([]string, len(set))
-	for i, v := range set {
-		words[i] = string(v)
-	}
-	return strings.Join(words, ", ")
 }
 
 // cursorOf is the position a caller resumes from, or nil at the end.

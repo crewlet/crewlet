@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // One person's inbox — what the company asked of them, in the order the log
@@ -301,8 +302,8 @@ func (r *Reader) Inbox(ctx context.Context, q InboxQuery, now time.Time) (
 			"default before it reads")
 	case !q.Snoozed.Valid():
 		return InboxAnswer{}, fmt.Errorf("worklet: %q is not a snoozed scope; "+
-			"pass one of %v; a surface resolves an absent `snoozed` to %q "+
-			"before it reads", q.Snoozed, SnoozeScopes, SnoozeExclude)
+			"pass one of %s; a surface resolves an absent `snoozed` to %q "+
+			"before it reads", q.Snoozed, words.Or(SnoozeScopes), SnoozeExclude)
 	}
 	for _, reason := range q.Reasons {
 		if !slices.Contains(Reasons, reason) {

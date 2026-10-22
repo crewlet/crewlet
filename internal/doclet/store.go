@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/textcut"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE KNOWLEDGE BASE'S WRITE PATH: one record per operation, published to the
@@ -736,7 +737,7 @@ func (a Actor) IsHuman() bool { return a.Kind == AuthorHuman || a.Kind == Author
 
 func (a Actor) validate() error {
 	if !a.Kind.Valid() {
-		return invalid("actor.kind", "%q is not one of %v", a.Kind, AuthorKinds())
+		return invalid("actor.kind", "%q is not one of %s", a.Kind, words.Or(AuthorKinds()))
 	}
 	// A KEY IS AN OPERATION ID THE ENGINE MINTED, or no key. Every id a
 	// write derives from it carries the key's own instant

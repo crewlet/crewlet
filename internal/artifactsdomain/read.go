@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Reader answers questions about artifacts from this node's own applied rows.
@@ -910,7 +911,7 @@ func (r *Reader) Trail(ctx context.Context, q TrailQuery) (TrailPage, error) {
 	// own op ([HistoryOps]).
 	if q.Op != "" && !slices.Contains(HistoryOps, q.Op) {
 		return TrailPage{}, fmt.Errorf("%w: %q is not an op an artifact's history records, "+
-			"which are %v", ErrInvalid, q.Op, HistoryOps)
+			"which are %s", ErrInvalid, q.Op, words.And(HistoryOps))
 	}
 	var after trailCursor
 	if q.Cursor != "" {
@@ -1256,13 +1257,13 @@ func listSpecFor(v Viewer, q ListQuery) (listSpec, error) {
 	}
 	switch {
 	case !scope.Valid():
-		return listSpec{}, fmt.Errorf("%w: scope %q is not one of %v", ErrInvalid, scope, ListScopes)
+		return listSpec{}, fmt.Errorf("%w: scope %q is not one of %s", ErrInvalid, scope, words.Or(ListScopes))
 	case !sort.Valid():
-		return listSpec{}, fmt.Errorf("%w: sort %q is not one of %v", ErrInvalid, sort, ListSorts)
+		return listSpec{}, fmt.Errorf("%w: sort %q is not one of %s", ErrInvalid, sort, words.Or(ListSorts))
 	case status != StatusLive && status != StatusTrashed:
 		return listSpec{}, fmt.Errorf("%w: status %q is neither live nor trashed", ErrInvalid, status)
 	case q.Kind != "" && !q.Kind.Valid():
-		return listSpec{}, fmt.Errorf("%w: kind %q is not one of %v", ErrInvalid, q.Kind, artifacts.Kinds)
+		return listSpec{}, fmt.Errorf("%w: kind %q is not one of %s", ErrInvalid, q.Kind, words.Or(artifacts.Kinds))
 	case v.Record == "" && !v.Admin:
 		return listSpec{}, fmt.Errorf("%w: a listing names who is viewing it", ErrInvalid)
 	case q.Delimiter != "" && q.Delimiter != ListDelimiter:

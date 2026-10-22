@@ -54,6 +54,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/tracing"
 	"github.com/crewlet/crewlet/internal/version"
+	"github.com/crewlet/crewlet/internal/words"
 	"github.com/crewlet/crewlet/static"
 
 	"gopkg.in/yaml.v3"
@@ -1248,9 +1249,9 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	// publish, with the reason sitting in a file nobody re-read.
 	nodeMode := statelog.MaintenanceMode(strings.TrimSpace(*mode))
 	if !nodeMode.Valid() {
-		return fmt.Errorf("-mode %q is not one of %v: the two maintenance modes "+
+		return fmt.Errorf("-mode %q is not one of %s: the two maintenance modes "+
 			"start no publisher, so a typo here would be a node that boots, "+
-			"reports healthy and runs nothing", *mode, statelog.MaintenanceModes)
+			"reports healthy and runs nothing", *mode, words.Or(statelog.MaintenanceModes))
 	}
 	// WHAT IS VALID ABOUT TIER A AND WORTH KNOWING, said on every start (see
 	// [logBootstrapAdvisories] for why). At this point and no other: after

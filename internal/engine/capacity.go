@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE CAPACITY COORDINATOR: what drives [statelog.PermitPhase] against a real
@@ -91,8 +92,8 @@ func (e *Engine) SetCapacity(ctx context.Context, req CapacityRequest) (
 	if running == nil {
 		return coord.MaintenanceOperation{}, fmt.Errorf(
 			"engine: %q is not a domain log this build runs — the streams a "+
-				"capacity change applies to are %v",
-			req.Stream, maintenanceStreams())
+				"capacity change applies to are %s",
+			req.Stream, words.And(maintenanceStreams()))
 	}
 	if req.TargetMaxBytes == 0 {
 		return coord.MaintenanceOperation{}, errors.New(
@@ -266,7 +267,7 @@ func (e *Engine) openCapacity(ctx context.Context, req CapacityRequest,
 	if !known {
 		return coord.MaintenanceOperation{}, fmt.Errorf(
 			"engine: %q is not a domain log this build registers — the streams a "+
-				"capacity change applies to are %v", req.Stream, maintenanceStreams())
+				"capacity change applies to are %s", req.Stream, words.And(maintenanceStreams()))
 	}
 	if req.TargetMaxBytes < uint64(field.Floor) {
 		return coord.MaintenanceOperation{}, fmt.Errorf(
@@ -333,11 +334,14 @@ func (e *Engine) openCapacity(ctx context.Context, req CapacityRequest,
 				"unreadable one is a publisher this operation cannot see: %w", err)
 	}
 	if blocking := statelog.AdmissionBlocks(admissions, nil); len(blocking) > 0 {
+		// NO EXCLUSION TO OFFER: no window is open yet, and excluding a
+		// participant is a gesture on one (`crewlet retention maintenance
+		// exclude` answers "there is no capacity operation" here). A node
+		// gives its admission back when it stops cleanly.
 		return coord.MaintenanceOperation{}, fmt.Errorf(
-			"engine: %v still hold an admission, so they may be publishing. "+
-				"Restart them with `-mode maintenance`, or — if a node is gone "+
-				"rather than running — record that with `crewlet retention "+
-				"maintenance --exclude`", blocking)
+			"engine: these nodes still hold an admission, so they may be "+
+				"publishing: %s. Restart each with `-mode maintenance`. A node "+
+				"withdraws its admission when it stops", words.And(blocking))
 	}
 
 	participants, err := e.capacityParticipants(ctx)
@@ -1030,12 +1034,14 @@ func (e *Engine) capacityIncarnations(ctx context.Context, op coord.MaintenanceO
 		incarnations[node] = incarnation
 	}
 	if len(missing) > 0 {
-		return nil, nil, fmt.Errorf("engine: %v have not restarted into a "+
-			"maintenance mode, so this operation has no baseline for them — and "+
-			"a baseline of nothing compares unequal to every later "+
+		return nil, nil, fmt.Errorf("engine: these nodes haven't restarted "+
+			"into a maintenance mode, so this operation has no baseline for "+
+			"them: %s. A baseline of nothing compares unequal to every later "+
 			"acknowledgement, which would let the seal be satisfied by a node "+
-			"that never came back. Restart them with `-mode maintenance`, or "+
-			"exclude one that is gone", missing)
+			"that never came back. Restart each with `-mode maintenance`, or "+
+			"record that one is gone with `crewlet retention maintenance "+
+			"exclude -stream %s -node <node-id> -confirm <node-id>`",
+			words.And(missing), op.Stream)
 	}
 	return incarnations, op.Participants, nil
 }

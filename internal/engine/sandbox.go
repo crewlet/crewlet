@@ -46,6 +46,7 @@ import (
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/tracing"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The sandbox's engine-side wiring: which concrete thing satisfies which seam.
@@ -187,8 +188,8 @@ func buildSandboxProvider(spec *config.SandboxProvider, env *config.Resolver, pl
 		//
 		// Answered rather than panicked: an embedder building a spec by
 		// hand is a caller, not an operator to be crashed at.
-		return nil, fmt.Errorf("providers.sandbox: %q is not one of %v",
-			placement, config.Placements)
+		return nil, fmt.Errorf("providers.sandbox: %q is not one of %s",
+			placement, words.Or(config.Placements))
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Sentence is an error this package wrote, as a person reads it: a
@@ -43,16 +44,13 @@ var sentenceCuts = []string{
 	ErrInvalidToken.Error() + ": ", ErrNotFindable.Error() + ": ",
 }
 
-// grantWords is a set of permissions as a sentence lists them — "tracker,
-// knowledge" — and never Go's "[tracker knowledge]", which is how a slice
-// printed with %v reads.
+// grantWords is the permissions a party holds as a sentence lists them
+// ("tracker" and "knowledge"), and "no permission" for none: the one
+// difference from [words.And], since "a party holding none" reads as a party
+// holding nothing at all.
 func grantWords(grants []iam.Grant) string {
 	if len(grants) == 0 {
 		return "no permission"
 	}
-	words := make([]string, len(grants))
-	for i, g := range grants {
-		words[i] = string(g)
-	}
-	return strings.Join(words, ", ")
+	return words.And(grants)
 }

@@ -43,7 +43,7 @@ func TestEvictingAPeerThatReanchoredAndVanishedReleasesTheFleet(t *testing.T) {
 		// stranded is what a reanchor says before the eviction.
 		stranded string
 	}{
-		{"its row names the generation it opened", true, "re-anchored peers: [node-x]"},
+		{"its row names the generation it opened", true, `re-anchored peers: "node-x"`},
 		{"it died before its row said so", false, "nothing to re-anchor"},
 	} {
 		t.Run(c.name, func(t *testing.T) {

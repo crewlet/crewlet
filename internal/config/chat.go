@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Chat is which chat surface this company talks on.
@@ -426,7 +427,7 @@ func (c *Company) validateUnitRooms() error {
 					"a unit's room belongs to one unit, so the others would "+
 					"be left out of it. Give each its own channel, or leave a "+
 					"child unit's empty so it inherits its parent's room",
-				u.name, channel, quotedList(others))
+				u.name, channel, words.And(others))
 		}
 	}
 	return p.err()

@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -532,8 +533,8 @@ func (r *liveRelay) answerSealed(ctx context.Context, raw []byte, now time.Time)
 			"disposition", string(admitted.Disposition), "claimed_from", admitted.Request.From,
 			"detail", admitted.Why)
 		return relayAnswer{Request: admitted.ID, Unserved: true, Detail: fmt.Sprintf(
-			"%s does not hold the key the ask is signed under (it holds %v)",
-			r.self, r.wire.HeldKeys())}
+			"%s does not hold the key the ask is signed under (it holds %s)",
+			r.self, words.And(r.wire.HeldKeys()))}
 	case signedask.Undecodable:
 		log.WarnContext(ctx, "live_relay_ask_refused", "node", r.self,
 			"disposition", string(admitted.Disposition), "detail", admitted.Why)

@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 var log = logging.Get("estate")
@@ -109,8 +110,8 @@ func (s server) answer(ctx context.Context, raw []byte) []byte {
 			"disposition", string(admitted.Disposition), "claimed_from", admitted.Request.From,
 			"held", s.env.heldKeys(), "detail", admitted.Why+"; nothing in it ran")
 		out.Request, out.Unserved, out.Detail = admitted.ID, unservedUnauthenticated, fmt.Sprintf(
-			"%s does not hold the key the request is signed under (it holds %v)",
-			s.self, s.env.heldKeys())
+			"%s does not hold the key the request is signed under (it holds %s)",
+			s.self, words.And(s.env.heldKeys()))
 		return s.encodeReply(out)
 	case signedask.Undecodable:
 		out.Err = encodeError(fmt.Errorf("estate: %s could not decode a request the "+

@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Writing ONE entity: the draft PUT /config/{kind}/{id} applies.
@@ -80,8 +81,8 @@ func (e *EntityError) Unwrap() error { return e.Err }
 func entityDraft(kind, id string, body submitted, expect string, create bool) (draft, error) {
 	access, ok := entityKinds[kind]
 	if !ok {
-		return draft{}, &EntityError{Err: fmt.Errorf("%w: %q (want one of %v)",
-			ErrUnknownEntityKind, kind, EntityKinds())}
+		return draft{}, &EntityError{Err: fmt.Errorf("%w: %q (want one of %s)",
+			ErrUnknownEntityKind, kind, words.Or(EntityKinds()))}
 	}
 	return draft{
 		expect: expect, requireActive: true,

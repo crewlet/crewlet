@@ -479,7 +479,7 @@ func TestANoteTheRunningNodeCouldNotVerifyIsRefusedAsUnavailable(t *testing.T) {
 	t.Parallel()
 	unverified := steer.Reply{Version: 1, TurnID: "run-1",
 		Unverified: "the node running turn run-1 does not hold the key the note is " +
-			"signed under (it holds [k0]) — add the key to its secrets.keys"}
+			"signed under (it holds \"k0\") — add the key to its secrets.keys"}
 	for name, caller := range map[string]iam.Principal{
 		"the offer, by the deployment's operator": operatorCaller,
 		"the probe, by a lead":                    boundTo("jane"),

@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // SHARING IS THE OWNER'S, BOUNDED TO THE COMPANY.
@@ -86,8 +87,8 @@ func (t *shareArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	role := artifacts.Role(strings.TrimSpace(argString(args, "role")))
 	if !slices.Contains(artifacts.ShareableRoles, role) {
-		return failed(fmt.Sprintf(ShareArtifactTool+" takes `role` as one of %v: ownership "+
-			"moves only by a person's transfer.", artifacts.ShareableRoles)), nil
+		return failed(fmt.Sprintf(ShareArtifactTool+" takes `role` as one of %s: ownership "+
+			"moves only by a person's transfer.", words.Or(artifacts.ShareableRoles))), nil
 	}
 	if audience.Kind == artifacts.AudienceCompany && c.agent() {
 		return refusedBy(tools.RefusalForbidden, artifactsdomain.ErrAgentCompanyShare,

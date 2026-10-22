@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/textcut"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Spec is how one tool's answer becomes a card: exactly one of a table and an
@@ -334,8 +335,8 @@ func (s Spec) Validate() error {
 	}
 	if e := s.Entity; e != nil {
 		if (e.Kind != "" && !e.Kind.Valid()) || (e.Title == "" && e.Name == "") {
-			return fmt.Errorf("cards: an entity spec needs a kind of %v or none, and "+
-				"a title path, a name, or both", wire.ResourceKinds)
+			return fmt.Errorf("cards: an entity spec needs either no kind or one of %s, and "+
+				"a title path, a name, or both", words.Or(wire.ResourceKinds))
 		}
 		// A KEYED KIND CARRIES ITS KEY, and no other kind does: the drawer
 		// finds a record in the answer's words by it (ADR-0061), so a spec
