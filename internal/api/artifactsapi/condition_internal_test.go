@@ -3,6 +3,7 @@ package artifactsapi
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -96,6 +98,50 @@ func TestAConditionIsToldInAPersonsWords(t *testing.T) {
 			if !strings.Contains(line, want) {
 				t.Errorf("%s logged %q, want %s in it", name, line, want)
 			}
+		}
+	}
+}
+
+// THE FILE STORE'S TWO CONDITIONS ARE NO FAULT OF THIS NODE'S, and are read as
+// a project file's upload reads them: a full store is `503` with no
+// Retry-After, in the words that say who makes room and a message that says
+// waiting won't help, where it fell to the fault's `500`; and a store that did
+// not take the bytes is `503` under an election's wait, which this route also
+// answered as a fault. Mutation: drop the store's classification of either and
+// its row fails; write the code's own message under no Retry-After and the
+// first row does.
+func TestAFullStoreSaysWhoMakesRoom(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		err          error
+		says, retry  string
+		messageWaits bool
+	}{
+		"a full store": {fmt.Errorf("artifactupload: put: objstore: store the object: %w",
+			objstore.ErrFull), objstore.FullWords, "", false},
+		"a store that did not answer": {fmt.Errorf("artifactupload: put: objstore: store "+
+			"the object: %w: %w", objstore.ErrUnanswered, errors.New("s3: 503 SlowDown")),
+			"The company's files couldn't be saved just now. Try again in a moment.", "4", true},
+	} {
+		rec := httptest.NewRecorder()
+		writeFailed(rec, httptest.NewRequest(http.MethodPut, "/artifacts/uploads/u/files/a", nil),
+			"op-1", "transfer the file", c.err)
+		var body map[string]any
+		_ = json.Unmarshal(rec.Body.Bytes(), &body)
+		if rec.Code != http.StatusServiceUnavailable || body["detail"] != c.says {
+			t.Errorf("%s answered %d %v, want 503 saying %q", name, rec.Code, body, c.says)
+		}
+		if got := rec.Header().Get("Retry-After"); got != c.retry {
+			t.Errorf("%s: Retry-After %q, want %q", name, got, c.retry)
+		}
+		message, _ := body["message"].(string)
+		if waits := strings.Contains(message, "in a moment"); waits != c.messageWaits {
+			t.Errorf("%s: the message %q invites a wait: %v, want %v", name, message, waits,
+				c.messageWaits)
+		}
+		if text := rec.Body.String(); strings.Contains(text, "objstore") ||
+			strings.Contains(text, "SlowDown") {
+			t.Errorf("%s carried its error's own text: %s", name, text)
 		}
 	}
 }

@@ -114,10 +114,11 @@ func invalid(w http.ResponseWriter, detail string) {
 		map[string]string{"detail": detail})
 }
 
-// unavailable is a 503 whose cause says whether, and when, to come back.
+// unavailable is a 503 whose cause says whether, and when, to come back
+// ([builtin.RetryAfter], the hint beside the words a condition is told in).
 func unavailable(w http.ResponseWriter, cause error, detail string) {
 	httpjson.UnavailableWith(w, httpjson.CodeUnavailable,
-		httpjson.RetrySeconds(statelog.RetryAfter(cause, authz.RetryUndecidedSeconds*time.Second)),
+		httpjson.RetrySeconds(builtin.RetryAfter(cause, authz.RetryUndecidedSeconds*time.Second)),
 		httpjson.Detail{"detail": detail})
 }
 
@@ -304,6 +305,11 @@ func writeFailed(w http.ResponseWriter, r *http.Request, key, verb string, err e
 		// ([builtin.ConditionSentence]) and its error to the log: it was
 		// "this node could not <verb> right now: " followed by the model's
 		// clause, which for a state-log refusal was the refusal's own text.
+		// The file store's own two are among them: a full one, `503` with
+		// no Retry-After saying who makes room ([objstore.ErrFull]), and one
+		// that did not take the bytes, under an election's wait
+		// ([objstore.ErrUnanswered]) — the reading a project file's upload
+		// gives both, where this route answered the second as a fault.
 		if said, ok := builtin.ConditionSentence(err); ok {
 			operator.LogCondition(r.Context(), log, "artifacts_write_unavailable", err,
 				"verb", verb, "op_id", key)

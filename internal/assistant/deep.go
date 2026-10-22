@@ -438,9 +438,7 @@ func (t *turn) deliver(ctx context.Context, runID string, delivered []DeepFile) 
 			Conversation: t.conversation, Turn: t.id, Origin: wire.FileDelivered,
 			Name: name, MediaType: mediaType, Content: f.Content})
 		if err != nil {
-			t.svc.log.ErrorContext(ctx, "assistant_deep_file_unkept", "turn", t.id,
-				"error", redact.Secrets(err.Error()))
-			notes = append(notes, "Not delivered: "+name+" could not be kept.")
+			notes = append(notes, t.unkept(ctx, name, err))
 			continue
 		}
 		refs = append(refs, ref)
@@ -449,6 +447,22 @@ func (t *turn) deliver(ctx context.Context, runID string, delivered []DeepFile) 
 		t.emitCard(ctx, wire.Card{Type: wire.CardFile, File: &wire.FileCard{Files: refs}}, nil)
 	}
 	return refs, notes
+}
+
+// unkept is the note the model reads of a delivered file the store did not
+// keep: the condition that kept it out, in the words a model is told it in
+// ([Unkept]), or for a fault of the node only that it was not kept, whose
+// reason is the log's.
+func (t *turn) unkept(ctx context.Context, name string, err error) string {
+	var condition *Unkept
+	if errors.As(err, &condition) {
+		t.svc.log.WarnContext(ctx, "assistant_deep_file_unkept", "turn", t.id,
+			"error", redact.Secrets(err.Error()))
+		return "Not delivered: " + name + ", because " + condition.Said + "."
+	}
+	t.svc.log.ErrorContext(ctx, "assistant_deep_file_unkept", "turn", t.id,
+		"error", redact.Secrets(err.Error()))
+	return "Not delivered: " + name + " could not be kept."
 }
 
 // deepInputs are the question's attachments as a new run is handed them. A

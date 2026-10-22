@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -287,6 +288,36 @@ type conditionSaid struct {
 	// to another node or an administrator, neither of which a model can
 	// reach.
 	stuck bool
+
+	// after is the soonest a wait can clear it, where the condition knows
+	// one the state log's rule does not ([RetryAfter]); zero leaves the
+	// hint to that rule.
+	after time.Duration
+}
+
+// RetryAfter is how long somebody told about err should wait before asking
+// again: NONE for a condition no wait clears ([condition]'s stuck — a log at
+// its ceiling, a company whose file storage is full), the condition's own
+// soonest where it knows one, and otherwise [statelog.RetryAfter]'s reading of
+// err, with otherwise as this node's hint where nothing derived one.
+//
+// THE ONE HINT every surface answering a refusal or a condition in status
+// codes takes, BESIDE [ConditionSentence], so the words and the Retry-After
+// come from one classification: read from the state log's rule alone, a full
+// file store was told "an administrator needs to make room" under a
+// Retry-After of two seconds on the operator's surface, and an object store
+// that did not answer was told an election's wait on one surface and none on
+// the next.
+func RetryAfter(err error, otherwise time.Duration) time.Duration {
+	if said, ok := condition(err); ok {
+		switch {
+		case said.stuck:
+			return 0
+		case said.after > 0:
+			return said.after
+		}
+	}
+	return statelog.RetryAfter(err, otherwise)
 }
 
 // condition is the one classification [Condition] and [ConditionSentence]
@@ -297,6 +328,19 @@ func condition(err error) (conditionSaid, bool) {
 		return conditionSaid{}, false
 	case errors.Is(err, statelog.ErrUnavailable):
 		return stateLogSaid(err), true
+	case errors.Is(err, objstore.ErrFull):
+		// THE DEPLOYMENT'S FILE STORAGE AT ITS RESERVATION, which no wait
+		// clears and nobody uploading can change: somebody has to make
+		// room ([objstore.FullWords]).
+		return conditionSaid{clause: "the company's file storage is full",
+			person: objstore.FullWords, stuck: true}, true
+	case errors.Is(err, objstore.ErrUnanswered):
+		// THE FILE STORE DID NOT TAKE THE BYTES, which clears when it
+		// answers again: the default store is the data nodes' own bucket,
+		// which answers no sooner than its group elects.
+		return conditionSaid{clause: "the company's file storage did not answer",
+			person: "The company's files couldn't be saved just now. " +
+				statelog.TryAgainSoon, after: statelog.ElectionRetryHint}, true
 	case errors.Is(err, coord.ErrUnavailable):
 		return conditionSaid{clause: "the coordination store did not answer",
 			person: "This node couldn't reach the rest of the fleet. " +

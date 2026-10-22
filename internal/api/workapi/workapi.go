@@ -529,7 +529,7 @@ func (s *Service) decide(w http.ResponseWriter, r *http.Request,
 }
 
 // unavailableFor is a 503 for a READ this surface took before a decision, whose
-// CAUSE says whether, and when, to come back — [statelog.RetryAfter]'s rule,
+// CAUSE says whether, and when, to come back — [builtin.RetryAfter]'s rule,
 // which is every surface's.
 //
 // A REFUSAL WAITING CANNOT CLEAR CARRIES NO Retry-After: a read refused by a
@@ -539,7 +539,7 @@ func (s *Service) decide(w http.ResponseWriter, r *http.Request,
 // or one more activation.
 func unavailableFor(w http.ResponseWriter, cause error, detail string) {
 	httpjson.UnavailableWith(w, httpjson.CodeUnavailable,
-		httpjson.RetrySeconds(statelog.RetryAfter(cause,
+		httpjson.RetrySeconds(builtin.RetryAfter(cause,
 			authz.RetryUndecidedSeconds*time.Second)),
 		httpjson.Detail{"detail": detail})
 }

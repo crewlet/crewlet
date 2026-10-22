@@ -25,6 +25,8 @@ type Files struct {
 
 	mu    sync.Mutex
 	files map[uuid.UUID]storedFile
+	// refuse, when set, is what every later Store answers.
+	refuse error
 }
 
 type storedFile struct {
@@ -48,6 +50,9 @@ func (f *Files) Store(_ context.Context, w assistant.Write, n assistant.NewFile)
 		Size: int64(len(n.Content)), Download: wire.FilePath(n.Conversation, n.ID)}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.refuse != nil {
+		return wire.FileRef{}, f.refuse
+	}
 	f.files[n.ID] = storedFile{StoredFile: assistant.StoredFile{FileRef: ref, Owner: w.Owner,
 		Conversation: n.Conversation, Turn: n.Turn, Origin: n.Origin, CreatedAt: f.now()},
 		content: slices.Clone(n.Content)}
@@ -69,6 +74,14 @@ func (f *Files) Open(ctx context.Context, owner, conversation, file uuid.UUID) (
 func (f *Files) Stat(ctx context.Context, owner, conversation, file uuid.UUID) (assistant.StoredFile, error) {
 	held, _, err := f.Open(ctx, owner, conversation, file)
 	return held, err
+}
+
+// RefuseStores makes every later Store fail with err, as a store that keeps
+// nothing more does.
+func (f *Files) RefuseStores(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.refuse = err
 }
 
 // Attach keeps an image the person uploaded, as the upload route does.

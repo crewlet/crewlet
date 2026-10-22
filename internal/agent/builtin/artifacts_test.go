@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -576,6 +577,46 @@ func TestATurnPastItsGuardrailIsToldToStop(t *testing.T) {
 	var quota *artifactupload.TurnQuota
 	if !errors.As(got.Cause, &quota) {
 		t.Errorf("the cause does not carry the guardrail: %v", got.Cause)
+	}
+}
+
+// A FULL FILE STORE IS NO PUBLISH TO TRY AGAIN: the pipeline stores the page
+// through the object store, whose reservation can be spent, and no retry lands
+// until somebody makes room, so the model is told so and who makes it, as a
+// condition of the node rather than a fault with nothing to say. Mutation:
+// drop the ErrFull arm from publishFailure and this fails, the publish read as
+// internal_error.
+func TestAFullStoreIsNoPublishToTryAgain(t *testing.T) {
+	t.Parallel()
+	r := newArtifactRig(t, artifactChart{}, requesters{}, nil)
+	h := r.f.seed("agent-cto", iam.ActorAgent, cto, nil, [2]string{"index.html", "x"})
+	r.f.publishErr = fmt.Errorf("artifactupload: store %q: %w", "index.html", objstore.ErrFull)
+	got := r.call(t, turnFor(t, "agent-cto"), builtin.PublishArtifactTool, map[string]any{
+		"artifact": h.ID.String(), "base_version": 1, "content": "y"})
+	if !got.Failed || tools.RefusalOf(got) != tools.RefusalUnavailable {
+		t.Fatalf("a full store answered %s %q, want unavailable", tools.RefusalOf(got), got.Output)
+	}
+	for _, says := range []string{"file storage is full", "Don't try again", "an administrator"} {
+		if !strings.Contains(got.Output, says) {
+			t.Errorf("a full store answered %q, which does not say %q", got.Output, says)
+		}
+	}
+	if strings.Contains(got.Output, "reservation") || strings.Contains(got.Output, "objstore") {
+		t.Errorf("a full store answered %q, which names the store's own terms", got.Output)
+	}
+
+	// AND A STORE THAT DID NOT ANSWER IS A CONDITION, invited back as
+	// write_project_file invites it, where this tool told it as a fault of
+	// the node. Mutation: drop the store's classification and this fails.
+	r.f.publishErr = fmt.Errorf("artifactupload: store %q: %w", "index.html",
+		fmt.Errorf("objstore: store the object: %w: %w", objstore.ErrUnanswered,
+			errors.New("s3: PutObject: 503 SlowDown")))
+	got = r.call(t, turnFor(t, "agent-cto"), builtin.PublishArtifactTool, map[string]any{
+		"artifact": h.ID.String(), "base_version": 1, "content": "y"})
+	if tools.RefusalOf(got) != tools.RefusalUnavailable || !strings.Contains(got.Output, "Try again") ||
+		strings.Contains(got.Output, "SlowDown") {
+		t.Errorf("a store that did not answer answered %s %q, want unavailable and a retry",
+			tools.RefusalOf(got), got.Output)
 	}
 }
 
