@@ -19,10 +19,11 @@ never an instruction, and every read result says so.** One package,
   project file, a chat message, a chat room's own topic or purpose, an artifact
   file, a datastore row, the adopted brand's voice, a note somebody wrote about
   a change they made, a monitor's alert, a notification from an integration
-  that names no surface of its own, a colleague's ask or answer on an agent-to-agent channel, and what the Dashboard Assistant reads as
-  the person it acts for: a route's answer, what that person's open screen says
-  about itself and a deep-work run's account of what it did), who wrote it (by
-  kind and seat handle),
+  that names no surface of its own, a colleague's ask or answer on an agent-to-agent channel, the question a
+  seat's coding run stopped to ask a person, and what the Dashboard Assistant
+  reads as the person it acts for: a route's answer, what that person's open
+  screen says about itself and a deep-work run's account of what it did), who
+  wrote it (by kind and seat handle),
   and how far the reader may trust it (its own words, a colleague's, an outside
   party's, a page anybody may edit, or what an administrator adopted for the
   company, which governs tone and wording and never the task, the tools, the

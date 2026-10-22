@@ -5532,31 +5532,37 @@ answers any parked run by naming it:
 | `answer` | What the coding agent should be told, at most 32 KiB — it is spliced into the run as one tool reply. |
 
 It answers `{"turn_id", "agent_handle", "question", "launch_id", "answer_id",
-"outcome": "pending"}`: the answer is on the control topic of the seat holding
-the run, and **that** node records it on the run as soon as it takes it off
-(the run's `status` reads `answered`), then resumes the run with it as soon as
-the seat is free: no other of its coding runs holding it, no other of its turns
-running, no person's pause. The resume is then the first thing the seat does,
-ahead of its mail. The control topic rather than the seat's inbox because the
-inbox is held while any of the seat's coding runs holds it and is worked
-oldest first after that, and an answer that rode it could wait out the run's
-pause TTL behind them. The answer is to the **question** the run was waiting
-on when you gave it (`launch_id`), and it resumes the run only while the run
-still waits on that one: if somebody else's answer resumed the run meanwhile
-and it has asked something new since, yours is announced `not_awaiting` rather
-than taken as the answer to a question you never saw. What it became is read
-off the run's own row in [`GET /sandbox-runs`](#get-sandbox-runs): `answered`
-or `resumed` on that `launch_id` once it was taken, `answer_id` among its
-`declined_answers` if every attempt to resume the run with it failed and it
-was let go of (the run waits on its question again, and you answer it again),
-or a new `launch_id` if the run moved past the question first. It is also
-announced on the event stream as `sandbox_run_answered` (`resumed`,
-`not_awaiting`, `gone` or `declined`), naming who answered: their name, its
-kind and the credential. A node that stops on the way to the resume leaves the
-recorded answer for the seat's next holder rather than losing it. An `unknown`
-outcome is a delivery the broker never confirmed; answering again is
-harmless, because whichever copy arrives second finds that question no longer
-waiting.
+"outcome": "pending"}`. A model reading it (a seat's, or an assistant's over
+`/operator/mcp`) is handed the question
+[fenced](../concepts/agent-runtime.md#text-somebody-else-wrote) as
+`coding_run` under the seat whose run asked it and the `provenance` envelope
+beside it (the coding agent wrote it in the seat's name, and the caller is
+often an assistant reading for the person answering); the act route answers a
+person the question as the run asked it. The answer is on the
+control topic of the seat holding the run, and **that** node records it on the
+run as soon as it takes it off (the run's `status` reads `answered`), then
+resumes the run with it as soon as the seat is free: no other of its coding
+runs holding it, no other of its turns running, no person's pause. The resume
+is then the first thing the seat does, ahead of its mail. The control topic
+rather than the seat's inbox because the inbox is held while any of the seat's
+coding runs holds it and is worked oldest first after that, and an answer that
+rode it could wait out the run's pause TTL behind them. The answer is to the
+**question** the run was waiting on when you gave it (`launch_id`), and it
+resumes the run only while the run still waits on that one: if somebody else's
+answer resumed the run meanwhile and it has asked something new since, yours
+is announced `not_awaiting` rather than taken as the answer to a question you
+never saw. What it became is read off the run's own row in
+[`GET /sandbox-runs`](#get-sandbox-runs): `answered` or `resumed` on that
+`launch_id` once it was taken, `answer_id` among its `declined_answers` if
+every attempt to resume the run with it failed and it was let go of (the run
+waits on its question again, and you answer it again), or a new `launch_id` if
+the run moved past the question first. It is also announced on the event
+stream as `sandbox_run_answered` (`resumed`, `not_awaiting`, `gone` or
+`declined`), naming who answered: their name, its kind and the credential. A
+node that stops on the way to the resume leaves the recorded answer for the
+seat's next holder rather than losing it. An `unknown` outcome is a delivery
+the broker never confirmed; answering again is harmless, because whichever
+copy arrives second finds that question no longer waiting.
 
 **Who may answer**: whoever asked for the run — the seat its requester holds — or whoever leads the run's seat, or `admin`. Everybody else is refused `forbidden`, as the authority table refuses a lead's verb, because everybody signed in holds a credential and an answer steers somebody else's work.
 
@@ -5995,8 +6001,8 @@ request was made under (the key as **this principal's** operation, named by a
 tag of their id, so sending it back as the header is the same operation as
 sending the original key). `receipt` is the tool's own answer, verbatim except
 for its `warnings`, with what somebody else wrote in it as it was stored: a
-room's topic and purpose, a page's title, which the same tool answers a model
-fenced and labelled (see
+room's topic and purpose, a page's title, a parked run's question, which the
+same tool answers a model fenced and labelled (see
 [Text somebody else wrote](../concepts/agent-runtime.md#text-somebody-else-wrote)).
 
 `caveats` is what the write tells you beside its outcome, and was not refused

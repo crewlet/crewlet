@@ -110,6 +110,13 @@ const (
 	// SourceA2AMessage is a message on an agent-to-agent channel: the
 	// question a colleague asked, or the answer one gave.
 	SourceA2AMessage Source = "a2a_message"
+
+	// SourceCodingRun is what a seat's coding run said to a person: the
+	// question it stopped to ask. The coding agent writes it in the seat's
+	// name, and it is neither a message in a room nor a colleague's ask —
+	// the run reached nobody through either, and a reader auditing a
+	// transcript has to tell it from both.
+	SourceCodingRun Source = "coding_run"
 )
 
 // Sources are every surface.
@@ -117,7 +124,7 @@ var Sources = []Source{
 	SourcePageBody, SourcePageComment, SourceWorkDescription, SourceWorkComment,
 	SourceProjectFile, SourceChatThread, SourceChatRoom, SourceArtifactFile,
 	SourceArtifactRow, SourceChangeNote, SourceAlert, SourceNotification,
-	SourceA2AMessage, SourceBrandVoice, SourceAPIAnswer, SourcePageContext, SourceDeepWork,
+	SourceA2AMessage, SourceCodingRun, SourceBrandVoice, SourceAPIAnswer, SourcePageContext, SourceDeepWork,
 }
 
 // Valid reports whether s is one of [Sources].

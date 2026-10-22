@@ -9,6 +9,8 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/operator"
@@ -17,6 +19,8 @@ import (
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -296,14 +300,15 @@ func (placingWork) PlaceTask(context.Context, string, worklet.Place,
 //
 // AND A RECEIPT ECHOING WORDS SOMEBODY ELSE WROTE ANSWERS THEM AS THEY WERE
 // STORED: `update_channel` answers a model the room's topic and purpose
-// fenced, since the one it left alone is whoever set it last, and read off
-// that answer the act route handed a person the topic between a fence's two
-// lines, under a value field no walk read.
+// fenced, since the one it left alone is whoever set it last, and `answer_run`
+// the question the parked run asked, in the seat's name; read off those
+// answers the act route handed a person the topic and the question between a
+// fence's two lines, under value fields no walk read.
 //
 // Mutation, run when this was written: answer the missed place as the
 // receipt's `unplaced` again and the drag's row goes red on the tool's name;
-// answer a receipt from the model's Output again and the room's row goes red
-// on the fence round its topic and its purpose.
+// answer a receipt from the model's Output again and the room's and the run's
+// rows go red on the fence round the topic, the purpose and the question.
 func TestEveryAnswerTheActRouteGivesIsWordedForAPerson(t *testing.T) {
 	t.Parallel()
 	created := &recordingWork{caveats: []caveat.Caveat{
@@ -351,4 +356,37 @@ func TestEveryAnswerTheActRouteGivesIsWordedForAPerson(t *testing.T) {
 	for _, problem := range caveattest.AnswerProblems(chatlet.UpdateChannelTool, answer) {
 		t.Errorf("a room's new topic: %s", problem)
 	}
+
+	runs := guarded(newSurface(t, operator.Options{Halves: fixed(operator.Halves{}),
+		Org: company, Runs: builtin.RunDeps{Desk: parkedRun{}}}))
+	status, answer = act(t, runs, "founder", builtin.AnswerRunTool, "application/json",
+		`{"args":{"turn_id":"t1","answer":"use main"}}`, newKey())
+	if status != http.StatusOK {
+		t.Fatalf("an answer to a parked run answered %d %v", status, answer)
+	}
+	if receipt, _ := answer["receipt"].(map[string]any); receipt["question"] != "which branch?" {
+		t.Errorf("an answer to a parked run answered the receipt %v, want the question "+
+			"as the run asked it", answer["receipt"])
+	}
+	for _, problem := range caveattest.AnswerProblems(builtin.AnswerRunTool, answer) {
+		t.Errorf("an answer to a parked run: %s", problem)
+	}
+}
+
+// parkedRun is a run desk holding one coding run, t1, parked on a question its
+// requester, the founder's seat, is to answer, which takes every answer.
+type parkedRun struct{}
+
+func (parkedRun) Run(_ context.Context, turnID string) (sandbox.PendingRun, bool, error) {
+	if turnID != "t1" {
+		return sandbox.PendingRun{}, false, nil
+	}
+	return sandbox.PendingRun{TurnID: "t1", AgentHandle: "cto",
+		AgentID:   uuid.NewSHA1(uuid.NameSpaceOID, []byte("cto")).String(),
+		Requester: "jane-founder", Status: sandbox.StatusAwaiting,
+		Question: "which branch?", LaunchID: "launch-t1"}, true, nil
+}
+
+func (parkedRun) Deliver(context.Context, types.SandboxAnswerGiven) (uuid.UUID, error) {
+	return uuid.NewSHA1(uuid.NameSpaceOID, []byte("answer-t1")), nil
 }
