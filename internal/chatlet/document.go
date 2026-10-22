@@ -129,6 +129,24 @@ type Channel struct {
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
+// called is how a sentence names the room to whoever reads it, a model in a
+// tool's answer above all: `#launch` where it has a name, which is how anybody
+// refers to it, and what it is where it has none.
+//
+// NEVER ITS ID. A named room's id was minted when it was created, and a direct
+// conversation's is derived from its participants; nobody chose either, and a
+// refusal that named a room by one left the reader to work out which room it
+// meant ([roomLabel] says the same of a notification's subject line).
+func (c Channel) called() string {
+	switch {
+	case c.Name != "":
+		return "#" + c.Name
+	case c.Kind.Direct():
+		return "this conversation"
+	}
+	return "this room"
+}
+
 // Message is one message's full state, as the blob on its row.
 type Message struct {
 	V int `json:"v"`

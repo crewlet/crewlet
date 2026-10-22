@@ -129,7 +129,7 @@ describe("a refusal", () => {
       "channel",
       refused(
         "exists",
-        "Another room already has that name: launch. Open that room, or pick another name.",
+        "#launch is already another room's name, so pick another one (or open #launch if you're in it).",
       ),
     );
     expect(report.taken).toBe(true);
@@ -146,12 +146,12 @@ describe("a refusal", () => {
       "join",
       refused(
         "forbidden",
-        "join_channel was refused: room-3 is a private room, and its membership is the only way into it.",
+        "join_channel was refused: #platform is a unit's own room, and the org chart decides who's in it. Joining it would be undone the next time the company's configuration is applied. Move the seat into the unit instead.",
       ),
     );
     expect(report.tone).toBe("danger");
     expect(report.taken).toBe(false);
-    expect(report.note).toContain("membership is the only way into it");
+    expect(report.note).toContain("Move the seat into the unit instead");
   });
 
   test("the engine's remedy travels with its sentence", () => {

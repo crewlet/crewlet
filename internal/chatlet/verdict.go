@@ -104,15 +104,22 @@ func (v Verdict) Landed() bool { return v == VerdictApplied || v == VerdictRepea
 // refusal is the domain's own refusal for a verdict that did not land, in the
 // sentinel each would have been refused with had the writer's snapshot already
 // held the record ahead of it — so a surface answers the two the same way.
-func (v Verdict) refusal(op OpKind, opID, channelID string) error {
+//
+// THE ROOM IS NAMED AS A PERSON KNOWS IT ([Channel.called]): this sentence is
+// a model's in a tool's answer, a seat's or a person's assistant's, and it
+// named the room by its id, which nobody chose and nobody can place.
+func (v Verdict) refusal(op OpKind, room Channel) error {
 	switch v {
 	case VerdictArchived:
 		return fmt.Errorf("%w: this room was archived before the message "+
 			"reached it, so nothing was said. %s", ErrArchived, reopenRoom)
 	case VerdictNotMember:
+		// NOT FOUND, AS THE DECIDE SAYS IT ([reachable]) — and the room
+		// named all the same: this is the author's own post, decided while
+		// they were in the room.
 		return fmt.Errorf("%w: the author was taken out of %s before this message "+
-			"reached it, and the room admits its members only; nothing was said",
-			ErrForbidden, channelID)
+			"reached it, and only its members can post there, so nothing was said",
+			ErrNotFound, room.called())
 	case VerdictGone:
 		return fmt.Errorf("%w: the message this %s was about was erased or pruned "+
 			"before the %s reached it; nothing was changed", ErrNotFound, op, op)
@@ -127,9 +134,10 @@ func (v Verdict) refusal(op OpKind, opID, channelID string) error {
 	// A VERDICT THIS BUILD DOES NOT KNOW, written by a newer peer's applier
 	// about a record that landed: it decided something this build cannot
 	// describe, which is a conflict with the room's state rather than an
-	// argument to change.
-	return fmt.Errorf("%w: operation %s in %s was decided %q by a newer build's "+
-		"applier, which this build cannot describe", ErrConflict, opID, channelID, v)
+	// argument to change. Named by what it was, never by the operation's id
+	// or the room's, which nobody chose.
+	return fmt.Errorf("%w: a newer node decided this %s in a way this node can't "+
+		"describe. Read %s again to see what happened", ErrConflict, op, room.called())
 }
 
 // verdictDropped is what [verdictIn] answers for a record every node's gate

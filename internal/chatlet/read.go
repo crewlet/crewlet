@@ -1145,7 +1145,7 @@ func (r *Reader) Channel(ctx context.Context, viewer, channelID string,
 				Members: members, Member: memberIn(members, who),
 			}
 			if !Visible(who, room, out.Member) {
-				return notFound(channelID)
+				return notFound()
 			}
 			return nil
 		})
@@ -1274,7 +1274,7 @@ func readRoom(ctx context.Context, tx *sql.Tx, channelID string) (
 		Scan(&document, &revision, &seq)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return Channel{}, 0, 0, notFound(channelID)
+		return Channel{}, 0, 0, notFound()
 	case err != nil:
 		return Channel{}, 0, 0, fmt.Errorf("chatlet: read room %s: %w",
 			channelID, err)
@@ -1292,8 +1292,11 @@ func readRoom(ctx context.Context, tx *sql.Tx, channelID string) (
 // ONE ERROR FOR BOTH, which is the point: a private room's existence is itself
 // information, so a refusal that said "not yours" would answer "who is talking
 // to whom" for anybody willing to guess an id.
-func notFound(channelID string) error {
-	return fmt.Errorf("%w: room %s", ErrNotFound, channelID)
+//
+// AND NAMING NO ROOM: the caller named it, and the one thing this could add
+// is the room's id, which nobody chose.
+func notFound() error {
+	return fmt.Errorf("%w: there's no such room", ErrNotFound)
 }
 
 // readMembers is a room's whole membership, in handle order.
@@ -1608,14 +1611,13 @@ func (r *Reader) Thread(ctx context.Context, viewer string, q ThreadQuery,
 					// is upgraded and the other never does. A
 					// `not found` here would send somebody looking
 					// for a message that is sitting in the room.
-					return fmt.Errorf("chatlet: the root of thread %s in room "+
-						"%s was written by a newer build than this node "+
-						"runs, so this node cannot render the thread — "+
-						"another node can, and this one can once it is "+
-						"upgraded", q.RootID, q.ChannelID)
+					return fmt.Errorf("chatlet: this thread's first message " +
+						"was written by a newer build than this node runs, so " +
+						"this node can't show the thread. Another node can, " +
+						"and this one can once it's upgraded")
 				}
-				return fmt.Errorf("%w: message %s in room %s", ErrNotFound,
-					q.RootID, q.ChannelID)
+				return fmt.Errorf("%w: there's no such thread in this room",
+					ErrNotFound)
 			}
 			out.Root = root.views[0]
 
@@ -1741,7 +1743,7 @@ func (r *Reader) reachable(ctx context.Context, tx *sql.Tx, who,
 		}
 	}
 	if !Visible(who, room, member) {
-		return notFound(channelID)
+		return notFound()
 	}
 	return nil
 }

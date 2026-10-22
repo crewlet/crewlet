@@ -586,19 +586,24 @@ func invalid(field, why string, args ...any) error {
 // never a tool's sentence, until the refusal catalog words it for them
 // (ADR-0060).
 //
-// THE FIVE IT RECOGNISES ARE THE FIVE WRITTEN AS SENTENCES: a field refused
+// THE EIGHT IT RECOGNISES ARE THE EIGHT WRITTEN AS SENTENCES: a field refused
 // ([ErrInvalid]), a gesture this actor may not make ([ErrForbidden]), a room
 // that takes nothing more ([ErrArchived]) and a message that carries all the
 // emoji it may ([ErrReactionsFull]), each a state the sentence says how to
-// change, and a room this node cannot serve until it is upgraded
-// ([ErrUnknownKind]). The rest are sentences for a model, or are answered in
-// words the tool composes itself.
+// change, a room this node cannot serve until it is upgraded
+// ([ErrUnknownKind]), a room, a message or a thread that is not there
+// ([ErrNotFound]), a name another room holds ([ErrNameTaken]) and a room that
+// changed under a decision ([ErrConflict]). Each names a room as a person
+// knows it ([Channel.called]) and never by its id. A lost race carries the
+// framework's own error after the mark, and is told to a person in the state
+// log's words before this is asked (internal/agent/builtin's WriterSentence).
 func Sentence(err error) string {
 	var refusal *InvalidError
 	if errors.As(err, &refusal) && refusal.Error() == err.Error() {
 		return "`" + refusal.Field + "`: " + refusal.Why
 	}
-	for _, mark := range []error{ErrForbidden, ErrArchived, ErrReactionsFull, ErrUnknownKind} {
+	for _, mark := range []error{ErrForbidden, ErrArchived, ErrReactionsFull, ErrUnknownKind,
+		ErrNotFound, ErrNameTaken, ErrConflict} {
 		if !errors.Is(err, mark) {
 			continue
 		}
