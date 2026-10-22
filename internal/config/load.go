@@ -437,9 +437,12 @@ func decodeDocument(doc *yaml.Node, out any) error {
 func decodeNode(node *yaml.Node, out any) error {
 	// A FRACTION BOUND FOR A WHOLE NUMBER is refused before the decoder
 	// sees it, because the decoder truncates it without a word — see
-	// [refuseFractions]. Collected beside whatever the decode itself
-	// refuses, so one pass reports both.
-	faults := refuseFractions(node, reflect.TypeOf(out))
+	// [refuseFractions] — and so is a number that is not finite, which it
+	// reads faithfully into a field nothing can then bound
+	// ([refuseNonFinite]). Collected beside whatever the decode itself
+	// refuses, so one pass reports all of them.
+	faults := append(refuseFractions(node, reflect.TypeOf(out)),
+		refuseNonFinite(node, reflect.TypeOf(out))...)
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)
 	if err := enc.Encode(blockStyle(node)); err != nil {
