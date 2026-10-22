@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/opkey"
+	"github.com/crewlet/crewlet/internal/api/paced"
 	"github.com/crewlet/crewlet/internal/api/workapi"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/estate"
@@ -151,6 +152,10 @@ type fakeFiles struct {
 	// readErr fails every read of a file's row, as a node that could not
 	// serve it answers.
 	readErr error
+
+	// putLimit, where set, is the cap the store holds an upload to in place
+	// of the surface's own, so a body can pass it without a gibibyte.
+	putLimit int64
 }
 
 func newFakeFiles(t *testing.T) *fakeFiles {
@@ -203,6 +208,9 @@ func (f *fakeFiles) Put(ctx context.Context, r io.Reader, limit int64,
 	m objstore.PutMeta) (objstore.Object, error) {
 	f.mu.Lock()
 	f.objects++
+	if f.putLimit > 0 {
+		limit = f.putLimit
+	}
 	f.mu.Unlock()
 	return f.store.Put(ctx, working{r: r, work: f.work, clock: f.clock}, limit, m)
 }
@@ -428,6 +436,11 @@ func TestAnUploadIsChargedOnlyWhileTheClientIsWaitedOn(t *testing.T) {
 // answers a client that went away mid-body with io.ErrUnexpectedEOF, which an
 // upload once took for the end of the file and RECORDED — the half that
 // arrived, as the file, answered 200.
+//
+// TOLD IN A PERSON'S WORDS ([paced.Unread]): the detail was the read's own
+// failure as Go spells it — "the body could not be read: unexpected EOF", "…:
+// i/o timeout" — which goes to the log. Mutation: answer err.Error() again
+// and both rows go red.
 func TestAnUploadWhoseBodyStopsIsRefusedAsTheClients(t *testing.T) {
 	t.Parallel()
 	for _, stop := range []error{errors.New("i/o timeout"), io.ErrUnexpectedEOF} {
@@ -447,8 +460,9 @@ func TestAnUploadWhoseBodyStopsIsRefusedAsTheClients(t *testing.T) {
 			answer := answerOf(t, rec)
 			detail, _ := answer["detail"].(string)
 			if answer["error"] != string(httpjson.CodeUnreadableBody) ||
-				!strings.Contains(detail, stop.Error()) {
-				t.Errorf("answer = %v, want unreadable_body naming the read's own failure", answer)
+				detail != paced.Unread || strings.Contains(detail, stop.Error()) {
+				t.Errorf("answer = %v, want unreadable_body saying %q and not "+
+					"the read's own failure", answer, paced.Unread)
 			}
 			fake.mu.Lock()
 			defer fake.mu.Unlock()
@@ -477,8 +491,10 @@ func TestAnUploadRefusedByWhatIsKnownReadsNothing(t *testing.T) {
 		if aborted := s.serve(rec, req, admin("ana")); aborted != nil {
 			t.Fatal(aborted)
 		}
+		answer := answerOf(t, rec)
 		if rec.Code != http.StatusRequestEntityTooLarge ||
-			answerOf(t, rec)["error"] != string(httpjson.CodeBodyTooLarge) {
+			answer["error"] != string(httpjson.CodeBodyTooLarge) ||
+			answer["detail"] != tooLargeSaid {
 			t.Fatalf("a declared length over the cap answered %d: %s", rec.Code, rec.Body.String())
 		}
 		if fake.objects != 0 {
@@ -975,5 +991,34 @@ func TestADownloadWritesEachMebibyteInAWindowOfItsOwn(t *testing.T) {
 		if d != objstore.MiBPace {
 			t.Errorf("deadline %d was set %v out, want %v", i, d, objstore.MiBPace)
 		}
+	}
+}
+
+// tooLargeSaid is what a person is told about a file over the cap.
+const tooLargeSaid = "This file is over 1 GiB, the most a project's file can hold."
+
+// A FILE OVER THE CAP IS TOLD IN A PERSON'S WORDS, whether its length was
+// declared or the store found it while the body streamed: the detail was the
+// store's error — "objstore: the object is over its size limit (1073741824
+// bytes)", a package's name and the cap in bytes. Mutation: answer
+// err.Error() for it again and this goes red.
+func TestAFileOverTheCapIsToldInAPersonsWords(t *testing.T) {
+	t.Parallel()
+	fake := newFakeFiles(t)
+	fake.putLimit = 4
+	s := filesSurface(t, fake, chart{})
+	rec := httptest.NewRecorder()
+	s.upload(bytes.NewReader([]byte("five!")), rec)
+	answer := answerOf(t, rec)
+	if rec.Code != http.StatusRequestEntityTooLarge ||
+		answer["error"] != string(httpjson.CodeBodyTooLarge) ||
+		answer["detail"] != tooLargeSaid {
+		t.Fatalf("a body the store found over the cap answered %d %v, want 413 "+
+			"saying %q", rec.Code, answer, tooLargeSaid)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.puts) != 0 {
+		t.Error("a file was recorded from a body over the cap")
 	}
 }

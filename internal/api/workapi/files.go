@@ -410,14 +410,21 @@ func fileReadFailed(w http.ResponseWriter, r *http.Request, err error) {
 // them is a condition that clears when it answers again — the broker's own
 // election at the soonest, the default store being the data nodes' NATS
 // bucket — with the store's own words in the log.
+//
+// THE FIRST TWO IN A PERSON'S WORDS ([paced.Unread], [fileTooLarge]), never the
+// error's: it opens with the store's or the reader's package words
+// ("objstore: the object is over its size limit (1073741824 bytes)") and ends
+// with the read's own failure as Go spells it, which goes to the log.
 func bytesFailed(w http.ResponseWriter, r *http.Request, err error, key string) {
 	switch {
 	case errors.Is(err, paced.ErrBody):
+		log.InfoContext(r.Context(), "api_file_body_unread", "op_id", key,
+			"error", err.Error())
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeUnreadableBody,
-			map[string]string{"detail": err.Error()})
+			map[string]string{"detail": paced.Unread})
 	case errors.Is(err, objstore.ErrTooLarge):
 		httpjson.FailWith(w, http.StatusRequestEntityTooLarge, httpjson.CodeBodyTooLarge,
-			map[string]string{"detail": err.Error()})
+			map[string]string{"detail": fileTooLarge})
 	default:
 		log.WarnContext(r.Context(), "api_file_store_unavailable", "op_id", key,
 			"error", err.Error())
@@ -429,6 +436,11 @@ func bytesFailed(w http.ResponseWriter, r *http.Request, err error, key string) 
 			})
 	}
 }
+
+// fileTooLarge is a file over [worklet.MaxFileBytes] as the person uploading
+// it reads it.
+var fileTooLarge = "This file is over " + objstore.SizeWords(worklet.MaxFileBytes) +
+	", the most a project's file can hold."
 
 // fileWriteFailed answers what the tracker's file writer refused: the
 // refusals about the file as a resource under their own codes, and anything
