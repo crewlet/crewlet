@@ -586,9 +586,11 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 		// A LOST RACE — the write's snapshot kept moving under it — which
 		// the same request resolves once read again. `stale` says exactly
 		// that, as it does on /worklet; `bad_params` said the request could
-		// never succeed however often it was sent.
-		refuse(http.StatusConflict, httpjson.CodeStale,
-			httpjson.Detail{"detail": err.Error()})
+		// never succeed however often it was sent. Told in the state log's
+		// words for a person ([statelog.Sentence]): its error names the
+		// subject the race was lost on, a broker path.
+		said, _ := statelog.Sentence(err)
+		refuse(http.StatusConflict, httpjson.CodeStale, httpjson.Detail{"detail": said})
 		return
 	case errors.As(err, &refused) && refused.Reason == statelog.ReasonDeleted:
 		// THE PERSON WAS REMOVED — between the read this route decided on
