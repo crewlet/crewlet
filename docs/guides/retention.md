@@ -1282,10 +1282,34 @@ else holds a connection to it. `set-capacity` refuses there unless you pass
 check that quietly proved nothing would be worse than the refusal.
 
 A node that boots into `normal` mode writes an **admission** before it starts
-anything, then re-reads the operation and withdraws if one is open. A
-coordinator refuses to take the exclusion while any admission is held. Either
-order is then safe: a node that slipped between a check and its own start has
-left a durable record, where a silence would have let the coordinator proceed.
+anything, then re-reads the operation and withdraws if one is open. The
+coordinator does the same the other way round: it writes the operation first,
+then reads the admissions, and sends no request while any is held. Either order
+is then safe: of the two records, whichever lands second has its writer read
+the first, so either the node finds the window and doesn't start, or the
+window finds the node and waits.
+
+What the window does about an admission depends on whether the process that
+wrote it is **running**, which the fleet's presence says: a running process
+renews its node's presence lease in every mode.
+
+- **Running** (it holds its node's presence): it may be publishing, so the
+  window is **closed again** as soon as it opens, nothing is sent, and the verb
+  is refused naming the node. Restart it with `-mode maintenance` and run the
+  verb again. A window left open over it would refuse every node that started
+  in service meanwhile and tell it to restart into maintenance mode, taking a
+  serving node out of service. The same happens when the admissions can't be
+  read.
+- **Not running** (nobody holds its node's presence): a node that stopped
+  without giving its admission back. The window stays at `opened`, which has
+  sent nothing for this attempt, and its first request is refused naming the
+  node, the restart and the exclusion for it. While it waits it refuses every
+  node that starts in service, so the refusal also names the abandonment that
+  closes it.
+- **Replaced** (another process of the node holds its presence): the process
+  the admission names is gone, and the window withdraws the admission itself,
+  logging `admission_superseded`. That is the node restarted into maintenance
+  mode before its crashed process's lease had lapsed.
 
 An admission names the process that wrote it, and it never expires. A node
 gives its own back when it stops cleanly, after its publishers have drained. A
@@ -1299,8 +1323,12 @@ publishing, so a second process started under a live node's id leaves its
 admission alone and logs `admission_not_superseded`. (A boot in service needs
 no such step: a data node's own admission replaces the old one, and a node
 without `data` publishes nothing.) So a node that crashed in service only has
-to be restarted with the window's `-mode`, once its lease has lapsed: within
-the coordination lease TTL (`coordination.lease_ttl_seconds`) of the crash.
+to be restarted with the window's `-mode`. Restarted within the coordination
+lease TTL (`coordination.lease_ttl_seconds`) of the crash, its boot still sees
+the crashed process's lease and leaves the admission, and the window withdraws
+it once the restarted process holds the node's presence. A node that will
+never boot again is **excluded** instead (below): the exclusion withdraws its
+admission, and it is the one way past a dead node's.
 
 ### Where it stands, and what is holding it
 
@@ -1309,25 +1337,33 @@ crewlet retention maintenance status -stream CREWLET_TRACKER_LOG
 ```
 
 One page: the operation and its phase and attempt, every participant's
-baselined incarnation against what it acknowledged as, which acknowledgements
-are missing, any unresolved write attempt, and any admission still blocking
-activation.
+baselined incarnation against what it acknowledged as, any unresolved write
+attempt, and what the window's next step is waiting on, with the commands that
+run next in full. At `opened` the next step is the baseline, so the page names
+the participants with no restart into a maintenance mode recorded and any
+admission still stopping the window's first request. From the baseline on it
+names what the seal is waiting for instead. With no window open on a node in a
+maintenance mode, it names any node still holding an admission, so you know
+before you open one.
 
 **You do not have to go looking for it.** While an operation is open, both
 `crewlet retention status` and **Settings › Backups & retention** lead with
 it — the stream, the phase, the attempt, how long it has been open, who ran
-the verb, and who is still outstanding — because every number underneath describes a fleet in which
+the verb, any admission holding it at `opened`, and who is still
+outstanding — because every number underneath describes a fleet in which
 nothing is running, and a blocked trim read without knowing that sends you
-after the wrong thing. **No acknowledgement outstanding is not progress**: it
-means the operation is waiting on its operator, and both surfaces say so
-rather than printing an empty list.
+after the wrong thing. At `opened`, outstanding means no restart into a
+maintenance mode recorded; past it, no acknowledgement for the seal. **Nothing
+outstanding is not progress**: unless an admission holds the window, it means
+the operation is waiting on its operator, and both surfaces say so rather than
+printing an empty list.
 
 Two gestures act on what it shows:
 
 | | |
 |---|---|
-| `crewlet retention maintenance exclude -stream NAME -node ID -confirm ID` | Your assertion that a participant's **process is stopped** and holds no outstanding request. The only thing that waives an acknowledgement — an eviction does not, because that is about whose records apply and this is about whose process is running. |
-| `crewlet retention maintenance abandon -stream NAME -confirm OPERATION-ID` | Changes what the operation is trying to reach; **never** the barrier it must cross. From `opened` it clears outright, because no request was ever issued. From anywhere else it still enters the seal: a paused coordinator's request is outstanding whether or not a person has read a status page. |
+| `crewlet retention maintenance exclude -stream NAME -node ID -confirm ID` | Your assertion that a participant's **process is stopped** and holds no outstanding request. The only thing that waives an acknowledgement — an eviction does not, because that is about whose records apply and this is about whose process is running. It also withdraws the node's admission, and an excluded node's admission no longer stops the window, so this is how a fleet gets past a node that crashed and will never boot again. Any node can be excluded, whether or not it is a participant. |
+| `crewlet retention maintenance abandon -stream NAME -confirm OPERATION-ID` | Changes what the operation is trying to reach; **never** the barrier it must cross. The node checks the confirmation against the operation that is open before it changes anything, and refuses one naming another. From `opened` it clears outright, because no request was ever issued. From anywhere else it still enters the seal: a paused coordinator's request is outstanding whether or not a person has read a status page. |
 
 Both are recorded on the window with who made them — the status prints each
 excluded participant as `excluded by` its author and the credential they used,

@@ -26,6 +26,12 @@ type fakeCapacityNode struct {
 	operation              map[string]any
 	reanchorConfirm        string
 
+	// abandonConfirm and excluded are what the last abandon and exclusion
+	// were asked with, and gesture is the operation either answers: nil
+	// for a window cleared outright.
+	abandonConfirm, excluded string
+	gesture                  map[string]any
+
 	// reanchorCase is the case the node's status reports — "recreated" when
 	// unset, and none at all when it is "-" — with reanchorCursor the
 	// sequence it would put the checkpoint at.
@@ -60,10 +66,9 @@ func newFakeCapacityNode(t *testing.T) *fakeCapacityNode {
 		if body == nil {
 			body = map[string]any{
 				"stream": n.stream, "open": true, "mode": "seal",
-				"sealed":              false,
-				"blocking":            "node-2 has not acknowledged",
-				"admissions_blocking": []string{"node-3"},
-				"operation":           n.op(),
+				"sealed":    false,
+				"blocking":  "node-2 has not acknowledged",
+				"operation": n.op(),
 				"acks": []map[string]any{{
 					"node_id": "node-1", "operation_id": "op-1", "attempt": 1,
 					"incarnation": "node-1:new", "mode": "seal",
@@ -74,6 +79,14 @@ func newFakeCapacityNode(t *testing.T) *fakeCapacityNode {
 			}
 		}
 		reply(w, body)
+	})
+	mux.HandleFunc("POST /worklet/retention/maintenance/abandon", func(w http.ResponseWriter, r *http.Request) {
+		n.abandonConfirm = r.URL.Query().Get("confirm")
+		reply(w, map[string]any{"operation": n.gesture})
+	})
+	mux.HandleFunc("POST /worklet/retention/maintenance/exclude", func(w http.ResponseWriter, r *http.Request) {
+		n.excluded = r.URL.Query().Get("node")
+		reply(w, map[string]any{"operation": n.gesture})
 	})
 	mux.HandleFunc("GET /worklet/retention/reanchor", func(w http.ResponseWriter, r *http.Request) {
 		body := map[string]any{
@@ -182,6 +195,248 @@ func TestSetCapacityRepeatsTheCeilingAndSaysWhatIsNext(t *testing.T) {
 	}
 }
 
+// A WINDOW AT `opened` IS SENT TO MAINTENANCE MODE, NOT TO THE SEAL.
+//
+// Nothing has been sent from `opened`, so its next step is the baseline, which
+// only maintenance mode takes. The report sent it to `-mode seal` as it does
+// `baselined`, where a restart changes nothing: the operator paid a fleet-wide
+// restart to come back to the same phase. An admission still held leaves a
+// window there, so this is the report a crashed node's fleet reads.
+// Mutation: fold "opened" back into "baselined" and this goes red.
+func TestAWindowAtOpenedIsSentToMaintenanceMode(t *testing.T) {
+	t.Parallel()
+	node := newFakeCapacityNode(t)
+	op := node.op()
+	op["phase"] = "opened"
+	op["write_incarnations"] = nil
+	op["journal"] = nil
+	node.operation = op
+	stdout, _, err := cli(t, "retention", "set-capacity", "CREWLET_TRACKER_LOG",
+		"8589934592", bootstrapForURL(t, node.server.URL), "-confirm", "8589934592")
+	if err != nil {
+		t.Fatalf("set-capacity: %v", err)
+	}
+	if !strings.Contains(stdout, "-mode maintenance") || strings.Contains(stdout, "-mode seal") {
+		t.Errorf("a window that has sent nothing is not sent back to maintenance "+
+			"mode:\n%s", stdout)
+	}
+	// THE VERB IS NAMED IN FULL, so a reader of any page that prints this
+	// knows which command runs next: "this verb" read as the page's own.
+	for _, want := range []string{
+		"Nothing has been sent yet.",
+		"run `crewlet retention set-capacity CREWLET_TRACKER_LOG 8589934592 " +
+			"-confirm 8589934592` again",
+		"`crewlet retention maintenance status -stream CREWLET_TRACKER_LOG` " +
+			"names anything that stops it",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the report never says %q:\n%s", want, stdout)
+		}
+	}
+	if strings.Contains(stdout, "this verb") {
+		t.Errorf("the report says \"this verb\" rather than naming it:\n%s", stdout)
+	}
+}
+
+// A LATER ATTEMPT AT OPENED SAYS WHAT THE LAST ONE LEFT.
+//
+// A verify that reads a ceiling other than the target starts a new attempt
+// back at opened, after the last attempt's request was sent and applied. "Nothing
+// has been sent yet" is true of the new attempt only, and the reader has just
+// watched a request change the ceiling. Mutation: print the first attempt's
+// sentence for every attempt and this fails.
+func TestALaterAttemptAtOpenedSaysWhatTheLastOneLeft(t *testing.T) {
+	t.Parallel()
+	node := newFakeCapacityNode(t)
+	op := node.op()
+	op["phase"] = "opened"
+	op["attempt"] = 2
+	op["observed_max_bytes"] = 6442450944
+	op["write_incarnations"] = nil
+	op["journal"] = nil
+	node.operation = op
+	stdout, _, err := cli(t, "retention", "set-capacity", "CREWLET_TRACKER_LOG",
+		"8589934592", bootstrapForURL(t, node.server.URL), "-confirm", "8589934592")
+	if err != nil {
+		t.Fatalf("set-capacity: %v", err)
+	}
+	if strings.Contains(stdout, "Nothing has been sent yet") {
+		t.Errorf("a second attempt says nothing has been sent:\n%s", stdout)
+	}
+	for _, want := range []string{"This attempt hasn't sent anything yet",
+		"left the ceiling at 6.0 GiB, not the target"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the report never says %q:\n%s", want, stdout)
+		}
+	}
+}
+
+// AN EXCLUSION SENDS ITS READER TO SET-CAPACITY, AND SAYS WHAT IT WITHDREW.
+//
+// The lines after an exclusion are the ones every gesture prints, which told
+// the reader to run "this verb" again: the exclusion, which only re-records
+// itself. Its own line never said that the admission it was run for stops
+// counting. Mutation: drop the verb's name from the opened line, or the
+// admission from the exclusion's line, and this fails.
+func TestAnExclusionSendsItsReaderToSetCapacity(t *testing.T) {
+	t.Parallel()
+	node := newFakeCapacityNode(t)
+	op := node.op()
+	op["phase"] = "opened"
+	op["write_incarnations"] = nil
+	op["journal"] = nil
+	node.gesture = op
+	stdout, _, err := cli(t, "retention", "maintenance", "exclude",
+		bootstrapForURL(t, node.server.URL), "-stream", "CREWLET_TRACKER_LOG",
+		"-node", "node-a", "-confirm", "node-a")
+	if err != nil {
+		t.Fatalf("exclude: %v", err)
+	}
+	if node.excluded != "node-a" {
+		t.Fatalf("the node was asked to exclude %q", node.excluded)
+	}
+	for _, want := range []string{
+		"node-a is excluded: it no longer has to acknowledge, and an admission " +
+			"it holds no longer stops the window.",
+		"run `crewlet retention set-capacity CREWLET_TRACKER_LOG 8589934592 " +
+			"-confirm 8589934592` again",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the exclusion never says %q:\n%s", want, stdout)
+		}
+	}
+}
+
+// AN ABANDONMENT SENDS ITS CONFIRMATION, AND THE NODE JUDGES IT.
+//
+// The CLI used to abandon with no confirmation and compare -confirm with the
+// operation that came back, so a wrong one was reported after the window had
+// already been abandoned, and a window cleared outright was never compared.
+// Mutation: drop the confirmation from the request and this fails.
+func TestAnAbandonmentSendsItsConfirmation(t *testing.T) {
+	t.Parallel()
+	node := newFakeCapacityNode(t)
+	stdout, _, err := cli(t, "retention", "maintenance", "abandon",
+		bootstrapForURL(t, node.server.URL), "-stream", "CREWLET_TRACKER_LOG",
+		"-confirm", "op-1")
+	if err != nil {
+		t.Fatalf("abandon: %v", err)
+	}
+	if node.abandonConfirm != "op-1" {
+		t.Errorf("the node was asked to abandon confirming %q, want op-1", node.abandonConfirm)
+	}
+	if !strings.Contains(stdout, "cleared") {
+		t.Errorf("a window cleared outright is not said to be:\n%s", stdout)
+	}
+}
+
+// THE STATUS NAMES BOTH WAYS PAST AN ADMISSION, the exclusion in full.
+//
+// It named `crewlet retention maintenance exclude` with none of the flags that
+// command refuses to run without, and a dead node's admission is the one no
+// restart can clear: the exclusion is the only way past it.
+//
+// AT OPENED IT NAMES WHAT THE BASELINE WAITS ON, never the seal's list: the
+// node answers which participants have no restart recorded and which
+// admissions hold the window, and the page prints those, each for one node in
+// the singular, and names the verb to run rather than sending its reader to the
+// page they are reading. Mutation: print "Not sealed" at opened, drop either
+// line, or keep the status clause on the status page, and this fails.
+func TestTheStatusNamesTheWayPastAnAdmission(t *testing.T) {
+	t.Parallel()
+	node := newFakeCapacityNode(t)
+	op := node.op()
+	op["phase"] = "opened"
+	op["write_incarnations"] = nil
+	op["journal"] = nil
+	node.status = map[string]any{
+		"stream": "CREWLET_TRACKER_LOG", "open": true, "mode": "maintenance",
+		"operation":           op,
+		"restarts_missing":    []string{"node-2"},
+		"admissions_blocking": []string{"node-3"},
+	}
+	stdout, _, err := cli(t, "retention", "maintenance", "status",
+		bootstrapForURL(t, node.server.URL), "-stream", "CREWLET_TRACKER_LOG")
+	if err != nil {
+		t.Fatalf("maintenance status: %v", err)
+	}
+	for _, want := range []string{
+		`No restart into a maintenance mode is recorded for "node-2"`,
+		"`crewlet retention maintenance exclude -stream CREWLET_TRACKER_LOG " +
+			"-node node-2 -confirm node-2`",
+		`"node-3" holds an admission, so nothing is sent while it stands`,
+		"`crewlet retention maintenance exclude -stream CREWLET_TRACKER_LOG " +
+			"-node node-3 -confirm node-3`",
+		"-mode maintenance",
+		"run `crewlet retention set-capacity CREWLET_TRACKER_LOG 8589934592 " +
+			"-confirm 8589934592` again.",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the status never says %q:\n%s", want, stdout)
+		}
+	}
+	for _, unwanted := range []string{"Not sealed", "These nodes",
+		"`crewlet retention maintenance status"} {
+		if strings.Contains(stdout, unwanted) {
+			t.Errorf("the status at opened says %q:\n%s", unwanted, stdout)
+		}
+	}
+}
+
+// A FLEET ON ITS WAY INTO A WINDOW IS TOLD WHO STILL HOLDS AN ADMISSION, before
+// it opens one.
+//
+// Every boot withdraws its node's last process's admission, so a fleet in
+// maintenance mode holds none but a node still in service or one that crashed
+// and has not booted since. Called "normal for a fleet in service" on a node
+// that is not in service, they read as nothing to act on.
+func TestNoWindowInMaintenanceModeNamesTheAdmissionsHeld(t *testing.T) {
+	t.Parallel()
+	node := newFakeCapacityNode(t)
+	node.status = map[string]any{
+		"stream": "CREWLET_TRACKER_LOG", "open": false, "mode": "maintenance",
+		"admissions": []map[string]any{{"node_id": "node-4", "incarnation": "x"}},
+	}
+	stdout, _, err := cli(t, "retention", "maintenance", "status",
+		bootstrapForURL(t, node.server.URL), "-stream", "CREWLET_TRACKER_LOG")
+	if err != nil {
+		t.Fatalf("maintenance status: %v", err)
+	}
+	if !strings.Contains(stdout, `"node-4" holds an admission: it's still running`) ||
+		strings.Contains(stdout, "normal for a fleet") {
+		t.Errorf("a fleet in maintenance mode is not told which node still holds "+
+			"an admission:\n%s", stdout)
+	}
+
+	// AND TWO NODES ARE SAID IN THE PLURAL.
+	node.status["admissions"] = []map[string]any{
+		{"node_id": "node-4", "incarnation": "x"}, {"node_id": "node-5", "incarnation": "y"}}
+	stdout, _, err = cli(t, "retention", "maintenance", "status",
+		bootstrapForURL(t, node.server.URL), "-stream", "CREWLET_TRACKER_LOG")
+	if err != nil {
+		t.Fatalf("maintenance status: %v", err)
+	}
+	if !strings.Contains(stdout, `"node-4" and "node-5" hold an admission: each`) {
+		t.Errorf("two nodes holding an admission are not said in the plural:\n%s", stdout)
+	}
+}
+
+// THE MAINTENANCE SYNOPSIS SAYS WHAT AN EXCLUSION WITHDRAWS: the one gesture
+// that frees a window from a node that will never boot again.
+func TestTheMaintenanceSynopsisSaysWhatAnExclusionWithdraws(t *testing.T) {
+	t.Parallel()
+	_, stderr, err := cli(t, "retention", "maintenance")
+	if err == nil {
+		t.Fatal("a bare `retention maintenance` succeeded")
+	}
+	for _, want := range []string{"-node <node-id> -confirm <node-id>", "withdraws its admission",
+		"stopped and holds no\n           outstanding request"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("the synopsis never says %q:\n%s", want, stderr)
+		}
+	}
+}
+
 // TestTheExternalAssertionIsExplicit: on a broker the engine does not run,
 // stopping every Crewlet node establishes nothing, and the operator says so in
 // their own words rather than a check quietly proving nothing.
@@ -208,7 +463,7 @@ func TestTheExternalAssertionIsExplicit(t *testing.T) {
 
 // TestMaintenanceStatusNamesWhatIsHoldingTheSeal is the one page an operator
 // can see why a fleet is still excluded: who has not acknowledged, whose
-// incarnation is unchanged, and which admission is blocking activation.
+// incarnation is unchanged, and which write attempt is unresolved.
 func TestMaintenanceStatusNamesWhatIsHoldingTheSeal(t *testing.T) {
 	t.Parallel()
 	node := newFakeCapacityNode(t)
@@ -224,7 +479,6 @@ func TestMaintenanceStatusNamesWhatIsHoldingTheSeal(t *testing.T) {
 		"node-1:new",                  // and what it acknowledged as
 		"node-2",                      // the one that has not
 		"node-2 has not acknowledged", // said in words
-		"node-3",                      // and the admission blocking activation
 		"issued",                      // the unresolved write attempt
 	} {
 		if !strings.Contains(stdout, want) {
@@ -290,7 +544,7 @@ func TestMaintenanceStatusOnAFleetWithNoOperationSaysSo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("maintenance status: %v", err)
 	}
-	if !strings.Contains(stdout, "No capacity operation is open") {
+	if !strings.Contains(stdout, "No capacity window is open") {
 		t.Fatalf("a fleet with no window does not say so:\n%s", stdout)
 	}
 	if !strings.Contains(stdout, "normal for a fleet in service") {

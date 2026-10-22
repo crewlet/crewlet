@@ -2047,11 +2047,18 @@ export interface RetentionMaintenance {
   since: string;
   by?: string;
   /**
-   * The nodes whose acknowledgement the seal is still waiting for. EMPTY IS
-   * NOT UNKNOWN: an operation with nobody outstanding is one waiting on its
-   * operator, which is the state somebody finding this most needs to see.
+   * The nodes the window's next step is still waiting for: at `opened`, those
+   * with no restart into a maintenance mode recorded; past it, those whose
+   * acknowledgement the seal is still waiting for. EMPTY IS NOT UNKNOWN: an
+   * operation with nobody outstanding is one waiting on its operator, which is
+   * the state somebody finding this most needs to see.
    */
   participants_missing?: string[];
+  /**
+   * The nodes whose admission keeps a window at `opened` from sending
+   * anything. Empty past `opened`, where nothing reads one.
+   */
+  admissions_blocking?: string[];
   /** Why it cannot proceed without a person, empty while it can. */
   blocked?: string;
 }

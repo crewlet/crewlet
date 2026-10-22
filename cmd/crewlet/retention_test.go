@@ -592,6 +592,38 @@ func TestAnOperationWithNobodyOutstandingSaysWhoItIsWaitingFor(t *testing.T) {
 	}
 }
 
+// A WINDOW HELD BY AN ADMISSION SAYS SO, AHEAD OF WHO IT WAITS ON.
+//
+// At opened every node can have restarted and the window still wait on one
+// node's stale admission, which no participant owes. The banner said only
+// "waiting on" every participant, so a reader went looking for restarts that
+// had happened. And a window held only by an admission is not waiting on its
+// operator. Mutation: drop the admission line, or print the operator line
+// beside it, and this fails.
+func TestAWindowHeldByAnAdmissionSaysSo(t *testing.T) {
+	t.Parallel()
+	node := newFakeRetentionNode(t)
+	report := blockedReport()
+	report.Maintenance = &statelog.MaintenanceReport{
+		Stream: "CREWLET_TRACKER_LOG", OperationID: "op-9",
+		Phase: "opened", Attempt: 1,
+		Since:              time.Date(2031, 4, 2, 2, 0, 0, 0, time.UTC),
+		AdmissionsBlocking: []string{"node-3"},
+	}
+	node.report = report
+
+	stdout, _, err := cli(t, "retention", "status", bootstrapForURL(t, node.server.URL))
+	if err != nil {
+		t.Fatalf("retention status: %v", err)
+	}
+	if want := `held by an admission from "node-3": nothing is sent while it stands.`; !strings.Contains(stdout, want) {
+		t.Errorf("the banner never says %q:\n%s", want, stdout)
+	}
+	if strings.Contains(stdout, "waiting on its operator") {
+		t.Errorf("a window held by an admission is said to wait on its operator:\n%s", stdout)
+	}
+}
+
 // AN ABANDONED WINDOW SAYS WHOSE DECISION IT IS STILL CARRYING OUT.
 //
 // Abandoning from anywhere but `opened` keeps the window — and the fleet in it —

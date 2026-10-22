@@ -403,14 +403,52 @@ func ResolveDelete(operationID string, current coord.MaintenanceOperation, found
 	}
 }
 
-// AdmissionBlocks names every node whose admission stands in the way of taking
-// the exclusion.
+// BaselineMissing is every participant a window has not excluded with no
+// restart into a maintenance mode recorded at all, bound to a window or to
+// none: the nodes a baseline refuses, since it baselines each participant at
+// the process its acknowledgement names. Sorted.
 //
-// A POSITIVE RECORD FROM EACH SIDE. A coordinator that merely checked for the
-// ABSENCE of a publisher would be back to the check-then-act it replaced: a
-// node that read the operation absent and started publishing in the interval
-// leaves a durable admission that blocks the coordinator, where a silence
-// would have let it proceed.
+// IT IS WHAT A WINDOW AT `opened` WAITS ON, beside the admissions
+// ([AdmissionBlocks]), and so what a page shows there. The seal's own list
+// ([SealHolds]) is the wrong one before the baseline: it names restarts into
+// seal mode the procedure has not asked for yet, so every node read as owing
+// something while the next step was just to run the verb again.
+func BaselineMissing(op coord.MaintenanceOperation, acks []coord.MaintenanceAck) []string {
+	restarted := make(map[string]bool, len(acks))
+	for _, ack := range acks {
+		restarted[ack.NodeID] = true
+	}
+	var missing []string
+	for _, node := range op.Participants {
+		if slices.Contains(op.Excluded, node) || restarted[node] {
+			continue
+		}
+		missing = append(missing, node)
+	}
+	slices.Sort(missing)
+	return missing
+}
+
+// AdmissionBlocks names every node whose admission stands in the way of an
+// operation's first request: every admission but an excluded node's.
+//
+// A POSITIVE RECORD FROM EACH SIDE, EACH WRITTEN BEFORE THE OTHER IS READ. A
+// node writes its admission and then reads the operation; a coordinator's
+// operation exists before it reads the admissions. Whichever record lands
+// second, its writer's read sees the first: either the node sees the operation
+// and does not publish, or the coordinator sees the admission and sends no
+// request. A coordinator that merely
+// checked for the ABSENCE of a publisher would be back to the check-then-act it
+// replaced, and so would one that read the admissions BEFORE writing its
+// operation: a node admitted just after that read finds no operation just
+// before the create.
+//
+// A window can therefore be open while an admission blocks it: one whose
+// process the fleet's presence shows is not running (the coordinator closes
+// the window again at its open over one that is). That is what lets an
+// EXCLUDED node's admission stop counting: the exclusion is an operator's word
+// that the process is stopped, recorded on the operation, and an operation is
+// the only place it can be recorded.
 func AdmissionBlocks(admissions []coord.Admission, excluded []string) []string {
 	var blocking []string
 	for _, a := range admissions {

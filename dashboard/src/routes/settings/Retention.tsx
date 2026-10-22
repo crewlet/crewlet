@@ -713,6 +713,10 @@ export function ServedLevelBanner({ level }: { level?: string }) {
  */
 export function MaintenanceBanner({ op, now }: { op: RetentionMaintenance; now: number }) {
   const missing = op.participants_missing ?? [];
+  // AN ADMISSION FIRST. It holds a window at `opened` whoever has restarted,
+  // and no participant owes it, so a banner that named only who it waits on
+  // read as every node owing something while one node's claim held the window.
+  const held = op.admissions_blocking ?? [];
   return (
     <Callout variant="danger" role="alert">
       <span className="col" style={{ gap: 6 }}>
@@ -728,9 +732,12 @@ export function MaintenanceBanner({ op, now }: { op: RetentionMaintenance; now: 
           </span>
         )}
         <span className="t-caption">
+          {held.length > 0 && (
+            <>Held by an admission from {held.join(", ")}: nothing is sent while it stands. </>
+          )}
           {missing.length > 0 ? (
             <>Waiting on {missing.join(", ")}.</>
-          ) : (
+          ) : held.length > 0 ? null : (
             // NOBODY OUTSTANDING IS NOT PROGRESS. It is the operation
             // waiting on whoever ran the verb, and rendering it as an
             // empty list would read as "nearly done".
