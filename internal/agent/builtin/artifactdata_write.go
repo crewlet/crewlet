@@ -211,13 +211,15 @@ func (d dataTools) verdict(ctx context.Context, turn *turnctx.Turn, tool string,
 				"again with its `version`."
 		}
 		// A REFUSAL, answered as one below: its note is the model's alone,
-		// and a person's surface answers the conflict's own sentence.
+		// and a person's surface answers the conflict's own sentence — and
+		// no receipt, so the rows rendered for one are not kept either.
 		out[NoteKey] = note
 		r, err := read.answer(ctx, tool, withArtifactOperation(out, a.c),
 			"Write fewer rows at once.")
 		if err == nil {
 			r.Failed = true
 			r.Cause = tools.Classify(tools.RefusalConflict, artifactdata.ErrConflict)
+			r.PersonReceipt = nil
 		}
 		return r, err
 	}

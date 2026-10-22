@@ -6040,7 +6040,10 @@ position: the state asked for already holds. `op_id` is the operation the
 request was made under (the key as **this principal's** operation, named by a
 tag of their id, so sending it back as the header is the same operation as
 sending the original key). `receipt` is the tool's own answer, verbatim except
-for its `warnings`.
+for its `warnings`, with what somebody else wrote in it as it was stored: a
+room's topic and purpose, a page's title, which the same tool answers a model
+fenced and labelled (see
+[Text somebody else wrote](../concepts/agent-runtime.md#text-somebody-else-wrote)).
 
 `caveats` is what the write tells you beside its outcome, and was not refused
 for: an item filed to triage because the project's default assignee has left
@@ -6067,7 +6070,9 @@ to add, and each entry is written for a **person**:
 The same tool called by an agent answers the same caveats under `warnings`,
 in words for a model that name the tool and argument it would use next. This
 route answers people, so it answers `caveats` and takes `warnings` off the
-receipt (ADR-0060).
+receipt with every other key written for a model: a partial outcome's
+sentence, and the `provenance` envelope a fenced answer carries beside the
+words it labels (ADR-0060).
 
 A tool that appends more than one record — an item filed or edited together
 with a dependency, a page saved and renamed in one call, a project's tags and
