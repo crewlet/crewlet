@@ -445,9 +445,9 @@ func chatWriteFailure(ctx context.Context, name string, err error, next string) 
 	class, ok := chatClass(err)
 	if !ok {
 		if why, cond := Condition(err); cond {
-			return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s did not "+
+			return refusedBy(tools.RefusalUnavailable, err, sentence(fmt.Sprintf("%s did not "+
 				"land (%s): nothing was written — do not report it as done.",
-				name, why))
+				name, why), conditionNext(err, "", stuckWrite)))
 		}
 		// NOT "NOTHING WAS WRITTEN", for [writeFailure]'s reason: a fault
 		// while the append resolved leaves a record nobody here can
@@ -626,9 +626,9 @@ func chatReadFailure(ctx context.Context, name string, err error) tools.Result {
 	}
 	if why, cond := Condition(err); cond {
 		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s could not "+
-			"read the company's chat right now (%s). This is NOT an empty room — "+
-			"do not conclude nothing was said. Try again, or say you could not "+
-			"check.", name, why))
+			"read the company's chat%s (%s). This is NOT an empty room — "+
+			"do not conclude nothing was said. %s", name, rightNow(err), why,
+			conditionNext(err, "Try again, or say you could not check.", stuckRead)))
 	}
 	return faulted(ctx, name, err, fmt.Sprintf("%s could not read the company's "+
 		"chat: %s. This is NOT an empty room — do not conclude nothing was said. "+
@@ -1188,8 +1188,12 @@ func directPostFailure(ctx context.Context, to []string, room chatlet.Written, e
 	}
 	switch tools.RefusalOf(failure) {
 	case tools.RefusalUnavailable:
-		failure.Output = fmt.Sprintf("the message did not land (%s) and was not "+
-			"said — do not report it as sent.", toldOf(failure, err))
+		// THE CONDITION'S NEXT STEP TOO, which this sentence replaces
+		// [chatWriteFailure]'s along with the rest of it: a direct message
+		// refused on a full log was told what happened and nothing to do.
+		failure.Output = sentence(fmt.Sprintf("the message did not land (%s) "+
+			"and was not said — do not report it as sent.", toldOf(failure, err)),
+			conditionNext(err, "", stuckWrite))
 	case tools.RefusalInternalError:
 		failure.Output = fmt.Sprintf("the message failed: %s — do not report it as "+
 			"sent, and do not send it again by other means.", faultSaid)

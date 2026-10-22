@@ -678,7 +678,8 @@ func publishFailure(ctx context.Context, tool string, c artifactCaller, err erro
 	}
 	if why, ok := Condition(err); ok {
 		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s did not land "+
-			"(%s). Nothing was changed: do not report it as done. Try again shortly.", tool, why))
+			"(%s). Nothing was changed: do not report it as done. %s", tool, why,
+			conditionNext(err, "Try again shortly.", stuckWrite)))
 	}
 	return faulted(ctx, tool, err, fmt.Sprintf("%s failed: %s. Do not report it as done, "+
 		"and do not make it again by other means: say it could not be made.", tool, faultSaid))

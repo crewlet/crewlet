@@ -778,8 +778,9 @@ func artifactReadFailure(ctx context.Context, tool, ref string, err error) tools
 	}
 	if why, ok := Condition(err); ok {
 		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s could not "+
-			"read the artifacts right now (%s). This is NOT an empty result: do not "+
-			"conclude the artifact does not exist. Try again shortly.", tool, why))
+			"read the artifacts%s (%s). This is NOT an empty result: do not "+
+			"conclude the artifact does not exist. %s", tool, rightNow(err), why,
+			conditionNext(err, "Try again, or say you could not check.", stuckRead)))
 	}
 	return faulted(ctx, tool, err, fmt.Sprintf("%s could not read the artifacts: %s. "+
 		"This is NOT an empty result: say you could not check.", tool, faultSaid))

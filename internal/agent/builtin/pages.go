@@ -1118,9 +1118,9 @@ func pageWriteFailure(ctx context.Context, name string, err error, next string) 
 		return refusedBy(class, err, domainRefusal(name, err))
 	}
 	if why, ok := Condition(err); ok {
-		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s did not "+
+		return refusedBy(tools.RefusalUnavailable, err, sentence(fmt.Sprintf("%s did not "+
 			"land (%s). The change was NOT made — do not report it as done.",
-			name, why))
+			name, why), conditionNext(err, "", stuckWrite)))
 	}
 	// NOT "NOT MADE", for [writeFailure]'s reason: a fault while the
 	// append resolved leaves a record nobody here can account for.
@@ -1142,9 +1142,10 @@ func pageWriteFailure(ctx context.Context, name string, err error, next string) 
 func pageReadFailure(ctx context.Context, name string, err error) tools.Result {
 	if why, ok := Condition(err); ok {
 		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s could not "+
-			"read Doclet right now (%s). This is NOT an empty result: do not "+
-			"conclude the page does not exist. Try again, or say you could not "+
-			"check.", name, why))
+			"read Doclet%s (%s). This is NOT an empty result: do not "+
+			"conclude the page does not exist. %s", name,
+			rightNow(err), why,
+			conditionNext(err, "Try again, or say you could not check.", stuckRead)))
 	}
 	return faulted(ctx, name, err, fmt.Sprintf("%s could not read Doclet: %s. "+
 		"This is NOT an empty result: do not conclude the page does not exist. "+

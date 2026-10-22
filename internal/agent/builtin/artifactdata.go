@@ -366,8 +366,9 @@ func dataFailure(ctx context.Context, tool string, err error) tools.Result {
 func dataConditionOrFault(ctx context.Context, tool string, err error) tools.Result {
 	if why, ok := Condition(err); ok {
 		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s could not reach the "+
-			"datastore right now (%s). This is NOT an empty result and nothing was "+
-			"changed. Try again shortly.", tool, why))
+			"datastore%s (%s). This is NOT an empty result and nothing was "+
+			"changed. %s", tool, rightNow(err), why,
+			conditionNext(err, "Try again shortly.", stuckWrite)))
 	}
 	return faulted(ctx, tool, err, fmt.Sprintf("%s failed: %s. This is NOT an empty "+
 		"result, and nothing is known to have changed: say it could not be done.", tool,

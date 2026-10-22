@@ -56,6 +56,20 @@ func (t *companyBrand) Description() string {
 		"`brand` is null when the company has adopted none."
 }
 
+// brandReadFailure explains a read of the company's brand that did not
+// answer: never "no brand", which a model would act on as the company having
+// none.
+func brandReadFailure(ctx context.Context, err error) tools.Result {
+	if why, ok := Condition(err); ok {
+		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf(CompanyBrandTool+" could "+
+			"not read the company's brand%s (%s). This is NOT \"no brand\": do not "+
+			"conclude the company has none. %s", rightNow(err), why,
+			conditionNext(err, "Try again shortly.", stuckRead)))
+	}
+	return faulted(ctx, CompanyBrandTool, err, CompanyBrandTool+" could not read the company's "+
+		"brand: "+faultSaid+". This is NOT \"no brand\": say you could not check.")
+}
+
 func (t *companyBrand) Parameters() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{}}
 }
@@ -79,13 +93,7 @@ func (t *companyBrand) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	adoption, adopted, err := t.deps.Reader.Brand(ctx, seatRead)
 	if err != nil {
-		if why, ok := Condition(err); ok {
-			return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf(CompanyBrandTool+" could "+
-				"not read the company's brand right now (%s). This is NOT \"no brand\": do not "+
-				"conclude the company has none. Try again shortly.", why)), nil
-		}
-		return faulted(ctx, t.Name(), err, CompanyBrandTool+" could not read the company's "+
-			"brand: "+faultSaid+". This is NOT \"no brand\": say you could not check."), nil
+		return brandReadFailure(ctx, err), nil
 	}
 	if !adopted {
 		out["brand"] = nil
