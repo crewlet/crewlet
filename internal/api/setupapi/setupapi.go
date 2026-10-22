@@ -103,6 +103,7 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
@@ -2082,7 +2083,7 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := decode(body, &req); err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody, map[string]string{
-			"detail": err.Error(),
+			"detail": plainjson.Unreadable("the body", err),
 		})
 		return
 	}
@@ -2273,7 +2274,7 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := decode(body, &req); err != nil {
 			httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-				map[string]string{"detail": err.Error()})
+				map[string]string{"detail": plainjson.Unreadable("the body", err)})
 			return
 		}
 	}

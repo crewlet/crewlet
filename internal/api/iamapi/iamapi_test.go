@@ -2684,3 +2684,26 @@ func TestTheTrailServesTheCredentialBesideTheActor(t *testing.T) {
 			own["operator_id"])
 	}
 }
+
+// A BODY THAT DOES NOT DECODE IS TOLD IN WORDS ([plainjson.Unreadable]): which
+// field held what where something else belongs, never encoding/json's own
+// sentence, which names Go's struct and the field's Go type ("json: cannot
+// unmarshal string into Go struct field createBody.grants of type
+// []iam.Grant"). Mutation: answer err.Error() again and both rows go red.
+func TestABodyThatDoesNotDecodeIsToldInWords(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ body, says string }{
+		{`{"email":"dana@example.com","seat":"founder","grants":"admin"}`,
+			`In the body, "grants" holds text where a list belongs.`},
+		{`[1]`, "The body is a list where an object belongs."},
+	} {
+		r := newRig(t)
+		got := r.as(administrator(), http.MethodPost, "/iam/people",
+			json.RawMessage(tc.body))
+		if got.status != http.StatusBadRequest || got.body["error"] != "invalid_body" ||
+			got.body["detail"] != tc.says {
+			t.Errorf("%s answered %d %v, want 400 invalid_body saying %q", tc.body,
+				got.status, got.body, tc.says)
+		}
+	}
+}

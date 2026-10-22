@@ -173,6 +173,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tools/argval"
@@ -1022,8 +1023,8 @@ func readArgs(w http.ResponseWriter, r *http.Request) (map[string]any, bool) {
 	args, err := toolargs.Decode(raw)
 	if err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-			map[string]string{"detail": "the body must be one JSON object of " +
-				"the verb's own arguments: " + err.Error()})
+			map[string]string{"detail": plainjson.Unreadable("the body", err) +
+				". Send one JSON object of this route's arguments"})
 		return nil, false
 	}
 	return args, true

@@ -3,6 +3,10 @@ package operator
 // ReceiptOf is the act transport's reading of a tool's answer.
 var ReceiptOf = receiptOf
 
+// DecodeAct is the act transport's reading of a request body: the tool's
+// arguments, or what the body got wrong, in the words this node logs.
+var DecodeAct = decodeAct
+
 // AuditOutcomeOf is the audit's reading of what became of one call.
 var AuditOutcomeOf = auditOutcome
 

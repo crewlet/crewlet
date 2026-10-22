@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/plainjson"
 )
 
 // THE CHARTER: the company's mission, vision and standing policies, read and
@@ -112,10 +113,10 @@ func readCharter(body []byte) (config.Charter, error) {
 	decoder.DisallowUnknownFields()
 	var sent charterBody
 	if err := decoder.Decode(&sent); err != nil {
-		return config.Charter{}, fmt.Errorf("the body is not a charter: %w", err)
+		return config.Charter{}, errors.New(plainjson.Unreadable("the body", err))
 	}
 	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
-		return config.Charter{}, errors.New("the body carries more than one JSON value")
+		return config.Charter{}, errors.New(plainjson.Unreadable("the body", plainjson.ErrTrailing))
 	}
 	if sent.Mission == nil || sent.Vision == nil || sent.Policies == nil {
 		return config.Charter{}, errCharterField

@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -296,7 +297,7 @@ func decode(w http.ResponseWriter, r *http.Request, out any) bool {
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(out); err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-			map[string]string{"detail": err.Error()})
+			map[string]string{"detail": plainjson.Unreadable("the body", err)})
 		return false
 	}
 	return true

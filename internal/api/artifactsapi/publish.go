@@ -26,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactupload/lint"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -63,7 +64,7 @@ func decodeWithin(w http.ResponseWriter, r *http.Request, out any, empty bool, l
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(out); err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-			map[string]string{"detail": err.Error()})
+			map[string]string{"detail": plainjson.Unreadable("the body", err)})
 		return false
 	}
 	return true

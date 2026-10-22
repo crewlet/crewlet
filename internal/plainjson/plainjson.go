@@ -48,13 +48,23 @@
 // included, a map's keys sorted — so a reader moved onto it changes in exactly
 // the characters this package exists for.
 //
-// # One function
+// # One encoder
 //
 // Because every caller is a copy of one rule, which is how the copies in this
 // tree have always started drifting: `internal/whsec` and `internal/textcut`
 // are both what a second spelling of a small decision cost. What stays with
 // each caller is what genuinely differs — the indent its reader is handed, and
 // how it spells nothing at all.
+//
+// # And JSON that did not decode, read as text too
+//
+// [Unreadable] is the other direction: a caller's document that did not
+// decode, said as the person or the model that sent it reads it — which field
+// held what where something else belongs — rather than in encoding/json's
+// words, which name Go's types and struct fields. Here for the encoder's
+// reason: every surface that decodes a caller's JSON had a copy of the answer,
+// and each copy was err.Error(); and a tool call's arguments are decoded
+// below the API, where only a leaf reaches both.
 //
 // # A leaf
 //

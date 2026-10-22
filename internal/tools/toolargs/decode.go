@@ -4,8 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
+
+	"github.com/crewlet/crewlet/internal/plainjson"
 )
 
 // Decode reads the arguments a caller sent one tool over a transport: nothing
@@ -31,6 +32,11 @@ import (
 // the tool session read through json.Number but took the first of two values,
 // while the HTTP write surface, the act transport and the operator's MCP read
 // every number as a float64.
+//
+// ARGUMENTS THAT DO NOT DECODE ARE SAID IN WORDS ([plainjson.Unreadable]), the
+// decoder's error beneath them for a caller that names the document otherwise:
+// a model and a person each read "invalid character '}' looking for beginning
+// of object key string" where they now read where the arguments went wrong.
 func Decode(raw []byte) (map[string]any, error) {
 	if trimmed := bytes.TrimSpace(raw); len(trimmed) == 0 || string(trimmed) == "null" {
 		return map[string]any{}, nil
@@ -39,14 +45,23 @@ func Decode(raw []byte) (map[string]any, error) {
 	dec.UseNumber()
 	var args map[string]any
 	if err := dec.Decode(&args); err != nil {
-		return nil, fmt.Errorf("the arguments are not a JSON object: %w", err)
+		return nil, &unreadableArgs{err: err}
 	}
 	if err := dec.Decode(new(json.RawMessage)); !errors.Is(err, io.EOF) {
-		return nil, errors.New("the arguments carry something after their JSON " +
-			"object; send exactly one")
+		return nil, &unreadableArgs{err: plainjson.ErrTrailing}
 	}
 	if args == nil {
 		args = map[string]any{}
 	}
 	return args, nil
 }
+
+// unreadableArgs is a call's arguments that did not decode, said in words
+// ([plainjson.Unreadable]); the decoder's error is beneath it, so a surface
+// that calls the document something else words it again.
+type unreadableArgs struct{ err error }
+
+func (e *unreadableArgs) Error() string {
+	return plainjson.Unreadable("the arguments object", e.err)
+}
+func (e *unreadableArgs) Unwrap() error { return e.err }

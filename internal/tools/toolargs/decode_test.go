@@ -2,6 +2,7 @@ package toolargs_test
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/tools/toolargs"
@@ -40,12 +41,42 @@ func TestACallWithNoArgumentsIsAnEmptyMap(t *testing.T) {
 // EXACTLY ONE JSON OBJECT, or the call is refused: a second value after it is
 // a call nobody can say which half of to run, and a decoder that stops at the
 // first value would run the first in silence.
+//
+// AND THE REFUSAL IS IN WORDS ([plainjson.Unreadable]), which a model fixes
+// its call from and a person reads on the act route: it was "the arguments
+// are not a JSON object: invalid character 'x' looking for beginning of
+// value" and "json: cannot unmarshal array into Go value of type
+// map[string]interface {}". Mutation: wrap the decoder's error again and the
+// word rows go red.
 func TestACallsArgumentsAreExactlyOneObject(t *testing.T) {
 	t.Parallel()
-	for _, raw := range []string{`{"a": 1} {"a": 2}`, `{"a": 1}null`, `{"a": 1} x`,
-		`[1, 2]`, `"text"`, `7`, `{"a": 1`} {
-		if args, err := toolargs.Decode([]byte(raw)); err == nil {
+	for raw, says := range map[string]string{
+		`{"a": 1} {"a": 2}`: "the arguments object has more after its JSON value, which is all it may hold",
+		`{"a": 1}null`:      "the arguments object has more after its JSON value, which is all it may hold",
+		`{"a": 1} x`:        "the arguments object has more after its JSON value, which is all it may hold",
+		// THE STRAY BRACE AND COMMA a model leaves, which are no second
+		// value: told in words true of anything that follows.
+		`{"a": 1}}`: "the arguments object has more after its JSON value, which is all it may hold",
+		`{"a": 1},`: "the arguments object has more after its JSON value, which is all it may hold",
+		`[1, 2]`:    "the arguments object is a list where an object belongs",
+		`"text"`:    "the arguments object is text where an object belongs",
+		`7`:         "the arguments object is a number where an object belongs",
+		`{"a": 1`:   "the arguments object isn't valid JSON: it ends too soon",
+	} {
+		args, err := toolargs.Decode([]byte(raw))
+		if err == nil {
 			t.Errorf("Decode(%q) = %#v, want it refused", raw, args)
+			continue
+		}
+		if !strings.HasPrefix(err.Error(), says) {
+			t.Errorf("Decode(%q) is told %q, want %q", raw, err, says)
+		}
+		for _, goWords := range []string{"json:", "invalid character", "Go value",
+			"interface {}"} {
+			if strings.Contains(err.Error(), goWords) {
+				t.Errorf("Decode(%q) is told %q, which carries %q", raw,
+					err, goWords)
+			}
 		}
 	}
 	if args, err := toolargs.Decode([]byte("{\"a\": 1}\n")); err != nil || len(args) != 1 {
