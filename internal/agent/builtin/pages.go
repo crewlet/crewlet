@@ -1099,9 +1099,9 @@ func pageWriteFailure(ctx context.Context, name string, err error, next string) 
 			"page again with "+GetPageTool+", re-apply your change on top of what it "+
 			"says now, and save with the version you just read.", pages.Sentence(err)))
 	case errors.Is(err, pages.ErrConflict):
-		// A LOST RACE, without the store's own words, which name the
-		// page's subject and the framework's error after it. A person is
-		// told it in [statelog.LostRace] ([WriterSentence]).
+		// A LOST RACE, in words that say which read comes before a
+		// retry. A person is told it in [statelog.LostRace]
+		// ([WriterSentence], [pages.Sentence]).
 		return refusedBy(tools.RefusalConflict, err, fmt.Sprintf("%s could not land: "+
 			"somebody else is editing this page, so nothing was written. Read it "+
 			"again before retrying.", name))

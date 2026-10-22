@@ -368,7 +368,12 @@ func refusal(err error, subject statelog.Subject) error {
 		// rounds are counted; what does not live there is that a page is
 		// a thing a PERSON is editing, so the answer a seat needs is
 		// "read it again", not "the append failed".
-		return fmt.Errorf("%w: %s: %w", ErrConflict, subject.ID, err)
+		//
+		// THE FRAMEWORK'S SENTINEL AND NOT ITS ERROR, whose text names the
+		// subject the race was lost on (a page's id, or a title's
+		// container and digest), and neither the subject itself: a caller
+		// that printed this error would show a person a broker path.
+		return fmt.Errorf("%w: %w", ErrConflict, statelog.ErrConflict)
 	}
 	return err
 }
