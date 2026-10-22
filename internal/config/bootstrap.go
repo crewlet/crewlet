@@ -2438,14 +2438,51 @@ type Coordination struct {
 	// LeaseTTLSeconds overrides how long a seat or presence lease survives
 	// without a renew. 0 takes the coordination layer's own measured
 	// default; shortening it speeds up failover at the cost of shedding
-	// seats over a store blip.
+	// seats over a store blip. Anything else is at least [MinLeaseTTL],
+	// and a fraction above it is as good as a whole number: the engine
+	// reads the duration it spells, once, at the edge.
 	//
 	// It bounds nothing else (coord.HeldToSeatTTL): a fleet duty's TTL
 	// follows its own tick and a tracker walk's claim its own heartbeat, each
 	// up to coord.MaxDutyTTL, which is why every lease but a seat's and a
 	// presence lease is kept in a lease bucket of its own.
-	LeaseTTLSeconds float64 `yaml:"lease_ttl_seconds,omitempty" json:"lease_ttl_seconds,omitempty" js:"min=0" desc:"Seat and presence lease TTL; 0 takes the measured default. Every other lease (a fleet duty, a Worklet walk's claim) sizes its own."`
+	LeaseTTLSeconds float64 `yaml:"lease_ttl_seconds,omitempty" json:"lease_ttl_seconds,omitempty" js:"min=0" desc:"Seat and presence lease TTL; 0 takes the measured default, anything else is at least 15. Every other lease (a fleet duty, a Worklet walk's claim) sizes its own."`
 }
+
+// MinLeaseTTL is the shortest seat and presence lease TTL a deployment may
+// set: fifteen seconds.
+//
+// THE TTL IS FOUR THINGS AT ONCE, and the floor is where the first one stops
+// being survivable:
+//
+//   - THE WATCHDOG'S THRESHOLD. A node whose heartbeat goes a TTL without a
+//     beat ends itself with status 75 (internal/seat's Watchdog says why the
+//     two are one number), so the TTL has to sit well past the longest a
+//     busy but healthy node goes between beats. Measured across 126 started
+//     engines under the race detector on four CPUs at a load average of 10
+//     to 33: 5.1 s at worst, every gap past 2 s the start's first placement
+//     pass — which the heartbeat no longer sits out — and 2.0 s at worst
+//     between beats. Fifteen seconds is nearly three times the first and more
+//     than seven times the second; at three, a quarter of those starts went
+//     longer than their TTL without a beat.
+//   - A STORE OUTAGE A LEASE RIDES OUT. Renews go out every heartbeat less a
+//     beat (a third of the TTL, less a second), so in its worst phase a lease
+//     survives an outage of a third of the TTL plus two beats: 7 s here,
+//     which covers the coordination bucket's own leader election at its
+//     shortest (four seconds, nats-server's raft default; it may take nine)
+//     with room, where a TTL of 6 s would only just cover it.
+//   - THE BEAT AT ITS FULL SECOND. From a 5 s TTL up a beat is the watchdog's
+//     whole second and the renew is given that second to land in; below it
+//     both shrink with the TTL, which is a regime for a test's host, not a
+//     deployment's.
+//   - FAILOVER. A dead node's seats move a TTL and a sweep after it died:
+//     about 20 s here, against about 50 s at the shipped 45.
+//
+// A floor rather than a warning, because what a TTL below it costs is a node
+// that ends itself under load, which a warning nobody reads does not prevent.
+// A judgment call on the margin: a deployment that measures its own beat gaps
+// may defend less, but nothing here has measured a shorter one safe.
+const MinLeaseTTL = 15 * time.Second
 
 // NATSTLS is the transport material for an external NATS server.
 //
@@ -2504,9 +2541,20 @@ func (c *Coordination) validate(path Path) error {
 	if c.Type != "" && !slices.Contains(CoordinationTypes, c.Type) {
 		p.add(at(path, "type"), ErrUnknownValue, "%q (want %s)", c.Type, names(CoordinationTypes))
 	}
-	if c.LeaseTTLSeconds < 0 {
+	// THE js TAG CANNOT EXPRESS "0 OR AT LEAST 15", so the schema publishes
+	// min=0 and the floor lives here, in a message naming both forms.
+	switch ttl := c.LeaseTTL(); {
+	case c.LeaseTTLSeconds < 0:
 		p.add(at(path, "lease_ttl_seconds"), ErrOutOfRange,
-			"must be 0 (the default) or positive, got %v", c.LeaseTTLSeconds)
+			"must be 0 (the default) or at least %v, got %v",
+			MinLeaseTTL.Seconds(), c.LeaseTTLSeconds)
+	case c.LeaseTTLSeconds > 0 && ttl < MinLeaseTTL:
+		p.add(at(path, "lease_ttl_seconds"), ErrOutOfRange,
+			"%v is below the %v-second floor — leave it unset to take the measured "+
+				"default, or set at least %v: the lease TTL is also how long the node's "+
+				"heartbeat may go without a beat before its watchdog ends it (exit 75), "+
+				"and a busy but healthy node goes seconds",
+			c.LeaseTTLSeconds, MinLeaseTTL.Seconds(), MinLeaseTTL.Seconds())
 	}
 	return p.err()
 }

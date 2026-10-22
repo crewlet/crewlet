@@ -1419,6 +1419,11 @@ coordination:
                                     #   renewals still leave a full interval to
                                     #   recover in. Shorter speeds failover and
                                     #   sheds healthy seats on ordinary jitter.
+                                    #   AT LEAST 15 when set: it is also how
+                                    #   long the heartbeat may go without a
+                                    #   beat before the node's watchdog ends it
+                                    #   (exit 75), and a busy node goes seconds.
+                                    #   A fraction above that is fine.
                                     #   Seats and presence only: a fleet duty
                                     #   sizes its lease from its own tick and
                                     #   a tracker move or merge from its own

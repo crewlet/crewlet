@@ -514,7 +514,7 @@
               "type": "string"
             }
           ],
-          "description": "Seat and presence lease TTL; 0 takes the measured default. Every other lease (a fleet duty, a Worklet walk's claim) sizes its own."
+          "description": "Seat and presence lease TTL; 0 takes the measured default, anything else is at least 15. Every other lease (a fleet duty, a Worklet walk's claim) sizes its own."
         },
         "type": {
           "anyOf": [
