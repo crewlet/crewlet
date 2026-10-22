@@ -2,12 +2,14 @@ package api
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -78,5 +80,28 @@ func TestABareRefusalSentinelIsAFault(t *testing.T) {
 	if got.Code != http.StatusInternalServerError {
 		t.Errorf("a refusal naming no decision answered %d %s, want the fault's 500",
 			got.Code, got.Body)
+	}
+}
+
+// A REVISION THIS NODE CANNOT OPEN IS ANSWERED IN THE /config ROUTE'S CODE AND
+// WORDS on the REST question route too, as the socket's frame carries them:
+// 409 under the code, with the detail that names what fixes it. Answered by
+// the default arm, a missing key was a 500 nobody could act on.
+//
+// Mutation: drop the arm and this answers 500.
+func TestAQuestionOnARevisionThisNodeCannotOpenIsTheRoutesConflict(t *testing.T) {
+	t.Parallel()
+	got := httptest.NewRecorder()
+	refusal := &stream.RevisionError{What: "config", Code: stream.CodeUnreadableFleetRevision,
+		Detail: "This node doesn't hold the key the fleet sealed this revision under. Add " +
+			"the key the fleet seals under to this node's secrets.keys and restart it."}
+	writeQueryError(got, httptest.NewRequest(http.MethodGet, "/query/config", nil), "config",
+		fmt.Errorf("answering config: %w", refusal))
+	var body struct{ Error, Detail string }
+	_ = json.Unmarshal(got.Body.Bytes(), &body)
+	if got.Code != http.StatusConflict || body.Error != stream.CodeUnreadableFleetRevision ||
+		body.Detail != refusal.Detail {
+		t.Errorf("a question on a revision this node cannot open answered %d %s, want 409 "+
+			"%s with the refusal's detail", got.Code, got.Body, stream.CodeUnreadableFleetRevision)
 	}
 }

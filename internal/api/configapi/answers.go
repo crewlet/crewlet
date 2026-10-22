@@ -68,6 +68,12 @@ type fleetRevision struct {
 	// built on it expects at the compare-and-set; false for the company this
 	// node knows when there is no pointer.
 	pointed bool
+	// fleet is a body read off the pointer that this node holds no row for,
+	// which the reconciler keeps only once it opens: a refusal to open it is
+	// the fleet's (a key this node was never given, a body somebody put on
+	// the pointer unsealed), never this node's history's
+	// ([UnreadableRevisionError.Fleet]).
+	fleet bool
 }
 
 // current is the company this surface answers for: the FLEET's revision, the
@@ -132,8 +138,8 @@ func (s *Service) current(ctx context.Context) (fleetRevision, bool, error) {
 				target.RevisionID, err)
 		}
 		if found {
-			return fleetRevision{revision: configplane.RevisionOf(target, payload), pointed: true},
-				true, nil
+			return fleetRevision{revision: configplane.RevisionOf(target, payload), pointed: true,
+				fleet: true}, true, nil
 		}
 		// THE POINTER MOVED between the two reads, taking its body with
 		// it: read it again. Each round that finds it moved is another
@@ -180,7 +186,7 @@ func (s *Service) activeCompany(ctx context.Context) (*config.Company, store.Rev
 	if !found {
 		return nil, store.Revision{}, ErrNoActiveRevision
 	}
-	company, err := s.open(cur.revision)
+	company, err := s.open(cur)
 	if err != nil {
 		return nil, store.Revision{}, err
 	}
@@ -334,30 +340,30 @@ func (s *Service) Diff(ctx context.Context, revisionID, against string) (map[str
 		changes = []Change{}
 	}
 	return map[string]any{
-		"from": base.ID, "to": target.ID,
+		"from": base.revision.ID, "to": target.revision.ID,
 		"changes": changes, "changes_total": total,
 	}, nil
 }
 
 // baseFor resolves the side a diff compares against: `active` is the fleet's
 // revision ([Service.current]).
-func (s *Service) baseFor(ctx context.Context, against string) (store.Revision, error) {
+func (s *Service) baseFor(ctx context.Context, against string) (fleetRevision, error) {
 	if against == "" || against == "active" {
 		cur, found, err := s.current(ctx)
 		if err != nil {
-			return store.Revision{}, err
+			return fleetRevision{}, err
 		}
 		if !found {
-			return store.Revision{}, ErrNoActiveRevision
+			return fleetRevision{}, ErrNoActiveRevision
 		}
-		return cur.revision, nil
+		return cur, nil
 	}
 	base, found, err := s.revision(ctx, against)
 	if err != nil {
-		return store.Revision{}, err
+		return fleetRevision{}, err
 	}
 	if !found {
-		return store.Revision{}, &missingRevision{side: sideAgainst, id: against}
+		return fleetRevision{}, &missingRevision{side: sideAgainst, id: against}
 	}
 	return base, nil
 }
@@ -365,15 +371,17 @@ func (s *Service) baseFor(ctx context.Context, against string) (store.Revision, 
 // revision is one revision by id: from this node's history, or — for the
 // fleet's revision on a node that has not ticked since the pointer named it —
 // from the pointer, so a revision every other answer here calls the company is
-// never one a read by its id cannot find.
-func (s *Service) revision(ctx context.Context, revisionID string) (store.Revision, bool, error) {
+// never one a read by its id cannot find. Which of the two it came from rides
+// with it ([fleetRevision.fleet]), so a revision that does not open is told by
+// where it came from.
+func (s *Service) revision(ctx context.Context, revisionID string) (fleetRevision, bool, error) {
 	held, found, err := s.configs.Get(ctx, revisionID)
 	if err != nil || found {
-		return held, found, err
+		return fleetRevision{revision: held}, found, err
 	}
 	cur, found, err := s.current(ctx)
 	if err != nil || !found || cur.revision.ID != revisionID {
-		return store.Revision{}, false, err
+		return fleetRevision{}, false, err
 	}
-	return cur.revision, true, nil
+	return cur, true, nil
 }

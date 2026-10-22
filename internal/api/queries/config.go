@@ -6,6 +6,8 @@ import (
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -18,6 +20,24 @@ import (
 // ConfigAuditLimit bounds the revision history a dashboard asks for.
 const ConfigAuditLimit = 50
 
+// revisionRefusal is err as the socket tells it when it is a revision this
+// node cannot open ([configapi.UnreadableRevisionError]): the REST route's own
+// code, and its detail and hint as one sentence, since the frame has one key
+// for words. The keyring's own error goes to the log, as the REST route sends
+// it. Any other err comes back as it was.
+func revisionRefusal(what string, err error) error {
+	var unreadable *configapi.UnreadableRevisionError
+	if !errors.As(err, &unreadable) {
+		return err
+	}
+	log.Warn("config_revision_unreadable", "what", what,
+		"revision", unreadable.ID, "fleet", unreadable.Fleet, "error", err)
+	return &stream.RevisionError{
+		What: what, Code: unreadable.Code(),
+		Detail: unreadable.Said() + " " + httpjson.Sentence(unreadable.Remedy()),
+	}
+}
+
 // configDocument answers the active company, redacted.
 //
 // NULL when nothing is active, not an error: a deployment before its first
@@ -29,7 +49,7 @@ func (s Sources) configDocument(ctx context.Context, _ Params) (any, error) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, revisionRefusal("config", err)
 	}
 	return company, nil
 }
@@ -64,7 +84,7 @@ func (s Sources) configEntities(ctx context.Context, p Params) (any, error) {
 		case errors.Is(err, configapi.ErrNoSuchEntity):
 			return nil, fmt.Errorf("%w: %s", ErrBadParams, configapi.NotFound(kind, id))
 		case err != nil:
-			return nil, err
+			return nil, revisionRefusal("config_entities", err)
 		}
 		return map[string]any{"kind": kind, "id": id, "entity": entity}, nil
 	}
@@ -75,7 +95,7 @@ func (s Sources) configEntities(ctx context.Context, p Params) (any, error) {
 	case errors.Is(err, configapi.ErrUnknownEntityKind):
 		return nil, unknownKind
 	case err != nil:
-		return nil, err
+		return nil, revisionRefusal("config_entities", err)
 	}
 	return map[string]any{"kind": kind, "ids": ids}, nil
 }
@@ -102,7 +122,7 @@ func (s Sources) configDiff(ctx context.Context, p Params) (any, error) {
 		// rather than fail the screen.
 		return nil, nil
 	case err != nil:
-		return nil, err
+		return nil, revisionRefusal("config_diff", err)
 	default:
 		return body, nil
 	}

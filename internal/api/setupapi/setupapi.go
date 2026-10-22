@@ -155,7 +155,7 @@ const RetryBusy = disconnectRetryFor
 // mistake as a deliberate answer.
 type Options struct {
 	// Config is the write path, the same one PATCH /config drives, and the
-	// read of the company every route describes ([Service.fleetCompany]).
+	// read of the company every route describes ([Service.readCompany]).
 	Config *configapi.Service
 
 	// Secrets seals a submitted credential, under the keyring every node
@@ -178,12 +178,12 @@ type Options struct {
 	// serves — and once there are two listeners, the person's answers 404
 	// for every one of them.
 	//
-	// A PLAIN STRING AND NOT A FUNCTION, unlike Company above, because it
-	// is Tier A: it cannot change under a running process, so a surface
-	// reading it twice in one request cannot get two answers. It used to
-	// be a Tier B field read through Resolve, which is why every caller
-	// below carried the resolver and had to decide what to do with a
-	// reference that resolved to nothing.
+	// A PLAIN STRING AND NOT A FUNCTION, because it is Tier A: it cannot
+	// change under a running process, so a surface reading it twice in one
+	// request cannot get two answers. It used to be a Tier B field read
+	// through Resolve, which is why every caller below carried the resolver
+	// and had to decide what to do with a reference that resolved to
+	// nothing.
 	//
 	// Empty is a deployment with no such address, which every gesture that
 	// would hand one to a vendor refuses by name.
@@ -2450,6 +2450,13 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 		log.WarnContext(r.Context(), "setup_write_unknown", "revision", unanswered.Stored,
 			"error", err.Error(), "secrets", strings.Join(partial.Secrets, ","))
 		configapi.RefuseActivationUnknown(w, unanswered, sealed)
+	case configapi.RefuseUnreadableWith(w, err, sealed):
+		// A REVISION THIS NODE CANNOT OPEN, met by the write's own read of
+		// the fleet's company inside the config surface's apply (a
+		// disconnect with no If-Match racing a pointer move, say): the
+		// config surface's own 409, by where the revision came from, with
+		// what was sealed before it, never the 500 that says the engine
+		// broke.
 	case errors.As(err, &seal) && errors.Is(seal.Err, coord.ErrUnavailable):
 		// A CREDENTIAL'S OWN WRITE UNANSWERED, ahead of the arm below, which
 		// it would otherwise reach: the fleet's secret store is a

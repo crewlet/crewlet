@@ -512,10 +512,7 @@ func (s *Service) getEntity(kind string) http.HandlerFunc {
 		company, _, err := s.documentOf(r.Context())
 		switch {
 		case errors.Is(err, ErrNoActiveRevision):
-			httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoActiveRevision,
-				map[string]string{
-					"hint": "the fleet runs no company to read",
-				})
+			refuseNoCompany(w)
 			return
 		case err != nil:
 			s.fail(w, r, "read the active revision", err)
@@ -657,7 +654,7 @@ func (s *Service) writeEntity(w http.ResponseWriter, r *http.Request, e entityWr
 			})
 		return true, nil
 	}
-	company, err := s.open(active)
+	company, err := s.open(cur)
 	if err != nil {
 		if !RefuseUnreadable(w, err) {
 			s.fail(w, r, "open the active revision", err)

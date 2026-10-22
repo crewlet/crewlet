@@ -30,6 +30,16 @@ export type QueryErrorCode =
    *  says the artifact is in the trash rather than that it does not exist
    *  (`not_found`, the answer for a reader it is not disclosed to). */
   | "artifact_trashed"
+  /** A configuration revision this node cannot open: sealed under a key the
+   *  keyring lost, stored without a seal, or the fleet's active revision met
+   *  only through its pointer, sealed under a key this node was never given or
+   *  put there without a seal. The REST route's own four codes; the frame's
+   *  `detail` names the key or the document that brings it back, which only
+   *  an administrator can do, so a screen shows it and never retries. */
+  | "unreadable_revision"
+  | "unsealed_revision"
+  | "unreadable_fleet_revision"
+  | "unsealed_fleet_revision"
   | "timeout"
   | "closed";
 

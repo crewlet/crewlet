@@ -176,7 +176,7 @@ func (s *Service) getCharter(w http.ResponseWriter, r *http.Request) {
 	company, _, err := s.documentOf(r.Context())
 	switch {
 	case errors.Is(err, ErrNoActiveRevision):
-		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNoActiveRevision)
+		refuseNoCompany(w)
 		return
 	case err != nil:
 		if !RefuseUnreadable(w, err) {
@@ -279,7 +279,7 @@ func (s *Service) writeCharter(w http.ResponseWriter, r *http.Request, c charter
 		return false, ErrNoActiveRevision
 	}
 	active := cur.revision
-	prior, err := s.open(active)
+	prior, err := s.open(cur)
 	if err != nil {
 		if RefuseUnreadable(w, err) {
 			return true, nil
