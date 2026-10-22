@@ -413,6 +413,6 @@ func (w *Writer) mayOperate(op OpKind) error {
 	if w.Can(iam.GrantAdmin) {
 		return nil
 	}
-	return needs([]iam.Grant{iam.GrantAdmin}, "%s needs %s, and you have %v",
-		op, iam.GrantAdmin, w.Grants)
+	return needs([]iam.Grant{iam.GrantAdmin}, "only an admin can do that").
+		about("%s, by a party holding %s", op, grantWords(w.Grants))
 }

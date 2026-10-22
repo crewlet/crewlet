@@ -268,7 +268,7 @@ func (s *Service) PostPeople(w http.ResponseWriter, r *http.Request) {
 	person, err := iamdomain.CreatedPersonID(seed)
 	if err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams,
-			map[string]string{"detail": err.Error()})
+			map[string]string{"detail": iamdomain.Sentence(err)})
 		return
 	}
 	// PUBLISHED UNDER A STEP OF THE KEY BOUND TO THIS REQUEST, for

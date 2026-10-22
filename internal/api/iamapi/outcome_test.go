@@ -585,7 +585,7 @@ func TestAReusedKeyIsAnsweredAsEverySurfaceTakingAKeyAnswersIt(t *testing.T) {
 		{"the state log's", fmt.Errorf("%w: %w", iamdomain.ErrOperationReused,
 			&statelog.Unavailable{Reason: statelog.ReasonOpReused,
 				Detail: `operation "op" landed on crewlet.iam.directory at 3:4`}), opkey.Reused},
-		{"the directory's own", fmt.Errorf("%w: the invitation from request op has "+
+		{"the directory's own", fmt.Errorf("%w: the invitation it sent has "+
 			"expired. Send a new one with a new key", iamdomain.ErrOperationReused),
 			"Send a new one with a new key"},
 	} {

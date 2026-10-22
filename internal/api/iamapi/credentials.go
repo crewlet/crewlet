@@ -259,7 +259,7 @@ func (s *Service) PostCredentials(w http.ResponseWriter, r *http.Request) {
 	if err != nil || !landed(minted.Result) {
 		if errors.Is(err, iamdomain.ErrInvalidToken) {
 			httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-				map[string]string{"detail": err.Error()})
+				map[string]string{"detail": iamdomain.Sentence(err)})
 			return
 		}
 		// AN UNKNOWN MINT HANDS OUT NO VALUE: it has no position to carry,

@@ -274,8 +274,8 @@ func (b *Blinder) PasswordLinkID(personID string) (string, error) {
 	}
 	id, err := uuid.Parse(personID)
 	if err != nil || id.Version() != 7 || id.Variant() != uuid.RFC4122 {
-		return "", fmt.Errorf("%w: person id %q is not a uuid7, and a first "+
-			"password link is derived at its person's instant", ErrInvalid,
+		return "", fmt.Errorf("%w: a first password link is derived at its "+
+			"person's instant, so their id must be a uuid7 (%q)", ErrInvalid,
 			personID)
 	}
 	return uuid7At(instantOf(id), b.mac(passwordLinkIDDomain, id.String())[:16]).
