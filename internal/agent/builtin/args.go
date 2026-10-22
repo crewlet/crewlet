@@ -295,11 +295,46 @@ type conditionSaid struct {
 	after time.Duration
 }
 
+// waitsUntil is the cause of an unavailable refusal a wait clears at a known
+// instant and no condition names: a model at a usage limit its CLI reported,
+// which its backend sits out until at (ADR-0064). [RetryAfter] answers the
+// wait left until then, never less than a second, where this node's undecided
+// hint told a person to come back in two seconds to a limit lifting in an
+// hour; a zero instant, a limit nothing said the end of, takes the hint as any
+// cause [RetryAfter] doesn't know.
+func waitsUntil(at time.Time) error { return &waitUntil{at: at} }
+
+// waitUntil is [waitsUntil]'s mark: the instant, and nothing of what was met,
+// for [waitless]'s reason.
+type waitUntil struct{ at time.Time }
+
+func (w *waitUntil) Error() string {
+	return "builtin: waiting clears this at " + w.at.UTC().Format(time.RFC3339)
+}
+
+// errWaitless is the mark beneath an unavailable refusal that no wait clears
+// and no condition names ([waitless]).
+var errWaitless = errors.New("builtin: no wait clears this")
+
+// waitless is the cause of an unavailable refusal no wait clears and no
+// condition names: a company that runs no model for the call, a login the
+// model's CLI reports refused or missing, a call the engine itself cannot make
+// (llm.KindFatal). The class says "this node cannot serve it", which is true,
+// and it was answered as every unavailable refusal is, under this node's
+// undecided hint, so a person told "an administrator needs to set one up" was
+// told in the same answer to come back in two seconds. [RetryAfter] answers the
+// mark with no hint. The mark carries no error of its own: the tool logs what
+// it met, and one beneath the mark could be read as a condition with its own
+// words.
+func waitless() error { return errWaitless }
+
 // RetryAfter is how long somebody told about err should wait before asking
 // again: NONE for a condition no wait clears ([condition]'s stuck — a log at
-// its ceiling, a company whose file storage is full), the condition's own
-// soonest where it knows one, and otherwise [statelog.RetryAfter]'s reading of
-// err, with otherwise as this node's hint where nothing derived one.
+// its ceiling, a company whose file storage is full) and for a refusal a tool
+// marked as one ([waitless]), the wait until the instant a tool marked
+// ([waitsUntil]), the condition's own soonest where it knows one, and
+// otherwise [statelog.RetryAfter]'s reading of err, with otherwise as this
+// node's hint where nothing derived one.
 //
 // THE ONE HINT every surface answering a refusal or a condition in status
 // codes takes, BESIDE [ConditionSentence], so the words and the Retry-After
@@ -309,6 +344,13 @@ type conditionSaid struct {
 // that did not answer was told an election's wait on one surface and none on
 // the next.
 func RetryAfter(err error, otherwise time.Duration) time.Duration {
+	if errors.Is(err, errWaitless) {
+		return 0
+	}
+	var until *waitUntil
+	if errors.As(err, &until) && !until.at.IsZero() {
+		return max(time.Until(until.at), time.Second)
+	}
 	if said, ok := condition(err); ok {
 		switch {
 		case said.stuck:

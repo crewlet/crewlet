@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -16,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/auxspend"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -88,6 +90,8 @@ type answerModel struct {
 	// failRewrite fails the condensing calls only — the ones made with the
 	// compactor's instructions — and answers the question as usual.
 	failRewrite bool
+	// auxErr is the seam's refusal to resolve a model at all.
+	auxErr error
 }
 
 func (m *answerModel) Model() string { return "aux-small" }
@@ -106,6 +110,9 @@ func (m *answerModel) Complete(_ context.Context, req llm.Request) (*llm.Complet
 }
 
 func (m *answerModel) Auxiliary(role *org.Role, use auxspend.Use) (chain.Member, error) {
+	if m.auxErr != nil {
+		return chain.Member{}, m.auxErr
+	}
 	m.role = role
 	m.uses = append(m.uses, use)
 	return chain.Member{Key: "aux", Provider: m}, nil
@@ -565,6 +572,59 @@ func TestAFailedAnswerIsRefusedAfterTheSeamSawIt(t *testing.T) {
 	}
 }
 
+// A MODEL AT ITS USAGE LIMIT IS A WAIT, NOT A FAILURE (ADR-0064): the answer
+// is refused with the wait until the model is tried again as its hint, the
+// catalog's words for the person who asked and the company's models as where
+// the limit is worked around, rather than "busy or out of quota" under this
+// node's two-second hint, which sent a person back every two seconds to a
+// limit lifting in an hour. A reset the vendor named past the next try is the
+// one the model is told, and a limit nobody named the end of is said as that.
+// Mutation: drop the limit's branch and the wait is the hint and the words
+// are none; drop its mark and the wait is the hint; drop the person's words and
+// a person is told the floor.
+func TestAModelAtItsLimitIsTheWaitItIs(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		retryIn, liftsIn time.Duration
+		says             string
+	}{
+		"a named reset": {retryIn: 14 * time.Minute, liftsIn: 14 * time.Minute,
+			says: "The limit lifts at "},
+		"a reset past the next try": {retryIn: time.Hour, liftsIn: 40 * time.Hour,
+			says: "The limit lifts at "},
+		"a limit nobody named the end of": {retryIn: 2 * time.Minute,
+			says: "named no time it lifts"},
+	} {
+		rig := newAnswerRig()
+		now := time.Now()
+		limit := &llm.Error{Kind: llm.KindRateLimit, Provider: "cli-agent/claude-code",
+			Model: "aux-small", Agent: "claude-code", Subscription: true,
+			RetryAt: now.Add(c.retryIn), Err: errors.New("usage limit reached")}
+		lifts := ""
+		if c.liftsIn > 0 {
+			limit.ResetsAt = now.Add(c.liftsIn)
+			lifts = limit.ResetsAt.UTC().Format(time.RFC3339)
+		}
+		rig.model.err = limit
+		res, _, _ := ask(t, rig.tool(t), "How do we deploy?")
+		if !res.Failed || tools.RefusalOf(res) != tools.RefusalUnavailable ||
+			!strings.Contains(res.Output, c.says) || !strings.Contains(res.Output, lifts) {
+			t.Errorf("%s: answered %s %q, want unavailable saying %q %s", name,
+				tools.RefusalOf(res), res.Output, c.says, lifts)
+		}
+		if wait := builtin.RetryAfter(res.Cause, 2*time.Second); wait > c.retryIn ||
+			wait < c.retryIn-time.Minute {
+			t.Errorf("%s: invites a retry in %v, want the %v until the model is "+
+				"tried again", name, wait, c.retryIn)
+		}
+		if res.PersonRefusal != caveat.ModelAtLimit() {
+			t.Errorf("%s: tells a person %q (remedy %+v), want the catalog's words "+
+				"for a model at its limit", name, res.PersonRefusal.Person(),
+				res.PersonRefusal.Remedy())
+		}
+	}
+}
+
 // NO QUESTION, NO CALL.
 func TestAnAnswerNeedsAQuestion(t *testing.T) {
 	t.Parallel()
@@ -861,5 +921,64 @@ func TestAnAnswerReadsItsSourcesAsTheirWritersWords(t *testing.T) {
 	}
 	if len(rewrite.Messages) < 2 || !strings.Contains(rewrite.Messages[1].Content, " source=page_body trust=external") {
 		t.Errorf("the long source was condensed under no label of its own:\n%v", rewrite.Messages)
+	}
+}
+
+// A FAILED ANSWER IS TOLD IN WORDS FOR THE PERSON WHO ASKED: whether a model is
+// set up, and what kind of failure the provider met, never the error, which
+// named the provider entry, the model and what the CLI said — the whole of the
+// sentence was "The model could not answer (llm
+// cli-agent/claude-code/aux-small: rate_limit: …)". Mutation: put the error
+// back into either sentence and its rows fail.
+func TestAFailedAnswerIsToldInWordsNotTheError(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		aux, complete error
+		says          string
+		// waits is whether the answer invites a retry: no wait gets past a
+		// chain with no model, a login the CLI reports refused or missing
+		// or a call the engine itself cannot make, and one told
+		// "an administrator needs to" was answered under a two-second
+		// Retry-After all the same. Mutation: drop the waitless mark from
+		// any of them and its row fails.
+		waits bool
+	}{
+		"no model set up": {aux: fmt.Errorf("engine: seat founder's auxiliary chain: %w",
+			errors.New("phase: no providers configured")),
+			says: "No model is set up to answer questions"},
+		"a spent plan": {complete: &llm.Error{Kind: llm.KindRateLimit, Provider: "cli-agent/claude-code",
+			Model: "aux-small", Agent: "claude-code", Subscription: true,
+			RetryAt: time.Now().Add(14 * time.Minute), ResetsAt: time.Now().Add(14 * time.Minute),
+			Err: errors.New("Claude AI usage limit reached|1761600000")},
+			says: "has reached its usage limit", waits: true},
+		"a refused login": {complete: &llm.Error{Kind: llm.KindAuth, Provider: "cli-agent/claude-code",
+			Model: "aux-small", Err: errors.New("Invalid API key · Please run /login")},
+			says: "An administrator needs to check them."},
+		"a CLI that failed": {complete: &llm.Error{Kind: llm.KindServer, Provider: "cli-agent/claude-code",
+			Model: "aux-small", Err: errors.New("exit status 1: overloaded_error")},
+			says: "The model's service failed. Try again shortly.", waits: true},
+		"a timeout": {complete: fmt.Errorf("waiting for a CLI slot: %w",
+			context.DeadlineExceeded), says: "The model took too long to answer.", waits: true},
+		"a fault nothing classified": {complete: errors.New("decode the reply: unexpected EOF"),
+			says: "The model couldn't answer this question."},
+	} {
+		rig := newAnswerRig()
+		rig.model.auxErr, rig.model.err = c.aux, c.complete
+		res, _, _ := ask(t, rig.tool(t), "How do we deploy?")
+		if !res.Failed || tools.RefusalOf(res) != tools.RefusalUnavailable ||
+			!strings.Contains(res.Output, c.says) {
+			t.Errorf("%s: answered %s %q, want unavailable saying %q", name,
+				tools.RefusalOf(res), res.Output, c.says)
+		}
+		if waits := builtin.RetryAfter(res.Cause, time.Second) > 0; waits != c.waits {
+			t.Errorf("%s: invites a retry: %v, want %v", name, waits, c.waits)
+		}
+		for _, theirs := range []string{"engine:", "phase:", "llm ", "cli-agent",
+			"claude-code", "limit reached", "1761600000", "Invalid API key", "/login",
+			"exit status", "overloaded", "CLI slot", "EOF", "deadline"} {
+			if strings.Contains(res.Output, theirs) {
+				t.Errorf("%s: told the person %q, which carries %q", name, res.Output, theirs)
+			}
+		}
 	}
 }

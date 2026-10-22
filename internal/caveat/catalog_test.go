@@ -72,6 +72,7 @@ var refusalSamples = map[string]caveat.Refusal{
 	"ArtifactBreaksPolicy": caveat.ArtifactBreaksPolicy(),
 	"ArtifactQuotaReached": caveat.ArtifactQuotaReached(),
 	"ArtifactTrashed":      caveat.ArtifactTrashed(),
+	"ModelAtLimit":         caveat.ModelAtLimit(),
 	"TokenBudgetSpent":     caveat.TokenBudgetSpent(caveat.CompanyTokenBudget()),
 	"TokenBudgetSpent (a seat's)": caveat.TokenBudgetSpent(
 		caveat.Remedy{Setting: caveat.SettingSeatTokenBudget, Seat: "backend-engineer"}),
@@ -209,6 +210,7 @@ func TestARefusalCrossesToAPeerWithItsRemedy(t *testing.T) {
 		caveat.QuestionRemoved(),
 		caveat.TokenBudgetSpent(caveat.Remedy{Setting: caveat.SettingSeatTokenBudget, Seat: "backend-engineer"}),
 		caveat.TokenBudgetSpent(caveat.AssistantTokenBudget()),
+		caveat.ModelAtLimit(),
 	} {
 		raw, err := json.Marshal(words)
 		if err != nil {
@@ -235,22 +237,29 @@ func TestARefusalCrossesToAPeerWithItsRemedy(t *testing.T) {
 // A LIMIT'S REFUSAL NAMES THE SETTING THAT CAUSED IT, and every setting is one
 // of [caveat.Settings]: the dashboard resolves each to the screen that edits it
 // (TestTheDashboardKnowsEverySettingARemedyNames), so a remedy naming one it
-// does not know would draw nothing. No other refusal in the catalog carries a
-// remedy, since nothing it refuses for is a limit a person can raise.
+// does not know would draw nothing. A model's usage limit names the company's
+// models, where it is given a fallback. No other refusal in the catalog carries
+// a remedy, since nothing it refuses for is a limit a person can raise.
 func TestEveryRemedyNamesAKnownSetting(t *testing.T) {
 	t.Parallel()
+	limits := func(name string) bool {
+		return strings.HasPrefix(name, "TokenBudgetSpent") || strings.HasPrefix(name, "ModelAtLimit")
+	}
 	for name, r := range refusalSamples {
 		remedy := r.Remedy()
 		switch {
-		case strings.HasPrefix(name, "TokenBudgetSpent") && remedy.IsZero():
-			t.Errorf("%s carries no remedy, so a person is told a budget is spent "+
+		case limits(name) && remedy.IsZero():
+			t.Errorf("%s carries no remedy, so a person is told of a limit "+
 				"with nothing to open", name)
-		case !strings.HasPrefix(name, "TokenBudgetSpent") && !remedy.IsZero():
+		case !limits(name) && !remedy.IsZero():
 			t.Errorf("%s carries the remedy %+v for a refusal no limit caused", name, remedy)
 		case !remedy.IsZero() && !remedy.Setting.Valid():
 			t.Errorf("%s names the setting %q, which is not one of %v", name,
 				remedy.Setting, caveat.Settings())
 		}
+	}
+	if got := caveat.ModelAtLimit().Remedy(); got != caveat.ModelProviders() {
+		t.Errorf("a model at its usage limit names %+v, want the company's models", got)
 	}
 	for _, bad := range []caveat.Remedy{{}, {Setting: caveat.SettingSeatTokenBudget, Seat: "Not A Handle"}} {
 		if got := caveat.TokenBudgetSpent(bad).Remedy(); got != caveat.CompanyTokenBudget() {

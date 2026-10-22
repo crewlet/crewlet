@@ -931,6 +931,13 @@ sequenceDiagram
   whatever becomes of the answer — an empty reply the tool declines to show
   ("The model wrote no answer") included, since its tokens are spent the moment
   the CLI replies.
+- **A model at its usage limit is a wait.** Where the asker's auxiliary model
+  has reached a usage limit its CLI reported, nothing is launched and nothing is
+  spent: the person is told the model has reached its limit, with the
+  company's models as where an administrator gives it a fallback, and the
+  answer carries the time until the model is tried again as its
+  `Retry-After`, as every caller of a model at its limit reads it
+  ([ADR-0064](https://github.com/crewlet/crewlet/blob/main/adr/0064-a-model-at-its-limit-parks-the-seats-it-holds-and-a-seat-says-one-steady-thing.md)).
 - **Cached at a corpus position.** Each node keeps 256 answers, keyed on the
   question (case and spacing folded) and where its tracker, pages and vector
   logs are applied through. Any write that could change an answer moves the
