@@ -20,6 +20,16 @@ import (
 // a model to report a failure rather than to re-read and retry.
 //
 // A test over values, because the producing condition is sixteen lost races.
+//
+// NEITHER NAMES THE SUBJECT, in the error or in its sentence: a title's is its
+// container and a DIGEST of the title, which says nothing to the person who
+// typed the title, and a page's is a broker path; the lost race carries the
+// framework's SENTINEL, so a caller reasoning in either vocabulary matches,
+// and not the framework's error, whose text names the subject again. It used
+// to carry both for the log, which any caller printing it would have shown a
+// person. Mutations: wrap the framework's error again, or the subject, and the
+// lost race's row goes red; drop the lost-race arm from Sentence and its
+// sentence does.
 func TestEveryRefusalACallerActsOnIsTranslated(t *testing.T) {
 	t.Parallel()
 
@@ -27,19 +37,17 @@ func TestEveryRefusalACallerActsOnIsTranslated(t *testing.T) {
 		in     error
 		want   error
 		framed bool // the framework's own sentinel survives the translation
-		// named is whether the subject is in the error: a lost race names
-		// it for the log, and a title held does not, because a title's
-		// subject is its container and a DIGEST of the title, which says
-		// nothing to the person who typed the title; that refusal says
-		// what to do instead.
-		named bool
+		says   string
 	}{
 		"a title somebody already holds": {
 			in: fmt.Errorf("append: %w", statelog.ErrExists), want: ErrTitleTaken,
+			says: "a page in this space already has that title. Open that page " +
+				"and edit it, or pick another title",
 		},
 		"a write that ran out of rounds": {
-			in: fmt.Errorf("append: %w", statelog.ErrConflict), want: ErrConflict,
-			framed: true, named: true,
+			in: fmt.Errorf("append: %w: crewlet.pages.title.ENG.deploy-runbook kept "+
+				"changing under this write", statelog.ErrConflict), want: ErrConflict,
+			framed: true, says: statelog.LostRace,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -52,13 +60,15 @@ func TestEveryRefusalACallerActsOnIsTranslated(t *testing.T) {
 					"answer that tells a model the change is simply lost",
 					tc.in, got, tc.want)
 			}
-			if strings.Contains(got.Error(), "ENG.deploy-runbook") != tc.named {
-				t.Errorf("the refusal names the subject = %v, want %v: %v",
-					!tc.named, tc.named, got)
+			if strings.Contains(got.Error(), "ENG.deploy-runbook") {
+				t.Errorf("the refusal names the subject: %v", got)
 			}
-			if framed := errors.Is(got, tc.in); framed != tc.framed {
-				t.Errorf("the framework's own error survives = %v, want %v",
+			if framed := errors.Is(got, statelog.ErrConflict); framed != tc.framed {
+				t.Errorf("the framework's own sentinel survives = %v, want %v",
 					framed, tc.framed)
+			}
+			if said := Sentence(got); said != tc.says {
+				t.Errorf("a person is told %q, want %q", said, tc.says)
 			}
 		})
 	}
