@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/plainjson"
 )
 
 // THE DATASTORE'S READ QUESTIONS: an artifact's documents, one document, a
@@ -131,7 +132,7 @@ func (s artifactData) docs(ctx context.Context, p Params) (any, error) {
 	}
 	since, ok := p.WholeInt("since")
 	if p.Has("since") && (!ok || since < 0) {
-		return nil, fmt.Errorf("%w: since is a version a read returned", ErrBadParams)
+		return nil, fmt.Errorf("%w: the since parameter is a version a read returned", ErrBadParams)
 	}
 	id, a, err := s.admit(ctx, "artifact_data", authz.ActionArtifactDataRead, p)
 	if err != nil {
@@ -166,7 +167,8 @@ func (s artifactData) query(ctx context.Context, p Params) (any, error) {
 	var q query.Query
 	if raw := p.String("q"); raw != "" {
 		if err := json.Unmarshal([]byte(raw), &q); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
-			return nil, fmt.Errorf("%w: q is a query as JSON: %w", ErrBadParams, err)
+			return nil, fmt.Errorf("%w: %s. It takes a query as JSON", ErrBadParams,
+				plainjson.Unreadable("the q parameter", err))
 		}
 	}
 	id, a, err := s.admit(ctx, "artifact_data_query", authz.ActionArtifactDataQuery, p)

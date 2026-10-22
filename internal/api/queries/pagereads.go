@@ -260,9 +260,8 @@ func (s Sources) pageReads(ctx context.Context, p Params) (any, error) {
 	if p.Has("days") {
 		days = p.Int("days", 0)
 		if days < 1 || days > PageReadsMaxDays {
-			return nil, fmt.Errorf("%w: days=%v, and a page's readers cover 1 to %d "+
-				"company days — ask for at most %d", ErrBadParams, p.Values()["days"],
-				PageReadsMaxDays, PageReadsMaxDays)
+			return nil, fmt.Errorf("%w: the days parameter is %q, and a page's readers cover 1 "+
+				"to %d company days", ErrBadParams, p.String("days"), PageReadsMaxDays)
 		}
 	}
 	now, loc := s.clock(), s.zone()
