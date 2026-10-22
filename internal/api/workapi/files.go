@@ -340,12 +340,13 @@ func (s *served) acceptsFiles(w http.ResponseWriter, r *http.Request, project st
 }
 
 // filePathOf is the route's file path, normalised as the tracker keeps it —
-// refused `400 bad_path` naming what is wrong with it.
+// refused `400 bad_path` naming what is wrong with it, in the tracker's
+// sentence rather than its error, which opens with the package's name.
 func filePathOf(w http.ResponseWriter, r *http.Request) (string, bool) {
 	filePath, err := worklet.NormalizeFilePath(r.PathValue("path"))
 	if err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadPath,
-			map[string]string{"detail": err.Error()})
+			map[string]string{"detail": worklet.Sentence(err)})
 		return "", false
 	}
 	return filePath, true
@@ -434,17 +435,22 @@ func bytesFailed(w http.ResponseWriter, r *http.Request, err error, key string) 
 // else through the one refusal mapping ([operator.FailWrite]) — so a
 // forbidden write, a conflict, a node that could not decide and a fault of the
 // node's own read here as they read on every write.
+//
+// EVERY ONE IN THE WRITER'S SENTENCE ([worklet.Sentence]), as the one mapping
+// answers the rest: the error's own text opens with the package's name
+// ("worklet: no such project: ENG"), which says where it came from and
+// nothing a person acts on.
 func fileWriteFailed(w http.ResponseWriter, r *http.Request, err error, key string) {
 	switch {
 	case errors.Is(err, worklet.ErrNoProject):
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoProject,
-			map[string]string{"detail": err.Error()})
+			map[string]string{"detail": worklet.Sentence(err)})
 	case errors.Is(err, worklet.ErrNoFile):
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoFile,
-			map[string]string{"detail": err.Error()})
+			map[string]string{"detail": worklet.Sentence(err)})
 	case errors.Is(err, worklet.ErrStaleVersion):
 		httpjson.FailWith(w, http.StatusPreconditionFailed, httpjson.CodeVersionMoved,
-			map[string]string{"detail": err.Error()})
+			map[string]string{"detail": worklet.Sentence(err)})
 	case errors.Is(err, worklet.ErrUploadStale):
 		// THE BYTES ARE STORED AND MAY NOT BE NAMED ANY MORE: the upload
 		// took longer than a write may name its object after
@@ -452,7 +458,7 @@ func fileWriteFailed(w http.ResponseWriter, r *http.Request, err error, key stri
 		// that lands — a new upload is a new object, under this key or
 		// another.
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeUploadExpired,
-			map[string]string{"detail": err.Error()})
+			map[string]string{"detail": worklet.Sentence(err)})
 	default:
 		// A CONTENT REFUSAL — a content type no row may hold — is `422
 		// invalid` and an archived project the project's state, `409
