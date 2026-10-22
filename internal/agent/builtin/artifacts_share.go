@@ -311,9 +311,9 @@ func (t *uploadArtifactAsset) CallForTurn(ctx context.Context, turn *turnctx.Tur
 	}
 	t.deps.present(c, h.ID, presence.Editing, presence.Focus{})
 	if !slices.Contains(h.Capabilities, artifacts.CapabilityAssets) {
-		return failed(fmt.Sprintf(UploadArtifactAssetTool+": artifact %s does not declare "+
+		return failed(fmt.Sprintf(UploadArtifactAssetTool+": artifact %q does not declare "+
 			"the `assets` capability, so its page cannot reference an asset. Publish a "+
-			"version declaring it first.", h.ID)), nil
+			"version declaring it first.", clip(ref))), nil
 	}
 	files := newFileSources(t.deps, c, t.Name())
 	name, refusal := files.cleanPath(argString(args, "name"))

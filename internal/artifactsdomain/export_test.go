@@ -40,6 +40,8 @@ func ShareBeforeTheGrantRule(ctx context.Context, w *Writer, c Call, id artifact
 func PublishError(subject statelog.Subject, err error) error { return publishError(subject, err) }
 
 // RefusalError is what a refusal verdict of the applier is told as.
-func RefusalError(ctx context.Context, w *Writer, id string, reason Refusal, s HistorySummary) error {
-	return w.refusal(ctx, id, reason, s)
+func RefusalError(ctx context.Context, w *Writer, id string, reason Refusal, s HistorySummary,
+	number int) error {
+
+	return w.refusal(ctx, id, reason, s, number)
 }

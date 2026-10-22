@@ -414,14 +414,25 @@ func (w *Writer) refused(ctx context.Context, id string, e HistoryEntry) error {
 	if e.Outcome != OutcomeRefused {
 		return nil
 	}
-	return w.refusal(ctx, id, e.Reason, e.Summary)
+	return w.refusal(ctx, id, e.Reason, e.Summary, e.Number)
 }
 
-// refusal translates an apply's refusal into the error a caller acts on.
-func (w *Writer) refusal(ctx context.Context, id string, reason Refusal, s HistorySummary) error {
+// refusal translates an apply's refusal into the error a caller acts on:
+// number is the version the refused record was about, where it was about one.
+//
+// A VERSION THE ARTIFACT DOES NOT KEEP IS SAID AS ONE, in the words the decide
+// says the same fact in ("this artifact doesn't keep version N"): answered as
+// the bare sentinel it was told as "no such artifact", about the artifact the
+// person was looking at.
+func (w *Writer) refusal(ctx context.Context, id string, reason Refusal, s HistorySummary,
+	number int) error {
+
 	switch reason {
-	case RefusedNotFound, RefusedVersionNotFound:
+	case RefusedNotFound:
 		return fmt.Errorf("%w: %s", ErrNotFound, id)
+	case RefusedVersionNotFound:
+		return fmt.Errorf("%w: %s: this artifact doesn't keep version %d", ErrNotFound,
+			id, number)
 	case RefusedTrashed:
 		return fmt.Errorf("%w: %s", ErrTrashed, id)
 	case RefusedPurged:
@@ -449,7 +460,8 @@ func (w *Writer) refusal(ctx context.Context, id string, reason Refusal, s Histo
 	case RefusedExists:
 		return &AlreadyExists{What: id}
 	case RefusedLive:
-		return fmt.Errorf("%w: artifact %s is not in the trash", ErrInvalid, id)
+		return fmt.Errorf("%w: %s: this artifact isn't in the trash, so there's "+
+			"nothing to restore", ErrInvalid, id)
 	case RefusedPurging:
 		return fmt.Errorf("%w: %s", ErrPurging, id)
 	case RefusedFolderGone:

@@ -673,7 +673,8 @@ func (r *Reader) Version(ctx context.Context, id artifacts.ID, number int) (Vers
 			if _, err := mustHead(ctx, tx, id.String()); err != nil {
 				return err
 			}
-			return fmt.Errorf("%w: artifact %s keeps no version %d", ErrNotFound, id, number)
+			return fmt.Errorf("%w: %s: this artifact doesn't keep version %d", ErrNotFound, id,
+				number)
 		}
 		out = v
 		return nil

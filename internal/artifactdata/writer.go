@@ -651,7 +651,12 @@ func (w *Writer) inverse(ctx context.Context, c Call, id artifacts.ID, seq int64
 			return err
 		}
 		if !present {
-			return fmt.Errorf("%w: %s holds no write %d", ErrNotFound, id, seq)
+			// THE ARTIFACT'S ID FOR THE LOG, right after the sentinel,
+			// where [Sentence] cuts it: a person reads the sentence alone,
+			// about the artifact they are looking at. "No such document"
+			// would be the wrong noun, since no store exists at all.
+			return fmt.Errorf("%w: %s: this artifact's data has no write %d to undo",
+				ErrNotFound, id, seq)
 		}
 		var (
 			op, verdict, actor, changes string
