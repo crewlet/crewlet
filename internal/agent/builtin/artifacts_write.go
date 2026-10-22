@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -670,6 +671,13 @@ func publishFailure(ctx context.Context, tool string, c artifactCaller, err erro
 		return refusedBy(tools.RefusalConflict, err, fmt.Sprintf("%s could not land: "+
 			"somebody else kept changing the artifact. Read it again with "+GetArtifactTool+" "+
 			"before retrying.", tool))
+	case errors.Is(err, objstore.ErrFull):
+		// NO RETRY LANDS until somebody makes room, as write_project_file
+		// tells it: read as a fault, the model was told only that the
+		// publish failed, with nothing to say about why or who can fix it.
+		return objectFailure(ctx, tool, tools.RefusalUnavailable, err, fmt.Sprintf("%s: "+
+			"nothing was saved: the company's file storage is full. Don't try again: "+
+			"say it couldn't be saved and that an administrator needs to make room.", tool))
 	}
 	if class, ok := WriterClass(err); ok {
 		// ANY OTHER REFUSAL A DOMAIN DECIDED, in its own class — see

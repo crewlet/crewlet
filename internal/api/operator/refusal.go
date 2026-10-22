@@ -296,12 +296,13 @@ func failClass(w http.ResponseWriter, cause error, key string, detail,
 	case answer.status == 0:
 		// WHETHER AND WHEN TO COME BACK is the cause's to say: a refusal
 		// waiting cannot clear — an evicted node, a full log, a record
-		// this node cannot decode — carries no Retry-After, one that
-		// derived its own hint carries that, and anything else this
-		// node's undecided hint ([statelog.RetryAfter]'s rule, which
-		// every surface answering a refusal reads).
+		// this node cannot decode, a company whose file storage is full —
+		// carries no Retry-After, one that derived its own hint carries
+		// that, and anything else this node's undecided hint
+		// ([builtin.RetryAfter], the rule every surface answering a
+		// refusal reads).
 		otherwise := time.Duration(authz.RetryUndecidedSeconds) * time.Second
-		after := httpjson.RetrySeconds(statelog.RetryAfter(cause, otherwise))
+		after := httpjson.RetrySeconds(builtin.RetryAfter(cause, otherwise))
 		logCondition("operator_call_unavailable", cause, "op_id", key)
 		detail["op_id"] = key
 		httpjson.UnavailableWith(w, answer.code, after, detail)
@@ -326,12 +327,12 @@ func failClass(w http.ResponseWriter, cause error, key string, detail,
 // board and the dataset a reading was for — because a line that carries the
 // error alone, under this package's component, says that something failed and
 // nothing about what. Only the level is decided once, for every surface:
-// [statelog.ConditionLevel], WARN where no wait clears the condition and INFO
-// where one does, since a gesture somebody made once is worth its line.
+// [conditionLevel], WARN where no wait clears the condition and INFO where one
+// does, since a gesture somebody made once is worth its line.
 func LogCondition(ctx context.Context, logger *slog.Logger, event string, err error,
 	fields ...any) {
 
-	logger.Log(ctx, statelog.ConditionLevel(err, slog.LevelInfo), event,
+	logger.Log(ctx, conditionLevel(err), event,
 		append(fields[:len(fields):len(fields)], "error", err.Error())...)
 }
 
@@ -340,16 +341,27 @@ func LogCondition(ctx context.Context, logger *slog.Logger, event string, err er
 // through and none hands a context to.
 func logCondition(event string, err error, fields ...any) {
 	fields = append(fields[:len(fields):len(fields)], "error", err.Error())
-	if statelog.ConditionLevel(err, slog.LevelInfo) == slog.LevelWarn {
+	if conditionLevel(err) == slog.LevelWarn {
 		log.Warn(event, fields...)
 		return
 	}
 	log.Info(event, fields...)
 }
 
+// conditionLevel is [statelog.ConditionLevel]'s rule over the one hint a
+// person is told ([builtin.RetryAfter]): WARN where no wait clears err — the
+// state log's own refusals of that kind, and a full file store, which only an
+// administrator can clear — and INFO where one does.
+func conditionLevel(err error) slog.Level {
+	if builtin.RetryAfter(err, time.Second) == 0 {
+		return slog.LevelWarn
+	}
+	return slog.LevelInfo
+}
+
 // AnswerCondition answers err as the condition of the node it is, for a
 // surface whose every other failure is a fault: `503` in a person's words for
-// it ([builtin.ConditionSentence]), under its own hint ([statelog.RetryAfter]:
+// it ([builtin.ConditionSentence]), under its own hint ([builtin.RetryAfter]:
 // none where no wait clears it, this node's undecided hint where it derived
 // none), its error to the surface's own log ([LogCondition]) under event with
 // fields, and beside the sentence the surface's own extra detail, nil for
@@ -369,7 +381,7 @@ func AnswerCondition(ctx context.Context, w http.ResponseWriter, logger *slog.Lo
 	maps.Copy(detail, extra)
 	detail["detail"] = said
 	httpjson.UnavailableWith(w, httpjson.CodeUnavailable,
-		httpjson.RetrySeconds(statelog.RetryAfter(err,
+		httpjson.RetrySeconds(builtin.RetryAfter(err,
 			time.Duration(authz.RetryUndecidedSeconds)*time.Second)),
 		detail)
 	return true

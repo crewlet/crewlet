@@ -118,6 +118,9 @@ type fakeObjects struct {
 
 	// corrupt makes every read answer the store's corruption sentinel.
 	corrupt bool
+
+	// putErr, when set, is every put's failure.
+	putErr error
 }
 
 func newFakeObjects() *fakeObjects { return &fakeObjects{objects: map[objstore.Key][]byte{}} }
@@ -125,6 +128,9 @@ func newFakeObjects() *fakeObjects { return &fakeObjects{objects: map[objstore.K
 func (o *fakeObjects) Put(_ context.Context, r io.Reader, limit int64,
 	_ objstore.PutMeta) (objstore.Object, error) {
 
+	if o.putErr != nil {
+		return objstore.Object{}, o.putErr
+	}
 	data, err := io.ReadAll(io.LimitReader(r, limit+1))
 	if err != nil {
 		return objstore.Object{}, err
@@ -504,5 +510,43 @@ func TestAFileIsRemovedByItsProjectsLeadOnly(t *testing.T) {
 				t.Errorf("the refusal carries %v, not the authority's own answer", got.Cause)
 			}
 		})
+	}
+}
+
+// A FULL STORE IS NO WRITE TO TRY AGAIN SHORTLY: no retry lands until somebody
+// makes room, so the model is told to stop and say so, where every failed put
+// told it to try again shortly — a store that did not answer still is, and a
+// failure the store classed as neither is a fault of the node, as every other
+// surface storing a file answers it (it was "try again shortly" here and a
+// fault on the artifact tools). Mutation: drop the full store's arm, or answer
+// a fault as a condition, and its row fails.
+func TestAFullStoreIsNoWriteToTryAgain(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		err        error
+		class      tools.Refusal
+		says, nots string
+	}{
+		"a full store": {fmt.Errorf("objstore: store the object: %w", objstore.ErrFull),
+			tools.RefusalUnavailable, "Don't try again", "Try again shortly"},
+		"a store that did not answer": {fmt.Errorf("objstore: store the object: %w: %w",
+			objstore.ErrUnanswered, errors.New("nats: timeout")),
+			tools.RefusalUnavailable, "Try again shortly", "Don't try again"},
+		"a fault": {errors.New("objstore: the backend stored x after 3 bytes, before the " +
+			"content ended"), tools.RefusalInternalError, "not something trying again clears",
+			"Try again shortly"},
+	} {
+		files, objects := newFakeFiles(), newFakeObjects()
+		objects.putErr = c.err
+		got := callWork(t, workRegistry(t, fileDeps(files, objects)),
+			worklet.WriteProjectFileTool, map[string]any{"path": "a.md", "content": "x"})
+		if !got.Failed || tools.RefusalOf(got) != c.class ||
+			!strings.Contains(got.Output, c.says) || strings.Contains(got.Output, c.nots) {
+			t.Errorf("%s: answered %s %q, want %s saying %q", name,
+				tools.RefusalOf(got), got.Output, c.class, c.says)
+		}
+		if strings.Contains(got.Output, "nats") || strings.Contains(got.Output, "3 bytes") {
+			t.Errorf("%s: told a model its error's own text: %q", name, got.Output)
+		}
 	}
 }

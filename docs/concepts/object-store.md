@@ -159,8 +159,18 @@ logs reserve their ceilings, and every seat's mailbox and every coordination
 bucket (the leases, ledgers and budget counters the fleet runs on) share what
 is left. A bucket allowed to grow into that remainder would, once full, refuse
 a lease heartbeat, which stops the fleet; a bucket at its reservation refuses
-**uploads, and only uploads**. The collector does not bound the bucket: it
-deletes what no row names, never the files a company keeps.
+**uploads, and only uploads**. A person uploading is told there's no room left
+and that an administrator needs to make room, as a `503` with no
+`Retry-After`, since no wait clears it, and an agent's file and artifact tools
+are told not to try again. An upload the store simply did not take (a request
+that ran out of time, a broker or a provider that didn't answer) is a `503`
+under an election's wait instead, and the tools are told to try again
+shortly: the object store classes every put it could not finish once, so a
+project file's upload, an artifact's, an image attached to a question for the
+[Dashboard Assistant](../guides/assistant.md) and both kinds of tool answer each
+the same way, and the assistant is told what kept out a file a deep-work run
+delivered. The collector does not bound the bucket: it deletes what no row
+names, never the files a company keeps.
 
 ```yaml
 store:

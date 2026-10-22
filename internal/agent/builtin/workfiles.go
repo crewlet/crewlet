@@ -518,11 +518,27 @@ func (t *writeProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s: %s was not "+
 			"written: its content is over the %d bytes a project's file may hold",
 			t.Name(), filePath, int64(worklet.MaxFileBytes))), nil
-	case err != nil:
+	case errors.Is(err, objstore.ErrFull):
+		// NO RETRY LANDS until somebody makes room, so the model is told
+		// to stop rather than to try again shortly.
 		return objectFailure(ctx, t.Name(), tools.RefusalUnavailable, err,
-			fmt.Sprintf("%s: %s was not written, and nothing was recorded: its "+
-				"content could not be stored in the object store right now. Try "+
-				"again shortly.", t.Name(), filePath)), nil
+			fmt.Sprintf("%s: %s was not written, and nothing was recorded: the "+
+				"company's file storage is full. Don't try again: say the file "+
+				"couldn't be saved and that an administrator needs to make room.",
+				t.Name(), filePath)), nil
+	case err != nil:
+		// A STORE THAT DID NOT TAKE THE BYTES is a condition, told as one
+		// and invited back ([objstore.ErrUnanswered]); anything else is a
+		// fault of this node, whose words are the log's — the reading
+		// every surface storing a file gives the same failure.
+		if why, ok := Condition(err); ok {
+			return objectFailure(ctx, t.Name(), tools.RefusalUnavailable, err,
+				fmt.Sprintf("%s: %s was not written, and nothing was recorded: its "+
+					"content could not be stored (%s). %s", t.Name(), filePath, why,
+					conditionNext(err, "Try again shortly.", stuckWrite))), nil
+		}
+		return faulted(ctx, t.Name(), err, fmt.Sprintf("%s: %s was not written, and "+
+			"nothing was recorded: %s.", t.Name(), filePath, faultSaid)), nil
 	}
 	// NOTHING IS DELETED ON A REFUSAL BELOW: a retry under one operation can
 	// be refused on one node after another committed it, and the object

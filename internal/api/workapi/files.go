@@ -407,14 +407,22 @@ func fileReadFailed(w http.ResponseWriter, r *http.Request, err error) {
 // that stopped arriving is the CLIENT'S (400, never a 503 telling it to retry
 // a request whose own connection failed), one over the cap is the one
 // spelling of a 413 every JSON surface answers, and a store that did not take
-// them is a condition that clears when it answers again — the broker's own
-// election at the soonest, the default store being the data nodes' NATS
-// bucket — with the store's own words in the log.
+// them is a CONDITION in its own words and under its own hint
+// ([operator.AnswerCondition]): a full one is `503` with no Retry-After and
+// says who makes room ([objstore.ErrFull]), one that did not answer is `503`
+// under an election's wait ([objstore.ErrUnanswered]), and the upload ran out
+// of its pace or was abandoned the same way. Anything else is a FAULT of this
+// node, `500`, its words the log's.
 //
 // THE FIRST TWO IN A PERSON'S WORDS ([paced.Unread], [fileTooLarge]), never the
 // error's: it opens with the store's or the reader's package words
 // ("objstore: the object is over its size limit (1073741824 bytes)") and ends
 // with the read's own failure as Go spells it, which goes to the log.
+//
+// ONE READING WITH EVERY SURFACE THAT STORES A FILE — an artifact's upload,
+// write_project_file and the artifact tools answer the same failures the same
+// way, because the store classifies them once: an unclassified failure was a
+// 503 inviting a retry here and a 500 there.
 func bytesFailed(w http.ResponseWriter, r *http.Request, err error, key string) {
 	switch {
 	case errors.Is(err, paced.ErrBody):
@@ -425,15 +433,14 @@ func bytesFailed(w http.ResponseWriter, r *http.Request, err error, key string) 
 	case errors.Is(err, objstore.ErrTooLarge):
 		httpjson.FailWith(w, http.StatusRequestEntityTooLarge, httpjson.CodeBodyTooLarge,
 			map[string]string{"detail": fileTooLarge})
+	case operator.AnswerCondition(r.Context(), w, log, "api_file_store_unavailable", err, nil,
+		"op_id", key):
+		// A CONDITION, under its own words and hint.
 	default:
-		log.WarnContext(r.Context(), "api_file_store_unavailable", "op_id", key,
+		log.ErrorContext(r.Context(), "api_file_store_failed", "op_id", key,
 			"error", err.Error())
-		httpjson.UnavailableWith(w, httpjson.CodeUnavailable,
-			httpjson.RetrySeconds(statelog.ElectionRetryHint), httpjson.Detail{
-				"detail": "the file's content could not be stored in the object " +
-					"store right now, and nothing was recorded",
-				"op_id": key,
-			})
+		httpjson.FailWithFields(w, http.StatusInternalServerError,
+			httpjson.CodeInternalError, httpjson.Detail{"op_id": key})
 	}
 }
 

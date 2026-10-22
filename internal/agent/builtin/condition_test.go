@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -45,6 +46,10 @@ func everyCondition() map[string]error {
 			errTransport),
 		"a wait that ran out": fmt.Errorf("read: %w", context.DeadlineExceeded),
 		"a wait abandoned":    fmt.Errorf("read: %w", context.Canceled),
+		"a full file store": fmt.Errorf("objstore: store the object: natsobj: put files/x: "+
+			"%w: bucket crewlet_files: %w", objstore.ErrFull, errTransport),
+		"a file store that did not answer": fmt.Errorf("objstore: store the object: %w: %w",
+			objstore.ErrUnanswered, errTransport),
 	}
 	for _, r := range statelog.Reasons() {
 		out["write "+string(r)] = fmt.Errorf("worklet: decide: %w", &statelog.Unavailable{
@@ -101,7 +106,9 @@ func TestAConditionIsToldToItsTwoReadersWithoutItsOwnText(t *testing.T) {
 				t.Errorf("%s is told to a person with %q in it: %s", name, internal, person)
 			}
 		}
-		waits := statelog.RetryAfter(err, time.Second) > 0
+		// THE HINT IS THE ONE EVERY SURFACE SENDS BESIDE THESE WORDS
+		// ([builtin.RetryAfter]), which reads the same classification.
+		waits := builtin.RetryAfter(err, time.Second) > 0
 		if soon := strings.HasSuffix(person, statelog.TryAgainSoon); soon != waits {
 			t.Errorf("%s carries a Retry-After: %v, and tells a person %q", name,
 				waits, person)
