@@ -1130,9 +1130,11 @@ func runQuery(ctx context.Context, client *Client, query Query, req request) {
 		}
 		client.Reply(refusal)
 	case errors.Is(err, ErrUnavailable):
-		// THE REFUSAL, ITS WORDS AND ITS HINT RIDE THE FRAME, because a
-		// node catching up and a node that will refuse this read until an
-		// operator acts are both `unavailable` — see [Unavailable].
+		// THE REFUSAL, A PERSON'S SENTENCE FOR IT AND ITS HINT RIDE THE
+		// FRAME, because a node catching up and a node that will refuse
+		// this read until an operator acts are both `unavailable` — see
+		// [Unavailable]. Its own detail goes to the log.
+		LogUnavailable(ctx, log, "stream_query_unavailable", err, "what", req.What)
 		env := queryError(req, CodeUnavailable)
 		env.unavailable(UnavailableOf(err))
 		client.Reply(env)

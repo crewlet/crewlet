@@ -100,14 +100,27 @@ func TestAStoreFaultIsAFiveHundredWithNoRetryAfter(t *testing.T) {
 	if after := header.Get("Retry-After"); after != "9" {
 		t.Errorf("Retry-After = %q, want the refusal's own 9 seconds", after)
 	}
+	// IN A PERSON'S WORDS FOR THE REFUSAL, the tool's sentence for a model
+	// beside it, and the refusal's own detail in neither: it was the
+	// tool's sentence, framework and detail and all.
+	said, _ := statelog.ConditionSentence(behind)
+	if answer["detail"] != said || strings.Contains(fmt.Sprint(answer), "40 records") ||
+		strings.Contains(fmt.Sprint(answer), "statelog") {
+		t.Errorf("a refusal the state log made answered %v, want the detail %q and "+
+			"nothing of its own text", answer, said)
+	}
+	if tool, _ := answer["tool_detail"].(string); !strings.Contains(tool, tracker.UpdateWorkItemTool) {
+		t.Errorf("the tool's own sentence does not travel beside the person's: %v", answer)
+	}
 }
 
 // A WRITER'S ERROR IS WORDED FOR WHOEVER READS IT, on the surfaces that call a
 // writer without a tool. The human write surface handed [operator.Fail] the
 // error's own text whatever it was, so a disk error's path was the `detail`;
 // [operator.FailWrite] tells a fault in fixed words and leaves its error to
-// the log, a condition in its own words with its hint, and the domain's
-// refusal as the domain composed it.
+// the log, a condition in a person's words for it with its hint
+// ([builtin.ConditionSentence]), and the domain's refusal as the domain
+// composed it.
 func TestAWritersErrorIsWordedForWhoeverReadsIt(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -123,7 +136,7 @@ func TestAWritersErrorIsWordedForWhoeverReadsIt(t *testing.T) {
 		{"a coordination store that did not answer",
 			fmt.Errorf("dial nats://10.0.0.7:4222: %w", coord.ErrUnavailable),
 			http.StatusServiceUnavailable, httpjson.CodeUnavailable,
-			"The coordination store did not answer", true},
+			"couldn't reach the rest of the fleet", true},
 		{"a refusal the domain composed",
 			fmt.Errorf("%w: the comment is longer than a comment may be", tracker.ErrInvalid),
 			http.StatusUnprocessableEntity, httpjson.CodeInvalid, "longer than", false},
@@ -134,7 +147,13 @@ func TestAWritersErrorIsWordedForWhoeverReadsIt(t *testing.T) {
 		{"an estate nobody served",
 			&estate.ErrUnserved{Detail: "10.0.0.7: out_of_service: applier halted"},
 			http.StatusServiceUnavailable, httpjson.CodeUnavailable,
-			"No data node could serve it", true},
+			"No node could serve this", true},
+		// A STATE-LOG REFUSAL, in the state log's sentence for its code and
+		// never its own text, which names the framework and its detail.
+		{"a log at its ceiling", fmt.Errorf("tracker: %w", &statelog.Unavailable{
+			Reason: statelog.ReasonLogFull, Detail: "raise stream.tracker_max_bytes on 10.0.0.7"}),
+			http.StatusServiceUnavailable, httpjson.CodeUnavailable,
+			"There's no room left to save this kind of change. An administrator needs to make room for it.", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -149,7 +168,7 @@ func TestAWritersErrorIsWordedForWhoeverReadsIt(t *testing.T) {
 			if !strings.Contains(detail, tc.says) {
 				t.Errorf("detail = %q, want it to say %q", detail, tc.says)
 			}
-			for _, never := range []string{"/var/lib", "10.0.0.7"} {
+			for _, never := range []string{"/var/lib", "10.0.0.7", "statelog", "tracker_max"} {
 				if strings.Contains(detail, never) {
 					t.Errorf("detail = %q carries the error's own %q", detail, never)
 				}

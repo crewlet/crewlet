@@ -15,6 +15,13 @@ import { RETRY_AFTER_MAX_MS, UNAVAILABLE_RETRY_MS } from "../contract/retry.ts";
 import { LiveSocket, QueryError } from "./socket.ts";
 import { Store } from "./store.ts";
 
+/** The engine's sentence for a read refused on a log at its ceiling
+ *  (`statelog.ConditionSentence`), which is what a frame's `detail` carries:
+ *  never the refusal's own detail, which stays in the node's log. */
+const FULL_LOG =
+  "There's no room left to save this kind of change, so the node answering this can't " +
+  "confirm it has the latest ones. An administrator needs to make room for it.";
+
 /** A WebSocket the test drives and whose outgoing frames it reads. */
 class RecordingWebSocket {
   static CONNECTING = 0;
@@ -262,8 +269,8 @@ describe("a query frame", () => {
   test.each([
     [
       "a refusal no wait clears",
-      { refusal: "log_full", detail: "raise the stream's byte ceiling", retry_after: 0 },
-      { code: "log_full", detail: "raise the stream's byte ceiling", retryAfter: 0 },
+      { refusal: "log_full", detail: FULL_LOG, retry_after: 0 },
+      { code: "log_full", detail: FULL_LOG, retryAfter: 0 },
     ],
     [
       "an unreachable store, no refusal behind it",

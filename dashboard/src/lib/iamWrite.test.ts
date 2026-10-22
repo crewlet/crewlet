@@ -42,6 +42,24 @@ test("an unknown answer keeps the key the engine handed back", async () => {
   });
 });
 
+// A CREATE THAT LANDED and whose link the node could not read back yet keeps
+// its key, in the engine's own words: a new key would be refused by the address
+// and the seat the first attempt now holds, and the link lost. Mutation: drop
+// the arm and it is a refusal, and the dialog mints a new key.
+test("a write that landed and cannot be read back yet keeps its key", async () => {
+  answer(503, {
+    error: "unavailable",
+    outcome: "pending",
+    op_id: "scoped-key",
+    id: "p-1",
+    detail:
+      "They were added, but this node can’t show their first password link yet. Send the same request again in a moment to get it.",
+  });
+  const got = await iamWrite({ method: "POST", path: "/iam/people", key: "sent" });
+  expect(got).toMatchObject({ kind: "unknown", key: "scoped-key" });
+  expect(got.kind === "unknown" && got.text).toMatch(/^They were added, but this node/);
+});
+
 // NO ANSWER AT ALL is unknown too, and the retry is the key that was sent.
 test("a request nobody answered is unknown under the key that was sent", async () => {
   vi.stubGlobal(

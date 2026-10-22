@@ -311,7 +311,7 @@ func (s *Service) enrolmentSession(w http.ResponseWriter, r *http.Request,
 	case v.Row == session.RowValid && v.Bearer.Person == person:
 		return v, true, true
 	case v.Row == session.RowBehind || v.Row == session.RowStalled:
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(nil))
+		auth.UnavailableIdentity(w, nil)
 	default:
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 	}
@@ -483,7 +483,7 @@ func (s *Service) mayChangeProof(w http.ResponseWriter, r *http.Request) (iam.Pr
 	switch resolution {
 	case iam.Resolved:
 	case iam.Unknown:
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(iam.Reason(r.Context())))
+		auth.UnavailableIdentity(w, iam.Reason(r.Context()))
 		return iam.Principal{}, false
 	default:
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)

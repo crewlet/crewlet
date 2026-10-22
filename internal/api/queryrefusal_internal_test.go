@@ -44,8 +44,8 @@ func TestARefusedQuestionAnswersInTheAuthorityTablesEnvelope(t *testing.T) {
 			got := httptest.NewRecorder()
 			// WRAPPED, as an answer's failure reaches the mapping through
 			// the registry's classification.
-			writeQueryError(got, "q", fmt.Errorf("answering q: %w",
-				queries.NewRefusal("q", d)))
+			writeQueryError(got, httptest.NewRequest(http.MethodGet, "/query/q", nil), "q",
+				fmt.Errorf("answering q: %w", queries.NewRefusal("q", d)))
 			want := httptest.NewRecorder()
 			authz.EnvelopeRefusal(want, httptest.NewRequest(http.MethodGet, "/query/q", nil),
 				authz.Policy{}, d)
@@ -73,7 +73,8 @@ func TestARefusedQuestionAnswersInTheAuthorityTablesEnvelope(t *testing.T) {
 func TestABareRefusalSentinelIsAFault(t *testing.T) {
 	t.Parallel()
 	got := httptest.NewRecorder()
-	writeQueryError(got, "q", fmt.Errorf("answering q: %w", queries.ErrUnauthorized))
+	writeQueryError(got, httptest.NewRequest(http.MethodGet, "/query/q", nil), "q",
+		fmt.Errorf("answering q: %w", queries.ErrUnauthorized))
 	if got.Code != http.StatusInternalServerError {
 		t.Errorf("a refusal naming no decision answered %d %s, want the fault's 500",
 			got.Code, got.Body)

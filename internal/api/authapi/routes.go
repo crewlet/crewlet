@@ -153,7 +153,7 @@ func (s *Service) Token(w http.ResponseWriter, r *http.Request) {
 		// here for the reason it is everywhere: a session minted now
 		// would act as the bare credential on this node and as its seat
 		// on the next.
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(iam.Reason(r.Context())))
+		auth.UnavailableIdentity(w, iam.Reason(r.Context()))
 		return
 	default:
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
@@ -344,7 +344,7 @@ func (s *Service) StepUp(w http.ResponseWriter, r *http.Request) {
 	held, err := s.directory.PersonByLogin(r.Context(), principal.Login)
 	if err != nil {
 		log.WarnContext(r.Context(), "api_step_up_lookup_failed", "error", err)
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(err))
+		auth.UnavailableIdentity(w, err)
 		return
 	}
 	attempt := authevents.Failure{Source: source, Method: types.FailPassword}
@@ -436,7 +436,7 @@ func (s *Service) replacedSession(w http.ResponseWriter, r *http.Request,
 	case v.Row == session.RowValid && v.Bearer.Person == held.ID:
 		return v, true
 	case v.Row == session.RowBehind || v.Row == session.RowStalled:
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(nil))
+		auth.UnavailableIdentity(w, nil)
 	default:
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 	}

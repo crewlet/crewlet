@@ -490,11 +490,16 @@ func TestARetriedCreateThisNodeHasNotAppliedIsUnavailable(t *testing.T) {
 			"the first call's record — the case is about that answer",
 			again.Result, err)
 	}
-	if !errors.Is(err, statelog.ErrUnavailable) || again.Link != nil ||
+	// A WRITE THAT LANDED, NOT A CONDITION: the answer carries what it is,
+	// so no surface tells an administrator the create did not happen.
+	var unread *iamdomain.NotReadBack
+	if !errors.As(err, &unread) || unread.Invitation ||
+		unread.Result.Outcome == statelog.OutcomeUnknown ||
+		!errors.Is(err, statelog.ErrUnavailable) || again.Link != nil ||
 		again.LinkClosed {
 		t.Errorf("the second call, on a node that has not applied the create, "+
-			"answered link %+v, closed %v (%v), want unavailable and neither",
-			again.Link, again.LinkClosed, err)
+			"answered link %+v, closed %v (%v), want a person's create not read "+
+			"back, unavailable, and neither", again.Link, again.LinkClosed, err)
 	}
 
 	rig.drain()

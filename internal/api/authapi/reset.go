@@ -204,7 +204,7 @@ func (s *Service) presentedReset(w http.ResponseWriter, r *http.Request,
 	held, err := s.directory.ResetByID(r.Context(), id)
 	if err != nil {
 		log.WarnContext(r.Context(), "api_reset_lookup_failed", "error", err)
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(err))
+		auth.UnavailableIdentity(w, err)
 		return iamdomain.ResetRow{}, false
 	}
 	if held.Opens(secret, s.now()) {
@@ -229,8 +229,7 @@ func (s *Service) presentedReset(w http.ResponseWriter, r *http.Request,
 // nothing is for any 503.
 func (s *Service) unvouched(w http.ResponseWriter, r *http.Request, link, id string) {
 	log.InfoContext(r.Context(), "api_link_unvouched", "link", link, "id", id)
-	httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable,
-		auth.RetryIdentity(iamdomain.ErrNotCurrent))
+	auth.UnavailableIdentity(w, iamdomain.ErrNotCurrent)
 }
 
 // refuseReset is every 410 a reset link answers, in the same bytes — a failed

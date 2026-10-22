@@ -229,6 +229,8 @@ func (s *Service) liveWorkItem(w http.ResponseWriter, r *http.Request, ref strin
 			tracker.Domain{}.Stream().Name))
 		return tracker.Task{}, false
 	case errors.As(err, new(*statelog.Refused)):
+		operator.LogCondition(r.Context(), log, "artifacts_work_item_unread", err,
+			"work_item", ref)
 		u := stream.UnavailableOf(err)
 		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, u.RetryAfter, u.Fields())
 		return tracker.Task{}, false

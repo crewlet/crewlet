@@ -1,15 +1,18 @@
 package stream
 
 import (
+	"context"
 	"errors"
+	"log/slog"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // Unavailable is what an `unavailable` answer says beyond its code: the state
-// log's own refusal behind it where there is one, that refusal's words, and
-// whether — and when — to ask THIS node again.
+// log's own refusal behind it where there is one, a person's sentence for that
+// refusal, and whether — and when — to ask THIS node again.
 //
 // # Why the code alone was not enough
 //
@@ -34,13 +37,16 @@ type Unavailable struct {
 	// as an unreachable coordination store.
 	Refusal string `json:"refusal,omitempty"`
 
-	// Detail is that refusal's own words: what it is about and what
-	// changes it. Written for a caller, which is why it may be sent where
-	// a failure's text may not — a fault can carry a database path, and a
-	// refusal names positions, record versions and settings. The state log
-	// holds itself to that: it composes every refusal's detail and sends
-	// the error behind one — a store's, a transport's — to its log
-	// ([statelog.Unavailable]).
+	// Detail is the condition as a person is told it: what happened and
+	// what to do, in the sentence every person surface tells it in
+	// ([builtin.ConditionSentence] — the state log's own for a refusal),
+	// whose advice agrees with RetryAfter.
+	// NEVER THE REFUSAL'S OWN DETAIL ([statelog.Refused.Detail],
+	// [statelog.Unavailable.Detail]), which names positions, record
+	// versions, settings and the broker's words for whoever runs the node:
+	// it was this field, so a screen read "the published trim floor was
+	// last read 41s ago". The surface answering the refusal logs it
+	// ([LogUnavailable]).
 	//
 	// NOT MARSHALLED FROM HERE: a socket frame carries it as the envelope's
 	// own `detail` ([Envelope.Detail]), the one key a `bad_params` refusal's
@@ -74,6 +80,15 @@ type Unavailable struct {
 var ErrNoCompany = errors.New("stream: this node has not been handed a company yet")
 
 // UnavailableOf reads an `unavailable` answer's cause.
+//
+// THE WORDS ARE EVERY CONDITION'S, not the state log's alone: a coordination
+// store that did not answer, no data node serving, a store busy or closed, a
+// queue down and a deadline are `unavailable` too ([builtin.Condition] classes
+// them for the query registry), and read only for a state-log refusal they
+// carried no detail at all — so one item read on the act route said "No node
+// could serve this right now" while the same question over REST said the
+// table's fixed words and on the socket nothing. [builtin.ConditionSentence]
+// is the one switch every person surface tells a condition through.
 func UnavailableOf(err error) Unavailable {
 	u := Unavailable{
 		RetryAfter: httpjson.RetrySeconds(statelog.RetryAfter(err, HealthInterval)),
@@ -85,20 +100,44 @@ func UnavailableOf(err error) Unavailable {
 		u.Refusal = string(httpjson.CodeNoActiveRevision)
 		u.Detail = httpjson.NativeHalvesNotUp
 		u.RetryAfter = httpjson.RetrySeconds(httpjson.NoActiveRevisionRetry)
+		return u
 	case errors.As(err, &read):
-		u.Refusal, u.Detail = string(read.Code), read.Detail
+		u.Refusal = string(read.Code)
 	case errors.As(err, &write):
-		u.Refusal, u.Detail = string(write.Reason), write.Detail
+		u.Refusal = string(write.Reason)
 	}
+	u.Detail, _ = builtin.ConditionSentence(err)
 	return u
 }
 
-// Fields is the refusal as a REST envelope's extra keys, or nil where no
-// state-log refusal is behind the answer. The hint is the response's
+// LogUnavailable writes what an `unavailable` answer's cause says for whoever
+// runs the node — a state-log refusal's own detail among it — through the
+// answering surface's own logger under event, with its own fields: the answer
+// carries a person's sentence for it ([Unavailable.Detail]) and never the
+// error. At [statelog.ConditionLevel], with DEBUG for a condition that clears,
+// since a screen asks a question again after every hint for as long as a node
+// is catching up, and a line per ask is noise beside the alarm that names it.
+func LogUnavailable(ctx context.Context, logger *slog.Logger, event string, err error,
+	fields ...any) {
+
+	logger.Log(ctx, statelog.ConditionLevel(err, slog.LevelDebug), event,
+		append(fields[:len(fields):len(fields)], "error", err.Error())...)
+}
+
+// Fields is the answer as a REST envelope's extra keys: the refusal where one
+// is behind it, and the person's sentence wherever there is one — every
+// condition has one — or nil where neither is. The hint is the response's
 // Retry-After rather than a key, which is where every other 503 says it.
 func (u Unavailable) Fields() httpjson.Detail {
-	if u.Refusal == "" {
+	fields := httpjson.Detail{}
+	if u.Refusal != "" {
+		fields["refusal"] = u.Refusal
+	}
+	if u.Detail != "" {
+		fields["detail"] = u.Detail
+	}
+	if len(fields) == 0 {
 		return nil
 	}
-	return httpjson.Detail{"refusal": u.Refusal, "detail": u.Detail}
+	return fields
 }
