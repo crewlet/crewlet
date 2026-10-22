@@ -7175,7 +7175,12 @@ record id is derived, so a retry under the same key is the same operation
 `outcome: unknown` and the `op_id` for one nobody could account for: send it
 again under the same key, never a fresh one. The transfer needs no key: the
 upload claims each file before a byte is read, and a second put of it is
-refused `409 upload_consumed`.
+refused `409 upload_consumed`. A node that runs no upload pipeline (no object
+store, or no coordination store to reserve the bytes in) answers every route
+that checks or publishes — create, check, publish, assets and transfer —
+`503 unavailable` with **no** `Retry-After`: it builds the pipeline once for the
+life of its process, so no wait changes the answer, and why is in its log
+rather than the answer.
 
 ### Linking to a work item
 

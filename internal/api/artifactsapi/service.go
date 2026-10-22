@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifacts/brandformat"
 	"github.com/crewlet/crewlet/internal/artifacts/canvasformat"
@@ -308,11 +309,24 @@ func (s *Service) Routes(mux authz.Mux) error {
 
 // pipeline is the node's upload pipeline, or the refusal of a node that cannot
 // build one, rendered.
+//
+// EVERY ROUTE THAT CALLS IT IS TOLD THE SAME, so it names what they share — a
+// check of a page and a publish of an edit move no bytes, and were told this
+// node took no uploads.
+//
+// WHY IS THE LOG'S, AND NO WAIT CLEARS IT: the engine builds the pipeline once
+// for the life of the process, so a node that could not — no object store, no
+// coordination store, an embedded runtime it could not read — answers the same
+// after every wait, and the error naming which is a configuration's, for
+// whoever runs the node. It was the answer's detail, after "this node takes no
+// artifact uploads: ", under a Retry-After of two seconds.
 func (s *Service) pipeline(w http.ResponseWriter, r *http.Request) (Pipeline, bool) {
 	p, err := s.uploads()
 	if err != nil {
 		log.WarnContext(r.Context(), "artifacts_uploads_unavailable", "error", err.Error())
-		unavailable(w, err, "this node takes no artifact uploads: "+err.Error())
+		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, 0, httpjson.Detail{
+			"detail": "This node can't check or publish artifacts. Try another " +
+				"node, or have an administrator check this one."})
 		return nil, false
 	}
 	return p, true
