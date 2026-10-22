@@ -141,6 +141,22 @@ func refuseAs(class error, format string, args ...any) error {
 	return &classedRefusal{sentence: fmt.Sprintf(format, args...), class: class}
 }
 
+// refusedBy is a refusal a DOMAIN decided about what a question asked, carried
+// as [ErrBadParams] with the domain's own error beneath it for [errors.Is] and
+// told in the domain's own sentence — the tracker's, the knowledge base's and
+// the state log's read refusals through [builtin.ReadRefusalSentence], chat's,
+// the artifacts' and a datastore's through each domain's Sentence.
+//
+// WRAPPED AS `%w: %w` IT WAS TOLD IN THE DOMAIN'S GO ERROR: [RefusalDetail]
+// takes out this package's sentinel and nothing else, so a question refused
+// by chat read "chatlet: invalid: `cursor`: …", by the tracker "worklet: this
+// read's request cannot be run: since: statelog: …", and by a datastore
+// "artifactdata: invalid: …" — package names and class words on the screen a
+// person asked the question from.
+func refusedBy(err error, sentence string) error {
+	return &classedRefusal{sentence: sentence, class: err}
+}
+
 // Refusal is a question refused on AUTHORITY: a caller this node knows, whose
 // grants — or, for a personal question, whose relation to the record it named
 // — do not reach what they asked. It is [ErrUnauthorized] to [errors.Is].
@@ -762,7 +778,7 @@ func classifyFailure(err error) error {
 		errors.Is(err, ErrUnauthorized):
 		return err
 	case errors.Is(err, statelog.ErrForeignPosition):
-		return fmt.Errorf("%w: %w", ErrBadParams, err)
+		return refusedBy(err, builtin.ReadRefusalSentence(err))
 	}
 	if unavailableHere(err) {
 		// WRAPPED, NOT REPLACED, so the refusal's own code, detail and

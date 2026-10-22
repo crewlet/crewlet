@@ -990,8 +990,8 @@ func TestAPageTakesTheDomainsOwnDefaultAndCeiling(t *testing.T) {
 func TestARefusedCursorReachesTheCallerAsABadRequest(t *testing.T) {
 	t.Parallel()
 	reader := newStubChat()
-	reader.err = fmt.Errorf("%w: cursor: %q is not a message number",
-		chatlet.ErrInvalid, "yesterday")
+	reader.err = &chatlet.InvalidError{Field: "cursor",
+		Why: fmt.Sprintf("%q is not a message number", "yesterday")}
 
 	_, err := askChat(t, chatSources(t, reader, nil, nil), "chat_messages",
 		map[string]any{"channel_id": cEng, "cursor": "yesterday"})
@@ -1001,6 +1001,12 @@ func TestARefusedCursorReachesTheCallerAsABadRequest(t *testing.T) {
 	if !strings.Contains(queries.RefusalDetail(err), "is not a message number") {
 		t.Errorf("the refusal reached the caller as %q, losing the sentence "+
 			"that says what a cursor is", queries.RefusalDetail(err))
+	}
+	// IN CHAT'S SENTENCE, never its Go error: "chatlet: invalid: cursor: …"
+	// reached the screen the question was asked from.
+	if detail := queries.RefusalDetail(err); strings.Contains(detail, "chatlet:") ||
+		strings.Contains(detail, "invalid:") {
+		t.Errorf("the refusal reached the caller as %q, a package's words", detail)
 	}
 }
 

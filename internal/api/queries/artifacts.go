@@ -132,7 +132,7 @@ func artifactFailure(what string, err error) error {
 		return fmt.Errorf("%w: %q names %d folders you can see; list one of them by folder id "+
 			"(%s)", ErrBadParams, ambiguous.Path, len(ids), strings.Join(ids, ", "))
 	case errors.Is(err, artifactsdomain.ErrInvalid), errors.Is(err, artifactsdomain.ErrBadCursor):
-		return fmt.Errorf("%w: %w", ErrBadParams, err)
+		return refusedBy(err, artifactsdomain.Sentence(err))
 	}
 	return err
 }

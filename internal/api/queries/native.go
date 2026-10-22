@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/engine"
@@ -76,7 +77,7 @@ import (
 func freshness(p Params) (statelog.Freshness, error) {
 	got, err := statelog.ParseFreshness(p)
 	if err != nil {
-		return got, fmt.Errorf("%w: %w", ErrBadParams, err)
+		return got, refusedBy(err, builtin.ReadRefusalSentence(err))
 	}
 	got.Level = statelog.LevelFor(statelog.SurfaceDashboard, got.Level)
 	// AND THE BOUND IS CHECKED AGAINST THE LEVEL THAT WILL BE SERVED,
@@ -238,7 +239,7 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 		// the estate router, and no copy could answer it yet.
 		return nil, err
 	case err != nil:
-		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
+		return nil, refusedBy(err, builtin.ReadRefusalSentence(err))
 	}
 	// THIS SURFACE'S OWN DEFAULT, applied where an absent level resolves.
 	// A dashboard tile polls, and a poll that took a quorum round trip
@@ -263,7 +264,7 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 		// [ErrUnavailable]: the caller narrows and asks again, where
 		// "unavailable" tells a polling screen to send the identical
 		// query back every few seconds for ever.
-		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
+		return nil, refusedBy(err, builtin.ReadRefusalSentence(err))
 	case err != nil:
 		return nil, err
 	}
@@ -554,7 +555,7 @@ func (s Sources) workItemTurns(ctx context.Context, p Params) (any, error) {
 	case errors.Is(err, worklet.ErrNoTask):
 		return nil, ErrNotFound
 	case errors.Is(err, worklet.ErrInvalid):
-		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
+		return nil, refusedBy(err, builtin.ReadRefusalSentence(err))
 	case err != nil:
 		return nil, err
 	}
@@ -963,7 +964,7 @@ func (s Sources) workProjects(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		// A REFUSAL ABOUT THE REQUEST — the value names itself and the
 		// accepted ones, so a 400 tells the caller what to send instead.
-		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
+		return nil, refusedBy(err, builtin.ReadRefusalSentence(err))
 	}
 	q.Units = s.chartUnits()
 	// THE CALLER'S OWN — see [freshness].
@@ -1008,7 +1009,7 @@ func (s Sources) workProject(ctx context.Context, p Params) (any, error) {
 	case errors.Is(err, worklet.ErrNoType):
 		// A BAD PARAMETER, not a missing record: the project is there
 		// and `for_type` is what to change. The refusal lists the types.
-		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
+		return nil, refusedBy(err, builtin.ReadRefusalSentence(err))
 	case err != nil:
 		return nil, err
 	}
@@ -1167,7 +1168,7 @@ func (s Sources) workActivity(ctx context.Context, p Params) (any, error) {
 		// BY ITS SENTINEL and nothing wider. Every failure that was not
 		// the state log's used to take this arm, so a store this node
 		// could not read was answered 400 as the caller's mistake.
-		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
+		return nil, refusedBy(err, builtin.ReadRefusalSentence(err))
 	case err != nil:
 		return nil, err
 	}
