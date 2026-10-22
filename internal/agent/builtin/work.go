@@ -3777,9 +3777,10 @@ func readFailure(ctx context.Context, name string, err error) tools.Result {
 	}
 	if why, ok := Condition(err); ok {
 		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s could not "+
-			"read the tracker right now (%s). This is NOT an empty result — do "+
-			"not conclude the item or the list does not exist. Try again, or say "+
-			"you could not check.", name, why))
+			"read the tracker%s (%s). This is NOT an empty result — do "+
+			"not conclude the item or the list does not exist. %s", name,
+			rightNow(err), why,
+			conditionNext(err, "Try again, or say you could not check.", stuckRead)))
 	}
 	return faulted(ctx, name, err, fmt.Sprintf("%s could not read the tracker: "+
 		"%s. This is NOT an empty result — do not conclude the item or the list "+
@@ -4013,8 +4014,9 @@ func writeFailure(ctx context.Context, actor Actor, name string, err error) tool
 		return out(class, domainRefusal(name, err))
 	}
 	if why, ok := Condition(err); ok {
-		return out(tools.RefusalUnavailable, fmt.Sprintf("%s did not land (%s). "+
-			"The change was NOT made — do not report it as done.", name, why))
+		return out(tools.RefusalUnavailable, sentence(fmt.Sprintf("%s did not land (%s). "+
+			"The change was NOT made — do not report it as done.", name, why),
+			conditionNext(err, "", stuckWrite)))
 	}
 	// NOT "NOT MADE": a fault after the append was acknowledged — the
 	// ledger or the gates unreadable while it resolved — leaves a durable
