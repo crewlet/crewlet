@@ -15,76 +15,101 @@ import (
 // heartbeatLoop renews this node's leases, and is the duty the watchdog
 // watches.
 //
-// It ticks far faster than it renews. The tick is what proves the goroutine
+// It beats far faster than it renews. The beat is what proves the goroutine
 // is turning — a pass hung inside a hook or deadlocked on a lock freezes the
 // stamp, and past the lease TTL that means this node's seats have moved to a
 // peer while its queue client is still attached and still holding their
 // mail. See [Watchdog].
+//
+// TWO TICKERS, the renew pass on one of its own ([Host.renewPeriod]) rather
+// than every so many beats: a ticker drops the ticks that come due while its
+// receiver is busy, so counting the beats the loop RECEIVED delayed the pass
+// after a long one by every beat it dropped — see renewPeriod.
 func (h *Host) heartbeatLoop(ctx context.Context) {
-	beat := h.beatInterval()
-	ticksPerPass := h.ticksPerPass()
-	ticker := time.NewTicker(beat)
-	defer ticker.Stop()
+	beats := time.NewTicker(h.beatInterval())
+	defer beats.Stop()
+	passes := time.NewTicker(h.renewPeriod())
+	defer passes.Stop()
 
-	for ticks := 0; ; {
+	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-beats.C:
+			h.stampBeat()
+		case <-passes.C:
+			h.stampBeat()
+			h.safely("seat_heartbeat_tick_failed", func() { h.Heartbeat(ctx) })
+			h.stampBeat()
 		}
-		h.stampBeat()
-		ticks++
-		if ticks < ticksPerPass {
-			continue
-		}
-		ticks = 0
-		h.safely("seat_heartbeat_tick_failed", func() { h.Heartbeat(ctx) })
-		h.stampBeat()
 	}
 }
 
-// ticksPerPass is how many watchdog beats the heartbeat loop counts between
-// renew passes.
+// renewPeriod is how often the heartbeat loop renews: ONE BEAT INSIDE THE
+// HEARTBEAT.
 //
-// A FUNCTION rather than three lines inside the loop, for the reason this
+// A FUNCTION rather than an expression inside the loop, for the reason this
 // tree gives everywhere the arithmetic is the decision: a rule exercised only
 // by starting a goroutine and watching a clock is a rule nobody re-measures.
-// [TestAHealthyNodeNeverRefusesItsOwnSeat] calls this directly, over a range
-// of TTLs, in microseconds.
+// [TestAHealthyNodeNeverRefusesItsOwnSeat] calls it directly, over a range of
+// TTLs, and [TestAHealthyNodeAdmitsItsSeatThroughEveryRenew] runs the loop on
+// a bubble's clock around it.
 //
-// ROUNDED DOWN, and that is the whole of it: the pass period must never
-// EXCEED the window [Host.MayStart] judges a renew by, because the two are
-// the same quantity read from opposite ends. MayStart refuses when
-// `elapsed > h.heartbeat`; the pass runs every ticksPerPass × beatInterval().
-// Rounding UP made that product larger than the heartbeat whenever the beat
-// did not divide it, and the difference is a window in EVERY cycle where a
-// healthy, renewing node refuses work it holds the lease for — measured at
-// 16.1 % of samples at a 3 s TTL, against the 16.7 % the arithmetic predicts.
-// internal/node defers such a delivery and quiesces that seat's consumer
-// until the next renew, so the cost is the rest of the cycle rather than the
-// width of the sample.
+// # The heartbeat is a deadline for a renew to LAND
 //
-// Invisible at the shipped default for the same reason [Host.beatInterval]'s
-// ceiling was: 45 s gives a 15 s heartbeat and a 1 s beat, which divides
-// exactly. It bit 1 s, 3 s, 5 s and 10 s TTLs at a sixth of every cycle and
-// 20 s at a twentieth — the values somebody lowers to, which is exactly when
-// it matters.
+// [Host.MayStart] refuses a seat whose last renew is more than one heartbeat
+// old, so one heartbeat after a renew is when the next one must have been
+// ANSWERED. The stamp it leaves is the instant it was SENT — [Host.Heartbeat]
+// reads the clock before the store call, the earliest instant the store can
+// have counted the lease's new deadline from — and it is recorded only once
+// the store says the renew succeeded, since one still in flight may yet fail. So a pass run
+// every heartbeat sends each renew at the very instant the proof it replaces
+// stops admitting, and the seat refuses its own work for the renew's whole
+// round trip: in EVERY cycle, at every TTL whose beat divides its heartbeat —
+// the shipped 45 s, 30 s, 15 s and 90 s among them, five refusals in five
+// renews at each. internal/node defers a delivery landing there and quiesces
+// the seat's consumer until that renew lands. Sent a beat early, the renew has
+// the beat to land in.
 //
-// Down rather than up is safe in the direction that matters: it renews MORE
-// often than strictly needed, never less, so no lease is closer to lapsing
-// than it was. What it costs is one extra renew per pass at a TTL where the
-// beat does not divide the heartbeat, which is a store write measured in
-// microseconds against a window measured in seconds.
-func (h *Host) ticksPerPass() int {
-	ticks := int(h.heartbeat / h.beatInterval())
-	if ticks < 1 {
-		// beatInterval already caps the beat at the heartbeat, so this
-		// is unreachable through it — kept because a zero here would
-		// fire the pass on every tick, which is the one arithmetic
-		// mistake this loop cannot survive.
-		return 1
-	}
-	return ticks
+// Neither of the other two quantities is the wrong one. A stamp taken when the
+// answer arrives would credit the node with the round trip it never held,
+// which [Host.Provable] and the unreachable-store grace measure from too; and
+// MayStart's window is what certifies every turn it admits owned for at least
+// ttl - heartbeat, so widening it by the renew's duration would admit on a
+// proof older than that promise. The schedule was the quantity read against
+// the wrong end of the window.
+//
+// A BEAT because it is this loop's resolution and the lateness the watchdog
+// already reads as behind ([Watchdog.Lag]): a renew that lands more than a
+// beat after its schedule is a loop that has fallen behind — a store that
+// slowed between passes, a pass longer than a period — which is what the
+// deferral and the resume on the next successful renew are for
+// ([Host.NoteDeliveryDeferred]). A beat is a second from 5 s up, against a
+// store round trip measured in milliseconds; below that [Host.beatInterval]
+// keeps it to half the heartbeat, so the pass never runs more than twice a
+// heartbeat.
+//
+// # On a ticker of its own
+//
+// It used to run every so many beats, counted as the loop received them. A
+// ticker drops the ticks that come due while its receiver is busy, so a pass
+// longer than two beats delayed the next pass by every beat it dropped — and a
+// pass is that long without anything being wrong, because the status hook it
+// renews presence with may spend a fifth of the heartbeat
+// ([StatusBudgetRatio]): three beats at the shipped TTL, and at 90 s a
+// five-second hook ran the renews 34 s apart against a 30 s window. A ticker of
+// its own keeps the schedule it started with whatever a pass costs, short of a
+// pass longer than the period itself, which is lateness.
+//
+// Shorter than the heartbeat is safe in the direction that matters: it renews
+// MORE often than the ratio needs, never less, so no lease is ever closer to
+// lapsing than it was. What it costs is a renew per seat every fourteen
+// seconds rather than fifteen at the shipped TTL.
+func (h *Host) renewPeriod() time.Duration {
+	// Positive whatever a host was built with, because a ticker panics on
+	// anything else: beatInterval is at most half the heartbeat, so this is
+	// at least a beat for every heartbeat of two nanoseconds or more.
+	return max(h.heartbeat-h.beatInterval(), time.Nanosecond)
 }
 
 // beatInterval is how often the heartbeat goroutine proves it is turning.
@@ -95,17 +120,20 @@ func (h *Host) ticksPerPass() int {
 // perfectly healthy node report itself a whole threshold behind and shoot
 // itself. Invisible at the shipped values (45 s vs 1 s) and lethal to anyone
 // who lowers the TTL, so it is enforced rather than documented.
+//
+// And never more than HALF the heartbeat: the renew pass runs a beat inside
+// the heartbeat ([Host.renewPeriod]), so a beat longer than half of it would
+// leave the pass less than a beat after the one before. That binds only below
+// a 6 s TTL, where the ceiling is a fifth of the TTL and the heartbeat a
+// third, and where it also keeps the beat from lagging the work it proves.
 func (h *Host) beatInterval() time.Duration {
 	d := beatCeiling(h.ttl)
-	// Never slower than the pass itself: a beat that lags the work it is
-	// meant to prove would report a stall the node has not had.
-	if h.heartbeat < d {
-		d = h.heartbeat
+	if half := h.heartbeat / 2; half < d {
+		d = half
 	}
-	if d <= 0 {
-		d = time.Millisecond
-	}
-	return d
+	// A ticker panics on a non-positive interval, which only a heartbeat
+	// of a nanosecond would leave here.
+	return max(d, time.Nanosecond)
 }
 
 // --- the heartbeat --------------------------------------------------------

@@ -1562,34 +1562,37 @@ func TestTheHeartbeatFollowsTheConfiguredTTL(t *testing.T) {
 }
 
 // A HEALTHY NODE IS NEVER STALE BY CONSTRUCTION, which is the other half of
-// the ratio above and the half that was wrong.
+// the ratio above and the half that was wrong twice.
 //
-// [Host.MayStart] refuses a delivery when `elapsed > h.heartbeat`, and the
-// heartbeat loop runs its pass every ticksPerPass × beatInterval(). Those are
-// the same quantity read from opposite ends, so the pass period must fit
-// inside the window — and it did not: ticksPerPass rounded UP to a whole
-// number of watchdog beats while MayStart compared against the unrounded
-// heartbeat. Whenever the beat did not divide the heartbeat, the difference
-// was a window in every cycle where a node holding a live lease, renewing on
-// time, refused work it was entitled to run. Measured at a 3 s TTL: renews
-// every 1.200 s against a 1.000 s window, MayStart false in 16.1 % of
-// samples.
+// [Host.MayStart] refuses a delivery once the seat's last renew is more than a
+// heartbeat old, and that renew's stamp is the instant it was SENT, recorded
+// only once the store has answered. So the pass that renews it has to be SENT
+// early enough to be ANSWERED inside the window: the renew period plus the
+// renew's own time must fit in the heartbeat. Twice it did not:
+//
+//   - the pass ran every whole number of watchdog beats rounded UP, longer
+//     than the heartbeat wherever the beat did not divide it — a window in
+//     every cycle at 1 s, 3 s, 5 s, 10 s and 20 s, 16.1 % of samples at 3 s;
+//   - rounded DOWN, it equalled the heartbeat wherever the beat DID divide
+//     it — the shipped 45 s, 15 s, 30 s and 90 s — so each renew went out at
+//     the very instant the proof it replaced stopped admitting, and the seat
+//     refused its own work for the renew's whole round trip, every cycle.
 //
 // The cost is not cosmetic. internal/node defers such a delivery and calls
-// NoteDeliveryDeferred, which quiesces that seat's consumer until the next
-// successful renew re-fires OnAdmission — so the seat stops taking work for
-// the rest of the cycle rather than for the width of the sample.
+// NoteDeliveryDeferred, which quiesces that seat's consumer until the renew in
+// flight lands and re-fires OnAdmission.
 //
-// OVER A RANGE, because the shipped default hides it: 45 s gives a 15 s
-// heartbeat and a 1 s beat, which divides exactly. The TTLs that bite are the
-// small ones somebody lowers to, which is exactly when this matters.
+// OVER A RANGE, because each shape hid at a different set of TTLs. The renew
+// is given a beat to land in ([Host.renewPeriod]);
+// [TestAHealthyNodeAdmitsItsSeatThroughEveryRenew] runs the loop itself
+// against a store that takes time to answer.
 func TestAHealthyNodeNeverRefusesItsOwnSeat(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
 	for _, ttl := range []time.Duration{
 		time.Second, 3 * time.Second, 5 * time.Second, 9 * time.Second,
-		10 * time.Second, 20 * time.Second, 30 * time.Second, 45 * time.Second,
-		90 * time.Second, 10 * time.Minute,
+		10 * time.Second, 15 * time.Second, 20 * time.Second, 30 * time.Second,
+		45 * time.Second, 90 * time.Second, 10 * time.Minute,
 	} {
 		h := f.newHost(fmt.Sprintf("fits-%s", ttl), Config{TTL: ttl})
 		// THROUGH THE PRODUCTION ARITHMETIC, never a copy of it. A
@@ -1597,12 +1600,16 @@ func TestAHealthyNodeNeverRefusesItsOwnSeat(t *testing.T) {
 		// passed with the bug restored — it was asserting about its own
 		// expression rather than about the loop's.
 		beat := h.beatInterval()
-		period := time.Duration(h.ticksPerPass()) * beat
-		if period > h.heartbeat {
-			t.Errorf("ttl %v: the renew pass runs every %v but MayStart refuses "+
-				"past %v, so a healthy node refuses its own seat for %v of every "+
-				"cycle (%.1f%%)", ttl, period, h.heartbeat, period-h.heartbeat,
-				100*float64(period-h.heartbeat)/float64(period))
+		period := h.renewPeriod()
+		if period+beat > h.heartbeat {
+			t.Errorf("ttl %v: the renew pass runs every %v and MayStart refuses "+
+				"past %v, which leaves a renew %v rather than a beat (%v) to be "+
+				"answered in before its seat refuses its own work", ttl, period,
+				h.heartbeat, h.heartbeat-period, beat)
+		}
+		if period < beat {
+			t.Errorf("ttl %v: the renew pass runs every %v, less than a beat (%v) "+
+				"after the one before it", ttl, period, beat)
 		}
 		// AND THE LEASE IS STILL LIVE at the far edge of that window: the
 		// bound MayStart admits on has to leave room for the renew that
