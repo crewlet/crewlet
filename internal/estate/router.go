@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"log/slog"
 	"reflect"
 	"slices"
 	"strings"
@@ -481,7 +482,7 @@ func (r *Router) route(ctx context.Context, spec *opSpec, actor *Actor, x exchan
 			}
 			continue
 		}
-		if value, final, ranErr := r.settle(spec, x, node, rep, w); final {
+		if value, final, ranErr := r.settle(ctx, spec, x, node, rep, w); final {
 			return value, ranErr
 		}
 	}
@@ -532,7 +533,7 @@ func (r *Router) lastResort(ctx context.Context, spec *opSpec, actor *Actor, x e
 			}
 			continue
 		}
-		if value, final, ranErr := r.settle(spec, x, node, rep, w); final {
+		if value, final, ranErr := r.settle(ctx, spec, x, node, rep, w); final {
 			return value, true, ranErr
 		}
 	}
@@ -657,8 +658,8 @@ func (r *Router) unheard(ctx context.Context, spec *opSpec, node string, h heard
 // settle is what one node's reply decides: final when it is the answer, and
 // otherwise noted on the walk — a node that ran nothing, or an answer not final
 // for its class, kept in case no node gives a better one.
-func (r *Router) settle(spec *opSpec, x exchange, node string, rep reply, w *walk) (
-	value any, final bool, err error) {
+func (r *Router) settle(ctx context.Context, spec *opSpec, x exchange, node string,
+	rep reply, w *walk) (value any, final bool, err error) {
 
 	if rep.Unserved != "" {
 		if rep.Unserved == unservedLagging {
@@ -674,6 +675,19 @@ func (r *Router) settle(spec *opSpec, x exchange, node string, rep reply, w *wal
 			w.fallback = &held{err: failure}
 			w.note("%s: unvouched", node)
 			return nil, false, nil
+		}
+		// A CONDITION ANOTHER NODE MET IS NAMED HERE, the one place that
+		// knows whose it was: it is handed back as this node's answer, and
+		// every surface tells the person "the node answering this" and
+		// logs the error — which carries the refusal and not the node that
+		// made it, so an administrator sent to the logs by "the logs name
+		// it" would otherwise check the node they asked rather than the one
+		// that refused. At the level the surface logs the condition at
+		// ([statelog.ConditionLevel]).
+		if errors.Is(failure, statelog.ErrUnavailable) {
+			log.Log(ctx, statelog.ConditionLevel(failure, slog.LevelDebug),
+				"estate_peer_refused", "node", node, "op", spec.name,
+				"error", failure.Error())
 		}
 		return nil, true, failure
 	}

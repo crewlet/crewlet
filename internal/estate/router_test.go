@@ -1,9 +1,12 @@
 package estate
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"log/slog"
 	"reflect"
 	"slices"
 	"strings"
@@ -15,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/knowledge"
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -1514,5 +1518,41 @@ func TestWedgedDataNodesCostAdmissionNoMoreThanItsBound(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("admission waited on every wedged data node in turn, past its bound")
+	}
+}
+
+// A DATA NODE'S REFUSAL IS NAMED IN THE ASKING NODE'S LOG. Handed back as the
+// asking node's own answer, it is told to a person as "the node answering this"
+// with the advice that the logs name it — and the error a surface logs carries
+// the refusal and no node, since the wire carries none. So the router names the
+// node it asked, at the level a surface logs the condition: WARN for one no
+// wait clears.
+//
+// Not parallel: it installs the process's log sink.
+//
+// Mutation: drop the line from settle and the log names nobody.
+func TestADataNodesRefusalIsNamedInTheAskingNodesLog(t *testing.T) {
+	var out bytes.Buffer
+	logging.Configure(slog.LevelInfo, logging.FormatText, &out)
+	t.Cleanup(func() { logging.Configure(slog.LevelError, logging.FormatText, io.Discard) })
+
+	f := newFleet(t, "data-a")
+	f.nodes["data-a"].failWith = &statelog.Refused{Code: statelog.RefuseDeferred,
+		Level: statelog.ReadLinearizable, Detail: "a record at 3:4182 this build cannot decode"}
+	_, err := f.client.Work().Tasks(t.Context(), worklet.Query{}, time.Now())
+	var refused *statelog.Refused
+	if !errors.As(err, &refused) || refused.Code != statelog.RefuseDeferred {
+		t.Fatalf("err = %v, want data-a's deferred refusal", err)
+	}
+	var line string
+	for l := range strings.Lines(out.String()) {
+		if strings.Contains(l, "estate_peer_refused") {
+			line = l
+		}
+	}
+	if line == "" || !strings.Contains(line, "node=data-a") ||
+		!strings.Contains(line, "WARN") || !strings.Contains(line, "3:4182") {
+		t.Fatalf("the asking node's log does not name the node that refused at "+
+			"WARN with its detail:\n%s", out.String())
 	}
 }

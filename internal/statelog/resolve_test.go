@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -101,6 +102,24 @@ func TestACollapsedWriteIsJudgedByTheWriterOfTheCopy(t *testing.T) {
 			}
 			if asked := h.gates.askedAbout(); !slices.Equal(asked, []string{tc.writer}) {
 				t.Errorf("the gates were asked about %v, want the copy's writer alone", asked)
+			}
+			// WHEN TO COME BACK AND WHAT A PERSON IS TOLD: another node's
+			// copy clears once the duplicate window lets go of the id, so
+			// it carries the window as its hint and asks the person to send
+			// it again then, never to readmit a node. This node's own copy
+			// is its own eviction, which no wait clears.
+			wait := statelog.RetryAfter(err, time.Second)
+			said, _ := statelog.ConditionSentence(err)
+			if tc.named != "" {
+				if wait != 2*time.Minute || !strings.HasSuffix(said,
+					statelog.TryAgainLater) || strings.Contains(said, "readmit") {
+					t.Errorf("another node's evicted copy waits %s and is told %q, "+
+						"want the 2m0s window and %q", wait, said,
+						statelog.TryAgainLater)
+				}
+			} else if wait != 0 || !strings.Contains(said, "readmit") {
+				t.Errorf("this node's own evicted copy waits %s and is told %q, "+
+					"want no wait and a readmission", wait, said)
 			}
 		})
 	}
