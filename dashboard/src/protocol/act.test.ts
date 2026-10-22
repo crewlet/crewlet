@@ -286,7 +286,16 @@ describe("what a change came to", () => {
 
   test("an unavailable the engine says no wait clears is not worth retrying", async () => {
     stub(async () =>
-      json({ error: "unavailable", tool: "set_pins", refusal: "log_full", detail: "full" }, 503),
+      json(
+        {
+          error: "unavailable",
+          tool: "set_pins",
+          refusal: "log_full",
+          detail:
+            "There's no room left to save this kind of change. An administrator needs to make room for it.",
+        },
+        503,
+      ),
     );
     const result = await act("set_pins", {}, { floors: new SessionFloors() });
     expect(result).toMatchObject({ kind: "refused", code: "unavailable", retryable: false });

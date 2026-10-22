@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/artifactsapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/operator"
@@ -263,7 +264,7 @@ func (s *Service) origin(w http.ResponseWriter, r *http.Request, a artifactsapi.
 			invalid(w, "the version the page names is not one this artifact keeps")
 			return "", false
 		case err != nil:
-			unavailable(w, err, "this node could not read the page's version")
+			unavailableAbout(w, r, err, "this node could not read the page's version")
 			return "", false
 		case !slices.Contains(v.Capabilities, capability):
 			httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeForbidden, map[string]string{
@@ -477,7 +478,7 @@ func (s *Service) export(w http.ResponseWriter, r *http.Request) {
 		// answered as an empty file rather than a body-less 200.
 		out.start()
 	case err != nil && !out.started:
-		readFailed(w, err)
+		readFailed(w, r, err)
 	case err != nil:
 		// A STORE THAT STOPPED ANSWERING HALF-WAY: the rows already sent
 		// cannot be recalled, so the connection is cut rather than ended
@@ -612,12 +613,12 @@ func writeFailed(w http.ResponseWriter, r *http.Request, key string, err error) 
 	case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
 		operator.Interrupted(w, r, key, string(authz.ActionArtifactDataWrite), err)
 	default:
-		unavailable(w, err, "this node could not write the artifact's data")
+		unavailableAbout(w, r, err, "this node could not write the artifact's data")
 	}
 }
 
 // readFailed renders a read that could not be answered.
-func readFailed(w http.ResponseWriter, err error) {
+func readFailed(w http.ResponseWriter, r *http.Request, err error) {
 	detail := map[string]string{"detail": said(err)}
 	switch {
 	case errors.Is(err, artifactdata.ErrGone):
@@ -627,7 +628,7 @@ func readFailed(w http.ResponseWriter, err error) {
 	case errors.Is(err, artifactdata.ErrInvalid), errors.Is(err, artifactdata.ErrBadCursor):
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams, detail)
 	default:
-		unavailable(w, err, "this node could not read the artifact's data")
+		unavailableAbout(w, r, err, "this node could not read the artifact's data")
 	}
 }
 
@@ -635,6 +636,24 @@ func readFailed(w http.ResponseWriter, err error) {
 func invalid(w http.ResponseWriter, detail string) {
 	httpjson.FailWith(w, http.StatusUnprocessableEntity, httpjson.CodeInvalid,
 		map[string]string{"detail": detail})
+}
+
+// unavailableAbout is [unavailable] for a read or a write of the estate that
+// failed: a CONDITION of the node is told in a person's words for it
+// ([builtin.ConditionSentence]), which say whether to come back exactly as the
+// Retry-After does, and its error goes to the log ([operator.LogCondition]);
+// anything else is told in detail, its error logged as a failure. Neither
+// sent the error anywhere before, and "could not write the artifact's data"
+// was the whole answer to a log at its ceiling, under no Retry-After.
+func unavailableAbout(w http.ResponseWriter, r *http.Request, err error, detail string) {
+	if said, ok := builtin.ConditionSentence(err); ok {
+		operator.LogCondition(r.Context(), log, "artifact_data_unavailable", err,
+			"artifact", r.PathValue("id"))
+		unavailable(w, err, said)
+		return
+	}
+	log.WarnContext(r.Context(), "artifact_data_failed", "error", err.Error())
+	unavailable(w, err, detail)
 }
 
 // unavailable is a 503 whose cause says whether, and when, to come back.

@@ -16,6 +16,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
@@ -24,8 +25,10 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
@@ -537,9 +540,12 @@ func TestANativeQuestionOnANodeWithNoCompanyIsOneAnswerOnBothTransports(t *testi
 // stream — reached the caller as a 500 `query_failed` with the refusal's words
 // sent only to the log, and a refusal waiting cannot clear, a record this node
 // cannot decode, always had. Neither is a fault. Both transports now answer
-// `unavailable` with the refusal's code and detail, and the hint is the state
-// log's: none at all for a refusal no wait changes, so a client is told what
-// to do rather than to poll, and the derived hint for a node that is behind.
+// `unavailable` with the refusal's code and the state log's sentence for it,
+// what happened and what to do ([statelog.ConditionSentence]), and never the
+// refusal's own detail, which names a setting or the broker's words for
+// whoever runs the node and goes to the log; and the hint is the state log's:
+// none at all for a refusal no wait changes, so a client is told what to do
+// rather than to poll, and the derived hint for a node that is behind.
 func TestAStateLogRefusalIsUnavailableOnBothTransports(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -576,17 +582,18 @@ func TestAStateLogRefusalIsUnavailableOnBothTransports(t *testing.T) {
 			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 				t.Fatalf("REST body: %v", err)
 			}
+			said, _ := statelog.ConditionSentence(tc.refused)
 			if body["error"] != "unavailable" || body["refusal"] != string(tc.refused.Code) ||
-				body["detail"] != httpjson.Sentence(tc.refused.Detail) {
-				t.Errorf("REST body = %v, want unavailable carrying %s and its words",
-					body, tc.refused.Code)
+				body["detail"] != said {
+				t.Errorf("REST body = %v, want unavailable carrying %s and %q",
+					body, tc.refused.Code, said)
 			}
 
 			socket := overSocket(t, a, "refused", nil)
 			if socket["error"] != "unavailable" || socket["refusal"] != string(tc.refused.Code) ||
-				socket["detail"] != httpjson.Sentence(tc.refused.Detail) {
-				t.Errorf("socket answer = %v, want unavailable carrying %s and its words",
-					socket, tc.refused.Code)
+				socket["detail"] != said {
+				t.Errorf("socket answer = %v, want unavailable carrying %s and %q",
+					socket, tc.refused.Code, said)
 			}
 			wantSeconds := 0.0
 			if tc.retry != "" {
@@ -595,6 +602,60 @@ func TestAStateLogRefusalIsUnavailableOnBothTransports(t *testing.T) {
 			if got, ok := socket["retry_after"].(float64); !ok || got != wantSeconds {
 				t.Errorf("socket retry_after = %v, want %v — its zero is the answer, "+
 					"so it is never omitted", socket["retry_after"], wantSeconds)
+			}
+		})
+	}
+}
+
+// EVERY CONDITION IS TOLD IN THE SAME WORDS ON EVERY TRANSPORT, not a
+// state-log refusal's alone.
+//
+// A coordination store that did not answer, no data node serving, a store
+// busy or closed, a queue down and a read that ran out of time are each
+// `unavailable` on the query surface, and were worded only where a state-log
+// refusal was behind them: REST answered the table's fixed message and the
+// socket no detail at all, while the act route, the work surface and the
+// artifacts told the same error in [builtin.ConditionSentence]'s words — one
+// read, three texts. Both transports now carry that sentence for every one,
+// and nothing of the error's own text.
+//
+// Mutation: word only a state-log refusal in stream.UnavailableOf, or carry
+// the detail only beside a refusal in Fields, and every row goes red.
+func TestEveryConditionIsToldInTheSameWordsOnEveryTransport(t *testing.T) {
+	t.Parallel()
+	for name, cond := range map[string]error{
+		"a coordination store that did not answer": coord.ErrUnavailable,
+		"no data node serving":                     &estate.ErrUnserved{Detail: "data-a: out of service"},
+		"a store too busy":                         store.ErrBusy,
+		"a store closed":                           store.ErrNoEstate,
+		"a queue that is not running":              queue.ErrNotLive,
+		"a broker that did not answer":             queue.ErrUnavailable,
+		"a read that ran out of time":              context.DeadlineExceeded,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			err := fmt.Errorf("read the board via nats://10.0.0.7:4222: %w", cond)
+			said, ok := builtin.ConditionSentence(err)
+			if !ok {
+				t.Fatalf("%v is no condition", err)
+			}
+			a := seededApp(t, nil)
+			a.Queries().Register("blinked", queries.Everybody(),
+				func(context.Context, queries.Params) (any, error) { return nil, err })
+
+			status, answered := overREST(t, a, "blinked", nil)
+			body, _ := answered.(map[string]any)
+			if status != http.StatusServiceUnavailable || body["detail"] != said {
+				t.Errorf("REST = %d %v, want 503 carrying %q", status, body, said)
+			}
+			socket := overSocket(t, a, "blinked", nil)
+			if socket["error"] != "unavailable" || socket["detail"] != said {
+				t.Errorf("socket answer = %v, want unavailable carrying %q", socket, said)
+			}
+			for _, leak := range []string{"10.0.0.7", "nats:"} {
+				if strings.Contains(fmt.Sprint(body, socket), leak) {
+					t.Errorf("the answer carries %q: %v %v", leak, body, socket)
+				}
 			}
 		})
 	}

@@ -23,6 +23,13 @@ import type {
 } from "./types.ts";
 import { healthFrame } from "~/test/health.ts";
 
+/** The engine's sentence for a read refused on a log at its ceiling
+ *  (`statelog.ConditionSentence`), which is what a frame's `detail` carries:
+ *  never the refusal's own detail, which stays in the node's log. */
+const FULL_LOG =
+  "There's no room left to save this kind of change, so the node answering this can't " +
+  "confirm it has the latest ones. An administrator needs to make room for it.";
+
 /** One member of a room, as the presence hub presents it. */
 function member(seat: string, over: Partial<RoomMember> = {}): RoomMember {
   return {
@@ -947,7 +954,7 @@ describe("a refused query", () => {
         error: "unavailable",
         retry_after: 4,
         refusal: "log_full",
-        detail: "the tracker log is at its ceiling",
+        detail: FULL_LOG,
       }),
     );
     const err = await asked.catch((e: unknown) => e);
@@ -955,7 +962,7 @@ describe("a refused query", () => {
     expect((err as QueryError).message).toBe("unavailable");
     expect((err as QueryError).refusal).toEqual({
       code: "log_full",
-      detail: "the tracker log is at its ceiling",
+      detail: FULL_LOG,
       retryAfter: 4,
     });
   });

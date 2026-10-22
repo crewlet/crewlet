@@ -13,7 +13,12 @@
  *    gateway's page). It is NEVER retried here: a retry is the person's, and it
  *    sends the SAME operation key, which the engine resolves to the first
  *    attempt's write rather than a second one, except on a route that reads no
- *    key, where a retry is a new one and the sentence says so;
+ *    key, where a retry is a new one and the sentence says so. So is a write
+ *    that LANDED and whose answer the node could not read back yet — a created
+ *    person's first password link, an invitation's: the engine's `503` with the
+ *    write's own outcome (`applied` or `pending`), in its own words. Only the
+ *    same request under the same key hands back what it made, and a new key is
+ *    refused by what the first attempt now holds;
  *  - **refused**: the engine said no, in its own words, with the access that
  *    would have admitted the caller where that access is the way past the
  *    rule, the steps a sequence had already landed (`landed`, worded by the
@@ -142,6 +147,19 @@ function refusalOf(
     landed.length > 0
       ? ` What did change: ${landed.map((s) => landedWords[s] ?? s).join(" and ")}.`
       : "";
+  // A WRITE THAT LANDED, whose answer the node could not read back yet: the
+  // key is kept for the retry its words ask for, which is the only one that
+  // hands back what it made.
+  const unread =
+    err.status === 503 && (err.body.outcome === "applied" || err.body.outcome === "pending");
+  if (unread && sent) {
+    const key = typeof err.body.op_id === "string" ? err.body.op_id : sent;
+    return {
+      kind: "unknown",
+      key,
+      text: `${openSentence(err.detail)}${changed}`,
+    };
+  }
   const unknown = err.unanswered || (err.status === 503 && err.body.outcome === "unknown");
   if (unknown) {
     const key = sent ? (typeof err.body.op_id === "string" ? err.body.op_id : sent) : "";

@@ -221,6 +221,29 @@ forecast](retention.md#the-storage-forecast).
 A read that cannot be served at the level asked for is **refused with a code**
 rather than downgraded. Each code names a different thing to do.
 
+A person is told each code, and each write reason below, in a sentence of its
+own — what happened and what to do, asking them to try again in a moment
+exactly where the answer carries a `Retry-After` — in an API answer's
+`detail`, which the dashboard's screens draw as it stands. A write through the
+operator's act route, or through the human write surface's tools and tool-less
+verbs, is the exception: it answers at ADR-0060's floor, with no `detail`, so
+the `unavailable` code's own sentence stands alone beside the `Retry-After`.
+The sentence names
+the node by what it is doing (the node handling a change, the node answering a
+question), because the node that refused may be a data node the one you asked
+routed to; that node's log names it (`estate_peer_refused`). A refusal of
+another node's copy of your write, which the node that refused finishes itself
+once the log's duplicate window lets go of the operation, asks you to try again
+in a few minutes, and carries that window as its `Retry-After`.
+
+The refusal's own detail, which the tables below describe (the broker's words,
+the record's size, the setting to change), names positions and settings for
+whoever runs the node, so it goes to the answering node's log rather than to an
+answer's `detail`. The gate and retention tooling an operator drives —
+`crewlet retention` and the dashboard's evict and readmit dialog — still shows
+it, and the configuration screens say in words of their own that a change may
+or may not have landed when the engine answers a write with a `5xx`.
+
 | Code | What happened | What to do |
 |---|---|---|
 | `behind` | This node has not reached the position the read needs — including a node below the published trim floor whose missing records the log still holds, which it is replaying. | Wait — the answer carries a retry hint derived from this node's measured drain. It clears on its own. |

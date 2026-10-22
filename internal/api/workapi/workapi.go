@@ -948,8 +948,11 @@ func failErr(w http.ResponseWriter, r *http.Request, err error, key string) {
 // AND "THIS NODE" IS TWO THINGS, told apart by the rule every tool classes a
 // failure of its own by ([builtin.Condition]). A CONDITION waiting clears — a
 // read the state log refused, a store closed while it adopts a peer's
-// snapshot — is `503` in the condition's own words, with the refusal's hint:
-// composed for a caller, and saying whether waiting helps. Anything else is a
+// snapshot — is `503` in a person's words for the condition
+// ([builtin.ConditionSentence]), with the refusal's hint, and its error in the
+// log: it was answered "this node could not read what the decision is about: "
+// followed by the refusal's own text, the framework's name and a position in
+// it. Anything else is a
 // FAULT: `500 internal_error`, its words to the log at error, because nobody
 // but whoever runs the node can act on it. Both were one 503 carrying the
 // error's text, so a store this node could not read told a client to come
@@ -977,9 +980,10 @@ func readFailed(w http.ResponseWriter, r *http.Request, err error) {
 			map[string]string{"detail": builtin.ReadRefusalSentence(err)})
 		return
 	}
-	if why, ok := builtin.Condition(err); ok {
-		unavailableFor(w, err, "this node could not read what the decision is "+
-			"about: "+why)
+	if said, ok := builtin.ConditionSentence(err); ok {
+		operator.LogCondition(r.Context(), log, "api_work_read_unavailable", err,
+			"path", r.URL.Path)
+		unavailableFor(w, err, said)
 		return
 	}
 	log.ErrorContext(r.Context(), "api_work_read_failed", "error", err.Error())

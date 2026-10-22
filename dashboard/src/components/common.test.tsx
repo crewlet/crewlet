@@ -134,6 +134,37 @@ test("a seat card links through seatPath, so an empty handle still reaches a pag
 // A REFUSAL WITH THE ENGINE'S SENTENCE SAYS THE SENTENCE. The generic
 // `bad_params` banner says only that the engine refused; the engine's words
 // name the parameter, so they replace it.
+// A CONDITION OF THE NODE IS THE ENGINE'S OWN SENTENCE, which names what to do
+// and agrees with whether waiting changes it. It was a fixed "Try another node"
+// for every refusal no wait clears, which contradicted the engine where every
+// node is refused alike (a full log, maintenance), and a fixed "Still catching
+// up" for one that clears whatever the engine said. Mutation: draw the fixed
+// banners again and both rows lose the engine's words.
+test("an unavailable answer says the engine's own sentence for the condition", () => {
+  const full =
+    "There's no room left to save this kind of change. An administrator needs to make room for it.";
+  render(
+    <QueryState
+      error="unavailable"
+      refusal={{ code: "log_full", detail: full, retryAfter: 0 }}
+      loading={false}
+    />,
+  );
+  expect(screen.getByText(full)).toBeTruthy();
+  expect(screen.queryByText(/Try another node/)).toBeNull();
+  cleanup();
+  const behind =
+    "The node answering this hasn't caught up with the latest changes yet. Try again in a moment.";
+  render(
+    <QueryState
+      error="unavailable"
+      refusal={{ code: "behind", detail: behind, retryAfter: 3 }}
+      loading={false}
+    />,
+  );
+  expect(screen.getByText(behind)).toBeTruthy();
+});
+
 test("a bad_params refusal with the engine's sentence shows the sentence, not the guess", () => {
   render(<QueryState error="bad_params" detail="days=91 is past the ninety" loading={false} />);
   expect(

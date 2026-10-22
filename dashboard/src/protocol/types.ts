@@ -4904,11 +4904,13 @@ export interface Frame {
    *  log because what the directory says about a login names its seat. */
   refusal?: string;
   /**
-   * The refusal's own words, on two error frames and nowhere else: a query's
-   * `unavailable` (what the state log's refusal is about and what changes it)
-   * and a `bad_params` (the parameter to change and what it accepts). Both are
-   * written FOR the caller; every other failure's text stays in the node's
-   * log, so this is never a path or a driver's message.
+   * A sentence for the person, on two error frames and nowhere else: a query's
+   * `unavailable` (the state log's sentence for its refusal, what happened and
+   * what to do, whose advice agrees with `retry_after`) and a `bad_params` (the
+   * parameter to change and what it accepts). Both are written FOR the caller;
+   * every other failure's text stays in the node's log, and so does a
+   * refusal's own detail, so this is never a path, a position, a setting or a
+   * driver's message.
    */
   detail?: string;
   /** On an `unavailable` error frame, a query's or a watch's: seconds before
@@ -4958,7 +4960,12 @@ export interface LogRefusal {
    *  and the question is over its tracker or knowledge base — the code a REST
    *  503 carries for it — or null where neither is behind the answer. */
   code: string | null;
-  /** The refusal's own words: what it is about and what changes it. */
+  /** The engine's sentence for the condition, written for a person: what
+   *  happened and what to do, in step with `retryAfter`. Every condition has
+   *  one, a state-log refusal's and a coordination store that did not answer
+   *  alike, and `QueryState` draws it as it stands. Never the refusal's own
+   *  detail, which names positions and settings for whoever runs the node and
+   *  stays in its log. */
   detail: string | null;
   /** Seconds before asking THIS node again; zero when waiting will not
    *  change the answer, and then nothing re-asks on a timer. Read through

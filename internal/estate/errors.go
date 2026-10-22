@@ -268,6 +268,7 @@ var typedKinds = []typedKind{
 	{"iamdomain.ErrTaken", reflect.TypeFor[*iamdomain.ErrTaken]()},
 	{"iamdomain.ErrUnknownVersion", reflect.TypeFor[iamdomain.ErrUnknownVersion]()},
 	{"iamdomain.InvitationRedeemed", reflect.TypeFor[*iamdomain.InvitationRedeemed]()},
+	{"iamdomain.NotReadBack", reflect.TypeFor[*iamdomain.NotReadBack]()},
 	{"iamdomain.Refusal", reflect.TypeFor[*iamdomain.Refusal]()},
 
 	{"iam.LookRefused", reflect.TypeFor[*iam.LookRefused]()},

@@ -84,6 +84,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
@@ -105,6 +106,7 @@ import (
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/slack"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 var log = logging.Get("api.setup")
@@ -2292,15 +2294,7 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 	if !req.Force {
 		if err := s.markDisconnecting(r.Context(), kind, req.RemoveSeats,
 			attributionOf(r)); err != nil {
-			// TRANSIENT SAID AS TRANSIENT. Both answers are 503 — the
-			// request can be repeated and may then work — but only this
-			// one is a race the caller should sit out and retry, and a
-			// caller cannot tell them apart from the status alone.
-			code, after := httpjson.CodeUnavailable, authz.RetryUndecidedSeconds
-			if errors.Is(err, errSurfaceBusy) {
-				code, after = httpjson.CodeSurfaceBusy, httpjson.RetrySeconds(RetryBusy)
-			}
-			httpjson.UnavailableWith(w, code, after, httpjson.Detail{"detail": err.Error()})
+			refuseDisconnect(w, r, kind, err)
 			return
 		}
 		log.InfoContext(r.Context(), "setup_disconnect_requested",
@@ -2532,6 +2526,38 @@ type disconnectRequest struct {
 	// saying they will remove what the third-party app holds themselves, so the
 	// answer names what was left behind.
 	Force bool `json:"force"`
+}
+
+// refuseDisconnect answers a disconnect this node could not record: always
+// 503, since the same request may then work.
+//
+// TRANSIENT SAID AS TRANSIENT: a concurrent pass holding the surface is
+// `surface_busy` under its own short wait, because only that one is a race the
+// caller should sit out and retry, and a caller cannot tell it from the rest by
+// the status alone.
+//
+// IN WORDS FOR A PERSON, the error to the log: the detail was the error, so a
+// disconnect the coordination store could not take read "setupapi: this node
+// could not take slack to record the disconnect: " and the store's own
+// transport error, its hosts and ports. A condition is told in its own
+// sentence ([builtin.ConditionSentence]) under its own hint, which is none
+// where no wait clears it.
+func refuseDisconnect(w http.ResponseWriter, r *http.Request, kind integration.Kind, err error) {
+	log.WarnContext(r.Context(), "setup_disconnect_unrecorded",
+		"integration", kind, "error", err.Error())
+	code, after := httpjson.CodeUnavailable, authz.RetryUndecidedSeconds
+	said := "This node couldn't start the disconnect. Try again in a moment."
+	switch condition, isCondition := builtin.ConditionSentence(err); {
+	case errors.Is(err, errSurfaceBusy):
+		code, after = httpjson.CodeSurfaceBusy, httpjson.RetrySeconds(RetryBusy)
+		said = "This integration is being set up right now, so the " +
+			"disconnect didn't start. Try again in a moment."
+	case isCondition:
+		said = condition
+		after = httpjson.RetrySeconds(statelog.RetryAfter(err,
+			time.Duration(authz.RetryUndecidedSeconds)*time.Second))
+	}
+	httpjson.UnavailableWith(w, code, after, httpjson.Detail{"detail": said})
 }
 
 // errSurfaceBusy is [Service.markDisconnecting] refused by a concurrent

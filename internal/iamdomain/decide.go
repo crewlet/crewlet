@@ -310,9 +310,7 @@ func (w *Writer) firstLinkAs(ctx context.Context, result statelog.Result,
 	case err != nil:
 		return Created{Result: result}, err
 	case !found && result.Outcome != statelog.OutcomeApplied:
-		return Created{Result: result}, fmt.Errorf("request %s added person "+
-			"%s, and this node hasn't caught up yet. Retry with "+
-			"the same key: %w", result.OpID, personID, statelog.ErrUnavailable)
+		return Created{Result: result}, &NotReadBack{Result: result}
 	case found && row.Opens(link.Secret, w.Now()):
 		link.ExpiresAt = row.ExpiresAt
 		return Created{Result: result, Link: &link}, nil
@@ -2545,8 +2543,7 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 		// call's terms with the invitation the key issued, nor read the
 		// deadline it keeps. Both are read back now, from the invitation's
 		// own row, by the comparison the decide makes.
-		applied := result.Outcome == statelog.OutcomeApplied
-		if expires, err = w.issuedAs(ctx, id, blind, seat, in, applied); err != nil {
+		if expires, err = w.issuedAs(ctx, id, blind, seat, in, result); err != nil {
 			return InviteIssued{Result: result}, err
 		}
 	}
@@ -2566,8 +2563,8 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 // holds that has not reached this node yet.
 //
 //   - NOT APPLIED HERE, and no row: the invitation landed and its terms cannot
-//     be read yet — unavailable, and the same key retried once this node has
-//     applied it is answered in full.
+//     be read yet — [NotReadBack], and the same key retried once this node
+//     has applied it is answered in full.
 //   - APPLIED HERE, and no row: the row existed and the retention sweep has
 //     COLLECTED it, which it does only to an invitation that was redeemed or
 //     aged out ([Writer.Sweep]) — so the link the key issued admits
@@ -2576,7 +2573,9 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 //     caller to retry the same key, which found the same absence on every
 //     attempt for the rest of the ledger's month.
 func (w *Writer) issuedAs(ctx context.Context, id, blind, seat string,
-	in InviteMint, applied bool) (time.Time, error) {
+	in InviteMint, result statelog.Result) (time.Time, error) {
+
+	applied := result.Outcome == statelog.OutcomeApplied
 
 	expires := in.ExpiresAt
 	err := w.db.Read(ctx, func(tx *sql.Tx) error {
@@ -2593,10 +2592,47 @@ func (w *Writer) issuedAs(ctx context.Context, id, blind, seat string,
 			"one with a new key", ErrOperationReused,
 			in.OpID, id)
 	}
-	return time.Time{}, fmt.Errorf("request %s sent invitation %s, and this "+
-		"node hasn't caught up yet. Retry with the same key: %w",
-		in.OpID, id, statelog.ErrUnavailable)
+	return time.Time{}, &NotReadBack{Result: result, Invitation: true}
 }
+
+// NotReadBack is a create of a person, or an invitation's issue, that LANDED
+// — its record is durable, applied on another node or pending here — and whose
+// answer this node cannot read back yet: the person's first password link, or
+// the invitation's own terms, are rows it has not applied. Only a retry under
+// the SAME key hands them back, answered from the ledger once the rows are
+// here.
+//
+// A TYPE OF ITS OWN rather than a condition wrapped in a sentence, because the
+// one thing a surface must not do is answer it as a condition: it was a bare
+// [statelog.ErrUnavailable] behind a sentence of this package's, which a
+// surface telling every condition in the state log's words answered as "the
+// node couldn't do this right now", so an administrator was told a create
+// that had landed had not, and a screen that mints a fresh key for anything
+// but an unknown outcome sent the retry under a new key — refused by the
+// address and the seat the first attempt now held, with the first password
+// link lost. It still unwraps to [statelog.ErrUnavailable], since it clears by
+// waiting and every rule that asks how long to wait reads it as one.
+type NotReadBack struct {
+	// Result is the write's own outcome where the caller has it, which is
+	// never unknown: the write landed.
+	Result statelog.Result
+
+	// Invitation is an invitation's issue, whose terms were not read back;
+	// false for a person's create, whose first password link was not.
+	Invitation bool
+}
+
+func (e *NotReadBack) Error() string {
+	made := "the person"
+	if e.Invitation {
+		made = "the invitation"
+	}
+	return "iamdomain: " + made + " this key made landed, and this node " +
+		"hasn't applied it yet, so only a retry under the same key reads it back"
+}
+
+// Unwrap makes it a condition that clears by waiting ([statelog.RetryAfter]).
+func (e *NotReadBack) Unwrap() error { return statelog.ErrUnavailable }
 
 // ErrOperationReused reports an operation key that already names something
 // other than what this call asks for: an invitation issued for another address

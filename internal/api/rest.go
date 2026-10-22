@@ -337,7 +337,7 @@ func (a *App) answerHTTP(w http.ResponseWriter, r *http.Request, what string, pa
 	// identity for the two to disagree about.
 	data, err := a.queries.AnswerWith(r.Context(), what, params)
 	if err != nil {
-		writeQueryError(w, what, err)
+		writeQueryError(w, r, what, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, data)

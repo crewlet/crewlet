@@ -415,9 +415,10 @@ func TestADisconnectRefusedByAConcurrentPassSaysItIsRetryable(t *testing.T) {
 			"it should sit out from a refusal that will never change, and "+
 			"treats both as terminal", body["error"])
 	}
-	if detail, _ := body["detail"].(string); !strings.Contains(detail, "try again") {
+	if detail, _ := body["detail"].(string); !strings.Contains(detail, "Try again") ||
+		strings.Contains(detail, "setupapi") || strings.Contains(detail, "gitlab") {
 		t.Errorf("detail = %q, which does not say the request is worth "+
-			"repeating", detail)
+			"repeating, or says it in the error's own words", detail)
 	}
 	// AND WHEN: three seconds, the span this request already waited before
 	// answering busy. The dashboard's dialog waits exactly this header and
