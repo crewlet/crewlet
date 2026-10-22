@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -345,20 +346,21 @@ func TestADirectoryWriteThatFaultedKeepsItsWordsInTheLog(t *testing.T) {
 	}
 }
 
-// A LOST RACE AND A REMOVAL ARE TOLD IN WORDS FOR A PERSON.
+// THE STATE LOG'S REFUSALS ARE TOLD IN WORDS FOR A PERSON.
 //
-// Both are the state log's refusals, and its error names the subject each met:
-// the directory answered a lost race with "statelog: conflict:
+// Each is the state log's refusal, and its error names the subject it met: the
+// directory answered a lost race with "statelog: conflict:
 // crewlet.iam.directory kept changing under this write", and a person removed
-// under the route with the framework's whole refusal, as the `detail` an
-// administrator reads. A lost race is told in the state log's own sentence for
-// a person ([statelog.Sentence]), and a removal as the removal it is — the
-// framework's own words for it say "deleted", which nobody does to a person
-// here — each under the status it always had.
+// under the route, or a key whose operation already names another write, with
+// the framework's whole refusal, as the `detail` an administrator reads. A lost
+// race and a reused key are told in the words every surface tells them in
+// ([statelog.Sentence], [opkey.Reused]), and a removal as the removal it is —
+// the framework's own words for it say "deleted", which nobody does to a
+// person here — each under the status it always had.
 //
-// Mutation: answer either arm's `detail` with the error's own text again and
-// its row goes red.
-func TestALostRaceAndARemovalAreToldInWordsForAPerson(t *testing.T) {
+// Mutation: answer any arm's `detail` with the error's own text again and its
+// row goes red.
+func TestTheStateLogsRefusalsAreToldInWordsForAPerson(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name   string
@@ -372,6 +374,11 @@ func TestALostRaceAndARemovalAreToldInWordsForAPerson(t *testing.T) {
 			Reason: statelog.ReasonDeleted,
 			Detail: "crewlet.iam.person.p-1 was deleted and stays deleted"}),
 			http.StatusNotFound, "This person was removed, so nothing was written."},
+		{"a reused key", fmt.Errorf("%w: %w", iamdomain.ErrOperationReused,
+			&statelog.Unavailable{Reason: statelog.ReasonOpReused,
+				Detail: `operation "op" landed on crewlet.iam.directory at 3:4, and ` +
+					`this write is to crewlet.iam.person.p-1`}),
+			http.StatusConflict, opkey.Reused},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -541,5 +548,48 @@ func TestEveryUnavailableAnswerHereSaysWhetherToComeBack(t *testing.T) {
 	// THE CONTROL: a glob that matched nothing would pass every rule.
 	if checked < 5 {
 		t.Fatalf("checked %d source files, which is not this package", checked)
+	}
+}
+
+// A REUSED KEY IS ANSWERED AS EVERY SURFACE THAT TAKES A KEY ANSWERS ONE:
+// `409 invalid_input` naming the header as the field to change, with the
+// operation it was sent under. It was `bad_params` here, whose sentence is about
+// a query parameter, while the act route answered the same refusal
+// `invalid_input`, so one gesture read two ways under two codes. Both of the
+// directory's reused keys are held: the state log's, told in [opkey.Reused],
+// and the directory's own decide's, told in its own sentence, which says what
+// the key already did.
+//
+// Mutation: answer either with `bad_params` again, or drop the field, and its
+// row goes red.
+func TestAReusedKeyIsAnsweredAsEverySurfaceTakingAKeyAnswersIt(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		err  error
+		says string
+	}{
+		{"the state log's", fmt.Errorf("%w: %w", iamdomain.ErrOperationReused,
+			&statelog.Unavailable{Reason: statelog.ReasonOpReused,
+				Detail: `operation "op" landed on crewlet.iam.directory at 3:4`}), opkey.Reused},
+		{"the directory's own", fmt.Errorf("%w: the invitation from request op has "+
+			"expired. Send a new one with a new key", iamdomain.ErrOperationReused),
+			"Send a new one with a new key"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t)
+			r.writer.err = tc.err
+			got := r.as(administrator(), http.MethodDelete,
+				"/iam/people/"+bob.String()+"/sessions", nil)
+			detail, _ := got.body["detail"].(string)
+			if got.status != http.StatusConflict || got.body["error"] != "invalid_input" ||
+				got.body["field"] != opkey.Header || got.body["op_id"] == nil ||
+				!strings.Contains(detail, tc.says) {
+				t.Errorf("answered %d %v, want 409 invalid_input naming %s and the "+
+					"op_id, with a detail saying %q", got.status, got.body, opkey.Header,
+					tc.says)
+			}
+		})
 	}
 }

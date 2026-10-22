@@ -490,9 +490,11 @@ func TestAnOperationIDInABodyIsTheCallersToChange(t *testing.T) {
 // object ([statelog.ReasonOpReused]) — a key sent back with a request it was
 // not answered for — and nothing is written. A new key settles it and no wait
 // does, so it is 409 naming the header, where it was the 503 every refusal
-// was.
+// was — told in words of its own, never the framework's refusal, which names
+// the operation and both subjects.
 //
-// Mutation: drop the arm and both rows answer 503.
+// Mutation: drop the arm and both rows answer 503; put the refusal's sentence
+// back in front of the arm's words and both carry the framework's.
 func TestAKeyNamingAnotherWriteIsAConflict(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -515,6 +517,10 @@ func TestAKeyNamingAnotherWriteIsAConflict(t *testing.T) {
 			if got.status != http.StatusConflict || got.body["field"] != opkey.Header {
 				t.Errorf("answered %d %v, want 409 naming %s", got.status, got.body,
 					opkey.Header)
+			}
+			if detail, _ := got.body["detail"].(string); detail != opkey.Reused {
+				t.Errorf("the detail is %q, want the arm's own words alone: %q", detail,
+					opkey.Reused)
 			}
 			assertOperationOf(t, got, key)
 		})
