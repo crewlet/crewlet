@@ -16,19 +16,19 @@
  *  - The fact on a card in use is a count the service already answers: the
  *    projects Works holds, the spaces Knowledge holds.
  *
- * A STATE ONLY WHERE IT IS NEWS. A service the company runs says On, and Chat
- * says Coming soon; a service the company runs elsewhere or not at all carries
- * no pill, sits on the quieter ground and says in its sentence what runs
- * instead. Turning a service on or off is not offered: the company document
+ * A STATE ONLY WHERE IT IS NEWS. A service the company runs says On; one the
+ * company runs elsewhere or not at all, and Chat, carry no pill and sit on the
+ * quieter ground, their sentence saying what runs instead and their foot the
+ * quiet fact (Not in use, Coming soon). Turning a service on or off is not offered: the company document
  * decides it, and a switch here that did nothing would be a lie.
  *
  * # One grid with the catalogue below it
  *
  * The section has its own heading (the kit's `Section`, as the catalogue's
  * is) and the same three-track `TileGrid` as the third-party apps, so every
- * tile edge on the page lines up and three tiles fill their row. A tile with
- * no way in (Chat, or a service the company runs elsewhere) draws no footer:
- * a rule with nothing under it reads as a missing control.
+ * tile edge on the page lines up and three tiles fill their row. EVERY TILE
+ * HAS A FOOT: a fact, and the way in where there is one. Chat with no foot
+ * stretched to its row as a block of blank space under one sentence.
  *
  * Where the company does not run a service, its places are hidden, and an
  * address under one says so in place (`app/ServiceNotice.tsx`), offering this
@@ -49,14 +49,17 @@ interface Status {
   text: string;
   /** In use: where it opens. */
   open?: { label: string; path: string[] };
-  /** In use: what it holds, once counted. */
+  /** What the foot says: what it holds once counted, or why there is no way in. */
   facts?: string;
 }
+
+/** The foot's fact for a service the company does not run here. */
+const NOT_IN_USE = "Not in use";
 
 const ON = { label: "On", tone: "success" } as const;
 
 /** A node running no company has nothing to say about either service. */
-const NO_COMPANY: Status = { text: "This node runs no company yet." };
+const NO_COMPANY: Status = { text: "This node runs no company yet.", facts: NOT_IN_USE };
 
 function worksStatus(tracker: OrgServices["tracker"], projects: number | null): Status {
   switch (tracker) {
@@ -68,9 +71,9 @@ function worksStatus(tracker: OrgServices["tracker"], projects: number | null): 
         ...(projects !== null ? { facts: plural(projects, "project") } : {}),
       };
     case "jira":
-      return { text: "Jira handles work items." };
+      return { text: "Jira handles work items.", facts: NOT_IN_USE };
     case "none":
-      return { text: "The company runs no work tracker." };
+      return { text: "The company runs no work tracker.", facts: NOT_IN_USE };
   }
 }
 
@@ -84,9 +87,9 @@ function knowledgeStatus(knowledge: OrgServices["knowledge"], spaces: number | n
         ...(spaces !== null ? { facts: plural(spaces, "space") } : {}),
       };
     case "confluence":
-      return { text: "Confluence holds the knowledge base." };
+      return { text: "Confluence holds the knowledge base.", facts: NOT_IN_USE };
     case "none":
-      return { text: "The company runs no knowledge base." };
+      return { text: "The company runs no knowledge base.", facts: NOT_IN_USE };
   }
 }
 
@@ -127,7 +130,8 @@ function statusOf(backends: OrgServices | null, of: (b: OrgServices) => Status):
 
 /**
  * One built-in service, as a catalogue tile. `status` null is a service that
- * has not shipped yet: Coming soon, its mark drained, and nothing to open.
+ * has not shipped yet: its mark drained, Coming soon in its foot, and nothing
+ * to open.
  */
 function BuiltInTile({ name, status }: { name: string; status: Status | null }) {
   const open = status?.open;
@@ -137,18 +141,14 @@ function BuiltInTile({ name, status }: { name: string; status: Status | null }) 
       mark={<VendorMark vendor="crewlet" size="lg" muted={status === null} />}
       title={name}
       status={
-        status === null ? (
-          <Tag size="sm" variant="neutral" appearance="outline">
-            Coming soon
-          </Tag>
-        ) : status.tag ? (
+        status?.tag ? (
           <Tag size="sm" variant={status.tag.tone}>
             {status.tag.label}
           </Tag>
         ) : undefined
       }
       description={status ? status.text : "Talk with your agents in Crewlet itself."}
-      meta={open ? (status?.facts ?? "") : undefined}
+      meta={status ? (status.facts ?? "") : "Coming soon"}
       action={
         open ? (
           <ButtonLink variant="secondary" size="small" href={href(open.path)}>
