@@ -6979,7 +6979,8 @@ credential they pressed it through beside it. It used to be written as the
 serving node's own writer, so "who stopped this machine writing" had one
 answer, whichever node the request happened to reach. A capacity operation
 names its opener the same way, `by` beside `operator_id`, on the operation and
-in the report's `maintenance` block.
+on its entry in the report's `maintenance` list, which names every open window,
+the oldest first.
 
 **The gesture is judged once, before any log is written**, and then its record
 goes to every identity-claiming log at once, each written by the node the

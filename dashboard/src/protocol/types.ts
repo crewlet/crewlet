@@ -2064,13 +2064,14 @@ export interface RetentionReport {
   replica: RetentionReplica;
   alarms: RetentionAlarm[];
   /**
-   * The capacity operation currently holding the fleet, ABSENT when there is
-   * none. Maintenance stops every publisher on every node — no seats, no
-   * duties, no scheduler, no write routes — and it was visible on no screen
-   * at all: an operator watching a company go quiet had nothing to look at
-   * that said why.
+   * Every capacity operation currently holding the fleet, the oldest first,
+   * ABSENT when there is none. Maintenance stops every publisher on every
+   * node — no seats, no duties, no scheduler, no write routes — and it was
+   * visible on no screen at all: an operator watching a company go quiet had
+   * nothing to look at that said why. EVERY ONE, because a window is per log
+   * and two can be open at once, each waiting on its own nodes.
    */
-  maintenance?: RetentionMaintenance;
+  maintenance?: RetentionMaintenance[];
 }
 
 /** One open capacity operation. */
