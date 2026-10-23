@@ -11,10 +11,11 @@
  */
 
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, expect, test } from "vitest";
 import { EMPTY_VALUE } from "@crewlethq/ui";
 import {
   AlarmItem,
+  AlarmList,
   Checks,
   DomainSize,
   donorsCounted,
@@ -440,20 +441,18 @@ test("a single log's measurement is said once, with the log beside it", () => {
   expect(screen.getByRole("link", { name: "vectors" })).toBeTruthy();
 });
 
-// THE BACKUP ALARM OFFERS THE BACKUP, where the page can take one, and no
-// other alarm offers a gesture it does not have.
-test("only the backup alarm offers to take a backup, and only where the page can", () => {
-  const take = vi.fn();
-  render(<AlarmItem alarm={alarm({})} now={NOW} onTakeBackup={take} />);
-  fireEvent.click(screen.getByRole("button", { name: "Take a backup" }));
-  expect(take).toHaveBeenCalledOnce();
-
-  cleanup();
-  render(<AlarmItem alarm={alarm({ kind: "trim_blocked" })} now={NOW} onTakeBackup={take} />);
-  expect(screen.queryByRole("button", { name: "Take a backup" })).toBeNull();
-
-  cleanup();
-  render(<AlarmItem alarm={alarm({})} now={NOW} />);
+// AN ALARM IS A ROW OF ITS CARD, NOT A CALLOUT IN IT: a bordered warning
+// callout inside the bordered Alarms card was a frame in a frame. And it
+// offers no Take a backup of its own, since the page bar's is on the same
+// screen. Mutation: draw an alarm as a Callout and the first query finds one.
+test("an alarm is a row of the alarms card, with no button the page bar already offers", () => {
+  const { container } = render(
+    <AlarmList alarms={[alarm({}), alarm({ kind: "trim_blocked" })]} now={NOW} />,
+  );
+  expect(container.querySelector(".crewlet-callout")).toBeNull();
+  const rows = container.querySelectorAll(".alarm-rows > .alarm-row");
+  expect(rows).toHaveLength(2);
+  expect(screen.getByText("Backup age").closest(".alarm-row")).toBe(rows[0]);
   expect(screen.queryByRole("button", { name: "Take a backup" })).toBeNull();
 });
 

@@ -470,7 +470,7 @@ test("an empty history some node could not answer still draws its lists", async 
 
 // WHAT IS WRONG LEADS THE PAGE: the alarms come before the record of backups
 // and the panels, and the backup alarm offers the backup it asks for.
-test("the alarms lead the page, and the backup alarm offers the backup", async () => {
+test("the alarms lead the page, and the backup they ask for is the page bar's one", async () => {
   const report = {
     v: 1,
     node_id: "node-a",
@@ -496,7 +496,11 @@ test("the alarms lead the page, and the backup alarm offers the backup", async (
   expect(alarms.compareDocumentPosition(record) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   // THE OWNER IS A FIGURE OF THE RECORD, named once.
   expect(screen.getByText("platform-oncall")).toBeTruthy();
-  fireEvent.click(within(alarms).getByRole("button", { name: "Take a backup" }));
+  // ONE TAKE A BACKUP ON THE SCREEN: the bar's, never a second beside the alarm.
+  expect(within(alarms).queryByRole("button", { name: "Take a backup" })).toBeNull();
+  const take = screen.getAllByRole("button", { name: "Take a backup" });
+  expect(take).toHaveLength(1);
+  fireEvent.click(take[0]!);
   expect(await screen.findByRole("dialog")).toBeTruthy();
 });
 

@@ -112,8 +112,8 @@ export function Backups({ domain }: { domain?: string }) {
         </Button>
       </PageActions>
       {/* WHAT IS WRONG LEADS: the alarms, each once with the logs it stands
-          on, and the backup they ask for one press away. */}
-      <RetentionStatus retention={retention} onTakeBackup={() => setTaking(true)} />
+          on, and the backup they ask for one press away in the bar. */}
+      <RetentionStatus retention={retention} />
       <QueryState
         error={backups.error}
         refusal={backups.refusal}
