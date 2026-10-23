@@ -1316,7 +1316,10 @@ else holds a connection to it. `set-capacity` refuses there unless you pass
 check that quietly proved nothing would be worse than the refusal.
 
 A node that boots into `normal` mode writes an **admission** before it starts
-anything, then re-reads the operation and withdraws if one is open. The
+anything, then re-reads the operation and withdraws if one is open, refusing to
+start and naming the mode to restart it in: `maintenance` while the window is
+at `opened`, and `seal` from `baselined` on, since a request may be
+outstanding from then and the fleet's next restart is the seal's. The
 coordinator does the same the other way round: it writes the operation first,
 then reads the admissions, and sends no request while any is held. Either order
 is then safe: of the two records, whichever lands second has its writer read
