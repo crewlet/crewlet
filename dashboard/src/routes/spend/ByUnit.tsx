@@ -44,7 +44,11 @@ export function ByUnit({
   const index = useMemo(() => indexOrg(org), [org]);
   return (
     <Card className="spend-card spend-list" padding="none">
-      <Card.Header icon={<UsersGlyph size="sm" />} subtitle={words ?? undefined}>
+      <Card.Header
+        icon={<UsersGlyph size="sm" />}
+        subtitle={words ?? undefined}
+        subtitlePlacement="below"
+      >
         <Card.Title>By team</Card.Title>
       </Card.Header>
       <Card.Body padding="md">

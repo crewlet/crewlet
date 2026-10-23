@@ -219,6 +219,7 @@ export function ExpensiveTasks() {
       </PageActions>
       <Card className="spend-card spend-tasks" padding="none">
         <Card.Header
+          subtitlePlacement="below"
           icon={<SquareKanbanGlyph size="sm" />}
           subtitle={`${words ? `${words} · ` : ""}tasks changed in this window · lifetime tokens`}
         >

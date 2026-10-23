@@ -33,7 +33,11 @@ export function Workers({
   const rows = (rollup?.by_worker ?? []).filter((w) => w.total_tokens > 0);
   return (
     <Card className="spend-card spend-list" padding="none">
-      <Card.Header icon={<WrenchGlyph size="sm" />} subtitle={words ?? undefined}>
+      <Card.Header
+        icon={<WrenchGlyph size="sm" />}
+        subtitle={words ?? undefined}
+        subtitlePlacement="below"
+      >
         <Card.Title>Auxiliary model</Card.Title>
       </Card.Header>
       <Card.Body padding="md">
