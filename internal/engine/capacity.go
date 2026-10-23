@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -75,31 +76,26 @@ func (e *Engine) SetCapacity(ctx context.Context, req CapacityRequest) (
 	coord.MaintenanceOperation, error) {
 
 	if e.mode.Publishes() {
-		return coord.MaintenanceOperation{}, fmt.Errorf(
-			"engine: this node is publishing, so a capacity change cannot run " +
-				"here: restart every node of the fleet with `-mode maintenance` " +
-				"first. The usage a resize is decided against has to be a " +
+		return coord.MaintenanceOperation{}, refused(
+			"this node is publishing, so a capacity change can't run here. " +
+				"Restart every node of the fleet with `-mode maintenance` " +
+				"first: the usage a resize is decided against has to be a " +
 				"quantity nothing can move, and what retires a request the " +
 				"broker already queued is the broker process restarting")
 	}
 	s, err := e.stateLogOf()
 	if e.backends == nil || e.backends.Fleet == nil || err != nil {
-		return coord.MaintenanceOperation{}, errors.New(
-			"engine: this node runs no state log, so it has no stream to resize: " +
-				"only a node with the `data` role holds the logs a capacity " +
-				"change applies to")
+		return coord.MaintenanceOperation{}, &UnknownStreamError{Stream: req.Stream}
 	}
 	running := s.logOf(req.Stream)
 	if running == nil {
-		return coord.MaintenanceOperation{}, fmt.Errorf(
-			"engine: %q is not a domain log this build runs — the streams a "+
-				"capacity change applies to are %s",
-			req.Stream, words.And(maintenanceStreams()))
+		return coord.MaintenanceOperation{}, &UnknownStreamError{Stream: req.Stream,
+			Streams: maintenanceStreams()}
 	}
 	if req.TargetMaxBytes == 0 {
-		return coord.MaintenanceOperation{}, errors.New(
-			"engine: a capacity target of zero would be an unbounded log, which " +
-				"is a real setting this verb does not set")
+		return coord.MaintenanceOperation{}, refused(
+			"a capacity target of zero would be an unbounded log, which is a " +
+				"real setting this verb doesn't set")
 	}
 	// AND A TARGET PAST int64 IS THE SAME SETTING WEARING A LARGE NUMBER.
 	// A stream's ceiling is an int64 on the wire, so anything above that
@@ -108,24 +104,24 @@ func (e *Engine) SetCapacity(ctx context.Context, req CapacityRequest) (
 	// with the ceiling named, because the two produce an identical stream
 	// from opposite-looking inputs.
 	if req.TargetMaxBytes > math.MaxInt64 {
-		return coord.MaintenanceOperation{}, fmt.Errorf(
-			"engine: a capacity target of %d is past the %d bytes a stream's "+
-				"ceiling can carry, and it would be sent as a negative — which "+
-				"is how an unbounded log is spelled, the one setting this verb "+
-				"does not set", req.TargetMaxBytes, int64(math.MaxInt64))
+		return coord.MaintenanceOperation{}, refused(
+			"a capacity target of %d is past the %d bytes a stream's ceiling "+
+				"can carry. It would be sent as a negative, which is how an "+
+				"unbounded log is spelled, the one setting this verb doesn't set",
+			req.TargetMaxBytes, int64(math.MaxInt64))
 	}
 	// AN EXTERNAL BROKER IS ONE THE ENGINE DOES NOT OWN, so it cannot
 	// establish who else holds a connection to it. A refusal an operator
 	// can override knowingly is honest; a check that quietly proves
 	// nothing is not.
 	if e.dialsExternalBroker() && !req.Assert {
-		return coord.MaintenanceOperation{}, errors.New(
-			"engine: this fleet dials an external NATS cluster, so stopping " +
-				"every Crewlet node does not establish that nothing is " +
-				"publishing — the engine does not run that broker and cannot " +
-				"know who else holds a connection. Pass the explicit assertion " +
-				"that you have excluded every publisher, or run the change on " +
-				"the embedded topology where the exclusion is structural")
+		return coord.MaintenanceOperation{}, refused(
+			"this fleet dials an external NATS cluster, so stopping every " +
+				"Crewlet node doesn't establish that nothing is publishing: the " +
+				"engine doesn't run that broker and can't know who else holds a " +
+				"connection. Pass the explicit assertion that you've excluded " +
+				"every publisher, or run the change on the embedded topology " +
+				"where the exclusion is structural")
 	}
 
 	// READ ONCE, HERE. The original ceiling is what an operator is shown
@@ -253,12 +249,11 @@ func (e *Engine) openCapacity(ctx context.Context, req CapacityRequest,
 	}
 	if found {
 		if held.TargetMaxBytes != req.TargetMaxBytes {
-			return coord.MaintenanceOperation{}, fmt.Errorf(
-				"engine: a capacity operation on %s is already open, targeting "+
-					"%d bytes rather than %d. Its target is chosen once and "+
-					"never changed — resolve it with `crewlet retention "+
-					"maintenance status`, or abandon it, before choosing a "+
-					"different one",
+			return coord.MaintenanceOperation{}, refused(
+				"a capacity operation on %s is already open, targeting %d "+
+					"bytes rather than %d. Its target is chosen once and never "+
+					"changed: resolve it with `crewlet retention maintenance "+
+					"status`, or abandon it, before choosing a different one",
 				req.Stream, held.TargetMaxBytes, req.TargetMaxBytes)
 		}
 		// THE SAME TARGET is a resume, which is the ordinary path after
@@ -273,15 +268,14 @@ func (e *Engine) openCapacity(ctx context.Context, req CapacityRequest,
 	// reason the usage below is not.
 	reservation, field, known := capacityBounds(req.Stream)
 	if !known {
-		return coord.MaintenanceOperation{}, fmt.Errorf(
-			"engine: %q is not a domain log this build registers — the streams a "+
-				"capacity change applies to are %s", req.Stream, words.And(maintenanceStreams()))
+		return coord.MaintenanceOperation{}, &UnknownStreamError{Stream: req.Stream,
+			Streams: maintenanceStreams()}
 	}
 	if req.TargetMaxBytes < uint64(field.Floor) {
-		return coord.MaintenanceOperation{}, fmt.Errorf(
-			"engine: a %d-byte ceiling is below the %d bytes %s's ceiling is "+
-				"floored at — the floor Tier A enforces on an explicit %s. Choose "+
-				"a target of at least %d bytes",
+		return coord.MaintenanceOperation{}, refused(
+			"a %d-byte ceiling is below the %d bytes %s's ceiling is floored "+
+				"at, the floor Tier A enforces on an explicit %s. Choose a "+
+				"target of at least %d bytes",
 			req.TargetMaxBytes, field.Floor, req.Stream, field.Field, field.Floor)
 	}
 
@@ -304,8 +298,8 @@ func (e *Engine) openCapacity(ctx context.Context, req CapacityRequest,
 				"%d is kept for the records that install or lift a gate)",
 				ordinary, reservation.Bytes(req.TargetMaxBytes))
 		}
-		return coord.MaintenanceOperation{}, fmt.Errorf(
-			"engine: %s holds %d bytes, so a %d-byte ceiling%s would refuse every "+
+		return coord.MaintenanceOperation{}, refused(
+			"%s holds %d bytes, so a %d-byte ceiling%s would refuse every "+
 				"ordinary append the moment it applied. Choose a target of at "+
 				"least %d bytes, or let the trim release some of the log first",
 			req.Stream, current.Bytes, req.TargetMaxBytes, held,
@@ -322,8 +316,8 @@ func (e *Engine) openCapacity(ctx context.Context, req CapacityRequest,
 	if req.TargetMaxBytes > current.MaxBytes {
 		grow := req.TargetMaxBytes - current.MaxBytes
 		if left := room.Available(); left >= 0 && grow > uint64(left) {
-			return coord.MaintenanceOperation{}, fmt.Errorf(
-				"engine: raising %s from %d to %d bytes reserves %d more, and "+
+			return coord.MaintenanceOperation{}, refused(
+				"raising %s from %d to %d bytes reserves %d more, and "+
 					"the broker has %d left to reserve (%d of its %d-byte limit "+
 					"already reserved). Choose a target of at most %d bytes, or "+
 					"give the broker more room first",
@@ -370,17 +364,16 @@ func (e *Engine) openCapacity(ctx context.Context, req CapacityRequest,
 			// AN EARLIER ATTEMPT OF MINE WON and its answer was lost.
 			return e.keepOpen(ctx, held)
 		default:
-			return coord.MaintenanceOperation{}, fmt.Errorf(
-				"engine: another capacity operation (%s, opened by %s) holds %s",
+			return coord.MaintenanceOperation{}, refused(
+				"another capacity operation (%s, opened by %s) holds %s",
 				held.OperationID, held.By, req.Stream)
 		}
 	}
-	return coord.MaintenanceOperation{}, fmt.Errorf(
-		"engine: could not establish whether the capacity window on %s was "+
-			"opened: the create may never have been received and may still be "+
-			"outstanding, so this fleet may already be excluded. Read `crewlet "+
-			"retention maintenance status` before trying again: %w",
-		req.Stream, last)
+	return coord.MaintenanceOperation{}, stopped(last,
+		"couldn't establish whether the capacity window on %s was opened: the "+
+			"create may never have been received and may still be outstanding, "+
+			"so this fleet may already be excluded. Read `crewlet retention "+
+			"maintenance status` before trying again", req.Stream)
 }
 
 // driveCapacity advances the operation as far as this mode's evidence allows.
@@ -397,8 +390,13 @@ func (e *Engine) driveCapacity(ctx context.Context, running *runningLog,
 		}
 		op = next
 	}
-	return op, fmt.Errorf("engine: the capacity operation on %s did not settle "+
-		"in %d transitions, which is more than the table has phases",
+	// AN INVARIANT BREACH, NOT A REFUSAL: every transition the table answers
+	// moves to a later phase, so nothing an operator asked for can loop, and
+	// told as a refusal it answered 409 "the capacity change was refused" in
+	// the table's own terms. Untold, the route answers it as the fault it is
+	// and sends the reader to the status read.
+	return op, fmt.Errorf("engine: the capacity operation on %s didn't settle "+
+		"in %d transitions, more than the table has phases",
 		op.Stream, len(coord.MaintenancePhases)+1)
 }
 
@@ -433,8 +431,9 @@ func (e *Engine) advanceCapacity(ctx context.Context, running *runningLog,
 	case coord.PhaseConfirmed:
 		return e.release(ctx, op)
 	}
-	return op, fmt.Errorf("engine: the capacity operation on %s is in phase %q, "+
-		"which this build does not know", op.Stream, op.Phase)
+	return op, refused("the capacity operation on %s is in phase %q, which "+
+		"this build doesn't know. Drive it from a node on the newer build that "+
+		"wrote it", op.Stream, op.Phase)
 }
 
 // baseline persists the participant set, every participant's incarnation and
@@ -537,25 +536,24 @@ func (e *Engine) keepOpen(ctx context.Context, op coord.MaintenanceOperation) (
 			"detail", "the window was opened while a node may be publishing and "+
 				"could not be closed again, so it stands and refuses every boot "+
 				"in service until somebody abandons it")
-		return op, fmt.Errorf("engine: the capacity window on %s was opened while "+
-			"a node may still be publishing, and closing it again failed, so it "+
-			"is still open and refuses every node that starts in service. Close "+
-			"it with `crewlet retention maintenance abandon -stream %s -confirm %s`: %w",
-			op.Stream, op.Stream, op.OperationID, closeErr)
+		return op, stopped(closeErr, "the capacity window on %s was opened while "+
+			"a node may still be publishing, and closing it again failed, so it's "+
+			"still open and refuses every node that starts in service. Close it "+
+			"with `crewlet retention maintenance abandon -stream %s -confirm %s`",
+			op.Stream, op.Stream, op.OperationID)
 	}
 	log.InfoContext(ctx, "capacity_operation_closed", "stream", op.Stream,
 		"operation", op.OperationID, "running", standing.running, "err", err,
 		"detail", "a node holding an admission may be publishing, so the window "+
 			"was closed again before anything was sent")
 	if err != nil {
-		return coord.MaintenanceOperation{}, fmt.Errorf("engine: couldn't tell "+
-			"whether the nodes holding an admission are running, so no window "+
-			"was opened on %s and nothing was sent. Run this again in a moment: %w",
-			op.Stream, err)
+		return coord.MaintenanceOperation{}, stopped(err, "couldn't tell whether "+
+			"the nodes holding an admission are running, so no window was opened "+
+			"on %s and nothing was sent. Run this again in a moment", op.Stream)
 	}
-	return coord.MaintenanceOperation{}, fmt.Errorf("engine: %s, so no window was "+
-		"opened on %s and nothing was sent. Restart %s with `-mode maintenance`, "+
-		"then run this again", runningAdmissions(standing.running), op.Stream,
+	return coord.MaintenanceOperation{}, refused("%s, so no window was opened on "+
+		"%s and nothing was sent. Restart %s with `-mode maintenance`, then run "+
+		"this again", runningAdmissions(standing.running), op.Stream,
 		eachOrIt(standing.running))
 }
 
@@ -658,9 +656,9 @@ func (e *Engine) judgeAdmissions(ctx context.Context, op coord.MaintenanceOperat
 func (e *Engine) admissionsClear(ctx context.Context, op coord.MaintenanceOperation) error {
 	standing, err := e.judgeAdmissions(ctx, op)
 	if err != nil {
-		return fmt.Errorf("engine: couldn't read which nodes hold an admission, "+
-			"so nothing was sent: one nobody can read may be a publisher's. Run "+
-			"this again in a moment: %w", err)
+		return stopped(err, "couldn't read which nodes hold an admission, so "+
+			"nothing was sent: one nobody can read may be a publisher's. Run this "+
+			"again in a moment")
 	}
 	if len(standing.running) == 0 && len(standing.silent) == 0 {
 		return nil
@@ -683,9 +681,9 @@ func (e *Engine) admissionsClear(ctx context.Context, op coord.MaintenanceOperat
 			eachOrIt(standing.silent), oneIsOrItIs(standing.silent), op.Stream,
 			exclude, exclude))
 	}
-	return fmt.Errorf("engine: %s. Nothing has been sent. The window stays open "+
-		"at opened meanwhile and refuses every node that starts in service; "+
-		"`crewlet retention maintenance abandon -stream %s -confirm %s` closes it",
+	return refused("%s. Nothing has been sent. The window stays open at opened "+
+		"meanwhile and refuses every node that starts in service; `crewlet "+
+		"retention maintenance abandon -stream %s -confirm %s` closes it",
 		strings.Join(said, ". And "), op.Stream, op.OperationID)
 }
 
@@ -792,16 +790,16 @@ func (e *Engine) applyFailure(ctx context.Context, op coord.MaintenanceOperation
 	err error) error {
 
 	if !errors.Is(err, jetstream.ErrInsufficientStorage) {
-		return fmt.Errorf("engine: set %s's ceiling to %d: the outcome is "+
-			"unknown and the operation stays open — restart the fleet with "+
-			"`-mode seal` to retire it: %w", op.Stream, op.TargetMaxBytes, err)
+		return stopped(err, "setting %s's ceiling to %d: the outcome is unknown "+
+			"and the operation stays open. Restart the fleet with `-mode seal` to "+
+			"retire it", op.Stream, op.TargetMaxBytes)
 	}
-	return fmt.Errorf("engine: set %s's ceiling to %d: the broker REFUSED it "+
-		"and wrote nothing%s. A target is chosen once for the life of an "+
-		"operation, so abandon this one with `crewlet retention maintenance "+
-		"abandon -stream %s` and open another at a ceiling that fits: %w",
+	return stopped(err, "the broker refused to set %s's ceiling to %d and "+
+		"wrote nothing%s. A target is chosen once for the life of an operation, "+
+		"so abandon this one with `crewlet retention maintenance abandon "+
+		"-stream %s` and open another at a ceiling that fits",
 		op.Stream, op.TargetMaxBytes, e.capacityRefusal(ctx, op.TargetMaxBytes),
-		op.Stream, err)
+		op.Stream)
 }
 
 // streamVolume is the directory the state logs' ceilings were derived from,
@@ -862,7 +860,7 @@ func (e *Engine) capacityRefusal(ctx context.Context, want uint64) string {
 	// this call just read. A second wording here would be the rule written
 	// twice, and a second READ would be a message about a different moment
 	// than the one it explains.
-	return fmt.Sprintf(" — it asked to reserve %d bytes and %s",
+	return fmt.Sprintf(". It asked to reserve %d bytes, and %s",
 		want, roomLeft(room, nil, e.streamVolume()))
 }
 
@@ -1012,13 +1010,16 @@ func (e *Engine) release(ctx context.Context, op coord.MaintenanceOperation) (
 func (e *Engine) AbandonCapacity(ctx context.Context, stream, operationID string,
 	by iam.Actor) (coord.MaintenanceOperation, error) {
 
+	if err := windowStream(stream); err != nil {
+		return coord.MaintenanceOperation{}, err
+	}
 	op, found, err := e.backends.Fleet.Maintenance(ctx, stream)
 	if err != nil {
 		return coord.MaintenanceOperation{}, err
 	}
 	if !found {
-		return coord.MaintenanceOperation{}, fmt.Errorf(
-			"engine: there is no capacity operation on %s to abandon", stream)
+		return coord.MaintenanceOperation{}, refused(
+			"there's no capacity operation on %s to abandon", stream)
 	}
 	if op.OperationID != operationID {
 		return op, &ConfirmMismatchError{Stream: stream, Open: op.OperationID,
@@ -1067,10 +1068,13 @@ type ConfirmMismatchError struct {
 	Open, Named string
 }
 
-func (e *ConfirmMismatchError) Error() string {
-	return fmt.Sprintf("engine: the capacity operation open on %s is %s, and "+
-		"the confirmation named %s, so nothing was abandoned", e.Stream, e.Open,
-		e.Named)
+func (e *ConfirmMismatchError) Error() string { return "engine: " + e.Tell() }
+
+// Tell is the refusal as the operator who sent the confirmation reads it
+// ([statelog.Told]).
+func (e *ConfirmMismatchError) Tell() string {
+	return fmt.Sprintf("the capacity operation open on %s is %s, and the "+
+		"confirmation named %s, so nothing was abandoned", e.Stream, e.Open, e.Named)
 }
 
 // ExcludeParticipant records an operator's assertion that a participant's
@@ -1090,13 +1094,16 @@ func (e *ConfirmMismatchError) Error() string {
 func (e *Engine) ExcludeParticipant(ctx context.Context, stream, node string,
 	by iam.Actor) (coord.MaintenanceOperation, error) {
 
+	if err := windowStream(stream); err != nil {
+		return coord.MaintenanceOperation{}, err
+	}
 	op, found, err := e.backends.Fleet.Maintenance(ctx, stream)
 	if err != nil {
 		return coord.MaintenanceOperation{}, err
 	}
 	if !found {
-		return coord.MaintenanceOperation{}, fmt.Errorf(
-			"engine: there is no capacity operation on %s", stream)
+		return coord.MaintenanceOperation{}, refused(
+			"there's no capacity operation on %s", stream)
 	}
 	out := op
 	if !contains(op.Excluded, node) {
@@ -1147,6 +1154,9 @@ func (e *Engine) withdrawExcluded(ctx context.Context, node string) {
 func (e *Engine) CapacityStatus(ctx context.Context, stream string) (
 	coord.MaintenanceOperation, []coord.MaintenanceAck, []coord.Admission, bool, error) {
 
+	if err := windowStream(stream); err != nil {
+		return coord.MaintenanceOperation{}, nil, nil, false, err
+	}
 	if e.backends == nil || e.backends.Fleet == nil {
 		return coord.MaintenanceOperation{}, nil, nil, false,
 			errors.New("engine: this node has no coordination store")
@@ -1164,6 +1174,20 @@ func (e *Engine) CapacityStatus(ctx context.Context, stream string) (
 		return op, acks, nil, found, err
 	}
 	return op, acks, admissions, found, nil
+}
+
+// windowStream refuses a stream no capacity window can ever be open on with an
+// [UnknownStreamError] naming the logs one can be: a window is only ever opened
+// on a registered domain's log ([Engine.SetCapacity]), so a name outside them is
+// a mistyped one. Read as a log that has no window, it answered an abandonment
+// and an exclusion "there's no capacity operation on X" and a status an empty
+// window, and the operator who mistyped it was never told so.
+func windowStream(stream string) error {
+	streams := maintenanceStreams()
+	if !slices.Contains(streams, stream) {
+		return &UnknownStreamError{Stream: stream, Streams: streams}
+	}
+	return nil
 }
 
 // reread returns the operation at its current revision, which every later
@@ -1318,7 +1342,7 @@ func (e *Engine) capacityIncarnations(ctx context.Context, op coord.MaintenanceO
 		if len(missing) == 1 {
 			exclude = missing[0]
 		}
-		return nil, nil, fmt.Errorf("engine: no restart into a maintenance mode "+
+		return nil, nil, refused("no restart into a maintenance mode "+
 			"is recorded for %s, so this operation has no baseline for %s. A "+
 			"baseline of nothing compares unequal to every later "+
 			"acknowledgement, which would let the seal be satisfied by a node "+

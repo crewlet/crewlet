@@ -86,10 +86,17 @@ func (s *stateLog) appends(gesture string) error {
 	if s.mode.Publishes() {
 		return nil
 	}
-	return fmt.Errorf("%w: %s appends a record to the state log, and this node "+
-		"runs in %s mode, which appends nothing while a capacity window "+
-		"measures the logs; run it once the fleet is back in normal mode "+
-		"(`crewlet run` without -mode)", ErrNotPublishing, gesture, s.mode)
+	return NotPublishing(gesture, s.mode)
+}
+
+// NotPublishing is [ErrNotPublishing] for gesture asked of a node in mode, told
+// to the operator who asked ([statelog.Told]): what the mode refuses and the
+// way back.
+func NotPublishing(gesture string, mode statelog.MaintenanceMode) error {
+	return &statelog.Telling{Say: fmt.Sprintf("%s adds a record to the logs, and "+
+		"this node runs in %s mode, which adds nothing while a capacity window "+
+		"measures them. Run it once the fleet is back in normal mode (`crewlet "+
+		"run` without -mode)", gesture, mode), Err: ErrNotPublishing}
 }
 
 // handshake is a boot's half of the capacity window, run BEFORE any publisher

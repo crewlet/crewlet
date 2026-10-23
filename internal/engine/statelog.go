@@ -1840,7 +1840,17 @@ func (s *stateLog) Readmissible(ctx context.Context, nodeID string) error {
 		}
 		bounds = append(bounds, bound)
 	}
-	return statelog.PermitReadmission(nodeID, register, bounds)
+	permitted := statelog.PermitReadmission(nodeID, register, bounds)
+	// A LOG THE FLEET RE-ANCHORED AND THIS NODE HASN'T caught up on is one it
+	// cannot judge the readmission on, which is this refusal's condition: told
+	// to the operator, with the node to ask instead, rather than answered as
+	// a fault with the remedy in this node's log alone.
+	var behind *statelog.ReanchorNotApplied
+	if errors.As(permitted, &behind) {
+		return &ReadmissionUnjudged{Node: nodeID, Log: behind.Domain, Behind: true,
+			Err: permitted}
+	}
+	return permitted
 }
 
 // readmissionBound is running's bound as this node's write fence reads it

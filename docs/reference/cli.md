@@ -2153,7 +2153,7 @@ ordinary writes still takes them — needs
 
 ```
   pages: not written (log_full): pages: statelog: unavailable (log_full): …
-    CREWLET_PAGES_LOG is full to its broker ceiling, past even the reserve kept there for gate records: raise its ceiling, which is the only thing that makes room for it — then the same gesture under the same operation id finishes it, where a fresh one would write every log that already holds the record again
+    CREWLET_PAGES_LOG is full to its broker ceiling, past even the reserve kept there for gate records: raise its ceiling, which is the only thing that makes room for it. Then the same gesture under the same operation id finishes it, where a fresh one would write every log that already holds the record again
     crewlet retention set-capacity CREWLET_PAGES_LOG <bytes> -confirm <bytes>, then run this again with -op-id 01a0cd85-…
 ```
 
@@ -2192,8 +2192,8 @@ inequality is the reason:
 ```
 $ crewlet retention readmit node-4 -confirm node-4
 crewlet: the node answered 409: readmission_refused
-  statelog: node-4 may not be readmitted: its last position in tracker (reported 2031-04-02T03:14:00Z) is 1200 and records below 9000 may already be gone from the tracker log (published floor 9000, first surviving sequence 8800) — it has to catch up before the fleet counts it again.
-  Start node-4 if it is not running: it catches up on its own, …
+  node-4 may not be readmitted: its last position in tracker (reported 2031-04-02T03:14:00Z) is 1200 and records below 9000 may already be gone from the tracker log (published floor 9000, first surviving sequence 8800). It has to catch up before the fleet counts it again.
+  Start node-4 if it isn't running: it catches up on its own, …
   its SEQ in `crewlet retention status`, at the domain's own GEN, says when it has caught up, and `crewlet retention snapshots` whether a peer can donate one; then run this again
 ```
 

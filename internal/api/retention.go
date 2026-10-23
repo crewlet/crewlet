@@ -101,9 +101,9 @@ func (a *App) serveRetentionAck(w http.ResponseWriter, r *http.Request) {
 	position, err := strconv.ParseUint(r.URL.Query().Get("position"), 10, 64)
 	if stream == "" || err != nil || position == 0 {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodePositionRequired, map[string]string{
-			"detail": "name the stream and the sequence your copy reaches — " +
-				"an acknowledgement moves the floor the trim deletes against, " +
-				"so there is no value to guess",
+			"detail": "name the stream and the sequence your copy reaches. An " +
+				"acknowledgement moves the floor the trim deletes against, so " +
+				"there's no value to guess",
 		})
 		return
 	}
@@ -120,9 +120,7 @@ func (a *App) serveRetentionAck(w http.ResponseWriter, r *http.Request) {
 		// the same call: nothing here is transient, and a 503 tells an
 		// operator who typed the stream name wrong to wait and try the
 		// identical request again.
-		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeUnknownStream, map[string]string{
-			"detail": err.Error(),
-		})
+		unknownStream(w, stream, err)
 		return
 	}
 	caller, ok := auth.Caller(w, r)
@@ -234,11 +232,29 @@ func callerOpID(w http.ResponseWriter, r *http.Request, name string) (string, bo
 		return statelog.NewOpID(time.Now(), name), true
 	}
 	if err := statelog.CheckCallerOpID(opID); err != nil {
-		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeOpIDInvalid,
-			map[string]string{"detail": err.Error()})
+		detail := "this isn't an operation id this engine would have minted"
+		var refused *statelog.CallerOpIDError
+		if errors.As(err, &refused) {
+			detail = "the op_id " + refused.Fault
+		}
+		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeOpIDInvalid,
+			httpjson.Detail{"field": "op_id", "detail": detail + ". Send back the " +
+				"op_id an earlier answer returned, unchanged, or leave it out to " +
+				"start the gesture afresh"})
 		return "", false
 	}
 	return opID, true
+}
+
+// unknownStream answers a gesture naming a stream this node does not run:
+// `404 unknown_stream`, naming the streams it does ([engine.UnknownStreamError]).
+func unknownStream(w http.ResponseWriter, stream string, err error) {
+	detail, ok := statelog.Tell(err)
+	if !ok {
+		detail = fmt.Sprintf("%q isn't a log this node keeps", stream)
+	}
+	httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeUnknownStream,
+		map[string]string{"detail": detail})
 }
 
 // gateVerb names a gate gesture in the fresh operation id it is minted under.
@@ -247,6 +263,14 @@ func gateVerb(evict bool) string {
 		return "evict"
 	}
 	return "readmit"
+}
+
+// gateNoun names a gate gesture in a sentence.
+func gateNoun(evict bool) string {
+	if evict {
+		return "eviction"
+	}
+	return "readmission"
 }
 
 // gate answers the eviction and readmission routes.
@@ -288,7 +312,7 @@ func (a *App) gate(evict bool) http.HandlerFunc {
 		// again, and neither is a value to get from a shell history.
 		if node == "" || r.URL.Query().Get("confirm") != node {
 			httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeConfirmRequired, map[string]string{
-				"detail": "repeat the node id in ?confirm= — an eviction stops " +
+				"detail": "repeat the node id in ?confirm=. An eviction stops " +
 					"that machine's records applying anywhere in the fleet",
 			})
 			return
@@ -325,10 +349,17 @@ func (a *App) gate(evict bool) http.HandlerFunc {
 			return
 		}
 		if err != nil {
+			// A FAULT NOTHING TOLD: every refusal above is rendered, and
+			// past the judgement the gesture answers per log rather than
+			// failing, so what reaches here stopped the judgement and
+			// nothing was written. Its words are the log's.
 			log.Warn("api_retention_gate_failed", "node", node,
-				"evict", evict, "error", err)
-			httpjson.FailWith(w, http.StatusInternalServerError, httpjson.CodeGateFailed,
-				map[string]string{"detail": err.Error()})
+				"evict", evict, "op_id", opID, "error", err)
+			httpjson.FailWithFields(w, http.StatusInternalServerError, httpjson.CodeGateFailed,
+				httpjson.Detail{"detail": fmt.Sprintf("couldn't judge the %s of %s, so "+
+					"nothing was written. Try again with the same op_id; this node's "+
+					"log says what went wrong", gateNoun(evict), node),
+					"node": node, "op_id": opID})
 			return
 		}
 		answer := RenderGate(evict, result)
@@ -399,8 +430,7 @@ func (a *App) serveReanchorStatus(w http.ResponseWriter, r *http.Request) {
 	view, err := a.capacity.ReanchorStatus(r.Context(), stream)
 	switch {
 	case errors.Is(err, engine.ErrUnknownStream):
-		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeUnknownStream,
-			map[string]string{"detail": err.Error()})
+		unknownStream(w, stream, err)
 		return
 	case err != nil:
 		// THE LOG EXISTS AND THE BROKER DID NOT ANSWER. The instant is read
@@ -413,8 +443,11 @@ func (a *App) serveReanchorStatus(w http.ResponseWriter, r *http.Request) {
 		// broker and the fleet's registers coming back — a store blip, not
 		// an outage — and a longer hint leaves an operator waiting on a
 		// status that could already answer.
+		log.Warn("api_reanchor_status_unreadable", "stream", stream, "error", err)
 		httpjson.UnavailableWith(w, httpjson.CodeStreamUnreadable,
-			authz.RetryUndecidedSeconds, httpjson.Detail{"detail": err.Error()})
+			authz.RetryUndecidedSeconds, httpjson.Detail{"detail": fmt.Sprintf(
+				"couldn't read %s just now, so nothing was decided. Ask again in "+
+					"a moment", stream)})
 		return
 	}
 	answer := map[string]any{
@@ -437,9 +470,9 @@ func (a *App) serveReanchor(w http.ResponseWriter, r *http.Request) {
 	if stream == "" || confirm == "" {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeConfirmRequired, map[string]string{
 			"detail": "echo the stream's own created_at from GET " +
-				"/worklet/retention/reanchor; a reanchor declares every position " +
+				"/worklet/retention/reanchor. A reanchor declares every position " +
 				"below the new generation stale, and the confirmation is what " +
-				"says you looked at the stream you are re-anchoring",
+				"says you looked at the stream you're re-anchoring",
 		})
 		return
 	}
@@ -454,9 +487,22 @@ func (a *App) serveReanchor(w http.ResponseWriter, r *http.Request) {
 		Discard: r.URL.Query().Get("discard") == "true",
 	})
 	if err != nil {
-		log.Warn("api_reanchor_refused", "stream", stream, "error", err)
-		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeReanchorRefused,
-			map[string]string{"detail": err.Error()})
+		log.Warn("api_reanchor_refused", "stream", stream, "by", by.Name,
+			"operator", by.OperatorID, "error", err)
+		said, told := statelog.Tell(err)
+		switch {
+		case errors.Is(err, engine.ErrUnknownStream):
+			unknownStream(w, stream, err)
+		case told:
+			httpjson.FailWith(w, http.StatusConflict, httpjson.CodeReanchorRefused,
+				map[string]string{"detail": said})
+		default:
+			httpjson.FailWith(w, http.StatusInternalServerError, httpjson.CodeReanchorFailed,
+				map[string]string{"detail": fmt.Sprintf("the reanchor of %s stopped "+
+					"on an error, and this node's log says which. Read where it "+
+					"stands with `crewlet retention reanchor -stream %s` before "+
+					"running it again", stream, stream)})
+		}
 		return
 	}
 	log.Warn("reanchored", "by", by.Name, "operator", by.OperatorID,
@@ -481,15 +527,15 @@ func (a *App) serveSetCapacity(w http.ResponseWriter, r *http.Request) {
 	target, err := strconv.ParseUint(r.URL.Query().Get("bytes"), 10, 64)
 	if stream == "" || err != nil || target == 0 {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeTargetRequired, map[string]string{
-			"detail": "name the stream and the byte ceiling — a target is chosen " +
-				"once for the life of an operation and never changed, so there " +
-				"is no value to guess",
+			"detail": "name the stream and the byte ceiling. A target is chosen " +
+				"once for the life of an operation and never changed, so there's " +
+				"no value to guess",
 		})
 		return
 	}
 	if confirm := r.URL.Query().Get("confirm"); confirm != strconv.FormatUint(target, 10) {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeConfirmRequired, map[string]string{
-			"detail": "repeat the byte count in ?confirm= — this restarts the " +
+			"detail": "repeat the byte count in ?confirm=. This restarts the " +
 				"whole fleet three times and changes what the broker will accept",
 		})
 		return
@@ -509,11 +555,9 @@ func (a *App) serveSetCapacity(w http.ResponseWriter, r *http.Request) {
 		// a caller told only that something failed cannot tell an
 		// operation that never opened from one that is open and stuck,
 		// and those have opposite next steps.
-		log.Warn("api_set_capacity_refused", "stream", stream, "error", err)
-		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeCapacityRefused, httpjson.Detail{
-			"detail":    err.Error(),
-			"operation": operationOrNil(op),
-		})
+		log.Warn("api_set_capacity_refused", "stream", stream, "by", by.Name,
+			"operator", by.OperatorID, "error", err)
+		capacityRefused(w, stream, "the capacity change", err, op)
 		return
 	}
 	log.Info("capacity_requested", "by", by.Name, "operator", by.OperatorID,
@@ -532,9 +576,16 @@ func (a *App) serveMaintenanceStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	op, acks, admissions, found, err := a.capacity.CapacityStatus(r.Context(), stream)
+	if errors.Is(err, engine.ErrUnknownStream) {
+		unknownStream(w, stream, err)
+		return
+	}
 	if err != nil {
+		log.Warn("api_maintenance_unreadable", "stream", stream, "error", err)
 		httpjson.FailWith(w, http.StatusInternalServerError, httpjson.CodeMaintenanceUnreadable,
-			map[string]string{"detail": err.Error()})
+			map[string]string{"detail": fmt.Sprintf("couldn't read the capacity "+
+				"window on %s. Try again, and if it keeps failing, this node's log "+
+				"says why", stream)})
 		return
 	}
 	body := map[string]any{
@@ -582,7 +633,7 @@ func (a *App) serveAbandon(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	a.capacityGesture(w, r, "abandon", func(ctx context.Context, stream string,
+	a.capacityGesture(w, r, "abandon", "the abandonment", func(ctx context.Context, stream string,
 		by iam.Actor) (coord.MaintenanceOperation, error) {
 		return a.capacity.AbandonCapacity(ctx, stream, confirm, by)
 	})
@@ -593,21 +644,23 @@ func (a *App) serveExclude(w http.ResponseWriter, r *http.Request) {
 	node := r.URL.Query().Get("node")
 	if node == "" || r.URL.Query().Get("confirm") != node {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeConfirmRequired, map[string]string{
-			"detail": "repeat the node id in ?confirm= — excluding a participant " +
+			"detail": "repeat the node id in ?confirm=. Excluding a participant " +
 				"asserts that its process is stopped and holds no outstanding " +
 				"request, which is the only thing that waives its acknowledgement",
 		})
 		return
 	}
-	a.capacityGesture(w, r, "exclude", func(ctx context.Context, stream string,
+	a.capacityGesture(w, r, "exclude", "the exclusion", func(ctx context.Context, stream string,
 		by iam.Actor) (coord.MaintenanceOperation, error) {
 		return a.capacity.ExcludeParticipant(ctx, stream, node, by)
 	})
 }
 
 // capacityGesture is the shared shape of the two operator writes, each handed
-// who is making it so the operation can record them.
-func (a *App) capacityGesture(w http.ResponseWriter, r *http.Request, what string,
+// who is making it so the operation can record them. Gesture is the verb the
+// log lines carry and what is the gesture as a reader is told it ("the
+// abandonment"): a verb used as a noun read "the abandon on X stopped".
+func (a *App) capacityGesture(w http.ResponseWriter, r *http.Request, gesture, what string,
 	run func(context.Context, string, iam.Actor) (coord.MaintenanceOperation, error)) {
 
 	stream := r.URL.Query().Get("stream")
@@ -638,18 +691,40 @@ func (a *App) capacityGesture(w http.ResponseWriter, r *http.Request, what strin
 		return
 	}
 	if err != nil {
-		log.Warn("api_capacity_gesture_refused", "gesture", what,
+		log.Warn("api_capacity_gesture_refused", "gesture", gesture,
 			"stream", stream, "by", by.Name, "operator", by.OperatorID,
 			"error", err)
-		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeCapacityRefused, httpjson.Detail{
-			"detail":    err.Error(),
-			"operation": operationOrNil(op),
-		})
+		capacityRefused(w, stream, what, err, op)
 		return
 	}
 	log.Info("capacity_gesture", "by", by.Name, "operator", by.OperatorID,
-		"gesture", what, "stream", stream)
+		"gesture", gesture, "stream", stream)
 	writeJSON(w, http.StatusOK, map[string]any{"operation": operationOrNil(op)})
+}
+
+// capacityRefused answers a capacity gesture that did not go through: a stream
+// this node does not run is `404 unknown_stream`, a refusal the engine told
+// ([statelog.Told]) is `409 capacity_refused` in its words, and anything else
+// is a fault, `500 capacity_failed`, told here and kept in the log the caller
+// has already written. Each carries the operation where there is one, since
+// "never opened" and "open and stuck" have opposite next steps.
+func capacityRefused(w http.ResponseWriter, stream, what string, err error,
+	op coord.MaintenanceOperation) {
+
+	if errors.Is(err, engine.ErrUnknownStream) {
+		unknownStream(w, stream, err)
+		return
+	}
+	if said, ok := statelog.Tell(err); ok {
+		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeCapacityRefused,
+			httpjson.Detail{"detail": said, "operation": operationOrNil(op)})
+		return
+	}
+	httpjson.FailWithFields(w, http.StatusInternalServerError, httpjson.CodeCapacityFailed,
+		httpjson.Detail{"detail": fmt.Sprintf("%s on %s stopped on an error, and "+
+			"this node's log says which. Read where it stands with `crewlet "+
+			"retention maintenance status -stream %s` before going on", what,
+			stream, stream), "operation": operationOrNil(op)})
 }
 
 // operationOrNil renders an operation, or nil where there is none — so a

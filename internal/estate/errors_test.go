@@ -299,6 +299,12 @@ func TestARefusalsSentenceSurvivesTheWire(t *testing.T) {
 		{"chat", &chatlet.InvalidError{Field: "name",
 			Why: "is longer than 80 bytes — shorten it"},
 			[]error{chatlet.ErrInvalid}, chatlet.Sentence, chatRefusal},
+		// A RETENTION GESTURE'S TOLD REFUSAL, which a node without the
+		// data role reaches through the estate router like any other.
+		// Mutation: drop statelog.Telling from typedKinds and this fails.
+		{"a told gesture", &statelog.Telling{Say: "the window is held by node-2",
+			Err: statelog.ErrReanchorRefused},
+			[]error{statelog.ErrReanchorRefused}, toldSentence, toldRefusal},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -340,6 +346,19 @@ func trackerRefusal(err error) error {
 
 func pagesRefusal(err error) error {
 	var r *doclet.InvalidError
+	if errors.As(err, &r) {
+		return r
+	}
+	return nil
+}
+
+func toldSentence(err error) string {
+	said, _ := statelog.Tell(err)
+	return said
+}
+
+func toldRefusal(err error) error {
+	var r *statelog.Telling
 	if errors.As(err, &r) {
 		return r
 	}

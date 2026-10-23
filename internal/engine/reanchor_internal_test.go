@@ -44,7 +44,7 @@ func TestAReanchorsInputsNameTheStreamTheyWereReadFrom(t *testing.T) {
 	for _, running := range s.running() {
 		name := running.domain.Name()
 		want := running.spec.Name
-		in, _, err := e.reanchorInputs(t.Context(), running)
+		in, err := e.reanchorInputs(t.Context(), running)
 		if err != nil {
 			t.Fatalf("read %s's inputs: %v", name, err)
 		}
@@ -119,7 +119,7 @@ func TestAReanchorsHighWaterMarkIsReadInItsOwnGeneration(t *testing.T) {
 			t.Fatalf("publish %s's row: %v", row.node, err)
 		}
 	}
-	in, _, err := e.reanchorInputs(t.Context(), running)
+	in, err := e.reanchorInputs(t.Context(), running)
 	if err != nil {
 		t.Fatalf("reanchorInputs: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestOnlyAPeerHoldingHistoryTheLogDoesNotCountsAsAhead(t *testing.T) {
 	}
 	read := func() statelog.ReanchorInputs {
 		t.Helper()
-		in, _, err := e.reanchorInputs(t.Context(), running)
+		in, err := e.reanchorInputs(t.Context(), running)
 		if err != nil {
 			t.Fatalf("reanchorInputs: %v", err)
 		}
@@ -237,10 +237,11 @@ func TestAReanchorOfAStreamThatCannotBeReadRefuses(t *testing.T) {
 	_, err := e.Reanchor(t.Context(), ReanchorRequest{
 		Stream: stream, Confirm: statelog.ConfirmationOf(time.Now()), By: reanchorOperator,
 	})
-	if !errors.Is(err, statelog.ErrReanchorRefused) ||
-		!strings.Contains(err.Error(), "could not be read") {
-		t.Fatalf("Reanchor over a stream that cannot be read = %v, want a refusal "+
-			"saying so", err)
+	said, told := statelog.Tell(err)
+	if !errors.Is(err, statelog.ErrReanchorRefused) || !told ||
+		!strings.Contains(said, "couldn't be read") || strings.Contains(said, "nats:") {
+		t.Fatalf("Reanchor over a stream that cannot be read = %v (told %q), want a "+
+			"refusal saying so in words of its own", err, said)
 	}
 	if _, err := e.ReanchorStatus(t.Context(), stream); err == nil {
 		t.Fatal("ReanchorStatus answered an instant for a stream it could not read")
@@ -703,9 +704,9 @@ func TestAFleetsMostCaughtUpNodeCanReanchorALogEveryNodeLost(t *testing.T) {
 		Generation: own.Generation + 1, Seq: 3, AppliedThrough: 3, StreamCreatedAt: live,
 	})
 	if _, err := reanchor(); !errors.Is(err, statelog.ErrReanchorRefused) ||
-		!strings.Contains(err.Error(), `re-anchored peers: "reanchored"`) {
+		!strings.Contains(toldOrError(err), `"reanchored" has already re-anchored`) {
 		t.Fatalf("a reanchor with a peer at a later generation = %v, want a refusal "+
-			"naming it", err)
+			"naming it in the sentence its operator reads", err)
 	}
 	moveOn("reanchored")
 
