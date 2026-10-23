@@ -126,7 +126,7 @@ describe("a live view", () => {
   // ONLY `not_running` ENDS THE ASKING, and what the view holds stays.
   test("stops on a job that is not running, and on nothing else", () => {
     const held = foldTail(EMPTY_VIEW, cursored("output\n", 0, true));
-    for (const outcome of ["launching", "box_paused", "owner_silent"] as const) {
+    for (const outcome of ["launching", "box_paused", "box_gone", "owner_silent"] as const) {
       const view = foldTail(held, { outcome, turn_id: "t", launch_id: "L" });
       expect(view.final, outcome).toBe(false);
       expect(view.text, outcome).toBe("output\n");

@@ -67,8 +67,8 @@ type SandboxTails interface {
 // sandboxTail answers `sandbox_tail{turn_id, launch_id}`: the tail of that
 // launch while it runs, `launching` while its box is being made, `not_running`
 // with the record's own status once it is not, `box_paused` for a running
-// record whose box is paused, or the owning node NAMED where it did not answer
-// (`owner_silent`).
+// record whose box is paused, `box_gone` for one whose box is gone for good,
+// or the owning node NAMED where it did not answer (`owner_silent`).
 //
 // BOTH IDS ARE REQUIRED. A run is one execution of a turn and a turn can launch
 // more than one job; a request naming only the turn would show whichever job

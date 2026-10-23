@@ -4451,7 +4451,8 @@ export interface SandboxOutput {
  * tail of that job while it runs, `launching` while its box is still being
  * made, `not_running` with the record's own status once it is not,
  * `box_paused` for a running record whose box is paused (never woken to be
- * read), or the node that reads its box NAMED where it did not answer
+ * read), `box_gone` for one whose box its backend says is gone for good, or
+ * the node that reads its box NAMED where it did not answer
  * (`owner_silent`).
  */
 export interface SandboxTailAnswer {
