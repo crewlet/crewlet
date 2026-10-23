@@ -1288,6 +1288,25 @@ test("an unclaimed deployment's screen points at the seat a person comes from", 
   expect(screen.queryByText("Nobody has joined yet")).toBeNull();
 });
 
+// AN EMPTY DIRECTORY SAYS THE STEP ONCE, in the People card's own empty
+// state: a callout over two stat tiles of zero over the card's "Nobody's here
+// yet" said one thing four times before any data. The CONTROL is the case
+// above, whose directory lists somebody and keeps the callout. Mutation: draw
+// the callout whatever the directory holds and the first query finds two.
+test("an unclaimed deployment with nobody listed says the step once, in the People card", async () => {
+  invitations = { invitations: [], next: "" };
+  engine({}, () => ({ people: [], next: "" }));
+  mount(ADMIN, "unclaimed");
+  const title = await screen.findByText("Nobody has joined yet");
+  expect(screen.getAllByText("Nobody has joined yet")).toHaveLength(1);
+  expect(title.closest(".crewlet-callout")).toBeNull();
+  const state = title.closest(".crewlet-empty-state") as HTMLElement;
+  expect(within(state).getByText("Invite yourself from your seat in the org chart.")).toBeTruthy();
+  expect(within(state).getByRole("link", { name: "Open the org chart" })).toBeTruthy();
+  expect(document.querySelector(".crewlet-stat-group")).toBeNull();
+  expect(screen.queryByText("Nobody’s here yet")).toBeNull();
+});
+
 // A NODE RUNNING NO COMPANY answers the seat listing `409
 // no_active_revision`, and the first step is creating the company: read as
 // an empty answer, the callout sent the operator to "choose your human seat"

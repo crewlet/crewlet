@@ -526,7 +526,8 @@ export function DataGrid<T>({
   isFailed?: (row: T) => boolean;
   defaultSort?: string;
   serverSorted?: boolean;
-  empty?: { title: ReactNode; hint?: ReactNode; icon?: GlyphName };
+  /** What an empty grid says, and the one control that is its next step. */
+  empty?: { title: ReactNode; hint?: ReactNode; icon?: GlyphName; action?: ReactNode };
   footer?: ReactNode;
   onLoadMore?: () => void;
   /** "40 of 312 loaded" — what an export would actually contain. */
@@ -821,6 +822,7 @@ export function DataGrid<T>({
           icon={empty.icon && <Mark name={empty.icon} size={32} />}
           title={empty.title}
           description={empty.hint}
+          action={empty.action}
         />
       </div>
     );
