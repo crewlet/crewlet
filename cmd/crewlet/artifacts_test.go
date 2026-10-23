@@ -709,7 +709,7 @@ func TestArtifactsPublishRefusesTwoCandidateEntries(t *testing.T) {
 	node := newFakeArtifactsNode(t)
 	dir := writeTree(t, map[string]string{"index.html": "<!doctype html>", "index.md": "# Plan"})
 	_, _, err := cli(t, "artifacts", "publish", dir, bootstrapForURL(t, node.server.URL))
-	if err == nil || !strings.Contains(err.Error(), "index.html and index.md") {
+	if err == nil || !strings.Contains(err.Error(), `"index.html" and "index.md"`) {
 		t.Fatalf("publish of two entries answered %v", err)
 	}
 	if len(node.intents) != 0 {

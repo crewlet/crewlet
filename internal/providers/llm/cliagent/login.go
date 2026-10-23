@@ -21,6 +21,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // maxBundle bounds a credential bundle on the way IN, decompressed.
@@ -825,21 +826,18 @@ func (p *Provider) headlessTokenRoute() string {
 // export or a file the profile names; an import needs nothing, so it is always
 // there.
 func (p *Provider) loginRoutes() string {
-	var routes []string
+	var routes []words.Said
 	if len(p.profile.LoginArgs) > 0 {
-		routes = append(routes, fmt.Sprintf("`crewlet llm login %s`", p.key))
+		routes = append(routes, words.Said(fmt.Sprintf("`crewlet llm login %s`", p.key)))
 	}
 	if p.profile.StdinLogin != nil {
-		routes = append(routes, fmt.Sprintf("`crewlet llm login %s -username <name> -password-stdin`", p.key))
+		routes = append(routes, words.Said(fmt.Sprintf("`crewlet llm login %s -username <name> -password-stdin`", p.key)))
 	}
 	if p.profile.CredentialStore != nil || len(p.hostSources()) > 0 {
-		routes = append(routes, fmt.Sprintf("`crewlet llm login %s -from-host`", p.key))
+		routes = append(routes, words.Said(fmt.Sprintf("`crewlet llm login %s -from-host`", p.key)))
 	}
-	routes = append(routes, fmt.Sprintf("`crewlet llm import %s`", p.key))
-	if len(routes) == 1 {
-		return routes[0]
-	}
-	return strings.Join(routes[:len(routes)-1], ", ") + " or " + routes[len(routes)-1]
+	routes = append(routes, words.Said(fmt.Sprintf("`crewlet llm import %s`", p.key)))
+	return words.Or(routes)
 }
 
 // LogoutNotice is what `crewlet llm logout` tells the operator about the

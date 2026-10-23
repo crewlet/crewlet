@@ -179,10 +179,12 @@ func TestARoomMembershipChangeRemovesOnlyWhatItNames(t *testing.T) {
 // once, each fault by where the call wrote it and the seats listed once; and a
 // membership that would remove a member it does not declare, and declares a
 // member who stays and one who is not in the room, is refused once naming all
-// three. The preview stopped at the first of each, so every fault cost the
-// model an attempt. Mutation: return at the first joiner, the first blank
-// handle or the first repeat, or at the first removal `removes` names but the
-// change does not make, and this fails.
+// three, the two it declares each in a sentence of its own. The preview
+// stopped at the first of each, so every fault cost the model an attempt.
+// Mutation: return at the first joiner, the first blank handle or the first
+// repeat, or at the first removal `removes` names but the change does not
+// make, or join who stays and who is not in the room into one list again, and
+// this fails.
 func TestEveryFaultOfAMembershipIsOneRefusal(t *testing.T) {
 	t.Parallel()
 	read := reader(assistanttest.World())
@@ -216,7 +218,8 @@ func TestEveryFaultOfAMembershipIsOneRefusal(t *testing.T) {
 	if !errors.As(err, &refused) || refused.Refusal.Code != "undeclared_removal" ||
 		!strings.Contains(refused.Refusal.Message, "would remove ada from #launch") ||
 		!strings.Contains(refused.Refusal.Message,
-			"`removes` names pm, who stays in #launch, and qa, who is not in #launch") ||
+			"`removes` names pm, who stays in #launch. `removes` also names qa, who is "+
+				"not in #launch.") ||
 		!strings.Contains(refused.Refusal.Hint, "Include them in members") ||
 		!strings.Contains(refused.Refusal.Hint, "List in removes only") {
 		t.Errorf("an undeclared removal beside two unmade ones answered %v", err)

@@ -1786,7 +1786,7 @@ manages the document and what to do:
   "error": "config_managed",
   "managed_by": ["gitops"],
   "detail": "The company config is managed by gitops. The credential \"founder\" can read it but not change it.",
-  "hint": "Change it in the system that manages it (the token gitops). Edits here get overwritten. To rotate a leaked credential, write it to /secrets and POST /config/reload. To manage it here, remove `api.auth.company_writers` from every node's config file and restart."
+  "hint": "Change it in the system that manages it (the token \"gitops\"). Edits here get overwritten. To rotate a leaked credential, write it to /secrets and POST /config/reload. To manage it here, remove `api.auth.company_writers` from every node's config file and restart."
 }
 ```
 
@@ -2084,7 +2084,7 @@ A refused document (`400 validation_error`, `400 invalid_patch`, `400 invalid_bo
 ```json
 {
   "error": "validation_error",
-  "detail": "workers.researcher.model: value not in the allowed set: \"nowhere\" is not a configured provider: providers.llm has zulu. ...",
+  "detail": "workers.researcher.model: value not in the allowed set: \"nowhere\" is not a configured provider. Use one of providers.llm's: \"zulu\". ...",
   "hint": "The WHOLE document a write produces is validated, ...",
   "problems": [
     {

@@ -20,21 +20,25 @@
 // joined the same way and written as it is. Config's warnings and the query
 // surface each had a helper of their own for this (the second listed a set
 // unquoted with commas, so "one of day, week, and \"hour\" isn't" read as a
-// set of three), and the rest of the tree printed brackets; [Or] and [And]
-// are the one copy now.
+// set of three), a dozen packages joined a list by hand, and the rest of the
+// tree printed brackets; [Or] and [And] are the one copy now.
 //
 // # The gate
 //
 // A rule nobody checks decays, so this package's suite walks every package of
 // the module with its types and refuses any format call whose verb prints a
 // slice, an array or a map, and any such operand of a print that takes no
-// format (fmt.Sprint and its kin, which print every operand as %v does). A
-// value whose type says how it prints, through a String, Error or Format
-// method, is that type's own business, and a byte slice under %s, %q or %x is
-// text. It runs go list for the export data the
-// type checker reads, because the shape of an operand is a property of its
-// type and not of its spelling: `artifacts.Kinds` and `AuthorKinds()` look
-// like any other identifier and call.
+// format (fmt.Sprint and its kin, which print every operand as %v does). It
+// refuses a list joined by hand into a sentence too: a strings.Join whose
+// separator is a conjunction, one written beside one ("a, b" + " or " +
+// "c"), one that joins all but the last member, and a closed set joined by
+// commas after "one of", which are the shapes every copy of [Or] the tree
+// carried took. A value whose type says how it prints, through a String,
+// Error or Format method, is that type's own business, and a byte slice
+// under %s, %q or %x is text. It runs go list for the export data the type
+// checker reads, because the shape of an operand is a property of its type
+// and not of its spelling: `artifacts.Kinds` and `AuthorKinds()` look like
+// any other identifier and call.
 //
 // A LEAF over the standard library, held to it by a test, because its readers
 // sit at every height — the identity vocabulary and config, which import only
@@ -91,13 +95,16 @@ func list[S ~[]E, E Word](set S, conjunction string) string {
 }
 
 // Said is a member its caller has already said as the sentence says it, which
-// [Or], [And] and [AndMore] write as it is: a phrase ("a whole number", "in
-// progress"), a command in backticks, a name a screen prints capitalised.
+// [Or], [And] and [AndMore] write as it is: a command in backticks, a
+// variable reference written `${NAME}`, a phrase ("the Slack integration to
+// mint ${TOKEN}"), a name a screen prints capitalised.
 //
 // A VALUE IS QUOTED and a Said is not, because the two are different things
 // in a sentence: a value is what a reader typed or may type, quoted so it
 // reads like the value beside it, while a phrase is already words and a
-// command already carries the quoting its reader copies.
+// command already carries the quoting its reader copies. Every list of those
+// was joined by hand before this type, each with its own idea of the last
+// comma, and the gate in this package's suite refuses one joined by hand now.
 type Said string
 
 // word is one member as a sentence says it. A named string type keeps its

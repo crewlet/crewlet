@@ -92,6 +92,7 @@ import (
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracing"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 var log = logging.Get("api.config")
@@ -586,7 +587,7 @@ func (s *Service) checkPatchMediaType(w http.ResponseWriter, r *http.Request) bo
 				"operations is a different format this surface does not serve. " +
 				"Editing one list member is its own route: editing one seat is " +
 				"PUT /config/roles/{handle}, and PUT /config/{kind}/{id} " +
-				"edits one member of " + strings.Join(EntityKinds(), " or "),
+				"edits one member of " + words.Or(EntityKinds()),
 		})
 	return false
 }

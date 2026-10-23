@@ -1172,7 +1172,7 @@ everything in one pass:
   "problems": [
     { "path": "roles[1].llm", "segments": ["roles", 1, "llm"],
       "kind": "unknown_value", "seat": "cto",
-      "message": "roles[1].llm: value not in the allowed set: \"nonexistent\" is not a configured provider: providers.llm has primary. A key that misses is not an error at run time: the seat falls back to another model and bills against it, so this is the only place the typo can be seen" }
+      "message": "roles[1].llm: value not in the allowed set: \"nonexistent\" is not a configured provider. Use one of providers.llm's: \"primary\". A key that misses is not an error at run time: the seat falls back to another model and bills against it, so this is the only place the typo can be seen" }
   ],
   "warnings": []
 }

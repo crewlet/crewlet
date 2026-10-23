@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/toolname"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Company is Tier B — founder-owned, live-editable, versioned in the store.
@@ -1071,11 +1072,11 @@ func (c *Company) validateProviderKeys() error {
 			for _, key := range field.keys {
 				if _, ok := c.Providers.LLM[key]; !ok {
 					p.add(field.path, ErrUnknownValue,
-						"%q is not a configured provider: providers.llm has %s. "+
+						"%q is not a configured provider. Use one of providers.llm's: %s. "+
 							"A key that misses is not an error at run time: the seat "+
 							"falls back to another model and bills against it, so this "+
 							"is the only place the typo can be seen",
-						key, strings.Join(known, ", "))
+						key, words.Or(known))
 				}
 			}
 		}

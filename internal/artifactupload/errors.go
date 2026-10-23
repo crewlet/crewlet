@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/artifacts/canvasformat"
+	"github.com/crewlet/crewlet/internal/artifacts/mediatype"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 )
 
@@ -71,8 +72,13 @@ func Sentence(err error) string {
 }
 
 // sentenceCuts are what [Sentence] removes beyond the domain's own, the class
-// words before the package names they open with.
+// words before the package names they open with. A media type's refusal is
+// two classes deep (this package's [ErrMediaType] over the table's
+// [mediatype.ErrRefused], each saying the type isn't one an artifact may
+// publish) above a sentence that says it a third time with the file and the
+// extensions to use, so both class texts go and the sentence is told once.
 var sentenceCuts = []string{
+	ErrMediaType.Error() + ": ", mediatype.ErrRefused.Error() + ": ",
 	ErrInvalid.Error() + ": ", canvasformat.ErrInvalid.Error() + ": ",
 	"artifactupload: ", "mediatype: ", "lint: ", "edits: ", "vendor: ",
 	"slideformat: ", "canvasformat: ", "dashspec: ", "docindex: ",

@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tools/argval"
+	"github.com/crewlet/crewlet/internal/words"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -267,7 +268,7 @@ func (s *fileSources) brandSlot(p, raw string) (brandformat.Slot, *tools.Result)
 	}
 	r := failed(fmt.Sprintf("%s: %q copies `from_brand` %q, which is no slot of the brand; "+
 		"take one of %s ("+CompanyBrandTool+" lists what your company's brand holds).", s.tool, p,
-		clip(raw), strings.Join(names, ", ")))
+		clip(raw), words.Or(names)))
 	return "", &r
 }
 

@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Providers is the Tier B model surface: which LLMs a seat can be pointed
@@ -1085,13 +1086,19 @@ func relocationRemedy(field, root, dir string, kept []string) string {
 	if len(kept) == 0 {
 		return remedy + "; a different directory is set with overrides." + field
 	}
-	fields := strings.Join(kept, ", ")
-	if n := len(kept); n > 1 {
-		fields = strings.Join(kept[:n-1], ", ") + " and " + kept[n-1]
-	}
 	return fmt.Sprintf("%s; a different directory is set with overrides.%s, moving the "+
 		"%s kept under %s beneath it in the same override, since the CLI finds them "+
-		"through this variable", remedy, field, fields, dir)
+		"through this variable", remedy, field, fieldNames(kept), dir)
+}
+
+// fieldNames is a profile's field names as a sentence about the file says
+// them, bare beside the overrides paths it names: "a", "a and b".
+func fieldNames(fields []string) string {
+	said := make([]words.Said, len(fields))
+	for i, f := range fields {
+		said[i] = words.Said(f)
+	}
+	return words.And(said)
 }
 
 // ---- embeddings ------------------------------------------------------ //

@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // BriefPromptVersion names a brief turn's system prompt ([briefRules]),
@@ -88,19 +89,18 @@ var briefCiteWords = map[wire.ResourceKind]string{
 // [catalog.BriefRefKinds], so the rules can never name fewer kinds than the
 // answer's schema takes, or more. A kind with no words of its own is named by
 // itself, and TestTheBriefRulesNameEveryCitableKind holds every kind to words.
+// Each kind's words are a phrase rather than a value, so they are said through
+// [words.Or] as [words.Said], unquoted.
 func briefCitable() string {
-	said := make([]string, 0, len(catalog.BriefRefKinds))
+	said := make([]words.Said, 0, len(catalog.BriefRefKinds))
 	for _, k := range catalog.BriefRefKinds {
 		w, ok := briefCiteWords[k]
 		if !ok {
 			w = "a " + string(k)
 		}
-		said = append(said, w)
+		said = append(said, words.Said(w))
 	}
-	if len(said) < 2 {
-		return strings.Join(said, "")
-	}
-	return strings.Join(said[:len(said)-1], ", ") + " or " + said[len(said)-1]
+	return words.Or(said)
 }
 
 // buildBriefMessages is a brief turn's conversation as its loop starts it:
@@ -151,11 +151,9 @@ func briefQuestion(in promptInput) string {
 		b.WriteString("Brief the person on this page: read what it shows, then say what it is " +
 			"about and what, if anything, on it they have to do.")
 	}
-	kinds := make([]string, 0, len(catalog.BriefRefKinds))
-	for _, k := range catalog.BriefRefKinds {
-		kinds = append(kinds, string(k))
-	}
-	fmt.Fprintf(&b, " A row may cite a %s.", strings.Join(kinds, ", "))
+	// THE KINDS AS THE ANSWER WRITES THEM, quoted as the values they are: the
+	// rules name the records in words, and a need's ref_kind takes these.
+	fmt.Fprintf(&b, " A need's ref_kind is one of %s.", words.Or(catalog.BriefRefKinds))
 	b.WriteString("\n\nThe screen, described by the screen itself:\n")
 	b.WriteString(pageFence(in.Boundary, page))
 	b.WriteString("\n\nWhat the person asked:\n")

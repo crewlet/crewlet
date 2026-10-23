@@ -1262,7 +1262,10 @@ func membersArgument(members []roomMember) []any {
 // names, and every one it names is one it removes, so the card never warns of
 // a removal that will not happen. BOTH FAULTS, EVERY ONE OF EACH, ARE ONE
 // REFUSAL (ADR-0059). Its refusals name handles, which is how the model writes
-// `removes` back.
+// `removes` back. A MEMBER WHO STAYS AND ONE WHO IS NOT IN THE ROOM ARE TWO
+// SENTENCES, as [undeclaredRemoval] says each fault of a replace: each group
+// carries a clause of its own ("pm, who stays in #launch"), and two of them
+// joined into one list leave the reader to find where the first one ends.
 func removalsNamed(r room, removed, declared []string) error {
 	var undeclared, stays, absent []string
 	for _, h := range removed {
@@ -1285,15 +1288,18 @@ func removalsNamed(r room, removed, declared []string) error {
 		hints = append(hints, "Include them in members to keep them, or list them in "+
 			"removes if the person asked for that.")
 	}
-	if len(stays) > 0 || len(absent) > 0 {
-		var named []string
+	if len(stays) > 0 {
+		said = append(said, "`removes` names "+inWords(stays)+", who "+staysIn(len(stays))+" "+
+			r.called()+".")
+	}
+	if len(absent) > 0 {
+		names := "`removes` names "
 		if len(stays) > 0 {
-			named = append(named, inWords(stays)+", who "+staysIn(len(stays))+" "+r.called())
+			names = "`removes` also names "
 		}
-		if len(absent) > 0 {
-			named = append(named, inWords(absent)+", who "+isNotIn(len(absent))+" "+r.called())
-		}
-		said = append(said, "`removes` names "+strings.Join(named, ", and ")+".")
+		said = append(said, names+inWords(absent)+", who "+isNotIn(len(absent))+" "+r.called()+".")
+	}
+	if len(stays) > 0 || len(absent) > 0 {
 		hints = append(hints, "List in removes only the members the change takes out.")
 	}
 	if len(said) == 0 {

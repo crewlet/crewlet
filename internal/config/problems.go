@@ -747,12 +747,12 @@ func (c *Company) unreachableWarnings() []Warning {
 		return nil
 	}
 	var surfaces []chatVendor
-	var titles, keys []string
+	var titles, keys []words.Said
 	for _, vendor := range chatVendors {
 		if vendor.declaredAt(c) != "" {
 			surfaces = append(surfaces, vendor)
-			titles = append(titles, vendor.title)
-			keys = append(keys, "`"+vendor.contactKey+"`")
+			titles = append(titles, words.Said(vendor.title))
+			keys = append(keys, words.Said("`"+vendor.contactKey+"`"))
 		}
 	}
 	var out []Warning
@@ -764,7 +764,7 @@ func (c *Company) unreachableWarnings() []Warning {
 		w := advisory(at(path, "contact"), fmt.Sprintf("%s is a human seat with "+
 			"no account on %s, so chat messages to it there reach nobody. Add a "+
 			"%s to its `contact`, or leave it if they only use the dashboard",
-			handle, strings.Join(titles, " or "), strings.Join(keys, " or ")))
+			handle, words.Or(titles), words.Or(keys)))
 		w.Seat = handle
 		out = append(out, w)
 	}

@@ -32,8 +32,11 @@ func TestAPageIsCreatedOnlyInADeclaredSpace(t *testing.T) {
 				name, err)
 		}
 		said := doclet.Sentence(err)
-		for _, want := range []string{"ENGG", "is not a space this company declares",
-			"`space:`", "knowledge.root_space", "write in one of: ENG, HOME, OPS"} {
+		// THE SET IS OFFERED AS ONE, quoted like the key the caller typed,
+		// rather than as a column of names after "one of:".
+		for _, want := range []string{`"ENGG" isn't a space this company declares`,
+			"`space:`", "knowledge.root_space",
+			`write in "ENG", "HOME", "OPS", "PROD", "SUITE" or "TS"`} {
 			if !strings.Contains(said, want) {
 				t.Errorf("%s's refusal reads %q, which does not say %q", name, said, want)
 			}

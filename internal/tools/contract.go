@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/tools/argval"
 	"github.com/crewlet/crewlet/internal/tools/toolargs"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // ---- a call held to the schema its tool advertises (ADR-0059) ------------ //
@@ -231,7 +232,7 @@ func (c *contract) enum(schema map[string]any, path, s string) {
 		return
 	}
 	c.add(path, Outside, "%s is %q, and %s takes one of %s", c.name(path), clipped(s), c.tool,
-		strings.Join(set, ", "))
+		words.Or(set))
 }
 
 // bounds holds a number to its schema's minimum and maximum.
@@ -272,16 +273,17 @@ func member(path, key string) string {
 }
 
 // describe is a schema's shape as a finding names it: "a whole number", "true
-// or false", "a list of strings", "an object {title, status}", "one of
-// todo, done".
+// or false", "a list of strings", "an object {title, status}", `one of "todo"
+// or "done"`, and a schema of several types as the alternatives it takes ("a
+// number or null").
 func describe(schema map[string]any) string {
 	if schema == nil {
 		return "a value"
 	}
 	if set := toolargs.StringsOf(schema["enum"]); len(set) > 0 {
-		return "one of " + strings.Join(set, ", ")
+		return "one of " + words.Or(set)
 	}
-	var parts []string
+	var parts []words.Said
 	for _, t := range toolargs.TypesOf(schema) {
 		switch t {
 		case "string":
@@ -294,12 +296,13 @@ func describe(schema map[string]any) string {
 			parts = append(parts, "true or false")
 		case "object":
 			if props, ok := schema["properties"].(map[string]any); ok && len(props) > 0 {
-				parts = append(parts, "an object {"+strings.Join(slices.Sorted(maps.Keys(props)), ", ")+"}")
+				parts = append(parts, words.Said("an object {"+
+					strings.Join(slices.Sorted(maps.Keys(props)), ", ")+"}"))
 			} else {
 				parts = append(parts, "an object")
 			}
 		case "array":
-			parts = append(parts, "a list of "+plural(asSchema(schema["items"])))
+			parts = append(parts, words.Said("a list of "+plural(asSchema(schema["items"]))))
 		case "null":
 			parts = append(parts, "null")
 		}
@@ -307,7 +310,7 @@ func describe(schema map[string]any) string {
 	if len(parts) == 0 {
 		return "a value"
 	}
-	return strings.Join(parts, " or ")
+	return words.Or(parts)
 }
 
 // plural is an element's shape, as a list's is named.

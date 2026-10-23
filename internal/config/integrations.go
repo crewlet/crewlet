@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/whsec"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Integrations is the INBOUND half of the external world: how events reach
@@ -1266,7 +1267,7 @@ func (g *GitLab) validate(path Path) error {
 	// account reported removed and still live.
 	if !pv.Mode.Valid() {
 		p.add(at(pp, "mode"), ErrUnknownValue, "%q is not one of %s",
-			pv.Mode, strings.Join(GitLabModes(), ", "))
+			pv.Mode, words.Or(GitLabModes()))
 	}
 	if pv.AccessLevel != "" && !slices.Contains(GitLabAccessLevels, pv.AccessLevel) {
 		p.add(at(pp, "access_level"), ErrUnknownValue, "%q (want %s)",
@@ -1644,7 +1645,7 @@ func (d *Datadog) validate(path Path) error {
 				"required when datadog is enabled: it is the region the keys "+
 					"were issued in, and a key from one region is refused by "+
 					"every other. One of %s",
-				strings.Join(DatadogSites, ", "))
+				words.Or(DatadogSites))
 		case envref.Has(d.Provisioning.Site):
 			// A ${VAR} IS UNKNOWN, NOT WRONG. Tier B holds pointers
 			// verbatim and resolves them where a client is built, so the
@@ -1656,7 +1657,7 @@ func (d *Datadog) validate(path Path) error {
 					"that tells one organization's keys from another's, so a "+
 					"value Datadog does not serve resolves to no API at all. "+
 					"One of %s",
-				d.Provisioning.Site, strings.Join(DatadogSites, ", "))
+				d.Provisioning.Site, words.Or(DatadogSites))
 		}
 	}
 

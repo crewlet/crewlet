@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/httpx"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // How this binary's four node clients render a refusal.
@@ -82,7 +82,7 @@ func credentialRefusal(status int, raw []byte, sentToken bool) (string, bool) {
 				"your own token (`crewlet iam token -login LOGIN`), or bind " +
 				"this one to a human seat (`crewlet iam bind ID SEAT`)", true
 		case lacks && len(grants) > 0:
-			return "this token doesn't have " + strings.Join(grants, " or ") +
+			return "this token doesn't have " + words.Or(grants) +
 				". Ask an admin for it", true
 		case message != "":
 			// ANY OTHER RULE IS THE NODE'S TO WORD, and its `message`
@@ -95,7 +95,7 @@ func credentialRefusal(status int, raw []byte, sentToken bool) (string, bool) {
 			return "this token isn't allowed to do this (" + reason + "): " +
 				message, true
 		case len(grants) > 0:
-			return "this token doesn't have " + strings.Join(grants, " or ") +
+			return "this token doesn't have " + words.Or(grants) +
 				". Ask an admin for it", true
 		}
 		// NO GRANT WOULD, and the node named no rule's words for it.

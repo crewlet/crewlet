@@ -8,10 +8,10 @@ import (
 	"fmt"
 	"io"
 	"slices"
-	"strings"
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // ---- file datasets -------------------------------------------------------- //
@@ -70,7 +70,7 @@ func ParseFile(d Dataset, essence string, raw []byte) (Table, error) {
 		records, lines, err = readJSON(d, raw)
 	default:
 		return Table{}, fileFinding(d, 0, fmt.Sprintf("is %s, and a file dataset reads %s", essence,
-			strings.Join(FileEssences, " or ")))
+			words.Or(FileEssences)))
 	}
 	if err != nil {
 		return Table{}, err
@@ -127,7 +127,7 @@ func readCSV(d Dataset, raw []byte) ([]map[string]any, []int, error) {
 	for _, c := range d.Columns {
 		if !slices.Contains(header, c.Key) {
 			return nil, nil, fileFinding(d, 1, fmt.Sprintf("has no %q in its header (%s)", c.Key,
-				quoteList(header)))
+				words.And(header)))
 		}
 	}
 	var out []map[string]any

@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Role is the AUTHORED shape of one seat — a `roles:` entry.
@@ -489,7 +490,7 @@ func (g *RoleGitHub) validate(path Path) error {
 			"%q is not an access tier; give one of %s. An unknown tier would "+
 				"run the seat read-only, which is safe and is not what the "+
 				"document says",
-			g.Tier, strings.Join(CodeAccessTiers, ", "))
+			g.Tier, words.Or(CodeAccessTiers))
 	}
 	if g.Workflows && g.TierOrDefault() != TierFullAccess {
 		p.add(at(path, "workflows"), ErrConflict,

@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // AN IDENTITY RECORD'S REFUSAL IS ANSWERED BY THE RULE THAT MADE IT.
@@ -128,5 +129,24 @@ func TestARecordRefusalSaysWhetherAPermissionWouldLiftIt(t *testing.T) {
 					got.body)
 			}
 		})
+	}
+}
+
+// A STATUS THIS BUILD DOES NOT KNOW IS REFUSED NAMING EVERY ONE IT DOES, as a
+// sentence says a set: each quoted as the value typed beside it is, the last
+// two joined by "or". It was joined by hand, unquoted, so a person read
+// `Use invited, enrolling, active, suspended or retired` beside the quoted
+// value they had typed. Mutation: put back the hand join in unknownStage and
+// this fails.
+func TestAnUnknownStatusIsRefusedNamingEveryStatus(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	got := r.as(administrator(), http.MethodGet, "/iam/people?stage=asleep", nil)
+	if got.status != http.StatusBadRequest {
+		t.Fatalf("an unknown status answered %d, want 400: %v", got.status, got.body)
+	}
+	want := `"asleep" isn't a valid status. Use ` + words.Or(iam.Stages) + "."
+	if got.body["detail"] != want {
+		t.Errorf("the detail is %q, want %q", got.body["detail"], want)
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // SearchKnowledgeTool is the tool's wire name.
@@ -248,7 +249,7 @@ func unknownMode(tool, asked string) string {
 		names[i] = string(m)
 	}
 	return fmt.Sprintf("%s does not search in mode %q. It takes `mode` as one of %s.",
-		tool, strings.TrimSpace(asked), strings.Join(names, ", "))
+		tool, strings.TrimSpace(asked), words.Or(names))
 }
 
 // degradedNote is the sentence a search that ranked other than it was asked

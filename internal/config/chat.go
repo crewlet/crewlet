@@ -1,7 +1,6 @@
 package config
 
 import (
-	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/org"
@@ -463,12 +462,12 @@ func (c *Company) validateChat() error {
 				"be split between them. Remove one", names(vendors))
 	}
 	if c.Chat.Backend == ChatVendor && len(vendors) == 0 {
-		ways := make([]string, len(chatVendors))
+		ways := make([]words.Said, len(chatVendors))
 		for i, vendor := range chatVendors {
-			ways[i] = vendor.howToDeclare
+			ways[i] = words.Said(vendor.howToDeclare)
 		}
 		p.add(field("chat.backend"), ErrConflict,
-			"chat.backend: vendor needs %s", strings.Join(ways, " or "))
+			"chat.backend: vendor needs %s", words.Or(ways))
 	}
 
 	// A CHATLET BLOCK ON A COMPANY THAT DOES NOT RUN CHATLET describes nothing, and

@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/words"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -86,7 +87,7 @@ func (t *listProjects) Parameters() map[string]any {
 					"the page is taken, so `-active` is the most started work " +
 					"anywhere rather than the most of one page, and `target` " +
 					"the soonest target date (projects with none last). One of " +
-					strings.Join(worklet.ProjectSortNames(), ", ") +
+					words.Or(worklet.ProjectSortNames()) +
 					", each optionally with a leading `-` for descending. " +
 					"Default " + string(worklet.ProjectSortKey) + ".",
 			},

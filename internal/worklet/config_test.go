@@ -184,9 +184,10 @@ func TestTheRollupSetsAndTheirPairings(t *testing.T) {
 		source, field, op string
 		says              string
 	}{
-		{"an aggregation nobody has", "children", "points", "median", "aggregations"},
+		{"an aggregation nobody has", "children", "points", "median",
+			`isn't an aggregation. Use "sum", "avg", "min", "max", "count", "earliest" or "latest"`},
 		{"the earliest of a number", "children", "points", "earliest", "applies to dates"},
-		{"the sum of some dates", "children", "due", "sum", "microseconds"},
+		{"the sum of some dates", "children", "due", "sum", `Use "earliest", "latest" or "count"`},
 		{"the sum of some words", "children", "status_group", "sum", "count"},
 		{"nothing to gather across", "", "points", "sum", "gather across"},
 		{"nothing to gather", "children", "", "sum", "no field"},

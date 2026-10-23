@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/whsec"
 
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Reconcile brings a GitLab instance in line with the company config.
@@ -296,8 +297,8 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		return &Result{Notes: notesOf(opts.Plan)}, nil
 	}
 	if !opts.Mode.Valid() {
-		return nil, fmt.Errorf("gitlab: unknown mode %q — it is one of %s",
-			opts.Mode, strings.Join(Modes(), ", "))
+		return nil, fmt.Errorf("gitlab: %q isn't a provisioning mode. Use %s",
+			opts.Mode, words.Or(Modes()))
 	}
 	p := opts.Config.Provisioning
 	// THE GROUP IS RESOLVED IN BOTH MODES. An instance service account is

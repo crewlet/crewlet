@@ -3,7 +3,6 @@ package builtin
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/skills"
@@ -11,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // LoadToolSkillTool is the tool's wire name.
@@ -126,7 +126,8 @@ func (t *loadToolSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 }
 
 // noSuchSkill is a miss's answer: the key asked for, the keys that hold it
-// first ("did you mean"), then every key, at most [maxSuggestedSkills].
+// first ("did you mean"), then every key, at most [maxSuggestedSkills], each
+// quoted as the key asked for is ([words.AndMore]).
 func noSuchSkill(asked string, keys []string) string {
 	if len(keys) == 0 {
 		return fmt.Sprintf("No tool skill %q: this company publishes no tool skills, so there is "+
@@ -137,19 +138,14 @@ func noSuchSkill(asked string, keys []string) string {
 	for _, k := range keys {
 		lower := strings.ToLower(k)
 		if want != "" && (strings.Contains(lower, want) || strings.Contains(want, lower)) {
-			near = append(near, strconv.Quote(k))
+			near = append(near, k)
 		}
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "No tool skill %q. Use a key exactly as your catalogue lists it.", asked)
 	if len(near) > 0 {
-		fmt.Fprintf(&b, " Did you mean %s?", strings.Join(near, " or "))
+		fmt.Fprintf(&b, " Did you mean %s?", words.Or(near))
 	}
-	shown := keys[:min(len(keys), maxSuggestedSkills)]
-	fmt.Fprintf(&b, " The keys are: %s", strings.Join(shown, ", "))
-	if rest := len(keys) - len(shown); rest > 0 {
-		fmt.Fprintf(&b, ", and %d more", rest)
-	}
-	b.WriteString(".")
+	fmt.Fprintf(&b, " The keys are: %s.", words.AndMore(keys, maxSuggestedSkills))
 	return b.String()
 }
