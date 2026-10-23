@@ -223,9 +223,11 @@ function WaitingTile({
       value={`${waiting.count.toLocaleString()}${waiting.floor ? "+" : ""}`}
       trend={review}
       sub={
+        // NO SECOND "NOTHING": the figure says 0, and the greeting says it in
+        // words. The line is for what the figure cannot carry.
         waiting.count > 0 && waiting.oldestAt
           ? `Oldest waiting ${waitedFor(waiting.oldestAt, now)}`
-          : "Nothing waiting on you"
+          : undefined
       }
       subTone={waiting.count > 0 ? "warning" : undefined}
     />
