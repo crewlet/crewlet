@@ -4336,10 +4336,11 @@ a.knowledge-reader-how:hover {
 /* THE APP DEFINITION AN OPERATOR PASTES, inside the agent's own block.
    FOLDED, because it is forty lines of JSON and the two boxes under it are
    what the form is for: it is opened once per agent, at the start. */
+/* A ROW OF THE AGENT'S BLOCK, ruled off from the fields above it, never a
+   second bordered box inside the block's own frame. */
 .int-manifest {
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-  padding: var(--spacing-3);
+  border-top: 1px solid var(--color-border-default);
+  padding-top: var(--spacing-3);
 }
 /* The label, the aside, and the Copy button on one line: copying is what an
    operator does with this, and a button below the fold is one they have to
@@ -4495,12 +4496,16 @@ details > summary.int-summary::-webkit-details-marker {
 
 /* A section heading inside the setup dialog, for a tool the engine reaches
    over more than one surface. */
+/* A SURFACE'S HEADING in a sheet that sets up several (Atlassian's Jira and
+   Confluence): a real subheading in the words as written, never the
+   uppercase eyebrow, which under "Connect Slack" repeated the vendor. */
 .int-section {
-  font-size: var(--font-size-compact);
-  font-weight: 600;
-  color: var(--color-text-tertiary);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  margin: 0;
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--font-letter-spacing-normal);
+  color: var(--color-text-primary);
 }
 .int-findings {
   margin: var(--spacing-1) 0 0;

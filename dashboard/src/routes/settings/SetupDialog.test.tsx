@@ -2571,3 +2571,30 @@ test("a rotation names itself and says why, over the same fields", () => {
   expect(screen.getByRole("dialog", { name: "Connect Datadog" })).toBeTruthy();
   expect(screen.queryByText(reason)).toBeNull();
 });
+
+// A SURFACE'S HEADING ONLY TELLS SURFACES APART. A per-seat app's one company
+// group sits under the dialog's own "Connect Slack", so a heading naming
+// Slack again said the vendor twice; a sheet setting up two surfaces names
+// each, as a real subheading in the words as written.
+test("a sheet names its company group only when it holds more than one", () => {
+  const companyField = req({
+    field: "signing_secret",
+    label: "Signing secret",
+    kind: "secret",
+    connect: true,
+  });
+  const slack = { ...perSeatTool, requirements: [...perSeatTool.requirements, companyField] };
+  const one = render(
+    <SetupDialog
+      sections={[
+        { name: "Slack", tool: slack },
+        { name: "SRE Lead", tool: slack, seat: "sre-lead" },
+      ]}
+      title="Slack"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  expect(one.baseElement.querySelector(".int-section")).toBeNull();
+  // Mutation: drop the group count from the condition and the heading is back.
+});
