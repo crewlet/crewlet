@@ -29,6 +29,7 @@ export function RelatedRow({
   icon,
   title,
   description,
+  className,
 }: {
   /** Where the row goes, as an address. */
   path: readonly string[];
@@ -38,11 +39,13 @@ export function RelatedRow({
   title: string;
   /** One sentence: what is there, and where. */
   description: ReactNode;
+  /** Where the page places the row, for a page whose blocks keep no gap. */
+  className?: string;
 }) {
   const held = useHeldReading();
   if (held === null || closedBy(path, held.grants) !== null) return null;
   return (
-    <nav aria-label="Related">
+    <nav aria-label="Related" className={className}>
       <Card href={href(path)} interactive padding="sm">
         <Inline gap={3}>
           <span className="muted">{icon}</span>

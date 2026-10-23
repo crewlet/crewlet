@@ -58,22 +58,16 @@ import {
   ArtifactMakeRow,
   ArtifactNameCell,
   Button,
-  Card,
-  Inline,
   Input,
   LivePreviewBudgetProvider,
   Section,
   SegmentedControl,
   Select,
   Skeleton,
-  Spacer,
-  Stack,
   TableEntityCell,
-  Text,
   PrincipalAvatar,
 } from "@crewlethq/ui";
 import {
-  ChevronRightGlyph,
   GaugeGlyph,
   LayoutGridGlyph,
   ListGlyph,
@@ -83,6 +77,7 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { href, useNavigator, useParam, useRoute } from "~/app/router.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
+import { RelatedRow } from "~/app/frame/RelatedRow.tsx";
 import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
 import { useSearchTarget } from "~/app/searchTarget.ts";
 import {
@@ -501,7 +496,17 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
             rest
           ))}
       </QueryState>
-      {viewer.admin && section === "all" && !trashed && !filtered && <StorageRow />}
+      {/* WHERE THE COMPANY'S STORAGE IS READ, a quiet row for a reader who
+          may open Settings › File storage (the row asks the gate itself). */}
+      {section === "all" && !trashed && !filtered && (
+        <RelatedRow
+          className="artifacts-related"
+          path={["settings", "storage"]}
+          icon={<GaugeGlyph size="sm" />}
+          title="Company storage"
+          description="What the company holds against its storage quotas, in Settings › File storage."
+        />
+      )}
     </LivePreviewBudgetProvider>
   );
 }
@@ -892,36 +897,5 @@ function Listing({
         loadedNote={note}
       />
     </div>
-  );
-}
-
-/**
- * Where the company's storage is read: Settings › File storage, which holds
- * what the company keeps against the plan's quotas. A quiet related row at the
- * foot of All for an administrator, the one reader that page is for: the
- * quotas themselves were this gallery's foot once, the one block on it about
- * the engine's storage rather than about artifacts a reader opens.
- */
-function StorageRow() {
-  return (
-    <nav aria-label="Related" className="artifacts-related">
-      <Card href={href(["settings", "storage"])} interactive padding="sm">
-        <Inline gap={3}>
-          <span className="muted">
-            <GaugeGlyph size="sm" />
-          </span>
-          <Stack gap={1}>
-            <Text variant="cell">Company storage</Text>
-            <Text variant="caption">
-              What the company holds against its storage quotas, in Settings › File storage.
-            </Text>
-          </Stack>
-          <Spacer />
-          <span className="muted">
-            <ChevronRightGlyph size="sm" />
-          </span>
-        </Inline>
-      </Card>
-    </nav>
   );
 }
