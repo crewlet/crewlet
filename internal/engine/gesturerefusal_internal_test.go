@@ -94,7 +94,7 @@ func TestAGestureRefusalIsToldWithoutWhatItStandsOn(t *testing.T) {
 		const nope = "CREWLET_NOPE_LOG"
 		_, abandonErr := e.AbandonCapacity(ctx, nope, "capacity:open", iam.Actor{Name: "ops-3"})
 		_, excludeErr := e.ExcludeParticipant(ctx, nope, "node-2", iam.Actor{Name: "ops-3"})
-		_, _, _, _, statusErr := e.CapacityStatus(ctx, nope)
+		_, statusErr := e.CapacityStatus(ctx, nope)
 		for verb, err := range map[string]error{"abandonment": abandonErr,
 			"exclusion": excludeErr, "status": statusErr} {
 			if !errors.Is(err, ErrUnknownStream) {

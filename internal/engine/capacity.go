@@ -1282,31 +1282,49 @@ func (e *Engine) withdrawExcluded(ctx context.Context, node string) {
 	}
 }
 
-// CapacityStatus is the operation as an operator reads it, or the absence of
-// one.
-func (e *Engine) CapacityStatus(ctx context.Context, stream string) (
-	coord.MaintenanceOperation, []coord.MaintenanceAck, []coord.Admission, bool, error) {
+// CapacityState is one log's capacity window as an operator reads it: the
+// window or the absence of one, and the two registers its next step reads,
+// each as read or with why it couldn't be.
+//
+// EACH PART IS ITS OWN ANSWER. The window is read first and the
+// acknowledgements and the admissions after it, and one failing after the
+// window answered still leaves the window known: folded into one error, the
+// page said it couldn't tell whether a window was open on a log it had just
+// read one open on.
+type CapacityState struct {
+	// Op is the window, and Found whether there is one.
+	Op    coord.MaintenanceOperation
+	Found bool
+	// Acks is every acknowledgement of this log's window, or AcksErr why
+	// they couldn't be read.
+	Acks    []coord.MaintenanceAck
+	AcksErr error
+	// Admissions is every admission, or AdmissionsErr why they couldn't be
+	// read.
+	Admissions    []coord.Admission
+	AdmissionsErr error
+}
 
+// CapacityStatus is one log's window as an operator reads it ([CapacityState]).
+// Its error is about the window itself: a log no window can be opened on
+// ([UnknownStreamError]), a node with no coordination store, or a window read
+// that failed. A part read after it that failed is the state's to say.
+func (e *Engine) CapacityStatus(ctx context.Context, stream string) (CapacityState, error) {
 	if err := windowStream(stream); err != nil {
-		return coord.MaintenanceOperation{}, nil, nil, false, err
+		return CapacityState{}, err
 	}
 	if e.backends == nil || e.backends.Fleet == nil {
-		return coord.MaintenanceOperation{}, nil, nil, false,
-			errors.New("engine: this node has no coordination store")
+		return CapacityState{}, errNoFleet
 	}
-	op, found, err := e.backends.Fleet.Maintenance(ctx, stream)
+	var state CapacityState
+	var err error
+	state.Op, state.Found, err = e.backends.Fleet.Maintenance(ctx, stream)
 	if err != nil {
-		return coord.MaintenanceOperation{}, nil, nil, false, err
+		return CapacityState{}, err
 	}
-	acks, err := e.backends.Fleet.MaintenanceAcks(ctx, stream)
-	if err != nil {
-		return op, nil, nil, found, err
-	}
-	admissions, err := e.backends.Fleet.Admissions(ctx)
-	if err != nil {
-		return op, acks, nil, found, err
-	}
-	return op, acks, admissions, found, nil
+	state.Acks, state.AcksErr = e.backends.Fleet.MaintenanceAcks(ctx, stream)
+	state.Admissions, state.AdmissionsErr = e.backends.Fleet.Admissions(ctx)
+	return state, nil
 }
 
 // CapacityWindows is every capacity window open on a log, the oldest first,
