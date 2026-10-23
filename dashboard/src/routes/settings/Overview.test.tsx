@@ -88,6 +88,10 @@ describe("the overview", () => {
     expect(screen.getByText("Ship it")).toBeDefined();
     expect(screen.getByText("Acme")).toBeDefined();
     expect(screen.getByText("Europe/Lisbon")).toBeDefined();
+    // ONE PROFILE: the name is the card's title and the rest its facts, not a
+    // card a sentence.
+    expect(screen.getByRole("heading", { name: "Acme" })).toBeDefined();
+    expect(document.querySelectorAll(".crewlet-card")).toHaveLength(1);
     expect(screen.queryByText("Every amount is exact to the cent.")).toBeNull();
     expect(screen.queryByText("Loading the company's charter")).toBeNull();
   });
