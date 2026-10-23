@@ -351,7 +351,31 @@ func (s *fileSources) addBoxDir(ctx context.Context, raw string) *tools.Result {
 		return refusal
 	}
 	listed, err := box.Files(ctx, dir, artifacts.MaxFilesPerVersion+1)
-	if err != nil {
+	switch {
+	case errors.Is(err, ErrNotADirectory):
+		// THE CALLER'S PATH, as a file's is ([fileSources.digest]): it was
+		// told as a fault of this node, and the model gave up on a publish
+		// one corrected argument would have made.
+		r := failed(fmt.Sprintf("%s: %s isn't a directory in your coding run's workspace: "+
+			"it's missing, or it's a file or a link. Name the directory the build wrote its "+
+			"output to. Nothing was published.", s.tool, dir))
+		return &r
+	case errors.Is(err, ErrNoWorkspace):
+		// NO DIR WOULD LIST, so naming another is no advice: the box has to
+		// hold a build again before anything in it can be published.
+		r := refusedBy(tools.RefusalNotRunning, err, s.tool+": your coding run's workspace "+
+			"is gone from its box, so nothing in it can be published. Ask the coding run "+
+			"to build again with "+RunSandboxTool+", then publish from it in the same turn.")
+		return &r
+	case errors.Is(err, ErrListIncomplete):
+		// A WALK THAT STOPPED PARTWAY is not the build: published, it shipped
+		// whatever the box could read and dropped the rest without a word.
+		r := refusedBy(tools.RefusalConflict, err, fmt.Sprintf("%s: %s couldn't be listed "+
+			"whole in your coding run's box: part of it can't be read, most often a "+
+			"directory without read permission. Nothing was published. Make the build's "+
+			"output readable with %s, then publish it again.", s.tool, dir, RunSandboxTool))
+		return &r
+	case err != nil:
 		r := boxFailure(ctx, s.tool, err, "Could not list "+dir+" in the coding run's box")
 		return &r
 	}

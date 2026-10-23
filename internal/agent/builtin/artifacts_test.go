@@ -706,6 +706,49 @@ func TestABoxReadIsToldByWhyItFailed(t *testing.T) {
 		strings.Contains(got.Output, "10.0.0.7") {
 		t.Errorf("a listing the provider did not answer: %v %q", tools.RefusalOf(got), got.Output)
 	}
+
+	// AND A DIRECTORY THE WORKSPACE DOES NOT HOLD AS ONE is the caller's to
+	// name again, as a path naming no file is: it was told as a fault of
+	// this node. Mutation: drop the ErrNotADirectory arm and this row is
+	// a fault.
+	r = newArtifactRig(t, artifactChart{}, requesters{}, func(d *builtin.ArtifactDeps) {
+		d.Boxes = boxes{box: &fakeBox{listErr: fmt.Errorf("engine: list dist: %w",
+			builtin.ErrNotADirectory)}}
+	})
+	h = r.f.seed("agent-cto", iam.ActorAgent, cto, nil, [2]string{"index.html", "x"})
+	got = r.call(t, turnFor(t, "agent-cto"), builtin.PublishArtifactTool, map[string]any{
+		"artifact": h.ID.String(), "base_version": 1, "source": map[string]any{"sandbox": "dist"}})
+	if tools.RefusalOf(got) != tools.RefusalInvalid ||
+		!strings.Contains(got.Output, "dist isn't a directory in your coding run's workspace") ||
+		len(r.f.publishes) != 0 {
+		t.Errorf("a directory the workspace does not hold: %v %q", tools.RefusalOf(got), got.Output)
+	}
+
+	// A WORKSPACE THAT IS GONE is said as that, never as a dir to name
+	// again, which no name could satisfy; and A WALK THAT STOPPED PARTWAY is
+	// refused, never published as the part it read. Mutation: drop either
+	// arm and its row reads as the box's fault.
+	for _, c := range []struct {
+		err   error
+		class tools.Refusal
+		says  string
+	}{
+		{builtin.ErrNoWorkspace, tools.RefusalNotRunning, "workspace is gone from its box"},
+		{builtin.ErrListIncomplete, tools.RefusalConflict, "dist couldn't be listed whole"},
+	} {
+		r = newArtifactRig(t, artifactChart{}, requesters{}, func(d *builtin.ArtifactDeps) {
+			d.Boxes = boxes{box: &fakeBox{listErr: fmt.Errorf("engine: list dist: %w: "+
+				"find: './dist/assets': Permission denied", c.err)}}
+		})
+		h = r.f.seed("agent-cto", iam.ActorAgent, cto, nil, [2]string{"index.html", "x"})
+		got = r.call(t, turnFor(t, "agent-cto"), builtin.PublishArtifactTool, map[string]any{
+			"artifact": h.ID.String(), "base_version": 1, "source": map[string]any{"sandbox": "dist"}})
+		if tools.RefusalOf(got) != c.class || !strings.Contains(got.Output, c.says) ||
+			strings.Contains(got.Output, "Permission denied") || len(r.f.publishes) != 0 {
+			t.Errorf("%v: %v %q, want %v saying %q", c.err, tools.RefusalOf(got), got.Output,
+				c.class, c.says)
+		}
+	}
 }
 
 // A BOX READ A CONDITION STOPPED IS WRITTEN TO THE LOG, as a launch's is: the
