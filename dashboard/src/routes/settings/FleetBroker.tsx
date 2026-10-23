@@ -55,7 +55,7 @@ import {
   TableKeyCell,
   TableTagsCell,
 } from "@crewlethq/ui";
-import { ServerGlyph, ClockGlyph, TriangleAlertGlyph } from "@crewlethq/icons/glyphs";
+import { NetworkGlyph, ClockGlyph, TriangleAlertGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 
 import { QueryState } from "~/components/common.tsx";
@@ -177,7 +177,9 @@ export function BrokerMembership({
     // grants and a state-log one says that waiting will not clear it.
     return error ? (
       <Card>
-        <Card.Header icon={<ServerGlyph size="sm" />}>Broker members</Card.Header>
+        <Card.Header icon={<NetworkGlyph size="sm" />}>
+          <Card.Title>Broker members</Card.Title>
+        </Card.Header>
         <QueryState error={error} refusal={refusal} loading={false} />
       </Card>
     ) : null;
@@ -185,10 +187,12 @@ export function BrokerMembership({
   if (answer.external) {
     return (
       <Card>
-        <Card.Header icon={<ServerGlyph size="sm" />}>Broker members</Card.Header>
+        <Card.Header icon={<NetworkGlyph size="sm" />}>
+          <Card.Title>Broker members</Card.Title>
+        </Card.Header>
         <EmptyState
           size="compact"
-          icon={<ServerGlyph size="xl" />}
+          icon={<NetworkGlyph size="xl" />}
           title="An external NATS cluster"
           description="Its membership is managed outside Crewlet."
         />
@@ -209,11 +213,11 @@ export function BrokerMembership({
   return (
     <Card padding="none">
       <Card.Header
-        icon={<ServerGlyph size="sm" />}
+        icon={<NetworkGlyph size="sm" />}
         count={answer.group?.peers.length ?? 0}
         subtitle={answer.group ? groupSummary(answer.group, answer.group_from) : undefined}
       >
-        Broker members
+        <Card.Title>Broker members</Card.Title>
       </Card.Header>
       {(!answer.group || answer.findings.length > 0 || error) && (
         <Card.Body padding="md">
@@ -427,7 +431,7 @@ export function BrokerRemoveDialog({
     <Modal
       open
       title={`Remove ${voterLabel(node, peer)} from the broker`}
-      icon={<ServerGlyph size="md" />}
+      icon={<NetworkGlyph size="md" />}
       onClose={onClose}
       // A REQUEST IN FLIGHT HAS AN OUTCOME NOBODY HAS HEARD YET.
       dismissable={!busy}

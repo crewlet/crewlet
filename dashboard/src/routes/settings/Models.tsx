@@ -193,7 +193,7 @@ function ModelList({
 
       <Card padding="none">
         <Card.Header icon={<CpuGlyph size="sm" />} count={providers.length}>
-          Models
+          <Card.Title>Models</Card.Title>
         </Card.Header>
         {providers.length === 0 ? (
           <div style={{ padding: "var(--spacing-4)" }}>
@@ -379,7 +379,7 @@ function ModelPage({
       {row.state !== "login" && (
         <Card padding="none">
           <Card.Header icon={<KeyGlyph size="sm" />} count={row.keys.length}>
-            Keys
+            <Card.Title>Keys</Card.Title>
           </Card.Header>
           {row.keys.length === 0 ? (
             <div style={{ padding: "var(--spacing-4)" }}>
@@ -482,7 +482,7 @@ function ModelPage({
 
       <Card padding="none">
         <Card.Header icon={<UsersGlyph size="sm" />} count={uses.length}>
-          Seats on it
+          <Card.Title>Seats on it</Card.Title>
         </Card.Header>
         {uses.length === 0 ? (
           <div style={{ padding: "var(--spacing-4)" }}>
