@@ -32,6 +32,8 @@ vi.mock("~/lib/viewer.ts", async () => {
   return {
     ...actual,
     useViewer: () => ({ owner: "token:review", admin: viewerAdmin, handle: "" }),
+    // THE GRANTS THE RELATED ROW ASKS ITS GATE WITH, the same reader's.
+    useHeldReading: () => ({ login: "token:review", grants: viewerAdmin ? ["admin"] : [] }),
   };
 });
 vi.mock("~/lib/artifacts/access.ts", async () => {
