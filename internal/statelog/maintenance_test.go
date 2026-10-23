@@ -445,6 +445,32 @@ func TestAMismatchStartsANumberedAttemptFromTheWritableMode(t *testing.T) {
 	}
 }
 
+// THE VERIFY CONFIRMS AN ABANDONED OPERATION AT WHATEVER ITS SEAL FOUND, and
+// any other at its target alone: abandoning stops an operation trying to
+// reach its target, so a ceiling other than the target is its outcome rather
+// than a reason for another attempt at it.
+func TestTheVerifyConfirmsAnAbandonedOperationAtWhatItFound(t *testing.T) {
+	t.Parallel()
+	op := operation(coord.PhaseSealed)
+	for _, c := range []struct {
+		name     string
+		blocked  string
+		observed uint64
+		want     bool
+	}{
+		{"the target", "", op.TargetMaxBytes, true},
+		{"another ceiling", "", op.TargetMaxBytes - 1, false},
+		{"another ceiling, out of attempts", statelog.BlockedUnsealed, op.TargetMaxBytes - 1, false},
+		{"another ceiling, abandoned", statelog.BlockedAbandoned, op.TargetMaxBytes - 1, true},
+		{"the target, abandoned", statelog.BlockedAbandoned, op.TargetMaxBytes, true},
+	} {
+		op.Blocked = c.blocked
+		if got := statelog.Verifies(op, c.observed); got != c.want {
+			t.Errorf("%s: Verifies = %t, want %t", c.name, got, c.want)
+		}
+	}
+}
+
 // TestTheAttemptBudgetSurvivesCoordinatorFailure: the count is on the RECORD,
 // so a takeover resumes it. Held in the coordinator, each takeover would reset
 // it and the advertised bound would be unbounded.
@@ -457,7 +483,7 @@ func TestTheAttemptBudgetSurvivesCoordinatorFailure(t *testing.T) {
 		t.Fatalf("attempt %d was allowed past the budget of %d",
 			op.Attempt, statelog.ControlRaiseAttempts)
 	}
-	if blocked.Blocked != "capacity_operation_unsealed" {
+	if blocked.Blocked != statelog.BlockedUnsealed {
 		t.Fatalf("the exhausted operation is blocked by %q", blocked.Blocked)
 	}
 	if want := "`crewlet retention maintenance status -stream " + op.Stream + "`"; !strings.Contains(err.Error(), want) {

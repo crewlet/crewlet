@@ -2364,9 +2364,11 @@ it must cross. From `opened` it clears outright, since no request was issued,
 and says what's left before service as set-capacity does once it closes a
 window. From anywhere else the fleet still has to restart into `seal`, because
 a paused coordinator's request is outstanding whether or not a person has read
-a status page. `-confirm` repeats the operation id from `status`, and the node
-checks it against the operation that is open before it abandons anything: one
-naming another operation is refused and nothing changes.
+a status page, and once the seal holds, set-capacity run again closes the
+window at whatever ceiling the log has then, rather than trying the target
+again. `-confirm` repeats the operation id from `status`, and the node checks
+it against the operation that is open before it abandons anything: one naming
+another operation is refused and nothing changes.
 
 ### `crewlet retention reanchor`
 

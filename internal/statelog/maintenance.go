@@ -91,6 +91,19 @@ import (
 // which is a person's problem rather than a retry's.
 const ControlRaiseAttempts = 3
 
+// Why a capacity operation can't go on without a person, as its Blocked field
+// carries it.
+const (
+	// BlockedAbandoned is an operation an operator abandoned ([AbandonPhase]).
+	// It no longer tries to reach its target, and closes once its seal
+	// holds, at whatever ceiling the log has then ([Verifies]).
+	BlockedAbandoned = "abandoned_by_operator"
+
+	// BlockedUnsealed is an operation that used every attempt at its target
+	// and still finds another ceiling ([NextAttempt]).
+	BlockedUnsealed = "capacity_operation_unsealed"
+)
+
 // MaintenanceMode is what a node started for.
 type MaintenanceMode string
 
@@ -158,8 +171,9 @@ type PhaseEvidence struct {
 	// Acks is every acknowledgement the coordinator can see.
 	Acks []coord.MaintenanceAck
 
-	// Verified reports that the final verify compared the observed
-	// ceiling against the immutable target and matched.
+	// Verified reports that the final verify confirms the operation at the
+	// ceiling it observed ([Verifies]): the immutable target, or anything at
+	// all for an operation an operator abandoned.
 	Verified bool
 }
 
@@ -417,6 +431,20 @@ func describeBarrier(ev BarrierEvidence) string {
 		ev.ObservedMaxBytes, strings.Join(nodes, ","))
 }
 
+// Verifies reports whether the verify after the seal confirms op at the
+// ceiling observed: the target exactly, or, for an operation an operator
+// abandoned ([BlockedAbandoned]), whatever the seal found.
+//
+// AN ABANDONED OPERATION NO LONGER TRIES TO REACH ITS TARGET, which is what
+// abandoning it means. It crosses the seal only because a request it sent may
+// still be in flight, and once the seal has retired that, the ceiling the log
+// has is the outcome. Verified against the target like any other, it started
+// another attempt at the target the operator had given up on, and the next
+// step it named was sending the request again.
+func Verifies(op coord.MaintenanceOperation, observed uint64) bool {
+	return observed == op.TargetMaxBytes || op.Blocked == BlockedAbandoned
+}
+
 // NextAttempt is what a failed verify produces: the SAME immutable target
 // under a new attempt number.
 //
@@ -439,7 +467,7 @@ func NextAttempt(op coord.MaintenanceOperation, observed uint64,
 	if op.Attempt >= ControlRaiseAttempts {
 		out := op
 		out.ObservedMaxBytes = observed
-		out.Blocked = "capacity_operation_unsealed"
+		out.Blocked = BlockedUnsealed
 		return out, &Telling{Say: fmt.Sprintf("the capacity operation on %s has "+
 			"used all %d attempts at %d bytes and the broker reports %d, so it "+
 			"needs a person now. `crewlet retention maintenance status -stream "+
