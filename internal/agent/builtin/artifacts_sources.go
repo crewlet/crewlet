@@ -669,7 +669,7 @@ func boxFailure(ctx context.Context, tool string, err error, stopped string) too
 			"sandbox setup; the node's log says what."))
 	}
 	// A class no box read meets (setup_unavailable, a launch's own: its setup
-	// step's download failing for now) is no reason this read can give, so it
-	// is told as what nothing classed.
+	// step's download failing for now) is told by the classification every
+	// tool shares ([Condition]), which words every class there is.
 	return nodeFailure(ctx, tool, err, stopped, fact)
 }
