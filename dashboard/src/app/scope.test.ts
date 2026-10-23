@@ -49,7 +49,7 @@ describe("which scope and lens a route is on", () => {
       ["work", "search"],
       ["work", "projects"],
       ["home"],
-      ["agents", "roster"],
+      ["company", "org", "roster"],
     ]) {
       expect(scopeAt(path, q()), path.join("/")).toBeNull();
     }

@@ -1291,7 +1291,8 @@ describe("projects, the switcher and the full search", () => {
 
   test("Switch project… is a place to go, and opens the switcher as the palette closes", async () => {
     const p = mount({ answers: { work_projects: listing } });
-    const go = screen.getByRole("group", { name: "Go to" });
+    // WITH WORK'S PLACES, under the sidebar's own Workspace heading.
+    const go = screen.getByRole("group", { name: "Workspace" });
     const row = within(go).getByRole("option", { name: /Switch project…/ });
     expect(row.textContent).toContain("or G then P, from anywhere");
     await act(async () => {
@@ -1339,13 +1340,35 @@ describe("a screen found by what it holds", () => {
     expect(location.hash).toBe("#/account");
   });
 
+  // THE EMPTY PALETTE DRAWS THE SIDEBAR'S TREE: one flat "Go to" of every
+  // place hid it, and set look-alikes side by side. Mutation: push every
+  // destination as one group and the headings are gone.
+  test("the empty palette lists every place under the sidebar's own headings", () => {
+    mount();
+    const headings = ["Go to", "Company", "Workspace", "Settings", "Account"];
+    for (const name of headings) expect(screen.getByRole("group", { name })).toBeDefined();
+    expect(
+      within(screen.getByRole("group", { name: "Company" })).getByRole("option", {
+        name: /^Budgets/,
+      }),
+    ).toBeDefined();
+    expect(
+      within(screen.getByRole("group", { name: "Settings" })).getByRole("option", {
+        name: /^Token spend/,
+      }),
+    ).toBeDefined();
+  });
+
   // A LABEL STILL WINS: a screen called what was typed is never pushed under
   // one that merely holds the word. "s" starts two of Account's words
   // ("sessions", "security"), which a flat ranking scored ahead of every label
   // with an "s" in its middle — Tasks, Projects, Agents.
   test("every label match ranks above a keyword match, however good", () => {
     const nav = { to: vi.fn() } as unknown as Parameters<typeof destinationHits>[1];
-    const hits = destinationHits("s", nav, Infinity, null).map((h) => h.label);
+    const hits = destinationHits("s", nav, Infinity, null, {
+      tracker: true,
+      knowledge: true,
+    }).map((h) => h.label);
     // THE LABEL MATCHES COME FIRST, then the screens only a keyword found
     // ("Account"), and never one after the other.
     const firstKeyword = hits.findIndex((label) => !label.toLowerCase().includes("s"));
@@ -1355,13 +1378,47 @@ describe("a screen found by what it holds", () => {
     expect(hits).toContain("Tasks");
   });
 
-  // THE HINT IS PROSE AND IS NEVER SEARCHED: People & access's mentions "API
-  // tokens", which are not the reader's own, and it is no answer to "token".
+  // SETTINGS OPENS WHERE THE READER MAY READ: a reader holding only Tracker
+  // was sent to Models & keys, which is Admin's, and its entry read "needs
+  // Admin access" although Token spend and Expensive tasks are theirs.
+  // Mutation: go to the workspace's own path and the press lands on the lock.
+  test("a reader holding only Tracker opens Settings on Token spend, unlocked", () => {
+    const to = vi.fn();
+    const nav = { to } as unknown as Parameters<typeof destinationHits>[1];
+    const runs = { tracker: true, knowledge: true };
+    const settings = destinationHits(
+      "settings",
+      nav,
+      Infinity,
+      {
+        anonymous: false,
+        grants: ["tracker"],
+      },
+      runs,
+    ).find((h) => h.id === "nav-settings")!;
+    expect(settings.hint).not.toMatch(/needs/);
+    settings.go();
+    expect(to).toHaveBeenCalledWith(["settings", "spend"]);
+    const admin = destinationHits(
+      "settings",
+      nav,
+      Infinity,
+      {
+        anonymous: false,
+        grants: ["admin"],
+      },
+      runs,
+    ).find((h) => h.id === "nav-settings")!;
+    admin.go();
+    expect(to).toHaveBeenLastCalledWith(["settings", "models"]);
+  });
+
+  // THE HINT IS PROSE AND IS NEVER SEARCHED: Service accounts' mentions
+  // "machine principals", and it is no answer to "principals".
   test("a word only a hint's prose holds finds nothing", async () => {
     const p = mount();
-    await p.type("token");
-    const go = screen.getByRole("group", { name: "Go to" });
-    expect(within(go).queryByRole("option", { name: /^People & access/ })).toBeNull();
+    await p.type("principals");
+    expect(screen.queryByRole("option", { name: /^Service accounts/ })).toBeNull();
   });
 });
 

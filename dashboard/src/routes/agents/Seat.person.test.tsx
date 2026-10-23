@@ -35,7 +35,7 @@ class InertWebSocket {
 
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
-  location.hash = "#/agents/seats/ceo?tab=work";
+  location.hash = "#/company/org/seats/ceo?tab=work";
 });
 
 afterEach(() => {
@@ -160,7 +160,7 @@ test("a lead holding Tracker asks for a report's queue", async () => {
 // above, the same lead holding it. Mutation: decide the lead before the app
 // and this reader asks for a queue the engine refuses them.
 test("a lead without Tracker asks nothing of a report's record", async () => {
-  location.hash = "#/agents/seats/ceo";
+  location.hash = "#/company/org/seats/ceo";
   const asked = await askedAs(["knowledge"], true);
   expect(asked).not.toContain("work_my_work");
   expect(asked).not.toContain("work_person");
@@ -169,7 +169,7 @@ test("a lead without Tracker asks nothing of a report's record", async () => {
 
 // AND THE OVERVIEW'S DAY READS THE SAME RULE.
 test("a lead's overview of a report asks for their day", async () => {
-  location.hash = "#/agents/seats/ceo";
+  location.hash = "#/company/org/seats/ceo";
   const asked = await askedAs(["tracker"], true);
   await waitFor(() => expect(asked).toContain("work_person"));
 });

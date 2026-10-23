@@ -27,7 +27,7 @@ import { FrameReadings } from "~/app/Shell.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { reloadForTest } from "~/lib/prefs.ts";
-import { LiveSocket, Store } from "~/protocol/index.ts";
+import { LiveSocket, QueryError, Store } from "~/protocol/index.ts";
 import type {
   WorkActivityRecord,
   WorkItem,
@@ -1884,4 +1884,21 @@ test("linking a task under a shared key links the one chosen", async () => {
   expect(posted).toEqual([
     { tool: "update_work_item", args: { item: "ENG-42", linked: { add: [DUPLICATE] } } },
   ]);
+});
+
+// A MISSING TASK IS AN EMPTY STATE WITH A WAY BACK, as a missing project and a
+// missing artifact are: it was a full-width grey callout, the one object page
+// that said so in a different shape. Mutation: leave not_found to the generic
+// callout and the way back is gone.
+test("a task that does not exist says so, naming the key, with the way back to Tasks", async () => {
+  location.hash = "#/work/AB-1";
+  mount(<WorkItemPage id="AB-1" />, {
+    answers: { work_item: () => Promise.reject(new QueryError("not_found")) },
+  });
+  await settle();
+  expect(screen.getByText("No task called “AB-1”")).toBeTruthy();
+  expect(screen.getByRole("link", { name: "Back to Tasks" }).getAttribute("href")).toBe(
+    "#/work/tasks",
+  );
+  expect(screen.queryByText("Not found. It may have been removed.")).toBeNull();
 });

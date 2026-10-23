@@ -550,7 +550,7 @@ const ALLOWED: Allowed[] = [
   },
   {
     name: "crewlet-popover",
-    why: "uilet's Popover writes it on its panel, and caps the panel at 360px with a scroll. styles/screens.css raises that cap for Spend › Budgets' ceiling editor (`.ceiling-pop`, the Popover's `className`), whose check can answer a paragraph of the engine's own warning — under the kit's cap it scrolled Save anyway below the fold of the panel. Paired with the kit's class so it wins whichever stylesheet a lazy chunk loads last. Another rule about OUR composition of the package's component.",
+    why: "uilet's Popover writes it on its panel, and caps the panel at 360px with a scroll. styles/screens.css raises that cap for Company › Budgets' ceiling editor (`.ceiling-pop`, the Popover's `className`), whose check can answer a paragraph of the engine's own warning, under the kit's cap it scrolled Save anyway below the fold of the panel. Paired with the kit's class so it wins whichever stylesheet a lazy chunk loads last. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {
@@ -604,8 +604,8 @@ const ALLOWED: Allowed[] = [
     pkg: "@crewlethq/ui/styles.css",
   },
   {
-    name: "crewlet-nav-item__badge",
-    why: "uilet's SidebarNav writes it on a row's filled figure, which the kit fills with the accent because its one badge is an unread count. styles/frame.css repaints it in the warning pair on a Settings row whose figure is a STATE waiting on the reader (`.section-row-attention` — Integrations' tools needing a person), as the approved Settings artboard draws that figure; in the accent it read as a second inbox. The kit's pill keeps its size, its place and its spoken figure. Another rule about OUR composition of the package's component.",
+    name: "crewlet-card",
+    why: "uilet's Card writes it on every card. styles/frame.css draws the dashboard's own DataGrid flush inside one (`.crewlet-card .grid-wrap`): the card is the frame, and a bordered grid a pixel inside its border was a double edge on fifteen pages that each had to remember the `flush` prop. A rule about OUR grid's composition inside the package's component; the card itself is untouched.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {
@@ -615,7 +615,7 @@ const ALLOWED: Allowed[] = [
   },
   {
     name: "crewlet-card__subtitle",
-    why: "uilet's Card writes it on the head's subtitle, beside the title. styles/screens.css moves it onto a line of its own on a narrow screen in every head that also holds actions, where it sat between the title and the actions and cut both — a seat's Current turn to 'Current tu…', Configuration's Active revision to 'Active' over 'revision'. Another rule about OUR composition of the package's component.",
+    why: "uilet's Card writes it on the head's subtitle, beside the title. styles/screens.css gives it a line of its own at every width in the heads the approved artboards draw stacked (`.card-head-stacked`: a chart's key such as 'Last 14 days' under 'Turns per day'). Another rule about OUR composition of the package's component; a narrow card's own wrap is the kit's.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {
@@ -673,12 +673,12 @@ const ALLOWED: Allowed[] = [
   },
   {
     name: "crewlet-table-cell__key",
-    why: "uilet's TableKeyCell writes it on an identifier. styles/screens.css gives the work item key on Spend › Expensive tasks' phone rows (`.spend-tasks`) a seven-character floor, so every title on the compact row starts at one x rather than at an indent set by each key's own width. Another rule about OUR composition of the package's component.",
+    why: "uilet's TableKeyCell writes it on an identifier. styles/screens.css gives the work item key on Settings › Token spend › Expensive tasks' phone rows (`.spend-tasks`) a seven-character floor, so every title on the compact row starts at one x rather than at an indent set by each key's own width. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {
     name: "crewlet-card__header-actions",
-    why: 'uilet\'s Card.Header writes it. styles/screens.css takes the name block out of the shrink where the head holds no actions or panel controls, because the kit\'s 100-to-1 subtitle shrink is proportional and still took a fraction of a pixel off the title — enough, with our ellipsis, to draw "When" as "Wh…" beside a whole subtitle on a phone. Where a head DOES hold actions and a subtitle, a narrow screen moves the subtitle to a line of its own instead (see crewlet-card__subtitle). Another rule about OUR composition of the package\'s component.',
+    why: 'uilet\'s Card.Header writes it. styles/screens.css takes the name block out of the shrink where the head holds no actions or panel controls, because the kit\'s 100-to-1 subtitle shrink is proportional and still took a fraction of a pixel off the title, enough, with our ellipsis, to draw "When" as "Wh…" beside a whole subtitle on a phone. Another rule about OUR composition of the package\'s component.',
     pkg: "@crewlethq/ui/styles.css",
   },
   {

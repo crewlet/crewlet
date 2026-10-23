@@ -668,7 +668,7 @@ this node published, and the 24-hour spend window (the `phase_tokens`
 question, cut to the asker's window and floored at the asker's instant, so
 every node answers the same one) behind the
 [`tokens` push](../reference/api-endpoints.md#pushes), which no screen draws:
-the Overview and Spend screens read the replicated `usage` domain's company
+Home and Settings › Token spend read the replicated `usage` domain's company
 days instead. Every one of these reads crosses the fleet the same way:
 
 ```mermaid

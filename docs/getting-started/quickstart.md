@@ -450,7 +450,7 @@ afterwards.
 
 **Invite yourself onto your seat.** Every person holds exactly one human seat
 for as long as they exist, so you join the company on the one `company.yaml`
-declares for you — the human seat with the handle `founder`. Open **Agents ›
+declares for you, the human seat with the handle `founder`. Open **Company ›
 Org chart**: your seat's card (under the name you gave it) reads **Open seat**,
 because nobody holds it yet. Click the card to open the seat beside the
 chart: its foot offers **Invite** and **Add person** (the same two are on
@@ -501,13 +501,13 @@ From now on the sign-in screen takes your login or address and your password.
 **Your name at the sidebar's foot opens your own Account** — your password,
 two-step verification (an authenticator app, which you can set up there even
 where it is optional) and recovery codes, where you are signed in and your
-personal access tokens; Settings lists it too, under **You**. The menu beside
-your name holds the same link and signing out, here or everywhere at once. A gesture that changes who may do what, or how somebody
+personal access tokens. The menu beside your name holds the same link and
+signing out, here or everywhere at once. A gesture that changes who may do what, or how somebody
 proves who they are, asks you to confirm your password first, in one dialog,
 and then carries on. The founder token stays: it is what a pipeline uses, and
 the way back in when nobody who can sign in is available — a machine
 credential, not how people should be signing in. Everybody after you arrives
-the same way, on a seat of their own: add a human seat for them (**Agents ›
+the same way, on a seat of their own: add a human seat for them (**Org chart ›
 Edit org › Add human seat**), and once it is saved an administrator invites
 them onto it, or creates them on it, from its card in the org chart — with
 both apps ticked by default and Admin not. A person handed no permission at all
@@ -547,9 +547,11 @@ what the company has done. With no company activity yet each card says so, and
 a condition the engine itself raised takes over the sentence under the
 greeting.
 
-The sidebar is the product in nine rows — Home, Inbox, My work, Work, Agents,
-Live, Knowledge, Spend, Settings — and each workspace's sections are tabs in
-its page header. `g` then a letter jumps between them, and `?` lists every key.
+The sidebar reads top to bottom: Home, Inbox and My work; the Company group
+(Overview, Policies, Org chart, Schedules, Integrations and Budgets); the
+Workspace group (Work, Knowledge, Artifacts and Live); and Settings at its
+foot. Each workspace's sections are tabs in its page header. `g` then a
+letter jumps between them, and `?` lists every key.
 While an agent is working, the Live row counts the seats at work and a
 **Running** group under the sidebar's shortcuts (after Projects, Pinned and
 Starred) lists up to four running turns. Press one to watch it — its
@@ -690,10 +692,11 @@ The engine holds its store, so the command goes through the node's API: a
 revision and activates it fleet-wide — exactly what a script driving the API
 directly sends ([Configure via the API](../guides/configure-via-api.md)).
 
-Or create the company from the dashboard: open **Agents** and its **Edit
-org** button (`#/agents/edit`). With no configuration active it opens on a
-form that starts the company from a template, has the engine check it, and
-creates it with `PUT /config`. Keep its **Add a seat for yourself** ticked:
+Or create the company from the dashboard: open **Org chart** under Company
+and its **Edit org** button (`#/company/org/edit`). With no configuration
+active it opens on a form that starts the company from a template, has the
+engine check it, and creates it with `PUT /config`. Keep its **Add a seat for
+yourself** ticked:
 that seat is the one you then invite yourself onto, from the org chart, as
 step 4 describes. The builder reads and writes the company
 document, so it needs a session holding `admin`: the one you signed in with
@@ -838,8 +841,8 @@ each), then wire them in:
   [code sandbox](../concepts/code-sandbox.md) so engineer roles author real
   merge requests
 - Bring your team in: add a human seat for each person who is to sign in
-  (**Agents › Edit org › Add human seat**), then invite them onto it or create
-  them on it from its card in **Agents › Org chart** — every person holds a
+  (**Org chart › Edit org › Add human seat**), then invite them onto it or create
+  them on it from its card in **Company › Org chart**, every person holds a
   seat of their own. See [Putting a person in the
   seat](../concepts/humans-in-the-org.md#putting-a-person-in-the-seat)
 - Fill in the [founder seat](../concepts/humans-in-the-org.md#the-founder-seat)

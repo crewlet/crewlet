@@ -776,14 +776,13 @@
 .live-filters {
   flex-wrap: wrap;
 }
+/* ONE TRACK SPLIT FOR BOTH ROWS, so the cards form one two-column grid: the
+   second row was split evenly, and its gutter stood 133px off the first's. */
 .live-row-pair {
   display: grid;
   grid-template-columns: minmax(0, 1.62fr) minmax(0, 1fr);
   gap: var(--spacing-4);
   align-items: stretch;
-}
-.live-row-even {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 .live-card {
   min-width: 0;
@@ -791,8 +790,7 @@
 /* 928px IS HOME'S OWN FOLD, for the same reason: the waiting card's Answer
    and the run rows need the width the running column would leave them. */
 @container page (width < 928px) {
-  .live-row-pair,
-  .live-row-even {
+  .live-row-pair {
     grid-template-columns: minmax(0, 1fr);
   }
 }
@@ -1288,8 +1286,10 @@ a.oc-key:hover {
 /* THE APPROVED AGENT ARTBOARD: a head flush with the sheet — the badge, the
    name, the kind and state, the line that places the seat, and the tab strip
    sitting on the head's own rule — and the tab's panel under it at the
-   artboard's 28px inset. The sheet's own padding is taken back, the same way
-   the task page and the Inbox take it, so the rule runs edge to edge. */
+   shell's gutter, the screen padding every page bar's trail starts at: at
+   the artboard's 28px the head, tabs and body stood 8px right of the crumb
+   above them. The sheet's own padding is taken back, the same way the task
+   page and the Inbox take it, so the rule runs edge to edge. */
 .app .crewlet-app-shell__content:has(> .prof-frame) {
   padding: 0;
   gap: 0;
@@ -1303,7 +1303,7 @@ a.oc-key:hover {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-4);
-  padding: 22px 28px 0;
+  padding: var(--spacing-5) var(--spacing-5) 0;
   border-bottom: 1px solid var(--color-border-default);
 }
 .prof-id {
@@ -1355,7 +1355,7 @@ a.oc-key:hover {
   flex-direction: column;
   gap: var(--spacing-4);
   min-width: 0;
-  padding: 20px 28px 32px;
+  padding: var(--spacing-5) var(--spacing-5) var(--spacing-8);
 }
 .prof-notices {
   display: flex;
@@ -1386,6 +1386,12 @@ a.oc-key:hover {
 }
 .prof-pair > * {
   min-width: 0;
+}
+/* A PAIR WITH ONE CARD LEFT GIVES IT THE ROW: where the company runs no
+   Crewlet Works the seat's Assigned work draws nothing, and Turns per day sat
+   in the left track beside a 334px hole. */
+.prof-pair > :only-child {
+  grid-column: 1 / -1;
 }
 .prof-card,
 .prof-turn {
@@ -1997,6 +2003,15 @@ a.prof-row:hover {
   gap: var(--spacing-2);
   flex-wrap: wrap;
   min-width: 0;
+}
+/* THE CHECK, DISCARD AND REVIEW AND SAVE ARE ONE GROUP at the row's end, and
+   wrap together: the toolbar's last line holds all three or none. */
+.org-builder-save {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  flex: none;
+  margin-left: auto;
 }
 
 /* Undo, Redo, Discard, Expand all and Collapse all move into the More menu at
@@ -2689,6 +2704,13 @@ a.prof-row:hover {
 }
 .knowledge-search > form {
   min-width: 0;
+  width: 14rem;
+}
+@container page (width < 640px) {
+  .knowledge-search > form {
+    flex: 1 1 auto;
+    width: auto;
+  }
 }
 
 /* A screen's column: the landing, a space, the results. */
@@ -2744,6 +2766,21 @@ a.prof-row:hover {
   .knowledge-tiles {
     grid-template-columns: minmax(0, 1fr);
     grid-template-areas: "latest" "written" "reading" "pinned" "watching" "agents";
+  }
+}
+/* WITH NOTHING WRITTEN there is no Recently written tile, and no column for
+   it: the newest change's tile says so, and the small tiles share the row. */
+.knowledge-tiles[data-written="none"] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-areas:
+    "latest latest"
+    "reading pinned"
+    "watching agents";
+}
+@container page (width < 640px) {
+  .knowledge-tiles[data-written="none"] {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "latest" "reading" "pinned" "watching" "agents";
   }
 }
 .knowledge-written {
@@ -3712,27 +3749,6 @@ a.knowledge-reader-how:hover {
   max-width: 100%;
 }
 
-/* ON A NARROW SCREEN A HEAD WITH ACTIONS PUTS ITS SUBTITLE ON A LINE OF ITS
-   OWN, under the title and the actions. Beside actions the kit's shrink is
-   proportional (above), so a phone's head gave a title a fraction of a pixel
-   and a plain title broke over two lines — "Active" over "revision" — while
-   its subtitle was cut beside the Copy button to "as the engine resolv…".
-   On its own line the subtitle has the head's whole width and the title and
-   its actions have the first. One rule for every head of that shape: a
-   seat's Current turn card had it written for itself alone, after the same
-   squeeze cut its title to "Current tu…". */
-@container page (width < 640px) {
-  .crewlet-card__header:has(> .crewlet-card__subtitle):has(> .crewlet-card__header-actions) {
-    flex-wrap: wrap;
-    row-gap: var(--spacing-1);
-  }
-  .crewlet-card__header:has(> .crewlet-card__header-actions) > .crewlet-card__subtitle {
-    order: 9;
-    flex: 1 1 100%;
-    min-width: 0;
-  }
-}
-
 /* A STAT'S SECOND LINE WRAPS RATHER THAN ENDING IN AN ELLIPSIS. uilet sets it
    `nowrap` and reserves exactly one line, so that a row of tiles where only
    some carry one still stands at one height — but inside a StatGroup the grid
@@ -3771,16 +3787,6 @@ a.knowledge-reader-how:hover {
    of the tile's three lines. */
 .crewlet-stat-group > .crewlet-statcard > :first-child {
   align-self: end;
-}
-
-/* AN ODD LAST TILE TAKES THE WHOLE ROW once the kit folds a stat row into two
-   columns (its `width < 1024px` step): three tiles on a phone stood 2 + 1,
-   the last beside an empty half-row that read as a tile failing to load. The
-   step is the kit's own, restated because a media query cannot be borrowed. */
-@media (width < 1024px) {
-  .crewlet-stat-group > :last-child:nth-child(odd) {
-    grid-column: 1 / -1;
-  }
 }
 
 /* ONE STEP WIDER THAN THE PACKAGE'S OWN, and only inside a tool row. uilet's
@@ -3904,7 +3910,6 @@ a.knowledge-reader-how:hover {
   justify-content: space-between;
   gap: var(--spacing-3) var(--spacing-6);
   flex-wrap: wrap;
-  margin-bottom: var(--spacing-4);
 }
 .int-bar > .page-note {
   margin: 0;
@@ -3915,6 +3920,18 @@ a.knowledge-reader-how:hover {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(16.5rem, 100%), 1fr));
   gap: var(--spacing-3);
+}
+
+/* CREWLET'S OWN SERVICES: three tiles, so three tracks, never the
+   catalogue's four-up grid with a quarter of its row empty, and never two
+   up with Chat alone on a second row. One track on a phone. */
+.int-grid-builtin {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+@media (width < 640px) {
+  .int-grid-builtin {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .int-tile {
@@ -4874,6 +4891,15 @@ details > summary.int-summary::-webkit-details-marker {
   .work-bar {
     flex-wrap: nowrap;
   }
+  /* THE SEARCH ROW STARTS AT THE GUTTER: right-aligned at its own width it
+     stood 62px in from the page's left edge, the box taking what it left. */
+  .work-tabs-tools {
+    flex: 1 1 100%;
+    justify-content: flex-start;
+  }
+  .work-tabs-tools .work-bar-find {
+    flex: 1 1 auto;
+  }
   /* THE RUN SCROLLS, NOT THE BAND: the band is the opaque sticky strip rows
      scroll under, and the fade on the edge with more past it has to fade the
      controls without fading the band. */
@@ -5050,6 +5076,24 @@ details > summary.int-summary::-webkit-details-marker {
   gap: var(--spacing-3);
   padding: var(--spacing-3);
   min-width: 300px;
+}
+/* WHICH WORK, GROUP BY AND SORT, folded in from the bar on a phone: one row
+   each, labels to the start and the choices to the end, as the panel's own
+   rows are, and parted from them by the panel's rule. */
+.work-display-arrange {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding-bottom: var(--spacing-3);
+  border-bottom: 1px solid var(--color-border-default);
+}
+.work-display-arrange .work-arrange {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--spacing-2);
+}
+.work-display-arrange .work-arrange-row {
+  justify-content: space-between;
 }
 /* THE LANES PUT AWAY, each a chip that brings it back — named, because a
    hidden lane is otherwise work nobody can tell is missing. */
@@ -7769,17 +7813,32 @@ a.work-cal-chip {
 
 /* 928px IS FIVE TILES' FLOOR: a tile's value line holds the figure and the
    kit's 96px trend slot inside 16px of padding each side, 176px, and five of
-   them take four 12px gaps. Below it the figures fold to three a row, and the
-   board's blocks stack (`STACKS_BELOW` in `routes/home/Home.tsx`), since the
-   decisions card's buttons need the width the live column would take. */
+   them take four 12px gaps. Below it the figures fold into rows that FILL:
+   four are two by two, and five are three over two on a six-track grid (the
+   first three spanning two tracks, the last two spanning three), since three
+   a row left a third-width hole beside the last two. The board's blocks stack
+   too (`STACKS_BELOW` in `routes/home/Home.tsx`), since the decisions card's
+   buttons need the width the live column would take. */
 @container page (width < 928px) {
-  .home-kpis:is([data-count="4"], [data-count="5"]) {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+  .home-kpis[data-count="4"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .home-kpis[data-count="5"] {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+  .home-kpis[data-count="5"] > * {
+    grid-column: span 2;
+  }
+  .home-kpis[data-count="5"] > :nth-child(n + 4) {
+    grid-column: span 3;
   }
 }
 @container page (width < 640px) {
   .home-kpis[data-count] {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .home-kpis[data-count] > * {
+    grid-column: auto;
   }
 }
 
@@ -8731,8 +8790,12 @@ a.live-row:focus-visible {
   min-height: 0;
   height: 100%;
 }
+/* THE PAGE'S GUTTER, as every other page's content keeps it: the frame takes
+   the sheet's padding back, and at 16px the callout and the list's rows began
+   4px left of the header's title. A row draws its own 8px inside the list, so
+   the list keeps 12px of its own. */
 .inbox-callout {
-  margin: var(--spacing-3) var(--spacing-4) 0;
+  margin: var(--spacing-3) var(--spacing-5) 0;
 }
 
 /* TWO COLUMNS, EACH ITS OWN SCROLLER. The list is 260 to 340px, as the
@@ -8747,7 +8810,7 @@ a.live-row:focus-visible {
 }
 .inbox-list {
   min-height: 0;
-  padding: var(--spacing-2) var(--spacing-2) var(--spacing-4);
+  padding: var(--spacing-2) var(--spacing-3) var(--spacing-4);
   overflow-x: hidden;
   overflow-y: auto;
   border-right: 1px solid var(--color-border-default);
@@ -8934,6 +8997,13 @@ a.live-row:focus-visible {
 @media (width < 640px) {
   .inbox-panes {
     grid-template-columns: minmax(0, 1fr);
+  }
+  /* AND THE PHONE'S 16px GUTTER: a row's own 8px inside 8px of list. */
+  .inbox-callout {
+    margin-inline: var(--spacing-4);
+  }
+  .inbox-list {
+    padding-inline: var(--spacing-2);
   }
   .inbox-list,
   .inbox-pane {
@@ -9465,29 +9535,19 @@ a.live-row:focus-visible {
 .spend-card {
   min-width: 0;
 }
-/* THE CAPTION GOES UNDER THE TITLE WHEN THE TWO DO NOT FIT ON ONE LINE: held
-   beside it, By agent's sentence stood a two-line column at the end of the
-   head on every phone. A caption that fits keeps its place at the end. */
-.spend-card-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--spacing-1) var(--spacing-3);
-  padding: var(--spacing-4) var(--spacing-4) var(--spacing-3);
-}
-/* A padded card (a list) draws its head flush with its own padding. */
-.spend-list .spend-card-head {
-  padding: 0 0 var(--spacing-3);
-}
+/* EVERY SPEND CARD HEADS WITH THE KIT'S `Card.Header`, as every other card
+   in Settings does: an icon, the title, the window as its subtitle. A body
+   line under it keeps the card's inset on every side. */
 .spend-card-body {
   margin: 0;
-  padding: 0 var(--spacing-4) var(--spacing-4);
+  padding: var(--spacing-4);
 }
+/* THE CHART'S TITLE, which shares its row with the chart's legend in the
+   kit's StackedColumns head, at the card title's size and weight. */
 .spend-title {
   flex: none;
   margin: 0;
-  font-size: var(--font-size-md);
+  font-size: var(--font-size-sm);
   font-weight: var(--font-weight-semibold);
   color: var(--color-text-primary);
 }
@@ -9861,12 +9921,14 @@ a.live-row:focus-visible {
 /* THE COMPANY'S THREE WINDOWS side by side, on the same elevated rung and at
    the same gap as the Spend overview's tiles, so a window reads as the same
    object on both screens. They stack below the width where a tile's figure,
-   bar and ceiling editor no longer fit a third of the card. */
+   bar and ceiling editor no longer fit a third of the card. THE CARD'S
+   INSET ON EVERY SIDE: with none on top the tiles sat flush against the
+   header's rule while keeping 16px on the other three. */
 .budget-tiles {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--spacing-3);
-  padding: 0 var(--spacing-4) var(--spacing-4);
+  padding: var(--spacing-4);
 }
 @container page (width < 760px) {
   .budget-tiles {
@@ -10315,58 +10377,6 @@ a.live-row:focus-visible {
   margin: 0;
   padding: 0;
   list-style: none;
-}
-
-/* ---- Settings › Appearance -----------------------------------------------
-   The fields, and beside them the pane a pointed-at theme is shown in: the
-   pane is sticky so it stays beside the gallery while the page scrolls, and
-   goes under the fields where there is no room beside them. Each field is
-   set off from the one above by the hairline, not drawn as a card. The fields
-   keep a reading width, so on a wide window a card stays a thumbnail rather
-   than a strip, and the pane stands beside them rather than across the page. */
-.appearance {
-  display: grid;
-  grid-template-columns: minmax(0, 36rem) 15.25rem;
-  justify-content: start;
-  gap: var(--spacing-5);
-  align-items: start;
-}
-
-.appearance-fields {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-4);
-  min-width: 0;
-}
-
-.appearance-fields > * + * {
-  padding-top: var(--spacing-4);
-  border-top: 1px solid var(--color-border-default);
-}
-
-/* Three cells of 108px. The popover draws the same switchers in one column
-   of 150px, its theme field's width. */
-.appearance-choice {
-  width: min(100%, 20.25rem);
-}
-
-.appearance-preview {
-  position: sticky;
-  top: calc(var(--sticky-top) + var(--spacing-4));
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-}
-
-@media (width < 1024px) {
-  .appearance {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .appearance-preview {
-    position: static;
-    max-width: 20rem;
-  }
 }
 
 /* ---- Artifacts ------------------------------------------------------- */
@@ -11742,4 +11752,14 @@ a.live-row:focus-visible {
    on one line. */
 .dashboard-note {
   height: 100%;
+}
+
+/* ---- A Settings page of term lists that read as one table ----------------
+   Limits and Sign-in policy stack several cards of terms and values, and each
+   list sized its term column to its own longest term, so the values started
+   at a different x in every card. The kit's term track is an inherited custom
+   property (`--crewlet-description-list-term`), set here once for the page;
+   below the kit's narrow step a term stands over its value as before. */
+.settings-terms {
+  --crewlet-description-list-term: 18rem;
 }

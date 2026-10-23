@@ -235,7 +235,7 @@ test("no module draws an identity badge of its own", async () => {
 test("a linked seat goes to its page, and no handle is the Nobody absence", () => {
   render(<TableEntityCell {...linkedSeat({ handle: "cto", name: "Agent CTO" })} />);
   expect(screen.getByRole("link", { name: "Agent CTO" }).getAttribute("href")).toBe(
-    "#/agents/seats/cto",
+    "#/company/org/seats/cto",
   );
   cleanup();
   const { container } = render(

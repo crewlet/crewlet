@@ -22,7 +22,7 @@ import { FrameReadings } from "~/app/Shell.tsx";
 import { SessionReading } from "~/lib/frameSession.ts";
 import { healthFrame } from "~/test/health.ts";
 import { HomeDataProvider, useHomeData } from "../useHomeData.ts";
-import { WIDGETS } from "./registry.tsx";
+import { WIDGETS, canUse } from "./registry.tsx";
 import { destinationOf, type WidgetDef } from "./kit.tsx";
 import { LeafView } from "./widgets.tsx";
 import type { ContribWidget } from "./model.ts";
@@ -227,11 +227,13 @@ describe("every widget a section offers", () => {
       "home",
       "inbox",
       "me",
+      "org",
+      "schedules",
+      "integrations",
+      "budgets",
       "work",
-      "agents",
       "live",
       "knowledge",
-      "spend",
       "settings",
     ])
       expect(workspaces.has(w as never), w).toBe(true);
@@ -290,9 +292,16 @@ describe("a widget whose choice is not made", () => {
 });
 
 describe("a reader whose access no longer opens a widget's page", () => {
-  const adminOnly = defs.filter((d) => d.key.startsWith("settings."));
+  // WHAT A MEMBER (Tracker and Knowledge, no Admin) CANNOT OPEN, read off the
+  // registry's own rule: Spend's readings are every reader's, so a Settings
+  // widget is not by its key alone a closed one.
+  const closed = defs.filter((d) => !canUse(d, MEMBER.grants));
 
-  test.each(adminOnly.map((d) => [d.key, d] as const))(
+  test("there are some to hold to it", () => {
+    expect(closed.map((d) => d.key)).toContain("settings.models");
+  });
+
+  test.each(closed.map((d) => [d.key, d] as const))(
     "%s says so, and asks nothing of its section",
     async (_key, def) => {
       const { container } = mount(<LeafView widget={leaf(def, {})} />, MEMBER);

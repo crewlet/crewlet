@@ -97,8 +97,8 @@
  * Mode, density and theme: none of them is the company's, and all of them are
  * about the person at this browser, so they sit behind the one control beside
  * that person's name, **Preferences**, drawn with a palette and holding
- * nothing else: the session's gestures are the row's own menu. Settings › Appearance offers the same three with room
- * to show every theme, and the command palette sets them too.
+ * nothing else: the session's gestures are the row's own menu. This is the one
+ * place they are set on a page, and the command palette sets them too.
  *
  * ONE CONTROL ON THE ROW. The mode had a one-press flip beside the name as
  * well, and the foot then carried the link's chevron and two glyph buttons

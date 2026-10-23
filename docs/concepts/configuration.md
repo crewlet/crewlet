@@ -1144,7 +1144,7 @@ administrator still reads `/config`, its history and its diffs.
 be replaced now, by whoever holds the new one, and the managing system cannot
 know it is needed. Writing the new value and re-publishing the unchanged
 document — `PUT /secrets/{name}` then `POST /config/reload`, or one rotation
-through Settings › Integrations — changes nothing the managing system renders,
+through Company › Integrations, changes nothing the managing system renders,
 so it is the break-glass a person keeps. If the managing system also syncs the
 secret store, it will overwrite a rotated name it owns at its next sync; fix
 the value at its source as well.
@@ -1154,7 +1154,7 @@ records what it discovered at a vendor writes as the engine itself (kind
 `system`), not as a credential; a managing system that re-renders the document should carry those
 values (they are in the active revision it reads back) or set them itself.
 That includes a provisioning pass any operator starts on demand from `/setup`
-or Settings › Integrations: where `integrations.jira` or
+or Company › Integrations: where `integrations.jira` or
 `integrations.confluence` has no `cloud_id`, the Atlassian pass records the
 `cloud_id` and `site_url` of the site it found, and the revision is credited to
 the engine (`reconcile loop`, kind `system`), not to the person who pressed

@@ -720,7 +720,10 @@ test("an empty landing says so once, and each small tile in one line", async () 
     expect(within(latest).getByText("Nothing has been written yet")).toBeTruthy(),
   );
   const tile = (name: RegExp) => screen.getByRole("region", { name });
-  expect(within(tile(/Recently written/)).getByText("Nothing has been written yet.")).toBeTruthy();
+  // ONCE: the newest change's tile says nothing has been written, and no
+  // three-row Recently written tile beside it says the same (`data-written`).
+  expect(screen.queryByRole("region", { name: /Recently written/ })).toBeNull();
+  expect(document.querySelector(".knowledge-tiles")?.getAttribute("data-written")).toBe("none");
   expect(
     within(tile(/Continue reading/)).getByText("The pages you open are listed here."),
   ).toBeTruthy();

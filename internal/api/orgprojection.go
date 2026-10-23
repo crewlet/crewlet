@@ -53,8 +53,8 @@ import (
 // ([org.Organization]) — the document's `roles:` and `units:` as the engine
 // built them, every root seat a `unit:` reference moved already in its unit —
 // so the tree a reader is shown is the one a turn reads. The company's name,
-// mission, vision, policies, clock and own token budget come from the
-// document.
+// mission, vision, policies, clock, own token budget and the services it runs
+// come from the document.
 //
 // # Authored values, not effective ones
 //
@@ -132,6 +132,10 @@ type OrgProjection struct {
 	// gives; how much of each window is spent is the /budgets answer.
 	TokenBudget *OrgTokenBudget `json:"token_budget,omitempty"`
 
+	// Services is which tracker and which knowledge base the company runs,
+	// as the engine resolves them: see [OrgServices].
+	Services *OrgServices `json:"services,omitempty"`
+
 	Roles []OrgSeat `json:"roles,omitempty"`
 	Units []OrgUnit `json:"units,omitempty"`
 
@@ -153,6 +157,41 @@ type OrgProjection struct {
 	// do not already carry, so it needs no classification of its own beyond
 	// this: it is those values, resolved.
 	Derived *config.Derived `json:"derived,omitempty"`
+}
+
+// OrgServices is which tracker and which knowledge base the company runs, each
+// as [config.Company.TrackerBackendFor] and [config.Company.KnowledgeBackendFor]
+// resolve it: the backend the document names, else the vendor whose block is
+// connected, else the engine's own.
+//
+// AN OVERVIEW FIELD, and the one narrow exception to the `tracker:` and
+// `knowledge:` blocks being guarded. What decides which of the dashboard's own
+// surfaces exist is whether the company runs the engine's tracker and
+// knowledge base at all: a company on Jira or on none has no Work, no My work
+// and no task to file, and a reader shown those surfaces is shown screens
+// whose every question is refused. Every reader learns the first half already,
+// from that refusal, and the vendor's name is the one fact a screen needs to
+// say where the work went instead. NOTHING ELSE of either block reaches this
+// audience: no project or space key, no site, no URL and no credential, which
+// is what the blocks were guarded for (see the classification test).
+//
+// A CLOSED SET on the wire, each member the backend's own constant: the
+// document's `backend` is refused at parse outside it, and a derived one is
+// one of the same constants. Present on every running company and absent only
+// on `{}`, so a reader tells "not known yet" from "none".
+type OrgServices struct {
+	// Tracker is `native`, `jira` or `none`.
+	Tracker string `json:"tracker"`
+	// Knowledge is `native`, `confluence` or `none`.
+	Knowledge string `json:"knowledge"`
+}
+
+// servicesOf is the company's resolved backends.
+func servicesOf(c *config.Company) *OrgServices {
+	return &OrgServices{
+		Tracker:   string(c.TrackerBackendFor()),
+		Knowledge: string(c.KnowledgeBackendFor()),
+	}
 }
 
 // OrgSeat is the public half of one seat: who it is and what it is for.
@@ -313,6 +352,7 @@ func orgProjection(company func() (*config.Company, *org.Organization)) OrgProje
 		Policies:    slices.Clone(c.Policies),
 		Timezone:    c.Location().String(),
 		TokenBudget: orgTokenBudget(c.TokenBudget),
+		Services:    servicesOf(c),
 		Roles:       b.seats(rootSeats(roster)),
 		Units:       b.units(topUnits(roster)),
 		Derived:     &derived,

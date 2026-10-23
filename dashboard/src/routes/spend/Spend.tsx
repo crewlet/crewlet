@@ -42,6 +42,7 @@ import { useNow } from "~/lib/clock.ts";
 import { isRange, useTimeRange, windowParam } from "~/lib/range.ts";
 import { useAgents, useOrg, useOrgBudget } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useServicesRun } from "~/lib/services.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { mayChangeConfig } from "~/lib/useWriteAccess.ts";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
@@ -82,6 +83,7 @@ export function Spend() {
   const budget = useOrgBudget();
   const agents = useAgents();
   const viewer = useViewer();
+  const runs = useServicesRun();
 
   // A REFUSED WINDOW HAS NO FIGURES. The previous answer is still in the
   // hook while the refusal stands, and drawing it under a control that now
@@ -161,18 +163,24 @@ export function Spend() {
             <div className="spend-side">
               <ByModel rollup={rollup} loading={tokens.loading} words={words} />
               <ByUnit params={params} words={words} />
+              {/* WHERE THE COMPANY RUNS NO CREWLET WORKS there are no tasks to
+                  rank, and the auxiliary model's card joins this column
+                  rather than standing alone in a row of its own. */}
+              {!runs.tracker && <Workers rollup={rollup} loading={tokens.loading} words={words} />}
             </div>
           </div>
           {/* WHAT IT WAS SPENT ON: the tasks, in the wide track their titles
               need, beside the auxiliary model's purposes. */}
-          <div className="spend-pair">
-            <ExpensiveTasksCard
-              since={rollup?.since}
-              until={rollup?.until}
-              window={windowParam(range.window)}
-            />
-            <Workers rollup={rollup} loading={tokens.loading} words={words} />
-          </div>
+          {runs.tracker && (
+            <div className="spend-pair">
+              <ExpensiveTasksCard
+                since={rollup?.since}
+                until={rollup?.until}
+                window={windowParam(range.window)}
+              />
+              <Workers rollup={rollup} loading={tokens.loading} words={words} />
+            </div>
+          )}
         </div>
       )}
     </>

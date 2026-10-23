@@ -24,17 +24,17 @@
  * a second way to the same place.
  *
  * Settings draws its sections as a COLUMN instead (`SectionColumn`), because
- * its own row in WORKSPACES holds more sections, and cross-links to the
- * reader's Account and to Budgets, in its groups, than a tab strip can — a row
- * nobody reads to the end of.
+ * its own row in WORKSPACES holds more sections, in four groups, than a tab
+ * strip can: a row nobody reads to the end of.
  *
  * # A section is a path
  *
  * Every tab is a link to its own address, never a `tab=` on this one: a
  * section is a place, and a place has a URL a reader can paste. What travels
- * between sections is the workspace's own query (`WorkspaceRow.keep` — whose
- * day My work is reading, the window Spend is reading over), and nothing
- * else: a filter on the Turns list is not a filter on the Event log.
+ * between sections is the workspace's own query (`WorkspaceRow.keep`: whose
+ * day My work is reading, the window Settings' Spend is reading over), in the
+ * tabs and the column alike ([keptQuery]), and nothing else: a filter on the
+ * Turns list is not a filter on the Event log.
  *
  * # A figure on a tab is the screen's
  *
@@ -59,13 +59,8 @@ import {
   type MenuEntry,
   useMediaMatch,
 } from "@crewlethq/ui";
-import {
-  ArrowUpRightGlyph,
-  ChevronDownGlyph,
-  EllipsisGlyph,
-  KeyGlyph,
-  StarGlyph,
-} from "@crewlethq/icons/glyphs";
+import { ChevronDownGlyph, EllipsisGlyph, StarGlyph } from "@crewlethq/icons/glyphs";
+import { LockMark } from "../frame/LockMark.tsx";
 import { href, samePath, useNavigator, useRoute } from "../router.tsx";
 import type { Crumb } from "../crumbs.ts";
 import { resolves } from "../routes.ts";
@@ -74,10 +69,11 @@ import {
   grantsMissing,
   isSidebarRow,
   sectionOf,
-  WORKSPACES,
+  serviceShown,
   type Section,
   type WorkspaceRow,
 } from "../nav.ts";
+import type { ServicesRun } from "~/lib/services.ts";
 import {
   ALL_PROJECTS_LENSES,
   LENS_LABELS,
@@ -124,6 +120,8 @@ export function PageHeader({
   working = false,
   menu = [],
   star = true,
+  runs,
+  grants,
   children,
 }: {
   crumbs: Crumb[];
@@ -140,6 +138,10 @@ export function PageHeader({
   menu?: readonly PageMenuEntry[];
   /** The frame draws the star; false where the screen's own menu carries it. */
   star?: boolean;
+  /** Which services the company runs: a tab reading one it does not is not drawn. */
+  runs: ServicesRun;
+  /** What the reader holds, or null before the frame has read it, for the tabs' locks. */
+  grants: readonly string[] | null;
   /** What sits under the rows: the state bar. */
   children?: ReactNode;
 }) {
@@ -194,7 +196,14 @@ export function PageHeader({
         </div>
       </AppShell.Topbar>
       {row && row.renderer === "tabs" && (
-        <SectionTabs row={row} path={route.path} query={route.query} counts={counts} />
+        <SectionTabs
+          row={row}
+          path={route.path}
+          query={route.query}
+          counts={counts}
+          runs={runs}
+          grants={grants}
+        />
       )}
       {children}
     </div>
@@ -277,14 +286,24 @@ export function SectionTabs({
   path,
   query,
   counts,
+  runs,
+  grants,
 }: {
   row: WorkspaceRow;
   path: string[];
   query: URLSearchParams;
   counts: Record<string, string>;
+  /** Which services the company runs: a tab reading one it does not is not drawn. */
+  runs: ServicesRun;
+  /**
+   * What the reader holds, or null before the frame has read it: a tab the
+   * reader cannot open is locked like the sidebar's rows and the Settings
+   * column's (`grantsMissing`), never drawn as open to then refuse.
+   */
+  grants: readonly string[] | null;
 }) {
   const nav = useNavigator();
-  const tabs = row.sections.filter((s) => s.tab !== false && !s.elsewhere);
+  const tabs = row.sections.filter((s) => s.tab !== false && serviceShown(s, runs));
   const current = tabs.find((s) => samePath(s.path, path));
   const strip = useRef<HTMLElement>(null);
   const fit = useTabFit(
@@ -294,11 +313,7 @@ export function SectionTabs({
   );
   const folded = fit.folded;
   if (tabs.length < 2 || !current) return null;
-  const kept: Record<string, string> = {};
-  for (const key of row.keep ?? []) {
-    const value = query.get(key);
-    if (value) kept[key] = value;
-  }
+  const kept = keptQuery(row, query);
   const out = tabs.filter((s) => folded.includes(s.key));
   const paths = new Map(tabs.map((s) => [s.key, s.path]));
   return (
@@ -310,7 +325,21 @@ export function SectionTabs({
       value={current.key}
       items={tabs.map((s) => {
         const Glyph = glyphFor(s.icon);
-        return { value: s.key, label: s.label, icon: <Glyph size="sm" />, count: counts[s.key] };
+        const needs = grants === null ? [] : grantsMissing(s, grants);
+        return {
+          value: s.key,
+          label:
+            needs.length > 0 ? (
+              <span className="side-locked" title={`Needs ${accessNames(needs)} access`}>
+                {s.label}
+                <LockMark needs={needs} />
+              </span>
+            ) : (
+              s.label
+            ),
+          icon: <Glyph size="sm" />,
+          count: counts[s.key],
+        };
       })}
       renderItem={({ item, className, isActive, children }) => (
         <a
@@ -465,16 +494,16 @@ function useTabFit(
 }
 
 /**
- * What a screen reader is told a CROSS-LINK leads to, after its label: the
- * workspace it lives under by NAME — it read the raw path segment, so Budgets
- * said "under spend" — or, for a cross-link to a workspace's own landing (the
- * reader's Account, which is a workspace of its own), that it is outside this
- * one, since "Account, under Account" says nothing.
+ * The workspace's own query on the address the reader is on
+ * ([WorkspaceRow.keep]), for a link to another of its sections to carry.
  */
-export function elsewhereWords(row: WorkspaceRow, s: Section): string {
-  if (s.path.length <= 1) return `, outside ${row.label}`;
-  const home = WORKSPACES.find((w) => w.key === s.path[0]);
-  return `, under ${home?.label ?? s.path[0]}`;
+export function keptQuery(row: WorkspaceRow, query: URLSearchParams): Record<string, string> {
+  const kept: Record<string, string> = {};
+  for (const key of row.keep ?? []) {
+    const value = query.get(key);
+    if (value) kept[key] = value;
+  }
+  return kept;
 }
 
 /**
@@ -486,22 +515,28 @@ export function elsewhereWords(row: WorkspaceRow, s: Section): string {
  * the one rule every lock is drawn by — the reader's own sections (their
  * Account, Appearance) and General never, every other without Admin. The lock
  * names what is missing, because that is what the reader would ask an admin
- * for — and it is drawn only once somebody has said what the
- * reader holds, since a lock on every section while the first read is out
- * claims a refusal nobody has made. Each row's title is its hint. A CROSS-LINK
- * (the reader's Account, and Budgets, which lives once, under Spend) draws an
- * arrow, because pressing it leaves Settings. A figure beside a section is handed in whole, in the
- * column's own two shapes (`settingsFigures.tsx` decides them and asks for
- * what they need), so the column itself asks nothing.
+ * for, and it is drawn only once somebody has said what the reader holds,
+ * since a lock on every section while the first read is out claims a refusal
+ * nobody has made. Each row's title is its hint. A section reading a service
+ * the company does not run is not drawn (`serviceShown`): Expensive tasks,
+ * where it runs no Crewlet Works. A figure beside a section is handed in
+ * whole, in the column's own two shapes (`settingsFigures.tsx` decides them
+ * and asks for what they need), so the column itself asks nothing.
  */
 export function SectionColumn({
   row,
   path,
+  query,
   grants,
   figures,
+  runs,
 }: {
   row: WorkspaceRow;
   path: string[];
+  /** The address's query, for the workspace's own keys a row carries ([keptQuery]). */
+  query: URLSearchParams;
+  /** Which services the company runs: a section reading one it does not is not drawn. */
+  runs: ServicesRun;
   /** What the viewer holds, or null while nobody has said. */
   grants: readonly string[] | null;
   figures: Record<string, SectionFigure>;
@@ -511,8 +546,9 @@ export function SectionColumn({
   // a mistyped `#/settings/general` drew "Not found" under a column (and a
   // phone picker) saying the reader was on General.
   const current = resolves(path) ? sectionOf(path) : undefined;
+  const kept = keptQuery(row, query);
   const groups: { name: string; sections: Section[] }[] = [];
-  for (const s of row.sections) {
+  for (const s of row.sections.filter((section) => serviceShown(section, runs))) {
     const name = s.group ?? "";
     const last = groups[groups.length - 1];
     if (last && last.name === name) last.sections.push(s);
@@ -527,11 +563,11 @@ export function SectionColumn({
   // FOLDED WHERE THE READER CHOSE A SECTION, OPEN WHERE THEY HAVE NOT. A deep
   // link (`#/settings/people`) arrives folded, which is the reason the picker
   // folds at all: the section the link named starts right under it. But the
-  // workspace's own address names no section anybody picked — it is where the
-  // sidebar's Settings row lands — so arriving there opens the list: folded,
-  // a phone reader saw one row reading "General" and never the You group with
-  // their Account in it. Every pick folds it again, the section the reader is
-  // already on included, which moves no path.
+  // workspace's own address names no section anybody picked (it is where the
+  // sidebar's Settings row lands), so arriving there opens the list: folded,
+  // a phone reader saw one row naming the first section and never the groups
+  // under it. Every pick folds it again, the section the reader is already
+  // on included, which moves no path.
   const phone = useMediaMatch(`(width < ${PHONE_BREAKPOINT}px)`);
   const at = path.join("/");
   const atRoot = samePath(path, row.path);
@@ -599,40 +635,23 @@ export function SectionColumn({
                 return (
                   <SidebarNav.Item
                     key={s.key}
-                    href={href(s.path)}
-                    current={!s.elsewhere && current?.key === s.key}
+                    href={href(s.path, kept)}
+                    current={current?.key === s.key}
                     icon={<Glyph size="sm" />}
                     onClick={pick(s)}
                     // THE ROW'S HINT AS ITS TITLE, the words the palette shows
-                    // under it — for a cross-link the hint of the row it leads
-                    // to (`crossLink`), so the reader's Account is described
-                    // alike wherever it is offered.
+                    // under it.
                     renderLink={({ className, ...link }) => (
                       <a className={className} {...link} title={s.hint} />
                     )}
                     label={
                       <span className="section-column-label">
                         {s.label}
-                        {needs.length > 0 && (
-                          <>
-                            <KeyGlyph size="xs" aria-hidden="true" />
-                            <span className="sr-only">, needs {accessNames(needs)} access</span>
-                          </>
-                        )}
-                        {s.elsewhere && (
-                          <>
-                            <ArrowUpRightGlyph size="xs" aria-hidden="true" />
-                            <span className="sr-only">{elsewhereWords(row, s)}</span>
-                          </>
-                        )}
+                        <LockMark needs={needs} />
                       </span>
                     }
-                    badge={figure?.badge ?? figure?.attention}
+                    badge={figure?.badge}
                     count={figure?.count}
-                    // A STATE WAITING ON THE READER is the kit's pill — its
-                    // size, its place and its spoken figure — repainted in
-                    // the warning tone (see `SectionFigure.attention`).
-                    className={figure?.attention ? "section-row-attention" : undefined}
                   />
                 );
               })}

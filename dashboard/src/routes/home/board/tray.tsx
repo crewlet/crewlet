@@ -34,6 +34,8 @@ import { useViewer } from "~/lib/viewer.ts";
 import { plural } from "~/lib/format.ts";
 import { ENTRIES, LAYOUT_CATEGORIES, TEMPLATES, summary, type LayoutCategory } from "./catalog.tsx";
 import { AREAS, WIDGETS, canUse } from "./registry.tsx";
+import { widgetDescription, widgetShown } from "./kit.tsx";
+import { useServicesRun } from "~/lib/services.ts";
 import { contrib, widgetsOn, type Board, type Widget } from "./model.ts";
 
 const TAB_PANEL = "home-tray-panel";
@@ -69,6 +71,9 @@ export function WidgetTray({
   const [tab, setTab] = useState<"widgets" | "templates">("widgets");
   const [q, setQ] = useState("");
   const viewer = useViewer();
+  // A WIDGET WITH NOTHING TO SHOW where the company does not run its service
+  // is not offered, and not counted among those the reader lacks access to.
+  const runs = useServicesRun();
   const on = widgetsOn(board);
   const query = q.trim().toLowerCase();
   const matches = (...words: string[]) =>
@@ -86,11 +91,16 @@ export function WidgetTray({
     label: area.label,
     hint: area.hint,
     tiles: area.widgets
-      .filter((d) => canUse(d, viewer.grants) && matches(d.label, d.description, area.label))
+      .filter(
+        (d) =>
+          widgetShown(d, {}, runs) &&
+          canUse(d, viewer.grants) &&
+          matches(d.label, widgetDescription(d, runs), area.label),
+      )
       .map((d) => ({
         key: d.key,
         label: d.label,
-        description: d.description,
+        description: widgetDescription(d, runs),
         icon: <d.icon size="sm" />,
         hue: d.hue,
         placed: d.once === true && on.has(d.key),
@@ -102,7 +112,8 @@ export function WidgetTray({
   const sections = [...layout, ...offered].filter((s) => s.tiles.length > 0);
   const locked = viewer.loading
     ? 0
-    : [...WIDGETS.values()].filter((d) => !canUse(d, viewer.grants)).length;
+    : [...WIDGETS.values()].filter((d) => widgetShown(d, {}, runs) && !canUse(d, viewer.grants))
+        .length;
 
   return (
     <Modal

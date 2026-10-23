@@ -139,6 +139,50 @@ type WorkReader interface {
 		fresh statelog.Freshness) (tracker.ResolvedThread, error)
 }
 
+// Keeper is a native source that can say, before anything is read from it,
+// whether its half is served on this node: nil when it is, an error wrapping
+// [ErrUnknown] when the company does not keep that half in the engine, and
+// any other error (a node that has not met its company yet answers
+// [ErrUnavailable]) when this node cannot tell yet.
+//
+// FOR THE QUESTIONS THAT MERGE SEVERAL HALVES, `company_feed` and
+// `decisions`. A question about one half is simply unanswerable where the half
+// is absent, and its own read says so. A merged answer is not: the half it
+// cannot read is a part to leave out, and the rest is still the answer.
+// Without a way to ask, each of them read the absent half, met its refusal and
+// refused WHOLE, so a company on Jira saw no coding run parked on a question
+// to a person and no schedule run in its feed.
+//
+// OPTIONAL, read by [keptHere]: a source that does not implement it is one
+// whose half is here whenever the source is present at all, which is every
+// source but the engine's live ones (internal/api's `NativeSources`), whose
+// half can be absent by configuration while the source is wired.
+type Keeper interface {
+	Kept() error
+}
+
+// keptHere reports whether src's half is served on this node. A nil source is
+// not; a source that is not a [Keeper] is; and a [Keeper] answers for itself,
+// its [ErrUnknown] read as "not kept here" and any other error returned as
+// the reason this node cannot say yet.
+func keptHere(src any) (bool, error) {
+	if src == nil {
+		return false, nil
+	}
+	k, ok := src.(Keeper)
+	if !ok {
+		return true, nil
+	}
+	switch err := k.Kept(); {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, ErrUnknown):
+		return false, nil
+	default:
+		return false, err
+	}
+}
+
 // PageReader is the knowledge read side this surface calls.
 type PageReader interface {
 	List(ctx context.Context, f pages.Filter, fresh statelog.Freshness) (pages.Listing, error)

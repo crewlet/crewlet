@@ -1,5 +1,5 @@
 /**
- * People & access's own write dialogs: a service account, and an edit of
+ * People's own write dialogs: a service account, and an edit of
  * somebody's login, seat and access.
  *
  * Each is one write through `lib/iamWrite.ts` — a create is keyed so the retry
@@ -16,6 +16,7 @@
  * none, so its dialogs offer both.
  */
 
+import { ORG_EDIT_PATH } from "~/app/routes.ts";
 import { useMemo, useState } from "react";
 import {
   Button,
@@ -223,7 +224,7 @@ export function ServiceAccountDialog({
 }
 
 /**
- * Invite a person from People & access: pick an open seat, then the seat's own
+ * Invite a person from People: pick an open seat, then the seat's own
  * invitation ([InviteDialog]).
  *
  * A PERSON STILL COMES FROM A SEAT (ADR-0032): the picker offers only the
@@ -294,7 +295,7 @@ export function InvitePersonDialog({
             <ButtonLink
               size="small"
               variant="secondary"
-              href={href(["agents", "edit"], { add: "human" })}
+              href={href(ORG_EDIT_PATH, { add: "human" })}
             >
               Add a human seat
             </ButtonLink>

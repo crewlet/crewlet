@@ -25,7 +25,7 @@ own infrastructure.
 
 ## Setting it up from the dashboard
 
-Connect Mattermost in Settings › Integrations with the instance address, the
+Connect Mattermost in Company › Integrations with the instance address, the
 team and a system administrator token. The reconcile loop creates each agent's
 bot account on its next tick, running the same pass
 `crewlet mattermost provision` runs. The administrator token is sealed in the
@@ -36,7 +36,7 @@ On a first boot the engine claims its seats before that pass has minted their
 tokens, so each agent's `mcp-server-mattermost` is not started yet: it is
 **waiting**, not failing, for a token this integration mints
 (`mcp_server_awaiting_credential` in the log, and *Waiting for credentials* on
-Settings › Tools & MCP, both naming it). The pass seals
+Settings › MCP Tools, both naming it). The pass seals
 the tokens and re-activates the revision, and once the seal reaches a seat's
 node it starts the seat's server with its token, so the agents get the tools
 they answer through without a restart of the engine. That holds only where
@@ -787,7 +787,7 @@ nodes that is a small number of idle connections; it is the one cost of a
 seat never going deaf while placement moves it.
 
 **Each delivery is counted once.** The node that wins a post's claim publishes
-an `inbound_delivery` record beside the wake, so Settings › Integrations
+an `inbound_delivery` record beside the wake, so Company › Integrations
 counts Mattermost's deliveries like any other surface's — one post presented
 to one seat, whichever node read it — and its row lists them as
 `socket:posted`, with the post id as the provider's id. The record is

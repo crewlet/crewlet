@@ -16,7 +16,7 @@
  * state is the ENGINE's roll-up of its surfaces (`integration.Rollup`, sent as
  * the answer's `tools`), and its sentence names the surface that is not
  * ready. The counts, the inbound paths, the reconcile findings and every
- * agent's own step are on the tool's own page (`#/settings/integrations/{kind}`,
+ * agent's own step are on the tool's own page (`#/company/integrations/{kind}`,
  * [EntryRow]), so an operator who needs to know why can open it without the
  * catalogue leading with it.
  *
@@ -26,6 +26,7 @@
  * claim that the tool is fine.
  */
 
+import { BuiltIn } from "./BuiltIn.tsx";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Button,
@@ -34,6 +35,7 @@ import {
   Card,
   EmptyState,
   EmptyValue,
+  Eyebrow,
   InlineCode,
   SegmentedControl,
   Skeleton,
@@ -1386,7 +1388,7 @@ export function ActionButton({
         <ButtonLink
           size="small"
           variant="secondary"
-          href={href(["settings", "integrations", entry.key])}
+          href={href(["company", "integrations", entry.key])}
           aria-label={`Manage ${entry.name}`}
         >
           Manage
@@ -2830,7 +2832,7 @@ export function IntegrationPeek({ kind }: { kind: string }) {
         size="compact"
         icon={<PlugGlyph size="xl" />}
         title={`This build serves no integration called “${kind}”`}
-        description="See Settings › Integrations for the ones available."
+        description="See Company › Integrations for the ones available."
       />
     );
   }
@@ -3096,7 +3098,7 @@ export function Integrations({ kind }: { kind?: string }) {
       rotate: action?.kind === "rotate" ? reason : undefined,
     });
   // THE SEGMENT IS A DESTINATION, not decoration. `kind` was accepted and
-  // never read, so `#/settings/integrations/github` rendered the whole catalogue
+  // never read, so `#/company/integrations/github` rendered the whole catalogue
   // — every link into one integration landed on the list it came from. It
   // matches an entry by its own key OR by any surface it covers, because a
   // finding and a webhook route both name the SURFACE (`jira`), while the
@@ -3108,7 +3110,7 @@ export function Integrations({ kind }: { kind?: string }) {
   // a card disagreeing about a tool would be two answers to one question on
   // one screen.
   const focusState = focus ? entryState(focus, rows, data?.tools) : undefined;
-  // THE CRUMB NAMES THE TOOL, not the segment: `#/settings/integrations/jira`
+  // THE CRUMB NAMES THE TOOL, not the segment: `#/company/integrations/jira`
   // is the Atlassian page, and a trail reading "jira" over a header reading
   // Atlassian is two names for one object.
   usePageLabels(useMemo(() => (kind && focus ? { [kind]: focus.name } : {}), [kind, focus]));
@@ -3137,55 +3139,190 @@ export function Integrations({ kind }: { kind?: string }) {
     .sort(byConfiguredThenName(rows))
     .filter((e) => show === "all" || (show === "connected") === configured.includes(e));
 
+  // THE ADDRESS EVERY INBOUND INTEGRATION IS BUILT ON, said once: over the
+  // catalogue it describes, or at the head of one tool's page. It is one
+  // setting, and a screen that asked for it per integration would ask the
+  // operator to keep seven copies consistent. ALWAYS SET: the address vendors
+  // deliver to is Tier A (the public listener's `api.public.external_url`
+  // where one is configured, and `api.external_url` otherwise, `config_path`
+  // naming which), required on every node serving this screen and resolved
+  // before the file is decoded, so a node that answers at all has an address.
+  const baseAddress = setup.base && (
+    <Callout variant="neutral" icon={<LinkGlyph size="md" />}>
+      <span>
+        Third-party apps reach this engine at <InlineCode>{setup.base.value}</InlineCode>
+      </span>
+    </Callout>
+  );
+
+  // THE TILES, OR ONE TOOL'S PAGE, drawn once: on the catalogue they sit
+  // under the third-party heading, and on a tool's page on their own.
+  const catalogue = (
+    <>
+      {/* BOTH HALVES, because a card drawn from one of them is a card with
+          no buttons. See [useSetup]'s `loading`. */}
+      {((loading && !data) || setup.loading) && (
+        <Skeleton variant="text" rows={6} label="Loading" />
+      )}
+      <QueryState error={error} refusal={refusal} loading={loading} empty={undefined}>
+        {/* NOTHING CONNECTED IS A FACT ABOUT THE LIST, SAID ABOVE IT. A page
+            holding a tile for every tool is not empty, and the sentence is
+            worth reading before the list, not after it. */}
+        {data && !kind && configured.length === 0 && (
+          <Callout variant="neutral" icon={<PlugGlyph size="md" />}>
+            No integration connected yet. Connect one below.
+          </Callout>
+        )}
+        {kind && !focus && (
+          <EmptyState
+            icon={<PlugGlyph size="xl" />}
+            title={`This build serves no integration called “${kind}”`}
+            description="See Company › Integrations for the ones available."
+          />
+        )}
+        {/* THE CATALOGUE: WHAT THIS COMPANY HAS, THEN WHAT IT COULD HAVE, each
+            half alphabetical, one tile per tool with one action each.
+
+            Connected covers ATTEMPTED as well as working — a tile with a
+            block behind it, whatever the loop says about it — because a
+            broken integration is one this company has and is the tile most
+            worth reaching first. Sorting on health instead would move a tile
+            out from under the cursor every time an app recovered.
+
+            NOT UNTIL BOTH HALVES HAVE ANSWERED. A tile drawn from the socket
+            alone has no setup listing, so its action could not say whether a
+            form exists behind it; the skeleton above says so honestly. A
+            REFUSED setup read is not waiting: it answers, the banner says so,
+            and the tiles render with their form actions disabled and saying
+            why. */}
+        {!setup.loading && !kind && (
+          <div className="int-grid">
+            {shown.map((entry) => (
+              <IntegrationTile
+                key={entry.key}
+                entry={entry}
+                rows={rows}
+                rollups={data?.tools}
+                sections={sectionsFor(entry, setup.byKey)}
+                trafficKnown={data?.traffic_known ?? false}
+                guarded={setup.guarded}
+                managed={managed}
+                onOpen={(action, reason) => openForm(entry, action, reason)}
+              />
+            ))}
+            {/* EVERY OTHER TOOL IS AN MCP SERVER, and a catalogue that ended
+                at the six vendors this build ships would read as the whole of
+                what an agent can reach. A link rather than a tile with an
+                action: it opens the add form where the servers are listed and
+                checked, MCP Tools, with `?add=server`, so a server added
+                from here lands beside the others it is compared with. */}
+            {show !== "connected" && (
+              <a
+                className="int-tile int-tile-more"
+                href={href(["settings", "mcp-tools"], { add: "server" })}
+              >
+                <span className="int-brand int-brand-more" aria-hidden>
+                  <PlusGlyph size="sm" />
+                </span>
+                <span className="int-name">Add an MCP server</span>
+                <span className="int-tile-text">Give agents any MCP tool.</span>
+              </a>
+            )}
+          </div>
+        )}
+        {/* ONE TOOL'S PAGE, which is where a tile's Manage goes: the agents,
+            the surfaces that need something, the settings form and
+            Disconnect. A KIND THAT NAMES NOTHING LISTS NOTHING — the empty
+            state above already says the link is dead. */}
+        {!setup.loading && focus && (
+          <EntryRow
+            // EACH SIBLING ITS OWN KEY: the tool's history below is keyed on
+            // the tool too, and two children of one parent sharing a key are
+            // reconciled as one, so every poll appended another card.
+            key={`entry:${focus.key}`}
+            entry={focus}
+            rows={rows}
+            rollups={data?.tools}
+            sections={sectionsFor(focus, setup.byKey)}
+            publicBase={setup.base?.value}
+            guarded={setup.guarded}
+            managed={managed}
+            avatarOf={avatarOf}
+            onOpen={(action, reason) => openForm(focus, action, reason)}
+            onDisconnect={() =>
+              setDropping({
+                name: focus.name,
+                // EVERY SURFACE THE CARD COVERS, not the first one.
+                //
+                // Atlassian is an organization and two products, and
+                // disconnecting took only the surface that happened to be
+                // listed first: the account was deleted, its block removed,
+                // and the card still read Connected because Jira and
+                // Confluence were untouched. A person pressing Disconnect on a
+                // card means the card.
+                kinds: disconnectOrder(focus, rows, sectionsFor(focus, setup.byKey)),
+                stuck: stuckDisconnecting(focus, rows),
+                // WHAT THE ENGINE CANNOT DELETE ITSELF. A seat carries a
+                // manage link only where what it holds has to be removed by
+                // hand, so an integration with nothing to hand over renders no
+                // list at all — each agent once, however many sections carry
+                // the same tool.
+                apps: toolsOf(sectionsFor(focus, setup.byKey))
+                  .flatMap((tool) => tool.seats ?? [])
+                  .filter((seat) => seat.manage_url)
+                  .map((seat) => ({
+                    handle: seat.handle,
+                    // THE AGENT, not the handle: the dialog draws this roster
+                    // the way every other roster in the product draws one.
+                    name: seat.name || seat.handle,
+                    url: seat.manage_url as string,
+                  })),
+                // WHAT IS LEFT TO CLICK once the link has opened, in the app's
+                // own words. Stated once, because it is the same for every
+                // agent.
+                appPath: sectionsFor(focus, setup.byKey).find((s) => s.tool.manage_path)?.tool
+                  .manage_path,
+              })
+            }
+          />
+        )}
+        {/* WHAT HAS BEEN HAPPENING TO IT, above what has been arriving: every
+            finding on this screen comes from a pass, and until this panel
+            existed nothing said that one had ever run — `SetupRun` was
+            declared on the wire and read by nobody. Only on the focused
+            screen, because a history per tool over six cards is six tables
+            nobody came for. */}
+        {focus && focusKinds.length > 0 && (
+          // KEYED ON THE TOOL, so walking from one integration's page to
+          // another's does not carry the open pass across: the detail route is
+          // keyed on (kind, id), and a pass opened on GitHub would be asked
+          // for under Slack and answer 404.
+          <SetupPasses key={`passes:${focus.key}`} entry={focus} kinds={focusKinds} />
+        )}
+
+        {/* WHAT ACTUALLY ARRIVED, one panel per surface the tool covers.
+            Per surface rather than per tool because the event rows carry the
+            SURFACE as their source — Atlassian is an organization and two
+            products, and a Jira delivery and a Confluence one are different
+            answers to "is this working". A silent surface says so rather
+            than being left out, which is the fact an operator came for. */}
+        {focus &&
+          focus.surfaces
+            // `forge` is a relay rather than a source: it hands Jira and
+            // Confluence events on in its own shape and the rows are filed
+            // under the product they belong to, so a panel for it could
+            // only ever be empty.
+            .filter((surface) => surface.key !== "forge")
+            .map((surface) => (
+              <SurfaceDeliveries key={surface.key} surface={surface.key} name={surface.name} />
+            ))}
+      </QueryState>
+    </>
+  );
+
   return (
     <>
-      {/* WHAT THE SCREEN IS, AND WHICH HALF OF IT. The lede and the filter
-          share a row, as on every catalogue in this product: the counts are
-          what a reader asks first ("how many do we have?"), and a figure in
-          the page bar said it a second time. The counts are a READING, so
-          the filter waits for one: "Connected 0" before the rows answer is a
-          claim that the company was counted. */}
-      {!focus && (
-        <div className="int-bar">
-          <PageNote>Connect the tools the company already uses.</PageNote>
-          {data && (
-            <SegmentedControl<Show>
-              semantics="radio"
-              activate="manual"
-              label="Which integrations to show"
-              size="sm"
-              value={show}
-              onValueChange={setShow}
-              options={[
-                { value: "all", label: "All" },
-                { value: "connected", label: "Connected", count: configured.length },
-                {
-                  value: "available",
-                  label: "Available",
-                  count: CATALOG.length - configured.length,
-                },
-              ]}
-            />
-          )}
-        </div>
-      )}
-
-      {/* THE ADDRESS EVERY INBOUND INTEGRATION IS BUILT ON, rendered once. It
-          is one setting, and a screen that asked for it per integration would
-          ask the operator to keep seven copies consistent. */}
-      {/* ALWAYS SET: the address vendors deliver to is Tier A (the public
-          listener's `api.public.external_url` where one is configured, and
-          `api.external_url` otherwise, `config_path` naming which), required
-          on every node serving this screen and resolved before the file is
-          decoded, so a node that answers at all has an address, and the
-          states that described its absence can no longer occur. */}
-      {setup.base && (
-        <Callout variant="neutral" icon={<LinkGlyph size="md" />}>
-          <span>
-            Third-party apps reach this engine at <InlineCode>{setup.base.value}</InlineCode>
-          </span>
-        </Callout>
-      )}
+      {kind && baseAddress}
       {managed !== null && (
         <Callout variant="neutral" icon={<ShieldGlyph size="md" />}>
           {managed}
@@ -3208,13 +3345,13 @@ export function Integrations({ kind }: { kind?: string }) {
         </Callout>
       )}
 
-      {/* ONE OBJECT, ONE HEADER. `#/settings/integrations/{kind}` is a page about
+      {/* ONE OBJECT, ONE HEADER. `#/company/integrations/{kind}` is a page about
           a single tool, and it opened with the catalogue's chrome and a card:
           the tool's name lived inside the card's disclosure BUTTON, which is a
           control rather than a title, so nothing on the screen named what it
           was about until the reader's eye reached the row.
-          The card stays — it carries the actions, the surfaces and the roster
-          — and this is the title and the facts re-homed above it. They are the
+          The card stays (it carries the actions, the surfaces and the roster),
+          and this is the title and the facts re-homed above it. They are the
           peek's facts, from one function, so the two frames cannot drift; see
           [integrationFacts]. */}
       {focus && focusState && (
@@ -3281,161 +3418,55 @@ export function Integrations({ kind }: { kind?: string }) {
         />
       )}
 
-      {/* BOTH HALVES, because a card drawn from one of them is a card with
-          no buttons. See [useSetup]'s `loading`. */}
-      {((loading && !data) || setup.loading) && (
-        <Skeleton variant="text" rows={6} label="Loading" />
-      )}
-      <QueryState error={error} refusal={refusal} loading={loading} empty={undefined}>
-        {/* NOTHING CONNECTED IS A FACT ABOUT THE LIST, SAID ABOVE IT. A page
-            holding a tile for every tool is not empty, and the sentence is
-            worth reading before the list, not after it. */}
-        {data && !kind && configured.length === 0 && (
-          <Callout variant="neutral" icon={<PlugGlyph size="md" />}>
-            No integration connected yet. Connect one below.
-          </Callout>
-        )}
-        {kind && !focus && (
-          <EmptyState
-            icon={<PlugGlyph size="xl" />}
-            title={`This build serves no integration called “${kind}”`}
-            description="See Settings › Integrations for the ones available."
-          />
-        )}
-        {/* THE CATALOGUE: WHAT THIS COMPANY HAS, THEN WHAT IT COULD HAVE, each
-            half alphabetical, one tile per tool with one action each.
+      {/* CREWLET'S OWN SERVICES FIRST, on the catalogue's page and never on
+          one tool's: what the company already has, before what it could
+          connect. */}
+      {!kind && <BuiltIn />}
 
-            Connected covers ATTEMPTED as well as working — a tile with a
-            block behind it, whatever the loop says about it — because a
-            broken integration is one this company has and is the tile most
-            worth reaching first. Sorting on health instead would move a tile
-            out from under the cursor every time an app recovered.
-
-            NOT UNTIL BOTH HALVES HAVE ANSWERED. A tile drawn from the socket
-            alone has no setup listing, so its action could not say whether a
-            form exists behind it; the skeleton above says so honestly. A
-            REFUSED setup read is not waiting: it answers, the banner says so,
-            and the tiles render with their form actions disabled and saying
-            why. */}
-        {!setup.loading && !kind && (
-          <div className="int-grid">
-            {shown.map((entry) => (
-              <IntegrationTile
-                key={entry.key}
-                entry={entry}
-                rows={rows}
-                rollups={data?.tools}
-                sections={sectionsFor(entry, setup.byKey)}
-                trafficKnown={data?.traffic_known ?? false}
-                guarded={setup.guarded}
-                managed={managed}
-                onOpen={(action, reason) => openForm(entry, action, reason)}
+      {kind ? (
+        catalogue
+      ) : (
+        <section className="col gap-3" aria-labelledby="catalogue-heading">
+          {/* THE THIRD-PARTY CATALOGUE, under its own heading: the filter, the
+              address vendors deliver to and the note that nothing is connected
+              are all about these tiles, and drawn above Crewlet's own services
+              they read as governing those too. */}
+          <Eyebrow as="p" id="catalogue-heading">
+            Third-party apps
+          </Eyebrow>
+          {/* WHAT THE SCREEN IS, AND WHICH HALF OF IT. The lede and the filter
+              share a row, as on every catalogue in this product: the counts are
+              what a reader asks first ("how many do we have?"), and a figure in
+              the page bar said it a second time. The counts are a READING, so
+              the filter waits for one: "Connected 0" before the rows answer is a
+              claim that the company was counted. */}
+          <div className="int-bar">
+            <PageNote>Connect the tools the company already uses.</PageNote>
+            {data && (
+              <SegmentedControl<Show>
+                semantics="radio"
+                activate="manual"
+                label="Which integrations to show"
+                size="sm"
+                value={show}
+                onValueChange={setShow}
+                options={[
+                  { value: "all", label: "All" },
+                  { value: "connected", label: "Connected", count: configured.length },
+                  {
+                    value: "available",
+                    label: "Available",
+                    count: CATALOG.length - configured.length,
+                  },
+                ]}
               />
-            ))}
-            {/* EVERY OTHER TOOL IS AN MCP SERVER, and a catalogue that ended
-                at the six vendors this build ships would read as the whole of
-                what an agent can reach. A link rather than a tile with an
-                action: it opens the add form where the servers are listed and
-                checked — Tools & MCP, with `?add=server` — so a server added
-                from here lands beside the others it is compared with. */}
-            {show !== "connected" && (
-              <a
-                className="int-tile int-tile-more"
-                href={href(["settings", "tools"], { add: "server" })}
-              >
-                <span className="int-brand int-brand-more" aria-hidden>
-                  <PlusGlyph size="sm" />
-                </span>
-                <span className="int-name">Add an MCP server</span>
-                <span className="int-tile-text">Give agents any MCP tool.</span>
-              </a>
             )}
           </div>
-        )}
-        {/* ONE TOOL'S PAGE, which is where a tile's Manage goes: the agents,
-            the surfaces that need something, the settings form and
-            Disconnect. A KIND THAT NAMES NOTHING LISTS NOTHING — the empty
-            state above already says the link is dead. */}
-        {!setup.loading && focus && (
-          <EntryRow
-            key={focus.key}
-            entry={focus}
-            rows={rows}
-            rollups={data?.tools}
-            sections={sectionsFor(focus, setup.byKey)}
-            publicBase={setup.base?.value}
-            guarded={setup.guarded}
-            managed={managed}
-            avatarOf={avatarOf}
-            onOpen={(action, reason) => openForm(focus, action, reason)}
-            onDisconnect={() =>
-              setDropping({
-                name: focus.name,
-                // EVERY SURFACE THE CARD COVERS, not the first one.
-                //
-                // Atlassian is an organization and two products, and
-                // disconnecting took only the surface that happened to be
-                // listed first: the account was deleted, its block removed,
-                // and the card still read Connected because Jira and
-                // Confluence were untouched. A person pressing Disconnect on a
-                // card means the card.
-                kinds: disconnectOrder(focus, rows, sectionsFor(focus, setup.byKey)),
-                stuck: stuckDisconnecting(focus, rows),
-                // WHAT THE ENGINE CANNOT DELETE ITSELF. A seat carries a
-                // manage link only where what it holds has to be removed by
-                // hand, so an integration with nothing to hand over renders no
-                // list at all — each agent once, however many sections carry
-                // the same tool.
-                apps: toolsOf(sectionsFor(focus, setup.byKey))
-                  .flatMap((tool) => tool.seats ?? [])
-                  .filter((seat) => seat.manage_url)
-                  .map((seat) => ({
-                    handle: seat.handle,
-                    // THE AGENT, not the handle: the dialog draws this roster
-                    // the way every other roster in the product draws one.
-                    name: seat.name || seat.handle,
-                    url: seat.manage_url as string,
-                  })),
-                // WHAT IS LEFT TO CLICK once the link has opened, in the app's
-                // own words. Stated once, because it is the same for every
-                // agent.
-                appPath: sectionsFor(focus, setup.byKey).find((s) => s.tool.manage_path)?.tool
-                  .manage_path,
-              })
-            }
-          />
-        )}
-        {/* WHAT HAS BEEN HAPPENING TO IT, above what has been arriving: every
-            finding on this screen comes from a pass, and until this panel
-            existed nothing said that one had ever run — `SetupRun` was
-            declared on the wire and read by nobody. Only on the focused
-            screen, because a history per tool over six cards is six tables
-            nobody came for. */}
-        {focus && focusKinds.length > 0 && (
-          // KEYED ON THE TOOL, so walking from one integration's page to
-          // another's does not carry the open pass across: the detail route is
-          // keyed on (kind, id), and a pass opened on GitHub would be asked
-          // for under Slack and answer 404.
-          <SetupPasses key={focus.key} entry={focus} kinds={focusKinds} />
-        )}
 
-        {/* WHAT ACTUALLY ARRIVED, one panel per surface the tool covers.
-            Per surface rather than per tool because the event rows carry the
-            SURFACE as their source — Atlassian is an organization and two
-            products, and a Jira delivery and a Confluence one are different
-            answers to "is this working". A silent surface says so rather
-            than being left out, which is the fact an operator came for. */}
-        {focus &&
-          focus.surfaces
-            // `forge` is a relay rather than a source: it hands Jira and
-            // Confluence events on in its own shape and the rows are filed
-            // under the product they belong to, so a panel for it could
-            // only ever be empty.
-            .filter((surface) => surface.key !== "forge")
-            .map((surface) => (
-              <SurfaceDeliveries key={surface.key} surface={surface.key} name={surface.name} />
-            ))}
-      </QueryState>
+          {baseAddress}
+          {catalogue}
+        </section>
+      )}
     </>
   );
 }

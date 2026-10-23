@@ -154,7 +154,7 @@ test("a schedule waking several seats says how many, and names them for a screen
     </Router>,
   );
   expect(screen.getByRole("link", { name: /Agent SWE/ }).getAttribute("href")).toBe(
-    "#/agents/seats/swe",
+    "#/company/org/seats/swe",
   );
 });
 
@@ -275,7 +275,7 @@ test("both grids name a role's scope by its seat", async () => {
   // The seat, linked, four times: the definition's scope and whom it wakes,
   // and the fire's scope and whom it woke.
   const seat = [...container.querySelectorAll("a")].filter(
-    (a) => a.getAttribute("href") === "#/agents/seats/pm",
+    (a) => a.getAttribute("href") === "#/company/org/seats/pm",
   );
   expect(seat).toHaveLength(4);
 });

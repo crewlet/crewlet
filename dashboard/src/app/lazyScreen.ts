@@ -1,5 +1,5 @@
 /**
- * The screens, one chunk per workspace, loaded when they are first needed.
+ * The screens, one chunk per screen directory, loaded when they are first needed.
  *
  * # Why the screens are split at all
  *
@@ -8,22 +8,26 @@
  * cost: the PARSE was. Every screen, the org builder among them, was one entry
  * module a browser had to download, parse and evaluate before it could draw
  * the sidebar — about a megabyte of script for a reader who came to look at
- * one inbox. A chunk per workspace makes the first paint pay for the frame and
- * the one screen asked for, and the idle prefetch below means the second
- * workspace a reader opens is usually already in memory, so the round trip
+ * one inbox. A chunk per screen directory makes the first paint pay for the
+ * frame and the one screen asked for, and the idle prefetch below means the
+ * second place a reader opens is usually already in memory, so the round trip
  * the old comment worried about is spent while nobody is waiting on it.
  *
- * # One chunk per workspace, plus the org editor, the sign-in screens, each create page and the palette
+ * # One chunk per screen directory, decided by the SCREEN
  *
- * Each `routes/<workspace>/index.ts` is the whole of what this file imports
- * from that workspace, and it is imported ONLY here, by `import()` — a static
- * import of a workspace's module from the frame would pull it back into the
- * entry without a sound. Two chunks are not workspaces. `routes/org`: the
- * builder is a section of Agents, and it is bigger than any whole workspace,
- * so it is its own (see `routes/org/OrgEdit.tsx`). And `routes/signin`, the
+ * Each `routes/<dir>/index.ts` is the whole of what this file imports from
+ * that directory, and it is imported ONLY here, by `import()`: a static
+ * import of one from the frame would pull it back into the entry without a
+ * sound. Which chunk draws a screen is [SCREEN_CHUNKS], keyed by the screen
+ * rather than by the sidebar row it is in, because the two are different
+ * questions: Company's rows draw screens from three directories (the
+ * Overview, Policies and Integrations are `routes/settings`, the Org chart and
+ * Schedules `routes/agents`, Budgets `routes/spend`), and a row that moves
+ * moves no code. `routes/org` is the builder, bigger than any other directory,
+ * so it is its own (see `routes/org/OrgEdit.tsx`). `routes/signin` is the
  * screens drawn outside the frame, which a reader who is signed in never
- * needs — so it is the one chunk the idle prefetch leaves alone ([CHUNKS]):
- * a reader who needs it is already on it. Each kind's create page
+ * needs, so it is the one chunk the idle prefetch leaves alone ([CHUNKS]): a
+ * reader who needs it is already on it. Each kind's create page
  * (`routes/artifacts/new/`) is a chunk of its own too, and neither is it
  * prefetched: a reader who opens Artifacts to look never needs an editor.
  *
@@ -53,8 +57,7 @@
 import { createElement, use, type ComponentType } from "react";
 import { NEW_KIND_TITLES } from "~/lib/artifacts/words.ts";
 import type { ArtifactKind } from "~/protocol/index.ts";
-import { WORKSPACES, type Workspace } from "./nav.ts";
-import { resolve, type Resolved } from "./routes.ts";
+import { resolve, type FramedScreen, type Resolved } from "./routes.ts";
 
 /**
  * How each chunk is fetched. The `import()` literals are what the bundler
@@ -82,9 +85,23 @@ const LOADERS = {
   "new-html": () => import("~/routes/artifacts/new/HtmlCreate.tsx"),
   palette: () => import("./palette/Palette.tsx"),
 } satisfies Record<
-  Workspace | "org" | "signin" | NewArtifactChunk | "palette",
+  ScreenDir | "org" | "signin" | NewArtifactChunk | "palette",
   () => Promise<unknown>
 >;
+
+/** A directory of framed screens under `routes/`, each one chunk. */
+type ScreenDir =
+  | "home"
+  | "inbox"
+  | "me"
+  | "work"
+  | "agents"
+  | "live"
+  | "knowledge"
+  | "artifacts"
+  | "spend"
+  | "settings"
+  | "account";
 
 /**
  * A kind's create page, a chunk of its own: a doc's editor, a deck's composer
@@ -100,25 +117,121 @@ export type Chunk = keyof typeof LOADERS;
 export type ChunkModule<C extends Chunk> = Awaited<ReturnType<(typeof LOADERS)[C]>>;
 
 /**
- * Every chunk the idle prefetch fetches, in the order it fetches them: the
- * palette, then the sidebar's. NOT `signin` or a create page; see the note above.
+ * The chunk each framed screen is drawn from. EXHAUSTIVE over the route
+ * table's screens, so a screen added to `routes.ts` and not placed here is a
+ * compile error rather than a page that never loads. A kind's create page is
+ * decided by its kind ([chunkOf]).
  */
-export const CHUNKS: readonly Chunk[] = ["palette", ...WORKSPACES.map((ws) => ws.key), "org"];
+const SCREEN_CHUNKS: Readonly<Record<FramedScreen["screen"], Chunk>> = {
+  home: "home",
+  inbox: "inbox",
+  me: "me",
+  overview: "settings",
+  policies: "settings",
+  "org-chart": "agents",
+  roster: "agents",
+  teams: "agents",
+  "org-edit": "org",
+  seat: "agents",
+  schedules: "agents",
+  integrations: "settings",
+  budgets: "spend",
+  "work-projects": "work",
+  "work-tasks": "work",
+  "work-views": "work",
+  "work-history": "work",
+  "work-search": "work",
+  project: "work",
+  item: "work",
+  knowledge: "knowledge",
+  container: "knowledge",
+  page: "knowledge",
+  "new-page": "knowledge",
+  skills: "knowledge",
+  diaries: "knowledge",
+  diary: "knowledge",
+  artifacts: "artifacts",
+  artifact: "artifacts",
+  "new-artifact": "artifacts",
+  live: "live",
+  turns: "live",
+  turn: "live",
+  runs: "live",
+  a2a: "live",
+  trace: "live",
+  events: "live",
+  event: "live",
+  models: "settings",
+  "mcp-tools": "settings",
+  secrets: "settings",
+  limits: "settings",
+  spend: "spend",
+  "spend-tasks": "spend",
+  people: "settings",
+  "service-accounts": "settings",
+  tokens: "settings",
+  "sign-in": "settings",
+  audit: "settings",
+  nodes: "settings",
+  config: "settings",
+  backups: "settings",
+  storage: "settings",
+  account: "account",
+};
+
+/**
+ * Every chunk the idle prefetch fetches, in the order it fetches them: the
+ * palette, then the sidebar's from the top. NOT `signin` or a create page;
+ * see the note above.
+ */
+export const CHUNKS: readonly Chunk[] = [
+  "palette",
+  "home",
+  "inbox",
+  "me",
+  "settings",
+  "agents",
+  "spend",
+  "work",
+  "knowledge",
+  "artifacts",
+  "live",
+  "account",
+  "org",
+];
+
+/**
+ * What a chunk is called in a sentence a reader sees: the places it draws,
+ * since a directory's name is nobody's word for anything.
+ */
+const CHUNK_LABELS: Readonly<Record<ScreenDir | "org" | "signin" | "palette", string>> = {
+  home: "Home",
+  inbox: "Inbox",
+  me: "My work",
+  work: "Work",
+  agents: "Org chart",
+  live: "Live",
+  knowledge: "Knowledge",
+  artifacts: "Artifacts",
+  spend: "Spend and Budgets",
+  settings: "Company and Settings",
+  account: "Account",
+  org: "Edit org",
+  signin: "sign-in",
+  palette: "Search",
+};
 
 /** What a chunk is called in a sentence a reader sees. */
 export function chunkLabel(chunk: Chunk): string {
-  if (chunk === "org") return "Edit org";
-  if (chunk === "signin") return "sign-in";
-  if (chunk === "palette") return "Search";
   if (chunk.startsWith("new-")) return NEW_KIND_TITLES[chunk.slice(4) as ArtifactKind];
-  return WORKSPACES.find((ws) => ws.key === chunk)?.label ?? chunk;
+  return CHUNK_LABELS[chunk as keyof typeof CHUNK_LABELS];
 }
 
 /** Which chunk draws a resolved screen. */
 export function chunkOf(route: Resolved): Chunk {
   if (route.workspace === "") return "signin";
   if (route.screen === "new-artifact" && route.kind) return `new-${route.kind}`;
-  return route.screen === "org-edit" ? "org" : route.workspace;
+  return SCREEN_CHUNKS[route.screen];
 }
 
 /**
@@ -132,7 +245,7 @@ export function chunkOf(route: Resolved): Chunk {
 export class ChunkLoadError extends Error {
   override name = "ChunkLoadError";
   readonly chunk: Chunk;
-  /** What failed, naming the workspace: the fallback's heading. */
+  /** What failed, naming the places it draws: the fallback's heading. */
   readonly title: string;
   /** What to do about it: the fallback's sentence. */
   readonly advice: string;

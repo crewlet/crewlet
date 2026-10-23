@@ -1,5 +1,5 @@
 /**
- * Spend › Budgets: every scope's day, week and month — what it has spent, the
+ * Company › Budgets: every scope's day, week and month, what it has spent, the
  * ceiling it is held to, and whether the gate is refusing it — with each
  * ceiling editable in place by an admin.
  *

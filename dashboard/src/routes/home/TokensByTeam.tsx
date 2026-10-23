@@ -53,7 +53,7 @@ export function TokensByTeam({
             {data ? `${window} · ${fmtCount(data.totals.total_tokens)} total` : window}
           </span>
         </div>
-        <a className="t-link" href={href(["spend"], { group: "unit" })}>
+        <a className="t-link" href={href(["settings", "spend"], { group: "unit" })}>
           Spend
         </a>
       </div>

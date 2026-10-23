@@ -410,6 +410,55 @@ export function duplicate(board: Board, id: string): { board: Board; id: string 
 }
 
 /** The board's order as lists, by container: the page, then each group. */
+/**
+ * The widths a list of blocks is DRAWN at once some of them are left out,
+ * without changing what is saved.
+ *
+ * The board's grid places each block in order, spanning its own columns, and
+ * starts a new row when the next block does not fit (`ArrangeGrid`, columns
+ * only, so the rows are exactly these). A block the company's services hide
+ * draws nothing, and its row closed up short: on a company running Jira,
+ * Tokens by team stood alone in a third of the row with two thirds of the
+ * board empty beside it. So each row is packed as saved, and the columns its
+ * hidden blocks held are shared out over the ones left in that row, in
+ * proportion to their own widths: a lone survivor takes the row. PURE, so it
+ * is held without a layout engine.
+ */
+export function drawnWidths(
+  blocks: readonly { id: string; w: number }[],
+  shown: (id: string) => boolean,
+  columns: number = COLUMNS,
+): Map<string, number> {
+  const drawn = new Map<string, number>();
+  let row: { id: string; w: number }[] = [];
+  let used = 0;
+  const close = () => {
+    const kept = row.filter((b) => shown(b.id));
+    const keptWidth = kept.reduce((sum, b) => sum + b.w, 0);
+    if (kept.length > 0 && keptWidth < used) {
+      // SHARED IN PROPORTION, rounded down, and the columns rounding left
+      // over handed out one each from the row's start, so the row's total is
+      // exactly what it was saved at.
+      const shares = kept.map((b) => Math.floor((b.w * used) / keptWidth));
+      let spare = used - shares.reduce((sum, w) => sum + w, 0);
+      for (let i = 0; spare > 0; i = (i + 1) % shares.length, spare--) shares[i]! += 1;
+      kept.forEach((b, i) => drawn.set(b.id, shares[i]!));
+    } else {
+      for (const b of kept) drawn.set(b.id, b.w);
+    }
+    row = [];
+    used = 0;
+  };
+  for (const block of blocks) {
+    const w = Math.min(Math.max(1, block.w), columns);
+    if (used + w > columns) close();
+    row.push({ id: block.id, w });
+    used += w;
+  }
+  close();
+  return drawn;
+}
+
 export const PAGE = "page";
 export const groupList = (id: string) => `group:${id}`;
 

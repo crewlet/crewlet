@@ -480,6 +480,7 @@ export function Secrets({ name }: { name?: string }) {
         <Button
           leadingIcon={<PlusGlyph size="sm" />}
           variant="primary"
+          size="small"
           onClick={() => setWriting({ editing: "" })}
         >
           Store a secret

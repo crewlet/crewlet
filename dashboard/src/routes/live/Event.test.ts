@@ -3,7 +3,7 @@
  *
  * An event's actor is a display name ("Agent PM") and a seat's page is
  * addressed by its handle, so the actor's link and button went to
- * `#/agents/seats/Agent PM` — no seat's address — on every event a seat
+ * `#/company/org/seats/Agent PM`, no seat's address, on every event a seat
  * published. The seat is found by the store's own `agent_id` tag instead.
  *
  * Mutation: return the actor from `seatHandleOf`, and the first case fails.

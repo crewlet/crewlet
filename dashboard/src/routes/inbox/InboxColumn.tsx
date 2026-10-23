@@ -72,6 +72,7 @@ export function InboxColumn({
   more,
   bound,
   refusal,
+  elsewhere = null,
 }: {
   needs: readonly InboxRow[];
   updates: readonly InboxRow[];
@@ -99,6 +100,12 @@ export function InboxColumn({
   bound: boolean;
   /** A read's refusal, drawn where its rows would be. */
   refusal?: ReactNode;
+  /**
+   * Where the company runs no Crewlet Works: the line saying where asks and
+   * mentions go instead, drawn in place of every tracker pane. Null where it
+   * runs it.
+   */
+  elsewhere?: string | null;
 }) {
   const item = (row: InboxRow) => (
     <InboxItem
@@ -119,6 +126,11 @@ export function InboxColumn({
     <InboxList label="Inbox" className="inbox-list">
       {refusal}
       {needs.length > 0 && <InboxGroup label="Needs you">{needs.map(item)}</InboxGroup>}
+      {elsewhere && (
+        <Text as="p" variant="caption" className="inbox-note">
+          {elsewhere}
+        </Text>
+      )}
       {updates.length > 0 && <InboxGroup label="Updates">{updates.map(item)}</InboxGroup>}
       {loading && <Skeleton variant="text" rows={5} label="Loading the inbox" />}
       {quiet && <EmptyState size="compact" title={quiet.title} description={quiet.hint} />}

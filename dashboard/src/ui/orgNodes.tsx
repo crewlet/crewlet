@@ -1,7 +1,7 @@
 /**
  * The drawing of an organization's nodes, shared by the two charts of one
- * company: the live org chart (Agents › Org chart) and the org builder
- * (Agents › Edit org).
+ * company: the live org chart (Company › Org chart) and the org builder
+ * (Org chart › Edit org).
  *
  * ONE DRAWING, TWO SOURCES. The builder draws a draft somebody is editing and
  * the live chart draws the company this node has applied, and their models

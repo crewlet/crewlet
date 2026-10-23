@@ -362,7 +362,7 @@ export default defineConfig({
       // Signing in, out and up, and an invitation's redemption — how a
       // browser comes to hold a session cookie (protocol/auth.ts).
       "/auth": { target: "http://localhost:8000" },
-      // The identity directory People & access reads and writes, and the
+      // The identity directory People reads and writes, and the
       // identity trail the audit screen reads beside it.
       "/iam": { target: "http://localhost:8000" },
       // Whether anybody has been invited yet, which the sign-in page reads

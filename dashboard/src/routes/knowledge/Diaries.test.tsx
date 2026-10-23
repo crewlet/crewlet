@@ -223,7 +223,7 @@ test("one agent's diary is its holder's answer, and names that node", async () =
     screen
       .getByRole("link", { name: "2 learned skills and 5 colleagues remembered" })
       .getAttribute("href"),
-  ).toBe("#/agents/seats/agent-3?tab=memory");
+  ).toBe("#/company/org/seats/agent-3?tab=memory");
 });
 
 test("one agent no node holds says why its diary is not shown", async () => {

@@ -35,7 +35,10 @@ vi.mock("~/lib/artifacts/access.ts", async () => {
   const actual = await vi.importActual<typeof import("~/lib/artifacts/access.ts")>(
     "~/lib/artifacts/access.ts",
   );
-  return { ...actual, useArtifactAccess: () => ({ can: true, as: "token:review", acts: [] }) };
+  return {
+    ...actual,
+    useArtifactAccess: () => ({ can: authoring, as: "token:review", acts: [], reason: "" }),
+  };
 });
 vi.mock("~/lib/artifacts/pinToggle.ts", () => ({
   usePinToggle: () => ({ label: "Pin to your sidebar", toggle: vi.fn(), pinned: false }),
@@ -64,6 +67,8 @@ function row(over: Partial<ArtifactListItem>): ArtifactListItem {
 }
 
 let items: ArtifactListItem[];
+/** Whether the reader may make an artifact (`useArtifactAccess`'s `can`). */
+let authoring = true;
 
 beforeEach(() => {
   items = [
@@ -80,6 +85,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   localStorage.clear();
+  authoring = true;
 });
 
 /** The list shape, as a reader who chose it on this browser before. */
@@ -374,4 +380,16 @@ test("a search that found nothing names the phrase, and only the change that cou
     title: "No Design artifacts here",
     hint: "Choose Every type to see the rest.",
   });
+});
+
+// THE EMPTY COPY FOLLOWS THE MAKE ROW: a reader who cannot make an artifact is
+// drawn no row, and "Start one above" pointed at nothing. Mutation: choose the
+// copy without the access check and the sentence is back.
+test("a reader who cannot make an artifact is not told to start one above", () => {
+  authoring = false;
+  items = [];
+  mount("all");
+  expect(document.querySelector(".artifacts-make")).toBeNull();
+  expect(screen.getByText("Artifacts shared with you appear here.")).toBeTruthy();
+  expect(screen.queryByText(/Start one above/)).toBeNull();
 });

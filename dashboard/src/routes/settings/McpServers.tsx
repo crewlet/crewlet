@@ -1,5 +1,5 @@
 /**
- * The MCP servers on Settings › Tools & MCP: each one's launch, who it reaches,
+ * The MCP servers on Settings › MCP Tools: each one's launch, who it reaches,
  * and what every live node did with it.
  *
  * # Everything here is the engine's
@@ -19,7 +19,7 @@
  * around it (a push every reader gets) stays exactly as it is.
  */
 
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import { fmtCount } from "~/lib/format.ts";
 import { Card, EmptyState, Tag, TableKeyCell, TableNumberCell } from "@crewlethq/ui";
 import { PlugGlyph } from "@crewlethq/icons/glyphs";
@@ -111,18 +111,33 @@ export function McpServers({
   seats: Seat[];
 }) {
   const servers = useMemo(() => data?.servers ?? [], [data]);
+  // A CARD IN EVERY STATE, headed like every other section on Settings: the
+  // empty and refused states were a bare heading over a floating sentence
+  // beside the framed catalogue under it.
+  const card = (body: ReactNode) => (
+    <Card padding="none">
+      <Card.Header icon={<PlugGlyph size="sm" />} count={data ? servers.length : undefined}>
+        <Card.Title>MCP servers</Card.Title>
+      </Card.Header>
+      {body}
+    </Card>
+  );
 
   if (error || (loading && !data)) {
-    return <QueryState error={error} refusal={refusal} loading={loading && !data} />;
+    return card(
+      <Card.Body padding="md">
+        <QueryState error={error} refusal={refusal} loading={loading && !data} />
+      </Card.Body>,
+    );
   }
   if (servers.length === 0) {
-    return (
+    return card(
       <EmptyState
         size="compact"
         icon={<PlugGlyph size="xl" />}
         title="No MCP servers yet"
         description="Add one to give agents more tools."
-      />
+      />,
     );
   }
 
@@ -130,13 +145,13 @@ export function McpServers({
   return (
     <div className="col gap-2">
       {silent.length > 0 && <SilentNodes nodes={silent} />}
-      <Card padding="none">
+      {card(
         <DataGrid<McpServerStatus>
           rows={servers}
           rowKey={(s) => s.name}
           // A ROW NAMES ITS SERVER'S TOOLS: the catalogue below, filtered to
           // this origin, which is what `servers/{name}` is.
-          rowHref={(s) => href(["settings", "tools", "servers", s.name])}
+          rowHref={(s) => href(["settings", "mcp-tools", "servers", s.name])}
           defaultSort="name"
           columns={[
             {
@@ -207,8 +222,8 @@ export function McpServers({
               cell: (s) => <NodeCells server={s} />,
             },
           ]}
-        />
-      </Card>
+        />,
+      )}
     </div>
   );
 }
@@ -310,7 +325,7 @@ function NodeCells({ server }: { server: McpServerStatus }) {
  * A server's own page head: the server as the engine reports it, above the
  * catalogue filtered to its tools.
  *
- * `#/settings/tools/servers/{name}` used to be ONLY a filter, so a row's click
+ * `#/settings/mcp-tools/servers/{name}` used to be ONLY a filter, so a row's click
  * on a server that registered no tools changed nothing a reader could see.
  * This is what the click opens: the state, the launch, the reach and —
  * unclamped, as the heartbeat carried it (bounded at the node, with the whole

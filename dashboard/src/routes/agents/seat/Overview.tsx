@@ -30,6 +30,8 @@
  * each part a reader may not read is drawn locked, saying what opens it.
  */
 
+import { useServicesRun, useServicesAsk } from "~/lib/services.ts";
+import { ORG_EDIT_PATH } from "~/app/routes.ts";
 import { useId, useMemo, useRef, useState } from "react";
 import {
   Card,
@@ -346,6 +348,8 @@ function CurrentTurn({
   now: number;
 }) {
   const viewer = useViewer();
+  const runs = useServicesRun();
+  const ask = useServicesAsk();
   const sandboxes = useSandboxes();
   const phone = useMediaMatch(`(width < ${PHONE_BREAKPOINT}px)`);
   const turn = agent?.turn ?? null;
@@ -362,7 +366,7 @@ function CurrentTurn({
   const itemTurns = useQuery(
     "work_item_turns",
     { id: asked, limit: 1 },
-    { enabled: viewer.tracker && onTurn && asked !== "" },
+    { enabled: viewer.tracker && runs.tracker && onTurn && asked !== "" },
   );
   // WHAT THE TASK IS CALLED, read by the turn's own item — never a lookup in
   // the Assigned-work card's top five: a turn on a task outside those five
@@ -371,7 +375,7 @@ function CurrentTurn({
   const item = useQuery(
     "work_item",
     { id: asked },
-    { enabled: viewer.tracker && onTurn && asked !== "" },
+    { enabled: viewer.tracker && ask.tracker && onTurn && asked !== "" },
   );
   // THE PHASES THIS TURN HAS RECORDED, for its tokens: the seat's newest
   // turn row is this turn's once any phase of it has completed.
@@ -545,9 +549,13 @@ function AssignedWork({
   now: number;
 }) {
   const viewer = useViewer();
+  const runs = useServicesRun();
   const self = isOwnSeat(viewer, seat.handle);
   const rows = work.data?.items ?? [];
   const total = work.data?.total_hint ?? rows.length;
+  // CREWLET WORKS' CARD, not drawn where the company runs none: no task is
+  // assigned anybody here, and a lock would say there was one to open.
+  if (!runs.tracker) return null;
   if (!viewer.tracker) {
     // THE TRACKER'S, and never asked without it: drawn locked — once the
     // viewer has said so, and waited for until it has.
@@ -836,7 +844,7 @@ function Setup({
       <Card.Header
         divided={false}
         actions={
-          <a className="t-link" href={href(["agents", "edit"], { seat: seat.handle })}>
+          <a className="t-link" href={href(ORG_EDIT_PATH, { seat: seat.handle })}>
             Edit
           </a>
         }
@@ -1052,7 +1060,10 @@ function HumanOverview({ seat, index, work, nameOf, now, unheld = false }: Overv
   const self = isOwnSeat(viewer, seat.handle);
   // NOBODY HOLDS THE SEAT, so nobody's day is read: the holding callout
   // above offers to fill it, and the stats would be about nobody.
-  const mayRead = !unheld && mayReadRecord(viewer, index, seat.handle);
+  // AND NOT AT ALL where the company runs no Crewlet Works, whose record it
+  // is: the day is not drawn, rather than drawn withheld.
+  const runs = useServicesRun();
+  const mayRead = !unheld && runs.tracker && mayReadRecord(viewer, index, seat.handle);
   const person = useQuery(
     "work_person",
     { handle: seat.handle },
@@ -1078,7 +1089,7 @@ function HumanOverview({ seat, index, work, nameOf, now, unheld = false }: Overv
   return (
     <div className="prof-overview">
       <div className="prof-main">
-        {unheld ? null : mayRead ? (
+        {unheld || !runs.tracker ? null : mayRead ? (
           // A SECTION RATHER THAN A CARD: the tiles draw their own surface,
           // and a card around them was a frame inside a frame.
           <section className="prof-day" aria-labelledby="prof-day-title">

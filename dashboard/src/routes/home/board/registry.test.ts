@@ -50,11 +50,13 @@ describe("the tray's sections", () => {
       "home",
       "inbox",
       "me",
+      "org",
+      "schedules",
+      "integrations",
+      "budgets",
       "work",
-      "agents",
       "live",
       "knowledge",
-      "spend",
       "settings",
     ] as const) {
       expect(areas, key).toContain(key);
@@ -74,9 +76,15 @@ describe("the tray's sections", () => {
 describe("who may add what", () => {
   const settings = AREAS.find((a) => a.key === "settings")!.widgets;
 
-  test("a reader without admin is offered none of Settings' widgets", () => {
+  // SETTINGS IS ADMIN'S BUT FOR SPEND'S READINGS, which every reader reads:
+  // its widgets follow its sections.
+  test("a reader without admin is offered of Settings' widgets only Spend's readings", () => {
     expect(settings.length).toBeGreaterThan(0);
-    for (const def of settings) expect(canUse(def, MEMBER), def.key).toBe(false);
+    for (const def of settings) {
+      // Expensive tasks names its tasks by the tracker's keys, which MEMBER holds.
+      const readings = def.from === "settings-spend" || def.from === "settings-spend-tasks";
+      expect(canUse(def, MEMBER), def.key).toBe(readings);
+    }
   });
 
   test("an admin is offered every widget", () => {

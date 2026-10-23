@@ -1,5 +1,5 @@
 /**
- * Adding an MCP server from Settings › Tools & MCP.
+ * Adding an MCP server from Settings › MCP Tools.
  *
  * A NEW CONFIGURATION REVISION, not an act: a server is a `mcp_servers` entry,
  * so the write goes through `protocol/configWrite.ts` like a seat or a budget

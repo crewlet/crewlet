@@ -1,5 +1,5 @@
 /**
- * The identity directory's closed sets that People & access offers back to the
+ * The identity directory's closed sets that People offers back to the
  * engine — the permissions a person, an invitation or a token may carry, the
  * login grammars, the kinds of finding the directory reports — and the shapes
  * of the answers the seat surfaces and the reset screen read.
@@ -78,7 +78,7 @@ export const TOKEN_MAX_DAYS = 365;
  * company's worst problem (nobody can administer it) comes first.
  *
  * HELD BY `internal/api/iamapi.TestTheDashboardWordsEveryFindingKindInTheEnginesOrder`
- * in both directions and in order. People & access words each one
+ * in both directions and in order. People words each one
  * (`FINDING_WORDS`, keyed on this list so a kind left unworded does not
  * compile); a kind the engine grew that this lacks is drawn as its raw code.
  */
@@ -99,7 +99,7 @@ export const FINDING_KINDS = [
  * `internal/api/iamapi.TestTheSeatSurfacesReadWhatTheSeatListingSends`, which
  * reads these four interfaces by name and holds the answer to each in both
  * directions. The org chart's card, the seat peek, a person's seat page and
- * People & access all read it, and a key renamed on the engine's side alone
+ * People all read it, and a key renamed on the engine's side alone
  * would draw an invited seat as vacant on every one of them.
  */
 export interface HumanSeatsAnswer {

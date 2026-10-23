@@ -35,16 +35,16 @@ const to = (hash: string) => parseHash(hash);
  */
 test("a move within the builder keeps it: the view, the chart and a selection", () => {
   for (const hash of [
-    "#/agents/edit",
-    "#/agents/edit?view=table",
-    "#/agents/edit?view=visualization",
-    "#/agents/edit?view=visualization&chart=reporting",
-    "#/agents/edit?view=table&unit=engineering",
-    "#/agents/edit?view=table&seat=ceo",
+    "#/company/org/edit",
+    "#/company/org/edit?view=table",
+    "#/company/org/edit?view=visualization",
+    "#/company/org/edit?view=visualization&chart=reporting",
+    "#/company/org/edit?view=table&unit=engineering",
+    "#/company/org/edit?view=table&seat=ceo",
     // The peek rail is a FILTER, so the router replaces and never asks at all
     // — but the route it produces still answers honestly here, because a
     // reader who opened a peek and then pressed Back traverses to it.
-    "#/agents/edit?peek=unit%3AEngineering",
+    "#/company/org/edit?peek=unit%3AEngineering",
   ]) {
     expect(keepsTheLens(to(hash)), hash).toBe(true);
   }
@@ -59,21 +59,21 @@ test("a move within the builder keeps it: the view, the chart and a selection", 
 test("a move off the builder does not keep it, including to its own workspace's sections", () => {
   for (const hash of [
     // The workspace's own sections, from the tabs in the page header.
-    "#/agents",
-    "#/agents/roster",
-    "#/agents/teams",
-    "#/agents/schedules",
+    "#/company/org",
+    "#/company/org/roster",
+    "#/company/org/teams",
+    "#/company/schedules",
     // The sidebar, which is ordinary links.
     "#/inbox",
     "#/work",
     "#/settings/config",
     // The command palette, which pushes a path with no query at all.
-    "#/agents/seats/ceo",
-    "#/agents/teams/Engineering",
+    "#/company/org/seats/ceo",
+    "#/company/org/teams/Engineering",
     // Another screen wearing the same first segment: a parameter the builder
     // once lived under, riding along, changes nothing.
-    "#/agents/teams/Engineering?lens=builder",
-    "#/agents?lens=builder",
+    "#/company/org/teams/Engineering?lens=builder",
+    "#/company/org?lens=builder",
   ]) {
     expect(keepsTheLens(to(hash)), hash).toBe(false);
   }
@@ -89,7 +89,7 @@ test("a move off the builder does not keep it, including to its own workspace's 
 test("the old address is not this one, and would hold every move in the builder", () => {
   const atCompany = (route: ReturnType<typeof to>) =>
     route.path[0] === "company" && route.query.get("lens") === "builder";
-  const inside = to("#/agents/edit?view=table");
+  const inside = to("#/company/org/edit?view=table");
   expect(keepsTheLens(inside)).toBe(true);
   expect(atCompany(inside)).toBe(false);
 });

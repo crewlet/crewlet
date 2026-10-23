@@ -70,7 +70,7 @@ function eventTitle(event: EventRecord): string {
  *
  * BY THE SEAT'S ID, never its actor. An event's actor is a display name
  * ("Agent PM"), and the seat's page is addressed by its handle — so the
- * actor's link and button went to `#/agents/seats/Agent PM`, which is no
+ * actor's link and button went to `#/company/org/seats/Agent PM`, which is no
  * seat's address, on every event a seat published. The id is the store's own
  * `agent_id` tag, and the agents push is what maps it to a handle.
  */
@@ -94,7 +94,7 @@ function eventFacts(event: EventRecord, now: number, handle: string): Fact[] {
       // blank — and only a real actor carries a link out to its seat.
       label: "Actor",
       value: event.actor || <span className="muted">the engine itself</span>,
-      path: handle ? ["agents", "seats", handle] : undefined,
+      path: handle ? ["company", "org", "seats", handle] : undefined,
     },
     {
       label: "When",
@@ -212,7 +212,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
                 size="small"
                 variant="secondary"
                 leadingIcon={<UserGlyph size="xs" />}
-                onClick={() => nav.to(["agents", "seats", handle])}
+                onClick={() => nav.to(["company", "org", "seats", handle])}
               >
                 {data.actor}
               </Button>

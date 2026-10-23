@@ -18,9 +18,10 @@ import (
 // stops at the armour before or after it.
 //
 // A COMPARISON, NOT A CLOCK: the same armours in the same number of bytes, on
-// lines of four KiB and on lines twice the bound, each timed as the fastest of
-// three interleaved reads, so a runner busy for a moment slows both or neither
-// and no absolute duration has to hold on a loaded machine — the clock this
+// lines of four KiB and on lines twice the bound, compared by [withinFactor]
+// (the fastest of interleaved reads, measured again before it fails), so a
+// runner busy for a moment slows both or neither and no absolute duration has
+// to hold on a loaded machine. The clock this
 // replaced, thirty seconds for two megabytes, failed two runs in three beside
 // other packages under the race detector. Read linearly the two cost the same,
 // the long lines a little less (measured 0.85 to 1.1 times, with and without
@@ -50,11 +51,7 @@ func TestALineOfManyArmoursIsLinear(t *testing.T) {
 		}
 		return b.String()
 	}
-	read := func(text string) time.Duration {
-		start := time.Now()
-		_, _ = keyBlocks(text)
-		return time.Since(start)
-	}
+	read := func(text string) { _, _ = keyBlocks(text) }
 	for name, group := range map[string]string{
 		"a bare BEGIN, over and over": "-----BEGIN PRIVATE KEY-----",
 		"an END, over and over":       "-----END RSA PRIVATE KEY----- ",
@@ -64,11 +61,7 @@ func TestALineOfManyArmoursIsLinear(t *testing.T) {
 		"a cut body before an END, over and over": "x[… 812 bytes truncated]Ab12cdEF34gh Ij56klMN78op=-----END RSA PRIVATE KEY----- ",
 	} {
 		short, long := lines(group, 4<<10), lines(group, 2*MaxKeyBlockBytes)
-		shortCost, longCost := time.Duration(1<<62), time.Duration(1<<62)
-		for range 3 {
-			shortCost, longCost = min(shortCost, read(short)), min(longCost, read(long))
-		}
-		if longCost > 3*shortCost {
+		if ok, shortCost, longCost := withinFactor(read, short, long, 3); !ok {
 			t.Errorf("%s: %v on lines of %d KiB against %v on lines of 4 KiB — a scan per armour "+
 				"runs to its line's end or to the bound again", name, longCost, 2*MaxKeyBlockBytes>>10, shortCost)
 		}
@@ -82,7 +75,7 @@ func TestALineOfManyArmoursIsLinear(t *testing.T) {
 // built again from its start at every run its prefix matched, so a line of
 // numbers under a gutter of numbers cost its runs times its length: 256 KiB in
 // lines of 30 KiB took 4.7 s against 0.17 s in lines of one. Timed as the
-// test above is, fastest of three interleaved reads, on lines of 1 KiB and 30
+// test above is ([withinFactor]), on lines of 1 KiB and 30
 // KiB — under [MaxKeyBlockBytes], since a read back reaches no line past it.
 //
 // Mutation: ask prefixOK before each run in headRun, and both directions take
@@ -99,18 +92,10 @@ func TestALineAWrappingsPrefixRunsAcrossIsLinear(t *testing.T) {
 		}
 		return map[string]string{"read back from an END": back.String(), "read forward from a BEGIN": forward.String()}
 	}
-	read := func(text string) time.Duration {
-		start := time.Now()
-		_, _ = keyBlocks(text)
-		return time.Since(start)
-	}
+	read := func(text string) { _, _ = keyBlocks(text) }
 	short, long := texts(1<<10), texts(30<<10)
 	for name := range short {
-		shortCost, longCost := time.Duration(1<<62), time.Duration(1<<62)
-		for range 3 {
-			shortCost, longCost = min(shortCost, read(short[name])), min(longCost, read(long[name]))
-		}
-		if longCost > 3*shortCost {
+		if ok, shortCost, longCost := withinFactor(read, short[name], long[name], 3); !ok {
 			t.Errorf("%s: %v on lines of 30 KiB against %v on lines of 1 KiB — the prefix's shape is "+
 				"built again at every run", name, longCost, shortCost)
 		}
@@ -127,7 +112,7 @@ func TestALineAWrappingsPrefixRunsAcrossIsLinear(t *testing.T) {
 // rest of the line: its keys times its length. So the scan stops at the next
 // key ([lineEndUnnamed]), and only the line's last key, which the scan leaves at
 // the line's end, reads its gutter and the lines after. Timed as the tests
-// above are, fastest of three interleaved reads, through [Secrets] and
+// above are ([withinFactor]), through [Secrets] and
 // [Settled] both, since each reads every key's value. The keys share their
 // line with filler rather than with more keys, because under the race detector
 // a key costs what scanning some 25 KiB does, and a line of keys alone would
@@ -146,11 +131,9 @@ func TestALineAWrappingsPrefixRunsAcrossIsLinear(t *testing.T) {
 // detector and without.
 func TestALineOfManyPasswordKeysIsLinear(t *testing.T) {
 	t.Parallel()
-	read := func(text string) time.Duration {
-		start := time.Now()
+	read := func(text string) {
 		_ = Secrets(text)
 		_ = Settled(text)
-		return time.Since(start)
 	}
 	for name, group := range passwordKeyGroups {
 		for _, line := range []struct {
@@ -158,11 +141,7 @@ func TestALineOfManyPasswordKeysIsLinear(t *testing.T) {
 			of    func(group string, lineBytes int) string
 		}{{"after", keysBefore}, {"before", keysAfter}} {
 			short, long := line.of(group, 2<<10), line.of(group, 256<<10)
-			shortCost, longCost := time.Duration(1<<62), time.Duration(1<<62)
-			for range 3 {
-				shortCost, longCost = min(shortCost, read(short)), min(longCost, read(long))
-			}
-			if longCost > 3*shortCost {
+			if ok, shortCost, longCost := withinFactor(read, short, long, 3); !ok {
 				t.Errorf("%s: %v on a line that goes on for 256 KiB %s them against %v for 2 KiB — "+
 					"every key reads the line %s it", name, longCost, line.where, shortCost, line.where)
 			}
@@ -207,8 +186,8 @@ func keysAfter(group string, lineBytes int) string {
 // bytes. So the whole text is read once ([valueHolds]).
 //
 // A COMPARISON ACROSS SIZES, NOT ACROSS FUNCTIONS: Settled over 32 KiB against
-// eight times Settled over 4 KiB of the same lines, each timed as the fastest
-// of three interleaved reads, as the tests above are. This used to compare
+// eight times Settled over 4 KiB of the same lines, compared by
+// [withinFactor] as the tests above are. This used to compare
 // Settled with Secrets over the same text, but that ratio is a constant factor
 // between two different functions, 0.8 to 2.4 on a quiet machine, and the race
 // detector's overhead on a loaded runner moved it past the three times allowed
@@ -223,19 +202,11 @@ func keysAfter(group string, lineBytes int) string {
 // this fails, with the race detector and without.
 func TestALiveViewOfManyPasswordKeysCostsOneRead(t *testing.T) {
 	t.Parallel()
-	timed := func(text string) time.Duration {
-		start := time.Now()
-		_ = Settled(text)
-		return time.Since(start)
-	}
+	read := func(text string) { _ = Settled(text) }
 	const scale = 8
 	for name, group := range passwordKeyGroups {
 		small, large := linesOf(group, 4<<10, 256), linesOf(group, scale*4<<10, 256)
-		smallCost, largeCost := time.Duration(1<<62), time.Duration(1<<62)
-		for range 3 {
-			smallCost, largeCost = min(smallCost, timed(small)), min(largeCost, timed(large))
-		}
-		if largeCost > 3*scale*smallCost {
+		if ok, smallCost, largeCost := withinFactor(read, small, large, 3*scale); !ok {
 			t.Errorf("%s: Settled took %v over 32 KiB against %v over 4 KiB, more than %d "+
 				"times as much for %d times the bytes, so it reads the text again for every "+
 				"line it holds", name, largeCost, smallCost, 3*scale, scale)
@@ -269,4 +240,62 @@ func linesOf(group string, size, lineBytes int) string {
 		b.WriteByte('\n')
 	}
 	return b.String()
+}
+
+// How many reads of each text one measurement takes, in turn, keeping the
+// fastest of each, and how many measurements a comparison may take before it
+// fails.
+const (
+	interleavedReads = 5
+	measureRounds    = 3
+)
+
+// withinFactor reports whether reading long costs at most factor times what
+// reading short does, with the two costs of the last measurement taken.
+//
+// EACH MEASUREMENT IS THE FASTEST OF [interleavedReads] READS OF EACH, taken
+// in turn, so a runner busy for a moment slows both or neither. AND A
+// COMPARISON THAT FAILS IS MEASURED AGAIN, up to [measureRounds] times, and
+// fails only if every measurement does. A burst of load from the other
+// packages beside this one under the race detector can outlast every read of
+// one measurement (the live view's 32 KiB read 264ms against 4ms in CI, with
+// nothing quadratic in it), but it does not recur on every measurement; the
+// regressions these tests guard cost six to eighty times the factor on every
+// one, so a real regression still fails.
+func withinFactor(read func(string), short, long string, factor int) (bool, time.Duration, time.Duration) {
+	timed := func(text string) time.Duration {
+		start := time.Now()
+		read(text)
+		return time.Since(start)
+	}
+	var shortCost, longCost time.Duration
+	for range measureRounds {
+		shortCost, longCost = time.Duration(1<<62), time.Duration(1<<62)
+		for range interleavedReads {
+			shortCost, longCost = min(shortCost, timed(short)), min(longCost, timed(long))
+		}
+		if longCost <= time.Duration(factor)*shortCost {
+			return true, shortCost, longCost
+		}
+	}
+	return false, shortCost, longCost
+}
+
+// THE COMPARISON STILL FAILS A STEADY REGRESSION, measured again or not: a
+// read whose cost grows with the square of its text costs sixty-four times as
+// much for eight times the bytes on every measurement, and a linear one eight.
+// Mutation: report a pass after any round, or never measure again, and one of
+// the two cases here fails.
+func TestWithinFactorFailsWhatEveryMeasurementSays(t *testing.T) {
+	t.Parallel()
+	const unit = 20 * time.Microsecond
+	small, large := strings.Repeat("x", 4), strings.Repeat("x", 32)
+	square := func(text string) { time.Sleep(time.Duration(len(text)*len(text)) * unit) }
+	if ok, s, l := withinFactor(square, small, large, 3*8); ok {
+		t.Errorf("a square cost passed: %v against %v", l, s)
+	}
+	linear := func(text string) { time.Sleep(time.Duration(len(text)) * 50 * unit) }
+	if ok, s, l := withinFactor(linear, small, large, 3*8); !ok {
+		t.Errorf("a linear cost failed: %v against %v", l, s)
+	}
 }

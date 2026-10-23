@@ -26,6 +26,7 @@ import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { calendarWeeks, dayKey, dayLabel, filterPatchForGroup } from "~/lib/work.ts";
 import type { QueryName, WorkGroup, WorkProjectRow, WorkSummary } from "~/protocol/index.ts";
+import { installWindow } from "~/testing.tsx";
 import { withDerived } from "~/test/org.ts";
 
 vi.mock("~/lib/store-hooks.ts", async () => {
@@ -1440,6 +1441,29 @@ test("the first row draws the shape and the menus, the second cuts the answer", 
   expect(within(bar).queryByLabelText("Status")).toBeNull();
   expect(within(bar).queryByLabelText("Priority")).toBeNull();
   expect(within(bar).queryByLabelText("Assignee")).toBeNull();
+});
+
+// ON A PHONE THE ARRANGEMENT FOLDS INTO DISPLAY: the bar's one line cut Group
+// by at the edge and put Sort past it, so at a phone's width which work, Group
+// by and Sort open from Display and the bar keeps the chips and the count.
+// Mutation: keep them in the bar at every width and the bar holds them.
+test("on a phone, which work, Group by and Sort are in Display, not the bar", async () => {
+  const screenWidth = installWindow(390);
+  try {
+    serving({ work_items: { items: [], groups: [], complete: true } });
+    const { container } = mountWork();
+    await waitFor(() => expect(container.querySelector(".work-bar")).toBeTruthy());
+    const bar = container.querySelector(".work-bar") as HTMLElement;
+    expect(within(bar).queryByRole("combobox", { name: "Group by" })).toBeNull();
+    expect(within(bar).queryByRole("combobox", { name: "Sort" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Display" }));
+    const panel = await screen.findByRole("dialog", { name: "Display" });
+    expect(within(panel).getByRole("combobox", { name: "Which work" })).toBeTruthy();
+    expect(within(panel).getByRole("combobox", { name: "Group by" })).toBeTruthy();
+    expect(within(panel).getByRole("combobox", { name: "Sort" })).toBeTruthy();
+  } finally {
+    screenWidth.restore();
+  }
 });
 
 // ON A PHONE THE BAR'S RUN SCROLLS, AND SAYS SO: the edge with more past it

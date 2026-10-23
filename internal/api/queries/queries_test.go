@@ -278,7 +278,7 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"credential_pool": "admin", "fleet_broker": "admin",
 		"integrations": "admin", "retention": "admin", "a2a_channels": "admin",
 		"config": "admin", "config_audit": "admin", "config_diff": "admin",
-		"config_entities": "admin",
+		"config_entities": "admin", "limits": "admin", "sign_in_policy": "admin",
 
 		"work_items": "tracker", "work_comments": "tracker",
 		"work_item_turns": "tracker", "work_views": "tracker",

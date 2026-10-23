@@ -9,6 +9,7 @@
  * bands and wrong for a list whose fifth row is somebody's whole team.
  */
 
+import { UsersGlyph } from "@crewlethq/icons/glyphs";
 import { useMemo } from "react";
 import { BarList, Card, DATA_COLORS, Skeleton } from "@crewlethq/ui";
 import { href } from "~/app/router.tsx";
@@ -42,37 +43,43 @@ export function ByUnit({
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
   return (
-    <Card className="spend-card spend-list">
-      <div className="spend-card-head">
-        <h2 className="spend-title">By team</h2>
-        {words && <span className="spend-caption">{words}</span>}
-      </div>
-      <QueryState error={units.error} refusal={units.refusal} detail={units.detail} loading={false}>
-        {units.loading && !units.data ? (
-          <Skeleton height="4.5rem" />
-        ) : (
-          <BarList
-            className="spend-bars"
-            layout="beside"
-            limit={8}
-            moreLabel={(n) => plural(n, "more team")}
-            emptyLabel="No team's seats spent tokens in this window."
-            data={rows.map((b) => ({
-              id: b.group || "other",
-              label: b.other ? "Everyone else" : b.label || b.group,
-              sub: b.other
-                ? plural(b.folded, "team")
-                : b.seats
-                  ? plural(b.seats, "agent")
-                  : undefined,
-              value: b.total_tokens,
-              display: fmtCount(b.total_tokens),
-              href: teamHref(b.other ? null : unitByKey(index, b.group)),
-              color: DATA_COLORS[0],
-            }))}
-          />
-        )}
-      </QueryState>
+    <Card className="spend-card spend-list" padding="none">
+      <Card.Header icon={<UsersGlyph size="sm" />} subtitle={words ?? undefined}>
+        <Card.Title>By team</Card.Title>
+      </Card.Header>
+      <Card.Body padding="md">
+        <QueryState
+          error={units.error}
+          refusal={units.refusal}
+          detail={units.detail}
+          loading={false}
+        >
+          {units.loading && !units.data ? (
+            <Skeleton height="4.5rem" />
+          ) : (
+            <BarList
+              className="spend-bars"
+              layout="beside"
+              limit={8}
+              moreLabel={(n) => plural(n, "more team")}
+              emptyLabel="No team's seats spent tokens in this window."
+              data={rows.map((b) => ({
+                id: b.group || "other",
+                label: b.other ? "Everyone else" : b.label || b.group,
+                sub: b.other
+                  ? plural(b.folded, "team")
+                  : b.seats
+                    ? plural(b.seats, "agent")
+                    : undefined,
+                value: b.total_tokens,
+                display: fmtCount(b.total_tokens),
+                href: teamHref(b.other ? null : unitByKey(index, b.group)),
+                color: DATA_COLORS[0],
+              }))}
+            />
+          )}
+        </QueryState>
+      </Card.Body>
     </Card>
   );
 }

@@ -48,7 +48,12 @@ vi.mock("~/lib/viewer.ts", () => ({
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
     await vi.importActual<typeof import("~/lib/store-hooks.ts")>("~/lib/store-hooks.ts");
-  return { ...actual, useConnection: () => ({ connected: true, accessRefused: null }) };
+  // NO ORG: which services the company runs is not known, so none is hidden.
+  return {
+    ...actual,
+    useConnection: () => ({ connected: true, accessRefused: null }),
+    useOrg: () => null,
+  };
 });
 
 afterEach(() => {
@@ -159,7 +164,7 @@ test("the table's assignee is the resolved name, linking to the seat", () => {
   mount("table", [row({ assignee: "ada" })]);
   const link = screen.getByText("Ada Okonkwo").closest("a") as HTMLAnchorElement;
   expect(link).toBeTruthy();
-  expect(link.getAttribute("href")).toBe("#/agents/seats/ada");
+  expect(link.getAttribute("href")).toBe("#/company/org/seats/ada");
   // THE HANDLE IS STILL REACHABLE, on the hover title — it is what an operator
   // types into a filter, so resolving the name must not destroy it.
   expect(link.getAttribute("title")).toBe("@ada");

@@ -125,6 +125,9 @@ func everySeam(t *testing.T) queries.Sources {
 		// node is wired with them only where the feature is deployed.
 		Artifacts:    &queries.ArtifactsSource{},
 		ArtifactData: &queries.ArtifactDataSource{},
+		// THIS NODE'S SIGN-IN POSTURE, which internal/api fills from the
+		// Bootstrap on every node that serves the API.
+		SignIn: &queries.SignInPolicy{},
 	}
 }
 

@@ -190,14 +190,16 @@ function mount({
   answers = {},
   viewer = JANE,
   agents = [],
+  services,
 }: {
   answers?: Record<string, Answer>;
   viewer?: Record<string, unknown>;
   agents?: Record<string, unknown>[];
+  services?: Record<string, string>;
 } = {}) {
   const store = new Store();
   store.applyHealth(healthFrame({ nodes: 1 }));
-  store.applyOrg(withDerived(ORG) as never);
+  store.applyOrg(withDerived(services ? { ...ORG, services } : ORG) as never);
   store.applySeats(agents as never);
   const socket = new LiveSocket(store);
   socket.query = ((what: string, params?: Record<string, unknown>) => {
@@ -873,4 +875,20 @@ describe("who is looking", () => {
     expect(read.getAttribute("aria-disabled")).toBe("true");
     expect(reasonOf(read)).toContain(WRITE_REASONS.not_served);
   });
+});
+
+// WHERE THE COMPANY RUNS JIRA THE INBOX SAYS WHERE ASKS GO, in the list and in
+// the reading pane: the pane said "All clear. New updates open here.",
+// promising updates that cannot arrive. Mutation: keep the pane's default
+// copy and the Jira title is gone.
+test("on a Jira company the list and the empty pane say asks and mentions arrive in Jira", async () => {
+  mount({ services: { tracker: "jira", knowledge: "native" } });
+  await settle();
+  expect(
+    screen.getByText("Jira handles work items, so asks and mentions arrive there."),
+  ).toBeTruthy();
+  expect(screen.getByText("Asks and mentions arrive in Jira")).toBeTruthy();
+  expect(screen.queryByText("New updates open here.")).toBeNull();
+  // AND THE TRACKER'S NOTICES ARE NEVER ASKED FOR.
+  expect(asked.some((a) => a.kind === "work_inbox")).toBe(false);
 });

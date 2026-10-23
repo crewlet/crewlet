@@ -31,6 +31,9 @@ import { LiveSocket, Store } from "~/protocol/index.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 import { installWindow } from "~/testing.tsx";
 
+/** A company running every service built into Crewlet. */
+const EVERY = { tracker: true, knowledge: true } as const;
+
 afterEach(cleanup);
 
 // A STAR IS A SHORTCUT TO A PAGE, so it is offered on a page and nowhere else.
@@ -111,7 +114,7 @@ describe("the star", () => {
       return disabled;
     };
     expect(more(["account"])).toBe(false);
-    expect(more(["settings"])).toBe(true);
+    expect(more(["settings", "models"])).toBe(true);
   });
 
   // A SCREEN WHOSE OWN MENU CARRIES THE STAR (a knowledge page's More) gets
@@ -128,6 +131,8 @@ describe("the star", () => {
             <AppShell
               topbar={
                 <PageHeader
+                  runs={EVERY}
+                  grants={null}
                   crumbs={[]}
                   row={undefined}
                   counts={{}}
@@ -247,6 +252,8 @@ describe("the trail", () => {
         <AppShell
           topbar={
             <PageHeader
+              runs={EVERY}
+              grants={null}
               crumbs={[
                 { label: "Work", path: ["work"], icon: "square-kanban" },
                 { label: "All projects", switch: "project" },
@@ -304,6 +311,8 @@ describe("who is working", () => {
           <AppShell
             topbar={
               <PageHeader
+                runs={EVERY}
+                grants={null}
                 crumbs={[]}
                 row={undefined}
                 counts={{}}
@@ -434,6 +443,8 @@ describe("the section tabs fold what does not fit into More", () => {
             path={path}
             query={new URLSearchParams()}
             counts={{ queue: "2", checklist: "0" }}
+            runs={EVERY}
+            grants={null}
           />
         </Router>,
       );
@@ -485,21 +496,23 @@ describe("the section tabs fold what does not fit into More", () => {
 // draw theirs, so the two rows of tabs in the product read one way. And a
 // figure nobody published is not drawn.
 test("a section's figure rides beside its name, and only if published", () => {
-  const agents = WORKSPACES.find((w) => w.key === "agents")!;
+  const org = WORKSPACES.find((w) => w.key === "org")!;
   render(
     <Router>
       <SectionTabs
-        row={agents}
-        path={["agents"]}
+        row={org}
+        path={["company", "org"]}
         query={new URLSearchParams()}
-        counts={{ roster: "8", schedules: "6" }}
+        counts={{ roster: "8", teams: "6" }}
+        runs={EVERY}
+        grants={null}
       />
     </Router>,
   );
   const roster = screen.getByRole("link", { name: /Roster/ });
   expect(roster.textContent).toBe("Roster8");
-  expect(screen.getByRole("link", { name: /Schedules/ }).textContent).toBe("Schedules6");
-  expect(screen.getByRole("link", { name: /Teams/ }).textContent).toBe("Teams");
+  expect(screen.getByRole("link", { name: /Teams/ }).textContent).toBe("Teams6");
+  expect(screen.getByRole("link", { name: /Chart/ }).textContent).toBe("Chart");
 });
 
 // THE READING NOTE GIVES WAY TO THE TABS: a sentence about how to read a
@@ -522,10 +535,10 @@ describe("the reading note at the strip's end", () => {
 
 // ON A PHONE SETTINGS' COLUMN IS A PICKER, and whether it is open says whether
 // the reader has chosen a section. Folded on every arrival, Settings' own
-// address showed a phone reader one row reading "General" — and the You group
-// with their Account in it only behind a tap nothing told them to make. A deep
-// link still arrives folded, since the section it names starts right under
-// the picker, and any pick folds it. Mutation: start folded everywhere, or
+// address showed a phone reader one row naming its first section, and its
+// four groups only behind a tap nothing told them to make. A deep link still
+// arrives folded, since the section it names starts right under the picker,
+// and any pick folds it. Mutation: start folded everywhere, or
 // leave the list open after a pick that moves no path, and a case goes red.
 describe("Settings' section picker on a phone", () => {
   const settings = WORKSPACES.find((w) => w.key === "settings")!;
@@ -536,7 +549,14 @@ describe("Settings' section picker on a phone", () => {
   afterEach(() => window.restore());
 
   const column = (path: string[]) => (
-    <SectionColumn row={settings} path={path} grants={null} figures={{}} />
+    <SectionColumn
+      row={settings}
+      path={path}
+      query={new URLSearchParams()}
+      grants={null}
+      figures={{}}
+      runs={EVERY}
+    />
   );
   const toggle = () => document.querySelector<HTMLButtonElement>(".section-picker-toggle")!;
   const list = () => document.getElementById(toggle().getAttribute("aria-controls") ?? "")!;
@@ -548,41 +568,89 @@ describe("Settings' section picker on a phone", () => {
     return copy.textContent;
   };
 
-  test("arriving at Settings' own address opens the list, the reader's Account in it", () => {
-    render(column(["settings"]));
+  test("arriving at Settings' own address opens the list, every group in it", () => {
+    render(column(["settings", "models"]));
     expect(toggle().getAttribute("aria-expanded")).toBe("true");
     expect(toggle().closest(".section-picker")?.hasAttribute("data-open")).toBe(true);
-    expect(row("#/account")).not.toBeNull();
+    expect(row("#/settings/spend")).not.toBeNull();
+    expect(row("#/settings/storage")).not.toBeNull();
   });
 
   test("a link to a section arrives folded, and says it is a picker", () => {
     render(column(["settings", "people"]));
     expect(toggle().getAttribute("aria-expanded")).toBe("false");
-    expect(shown()).toBe("Section · People & access");
+    expect(shown()).toBe("Section · People");
   });
 
   test("a pick folds it, the section the reader is already on included", () => {
-    render(column(["settings"]));
-    fireEvent.click(row("#/settings"));
+    render(column(["settings", "models"]));
+    fireEvent.click(row("#/settings/models"));
     expect(toggle().getAttribute("aria-expanded")).toBe("false");
   });
 
   test("a pick that lands on Settings' own address leaves it folded; an arrival nobody picked opens it", () => {
     const view = render(column(["settings", "people"]));
-    fireEvent.click(row("#/settings"));
-    view.rerender(column(["settings"]));
-    expect(toggle().getAttribute("aria-expanded"), "a pick of General").toBe("false");
+    fireEvent.click(row("#/settings/models"));
+    view.rerender(column(["settings", "models"]));
+    expect(toggle().getAttribute("aria-expanded"), "a pick of Models & keys").toBe("false");
     view.rerender(column(["settings", "nodes"]));
     expect(toggle().getAttribute("aria-expanded"), "a link to Nodes").toBe("false");
     // THE SIDEBAR'S SETTINGS ROW, or Back: no pick in this list made it.
-    view.rerender(column(["settings"]));
+    view.rerender(column(["settings", "models"]));
     expect(toggle().getAttribute("aria-expanded"), "an arrival at Settings").toBe("true");
+  });
+
+  // A SECTION READING A SERVICE THE COMPANY DOES NOT RUN IS NOT DRAWN: Expensive
+  // tasks names its tasks by Crewlet Works' keys, so where the company runs
+  // none the Spend group is the readings alone. Mutation: draw the column's
+  // sections unfiltered and the row is there.
+  test("a section reading a service the company does not run is not drawn", () => {
+    render(
+      <SectionColumn
+        row={settings}
+        path={["settings", "spend"]}
+        query={new URLSearchParams()}
+        grants={null}
+        figures={{}}
+        runs={{ tracker: false, knowledge: true }}
+      />,
+    );
+    expect(row("#/settings/spend")).not.toBeNull();
+    expect(row("#/settings/spend/tasks")).toBeNull();
   });
 
   test("beside a section there is room for the list, and nothing is opened for the reader", () => {
     window.restore();
     window = installWindow(1440);
-    render(column(["settings"]));
+    render(column(["settings", "models"]));
     expect(toggle().getAttribute("aria-expanded")).toBe("false");
   });
+});
+
+// A TAB THE READER CANNOT OPEN IS LOCKED, as the sidebar's rows and the
+// Settings column's are: Live's Turns, Agent-to-agent and Event log looked
+// open to a Tracker-only reader and then refused. Mutation: drop the grants
+// from the tabs and no tab names what it needs.
+test("a section tab the reader cannot open names the access it needs", () => {
+  const live = WORKSPACES.find((w) => w.key === "live")!;
+  const locked = live.sections.filter((s) => s.grants && !s.grants.includes("tracker"));
+  expect(locked.length).toBeGreaterThan(0);
+  render(
+    <Router>
+      <SectionTabs
+        row={live}
+        path={live.sections[0]!.path}
+        query={new URLSearchParams()}
+        counts={{}}
+        runs={EVERY}
+        grants={["tracker"]}
+      />
+    </Router>,
+  );
+  for (const s of locked) {
+    const tab = document.querySelector(`[data-section="${s.key}"]`)!;
+    expect(tab.textContent).toMatch(/needs Admin access/);
+  }
+  const open = document.querySelector(`[data-section="${live.sections[0]!.key}"]`)!;
+  expect(open.textContent).not.toMatch(/needs/);
 });

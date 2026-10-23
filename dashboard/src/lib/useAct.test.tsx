@@ -20,7 +20,13 @@ import { useViewer, type ViewerState } from "./viewer.ts";
 import { WriteButton } from "~/components/WriteButton.tsx";
 import { session } from "~/protocol/session.ts";
 
-vi.mock("./store-hooks.ts", () => ({ useClient: vi.fn(), useConnection: vi.fn() }));
+// NO ORG: the company's services are not known, so every write is the
+// engine's to decide, as on a node that has not sent its chart yet.
+vi.mock("./store-hooks.ts", () => ({
+  useClient: vi.fn(),
+  useConnection: vi.fn(),
+  useOrg: () => null,
+}));
 vi.mock("./viewer.ts", () => ({ useViewer: vi.fn() }));
 
 const BOUND: ViewerState = {

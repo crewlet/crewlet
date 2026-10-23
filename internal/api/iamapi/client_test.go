@@ -23,8 +23,8 @@ import (
 // THE DASHBOARD OFFERS EXACTLY THE ENGINE'S PERMISSIONS, in its order, and
 // treats as apps exactly the engine's apps.
 //
-// People & access confers access — an invitation, an edit, a service account,
-// a token — by ticking it off `GRANTS`, and the access picker ticks and locks
+// People, Service accounts and API tokens confer access (an invitation, an
+// edit, a service account, a token) by ticking it off `GRANTS`, and the access picker ticks and locks
 // `APPS` when Admin is ticked, because admin includes every app ([iam.Expand]).
 // A permission the engine grew that the list lacks is one no administrator can
 // confer from the dashboard; one the list kept that the engine dropped is a box
@@ -176,7 +176,7 @@ func TestTheDashboardMintsWithinTheEnginesTokenLifetimes(t *testing.T) {
 
 // THE DASHBOARD WORDS EVERY FINDING KIND, IN THE ENGINE'S ORDER.
 //
-// People & access words each kind `GET /iam/check` reports off
+// People words each kind `GET /iam/check` reports off
 // `FINDING_KINDS`, which promises the order the report is sorted in — and it
 // was a copy nothing held: a kind the engine grew and the list lacked was drawn
 // as its raw code. Held in both directions and in order, against [iamapi.FindingKinds], which the
@@ -206,7 +206,7 @@ func TestTheDashboardWordsEveryFindingKindInTheEnginesOrder(t *testing.T) {
 
 // THE SEAT SURFACES READ WHAT THE SEAT LISTING SENDS.
 //
-// The org chart's card, the seat peek, a person's seat page and People & access
+// The org chart's card, the seat peek, a person's seat page and People
 // all read `GET /iam/seats` through four declarations — the answer, a seat, its
 // holder and its invitation — and a key renamed on the engine's side alone
 // would draw an invited seat as vacant on every one of them, with nothing

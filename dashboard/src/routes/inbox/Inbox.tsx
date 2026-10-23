@@ -22,6 +22,17 @@
  * keyboard. A task named on a row or in a byline opens beside the inbox, in
  * the frame's side panel.
  *
+ * # Where the company runs no Crewlet Works
+ *
+ * Updates, Snoozed and Earlier are the tracker's notices, and Mark all read
+ * marks them, so where the company runs another tracker or none
+ * (`lib/services.ts`) none of them is asked for or drawn: one line says where
+ * asks and mentions go instead ([elsewhereLine]). Needs you stays, because
+ * what fills it without the tracker still arrives: the seats stopped on a
+ * spent budget and the engine's conditions (the agents and budget pushes) and
+ * the coding runs parked on a question (`decisions`, which answers them
+ * whatever runs the tracker).
+ *
  * # What is done is shown, then the next item opens
  *
  * An answered question or run stays in its place in the list, struck through,
@@ -49,12 +60,13 @@ import { useFillScreen } from "~/app/fill.tsx";
 import { useKeymap } from "~/app/keymap.ts";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { RefusalNote, WriteButton } from "~/components/WriteButton.tsx";
-import { decisionSubjects, seatConditionsOf } from "~/components/DecisionRow.tsx";
+import { decisionSubjects, seatConditionsOf } from "~/lib/decisions.ts";
 import { QueryState } from "~/components/common.tsx";
 import { UnboundRemedy } from "~/components/people.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useViewer } from "~/lib/viewer.ts";
+import { useBackends, useServicesRun, type OrgServices } from "~/lib/services.ts";
 import { useNow } from "~/lib/clock.ts";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
@@ -144,23 +156,28 @@ export function Inbox() {
   // reconnect is never sent again.
   const owner = viewer.owner;
   const bound = owner !== "";
+  // THE NOTICES ARE CREWLET WORKS', and asked only where the company runs it:
+  // elsewhere the engine refuses every one of these reads.
+  const runs = useServicesRun();
+  const backends = useBackends();
+  const notices = bound && runs.tracker;
   const updatesRead = useQuery(
     "work_inbox",
-    bound ? { handle: owner, limit: INBOX_PAGE, unread: true, snoozed: "exclude" } : undefined,
-    { enabled: bound, pollMs: INBOX_POLL_MS, refetchOnInboxOf: owner },
+    notices ? { handle: owner, limit: INBOX_PAGE, unread: true, snoozed: "exclude" } : undefined,
+    { enabled: notices, pollMs: INBOX_POLL_MS, refetchOnInboxOf: owner },
   );
   usePageCoverage(updatesRead.data);
   // THE SNOOZED COUNT IS READ WHETHER OR NOT THE LIST IS OPEN, because the link
   // says it; `only` IS WHAT WAS PUT OFF, and nothing else.
   const snoozed = usePagedInbox(
-    bound ? { handle: owner, limit: INBOX_PAGE, snoozed: "only" } : undefined,
+    notices ? { handle: owner, limit: INBOX_PAGE, snoozed: "only" } : undefined,
     INBOX_POLL_MS,
     owner,
   );
   // EARLIER IS READ ONLY ONCE IT IS OPENED: every notice not snoozed, of which
   // the read ones are listed (`earlierOf`).
   const earlier = usePagedInbox(
-    bound && earlierOpen
+    notices && earlierOpen
       ? { handle: owner, limit: INBOX_PAGE, unread: false, snoozed: "exclude" }
       : undefined,
     INBOX_POLL_MS,
@@ -171,7 +188,9 @@ export function Inbox() {
     pollMs: INBOX_POLL_MS,
   });
   // THE SNOOZE BOUND, so a preset the engine would refuse is never offered.
-  const person = useQuery("work_person", bound ? { handle: owner } : undefined, { enabled: bound });
+  const person = useQuery("work_person", notices ? { handle: owner } : undefined, {
+    enabled: notices,
+  });
   const attention = useAttention();
 
   const rows = useMemo(
@@ -184,9 +203,9 @@ export function Inbox() {
         // say why a reader who cannot act cannot.
         subjects: bound ? decisionSubjects(decisions.data, seatConditionsOf(agents)) : [],
         conditions: conditionsToDecide(attention),
-        notices: bound ? (updatesRead.data?.notices ?? []) : [],
+        notices: notices ? (updatesRead.data?.notices ?? []) : [],
       }),
-    [bound, decisions.data, agents, attention, updatesRead.data],
+    [bound, notices, decisions.data, agents, attention, updatesRead.data],
   );
 
   const [settled, setSettled] = useState<ReadonlyMap<string, Settled>>(new Map());
@@ -299,7 +318,7 @@ export function Inbox() {
   const loaded = updatesRead.data?.notices ?? [];
   const quiet = inboxQuiet({
     answer: updatesRead.data,
-    bound,
+    bound: notices,
     error: Boolean(updatesRead.error || decisions.error),
     shown: needs.length + rows.updates.length,
     watched: watchedIn("seat"),
@@ -313,9 +332,14 @@ export function Inbox() {
 
   return (
     <div className="inbox-frame" data-phone-pane={phone && named ? "true" : undefined}>
-      <PageActions>
-        <MarkAllRead through={bound ? readThrough(loaded) : null} />
-      </PageActions>
+      {/* MARK ALL READ IS THE TRACKER'S: hidden where the company runs none,
+          and otherwise drawn for every reader, held with its reason where
+          there is nothing of theirs to mark. */}
+      {runs.tracker && (
+        <PageActions>
+          <MarkAllRead through={notices ? readThrough(loaded) : null} />
+        </PageActions>
+      )}
 
       {/* THREE VIEWER STATES, three sentences, and an unbound reader's says
           what binding would add (`UnboundRemedy`): it is a service account or
@@ -364,10 +388,11 @@ export function Inbox() {
             titles={titles}
             index={index}
             now={now}
-            loading={bound && updatesRead.loading && !updatesRead.data}
-            quiet={quiet}
+            loading={notices && updatesRead.loading && !updatesRead.data}
+            quiet={runs.tracker ? quiet : null}
             more={Boolean(updatesRead.data?.next_cursor)}
-            bound={bound}
+            bound={notices}
+            elsewhere={runs.tracker ? null : elsewhereLine(backends?.tracker ?? null)}
             refusal={
               // A READ THAT FAILED IS SAID, never drawn as a quiet list: each
               // read's own refusal, where the rows it would have given go.
@@ -404,6 +429,7 @@ export function Inbox() {
         {showPane && (
           <InboxPane
             row={selected}
+            empty={runs.tracker ? undefined : paneElsewhere(backends?.tracker ?? null)}
             index={index}
             now={now}
             zone={zone}
@@ -418,6 +444,33 @@ export function Inbox() {
       </div>
     </div>
   );
+}
+
+/**
+ * Where asks and mentions go where the company runs no Crewlet Works, as far
+ * as the engine has said which tracker it runs.
+ */
+export function elsewhereLine(tracker: OrgServices["tracker"] | null): string {
+  if (tracker === "jira") return "Jira handles work items, so asks and mentions arrive there.";
+  if (tracker === "none") {
+    return "The company runs no work tracker, so no asks or mentions arrive here.";
+  }
+  return "Work items live outside Crewlet, so asks and mentions don't arrive here.";
+}
+
+/**
+ * What the reading pane says with nothing open where the company runs no
+ * Crewlet Works: "All clear. New updates open here." promised updates that
+ * cannot arrive. It says where asks and mentions go instead, and what still
+ * comes here.
+ */
+export function paneElsewhere(tracker: OrgServices["tracker"] | null): {
+  title: string;
+  description: string;
+} {
+  const description = "Seats stopped on a budget and the engine's conditions still arrive here.";
+  if (tracker === "jira") return { title: "Asks and mentions arrive in Jira", description };
+  return { title: "No asks or mentions arrive here", description };
 }
 
 /**

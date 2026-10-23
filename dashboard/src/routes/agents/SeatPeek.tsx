@@ -72,6 +72,7 @@
  * is theirs, at `#/account`. No other seat draws it.
  */
 
+import { useServicesRun, useServicesAsk } from "~/lib/services.ts";
 import { useMemo, useState } from "react";
 import {
   Button,
@@ -234,8 +235,11 @@ function SeatPeekBody({
   const item = ref?.key ? itemAddress(turnItem(ref)) : "";
 
   // THE THREE READS — see the file's doc.
+  // THE TRACKER'S TWO, asked only of a company running Crewlet Works.
+  const runs = useServicesRun();
+  const ask = useServicesAsk();
   const workload = useQuery("work_workload", undefined, {
-    enabled: viewer.tracker,
+    enabled: viewer.tracker && runs.tracker,
     pollMs: 60_000,
   });
   // THE FLEET'S LEASES ARE THE DEPLOYMENT'S, read on Admin: asked only of an
@@ -244,7 +248,7 @@ function SeatPeekBody({
   const turns = useQuery(
     "work_item_turns",
     { id: item, limit: 1 },
-    { enabled: viewer.tracker && state === "working" && item !== "" },
+    { enabled: viewer.tracker && ask.tracker && state === "working" && item !== "" },
   );
 
   const ordinal =
@@ -430,28 +434,33 @@ function SeatPeekBody({
           </>
         )}
 
-        <dt>Open work</dt>
-        <dd>
-          {viewer.loading ? (
-            <EmptyValue label="Checking your access" />
-          ) : !viewer.tracker ? (
-            // NOT ASKED: the open work is the tracker's, and a reader without
-            // it is told what would show it rather than a refusal.
-            <EmptyValue label={`Needs ${accessNames([TRACKER])} access`} />
-          ) : workload.error ? (
-            <EmptyValue label="The tracker did not answer" />
-          ) : !workload.data ? (
-            <EmptyValue label="Reading the tracker" />
-          ) : load && load.open > 0 ? (
-            <a className="t-link" href={href(["work", "tasks"], { assignee: seat.handle })}>
-              {plural(load.open, "task")}
-              {load.blocked > 0 && ` · ${load.blocked} blocked`}
-              {load.overdue > 0 && ` · ${load.overdue} overdue`}
-            </a>
-          ) : (
-            "Nothing open"
-          )}
-        </dd>
+        {/* CREWLET WORKS' OPEN TASKS, drawn only where the company runs it. */}
+        {runs.tracker && (
+          <>
+            <dt>Open work</dt>
+            <dd>
+              {viewer.loading ? (
+                <EmptyValue label="Checking your access" />
+              ) : !viewer.tracker ? (
+                // NOT ASKED: the open work is the tracker's, and a reader without
+                // it is told what would show it rather than a refusal.
+                <EmptyValue label={`Needs ${accessNames([TRACKER])} access`} />
+              ) : workload.error ? (
+                <EmptyValue label="The tracker did not answer" />
+              ) : !workload.data ? (
+                <EmptyValue label="Reading the tracker" />
+              ) : load && load.open > 0 ? (
+                <a className="t-link" href={href(["work", "tasks"], { assignee: seat.handle })}>
+                  {plural(load.open, "task")}
+                  {load.blocked > 0 && ` · ${load.blocked} blocked`}
+                  {load.overdue > 0 && ` · ${load.overdue} overdue`}
+                </a>
+              ) : (
+                "Nothing open"
+              )}
+            </dd>
+          </>
+        )}
 
         {!human && tools.length > 0 && (
           <>

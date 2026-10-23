@@ -182,11 +182,11 @@ const markSentences = (el: HTMLElement) => markNames(el).map(([tooltip]) => tool
 describe("which chart", () => {
   test("the chart the builder hands in is the one drawn, whatever the URL says", () => {
     // The Builder owns the `chart` param; a second reading here could disagree.
-    location.hash = "#/agents/edit?view=visualization&chart=reporting";
+    location.hash = "#/company/org/edit?view=visualization&chart=reporting";
     mount();
     expect(screen.getByRole("tree", { name: "Structure chart" })).toBeDefined();
     cleanup();
-    location.hash = "#/agents/edit?view=visualization&chart=structure";
+    location.hash = "#/company/org/edit?view=visualization&chart=structure";
     mount(undefined, { chart: "reporting" });
     expect(screen.getByRole("tree", { name: "Reporting chart" })).toBeDefined();
   });
@@ -1801,7 +1801,7 @@ describe("adding a node in the chart", () => {
   /*
    * AND THE FORM SAYS WHERE, ON SCREEN. The canvas eases onto the ghost, and
    * at the company's root the ghost is a card wide of the parent at the end
-   * of a long branch: arriving from Agents › Add seat, the root and the
+   * of a long branch: arriving from Org chart › Add seat, the root and the
    * siblings the node joins were off the canvas and nothing drawn said where
    * it would land. Said once to a screen reader, which the region's own name
    * already tells on the way in.

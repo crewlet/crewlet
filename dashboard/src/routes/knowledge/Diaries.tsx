@@ -275,7 +275,7 @@ export function Diary({ handle }: { handle: string }) {
               <p className="t-caption">
                 <a
                   className="t-link prose-link"
-                  href={href(["agents", "seats", handle], { tab: "memory" })}
+                  href={href(["company", "org", "seats", handle], { tab: "memory" })}
                 >
                   {plural(data.skills_total, "learned skill")} and{" "}
                   {plural(data.counterparties_total, "colleague")} remembered

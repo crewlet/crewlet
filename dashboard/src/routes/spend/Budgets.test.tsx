@@ -1,5 +1,5 @@
 /**
- * Spend › Budgets, rendered over wire-shaped answers, with the configuration
+ * Company › Budgets, rendered over wire-shaped answers, with the configuration
  * surface behind the ceiling editor stubbed at `fetch`.
  *
  * What these hold, one case each: every scope states all three windows; a
@@ -105,7 +105,7 @@ const READER = { login: "", grants: [], handle: "", owner: "", name: "", kind: "
 let budgetAsks = 0;
 
 function mount(budgets: BudgetsAnswer, viewer: Record<string, unknown> = OPERATOR) {
-  location.hash = "#/spend/budgets";
+  location.hash = "#/company/budgets";
   budgetAsks = 0;
   const store = new Store();
   store.applyHealth(healthFrame({ applied_epoch: 4 }));

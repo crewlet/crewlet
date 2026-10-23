@@ -1,10 +1,10 @@
 /**
- * The company's units: Agents › Teams, one unit's page and one unit's peek.
+ * The company's units: Org chart › Teams, one unit's page and one unit's peek.
  *
  * # Teams is the tree of units; the chart is the tree of people
  *
- * `#/agents` (`OrgChart.tsx`) draws who reports to whom, one card per seat.
- * `#/agents/teams` draws the UNITS — what each is for, what it was told to do
+ * `#/company/org` (`OrgChart.tsx`) draws who reports to whom, one card per seat.
+ * `#/company/org/teams` draws the UNITS, what each is for, what it was told to do
  * (its goals, which moved here from the charter: a unit's goals are the
  * unit's, and filed under the company's settings they read as company
  * policy), who leads it, which project its work is filed under, and the seats
@@ -17,7 +17,7 @@
  *
  * # A unit is an object with a page
  *
- * `UnitScreen` is that page, at `#/agents/teams/{unit}`. It existed as a query
+ * `UnitScreen` is that page, at `#/company/org/teams/{unit}`. It existed as a query
  * key on the org screen (`#/org?unit=`), which meant a team could not be
  * linked to, could not carry its own tabs, and was one filter away from being
  * lost.
@@ -320,7 +320,7 @@ export function UnitBlock({
 }
 
 /**
- * Agents › Teams: every unit, nested, with what it is for, what it was told to
+ * Org chart › Teams: every unit, nested, with what it is for, what it was told to
  * do, who leads it, where its work is filed and who is in it.
  *
  * The seats above every unit come first, as their own block: they are part
@@ -411,7 +411,7 @@ export function UnitScreen({ id }: { id: string }) {
   return (
     <>
       <PageActions>
-        <a className="t-link" href={href(["agents"])}>
+        <a className="t-link" href={href(["company", "org"])}>
           Chart →
         </a>
       </PageActions>

@@ -81,7 +81,7 @@ export function SeatChip({
       // The affordance is the hover state and the cursor.
       className="row seat-chip"
       style={{ gap: "var(--spacing-2)", minWidth: 0 }}
-      href={href(["agents", "seats", target])}
+      href={href(["company", "org", "seats", target])}
     >
       {/* THE KIND IS THE OUTLINE: the kit draws a person as a circle and an
           agent as a squircle, and that is the one cue telling them apart. A

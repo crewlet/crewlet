@@ -23,7 +23,7 @@ import {
   snoozePresets,
   type InboxRow,
 } from "./model.ts";
-import type { DecisionSubject } from "~/components/DecisionRow.tsx";
+import type { DecisionSubject } from "~/lib/decisions.ts";
 import type { SandboxRun, WorkAskRow, WorkInboxNotice } from "~/protocol/index.ts";
 import { itemAddress } from "~/lib/work.ts";
 import { indexOrg } from "~/lib/seats.ts";

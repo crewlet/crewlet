@@ -1,6 +1,6 @@
 /**
  * The most expensive tasks: on the overview, the top three; at
- * `#/spend/tasks`, the list — every task last changed inside the window,
+ * `#/settings/spend/tasks`, the list, every task last changed inside the window,
  * most tokens first, each saying what drove it.
  *
  * A TASK'S TOKENS ARE ITS WHOLE LIFE'S. The tracker charges a turn to one work
@@ -22,10 +22,11 @@
  * overview is everybody's, a task is the tracker's, and a question the engine
  * would refuse drew its refusal — a "Sign in" callout to somebody already
  * signed in — on every visit; the card says what would open it instead, as the
- * median tile beside it does. The list at `#/spend/tasks` is its own section,
+ * median tile beside it does. The list at `#/settings/spend/tasks` is its own section,
  * drawn locked by the navigation for the same reader.
  */
 
+import { SquareKanbanGlyph } from "@crewlethq/icons/glyphs";
 import { Card, Skeleton, TableKeyCell, TableNumberCell } from "@crewlethq/ui";
 import { href } from "~/app/router.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
@@ -93,9 +94,9 @@ export function ExpensiveTasksCard({
     // same lock this card already says.
     return (
       <Card className="spend-card" padding="none">
-        <div className="spend-card-head">
-          <h2 className="spend-title">Most expensive tasks</h2>
-        </div>
+        <Card.Header icon={<SquareKanbanGlyph size="sm" />}>
+          <Card.Title>Most expensive tasks</Card.Title>
+        </Card.Header>
         <p className="spend-card-body spend-caption">{`Needs ${accessNames([TRACKER])} access`}</p>
       </Card>
     );
@@ -103,12 +104,19 @@ export function ExpensiveTasksCard({
   const rows = answer.data?.items ?? [];
   return (
     <Card className="spend-card" padding="none">
-      <div className="spend-card-head">
-        <h2 className="spend-title">Most expensive tasks</h2>
-        <a className="t-link spend-caption" href={href(["spend", "tasks"], { window })}>
-          All
-        </a>
-      </div>
+      <Card.Header
+        icon={<SquareKanbanGlyph size="sm" />}
+        actions={
+          <a
+            className="t-link spend-caption"
+            href={href(["settings", "spend", "tasks"], { window })}
+          >
+            All
+          </a>
+        }
+      >
+        <Card.Title>Most expensive tasks</Card.Title>
+      </Card.Header>
       <QueryState
         error={answer.error}
         refusal={answer.refusal}
@@ -151,7 +159,7 @@ export function ExpensiveTasksCard({
   );
 }
 
-/** `#/spend/tasks`: the list. */
+/** `#/settings/spend/tasks`: the list. */
 export function ExpensiveTasks() {
   const zone = useOrg()?.timezone;
   const now = useNow();
@@ -206,12 +214,12 @@ export function ExpensiveTasks() {
         <TimeRangePicker range={range} ariaLabel="Window" />
       </PageActions>
       <Card className="spend-card spend-tasks" padding="none">
-        <div className="spend-card-head">
-          <h2 className="spend-title">Most expensive tasks</h2>
-          <span className="spend-caption">
-            {words ? `${words} · ` : ""}tasks changed in this window · lifetime tokens
-          </span>
-        </div>
+        <Card.Header
+          icon={<SquareKanbanGlyph size="sm" />}
+          subtitle={`${words ? `${words} · ` : ""}tasks changed in this window · lifetime tokens`}
+        >
+          <Card.Title>Most expensive tasks</Card.Title>
+        </Card.Header>
         <QueryState
           error={answer.error}
           refusal={answer.refusal}

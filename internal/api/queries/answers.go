@@ -178,6 +178,11 @@ type Sources struct {
 	// exactly the edits that surface admits.
 	CompanyWriters []string
 
+	// SignIn is this node's sign-in posture, read from its Tier A
+	// `api.auth` ([SignInPolicyOf]). Nil leaves `sign_in_policy`
+	// unregistered; internal/api fills it from the Bootstrap it is handed.
+	SignIn *SignInPolicy
+
 	// Coord is the lease table: the fleet's one shared answer to "which
 	// node holds what". Nil leaves the fleet question unregistered.
 	Coord coord.Backend
@@ -655,6 +660,11 @@ func Register(r *Registry, s Sources) {
 		// which is a real state an operator needs to see and is not the
 		// same as the question being unavailable here.
 		r.Register("budgets", Everybody(), s.budgets)
+		// THE CAPS A TURN IS HELD TO, as the engine enforces them, beside
+		// its defaults: read from the company document, and the
+		// configuration's, so an administrator's like the `config`
+		// question it is read beside. See [LimitRow].
+		r.Register("limits", Requires(iam.GrantAdmin), s.companyLimits)
 		// Both are projections of the epoch: what the company DECLARES,
 		// which is a different question from what it has done.
 		r.Register("schedules", Everybody(), s.schedules)
@@ -706,6 +716,12 @@ func Register(r *Registry, s Sources) {
 		// machine to take out to lose the company's history — and it is
 		// read by a person or their cron.
 		r.Register("retention", Requires(iam.GrantAdmin), s.retention)
+	}
+	if s.SignIn != nil {
+		// HOW A PERSON SIGNS IN HERE, for the administrators who answer
+		// for it: posture rather than a secret, but the deployment's, read
+		// beside the people and tokens it governs. See [SignInPolicy].
+		r.Register("sign_in_policy", Requires(iam.GrantAdmin), s.signInPolicy)
 	}
 	// The NATIVE backends, each gated on its own reader: a company can run
 	// the native tracker on Confluence, or the native knowledge base on
@@ -773,18 +789,26 @@ func Register(r *Registry, s Sources) {
 		r.Register("work_routing", Requires(iam.GrantTracker), s.workRouting)
 		r.Register("work_catalogue", Requires(iam.GrantTracker), s.workCatalogue)
 		r.Register("work_person", Requires(iam.GrantTracker), s.workPerson)
-		// THE LANDING SCREEN'S THREE. The series is the tracker's history
-		// replayed backward from today's census; the feed merges the
-		// tracker's completions, creates and hand-offs with the pages'
-		// and the schedules' where this node keeps them; and what is
-		// waiting on a person is their open asks beside the coding runs
-		// parked on a question to them — scoped as `work_my_work` is. See
-		// home.go. The feed and the decisions are the overview's and
-		// everybody's: each row is filtered by the app it belongs to
-		// ([authz.Shows]), and a person's own asks need no tracker to be
-		// listed, since answering them needs none (§5a of ADR-0033).
+		// THE LANDING SCREEN'S SERIES: the tracker's history replayed
+		// backward from today's census. See home.go.
 		r.Register("work_flow", Requires(iam.GrantTracker), s.workFlow)
+	}
+	// THE LANDING SCREEN'S TWO MERGED ANSWERS, registered wherever ANY half
+	// they merge is wired rather than behind the tracker alone: the feed
+	// merges the tracker's completions, creates and hand-offs with the
+	// pages' and the schedules' where this node keeps them, and what is
+	// waiting on a person is their open asks beside the coding runs parked
+	// on a question to them, scoped as `work_my_work` is. Each leaves out a
+	// half that is not kept here ([keptHere]) and answers the rest, so a
+	// company on Jira still sees its schedules' runs and the runs waiting on
+	// a person. Both are the overview's and everybody's: each row is
+	// filtered by the app it belongs to ([authz.Shows]), and a person's own
+	// asks need no tracker to be listed, since answering them needs none
+	// (section 5a of ADR-0033).
+	if s.Work != nil || s.Pages != nil || s.Usage != nil {
 		r.Register("company_feed", Everybody(), s.companyFeed)
+	}
+	if s.Work != nil || s.Sandbox != nil {
 		r.Register("decisions", Everybody(), s.decisions)
 	}
 	if s.Pages != nil {

@@ -447,8 +447,16 @@
 
 /* THE ⌘K FIELD SITS ON THE NAV'S OWN GUTTER, so its left edge is the left
    edge every nav row's background starts at. */
+/* THE TRIGGER'S GLYPH ON THE NAV'S GLYPH COLUMN: a nav row's glyph stands
+   the gutter and the row's pad in, and the trigger's the gutter, its own
+   1px edge and its pad, which put it a pixel left of every row under it. The
+   inset makes up the difference from the kit's own measures. */
 .side-search {
   padding: 0 var(--size-nav-gutter) var(--spacing-3);
+  padding-inline-start: calc(
+    var(--size-nav-gutter) + var(--size-nav-row-pad) - (var(--spacing-2) + var(--spacing-1) / 2) -
+      1px
+  );
 }
 
 /* A SIDEBAR SECTION THAT COULD NOT BE DRAWN (`app/boundaries.tsx`): its
@@ -492,18 +500,6 @@
   align-items: center;
   gap: var(--spacing-1);
   min-width: 0;
-}
-
-/* A STATE WAITING ON THE READER — the tools the engine says need a person —
-   is the kit's badge in the WARNING tone, as the approved Settings artboard
-   draws Integrations' figure ("pill need"). The kit fills its badge with the
-   accent because its one badge is an unread count; this figure is a state,
-   and colour is state, so in the accent it read as a second inbox. The soft
-   fill and its ink are the feedback pair every warning tag wears, on the
-   rail and on the raised current row alike. */
-.section-row-attention .crewlet-nav-item__badge {
-  background: var(--color-feedback-warning-soft);
-  color: var(--color-feedback-warning-ink);
 }
 
 /* THE ENGINE PANEL'S INSET. The row that opens it and every part inside it
@@ -596,7 +592,11 @@
   gap: var(--spacing-1) var(--spacing-2);
   height: auto;
   min-height: var(--page-bar-h);
-  padding: var(--spacing-1) var(--spacing-4) var(--spacing-1) var(--spacing-5);
+  /* THE KIT'S INLINE INSET (`AppShell`'s top bar): the content's own on both
+     sides and, at the end, the scroller's measured gutter, so the bar's last
+     control ends over the content's edge. A 16px end of our own put every
+     page's actions 15px past the cards under them with classic scrollbars. */
+  padding-block: var(--spacing-1);
 }
 
 /* THE TRAIL IS THE KIT'S `Breadcrumb`, and so are its rules: it gives way
@@ -665,6 +665,13 @@
 .page-actions {
   flex: 0 1 auto;
   min-width: 0;
+}
+/* A SCREEN WITH NO ACTIONS LEAVES NO GAP: the empty slot was still a flex
+   item, and the row's gap stood the star 8px short of the bar's gutter on
+   every page that adds nothing, out of line with the last control on every
+   page that does. */
+.page-actions:empty {
+  display: none;
 }
 
 /* THE FRAME'S STAR AND COPY LINK are one element only so the phone rule below
@@ -1129,8 +1136,12 @@
 }
 
 /* A CARD'S BODY (`flush`): the card is the frame, so the grid draws none of
-   its own — one rule parts it from the card's head above. */
-.grid-wrap[data-flush] {
+   its own, and one rule parts it from the card's head above. AND EVERY GRID
+   INSIDE A CARD IS ONE, told or not: a bordered grid a pixel inside a card's
+   border was a table inset in the frame the card already is, and it was on
+   fifteen pages because each had to remember the prop. */
+.grid-wrap[data-flush],
+.crewlet-card .grid-wrap {
   border: 0;
   border-top: 1px solid var(--color-border-default);
   border-radius: 0;
@@ -1139,7 +1150,7 @@
 /* UNDER THE KIT'S CARD HEADER, THE HEADER'S RULE IS THAT ONE. The header
    draws a rule beneath itself, and the grid's own stood a pixel under it: two
    lines where the card has one edge between its head and its body. */
-.crewlet-card__header + .grid-wrap[data-flush] {
+.crewlet-card__header + .grid-wrap {
   border-top: 0;
 }
 
@@ -1471,6 +1482,15 @@
   max-width: var(--size-measure);
   text-wrap: pretty;
 }
+/* A PAGE'S LEDE IN A COLUMN THAT SETS ITS OWN RHYTHM keeps no margin of its
+   own: the screen's content and a Settings section are flex columns with a
+   gap, and the lede's 12px on top of it stood the first card 32px under the
+   lede while every other block on the page was 20px apart. */
+.app .crewlet-app-shell__content > .page-note,
+.section-body > .page-note,
+.col > .page-note {
+  margin-bottom: 0;
+}
 
 /* ---- An object's own facts ------------------------------------------------
    ONE rail, replacing `.kv` (flat, no sections) and `.work-props` (sections,
@@ -1736,37 +1756,15 @@ button.histogram-bar[data-empty]:focus-visible > .histogram-fill {
    width at which a layout goes single-pane. The navigation needs nothing
    here: below `breakpoint.shell` the sidebar is already the kit's drawer, and
    the sheet the whole window. What changes at a phone's width is the grid. */
-@media (width < 640px) {
-  /* A PHONE KEEPS THE PALETTE'S KEYS ON ONE LINE: the mode pill and the
-     scope note are what its band can lose without losing a key — the tabs
-     already say the scope, and the mode is a property of the answer, which
-     still reads — and so is the ask chord, which a phone has no keyboard to
-     press (its row is still a row, pressed like any other). */
-  .palette-scope-note,
-  .palette-mode,
-  .palette-keys > .palette-keys-chord {
-    display: none;
-  }
-  /* AND ITS SOURCES WRAP: four chips on one 326px line are four numbers and
-     an ellipsis each. The one-line rule is for the first screen of a desktop
-     window, where the actions under the answer have to stay in view; a
-     phone scrolls to them in any case. */
-  .palette-answer-sources {
-    flex-wrap: wrap;
-  }
-
-  /* The bar's inset tightens to the sheet's own phone inset, so the trail
-     starts where the screen's content does. */
-  .app .page-bar {
-    padding-inline: var(--spacing-3);
-  }
-
-  .section-tabs {
-    padding-inline: var(--spacing-3);
-  }
-
+/* ---- Settings' column folds where its section would be too narrow -------
+   Below `SECTION_COLUMN_MIN` (app/layout.ts: the sidebar, the sheet, the
+   column and a section floor of 720px) the column beside the section left
+   it 489px at 1024: the Audit log's columns were drawn 46px wide and the stat
+   tiles cut their figures. So the column folds to the one-row picker the
+   phone draws, and the section takes the screen's width. */
+@media (width < 1212px) {
   /* ONE PANE: the Settings column stacks above the section rather than
-     taking a third of the phone beside it.
+     taking a third of a narrow window beside it.
 
      AND THE SECTION TAKES WHAT IS LEFT. The frame is at least the view's
      height, and two `auto` rows split a short section's spare height between
@@ -1793,8 +1791,11 @@ button.histogram-bar[data-empty]:focus-visible > .histogram-fill {
   /* FOLDED TO ONE ROW, which names where the reader is. Stacked whole, the
      Settings column pushed every section's own content about 520px down —
      below the fold on Nodes and Secrets. */
+  /* ON THE SECTION'S OWN GUTTER, so the toggle starts where the section's
+     content does: the screen padding beside a folded column, the phone's
+     16px below the phone breakpoint. */
   .section-picker {
-    padding: var(--spacing-2) var(--spacing-3);
+    padding: var(--spacing-2) var(--spacing-5);
   }
   .section-picker-toggle {
     display: flex;
@@ -1802,7 +1803,9 @@ button.histogram-bar[data-empty]:focus-visible > .histogram-fill {
     gap: var(--spacing-2);
     width: 100%;
     min-height: var(--size-target-min);
-    padding: 0 var(--spacing-2);
+    /* THE ROWS' OWN INSET, less the toggle's border: the toggle's glyph and
+       name stand over the glyphs and names of the list it unfolds. */
+    padding: 0 calc(var(--size-nav-row-pad) - 1px);
     border: 1px solid var(--color-border-default);
     border-radius: var(--radius-sm);
     background: var(--color-surface-elevated);
@@ -1842,9 +1845,44 @@ button.histogram-bar[data-empty]:focus-visible > .histogram-fill {
   .section-picker[data-open] .section-picker-list {
     padding-top: var(--spacing-2);
   }
+  /* THE LIST TAKES NO GUTTER OF ITS OWN inside the picker, which is inset
+     already: with the kit's rail gutter on top, its glyphs and names sat 11px
+     right of the toggle's. */
+  .section-picker-list > .crewlet-sidebar-nav {
+    padding-inline: 0;
+  }
+}
+
+@media (width < 640px) {
+  /* A PHONE KEEPS THE PALETTE'S KEYS ON ONE LINE: the mode pill and the
+     scope note are what its band can lose without losing a key, the tabs
+     already say the scope, and the mode is a property of the answer, which
+     still reads, and so is the ask chord, which a phone has no keyboard to
+     press (its row is still a row, pressed like any other). */
+  .palette-scope-note,
+  .palette-mode,
+  .palette-keys > .palette-keys-chord {
+    display: none;
+  }
+  /* AND ITS SOURCES WRAP: four chips on one 326px line are four numbers and
+     an ellipsis each. The one-line rule is for the first screen of a desktop
+     window, where the actions under the answer have to stay in view; a
+     phone scrolls to them in any case. */
+  .palette-answer-sources {
+    flex-wrap: wrap;
+  }
+
+  /* ONE GUTTER ON A PHONE: the tabs and a Settings section start where
+     every other screen's content does, the kit's 16px. */
+  .section-tabs {
+    padding-inline: var(--spacing-4);
+  }
 
   .section-body {
-    padding: var(--spacing-4) var(--spacing-3) var(--spacing-9);
+    padding: var(--spacing-4) var(--spacing-4) var(--spacing-9);
+  }
+  .section-picker {
+    padding-inline: var(--spacing-4);
   }
 
   /* ---- A ROW IS A CARD ON A PHONE ---------------------------------------

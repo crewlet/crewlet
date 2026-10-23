@@ -342,7 +342,7 @@ export function CounterpartyRow({ profile, now }: { profile: CounterpartyProfile
     <div className="thread-entry">
       <div className="row gap-1">
         {profile.subject.handle ? (
-          <a className="t-cell" href={href(["agents", "seats", profile.subject.handle])}>
+          <a className="t-cell" href={href(["company", "org", "seats", profile.subject.handle])}>
             <strong>{profile.subject.name || profile.subject.handle}</strong>
           </a>
         ) : (

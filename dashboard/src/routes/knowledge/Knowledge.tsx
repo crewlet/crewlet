@@ -235,10 +235,15 @@ function Tiles() {
     refusal: feed.refusal,
     loading: feed.loading && !feed.data,
   };
+  // NOTHING WRITTEN AT ALL IS SAID ONCE, by the newest change's tile: a
+  // second tile three rows tall holding "Nothing has been written yet" beside
+  // it said the same in a 417px box. The grid then has no Recently written
+  // column (`data-written="none"`, screens.css).
+  const nothing = !state.loading && !state.error && runs.length === 0;
   return (
-    <div className="knowledge-tiles">
+    <div className="knowledge-tiles" data-written={nothing ? "none" : undefined}>
       <Latest run={runs[lead]} state={state} />
-      <RecentlyWritten runs={rest} led={lead >= 0} state={state} />
+      {!nothing && <RecentlyWritten runs={rest} led={lead >= 0} state={state} />}
       <ContinueReading />
       <Pinned />
       <Watching />

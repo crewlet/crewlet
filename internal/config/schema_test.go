@@ -135,6 +135,12 @@ func TestSchemaEnumsMatchTheValidators(t *testing.T) {
 		// field's tag and not the other would leave two enums that agree
 		// today and drift on the next value.
 		{"GitHubProvisioning", "org_webhook", strs(ContainerWebhookModes)},
+		// The two service backends, which the org projection also hands
+		// every reader as `services`: a value the schema offered and the
+		// validator refused would be a company an editor passed and no
+		// node would run.
+		{"Tracker", "backend", strs(TrackerBackends)},
+		{"Knowledge", "backend", strs(KnowledgeBackends)},
 	}
 	for _, tc := range cases {
 		def, ok := defs[tc.def].(map[string]any)

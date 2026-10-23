@@ -1967,7 +1967,7 @@ test("a finding of a kind and phase this build does not know still un-readies th
 //
 // Measured on a live card, as one unbroken line: "1 agent(s) have no GitHub
 // App of their own, so nothing they do on GitHub is theirs: sre-lead. Create
-// one per agent from Settings › Integrations — GitHub offers no API for it,
+// one per agent from Company › Integrations, GitHub offers no API for it,
 // so it is a click there and nothing else can do it.all 1 agents without an
 // app". A problem, a name, an instruction and a disclosure summary, at one
 // weight, with the last running into the sentence before it.

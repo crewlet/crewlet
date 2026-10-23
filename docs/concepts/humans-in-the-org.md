@@ -173,7 +173,7 @@ A human seat is where a person comes from. **Every person who signs in holds
 exactly one human seat**, from the moment they exist until they are removed
 ([ADR-0032](https://github.com/crewlet/crewlet/blob/main/adr/0032-every-person-holds-a-human-seat.md)),
 so the seat is declared first — in the company document, as above — and the
-person is then put in it. A human seat is in one of three states, and **Agents
+person is then put in it. A human seat is in one of three states, and **Company
 › Org chart** draws each on the seat's card. **Everybody** sees who holds a
 seat, by name — the org chart is the overview everybody signed in reads — and
 an administrator also sees the holder's login and an open invitation, which
@@ -184,7 +184,7 @@ vacant):
 |---|---|---|
 | **Open seat** | Nobody holds it and no invitation names it | **Invite** (on the card's menu, **Invite someone…**) — an address and their access, both apps ticked and Admin not to start; the link is shown once, and the person chooses their login and password when they redeem it. **Add person** (**Add a person…**) — an address, optionally a name and a login (proposed from the address when left empty), and their access, ticked the same way; the person exists at once, `active`, and you are shown their **first password link** once |
 | **Invited ·** an address | An open invitation holds it until it is redeemed, cancelled or lapses — a week. Nobody else can be invited onto it, created on it or bound to it meanwhile | **Cancel invitation**, which frees the seat |
-| **Held by** a name | A person holds it, at whatever stage, or a service account or a token's row is bound to it | Nothing here: the person is changed, moved, suspended or removed in Settings › People & access |
+| **Held by** a name | A person holds it, at whatever stage, or a service account or a token's row is bound to it | Nothing here: the person is changed, moved, suspended or removed in Settings › People, and a service account in Settings › Service accounts |
 
 The dialog is about the seat it was opened from and offers no other. The same
 gestures are a command and a route each — `crewlet iam invite <address> -seat
@@ -198,7 +198,7 @@ seat](identity-and-access.md#a-person-arrives-on-their-seat-invited-or-created).
 
 **A person's seat is moved, never cleared.** To put somebody on another seat,
 bind them to it — `crewlet iam bind <person-id> <seat>`, or the seat field of
-**Edit** in Settings › People & access, which offers the
+**Edit** in Settings › People, which offers the
 vacant human seats and their own and no "No seat". The move is one record: the
 old seat is free the moment the new one is taken. A suspended or retired person
 **keeps** their seat. To free a seat for somebody else, move its holder or
@@ -620,9 +620,9 @@ Three things to keep in mind:
   Different hats, deliberately separate.
 - **It is the seat you join through.** Every person holds a human seat, so
   this is where you are put when you first sign in. Declare it before you
-  invite anybody — the **Create the company** form under **Agents › Edit
+  invite anybody, the **Create the company** form under **Org chart › Edit
   org** adds it when **Add a seat for yourself** is ticked, as it is by
-  default — then sign in with the deployment's API token, open **Agents ›
+  default, then sign in with the deployment's API token, open **Company ›
   Org chart**, and press **Invite** or **Add person** on it (see
   [Putting a person in the seat](#putting-a-person-in-the-seat)). A company
   with no human seat can admit nobody, and `crewlet validate` warns about it

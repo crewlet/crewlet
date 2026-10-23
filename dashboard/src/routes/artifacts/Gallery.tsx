@@ -93,12 +93,13 @@ import { STORAGE_KEYS } from "~/lib/storage.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useClient } from "~/lib/store-hooks.ts";
 import { useViewer, type ViewerState } from "~/lib/viewer.ts";
+import { offeredKinds } from "~/app/nav.ts";
+import { useServicesRun } from "~/lib/services.ts";
 import { usePinsChanged } from "~/lib/artifacts/pins.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { useArtifactPeople, type ArtifactPeople } from "~/lib/artifacts/people.ts";
 import {
   KIND_WORDS,
-  MAKE_ORDER,
   KINDS,
   ROLE_WORDS,
   TRASH_KEPT,
@@ -172,6 +173,23 @@ const MAKE_DETAILS: Readonly<Record<ArtifactKind, string>> = {
   dashboard: "Live figures",
   html: "Any web page",
   sheet: "A table to fill in",
+};
+
+/**
+ * What a section says when it holds nothing to a reader who cannot make an
+ * artifact: no Make row is drawn for them, and "Start one above" pointed at
+ * nothing.
+ */
+const EMPTY_READER: Readonly<Record<ArtifactSection, { title: string; hint: string }>> = {
+  all: { title: "Nothing here yet", hint: "Artifacts shared with you appear here." },
+  yours: {
+    title: "You have not made an artifact yet",
+    hint: "Ask an agent to make one for you, and it appears here.",
+  },
+  shared: {
+    title: "Nothing is shared with you",
+    hint: "When somebody shares an artifact with you, your team or the company, it appears here.",
+  },
 };
 
 /** What a section says when it holds nothing, and what to do about it. */
@@ -461,7 +479,9 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
                 }
               : filtered
                 ? noMatch(q.trim(), kind)
-                : EMPTY[section]
+                : // THE COPY FOLLOWS THE ROW: offered to make one only where
+                  // the Make row is drawn, by the same access check.
+                  (author.can ? EMPTY : EMPTY_READER)[section]
             : undefined
         }
       >
@@ -489,6 +509,7 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
  * under a heading as quiet as the groups' below it.
  */
 function MakeRow() {
+  const runs = useServicesRun();
   return (
     <section className="artifacts-make" aria-labelledby="artifacts-make-title">
       <h2 className="artifacts-make-title" id="artifacts-make-title">
@@ -496,7 +517,7 @@ function MakeRow() {
       </h2>
       <ArtifactMakeRow
         aria-labelledby="artifacts-make-title"
-        items={MAKE_ORDER.map((k) => ({
+        items={offeredKinds(runs).map((k) => ({
           kind: k,
           label: MAKE_WORDS[k],
           detail: MAKE_DETAILS[k],

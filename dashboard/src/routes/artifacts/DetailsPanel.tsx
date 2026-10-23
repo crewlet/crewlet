@@ -44,7 +44,7 @@ export function DetailsPanel({
         <dd>{KIND_WORDS[detail.kind]}</dd>
         <dt>Owner</dt>
         <dd>
-          <a className="prose-link" href={href(["agents", "seats", detail.owner])}>
+          <a className="prose-link" href={href(["company", "org", "seats", detail.owner])}>
             {people.seatName(detail.owner)}
           </a>
         </dd>

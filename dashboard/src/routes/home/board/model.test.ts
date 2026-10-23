@@ -17,6 +17,7 @@ import {
   SIZING,
   addWidget,
   contrib,
+  drawnWidths,
   duplicate,
   everyWidget,
   fromLists,
@@ -373,5 +374,34 @@ describe("editing a board", () => {
     out[groupList("g-1")] = [];
     out[PAGE] = ["g-1", "n-1"];
     expect(fromLists(wide, out).widgets[1]!.w).toBe(SIZING.note.minW);
+  });
+});
+
+// A ROW CLOSES UP OVER WHAT THE COMPANY'S SERVICES HIDE: the columns a hidden
+// block held go to the blocks left in its row, in proportion, so the row is
+// drawn as wide as it was saved; the rows around it are untouched.
+describe("the widths a board is drawn at", () => {
+  const row = (...ws: [string, number][]) => ws.map(([id, w]) => ({ id, w }));
+  test("a lone survivor takes its row, and other rows keep their widths", () => {
+    const drawn = drawnWidths(
+      row(["a", 6], ["b", 6], ["done", 4], ["proj", 4], ["tok", 4]),
+      (id) => id !== "done" && id !== "proj",
+    );
+    expect(Object.fromEntries(drawn)).toEqual({ a: 6, b: 6, tok: 12 });
+  });
+  test("the hidden columns are shared in proportion, and the row's total holds", () => {
+    const drawn = drawnWidths(row(["x", 3], ["gone", 3], ["y", 6]), (id) => id !== "gone");
+    expect(drawn.get("x")! + drawn.get("y")!).toBe(12);
+    expect(drawn.get("y")!).toBeGreaterThan(drawn.get("x")!);
+  });
+  test("a short row stays as wide as it was saved", () => {
+    const drawn = drawnWidths(row(["x", 4], ["gone", 4]), (id) => id !== "gone");
+    expect(drawn.get("x")).toBe(8);
+  });
+  test("nothing hidden is nothing changed", () => {
+    expect(Object.fromEntries(drawnWidths(row(["a", 5], ["b", 9]), () => true))).toEqual({
+      a: 5,
+      b: 9,
+    });
   });
 });

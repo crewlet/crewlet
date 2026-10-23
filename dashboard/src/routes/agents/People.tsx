@@ -1,5 +1,5 @@
 /**
- * Agents › Roster: everyone in the company, and what each of them is doing.
+ * Org chart › Roster: everyone in the company, and what each of them is doing.
  *
  * The list is grouped by RUN STATE by default rather than by unit, because the
  * question this screen is opened with is "who is working / who stopped", and a
@@ -17,6 +17,7 @@
  * still spending tokens. It has no page to link to, so its card is not a link.
  */
 
+import { useServicesRun } from "~/lib/services.ts";
 import { useMemo } from "react";
 import { useNow } from "~/lib/clock.ts";
 import { fmtMinutes } from "~/lib/work.ts";
@@ -50,6 +51,8 @@ import { useTab } from "~/app/frame/tabs.ts";
 import { AgentsHeader, useAgentsCounts } from "./header.tsx";
 
 const VIEWS = ["seats", "workload"] as const;
+/** The views a company running no Crewlet Works is offered: the workload is its open tasks. */
+const SEATS_ONLY = ["seats"] as const;
 
 const GROUPINGS = ["state", "unit", "flat"] as const;
 type Grouping = (typeof GROUPINGS)[number];
@@ -145,14 +148,14 @@ function LoadRow({ load, heaviest }: { load: Load; heaviest: number }) {
       {/* A DEAD LINK UNTIL NOW: this hand-built `#/company/seats/…` named a
           segment Company routes nothing under, so every name in this table
           landed on "there is no such screen". A seat's page is
-          `#/agents/seats/{handle}`, and `href` is what spells it — the one
+          `#/company/org/seats/{handle}`, and `href` is what spells it, the one
           place the route and its encoding are written down. A plain click
           peeks instead, which on this table is the whole point: the question
           is who is carrying the most, and answering it should not cost the row
           the reader was comparing against. */}
       <a
         className="wl-who"
-        href={href(["agents", "seats", load.handle])}
+        href={href(["company", "org", "seats", load.handle])}
         onClick={rowPeekHandler(() => openPeek({ kind: "seat", id: load.handle }))}
       >
         <span className="truncate">{load.seat?.name ?? load.handle}</span>
@@ -243,7 +246,10 @@ function bucketOf(seat: Seat | null, agent: AgentRow | undefined): string {
 export function People() {
   const agents = useAgents();
   const org = useOrg();
-  const [view, setView] = useTab("view", VIEWS);
+  // THE WORKLOAD IS CREWLET WORKS' OPEN TASKS, and not offered where the
+  // company runs none: the roster is its seats alone.
+  const runs = useServicesRun();
+  const [view, setView] = useTab<(typeof VIEWS)[number]>("view", runs.tracker ? VIEWS : SEATS_ONLY);
   // A GROUPING IS A FILTER, not a section, which is `tabs.ts`'s own
   // distinction: a section is the page you are on and takes the number keys,
   // a filter narrows what is on it and leaves them alone. Declared as a
@@ -411,17 +417,19 @@ export function People() {
         {/* THE VIEW IS A PLACE, so it pushes history: somebody who opened the
             workload and pressed back expects the roster, not the screen
             before this one. */}
-        <SegmentedControl<(typeof VIEWS)[number]>
-          semantics="radio"
-          activate="manual"
-          label="View"
-          value={view}
-          onValueChange={setView}
-          options={[
-            { value: "seats", label: "Seats" },
-            { value: "workload", label: "Workload" },
-          ]}
-        />
+        {runs.tracker && (
+          <SegmentedControl<(typeof VIEWS)[number]>
+            semantics="radio"
+            activate="manual"
+            label="View"
+            value={view}
+            onValueChange={setView}
+            options={[
+              { value: "seats", label: "Seats" },
+              { value: "workload", label: "Workload" },
+            ]}
+          />
+        )}
       </div>
 
       {view === "workload" && <Workload seats={index.seats} needle={needle} />}

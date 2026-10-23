@@ -615,7 +615,7 @@ broker member leaving, handled as for every stream (see
 
 `crewlet objects status` prints the store, the node that ran the last passes,
 and what each found; `--json` prints the fleet answer's `objects` block. The
-dashboard draws the same under **Settings › Nodes**.
+dashboard draws the same under **Settings › File storage**.
 
 ---
 

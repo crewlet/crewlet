@@ -64,10 +64,31 @@ afterEach(() => {
 });
 
 describe("which chunk draws a screen", () => {
-  test("every workspace is a chunk, and the org editor is one of its own", () => {
+  // A CHUNK IS A SCREEN DIRECTORY, not a sidebar row: Company's rows draw
+  // screens from three of them, and a row that moves moves no code.
+  test("every screen directory is a chunk, and the org editor is one of its own", () => {
     expect([...CHUNKS].sort()).toEqual(
-      [...WORKSPACES.map((ws) => ws.key), "org", "palette"].sort(),
+      [
+        "account",
+        "agents",
+        "artifacts",
+        "home",
+        "inbox",
+        "knowledge",
+        "live",
+        "me",
+        "org",
+        "palette",
+        "settings",
+        "spend",
+        "work",
+      ].sort(),
     );
+    // EVERY SIDEBAR ROW'S LANDING is drawn by one of them.
+    for (const ws of WORKSPACES) {
+      const where = resolve(ws.path);
+      expect(where.resolved && CHUNKS.includes(chunkOf(where)), ws.key).toBe(true);
+    }
   });
 
   // EVERY SCREEN OPENS THE PALETTE WITH A KEY, so it is the first chunk the
@@ -78,13 +99,18 @@ describe("which chunk draws a screen", () => {
     expect(typeof module.CommandPalette).toBe("function");
   });
 
-  test("a screen is drawn by its workspace's chunk, the builder by the org chunk", () => {
-    const edit = resolve(["agents", "edit"]);
-    const chart = resolve(["agents"]);
-    const item = resolve(["work", "ENG-4"]);
-    expect(edit.resolved && chunkOf(edit)).toBe("org");
-    expect(chart.resolved && chunkOf(chart)).toBe("agents");
-    expect(item.resolved && chunkOf(item)).toBe("work");
+  test("a screen is drawn by its directory's chunk, the builder by the org chunk", () => {
+    const at = (...path: string[]) => {
+      const where = resolve(path);
+      return where.resolved ? chunkOf(where) : null;
+    };
+    expect(at("company", "org", "edit")).toBe("org");
+    expect(at("company", "org")).toBe("agents");
+    expect(at("company", "schedules")).toBe("agents");
+    expect(at("company")).toBe("settings");
+    expect(at("company", "budgets")).toBe("spend");
+    expect(at("settings", "spend")).toBe("spend");
+    expect(at("work", "ENG-4")).toBe("work");
   });
 
   test("each kind's create page is a chunk of its own, and none is prefetched", () => {
@@ -116,7 +142,7 @@ describe("a chunk that does not load", () => {
     const error = await loadChunk("spend").catch((e: unknown) => e);
     expect(error).toBeInstanceOf(ChunkLoadError);
     const message = (error as ChunkLoadError).message;
-    expect(message).toMatch(/^The Spend screens could not be loaded\./);
+    expect(message).toMatch(/^The Spend and Budgets screens could not be loaded\./);
     expect(message).toContain("The engine was updated.");
     expect(message).toMatch(/Reload/);
     // The cause survives for whoever reads the console.
@@ -228,7 +254,7 @@ describe("preload", () => {
         return Promise.resolve({});
       });
     }
-    preload(["agents", "edit"]);
+    preload(["company", "org", "edit"]);
     preload(["settings", "secrets"]);
     preload(["nowhere", "at", "all"]);
     await Promise.resolve();
@@ -318,18 +344,16 @@ describe("a sidebar row", () => {
   // row, or the keyboard's focus arriving on it.
   test("starts fetching its workspace on hover and on focus", async () => {
     const asked: Chunk[] = [];
-    for (const chunk of ["spend", "knowledge"] as const) {
+    for (const chunk of ["spend", "live"] as const) {
       serve(chunk, async () => {
         asked.push(chunk);
         return chunk === "spend"
           ? import("~/routes/spend/index.ts")
-          : import("~/routes/knowledge/index.ts");
+          : import("~/routes/live/index.ts");
       });
     }
     // The other chunks, back in after the overrides forgot them.
-    await Promise.all(
-      CHUNKS.filter((c) => c !== "spend" && c !== "knowledge").map((c) => loadChunk(c)),
-    );
+    await Promise.all(CHUNKS.filter((c) => c !== "spend" && c !== "live").map((c) => loadChunk(c)));
     Object.defineProperty(globalThis, "WebSocket", {
       writable: true,
       value: class {
@@ -353,9 +377,9 @@ describe("a sidebar row", () => {
     });
     const nav = screen.getByRole("navigation", { name: "Navigation" });
     expect(asked).toEqual([]);
-    fireEvent.pointerEnter(nav.querySelector('a[href="#/spend"]')!);
-    fireEvent.focus(nav.querySelector('a[href="#/knowledge"]')!);
-    expect(asked).toEqual(["spend", "knowledge"]);
+    fireEvent.pointerEnter(nav.querySelector('a[href="#/company/budgets"]')!);
+    fireEvent.focus(nav.querySelector('a[href="#/live"]')!);
+    expect(asked).toEqual(["spend", "live"]);
   });
 });
 

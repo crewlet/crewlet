@@ -4,11 +4,12 @@
  * primitive.
  */
 
-import { Button, Card, Divider, ErrorBoundary, Link, Note, Text } from "@crewlethq/ui";
+import { Button, Card, Divider, ErrorBoundary, Link, Note, Skeleton, Text } from "@crewlethq/ui";
 import { LinkGlyph } from "@crewlethq/icons/glyphs";
 import { renderMarkdown } from "~/lib/markdown.ts";
+import { useOrgArrived, useServicesRun, type ServicesRun } from "~/lib/services.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { WidgetNote, destinationOf } from "./kit.tsx";
+import { WidgetNote, destinationOf, widgetMissing } from "./kit.tsx";
 import { canUse, widgetDef } from "./registry.tsx";
 import { isExternal, type ContribWidget, type Leaf, type LinksWidget } from "./model.ts";
 
@@ -63,17 +64,50 @@ function Unavailable({ children }: { children: string }) {
   );
 }
 
+/** No service at all: what a widget is measured against to ask whether it reads one. */
+const NONE_RUN: ServicesRun = { tracker: false, knowledge: false };
+
+/** The card a widget holds while the board waits to learn what the company runs. */
+function WidgetSkeleton() {
+  return (
+    <Card padding="none" className="home-card">
+      <Card.Body padding="md">
+        <Skeleton variant="text" rows={2} label="Checking what the company runs" />
+      </Card.Body>
+    </Card>
+  );
+}
+
+/** Each of Crewlet's services by the name a reader knows it by. */
+const SERVICE_NAMES = { tracker: "Crewlet Works", knowledge: "Crewlet Knowledge" } as const;
+
 /**
  * A widget a section offers, drawn by the section's component, or the
  * sentence that says why it is not: its section no longer offers it, the
- * reader's access no longer opens its page, or it failed to draw. A failure
- * costs that one widget, never the board.
+ * company does not run the service it reads (said only while Home is edited:
+ * in view the board closes up over it), the reader's access no longer opens
+ * its page, or it failed to draw. A failure costs that one widget, never the
+ * board.
  */
 function Contributed({ widget }: { widget: ContribWidget }) {
   const viewer = useViewer();
+  const runs = useServicesRun();
+  const arrived = useOrgArrived();
   const def = widgetDef(widget.widget);
   if (!def)
     return <Unavailable>This widget is no longer available. Remove it in Edit Home.</Unavailable>;
+  // A WIDGET READING ONE OF CREWLET'S SERVICES WAITS FOR THE PROJECTION on
+  // a cold load: drawn on the guess, a tracker widget on a company running
+  // Jira asked its reads and was refused before the board closed over it.
+  if (!arrived && widgetMissing(def, widget.params, NONE_RUN) !== undefined) {
+    return <WidgetSkeleton />;
+  }
+  const service = widgetMissing(def, widget.params, runs);
+  if (service !== undefined) {
+    return (
+      <Unavailable>{`Hidden: the company does not run ${SERVICE_NAMES[service]}. Remove it in Edit Home.`}</Unavailable>
+    );
+  }
   if (viewer.loading) return null;
   if (!canUse(def, viewer.grants)) {
     const page = destinationOf(def.from)?.label ?? def.label;

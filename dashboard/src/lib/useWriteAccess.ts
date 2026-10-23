@@ -56,6 +56,7 @@ import { useLeadScope, type LeadScope } from "./leadScope.ts";
 import { isOwnSeat } from "./seats.ts";
 import { useConnection } from "./store-hooks.ts";
 import { useViewer, type ViewerState } from "./viewer.ts";
+import { useServicesRun, type Service, type ServicesRun } from "./services.ts";
 import { ADMIN, KNOWLEDGE, TRACKER, holds, needsWords, type App } from "./access.ts";
 import type { ActionTool } from "~/protocol/act.ts";
 import { ACTIONS } from "~/contract/actions.ts";
@@ -122,6 +123,30 @@ export function actionApp(tool: ActionTool): App | null {
   return null;
 }
 
+/**
+ * The service built into Crewlet a change lands in, read off the same
+ * `domain`: Crewlet Works for the tracker's log, Crewlet Knowledge for the
+ * pages'. A company running another system in its place, or none, has nowhere
+ * for the change to land.
+ */
+export function actionService(tool: ActionTool): Service | null {
+  const domain: string | null = ACTIONS[tool].domain;
+  if (domain === "tracker") return "tracker";
+  if (domain === "pages") return "knowledge";
+  return null;
+}
+
+/**
+ * The sentence a change is held with where the company does not run the
+ * service it lands in. The control that would START such a change (New task,
+ * Message, Assign, Ask an agent) is not drawn there at all; this is for what
+ * stays drawn, such as an action folded into a phone's More menu.
+ */
+export const SERVICE_OFF_REASONS: Readonly<Record<Service, string>> = {
+  tracker: "Crewlet Works is not in use, so no task can be filed or changed here.",
+  knowledge: "Crewlet Knowledge is not in use, so no page can be written here.",
+};
+
 /** The sentence a change is held with when the reader lacks its app. */
 export function noAccessReason(app: App): string {
   return needsWords("This change", [app]);
@@ -132,6 +157,8 @@ export function writeAccess(
   tool: ActionTool,
   viewer: ViewerState,
   link: Link,
+  /** Which of Crewlet's own services the company runs (`lib/services.ts`). */
+  runs: ServicesRun,
   /** The hold the nearest [HoldWrites] placed, or null where none is. */
   held: string | null = null,
 ): WriteAccess {
@@ -143,6 +170,12 @@ export function writeAccess(
   if (link !== "open") return blocked(link);
   if (viewer.loading) return blocked("loading");
   if (viewer.anonymous) return blocked("anonymous");
+  // A SERVICE THE COMPANY DOES NOT RUN FIRST: no access the reader could be
+  // given would give the change anywhere to land.
+  const service = actionService(tool);
+  if (service !== null && !runs[service]) {
+    return { can: false, block: "held", reason: SERVICE_OFF_REASONS[service] };
+  }
   if (!viewer.acts.includes(tool)) {
     // THE APP FIRST, where the reader lacks it: "needs Tracker access" is a
     // remedy they can ask an admin for, and "this engine does not make this
@@ -185,7 +218,7 @@ export function useWriteAccess(tool: ActionTool): WriteAccess {
   const viewer = useViewer();
   const link = linkOf(useConnection());
   const held = useContext(Held);
-  return writeAccess(tool, viewer, link, held);
+  return writeAccess(tool, viewer, link, useServicesRun(), held);
 }
 
 /**

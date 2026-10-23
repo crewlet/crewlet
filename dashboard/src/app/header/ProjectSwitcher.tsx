@@ -56,6 +56,7 @@ import {
 import { href, useNavigator, useRoute } from "../router.tsx";
 import { KEY_SHAPE } from "../routes.ts";
 import { sequenceWords, useKeymap } from "../keymap.ts";
+import { useServicesAsk, useServicesRun } from "~/lib/services.ts";
 import { LayerBoundary } from "../boundaries.tsx";
 import { lazyScreen, preload } from "../lazyScreen.ts";
 import {
@@ -379,7 +380,10 @@ export function ProjectSwitcherProvider({ children }: { children: ReactNode }) {
   // never loads. NOR DOES A READER WITHOUT TRACKER, whose every project the
   // engine would refuse — the palette offers them no switch to open.
   const tracker = useViewer().tracker;
-  const served = useConnection().accessRefused === null && tracker;
+  // AND NONE WHERE THE COMPANY RUNS NO CREWLET WORKS: a hidden Work address
+  // still names a scope, and the projects were asked on it and refused.
+  const ask = useServicesAsk();
+  const served = useConnection().accessRefused === null && tracker && ask.tracker;
   const at = useMemo(() => scopeAt(route.path, route.query), [route.path, route.query]);
 
   const [state, setState] = useState({ open: false, centred: false });
@@ -442,8 +446,10 @@ export function ProjectSwitcherProvider({ children }: { children: ReactNode }) {
     preload(["work"]);
     setState({ open: true, centred: at === null });
   }, [at]);
-  // G THEN P, from anywhere (`keymap.ts`).
-  useKeymap({ project: openSwitcher });
+  // G THEN P, from anywhere (`keymap.ts`), where the company runs Crewlet
+  // Works: its projects are what the switcher lists.
+  const runs = useServicesRun();
+  useKeymap({ project: { run: openSwitcher, when: runs.tracker } });
 
   const setOpen = useCallback(
     (open: boolean) => {

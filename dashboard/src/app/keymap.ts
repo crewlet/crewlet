@@ -39,7 +39,7 @@
  */
 
 import { useKeyChords, type Chord, type Sequence } from "~/lib/keys.ts";
-import { WORKSPACES } from "./nav.ts";
+import { WORKSPACES, type Service } from "./nav.ts";
 
 /** Where a row is live. See the file's doc. */
 export type KeyScope =
@@ -112,6 +112,12 @@ export interface KeyRow {
    * with K. A bare letter never does — it is a letter in the field.
    */
   whileTyping?: boolean;
+  /**
+   * The service built into Crewlet the row's place reads (`nav.ts`): a jump
+   * to Work is no key at all where the company runs no Crewlet Works, so the
+   * legend leaves it out and the frame binds nothing to it.
+   */
+  service?: Service;
 }
 
 /**
@@ -147,6 +153,7 @@ const FRAME: KeyRow[] = [
     presses: [{ after: "g", key: ws.chord }],
     does: `Go to ${ws.label}`,
     by: "dashboard",
+    ...(ws.service ? { service: ws.service } : {}),
   })),
   // THE ONE `g` SEQUENCE THAT IS NOT A WORKSPACE: a running turn is an object,
   // and reaching it was a workspace, a card, a profile and a tab away. Not a
@@ -166,6 +173,9 @@ const FRAME: KeyRow[] = [
     presses: [{ after: "g", key: "p" }],
     does: "Switch project",
     by: "dashboard",
+    // A PROJECT IS CREWLET WORKS', so where the company runs none there is
+    // nothing to switch between.
+    service: "tracker",
   },
   {
     id: "drawer",

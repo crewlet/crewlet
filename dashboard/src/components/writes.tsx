@@ -57,6 +57,7 @@ import { useOpenNewTask } from "~/app/newTask.ts";
 import { STEER_NOTE_MAX_RUNES } from "~/contract/steer.ts";
 import { VIEW_NAME_MAX_BYTES } from "~/contract/work.ts";
 import { textBudget } from "~/lib/format.ts";
+import { useServicesRun } from "~/lib/services.ts";
 
 /**
  * Hand a task to somebody — or to nobody — with a line saying why.
@@ -1078,6 +1079,10 @@ export function MessageSeatButton({
   const write = useAct("create_work_item");
   const access = useMessageSeatAccess(handle);
   const openNewTask = useOpenNewTask();
+  // A MESSAGE IS AN ASK FILED AS A TASK, so where the company runs no Crewlet
+  // Works there is nothing to file it in and no button (`lib/services.ts`).
+  const runs = useServicesRun();
+  if (!runs.tracker) return null;
   return (
     <WriteButton
       write={write}
@@ -1187,6 +1192,10 @@ export function AssignToSeatButton({
     setOwn(next);
     onOpenChange?.(next);
   };
+  // A TASK TO ASSIGN IS CREWLET WORKS', so where the company runs none there
+  // is no button (`lib/services.ts`).
+  const runs = useServicesRun();
+  if (!runs.tracker) return null;
   return (
     <>
       <WriteButton

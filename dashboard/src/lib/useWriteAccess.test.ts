@@ -15,6 +15,7 @@ import {
   messageSeatAccess,
   orgWriteAccess,
   OWN_SEAT_MESSAGE,
+  SERVICE_OFF_REASONS,
   writeAccess,
 } from "./useWriteAccess.ts";
 import { ACT_ERRORS } from "~/contract/errors.ts";
@@ -22,6 +23,10 @@ import { CHART_ORG } from "~/test/orgchart.ts";
 import { leadScope, NO_SCOPE } from "./leadScope.ts";
 import type { ViewerState } from "./viewer.ts";
 import { managedSentence } from "~/protocol/configAnswer.ts";
+import type { ServicesRun } from "./services.ts";
+
+/** A company running every service built into Crewlet. */
+const EVERY: ServicesRun = { tracker: true, knowledge: true };
 
 const BOUND: ViewerState = {
   login: "jane.founder",
@@ -70,7 +75,7 @@ test.each([
     "not_served",
   ],
 ] as const)("%s", (_name, viewer, link, block) => {
-  const access = writeAccess("set_pins", viewer, link);
+  const access = writeAccess("set_pins", viewer, link, EVERY);
   expect(access).toEqual({ can: false, block, reason: WRITE_REASONS[block] });
 });
 
@@ -81,20 +86,28 @@ test.each([
 // served. Mutation: drop the app's arm and the first reads `not_served`.
 test("a change in an app the reader lacks names that app", () => {
   const noTracker: ViewerState = { ...BOUND, grants: ["knowledge"], tracker: false, acts: [] };
-  expect(writeAccess("update_work_item", noTracker, "open")).toEqual({
+  expect(writeAccess("update_work_item", noTracker, "open", EVERY)).toEqual({
     can: false,
     block: "no_access",
     reason: "This change needs Tracker access. An admin can give it to you.",
   });
   expect(
-    writeAccess("comment_on_work_item", { ...noTracker, acts: ["comment_on_work_item"] }, "open"),
+    writeAccess(
+      "comment_on_work_item",
+      { ...noTracker, acts: ["comment_on_work_item"] },
+      "open",
+      EVERY,
+    ),
   ).toMatchObject({ can: true });
-  expect(writeAccess("pause_seat", noTracker, "open")).toMatchObject({ block: "not_served" });
+  expect(writeAccess("pause_seat", noTracker, "open", EVERY)).toMatchObject({
+    block: "not_served",
+  });
   expect(
     writeAccess(
       "write_page",
       { ...BOUND, grants: ["tracker"], knowledge: false, acts: [] },
       "open",
+      EVERY,
     ),
   ).toMatchObject({ block: "no_access", reason: expect.stringContaining("Knowledge access") });
 });
@@ -102,7 +115,10 @@ test("a change in an app the reader lacks names that app", () => {
 // A QUEUED WRITE IS ONE THE PERSON WALKED AWAY FROM believing it happened:
 // offline outranks every other reason, including a reader who could act.
 test("offline outranks everything, a bound person included", () => {
-  expect(writeAccess("set_pins", BOUND, "offline")).toMatchObject({ can: false, block: "offline" });
+  expect(writeAccess("set_pins", BOUND, "offline", EVERY)).toMatchObject({
+    can: false,
+    block: "offline",
+  });
 });
 
 // A BROWSER THE ENGINE REFUSES IS NOT OFFLINE. A refused socket stops
@@ -116,7 +132,7 @@ test("a browser the engine refuses is told so, never that it is offline", () => 
     accessRefused: "your seat is no longer in the chart",
   });
   expect(refused).toBe("refused");
-  expect(writeAccess("set_pins", { ...BOUND, loading: true }, refused)).toEqual({
+  expect(writeAccess("set_pins", { ...BOUND, loading: true }, refused, EVERY)).toEqual({
     can: false,
     block: "refused",
     reason: WRITE_REASONS.refused,
@@ -128,7 +144,7 @@ test("a browser the engine refuses is told so, never that it is offline", () => 
 });
 
 test("a bound person the engine serves acts as their own seat", () => {
-  expect(writeAccess("set_pins", BOUND, "open")).toEqual({
+  expect(writeAccess("set_pins", BOUND, "open", EVERY)).toEqual({
     can: true,
     as: "jane",
     acts: ["set_pins"],
@@ -140,7 +156,7 @@ test("a bound person the engine serves acts as their own seat", () => {
 // here, a person the directory had not bound yet could change nothing the
 // engine would have taken from them.
 test("a person bound to no seat acts under their own login", () => {
-  expect(writeAccess("set_pins", UNBOUND, "open")).toEqual({
+  expect(writeAccess("set_pins", UNBOUND, "open", EVERY)).toEqual({
     can: true,
     as: "jane.founder",
     acts: ["set_pins"],
@@ -151,7 +167,7 @@ test("a person bound to no seat acts under their own login", () => {
 // may not act, so a viewer answer that somehow carried a handle and no acts
 // still acts for nobody.
 test("a handle with an empty acts list acts for nobody", () => {
-  expect(writeAccess("set_pins", { ...BOUND, acts: [] }, "open").can).toBe(false);
+  expect(writeAccess("set_pins", { ...BOUND, acts: [] }, "open", EVERY).can).toBe(false);
 });
 
 // MESSAGING YOUR OWN SEAT IS HELD, by the control's own rule and in one
@@ -160,7 +176,12 @@ test("a handle with an empty acts list acts for nobody", () => {
 // reader has no seat of their own, so no seat is theirs. Mutation: compare
 // against anything but the reader's bound seat and a row goes red.
 test("messaging your own seat is held after everything a person can clear", () => {
-  const can = writeAccess("create_work_item", { ...BOUND, acts: ["create_work_item"] }, "open");
+  const can = writeAccess(
+    "create_work_item",
+    { ...BOUND, acts: ["create_work_item"] },
+    "open",
+    EVERY,
+  );
   expect(messageSeatAccess(can, BOUND, "jane")).toEqual({
     can: false,
     block: "held",
@@ -168,8 +189,34 @@ test("messaging your own seat is held after everything a person can clear", () =
   });
   expect(messageSeatAccess(can, BOUND, "swe")).toBe(can);
   expect(messageSeatAccess(can, UNBOUND, "")).toBe(can);
-  const offline = writeAccess("create_work_item", BOUND, "offline");
+  const offline = writeAccess("create_work_item", BOUND, "offline", EVERY);
   expect(messageSeatAccess(offline, BOUND, "jane")).toBe(offline);
+});
+
+// A CHANGE INTO A SERVICE THE COMPANY DOES NOT RUN IS HELD, with the sentence
+// that says so, ahead of any access the reader could be given: no grant gives
+// a task anywhere to land where the company runs no Crewlet Works. A change
+// that is no service's is not held for it. Mutation: drop the service arm and
+// the first two read `can: true`.
+test("a change into a service the company does not run is held, and says why", () => {
+  const acting = { ...BOUND, acts: ["create_work_item", "write_page", "pause_seat"] };
+  const jira: ServicesRun = { tracker: false, knowledge: true };
+  expect(writeAccess("create_work_item", acting, "open", jira)).toEqual({
+    can: false,
+    block: "held",
+    reason: SERVICE_OFF_REASONS.tracker,
+  });
+  const confluence: ServicesRun = { tracker: true, knowledge: false };
+  expect(writeAccess("write_page", acting, "open", confluence)).toEqual({
+    can: false,
+    block: "held",
+    reason: SERVICE_OFF_REASONS.knowledge,
+  });
+  expect(writeAccess("pause_seat", acting, "open", jira).can).toBe(true);
+  // AFTER WHAT THE PERSON CAN CLEAR: offline is still said first.
+  expect(writeAccess("create_work_item", acting, "offline", jira)).toMatchObject({
+    block: "offline",
+  });
 });
 
 // A SCREEN SHOWING SOMEBODY ELSE'S RECORD HOLDS EVERY CHANGE ON IT, with its
@@ -177,22 +224,25 @@ test("messaging your own seat is held after everything a person can clear", () =
 // thing they can clear first, and a hold is a fact about the screen.
 test("a hold is the screen's sentence, and it ranks after everything a person can clear", () => {
   const hold = "This is Rui Santos’s day.";
-  expect(writeAccess("set_pins", BOUND, "open", hold)).toEqual({
+  expect(writeAccess("set_pins", BOUND, "open", EVERY, hold)).toEqual({
     can: false,
     block: "held",
     reason: hold,
   });
-  expect(writeAccess("set_pins", BOUND, "offline", hold)).toMatchObject({ block: "offline" });
+  expect(writeAccess("set_pins", BOUND, "offline", EVERY, hold)).toMatchObject({
+    block: "offline",
+  });
   expect(
     writeAccess(
       "set_pins",
       { ...BOUND, login: "", handle: "", owner: "", anonymous: true, acts: [] },
       "open",
+      EVERY,
       hold,
     ),
   ).toMatchObject({ block: "anonymous" });
   // AND NO HOLD IS NO HOLD: the empty value of the context is `null`.
-  expect(writeAccess("set_pins", BOUND, "open", null).can).toBe(true);
+  expect(writeAccess("set_pins", BOUND, "open", EVERY, null).can).toBe(true);
 });
 
 describe("changing the company's configuration", () => {

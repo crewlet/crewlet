@@ -43,7 +43,7 @@ afterEach(() => {
 });
 
 beforeEach(() => {
-  location.hash = "#/agents/edit?view=table";
+  location.hash = "#/company/org/edit?view=table";
 });
 
 function mount(options: { readOnly?: boolean } = {}) {

@@ -9,9 +9,8 @@
  * last state it sent" when nothing had ever been sent, and its figures were
  * skeletons that never resolved. So nothing is drawn but what is true: the
  * engine's own reason (left out where it gave none), and the three things
- * that change something from here: the Account page, which
- * reads no socket (nor does Settings › Appearance, the other screen that is
- * the reader's own and drawn in place of this, `nav.ts`'s `personalPath`);
+ * that change something from here: the Account page, which reads no socket
+ * and is the reader's own, drawn in place of this (`nav.ts`'s `personalPath`);
  * dialling again once an admin has acted; and signing out, because the person
  * refused is the person who needs to leave.
  *

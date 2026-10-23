@@ -61,7 +61,7 @@ test("every destination resolves to a screen", () => {
 });
 
 /*
- * AND THE WHOLE PATH, not just its head: `["settings", "integrations"]` and
+ * AND THE WHOLE PATH, not just its head: `["company", "integrations"]` and
  * `["settings", "integration"]` have the same first segment and only one of them
  * is a screen. `nav.ts` is where a destination is declared, so a builder
  * destination has to BE one — which is also what makes the sidebar and this builder
@@ -112,10 +112,12 @@ test("the check can tell: a flat route is caught, head and whole", () => {
   expect(resolves(["integrations"])).toBe(false);
   expect(declared.has("integrations")).toBe(false);
   // And a path whose head is live but whose tail is not.
-  expect(resolves(["settings"])).toBe(true);
-  expect(resolves(["settings", "integration"])).toBe(false);
-  expect(declared.has("settings/integration")).toBe(false);
-  expect(declared.has("settings/integrations")).toBe(true);
+  expect(resolves(["company"])).toBe(true);
+  expect(resolves(["company", "integration"])).toBe(false);
+  expect(declared.has("company/integration")).toBe(false);
+  expect(declared.has("company/integrations")).toBe(true);
+  // And the address it lived at before Company held it.
+  expect(resolves(["settings", "integrations"])).toBe(false);
   // And the address this builder's destinations lived at before this tree.
   expect(resolves(["admin", "integrations"])).toBe(false);
 });

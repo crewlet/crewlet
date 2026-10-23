@@ -1,6 +1,6 @@
 /**
- * The file-storage card on Settings › Nodes: what it says of the store and of
- * the collector's last passes.
+ * Settings › File storage: what it says of the store and of the collector's
+ * last passes.
  */
 
 import { afterEach, describe, expect, test } from "vitest";
@@ -69,7 +69,7 @@ describe("file storage", () => {
     expect(screen.getByText("data-a")).toBeTruthy();
     expect(
       screen.getByText(
-        /deleted 12 objects no file names, of 1,840 stored.*; abandoned 1 unfinished upload$/,
+        /^Deleted 12 objects that no file names, of 1,840 stored \(.*\); abandoned 1 unfinished upload$/,
       ),
     ).toBeTruthy();
     expect(screen.getByText("1,828 named, none missing")).toBeTruthy();
@@ -91,7 +91,7 @@ describe("file storage", () => {
     expect(alert.textContent).toContain("damaged");
     expect(screen.getByText("1,828 named, 1 missing, 1 damaged")).toBeTruthy();
     expect(
-      screen.getByText("the fleet's own NATS bucket, replicated at stream.replicas"),
+      screen.getByText("The fleet's own NATS bucket, replicated as the stream is"),
     ).toBeTruthy();
   });
 
@@ -108,7 +108,7 @@ describe("file storage", () => {
   test("a collection that stopped judging says what it deleted first, and why it stopped", () => {
     renderCard(block("skipped"));
     expect(
-      screen.getByText(/^deleted 500 objects no file names, then stopped: a record this node/),
+      screen.getByText(/^Deleted 500 objects that no file names, then stopped: a record this node/),
     ).toBeTruthy();
     expect(screen.queryByText(/deleted nothing/)).toBeNull();
     // A REFUSED SWEEP is said beside the collection, with what the identity lacks.
@@ -131,9 +131,21 @@ describe("file storage", () => {
     expect(screen.getByText("No collection yet")).toBeTruthy();
   });
 
-  test("a node that reads no record draws no card", () => {
+  // NO RECORD IS NOT AN EMPTY STORE: the page says the node keeps none,
+  // rather than drawing nothing under its own heading.
+  // TWO CARDS, EACH NAMED BY ITS SUBJECT, and neither by the page's own
+  // title: "File storage" over a page called File storage said it twice.
+  test("a report is two cards named by their subjects, not by the page", () => {
+    renderCard(block("reported"));
+    expect(screen.getByText("Where files are kept")).toBeTruthy();
+    expect(screen.getByText("Collector passes")).toBeTruthy();
+    expect(screen.queryByText("File storage")).toBeNull();
+    expect(screen.getByText("Last pass run by")).toBeTruthy();
+  });
+
+  test("a node that reads no record says it keeps none", () => {
     const { container } = renderCard(undefined);
-    expect(container.textContent).toBe("");
+    expect(container.textContent).toContain("No record of the company's files");
   });
 
   test("an incomplete audit's count is a floor, and a failed pass says what stopped it", () => {
@@ -149,7 +161,7 @@ describe("file storage", () => {
         damaged: 0,
         error: "the bucket did not answer",
       }),
-    ).toBe("stopped: the bucket did not answer");
+    ).toBe("Stopped: the bucket did not answer");
     expect(
       collectSummary({
         at: "",
@@ -161,7 +173,7 @@ describe("file storage", () => {
         abandoned: 0,
         error: "the bucket did not answer",
       }),
-    ).toBe("stopped: the bucket did not answer");
+    ).toBe("Stopped: the bucket did not answer");
     expect(backendSummary("gcs:x")).toBe("gcs:x");
   });
 });

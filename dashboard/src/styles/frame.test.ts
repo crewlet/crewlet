@@ -11,6 +11,7 @@ import {
   LIST_FLOOR,
   PEEK_WIDTH,
   PHONE_BREAKPOINT,
+  SECTION_COLUMN_MIN,
   SCROLLBAR_GUTTER,
   SHELL_BREAKPOINT,
   columnWidth,
@@ -123,6 +124,8 @@ function atRuleBody(css: string, prelude: string): string {
 
 /** The phone breakpoint's query, as every sheet writes it. */
 const PHONE = `@media (width < ${PHONE_BREAKPOINT}px)`;
+/** Where Settings' column folds to its picker (`app/layout.ts`'s SECTION_COLUMN_MIN). */
+const FOLD = `@media (width < ${SECTION_COLUMN_MIN}px)`;
 
 /** The body of the first rule whose selector is exactly `selector`. */
 function block(css: string, selector: string): string {
@@ -381,7 +384,7 @@ describe("the frame's layout", () => {
   // builder's buttons swapped for its menu at 860 in the sheet and at 640 in
   // the script.
   test("every media query's width is a breakpoint app/layout.ts declares", () => {
-    const allowed = new Set([PHONE_BREAKPOINT, SHELL_BREAKPOINT]);
+    const allowed = new Set([PHONE_BREAKPOINT, SHELL_BREAKPOINT, SECTION_COLUMN_MIN]);
     const stray: string[] = [];
     for (const name of readdirSync(STYLES).filter((f) => f.endsWith(".css"))) {
       const css = sheet(name);
@@ -459,20 +462,51 @@ describe("the frame's layout", () => {
   // scroller its content box is the viewport, the `max-content` columns alone
   // exceed it, and every `1fr` resolves to ZERO — the title column vanishing
   // to make room for a due date.
-  // THE SETTINGS COLUMN IS ONE ROW ON A PHONE. Stacked whole above the section
-  // it took about 520px, and Nodes' and Secrets' own content began below the
-  // fold. Below the breakpoint the list folds behind the toggle naming the
-  // section; at every other width the toggle is not drawn at all, so the
-  // column beside a section is never a second, collapsed copy of itself.
-  test("the Settings column folds to a picker below the phone breakpoint, and only there", () => {
+  // THE SETTINGS COLUMN IS ONE ROW WHERE THE SECTION WOULD BE TOO NARROW.
+  // Stacked whole above the section on a phone it took about 520px; beside
+  // the section at 1024 it left a 489px section whose tables and stat tiles
+  // cut their values. Below SECTION_COLUMN_MIN the list folds behind the
+  // toggle naming the section; at every other width the toggle is not drawn
+  // at all, so the column beside a section is never a second, collapsed copy
+  // of itself.
+  test("the Settings column folds to a picker below SECTION_COLUMN_MIN, and only there", () => {
     const css = sheet("frame.css");
-    const wide = css.split(PHONE)[0]!;
-    const narrow = css.slice(css.indexOf(PHONE));
+    const wide = css.split(FOLD)[0]!;
+    const narrow = atRuleBody(css, FOLD);
+    expect(SECTION_COLUMN_MIN).toBe(1212);
     expect(block(wide, ".section-picker-toggle")).toMatch(/display:\s*none/);
     expect(wide).not.toMatch(/\.section-picker:not\(\[data-open\]\)/);
     expect(block(narrow, ".section-picker-toggle")).toMatch(/display:\s*flex/);
     expect(block(narrow, ".section-picker:not([data-open]) .section-picker-list")).toMatch(
       /display:\s*none/,
+    );
+    expect(block(narrow, ".section-frame")).toMatch(/grid-template-columns:\s*minmax\(0, 1fr\)/);
+  });
+
+  // THE BAR'S INLINE INSET IS THE KIT'S (`AppShell` measures the scroller's
+  // gutter into it): an inset of our own put every page's actions 15px past
+  // the cards under them with classic scrollbars.
+  test("the page bar leaves its inline inset to the kit", () => {
+    const css = sheet("frame.css");
+    for (const m of css.matchAll(/\.app \.page-bar\s*\{([^}]*)\}/g)) {
+      expect(m[1]).not.toMatch(/padding(-inline)?:/);
+    }
+  });
+
+  // THE PICKER'S TOGGLE STANDS OVER THE LIST IT UNFOLDS, on the section's
+  // gutter: the list's glyphs sat 11px right of the toggle's, and the toggle
+  // 4px left of the section's content. The toggle takes the rows' inset less
+  // its border, and the list no gutter of its own inside the picker.
+  test("the folded picker's toggle lines up with its rows and the section", () => {
+    const narrow = atRuleBody(sheet("frame.css"), FOLD);
+    expect(block(narrow, ".section-picker-toggle")).toMatch(
+      /padding:\s*0 calc\(var\(--size-nav-row-pad\) - 1px\)/,
+    );
+    expect(block(narrow, ".section-picker-list > .crewlet-sidebar-nav")).toMatch(
+      /padding-inline:\s*0/,
+    );
+    expect(block(narrow, ".section-picker")).toMatch(
+      /padding:\s*var\(--spacing-2\) var\(--spacing-5\)/,
     );
   });
 
@@ -484,7 +518,7 @@ describe("the frame's layout", () => {
   // the scroller's view, which only a size container can hand a descendant.
   test("the Settings column is the scroller's height, so it stays put while the section scrolls", () => {
     const css = sheet("frame.css");
-    const wide = css.split(PHONE)[0]!;
+    const wide = css.split(FOLD)[0]!;
     const column = block(wide, ".section-column");
     expect(column).toMatch(/position:\s*sticky/);
     expect(column).toMatch(/height:\s*100cqb/);
@@ -505,68 +539,33 @@ describe("the frame's layout", () => {
       /\.crewlet-app-shell__main:has\([^)]*section-frame[^)]*\)\s*\{[^}]*container:/,
     );
 
-    // ON A PHONE the column is back in the flow, and the frame's spare height
+    // FOLDED, the column is back in the flow, and the frame's spare height
     // goes to the section: two `auto` rows split it and opened a band of
     // nothing between the folded picker and the section it names.
-    const narrow = css.slice(css.indexOf(PHONE));
+    const narrow = atRuleBody(css, FOLD);
     expect(block(narrow, ".section-frame")).toMatch(/grid-template-rows:\s*auto 1fr/);
     const stacked = block(narrow, ".section-column");
     expect(stacked).toMatch(/position:\s*static/);
     expect(stacked).toMatch(/height:\s*auto/);
   });
 
-  // A HEAD WITH ACTIONS PUTS ITS SUBTITLE ON A LINE OF ITS OWN on a narrow
-  // screen. Beside actions the kit's shrink is proportional, so a phone gave a
-  // plain title a fraction of a pixel and it broke over two lines ("Active"
-  // over "revision") while the subtitle was cut beside the Copy button. The
-  // rule is the head's SHAPE, not one screen's — the agent profile had
-  // written it for its own card alone.
-  test("a card head holding a subtitle and actions stacks the subtitle on a narrow screen", () => {
+  // A NARROW CARD PUTS ITS SUBTITLE ON A LINE OF ITS OWN, and the kit does it
+  // (@crewlethq/ui 0.38.0, by the card's own width): beside actions the
+  // subtitle was cut ("as the engine resolv…") and a title broke over two
+  // lines. The dashboard's page-width copy of the rule is gone, and no screen
+  // keeps a private one.
+  test("a narrow card's subtitle takes its own line by the kit's rule, not ours", () => {
+    expect(kitSheet()).toMatch(/@container crewlet-card \(width < 480px\)/);
     const css = sheet("screens.css");
-    const narrow = [...css.matchAll(/@container page \(width < 640px\)\s*\{/g)].map((m) =>
-      atRuleBody(css.slice(m.index), "@container page (width < 640px)"),
-    );
-    const head = narrow.find((b) =>
-      b.includes(
-        ".crewlet-card__header:has(> .crewlet-card__subtitle):has(> .crewlet-card__header-actions)",
-      ),
-    );
-    expect(head, "the narrow-screen card head rule is declared").toBeDefined();
-    expect(
-      block(
-        head!,
-        ".crewlet-card__header:has(> .crewlet-card__subtitle):has(> .crewlet-card__header-actions)",
-      ),
-    ).toMatch(/flex-wrap:\s*wrap/);
-    const subtitle = block(
-      head!,
-      ".crewlet-card__header:has(> .crewlet-card__header-actions) > .crewlet-card__subtitle",
-    );
-    expect(subtitle).toMatch(/order:\s*9/);
-    expect(subtitle).toMatch(/flex:\s*1 1 100%/);
-    // AND NO SCREEN KEEPS A PRIVATE COPY of the one rule.
+    expect(css).not.toMatch(/\.crewlet-card__header:has\(> \.crewlet-card__subtitle\)/);
     expect(css).not.toMatch(/\.prof-turn \.crewlet-card__subtitle/);
   });
 
-  // AN ODD LAST TILE TAKES THE WHOLE ROW once the kit folds a stat row into two
-  // columns: three tiles stood 2 + 1 on a phone — Secrets' among them — the
-  // last beside an empty half-row, its top hairline stopping mid-panel, which
-  // reads as a tile that failed to load. The fold is the kit's `width <
-  // 1024px` step, so the rule has to sit at exactly that width to meet it.
-  test("a stat row's odd last tile spans the row wherever the kit folds it to two", () => {
-    const at = (css: string, needle: string) =>
-      mediaBodies(css).filter(
-        (m) => m.prelude.includes("(width < 1024px)") && m.body.includes(needle),
-      );
-    const folds = at(kitSheet(), ".crewlet-stat-group");
-    expect(folds.map((m) => m.body).join("\n")).toMatch(
-      /\.crewlet-stat-group\s*\{[^}]*grid-template-columns:\s*repeat\(2,/,
-    );
-    const ours = at(sheet("screens.css"), ":last-child:nth-child(odd)");
-    expect(ours, "the odd-tile rule sits at the kit's fold").toHaveLength(1);
-    expect(block(ours[0]!.body, ".crewlet-stat-group > :last-child:nth-child(odd)")).toMatch(
-      /grid-column:\s*1 \/ -1/,
-    );
+  // THE KIT FOLDS A STAT ROW BY ITS OWN WIDTH (@crewlethq/ui 0.38.0), so the
+  // dashboard restates no viewport step for it: a row is as wide as its
+  // column leaves it, and the 1024px step cut a 489px row's figures.
+  test("no stat row fold is restated at a viewport width", () => {
+    expect(sheet("screens.css")).not.toMatch(/\.crewlet-stat-group > :last-child:nth-child\(odd\)/);
   });
 
   // NO WORD ALONE ON A NOTE'S LAST LINE. At the measure, Secrets' note broke
@@ -581,19 +580,6 @@ describe("the frame's layout", () => {
     for (const { sel, body } of elsewhere) {
       expect(body, `${sel} takes the note's wrap back`).not.toMatch(/text-wrap/);
     }
-  });
-
-  // A STATE WAITING ON THE READER IS THE WARNING PILL, as the approved
-  // Settings artboard draws Integrations' figure; the kit fills its one badge
-  // with the accent because its badge is an unread count, and a state in that
-  // fill read as a second inbox. The repaint has to reach the kit's own pill.
-  test("the Settings column's attention figure is the kit's pill in the warning pair", () => {
-    expect(kitSheet()).toMatch(
-      /\.crewlet-nav-item__badge\s*\{[^}]*background:\s*var\(--color-brand-accent\)/,
-    );
-    const pill = block(sheet("frame.css"), ".section-row-attention .crewlet-nav-item__badge");
-    expect(pill).toMatch(/background:\s*var\(--color-feedback-warning-soft\)/);
-    expect(pill).toMatch(/(^|[\s;])color:\s*var\(--color-feedback-warning-ink\)/);
   });
 
   test("a grid becomes labelled cards below the phone breakpoint", () => {
@@ -1458,6 +1444,9 @@ test("the work search form wraps before its phrase field goes under a readable w
 test("the lens slot vanishes when empty and takes the slack beside the trail when not", () => {
   const css = sheet("frame.css");
   expect(block(css, ".page-lenses:empty")).toMatch(/display:\s*none/);
+  // AND SO DOES THE ACTIONS SLOT: empty, it took the row's gap and stood the
+  // star 8px short of the gutter.
+  expect(block(css, ".page-actions:empty")).toMatch(/display:\s*none/);
   expect(block(css, ".page-lenses")).toMatch(/flex:\s*1 0 auto/);
   const trail = block(css, ".page-bar:has(> .page-lenses:not(:empty)) > .page-trail");
   expect(trail).toMatch(/flex:\s*0 100 auto/);
@@ -1568,8 +1557,8 @@ test("the span detail sits beside the waterfall at a laptop's page width", () =>
 // default wrap's border stood a pixel inside the card's, a table inset in the
 // frame the card already is; `flush` takes the border, the radius and the
 // ground away and keeps one rule above the head.
-test("a flush grid draws no frame inside its card", () => {
-  const body = block(sheet("frame.css"), ".grid-wrap[data-flush]");
+test("a flush grid draws no frame inside its card, and every grid in a card is flush", () => {
+  const body = block(sheet("frame.css"), ".grid-wrap[data-flush],\n.crewlet-card .grid-wrap");
   expect(body).toMatch(/border:\s*0/);
   expect(body).toMatch(/border-top:\s*1px solid/);
   expect(body).toMatch(/border-radius:\s*0/);
@@ -1579,7 +1568,7 @@ test("a flush grid draws no frame inside its card", () => {
 // UNDER A CARD HEADER THE GRID DRAWS NO RULE OF ITS OWN: the kit's header
 // rules itself off, and the flush grid's rule under it made two lines.
 test("a flush grid under a card's header leaves the rule to the header", () => {
-  expect(block(sheet("frame.css"), ".crewlet-card__header + .grid-wrap[data-flush]")).toMatch(
+  expect(block(sheet("frame.css"), ".crewlet-card__header + .grid-wrap")).toMatch(
     /border-top:\s*0/,
   );
 });
@@ -1680,10 +1669,48 @@ describe("the Spend overview's rows", () => {
     expect(block(css, ".spend-tiles:empty")).toMatch(/display:\s*none/);
   });
 
-  // ON A PHONE A HEAD'S CAPTION GOES UNDER ITS TITLE. Held beside it, By
-  // agent's sentence stood a two-line column at the end of the head.
-  test("a card's caption wraps under its title when the two do not fit", () => {
-    expect(block(css, ".spend-card-head")).toMatch(/flex-wrap:\s*wrap/);
+  // LIVE'S TWO ROWS ARE ONE GRID: the second row was split evenly, its gutter
+  // 133px off the first's.
+  test("Live's rows share one track split", () => {
+    expect(css).not.toMatch(/\.live-row-even\b/);
+    expect(block(css, ".live-row-pair")).toMatch(
+      /grid-template-columns:\s*minmax\(0, 1\.62fr\) minmax\(0, 1fr\)/,
+    );
+  });
+
+  // THE INBOX IS ON THE PAGE'S GUTTER: its callout and rows began 4px left of
+  // the header's title.
+  test("the Inbox's callout and rows start at the page's gutter", () => {
+    expect(block(css, ".inbox-callout")).toMatch(
+      /margin:\s*var\(--spacing-3\) var\(--spacing-5\) 0/,
+    );
+    expect(block(css, ".inbox-list")).toMatch(/padding:\s*var\(--spacing-2\) var\(--spacing-3\)/);
+  });
+
+  // A LONE CARD TAKES ITS ROW: without Crewlet Works a seat's Assigned work
+  // draws nothing, and Turns per day sat beside a 334px hole.
+  test("a seat's pair gives a lone card the whole row", () => {
+    expect(block(css, ".prof-pair > :only-child")).toMatch(/grid-column:\s*1 \/ -1/);
+  });
+
+  // THE SEAT PAGE IS ON THE SHELL'S GUTTER, the one the page bar's trail
+  // starts at: at 28px its head and body stood 8px right of the crumb.
+  test("a seat's head and body start where the page bar's trail does", () => {
+    expect(block(css, ".prof-head")).toMatch(/padding:\s*var\(--spacing-5\) var\(--spacing-5\) 0/);
+    expect(block(css, ".prof-body")).toMatch(/padding:\s*var\(--spacing-5\) var\(--spacing-5\)/);
+  });
+
+  // THE COMPANY'S BUDGET TILES KEEP THE CARD'S INSET ON EVERY SIDE: with none
+  // on top they sat flush against the header's rule.
+  test("the company's budget tiles are inset on every side", () => {
+    expect(block(css, ".budget-tiles")).toMatch(/padding:\s*var\(--spacing-4\);/);
+  });
+
+  // ONE CARD HEADER IN SETTINGS: Spend's cards drew a bespoke head (a 16px
+  // title, no icon, the caption at its end) beside every other card's kit
+  // header. They head with `Card.Header` now, and the bespoke rule is gone.
+  test("Spend's cards keep no head of their own", () => {
+    expect(css).not.toMatch(/\.spend-card-head\b/);
   });
 
   // A SEAT IS TWO LINES ON A PHONE, at every density. With today's bar on its

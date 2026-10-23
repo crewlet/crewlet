@@ -86,7 +86,7 @@ export function linkedSeat({
     name,
     kind: face.kind === "human" ? "human" : "agent",
     badge: seatBadge(name, face),
-    href: href(["agents", "seats", handle]),
+    href: href(["company", "org", "seats", handle]),
     title: title ?? handleLabel(handle),
   };
 }

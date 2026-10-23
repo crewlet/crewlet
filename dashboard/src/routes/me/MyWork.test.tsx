@@ -411,7 +411,7 @@ test("the banner names whose day it is and links to their seat", async () => {
   });
   mount();
   const chip = await screen.findByRole("link", { name: /Rui Santos/ });
-  expect(chip.getAttribute("href")).toBe("#/agents/seats/rui");
+  expect(chip.getAttribute("href")).toBe("#/company/org/seats/rui");
   expect(screen.getByText("rui")).toBeTruthy();
   expect(screen.getByText("their day")).toBeTruthy();
 });

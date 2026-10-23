@@ -77,7 +77,6 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { href } from "~/app/router.tsx";
-import { AgentsHeader, useAgentsCounts } from "./header.tsx";
 
 /** The ledger's three outcomes, and nothing else — see the note above.
  *
@@ -543,11 +542,8 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
   // badge's monogram out of it, and drew a person's seat as an agent's.
   const index = useMemo(() => indexOrg(org), [org]);
   const who = useMemo(() => seatLookup(index), [index]);
-  // THE SAME FIGURES ON EVERY AGENTS TAB, this one's included: a strip whose
-  // numbers came and went with the tab would read as counts that changed.
-  useAgentsCounts(index);
   const { open: openPeek } = usePeekControls();
-  // `#/agents/schedules/{scope_type}/{scope_id}/{name}` names ONE schedule.
+  // `#/company/schedules/{scope_type}/{scope_id}/{name}` names ONE schedule.
   // Three segments because a schedule's identity is all three: two units may
   // each declare a "standup", and a role and a unit may both.
   const [scopeType, scopeId, scheduleName] = scope;
@@ -648,12 +644,6 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
 
   return (
     <>
-      {/* THE AGENTS PAGE BAR, as every Agents section carries it — Find a
-          seat (a found seat opens beside the list, as on Teams), Edit org and
-          Add seat. Without it the controls vanished from the bar the moment a
-          reader moved from the roster to this tab, and came back when they
-          moved away. */}
-      <AgentsHeader index={index} />
       {/* NO COUNT IN THE BAR AND NO INTRODUCTION: the section's tab carries
           the figure ("Schedules 6"), which the bar's "6 schedules defined"
           restated a few pixels above it, and a working screen opens on its
@@ -999,7 +989,7 @@ function OneSchedule({
     <>
       <PageActions>
         {
-          <a className="t-link" href={href(["agents", "schedules"])}>
+          <a className="t-link" href={href(["company", "schedules"])}>
             All schedules →
           </a>
         }

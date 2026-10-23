@@ -166,8 +166,14 @@ function ModelList({
             icon={<CpuGlyph size="xs" />}
             label="Models"
             value={providers.length}
+            // NONE IS NOT ALL READY: "0, all ready" said every model worked on
+            // a node with no model to run a turn on.
             sub={
-              attention ? `${attention} need${attention === 1 ? "s" : ""} attention` : "all ready"
+              providers.length === 0
+                ? "none configured"
+                : attention
+                  ? `${attention} need${attention === 1 ? "s" : ""} attention`
+                  : "all ready"
             }
           />
           <StatCard
@@ -487,7 +493,7 @@ function ModelPage({
             name="seats"
             rows={uses}
             rowKey={(u) => u.seat.key}
-            rowHref={(u) => href(["agents", "seats", u.seat.handle])}
+            rowHref={(u) => href(["company", "org", "seats", u.seat.handle])}
             columns={[
               {
                 key: "seat",

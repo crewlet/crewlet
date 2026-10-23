@@ -1,9 +1,9 @@
 /**
- * Agents › Org chart: the company as it is running, one node per seat.
+ * Company › Org chart: the company as it is running, one node per seat.
  *
  * # One drawing with the builder
  *
- * The chart is drawn as Agents › Edit org draws a draft: the design system's
+ * The chart is drawn as Org chart › Edit org draws a draft: the design system's
  * tree canvas in its `node` appearance, elbow connectors on the dotted field,
  * an agent seat toned and marked with the Crewlet figure, a person inside a
  * dashed ring, each unit's lead in a pill along its bottom edge, and the
@@ -63,6 +63,7 @@
  * ([OrgOutline]): no size of chart can be read on a phone.
  */
 
+import { useServicesAsk } from "~/lib/services.ts";
 import {
   useCallback,
   useEffect,
@@ -205,10 +206,11 @@ export function OrgChart() {
   // a unit's node carries its type alone — as it does for a reader without
   // Tracker, who is not asked a question the engine would refuse them.
   const viewer = useViewer();
+  const ask = useServicesAsk();
   const projects = useQuery(
     "work_projects",
     { limit: PROJECT_PAGE },
-    { pollMs: 120_000, enabled: viewer.tracker },
+    { pollMs: 120_000, enabled: viewer.tracker && ask.tracker },
   );
   const projectRows = projects.error ? undefined : projects.data?.projects;
   const keysOf = useMemo(() => projectsByUnit(projectRows ?? []), [projectRows]);

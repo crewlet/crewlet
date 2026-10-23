@@ -17,6 +17,7 @@
  * one again.
  */
 
+import { useServicesRun } from "~/lib/services.ts";
 import { useCallback, useMemo, useState } from "react";
 import { Button, Card, SegmentedControl, useMediaMatch } from "@crewlethq/ui";
 import {
@@ -36,7 +37,7 @@ import { fmtCount, fmtDateCompact, parseUTC, plural, readerDay } from "~/lib/for
 import { zone } from "~/lib/prefs.ts";
 import type { CompanyFeedAnswer, FeedEntry, FeedWorkRow } from "~/protocol/index.ts";
 import {
-  FEED_FILTERS,
+  feedFilters,
   FEED_PHRASES,
   feedFilterOf,
   mergePages,
@@ -50,7 +51,8 @@ export const FEED_PAGE = 20;
 
 export function Feed({ now }: { now: number }) {
   const [filterValue, setFilter] = useParam("feed", "all");
-  const filter = feedFilterOf(filterValue);
+  const runs = useServicesRun();
+  const filter = feedFilterOf(filterValue, runs);
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
   const { socket } = useClient();
@@ -117,7 +119,7 @@ export function Feed({ now }: { now: number }) {
             label="Show"
             semantics="radio"
             size={phone ? "sm" : "md"}
-            options={FEED_FILTERS.map((f) => ({ value: f.value, label: f.label }))}
+            options={feedFilters(runs).map((f) => ({ value: f.value, label: f.label }))}
             value={filter.value}
             onValueChange={(v) => setFilter(v === "all" ? "" : v)}
           />

@@ -229,6 +229,22 @@ var contract = []Entry{
 		"internal/api/iamapi.TestTheSeatSurfacesReadWhatTheSeatListingSends"},
 	{"ResetView", ReadInterface, "internal/api/authapi.TestTheResetScreenReadsWhatTheResetViewSends"},
 
+	// services.ts
+	{"OrgServices", ReadInterface, "internal/api.TestTheDashboardKnowsExactlyTheServicesTheEngineSends"},
+	{"TrackerBackend", ReadUnion, "internal/api.TestTheDashboardKnowsExactlyTheServicesTheEngineSends"},
+	{"KnowledgeBackend", ReadUnion, "internal/api.TestTheDashboardKnowsExactlyTheServicesTheEngineSends"},
+
+	// limits.ts
+	{"LimitsAnswer", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheLimitsTheEngineSends"},
+	{"LimitRow", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheLimitsTheEngineSends"},
+	{"LimitGroup", ReadUnion, "internal/api.TestTheDashboardReadsExactlyTheLimitsTheEngineSends"},
+	{"LimitUnit", ReadUnion, "internal/api.TestTheDashboardReadsExactlyTheLimitsTheEngineSends"},
+
+	// signin.ts
+	{"SignInPolicyAnswer", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheSignInPolicyTheEngineSends"},
+	{"SignInPolicy", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheSignInPolicyTheEngineSends"},
+	{"SecondFactorRule", ReadUnion, "internal/api.TestTheDashboardReadsExactlyTheSignInPolicyTheEngineSends"},
+
 	// health.ts
 	{"EngineHealth", ReadInterface, "internal/api.TestTheDashboardDeclaresExactlyTheHealthTheEngineReports"},
 	{"HealthAlarms", ReadInterface, "internal/api.TestTheDashboardDeclaresExactlyTheHealthTheEngineReports"},

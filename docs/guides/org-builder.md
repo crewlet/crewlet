@@ -1,11 +1,12 @@
 # The Org Builder
 
-The dashboard's Agents workspace has an **Edit org** section
-(`#/agents/edit`, the button on the org chart) for editing the organization of a running company, and
-for creating the company on an engine that has none. It edits the same
-company document `GET /config` serves and `PATCH /config` writes, so every
-change it makes is an ordinary configuration revision: stored, activated,
-audited, and applied by every node on its own tick.
+The dashboard's Org chart, under Company, has an **Edit org** section
+(`#/company/org/edit`, the button on the org chart) for editing the
+organization of a running company, and for creating the company on an engine
+that has none. It edits the same company document `GET /config` serves and
+`PATCH /config` writes, so every change it makes is an ordinary configuration
+revision: stored, activated, audited, and applied by every node on its own
+tick.
 
 The engine is the validator. The builder checks every draft by sending the
 engine a dry run of exactly the write a save would send, and draws the
@@ -112,7 +113,7 @@ identity for it.
 person holds exactly one human seat for as long as they exist, and is put on
 it by an invitation or an administrator's create that names it — so the seat
 you add here is the one you put yourself on once the company exists: sign in
-with the deployment's API token, open **Agents › Org chart** and press
+with the deployment's API token, open **Company › Org chart** and press
 **Invite** or **Add person** on it (see [How the first person
 exists](../concepts/identity-and-access.md#how-the-first-person-exists)). A
 company that declares no human seat can admit nobody, the operator included,
@@ -148,7 +149,7 @@ company is never applied to one that exists, and never replayed onto it.
 beside it.
 
 After a successful create, two steps remain that the dashboard cannot take:
-connecting chat and trackers in Settings › Integrations, and adding a model
+connecting chat and trackers in Company › Integrations, and adding a model
 provider, which no dashboard screen writes. The engine applies the new company
 without one, but until the provider is added no agent seat takes a turn:
 whatever is sent to a seat waits on its inbox and runs once the provider
@@ -182,7 +183,7 @@ surface. An agent's character and colour are the ones its author chose (see
 [A seat](#a-seat)), the original Crewlet in purple until somebody does: they
 are never a hash of a name, so a renamed seat keeps them. The
 selected node's card takes the accent on its own edge. The live org chart
-(Agents › Org chart) draws the same nodes, marks and hue, with what each seat
+(Company › Org chart) draws the same nodes, marks and hue, with what each seat
 is doing under its name, and both are drawn on the same dotted field, which
 says it pans before you drag it.
 
@@ -380,7 +381,7 @@ another character and colour before adding it.
 
 **A new human seat is vacant until somebody is put on it**, which no save
 does: who holds a seat is the identity directory's, not the company
-document's. Once the save is applied, the seat's card in **Agents › Org
+document's. Once the save is applied, the seat's card in **Company › Org
 chart** reads **Open seat** — to everybody, since who holds a seat is the
 overview's — and an administrator invites somebody onto it or creates a person on
 it from there, its peek, its page or the **Person** section of its editor's
@@ -660,7 +661,7 @@ seat goes:
   enrolled for (it holds a credential for that tool's `mcp_env` server, or its
   unit does), and the secret store entries its config references, stay until
   you decommission them. They are listed by name, never by value, with links to
-  **Settings › Integrations** and **Settings › Secrets**. A seat added in this draft was never saved,
+  **Company › Integrations** and **Settings › Secrets**. A seat added in this draft was never saved,
   so nothing exists for it outside the chart.
 - **The mailbox, coding runs and memory.** A removed agent seat's mailbox, and
   the mail still addressed to it, is kept for 24 hours after the engine applies
@@ -747,7 +748,7 @@ A save stores and activates a revision. It does not apply it: every node
 applies on its own reconcile tick (about every fifteen seconds, spread a
 little per node so a fleet does not apply at once), and a node can refuse a
 revision and go on serving the previous one. Until this node has
-applied it, the org chart, Teams and Settings › General still draw the
+applied it, the org chart, Teams and Company › Overview still draw the
 previous organization, and say so.
 
 The strip under the toolbar follows the revision:
@@ -807,7 +808,7 @@ When the builder opens and finds a kept draft:
 
 - **Made against the revision that is still active:** a banner offers **Keep
   the draft** or **Discard it**, and nothing can be edited until you choose.
-  Coming back to Edit org from another section of Agents restores the draft
+  Coming back to Edit org from another section of the Org chart restores the draft
   without asking.
 - **Made against an older revision:** the draft is restored through the same
   update described below, and **Discard the kept draft** removes it instead.
@@ -834,7 +835,7 @@ draft. A draft of more than 500 changes is not kept either; save it in steps.
 
 Every check is conditional on the revision the draft was started from, so a
 revision saved by somebody else (another operator, `crewlet config import`, a
-setup flow in Settings › Integrations) is found at the next check, not at the
+setup flow in Company › Integrations) is found at the next check, not at the
 save. The status reads "The configuration changed", editing pauses, and a
 banner offers **Show what changed** (the newer revision against the one the
 draft was started from — to a reader who may read the company document) and
@@ -924,7 +925,7 @@ changes** and **Copy as YAML** read the company document and are not offered.
 The same rule reaches a lead outside the builder, for the seats in the units
 they lead: a seat's profile shows its settings, read through
 `GET /config/roles/{handle}` and its unit's own fields, and its token ceilings
-are changed in Spend › Budgets and with **Raise budget** where a decision about
+are changed in Company › Budgets and with **Raise budget** where a decision about
 a stopped seat offers it, through `PUT /config/roles/{handle}`. The company's
 own ceilings stay `admin`'s.
 

@@ -70,6 +70,7 @@ import {
   ROW,
   addWidget,
   boardStore,
+  drawnWidths,
   duplicate,
   findWidget,
   fromLists,
@@ -86,6 +87,9 @@ import {
   type Widget,
 } from "./board/model.ts";
 import { LeafView } from "./board/widgets.tsx";
+import { widgetShown } from "./board/kit.tsx";
+import { widgetDef } from "./board/registry.tsx";
+import { useServicesRun } from "~/lib/services.ts";
 import { WidgetSettings, configurable, widgetName } from "./board/settings.tsx";
 import { WidgetTray } from "./board/tray.tsx";
 import { openLinksInNewTab } from "./board/newTab.ts";
@@ -107,6 +111,7 @@ const COALESCE_MS = 1000;
 
 export function Home() {
   const data = useHomeData();
+  const runs = useServicesRun();
   const saved = store.use();
   const toast = useToast();
   const [draft, setDraft] = useState<Board | null>(null);
@@ -229,6 +234,29 @@ export function Home() {
   };
 
   const lists = useMemo(() => listsOf(board), [board]);
+  /** Whether a block draws nothing where the company runs what it does. */
+  const hidden = useCallback(
+    (id: string) => {
+      const w = findWidget(board, id);
+      if (w?.kind !== "widget") return false;
+      const def = widgetDef(w.widget);
+      return def !== undefined && !widgetShown(def, w.params, runs);
+    },
+    [board, runs],
+  );
+  // THE WIDTHS THE BOARD IS DRAWN AT, each list's rows closed up over what is
+  // hidden ([drawnWidths]); the saved widths are what Edit Home resizes.
+  const drawn = useMemo(() => {
+    const widths = new Map<string, number>();
+    for (const ids of Object.values(lists)) {
+      const blocks = ids.flatMap((id) => {
+        const w = findWidget(board, id);
+        return w ? [{ id, w: w.w }] : [];
+      });
+      for (const [id, w] of drawnWidths(blocks, (id) => !hidden(id))) widths.set(id, w);
+    }
+    return widths;
+  }, [lists, board, hidden]);
   const reorder = useReorderLists({
     lists,
     onReorder: (next) => apply(fromLists(board, next)),
@@ -299,6 +327,12 @@ export function Home() {
   const renderLeaf = (id: string) => {
     const w = findWidget(board, id);
     if (!w || w.kind === "group") return null;
+    // A WIDGET WITH NOTHING TO SHOW where the company does not run its
+    // service draws no cell, and its row's survivors take its columns
+    // ([drawn]). It stays on the saved board, and is drawn again once the
+    // company runs it. While Home is edited it keeps its cell, saying why it
+    // is hidden, so it can be removed rather than leaving a hole.
+    if (!editing && hidden(id)) return null;
     const sizing = sizingOf(w);
     // WORDS WITH NO CARD OF THEIR OWN (a heading, a divider) are drawn bare,
     // centred in the cell they are given.
@@ -313,7 +347,7 @@ export function Home() {
         editing={editing}
         bare={bare}
         selected={settingsId === id}
-        columns={stacked ? COLUMNS : w.w}
+        columns={stacked ? COLUMNS : editing ? w.w : (drawn.get(id) ?? w.w)}
         rows={w.h}
         rowHeight={ROW}
         fresh={fresh === id}

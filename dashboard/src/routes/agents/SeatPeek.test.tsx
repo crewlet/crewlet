@@ -31,7 +31,7 @@ class InertWebSocket {
 
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
-  location.hash = "#/agents?peek=seat%3Aswe";
+  location.hash = "#/company/org?peek=seat%3Aswe";
 });
 
 afterEach(() => {

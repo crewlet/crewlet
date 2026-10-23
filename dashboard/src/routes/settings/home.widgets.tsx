@@ -179,7 +179,7 @@ function Integrations() {
   const owed = states.filter((s) => s.state.tone !== "success");
   const working = states.length - owed.length;
   return (
-    <WidgetCard title="Integrations" from="settings-integrations">
+    <WidgetCard title="Integrations" from="integrations">
       <QueryState
         error={read.error}
         refusal={read.refusal}
@@ -198,7 +198,7 @@ function Integrations() {
               {owed.slice(0, ROWS).map(({ entry, state }) => (
                 <ListItem
                   key={entry.key}
-                  href={href(["settings", "integrations", entry.key])}
+                  href={href(["company", "integrations", entry.key])}
                   leading={<Tag variant={state.tone}>{state.tag}</Tag>}
                   title={state.reason}
                 >
@@ -206,7 +206,7 @@ function Integrations() {
                 </ListItem>
               ))}
             </List>
-            <More total={owed.length} to={["settings", "integrations"]} />
+            <More total={owed.length} to={["company", "integrations"]} />
             {working > 0 && <WidgetNote>{`${plural(working, "other tool")} working.`}</WidgetNote>}
           </>
         )}
@@ -228,7 +228,7 @@ function McpServers() {
   );
   const failing = servers.filter((s) => s.state !== "running").length;
   return (
-    <WidgetCard title="MCP servers" from="settings-tools">
+    <WidgetCard title="MCP servers" from="settings-mcp-tools">
       <QueryState
         error={status.error}
         refusal={status.refusal}
@@ -245,7 +245,7 @@ function McpServers() {
             return (
               <ListItem
                 key={s.name}
-                href={href(["settings", "tools", "servers", s.name])}
+                href={href(["settings", "mcp-tools", "servers", s.name])}
                 trailing={<Tag variant={words.tone}>{words.label}</Tag>}
               >
                 {s.name}
@@ -253,7 +253,7 @@ function McpServers() {
             );
           })}
         </List>
-        <More total={servers.length} to={["settings", "tools"]} />
+        <More total={servers.length} to={["settings", "mcp-tools"]} />
         {failing === 0 && servers.length > 0 && (
           <WidgetNote>{`${plural(servers.length, "server")}, all running.`}</WidgetNote>
         )}
@@ -274,7 +274,7 @@ function Models() {
     [pool.data],
   );
   return (
-    <WidgetCard title="Models & keys" from="settings-models">
+    <WidgetCard title="Models & keys" from="settings">
       <QueryState
         error={pool.error}
         refusal={pool.refusal}
@@ -522,7 +522,7 @@ function AuditLog() {
   );
 }
 
-// ---- People & access ----------------------------------------------------------------------
+// ---- People ---------------------------------------------------------------------------------
 
 interface DirectoryCheck {
   findings: DirectoryFinding[] | null;
@@ -534,7 +534,7 @@ const findingWords = (kind: string) =>
     ? FINDING_WORDS[kind as (typeof FINDING_KINDS)[number]]
     : undefined;
 
-function PeopleAndAccess() {
+function PeopleWidget() {
   // One page of the directory is enough to count: a Home says "200+" past it.
   const directory = useRest(
     "/iam/people?limit=200",
@@ -556,7 +556,7 @@ function PeopleAndAccess() {
   const invited = (seats.data ?? []).filter((s) => !s.holder && s.invitation).length;
   const findings = check.data?.findings ?? [];
   return (
-    <WidgetCard title="People & access" from="settings-people">
+    <WidgetCard title="People" from="settings-people">
       <QueryState
         error={directory.code}
         refusal={directory.refusal}
@@ -632,8 +632,8 @@ export const widgets = defineWidgets([
     Component: Nodes,
   },
   {
-    key: "settings.integrations",
-    from: "settings-integrations",
+    key: "integrations.connected",
+    from: "integrations",
     label: "Integrations",
     description: "Connected tools and any that need attention",
     icon: PlugGlyph,
@@ -644,7 +644,7 @@ export const widgets = defineWidgets([
   },
   {
     key: "settings.mcp-servers",
-    from: "settings-tools",
+    from: "settings-mcp-tools",
     label: "MCP servers",
     description: "Tool servers for agents and their state",
     icon: WrenchGlyph,
@@ -655,7 +655,7 @@ export const widgets = defineWidgets([
   },
   {
     key: "settings.models",
-    from: "settings-models",
+    from: "settings",
     label: "Models & keys",
     description: "Model providers and whether their keys work",
     icon: CpuGlyph,
@@ -700,12 +700,12 @@ export const widgets = defineWidgets([
   {
     key: "settings.people",
     from: "settings-people",
-    label: "People & access",
+    label: "People",
     description: "People, pending invites and access problems",
     icon: ShieldUserGlyph,
     hue: "green",
     size: { w: 6, minW: 4, minH: 8, vertical: true },
     once: true,
-    Component: PeopleAndAccess,
+    Component: PeopleWidget,
   },
 ]);

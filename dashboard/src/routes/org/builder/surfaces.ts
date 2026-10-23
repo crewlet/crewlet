@@ -1,5 +1,5 @@
 /**
- * The views and dialogs Agents › Edit org hands its builder.
+ * The views and dialogs Org chart › Edit org hands its builder.
  *
  * ONE PLACE WHERE THE BUILDER IS ASSEMBLED. The Builder hosts its visualization,
  * its table, its node editor and its structural dialogs without importing any

@@ -323,8 +323,7 @@ function Profile({
         {holds(row?.grants ?? session.grants ?? [], ADMIN) ? (
           <>
             Change these in{" "}
-            <Link href={peekHref({ kind: "person", id: session.person })}>People &amp; access</Link>
-            .
+            <Link href={peekHref({ kind: "person", id: session.person })}>People</Link>.
           </>
         ) : (
           "Only an admin can change these."
@@ -355,7 +354,7 @@ function SeatFact({ handle }: { handle: string }) {
   const at = handleLabel(handle);
   if (!held) {
     return linked ? (
-      <Link href={href(["agents", "seats", handle])} size="inherit">
+      <Link href={href(["company", "org", "seats", handle])} size="inherit">
         <Text variant="cell" mono>
           {at}
         </Text>

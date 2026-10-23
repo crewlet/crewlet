@@ -52,11 +52,11 @@ test("a fact's route becomes its link, and a named glyph its mark", () => {
       kind="Unit"
       icon="users"
       title="Engineering"
-      facts={[{ label: "Lead", value: "ada", path: ["agents", "seats", "ada"] }]}
+      facts={[{ label: "Lead", value: "ada", path: ["company", "org", "seats", "ada"] }]}
     />,
   );
   expect(screen.getByRole("link", { name: "ada" }).getAttribute("href")).toBe(
-    href(["agents", "seats", "ada"]),
+    href(["company", "org", "seats", "ada"]),
   );
   expect(container.querySelector(".crewlet-object-header__icon svg")).not.toBeNull();
   expect(screen.getByRole("heading", { level: 2, name: "Engineering" })).toBeTruthy();
