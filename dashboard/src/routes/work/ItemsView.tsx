@@ -91,7 +91,15 @@ import {
 } from "./toolbar/WorkBar.tsx";
 import { FEED_PAGE, PurgeBand } from "./feed.tsx";
 import { usePagedItems } from "./usePagedItems.ts";
-import { Button, Callout, EmptyState, Skeleton, type AvatarStatus } from "@crewlethq/ui";
+import {
+  Button,
+  Callout,
+  EmptyState,
+  Skeleton,
+  useMediaMatch,
+  type AvatarStatus,
+} from "@crewlethq/ui";
+import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { LayoutDashboardGlyph } from "@crewlethq/icons/glyphs";
 import { useOpenNewTask } from "~/app/newTask.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -782,6 +790,25 @@ export function ItemsView({
       ...(next ? {} : { group_by2: null }),
     });
   };
+
+  // WHICH WORK, GROUP BY AND SORT: at the bar's far end on a wide screen, and
+  // in the Display popover on a phone, where the bar's one line cut Group by
+  // at the edge and put Sort past it. The bar holds the chips and the count.
+  const phone = useMediaMatch(`(width < ${PHONE_BREAKPOINT}px)`);
+  const arrange = (
+    <>
+      <ScopeControl scope={scope} onScope={setScope} />
+      <ArrangeControls
+        shape={shape}
+        workspace={!project}
+        groupBy={axis}
+        sort={order}
+        manual={manualOrder(order, project)}
+        onGroupBy={onGroupBy}
+        onSort={(next) => setSort(next || off(viewOwn.sort))}
+      />
+    </>
+  );
   // THE SAVED VIEW RUNNING, if one is — what the strip's pin acts on.
   const running = saved.find((v) => v.key === chosenView && v.id);
   // WHERE THE BOARD NAMES ITS LANES OUT OF VIEW: a slot at the bar's end the
@@ -840,6 +867,7 @@ export function ItemsView({
         <div className="work-tabs-tools">
           <SubstringBox value={q} onChange={setQ} scopeLabel={project || "work"} />
           <DisplayMenu
+            arrange={phone ? arrange : undefined}
             shape={shape}
             workspace={!project}
             viewShape={savedShape}
@@ -897,16 +925,7 @@ export function ItemsView({
             narrow row — an open peek, a 1280 window — moves them down
             together rather than leaving the count alone on a line. */}
           <span className="work-bar-end">
-            <ScopeControl scope={scope} onScope={setScope} />
-            <ArrangeControls
-              shape={shape}
-              workspace={!project}
-              groupBy={axis}
-              sort={order}
-              manual={manualOrder(order, project)}
-              onGroupBy={onGroupBy}
-              onSort={(next) => setSort(next || off(viewOwn.sort))}
-            />
+            {!phone && arrange}
             {/* THE LANES OUT OF A BOARD'S VIEW are named here, at the bar's end,
               rather than on a row of their own above the lanes: see
               `shapes/Board.tsx`, which draws them into this slot. */}

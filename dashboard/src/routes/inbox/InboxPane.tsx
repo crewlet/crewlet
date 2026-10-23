@@ -94,6 +94,11 @@ import { questionWithheld } from "~/lib/access.ts";
 
 interface PaneProps {
   row: InboxRow | null;
+  /**
+   * What the pane says with no row open, where the default ("New updates
+   * open here") would promise what the company's services cannot send.
+   */
+  empty?: { title: string; description: string } | undefined;
   index: OrgIndex;
   now: number;
   /** The company's clock, which the snooze presets are read on. */
@@ -116,8 +121,8 @@ export function InboxPane(props: PaneProps) {
       <div className="inbox-pane inbox-pane-empty">
         <EmptyState
           icon={<CircleCheckGlyph size={28} />}
-          title="All clear"
-          description="New updates open here."
+          title={props.empty?.title ?? "All clear"}
+          description={props.empty?.description ?? "New updates open here."}
         />
       </div>
     );

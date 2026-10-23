@@ -175,6 +175,23 @@ const MAKE_DETAILS: Readonly<Record<ArtifactKind, string>> = {
   sheet: "A table to fill in",
 };
 
+/**
+ * What a section says when it holds nothing to a reader who cannot make an
+ * artifact: no Make row is drawn for them, and "Start one above" pointed at
+ * nothing.
+ */
+const EMPTY_READER: Readonly<Record<ArtifactSection, { title: string; hint: string }>> = {
+  all: { title: "Nothing here yet", hint: "Artifacts shared with you appear here." },
+  yours: {
+    title: "You have not made an artifact yet",
+    hint: "Ask an agent to make one for you, and it appears here.",
+  },
+  shared: {
+    title: "Nothing is shared with you",
+    hint: "When somebody shares an artifact with you, your team or the company, it appears here.",
+  },
+};
+
 /** What a section says when it holds nothing, and what to do about it. */
 const EMPTY: Readonly<Record<ArtifactSection, { title: string; hint: string }>> = {
   all: {
@@ -462,7 +479,9 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
                 }
               : filtered
                 ? noMatch(q.trim(), kind)
-                : EMPTY[section]
+                : // THE COPY FOLLOWS THE ROW: offered to make one only where
+                  // the Make row is drawn, by the same access check.
+                  (author.can ? EMPTY : EMPTY_READER)[section]
             : undefined
         }
       >

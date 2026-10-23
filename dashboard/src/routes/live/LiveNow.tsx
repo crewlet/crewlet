@@ -372,7 +372,7 @@ export function LiveNow() {
           </Card>
         </div>
 
-        <div className="live-row-pair live-row-even">
+        <div className="live-row-pair">
           <Card padding="none" className="live-card">
             <Card.Header
               icon={<SquareTerminalGlyph size="sm" />}

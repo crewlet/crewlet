@@ -429,6 +429,7 @@ export function Inbox() {
         {showPane && (
           <InboxPane
             row={selected}
+            empty={runs.tracker ? undefined : paneElsewhere(backends?.tracker ?? null)}
             index={index}
             now={now}
             zone={zone}
@@ -455,6 +456,21 @@ export function elsewhereLine(tracker: OrgServices["tracker"] | null): string {
     return "The company runs no work tracker, so no asks or mentions arrive here.";
   }
   return "Work items live outside Crewlet, so asks and mentions don't arrive here.";
+}
+
+/**
+ * What the reading pane says with nothing open where the company runs no
+ * Crewlet Works: "All clear. New updates open here." promised updates that
+ * cannot arrive. It says where asks and mentions go instead, and what still
+ * comes here.
+ */
+export function paneElsewhere(tracker: OrgServices["tracker"] | null): {
+  title: string;
+  description: string;
+} {
+  const description = "Seats stopped on a budget and the engine's conditions still arrive here.";
+  if (tracker === "jira") return { title: "Asks and mentions arrive in Jira", description };
+  return { title: "No asks or mentions arrive here", description };
 }
 
 /**

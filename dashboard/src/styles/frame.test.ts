@@ -1677,6 +1677,24 @@ describe("the Spend overview's rows", () => {
     expect(block(css, ".spend-tiles:empty")).toMatch(/display:\s*none/);
   });
 
+  // LIVE'S TWO ROWS ARE ONE GRID: the second row was split evenly, its gutter
+  // 133px off the first's.
+  test("Live's rows share one track split", () => {
+    expect(css).not.toMatch(/\.live-row-even\b/);
+    expect(block(css, ".live-row-pair")).toMatch(
+      /grid-template-columns:\s*minmax\(0, 1\.62fr\) minmax\(0, 1fr\)/,
+    );
+  });
+
+  // THE INBOX IS ON THE PAGE'S GUTTER: its callout and rows began 4px left of
+  // the header's title.
+  test("the Inbox's callout and rows start at the page's gutter", () => {
+    expect(block(css, ".inbox-callout")).toMatch(
+      /margin:\s*var\(--spacing-3\) var\(--spacing-5\) 0/,
+    );
+    expect(block(css, ".inbox-list")).toMatch(/padding:\s*var\(--spacing-2\) var\(--spacing-3\)/);
+  });
+
   // A LONE CARD TAKES ITS ROW: without Crewlet Works a seat's Assigned work
   // draws nothing, and Turns per day sat beside a 334px hole.
   test("a seat's pair gives a lone card the whole row", () => {

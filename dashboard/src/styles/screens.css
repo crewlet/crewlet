@@ -776,14 +776,13 @@
 .live-filters {
   flex-wrap: wrap;
 }
+/* ONE TRACK SPLIT FOR BOTH ROWS, so the cards form one two-column grid: the
+   second row was split evenly, and its gutter stood 133px off the first's. */
 .live-row-pair {
   display: grid;
   grid-template-columns: minmax(0, 1.62fr) minmax(0, 1fr);
   gap: var(--spacing-4);
   align-items: stretch;
-}
-.live-row-even {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 .live-card {
   min-width: 0;
@@ -791,8 +790,7 @@
 /* 928px IS HOME'S OWN FOLD, for the same reason: the waiting card's Answer
    and the run rows need the width the running column would leave them. */
 @container page (width < 928px) {
-  .live-row-pair,
-  .live-row-even {
+  .live-row-pair {
     grid-template-columns: minmax(0, 1fr);
   }
 }
@@ -2706,6 +2704,13 @@ a.prof-row:hover {
 }
 .knowledge-search > form {
   min-width: 0;
+  width: 14rem;
+}
+@container page (width < 640px) {
+  .knowledge-search > form {
+    flex: 1 1 auto;
+    width: auto;
+  }
 }
 
 /* A screen's column: the landing, a space, the results. */
@@ -2761,6 +2766,21 @@ a.prof-row:hover {
   .knowledge-tiles {
     grid-template-columns: minmax(0, 1fr);
     grid-template-areas: "latest" "written" "reading" "pinned" "watching" "agents";
+  }
+}
+/* WITH NOTHING WRITTEN there is no Recently written tile, and no column for
+   it: the newest change's tile says so, and the small tiles share the row. */
+.knowledge-tiles[data-written="none"] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-areas:
+    "latest latest"
+    "reading pinned"
+    "watching agents";
+}
+@container page (width < 640px) {
+  .knowledge-tiles[data-written="none"] {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "latest" "reading" "pinned" "watching" "agents";
   }
 }
 .knowledge-written {
@@ -4902,6 +4922,15 @@ details > summary.int-summary::-webkit-details-marker {
   .work-bar {
     flex-wrap: nowrap;
   }
+  /* THE SEARCH ROW STARTS AT THE GUTTER: right-aligned at its own width it
+     stood 62px in from the page's left edge, the box taking what it left. */
+  .work-tabs-tools {
+    flex: 1 1 100%;
+    justify-content: flex-start;
+  }
+  .work-tabs-tools .work-bar-find {
+    flex: 1 1 auto;
+  }
   /* THE RUN SCROLLS, NOT THE BAND: the band is the opaque sticky strip rows
      scroll under, and the fade on the edge with more past it has to fade the
      controls without fading the band. */
@@ -5078,6 +5107,24 @@ details > summary.int-summary::-webkit-details-marker {
   gap: var(--spacing-3);
   padding: var(--spacing-3);
   min-width: 300px;
+}
+/* WHICH WORK, GROUP BY AND SORT, folded in from the bar on a phone: one row
+   each, labels to the start and the choices to the end, as the panel's own
+   rows are, and parted from them by the panel's rule. */
+.work-display-arrange {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding-bottom: var(--spacing-3);
+  border-bottom: 1px solid var(--color-border-default);
+}
+.work-display-arrange .work-arrange {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--spacing-2);
+}
+.work-display-arrange .work-arrange-row {
+  justify-content: space-between;
 }
 /* THE LANES PUT AWAY, each a chip that brings it back — named, because a
    hidden lane is otherwise work nobody can tell is missing. */
@@ -8774,8 +8821,12 @@ a.live-row:focus-visible {
   min-height: 0;
   height: 100%;
 }
+/* THE PAGE'S GUTTER, as every other page's content keeps it: the frame takes
+   the sheet's padding back, and at 16px the callout and the list's rows began
+   4px left of the header's title. A row draws its own 8px inside the list, so
+   the list keeps 12px of its own. */
 .inbox-callout {
-  margin: var(--spacing-3) var(--spacing-4) 0;
+  margin: var(--spacing-3) var(--spacing-5) 0;
 }
 
 /* TWO COLUMNS, EACH ITS OWN SCROLLER. The list is 260 to 340px, as the
@@ -8790,7 +8841,7 @@ a.live-row:focus-visible {
 }
 .inbox-list {
   min-height: 0;
-  padding: var(--spacing-2) var(--spacing-2) var(--spacing-4);
+  padding: var(--spacing-2) var(--spacing-3) var(--spacing-4);
   overflow-x: hidden;
   overflow-y: auto;
   border-right: 1px solid var(--color-border-default);
@@ -8977,6 +9028,13 @@ a.live-row:focus-visible {
 @media (width < 640px) {
   .inbox-panes {
     grid-template-columns: minmax(0, 1fr);
+  }
+  /* AND THE PHONE'S 16px GUTTER: a row's own 8px inside 8px of list. */
+  .inbox-callout {
+    margin-inline: var(--spacing-4);
+  }
+  .inbox-list {
+    padding-inline: var(--spacing-2);
   }
   .inbox-list,
   .inbox-pane {
