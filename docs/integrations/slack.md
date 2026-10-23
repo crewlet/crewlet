@@ -123,7 +123,7 @@ For every Slack-enabled agent seat (a role whose `integrations.slack` credential
 1. Builds the canonical app manifest — app name from `role.name`, bot display name from the handle, the [bot scopes](#bot-scopes-and-events) both credential consumers need, event subscriptions pointed at `<public-url>/webhooks/slack/{handle}`, and the OAuth redirect at `<public-url>/webhooks/slack-oauth`.
 2. Calls [`apps.manifest.create`](https://docs.slack.dev/reference/methods/apps.manifest.create/) on the first run, or `apps.manifest.update` on later ones, keyed by the local ledger. **A ledgered app whose manifest fingerprint has not changed is skipped entirely** — the manifest endpoints are Tier 1 rate limited to roughly one request a minute, so a no-op re-run over seven seats would otherwise spend minutes achieving nothing.
 3. Records the app in the ledger (`slack-apps.json` beside the company YAML) and writes the returned **signing secret** into whichever `${VAR}` the YAML's `signing_secret` points at, through the sink you chose.
-4. Walks you through the one step Slack has no API for: **an authorize click per app.** It prints the install URL; after you click **Allow** the browser lands on the API's `/webhooks/slack-oauth` page showing a short-lived code — paste it back and the command exchanges it (`oauth.v2.access`) for the **bot token**, recorded into the `bot_token` variable.
+4. Walks you through the one step Slack has no API for: **an authorize click per app.** It prints the install URL; after you click **Allow** the browser lands on the API's `/webhooks/slack-oauth` page showing a short-lived code — paste it back and the command exchanges it (`oauth.v2.access`) for the **bot token**, recorded into the `bot_token` variable. If you cancel, or Slack doesn't approve the install, the page says so in its own words and tells you to run the command again; Slack's error code is in Crewlet's log as `slack_oauth_refused`.
 
 **One seat failing does not cost the others.** A mistyped code paste or a refused manifest is recorded against that handle, the remaining seats still provision, and the command exits non-zero naming what failed. Everything completed is durable — the ledger is written after every mutation — so re-running resumes rather than starting over.
 
@@ -283,6 +283,10 @@ For each app:
 3. Click **Install to Workspace**, or **Reinstall to Workspace** if you added scopes to an existing app (new scopes only take effect on a freshly minted token, so adding a scope without reinstalling changes nothing)
 4. Copy the **Bot User OAuth Token** (`xoxb-...`)
 5. Go to **Basic Information** > **App Credentials** and copy the **Signing Secret**
+
+If you cancel the install, or Slack doesn't approve it, the page Slack sends you
+to says so and tells you to go back to the app's settings in Slack and install it
+again.
 
 ### Step 3: Enable Events API (Per App)
 
