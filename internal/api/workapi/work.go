@@ -416,13 +416,13 @@ func (s *served) postPurge(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case confirm == "":
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidQuery,
-			map[string]string{"detail": "repeat the item's KEY in ?confirm= — " +
-				"a purge removes the item and every row it produced on every " +
+			map[string]string{"detail": "repeat the item's KEY in ?confirm=. " +
+				"A purge removes the item and every row it produced on every " +
 				"data node, and there is nothing that undoes it"})
 		return
 	case reason == "":
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidQuery,
-			map[string]string{"detail": "state why in ?reason= — the rows are " +
+			map[string]string{"detail": "state why in ?reason=. The rows are " +
 				"destroyed and the marker's reason is the only account of them " +
 				"that survives"})
 		return
@@ -434,7 +434,7 @@ func (s *served) postPurge(w http.ResponseWriter, r *http.Request) {
 	if !strings.EqualFold(confirm, detail.Task.Key) {
 		httpjson.FailWith(w, http.StatusUnprocessableEntity, httpjson.CodeInvalid,
 			map[string]string{"detail": fmt.Sprintf("?confirm= says %q and the "+
-				"item is %s — nothing was destroyed", confirm, detail.Task.Key)})
+				"item is %s, so nothing was destroyed", confirm, detail.Task.Key)})
 		return
 	}
 	key, ok := operationKey(w, r)

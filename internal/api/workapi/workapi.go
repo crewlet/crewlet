@@ -359,7 +359,7 @@ func New(opts Options) (*Service, error) {
 	}
 	if opts.Chart == nil {
 		return nil, errors.New("workapi: no chart: every decision here reads " +
-			"one — pass authz.NoChart to decide on grants alone")
+			"one. Pass authz.NoChart to decide on grants alone")
 	}
 	if opts.Operator == nil {
 		return nil, errors.New("workapi: no operator dispatch: every " +
@@ -859,8 +859,8 @@ func moveStoppedHere(receipt map[string]any, caveats []caveat.Shown) {
 	total, _ := receipt["subtree_total"].(float64)
 	duty := "the Worklet duty finishes the move on its own once nobody is " +
 		"walking it"
-	sameKey := "the SAME " + opkey.Header + " — send op_id back as that " +
-		"header, which is this request's key whether it sent one or not"
+	sameKey := "the SAME " + opkey.Header + " (send op_id back as that " +
+		"header, which is this request's key whether it sent one or not)"
 	next := fmt.Sprintf("To finish it, send this request again under %s. A "+
 		"new key is refused, since the item is already in %s. Or leave it: %s.",
 		sameKey, project, duty)
@@ -1106,7 +1106,7 @@ func ifMatch(w http.ResponseWriter, r *http.Request, args map[string]any,
 	if err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
 			map[string]string{"detail": "If-Match carries the version you read, " +
-				"as a number — " + strconv.Quote(header) + " is not one"})
+				"as a number, and " + strconv.Quote(header) + " is not one"})
 		return false, false
 	}
 	if held, present := args[field]; present && held != nil {

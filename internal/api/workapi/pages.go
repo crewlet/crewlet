@@ -170,7 +170,7 @@ func (s *served) postPagePurge(w http.ResponseWriter, r *http.Request) {
 	if doclet.NormalizeTitle(confirm) != doclet.NormalizeTitle(detail.Page.Title) {
 		httpjson.FailWith(w, http.StatusUnprocessableEntity, httpjson.CodeInvalid,
 			map[string]string{"detail": fmt.Sprintf("?confirm= says %q and the "+
-				"page is %q — nothing was destroyed", confirm, detail.Page.Title)})
+				"page is %q, so nothing was destroyed", confirm, detail.Page.Title)})
 		return
 	}
 	if !s.maySkillPage(w, r, detail.Page.Container) {

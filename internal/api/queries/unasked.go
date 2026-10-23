@@ -97,8 +97,8 @@ func (s Sources) workSearch(ctx context.Context, p Params) (any, error) {
 			"mode":      string(mode),
 			"available": false,
 			"reason":    "building",
-			"note": "this node joined recently and is still indexing the company's work — " +
-				"items that exist are simply not findable from here yet",
+			"note": "this node joined recently and is still indexing the company's work, " +
+				"so items that exist are simply not findable from here yet",
 		}
 		outcome(out, knowledge.Outcome{})
 		return out, nil

@@ -880,8 +880,8 @@ func (s *Service) refuseEntity(w http.ResponseWriter, r *http.Request, kind, id 
 			"detail": mismatch.Sentence(),
 			"hint": "the path is the address: send " + kind + "/" + id +
 				" back under the id it already has. A seat's handle and a " +
-				"unit's key are permanent — a seat's durable id derives from " +
-				"its handle — and an MCP server's name or a provider's key is " +
+				"unit's key are permanent (a seat's durable id derives from " +
+				"its handle), and an MCP server's name or a provider's key is " +
 				"named by everything that uses it, so a rename is a removal " +
 				"and a creation made through PUT /config, where everything " +
 				"that names it is visible",

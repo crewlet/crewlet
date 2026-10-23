@@ -792,7 +792,7 @@ func (b *Bridge) Miss(token string) (runID, reason string) {
 	case b.held(sub) != nil:
 		return sub.run, ""
 	case current != nil:
-		return sub.run, "this node holds a DIFFERENT job's session for that run — " +
+		return sub.run, "this node holds a DIFFERENT job's session for that run: " +
 			"the run was relaunched and this token names the superseded job, " +
 			"which is a box that outlived the run it was started for"
 	case b.fleet.Load() == nil:

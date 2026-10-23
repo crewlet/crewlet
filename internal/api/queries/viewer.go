@@ -31,7 +31,7 @@ import (
 // seat, because that is the only kind the directory binds anybody to: a bind
 // naming an agent's seat is refused, so "bind it to one" sent a caller to try
 // the seat whose trail they were reading.
-var errNoSeat = fmt.Errorf("%w: this credential is not bound to a seat — bind "+
+var errNoSeat = fmt.Errorf("%w: this credential is not bound to a seat. Bind "+
 	"its row in the identity directory to a human seat (`crewlet iam bind`), "+
 	"or name a handle", ErrBadParams)
 
@@ -43,7 +43,7 @@ var errNoSeat = fmt.Errorf("%w: this credential is not bound to a seat — bind 
 // so what reaches this is a principal the engine can name nothing for, and the
 // remedy is to name whose record to read.
 var errNoRecord = fmt.Errorf("%w: this credential names nobody whose own "+
-	"record there is — name a handle", ErrBadParams)
+	"record there is. Name a handle", ErrBadParams)
 
 // viewer answers who this caller is.
 //

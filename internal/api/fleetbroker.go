@@ -120,7 +120,7 @@ func RenderBrokerRefusal(err error) (BrokerRefusal, bool) {
 	case errors.Is(err, jetstream.ErrNotAMetaPeer):
 		return refuse(http.StatusNotFound, httpjson.CodeNotAMember,
 			"the metadata group counts no voter by that peer id, so there is nothing "+
-				"to remove: it was never a member, or a removal already made it so — "+
+				"to remove: it was never a member, or a removal already made it so. "+
 				"GET /fleet/broker lists every voter it counts")
 	case errors.Is(err, jetstream.ErrMembershipChanging):
 		return refuse(http.StatusConflict, httpjson.CodeMembershipChanging,
@@ -128,7 +128,7 @@ func RenderBrokerRefusal(err error) (BrokerRefusal, bool) {
 	case errors.Is(err, jetstream.ErrNoMetaLeader):
 		return refuse(http.StatusServiceUnavailable, httpjson.CodeNoLeader,
 			"a group without a leader can change nothing about itself: bring enough "+
-				"members back for a quorum, then ask again — and read the group first, "+
+				"members back for a quorum, then ask again. Read the group first, "+
 				"since a removal whose answer was lost may already have been committed")
 	case errors.Is(err, engine.ErrNoBrokerMember):
 		return refuse(http.StatusServiceUnavailable, httpjson.CodeNoBrokerMember,

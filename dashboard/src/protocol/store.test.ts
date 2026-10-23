@@ -980,12 +980,12 @@ describe("a refused query", () => {
         kind: "error",
         id: 1,
         error: "bad_params",
-        detail: "days=91, and a spend window is 1 to 90 company days — ask for at most 90",
+        detail: "days=91, and a spend window is 1 to 90 company days. Ask for at most 90",
       }),
     );
     const err = (await asked.catch((e: unknown) => e)) as QueryError;
     expect(err.message).toBe("bad_params");
-    expect(err.detail).toMatch(/ask for at most 90/);
+    expect(err.detail).toMatch(/Ask for at most 90/);
   });
 
   // A REVISION THE NODE CANNOT OPEN SAYS WHAT FIXES IT. The engine writes

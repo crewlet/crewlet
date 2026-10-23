@@ -280,8 +280,8 @@ var ErrNoHalves = errors.New("operator: Options.Halves is required: every " +
 
 // ErrNoSeatControls refuses a surface built without one of the seat controls,
 // naming which: see [Options.Steer].
-var ErrNoSeatControls = errors.New("operator: the seat controls are required " +
-	"— every node reaches the fleet's records they read and write, whatever " +
+var ErrNoSeatControls = errors.New("operator: the seat controls are required: " +
+	"every node reaches the fleet's records they read and write, whatever " +
 	"its company runs")
 
 // New builds the surface, or refuses a missing required dependency by name.
