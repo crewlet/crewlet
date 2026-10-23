@@ -16,7 +16,7 @@
  */
 
 import { CpuGlyph } from "@crewlethq/icons/glyphs";
-import { BarList, Card, DATA_COLORS, Skeleton } from "@crewlethq/ui";
+import { BarList, Card, DATA_COLORS, EmptyState, Skeleton } from "@crewlethq/ui";
 import { usedByParts, usedByWords } from "./model.ts";
 import { fmtCount } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
@@ -41,13 +41,21 @@ export function ByModel({
       <Card.Body padding="md">
         {loading && !rollup ? (
           <Skeleton height="4.5rem" />
+        ) : rows.length === 0 ? (
+          // ONE EMPTY STATE FOR EVERY EMPTY CARD ON THE PAGE: a ranked list's
+          // bare sentence beside the tables' and the chart's empty states read
+          // as two kinds of answer to one question.
+          <EmptyState
+            size="compact"
+            title="No model served a call in this window"
+            description="A provider entry appears once it serves a call."
+          />
         ) : (
           <BarList
             className="spend-bars"
             layout="beside"
             limit={6}
             moreLabel={(n) => `${n} more ${n === 1 ? "entry" : "entries"}`}
-            emptyLabel="No provider entry served a call in this window."
             data={rows.map((p) => {
               const used = usedByWords(p.seats, p.seats_total, (h) => badgeOf(h).name);
               const parts = usedByParts(p.seats, p.seats_total, (h) => badgeOf(h).name);
