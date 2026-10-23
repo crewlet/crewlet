@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/httpx"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // fakeCapacityNode answers the maintenance surface, recording what it was
@@ -400,6 +401,41 @@ func TestAClosedWindowWaitsOnEveryOtherBeforeService(t *testing.T) {
 			if !strings.Contains(stdout, want) {
 				t.Errorf("%s never says %q:\n%s", page, want, stdout)
 			}
+		}
+	}
+}
+
+// AN ABANDONED WINDOW IS CLOSED AT THE CEILING ITS SEAL FOUND, and never
+// said to be verified at the target it no longer tries to reach. Mutation:
+// print the verified sentence for an abandoned window and this fails.
+func TestAnAbandonedWindowSaysTheCeilingItClosedAt(t *testing.T) {
+	t.Parallel()
+	node := newFakeCapacityNode(t)
+	op := node.op()
+	op["phase"] = "confirmed"
+	op["blocked"] = statelog.BlockedAbandoned
+	op["observed_max_bytes"] = 4294967296
+	node.operation, node.gesture = op, op
+	base := bootstrapForURL(t, node.server.URL)
+	closed, _, err := cli(t, "retention", "set-capacity", "CREWLET_TRACKER_LOG",
+		"8589934592", base, "-confirm", "8589934592")
+	if err != nil {
+		t.Fatalf("set-capacity: %v", err)
+	}
+	open, _, err := cli(t, "retention", "maintenance", "exclude", base,
+		"-stream", "CREWLET_TRACKER_LOG", "-node", "node-a", "-confirm", "node-a")
+	if err != nil {
+		t.Fatalf("exclude: %v", err)
+	}
+	for page, want := range map[string]string{
+		closed: "The window was abandoned and is closed, with the ceiling at 4.0 GiB.",
+		open: "The window was abandoned, and its seal found the ceiling at 4.0 GiB. " +
+			"Run `crewlet retention set-capacity CREWLET_TRACKER_LOG 8589934592 " +
+			"-confirm 8589934592` again to close it there.",
+	} {
+		if !strings.Contains(page, want) || strings.Contains(page, "verified at the target") {
+			t.Errorf("an abandoned window never says %q, or says it was verified:\n%s",
+				want, page)
 		}
 	}
 }

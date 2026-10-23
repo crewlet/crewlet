@@ -1023,7 +1023,8 @@ func (e *Engine) seal(ctx context.Context, resized capacityLog,
 	return e.reread(ctx, op.Stream)
 }
 
-// verify compares the observed ceiling against the immutable target.
+// verify compares the observed ceiling against the immutable target, or, for a
+// window an operator abandoned, records it as the outcome ([statelog.Verifies]).
 //
 // A MISMATCH IS A NUMBERED ATTEMPT rather than a re-apply: every node is in
 // seal mode, which refuses configuration writes, so there is nowhere legal for
@@ -1035,7 +1036,7 @@ func (e *Engine) verify(ctx context.Context, resized capacityLog,
 	if err != nil {
 		return op, fmt.Errorf("engine: read %s's ceiling to verify: %w", op.Stream, err)
 	}
-	if stats.MaxBytes != op.TargetMaxBytes {
+	if !statelog.Verifies(op, stats.MaxBytes) {
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		next, err := statelog.NextAttempt(op, stats.MaxBytes, time.Now().UTC())
 		if writeErr := e.backends.Fleet.UpdateMaintenance(ctx, next); writeErr != nil {
@@ -1111,7 +1112,8 @@ func (e *Engine) release(ctx context.Context, op coord.MaintenanceOperation) (
 	}
 	log.InfoContext(ctx, "capacity_operation_confirmed", "stream", op.Stream,
 		"operation", op.OperationID, "attempt", op.Attempt,
-		"target", op.TargetMaxBytes,
+		"target", op.TargetMaxBytes, "observed", op.ObservedMaxBytes,
+		"abandoned", op.Blocked == statelog.BlockedAbandoned,
 		"detail", "the exclusion on this log is released; once no log has a "+
 			"window open, restart every node without -mode to return the fleet "+
 			"to service")
@@ -1176,7 +1178,7 @@ func (e *Engine) AbandonCapacity(ctx context.Context, stream, operationID string
 	}
 	out := op
 	out.Phase = phase
-	out.Blocked = "abandoned_by_operator"
+	out.Blocked = statelog.BlockedAbandoned
 	out.AbandonedBy = partyOf(by)
 	if err := e.backends.Fleet.UpdateMaintenance(ctx, out); err != nil {
 		return op, err
