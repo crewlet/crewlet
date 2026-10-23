@@ -485,6 +485,34 @@ func TestADeletionAndAReusedKeyAreToldWithoutTheFrameworksWords(t *testing.T) {
 	}
 }
 
+// A REUSED KEY'S ANSWER CARRIES NO tool_detail, and no sentence of the tool's:
+// it names the header as its `field` and is told in the one sentence every
+// surface taking a key answers it with ([opkey.Reused]), a person's, which the
+// dashboard shows in place of its own. The tool's sentence names the operation
+// and the subjects it met, and beside the key's words it told a person pressing
+// a button again to send a key they never chose. Mutation: keep the tool's
+// sentence in the op-reused arm and this fails.
+func TestAReusedKeyCarriesNoToolDetail(t *testing.T) {
+	t.Parallel()
+	reused := &statelog.Unavailable{Reason: statelog.ReasonOpReused,
+		Detail: `operation "op" landed on crewlet.tracker.task.t-2 at 3:4`}
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost,
+		operator.ActPathPrefix+"update_work_item", nil)
+	rec := httptest.NewRecorder()
+	operator.FailTool(rec, r, crewletmcp.Result{Failed: true,
+		Output: "update_work_item did not land.",
+		Cause:  crewletmcp.Classify(crewletmcp.RefusalUnavailable, reused)},
+		newKey(), httpjson.Detail{"tool": "update_work_item"})
+	body := decode(t, rec)
+	if rec.Code != http.StatusConflict || body["field"] != opkey.Header {
+		t.Fatalf("a reused key answered %d %v, want 409 naming the header", rec.Code, body)
+	}
+	if said, ok := body["tool_detail"]; ok || body["detail"] != opkey.Reused {
+		t.Errorf("a reused key's answer carries the detail %v and tool_detail %v, want "+
+			"the key's own words alone", body["detail"], said)
+	}
+}
+
 // THE CLASS OF A WRITER'S ERROR IS THE TOOLS' OWN RULE: a content refusal the
 // domain marked keeps its class, a condition waiting clears is `unavailable` —
 // an estate the router found nobody to serve among them — and anything

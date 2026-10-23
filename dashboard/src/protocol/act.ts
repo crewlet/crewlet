@@ -115,12 +115,12 @@ export type ActResult =
       /** The sentence a person is shown. */
       sentence: string;
       /**
-       * The engine's own `detail`, verbatim — `""` where it sent none, and
-       * the act route sends one only in a person's words (ADR-0060). The
-       * sentence above is the dashboard's for most codes, written about a
-       * change; a screen asking a question shows this instead where there
-       * is one (`answer_knowledge`'s spent budget, or its model at a usage
-       * limit).
+       * The engine's `detail` where it is written for the person
+       * (`writeOutcome.ts`'s `WORDED_FOR_A_PERSON`, ADR-0060), and `""` where
+       * it sent none or wrote it for whoever built the request. Where there is
+       * one it is also the sentence above (`writeOutcome.ts`'s `sentenceOf`); a
+       * screen that shows the engine's words for every refusal reads it here
+       * (`answer_knowledge`).
        */
       detail: string;
       /** The engine's own remedy, where it sent one. */

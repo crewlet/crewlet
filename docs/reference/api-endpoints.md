@@ -6210,8 +6210,15 @@ And the tool's own refusal, carrying its person's words as `detail` where it
 has them, never the tool's sentence, which is written for a model and names
 the tool to call next. A `conflict` or an `exists` a native domain decided (a
 room archived, an item in the trash, a label another tag carries, a write that
-lost its race) has none yet, so its code's own `message` stands alone: read the
-object again to see what refused the change. Its class decides its status:
+lost its race), a write about something deleted, and an `unavailable` about a
+condition of the node or the fleet (a node behind its log, a full log, a store
+that didn't answer, a note the node running a turn couldn't verify, or a coding
+run's record whose seat this node couldn't open, because the fleet's nodes don't
+hold the same keys) have none yet, so each answers its code's own `message`
+alone, the condition's in step with the answer's `Retry-After`.
+
+The dashboard shows a refusal's `detail` in place of its own sentence for the
+code. Its class decides its status:
 
 | `error` | Status |
 |---|---|

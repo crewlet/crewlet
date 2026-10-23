@@ -114,16 +114,19 @@ describe("SteerTurnButton", () => {
 // takes this note once it has read them, and one that has taken all it takes
 // never will. Neither is a write that collided with another, which "look again,
 // then retry" would tell them it was.
+//
+// THE ANSWER CARRIES NO DETAIL: the act route answers a refusal in a person's
+// words or in none (ADR-0060), and nobody has worded either bound for a
+// person, so the dashboard's sentence for the code is the whole of it. The
+// tool's own sentence, which names the turn and its count for a model, is
+// never the answer's detail.
 describe("a note the turn refuses on its bounds", () => {
-  test.each([
-    ["notes_full", "Turn t-1 already holds 5 notes it has not read yet."],
-    ["notes_spent", "Turn t-1 has been sent the 10 notes a turn takes."],
-  ] as const)("%s is said in its own words", async (code, detail) => {
+  test.each(["notes_full", "notes_spent"] as const)("%s is said in its own words", async (code) => {
     vi.stubGlobal(
       "fetch",
       vi.fn(
         async () =>
-          new Response(JSON.stringify({ error: code, detail }), {
+          new Response(JSON.stringify({ error: code }), {
             status: 409,
             headers: { "Content-Type": "application/json" },
           }),

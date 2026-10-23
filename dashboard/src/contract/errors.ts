@@ -72,6 +72,15 @@ export type QueryErrorCode =
  * for a model and names the next call, its arguments and record ids. One fixed
  * sentence for every `conflict` ended "retry", which re-trying an archived
  * room's post never changes.
+ *
+ * TWO ANSWERS OVERRULE A SENTENCE HERE, because each could only contradict it
+ * (`protocol/writeOutcome.ts`, `sentenceOf`): a refusal the engine answered
+ * with a `detail`, which it writes only in a person's words (ADR-0060), is
+ * shown in that `detail`, as a coding run's question somebody already
+ * answered names who did and a spent token budget names whose it was; and a
+ * sentence below that asks for a wait (`unavailable`, `identity_unavailable`)
+ * gives way to the engine's own sentence for the code where the answer
+ * carries no `Retry-After`, since the engine said waiting won't change it.
  */
 export const ACT_ERRORS = {
   // Who is asking — the request guard's, before any tool is named.
