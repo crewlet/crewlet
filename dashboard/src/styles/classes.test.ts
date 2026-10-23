@@ -687,21 +687,6 @@ const ALLOWED: Allowed[] = [
     pkg: "@crewlethq/ui/styles.css",
   },
   {
-    name: "crewlet-stat-group",
-    why: "uilet's StatGroup writes it on the tile row. Below 1024px the kit folds any row into two columns, so an ODD count leaves its last tile beside an empty half-row that reads as a tile failing to load (Secrets' and Models & keys' three tiles stood 2 + 1 on a phone, the third tile's hairline stopping mid-panel). styles/screens.css lets that last tile take the whole row, restating the kit's own step because a media query cannot be borrowed — and makes each tile in the row a subgrid over its lines (see crewlet-statcard). Another rule about OUR composition of the package's component.",
-    pkg: "@crewlethq/ui/styles.css",
-  },
-  {
-    name: "crewlet-statcard",
-    why: "uilet's StatCard writes it on each tile. Inside a StatGroup, styles/screens.css makes the tile a subgrid over the group's rows, one per line the tile draws: the kit stacks label, number and sub in a flex column per tile, so a label that wrapped pushed its own number down and no other (\"Behind on config\" beside a node's peek at 1440, its figure 18px below the other three). styles/stats.test.tsx holds the span to the lines the kit renders. Another rule about OUR composition of the package's component.",
-    pkg: "@crewlethq/ui/styles.css",
-  },
-  {
-    name: "crewlet-statcard__sub",
-    why: "uilet's StatCard writes it for the line under the number. styles/screens.css lets it wrap rather than end in an ellipsis: inside a StatGroup the grid already stretches every tile in a row to one height, so the kit's one-line reserve buys nothing there, and `nowrap` cut every longer sentence — \"6 seats idle and waiting for …\" on a phone, the input/output caption at 1440. Another rule about OUR composition of the package's component.",
-    pkg: "@crewlethq/ui/styles.css",
-  },
-  {
     name: "crewlet-disclosure__trigger",
     why: "uilet's Disclosure writes it. styles/screens.css widens its gap inside a .tool-row, which is a rule about OUR composition of the package's component — the one kind of class this tree declares and never writes.",
     pkg: "@crewlethq/ui/styles.css",
