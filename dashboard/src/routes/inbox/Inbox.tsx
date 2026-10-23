@@ -430,6 +430,7 @@ export function Inbox() {
           <InboxPane
             row={selected}
             empty={runs.tracker ? undefined : paneElsewhere(backends?.tracker ?? null)}
+            listEmpty={Boolean(quiet) && runs.tracker}
             index={index}
             now={now}
             zone={zone}

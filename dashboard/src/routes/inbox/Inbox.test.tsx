@@ -892,3 +892,14 @@ test("on a Jira company the list and the empty pane say asks and mentions arrive
   // AND THE TRACKER'S NOTICES ARE NEVER ASKED FOR.
   expect(asked.some((a) => a.kind === "work_inbox")).toBe(false);
 });
+
+// ONE EMPTY STATE FOR AN EMPTY INBOX: the list says it, and the reading pane
+// beside it holds one quiet line rather than a second "All clear". Mutation:
+// drop `listEmpty` and the pane's All clear is back.
+test("an empty inbox says so once, in the list, and the pane holds a quiet line", async () => {
+  mount();
+  await settle();
+  expect(document.querySelectorAll(".crewlet-empty-state")).toHaveLength(1);
+  expect(screen.queryByText("All clear")).toBeNull();
+  expect(document.querySelector(".inbox-pane")?.textContent).toBe("New updates open here.");
+});
