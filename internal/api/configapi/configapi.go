@@ -90,6 +90,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracing"
 	"github.com/crewlet/crewlet/internal/words"
@@ -1013,20 +1014,27 @@ func (s *Service) refuseApply(w http.ResponseWriter, r *http.Request, err error)
 				"hint": "move each person to another human seat (PATCH " +
 					"/iam/people/{person} with seat) or remove them, unbind a " +
 					"service account (PATCH /iam/people/{person} with no seat), " +
-					"cancel an open invitation (DELETE /iam/invitations/{id}) — " +
-					"each an admin's gesture — then send the write again",
+					"cancel an open invitation (DELETE /iam/invitations/{id}), " +
+					"each an admin's gesture, then send the write again",
 			})
 	case errors.As(err, &unanswered):
 		RefuseActivationUnknown(w, unanswered, nil)
 	case errors.As(err, &unknown):
 		log.Warn("config_seat_holders_unreadable",
 			"seats", unknown.Seats, "error", unknown.Err)
-		httpjson.UnavailableWith(w, httpjson.CodeIdentityUnavailable,
+		// WHAT CLEARS IT, in the words that agree with the hint: the
+		// identity estate's own sentence where its log refused the read (a
+		// node evicted, a log full, which no wait clears), as every identity
+		// 503 is told (auth.UnavailableIdentity). A fixed sentence told a
+		// stuck refusal only that waiting wouldn't help, never what would.
+		said, ok := statelog.ConditionSentence(unknown.Err)
+		if !ok {
+			said = "This node couldn't read who holds the human seats this " +
+				"change removes, so nothing was written. Try again in a moment."
+		}
+		httpjson.UnavailableWith(w, httpjson.CodeSeatHoldersUnavailable,
 			auth.RetryIdentity(unknown.Err), httpjson.Detail{
-				"seats": unknown.Seats,
-				"hint": "this write removes a human seat, and this node could not " +
-					"read the identity directory to see whether anybody holds it; " +
-					"nothing was written",
+				"seats": unknown.Seats, "detail": said,
 			})
 	default:
 		s.fail(w, r, "apply the config", err)

@@ -216,6 +216,7 @@ export function classifyCheck(
       };
     case "draining":
     case "starting":
+    case "unavailable":
     case "unreachable":
       return { status: "unreachable", detail: refusal.detail };
     case "problems":

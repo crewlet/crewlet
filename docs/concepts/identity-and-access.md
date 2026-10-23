@@ -1099,8 +1099,11 @@ seat an open invitation was sent for, is refused `409 seat_held` naming them.
 held seat rather than allowing it** — `503`, and only a write that takes a
 human seat away asks. A read that failed has said nothing, and reading that silence as
 "nobody holds this seat" would make a store fault the one moment every removal
-succeeds. The refusal says the directory could not be read; the remedy is to
-try again once it can.
+succeeds. The refusal (`503 seat_holders_unavailable`) says the directory
+could not be read and what clears it: where waiting does, a `Retry-After`
+and a sentence to try again; where it does not, a node evicted from the
+identity log or a log at its ceiling, no `Retry-After` and the identity
+estate's own sentence for what an administrator does about it.
 
 **A Tier A token's binding has a third end, and it is on a node's disk.** A
 token acts under the login `token:<id>`, and a directory row holding that

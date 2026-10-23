@@ -340,6 +340,53 @@ describe("one reading of a /config refusal", () => {
     });
   });
 
+  // A 503 THAT STORED NOTHING. A write removing a human seat on a node that
+  // couldn't read who holds it is refused `seat_holders_unavailable`; read as
+  // unreachable, the builder settled it as a save that might have landed and
+  // showed the bare code. Where no wait clears it (it carried no Retry-After)
+  // it is a problem on each seat the write removes, in the engine's own
+  // sentence, which says what does.
+  test("an unreadable seat-holder read no wait clears is a problem on each seat the write removes", () => {
+    const said =
+      "This node can't apply the identity log's records, so it can't read who holds the seats. Ask an administrator to look at it.";
+    const refusal = classifyConfigRefusal({
+      status: 503,
+      body: { error: "seat_holders_unavailable", detail: said, seats: ["sre", "qa"] },
+    });
+    expect(refusal).toMatchObject({
+      kind: "problems",
+      code: "seat_holders_unavailable",
+      derived: null,
+    });
+    if (refusal.kind !== "problems") throw new Error(refusal.kind);
+    expect(refusal.problems.map((p) => [p.seat, p.message])).toEqual([
+      ["sre", said],
+      ["qa", said],
+    ]);
+    // A body naming no seat still refuses, in the engine's own sentence.
+    const bare = classifyConfigRefusal({
+      status: 503,
+      body: { error: "seat_holders_unavailable", detail: said },
+    });
+    expect(bare).toMatchObject({ kind: "problems", problems: [{ message: said }] });
+  });
+
+  // AND ONE WAITING CLEARS IS A CONDITION TO ASK AGAIN ABOUT, never a problem
+  // with the draft: told as one, the builder's check stopped and kept Save
+  // off until the person changed something, for a node that would answer a
+  // moment later. The check asks again; a save that met it stored nothing.
+  test("an unreadable seat-holder read waiting clears is the node's condition, not the draft's", () => {
+    const said =
+      "This node couldn't read who holds the human seats this change removes, so nothing was written. Try again in a moment.";
+    expect(
+      classifyConfigRefusal({
+        status: 503,
+        body: { error: "seat_holders_unavailable", detail: said, seats: ["sre"] },
+        retryAfter: 2,
+      }),
+    ).toEqual({ kind: "unavailable", detail: said });
+  });
+
   // A LEAD'S WRITE IS REFUSED PART BY PART. The engine names each part that
   // reaches outside what the caller leads (`refused`), and the caller holds
   // what they need for the rest: a problem per part, on the seat or unit it

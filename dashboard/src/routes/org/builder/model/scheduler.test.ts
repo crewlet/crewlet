@@ -167,6 +167,16 @@ describe("classifyCheck", () => {
         { status: 503, body: { error: "starting", detail: "recovering" } },
         { status: "unreachable", detail: "recovering" },
       ],
+      // A seat-holder read waiting clears is asked about again, never a
+      // problem that keeps Save off until the draft changes.
+      [
+        {
+          status: 503,
+          body: { error: "seat_holders_unavailable", detail: "try again", seats: ["sre"] },
+          retryAfter: 2,
+        },
+        { status: "unreachable", detail: "try again" },
+      ],
       [
         { status: 0, body: { error: "unreachable" } },
         { status: "unreachable", detail: "unreachable" },

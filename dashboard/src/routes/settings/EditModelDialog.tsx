@@ -99,6 +99,8 @@ function refusalWords(refusal: ConfigRefusal, id: string): string {
       return `This node is draining and stored nothing${refusal.detail ? `: ${refusal.detail}` : "."}`;
     case "starting":
       return `This node is still starting and stored nothing${refusal.detail ? `: ${refusal.detail}` : "."}`;
+    case "unavailable":
+      return refusal.detail;
     case "unreachable":
       return "The engine did not answer, so the change may or may not have been stored. Reopen the model before trying again.";
     case "problems":
