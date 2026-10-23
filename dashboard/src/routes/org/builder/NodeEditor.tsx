@@ -1372,7 +1372,7 @@ function SeatEditor({
                   chat an agent mentions a person by their seat. */}
               <EditorSection
                 title="Contact identities"
-                hint={`The accounts other systems know the person by — a chat vendor's, a code host's, the tracker's — so agents there can reach them and their activity there is attributed to them. Optional: with none, the person is reached through the dashboard only.${keyLimit ? ` ${keyLimit}` : ""}`}
+                hint={`The accounts other systems know the person by (a chat vendor's, a code host's or the tracker's), so agents there can reach them and their activity there is attributed to them. Optional: with none, the person is reached through the dashboard only.${keyLimit ? ` ${keyLimit}` : ""}`}
               >
                 {errorFor(["contact"]) && (
                   <Callout variant="danger" role="alert">
