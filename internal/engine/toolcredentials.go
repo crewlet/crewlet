@@ -706,19 +706,6 @@ func (m *credentialMissing) Error() string {
 	return "not started: " + m.reason() + when
 }
 
-// runRefusal is why a coding run was not started, as the tool result its turn
-// reads: what is missing, and — the reader being a model — what to do about
-// the turn meanwhile.
-func (m *credentialMissing) runRefusal() string {
-	refusal := "this seat's run environment is not complete, so no box was started: " + m.reason()
-	if m.waiting() {
-		return refusal + "; a run launched once the seal reaches this node is given it — " +
-			"try again then, or do the work with your own tools"
-	}
-	return refusal + "; until somebody does, do the work with your own tools, or say " +
-		"what is missing"
-}
-
 // mintedVariables lists what a child waits for, sorted, for a log line.
 func (m *credentialMissing) mintedVariables() []string {
 	return slices.Sorted(maps.Keys(m.minting))

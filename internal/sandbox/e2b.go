@@ -298,16 +298,19 @@ func (s *E2BSandbox) Exec(ctx context.Context, cmd string, opts ExecOptions) (Ex
 		return failed, fmt.Errorf("e2b: the command ended as %q, which names "+
 			"no exit status (sandbox %s)", res.Status, s.id)
 	case res.Trailer != nil:
-		return failed, fmt.Errorf("e2b: the box's agent ended the command's "+
-			"stream with %s (%s) before it reported an exit code (sandbox %s)",
-			res.Trailer.Code, res.Trailer.Message, s.id)
+		// THE BOX'S AGENT GAVE UP ON THE COMMAND, which is the box failing
+		// on its side rather than anything the command or its caller did.
+		return failed, Because(WhyProviderUnavailable, fmt.Errorf("e2b: the box's agent "+
+			"ended the command's stream with %s (%s) before it reported an exit code "+
+			"(sandbox %s)", res.Trailer.Code, res.Trailer.Message, s.id))
 	default:
 		// The stream ended without a verdict or a reason — the box was
 		// paused or reclaimed mid-command. Reported as a failure with what
 		// was captured, because claiming exit 0 would have the caller
 		// treat an abandoned command as a successful one.
-		return failed, fmt.Errorf("e2b: the command's stream ended before it "+
-			"reported an exit code, so the box went away mid-command (sandbox %s)", s.id)
+		return failed, Because(WhyProviderUnavailable, fmt.Errorf("e2b: the command's "+
+			"stream ended before it reported an exit code, so the box went away "+
+			"mid-command (sandbox %s)", s.id))
 	}
 }
 

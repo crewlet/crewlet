@@ -3,10 +3,13 @@ package sandbox
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -109,6 +112,13 @@ func (e *E2BError) Gone() bool {
 	return e.Status == http.StatusNotFound || e.Status == http.StatusGone
 }
 
+// why classes the refusal by its status ([statusWhy]): the company's key
+// refused, the account at a limit, or E2B failing on its side. A status that
+// means something only for the call that met it — a 404 is a box that is gone
+// to a connect and a template E2B does not have to a create — is that call's
+// to class.
+func (e *E2BError) why() (Why, bool) { return statusWhy(e.Status, true) }
+
 func (a *e2bAPI) do(ctx context.Context, method, path string, in, out any) error {
 	var body io.Reader
 	if in != nil {
@@ -134,7 +144,11 @@ func (a *e2bAPI) do(ctx context.Context, method, path string, in, out any) error
 
 	resp, err := a.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("e2b: %s: %w", path, err)
+		// NO ANSWER AT ALL is E2B not answering, which clears when it
+		// does, unless the configured domain is what failed: see
+		// [transportWhy]. The caller's own context ending is the caller's
+		// to tell apart, and it reads that first.
+		return Because(transportWhy(err), fmt.Errorf("e2b: %s: %w", path, err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
@@ -152,6 +166,32 @@ func (a *e2bAPI) do(ctx context.Context, method, path string, in, out any) error
 		return fmt.Errorf("e2b: decode %s: %w", path, err)
 	}
 	return nil
+}
+
+// transportWhy is what a control-plane request that got no answer means.
+//
+// A DOMAIN THAT DOESN'T RESOLVE, or a certificate the host it resolves to
+// doesn't present for it, is the deployment's providers.sandbox.e2b domain:
+// the request never reached E2B, and no wait changes either. Read as E2B not
+// answering, a mistyped domain (the mistake [newE2BAPI] names as the obvious
+// one) told a model to try again shortly on every call for as long as its turn
+// lasted. Anything else (a timeout, a reset, a refused connection, a resolver
+// that didn't answer) is E2B, or the way to it, not answering, which clears
+// when it does.
+func transportWhy(err error) Why {
+	var dns *net.DNSError
+	if errors.As(err, &dns) && dns.IsNotFound {
+		return WhyConfiguration
+	}
+	var verify *tls.CertificateVerificationError
+	var authority x509.UnknownAuthorityError
+	var hostname x509.HostnameError
+	var invalid x509.CertificateInvalidError
+	if errors.As(err, &verify) || errors.As(err, &authority) ||
+		errors.As(err, &hostname) || errors.As(err, &invalid) {
+		return WhyConfiguration
+	}
+	return WhyProviderUnavailable
 }
 
 // e2bBox is a sandbox as the control plane reports it.
@@ -244,18 +284,38 @@ func (a *e2bAPI) createBox(ctx context.Context, template string, timeoutSec floa
 		Metadata: map[string]string{"crewlet": "sandbox"},
 	}, &out)
 	if err != nil {
+		var refused *E2BError
+		if errors.As(err, &refused) && createRefusesTemplate(refused.Status) {
+			// A CREATE E2B REFUSES AS MALFORMED (400, 422), or a template
+			// it doesn't have (404): everything this request carries is
+			// configuration, so each is a person's to change. The
+			// template (providers.sandbox.e2b.template, or the coding
+			// agent's own) is the likeliest, a missing one or one whose
+			// envd predates secured access, which E2B refuses saying to
+			// rebuild it; the timeout and the seat's run environment ride
+			// the same request, and E2B refuses a malformed one too.
+			return e2bBox{}, Because(WhyConfiguration, err)
+		}
 		return e2bBox{}, err
 	}
 	if out.SandboxID == "" {
 		// A create that answered 200 with no id has left a VM running
 		// that nothing can address — the worst outcome available, since
 		// it cannot be killed either.
-		return e2bBox{}, fmt.Errorf(
-			"e2b: the create call succeeded and named no sandbox, so a box " +
-				"may be running that nothing can reach or reclaim — check the " +
-				"E2B dashboard for an orphan")
+		return e2bBox{}, Because(WhyProviderUnavailable, fmt.Errorf(
+			"e2b: the create call succeeded and named no sandbox, so a box "+
+				"may be running that nothing can reach or reclaim — check the "+
+				"E2B dashboard for an orphan"))
 	}
 	return out, nil
+}
+
+// createRefusesTemplate reports a status a create answers only about the
+// template it names: a request E2B cannot read (400), a template it does not
+// have (404), or one it will not boot (422).
+func createRefusesTemplate(status int) bool {
+	return status == http.StatusBadRequest || status == http.StatusNotFound ||
+		status == http.StatusUnprocessableEntity
 }
 
 // connectBox reads one sandbox for a reconnect, resuming it if it was paused.
