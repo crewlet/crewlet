@@ -62,6 +62,11 @@ const SCRIPT_DECLARED: { name: string; by: string; why: string }[] = [
     by: "app/Shell.tsx",
     why: "columnWidth() for the workspace's column, set on .section-frame — the same number the peek threshold counts",
   },
+  {
+    name: "--budget-tracks",
+    by: "routes/spend/Budgets.tsx",
+    why: "TRACKS, the one track list the company's budget row and the seats' table are both handed, set on .budget-row",
+  },
 ];
 
 /** Every stylesheet under `dashboard/src`, wherever a screen keeps one. */
