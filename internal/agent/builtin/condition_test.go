@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -50,6 +51,10 @@ func everyCondition() map[string]error {
 			"%w: bucket crewlet_files: %w", objstore.ErrFull, errTransport),
 		"a file store that did not answer": fmt.Errorf("objstore: store the object: %w: %w",
 			objstore.ErrUnanswered, errTransport),
+		"a note the running node could not verify": fmt.Errorf("steer: ask: %w",
+			steer.ErrUnverified),
+		"a run's record naming its seat under a key this node lacks": fmt.Errorf(
+			"steer: run-1's seat: %w", steer.ErrSeatKeyUnknown),
 	}
 	for _, r := range statelog.Reasons() {
 		out["write "+string(r)] = fmt.Errorf("worklet: decide: %w", &statelog.Unavailable{

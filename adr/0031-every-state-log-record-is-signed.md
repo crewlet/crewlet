@@ -199,7 +199,8 @@ id, and the record names the seat a person's authority is decided on only
 inside a seal of its own (`seat.steer.seat`). Every reader opens both before
 using either, with the two failures' dispositions: a key the node does not hold
 leaves the note waiting, with a warning naming the keys the node holds, and
-refuses a decision on the anchor as unavailable; a seal that does not open, or
+refuses a decision on the anchor as unavailable under no wait, the condition
+of the fleet the steer channel's own unheld key is; a seal that does not open, or
 opens as another turn's or another note's, is never handed to a model, carried
 or attributed, and is logged at error. The detail is `internal/engine`'s
 (runsteer.go).

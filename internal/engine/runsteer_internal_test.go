@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -303,13 +304,14 @@ func TestANoteUnderAnUnheldKeyWaitsAndNamesTheHeldKeys(t *testing.T) {
 // AN ANCHOR THAT DOES NOT OPEN DECIDES NO AUTHORITY: a person's authority to
 // steer a turn is decided on the seat the run's record names, so a record with
 // no anchor, one that does not verify, or one sealed for another turn names no
-// seat anybody can decide on — and says why, rather than naming one. The why
-// reaches whoever called the steer tool, in its sentence, so it names no key
-// and no secrets.keys: one sealed under a key this node does not hold says who
-// fixes it.
+// seat anybody can decide on — and says why, rather than naming one. The why is
+// a VERDICT the steer tool words for its readers, never a sentence of this
+// node's: one sealed under a key this node does not hold is the condition the
+// fleet's keys clear ([steer.ErrSeatKeyUnknown]), and the rest a record no
+// keyring opens.
 //
 // Mutation: answer an unverified anchor's agent, and the planted seat decides;
-// put the held keys back into the why, and the unheld key's row fails.
+// answer the unheld key as an anchor that does not verify, and its row fails.
 func TestAnAnchorThatDoesNotOpenDecidesNoAuthority(t *testing.T) {
 	t.Parallel()
 	store := sandbox.NewCoordStore(coordmem.NewFleet())
@@ -318,16 +320,18 @@ func TestAnAnchorThatDoesNotOpenDecidesNoAuthority(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		anchor func(turnID string) []byte
-		why    string
+		why    error
 	}{
-		{"no anchor", func(string) []byte { return nil }, "names no seat"},
+		{"no anchor", func(string) []byte { return nil }, steer.ErrSeatUnnamed},
 		{"an anchor in the clear", func(turnID string) []byte {
 			return []byte(`{"turn_id":"` + turnID + `","agent_id":"x","handle":"ceo"}`)
-		}, "does not verify"},
-		{"another turn's anchor", func(string) []byte { return runs.anchor("run-9", "x", "ceo") }, "does not verify"},
+		}, steer.ErrSeatUnverified},
+		{"another turn's anchor", func(string) []byte {
+			return runs.anchor("run-9", "x", "ceo")
+		}, steer.ErrSeatUnverified},
 		{"an anchor under an unheld key", func(turnID string) []byte {
 			return stranger.anchor(turnID, "x", "ceo")
-		}, "an administrator needs to give the fleet's nodes the same keys"},
+		}, steer.ErrSeatKeyUnknown},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			turnID := "run-" + strings.ReplaceAll(tc.name, " ", "-")
@@ -341,19 +345,13 @@ func TestAnAnchorThatDoesNotOpenDecidesNoAuthority(t *testing.T) {
 			if err != nil || !found {
 				t.Fatalf("Seat = %v, %v", found, err)
 			}
-			if seat.Agent != "" || seat.Handle != "" || !strings.Contains(seat.Unverified, tc.why) {
-				t.Errorf("the record's seat read as %+v, want no seat and why (%q)", seat, tc.why)
-			}
-			for _, leak := range []string{"k1", "k-x", "secrets.keys"} {
-				if strings.Contains(seat.Unverified, leak) {
-					t.Errorf("the why %q names %q, which only this node's log should",
-						seat.Unverified, leak)
-				}
+			if seat.Agent != "" || seat.Handle != "" || !errors.Is(seat.Unverified, tc.why) {
+				t.Errorf("the record's seat read as %+v, want no seat and why (%v)", seat, tc.why)
 			}
 		})
 	}
 	launchedRun(t, store, runs, "run-good", nil, nil)
-	if seat, _, _ := runs.Seat(t.Context(), "run-good"); seat.Agent != sweAgent || seat.Unverified != "" {
+	if seat, _, _ := runs.Seat(t.Context(), "run-good"); seat.Agent != sweAgent || seat.Unverified != nil {
 		t.Errorf("a sealed anchor read as %+v", seat)
 	}
 }
@@ -376,7 +374,9 @@ func TestAnAnchorUnderAnUnheldKeyNamesTheHeldKeysInTheLog(t *testing.T) {
 	}, sandbox.Fence{}); err != nil {
 		t.Fatal(err)
 	}
-	if seat, found, err := runs.Seat(t.Context(), "run-1"); err != nil || !found || seat.Unverified == "" {
+	if seat, found, err := runs.Seat(t.Context(), "run-1"); err != nil || !found ||
+		!errors.Is(seat.Unverified, steer.ErrSeatKeyUnknown) {
+
 		t.Fatalf("Seat = %+v, %v, %v, want the anchor unopened", seat, found, err)
 	}
 	var warned []map[string]any

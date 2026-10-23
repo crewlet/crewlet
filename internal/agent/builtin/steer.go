@@ -96,11 +96,13 @@ type RunSeat struct {
 	Agent  string
 	Handle string
 
-	// Unverified is set, and the seat empty, where the anchor did not open —
-	// sealed under a key this node does not hold, or not by the fleet at all.
-	// The sentence says which and what to do; no authority is decided on a
-	// seat nobody can vouch for.
-	Unverified string
+	// Unverified is set, and the seat empty, where the anchor names no seat
+	// anybody can vouch for: [steer.ErrSeatUnnamed], [steer.ErrSeatUnverified],
+	// or [steer.ErrSeatKeyUnknown] for one sealed under a key this node does
+	// not hold. A VERDICT, NEVER A SENTENCE: the tool words it for each of its
+	// readers ([unopenedRefusal]), and the record's reader writes none. No
+	// authority is decided on a seat nobody can vouch for.
+	Unverified error
 }
 
 // RunFiled is what became of a note filed on a turn's run record.
@@ -396,13 +398,8 @@ func (t *steerTurn) maySteer(ctx context.Context, turnID string, seat RunSeat, r
 	if recorded {
 		// THE RECORD'S ANCHOR, and nothing else: no scatter is asked about a
 		// turn whose run record already names its seat.
-		// NO WAIT CLEARS EITHER: the launch sealed the anchor once, so one
-		// that names no seat, or does not verify, stays so, and one under a
-		// key this node does not hold opens only once an operator brings the
-		// keyrings into agreement.
-		if seat.Unverified != "" {
-			return refusalOf(refusedBy(tools.RefusalUnavailable, waitless(), fmt.Sprintf("Whose "+
-				"turn %s is cannot be decided: %s. Nothing was sent.", clip(turnID), seat.Unverified)))
+		if seat.Unverified != nil {
+			return refusalOf(unopenedRefusal(turnID, seat.Unverified))
 		}
 		owner, named := t.seatOf(seat.Agent, seat.Handle)
 		if !named {
@@ -520,22 +517,65 @@ func (t *steerTurn) replyFor(ctx context.Context, replies [][]byte, req steer.Re
 }
 
 // unverifiedRefusal is the running node saying it took nothing because it
-// could not verify the request: unavailable, and WAITLESS, since what changes
-// the answer is an operator bringing the two nodes' keyrings into agreement,
-// never a wait.
+// could not verify the request: unavailable, on [steer.ErrUnverified], a
+// condition no wait clears, since what changes the answer is an operator
+// bringing the two nodes' keyrings into agreement.
 //
-// THE PERSON IS TOLD THE NOTE WAS NOT TAKEN AND WHO FIXES IT; the node running
-// the turn, the keys it holds and the turn go to this node's log, which is
-// where the person who administers the keyring reads them. Said to the person
-// steering, they were a turn id and a list of key ids nobody at a dashboard
-// chose. They are fields the running node answered rather than a sentence it
-// wrote, because its sentence said "this node", which read here as this one.
+// A CONDITION, SO EACH READER HAS WORDS OF THEIR OWN: the person's sentence
+// says the note was not taken and who fixes it ([ConditionSentence]), and the
+// assistant that called the tool is told the same and that retrying won't
+// help. As a bare refusal carrying the person's sentence, it handed that
+// assistant words written for the person steering. The act route answers a
+// person only in words the refusal catalog wrote, and the catalog words no
+// condition (ADR-0060), so there the person steering is told the
+// `unavailable` code's own sentence for a refusal no wait clears, under no
+// Retry-After, and the tool's sentence goes to the assistant's model alone.
+// The node running the turn, the keys it holds and the turn go to this node's
+// log, which is where the person who administers the keyring reads them. Said
+// to the person steering, they were a turn id and a list of key ids nobody at
+// a dashboard chose. They are fields the running node answered rather than a
+// sentence it wrote, because its sentence said "this node", which read here as
+// this one.
 func unverifiedRefusal(ctx context.Context, turnID string, reply steer.Reply) tools.Result {
 	log.WarnContext(ctx, "steer_turn_unverified", "turn_id", turnID,
 		"running_node", reply.Unverified.Node, "held_keys", reply.Unverified.HeldKeys,
 		"detail", "the node running the turn holds none of the keys the note is "+
 			"signed under; add the key the fleet signs with to its secrets.keys")
-	return refusedBy(tools.RefusalUnavailable, waitless(), "The node running this "+
-		"turn couldn't verify your note, so it took nothing. An administrator "+
-		"needs to give the fleet's nodes the same keys.")
+	return refusedBy(tools.RefusalUnavailable, steer.ErrUnverified, "The node running "+
+		"this turn couldn't verify the note, so it took nothing, and sending it again "+
+		"won't change that. Tell the person steering that an administrator needs to "+
+		"give the fleet's nodes the same keys.")
+}
+
+// unopenedRefusal is a run's record whose sealed anchor names no seat anybody
+// can vouch for ([RunSeat.Unverified]): unavailable, and no wait clears any of
+// them, since the launch sealed the anchor once.
+//
+// ONE UNDER A KEY THIS NODE DOES NOT HOLD IS THE FLEET'S NODES NOT HOLDING THE
+// SAME KEYS, the fact [unverifiedRefusal] answers on the scatter, so it is told
+// the same way: a condition no wait clears ([steer.ErrSeatKeyUnknown]), which
+// gives each reader words of their own from the one condition table, and the
+// assistant that called the tool is told that sending it again won't help and
+// who the person steering should be told fixes it. As a bare no-wait refusal
+// it was handed a sentence the engine wrote for the person, and no reader that
+// tells a condition knew it as one. The keys this node holds, and the turn, are
+// in its log (steer_seat_key_unknown, internal/engine). A record naming no
+// seat, or an anchor that does not verify, is a record no keyring opens, and
+// says so.
+func unopenedRefusal(turnID string, unverified error) tools.Result {
+	switch {
+	case errors.Is(unverified, steer.ErrSeatKeyUnknown):
+		return refusedBy(tools.RefusalUnavailable, unverified, "Whose turn this is cannot "+
+			"be decided: its coding run's record names its seat under a key this node "+
+			"doesn't hold, so nothing was sent, and sending it again won't change that. "+
+			"Tell the person steering that an administrator needs to give the fleet's "+
+			"nodes the same keys.")
+	case errors.Is(unverified, steer.ErrSeatUnnamed):
+		return refusedBy(tools.RefusalUnavailable, waitless(), fmt.Sprintf("Whose turn %s "+
+			"is cannot be decided: its run's record names no seat. Nothing was sent.",
+			clip(turnID)))
+	}
+	return refusedBy(tools.RefusalUnavailable, waitless(), fmt.Sprintf("Whose turn %s is "+
+		"cannot be decided: the seat its run's record names does not verify. Nothing was "+
+		"sent.", clip(turnID)))
 }

@@ -58,12 +58,12 @@ import (
 // waits, with a WARN naming the keys it holds — the precedent is a person's
 // answer to a parked run (internal/sandbox, answerseal.go). An anchor this node
 // cannot open decides nothing, and one sealed under a key it does not hold is a
-// WARN naming the keys it holds (steer_seat_key_unknown): steer_turn's caller
-// is told only who fixes it ([runSteers.openSeat]). What is NOT sealed is the
-// `read` marker, which only the store's own compare-and-set guards: a party on
-// the broker could re-deliver a genuine note to its own turn, or hide one from
-// in-run delivery, and the note still reaches the reviewer or expires — the
-// residual ADR-0067 states.
+// WARN naming the keys it holds (steer_seat_key_unknown), and steer_turn says
+// only who fixes it, as a condition of the fleet ([runSteers.openSeat]).
+// What is NOT sealed is the `read` marker, which only the store's own
+// compare-and-set guards: a party on the broker could re-deliver a genuine
+// note to its own turn, or hide one from in-run delivery, and the note still
+// reaches the reviewer or expires — the residual ADR-0067 states.
 //
 // # Every read is on the record, so the record is the carry
 //
@@ -276,18 +276,21 @@ func (s *runSteers) anchor(turnID, agentID, handle string) []byte {
 }
 
 // openSeat is the seat run's anchor names, or why it names none anybody can
-// vouch for ([builtin.RunSeat.Unverified]), which the steer tool's sentence
-// carries to the assistant that called it: a person steering from the
-// dashboard is answered in the refusal's code alone (ADR-0060).
+// vouch for ([builtin.RunSeat.Unverified]): a VERDICT, which the steer tool
+// words for each of its readers, and never a sentence written here. A sentence
+// this node wrote was handed whole to the tool's caller, and a person steering
+// from the dashboard read none of it, answered in the refusal's code alone
+// (ADR-0060).
 //
-// AN ANCHOR UNDER A KEY THIS NODE DOES NOT HOLD IS THE OPERATOR'S TO FIX, so the
+// AN ANCHOR UNDER A KEY THIS NODE DOES NOT HOLD IS THE OPERATOR'S TO FIX, a
+// condition of the fleet no wait clears ([steer.ErrSeatKeyUnknown]), so the
 // keys this node holds and the advice go to its log, where whoever administers
-// the keyring reads them; the why says only that an administrator needs to give
-// the fleet's nodes the same keys. Said in it, the keys were ids nobody
-// steering chose, beside a file only that administrator changes.
+// the keyring reads them, and nothing anybody steering reads names them: they
+// were ids nobody steering chose, beside a file only that administrator
+// changes.
 func (s *runSteers) openSeat(run sandbox.PendingRun) builtin.RunSeat {
 	if len(run.Steer.Seat) == 0 {
-		return builtin.RunSeat{Unverified: "its run's record names no seat"}
+		return builtin.RunSeat{Unverified: steer.ErrSeatUnnamed}
 	}
 	body, verdict := s.seat.verifier.Open(run.Steer.Seat)
 	switch verdict {
@@ -298,20 +301,19 @@ func (s *runSteers) openSeat(run sandbox.PendingRun) builtin.RunSeat {
 			"detail", "the seat its run's record names is sealed under a key this node does not "+
 				"hold, so no authority is decided on it and nothing is filed; add the key the "+
 				"fleet signs with to this node's secrets.keys")
-		return builtin.RunSeat{Unverified: "its run's record names its seat under a key this " +
-			"node doesn't hold, and an administrator needs to give the fleet's nodes the same keys"}
+		return builtin.RunSeat{Unverified: steer.ErrSeatKeyUnknown}
 	default:
 		log.Error("steer_seat_unverified", "turn_id", run.TurnID,
 			"detail", "the seat its run's record names does not verify under the key it names; "+
 				"no authority is decided on it")
-		return builtin.RunSeat{Unverified: "the seat its run's record names does not verify"}
+		return builtin.RunSeat{Unverified: steer.ErrSeatUnverified}
 	}
 	var sealed seatSealBody
 	if err := json.Unmarshal(body, &sealed); err != nil || sealed.TurnID != run.TurnID {
 		log.Error("steer_seat_unverified", "turn_id", run.TurnID,
 			"detail", "the seat its run's record names was sealed for another turn; no authority "+
 				"is decided on it")
-		return builtin.RunSeat{Unverified: "the seat its run's record names does not verify"}
+		return builtin.RunSeat{Unverified: steer.ErrSeatUnverified}
 	}
 	return builtin.RunSeat{Agent: sealed.AgentID, Handle: sealed.Handle}
 }

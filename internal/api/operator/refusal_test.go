@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/opkey"
@@ -348,6 +349,59 @@ func TestAStateOrACollisionIsToldToAPersonInItsCodesOwnWords(t *testing.T) {
 			}
 			if heard.Said() != model {
 				t.Errorf("the model heard %q, want the tool's own sentence", heard.Said())
+			}
+		})
+	}
+}
+
+// A NOTE THE RUNNING NODE COULD NOT VERIFY IS TOLD TO A PERSON UNDER NO WAIT:
+// no Retry-After, since only an operator giving the fleet's nodes the same
+// keys changes the answer, and the assistant's sentence to its model alone, in
+// process (internal/modelnote). A refusal carrying the person's sentence
+// alone, with no condition beneath it, reached the dashboard as an unavailable
+// a wait would clear. Nobody has worded the condition for a person yet
+// (ADR-0060), so the answer carries no detail and no `tool_detail`, and its
+// code's own message for a refusal no wait clears stands alone. So is a coding
+// run's record whose seat this node cannot open, sealed under a key it does
+// not hold.
+//
+// Mutation: drop either steer arm from builtin's condition table, or mark it
+// as a condition a wait clears, and the answer carries a Retry-After; answer
+// the assistant's sentence as the detail and it reaches the person.
+func TestAnUnverifiedNoteIsToldToAPersonUnderNoWait(t *testing.T) {
+	t.Parallel()
+	for name, cause := range map[string]error{
+		"a note the running node could not verify": fmt.Errorf("ask: %w", steer.ErrUnverified),
+		"a run's record naming its seat under a key this node lacks": fmt.Errorf("seat: %w",
+			steer.ErrSeatKeyUnknown),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			model := "This turn's note couldn't be verified; tell the person steering."
+			ctx, heard := modelnote.Expect(t.Context())
+			r := httptest.NewRequestWithContext(ctx, http.MethodPost,
+				operator.ActPathPrefix+"steer_turn", nil)
+			rec := httptest.NewRecorder()
+			operator.FailTool(rec, r, crewletmcp.Result{Failed: true, Output: model,
+				Cause: crewletmcp.Classify(crewletmcp.RefusalUnavailable, cause)}, newKey(),
+				httpjson.Detail{"tool": "steer_turn"})
+			body := decode(t, rec)
+			if rec.Code != http.StatusServiceUnavailable ||
+				body["error"] != string(httpjson.CodeUnavailable) {
+				t.Fatalf("answered %d %v, want 503 unavailable", rec.Code, body)
+			}
+			if after := rec.Header().Get("Retry-After"); after != "" {
+				t.Errorf("Retry-After: %s on a refusal no wait clears", after)
+			}
+			said, has := body["detail"]
+			if has || body["message"] != waitless(t, httpjson.CodeUnavailable) ||
+				body["tool_detail"] != nil || strings.Contains(fmt.Sprint(body), "verified") {
+
+				t.Errorf("answered %v (detail %v), want its code's own message for no wait alone",
+					body, said)
+			}
+			if heard.Said() != model {
+				t.Errorf("the assistant's model heard %q, want its sentence %q", heard.Said(), model)
 			}
 		})
 	}
