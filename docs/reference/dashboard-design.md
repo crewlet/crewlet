@@ -7172,7 +7172,13 @@ that can.
   `not_running` is stopping: a job still being set up (`launching`), a box
   paused before its record moves on (`box_paused`), a box gone before its
   record says how the run ended (`box_gone`), a silent owner and a failed
-  read all keep asking, and keep what is on screen.
+  read all keep asking, and keep what is on screen. The one failed read that
+  ends the poll is a refusal the engine says no wait clears (`unavailable`
+  whose `retry_after` is zero: a sandbox setup somebody has to fix, a refused
+  key), since every ask would be answered the same and logged on the owner;
+  a reconnect, or opening the view again, asks again. A failed read is told in
+  the engine's own sentence for it (`QueryState`, as every screen tells one),
+  never by its code, over what the view already shows.
   - **The view holds what it was sent.** It asks by CURSOR — the reading it
     holds, how far and the owner's digest there — and APPENDS what the owner
     says it lacks, or replaces what it holds on a reset. `lib/useLiveTail.ts`
