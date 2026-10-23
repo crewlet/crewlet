@@ -7612,7 +7612,12 @@ failed) is told the page could not read it — never that no configuration
 carries the server, which only an answer can say. An origin with no tools says so — *docs has
 registered no tools*, with the reason from the engine's state and **Show all
 tools** — rather than *No tool matches “”*, which is kept for a search that
-found nothing. **Add an MCP server** is drawn for every reader and
+found nothing. The catalogue's rows are a tool's name, its description and
+what it can do; its origin is a column of words (*Built in*, or the MCP
+server's name) and the filter's chips name it the same way, both drawn only
+where the catalogue holds more than one origin, and the sentence of what its
+hints say, with what nobody advertised, is on the tool's own page.
+**Add an MCP server** is drawn for every reader and
 disabled with the reason for one who cannot change the configuration: a
 name (its example is never a name the company already has; a name the
 configuration carries is refused, and one only a node still runs from an
