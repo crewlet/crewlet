@@ -1060,6 +1060,87 @@ func TestARequestIsCompletedOnlyByItsOwnReadBack(t *testing.T) {
 	}
 }
 
+// A RELEASE THAT LOST ITS RACE RELEASES THE WINDOW AS IT NOW STANDS.
+//
+// The delete that ends a window is conditional on the revision the drive read.
+// An exclusion landing between the verify and the release moves the record,
+// and the refused delete was taken as the release: the node logged the fleet
+// released, and the drive's next pass asked to delete it at no revision, which
+// the store refuses, so the verb answered a fault for a window that was still
+// open. And a release that landed asked the store to delete the window again.
+//
+// Mutation: take a moved record as released and the window is left open; drop
+// the early return for a released window and the store is asked to delete it a
+// third time.
+func TestAReleaseThatLostItsRaceReleasesTheWindowAsItNowStands(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fleet := coordmem.NewFleet()
+	streams := []string{"CREWLET_TRACKER_LOG"}
+	nodes := []string{"node-a", "node-b"}
+	for _, id := range nodes {
+		if err := nodeOn(fleet, id, "maintenance", statelog.ModeMaintenance, dataNode).
+			handshake(ctx, streams); err != nil {
+			t.Fatal(err)
+		}
+		if err := fleet.PutPositions(ctx, coord.NodePositions{
+			NodeID: id, At: time.Now().UTC(), Domains: map[string]coord.DomainPosition{},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	coordinator := nodeOn(fleet, "node-a", "maintenance", statelog.ModeMaintenance, dataNode)
+	resized := &ceilingLog{max: 1 << 32}
+	applied, err := coordinator.driveCapacity(ctx, resized, openWindow(t, coordinator))
+	if err != nil || applied.Phase != coord.PhaseApplied {
+		t.Fatalf("the verb from maintenance mode left %s (err %v)", applied.Phase, err)
+	}
+	for _, id := range nodes {
+		if err := nodeOn(fleet, id, "seal", statelog.ModeSeal, dataNode).
+			handshake(ctx, streams); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// AN EXCLUSION LANDS just as the release is sent.
+	operator := nodeOn(fleet, "node-b", "seal", statelog.ModeSeal, dataNode)
+	raced := &racedClose{fleetStore: fleet, before: func() {
+		if _, err := operator.ExcludeParticipant(ctx, applied.Stream, "node-gone",
+			iam.Actor{Name: "ops-3"}); err != nil {
+			t.Errorf("the exclusion did not land: %v", err)
+		}
+	}}
+	sealing := nodeOn(raced, "node-a", "seal", statelog.ModeSeal, dataNode)
+	if _, err := sealing.driveCapacity(ctx, resized, applied); err != nil {
+		t.Fatalf("the verb from seal mode, with the window moved under its release: %v", err)
+	}
+	if held, open, err := fleet.Maintenance(ctx, applied.Stream); err != nil || open {
+		t.Fatalf("the window is still open at %s (open=%t, err=%v)", held.Phase, open, err)
+	}
+	if raced.closes != 2 {
+		t.Errorf("the store was asked to delete the window %d times, want the "+
+			"refused one and the one at the revision it moved to", raced.closes)
+	}
+}
+
+// racedClose is a coordination store that runs before as its first close is
+// sent, and counts every close.
+type racedClose struct {
+	*fleetStore
+	before func()
+	closes int
+}
+
+func (r *racedClose) CloseMaintenance(ctx context.Context, stream, operationID string,
+	revision uint64) error {
+
+	r.closes++
+	if r.closes == 1 && r.before != nil {
+		r.before()
+	}
+	return r.fleetStore.CloseMaintenance(ctx, stream, operationID, revision)
+}
+
 // ceilingLog is a log a capacity window drives end to end with no broker: its
 // ceiling is what the last request set, and onSet, when given, runs as each
 // request leaves and may refuse it.
