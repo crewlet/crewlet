@@ -25,7 +25,6 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A person's note to a turn whose coding run is out: it waits sealed on the
@@ -57,11 +56,14 @@ import (
 // does not open is never delivered, carried or attributed (logged at ERROR as
 // steer_note_unverified), and one sealed under a key this node does not hold
 // waits, with a WARN naming the keys it holds — the precedent is a person's
-// answer to a parked run (internal/sandbox, answerseal.go). What is NOT sealed
-// is the `read` marker, which only the store's own compare-and-set guards: a
-// party on the broker could re-deliver a genuine note to its own turn, or hide
-// one from in-run delivery, and the note still reaches the reviewer or expires
-// — the residual ADR-0067 states.
+// answer to a parked run (internal/sandbox, answerseal.go). An anchor this node
+// cannot open decides nothing, and one sealed under a key it does not hold is a
+// WARN naming the keys it holds (steer_seat_key_unknown): steer_turn's caller
+// is told only who fixes it ([runSteers.openSeat]). What is NOT sealed is the
+// `read` marker, which only the store's own compare-and-set guards: a party on
+// the broker could re-deliver a genuine note to its own turn, or hide one from
+// in-run delivery, and the note still reaches the reviewer or expires — the
+// residual ADR-0067 states.
 //
 // # Every read is on the record, so the record is the carry
 //
@@ -274,7 +276,15 @@ func (s *runSteers) anchor(turnID, agentID, handle string) []byte {
 }
 
 // openSeat is the seat run's anchor names, or why it names none anybody can
-// vouch for ([builtin.RunSeat.Unverified]).
+// vouch for ([builtin.RunSeat.Unverified]), which the steer tool's sentence
+// carries to the assistant that called it: a person steering from the
+// dashboard is answered in the refusal's code alone (ADR-0060).
+//
+// AN ANCHOR UNDER A KEY THIS NODE DOES NOT HOLD IS THE OPERATOR'S TO FIX, so the
+// keys this node holds and the advice go to its log, where whoever administers
+// the keyring reads them; the why says only that an administrator needs to give
+// the fleet's nodes the same keys. Said in it, the keys were ids nobody
+// steering chose, beside a file only that administrator changes.
 func (s *runSteers) openSeat(run sandbox.PendingRun) builtin.RunSeat {
 	if len(run.Steer.Seat) == 0 {
 		return builtin.RunSeat{Unverified: "its run's record names no seat"}
@@ -283,9 +293,13 @@ func (s *runSteers) openSeat(run sandbox.PendingRun) builtin.RunSeat {
 	switch verdict {
 	case statelog.Verified:
 	case statelog.KeyUnknown:
-		return builtin.RunSeat{Unverified: fmt.Sprintf("its run's record names its seat under a key "+
-			"this node does not hold (it holds %s) — add the key to secrets.keys",
-			words.And(s.seat.verifier.KeyIDs()))}
+		log.Warn("steer_seat_key_unknown", "turn_id", run.TurnID,
+			"held_keys", s.seat.verifier.KeyIDs(),
+			"detail", "the seat its run's record names is sealed under a key this node does not "+
+				"hold, so no authority is decided on it and nothing is filed; add the key the "+
+				"fleet signs with to this node's secrets.keys")
+		return builtin.RunSeat{Unverified: "its run's record names its seat under a key this " +
+			"node doesn't hold, and an administrator needs to give the fleet's nodes the same keys"}
 	default:
 		log.Error("steer_seat_unverified", "turn_id", run.TurnID,
 			"detail", "the seat its run's record names does not verify under the key it names; "+

@@ -41,7 +41,7 @@ func TestEveryInstructionChannelSignsInDomainsOfItsOwn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	desk, err := newSteerDesk(ring)
+	desk, err := newSteerDesk("node-channels", ring)
 	if err != nil {
 		t.Fatal(err)
 	}

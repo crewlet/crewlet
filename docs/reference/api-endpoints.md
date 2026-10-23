@@ -5719,7 +5719,7 @@ this node files the note there itself — sealed under the fleet keyring — and
 asks nobody. A turn that has not launched one holds its notes on the node
 running it, and the note is scattered to that node.
 
-**Who may**: the turn's seat's holder, whoever leads that seat, or `admin`. Once the turn's run is out, the seat is the one the run's record names under a sealed anchor, read here; a record whose anchor does not open decides nothing, and the note is refused `unavailable` with the reason. Before that the seat is the one thing this node cannot know — the turn runs wherever its seat is held — so `admin` is admitted at once and a caller who leads nobody is refused at once, and anybody else is decided after a PROBE asks the fleet whose turn it is, without offering the note. A probe nobody answers inside two seconds is `unavailable`: nothing was offered, so there is nothing to be uncertain about.
+**Who may**: the turn's seat's holder, whoever leads that seat, or `admin`. Once the turn's run is out, the seat is the one the run's record names under a sealed anchor, read here; a record whose anchor does not open decides nothing, and the note is refused `unavailable`, the tool's sentence saying why. Before that the seat is the one thing this node cannot know — the turn runs wherever its seat is held — so `admin` is admitted at once and a caller who leads nobody is refused at once, and anybody else is decided after a PROBE asks the fleet whose turn it is, without offering the note. A probe nobody answers inside two seconds is `unavailable`: nothing was offered, so there is nothing to be uncertain about.
 
 `unknown` means no node answered the OFFER inside two seconds. A reply lost on its way
 back is indistinguishable from none, so the note may have been taken; sending it
@@ -5740,9 +5740,16 @@ so nothing else reaches a turn
 [ADR-0067](https://github.com/crewlet/crewlet/blob/main/adr/0067-a-note-to-a-coding-run-waits-sealed-on-its-record.md)).
 An answer the asking node cannot believe is no answer, so it reads as
 `unknown`. A running node that does not hold the key the note is signed under
-takes nothing and says so, and the tool refuses `unavailable` naming the keys
-it holds: bring `secrets.keys` into agreement across the fleet, and send the
-note again.
+takes nothing and says so, and the tool refuses `unavailable` with no
+`Retry-After`. Its sentence, which your assistant reads over `/operator/mcp`,
+says that an administrator needs to give the nodes the same keys; over
+`/operator/act` the refusal carries no `detail` (ADR-0060), so the person
+steering is answered in the code's own `message` for a refusal no wait clears.
+The keys the running node holds are in its log
+(`steer_request_refused`, `held_keys`) and the asking node's
+(`steer_turn_unverified`, which names the node running the turn as
+`running_node` beside its `held_keys`): bring `secrets.keys` into agreement
+across the fleet, and send the note again.
 
 ### Answering a question from the company's knowledge
 

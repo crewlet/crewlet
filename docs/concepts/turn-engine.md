@@ -862,7 +862,13 @@ sequenceDiagram
   seat it is, and the note is decided on that seat before it is offered. A
   probe nobody answers is `unavailable`, never a refusal: no answer says nothing
   about whose turn it was. An anchor that does not open decides nothing, and
-  the note is refused `unavailable` with the reason.
+  the note is refused `unavailable`, the tool's sentence saying why: for one
+  sealed under a key the asking node does not hold, only that an administrator
+  needs to give the fleet's nodes the same keys. That sentence is the calling
+  assistant's; a person steering from the dashboard is answered in the
+  refusal's code alone (ADR-0060). The keys that node holds are in its log
+  (`steer_seat_key_unknown`, `held_keys`), where whoever administers the
+  keyring reads them.
 - **One node answers a scatter.** Every node serves the subject and the note
   names the turn; the node running it is the only one that can answer, so
   nothing has to know where a turn runs. It keeps answering `closed` (the

@@ -127,8 +127,11 @@ now or for this question; and each judges what arrives by the same two failures
 with the dispositions a channel allows: a key the receiving node does not hold
 answers that the request DID NOT RUN, so the asker moves on to a node that
 holds it rather than counting a refusal — or, where only one node can take it,
-as only the node running a turn can take its note, tells the person the keyring
-is what to fix, and as only a box's host can read the box, answers nothing, so
+as only the node running a turn can take its note, answers that it took
+nothing, which the asking node refuses under no wait, its tool telling the
+assistant that called it that the keyring is what to fix (a person at the
+dashboard is answered in the refusal's code alone, ADR-0060), and as only a
+box's host can read the box, answers nothing, so
 the asker hears a host that did not answer and the host's own next poll
 announces the run again — and a MAC that fails under a key it holds is refused
 and logged at error, because no holder will ever accept it. The rule has ONE

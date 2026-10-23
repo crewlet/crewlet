@@ -303,9 +303,13 @@ func TestANoteUnderAnUnheldKeyWaitsAndNamesTheHeldKeys(t *testing.T) {
 // AN ANCHOR THAT DOES NOT OPEN DECIDES NO AUTHORITY: a person's authority to
 // steer a turn is decided on the seat the run's record names, so a record with
 // no anchor, one that does not verify, or one sealed for another turn names no
-// seat anybody can decide on — and says why, rather than naming one.
+// seat anybody can decide on — and says why, rather than naming one. The why
+// reaches whoever called the steer tool, in its sentence, so it names no key
+// and no secrets.keys: one sealed under a key this node does not hold says who
+// fixes it.
 //
-// Mutation: answer an unverified anchor's agent, and the planted seat decides.
+// Mutation: answer an unverified anchor's agent, and the planted seat decides;
+// put the held keys back into the why, and the unheld key's row fails.
 func TestAnAnchorThatDoesNotOpenDecidesNoAuthority(t *testing.T) {
 	t.Parallel()
 	store := sandbox.NewCoordStore(coordmem.NewFleet())
@@ -323,7 +327,7 @@ func TestAnAnchorThatDoesNotOpenDecidesNoAuthority(t *testing.T) {
 		{"another turn's anchor", func(string) []byte { return runs.anchor("run-9", "x", "ceo") }, "does not verify"},
 		{"an anchor under an unheld key", func(turnID string) []byte {
 			return stranger.anchor(turnID, "x", "ceo")
-		}, "secrets.keys"},
+		}, "an administrator needs to give the fleet's nodes the same keys"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			turnID := "run-" + strings.ReplaceAll(tc.name, " ", "-")
@@ -340,11 +344,61 @@ func TestAnAnchorThatDoesNotOpenDecidesNoAuthority(t *testing.T) {
 			if seat.Agent != "" || seat.Handle != "" || !strings.Contains(seat.Unverified, tc.why) {
 				t.Errorf("the record's seat read as %+v, want no seat and why (%q)", seat, tc.why)
 			}
+			for _, leak := range []string{"k1", "k-x", "secrets.keys"} {
+				if strings.Contains(seat.Unverified, leak) {
+					t.Errorf("the why %q names %q, which only this node's log should",
+						seat.Unverified, leak)
+				}
+			}
 		})
 	}
 	launchedRun(t, store, runs, "run-good", nil, nil)
 	if seat, _, _ := runs.Seat(t.Context(), "run-good"); seat.Agent != sweAgent || seat.Unverified != "" {
 		t.Errorf("a sealed anchor read as %+v", seat)
+	}
+}
+
+// AN ANCHOR UNDER A KEY THIS NODE DOES NOT HOLD NAMES THE KEYS IT HOLDS IN ITS
+// LOG, at WARN and with the turn, where whoever administers the keyring reads
+// them: steer_turn's caller is told only who fixes it, and an anchor in a key
+// this node lacks is no forgery, so nothing is said at ERROR.
+//
+// Mutation: drop held_keys from the line, or log it as steer_seat_unverified,
+// and this fails. Not parallel: it installs the process's log sink.
+func TestAnAnchorUnderAnUnheldKeyNamesTheHeldKeysInTheLog(t *testing.T) {
+	logs := captureSteerLogs(t)
+	store := sandbox.NewCoordStore(coordmem.NewFleet())
+	runs, _ := steersOver(t, steerRing, store)
+	stranger, _ := steersOver(t, statelog.OneKey("k-x", "another fleet's key material"), store)
+	if _, err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
+		TurnID: "run-1", AgentID: sweAgent, AgentHandle: "swe", Role: "SWE",
+		CodingAgent: "claude-code", Steer: sandbox.RunSteer{Seat: stranger.anchor("run-1", sweAgent, "swe")},
+	}, sandbox.Fence{}); err != nil {
+		t.Fatal(err)
+	}
+	if seat, found, err := runs.Seat(t.Context(), "run-1"); err != nil || !found || seat.Unverified == "" {
+		t.Fatalf("Seat = %+v, %v, %v, want the anchor unopened", seat, found, err)
+	}
+	var warned []map[string]any
+	for line := range strings.SplitSeq(logs.String(), "\n") {
+		var rec map[string]any
+		if json.Unmarshal([]byte(line), &rec) != nil {
+			continue
+		}
+		switch rec["msg"] {
+		case "steer_seat_key_unknown":
+			warned = append(warned, rec)
+		case "steer_seat_unverified":
+			t.Errorf("an anchor under an unheld key was reported as one that does not verify: %v", rec)
+		}
+	}
+	if len(warned) != 1 {
+		t.Fatalf("steer_seat_key_unknown was logged %d times, want once: %v", len(warned), warned)
+	}
+	held, _ := warned[0]["held_keys"].([]any)
+	if warned[0]["level"] != "WARN" || warned[0]["turn_id"] != "run-1" ||
+		!slices.Equal(held, []any{"k1"}) {
+		t.Errorf("the line %v doesn't name the turn and the one key this node holds, at WARN", warned[0])
 	}
 }
 

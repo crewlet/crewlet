@@ -276,8 +276,8 @@ func (t *steerTurn) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	if answered && reply.Unverified != "" {
-		return unverifiedRefusal(turnID, reply), nil
+	if answered && reply.Unverified != nil {
+		return unverifiedRefusal(ctx, turnID, reply), nil
 	}
 	if !answered {
 		log.WarnContext(ctx, "steer_turn_unanswered",
@@ -410,8 +410,8 @@ func (t *steerTurn) maySteer(ctx context.Context, turnID string, seat RunSeat, r
 			"answered for turn %s within %s: it is not running anywhere, or the node "+
 			"running it did not answer in time. Nothing was sent; try again.",
 			clip(turnID), SteerAskBudget)))
-	case reply.Unverified != "":
-		return refusalOf(unverifiedRefusal(turnID, reply))
+	case reply.Unverified != nil:
+		return refusalOf(unverifiedRefusal(ctx, turnID, reply))
 	}
 	owner, named := t.seatOf(reply.Agent, reply.AgentHandle)
 	if !named {
@@ -504,11 +504,22 @@ func (t *steerTurn) replyFor(ctx context.Context, replies [][]byte, req steer.Re
 }
 
 // unverifiedRefusal is the running node saying it took nothing because it
-// could not verify the request: unavailable, since a keyring an operator
-// brings into agreement is what changes the answer, and naming what the node
-// holds, which is all a person needs to say to the operator.
-func unverifiedRefusal(turnID string, reply steer.Reply) tools.Result {
-	return refused(tools.RefusalUnavailable, fmt.Sprintf("Turn %s's node could not "+
-		"verify the note, so it took nothing: %s. Nothing was sent.", clip(turnID),
-		reply.Unverified))
+// could not verify the request: unavailable, and WAITLESS, since what changes
+// the answer is an operator bringing the two nodes' keyrings into agreement,
+// never a wait.
+//
+// THE PERSON IS TOLD THE NOTE WAS NOT TAKEN AND WHO FIXES IT; the node running
+// the turn, the keys it holds and the turn go to this node's log, which is
+// where the person who administers the keyring reads them. Said to the person
+// steering, they were a turn id and a list of key ids nobody at a dashboard
+// chose. They are fields the running node answered rather than a sentence it
+// wrote, because its sentence said "this node", which read here as this one.
+func unverifiedRefusal(ctx context.Context, turnID string, reply steer.Reply) tools.Result {
+	log.WarnContext(ctx, "steer_turn_unverified", "turn_id", turnID,
+		"running_node", reply.Unverified.Node, "held_keys", reply.Unverified.HeldKeys,
+		"detail", "the node running the turn holds none of the keys the note is "+
+			"signed under; add the key the fleet signs with to its secrets.keys")
+	return refusedBy(tools.RefusalUnavailable, waitless(), "The node running this "+
+		"turn couldn't verify your note, so it took nothing. An administrator "+
+		"needs to give the fleet's nodes the same keys.")
 }
