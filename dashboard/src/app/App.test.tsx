@@ -259,7 +259,7 @@ describe("the drawer's search", () => {
     const restore = touch(on);
     try {
       mount();
-      const search = document.querySelector(".side-search")!;
+      const search = document.querySelector(".crewlet-app-shell__rail-search")!;
       expect(search.textContent).toContain("Ask or jump to…");
       expect(search.querySelectorAll(".crewlet-kbd-combo")).toHaveLength(caps);
     } finally {

@@ -757,7 +757,7 @@ describe("the sidebar's figures", () => {
     await settle();
     const presses = screen.getAllByRole("button", { name: /^New task$/ });
     expect(presses).toHaveLength(1);
-    expect(document.querySelector(".side-head button")).toBeNull();
+    expect(document.querySelector(".crewlet-app-shell__rail-head button")).toBeNull();
     await act(async () => {
       fireEvent.click(presses[0]!);
     });

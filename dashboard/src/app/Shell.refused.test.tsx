@@ -197,9 +197,9 @@ test("a session holding no app is dialled, and its sidebar locks the apps by nam
   );
   expect(row(/^Work/).querySelector("[title='Needs Tracker access']")).not.toBeNull();
   expect(row(/^Knowledge/).querySelector("[title='Needs Knowledge access']")).not.toBeNull();
-  expect(row(/^Home/).querySelector(".side-locked")).toBeNull();
-  expect(row(/^Overview/).querySelector(".side-locked")).toBeNull();
-  expect(row(/^Org chart/).querySelector(".side-locked")).toBeNull();
+  expect(row(/^Home/).querySelector(".crewlet-locked-label")).toBeNull();
+  expect(row(/^Overview/).querySelector(".crewlet-locked-label")).toBeNull();
+  expect(row(/^Org chart/).querySelector(".crewlet-locked-label")).toBeNull();
   // NOTHING SAYS IT WAS REFUSED: there is no refusal to say.
   expect(screen.queryByText("You can’t use Crewlet right now")).toBeNull();
   expect(screen.queryByText(/Blocked|no access/i)).toBeNull();
@@ -214,7 +214,7 @@ test("a session holding no app finds Settings unlocked, and Spend open in it", a
   await mount(null);
   const foot = await screen.findByRole("navigation", { name: "Settings" });
   const settings = within(foot).getByRole("link", { name: /^Settings/ });
-  expect(settings.querySelector(".side-locked")).toBeNull();
+  expect(settings.querySelector(".crewlet-locked-label")).toBeNull();
   expect(settings.textContent).toBe("Settings");
   // AND IT OPENS WHERE THE READER MAY READ: Models & keys is Admin's, so the
   // row leads to Token spend rather than to a refusal ([landingPath]).

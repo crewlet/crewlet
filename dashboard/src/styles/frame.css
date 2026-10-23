@@ -413,34 +413,6 @@
   padding: 0;
 }
 
-/* THE RAIL'S HEAD: the company's lockup, alone on its line. It takes the
-   whole width, so a long company name truncates rather than wrapping. */
-.side-head {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  min-width: 0;
-  width: 100%;
-}
-.side-head > :first-child {
-  flex: 1;
-  min-width: 0;
-}
-
-/* THE ⌘K FIELD SITS ON THE NAV'S OWN GUTTER, so its left edge is the left
-   edge every nav row's background starts at. */
-/* THE TRIGGER'S GLYPH ON THE NAV'S GLYPH COLUMN: a nav row's glyph stands
-   the gutter and the row's pad in, and the trigger's the gutter, its own
-   1px edge and its pad, which put it a pixel left of every row under it. The
-   inset makes up the difference from the kit's own measures. */
-.side-search {
-  padding: 0 var(--size-nav-gutter) var(--spacing-3);
-  padding-inline-start: calc(
-    var(--size-nav-gutter) + var(--size-nav-row-pad) - (var(--spacing-2) + var(--spacing-1) / 2) -
-      1px
-  );
-}
-
 /* A SIDEBAR SECTION THAT COULD NOT BE DRAWN (`app/boundaries.tsx`): its
    heading stays, and one caption line under it says so, set in from the rail
    the way a row's words are, with the retry beside the words rather than a

@@ -12,6 +12,8 @@ import { describe, expect, test } from "vitest";
 
 import { APPS, GRANTS } from "~/contract/identity.ts";
 import {
+  groupLock,
+  lockReason,
   ACCESS_WORDS,
   accessLabel,
   accessLine,
@@ -116,4 +118,20 @@ test("a coding run's question is withheld only where the engine said so", () => 
   expect(questionWithheld({ body_withheld: true })).toBe(true);
   expect(questionWithheld({ question: "Which branch?", body_withheld: true })).toBe(false);
   expect(questionWithheld({})).toBe(false);
+});
+
+// ONE SENTENCE FOR A LOCK, and one rule for a group's: the reason every row
+// shares, or nothing where a row is open or the rows want different access.
+describe("a lock's words", () => {
+  test("say what is missing, and nothing where nothing is", () => {
+    expect(lockReason(["admin"])).toBe("Needs Admin access");
+    expect(lockReason([])).toBeUndefined();
+  });
+
+  test("a group carries the lock only where every row shares one reason", () => {
+    expect(groupLock(["Needs Admin access", "Needs Admin access"])).toBe("Needs Admin access");
+    expect(groupLock(["Needs Admin access", undefined])).toBeUndefined();
+    expect(groupLock(["Needs Admin access", "Needs Tracker access"])).toBeUndefined();
+    expect(groupLock([])).toBeUndefined();
+  });
 });
