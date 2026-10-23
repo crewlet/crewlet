@@ -773,8 +773,8 @@ func TestTheBarrierRefusesEveryWayAnAcknowledgementCanBeTheWrongOne(t *testing.T
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			restarted, incarnations := barrierEvidence(op, tc.acks)
-			if restarted != tc.want {
+			incarnations, missing := statelog.SealRestarts(op, tc.acks)
+			if restarted := len(missing) == 0; restarted != tc.want {
 				t.Fatalf("the barrier reports restarted=%v, want %v", restarted, tc.want)
 			}
 			if !tc.want {
@@ -809,12 +809,12 @@ func TestAnExcludedParticipantIsTheOnlyThingThatWaivesAnAcknowledgement(t *testi
 		NodeID: "node-1", OperationID: "op-1", Attempt: 1,
 		Incarnation: "node-1:new", Mode: string(statelog.ModeSeal),
 	}}
-	if restarted, _ := barrierEvidence(op, acks); restarted {
+	if _, missing := statelog.SealRestarts(op, acks); len(missing) == 0 {
 		t.Fatal("the barrier held with a participant that never came back")
 	}
 	op.Excluded = []string{"node-2"}
-	restarted, incarnations := barrierEvidence(op, acks)
-	if !restarted {
+	incarnations, missing := statelog.SealRestarts(op, acks)
+	if len(missing) > 0 {
 		t.Fatal("an operator's exclusion did not waive the acknowledgement")
 	}
 	if _, named := incarnations["node-2"]; named {
@@ -2403,7 +2403,7 @@ func TestADatalessMemberMustAcknowledgeASeal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if held, _ := barrierEvidence(op, acks); held {
+	if _, missing := statelog.SealRestarts(op, acks); len(missing) == 0 {
 		t.Fatal("the seal held before the dataless member restarted into seal mode")
 	}
 	for _, id := range []string{"broker-1", "agent-1"} {
@@ -2419,8 +2419,8 @@ func TestADatalessMemberMustAcknowledgeASeal(t *testing.T) {
 				"nothing and it is no participant, so the record is noise at best")
 		}
 	}
-	held, incarnations := barrierEvidence(op, acks)
-	if !held {
+	incarnations, missing := statelog.SealRestarts(op, acks)
+	if len(missing) > 0 {
 		t.Fatalf("the seal does not hold with every participant restarted into "+
 			"seal mode: the dataless member never acknowledged (acks: %+v)", acks)
 	}
