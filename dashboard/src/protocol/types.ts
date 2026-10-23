@@ -5563,18 +5563,10 @@ export interface Viewer {
    *  Absent from an engine that does not serve the assistant, which the
    *  client reads as off (`assistantUnavailable`). */
   assistant?: AssistantViewerAssistant;
-  /**
-   * Which chat the company runs (`chat.backend`, resolved): the engine's own
-   * (`chatlet`), a vendor's (`vendor`) or none (`none`) — and "" for a caller
-   * not holding the Chatlet app, and on a node with no company yet. Every chat
-   * question is served only where it is `chatlet`, so a screen says which it
-   * is before it asks one: asked of a vendor company, each would be
-   * `unknown_query`, which reads as a node fault rather than a company's
-   * choice.
-   */
-  chat_backend: "chatlet" | "vendor" | "none" | "";
-  /** On a `vendor` company, the vendor surfaces it declares (`mattermost`,
-   *  `slack`), in that order; empty everywhere else. */
+  /** On a company whose chat is a vendor's (`services.chat` is `vendor` on
+   *  the org projection), the vendor surfaces it declares (`mattermost`,
+   *  `slack`), in that order: told to a caller holding the Chatlet app, and
+   *  empty for anybody else and everywhere else. */
   chat_vendors: string[];
 }
 

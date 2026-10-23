@@ -130,14 +130,15 @@ export function actionApps(tool: ActionTool): readonly App[] {
 
 /**
  * The service built into Crewlet a change lands in, read off the same
- * `domain`: Worklet for the `tracker` log, Doclet for the `pages` log. A
- * company running another system in its place, or none, has nowhere for the
- * change to land.
+ * `domain`: Worklet for the `tracker` log, Doclet for the `pages` log, Chatlet
+ * for the `chat` log. A company running another system in its place, or
+ * none, has nowhere for the change to land.
  */
 export function actionService(tool: ActionTool): Service | null {
   const domain: string | null = ACTIONS[tool].domain;
   if (domain === "tracker") return "tracker";
   if (domain === "pages") return "knowledge";
+  if (domain === "chat") return "chat";
   return null;
 }
 
@@ -150,6 +151,7 @@ export function actionService(tool: ActionTool): Service | null {
 export const SERVICE_OFF_REASONS: Readonly<Record<Service, string>> = {
   tracker: "Worklet is not in use, so no task can be filed or changed here.",
   knowledge: "Doclet is not in use, so no page can be written here.",
+  chat: "Chatlet is not in use, so nothing can be said in a room here.",
 };
 
 /** The sentence a change is held with when the reader holds none of its apps. */
@@ -282,10 +284,9 @@ export const OWN_SEAT_DIRECT =
  * seat — or null where none is offered at all.
  *
  * OFFERED BESIDE Message, never instead of it, and only where it can mean
- * something: the company runs the engine's own chat (`chat_backend` is
- * `chatlet` — on a vendor's, the conversation is there and this engine holds
- * no room for it) and the reader holds Chatlet, which the viewer names the
- * backend to and nobody else. A person writes to a seat there as they would
+ * something: the company runs Chatlet (`runs.chat`; on a vendor's, the
+ * conversation is there and this engine holds no room for it) and the reader
+ * holds Chatlet. A person writes to a seat there as they would
  * to a colleague: a remark that obliges nothing, where Message files an ask
  * the seat owes an answer on. Held, as Message is, on the reader's own seat —
  * the engine adds the author to every direct conversation, so one with only
@@ -293,10 +294,12 @@ export const OWN_SEAT_DIRECT =
  */
 export function directSeatAccess(
   access: WriteAccess,
-  viewer: Pick<ViewerState, "handle" | "chatlet" | "chatBackend">,
+  viewer: Pick<ViewerState, "handle" | "chatlet">,
   handle: string,
+  /** Which of Crewlet's own services the company runs (`lib/services.ts`). */
+  runs: ServicesRun,
 ): WriteAccess | null {
-  if (viewer.chatBackend !== "chatlet" || !viewer.chatlet) return null;
+  if (!runs.chat || !viewer.chatlet) return null;
   return access.can && isOwnSeat(viewer, handle)
     ? { can: false, block: "held", reason: OWN_SEAT_DIRECT }
     : access;
@@ -304,7 +307,7 @@ export function directSeatAccess(
 
 /** [directSeatAccess] for this browser now. */
 export function useDirectSeatAccess(handle: string): WriteAccess | null {
-  return directSeatAccess(useWriteAccess("open_dm"), useViewer(), handle);
+  return directSeatAccess(useWriteAccess("open_dm"), useViewer(), handle, useServicesRun());
 }
 
 // ---------------------------------------------------------------------------

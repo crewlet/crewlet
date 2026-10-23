@@ -868,7 +868,7 @@ test("where the company runs no Worklet, the auxiliary model joins the side colu
         withDerived({
           timezone: "UTC",
           roles: [{ name: "CEO", handle: "ceo" }],
-          services: { tracker: "jira", knowledge: "doclet" },
+          services: { tracker: "jira", knowledge: "doclet", chat: "chatlet" },
         }),
       ),
   );

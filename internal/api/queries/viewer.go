@@ -123,23 +123,18 @@ func (s Sources) viewer(ctx context.Context, _ Params) (any, error) {
 		// ALWAYS AN ARRAY; empty is not managed.
 		"config_writer":     s.companyWriters().MayWriteCompany(iam.ActorFor(principal)),
 		"config_managed_by": slices.Clone(s.companyWriters().CompanyWriters),
-		// WHICH CHAT THIS COMPANY RUNS — `chatlet`, `vendor` or `none` —
-		// and, on a vendor, which of the vendor surfaces it declares. The
-		// chat questions answer `unknown_query` for a company whose chat is
-		// not the engine's own, which reads as a subsystem missing on this
-		// node rather than as a company's choice, so a screen asks here
-		// first. ANSWERED TO A HOLDER OF `chatlet`, the app whose questions
-		// it explains, as every app's disclosures are (ADR-0033): ""
-		// and an empty list for anybody else, and for a node that has no
-		// company yet.
-		"chat_backend": "",
+		// WHICH VENDOR CHAT SURFACES THIS COMPANY DECLARES, on a company
+		// whose chat is a vendor's. Whether it runs the engine's own chat
+		// at all is every reader's, as the org projection's `services`; the
+		// vendors' names are the one further fact a screen naming where
+		// the company talks needs, and they are ANSWERED TO A HOLDER OF
+		// `chatlet`, the app they describe, as every app's disclosures are
+		// (ADR-0033): an empty list for anybody else, for a company on the
+		// engine's own chat or on none, and for a node with no company yet.
 		"chat_vendors": []string{},
 	}
 	if principal.Can(iam.GrantChatlet) {
-		if backend, vendors := s.chatBackend(); backend != "" {
-			out["chat_backend"] = string(backend)
-			out["chat_vendors"] = vendors
-		}
+		out["chat_vendors"] = s.chatVendors()
 	}
 	if out["config_managed_by"] == nil {
 		out["config_managed_by"] = []string{}

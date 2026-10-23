@@ -19,24 +19,33 @@ import { MAKE_ORDER } from "./artifacts/words.ts";
 
 // NOTHING IS HIDDEN UNTIL THE ENGINE HAS SAID: the projection names no services
 // only on a node running no company, which is "not known yet", never "none".
-// Mutation: read an absent answer as none, and the first case hides Work.
+// Mutation: read an absent answer as none, and the first case hides Worklet;
+// read chat off another service, and the chat case goes red.
 test("the engine's word decides what runs, and every service runs until it has said", () => {
-  expect(servicesRun(null)).toEqual({ tracker: true, knowledge: true });
-  expect(servicesRun({ tracker: "worklet", knowledge: "doclet" })).toEqual({
+  expect(servicesRun(null)).toEqual({ tracker: true, knowledge: true, chat: true });
+  expect(servicesRun({ tracker: "worklet", knowledge: "doclet", chat: "chatlet" })).toEqual({
     tracker: true,
     knowledge: true,
+    chat: true,
   });
-  expect(servicesRun({ tracker: "jira", knowledge: "doclet" })).toEqual({
+  expect(servicesRun({ tracker: "jira", knowledge: "doclet", chat: "chatlet" })).toEqual({
     tracker: false,
     knowledge: true,
+    chat: true,
   });
-  expect(servicesRun({ tracker: "worklet", knowledge: "confluence" })).toEqual({
+  expect(servicesRun({ tracker: "worklet", knowledge: "confluence", chat: "chatlet" })).toEqual({
     tracker: true,
     knowledge: false,
+    chat: true,
+  });
+  expect(servicesRun({ tracker: "worklet", knowledge: "doclet", chat: "vendor" })).toEqual({
+    tracker: true,
+    knowledge: true,
+    chat: false,
   });
   // ONE OBJECT PER ANSWER, so a memo keyed on it moves only when it changes.
-  expect(servicesRun({ tracker: "jira", knowledge: "none" })).toBe(
-    servicesRun({ tracker: "none", knowledge: "confluence" }),
+  expect(servicesRun({ tracker: "jira", knowledge: "none", chat: "chatlet" })).toBe(
+    servicesRun({ tracker: "none", knowledge: "confluence", chat: "chatlet" }),
   );
 });
 
@@ -44,7 +53,7 @@ test("the engine's word decides what runs, and every service runs until it has s
 // work and no way to its tasks, and keeps the Inbox, whose seat and budget
 // conditions arrive whatever runs the tracker.
 test("a company on another tracker is offered nothing of Worklet", () => {
-  const jira = { tracker: false, knowledge: true } as const;
+  const jira = { tracker: false, knowledge: true, chat: true } as const;
   const rows = WORKSPACES.filter((w) => w.place !== "menu" && serviceShown(w, jira)).map(
     (w) => w.key,
   );
@@ -68,15 +77,33 @@ test("a company on another tracker is offered nothing of Worklet", () => {
   expect(pathShown(["inbox"], jira)).toBe(true);
   // NEW DESIGN'S ONE WAY TO FINISH IS AN AGENT, which files a task.
   expect(offeredKinds(jira)).toEqual(MAKE_ORDER.filter((k) => k !== "design"));
-  expect(offeredKinds({ tracker: true, knowledge: true })).toEqual([...MAKE_ORDER]);
+  expect(offeredKinds({ tracker: true, knowledge: true, chat: true })).toEqual([...MAKE_ORDER]);
 });
 
 test("a company on another knowledge base is offered no Doclet", () => {
-  const confluence = { tracker: true, knowledge: false } as const;
+  const confluence = { tracker: true, knowledge: false, chat: true } as const;
   const places = DESTINATIONS.filter((d) => !serviceShown(d, confluence)).map((d) => d.key);
   expect(places.sort()).toEqual(["doclet", "doclet-diaries", "doclet-skills"]);
   expect(pathShown(["doclet", "pages", "0f0f0f0f-1111-4222-8333-444455556666"], confluence)).toBe(
     false,
   );
   expect(pathShown(["worklet"], confluence)).toBe(true);
+});
+
+// A COMPANY TALKING ON A VENDOR'S CHAT, or on none, is offered no Chatlet at all:
+// no row, no section, no address and no Home widget's page, while its rooms
+// would be refused anyway. Mutation: drop Chatlet's `service` from its row and
+// every expectation here fails.
+test("a company on another chat is offered nothing of Chatlet", () => {
+  const slack = { tracker: true, knowledge: true, chat: false } as const;
+  const rows = WORKSPACES.filter((w) => w.place !== "menu" && serviceShown(w, slack)).map(
+    (w) => w.key,
+  );
+  expect(rows).not.toContain("chatlet");
+  expect(rows).toContain("worklet");
+  const places = DESTINATIONS.filter((d) => !serviceShown(d, slack)).map((d) => d.key);
+  expect(places.sort()).toEqual(["chatlet", "chatlet-mentions", "chatlet-search"]);
+  expect(serviceOfPath(["chatlet", "0f0f0f0f-1111-4222-8333-444455556666"])).toBe("chat");
+  expect(pathShown(["chatlet", "mentions"], slack)).toBe(false);
+  expect(pathShown(["doclet"], slack)).toBe(true);
 });

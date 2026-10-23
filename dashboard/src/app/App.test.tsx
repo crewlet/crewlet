@@ -705,6 +705,15 @@ describe("chat, for a person", () => {
     const asked: string[] = [];
     const store = new Store();
     store.applyHealth(healthFrame({ nodes: 1, applied_epoch: 2 }));
+    // A COMPANY RUNNING CHATLET, as the projection says before a chat
+    // page is drawn at all.
+    store.applyOrg(
+      withDerived({
+        name: "Acme",
+        roles: [],
+        services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet" },
+      }),
+    );
     const socket = new LiveSocket(store);
     (socket as unknown as { query: (what: string) => Promise<unknown> }).query = async (what) => {
       asked.push(what);
@@ -718,7 +727,6 @@ describe("chat, for a person", () => {
             kind: "human",
             grants: ["chatlet"],
             acts: [],
-            chat_backend: "chatlet",
             chat_vendors: [],
           };
         case "chat_channels":
@@ -1217,6 +1225,45 @@ test("the page bar's More holds the star and what the screen folded, and no Copy
   expect(location.hash).toContain("peek=");
 });
 
+// AN ADDRESS UNDER CHATLET, ON A COMPANY TALKING ON A VENDOR'S, draws where the
+// company talks in place of the screen, and the screen asks nothing: no rail,
+// no room. Mutation: drop Chatlet's `service` and the rooms are asked.
+test("a chat address on a company not running Chatlet says where it talks", async () => {
+  location.hash = "#/chatlet";
+  const asked: string[] = [];
+  const reader = {
+    login: "ana",
+    owner: "ana",
+    handle: "ana",
+    grants: ["chatlet"],
+    acts: [],
+    chat_vendors: ["mattermost"],
+  };
+  const store = new Store();
+  store.applyOrg(
+    withDerived({
+      name: "Acme",
+      roles: [],
+      services: { tracker: "worklet", knowledge: "doclet", chat: "vendor" },
+    }),
+  );
+  const socket = new LiveSocket(store);
+  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) => {
+    asked.push(what);
+    return what === "viewer" ? Promise.resolve(reader) : new Promise(() => {});
+  };
+  render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <Router>
+        <App />
+      </Router>
+    </ClientContext.Provider>,
+  );
+  expect(await screen.findByText("This company talks on Mattermost")).toBeTruthy();
+  expect(asked.filter((w) => w.startsWith("chat_"))).toEqual([]);
+  expect(screen.queryByRole("navigation", { name: "Your rooms" })).toBeNull();
+});
+
 // A COLD LOAD OF A SERVICE'S PAGE WAITS FOR THE PROJECTION: mounted on the
 // guess, Doclet asked its spaces, its pages and its activity on a company
 // running none, was refused all three, then gave way to the notice. It waits,
@@ -1243,7 +1290,11 @@ test("a cold load of a service's page asks nothing until the company says what i
   expect(asked.filter((w) => w === "containers" || w === "pages")).toEqual([]);
   act(() =>
     store.applyOrg(
-      withDerived({ name: "Acme", roles: [], services: { tracker: "worklet", knowledge: "none" } }),
+      withDerived({
+        name: "Acme",
+        roles: [],
+        services: { tracker: "worklet", knowledge: "none", chat: "chatlet" },
+      }),
     ),
   );
   expect(await screen.findByText("This company runs no knowledge base")).toBeTruthy();

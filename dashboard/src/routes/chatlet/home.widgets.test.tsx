@@ -1,18 +1,25 @@
 /**
  * Chatlet's widgets on Home: the rail's question and the mention feed's, read as
  * the seat the session holds — and nothing asked of a reader the engine would
- * only refuse, or of a company whose chat is not the engine's own.
+ * only refuse, or before the engine has said the company runs Chatlet.
  */
 
 import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import type { Store } from "~/protocol/index.ts";
-import { ADA, mountChat } from "~/test/chat.tsx";
+import type { ReactNode } from "react";
+import type { OrgServices } from "~/contract/services.ts";
+import { ADA, NATIVE_SERVICES, mountChat } from "~/test/chat.tsx";
 import { INCOMPLETE_NOTE } from "~/components/work.tsx";
 import { NOTHING_TO_LIST } from "~/routes/home/board/kit.tsx";
 import { widgets } from "./home.widgets.tsx";
 import { LIVE_REFETCH_MS } from "./live.ts";
+
+/** A widget mounted as Home mounts it, on a company the engine says runs Chatlet. */
+function mountHome(children: ReactNode, opts: Parameters<typeof mountChat>[1] = {}) {
+  return mountChat(children, { services: NATIVE_SERVICES, ...opts });
+}
 
 const ROOMS = widgets.find((w) => w.key === "chatlet.unread")!;
 const MENTIONS = widgets.find((w) => w.key === "chatlet.mentions")!;
@@ -69,7 +76,7 @@ afterEach(() => {
 describe("unread rooms", () => {
   test("lists the rooms with something unread, the engine's count on each, and counts the muted ones", async () => {
     const { Component } = ROOMS;
-    const { socket } = mountChat(<Component params={{}} />, { answers: { chat_channels: RAIL } });
+    const { socket } = mountHome(<Component params={{}} />, { answers: { chat_channels: RAIL } });
     await settle();
     expect(socket.query.mock.calls.map(([what]) => what)).toContain("chat_channels");
     expect(screen.getByText("Unread rooms · 2")).toBeTruthy();
@@ -89,7 +96,7 @@ describe("unread rooms", () => {
 
   test("an unread count with no read state behind it is not a zero", async () => {
     const { Component } = ROOMS;
-    mountChat(<Component params={{}} />, {
+    mountHome(<Component params={{}} />, {
       answers: { chat_channels: { ...RAIL, read_state: false } },
     });
     await settle();
@@ -100,7 +107,7 @@ describe("unread rooms", () => {
 
   test("a muted room is counted even when it is all that is unread", async () => {
     const { Component } = ROOMS;
-    mountChat(<Component params={{}} />, {
+    mountHome(<Component params={{}} />, {
       answers: {
         chat_channels: {
           ...RAIL,
@@ -121,7 +128,7 @@ describe("unread rooms", () => {
     const { Component } = ROOMS;
     const cut =
       "You’re in more rooms than Chatlet lists, so only your 4 most recently active are counted here.";
-    mountChat(<Component params={{}} />, {
+    mountHome(<Component params={{}} />, {
       answers: { chat_channels: { ...RAIL, truncated: true } },
     });
     await settle();
@@ -130,7 +137,7 @@ describe("unread rooms", () => {
     cleanup();
 
     // AND NEVER "CAUGHT UP" over rooms nobody counted.
-    mountChat(<Component params={{}} />, {
+    mountHome(<Component params={{}} />, {
       answers: {
         chat_channels: {
           ...RAIL,
@@ -147,7 +154,7 @@ describe("unread rooms", () => {
 
   test("a reader with nothing unread is caught up", async () => {
     const { Component } = ROOMS;
-    mountChat(<Component params={{}} />, {
+    mountHome(<Component params={{}} />, {
       answers: { chat_channels: { ...RAIL, channels: [room("c-quiet", "quiet", 0)] } },
     });
     await settle();
@@ -161,7 +168,7 @@ describe("unread rooms", () => {
 describe("unread rooms, live", () => {
   test("a frame anywhere re-reads the rooms", async () => {
     const { Component } = ROOMS;
-    const { socket, store } = mountChat(<Component params={{}} />, {
+    const { socket, store } = mountHome(<Component params={{}} />, {
       answers: { chat_channels: RAIL },
     });
     await waitFor(() => expect(screen.getByText("#general")).toBeTruthy());
@@ -174,7 +181,7 @@ describe("unread rooms, live", () => {
 
   test("a newer read state re-reads the rooms, and the one they drew asks nothing", async () => {
     const { Component } = ROOMS;
-    const { socket, store } = mountChat(<Component params={{}} />, {
+    const { socket, store } = mountHome(<Component params={{}} />, {
       answers: { chat_channels: RAIL },
     });
     await waitFor(() => expect(screen.getByText("#general")).toBeTruthy());
@@ -195,7 +202,7 @@ describe("unread rooms, live", () => {
 describe("mentions", () => {
   test("lists the newest mentions, a thread's opening its thread", async () => {
     const { Component } = MENTIONS;
-    const { socket } = mountChat(<Component params={{}} />, {
+    const { socket } = mountHome(<Component params={{}} />, {
       answers: {
         chat_mentions: {
           handle: "ada",
@@ -230,7 +237,7 @@ describe("mentions", () => {
 
   test("a frame anywhere re-reads the newest page", async () => {
     const { Component } = MENTIONS;
-    const { socket, store } = mountChat(<Component params={{}} />, {
+    const { socket, store } = mountHome(<Component params={{}} />, {
       answers: { chat_mentions: { handle: "ada", mentions: [] } },
     });
     await waitFor(() => expect(screen.getByText("Nobody has named you")).toBeTruthy());
@@ -243,7 +250,7 @@ describe("mentions", () => {
 
   test("nobody has named the reader", async () => {
     const { Component } = MENTIONS;
-    mountChat(<Component params={{}} />, {
+    mountHome(<Component params={{}} />, {
       answers: { chat_mentions: { handle: "ada", mentions: [] } },
     });
     await settle();
@@ -257,7 +264,7 @@ describe("mentions", () => {
 describe("an answer that could not account for everything", () => {
   test("the rail says so rather than that the reader is caught up", async () => {
     const { Component } = ROOMS;
-    mountChat(<Component params={{}} />, {
+    mountHome(<Component params={{}} />, {
       answers: {
         chat_channels: { ...RAIL, complete: false, channels: [room("c-quiet", "quiet", 0)] },
       },
@@ -270,7 +277,7 @@ describe("an answer that could not account for everything", () => {
 
   test("a room a newer engine made is counted as left out", async () => {
     const { Component } = ROOMS;
-    mountChat(<Component params={{}} />, {
+    mountHome(<Component params={{}} />, {
       answers: {
         chat_channels: { ...RAIL, unreadable: 1, channels: [room("c-quiet", "quiet", 0)] },
       },
@@ -282,7 +289,7 @@ describe("an answer that could not account for everything", () => {
 
   test("the feed says so rather than that nobody named the reader", async () => {
     const { Component } = MENTIONS;
-    mountChat(<Component params={{}} />, {
+    mountHome(<Component params={{}} />, {
       answers: { chat_mentions: { handle: "ada", mentions: [], complete: false } },
     });
     await settle();
@@ -296,7 +303,7 @@ describe("a reader chat answers nothing for", () => {
     "%s: a credential acting as no seat is told so, and nothing is asked",
     async (def) => {
       const { Component } = def;
-      const { socket } = mountChat(<Component params={{}} />, {
+      const { socket } = mountHome(<Component params={{}} />, {
         viewer: { ...ADA, handle: "", owner: "token:ci" },
       });
       await settle();
@@ -307,23 +314,19 @@ describe("a reader chat answers nothing for", () => {
     },
   );
 
-  test.each([ROOMS, MENTIONS])(
-    "%s: a company on a vendor's chat says where its chat is, and nothing is asked",
-    async (def) => {
-      const { Component } = def;
-      const { socket } = mountChat(<Component params={{}} />, {
-        viewer: { ...ADA, chat_backend: "vendor", chat_vendors: ["slack"] },
-      });
+  // NOTHING IS ASKED OF A SERVICE THE COMPANY DOES NOT RUN, nor before the
+  // engine has said: Home's board hides both widgets on a company talking on
+  // a vendor's chat, and a cold load must not ask first and be refused.
+  test.each([
+    ["a company on a vendor's chat", { ...NATIVE_SERVICES, chat: "vendor" } as OrgServices],
+    ["a company running no chat", { ...NATIVE_SERVICES, chat: "none" } as OrgServices],
+    ["a company the engine has not yet described", undefined],
+  ])("%s is asked nothing", async (_, services) => {
+    for (const { Component } of [ROOMS, MENTIONS]) {
+      const { socket } = mountChat(<Component params={{}} />, { services });
       await settle();
-      expect(screen.getByText("This company's chat is on Slack.")).toBeTruthy();
       expect(socket.query.mock.calls.map(([what]) => what)).toEqual(["viewer"]);
-    },
-  );
-
-  test("a company that runs no chat says so", async () => {
-    const { Component } = ROOMS;
-    mountChat(<Component params={{}} />, { viewer: { ...ADA, chat_backend: "none" } });
-    await settle();
-    expect(screen.getByText("This company runs no chat.")).toBeTruthy();
+      cleanup();
+    }
   });
 });

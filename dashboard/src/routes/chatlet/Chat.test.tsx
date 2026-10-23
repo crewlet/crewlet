@@ -430,53 +430,6 @@ describe("the rail follows the reader's own read state", () => {
   });
 });
 
-// A COMPANY WHOSE CHAT IS SOMEBODY ELSE'S IS NOT A NODE WITH CHAT DOWN. The
-// engine serves no chat question there, and each one asked came back
-// `unknown_query` — "the subsystem behind it is not running on this node",
-// which sends an operator to debug a node over a line of company
-// configuration. The screen says which chat the company runs, asks nothing,
-// and offers to start nothing it could not hold.
-describe("a company whose chat is not the engine's own", () => {
-  test("on a vendor's chat, the screen names it and asks nothing", async () => {
-    const { query } = mount({
-      viewer: { ...bound, chat_backend: "vendor", chat_vendors: ["mattermost"] },
-    });
-    await waitFor(() => expect(screen.getByText(/chat is on Mattermost/)).toBeTruthy());
-    expect(screen.getByText("chat.backend")).toBeTruthy();
-    expect(query.mock.calls.map(([what]) => what)).not.toContain("chat_channels");
-    expect(screen.queryByRole("button", { name: /new room/i })).toBeNull();
-    expect(screen.queryByRole("navigation", { name: "Your rooms" })).toBeNull();
-  });
-
-  test("with both vendors, it names both", async () => {
-    mount({
-      viewer: { ...bound, chat_backend: "vendor", chat_vendors: ["mattermost", "slack"] },
-    });
-    await waitFor(() => expect(screen.getByText(/on Mattermost and Slack/)).toBeTruthy());
-  });
-
-  test("with no chat at all, it says so", async () => {
-    const { query } = mount({ viewer: { ...bound, chat_backend: "none", chat_vendors: [] } });
-    await waitFor(() => expect(screen.getByText(/runs no chat/)).toBeTruthy());
-    expect(query.mock.calls.map(([what]) => what)).not.toContain("chat_channels");
-  });
-
-  test("on the engine's own, the rooms are asked for as ever", async () => {
-    const { query } = mount({
-      viewer: { ...bound, chat_backend: "chatlet", chat_vendors: [] },
-      chat_channels: { ...served, read_state: true, channels: [room()] },
-    });
-    const rail = await screen.findByRole("navigation", { name: "Your rooms" });
-    // WAITED FOR, NOT READ AT ONCE: the rail is drawn in the same commit
-    // that arms its question, and the question goes out a beat later, so a
-    // loaded runner can show the frame before the socket was asked anything.
-    // The room the answer names, drawn in the rail, is the proof it was both
-    // asked and answered.
-    await waitFor(() => expect(query.mock.calls.map(([what]) => what)).toContain("chat_channels"));
-    expect(await within(rail).findByText(/general/)).toBeTruthy();
-  });
-});
-
 // THE OUTBOX OUTLIVES THE ROOM. A room is remounted for every room opened, and
 // an outbox kept inside it threw the unanswered rows away with it — an
 // `unknown` row's Retry under its own operation key included, which is the only

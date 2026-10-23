@@ -5,11 +5,10 @@
  * # Grouped by need, Crewlet's own service first
  *
  * Chat, Work tracking, Docs and knowledge, Code and Observability. Each of
- * Crewlet's own services opens its group (Crewlet Chat, Worklet, Doclet), so
+ * Crewlet's own services opens its group (Chatlet, Worklet, Doclet), so
  * the built-in answer to a need sits beside the apps that answer it in its
- * place, with In use, Not in use or Soon on its line. Worklet and Doclet name
- * Crewlet beside them as their maker, the way Jira names Atlassian, while
- * Crewlet Chat carries its maker in its name. ATLASSIAN IS LISTED BY
+ * place, with In use or Not in use on its line. Each names Crewlet beside
+ * it as its maker, the way Jira names Atlassian. ATLASSIAN IS LISTED BY
  * PRODUCT: it is one connection that serves two needs, so Jira sits under work
  * tracking and Confluence under docs, each with its own product's state, and
  * both open the one Atlassian page, since it is one key and one account per

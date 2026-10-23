@@ -66,7 +66,6 @@ const JANE: ViewerState = {
   configManagedBy: [],
   assistant: "disabled",
   assistantModel: null,
-  chatBackend: "",
   chatVendors: [],
 };
 
@@ -1537,6 +1536,7 @@ describe("a screen found by what it holds", () => {
     const hits = destinationHits("s", nav, Infinity, null, {
       tracker: true,
       knowledge: true,
+      chat: true,
     }).map((h) => h.label);
     // THE LABEL MATCHES COME FIRST, then the screens only a keyword found
     // ("Account", "Chatlet"), and never one after the other.
@@ -1555,7 +1555,7 @@ describe("a screen found by what it holds", () => {
   test("a reader holding only Worklet opens Settings on Token spend, unlocked", () => {
     const to = vi.fn();
     const nav = { to } as unknown as Parameters<typeof destinationHits>[1];
-    const runs = { tracker: true, knowledge: true };
+    const runs = { tracker: true, knowledge: true, chat: true };
     const settings = destinationHits(
       "settings",
       nav,

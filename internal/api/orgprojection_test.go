@@ -68,7 +68,7 @@ var companyFields = map[string]classified{
 	"Tracker":      {exposure: exposureGuarded, why: "project keys and Worklet's settings: a map of what is wired to what. Only the RESOLVED backend's name reaches a reader, as `services`"},
 	"Knowledge":    {exposure: exposureGuarded, why: "container keys, read scopes and search settings. Only the RESOLVED backend's name reaches a reader, as `services`"},
 	"Chat": {exposure: exposureGuarded,
-		why: "which chat backend, and Chatlet's room policy — the message horizon, a new room's visibility, the working indicator — read through the config query like the tracker's and the knowledge base's"},
+		why: "Chatlet's room policy (the message horizon, a new room's visibility, the working indicator), read through the config query like the tracker's and the knowledge base's. Only the RESOLVED backend's name reaches a reader, as `services`"},
 	"Artifacts":      {exposure: exposureGuarded, why: "the company's artifact policy: what agents may manage and who sees who opened one"},
 	"SkillVariables": {exposure: exposureGuarded, why: "facts substituted into tool-skill text, routinely hostnames and account names"},
 	"Providers": {exposure: exposureResolved, into: "llm",
@@ -91,9 +91,9 @@ var companyFields = map[string]classified{
 // accounts for, and why it may exist anyway.
 var projectionOnly = map[string]string{
 	"derived": "the hierarchy the fields above resolve to, with no document paths",
-	"services": "the tracker and knowledge backends RESOLVED from the guarded `tracker:` and " +
-		"`knowledge:` blocks and their vendor blocks, as a closed set: which of the dashboard's " +
-		"own surfaces exist, and nothing those blocks were guarded for",
+	"services": "the tracker, knowledge and chat backends RESOLVED from the guarded `tracker:`, " +
+		"`knowledge:` and `chat:` blocks and their vendor blocks, as a closed set: which of the " +
+		"dashboard's own surfaces exist, and nothing those blocks were guarded for",
 }
 
 // A tracker project and a knowledge space are the decision here that is not
@@ -513,7 +513,7 @@ func (f *filler) company() *config.Company {
 			f.publicValues = append(f.publicValues, "Pacific/Chatham")
 		case field.Name == "Roles" || field.Name == "Units":
 			// Filled below, through the classification tables.
-		case field.Name == "Tracker" || field.Name == "Knowledge":
+		case field.Name == "Tracker" || field.Name == "Knowledge" || field.Name == "Chat":
 			// GUARDED, then given a backend from the CLOSED SET below:
 			// filled with prose, the resolved backend would be a value no
 			// company can hold, and `services` carrying it would read as a
@@ -535,8 +535,9 @@ func (f *filler) company() *config.Company {
 	c.MCPServers[0].Shared = org.On()
 	c.Tracker.Backend = config.TrackerJira
 	c.Knowledge.Backend = config.KnowledgeConfluence
+	c.Chat.Backend = config.ChatVendor
 	f.publicValues = append(f.publicValues,
-		`"tracker":"jira"`, `"knowledge":"confluence"`)
+		`"tracker":"jira"`, `"knowledge":"confluence"`, `"chat":"vendor"`)
 	c.Roles = f.seats()
 	c.Units = []config.Unit{f.unit(2)}
 	// Every provider key a seat names is configured, each entry filled with
@@ -892,11 +893,12 @@ func TestTheOrgProjectionCarriesTheCompanysClock(t *testing.T) {
 	}
 }
 
-// EVERY READER IS TOLD WHICH TRACKER AND KNOWLEDGE BASE THE COMPANY RUNS, as
-// the engine resolves them, and only on a running company.
+// EVERY READER IS TOLD WHICH TRACKER, KNOWLEDGE BASE AND CHAT THE COMPANY
+// RUNS, as the engine resolves them, and only on a running company.
 //
-// The derivation is the engine's own ([config.Company.TrackerBackendFor] and
-// [config.Company.KnowledgeBackendFor]): a named backend wins, an empty one
+// The derivation is the engine's own ([config.Company.TrackerBackendFor],
+// [config.Company.KnowledgeBackendFor] and [config.Company.ChatBackendFor]): a
+// named backend wins, an empty one
 // follows the vendor block that is connected, and with neither it is the
 // engine's own. The answer reaches a reader holding no permission exactly as
 // it reaches an admin, on the socket snapshot and on GET /org, because which
@@ -909,24 +911,27 @@ func TestTheOrgProjectionCarriesTheCompanysClock(t *testing.T) {
 func TestTheOrgProjectionNamesTheServicesTheCompanyRuns(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name               string
-		company            *config.Company
-		tracker, knowledge string
+		name                     string
+		company                  *config.Company
+		tracker, knowledge, chat string
 	}{
-		{"nothing written", &config.Company{Name: "Acme"}, "worklet", "doclet"},
+		{"nothing written", &config.Company{Name: "Acme"}, "worklet", "doclet", "chatlet"},
 		{"the vendor blocks connected", &config.Company{Name: "Acme",
 			Integrations: config.Integrations{
 				Jira:       &config.Jira{URL: "https://jira.example.com"},
 				Confluence: &config.Confluence{URL: "https://wiki.example.com"},
-			}}, "jira", "confluence"},
-		{"both named none", &config.Company{Name: "Acme",
+				Mattermost: &config.Mattermost{URL: "https://chat.example.com"},
+			}}, "jira", "confluence", "vendor"},
+		{"all named none", &config.Company{Name: "Acme",
 			Tracker:   config.Tracker{Backend: config.TrackerNone},
 			Knowledge: config.Knowledge{Backend: config.KnowledgeNone},
-		}, "none", "none"},
+			Chat:      config.Chat{Backend: config.ChatNone},
+		}, "none", "none", "none"},
 		{"one of each", &config.Company{Name: "Acme",
 			Tracker:   config.Tracker{Backend: config.TrackerNone},
 			Knowledge: config.Knowledge{Backend: config.KnowledgeDoclet},
-		}, "none", "doclet"},
+			Chat:      config.Chat{Backend: config.ChatVendor},
+		}, "none", "doclet", "vendor"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -952,7 +957,7 @@ func TestTheOrgProjectionNamesTheServicesTheCompanyRuns(t *testing.T) {
 					if err := json.Unmarshal(body, &got); err != nil {
 						t.Fatalf("%s %s is not JSON: %v", reader.name, surface, err)
 					}
-					want := api.OrgServices{Tracker: tc.tracker, Knowledge: tc.knowledge}
+					want := api.OrgServices{Tracker: tc.tracker, Knowledge: tc.knowledge, Chat: tc.chat}
 					if got.Services == nil || *got.Services != want {
 						t.Errorf("%s's %s names services %+v, want %+v",
 							reader.name, surface, got.Services, want)
@@ -966,7 +971,7 @@ func TestTheOrgProjectionNamesTheServicesTheCompanyRuns(t *testing.T) {
 // THE SERVICES ARE A CLOSED SET, and the set is the engine's: every value the
 // projection can carry is a member of the backend's own list, and every
 // member is one the projection carries for some company. The dashboard's copy
-// of the two sets is held to the same lists by
+// of the three sets is held to the same lists by
 // [TestTheDashboardKnowsExactlyTheServicesTheEngineSends].
 func TestTheOrgServicesAreTheBackendsClosedSets(t *testing.T) {
 	t.Parallel()
@@ -998,6 +1003,21 @@ func TestTheOrgServicesAreTheBackendsClosedSets(t *testing.T) {
 		}}), overviewReader)
 		if got.Services == nil || got.Services.Knowledge != string(b) {
 			t.Errorf("a company running knowledge %q is projected as %+v", b, got.Services)
+		}
+	}
+	for _, b := range config.ChatBackends {
+		got := projectionOf(t, newApp(t, api.Options{Sources: queries.Sources{
+			Company: companySource(t, &config.Company{Name: "Acme",
+				Chat: config.Chat{Backend: b},
+				Integrations: config.Integrations{Mattermost: func() *config.Mattermost {
+					if b == config.ChatVendor {
+						return &config.Mattermost{URL: "https://chat.example.com"}
+					}
+					return nil
+				}()}}),
+		}}), overviewReader)
+		if got.Services == nil || got.Services.Chat != string(b) {
+			t.Errorf("a company running chat %q is projected as %+v", b, got.Services)
 		}
 	}
 }

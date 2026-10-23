@@ -28,7 +28,7 @@ import { managedSentence } from "~/protocol/configAnswer.ts";
 import type { ServicesRun } from "./services.ts";
 
 /** A company running every service built into Crewlet. */
-const EVERY: ServicesRun = { tracker: true, knowledge: true };
+const EVERY: ServicesRun = { tracker: true, knowledge: true, chat: true };
 
 const BOUND: ViewerState = {
   login: "jane.founder",
@@ -51,7 +51,6 @@ const BOUND: ViewerState = {
   configManagedBy: [],
   assistant: "disabled",
   assistantModel: null,
-  chatBackend: "",
   chatVendors: [],
 };
 
@@ -251,13 +250,13 @@ test("messaging your own seat is held after everything a person can clear", () =
 // the first two read `can: true`.
 test("a change into a service the company does not run is held, and says why", () => {
   const acting = { ...BOUND, acts: ["create_work_item", "write_page", "pause_seat"] };
-  const jira: ServicesRun = { tracker: false, knowledge: true };
+  const jira: ServicesRun = { tracker: false, knowledge: true, chat: true };
   expect(writeAccess("create_work_item", acting, "open", jira)).toEqual({
     can: false,
     block: "held",
     reason: SERVICE_OFF_REASONS.tracker,
   });
-  const confluence: ServicesRun = { tracker: true, knowledge: false };
+  const confluence: ServicesRun = { tracker: true, knowledge: false, chat: true };
   expect(writeAccess("write_page", acting, "open", confluence)).toEqual({
     can: false,
     block: "held",
@@ -271,37 +270,45 @@ test("a change into a service the company does not run is held, and says why", (
 });
 
 // A DIRECT MESSAGE IS OFFERED ONLY WHERE A ROOM CAN BE, and held as Message
-// is otherwise. The company has to run the engine's own chat and the reader
-// hold Chatlet — the viewer names the backend to nobody else, so to anybody
-// else "" is not said rather than "not Chatlet" — and then it is open_dm's own
-// access, held last on the reader's own seat. Mutation: offer it on a vendor
-// company, or to a reader without Chatlet, and a null row goes red; drop the
-// own-seat hold and the held row does.
-test("a direct message is offered only on the engine's own chat, and held on your own seat", () => {
+// is otherwise. The company has to run Chatlet and the reader hold Chatlet,
+// and then it is open_dm's own access, held last on the reader's own seat.
+// Mutation: offer it on a company not running Chatlet, or to a reader
+// without Chatlet, and a null row goes red; drop the own-seat hold and the held
+// row does.
+test("a direct message is offered only where Chatlet runs, and held on your own seat", () => {
   const reader: ViewerState = {
     ...BOUND,
     grants: ["chatlet"],
     chatlet: true,
-    chatBackend: "chatlet",
     acts: ["open_dm"],
   };
   const can = writeAccess("open_dm", reader, "open", EVERY);
   expect(can.can).toBe(true);
-  expect(directSeatAccess(can, reader, "swe")).toBe(can);
-  expect(directSeatAccess(can, reader, "jane")).toEqual({
+  expect(directSeatAccess(can, reader, "swe", EVERY)).toBe(can);
+  expect(directSeatAccess(can, reader, "jane", EVERY)).toEqual({
     can: false,
     block: "held",
     reason: OWN_SEAT_DIRECT,
   });
   const offline = writeAccess("open_dm", reader, "offline", EVERY);
-  expect(directSeatAccess(offline, reader, "jane")).toBe(offline);
-  for (const elsewhere of ["vendor", "none", ""] as const) {
-    expect(
-      directSeatAccess(can, { ...reader, chatBackend: elsewhere }, "swe"),
-      elsewhere,
-    ).toBeNull();
-  }
-  expect(directSeatAccess(can, { ...reader, chatlet: false }, "swe")).toBeNull();
+  expect(directSeatAccess(offline, reader, "jane", EVERY)).toBe(offline);
+  expect(directSeatAccess(can, reader, "swe", { ...EVERY, chat: false })).toBeNull();
+  expect(directSeatAccess(can, { ...reader, chatlet: false }, "swe", EVERY)).toBeNull();
+});
+
+// A CHANGE INTO A ROOM IS HELD WHERE THE COMPANY RUNS NO CHATLET, ahead of
+// any access the reader could be given, as a task is where it runs no
+// Worklet. Mutation: drop the chat arm of `actionService` and the first reads
+// `can: true`.
+test("a change into a room is held where the company runs no Chatlet", () => {
+  const acting = { ...BOUND, grants: ["chatlet"], chatlet: true, acts: ["post_message"] };
+  const slack: ServicesRun = { tracker: true, knowledge: true, chat: false };
+  expect(writeAccess("post_message", acting, "open", slack)).toEqual({
+    can: false,
+    block: "held",
+    reason: SERVICE_OFF_REASONS.chat,
+  });
+  expect(writeAccess("post_message", acting, "open", EVERY).can).toBe(true);
 });
 
 // A SCREEN SHOWING SOMEBODY ELSE'S RECORD HOLDS EVERY CHANGE ON IT, with its

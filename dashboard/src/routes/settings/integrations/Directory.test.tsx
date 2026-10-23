@@ -131,7 +131,7 @@ const MEMBER = {
 };
 const NOBODY = { login: "", owner: "", grants: [], acts: [] };
 
-const BUILT_IN: OrgServices = { tracker: "worklet", knowledge: "doclet" };
+const BUILT_IN: OrgServices = { tracker: "worklet", knowledge: "doclet", chat: "chatlet" };
 
 interface Mounted {
   /** Every socket question the page asked. */
@@ -222,9 +222,9 @@ afterEach(() => {
 // its group, beside the apps that answer it. ATLASSIAN IS LISTED BY PRODUCT,
 // one line under work tracking and one under docs, because it is one
 // connection that serves two needs. A PRODUCT NAMES ITS MAKER beside it:
-// Worklet and Doclet name Crewlet as Jira and Confluence name Atlassian, and
-// Crewlet Chat, whose name already says it, names nobody. Mutation: drop the
-// services' vendor and the two lines lose "Crewlet".
+// Chatlet, Worklet and Doclet name Crewlet as Jira and Confluence name
+// Atlassian. Mutation: drop the services' vendor and the three lines lose
+// "Crewlet".
 test("the directory groups by need, with Crewlet's own service first in each", async () => {
   mount(ADMIN);
   const nav = await screen.findByRole("navigation", { name: "Integrations" });
@@ -244,7 +244,7 @@ test("the directory groups by need, with Crewlet's own service first in each", a
       ];
     });
   expect(groups).toEqual([
-    ["Chat", ["Crewlet Chat", "Slack", "Mattermost"]],
+    ["Chat", ["Chatlet (Crewlet)", "Slack", "Mattermost"]],
     ["Work tracking", ["Worklet (Crewlet)", "Jira (Atlassian)"]],
     ["Docs and knowledge", ["Doclet (Crewlet)", "Confluence (Atlassian)"]],
     ["Code", ["GitHub", "GitLab"]],
@@ -262,7 +262,7 @@ test("each line carries its own state, and a product only its own", async () => 
   expect((await line(/GitLab/)).textContent).toContain("Needs attention");
   expect((await line(/Slack/)).textContent).toBe("Slack");
   expect((await line(/Worklet/)).textContent).toContain("In use");
-  expect((await line(/Crewlet Chat/)).textContent).toContain("Soon");
+  expect((await line(/Chatlet/)).textContent).toContain("In use");
 });
 
 // THE OLD ADDRESSES STILL WORK, AS THE SELECTION: an app's key, a surface
@@ -298,7 +298,7 @@ test("the home shows only what is in use, each a compact card with one action", 
   mount(ADMIN);
   const inUse = await screen.findByRole("region", { name: /^In use/ });
   const names = [...inUse.querySelectorAll(".int-tile-link")].map((a) => a.textContent);
-  expect(names).toEqual(["Worklet", "Doclet", "Confluence", "GitLab", "Datadog"]);
+  expect(names).toEqual(["Chatlet", "Worklet", "Doclet", "Confluence", "GitLab", "Datadog"]);
   for (const card of inUse.querySelectorAll(".crewlet-catalog-tile")) {
     expect(card.className).toContain("crewlet-catalog-tile--compact");
   }
@@ -309,7 +309,7 @@ test("the home shows only what is in use, each a compact card with one action", 
   // THE HEADING DESCRIBES THE PAGE, and the count beside In use is of every
   // card under it, the services included.
   expect(screen.getByText(DESCRIPTION)).toBeTruthy();
-  expect(within(inUse).getAllByRole("heading")[0]!.textContent).toBe("In use 5");
+  expect(within(inUse).getAllByRole("heading")[0]!.textContent).toBe("In use 6");
 });
 
 // EVERY CARD'S ACTION NAMES ITS CARD: a reader listing the links in In use
@@ -372,7 +372,7 @@ test("coming back to an app through the list does not reopen the arrival's form"
 
 // A HOME WITH NOTHING IN USE says so and points at the list.
 test("a company with nothing in use is told to pick from the list", async () => {
-  mount(MEMBER, undefined, { tracker: "none", knowledge: "none" });
+  mount(MEMBER, undefined, { tracker: "none", knowledge: "none", chat: "none" });
   expect(await screen.findByText("Nothing is in use yet")).toBeTruthy();
   expect(screen.queryByRole("region", { name: /^In use/ })).toBeNull();
 });
@@ -519,7 +519,11 @@ test("a service the company runs is in use, with its way in", async () => {
 // asked of a service the company does not run. Mutation: ask the counts
 // whatever runs, and the list names `work_projects`.
 test("a service run elsewhere says what replaces it and asks nothing of it", async () => {
-  const { asked } = mount(ADMIN, "worklet", { tracker: "jira", knowledge: "doclet" });
+  const { asked } = mount(ADMIN, "worklet", {
+    tracker: "jira",
+    knowledge: "doclet",
+    chat: "chatlet",
+  });
   expect(await screen.findByText("Jira does this for your company")).toBeTruthy();
   expect(screen.getByRole("link", { name: "Open Jira" }).getAttribute("href")).toBe(
     "#/company/integrations/jira",
@@ -529,25 +533,73 @@ test("a service run elsewhere says what replaces it and asks nothing of it", asy
 });
 
 test("a service the company runs none of says so, with no product to open", async () => {
-  mount(ADMIN, "doclet", { tracker: "worklet", knowledge: "none" });
+  mount(ADMIN, "doclet", { tracker: "worklet", knowledge: "none", chat: "chatlet" });
   expect(await screen.findByText("Nothing does this for your company")).toBeTruthy();
   expect(screen.queryByRole("link", { name: /Open Confluence/ })).toBeNull();
 });
 
 // UNTIL THE ENGINE HAS SAID, nothing is guessed: a node running no company
-// says so, and no service wears On or Off.
+// says so, and no service wears In use or Not in use.
 test("a node running no company says so and wears no state", async () => {
   mount(ADMIN, "worklet", null);
   expect(await screen.findByText("This node runs no company yet.")).toBeTruthy();
-  // ITS NAME AND ITS MAKER, and nothing after them.
-  const worklet = await line(/Worklet/);
-  expect(worklet.textContent).toBe("WorkletCrewlet");
+  // ITS NAME AND ITS MAKER, and nothing after them: Crewlet beside Worklet, Doclet and Chatlet.
+  for (const [name, says] of [
+    ["Worklet", "WorkletCrewlet"],
+    ["Doclet", "DocletCrewlet"],
+    ["Chatlet", "ChatletCrewlet"],
+  ] as const) {
+    expect((await line(new RegExp(name))).textContent, name).toBe(says);
+  }
 });
 
-test("Crewlet Chat is coming soon, pointing at the chat apps meanwhile", async () => {
+// CHATLET COUNTS NOTHING: the rooms it answers for are the reader's own seat's,
+// so its page says what it gives and the way in, and asks no count.
+test("Chatlet in use is In use, with its way in and nothing counted", async () => {
+  const { asked } = mount({ ...MEMBER, grants: [...MEMBER.grants, "chatlet"] }, "chat");
+  expect(await screen.findByRole("heading", { level: 2, name: "Chatlet" })).toBeTruthy();
+  expect(screen.getByRole("link", { name: "Open Chatlet" }).getAttribute("href")).toBe("#/chatlet");
+  expect(screen.getByText("Rooms, threads and direct messages with your agents.")).toBeTruthy();
+  expect((await line(/Chatlet/)).textContent).toContain("In use");
+  expect(asked.filter((q) => q !== "viewer" && q !== "integrations")).toEqual([]);
+});
+
+// THE WAY IN IS OFFERED TO A HOLDER OF CHATLET, as Worklet's and Doclet's are
+// to a holder of their apps. Mutation: offer Open Chatlet to every reader, and
+// a reader without Chatlet is sent to a screen that refuses them.
+test("a reader without Chatlet is told what opens it, and offered no way in", async () => {
   mount(MEMBER, "chat");
-  const soon = (await screen.findByText("Coming soon")).closest(".int-soon") as HTMLElement;
-  expect(within(soon).getByRole("link", { name: "Slack" }).getAttribute("href")).toBe(
+  expect(await screen.findByRole("heading", { level: 2, name: "Chatlet" })).toBeTruthy();
+  expect(screen.queryByRole("link", { name: "Open Chatlet" })).toBeNull();
+  expect(screen.getByText(/needs Chatlet access/)).toBeTruthy();
+  expect(screen.getByText("Rooms, threads and direct messages with your agents.")).toBeTruthy();
+});
+
+// THE VENDOR BY NAME, from the viewer answer that names it to a holder of
+// Chatlet, with the way to its line. Mutation: drop chat's `replacedBy` and the
+// page says nothing does this for your company.
+test("a company talking on a vendor's chat is told which, with the way to it", async () => {
+  mount({ ...ADMIN, chat_vendors: ["slack"] }, "chat", { ...BUILT_IN, chat: "vendor" });
+  expect(await screen.findByText("Slack does this for your company")).toBeTruthy();
+  expect(screen.getByRole("link", { name: "Open Slack" }).getAttribute("href")).toBe(
     "#/company/integrations/slack",
   );
+  expect(screen.getByText("Slack is not connected.")).toBeTruthy();
+  expect((await line(/Chatlet/)).textContent).toContain("Not in use");
+  expect(screen.queryByRole("link", { name: "Open Chatlet" })).toBeNull();
+});
+
+// A VENDOR NOBODY NAMED is still a vendor's chat, never a blank and never
+// "nothing does this": the projection says the chat is a vendor's, and only
+// a holder of Chatlet is told which.
+test("a vendor chat nobody named is said in words, with no line to open", async () => {
+  mount(MEMBER, "chat", { ...BUILT_IN, chat: "vendor" });
+  expect(await screen.findByText("A vendor's chat does this for your company")).toBeTruthy();
+  expect(screen.queryByRole("link", { name: /^Open / })).toBeNull();
+});
+
+test("a company running no chat says so, with nothing to open", async () => {
+  mount(ADMIN, "chat", { ...BUILT_IN, chat: "none" });
+  expect(await screen.findByText("Nothing does this for your company")).toBeTruthy();
+  expect(screen.queryByRole("link", { name: "Open Chatlet" })).toBeNull();
 });

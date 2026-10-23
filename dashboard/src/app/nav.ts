@@ -60,7 +60,7 @@
  * # Hidden for a service the company does not run, locked for access
  *
  * A row or section that reads one of Crewlet's own services (its tracker,
- * Worklet, or its knowledge base, Doclet) names it
+ * Worklet, its knowledge base, Doclet, or its chat, Chatlet) names it
  * ([WorkspaceRow.service], [Section.service]). Where the company runs that
  * service elsewhere or not at all, the place is HIDDEN, never locked: there is
  * nothing to ask an admin for, and its addresses say so in place, to every
@@ -95,10 +95,11 @@ export type Workspace =
 /**
  * A service built into Crewlet that a company may run elsewhere or not at
  * all: `tracker` is Worklet (projects, tasks, the Inbox's updates and My
- * work), `knowledge` is Doclet (spaces and pages). Named here
- * because the navigation hides what reads one the company does not run.
+ * work), `knowledge` is Doclet (spaces and pages), `chat` is
+ * Chatlet (rooms, threads and direct messages). Named here because the
+ * navigation hides what reads one the company does not run.
  */
-export type Service = "tracker" | "knowledge";
+export type Service = "tracker" | "knowledge" | "chat";
 
 /** Whether the company runs each of Crewlet's own services: what `lib/services.ts` reads off the wire. */
 export type ServicesRun = Readonly<Record<Service, boolean>>;
@@ -253,8 +254,8 @@ export interface WorkspaceRow {
   personal?: boolean;
   /**
    * The service built into Crewlet the whole workspace reads, as
-   * [Section.service]: the Worklet workspace and My work read Worklet, and the
-   * Doclet workspace reads Doclet.
+   * [Section.service]: the Worklet workspace and My work read Worklet, the
+   * Doclet workspace reads Doclet, and Chatlet reads Chatlet.
    */
   service?: Service;
   /**
@@ -723,9 +724,13 @@ export const WORKSPACES: WorkspaceRow[] = [
     // THE CHATLET APP'S, every section and every room: each reads somebody's
     // rooms as the seat the session holds, so the frame draws its one refusal
     // in place of every chat page for a reader without it. What the screen
-    // answers is only what is chat's own: a company whose chat is elsewhere,
-    // and a credential acting as no seat.
+    // answers is only what is chat's own: a credential acting as no seat.
     grants: ["chatlet"],
+    // AND CHATLET'S: a company talking on Mattermost or Slack, or on
+    // nothing, has no room here to read, so the row is hidden as Worklet is on
+    // Jira, and its addresses say where the company's chat is instead
+    // (`ServiceNotice.tsx`).
+    service: "chat",
     sections: [
       {
         key: "rooms",

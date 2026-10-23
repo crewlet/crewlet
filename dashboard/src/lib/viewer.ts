@@ -156,14 +156,12 @@ export interface ViewerState {
    */
   assistantModel: AssistantModelNotice | null;
   /**
-   * Which chat the company runs — the engine's answer, named to a reader
-   * holding Chatlet only, and "" when nobody has said (no answer yet, or a reader
-   * without the app). Read by the chat screen, which draws a company on a
-   * vendor's chat or on none as that rather than asking questions this engine
-   * does not serve — and reads "" as not said, never as Chatlet.
+   * On a company talking on a vendor's chat, which vendor surfaces it
+   * declares, named to a reader holding Chatlet only: empty everywhere else.
+   * WHETHER the company runs Chatlet is every reader's, on the org
+   * projection (`lib/services.ts`); this is the one further fact a place
+   * naming the vendor needs (`chatVendorName`).
    */
-  chatBackend: Viewer["chat_backend"];
-  /** On a vendor company, which vendor surfaces it declares. */
   chatVendors: readonly string[];
 }
 
@@ -228,7 +226,6 @@ function useViewerRead(): ViewerState {
     configManagedBy: data?.config_managed_by ?? [],
     assistant: assistantUnavailable(data?.assistant),
     assistantModel: assistantModelNotice(data?.assistant),
-    chatBackend: data?.chat_backend ?? "",
     chatVendors: data?.chat_vendors ?? [],
   };
 }
