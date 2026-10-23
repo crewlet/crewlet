@@ -235,15 +235,16 @@ function Tiles() {
     refusal: feed.refusal,
     loading: feed.loading && !feed.data,
   };
-  // NOTHING WRITTEN AT ALL IS SAID ONCE, by the newest change's tile: a
-  // second tile three rows tall holding "Nothing has been written yet" beside
-  // it said the same in a 417px box. The grid then has no Recently written
-  // column (`data-written="none"`, screens.css).
-  const nothing = !state.loading && !state.error && runs.length === 0;
+  // NOTHING ELSE WRITTEN IS SAID ONCE, by the newest change's tile: a second
+  // tile three rows tall holding "Nothing has been written yet" (or "Nothing
+  // else", beside the one change the big tile leads with) said it again in a
+  // 440px box. The grid then has no Recently written column
+  // (`data-written="none"`, screens.css).
+  const nothing = !state.loading && !state.error && rest.length === 0;
   return (
     <div className="knowledge-tiles" data-written={nothing ? "none" : undefined}>
       <Latest run={runs[lead]} state={state} />
-      {!nothing && <RecentlyWritten runs={rest} led={lead >= 0} state={state} />}
+      {!nothing && <RecentlyWritten runs={rest} state={state} />}
       <ContinueReading />
       <Pinned />
       <Watching />
@@ -268,7 +269,9 @@ function Latest({ run, state }: { run: Run | undefined; state: FeedState }) {
   // page's arrives.
   const detail = page.data?.page?.id === id ? page.data : null;
   return (
-    <Card as="article" padding="lg" className="knowledge-latest" aria-label="Newest change">
+    // THE SIBLING TILES' INSET: at the large step its words stood 8px in from
+    // every other tile's in the same grid.
+    <Card as="article" padding="md" className="knowledge-latest" aria-label="Newest change">
       {state.loading ? (
         <Skeleton variant="text" rows={6} label="Reading the newest change" />
       ) : (
@@ -435,7 +438,7 @@ function Opening({ detail }: { detail: PageDetail }) {
  * tile leads with, under the COMPANY's days. Each row says its time on the
  * clock its day is cut on, and the note it carries, never the title again.
  */
-function RecentlyWritten({ runs, led, state }: { runs: Run[]; led: boolean; state: FeedState }) {
+function RecentlyWritten({ runs, state }: { runs: Run[]; state: FeedState }) {
   const who = usePeople();
   const now = useNow();
   const zone = useOrg()?.timezone;
@@ -460,9 +463,7 @@ function RecentlyWritten({ runs, led, state }: { runs: Run[]; led: boolean; stat
           <QueryState error={state.error} refusal={state.refusal} loading={false} />
         </TileBody>
       ) : days.length === 0 ? (
-        <TileNote>
-          {led ? "Nothing else has been written yet." : "Nothing has been written yet."}
-        </TileNote>
+        <TileNote>Nothing has been written yet.</TileNote>
       ) : (
         days.map(({ day, runs: rows }) => (
           <section key={day} aria-label={day}>

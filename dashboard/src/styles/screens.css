@@ -2773,7 +2773,8 @@ a.prof-row:hover {
    small tiles pair up, and below 640px everything is one column. */
 .knowledge-tiles {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.1fr);
+  /* EQUAL COLUMNS, so a small tile is one width in either row. */
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   grid-template-areas:
     "latest latest written"
     "reading pinned written"
