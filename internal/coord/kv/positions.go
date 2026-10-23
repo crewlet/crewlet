@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
@@ -434,7 +436,7 @@ func (f *FleetStore) ForgetAdmission(ctx context.Context, nodeID, incarnation st
 	return nil
 }
 
-// PutMaintenanceAck records one participant's restart.
+// PutMaintenanceAck records one participant's restart for one log's window.
 func (f *FleetStore) PutMaintenanceAck(ctx context.Context, ack coord.MaintenanceAck) error {
 	if err := ack.Validate(); err != nil {
 		return err
@@ -447,16 +449,21 @@ func (f *FleetStore) PutMaintenanceAck(ctx context.Context, ack coord.Maintenanc
 		return fmt.Errorf("coord: encode node %s's maintenance acknowledgement: %w",
 			ack.NodeID, err)
 	}
-	if _, err := f.positions.Put(ctx, coord.MaintenanceAckKey(ack.NodeID), body); err != nil {
+	if _, err := f.positions.Put(ctx, coord.MaintenanceAckKey(ack.Stream, ack.NodeID),
+		body); err != nil {
 		return unavailable("record a maintenance acknowledgement", err)
 	}
 	return nil
 }
 
-// MaintenanceAcks reads every participant's.
-func (f *FleetStore) MaintenanceAcks(ctx context.Context) ([]coord.MaintenanceAck, error) {
+// MaintenanceAcks reads every participant's for one log's window, filtered by
+// the broker on the log's segment of the key ([coord.MaintenanceAckKey]).
+func (f *FleetStore) MaintenanceAcks(ctx context.Context, stream string) (
+	[]coord.MaintenanceAck, error) {
+
 	var out []coord.MaintenanceAck
-	err := f.eachPositionKey(ctx, "maintenance-ack", "the maintenance acknowledgements",
+	err := f.eachPositionPrefix(ctx, []string{"maintenance-ack", stream},
+		"the maintenance acknowledgements",
 		func(key string, value []byte) error {
 			var ack coord.MaintenanceAck
 			if err := json.Unmarshal(value, &ack); err != nil {
@@ -468,6 +475,9 @@ func (f *FleetStore) MaintenanceAcks(ctx context.Context) ([]coord.MaintenanceAc
 			out = append(out, ack)
 			return nil
 		})
+	slices.SortFunc(out, func(a, b coord.MaintenanceAck) int {
+		return strings.Compare(a.NodeID, b.NodeID)
+	})
 	return out, err
 }
 
@@ -478,6 +488,16 @@ func (f *FleetStore) MaintenanceAcks(ctx context.Context) ([]coord.MaintenanceAc
 // chances for one to be written with the wrong prefix — a positions row
 // decoded as an admission is a publisher nobody can see.
 func (f *FleetStore) eachPositionKey(ctx context.Context, class, what string,
+	fn func(key string, value []byte) error) error {
+
+	return f.eachPositionPrefix(ctx, []string{class}, what, fn)
+}
+
+// eachPositionPrefix walks the keys of the positions register whose leading
+// segments are prefix, the class first: [FleetStore.eachPositionKey] for a
+// whole class, and one log's acknowledgements, filed under the class and then
+// the log ([coord.MaintenanceAckKey]).
+func (f *FleetStore) eachPositionPrefix(ctx context.Context, prefix []string, what string,
 	fn func(key string, value []byte) error) error {
 
 	// THE CLASS IS A SUBJECT TOKEN, so the broker filters. A key here is
@@ -500,10 +520,11 @@ func (f *FleetStore) eachPositionKey(ctx context.Context, class, what string,
 	// what SELECTS the class — it is what catches a filter and a grammar
 	// that have drifted apart, along with a key this grammar did not write,
 	// which is the rule the rest of the package already follows.
-	return f.eachUnder(ctx, f.positions, coord.DocumentFilter(class), what,
+	return f.eachUnder(ctx, f.positions, coord.DocumentFilter(prefix...), what,
 		func(kve jetstream.KeyValueEntry) error {
 			segments, ok := coord.DocumentSegments(kve.Key())
-			if !ok || len(segments) < 2 || segments[0] != class {
+			if !ok || len(segments) <= len(prefix) ||
+				!slices.Equal(segments[:len(prefix)], prefix) {
 				return nil
 			}
 			return fn(kve.Key(), kve.Value())

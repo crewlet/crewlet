@@ -2326,9 +2326,10 @@ crewlet retention maintenance abandon -stream CREWLET_TRACKER_LOG -confirm capac
 
 `status` is the one page an operator can see why a fleet is still excluded: the
 operation, its phase and attempt, every participant's baselined incarnation
-against what it acknowledged as (its ATTEMPT reads `no window` for a node that
-restarted before any window opened, and `another window` for one that last
-acknowledged an earlier window), any unresolved write attempt, and what the
+against what it acknowledged as for this log (its ATTEMPT reads `no window`
+for a node that restarted before a window opened on the log, and `another
+window` for one that last acknowledged an earlier window on it), any
+unresolved write attempt, and what the
 window's next step is waiting on. At `opened` that is the baseline's: the
 participants with no restart into a maintenance mode recorded, and any
 admission still stopping the window's first request. From the baseline on it is

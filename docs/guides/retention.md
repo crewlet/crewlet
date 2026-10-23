@@ -1208,6 +1208,10 @@ crewlet retention set-capacity CREWLET_TRACKER_LOG 8589934592 -confirm 858993459
 crewlet run
 ```
 
+Resizing more than one log takes the same three restarts: run step 2 for each
+log before the seal restart and step 4 for each after it. Each log has its own
+window, and each window is sealed by its own acknowledgements.
+
 ### The three modes
 
 | `-mode` | Starts publishers | May write stream configuration |
@@ -1273,11 +1277,12 @@ its broker queues nothing, and its seats publish through a data node, which is.
 Each node's broker kind is on `crewlet fleet broker list`.
 
 Each of them records which process it restarted as the moment it boots into
-either mode. With a window already open, that record **acknowledges** the
-window and its attempt. With none open yet, which is the ordinary case for the
-first restart, it names no window, and the baseline still reads it, so the
-fleet restarts into `maintenance` once, before you run the verb, and the verb
-then goes ahead. The seal takes only an acknowledgement a node made by booting
+either mode, once for every log. Where a log has a window open, that record
+**acknowledges** the window and its attempt. Where it has none yet, which is
+the ordinary case for the first restart, it names no window, and the baseline
+still reads it, so the fleet restarts into `maintenance` once, before you run
+the verb, and the verb then goes ahead. Each log's records are its own, so a
+window on one log is never answered by a restart recorded for another. The seal takes only an acknowledgement a node made by booting
 into `seal` while this window's attempt was open, so a restart from before the
 window never stands in for one.
 

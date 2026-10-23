@@ -214,7 +214,7 @@ type PositionRegister interface {
 // window's: [MaintenanceKey], whose existence IS the exclusion,
 // [AdmissionKey], which is one node's positive record that it intends to
 // publish, and [MaintenanceAckKey], which is one participant's evidence that
-// its process restarted. The eighth is [SeatPauseKey], a person's decision
+// its process restarted for one log's window. The eighth is [SeatPauseKey], a person's decision
 // that a seat stops taking work, which an age would lift on a timer nobody
 // set.
 //

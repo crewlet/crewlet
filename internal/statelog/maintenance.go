@@ -233,13 +233,12 @@ func SealHolds(op coord.MaintenanceOperation, acks []coord.MaintenanceAck) (bool
 // Restarted is each participant's acknowledging process when every one is
 // taken, and nil when any is not. Missing says what is wrong with each one that
 // is not, in participant order.
+//
+// ONLY THIS LOG'S ACKNOWLEDGEMENTS ARE READ ([acksOf]).
 func SealRestarts(op coord.MaintenanceOperation, acks []coord.MaintenanceAck) (
 	restarted map[string]string, missing []string) {
 
-	byNode := make(map[string]coord.MaintenanceAck, len(acks))
-	for _, ack := range acks {
-		byNode[ack.NodeID] = ack
-	}
+	byNode := acksOf(op, acks)
 	restarted = map[string]string{}
 	for _, node := range op.Participants {
 		if slices.Contains(op.Excluded, node) {
@@ -445,19 +444,32 @@ func ResolveDelete(operationID string, current coord.MaintenanceOperation, found
 // seal mode the procedure has not asked for yet, so every node read as owing
 // something while the next step was just to run the verb again.
 func BaselineMissing(op coord.MaintenanceOperation, acks []coord.MaintenanceAck) []string {
-	restarted := make(map[string]bool, len(acks))
-	for _, ack := range acks {
-		restarted[ack.NodeID] = true
-	}
+	restarted := acksOf(op, acks)
 	var missing []string
 	for _, node := range op.Participants {
-		if slices.Contains(op.Excluded, node) || restarted[node] {
+		if _, recorded := restarted[node]; recorded || slices.Contains(op.Excluded, node) {
 			continue
 		}
 		missing = append(missing, node)
 	}
 	slices.Sort(missing)
 	return missing
+}
+
+// acksOf is the acknowledgements of op's own log, by node.
+//
+// A WINDOW IS PER LOG, and two can be open at once, so an acknowledgement of
+// another log's window is no evidence for this one: not a restart its baseline
+// reads, since that log's boot may have read this log's window or failed to,
+// and never a seal.
+func acksOf(op coord.MaintenanceOperation, acks []coord.MaintenanceAck) map[string]coord.MaintenanceAck {
+	byNode := make(map[string]coord.MaintenanceAck, len(acks))
+	for _, ack := range acks {
+		if ack.Stream == op.Stream {
+			byNode[ack.NodeID] = ack
+		}
+	}
+	return byNode
 }
 
 // AdmissionBlocks names every node whose admission stands in the way of an
