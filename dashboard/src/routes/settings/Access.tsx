@@ -455,49 +455,35 @@ function WordTag({ words, fallback }: { words: Words | undefined; fallback: stri
  * told so with the way to add one. A listing refused for any other reason
  * says nothing about the seats, so the callout claims nothing about them.
  */
-function FirstPerson({
-  waiting,
-  seats,
-}: {
-  waiting: InvitationRow[];
-  seats: RestResult<HumanSeat[]>;
-}) {
+/** The one next step of a company nobody has joined: what to say, and its control. */
+interface FirstStep {
+  body: React.ReactNode;
+  action?: React.ReactNode;
+}
+
+function firstPersonStep(waiting: InvitationRow[], seats: RestResult<HumanSeat[]>): FirstStep {
   if (waiting.length > 0) {
-    return (
-      <Callout variant="neutral" title="Nobody has joined yet">
-        Lost the invitation link? Cancel it and invite again.
-      </Callout>
-    );
+    return { body: "Lost the invitation link? Cancel it and invite again." };
   }
   if (listsNoCompany(seats)) {
-    return (
-      <Callout
-        variant="neutral"
-        title="Nobody has joined yet"
-        action={
-          <ButtonLink size="small" variant="primary" href={href(ORG_EDIT_PATH)}>
-            Create the company
-          </ButtonLink>
-        }
-      >
-        No company yet. Create one in Edit org.
-      </Callout>
-    );
+    return {
+      body: "No company yet. Create one in Edit org.",
+      action: (
+        <ButtonLink size="small" variant="primary" href={href(ORG_EDIT_PATH)}>
+          Create the company
+        </ButtonLink>
+      ),
+    };
   }
   if (seats.data && seats.data.length === 0) {
-    return (
-      <Callout
-        variant="neutral"
-        title="Nobody has joined yet"
-        action={
-          <ButtonLink size="small" variant="primary" href={href(ORG_EDIT_PATH, { add: "human" })}>
-            Add a human seat
-          </ButtonLink>
-        }
-      >
-        No people in the chart yet. Add one in Edit org.
-      </Callout>
-    );
+    return {
+      body: "No people in the chart yet. Add one in Edit org.",
+      action: (
+        <ButtonLink size="small" variant="primary" href={href(ORG_EDIT_PATH, { add: "human" })}>
+          Add a human seat
+        </ButtonLink>
+      ),
+    };
   }
   const chart = (
     <ButtonLink size="small" variant="primary" href={href(["company", "org"])}>
@@ -505,20 +491,32 @@ function FirstPerson({
     </ButtonLink>
   );
   if (!seats.data) {
-    return (
-      <Callout variant="neutral" title="Nobody has joined yet" action={chart}>
-        This company has no person in it, so nobody can sign in with a password yet. Every person is
-        invited or created on a human seat in the org chart; this node could not list the seats just
-        now, so Human seats below says why. The API token you are using stays the way back in.
-      </Callout>
-    );
+    return {
+      body: (
+        <>
+          This company has no person in it, so nobody can sign in with a password yet. Every person
+          is invited or created on a human seat in the org chart; this node could not list the seats
+          just now, so Human seats below says why. The API token you are using stays the way back
+          in.
+        </>
+      ),
+      action: chart,
+    };
   }
+  return { body: "Invite yourself from your seat in the org chart.", action: chart };
+}
+
+/** The first-run step as a callout, over a directory that already lists somebody. */
+function FirstPerson({ step }: { step: FirstStep }) {
   return (
-    <Callout variant="neutral" title="Nobody has joined yet" action={chart}>
-      Invite yourself from your seat in the org chart.
+    <Callout variant="neutral" title={FIRST_RUN_TITLE} action={step.action}>
+      {step.body}
     </Callout>
   );
 }
+
+/** What a company nobody has joined is told, wherever the step is drawn. */
+const FIRST_RUN_TITLE = "Nobody has joined yet";
 
 /**
  * Whether a read has said something — answered or been refused — rather than
@@ -743,9 +741,19 @@ export function People() {
   // could still invite somebody onto.
   const vacant = seatRows.filter((s) => !s.holder && !s.invitation).length;
   const invited = seatRows.filter((s) => !s.holder && s.invitation).length;
-  // FIRST RUN: nobody has joined, and the first-person callout below names
-  // the one next step. See [FirstPerson].
+  // FIRST RUN: nobody has joined, and the first-person step names the one
+  // next step. See [firstPersonStep].
   const firstRun = health?.identity === "unclaimed" && settled(invitations) && settled(seats);
+  const firstStep = firstRun
+    ? firstPersonStep(
+        (invitations.data ?? []).filter((i) => i.state === "open"),
+        seats,
+      )
+    : null;
+  // NOBODY LISTED: the People card's empty state IS the step. Over an empty
+  // directory the callout, two stat tiles of zero and the card's own "Nobody's
+  // here yet" said one thing four times before any data.
+  const nobody = directory.data !== null && people.length === 0;
 
   return (
     <>
@@ -805,39 +813,36 @@ export function People() {
           or, with no human seat at all, adding one. Drawn once the
           invitations AND the seats have answered or been refused, so it never
           says the wrong one first. */}
-      {firstRun && (
-        <FirstPerson
-          waiting={(invitations.data ?? []).filter((i) => i.state === "open")}
-          seats={seats}
-        />
-      )}
+      {firstStep && !nobody && <FirstPerson step={firstStep} />}
 
       <DirectoryState directory={directory} />
 
       {directory.data && (
         <>
-          <Card padding="none">
-            <StatGroup columns={2}>
-              <StatCard
-                icon={<UsersGlyph size="xs" />}
-                label="People"
-                value={people.length}
-                sub={`${active} active`}
-              />
-              <StatCard
-                icon={<TriangleAlertGlyph size="xs" />}
-                label="Open seats"
-                value={seats.data ? vacant : EMPTY_VALUE}
-                sub={
-                  seats.data
-                    ? `${invited > 0 ? `${invited} invited · ` : ""}${seatRows.length} total`
-                    : listsNoCompany(seats)
-                      ? "no company yet"
-                      : "not read"
-                }
-              />
-            </StatGroup>
-          </Card>
+          {!nobody && (
+            <Card padding="none">
+              <StatGroup columns={2}>
+                <StatCard
+                  icon={<UsersGlyph size="xs" />}
+                  label="People"
+                  value={people.length}
+                  sub={`${active} active`}
+                />
+                <StatCard
+                  icon={<TriangleAlertGlyph size="xs" />}
+                  label="Open seats"
+                  value={seats.data ? vacant : EMPTY_VALUE}
+                  sub={
+                    seats.data
+                      ? `${invited > 0 ? `${invited} invited · ` : ""}${seatRows.length} total`
+                      : listsNoCompany(seats)
+                        ? "no company yet"
+                        : "not read"
+                  }
+                />
+              </StatGroup>
+            </Card>
+          )}
 
           <Findings
             check={checkFor(check, "people", byId)}
@@ -860,10 +865,14 @@ export function People() {
               onRowActivate={peekRow(openPeek)}
               // THE HINT ADDS WHAT THE PAGE NOTE DOES NOT: it repeated the note
               // word for word 530px below it.
-              empty={{
-                title: "Nobody’s here yet",
-                hint: "A person is listed once they accept their invitation, or are created on their seat.",
-              }}
+              empty={
+                firstStep
+                  ? { title: FIRST_RUN_TITLE, hint: firstStep.body, action: firstStep.action }
+                  : {
+                      title: "Nobody’s here yet",
+                      hint: "A person is listed once they accept their invitation, or are created on their seat.",
+                    }
+              }
               columns={[
                 {
                   key: "person",
