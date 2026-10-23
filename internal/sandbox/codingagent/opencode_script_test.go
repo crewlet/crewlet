@@ -257,6 +257,32 @@ func runScript(t *testing.T, o scriptOpts) scriptRun {
 	return startScript(t, o).wait()
 }
 
+// startPieces runs body, pieces of a run's script put together by a case,
+// under sh as [startScript] runs the whole: in a process group of its own,
+// behind the shell's prelude, so the same waits and checks read it.
+func startPieces(t *testing.T, sh boxShell, body string) *scriptJob {
+	t.Helper()
+	signalsDeliverable()
+	dir := t.TempDir()
+	argv := sh.argv
+	if len(argv) == 0 {
+		argv = []string{"sh"}
+	}
+	j := &scriptJob{t: t, dir: dir, home: dir, paths: codingagent.Paths{Home: dir}, exited: make(chan error, 1)}
+	args := append(append([]string{}, argv[1:]...), "-c", sh.prelude+body)
+	j.cmd = exec.Command(argv[0], args...) //nolint:gosec // the pieces under test
+	j.cmd.Dir = dir
+	j.cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "FAKE_DIR=" + dir}
+	j.cmd.Stdout, j.cmd.Stderr = &j.stdout, &j.stderr
+	j.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := j.cmd.Start(); err != nil {
+		t.Fatalf("starting the pieces: %v", err)
+	}
+	go func() { j.exited <- j.cmd.Wait() }()
+	t.Cleanup(func() { _ = syscall.Kill(-j.cmd.Process.Pid, syscall.SIGKILL) })
+	return j
+}
+
 // signal sends sig to the script's whole process group, as a teardown does.
 func (j *scriptJob) signal(sig syscall.Signal) {
 	j.t.Helper()
@@ -1180,7 +1206,13 @@ sleep() { __p=$(exec sh -c 'echo $PPID'); echo "start $__p" >> "$FAKE_DIR/pids";
 	ended := map[string]bool{}
 	reaped := 0
 	for _, line := range strings.Split(strings.TrimSpace(readIn(t, run.dir, "pids")), "\n") {
-		verb, operand, _ := strings.Cut(line, " ")
+		// THE PID IS THE LAST WORD, after any signal a kill names: the
+		// sleep is ended with `kill -9`.
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			t.Fatalf("an unreadable record %q", line)
+		}
+		verb, operand := fields[0], fields[len(fields)-1]
 		switch {
 		case verb == "end":
 			ended[operand] = true
@@ -1194,6 +1226,70 @@ sleep() { __p=$(exec sh -c 'echo $PPID'); echo "start $__p" >> "$FAKE_DIR/pids";
 	if reaped == 0 {
 		t.Fatal("the exporter reaped no sleep before it was stopped, so nothing was tested")
 	}
+}
+
+// AN EXPORTER STOPPED AS IT STARTS GOES AT ONCE, under every sh a box can
+// have, and leaves nothing behind. It is forked while the script traps
+// SIGTERM, and a SIGTERM that reaches it before it has run lands on the
+// script's handler, which dash clears as the subshell begins: the stop is
+// dropped, so unsync tells it again until it goes.
+//
+// TWENTY EXPORTERS, ONE AFTER ANOTHER, each stopped straight after its fork,
+// because whether one stop is lost depends on whether the fork ran first: one
+// at a time, every stop is lost under dash, but with this case's shells
+// running beside each other a fork often runs first, so a single exporter
+// stopped once passed two runs in three with the repeat removed. Twenty make
+// a lost stop all but certain under dash on every run.
+//
+// The stop wait is stretched to a minute, so a stop that was lost and waited
+// out cannot pass for a prompt one.
+//
+// Mutation: tell the exporter once (drop unsync's second operand), and the
+// dash cases wait out the minute.
+func TestAnExporterStoppedAsItStartsGoesAtOnce(t *testing.T) {
+	t.Parallel()
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		j := startPieces(t, sh, "trap 'exit 143' TERM\nkeep() { :; }\n"+
+			codingagent.OpenCodeStops(stretchedStop)+"n=0\nwhile [ \"$n\" -lt 20 ]; do\n"+
+			codingagent.OpenCodeExporter(time.Hour, "sync")+" &\nxpid=$!\nunsync\n"+
+			"n=$((n+1))\ndone\n")
+		run := j.waitWithin(promptEnd, "a stop sent as the exporter started was lost and waited out")
+		if run.code != 0 {
+			t.Fatalf("exit %d:\n%s", run.code, run.stderr)
+		}
+		j.assertGroupGone()
+	})
+}
+
+// A STOP AS THE EXPORTER STARTS ITS SLEEP LEAVES NO SLEEP. Between starting a
+// sleep in the background and holding its pid the exporter has nothing it
+// could kill, so a SIGTERM there is kept until it does. Acted on at once, the
+// trap found no pid and left the sleep in the job's group for the rest of its
+// interval. No signal from outside can be timed into that window, so the
+// exporter here signals itself in it, once, from inside its own text.
+//
+// Mutation: act on the stop at once (drop the trap's test of w), and the
+// hour's sleep is still running after the exporter has gone.
+func TestAStopAsTheExporterStartsItsSleepLeavesNoSleep(t *testing.T) {
+	t.Parallel()
+	exporter := codingagent.OpenCodeExporter(time.Hour, "sync")
+	for _, cut := range []struct{ old, new string }{
+		{"( ", `( me=$(exec sh -c 'echo $PPID'); `},
+		{"sleep 3600 & ", `sleep 3600 & [ -z "$me" ] || { kill -TERM "$me"; me=; }; `},
+	} {
+		if n := strings.Count(exporter, cut.old); n != 1 {
+			t.Fatalf("the exporter holds %q %d times, want once:\n%s", cut.old, n, exporter)
+		}
+		exporter = strings.Replace(exporter, cut.old, cut.new, 1)
+	}
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		j := startPieces(t, sh, "keep() { :; }\n"+exporter+" &\nwait $!\n")
+		run := j.waitWithin(promptEnd, "an exporter that stopped itself did not go")
+		if run.code != 0 {
+			t.Fatalf("exit %d:\n%s", run.code, run.stderr)
+		}
+		j.assertGroupGone()
+	})
 }
 
 // A SIGNALLED RUN EXPORTS ITS LOGIN BEFORE IT GOES, beside a server that is

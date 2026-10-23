@@ -58,6 +58,17 @@ func OpenCodeCommandTimed(req sandbox.RunRequest, paths Paths, times OpenCodeTim
 	}))
 }
 
+// OpenCodeStops is a run's script's stops ([openCodeStops]) at stop, and
+// OpenCodeExporter its login exporter ([openCodeExporter]) at sync into file:
+// the two pieces a case about stopping the exporter runs on their own, since
+// no run of the whole script can choose the instant its exporter is stopped.
+func OpenCodeStops(stop time.Duration) string { return openCodeStops(stop) }
+
+// OpenCodeExporter is [OpenCodeStops]' other half.
+func OpenCodeExporter(sync time.Duration, file string) string {
+	return openCodeExporter(sync, file)
+}
+
 // JSONStringify is how a run's script spells a server name it looks for in an
 // OpenCode answer.
 func JSONStringify(s string) string { return jsonStringify(s) }

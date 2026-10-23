@@ -288,20 +288,7 @@ func openCodeScript(req sandbox.RunRequest, paths Paths, session string, times o
 	line(`config=$(cat %s) && [ -n "$config" ] || { echo 'crewlet: the run has no OpenCode configuration at '%s >&2; exit 1; }`,
 		cfg, cfg)
 	line(`imported= spid= xpid=`)
-	// end: stop one process of the script's own, bounded ([openCodeStopWait]),
-	// killing it only if it is still there at the end of the wait.
-	//
-	// NO PROCESS IS NOTHING TO STOP, and it is TESTED rather than left to
-	// `kill` refusing an empty operand: dash and bash refuse it, but busybox
-	// ash — the sh of an Alpine image, which OpenCode 2's musl builds are for
-	// — answers both `kill ""` and `kill -0 ""` with success and signals
-	// nothing, so an end with no process waited out the whole bound: five
-	// seconds at the end of every run given no login, where the exporter
-	// never started, and ten after a signal.
-	line(`end() { [ -n "$1" ] || return 0; kill "$1" 2> /dev/null || return 0; i=0; while kill -0 "$1" 2> /dev/null && [ "$i" -lt %d ]; do sleep 0.1; i=$((i+1)); done; kill -0 "$1" 2> /dev/null && kill -9 "$1" 2> /dev/null; return 0; }`,
-		int(times.stop/(100*time.Millisecond)))
-	line(`stop() { end "$spid"; spid=; }`)
-	line(`unsync() { end "$xpid"; xpid=; }`)
+	b.WriteString(openCodeStops(times.stop))
 	// holds: the file is a whole, non-empty JSON array.
 	line(`holds() { t=$(tr -d '[:space:]' < "$1") || return 1; case "$t" in '['*']') [ "$t" != '[]' ];; *) return 1;; esac; }`)
 	// keep FILE FLAGS...: one export into FILE, moved over the document only
@@ -346,17 +333,8 @@ func openCodeScript(req sandbox.RunRequest, paths Paths, session string, times o
 	line(`url=$(sed -n 's/^server listening on //p' %s)`, srv)
 	line(`OPENCODE_PASSWORD=$(sed -n 's/^server password //p' %s); export OPENCODE_PASSWORD`, srv)
 	line(`rm -f %s`, srv)
-	// The loop, in a subshell of its own, which starts with none of the
-	// script's traps: a SIGTERM there ends its sleep at once, and an export
-	// it is in once that export has finished — see the serialisation above.
-	// The sleep is reaped before it goes, so a stopped loop leaves nothing in
-	// the job's group. And its pid is FORGOTTEN once the sleep is reaped: a
-	// SIGTERM that arrives during an export, up to an interval later, would
-	// otherwise signal a pid the system is free to have handed to another
-	// process by then — and a `direct` box shares the host's pids.
 	line(`if [ -n "$imported" ]; then`)
-	line(`  ( z=; trap '[ -z "$z" ] || { kill "$z" 2> /dev/null; wait "$z"; }; exit 0' TERM; while :; do sleep %s & z=$!; wait "$z"; z=; keep %s --server "$url"; done ) < /dev/null > /dev/null 2>&1 &`,
-		strconv.FormatFloat(times.sync.Seconds(), 'f', -1, 64), loop)
+	line(`  %s &`, openCodeExporter(times.sync, loop))
 	line(`  xpid=$!`)
 	line(`fi`)
 
@@ -386,6 +364,82 @@ func openCodeScript(req sandbox.RunRequest, paths Paths, session string, times o
 	line(`stop; trap - EXIT TERM INT HUP`)
 	line(`exit "$code"`)
 	return b.String()
+}
+
+// openCodeStops is the script's three stops: end, which stops one process of
+// the script's own, bounded by stop ([openCodeStopWait]) and killing it only
+// if it is still there at the end of the wait; and stop and unsync, which end
+// its server and its login exporter ([openCodeExporter]).
+//
+// NO PROCESS IS NOTHING TO STOP, and it is TESTED rather than left to `kill`
+// refusing an empty operand: dash and bash refuse it, but busybox ash — the
+// sh of an Alpine image, which OpenCode 2's musl builds are for — answers both
+// `kill ""` and `kill -0 ""` with success and signals nothing, so an end with
+// no process waited out the whole bound: five seconds at the end of every run
+// given no login, where the exporter never started, and ten after a signal.
+//
+// THE EXPORTER IS TOLD AGAIN until it goes (end's second operand), because
+// the first SIGTERM can be lost. The exporter is a subshell forked while the
+// script traps SIGTERM, so it starts with the script's handler for it; dash
+// clears that handler as the subshell begins, and a SIGTERM the handler took
+// before then is dropped as untrapped. So a stop sent before the subshell has
+// run (a signal to the job as its server comes up, or a run that ends at once
+// on a host too busy to have run the subshell) reached an exporter that could
+// not hear it. Measured with a stop sent straight after the fork, one
+// exporter at a time: all 100 of 100 lost under dash and 1 to 3 of 100 under
+// bash, each waiting out the whole bound and then killing the exporter with
+// its sleep still running, which left that sleep in the job's group for an
+// interval. The loss is certain only while the fork has not run, so under
+// load, where it often runs first, fewer are lost. A repeat goes only to a pid
+// `kill -0` still finds, as every probe of end's does, so it shares end's one
+// residual: a pid the script reaped during the tenth of a second before the
+// probe, which the system could hand out again only by wrapping its whole pid
+// space within that tenth.
+//
+// THE SERVER IS TOLD ONCE. It is stopped long after it starts on every path
+// but a signal in its first instant, where a lost SIGTERM costs the bound and
+// then the kill, and a repeat would tell a server that is already shutting
+// down, stopping its own MCP servers, to stop again.
+func openCodeStops(stop time.Duration) string {
+	return fmt.Sprintf(`end() { [ -n "$1" ] || return 0; kill "$1" 2> /dev/null || return 0; i=0; while kill -0 "$1" 2> /dev/null && [ "$i" -lt %d ]; do sleep 0.1; i=$((i+1)); [ -z "$2" ] || { kill -0 "$1" 2> /dev/null && kill "$1" 2> /dev/null; }; done; kill -0 "$1" 2> /dev/null && kill -9 "$1" 2> /dev/null; return 0; }
+stop() { end "$spid"; spid=; }
+unsync() { end "$xpid" again; xpid=; }
+`, int(stop/(100*time.Millisecond)))
+}
+
+// openCodeExporter is the login exporter: a subshell that exports the login
+// into file and over the document every sync ([openCodeLoginSync]) while the
+// run works, until [openCodeStops]' unsync stops it.
+//
+// A subshell of its own, with a SIGTERM trap of its own: a SIGTERM there ends
+// its sleep at once, and an export it is in once that export has finished —
+// see the serialisation in [openCodeScript]. The sleep is reaped before it
+// goes, so a stopped exporter leaves nothing in the job's group. And its pid
+// is FORGOTTEN the command after the sleep is reaped (`z=`, right after
+// `wait`): a SIGTERM that arrives during an export, up to an interval later,
+// would otherwise signal a pid the system is free to have handed to another
+// process by then, and a `direct` box shares the host's pids. It shares end's
+// residual ([openCodeStops]): a stop whose trap runs between the reap and
+// `z=` signals that pid, which the system could have handed out again only by
+// wrapping its whole pid space within those two commands.
+//
+// A SIGTERM BETWEEN STARTING THE SLEEP AND HOLDING ITS PID is kept rather than
+// acted on: `w` is set across those two steps, and the trap only records the
+// stop there (`s`), which the exporter acts on once `z` holds the sleep. Acted
+// on, the trap found no pid, exited, and left the sleep running in the job's
+// group for the rest of its interval.
+//
+// THE SLEEP IS ENDED WITH SIGKILL, never SIGTERM, for the reason unsync tells
+// the exporter more than once ([openCodeStops]): the sleep is forked while the
+// exporter traps SIGTERM, and until it has run far enough to drop that trap a
+// SIGTERM lands on the inherited handler and is lost. A stop kept across the
+// fork is acted on the instant after it, so under dash most such SIGTERMs
+// were lost and the exporter waited out the whole interval on a sleep it had
+// told to go. SIGKILL has no handler to land on, and a sleep has nothing to
+// shut down.
+func openCodeExporter(sync time.Duration, file string) string {
+	return fmt.Sprintf(`( z= w= s=; trap 'if [ -n "$w" ]; then s=1; else [ -z "$z" ] || { kill -9 "$z" 2> /dev/null; wait "$z"; }; exit 0; fi' TERM; while :; do w=1; sleep %s & z=$!; w=; [ -z "$s" ] || { kill -9 "$z" 2> /dev/null; wait "$z"; exit 0; }; wait "$z"; z=; keep %s --server "$url"; done ) < /dev/null > /dev/null 2>&1`,
+		strconv.FormatFloat(sync.Seconds(), 'f', -1, 64), file)
 }
 
 // openCodeLeftoverSteers is the script's line that cancels every steer the run's
