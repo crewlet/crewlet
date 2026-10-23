@@ -55,7 +55,7 @@ export function ByModel({
                 id: p.provider_key,
                 label: <span title={p.models.join(", ")}>{p.provider_key}</span>,
                 // THE NAMES GIVE WAY, THE COUNT NEVER DOES: the column is one
-                // line, and cut as one sentence it lost "and 4 more" first —
+                // line, and cut as one sentence it lost "and 4 more" first,
                 // three names then read as the whole list. The whole sentence
                 // is the hover.
                 sub: used ? (

@@ -1855,9 +1855,9 @@ button.histogram-bar[data-empty]:focus-visible > .histogram-fill {
 
 @media (width < 640px) {
   /* A PHONE KEEPS THE PALETTE'S KEYS ON ONE LINE: the mode pill and the
-     scope note are what its band can lose without losing a key — the tabs
+     scope note are what its band can lose without losing a key, the tabs
      already say the scope, and the mode is a property of the answer, which
-     still reads — and so is the ask chord, which a phone has no keyboard to
+     still reads, and so is the ask chord, which a phone has no keyboard to
      press (its row is still a row, pressed like any other). */
   .palette-scope-note,
   .palette-mode,

@@ -694,7 +694,7 @@ Pin item read (`lib/artifacts/pins.ts`), so a pin made anywhere moves the
 sidebar at once),
 **Starred** (drawn only when there is one; **one row is current**: a pin, a
 star or a running turn that opens exactly the page on screen is the current
-row, and the workspace row containing it gives the mark up), and **Running** — one row per seat
+row, and the workspace row containing it gives the mark up), and **Running**, one row per seat
 the engine says is working, drawn while one is: the seat's badge with its
 status glyph, its name, the key of the item its turn is charged to as the lead,
 and a link that WATCHES the turn (its Transcript, the phase it is on open, or

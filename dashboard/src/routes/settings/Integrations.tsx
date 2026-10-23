@@ -3350,8 +3350,8 @@ export function Integrations({ kind }: { kind?: string }) {
           the tool's name lived inside the card's disclosure BUTTON, which is a
           control rather than a title, so nothing on the screen named what it
           was about until the reader's eye reached the row.
-          The card stays — it carries the actions, the surfaces and the roster
-          — and this is the title and the facts re-homed above it. They are the
+          The card stays (it carries the actions, the surfaces and the roster),
+          and this is the title and the facts re-homed above it. They are the
           peek's facts, from one function, so the two frames cannot drift; see
           [integrationFacts]. */}
       {focus && focusState && (
