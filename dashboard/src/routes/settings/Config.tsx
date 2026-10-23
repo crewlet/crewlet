@@ -303,7 +303,9 @@ function AppliedAcross({
   }
   return (
     <Card>
-      <Card.Header icon={<ServerGlyph size="sm" />}>Across the fleet</Card.Header>
+      <Card.Header icon={<ServerGlyph size="sm" />}>
+        <Card.Title>Across the fleet</Card.Title>
+      </Card.Header>
       {body}
     </Card>
   );
@@ -398,7 +400,9 @@ function RevisionBody({
         </section>
       ) : (
         <Card>
-          <Card.Header icon={<FileTextGlyph size="sm" />}>Where it came from</Card.Header>
+          <Card.Header icon={<FileTextGlyph size="sm" />}>
+            <Card.Title>Where it came from</Card.Title>
+          </Card.Header>
           {provenance}
         </Card>
       )}
@@ -730,7 +734,7 @@ export function ConfigScreen({
                   subtitle="as the engine resolved it"
                   actions={<CopyButton text={pretty} title="the active revision, as JSON" />}
                 >
-                  Active revision
+                  <Card.Title>Active revision</Card.Title>
                 </Card.Header>
                 {/* BOUNDED, like every other record block, by the ceiling the
                     shell declares once (`--record-ceiling`, frame.css). A
@@ -958,7 +962,7 @@ export function ConfigScreen({
           >
             <Card padding="none">
               <Card.Header icon={<ClockGlyph size="sm" />} count={rows.length}>
-                Revisions
+                <Card.Title>Revisions</Card.Title>
               </Card.Header>
               <DataGrid<RevisionMeta>
                 rows={rows}

@@ -134,6 +134,7 @@ import {
   BotGlyph,
   ShieldGlyph,
   TriangleAlertGlyph,
+  UserGlyph,
   UsersGlyph,
 } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
@@ -847,7 +848,7 @@ export function People() {
 
           <Card padding="none">
             <Card.Header icon={<UsersGlyph size="sm" />} count={people.length}>
-              People
+              <Card.Title>People</Card.Title>
             </Card.Header>
             <DataGrid<DirectoryRow>
               rows={people}
@@ -932,8 +933,8 @@ export function People() {
           />
 
           <Card padding="none">
-            <Card.Header icon={<UsersGlyph size="sm" />} count={seatRows.length}>
-              Human seats
+            <Card.Header icon={<UserGlyph size="sm" />} count={seatRows.length}>
+              <Card.Title>Human seats</Card.Title>
             </Card.Header>
             {/* NO COMPANY IS NOT A FAILURE: the listing's 409 is the node
                 saying it has no seat to list yet, which the generic refusal
@@ -1068,7 +1069,7 @@ export function ServiceAccounts() {
           />
           <Card padding="none">
             <Card.Header icon={<BotGlyph size="sm" />} count={accounts.length}>
-              Service accounts
+              <Card.Title>Service accounts</Card.Title>
             </Card.Header>
             <DataGrid<DirectoryRow>
               rows={accounts}
@@ -1161,7 +1162,7 @@ export function ApiTokens() {
           icon={<KeyGlyph size="sm" />}
           count={tokens.data ? tokenRows.length : undefined}
         >
-          API tokens on this node
+          <Card.Title>API tokens on this node</Card.Title>
         </Card.Header>
         {companyWriters.length > 0 && (
           <Card.Body padding="md">
@@ -1430,7 +1431,7 @@ function Findings({
   return (
     <Card padding="none">
       <Card.Header icon={<TriangleAlertGlyph size="sm" />} count={findings.length}>
-        Needs attention
+        <Card.Title>Needs attention</Card.Title>
       </Card.Header>
       <QueryState
         error={check.code}
@@ -1562,7 +1563,7 @@ function Invitations({
         count={rows.length}
         actions={<Checkbox label="Show used and expired" checked={all} onCheckedChange={onAll} />}
       >
-        Invitations
+        <Card.Title>Invitations</Card.Title>
       </Card.Header>
       <QueryState
         error={invitations.code}
