@@ -381,8 +381,7 @@ type capacityRunner interface {
 	SetCapacity(ctx context.Context, req engine.CapacityRequest) (coord.MaintenanceOperation, error)
 	AbandonCapacity(ctx context.Context, stream, operationID string, by iam.Actor) (coord.MaintenanceOperation, error)
 	ExcludeParticipant(ctx context.Context, stream, node string, by iam.Actor) (coord.MaintenanceOperation, error)
-	CapacityStatus(ctx context.Context, stream string) (
-		coord.MaintenanceOperation, []coord.MaintenanceAck, []coord.Admission, bool, error)
+	CapacityStatus(ctx context.Context, stream string) (engine.CapacityState, error)
 	CapacityWindows(ctx context.Context) ([]coord.MaintenanceOperation, []string)
 	Mode() statelog.MaintenanceMode
 }
@@ -609,22 +608,48 @@ func (a *App) serveMaintenanceStatus(w http.ResponseWriter, r *http.Request) {
 		httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeStreamRequired)
 		return
 	}
-	op, acks, admissions, found, err := a.capacity.CapacityStatus(r.Context(), stream)
+	state, err := a.capacity.CapacityStatus(r.Context(), stream)
 	if errors.Is(err, engine.ErrUnknownStream) {
 		unknownStream(w, stream, err)
 		return
 	}
 	if err != nil {
+		// THE LOG IS RIGHT AND COORDINATION DIDN'T ANSWER, which a wait clears,
+		// so it is 503 with the undecided scale ([authz.RetryUndecidedSeconds])
+		// for the reanchor status's reason: what the caller waits for is one
+		// read of the registers coming back. It was a 500, which tells a
+		// client the node itself faulted, under a sentence telling a person to
+		// try again. THIS ERROR IS THE WINDOW'S OWN READ: a part read after it
+		// that failed is answered below beside the window it read.
 		log.Warn("api_maintenance_unreadable", "stream", stream, "error", err)
-		httpjson.FailWith(w, http.StatusInternalServerError, httpjson.CodeMaintenanceUnreadable,
-			map[string]string{"detail": fmt.Sprintf("couldn't read the capacity "+
-				"window on %s. Try again, and if it keeps failing, this node's log "+
-				"says why", stream)})
+		httpjson.UnavailableWith(w, httpjson.CodeMaintenanceUnreadable,
+			authz.RetryUndecidedSeconds, httpjson.Detail{"detail": fmt.Sprintf(
+				"couldn't read whether a capacity window is open on %s just now. "+
+					"Ask again in a moment, and if it keeps failing, this node's "+
+					"log says why", stream)})
 		return
 	}
-	body := map[string]any{
-		"stream": stream, "open": found, "mode": a.capacity.Mode(),
-		"acks": acks, "admissions": admissions,
+	op, found := state.Op, state.Found
+	body := map[string]any{"stream": stream, "open": found, "mode": a.capacity.Mode()}
+	// A PART THAT COULDN'T BE READ IS SAID AS THAT, beside the window that
+	// was read, and nothing formed from it is answered: an empty list of
+	// acknowledgements or admissions reads as nobody owing anything, and
+	// folded into the window's own 503 it said the window couldn't be read
+	// when it just had been.
+	acksRead, admissionsRead := state.AcksErr == nil, state.AdmissionsErr == nil
+	if acksRead {
+		body["acks"] = state.Acks
+	} else {
+		log.Warn("api_maintenance_part_unreadable", "stream", stream,
+			"part", "acknowledgements", "error", state.AcksErr)
+		body["acks_unread"] = true
+	}
+	if admissionsRead {
+		body["admissions"] = state.Admissions
+	} else {
+		log.Warn("api_maintenance_part_unreadable", "stream", stream,
+			"part", "admissions", "error", state.AdmissionsErr)
+		body["admissions_unread"] = true
 	}
 	if found {
 		body["operation"] = op
@@ -643,14 +668,21 @@ func (a *App) serveMaintenanceStatus(w http.ResponseWriter, r *http.Request) {
 		// after it, so the page said "not sealed" under PHASE sealed.
 		switch op.Phase {
 		case coord.PhaseOpened:
-			body["restarts_missing"] = statelog.BaselineMissing(op, acks)
-			body["admissions_blocking"] = statelog.AdmissionBlocks(admissions, op.Excluded)
+			if acksRead {
+				body["restarts_missing"] = statelog.BaselineMissing(op, state.Acks)
+			}
+			if admissionsRead {
+				body["admissions_blocking"] = statelog.AdmissionBlocks(state.Admissions,
+					op.Excluded)
+			}
 		case coord.PhaseSealed, coord.PhaseConfirmed:
 			body["sealed"] = true
 		default:
-			held, missing := statelog.SealHolds(op, acks)
-			body["sealed"] = held
-			body["blocking"] = missing
+			if acksRead {
+				held, missing := statelog.SealHolds(op, state.Acks)
+				body["sealed"] = held
+				body["blocking"] = missing
+			}
 		}
 	}
 	writeJSON(w, http.StatusOK, body)

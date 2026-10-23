@@ -80,6 +80,9 @@ type fakeStateLog struct {
 	window     *coord.MaintenanceOperation
 	acks       []coord.MaintenanceAck
 	admissions []coord.Admission
+	// acksErr and admissionsErr are those two reads failing after the
+	// window answered.
+	acksErr, admissionsErr error
 
 	// unreadable is the broker's answer to a LIVE read of a stream's
 	// instant, nil while it answers.
@@ -194,18 +197,17 @@ func (f *fakeStateLog) ExcludeParticipant(_ context.Context, _, _ string,
 	return coord.MaintenanceOperation{}, errors.New("not exercised here")
 }
 
-func (f *fakeStateLog) CapacityStatus(context.Context, string) (
-	coord.MaintenanceOperation, []coord.MaintenanceAck, []coord.Admission, bool, error) {
-
+func (f *fakeStateLog) CapacityStatus(context.Context, string) (engine.CapacityState, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.gestureErr != nil {
-		return coord.MaintenanceOperation{}, nil, nil, false, f.gestureErr
+		return engine.CapacityState{}, f.gestureErr
 	}
 	if f.window == nil {
-		return coord.MaintenanceOperation{}, nil, nil, false, errors.New("not exercised here")
+		return engine.CapacityState{}, errors.New("not exercised here")
 	}
-	return *f.window, f.acks, f.admissions, true, nil
+	return engine.CapacityState{Op: *f.window, Found: true, Acks: f.acks,
+		AcksErr: f.acksErr, Admissions: f.admissions, AdmissionsErr: f.admissionsErr}, nil
 }
 
 func (f *fakeStateLog) CapacityWindows(context.Context) ([]coord.MaintenanceOperation, []string) {
@@ -233,6 +235,71 @@ func postAck(t *testing.T, a *api.App, path string) (int, map[string]any) {
 	var body map[string]any
 	_ = json.NewDecoder(rec.Result().Body).Decode(&body)
 	return rec.Code, body
+}
+
+// A WINDOW THE STATUS READ IS ANSWERED, WHATEVER FAILED AFTER IT. The window is
+// read first and the acknowledgements and the admissions after it, and either
+// failing was answered as the window's own 503: "couldn't read whether a
+// capacity window is open" about a window the node had just read open. Each
+// part is said as unread beside the window, and nothing is formed from it.
+//
+// Mutation: answer a part's failure as the window's 503, or form a list from
+// the part that failed, and this fails.
+func TestAStatusAnswersTheWindowItReadAndNamesWhatItCouldNot(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		acksErr, admissionsErr error
+		unread, absent         []string
+	}{
+		"acknowledgements": {acksErr: errors.New("store unreachable"),
+			unread: []string{"acks_unread"}, absent: []string{"acks", "restarts_missing",
+				"admissions_unread"}},
+		"admissions": {admissionsErr: errors.New("store unreachable"),
+			unread: []string{"admissions_unread"}, absent: []string{"admissions",
+				"admissions_blocking", "acks_unread"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			log := &fakeStateLog{
+				window: &coord.MaintenanceOperation{
+					Stream: "CREWLET_TRACKER_LOG", OperationID: "capacity:open",
+					Phase: coord.PhaseOpened, Attempt: 1,
+					Participants: []string{"node-1", "node-2"},
+				},
+				acksErr: tc.acksErr, admissionsErr: tc.admissionsErr,
+			}
+			b := closedPosture()
+			a := newApp(t, api.Options{Bootstrap: &b, Retention: &fakeBackupRegister{},
+				Capacity: log, Nodes: &fakeNodeGate{}})
+			req := httptest.NewRequest(http.MethodGet,
+				"/worklet/retention/maintenance?stream=CREWLET_TRACKER_LOG", nil)
+			req.Header.Set("Authorization", "Bearer secret")
+			rec := httptest.NewRecorder()
+			a.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("a window read beside a part that failed answered %d: %s",
+					rec.Code, rec.Body)
+			}
+			var body map[string]any
+			if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if body["open"] != true || body["operation"] == nil {
+				t.Errorf("the window read is not answered: %v", body)
+			}
+			for _, key := range tc.unread {
+				if body[key] != true {
+					t.Errorf("%s = %v, want true", key, body[key])
+				}
+			}
+			for _, key := range tc.absent {
+				if _, said := body[key]; said {
+					t.Errorf("the status answers %s = %v beside a part it couldn't read",
+						key, body[key])
+				}
+			}
+		})
+	}
 }
 
 // THE FLEET'S CONTROLS RECORD WHO PRESSED THEM: the eviction gate is handed
@@ -712,7 +779,10 @@ func TestARetentionRouteTellsItsRefusalAndKeepsItsFaultForTheLog(t *testing.T) {
 			http.StatusInternalServerError, httpjson.CodeReanchorFailed, ""},
 		{"an unreadable maintenance window", http.MethodGet,
 			"/worklet/retention/maintenance?stream=CREWLET_TRACKER_LOG", nil,
-			http.StatusInternalServerError, httpjson.CodeMaintenanceUnreadable, ""},
+			http.StatusServiceUnavailable, httpjson.CodeMaintenanceUnreadable,
+			"Couldn't read whether a capacity window is open on CREWLET_TRACKER_LOG " +
+				"just now. Ask again in a moment, and if it keeps failing, this " +
+				"node's log says why."},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -737,6 +807,11 @@ func TestARetentionRouteTellsItsRefusalAndKeepsItsFaultForTheLog(t *testing.T) {
 			detail, _ := body["detail"].(string)
 			if c.detail != "" && detail != c.detail {
 				t.Errorf("detail = %q, want %q", detail, c.detail)
+			}
+			// A READ A WAIT CLEARS SAYS WHEN TO ASK AGAIN: every 503 here
+			// is coordination or the broker not answering.
+			if c.status == http.StatusServiceUnavailable && rec.Header().Get("Retry-After") == "" {
+				t.Error("a 503 answered no Retry-After")
 			}
 			for _, leak := range []string{"nats:", "engine:", "statelog:", "not exercised"} {
 				if strings.Contains(detail, leak) {
@@ -827,7 +902,7 @@ func TestTheDeploymentControlsRefuseInTheEnvelope(t *testing.T) {
 		{http.MethodPost, "/worklet/retention/reanchor?stream=CREWLET_TRACKER_LOG", http.StatusBadRequest, httpjson.CodeConfirmRequired},
 		{http.MethodPost, "/worklet/retention/capacity?stream=CREWLET_TRACKER_LOG", http.StatusBadRequest, httpjson.CodeTargetRequired},
 		{http.MethodPost, "/worklet/retention/capacity?stream=CREWLET_TRACKER_LOG&bytes=1024&confirm=1024", http.StatusConflict, httpjson.CodeCapacityRefused},
-		{http.MethodGet, "/worklet/retention/maintenance?stream=CREWLET_TRACKER_LOG", http.StatusInternalServerError, httpjson.CodeMaintenanceUnreadable},
+		{http.MethodGet, "/worklet/retention/maintenance?stream=CREWLET_TRACKER_LOG", http.StatusServiceUnavailable, httpjson.CodeMaintenanceUnreadable},
 	}
 	for _, tc := range cases {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {

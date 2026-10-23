@@ -15,6 +15,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/words"
@@ -378,15 +379,21 @@ func maintenanceStatus(environ config.Source, args []string, stdout, stderr io.W
 		return errors.New("name the log")
 	}
 	var answer struct {
-		Stream             string             `json:"stream"`
-		Open               bool               `json:"open"`
-		Mode               string             `json:"mode"`
-		Sealed             bool               `json:"sealed"`
-		Blocking           string             `json:"blocking"`
-		RestartsMissing    []string           `json:"restarts_missing"`
-		AdmissionsBlocking []string           `json:"admissions_blocking"`
-		Operation          *capacityOperation `json:"operation"`
-		Acks               []struct {
+		Stream             string   `json:"stream"`
+		Open               bool     `json:"open"`
+		Mode               string   `json:"mode"`
+		Sealed             bool     `json:"sealed"`
+		Blocking           string   `json:"blocking"`
+		RestartsMissing    []string `json:"restarts_missing"`
+		AdmissionsBlocking []string `json:"admissions_blocking"`
+		// AcksUnread and AdmissionsUnread say the node read the window
+		// and couldn't read that register beside it: what is formed from
+		// it is absent, and this page says so rather than printing it as
+		// empty.
+		AcksUnread       bool               `json:"acks_unread"`
+		AdmissionsUnread bool               `json:"admissions_unread"`
+		Operation        *capacityOperation `json:"operation"`
+		Acks             []struct {
 			NodeID      string `json:"node_id"`
 			OperationID string `json:"operation_id"`
 			Attempt     int    `json:"attempt"`
@@ -400,11 +407,26 @@ func maintenanceStatus(environ config.Source, args []string, stdout, stderr io.W
 	}
 	if err := client.get(context.Background(),
 		"/worklet/retention/maintenance?stream="+url.QueryEscape(*stream), &answer); err != nil {
+		// A WINDOW THE NODE COULDN'T READ IS ITS ANSWER ABOUT THE WINDOW, a
+		// coordination read every node shares, and never a node that can't
+		// serve this page: framed as the second, it sent an operator to find
+		// another node, which reads the same register.
+		var refused *nodeRefusal
+		if errors.As(err, &refused) &&
+			refused.Code == string(httpjson.CodeMaintenanceUnreadable) {
+			return refused.asJudgement()
+		}
 		return err
 	}
 	if !answer.Open {
 		fmt.Fprintf(stdout, "No capacity window is open on %s. "+
 			"This node's mode is %s.\n", answer.Stream, answer.Mode)
+		if answer.AdmissionsUnread {
+			fmt.Fprintln(stdout, "It couldn't read the admissions just now, so it "+
+				"can't say whether a node would keep a window from opening. Ask "+
+				"again in a moment.")
+			return nil
+		}
 		if len(answer.Admissions) == 0 {
 			return nil
 		}
@@ -453,6 +475,12 @@ func maintenanceStatus(environ config.Source, args []string, stdout, stderr io.W
 	for i, ack := range answer.Acks {
 		acked[ack.NodeID] = i
 	}
+	// AN ACKNOWLEDGEMENT NOBODY COULD READ IS NOT A MISSING ONE: printed as a
+	// dash beside every participant, it read as no node having restarted.
+	noAck := "—"
+	if answer.AcksUnread {
+		noAck = "couldn't read"
+	}
 	for _, node := range answer.Operation.Participants {
 		baseline := dashIfEmpty(answer.Operation.WriteIncarnations[node])
 		if containsString(answer.Operation.Excluded, node) {
@@ -462,7 +490,7 @@ func maintenanceStatus(environ config.Source, args []string, stdout, stderr io.W
 		}
 		i, ok := acked[node]
 		if !ok {
-			fmt.Fprintf(w, "%s\t%s\t—\t\t\n", node, baseline)
+			fmt.Fprintf(w, "%s\t%s\t%s\t\t\n", node, baseline, noAck)
 			continue
 		}
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", node, baseline,
@@ -493,10 +521,22 @@ func maintenanceStatus(environ config.Source, args []string, stdout, stderr io.W
 	// maintenance mode from every participant, and no admission), past it the
 	// seal's. The seal's list at opened named every node restarted before
 	// the window as owing a seal restart nobody had asked for yet.
-	if answer.Sealed {
+	switch {
+	case answer.Sealed:
 		fmt.Fprintln(stdout, "The barrier holds.")
-	} else if answer.Blocking != "" {
+	case answer.Blocking != "":
 		fmt.Fprintf(stdout, "Not sealed: %s\n", answer.Blocking)
+	}
+	// WHAT THE NODE COULDN'T READ BESIDE THE WINDOW is said as that, so the
+	// page never reads as a window waiting on nobody.
+	if answer.AcksUnread {
+		fmt.Fprintln(stdout, "This node couldn't read which nodes have restarted "+
+			"for the window just now, so it can't say what the window is waiting "+
+			"on. Ask again in a moment.")
+	}
+	if answer.AdmissionsUnread && answer.Operation.Phase == "opened" {
+		fmt.Fprintln(stdout, "This node couldn't read the admissions just now, so "+
+			"it can't say whether one is holding the window. Ask again in a moment.")
 	}
 	if missing := answer.RestartsMissing; len(missing) > 0 {
 		exclude := "<node-id>"

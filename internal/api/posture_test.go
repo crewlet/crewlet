@@ -226,7 +226,9 @@ func TestThePostureMatrix(t *testing.T) {
 		forbd  = http.StatusForbidden
 		bad    = http.StatusBadRequest
 		absent = http.StatusNotFound
-		broken = http.StatusInternalServerError
+		// unread is a 503 a wait clears: the route admitted the caller and
+		// the fixture's coordination read didn't answer.
+		unread = http.StatusServiceUnavailable
 		// stepUp is a 403 that says `step_up_required`: the caller may
 		// take the verb and has not proved who they are recently enough.
 		// Its own cell, because a 403 for a permission the caller lacks
@@ -318,10 +320,10 @@ func TestThePostureMatrix(t *testing.T) {
 		// ADMITTED AS A 400: no target named.
 		{"resizing a stream", "POST", "/worklet/retention/capacity", "",
 			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, forbd, bad, unath, forbd, forbd, bad, unath, forbd, stepUp}},
-		// ADMITTED AS A 500: this fixture's capacity window cannot be read.
+		// ADMITTED AS A 503: this fixture's capacity window cannot be read.
 		{"the maintenance window's state", "GET",
 			"/worklet/retention/maintenance?stream=CREWLET_TRACKER_LOG", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, forbd, broken, forbd, broken, unath, forbd, forbd, broken, unath, forbd, broken}},
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, unread, forbd, unread, unath, forbd, forbd, unread, unath, forbd, unread}},
 		{"abandoning a resize", "POST", "/worklet/retention/maintenance/abandon", "",
 			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, forbd, bad, unath, forbd, forbd, bad, unath, forbd, stepUp}},
 		{"excluding a participant", "POST", "/worklet/retention/maintenance/exclude", "",

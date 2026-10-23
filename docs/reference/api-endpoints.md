@@ -7145,7 +7145,12 @@ usage a resize is decided against has to be a quantity nothing can move.
 was refused and what to do, the numbers it turns on included, and never the
 error underneath, which goes to this node's log. A gesture that stopped on a
 fault nothing told is `500 capacity_failed`, pointing at the status read; a
-status read that fails is `500 maintenance_unreadable`; and a stream this node
+status read that couldn't read the window is `503 maintenance_unreadable` with a
+`Retry-After`, since asking again once coordination answers is the remedy, while
+one that read the window and then couldn't read its acknowledgements or the
+admissions answers `200` with the window and `acks_unread: true` or
+`admissions_unread: true`, leaving out that register and every list formed from
+it (`restarts_missing`, `admissions_blocking`, `sealed`, `blocking`); and a stream this node
 doesn't keep is `404 unknown_stream`, naming the ones it does. Each answer to a
 write carries `operation` where there is one. The
 three-mode boot is `crewlet run -mode`; see
