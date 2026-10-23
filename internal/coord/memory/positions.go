@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -286,7 +287,8 @@ func (f *Fleet) ForgetAdmission(_ context.Context, nodeID, incarnation string) e
 	return nil
 }
 
-// PutMaintenanceAck records one participant's restart.
+// PutMaintenanceAck records one participant's restart for one log's window,
+// at the key the KV backend writes it under ([coord.MaintenanceAckKey]).
 func (f *Fleet) PutMaintenanceAck(_ context.Context, ack coord.MaintenanceAck) error {
 	if err := ack.Validate(); err != nil {
 		return err
@@ -299,18 +301,26 @@ func (f *Fleet) PutMaintenanceAck(_ context.Context, ack coord.MaintenanceAck) e
 	if f.maintAcks == nil {
 		f.maintAcks = map[string]coord.MaintenanceAck{}
 	}
-	f.maintAcks[ack.NodeID] = ack
+	f.maintAcks[coord.MaintenanceAckKey(ack.Stream, ack.NodeID)] = ack
 	return nil
 }
 
-// MaintenanceAcks reads every participant's, in node order.
-func (f *Fleet) MaintenanceAcks(_ context.Context) ([]coord.MaintenanceAck, error) {
+// MaintenanceAcks reads every participant's for one log's window, in node
+// order.
+func (f *Fleet) MaintenanceAcks(_ context.Context, stream string) (
+	[]coord.MaintenanceAck, error) {
+
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	out := make([]coord.MaintenanceAck, 0, len(f.maintAcks))
-	for _, node := range slices.Sorted(maps.Keys(f.maintAcks)) {
-		out = append(out, f.maintAcks[node])
+	var out []coord.MaintenanceAck
+	for _, ack := range f.maintAcks {
+		if ack.Stream == stream {
+			out = append(out, ack)
+		}
 	}
+	slices.SortFunc(out, func(a, b coord.MaintenanceAck) int {
+		return strings.Compare(a.NodeID, b.NodeID)
+	})
 	return out, nil
 }
 

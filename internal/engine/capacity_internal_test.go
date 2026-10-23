@@ -166,7 +166,7 @@ func TestOnlyANormalNodeAdmitsAndOnlyAMaintenanceNodeAcknowledges(t *testing.T) 
 		t.Fatal(err)
 	}
 	e.acknowledge(ctx, streams)
-	acks, _ := fleet.MaintenanceAcks(ctx)
+	acks, _ := fleet.MaintenanceAcks(ctx, "CREWLET_TRACKER_LOG")
 	if len(acks) != 0 {
 		t.Fatalf("a publishing node acknowledged a capacity operation, which "+
 			"is the one claim its mode cannot make — its process is exactly "+
@@ -316,7 +316,7 @@ func TestAnUnreadableAdmissionDoesNotRefuseAMaintenanceBoot(t *testing.T) {
 		t.Fatalf("a maintenance-mode boot was refused over an admission it could "+
 			"not read: %v", err)
 	}
-	acks, err := fleet.MaintenanceAcks(ctx)
+	acks, err := fleet.MaintenanceAcks(ctx, "CREWLET_TRACKER_LOG")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -471,7 +471,7 @@ func TestAnAcknowledgementCarriesTheModeItWasMadeIn(t *testing.T) {
 	// mode before the verb ran is the ordinary first step — and the boot
 	// still records which process it is, in which mode, bound to nothing.
 	e.acknowledge(ctx, []string{"CREWLET_TRACKER_LOG"})
-	acks, err := fleet.MaintenanceAcks(ctx)
+	acks, err := fleet.MaintenanceAcks(ctx, "CREWLET_TRACKER_LOG")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -489,7 +489,7 @@ func TestAnAcknowledgementCarriesTheModeItWasMadeIn(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.acknowledge(ctx, []string{"CREWLET_TRACKER_LOG"})
-	acks, err = fleet.MaintenanceAcks(ctx)
+	acks, err = fleet.MaintenanceAcks(ctx, "CREWLET_TRACKER_LOG")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -521,8 +521,88 @@ func TestABootThatCouldNotReadAWindowRecordsNoWindowlessRestart(t *testing.T) {
 	e := nodeOn(&blindFleet{fleetStore: fleet, readErr: errors.New("store unreachable")},
 		"node-1", "boot-1", statelog.ModeMaintenance, dataNode)
 	e.acknowledge(ctx, []string{"CREWLET_TRACKER_LOG"})
-	if acks, _ := fleet.MaintenanceAcks(ctx); len(acks) != 0 {
+	if acks, _ := fleet.MaintenanceAcks(ctx, "CREWLET_TRACKER_LOG"); len(acks) != 0 {
 		t.Fatalf("a boot that could not read the window recorded %+v", acks)
+	}
+}
+
+// A LOG WITH NO WINDOW OPEN IS RECORDED AS SUCH WHATEVER ANOTHER LOG HOLDS.
+//
+// A boot reads each log's window on its own, and the restart it records for a
+// log with no window open is what that log's next window baselines from. It
+// used to be one record per node, written only when no log had a window, so a
+// fleet that restarted while the tracker's window was open wrote nothing for
+// the pages log, and a window opened there next found no restart recorded for
+// any node but its coordinator: one more fleet-wide restart, for nothing.
+//
+// Mutation: withhold a log's windowless record whenever another log has a
+// window open and the pages window's baseline refuses node-b.
+func TestARestartBesideAnOpenWindowRecordsTheOtherLogs(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fleet := coordmem.NewFleet()
+	streams := []string{"CREWLET_TRACKER_LOG", "CREWLET_PAGES_LOG"}
+	for _, id := range []string{"node-a", "node-b"} {
+		if err := fleet.PutPositions(ctx, coord.NodePositions{
+			NodeID: id, At: time.Now().UTC(), Domains: map[string]coord.DomainPosition{},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// THE TRACKER'S WINDOW IS OPEN BEFORE THE FLEET RESTARTS, as it is when
+	// the verb runs from the first node up.
+	openWindow(t, nodeOn(fleet, "node-a", "first", statelog.ModeMaintenance, dataNode))
+
+	booted := map[string]*Engine{}
+	for _, id := range []string{"node-a", "node-b"} {
+		booted[id] = nodeOn(fleet, id, "maintenance", statelog.ModeMaintenance, dataNode)
+		if err := booted[id].handshake(ctx, streams); err != nil {
+			t.Fatal(err)
+		}
+	}
+	op, err := booted["node-a"].openCapacity(ctx, CapacityRequest{
+		Stream: "CREWLET_PAGES_LOG", TargetMaxBytes: 1 << 33, By: "ops-3",
+	}, jetstream.LogStats{MaxBytes: 1 << 32}, unstatedRoom)
+	if err != nil {
+		t.Fatalf("the pages window did not open: %v", err)
+	}
+	applied, err := booted["node-a"].driveCapacity(ctx, &ceilingLog{max: 1 << 32}, op)
+	if err != nil {
+		t.Fatalf("the pages window's baseline found no restart recorded beside "+
+			"the tracker's open window: %v", err)
+	}
+	if applied.Phase != coord.PhaseApplied {
+		t.Fatalf("the pages window stands at %s, want applied", applied.Phase)
+	}
+	if got := applied.WriteIncarnations["node-b"]; got != booted["node-b"].incarnation {
+		t.Errorf("node-b is recorded as %q, want the process it restarted as (%s)",
+			got, booted["node-b"].incarnation)
+	}
+}
+
+// A LOG THE BOOT COULDN'T READ COSTS THAT LOG ITS RECORD AND NO OTHER: the
+// window that may be open there is one this boot can say nothing about, and
+// every log it did read still records the restart, bound or windowless.
+//
+// Mutation: withhold every windowless record once any log was unreadable and
+// the pages log records nothing.
+func TestAnUnreadableLogCostsOnlyItsOwnRecord(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fleet := coordmem.NewFleet()
+	e := nodeOn(&blindFleet{fleetStore: fleet, readErr: errors.New("store unreachable"),
+		readErrOn: "CREWLET_TRACKER_LOG"}, "node-1", "boot-1", statelog.ModeMaintenance, dataNode)
+	e.acknowledge(ctx, []string{"CREWLET_TRACKER_LOG", "CREWLET_PAGES_LOG"})
+	if acks, _ := fleet.MaintenanceAcks(ctx, "CREWLET_TRACKER_LOG"); len(acks) != 0 {
+		t.Errorf("a log the boot couldn't read was recorded: %+v", acks)
+	}
+	acks, err := fleet.MaintenanceAcks(ctx, "CREWLET_PAGES_LOG")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(acks) != 1 || !acks[0].Windowless() || acks[0].Incarnation != e.incarnation {
+		t.Fatalf("the log the boot did read recorded %+v, want this process's "+
+			"windowless restart", acks)
 	}
 }
 
@@ -597,7 +677,7 @@ func TestTheCapacityProcedureRunsInTheRestartsItNames(t *testing.T) {
 	}
 
 	// THE WINDOWLESS RECORDS ARE NOT A SEAL, before the seal restart.
-	acks, err := fleet.MaintenanceAcks(ctx)
+	acks, err := fleet.MaintenanceAcks(ctx, "CREWLET_TRACKER_LOG")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -696,6 +776,76 @@ func TestASealStillWaitingOnANodeIsAnAnswerNotAFault(t *testing.T) {
 	}
 }
 
+// WINDOWS ON TWO LOGS RUN IN THE SAME RESTARTS, and each seals on its own
+// acknowledgements.
+//
+// A fleet resizing two logs restarts once into maintenance mode, runs the
+// verb for each, restarts once into seal mode and runs the verb for each
+// again. Every boot acknowledges each log's window. The acknowledgements were
+// kept one per node, so the boot's second write replaced its first, and the
+// window whose acknowledgement went first read "acknowledged another
+// operation" from every node for as long as the other was open: no restart
+// could seal it.
+//
+// Mutation: key an acknowledgement by its node alone and the tracker's window
+// never closes.
+func TestWindowsOnTwoLogsSealInTheSameRestarts(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fleet := coordmem.NewFleet()
+	streams := []string{"CREWLET_TRACKER_LOG", "CREWLET_PAGES_LOG"}
+	nodes := []string{"node-a", "node-b"}
+
+	maintenance := map[string]*Engine{}
+	for _, id := range nodes {
+		maintenance[id] = nodeOn(fleet, id, "maintenance", statelog.ModeMaintenance, dataNode)
+		if err := maintenance[id].handshake(ctx, streams); err != nil {
+			t.Fatal(err)
+		}
+		if err := fleet.PutPositions(ctx, coord.NodePositions{
+			NodeID: id, At: time.Now().UTC(), Domains: map[string]coord.DomainPosition{},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	logs := map[string]*ceilingLog{}
+	applied := map[string]coord.MaintenanceOperation{}
+	for _, stream := range streams {
+		logs[stream] = &ceilingLog{max: 1 << 32}
+		op, err := maintenance["node-a"].openCapacity(ctx, CapacityRequest{
+			Stream: stream, TargetMaxBytes: 1 << 33, By: "ops-3",
+		}, jetstream.LogStats{MaxBytes: 1 << 32}, unstatedRoom)
+		if err != nil {
+			t.Fatalf("the window on %s did not open: %v", stream, err)
+		}
+		if applied[stream], err = maintenance["node-a"].driveCapacity(ctx, logs[stream], op); err != nil {
+			t.Fatalf("the verb on %s: %v", stream, err)
+		}
+		if applied[stream].Phase != coord.PhaseApplied {
+			t.Fatalf("the window on %s stands at %s, want applied", stream,
+				applied[stream].Phase)
+		}
+	}
+
+	seal := map[string]*Engine{}
+	for _, id := range nodes {
+		seal[id] = nodeOn(fleet, id, "seal", statelog.ModeSeal, dataNode)
+		if err := seal[id].handshake(ctx, streams); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, stream := range streams {
+		if _, err := seal["node-b"].driveCapacity(ctx, logs[stream], applied[stream]); err != nil {
+			t.Fatalf("the verb on %s from seal mode: %v", stream, err)
+		}
+		if held, found, err := fleet.Maintenance(ctx, stream); err != nil || found {
+			t.Errorf("the window on %s is still open at %s after every node "+
+				"restarted into seal mode (found=%t, err=%v)", stream, held.Phase,
+				found, err)
+		}
+	}
+}
+
 // ceilingLog is a log a capacity window drives end to end with no broker: its
 // ceiling is what the last request set, and onSet, when given, runs as each
 // request leaves and may refuse it.
@@ -739,7 +889,7 @@ func TestTheBarrierRefusesEveryWayAnAcknowledgementCanBeTheWrongOne(t *testing.T
 	}
 	good := func(node string) coord.MaintenanceAck {
 		return coord.MaintenanceAck{
-			NodeID: node, OperationID: "op-1", Attempt: 2,
+			Stream: "CREWLET_TRACKER_LOG", NodeID: node, OperationID: "op-1", Attempt: 2,
 			Incarnation: node + ":new", Mode: string(statelog.ModeSeal),
 		}
 	}
@@ -769,6 +919,9 @@ func TestTheBarrierRefusesEveryWayAnAcknowledgementCanBeTheWrongOne(t *testing.T
 			}), false},
 		{"one is the same process that was baselined",
 			bend("node-1", func(a *coord.MaintenanceAck) { a.Incarnation = "node-1:old" }),
+			false},
+		{"one acknowledged another log's window",
+			bend("node-1", func(a *coord.MaintenanceAck) { a.Stream = "CREWLET_PAGES_LOG" }),
 			false},
 	}
 	for _, tc := range cases {
@@ -801,12 +954,12 @@ func TestTheBarrierRefusesEveryWayAnAcknowledgementCanBeTheWrongOne(t *testing.T
 func TestAnExcludedParticipantIsTheOnlyThingThatWaivesAnAcknowledgement(t *testing.T) {
 	t.Parallel()
 	op := coord.MaintenanceOperation{
-		OperationID: "op-1", Attempt: 1,
+		Stream: "CREWLET_TRACKER_LOG", OperationID: "op-1", Attempt: 1,
 		Participants:      []string{"node-1", "node-2"},
 		WriteIncarnations: map[string]string{"node-1": "node-1:old", "node-2": "node-2:old"},
 	}
 	acks := []coord.MaintenanceAck{{
-		NodeID: "node-1", OperationID: "op-1", Attempt: 1,
+		Stream: "CREWLET_TRACKER_LOG", NodeID: "node-1", OperationID: "op-1", Attempt: 1,
 		Incarnation: "node-1:new", Mode: string(statelog.ModeSeal),
 	}}
 	if _, missing := statelog.SealRestarts(op, acks); len(missing) == 0 {
@@ -931,7 +1084,7 @@ func TestTheReportAtOpenedSaysWhatTheBaselineWaitsOn(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := fleet.PutMaintenanceAck(ctx, coord.MaintenanceAck{
-		NodeID: "node-1", OperationID: "capacity:before", Attempt: 2,
+		Stream: "CREWLET_TRACKER_LOG", NodeID: "node-1", OperationID: "capacity:before", Attempt: 2,
 		Incarnation: "node-1:2", Mode: string(statelog.ModeMaintenance),
 	}); err != nil {
 		t.Fatal(err)
@@ -1035,7 +1188,7 @@ func TestABaselineOfNothingIsRefusedRatherThanRecorded(t *testing.T) {
 	// EITHER an acknowledgement or an exclusion resolves it — and nothing
 	// else does.
 	if err := fleet.PutMaintenanceAck(ctx, coord.MaintenanceAck{
-		NodeID: "node-2", OperationID: "op-1", Attempt: 1,
+		Stream: "CREWLET_TRACKER_LOG", NodeID: "node-2", OperationID: "op-1", Attempt: 1,
 		Incarnation: "node-2:boot-9", Mode: string(statelog.ModeMaintenance),
 	}); err != nil {
 		t.Fatal(err)
@@ -1473,7 +1626,7 @@ func TestARestartInsideItsCrashedProcesssLeaseIsRetiredByTheWindow(t *testing.T)
 	// AND THE RESTARTED PROCESS ACKNOWLEDGES THE WINDOW, as its next boot
 	// would, so the baseline has a process to record for it.
 	if err := fleet.PutMaintenanceAck(ctx, coord.MaintenanceAck{
-		NodeID: "node-a", OperationID: op.OperationID, Attempt: op.Attempt,
+		Stream: "CREWLET_TRACKER_LOG", NodeID: "node-a", OperationID: op.OperationID, Attempt: op.Attempt,
 		Incarnation: "node-a:restarted", Mode: string(statelog.ModeMaintenance),
 		At: time.Now().UTC(),
 	}); err != nil {
@@ -2052,7 +2205,9 @@ type fleetStore = coordmem.Fleet
 // as an absence are reachable.
 type blindFleet struct {
 	*fleetStore
-	readErr       error
+	readErr error
+	// readErrOn narrows readErr to one log's window, where it is set.
+	readErrOn     string
 	positionsErr  error
 	admissionsErr error
 	openFailures  int
@@ -2062,7 +2217,7 @@ type blindFleet struct {
 func (b *blindFleet) Maintenance(ctx context.Context, stream string) (
 	coord.MaintenanceOperation, bool, error) {
 
-	if b.readErr != nil {
+	if b.readErr != nil && (b.readErrOn == "" || b.readErrOn == stream) {
 		return coord.MaintenanceOperation{}, false, b.readErr
 	}
 	return b.fleetStore.Maintenance(ctx, stream)
@@ -2399,7 +2554,7 @@ func TestADatalessMemberMustAcknowledgeASeal(t *testing.T) {
 	// EVERY NODE RESTARTS INTO SEAL MODE, each acknowledging as its own
 	// profile says it must — the leaf included, which must write nothing.
 	coordinator.acknowledge(ctx, []string{op.Stream})
-	acks, err := fleet.MaintenanceAcks(ctx)
+	acks, err := fleet.MaintenanceAcks(ctx, "CREWLET_TRACKER_LOG")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2409,7 +2564,7 @@ func TestADatalessMemberMustAcknowledgeASeal(t *testing.T) {
 	for _, id := range []string{"broker-1", "agent-1"} {
 		nodes[id].acknowledge(ctx, []string{op.Stream})
 	}
-	acks, err = fleet.MaintenanceAcks(ctx)
+	acks, err = fleet.MaintenanceAcks(ctx, "CREWLET_TRACKER_LOG")
 	if err != nil {
 		t.Fatal(err)
 	}

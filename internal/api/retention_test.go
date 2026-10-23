@@ -349,7 +349,8 @@ func TestAWindowsStatusAnswersWhatItsNextStepWaitsOn(t *testing.T) {
 			Participants: []string{"node-1", "node-2", "node-3"},
 		},
 		acks: []coord.MaintenanceAck{
-			{NodeID: "node-1", Incarnation: "node-1:2", Mode: "maintenance"},
+			{Stream: "CREWLET_TRACKER_LOG", NodeID: "node-1", Incarnation: "node-1:2",
+				Mode: "maintenance"},
 		},
 		admissions: []coord.Admission{{NodeID: "node-3", Incarnation: "node-3:1"}},
 	}
