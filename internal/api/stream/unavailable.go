@@ -125,15 +125,48 @@ func UnavailableOf(err error) Unavailable {
 // (a company's file storage full, a fleet whose nodes don't hold the same
 // keys) went out with no Retry-After and was written at DEBUG, where nobody
 // running the node reads it.
+//
+// A FAILURE ITS OWN NODE HAS LOGGED ALREADY ([loggedAtSource]) is written at
+// DEBUG whatever it is: the node that met it wrote it at its level with its
+// text (a coding run's output read on the node that owns the run), so this
+// line is the trace of the answer, and at WARN it was the same failure twice,
+// on two nodes or on one.
 func LogUnavailable(ctx context.Context, logger *slog.Logger, event string, err error,
 	fields ...any) {
 
 	level := slog.LevelDebug
-	if builtin.RetryAfter(err, HealthInterval) == 0 {
+	if builtin.RetryAfter(err, HealthInterval) == 0 && !atSource(err) {
 		level = slog.LevelWarn
 	}
 	logger.Log(ctx, level, event,
 		append(fields[:len(fields):len(fields)], "error", err.Error())...)
+}
+
+// LogFailed writes a question's fault (the answer a surface gives as a 500)
+// through the answering surface's logger under event: at WARN, since a fault
+// is somebody's to look at, and at DEBUG where its own node has logged it
+// already ([loggedAtSource]), for [LogUnavailable]'s reason.
+func LogFailed(ctx context.Context, logger *slog.Logger, event string, err error,
+	fields ...any) {
+
+	level := slog.LevelWarn
+	if atSource(err) {
+		level = slog.LevelDebug
+	}
+	logger.Log(ctx, level, event,
+		append(fields[:len(fields):len(fields)], "error", err)...)
+}
+
+// loggedAtSource is a failure the node that met it has logged already, with its
+// class and its text, so a surface answering it writes a trace. Declared here,
+// by its reader; a coding run's output read is what marks one today.
+type loggedAtSource interface{ LoggedAtSource() bool }
+
+// atSource reports whether err, or anything it wraps, was logged where it was
+// met.
+func atSource(err error) bool {
+	var logged loggedAtSource
+	return errors.As(err, &logged) && logged.LoggedAtSource()
 }
 
 // Fields is the answer as a REST envelope's extra keys: the refusal where one

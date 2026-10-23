@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/queries"
@@ -107,10 +108,11 @@ func everySeam(t *testing.T) queries.Sources {
 		Sandbox:  memorySandbox{},
 		// A RUNNING RUN'S LIVE OUTPUT: the real reader over an empty
 		// fleet record, which answers every run `not_running`.
-		SandboxTail: &sandbox.TailReader{Pending: sandbox.NewCoordStore(coordmemory.NewFleet())},
-		Config:      surface,
-		Work:        emptyWork{},
-		Pages:       emptyPages{},
+		SandboxTail: &sandbox.TailReader{Pending: sandbox.NewCoordStore(coordmemory.NewFleet()),
+			Condition: func(err error) bool { _, ok := builtin.Condition(err); return ok }},
+		Config: surface,
+		Work:   emptyWork{},
+		Pages:  emptyPages{},
 		// THE SEARCH INDEX IS ITS OWN SEAM, so a node with a board and
 		// no index is a real shape this sweep can describe.
 		WorkSearch: emptyWork{},

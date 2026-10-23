@@ -29,6 +29,7 @@ import (
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
@@ -656,6 +657,76 @@ func TestEveryConditionIsToldInTheSameWordsOnEveryTransport(t *testing.T) {
 				if strings.Contains(fmt.Sprint(body, socket), leak) {
 					t.Errorf("the answer carries %q: %v %v", leak, body, socket)
 				}
+			}
+		})
+	}
+}
+
+// A RUNNING RUN'S OUTPUT THAT COULD NOT BE READ IS TOLD BY WHAT CLEARS IT, on
+// both transports: a box its provider did not answer and a node that could not
+// answer just now are a 503 with a Retry-After, a setup somebody has to fix is
+// a 503 with none, and only a fault of the node that owns the run is a 500 —
+// each in the engine's own words, with nothing of the provider's. A provider
+// outage while somebody watched a run used to be a 500 query_failed, the
+// answer that says the node broke and waiting won't help.
+//
+// Mutation: drop the sandbox classes from [builtin.Condition] and the first
+// three rows answer 500; mark configuration as a wait and its row carries a
+// Retry-After.
+func TestARunsOutputThatCouldNotBeReadIsToldByWhatClearsIt(t *testing.T) {
+	t.Parallel()
+	host := errors.New("e2b: GET https://49983-box.e2b.example.com/files: 502 Bad Gateway")
+	for name, c := range map[string]struct {
+		err    error
+		status int
+		waits  bool
+	}{
+		"a box its provider did not answer": {err: fmt.Errorf("sandbox: read the box of "+
+			"run t1: %w", sandbox.Because(sandbox.WhyProviderUnavailable, host)),
+			status: http.StatusServiceUnavailable, waits: true},
+		"the owner's provider did not answer": {err: &sandbox.TailError{Node: "n2",
+			TurnID: "t1", Failure: sandbox.TailFailure(sandbox.WhyProviderUnavailable)},
+			status: http.StatusServiceUnavailable, waits: true},
+		"the owner could not answer just now": {err: &sandbox.TailError{Node: "n2",
+			TurnID: "t1", Failure: sandbox.TailFailedUnanswered},
+			status: http.StatusServiceUnavailable, waits: true},
+		"the owner's sandbox setup": {err: &sandbox.TailError{Node: "n2", TurnID: "t1",
+			Failure: sandbox.TailFailure(sandbox.WhyConfiguration)},
+			status: http.StatusServiceUnavailable},
+		"a fault of the owner's": {err: &sandbox.TailError{Node: "n2", TurnID: "t1",
+			Failure: sandbox.TailFailedFault}, status: http.StatusInternalServerError},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			a := seededApp(t, nil)
+			a.Queries().Register("tailed", queries.Everybody(),
+				func(context.Context, queries.Params) (any, error) { return nil, c.err })
+			rec := httptest.NewRecorder()
+			a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet, "/query/tailed", nil)))
+			if rec.Code != c.status {
+				t.Fatalf("REST status = %d, want %d: %s", rec.Code, c.status, rec.Body.String())
+			}
+			for _, leak := range []string{"e2b.example.com", "502", "n2 owns"} {
+				if strings.Contains(rec.Body.String(), leak) {
+					t.Errorf("REST body carries %q: %s", leak, rec.Body.String())
+				}
+			}
+			if c.status != http.StatusServiceUnavailable {
+				return
+			}
+			said, _ := builtin.ConditionSentence(c.err)
+			var body map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body["detail"] != said {
+				t.Errorf("REST body = %s, want the engine's sentence %q", rec.Body.String(), said)
+			}
+			if got := rec.Header().Get("Retry-After"); (got != "") != c.waits {
+				t.Errorf("REST Retry-After = %q, want one: %v", got, c.waits)
+			}
+			socket := overSocket(t, a, "tailed", nil)
+			wait, _ := socket["retry_after"].(float64)
+			if socket["error"] != "unavailable" || socket["detail"] != said || (wait > 0) != c.waits {
+				t.Errorf("socket answer = %v, want unavailable carrying %q, waits %v",
+					socket, said, c.waits)
 			}
 		})
 	}

@@ -1182,7 +1182,7 @@ func runQuery(ctx context.Context, client *Client, query Query, req request) {
 		// carry a database path or a driver's own message, and being
 		// admitted to a question does not make a reader somebody that path
 		// is meant for.
-		log.WarnContext(ctx, "stream_query_failed", "what", req.What, "error", err)
+		LogFailed(ctx, log, "stream_query_failed", err, "what", req.What)
 		client.Reply(queryError(req, CodeQueryFailed))
 	}
 }
