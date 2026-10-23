@@ -1,16 +1,18 @@
 /**
- * What the Org chart's sections and Company › Schedules carry in the page bar: a way to find a seat, the
- * way into the builder, and the one write the bar offers — adding a seat —
- * plus the section tabs' figures. The chart's other writes are a seat's own
+ * What the Org chart's sections carry in the page bar: a way to find a seat,
+ * the way into the builder ([EditOrgButton], which Company › Overview and
+ * Policies draw too), and the one write the bar offers, adding a seat, plus
+ * the section tabs' figures. Company › Schedules is its own row and draws
+ * none of these: its bar offered Add seat as a schedules page's main action. The chart's other writes are a seat's own
  * and live on it: a vacant human seat's card, peek and page offer Invite and
  * Create to an admin (`components/people.tsx`), since
  * a person comes from the seat they will hold.
  *
  * # One header for every section
  *
- * The chart, the roster, the teams and the schedules are four ways of looking
- * at one company's seats, and a reader moving between them expects the same
- * controls in the same place. Written per screen, the chart had "Edit org", the roster
+ * The chart, the roster and the teams are three ways of looking at one
+ * company's seats, and a reader moving between them expects the same controls
+ * in the same place. Written per screen, the chart had "Edit org", the roster
  * had a pair of count tags where the controls should be, and Schedules had
  * none at all, so the bar changed shape with every tab.
  *
@@ -132,20 +134,14 @@ export function AgentsHeader({
       label: "Edit org",
       icon: <PencilGlyph size="sm" />,
       onSelect: () => nav.to(ORG_EDIT_PATH),
+      ...(access.can ? {} : { disabled: true, description: access.reason }),
     },
   ]);
   return (
     <PageActions>
       {filter ? <FilterSeats {...filter} /> : <FindSeat index={index} onFound={onFound} />}
       <span className="page-action-folds">
-        <ButtonLink
-          size="small"
-          variant="secondary"
-          href={href(ORG_EDIT_PATH)}
-          leadingIcon={<PencilGlyph size="sm" />}
-        >
-          Edit org
-        </ButtonLink>
+        <EditOrgButton />
       </span>
       {/* NEVER HIDDEN: a reader who may not add a seat sees the control and
           the reason, rather than a product with no way to grow its company. */}
@@ -170,6 +166,39 @@ export function AgentsHeader({
         </Button>
       )}
     </PageActions>
+  );
+}
+
+/**
+ * The way into the org builder, one control wherever the builder writes what
+ * the page shows: the Org chart's sections, and Company › Overview and
+ * Policies, which drew a text link "Edit in org →" for the same place.
+ *
+ * ASKED THE GATE THE BUILDER ASKS (`useOrgWriteAccess`): a reader holding only
+ * Tracker was offered an enabled Edit org beside a disabled Add seat, and the
+ * page it opened refused them. Never hidden: the control says why.
+ */
+export function EditOrgButton() {
+  const access = useOrgWriteAccess("anywhere");
+  return access.can ? (
+    <ButtonLink
+      size="small"
+      variant="secondary"
+      href={href(ORG_EDIT_PATH)}
+      leadingIcon={<PencilGlyph size="sm" />}
+    >
+      Edit org
+    </ButtonLink>
+  ) : (
+    <Button
+      size="small"
+      variant="secondary"
+      leadingIcon={<PencilGlyph size="sm" />}
+      disabledReason={access.reason}
+      title={access.reason}
+    >
+      Edit org
+    </Button>
   );
 }
 

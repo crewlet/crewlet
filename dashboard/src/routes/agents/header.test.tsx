@@ -72,7 +72,9 @@ test("Edit org folds into the phone's More menu and Add seat stays inline", () =
   const { container } = withClient(<AgentsHeader index={indexOrg(CHART_ORG)} />, 0);
   const entries = vi.mocked(usePageMenu).mock.lastCall?.[0] ?? [];
   expect(entries.map((e) => e.label)).toEqual(["Edit org"]);
-  const edit = [...container.querySelectorAll("a")].find((a) => a.textContent === "Edit org")!;
+  const edit = [...container.querySelectorAll("a, button")].find(
+    (a) => a.textContent === "Edit org",
+  )!;
   expect(edit.closest(".page-action-folds")).not.toBeNull();
   const add = [...container.querySelectorAll("a, button")].find((b) =>
     b.textContent?.includes("Add seat"),
@@ -80,14 +82,25 @@ test("Edit org folds into the phone's More menu and Add seat stays inline", () =
   expect(add.closest(".page-action-folds")).toBeNull();
 });
 
-// THE SAME BAR ON EVERY SECTION, Schedules included. It carried only the star
-// and Copy link, so Find a seat, Edit org and Add seat vanished from the bar
-// the moment a reader moved to it from the roster, and came back on the way
-// out.
-test("the Schedules section carries the Agents page bar", () => {
+// SCHEDULES IS ITS OWN ROW OF COMPANY, not a tab of the Org chart, and its
+// bar is its own: it carried the chart's Find a seat, Edit org and Add seat,
+// so a schedules page offered "Add seat" as its main action.
+test("the Schedules page carries none of the Org chart's controls", () => {
   const { container } = withClient(<Schedules />, 2);
-  expect(container.querySelector("input[placeholder='Find a seat']")).not.toBeNull();
+  expect(container.querySelector("input[placeholder='Find a seat']")).toBeNull();
   const controls = [...container.querySelectorAll("a, button")].map((el) => el.textContent);
-  expect(controls).toContain("Edit org");
-  expect(controls.some((text) => text?.includes("Add seat"))).toBe(true);
+  expect(controls).not.toContain("Edit org");
+  expect(controls.some((text) => text?.includes("Add seat"))).toBe(false);
+});
+
+// EDIT ORG ASKS THE BUILDER'S GATE: a reader who may not write the chart was
+// offered it enabled, beside a disabled Add seat, and the page it opened
+// refused them. Mutation: draw the link whatever the access says.
+test("Edit org is held with its reason for a reader who may not write the chart", () => {
+  const { container } = withClient(<AgentsHeader index={indexOrg(CHART_ORG)} />, 0);
+  const edit = [...container.querySelectorAll("a, button")].find(
+    (a) => a.textContent === "Edit org",
+  )!;
+  expect(edit.tagName).toBe("BUTTON");
+  expect(edit.getAttribute("aria-disabled")).toBe("true");
 });

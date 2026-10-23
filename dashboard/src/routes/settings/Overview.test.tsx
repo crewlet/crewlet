@@ -18,6 +18,7 @@ import { Overview } from "./Overview.tsx";
 import { Policies } from "./Policies.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
 
@@ -44,9 +45,11 @@ function mount(Screen: ComponentType = Overview) {
   const store = new Store();
   render(
     <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
-      <Router>
-        <Screen />
-      </Router>
+      <ViewerProvider>
+        <Router>
+          <Screen />
+        </Router>
+      </ViewerProvider>
     </ClientContext.Provider>,
   );
   return store;

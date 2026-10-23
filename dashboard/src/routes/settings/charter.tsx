@@ -19,9 +19,8 @@
 
 import type { ReactNode } from "react";
 import { Card, Skeleton } from "@crewlethq/ui";
-import { href } from "~/app/router.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { ORG_EDIT_PATH } from "~/app/routes.ts";
+import { EditOrgButton } from "~/routes/agents/header.tsx";
 import { useOrg } from "~/lib/store-hooks.ts";
 import type { OrgProjection } from "~/protocol/index.ts";
 import { PreviousRevisionNote } from "~/routes/org/builder/AfterSaveStrip.tsx";
@@ -38,10 +37,11 @@ export function CharterPage({
   const org = useOrg();
   return (
     <>
+      {/* THE ORG CHART'S OWN CONTROL, the same button and words: a text link
+          here for the place the chart's bar offers as a button changed the
+          bar's style between sibling pages. */}
       <PageActions>
-        <a className="t-link" href={href(ORG_EDIT_PATH)}>
-          Edit in org →
-        </a>
+        <EditOrgButton />
       </PageActions>
       <PreviousRevisionNote />
       {org ? (
