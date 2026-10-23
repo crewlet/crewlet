@@ -188,23 +188,45 @@ test("every tile carries exactly one action, and which one follows the engine", 
   expect(manage[0]?.getAttribute("href")).toBe("#/company/integrations/datadog");
   expect(within(datadog).queryByRole("button", { name: /Disconnect/ })).toBeNull();
 
-  // AND A TOOL NOBODY CONNECTED is Connect, under the engine's own word.
+  // AND A TOOL NOBODY CONNECTED is Connect, with no pill: "Not in use" on
+  // every such tile was a column a reader learned to skip.
   const slack = await tile("Slack");
   expect(controls(slack).map((c) => c.getAttribute("aria-label"))).toEqual(["Connect Slack"]);
-  expect(within(slack).getByText("Not in use")).toBeTruthy();
+  expect(within(slack).queryByText("Not in use")).toBeNull();
+  expect(slack.querySelector(".crewlet-tag")).toBeNull();
 });
 
-// A TOOL NOBODY SET UP KEEPS ITS MARK, DRAINED: the kit's `muted` mark is the
-// glance that says "available, not connected" down the grid, and a tool that
-// is set up draws its own colours whatever its state.
-test("an unconfigured tool's mark is muted and a configured one's is not", async () => {
+// EVERY MARK IN FULL COLOUR, ON ONE WELL: a drained Datadog read as a
+// placeholder image. A tool nobody set up says so by the tile's quieter
+// ground instead.
+test("every mark draws in its own colours, and an unconfigured tile sits on the quieter ground", async () => {
   stubFetch({ status: 200, body: listing });
   mount();
-  const mark = async (name: string) =>
-    (await tile(name)).querySelector(".int-brand .crewlet-vendor-mark") as Element;
-  expect((await mark("Slack")).classList.contains("crewlet-vendor-mark--muted")).toBe(true);
-  expect((await mark("GitLab")).classList.contains("crewlet-vendor-mark--muted")).toBe(false);
-  expect((await mark("Datadog")).classList.contains("crewlet-vendor-mark--muted")).toBe(false);
+  for (const name of ["Slack", "GitLab", "Datadog"]) {
+    const mark = (await tile(name)).querySelector(
+      ".crewlet-catalog-tile__mark .crewlet-vendor-mark",
+    );
+    expect(mark?.classList.contains("crewlet-vendor-mark--muted")).toBe(false);
+  }
+  const quiet = async (name: string) =>
+    (await tile(name)).classList.contains("crewlet-catalog-tile--quiet");
+  expect(await quiet("Slack")).toBe(true);
+  expect(await quiet("GitLab")).toBe(false);
+});
+
+// THE CATALOGUE ENDS AT THE TOOLS IT SERVES. MCP servers live in Settings ›
+// MCP Tools now, and a stale "Add an MCP server" tile pointed there from a
+// grid of apps. The address vendors deliver to is a quiet fact under the
+// tiles, copyable, never a banner over them.
+test("the catalogue carries no MCP tile, and says the engine's address quietly", async () => {
+  stubFetch({ status: 200, body: listing });
+  const { container } = mount();
+  await tile("GitLab");
+  expect(screen.queryByText("Add an MCP server")).toBeNull();
+  const address = container.querySelector(".int-address");
+  expect(address?.textContent).toContain("Third-party apps reach this engine at");
+  expect(address?.closest(".crewlet-callout")).toBeNull();
+  expect(screen.getByRole("button", { name: "Copy the engine's address" })).toBeTruthy();
 });
 
 // ROTATE TOKEN OPENS THE SETTINGS FORM, SAYING WHY.
@@ -223,12 +245,16 @@ test("the filter shows what the company has, or what it could have", async () =>
   await tile("GitLab");
   fireEvent.click(screen.getByRole("radio", { name: /Connected/ }));
   // THE CATALOGUE'S TILES: the services built into Crewlet above it are not
-  // third-party tools, and the filter is about those.
+  // third-party tools, and the filter is about those. The filter is the
+  // section's own control, on its heading row.
+  const section = screen.getByRole("region", { name: "Third-party apps" });
+  expect(
+    within(section).getByRole("radiogroup", { name: "Which integrations to show" }),
+  ).toBeTruthy();
   const catalogue = () =>
-    screen
-      .getAllByRole("heading")
-      .map((h) => h.textContent)
-      .filter((name) => !name?.startsWith("Crewlet "));
+    within(section)
+      .getAllByRole("heading", { level: 3 })
+      .map((h) => h.textContent);
   expect(catalogue()).toEqual(["Datadog", "GitLab"]);
   fireEvent.click(screen.getByRole("radio", { name: /Available/ }));
   await waitFor(() => expect(screen.queryByRole("heading", { name: "GitLab" })).toBeNull());
@@ -293,4 +319,41 @@ test("one tool's page draws its card once, its siblings keyed apart", async () =
   expect(screen.getAllByRole("button", { name: /^Disconnect/ }).length).toBe(1);
   expect(warned.mock.calls.some((c) => String(c[0]).includes("same key"))).toBe(false);
   warned.mockRestore();
+});
+
+// NOTHING CONNECTED IS SAID WHERE IT IS NEWS: under the Connected filter it
+// empties, with the way to what is available. Over the whole catalogue the
+// filter's own count says it, and a banner said it a second time.
+test("the Connected filter of a company with nothing connected says so, with the way back", async () => {
+  stubFetch({
+    status: 200,
+    body: { ...listing, tools: listing.tools.map((t) => ({ ...t, configured: false })) },
+  });
+  const store = new Store();
+  const socket = new LiveSocket(store);
+  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
+    Promise.resolve(
+      what === "integrations"
+        ? { ...answer, integrations: [], tools: [] }
+        : what === "viewer"
+          ? OPERATOR
+          : [],
+    );
+  render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <ViewerProvider>
+        <Router>
+          <Integrations />
+        </Router>
+      </ViewerProvider>
+    </ClientContext.Provider>,
+    { wrapper: LayerHost },
+  );
+  await tile("GitLab");
+  expect(screen.queryByText("No app is connected yet")).toBeNull();
+  fireEvent.click(screen.getByRole("radio", { name: /Connected/ }));
+  expect(await screen.findByText("No app is connected yet")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Show available apps" }));
+  expect(await screen.findByRole("heading", { name: "GitLab" })).toBeTruthy();
+  expect(screen.queryByText("No app is connected yet")).toBeNull();
 });
