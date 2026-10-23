@@ -97,6 +97,7 @@ export function ByAgent({
   return (
     <Card className="spend-card spend-agents" padding="none">
       <Card.Header
+        subtitlePlacement="below"
         icon={<BotGlyph size="sm" />}
         subtitle={`${words ? `${words} · ` : ""}${
           capped ? "budget is today\u2019s per-seat allowance" : "no seat has a daily token ceiling"

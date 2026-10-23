@@ -35,7 +35,11 @@ export function ByModel({
   const rows = (rollup?.by_provider ?? []).filter((p) => p.total_tokens > 0);
   return (
     <Card className="spend-card spend-list" padding="none">
-      <Card.Header icon={<CpuGlyph size="sm" />} subtitle={words ?? undefined}>
+      <Card.Header
+        icon={<CpuGlyph size="sm" />}
+        subtitle={words ?? undefined}
+        subtitlePlacement="below"
+      >
         <Card.Title>By model</Card.Title>
       </Card.Header>
       <Card.Body padding="md">
