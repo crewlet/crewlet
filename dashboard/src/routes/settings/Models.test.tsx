@@ -321,6 +321,21 @@ test("a key the engine does not know is said, not drawn as an empty model", asyn
   expect(screen.getByText("No model called “nope”")).toBeDefined();
 });
 
+// NO MODEL IS THE KIT'S EMPTY STATE, with the way to where one is added: a
+// plain sentence in a padded box was the one empty card on Settings drawn by
+// hand, beside the MCP servers card's empty state.
+test("a node with no model says so with the empty state and the way to Configuration", async () => {
+  mount(undefined, { answer: { ...pool(), providers: [] } });
+  await settle();
+  const title = await screen.findByText("No model configured yet");
+  const state = title.closest(".crewlet-empty-state") as HTMLElement;
+  expect(state).not.toBeNull();
+  expect(within(state).getByText("providers.llm").tagName).toBe("CODE");
+  expect(within(state).getByRole("link", { name: "Open Configuration" }).getAttribute("href")).toBe(
+    "#/settings/config",
+  );
+});
+
 test("a refused reader sees the refusal alone — no tiles, no empty list", async () => {
   const { view } = mount(undefined, { refuse: true });
   await settle();
