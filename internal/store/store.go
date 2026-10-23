@@ -1089,6 +1089,50 @@ func openPool(path string, busy time.Duration,
 			// connection answered and no other. The figure, and what the
 			// cache is for, are [nodeCacheKiB]'s; negative is KiB.
 			fmt.Sprintf("PRAGMA cache_size = %d", -nodeCacheKiB),
+			// TEMPORARY STORAGE IS MEMORY, because on the driver's default
+			// it was a file per connection that outlived the process.
+			// Turso opens a per-connection temp database at the first
+			// BEGIN IMMEDIATE, which every write here takes (begin.go),
+			// since that statement opens a transaction on every schema,
+			// temp included. On the default the temp database is a FILE,
+			//
+			//	$TMPDIR/.tmpXXXXXX/tursodb-temp.db
+			//
+			// in a fresh directory removed only when its connection
+			// closes. So every exit that closes nothing (the watchdog's
+			// two exits, a crash, a kill) left one per connection for
+			// good, eight a node as measured, in a directory shared with
+			// the rest of the host that nothing can safely sweep. And
+			// every write needed TMPDIR to be writable: missing, it
+			// refused each one with "I/O error (tempdir)". Nothing here
+			// declares a TEMP table, view, index or trigger, so the file
+			// held nothing.
+			//
+			// What moves into memory with it: a sort past the sort
+			// buffer (the page cache above), a hash join and an
+			// ephemeral table (a DISTINCT, an IN over a subquery) no
+			// longer spill to TMPDIR, so one that large holds what it
+			// built in memory until its statement ends. The plan gates
+			// keep the walks a node runs constantly from sorting their
+			// result (storetest.Sorts); what can build one past the
+			// buffer is a migration indexing a table that already holds
+			// most of a node's data, which holds that index's keys in
+			// memory while it runs.
+			//
+			// NOT a directory of the store's own: the driver takes the
+			// location from the process environment alone (TURSO_TMPDIR,
+			// then SQLITE_TMPDIR, for the temp database, TMPDIR for every
+			// other temp file), so a process holding two files could not
+			// give each its own, and the file it would still leave is one
+			// the next open would have to sweep rather than one never
+			// made.
+			//
+			// VACUUM INTO is the one statement that still writes there,
+			// and two things run it: a backup, and the state-log snapshot
+			// every data node takes for its peers. The driver builds the
+			// copy on a connection of its own, which no session pragma
+			// here reaches.
+			"PRAGMA temp_store = MEMORY",
 			fmt.Sprintf("PRAGMA busy_timeout = %d", busy.Milliseconds()),
 		},
 	}), nil

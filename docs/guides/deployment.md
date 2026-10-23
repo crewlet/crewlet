@@ -1565,7 +1565,8 @@ can read it.
 first query.** The driver is pure Go in the sense that matters — no cgo, no C
 toolchain — but its engine ships as a ~20 MB native library embedded in the
 driver, extracted on first use into `$TURSO_GO_CACHE_DIR` (default
-`~/.cache/turso-go`) and loaded from there. That cache is shared by every
+`~/.cache/turso-go`, or `$TMPDIR/turso-go` when neither `XDG_CACHE_HOME` nor
+`HOME` is set) and loaded from there. That cache is shared by every
 process on the host and is written without a rename, so two engines starting at
 once could leave a half-written file behind that fails verification for good.
 Crewlet therefore extracts under a lock in `<cache>/turso-go/`, and clears and
@@ -1586,6 +1587,22 @@ re-extracts a cache entry that will not verify. Two consequences worth knowing:
   Use a glibc base image — the published one is `debian:trixie-slim` for
   exactly this reason — or run the engine on a glibc host. macOS is
   unaffected.
+
+**Database connections write nothing under `TMPDIR`.** Every connection keeps
+the database engine's temporary storage in memory
+(`PRAGMA temp_store = MEMORY`). On the driver's default, each connection that
+took a write transaction kept a small temporary database in a new directory
+under the temporary directory (`.tmpXXXXXX/tursodb-temp.db`; the first of
+`TURSO_TMPDIR`, `SQLITE_TMPDIR` or `TMPDIR` that is set), removed only when
+that connection closed. So every exit that closes nothing (the watchdog's, a
+crash, a `SIGKILL`) left one per connection behind for good, and a node whose
+temporary directory was missing or read-only refused every write. What it
+costs instead is memory. A sort larger than the 32 MiB page cache keeps the
+rest in memory until its statement ends, where it used to spill to disk; a
+hash join and a de-duplicating table now build in memory with no spill at all,
+where a join used to spill past 64 MiB. The reads a node runs all the time are
+planned not to sort; what can is a schema migration that indexes a table
+already holding most of a node's data.
 
 **The engine owns the file exclusively.** A second process pointed at the same
 path is not a degraded configuration, it is corruption waiting for a schedule
