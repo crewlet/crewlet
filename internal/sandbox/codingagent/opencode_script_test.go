@@ -167,6 +167,27 @@ var signalsDeliverable = sync.OnceFunc(func() {
 	}
 })
 
+// writeExecutable writes a program a case is about to run, where no process
+// this one forks can still hold it open.
+//
+// Linux refuses to exec a file any process holds open for writing (ETXTBSY).
+// os.WriteFile's descriptor is close-on-exec, but a child another goroutine
+// forks while it is open keeps it until that child's own exec, and every case
+// here forks in parallel: on a loaded runner the window was wide enough that
+// the script's first `opencode --version` could not start the fake, and the
+// case read the script's "no opencode on the box PATH" as its failure.
+// syscall.ForkLock is what a fork takes for writing, so holding it for
+// reading while the file is open keeps every fork out of that window, rather
+// than waiting the window out after it.
+func writeExecutable(t *testing.T, path, content string) {
+	t.Helper()
+	syscall.ForkLock.RLock()
+	defer syscall.ForkLock.RUnlock()
+	if err := os.WriteFile(path, []byte(content), 0o700); err != nil { //nolint:gosec // the case's own program, to be run
+		t.Fatal(err)
+	}
+}
+
 // startScript starts the script under a real sh — o.shell, the sh on PATH
 // where that is unset — the way the wrapper does: the brief on stdin, stdout
 // the event stream.
@@ -181,9 +202,7 @@ func startScript(t *testing.T, o scriptOpts) *scriptJob {
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(bin, "opencode"), []byte(fakeOpenCode), 0o700); err != nil { //nolint:gosec // the fake must run
-		t.Fatal(err)
-	}
+	writeExecutable(t, filepath.Join(bin, "opencode"), fakeOpenCode)
 	paths := codingagent.Paths{Home: home}
 	if o.login != "" {
 		if err := os.WriteFile(paths.CredentialDocument(), []byte(o.login), 0o600); err != nil {
@@ -1029,6 +1048,54 @@ func TestASignalledRunExportsItsLoginBeforeItGoes(t *testing.T) {
 			})
 		}
 	})
+}
+
+// THE FAKE RUNS THE MOMENT IT IS WRITTEN, however many forks are in flight.
+//
+// The guard for [writeExecutable]: each of 64 fakes is run as soon as it is
+// written while eight goroutines fork without pause, which is this package's
+// parallel cases in miniature. A descriptor a fork inherited is what refuses
+// the exec, so the forkers have to be this process's own.
+//
+// Mutation: write without holding syscall.ForkLock, and some of the 64 cannot
+// be started.
+func TestTheFakeRunsTheMomentItIsWritten(t *testing.T) {
+	t.Parallel()
+	stop := make(chan struct{})
+	var forkers sync.WaitGroup
+	for range 8 {
+		forkers.Go(func() {
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					_ = exec.Command("/bin/true").Run() //nolint:noctx // a fork, not a subject
+				}
+			}
+		})
+	}
+	t.Cleanup(func() { close(stop); forkers.Wait() })
+
+	var fakes sync.WaitGroup
+	busy := make(chan error, 64)
+	for range 64 {
+		fakes.Go(func() {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "opencode")
+			writeExecutable(t, path, fakeOpenCode)
+			cmd := exec.Command(path, "--version") //nolint:noctx // the fake, run once
+			cmd.Env = []string{"FAKE_DIR=" + dir}
+			if err := cmd.Run(); errors.Is(err, syscall.ETXTBSY) {
+				busy <- err
+			}
+		})
+	}
+	fakes.Wait()
+	close(busy)
+	if n := len(busy); n > 0 {
+		t.Fatalf("%d of 64 fakes could not be started the moment they were written: %v", n, <-busy)
+	}
 }
 
 // 1.x CANNOT RUN THIS SCRIPT, and says so in its own words rather than leaving
