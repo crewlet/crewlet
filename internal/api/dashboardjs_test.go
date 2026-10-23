@@ -1050,8 +1050,12 @@ const (
 	// (0.5 KiB) ride the one sheet by the same rule, and the shared screen
 	// helpers that grew with them (QueryState's empty-state action, the seat
 	// people helpers, 1.0 KiB) are in the entry's graph. 312 KiB, still under
-	// two seconds on that link.
-	initialBudget = 312 << 10
+	// two seconds on that link. The kit's lists, page parts and navigation
+	// pieces (uilet 0.40 and 0.41) moved the dashboard's own rules into that
+	// sheet rather than adding to it, and the rail head's status, the
+	// engine's state beside the company's name, brought its rules and its
+	// component into the shell: 312.1 KiB. 314 KiB, the same two seconds.
+	initialBudget = 314 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
