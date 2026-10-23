@@ -1340,6 +1340,82 @@ func TestTheReportAtOpenedSaysWhatTheBaselineWaitsOn(t *testing.T) {
 	}
 }
 
+// PAST `opened` THE REPORT WAITS ON WHO THE SEAL WAITS ON.
+//
+// The report counted any acknowledgement of the window's attempt, whatever its
+// mode and whatever process made it, so a node restarted into maintenance mode
+// after the window opened, and one still the process recorded as the request
+// left, read as nothing outstanding while the seal waited on both, and the
+// banner said the window was waiting on its operator.
+//
+// Mutation: count every acknowledgement of the attempt and node-1 and node-2
+// drop out of the list.
+func TestTheReportPastOpenedWaitsOnWhoTheSealWaitsOn(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fleet := coordmem.NewFleet()
+	op, _, err := fleet.OpenMaintenance(ctx, coord.MaintenanceOperation{
+		Stream: "CREWLET_TRACKER_LOG", OperationID: "capacity:now",
+		TargetMaxBytes: 1 << 33, Phase: coord.PhaseApplied, Attempt: 1,
+		Participants: []string{"node-1", "node-2", "node-3", "node-4"},
+		WriteIncarnations: map[string]string{"node-1": "node-1:1", "node-2": "node-2:1",
+			"node-3": "node-3:1", "node-4": "node-4:1"},
+		EnteredAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ack := range []coord.MaintenanceAck{
+		// node-1 restarted into maintenance mode after the window opened.
+		{NodeID: "node-1", Incarnation: "node-1:2", Mode: string(statelog.ModeMaintenance)},
+		// node-2 is the process recorded as the request left.
+		{NodeID: "node-2", Incarnation: "node-2:1", Mode: string(statelog.ModeSeal)},
+		// node-3 restarted into seal mode after the request.
+		{NodeID: "node-3", Incarnation: "node-3:2", Mode: string(statelog.ModeSeal)},
+	} {
+		ack.Stream, ack.OperationID, ack.Attempt = op.Stream, op.OperationID, op.Attempt
+		if err := fleet.PutMaintenanceAck(ctx, ack); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := &retention{fleet: fleet, state: runsLogs(&stateLog{},
+		&runningLog{domain: worklet.Domain{}, spec: worklet.Domain{}.Stream()})}
+	row := r.openMaintenance(ctx)
+	if row == nil {
+		t.Fatal("the report shows no window while one is open")
+	}
+	if want := []string{"node-1", "node-2", "node-4"}; !slices.Equal(row.ParticipantsMissing, want) {
+		t.Errorf("the report waits on %v, want %v: the nodes the seal still waits on",
+			row.ParticipantsMissing, want)
+	}
+
+	// ONCE IT HAS SEALED IT WAITS ON NOBODY BUT ITS OPERATOR, whatever the
+	// nodes have written since: the verify and the release read no
+	// acknowledgement, and the seal's rule applied to a node restarted again
+	// after it (here into maintenance mode, which a boot refused in service
+	// is told to do) named a node nothing waits on.
+	// Mutation: judge every phase past opened by the seal's rule and these
+	// fail.
+	for _, phase := range []coord.MaintenancePhase{coord.PhaseSealed, coord.PhaseConfirmed} {
+		held, _, err := fleet.Maintenance(ctx, op.Stream)
+		if err != nil {
+			t.Fatal(err)
+		}
+		held.Phase = phase
+		if err := fleet.UpdateMaintenance(ctx, held); err != nil {
+			t.Fatal(err)
+		}
+		row := r.openMaintenance(ctx)
+		if row == nil {
+			t.Fatalf("the report shows no window at %s", phase)
+		}
+		if len(row.ParticipantsMissing) != 0 {
+			t.Errorf("a window at %s waits on %v, want nobody: nothing after the "+
+				"seal waits on a node", phase, row.ParticipantsMissing)
+		}
+	}
+}
+
 // toldRefusal is err's told sentence ([statelog.Told]) as an error, failing the
 // case where err tells its operator nothing or carries the package it was
 // written in: the retention routes answer the sentence alone, so a refusal an

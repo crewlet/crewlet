@@ -603,10 +603,17 @@ func (a *App) serveMaintenanceStatus(w http.ResponseWriter, r *http.Request) {
 		// admissions; the seal's list there named every node as owing a
 		// seal restart the procedure hadn't asked for yet. Past it, the
 		// seal is the next step and no step reads an admission again.
-		if op.Phase == coord.PhaseOpened {
+		// AND ONCE IT HAS SEALED, THE SEAL IS A FACT OF THE PHASE: the
+		// verify and the release wait on no node, and the seal's rule
+		// applied to what nodes wrote since judged a node restarted again
+		// after it, so the page said "not sealed" under PHASE sealed.
+		switch op.Phase {
+		case coord.PhaseOpened:
 			body["restarts_missing"] = statelog.BaselineMissing(op, acks)
 			body["admissions_blocking"] = statelog.AdmissionBlocks(admissions, op.Excluded)
-		} else {
+		case coord.PhaseSealed, coord.PhaseConfirmed:
+			body["sealed"] = true
+		default:
 			held, missing := statelog.SealHolds(op, acks)
 			body["sealed"] = held
 			body["blocking"] = missing

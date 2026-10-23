@@ -279,8 +279,47 @@ func SealHolds(op coord.MaintenanceOperation, acks []coord.MaintenanceAck) (bool
 func SealRestarts(op coord.MaintenanceOperation, acks []coord.MaintenanceAck) (
 	restarted map[string]string, missing []string) {
 
+	restarted, gaps := sealGaps(op, acks)
+	for _, gap := range gaps {
+		missing = append(missing, gap.says)
+	}
+	return restarted, missing
+}
+
+// SealOutstanding is every participant the seal still waits on, by
+// [SealRestarts]' rule: each one not excluded whose acknowledgement the seal
+// does not take. Sorted. It is what a window past `opened` waits on, and so
+// what a page shows there, where [BaselineMissing] is what one at `opened`
+// waits on.
+//
+// THE SEAL'S OWN RULE, and never a looser one beside it. The report counted any
+// acknowledgement of this attempt, so a node that had restarted into
+// maintenance mode after the window opened, or one still the process recorded
+// as the request left, read as nothing outstanding while the seal waited on it,
+// and a window waiting on nodes said it was waiting on its operator.
+func SealOutstanding(op coord.MaintenanceOperation, acks []coord.MaintenanceAck) []string {
+	_, gaps := sealGaps(op, acks)
+	out := make([]string, 0, len(gaps))
+	for _, gap := range gaps {
+		out = append(out, gap.node)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// sealGap is one participant whose acknowledgement the seal does not take, and
+// what is wrong with it, said as a sentence beginning with the node.
+type sealGap struct {
+	node, says string
+}
+
+// sealGaps is the rule [SealRestarts] and [SealOutstanding] read.
+func sealGaps(op coord.MaintenanceOperation, acks []coord.MaintenanceAck) (
+	map[string]string, []sealGap) {
+
 	byNode := acksOf(op, acks)
-	restarted = map[string]string{}
+	restarted := map[string]string{}
+	var gaps []sealGap
 	for _, node := range op.Participants {
 		if slices.Contains(op.Excluded, node) {
 			// AN OPERATOR'S ASSERTION that this participant's process
@@ -291,32 +330,34 @@ func SealRestarts(op coord.MaintenanceOperation, acks []coord.MaintenanceAck) (
 			continue
 		}
 		ack, acked := byNode[node]
+		var says string
 		switch {
 		case !acked:
-			missing = append(missing, node+" has not acknowledged")
+			says = node + " has not acknowledged"
 		case ack.Windowless():
 			// A RESTART MADE WHILE NO WINDOW WAS OPEN binds nothing: it
 			// is what a baseline reads, never what a seal takes.
-			missing = append(missing, node+" restarted before this operation "+
-				"opened and has not acknowledged it")
+			says = node + " restarted before this operation opened and has " +
+				"not acknowledged it"
 		case ack.OperationID != op.OperationID:
-			missing = append(missing, node+" acknowledged another operation")
+			says = node + " acknowledged another operation"
 		case ack.Attempt != op.Attempt:
-			missing = append(missing, fmt.Sprintf(
-				"%s acknowledged attempt %d and this is attempt %d",
-				node, ack.Attempt, op.Attempt))
+			says = fmt.Sprintf("%s acknowledged attempt %d and this is attempt %d",
+				node, ack.Attempt, op.Attempt)
 		case ack.Mode != string(ModeSeal):
-			missing = append(missing, fmt.Sprintf(
-				"%s acknowledged from %q rather than seal mode", node, ack.Mode))
+			says = fmt.Sprintf("%s acknowledged from %q rather than seal mode",
+				node, ack.Mode)
 		case ack.Incarnation == op.WriteIncarnations[node]:
-			missing = append(missing, node+" is still the process that was "+
-				"running when the request left, so it hasn't restarted since")
+			says = node + " is still the process that was running when the " +
+				"request left, so it hasn't restarted since"
 		default:
 			restarted[node] = ack.Incarnation
+			continue
 		}
+		gaps = append(gaps, sealGap{node: node, says: says})
 	}
-	if len(missing) > 0 {
-		return nil, missing
+	if len(gaps) > 0 {
+		return nil, gaps
 	}
 	return restarted, nil
 }
