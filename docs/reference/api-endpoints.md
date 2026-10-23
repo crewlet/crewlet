@@ -3415,15 +3415,47 @@ what stands in its place, and it is validated before anything else happens.
   [reconcile loop](../concepts/integration-reconcile.md) adopts the
   installation on its next pass, having *listed the app's own installations* —
   the reading that can tell a real id from a typed one.
-- With `?error=`, it renders GitHub's own `error_description`, which is the
-  operator's to read (they cancelled, or they may not create apps on that
-  organization).
+- With `?error=`, it says in its own words that the creation was cancelled
+  (`access_denied`) or that GitHub didn't create the app, and logs GitHub's
+  `error` and `error_description` as `github_app_create_refused`. The
+  description is never printed: the route is unauthenticated, so it is
+  whatever the address that brought the browser here says, on the dashboard's
+  own origin.
 
-It answers `200` for a completion or an install, `400` for a refusal, a missing
-code, or a state or code the engine will not accept, and `503` when this
-process has no setup surface behind it. An error message here is always the
-engine's own wording and never a quote of GitHub's response body, because that
-body carries the app's private key.
+The page names a seat only where the value can be a seat's handle: an install
+arrival's `installed` is whatever the caller typed.
+
+A link is spent the first time it's presented, so asking for the same address
+again (a refresh, or Back from GitHub's install page) runs nothing. The page
+then says what the agent the link names has: its app, in which case there's
+nothing left to do and the install button is still offered, or no app yet, in
+which case it says to give the app a minute to show before starting again.
+
+The status is whose the stop was:
+
+| Status | When |
+|---|---|
+| `200` | A completion, an install, or a link presented again whose agent has its app |
+| `400` | GitHub refused or the person cancelled, GitHub sent no code, or the link or GitHub's code is expired, forged or already used |
+| `403` | The company's settings are managed outside Crewlet |
+| `404` | The agent the link names is no longer one of the company's |
+| `409` | No company is set up |
+| `502` | GitHub didn't finish converting the code |
+| `500` | Crewlet couldn't finish: it couldn't check the link, read the company's settings, save the app's key or webhook secret, add the app to the agent, or confirm that it did |
+
+None is a `503`, because the same request can't succeed later: the link is
+spent before anything that can fail for a while, so sent again it runs nothing
+and is answered as already used, by whether the agent it names has its app.
+That answer is what settles an app whose record on the agent the coordination
+store took without answering (the `500` that says to refresh: the change may
+have landed, so the page reads the agent back once first and answers `200`
+when the app is there), and a new creation is what clears any other passing
+condition, which the page says. Once GitHub has handed the app over, the
+heading says the app was created but not finished, or, on that unanswered
+record, that Crewlet is confirming it was added. What the page says is always
+the engine's own wording, chosen by the step that stopped, and never a quote of
+an error or of GitHub's response body, because that body carries the app's
+private key. Every answer carries `Cache-Control: no-store`.
 
 **The roster says what is outstanding.** A seat entry in a tool's `seats` array
 carries three more fields where a per-seat app has tiers and clicks: `tier` is
@@ -9860,10 +9892,27 @@ nothing** — it renders a page and no more; the
 [reconcile loop](../concepts/integration-reconcile.md) is what records the
 installation, from GitHub's own list rather than from the query. On a conversion the app's private key and webhook secret are
 sealed before anything else can fail, because GitHub returns both exactly once
-and reissues neither. Answers `200` for a completion or an install, `400` for a
-refusal from GitHub, a missing code, or a state or code the engine will not
-accept, and `503` when this process has no setup surface. Error text is always
-the engine's own wording: GitHub's response body here carries the private key.
+and reissues neither. A record of the app on the seat that the coordination
+store took without answering is read back once before the page answers, and
+is a completion when the seat has the app.
+A link presented again (a refresh, or Back from GitHub's
+install page) runs nothing, and is answered by whether the agent it names has
+its app. Answers `200` for a completion, an install, or a link presented again
+whose agent has its app; `400` for a refusal from GitHub, a missing code, or a
+link or code that is expired, forged or already used; `403`, `404` and `409` as
+the begin route does for a managed document, an agent the company no longer has
+and no company; `502` when GitHub didn't finish the conversion; and `500` when
+Crewlet couldn't (the link couldn't be checked, the company couldn't be read, the
+key or webhook secret couldn't be sealed, or the app couldn't be recorded or
+its record confirmed). See
+[the table](#one-agents-own-github-app) for why none is a `503`. What the page says
+is always the engine's own wording, chosen by the step that stopped so it says
+what to do (see
+[GitHub Integration](../integrations/github.md#when-a-creation-doesnt-finish)),
+and never an error's text or GitHub's: GitHub's response body here carries the
+private key, and the error is the log's (`github_app_create_failed`, which names
+the app GitHub handed over, never its key). Every answer carries
+`Cache-Control: no-store`.
 The page runs only its own inline style and install countdown script, allowed
 by hash (see [Security headers on every response](#security-headers-on-every-response)).
 

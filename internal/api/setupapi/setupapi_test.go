@@ -93,8 +93,11 @@ type vault struct {
 	authors map[string]secrets.Author
 	// fail is what Set answers once failAfter values are in the store, so a
 	// case can fail a submission's second credential rather than its first.
+	// failName, when set, keeps fail to the one name: a case where one seal
+	// lands and the next does not.
 	fail      error
 	failAfter int
+	failName  string
 }
 
 func (v *vault) Set(_ context.Context, name, value string, by secrets.Author,
@@ -102,7 +105,8 @@ func (v *vault) Set(_ context.Context, name, value string, by secrets.Author,
 
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if v.fail != nil && len(v.values) >= v.failAfter {
+	if v.fail != nil && len(v.values) >= v.failAfter &&
+		(v.failName == "" || v.failName == name) {
 		return v.fail
 	}
 	if v.values == nil {
@@ -188,7 +192,9 @@ type configFixture struct {
 // gatedPlane is a fleet a case can take down: while down, the pointer cannot
 // be read, as a coordination store between leaders cannot — after the reads
 // allow still lets through, so a case can take it down partway through a
-// request. While unanswered, an activation lands and its answer is lost.
+// request. While unanswered, an activation lands and its answer is lost;
+// while dropped, it is lost before it lands and answered the same, because
+// the store's client cannot tell the two apart.
 //
 // And meanwhile, armed, is another write landing between two reads of a
 // request: it runs once, at the read after the ones skip lets by. contested,
@@ -200,6 +206,7 @@ type gatedPlane struct {
 	down       atomic.Bool
 	allow      atomic.Int64
 	unanswered atomic.Bool
+	dropped    atomic.Bool
 	meanwhile  atomic.Pointer[func()]
 	skip       atomic.Int64
 	contested  atomic.Pointer[func()]
@@ -219,6 +226,10 @@ func (p *gatedPlane) Target(ctx context.Context) (coord.Activation, bool, error)
 func (p *gatedPlane) Activate(ctx context.Context, req coord.ActivationRequest) (coord.Activation, error) {
 	if m := p.contested.Load(); m != nil && p.contested.CompareAndSwap(m, nil) {
 		(*m)()
+	}
+	if p.dropped.Load() {
+		return coord.Activation{}, fmt.Errorf("%w: publish the activation: no answer",
+			coord.ErrUnavailable)
 	}
 	if !p.unanswered.Load() {
 		return p.Plane.Activate(ctx, req)

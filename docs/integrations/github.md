@@ -274,6 +274,52 @@ sequenceDiagram
     GH->>CL: GET /webhooks/github-app?installed=senior-engineer
 ```
 
+### When a creation doesn't finish
+
+The page GitHub returns you to says what went wrong and what to do, and the
+step that stopped decides which. Crewlet's log has the detail, as
+`github_app_create_failed`.
+
+| What stopped | What the page tells you to do |
+|---|---|
+| The link expired or isn't one Crewlet made, or Crewlet couldn't check it | Start again from Company › Integrations |
+| The link was already used, and the agent has its app | Nothing: the creation is done, and the install button is still there |
+| The link was already used, and the agent has no app yet | Give the app a minute to show in Company › Integrations. If it doesn't, delete it on GitHub if it's there, then start again |
+| No company is set up | Set the company up, then start again |
+| The company's settings couldn't be read just now | Wait a moment, then start again |
+| The company's settings can't be read at all | Ask an admin to check Crewlet's logs, then start again |
+| The agent is no longer one of the company's | Add it back, then start again |
+| The company's settings are managed outside Crewlet | Ask whoever manages them to add the app |
+| GitHub's code was already used or expired | If the app shows up on GitHub, delete it there, then start again |
+| GitHub didn't finish creating the app | If it shows up on GitHub anyway, delete it there, then start again |
+| GitHub created the app but its key couldn't be saved | Delete the app on GitHub, then start again: GitHub never sends the key twice |
+| The key was saved but the app's webhook secret couldn't be | Delete the app on GitHub, then start again: GitHub never sends the secret twice either |
+| The key was saved but the app couldn't be added to the agent | Delete the app on GitHub, then start again |
+| The key was saved, but whether the app was added to the agent isn't known yet | Refresh the page in a minute to find out, or check the agent in Company › Integrations: delete the app on GitHub and start again only if it still shows Create app on GitHub |
+
+A link is spent the moment it's used, so refreshing the page, or coming Back to
+it from GitHub's install page, runs nothing: the page then looks at the agent
+the link names, which is the two "already used" rows. Once GitHub has created
+the app, the page's heading says so ("App created, but not finished") rather
+than "App not created", and the log line names the app (its id, slug and
+address, never its key) so whoever is asked can find the one to delete. Its
+status says whose the stop was: see
+[`GET /webhooks/github-app`](../reference/api-endpoints.md#get-webhooksgithub-app).
+
+Adding the app to the agent is a change to the company's settings, and the
+coordination store can take that change and lose its answer, so the change may
+be in place although Crewlet wasn't told. The page reads the agent back once
+before it says anything: an agent that has the app gets the ordinary "App
+created" page, and otherwise the page is headed "App created, confirming it
+was added to" and says the outcome isn't known yet, never that the app wasn't
+added. A refresh a minute later answers it from the agent's record, as one of
+the "already used" rows.
+
+A cancellation at GitHub, or any other refusal it sends back, is said in the
+page's own words. GitHub's description is logged as `github_app_create_refused`
+and never printed, because anyone can send a browser to this page with any text
+in its address.
+
 ### The card catches up immediately, not on a cadence
 
 An agent's App is **private**, so GitHub sends this engine nothing when you install it — there is no webhook for it to arrive on, and the reconcile loop is what finds the installation, by listing the App's own installations with the App's own key.
