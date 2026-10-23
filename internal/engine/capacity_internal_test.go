@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -535,8 +536,9 @@ func TestABootThatCouldNotReadAWindowRecordsNoWindowlessRestart(t *testing.T) {
 // operator to restart node-a into the mode it was in. With that fixed, the
 // baseline found no acknowledgement from anyone but the coordinator, since a
 // boot with no window open recorded nothing, and sent the operator to restart
-// the whole fleet again. Now the verb baselines in the one call, and the seal
-// holds after the one seal restart.
+// the whole fleet again. Now the verb baselines and applies in the one call,
+// and after the one seal restart the verb run again seals, verifies and
+// confirms the window, which closes.
 //
 // Mutation: drop the windowless acknowledgement and the baseline refuses
 // node-a and node-c; drop the boot's admission retirement and it refuses
@@ -576,30 +578,22 @@ func TestTheCapacityProcedureRunsInTheRestartsItNames(t *testing.T) {
 		}
 	}
 
-	// THE VERB, from node-b: it opens the window and baselines it.
+	// THE VERB, from node-b: it opens the window, baselines it and applies
+	// the target.
+	resized := &ceilingLog{max: 1 << 32}
 	op := openWindow(t, maintenance["node-b"])
-	baselined, err := maintenance["node-b"].advanceCapacity(ctx, nil, op)
+	applied, err := maintenance["node-b"].driveCapacity(ctx, resized, op)
 	if err != nil {
-		t.Fatalf("the first run of the verb did not baseline the window: %v", err)
+		t.Fatalf("the first run of the verb did not apply the target: %v", err)
 	}
-	if baselined.Phase != coord.PhaseBaselined {
-		t.Fatalf("the window stands at %s, want baselined", baselined.Phase)
+	if applied.Phase != coord.PhaseApplied {
+		t.Fatalf("the window stands at %s, want applied", applied.Phase)
 	}
 	for _, id := range nodes {
-		if got := baselined.WriteIncarnations[id]; got != maintenance[id].incarnation {
+		if got := applied.WriteIncarnations[id]; got != maintenance[id].incarnation {
 			t.Errorf("%s is baselined as %q, want the process it restarted as (%s)",
 				id, got, maintenance[id].incarnation)
 		}
-	}
-
-	// THE APPLY needs a broker; what it leaves is the phase and its own
-	// journal record resolved.
-	applied := baselined
-	applied.Phase = coord.PhaseApplied
-	applied.Journal = completeJournal(baselined.Journal, baselined.Attempt,
-		maintenance["node-b"].incarnation)
-	if err := fleet.UpdateMaintenance(ctx, applied); err != nil {
-		t.Fatal(err)
 	}
 
 	// THE WINDOWLESS RECORDS ARE NOT A SEAL, before the seal restart.
@@ -611,20 +605,54 @@ func TestTheCapacityProcedureRunsInTheRestartsItNames(t *testing.T) {
 		t.Fatal("the seal held on the maintenance restarts that preceded the apply")
 	}
 
-	// RESTART 2: every node into seal mode, and the barrier holds.
+	// RESTART 2: every node into seal mode, and the verb run again seals,
+	// verifies and confirms the window, which closes.
+	seal := map[string]*Engine{}
 	for _, id := range nodes {
-		e := nodeOn(fleet, id, "seal", statelog.ModeSeal, dataNode)
-		if err := e.handshake(ctx, streams); err != nil {
+		seal[id] = nodeOn(fleet, id, "seal", statelog.ModeSeal, dataNode)
+		if err := seal[id].handshake(ctx, streams); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if acks, err = fleet.MaintenanceAcks(ctx); err != nil {
-		t.Fatal(err)
+	if _, err := seal["node-a"].driveCapacity(ctx, resized, applied); err != nil {
+		t.Fatalf("the verb run from seal mode: %v", err)
 	}
-	if held, missing := statelog.SealHolds(applied, acks); !held {
-		t.Fatalf("the seal does not hold after every node restarted into seal "+
-			"mode: %s", missing)
+	if held, found, err := fleet.Maintenance(ctx, op.Stream); err != nil || found {
+		t.Fatalf("the window is still open after every node restarted into "+
+			"seal mode (found=%t, err=%v): %+v", found, err, held)
 	}
+	if resized.sets != 1 {
+		t.Errorf("the procedure sent %d configuration requests, want the one", resized.sets)
+	}
+}
+
+// ceilingLog is a log a capacity window drives end to end with no broker: its
+// ceiling is what the last request set, and onSet, when given, runs as each
+// request leaves and may refuse it.
+type ceilingLog struct {
+	mu    sync.Mutex
+	max   uint64
+	sets  int
+	onSet func(maxBytes uint64) error
+}
+
+func (l *ceilingLog) SetMaxBytes(_ context.Context, maxBytes uint64) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.sets++
+	if l.onSet != nil {
+		if err := l.onSet(maxBytes); err != nil {
+			return err
+		}
+	}
+	l.max = maxBytes
+	return nil
+}
+
+func (l *ceilingLog) Stats(context.Context) (jetstream.LogStats, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return jetstream.LogStats{MaxBytes: l.max}, nil
 }
 
 // TestTheBarrierRefusesEveryWayAnAcknowledgementCanBeTheWrongOne.
