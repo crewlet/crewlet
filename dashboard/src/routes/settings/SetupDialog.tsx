@@ -931,11 +931,15 @@ export function SetupDialog({
 
         {plainGroups.map(({ section, heading, connect }) => (
           <Fragment key={sectionKey(section) + ":group"}>
-            {/* A HEADING ONLY OVER SOMETHING. A surface whose every field is
-                optional contributes nothing here (they are all in the fold
-                below), and its heading stood over the next surface's
-                questions. */}
-            {heading && connect.length > 0 && <strong className="int-section">{heading}</strong>}
+            {/* A HEADING ONLY OVER SOMETHING, AND ONLY TO TELL SURFACES APART.
+                A surface whose every field is optional contributes nothing
+                here (they are all in the fold below), and its heading stood
+                over the next surface's questions. A sheet with one company
+                group names nothing its title does not: "SLACK" under
+                "Connect Slack" was the vendor said twice. */}
+            {heading && connect.length > 0 && plainGroups.length > 1 && (
+              <h2 className="int-section">{heading}</h2>
+            )}
             {connect.map((r) => (
               <Fragment key={valueKey(section, r)}>{renderField(section, r)}</Fragment>
             ))}
