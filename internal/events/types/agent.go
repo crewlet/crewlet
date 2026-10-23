@@ -929,7 +929,10 @@ type AgentPhaseCompleted struct {
 	Error string `json:"error"`
 	// ErrorKind is the failure's class: a classified provider error
 	// (`rate_limit`, `auth`, `timeout`, `server`, `fatal`),
-	// `budget_exhausted`, `stopped` for a phase a person ended, and `error`
+	// `budget_exhausted`, `stopped` for a phase a person ended, `sandbox_<class>` for an executor
+	// whose box couldn't be started (the class is a sandbox.Why, such as
+	// `sandbox_provider_unavailable`), `canceled` for a phase this node
+	// cancelled, and `error`
 	// for anything unclassified.
 	ErrorKind string `json:"error_kind"`
 	// ConversationKey is which conversation this phase's turn served.

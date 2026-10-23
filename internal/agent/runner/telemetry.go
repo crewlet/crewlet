@@ -26,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracing"
@@ -1174,6 +1175,10 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 	e.publish(ctx, events.New(ev, e.traceFor(ctx)))
 }
 
+// SandboxKindPrefix opens the error kind of a failure a coding sandbox's
+// backend classed: `sandbox_` and the class ([sandbox.Why]).
+const SandboxKindPrefix = "sandbox_"
+
 // StoppedKind is the error kind a phase and a turn a person stopped carry: not
 // a failure class, but the one word that says why the record has an error and
 // no failure.
@@ -1191,6 +1196,14 @@ const StoppedKind = "stopped"
 // underneath, so the field would carry the same meaningless token for every
 // unclassified failure while looking specific. One honest generic beats a
 // specific-looking constant.
+//
+// A CODING SANDBOX'S CLASS is one of them, as `sandbox_<class>`
+// ([sandbox.WhyOf]): every executor is its coding CLI's run in a box, and a
+// box that could not be started — its provider not answering, refusing the
+// key, a setup somebody has to fix — failed the phase as `error`, while the
+// backend that met it had said what it was. Read before a deadline its chain
+// carries, since a provider's request that ran out of time is the provider
+// not answering.
 func ErrorKind(err error) string {
 	var provider *llm.Error
 	switch {
@@ -1202,6 +1215,11 @@ func ErrorKind(err error) string {
 		// Not a failure at all, and named so: a person paused the seat
 		// and asked for its running turn to stop.
 		return StoppedKind
+	}
+	if why, ok := sandbox.WhyOf(err); ok {
+		return SandboxKindPrefix + string(why)
+	}
+	switch {
 	case errors.Is(err, context.DeadlineExceeded):
 		return llm.KindTimeout.String()
 	case errors.Is(err, context.Canceled):

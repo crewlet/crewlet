@@ -267,6 +267,7 @@ A turn can also end `failed` without the reviewer choosing it. Every failed turn
 | A panic, in a phase or around one | `turn.guard_breach` with `unhandled_exception` | `unhandled_exception` |
 | The token budget refused a charge | `budget_exhausted` | `budget_exhausted` |
 | Every member of the provider chain failed retryably | `llm_unavailable`, with the chain it tried | the last member's kind (`rate_limit`, `server`, …) |
+| An executor whose [box](llm-backends.md#the-executors-run-in-a-box) couldn't be started | none | `sandbox_` and the class its backend gave the failure (`sandbox_configuration`, `sandbox_setup_unavailable`, `sandbox_provider_unavailable`, …; see [When a run does not start](code-sandbox.md#when-a-run-does-not-start)) |
 | Any other broken phase | none | the provider's classified kind where there is one, else `error` |
 
 The `error_kind` on the turn's summary is the **same classifier** the failed phase's record uses (`runner.ErrorKind`), so the two records of one failure name it alike. It used to read `error` for every cause but a guard, while the phase record beside it said `auth` or `rate_limit`.

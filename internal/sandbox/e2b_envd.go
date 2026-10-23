@@ -339,7 +339,7 @@ func (c *envdClient) start(ctx context.Context, cmd string, opts ExecOptions, ba
 	resp, err := c.http.Do(req)
 	if err != nil {
 		cancel()
-		return e2bProcessResult{}, Because(WhyProviderUnavailable, fmt.Errorf("e2b: start: %w", err))
+		return e2bProcessResult{}, unanswered(ctx, fmt.Errorf("e2b: start: %w", err))
 	}
 	defer resp.Body.Close()
 	stream := newIdleReader(resp.Body, cancel, e2bStreamIdleTimeout)
@@ -350,7 +350,7 @@ func (c *envdClient) start(ctx context.Context, cmd string, opts ExecOptions, ba
 		return e2bProcessResult{}, envdRefused(resp.StatusCode, fmt.Errorf("e2b: start: %d: %s",
 			resp.StatusCode, httpx.ReadRefusalFrom(resp.Header.Get("Content-Type"), stream)))
 	}
-	return foldStream(stream, background)
+	return foldStream(ctx, stream, background)
 }
 
 // foldStream reads Connect frames and folds them into one result.
@@ -361,7 +361,7 @@ func (c *envdClient) start(ctx context.Context, cmd string, opts ExecOptions, ba
 // raising instead would turn an ordinary pause into a failed run. What the
 // stream did say — an end event, the trailer's error — is kept apart in the
 // result, and the caller decides what the command's status is.
-func foldStream(r io.Reader, background bool) (e2bProcessResult, error) {
+func foldStream(ctx context.Context, r io.Reader, background bool) (e2bProcessResult, error) {
 	var (
 		out    e2bProcessResult
 		stdout strings.Builder
@@ -374,7 +374,7 @@ func foldStream(r io.Reader, background bool) (e2bProcessResult, error) {
 			if err == io.EOF || err == io.ErrUnexpectedEOF {
 				break
 			}
-			return out, Because(WhyProviderUnavailable, fmt.Errorf("e2b: read stream: %w", err))
+			return out, unanswered(ctx, fmt.Errorf("e2b: read stream: %w", err))
 		}
 		length := binary.BigEndian.Uint32(header[1:])
 		if length > maxEnvdFrame {
@@ -387,7 +387,7 @@ func foldStream(r io.Reader, background bool) (e2bProcessResult, error) {
 		}
 		payload := make([]byte, length)
 		if _, err := io.ReadFull(r, payload); err != nil {
-			return out, Because(WhyProviderUnavailable, fmt.Errorf("e2b: read stream: %w", err))
+			return out, unanswered(ctx, fmt.Errorf("e2b: read stream: %w", err))
 		}
 		if header[0]&connectEndFlag != 0 {
 			// The trailer, whose error is how a stream envd ended on a
@@ -566,7 +566,7 @@ func (c *envdClient) exchange(ctx context.Context, method, target string,
 	resp, err := c.http.Do(req)
 	if err != nil {
 		idle.stop()
-		return nil, nil, Because(WhyProviderUnavailable, idle.silent(err))
+		return nil, nil, unanswered(ctx, idle.silent(err))
 	}
 	idle.inner = resp.Body
 	return resp, idle, nil
@@ -609,7 +609,7 @@ func (c *envdClient) readFile(ctx context.Context, path string) ([]byte, error) 
 	}
 	raw, err := readCapped(idle, path, MaxFileBytes)
 	if err != nil {
-		return nil, Because(WhyProviderUnavailable, fmt.Errorf("e2b: read %s: %w", path, idle.silent(err)))
+		return nil, unanswered(ctx, fmt.Errorf("e2b: read %s: %w", path, idle.silent(err)))
 	}
 	return raw, nil
 }
@@ -633,7 +633,8 @@ func (c *envdClient) openFile(ctx context.Context, path string) (io.ReadCloser, 
 		return nil, envdRefused(resp.StatusCode, fmt.Errorf("e2b: open %s: %d: %s", path,
 			resp.StatusCode, httpx.ReadRefusal(resp)))
 	}
-	return &envdStream{body: resp.Body, idle: idle, path: path}, nil
+	return &envdStream{body: resp.Body, idle: idle, path: path,
+		cancelled: func() bool { return cancelledBy(ctx) }}, nil
 }
 
 // envdStream is an open file's body, read through its idle bound.
@@ -641,12 +642,19 @@ type envdStream struct {
 	body io.ReadCloser
 	idle *idleReader
 	path string
+	// cancelled reports whether the caller that opened the file cancelled
+	// it: an io.Reader's Read takes no context, and a read the caller
+	// cancelled is no class at all ([unanswered]).
+	cancelled func() bool
 }
 
 func (s *envdStream) Read(p []byte) (int, error) {
 	n, err := s.idle.Read(p)
 	if err != nil && !errors.Is(err, io.EOF) {
-		err = Because(WhyProviderUnavailable, fmt.Errorf("e2b: read %s: %w", s.path, s.idle.silent(err)))
+		err = fmt.Errorf("e2b: read %s: %w", s.path, s.idle.silent(err))
+		if !s.cancelled() {
+			err = Because(WhyProviderUnavailable, err)
+		}
 	}
 	return n, err
 }
@@ -694,7 +702,7 @@ func (c *envdClient) readTail(ctx context.Context, path string, n int) (FileTail
 		start, total, ok := parseContentRange(resp.Header.Get("Content-Range"))
 		data, readErr := io.ReadAll(io.LimitReader(idle, int64(max(want, 1))))
 		if readErr != nil {
-			return FileTail{}, Because(WhyProviderUnavailable, fmt.Errorf(
+			return FileTail{}, unanswered(ctx, fmt.Errorf(
 				"e2b: read the end of %s: %w", path, idle.silent(readErr)))
 		}
 		if !ok || total < 0 {
@@ -707,7 +715,7 @@ func (c *envdClient) readTail(ctx context.Context, path string, n int) (FileTail
 	default:
 		data, total, readErr := keepLast(idle, max(want, 1))
 		if readErr != nil {
-			return FileTail{}, Because(WhyProviderUnavailable, fmt.Errorf(
+			return FileTail{}, unanswered(ctx, fmt.Errorf(
 				"e2b: read the end of %s: %w", path, idle.silent(readErr)))
 		}
 		tail = FileTail{Data: data, Size: total}

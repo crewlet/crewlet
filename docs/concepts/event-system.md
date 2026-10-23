@@ -418,7 +418,9 @@ agent_phase_completed      # one phase's durable record: prompts, response,
                            # `error_kind` — a provider kind (rate_limit,
                            # auth, timeout, server, fatal, canceled),
                            # budget_exhausted, stopped for a phase a person
-                           # ended, canceled, or error
+                           # ended, canceled, sandbox_<class>
+                           # for an executor whose box could not
+                           # be started, or error
 auxiliary_spend            # what the seat's auxiliary model cost for one key —
                            # stage (turn, reflection, background, operator),
                            # purpose, seat or person, turn, model, provider

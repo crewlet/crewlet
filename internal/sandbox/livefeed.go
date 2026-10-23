@@ -361,9 +361,9 @@ func (f *liveFeed) current(ctx context.Context) (liveSnapshot, error) {
 	// THE BOX HAS NOT ANSWERED YET, which is the box not answering in the
 	// time this request had: the read goes on, and the next request is
 	// answered from what it finds.
-	return liveSnapshot{}, Because(WhyProviderUnavailable, fmt.Errorf("sandbox: reading the "+
-		"box of run %s took longer than this request could wait; it goes on, and the next "+
-		"request reads what it found", f.run.TurnID))
+	return liveSnapshot{}, unanswered(ctx, fmt.Errorf("sandbox: reading the box of run %s "+
+		"took longer than this request could wait; it goes on, and the next request reads "+
+		"what it found: %w", f.run.TurnID, ctx.Err()))
 }
 
 // refresh reads the box once, under the reading's own budget rather than any
