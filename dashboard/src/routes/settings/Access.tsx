@@ -376,7 +376,7 @@ const KIND_WORDS: Record<string, string> = {
 /** What a Tier A token's login names in the directory. */
 export const TOKEN_ROW_WORDS: Record<string, Words> = {
   none: {
-    label: "None",
+    label: "Not bound",
     tone: "neutral",
     hint: "Not bound to a seat. Bind it with crewlet iam create -kind machine -login token:<id> -seat <seat> -grants none.",
   },
@@ -431,6 +431,31 @@ const CONTACT_SURFACES: Record<string, string> = {
   github_login: "GitHub",
   gitlab_username: "GitLab",
 };
+
+/**
+ * A state in a list's column: QUIET WORDS while it is the resting one, a pill
+ * only when it is news. "Active" on every person and every service account,
+ * and a binding state on every token, were pills down whole columns that a
+ * reader learned to skip, so the row that differs was the one they missed.
+ */
+function StateCell({
+  words,
+  fallback,
+  resting,
+}: {
+  words: Words | undefined;
+  fallback: string;
+  resting: boolean;
+}) {
+  if (resting) {
+    return (
+      <span title={words?.hint}>
+        <TableTextCell>{words?.label ?? fallback}</TableTextCell>
+      </span>
+    );
+  }
+  return <WordTag words={words} fallback={fallback} />;
+}
 
 function WordTag({ words, fallback }: { words: Words | undefined; fallback: string }) {
   return (
@@ -906,7 +931,13 @@ export function People() {
                   header: "Stage",
                   shrink: true,
                   sortValue: (p) => p.stage,
-                  cell: (p) => <WordTag words={STAGE_WORDS[p.stage]} fallback={p.stage} />,
+                  cell: (p) => (
+                    <StateCell
+                      words={STAGE_WORDS[p.stage]}
+                      fallback={p.stage}
+                      resting={p.stage === "active"}
+                    />
+                  ),
                 },
                 {
                   key: "seat",
@@ -1077,7 +1108,16 @@ export function ServiceAccounts() {
             held={viewer.grants}
           />
           <Card padding="none">
-            <Card.Header icon={<BotGlyph size="sm" />} count={accounts.length}>
+            {/* HOW MANY ACT AS A SEAT is the card's fact, said in its head
+                rather than as a footnote floating inside the card under the
+                table. */}
+            <Card.Header
+              icon={<BotGlyph size="sm" />}
+              count={accounts.length}
+              subtitle={
+                accounts.length > 0 ? `${bound} of ${accounts.length} act as a seat` : undefined
+              }
+            >
               <Card.Title>Service accounts</Card.Title>
             </Card.Header>
             <DataGrid<DirectoryRow>
@@ -1114,32 +1154,34 @@ export function ServiceAccounts() {
                   header: "Stage",
                   shrink: true,
                   sortValue: (p) => p.stage,
-                  cell: (p) => <WordTag words={STAGE_WORDS[p.stage]} fallback={p.stage} />,
+                  cell: (p) => (
+                    <StateCell
+                      words={STAGE_WORDS[p.stage]}
+                      fallback={p.stage}
+                      resting={p.stage === "active"}
+                    />
+                  ),
                 },
+                // SIZED TO WHAT THEY HOLD, so the name takes the spare width:
+                // as two more flexible tracks, Acts as held a dash in 226px
+                // while the name beside it was cut at 174.
                 {
                   key: "seat",
                   header: "Acts as",
-                  floor: "8rem",
+                  shrink: true,
                   sortValue: (p) => p.seat ?? "",
                   cell: (p) => <SeatHandle seat={p.seat} index={index} />,
                 },
                 {
                   key: "grants",
                   header: "Access",
-                  floor: "8rem",
+                  shrink: true,
                   drop: 1,
                   sortValue: (p) => accessLine(p.grants ?? []),
                   cell: (p) => <TableTextCell>{accessLine(p.grants ?? [])}</TableTextCell>,
                 },
               ]}
             />
-            {accounts.length > 0 && (
-              <Card.Body padding="md">
-                <Text as="p" variant="caption" tone="tertiary">
-                  {bound} of {accounts.length} act as a seat.
-                </Text>
-              </Card.Body>
-            )}
           </Card>
         </>
       )}
@@ -1205,10 +1247,12 @@ export function ApiTokens() {
                 sortValue: (t) => t.id,
                 cell: (t) => <TableKeyCell value={t.id} />,
               },
+              // THE LOGIN TAKES THE SPARE WIDTH, never cut (its floor is its
+              // content): a Seat column holding a dash took 530px of it.
               {
                 key: "login",
                 header: "Signs in as",
-                width: "max-content",
+                floor: "max-content",
                 sortValue: (t) => t.login,
                 cell: (t) => <TableKeyCell value={t.login} />,
               },
@@ -1217,14 +1261,26 @@ export function ApiTokens() {
                 header: "Seat entry",
                 shrink: true,
                 sortValue: (t) => t.row,
-                cell: (t) => <WordTag words={TOKEN_ROW_WORDS[t.row]} fallback={t.row} />,
+                cell: (t) => (
+                  <StateCell
+                    words={TOKEN_ROW_WORDS[t.row]}
+                    fallback={t.row}
+                    resting={t.row === "none"}
+                  />
+                ),
               },
-              {
-                key: "seat",
-                header: "Seat",
-                sortValue: (t) => t.seat ?? "",
-                cell: (t) => <BoundSeat seat={t.seat} index={index} />,
-              },
+              // A SEAT COLUMN ONLY WHERE A TOKEN IS BOUND TO ONE.
+              ...(tokenRows.some((t) => t.seat)
+                ? [
+                    {
+                      key: "seat",
+                      header: "Seat",
+                      shrink: true,
+                      sortValue: (t: NodeToken) => t.seat ?? "",
+                      cell: (t: NodeToken) => <BoundSeat seat={t.seat} index={index} />,
+                    },
+                  ]
+                : []),
             ]}
           />
         </QueryState>
@@ -1588,10 +1644,15 @@ function Invitations({
             title: all ? "No invitations" : "No open invitations",
           }}
           columns={[
+            // THE ADDRESS IS THE ONE FLEXIBLE TRACK, and is never cut (its
+            // floor is its content): it is what a reader matches against the
+            // mail they sent, and it ended in an ellipsis at 1440 while Seat
+            // and Access beside it held 203px each of air. They size to what
+            // they hold.
             {
               key: "email",
               header: "Address",
-              floor: "12rem",
+              floor: "max-content",
               sortValue: (i) => i.email ?? "",
               cell: (i) =>
                 i.sealed ? (
@@ -1608,6 +1669,7 @@ function Invitations({
             {
               key: "seat",
               header: "Seat",
+              shrink: true,
               drop: 2,
               sortValue: (i) => i.seat ?? "",
               cell: (i) => <BoundSeat seat={i.seat} index={index} />,
@@ -1615,6 +1677,7 @@ function Invitations({
             {
               key: "grants",
               header: "Access",
+              shrink: true,
               drop: 1,
               sortValue: (i) => accessLine(i.grants ?? []),
               cell: (i) => <TableTextCell>{accessLine(i.grants ?? [])}</TableTextCell>,

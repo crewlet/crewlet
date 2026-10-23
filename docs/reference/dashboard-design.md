@@ -7361,9 +7361,12 @@ reset link and "Sign out everywhere" and nothing that pointed at their own
 security. A sealed value this node's keyring cannot open reads *Locked*,
 never blank. A service account bound
 to none reads *No seat*, which is ordinary; a person always holds a
-human seat. **Service accounts** (`#/settings/service-accounts`) is the
-machine principals, drawn as People draws a person and opened in the same
-peek. **Human seats**, on People, is every
+human seat. A stage that is the resting one (*Active*) is quiet words in its
+column, and a stage that differs (*Invited*, *Suspended*) is a tag, so the
+row that needs a look is the one that stands out. **Service accounts**
+(`#/settings/service-accounts`) is the machine principals, drawn as People
+draws a person and opened in the same peek, with how many act as a seat in
+the card's head. **Human seats**, on People, is every
 human seat of the running company with whatever holds it (`/iam/seats`) — a
 person or a service account by login and stage, an open invitation as an
 **Invited** tag with its address, or *Open seat* — and where agents
@@ -7374,7 +7377,8 @@ a person does, and counted as vacant it read as a seat an administrator could
 still invite somebody onto — with "*n* invited" beside the total. **API
 tokens** (`#/settings/tokens`) is this node's Tier A labels joined to the directory rows holding
 their logins (`/iam/node-tokens`): a token whose login nobody holds acts as
-itself, unbound, and the row says so and names the one command that binds it
+itself, unbound, and the row says so in quiet words (*Not bound*, the Seat
+column drawn only where a token is bound) and names the one command that binds it
 — `crewlet iam create -kind machine -login token:<id> -seat <seat> -grants none`, a row
 created on a human seat nothing else holds — since a label mistyped on either
 side otherwise looks bound until the token presses something. When the company
