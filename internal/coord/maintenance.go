@@ -104,8 +104,10 @@ const (
 	// and observing the value retires nothing.
 	PhaseApplied MaintenancePhase = "applied"
 
-	// PhaseSealing — the fleet has been stopped, verified stopped, and
-	// restarted seal-only for this attempt.
+	// PhaseSealing — a node in seal mode is collecting the barrier for
+	// this attempt: the fleet is being restarted seal-only, and the seal
+	// holds once every participant's process has been replaced by one
+	// booted into seal mode.
 	PhaseSealing MaintenancePhase = "sealing"
 
 	// PhaseSealed — every participant acked for this attempt with an
