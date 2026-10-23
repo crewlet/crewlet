@@ -119,8 +119,7 @@ export function Limits() {
   return (
     <>
       <PageNote>
-        The caps the engine holds every turn, delegation and wake-up to. Read only here: each is a
-        key of the company document, named under the cap.
+        The caps the engine holds the company&rsquo;s work to, read from the company document.
       </PageNote>
       <QueryState error={error} refusal={refusal} detail={detail} loading={loading && !data}>
         {data && rows.length === 0 && (

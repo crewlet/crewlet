@@ -1154,8 +1154,8 @@ export function ApiTokens() {
   return (
     <>
       <PageNote>
-        Declared in this node&rsquo;s bootstrap file (api.auth.tokens), and changed with a restart.
-        A person&rsquo;s own tokens are on their Account.
+        Declared under <InlineCode>api.auth.tokens</InlineCode> in this node&rsquo;s bootstrap file,
+        and changed with a restart. A person&rsquo;s own tokens are on their Account.
       </PageNote>
       <Card padding="none">
         <Card.Header
