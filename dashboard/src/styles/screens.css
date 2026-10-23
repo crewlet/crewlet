@@ -1906,6 +1906,14 @@ a.prof-row:hover {
   max-width: 100%;
   min-width: 0;
 }
+/* The unit's kind and its lead, quiet facts beside the name: the crown sits
+   on the words' line. */
+.org-unit-fact {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  white-space: nowrap;
+}
 /* A count is one phrase: broken across two lines it reads as two facts. */
 .org-unit-count {
   white-space: nowrap;
