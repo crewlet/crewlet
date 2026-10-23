@@ -261,16 +261,23 @@ const (
 // recur on every measurement; the regressions these tests guard cost six to
 // eighty times the factor on every one, so a real regression still fails.
 func withinFactor(read func(string), short, long string, factor int) (bool, time.Duration, time.Duration) {
-	timed := func(text string) time.Duration {
+	return judgedWithin(func(text string) time.Duration {
 		start := time.Now()
 		read(text)
 		return time.Since(start)
-	}
+	}, short, long, factor)
+}
+
+// judgedWithin is [withinFactor]'s judgement over the cost of each read,
+// however that cost is taken: the wall clock's for a real read, and a given
+// one for the case that holds the judgement itself, which a timed read could
+// only hold as well as the runner keeps time.
+func judgedWithin(cost func(string) time.Duration, short, long string, factor int) (bool, time.Duration, time.Duration) {
 	var shortCost, longCost time.Duration
 	for range measureRounds {
 		shortCost, longCost = time.Duration(1<<62), time.Duration(1<<62)
 		for range interleavedReads {
-			shortCost, longCost = min(shortCost, timed(short)), min(longCost, timed(long))
+			shortCost, longCost = min(shortCost, cost(short)), min(longCost, cost(long))
 		}
 		if longCost <= time.Duration(factor)*shortCost {
 			return true, shortCost, longCost
@@ -279,41 +286,67 @@ func withinFactor(read func(string), short, long string, factor int) (bool, time
 	return false, shortCost, longCost
 }
 
-// THE COMPARISON STILL FAILS A STEADY REGRESSION, measured again or not: a
-// read whose cost grows with the square of its text costs sixty-four times as
-// much for eight times the bytes on every measurement, and a linear one eight.
-// Mutation: report a pass after any round, or never measure again, and one of
-// the two cases here fails.
+// THE COMPARISON STILL FAILS A STEADY REGRESSION, MEASURED AGAIN OR NOT, AND
+// PASSES A BURST THE NEXT MEASUREMENT DOES NOT SEE. The costs are given rather
+// than slept: a read that slept 320us took 1.09ms on a loaded runner, which
+// brought the square cost's 20.5ms within twenty-four times of it and passed
+// what every measurement here is meant to fail.
 //
-// EVERY READ SLEEPS WELL ABOVE THE TIMER'S SLACK. A sleep is a floor, never a
-// duration: on a loaded runner under the race detector a 320µs sleep measured
-// 1.09ms, which put the square case's short read at three times its cost and
-// let a 21ms long read pass a factor of 24 it should have failed by 2.7 times.
-// At this unit the square case's short read is 2ms, so even 2ms of slack on
-// every short read leaves the long one past the factor; the linear case's
-// short read is 25ms, which no slack moves eight times.
+// Mutation: report a pass after any round and the square cost passes; never
+// measure again and the burst fails; measure more than once a comparison that
+// passed and the count of reads moves; keep the slowest read of a measurement
+// rather than the fastest and the stray read fails it.
 func TestWithinFactorFailsWhatEveryMeasurementSays(t *testing.T) {
 	t.Parallel()
-	const unit = 125 * time.Microsecond
+	const unit = time.Microsecond
 	small, large := strings.Repeat("x", 4), strings.Repeat("x", 32)
-	square := func(text string) { spin(time.Duration(len(text)*len(text)) * unit) }
-	if ok, s, l := withinFactor(square, small, large, 3*8); ok {
+	reads := 0
+	square := func(text string) time.Duration { reads++; return time.Duration(len(text)*len(text)) * unit }
+	if ok, s, l := judgedWithin(square, small, large, 3*8); ok {
 		t.Errorf("a square cost passed: %v against %v", l, s)
 	}
-	linear := func(text string) { spin(time.Duration(len(text)) * 50 * unit) }
-	if ok, s, l := withinFactor(linear, small, large, 3*8); !ok {
+	if want := 2 * interleavedReads * measureRounds; reads != want {
+		t.Errorf("a square cost was read %d times, want every measurement's %d", reads, want)
+	}
+	linear := func(text string) time.Duration { return time.Duration(len(text)) * unit }
+	if ok, s, l := judgedWithin(linear, small, large, 3*8); !ok {
 		t.Errorf("a linear cost failed: %v against %v", l, s)
 	}
-}
 
-// spin holds the CPU for d, as a read whose cost is d does.
-//
-// NOT time.Sleep, whose floor is the timer's resolution rather than d: on a
-// virtual machine that is about a millisecond, so the square case's 320µs
-// short read measured 1.1ms, its ratio fell to nineteen against a factor of
-// twenty-four, and a quadratic cost passed on every run. A spin costs what it
-// is asked to, at any resolution, which is the property the case is about.
-func spin(d time.Duration) {
-	for start := time.Now(); time.Since(start) < d; {
+	// A BURST OVER THE WHOLE FIRST MEASUREMENT: every read of the long text
+	// in it costs a hundred times what it does after, as a runner busy for
+	// longer than one measurement makes it.
+	reads = 0
+	burst := func(text string) time.Duration {
+		reads++
+		cost := time.Duration(len(text)) * unit
+		if reads <= 2*interleavedReads && len(text) == len(large) {
+			cost *= 100
+		}
+		return cost
+	}
+	if ok, s, l := judgedWithin(burst, small, large, 3*8); !ok {
+		t.Errorf("a burst over the first measurement failed the comparison: %v against %v", l, s)
+	}
+	if want := 2 * 2 * interleavedReads; reads != want {
+		t.Errorf("a burst over the first measurement was read %d times, want two measurements' %d", reads, want)
+	}
+
+	// ONE STRAY READ IN EVERY MEASUREMENT: the fastest of a measurement's
+	// reads is what it keeps, so a single slow read never decides it.
+	reads = 0
+	stray := func(text string) time.Duration {
+		reads++
+		cost := time.Duration(len(text)) * unit
+		if reads%(2*interleavedReads) == 2 {
+			cost *= 100
+		}
+		return cost
+	}
+	if ok, s, l := judgedWithin(stray, small, large, 3*8); !ok {
+		t.Errorf("one stray read in every measurement failed the comparison: %v against %v", l, s)
+	}
+	if want := 2 * interleavedReads; reads != want {
+		t.Errorf("one stray read was read %d times, want one measurement's %d", reads, want)
 	}
 }
