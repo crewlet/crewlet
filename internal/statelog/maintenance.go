@@ -29,11 +29,12 @@ import (
 //
 // A resize is unsafe while anything publishes, so the fleet restarts into a
 // mode with every broker and no publisher. The operation's record IS the
-// exclusion ([coord.MaintenanceOperation]). It opens, records a baseline
-// BEFORE issuing anything, applies, and is then SEALED by a verified global
-// stop — because what retires a request the broker has already queued is the
-// broker process restarting, not a client closing. Only a sealed operation may
-// be verified, and only a verified one is confirmed and deleted.
+// exclusion ([coord.MaintenanceOperation]). It opens, records who is running
+// BEFORE issuing anything, applies, and is then SEALED once every
+// participant's process has been replaced by one booted into seal mode —
+// because what retires a request the broker has already queued is the broker
+// process restarting, not a client closing. Only a sealed operation may be
+// verified, and only a verified one is confirmed and deleted.
 //
 // # What each piece of evidence proves, and no more
 //
@@ -148,8 +149,10 @@ type PhaseEvidence struct {
 	ObservedMaxBytes uint64
 	Observed         bool
 
-	// Stopped reports that the fleet was verified stopped and restarted
-	// seal-only for this attempt.
+	// Stopped reports that the drive runs in seal mode, so the fleet is
+	// being restarted seal-only for this attempt. It is not the barrier:
+	// whether every participant has been replaced is the acknowledgements'
+	// to say ([SealHolds]).
 	Stopped bool
 
 	// Acks is every acknowledgement the coordinator can see.
@@ -362,7 +365,8 @@ func sealGaps(op coord.MaintenanceOperation, acks []coord.MaintenanceAck) (
 	return restarted, nil
 }
 
-// BarrierEvidence is what a verified global stop observed.
+// BarrierEvidence is what the barrier observed: the process each participant
+// was replaced by, and the ceiling.
 type BarrierEvidence struct {
 	// Incarnations is each participant's incarnation as the barrier saw
 	// it, and ObservedMaxBytes the ceiling it read.
