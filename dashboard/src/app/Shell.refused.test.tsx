@@ -22,6 +22,7 @@
  * says which access would open it.
  */
 
+import { withDerived } from "~/test/org.ts";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { App } from "./App.tsx";
@@ -119,6 +120,9 @@ async function mount(
   answer: (what: string) => Promise<unknown> = () => new Promise(() => {}),
 ) {
   const store = new Store();
+  // A SERVED SESSION'S FIRST FRAME CARRIES THE ORG; a refused one's never
+  // comes, so nothing about what the company runs is known to it.
+  if (refused === null) store.applyOrg(withDerived({ name: "Acme", roles: [] }));
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = answer;
   const dial = vi.spyOn(socket, "start");

@@ -30,7 +30,7 @@
  * each part a reader may not read is drawn locked, saying what opens it.
  */
 
-import { useServicesRun } from "~/lib/services.ts";
+import { useServicesRun, useServicesAsk } from "~/lib/services.ts";
 import { ORG_EDIT_PATH } from "~/app/routes.ts";
 import { useId, useMemo, useRef, useState } from "react";
 import {
@@ -349,6 +349,7 @@ function CurrentTurn({
 }) {
   const viewer = useViewer();
   const runs = useServicesRun();
+  const ask = useServicesAsk();
   const sandboxes = useSandboxes();
   const phone = useMediaMatch(`(width < ${PHONE_BREAKPOINT}px)`);
   const turn = agent?.turn ?? null;
@@ -374,7 +375,7 @@ function CurrentTurn({
   const item = useQuery(
     "work_item",
     { id: asked },
-    { enabled: viewer.tracker && runs.tracker && onTurn && asked !== "" },
+    { enabled: viewer.tracker && ask.tracker && onTurn && asked !== "" },
   );
   // THE PHASES THIS TURN HAS RECORDED, for its tokens: the seat's newest
   // turn row is this turn's once any phase of it has completed.

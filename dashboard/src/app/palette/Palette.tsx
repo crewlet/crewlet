@@ -156,7 +156,7 @@ import {
   type Standing,
 } from "./hits.ts";
 import { useKnowledgeAnswer, type AnswerState, type KnowledgeAnswerReceipt } from "./answer.ts";
-import { useServicesRun } from "~/lib/services.ts";
+import { useServicesRun, useServicesAsk } from "~/lib/services.ts";
 
 /** What a project step files once the person has chosen where. */
 type Filing =
@@ -225,6 +225,7 @@ export function CommandPalette({
   // WHICH OF CREWLET'S OWN SERVICES THE COMPANY RUNS: a search, a scope, a
   // destination or a write into one it does not is not offered at all.
   const runs = useServicesRun();
+  const ask = useServicesAsk();
 
   // THE RUNNING SET IS READ ONCE, AS THE PALETTE OPENS — which turns Running
   // now offers and in what order. The kit's listbox holds the highlight by
@@ -374,7 +375,7 @@ export function CommandPalette({
   const itemRead = useQuery(
     "work_item",
     { id: pickItem },
-    { enabled: pickItem !== "" && runs.tracker && viewer.tracker },
+    { enabled: pickItem !== "" && ask.tracker && viewer.tracker },
   );
 
   // The task at hand: the one on screen, else the best task hit for this term.

@@ -63,7 +63,7 @@
  * ([OrgOutline]): no size of chart can be read on a phone.
  */
 
-import { useServicesRun } from "~/lib/services.ts";
+import { useServicesAsk } from "~/lib/services.ts";
 import {
   useCallback,
   useEffect,
@@ -206,11 +206,11 @@ export function OrgChart() {
   // a unit's node carries its type alone — as it does for a reader without
   // Tracker, who is not asked a question the engine would refuse them.
   const viewer = useViewer();
-  const runs = useServicesRun();
+  const ask = useServicesAsk();
   const projects = useQuery(
     "work_projects",
     { limit: PROJECT_PAGE },
-    { pollMs: 120_000, enabled: viewer.tracker && runs.tracker },
+    { pollMs: 120_000, enabled: viewer.tracker && ask.tracker },
   );
   const projectRows = projects.error ? undefined : projects.data?.projects;
   const keysOf = useMemo(() => projectsByUnit(projectRows ?? []), [projectRows]);

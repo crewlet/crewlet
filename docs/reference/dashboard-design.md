@@ -852,9 +852,12 @@ design address says a design is made by an agent working a task). It is
 readable by every signed-in reader, and offers Company › Integrations only to
 a reader who may open it, since Integrations is an administrator's page. It
 is drawn only once the engine has answered, so a deep link opened on a cold
-tab is never refused on a guess. Until then a service counts as
-not run, as an app the reader holds counts as not held, so nothing is asked of
-it before somebody has said the company runs it.
+tab is never refused on a guess. Until the org projection arrives every
+place is DRAWN as if its service ran, so nothing is hidden on a guess, but no
+read is ASKED of a service (`useServicesAsk`), as an app the reader holds
+counts as not held, and a service's page waits for the projection before it
+mounts: nothing is asked of a service before somebody has said the company
+runs it.
 
 **A guarded section says so and nothing else.** Opened by a reader the engine
 has SAID holds none of the access it needs, a guarded section is replaced by

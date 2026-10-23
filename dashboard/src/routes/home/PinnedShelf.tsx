@@ -12,7 +12,7 @@
  * same way in both places.
  */
 
-import { useServicesRun } from "~/lib/services.ts";
+import { useServicesRun, useServicesAsk } from "~/lib/services.ts";
 import { useMemo, type ReactNode } from "react";
 import { Button, Card, PinTile, Tag } from "@crewlethq/ui";
 import { PinGlyph, PlusGlyph } from "@crewlethq/icons/glyphs";
@@ -47,11 +47,11 @@ function useFacts(): (star: Star) => Facts {
   const index = useMemo(() => indexOrg(org), [org]);
   const agents = useAgents();
   const viewer = useViewer();
-  const runs = useServicesRun();
+  const ask = useServicesAsk();
   const projects = useQuery(
     "work_projects",
     { limit: 50 },
-    { enabled: viewer.tracker && runs.tracker },
+    { enabled: viewer.tracker && ask.tracker },
   );
   return (star) => {
     const route = resolve(star.path);
@@ -111,10 +111,11 @@ function useSuggestions(pins: readonly Star[]): Omit<Star, "at">[] {
   const index = useMemo(() => indexOrg(org), [org]);
   const viewer = useViewer();
   const runs = useServicesRun();
+  const ask = useServicesAsk();
   const projects = useQuery(
     "work_projects",
     { limit: 10 },
-    { enabled: viewer.tracker && runs.tracker },
+    { enabled: viewer.tracker && ask.tracker },
   );
   const pinned = new Set(pins.map((p) => keyOf(p.path)));
   const out: Omit<Star, "at">[] = [];

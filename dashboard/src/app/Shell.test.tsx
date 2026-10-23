@@ -221,6 +221,10 @@ function answering(
   asked: { what: string; params?: Record<string, unknown> }[] = [],
 ) {
   const store = new Store();
+  // THE SOCKET'S FIRST FRAME CARRIES THE ORG, as a served frame's always
+  // does: what the company runs is known before a read is asked.
+  // NAMELESS, so a case that names the company applies its own.
+  store.applyOrg(withDerived({ name: "", roles: [] }));
   const socket = new LiveSocket(store);
   (
     socket as unknown as {

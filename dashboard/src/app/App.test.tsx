@@ -72,6 +72,9 @@ function mount(viewer: unknown = null) {
 /** The frame, over a socket that answers the viewer and refuses the rest. */
 function mountAs(viewer: Promise<unknown>) {
   const store = new Store();
+  // THE SOCKET'S FIRST FRAME CARRIES THE ORG, as a served frame's always
+  // does: what the company runs is known before a read is asked.
+  store.applyOrg(withDerived({ name: "Acme", roles: [] }));
   store.applyHealth(healthFrame({ nodes: 1, applied_epoch: 2 }));
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) => {
@@ -1033,6 +1036,7 @@ test("the page bar's More holds the star and what the screen folded, and no Copy
   location.hash = "#/work/ENG";
   const store = new Store();
   store.applyHealth(healthFrame({ nodes: 1, applied_epoch: 2 }));
+  store.applyOrg(withDerived({ name: "Acme", roles: [] }));
   const socket = new LiveSocket(store);
   const project = {
     key: "ENG",
@@ -1112,4 +1116,37 @@ test("the page bar's More holds the star and what the screen folded, and no Copy
   fireEvent.click(screen.getByRole("menuitem", { name: "Open on the board" }));
   expect(location.hash).toContain("#/work/ENG");
   expect(location.hash).toContain("peek=");
+});
+
+// A COLD LOAD OF A SERVICE'S PAGE WAITS FOR THE PROJECTION: mounted on the
+// guess, Knowledge asked its spaces, its pages and its activity on a company
+// running none, was refused all three, then gave way to the notice. It waits,
+// asks nothing, and says what the company runs once it knows. Mutation: mount
+// the screen before the org and `containers` is asked.
+test("a cold load of a service's page asks nothing until the company says what it runs", async () => {
+  location.hash = "#/knowledge";
+  const asked: string[] = [];
+  const reader = { login: "ana", owner: "ana", handle: "ana", grants: ["admin"], acts: [] };
+  const store = new Store();
+  const socket = new LiveSocket(store);
+  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) => {
+    asked.push(what);
+    return what === "viewer" ? Promise.resolve(reader) : new Promise(() => {});
+  };
+  render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <Router>
+        <App />
+      </Router>
+    </ClientContext.Provider>,
+  );
+  expect(await screen.findByText("Checking what the company runs")).toBeTruthy();
+  expect(asked.filter((w) => w === "containers" || w === "pages")).toEqual([]);
+  act(() =>
+    store.applyOrg(
+      withDerived({ name: "Acme", roles: [], services: { tracker: "native", knowledge: "none" } }),
+    ),
+  );
+  expect(await screen.findByText("This company runs no knowledge base")).toBeTruthy();
+  expect(asked.filter((w) => w === "containers" || w === "pages")).toEqual([]);
 });

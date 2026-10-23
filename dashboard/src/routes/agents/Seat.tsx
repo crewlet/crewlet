@@ -66,7 +66,7 @@
  * this kind has not got lands on Overview (`useTab`).
  */
 
-import { useServicesRun } from "~/lib/services.ts";
+import { useServicesRun, useServicesAsk } from "~/lib/services.ts";
 import { ORG_EDIT_PATH } from "~/app/routes.ts";
 import { useId, useMemo, useState } from "react";
 import { Button, ButtonLink, Callout, EmptyState, Menu, Skeleton, Tag, tabId } from "@crewlethq/ui";
@@ -181,6 +181,7 @@ export function SeatScreen({ handle }: { handle: string }) {
       : {},
   );
   const runs = useServicesRun();
+  const ask = useServicesAsk();
   const [tab, setTab] = useTab<SeatTab>("tab", seatTabs(human, runs));
   const panelId = useId();
   const agent = liveRow(agents, handle, seat);
@@ -202,7 +203,7 @@ export function SeatScreen({ handle }: { handle: string }) {
       limit: WORK_PAGE,
     },
     // THE TRACKER'S QUESTION, asked only of a reader holding it.
-    { enabled: !!seat?.handle && viewer.tracker && runs.tracker, pollMs: 30_000 },
+    { enabled: !!seat?.handle && viewer.tracker && ask.tracker, pollMs: 30_000 },
   );
   // WHAT THE SEAT SAID is its lead's and an admin's to read — see the file's
   // doc.

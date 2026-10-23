@@ -58,7 +58,7 @@ import {
   workspaceOf,
   workspaceRow,
 } from "./nav.ts";
-import { useServicesRun } from "~/lib/services.ts";
+import { useServicesRun, useServicesAsk } from "~/lib/services.ts";
 import { samePath, useNavigator, useRoute } from "./router.tsx";
 import { crumbsFor, titleOf, type Labels } from "./crumbs.ts";
 import { remember } from "~/lib/recents.ts";
@@ -463,7 +463,8 @@ function Frame({ children }: { children: ReactNode }) {
   // reconnect.
   // AND ONLY OF A COMPANY RUNNING CREWLET WORKS, whose push it is.
   const runs = useServicesRun();
-  const watchesInbox = viewer.owner !== "" && viewer.tracker && runs.tracker;
+  const ask = useServicesAsk();
+  const watchesInbox = viewer.owner !== "" && viewer.tracker && ask.tracker;
   useEffect(() => {
     if (!watchesInbox) return;
     socket.watch(viewer.owner);

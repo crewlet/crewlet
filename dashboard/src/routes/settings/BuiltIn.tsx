@@ -39,7 +39,7 @@ import { PageNote } from "~/app/frame/PageNote.tsx";
 import { href } from "~/app/router.tsx";
 import { plural } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { servicesRun, useBackends, type OrgServices } from "~/lib/services.ts";
+import { useBackends, type OrgServices, useServicesAsk } from "~/lib/services.ts";
 
 /** What a card says about its service: the engine's word, and the sentence under it. */
 interface Status {
@@ -95,11 +95,11 @@ function knowledgeStatus(knowledge: OrgServices["knowledge"], spaces: number | n
 /** The services built into Crewlet, with what the company runs of each. */
 export function BuiltIn() {
   const backends = useBackends();
-  const runs = servicesRun(backends);
+  const ask = useServicesAsk();
   // THE COUNTS, asked only of a service the company runs: elsewhere the
   // engine refuses both, and the card says what runs instead.
-  const projects = useQuery("work_projects", { limit: 1 }, { enabled: runs.tracker });
-  const spaces = useQuery("containers", undefined, { enabled: runs.knowledge });
+  const projects = useQuery("work_projects", { limit: 1 }, { enabled: ask.tracker });
+  const spaces = useQuery("containers", undefined, { enabled: ask.knowledge });
   return (
     <section className="col gap-3" aria-labelledby="builtin-heading">
       <div className="col gap-1">

@@ -72,7 +72,7 @@
  * is theirs, at `#/account`. No other seat draws it.
  */
 
-import { useServicesRun } from "~/lib/services.ts";
+import { useServicesRun, useServicesAsk } from "~/lib/services.ts";
 import { useMemo, useState } from "react";
 import {
   Button,
@@ -237,6 +237,7 @@ function SeatPeekBody({
   // THE THREE READS — see the file's doc.
   // THE TRACKER'S TWO, asked only of a company running Crewlet Works.
   const runs = useServicesRun();
+  const ask = useServicesAsk();
   const workload = useQuery("work_workload", undefined, {
     enabled: viewer.tracker && runs.tracker,
     pollMs: 60_000,
@@ -247,7 +248,7 @@ function SeatPeekBody({
   const turns = useQuery(
     "work_item_turns",
     { id: item, limit: 1 },
-    { enabled: viewer.tracker && runs.tracker && state === "working" && item !== "" },
+    { enabled: viewer.tracker && ask.tracker && state === "working" && item !== "" },
   );
 
   const ordinal =

@@ -15,7 +15,7 @@
  * question the engine would refuse.
  */
 
-import { useServicesRun } from "~/lib/services.ts";
+import { useServicesRun, useServicesAsk } from "~/lib/services.ts";
 import { Skeleton } from "@crewlethq/ui";
 import { medianTaskParams } from "./model.ts";
 import { fmtCount, fmtExact, plural } from "~/lib/format.ts";
@@ -35,9 +35,10 @@ export function TaskMedianTile({
 }) {
   const viewer = useViewer();
   const runs = useServicesRun();
+  const ask = useServicesAsk();
   const ready = Boolean(since && until);
   const answer = useQuery("work_items", ready ? medianTaskParams(since!, until!) : undefined, {
-    enabled: ready && viewer.tracker && runs.tracker,
+    enabled: ready && viewer.tracker && ask.tracker,
   });
   // A TASK IS CREWLET WORKS', so where the company runs none there is no
   // median to draw and no tile.

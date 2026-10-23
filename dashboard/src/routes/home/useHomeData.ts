@@ -15,7 +15,7 @@
  * `HomeDataProvider`; a card reads it with `useSharedHomeData`.
  */
 
-import { useServicesRun } from "~/lib/services.ts";
+import { useServicesAsk } from "~/lib/services.ts";
 import { createContext, useContext, useMemo } from "react";
 import { href, useParam } from "~/app/router.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -66,11 +66,11 @@ export function useHomeData() {
   // what would open them rather than drawing a refusal as a broken read.
   // AND OF A COMPANY RUNNING CREWLET WORKS, where the history is: elsewhere
   // the tiles and chart it feeds are not drawn (`Kpis.tsx`'s `KPI_SERVICES`).
-  const runs = useServicesRun();
+  const ask = useServicesAsk();
   const flow = useQuery(
     "work_flow",
     { bucket: "day", points: flowPoints(range) },
-    { pollMs: SLOW_POLL_MS, enabled: viewer.tracker && runs.tracker },
+    { pollMs: SLOW_POLL_MS, enabled: viewer.tracker && ask.tracker },
   );
   const spend = useQuery(
     "token_series",

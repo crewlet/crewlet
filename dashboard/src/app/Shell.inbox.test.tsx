@@ -7,6 +7,7 @@
  * the sixty-second poll that used to be the only way the badge moved.
  */
 
+import { withDerived } from "~/test/org.ts";
 import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Shell } from "./Shell.tsx";
@@ -42,6 +43,9 @@ afterEach(() => {
  */
 function shellAs(grants: string[]) {
   const store = new Store();
+  // THE SOCKET'S FIRST FRAME CARRIES THE ORG, as a served frame's always
+  // does: what the company runs is known before a read is asked.
+  store.applyOrg(withDerived({ name: "Acme", roles: [] }));
   const socket = new LiveSocket(store);
   const watched: string[] = [];
   socket.watch = (seat: string) => void watched.push(seat);

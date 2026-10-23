@@ -64,6 +64,28 @@ export function useServicesRun(): ServicesRun {
   return servicesRun(useBackends());
 }
 
+/**
+ * Which of Crewlet's services may be ASKED anything: none until the org
+ * projection has arrived, then those the company runs (every one where the
+ * projection names none, a node running no company).
+ *
+ * DRAWING AND ASKING DIFFER ON A COLD LOAD. Until the projection lands, a
+ * place is drawn as if every service ran ([useServicesRun]), so nothing is
+ * hidden on a guess; but a read sent then for a service the company does not
+ * run is refused (`unknown_query`), and a tab opened on Jira's company asked
+ * the tracker for its inbox, its queue and its projects before it knew. A
+ * read waits for the projection instead.
+ */
+export function useServicesAsk(): ServicesRun {
+  const org = useOrg();
+  return org === null ? RUN["false/false"] : servicesRun(org.services ?? null);
+}
+
+/** Whether the org projection has arrived, so what the company runs is no longer a guess. */
+export function useOrgArrived(): boolean {
+  return useOrg() !== null;
+}
+
 /** Whether the engine has said what the company runs. */
 export function useServicesKnown(): boolean {
   return useBackends() !== null;

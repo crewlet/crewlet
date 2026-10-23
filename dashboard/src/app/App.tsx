@@ -57,18 +57,12 @@ import {
   type Resolved,
   type Route,
 } from "./routes.ts";
-import {
-  closedBy,
-  framelessOf,
-  guardedPath,
-  personalPath,
-  serviceOfPath,
-} from "./nav.ts";
+import { closedBy, framelessOf, guardedPath, personalPath, serviceOfPath } from "./nav.ts";
 import { AccessRefused } from "./frame/AccessRefused.tsx";
 import { GrantRequired } from "./frame/GrantRequired.tsx";
 import { useConnection } from "~/lib/store-hooks.ts";
 import { useHeldReading, useViewer } from "~/lib/viewer.ts";
-import { useServicesKnown, useServicesRun } from "~/lib/services.ts";
+import { useOrgArrived, useServicesKnown, useServicesRun } from "~/lib/services.ts";
 import { ServiceNotice } from "./ServiceNotice.tsx";
 import { safeNext, signInHash } from "~/lib/session.ts";
 import { isArtifactKind } from "~/lib/artifacts/words.ts";
@@ -369,6 +363,7 @@ function Frame() {
 function Screen({ where, path }: { where: Route; path: string[] }) {
   const viewer = useViewer();
   const known = useServicesKnown();
+  const arrived = useOrgArrived();
   const runs = useServicesRun();
   const held = useHeldReading();
   const { accessRefused } = useConnection();
@@ -421,6 +416,13 @@ function Screen({ where, path }: { where: Route; path: string[] }) {
         return <GrantRequired grants={closed.needs} reader={held.login} />;
       }
     }
+  }
+  // A COLD LOAD OF A SERVICE'S PAGE WAITS FOR THE PROJECTION, which says
+  // whether the company runs it, once nothing above has answered the address
+  // (a refusal or a lock is decided without it): mounted on the guess, the
+  // page asked its reads and was refused, then gave way to the notice.
+  if (service !== undefined && !arrived) {
+    return <Skeleton variant="text" rows={4} label="Checking what the company runs" />;
   }
   return screenFor(where);
 }

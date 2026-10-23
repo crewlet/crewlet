@@ -9,7 +9,7 @@
  * forward every time somebody tidied its board.
  */
 
-import { useServicesRun } from "~/lib/services.ts";
+import { useServicesAsk } from "~/lib/services.ts";
 import { useMemo } from "react";
 import { Card, SegmentedMeter, StatusDot } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
@@ -36,11 +36,11 @@ export function Projects() {
   // THE TRACKER'S LIST, asked only of a reader holding Tracker, of a company
   // running Crewlet Works (the card is not drawn elsewhere).
   const viewer = useViewer();
-  const runs = useServicesRun();
+  const ask = useServicesAsk();
   const read = useQuery(
     "work_projects",
     { limit: PROJECTS_PAGE },
-    { pollMs: 120_000, enabled: viewer.tracker && runs.tracker },
+    { pollMs: 120_000, enabled: viewer.tracker && ask.tracker },
   );
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
