@@ -840,10 +840,13 @@ task); without Crewlet Knowledge, Knowledge does. The Inbox stays, because
 the seat and budget conditions waiting on a person arrive under every
 backend: it draws those, and one line in place of its updates. Home leaves
 out the blocks and figures that cannot arrive. An address under a hidden
-place opens that service's card on Company › Integrations
-(`#/company/integrations?builtin=works` or `?builtin=knowledge`), and only
-once the engine has answered, so a deep link opened on a cold tab is never
-sent away from a page the company does run. Until then a service counts as
+place draws a notice in place (`app/ServiceNotice.tsx`): what the company runs
+instead, in the engine's word, and why the page asked for is not here (a New
+design address says a design is made by an agent working a task). It is
+readable by every signed-in reader, and offers Company › Integrations only to
+a reader who may open it, since Integrations is an administrator's page. It
+is drawn only once the engine has answered, so a deep link opened on a cold
+tab is never refused on a guess. Until then a service counts as
 not run, as an app the reader holds counts as not held, so nothing is asked of
 it before somebody has said the company runs it.
 
@@ -1143,7 +1146,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/company/org/edit` | **Org chart › Edit org**: the builder, opened from the chart's button, where the charter and the standing policies are written too *(saves as an admin, or as a unit's lead inside the units they lead)* | `view=visualization\|table` · `chart=structure\|reporting` · `unit=` · `seat=` (the selection; arriving with one opens its editor) · `add=unit\|agent\|human` (opens the Add once, then leaves the address) · `project=` (with `unit=` or `seat=`: Work's New project, which opens that node's editor on its Project field holding the key, then leaves the address) |
 | `#/company/org/seats/{handle}` | **Seat**, an agent's or a person's profile; a person's says what holds the seat, its holder, the open invitation that names it (with **Cancel invitation**), or nobody, with **Invite** and **Add person**, the gestures drawn for an admin. Handles live only under `seats/` | agent: `tab=overview\|work\|turns\|memory\|schedules\|settings` · `conversation=` (Memory); human: overview · work · settings |
 | `#/company/schedules` · `#/company/schedules/{scope_type}/{scope_id}/{name}` | **Schedules**, recurring work; one schedule | |
-| `#/company/integrations` · `#/company/integrations/{kind}` | **Integrations**: **Built into Crewlet** first (Crewlet Works, Crewlet Knowledge, and Crewlet Chat, coming soon), each saying from the engine's own word whether the company runs it, runs another system in its place (Jira, Confluence) or none, with its counts and the way in where it is run; then the third-party catalogue, one tile per tool. No tabs. A hidden service's addresses open its card here *(needs Admin access)* | `builtin=works\|knowledge` (the built-in card brought into view) |
+| `#/company/integrations` · `#/company/integrations/{kind}` | **Integrations**: **Built into Crewlet** first (Crewlet Works, Crewlet Knowledge, and Crewlet Chat, coming soon), each saying from the engine's own word whether the company runs it, runs another system in its place (Jira, Confluence) or none, with its counts and the way in where it is run; then the third-party catalogue, one tile per tool, under its own heading with its filter and the address vendors deliver to. No tabs *(needs Admin access)* | |
 | `#/company/budgets` | **Budgets**, the company's and every agent seat's day, week and month: spent, the ceiling (raised in place by an admin whose credential the document admits), and what is refusing. Last in Company: what the company decides, while what it spent is Settings › Spend | `window=` is not read here |
 | `#/live` | **Live › Now running** — the running turns, the coding runs waiting on a person and the rest in a box, the activity strip and the recent phases | `window=15m\|1h\|6h` (the activity strip) · `seat=` (a handle) · `phase=` · `failed=true` (the same spelling Turns uses) |
 | `#/live/turns` · `#/live/turns/{id}` | **Turns** — the turns that ended over the window, counted by the engine, then every turn one row each; one turn *(needs Admin access)* | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `seat=` (a handle) · `failed=true\|false` · `sort=-started\|-tokens` (the engine's order) |
@@ -7489,12 +7492,13 @@ engine's own word, whether the company runs it, runs another system in its
 place (Jira, Confluence) or none, with the count the service already answers
 (the projects Works holds, the spaces Knowledge holds) and the way in where it
 is run. Turning a service on or off is not offered: the company document
-decides it, and a switch here that did nothing would be a lie. An address
-under a place the company does not run lands here with that service's card
-brought into view (`?builtin=works` or `?builtin=knowledge`), since the card
-says what runs in its place.
+decides it, and a switch here that did nothing would be a lie. The row has
+its own grid, three tracks for its three tiles, and a tile with no way in
+(Chat, or a service run elsewhere) draws no footer.
 
-Under it, the third-party catalogue is a grid of **tiles, one per tool**, Slack, Mattermost,
+Under it, under its own **Third-party apps** heading, with the All, Connected
+and Available filter and the address vendors deliver to (both are about these
+tiles alone), the third-party catalogue is a grid of **tiles, one per tool**, Slack, Mattermost,
 Atlassian, GitHub, GitLab, Datadog — each with the vendor's mark, the
 engine's word for its state (`tools[].label` from `integration.Rollup`, the
 same word everywhere the tool is named), one sentence and **one action**. The

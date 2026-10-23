@@ -61,8 +61,8 @@
  * Crewlet Works, or its knowledge base, Crewlet Knowledge) names it
  * ([WorkspaceRow.service], [Section.service]). Where the company runs that
  * service elsewhere or not at all, the place is HIDDEN, never locked: there is
- * nothing to ask an admin for, and its addresses open the service's card on
- * Company › Integrations instead ([serviceShown], `lib/services.ts`). Access
+ * nothing to ask an admin for, and its addresses say so in place, to every
+ * reader (`ServiceNotice.tsx`, [serviceShown], `lib/services.ts`). Access
  * the reader lacks is the opposite case and keeps its rule: locked, never
  * hidden ([sectionOpen]).
  */
@@ -1351,7 +1351,8 @@ export function serviceShown(place: { service?: Service }, runs: ServicesRun): b
 /**
  * The service an address reads, if the company may not run it: its
  * workspace's, then its section's. What the router asks before drawing a page
- * a hidden row held, so the reader lands on the service's card instead.
+ * a hidden row held, so the reader is told in place why it is not here
+ * (`ServiceNotice.tsx`).
  */
 export function serviceOfPath(path: readonly string[]): Service | undefined {
   const row = workspaceRow(workspaceOf(path));

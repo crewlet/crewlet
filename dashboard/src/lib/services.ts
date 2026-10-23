@@ -25,11 +25,12 @@
  * The projection names no services only on a node running no company, which
  * is "not known yet" and never "none": NOTHING IS HIDDEN then, so the frame
  * draws as it always has rather than taking places away on a guess. And a
- * hidden service's address is sent to its card only once the engine HAS said
- * ([useServicesKnown]), so a deep link is never sent away on a guess either.
+ * hidden service's address draws its notice (`app/ServiceNotice.tsx`) only
+ * once the engine HAS said ([useServicesKnown]), so a deep link is never
+ * refused on a guess either.
  */
 
-import type { Service, ServicesRun } from "~/app/nav.ts";
+import type { ServicesRun } from "~/app/nav.ts";
 import type { OrgServices } from "~/contract/services.ts";
 import { useOrg } from "./store-hooks.ts";
 
@@ -67,9 +68,3 @@ export function useServicesRun(): ServicesRun {
 export function useServicesKnown(): boolean {
   return useBackends() !== null;
 }
-
-/** The built-in service card each service's addresses open where it is not run. */
-export const SERVICE_CARDS: Readonly<Record<Service, string>> = {
-  tracker: "works",
-  knowledge: "knowledge",
-};

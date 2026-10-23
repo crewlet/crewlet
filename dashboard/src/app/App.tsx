@@ -63,14 +63,13 @@ import {
   guardedPath,
   personalPath,
   serviceOfPath,
-  workspaceRow,
-  type Service,
 } from "./nav.ts";
 import { AccessRefused } from "./frame/AccessRefused.tsx";
 import { GrantRequired } from "./frame/GrantRequired.tsx";
 import { useConnection } from "~/lib/store-hooks.ts";
 import { useHeldReading, useViewer } from "~/lib/viewer.ts";
-import { SERVICE_CARDS, useServicesKnown, useServicesRun } from "~/lib/services.ts";
+import { useServicesKnown, useServicesRun } from "~/lib/services.ts";
+import { ServiceNotice } from "./ServiceNotice.tsx";
 import { safeNext, signInHash } from "~/lib/session.ts";
 import { isArtifactKind } from "~/lib/artifacts/words.ts";
 import { currentSessionNeed, onSessionNeed, type ArtifactKind } from "~/protocol/index.ts";
@@ -308,24 +307,6 @@ function NewArtifactRedirect() {
 }
 
 /**
- * An address under a place the company does not run the service for (Work
- * where it runs no Crewlet Works, Knowledge where it runs no Crewlet
- * Knowledge): that service's card on Company › Integrations, which says what
- * the company runs instead, REPLACED so Back never lands on the hidden page.
- * A star, a recent or a link pasted before the company changed what it runs
- * lands somewhere that says why, rather than on a page every read of which the
- * engine would refuse.
- */
-function ServiceCard({ service }: { service: Service }) {
-  const nav = useNavigator();
-  useEffect(() => {
-    const integrations = workspaceRow("integrations");
-    if (integrations) nav.replace(integrations.path, { builtin: SERVICE_CARDS[service] });
-  }, [nav, service]);
-  return null;
-}
-
-/**
  * Follows what the transports say the session needs.
  *
  * A `401` anywhere — the socket's refusal probe, any REST call — means this
@@ -392,10 +373,14 @@ function Screen({ where, path }: { where: Route; path: string[] }) {
   const held = useHeldReading();
   const { accessRefused } = useConnection();
   if (!where.resolved) return <NotFound what={where.what} hint={where.hint} />;
-  // A PLACE THE COMPANY DOES NOT RUN THE SERVICE FOR opens that service's
-  // card instead, once the engine has said what it runs (`lib/services.ts`).
+  // A PLACE THE COMPANY DOES NOT RUN THE SERVICE FOR says so in place, once
+  // the engine has said what it runs (`lib/services.ts`): never a redirect,
+  // since the service's card is on an administrator's page. See
+  // `ServiceNotice`.
   const service = serviceOfPath(path);
-  if (service !== undefined && known && !runs[service]) return <ServiceCard service={service} />;
+  if (service !== undefined && known && !runs[service]) {
+    return <ServiceNotice service={service} path={path} />;
+  }
   // A BROWSER THE ENGINE KNOWS AND WILL NOT SERVE (a refused handshake, never
   // a want of access) is told so in place of every screen but the reader's
   // own: their Account, which reads no socket (`personalPath`, the rule the
