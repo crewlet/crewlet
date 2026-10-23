@@ -87,7 +87,7 @@ func fleetStoreRemedy(err error, bootstrapPath string) error {
 	case errors.Is(err, engine.ErrNoFleetStoreHere):
 		return fmt.Errorf("%w\n\nWith %s's engine stopped, reach the store through "+
 			"a node that is running: name it with -api, with one of its Tier A "+
-			"tokens in %s — or start this node's engine and re-run", err,
+			"tokens in %s, or start this node's engine and re-run", err,
 			bootstrapPath, apiTokenEnv)
 	case errors.Is(err, jetstream.ErrStoreDirHeld):
 		// AN ENGINE STARTING WITH -import-company is the one engine named
@@ -144,5 +144,5 @@ func fleetSecrets(fs *engine.FleetStore, boot *config.Bootstrap) (*fleetsecrets.
 // engine was stopped: which broker, and that no node stood in between.
 func reachedDirectly(fs *engine.FleetStore) string {
 	return "the fleet's store, reached through " + fs.Where +
-		" — this node's engine is stopped"
+		" (this node's engine is stopped)"
 }

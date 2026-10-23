@@ -366,7 +366,7 @@ The CLI says which way it went after every write, and who reads the value when â
 
 ```
 stored GITLAB_TOKEN_SWE (51 bytes) as alice
-written to the fleet's store, reached through this node's broker on /var/lib/crewlet/stream â€” this node's engine is stopped
+written to the fleet's store, reached through this node's broker on /var/lib/crewlet/stream (this node's engine is stopped)
 This node's engine reads it when it starts; a node already running on the same store reads it at its next configuration apply, and POST /config/reload to it re-activates the current revision now.
 ```
 

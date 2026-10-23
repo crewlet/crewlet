@@ -935,7 +935,7 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 				"name this entry's key as auth.api_key: the %q CLI reads its key from "+
 					"%s, a variable other vendors' keys are kept under too, so the "+
 					"engine does not read it from its own environment or secret store "+
-					`in this entry's place — e.g. api_key: "${DASHSCOPE_API_KEY}"`,
+					`in this entry's place (for example api_key: "${DASHSCOPE_API_KEY}")`,
 				agent, profile.APIKeyEnv)
 		}
 	}
@@ -949,8 +949,8 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 		!profile.EnvSignIn && profile.APIKeyEnv != "" {
 		p.add(at(path, "auth.mode"), ErrConflict,
 			"subscription signs the CLI in with a login it keeps or a headless token, and "+
-				"the %q profile names neither — no credential_paths, credential_store or "+
-				"token_env — so the entry would sign in to nothing: this CLI signs in with "+
+				"the %q profile names neither (no credential_paths, credential_store or "+
+				"token_env), so the entry would sign in to nothing. This CLI signs in with "+
 				"its key, so set auth.mode: api-key and give the key as auth.api_key (the "+
 				"CLI reads it from %s)", agent, profile.APIKeyEnv)
 	}
@@ -1024,7 +1024,7 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 				p.add(entry(at(path, "env"), name), ErrConflict,
 					"%s is set by the %q profile under auth.mode subscription, to %q, to "+
 						"choose the login the seat's home holds; a value here is replaced on "+
-						"every call, so drop it — a different value is set with "+
+						"every call, so drop it. A different value is set with "+
 						"overrides.subscription_env", name, l.Agent, profile.SubscriptionEnv[name])
 				continue
 			}
