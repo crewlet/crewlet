@@ -50,7 +50,10 @@ import (
 // empty tail is exactly the lie a screen that polls cannot recover from. An
 // owner with no presence — draining, or its heartbeat lapsed — is asked like
 // any other, and its silence is that same `owner_silent`. `box_paused` is a
-// running record whose box is paused, which a reader never wakes.
+// running record whose box is paused, which a reader never wakes, and
+// `box_gone` one whose box its backend says is gone for good ([ErrBoxGone]):
+// reaped, or a local box on a host the run's seat has moved off. Neither is a
+// failure — each is the box's state, and the record moves on from it.
 //
 // A box that the owner could not read is an ERROR rather than an outcome, and
 // what crosses the wire is its CLASS, never its text ([TailFailure]): the
@@ -195,11 +198,19 @@ const (
 	// the record moving on, or a collection whose claim was handed back to
 	// be tried again. NOT terminal: the next answer says which.
 	TailBoxPaused TailOutcome = "box_paused"
+	// TailBoxGone is a running record whose box its backend says is gone
+	// for good ([ErrBoxGone]): its provider reaped it, or it is a local box
+	// on a host this run's seat has moved off, which no other host can
+	// reach. Nothing more will be read from it, and the run is ended by the
+	// completion that finds the same: NOT terminal for a reader, which asks
+	// until the record says how the run ended. It was an error, which the
+	// query surface answered as a fault of the node that asked.
+	TailBoxGone TailOutcome = "box_gone"
 )
 
 // TailOutcomes is every outcome this build answers.
 var TailOutcomes = []TailOutcome{
-	TailRunning, TailLaunching, TailNotRunning, TailOwnerSilent, TailBoxPaused,
+	TailRunning, TailLaunching, TailNotRunning, TailOwnerSilent, TailBoxPaused, TailBoxGone,
 }
 
 // Valid reports whether this build knows the outcome.
@@ -379,6 +390,8 @@ func (r *TailReader) local(ctx context.Context, run PendingRun, cursor TailCurso
 	switch {
 	case errors.Is(err, ErrBoxPaused):
 		answer.Outcome = TailBoxPaused
+	case errors.Is(err, ErrBoxGone):
+		answer.Outcome = TailBoxGone
 	case err != nil:
 		return fail(err)
 	default:
@@ -433,6 +446,8 @@ func (r *TailReader) ask(ctx context.Context, run PendingRun, cursor TailCursor,
 				Failure: rep.Failed}
 		case rep.Paused:
 			answer.Outcome = TailBoxPaused
+		case rep.Gone:
+			answer.Outcome = TailBoxGone
 		case rep.Output != nil:
 			answer.Outcome, answer.Output = TailRunning, rep.Output
 		default:
@@ -511,6 +526,8 @@ func ServeTail(ctx context.Context, q TailServer, owner string, pending PendingR
 			switch {
 			case errors.Is(err, ErrBoxPaused):
 				reply.Paused = true
+			case errors.Is(err, ErrBoxGone):
+				reply.Gone = true
 			case err != nil:
 				reply.Failed = fail(ctx, req, err)
 			default:
@@ -574,6 +591,8 @@ type tailReply struct {
 
 	// Paused is [TailBoxPaused]: the box is paused and was left so.
 	Paused bool `json:"paused,omitempty"`
+	// Gone is [TailBoxGone]: the box's backend says it is gone for good.
+	Gone bool `json:"gone,omitempty"`
 }
 
 // TailFailure is why the node that owns a run could not answer a tail request,

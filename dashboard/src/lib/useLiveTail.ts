@@ -23,8 +23,9 @@
  *
  * Only on `not_running`: the job finished, parked, or a later one replaced it,
  * and its output is on its record from here on. `launching` (a box still being
- * made), `box_paused`, a silent owner and a failed read all go on asking, and
- * keep what the view holds on screen.
+ * made), `box_paused`, `box_gone` (the record has yet to say how the run
+ * ended), a silent owner and a failed read all go on asking, and keep what the
+ * view holds on screen.
  */
 
 import { useEffect, useRef, useState } from "react";

@@ -7170,8 +7170,9 @@ that can.
   live](../concepts/code-sandbox.md#watching-a-run-live)), and only then:
   closing the span or the job stopping ends the poll — and only
   `not_running` is stopping: a job still being set up (`launching`), a box
-  paused before its record moves on (`box_paused`), a silent owner and a
-  failed read all keep asking, and keep what is on screen.
+  paused before its record moves on (`box_paused`), a box gone before its
+  record says how the run ended (`box_gone`), a silent owner and a failed
+  read all keep asking, and keep what is on screen.
   - **The view holds what it was sent.** It asks by CURSOR — the reading it
     holds, how far and the owner's digest there — and APPENDS what the owner
     says it lacks, or replaces what it holds on a reset. `lib/useLiveTail.ts`

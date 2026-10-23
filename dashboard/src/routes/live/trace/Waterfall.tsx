@@ -813,6 +813,12 @@ export function LiveOutput({
     notice = <span className="t-caption">Setting up. Output appears when the agent starts.</span>;
   } else if (answer.outcome === "box_paused") {
     notice = <span className="t-caption">Finished. Output appears on the run&rsquo;s record.</span>;
+  } else if (answer.outcome === "box_gone") {
+    notice = (
+      <span className="t-caption">
+        The run&rsquo;s box is gone, so no more output will come. Its record will say how it ended.
+      </span>
+    );
   } else if (answer.outcome === "not_running") {
     notice = (
       <span className="t-caption">
@@ -910,6 +916,8 @@ export function liveState(answer: SandboxTailAnswer | null | undefined, failed: 
       return "The job is being set up.";
     case "box_paused":
       return "The run's box is paused; its job has finished.";
+    case "box_gone":
+      return "The run's box is gone.";
     case "not_running":
       return "The run is no longer running.";
     default:
