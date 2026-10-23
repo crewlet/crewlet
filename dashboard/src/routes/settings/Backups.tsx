@@ -237,7 +237,7 @@ export function BackupRecord({
         <>
           <Card padding="none">
             <Card.Header icon={<DatabaseGlyph size="sm" />} count={answer.points.length}>
-              Newest per owner
+              <Card.Title>Newest per owner</Card.Title>
             </Card.Header>
             <DataGrid<BackupPointRow>
               name="points"
@@ -331,7 +331,7 @@ export function BackupRecord({
               count={answer.history.length}
               subtitle="Newest first"
             >
-              Backup history
+              <Card.Title>Backup history</Card.Title>
             </Card.Header>
             <CoverageNote
               coverage={[answer.coverage]}

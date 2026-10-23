@@ -66,7 +66,7 @@ import {
 } from "@crewlethq/ui";
 import {
   DatabaseGlyph,
-  ServerGlyph,
+  CopyGlyph,
   PackageGlyph,
   ClockGlyph,
   TriangleAlertGlyph,
@@ -188,7 +188,7 @@ export function AlarmList({
   return (
     <Card id={ALARMS_ID}>
       <Card.Header icon={<TriangleAlertGlyph size="sm" />} count={alarms.length}>
-        Alarms
+        <Card.Title>Alarms</Card.Title>
       </Card.Header>
       <div className="col gap-2">
         {alarms.map((alarm) => (
@@ -408,8 +408,8 @@ export function RetentionPanels({
         ))}
 
       <Card padding="none">
-        <Card.Header icon={<ServerGlyph size="sm" />} count={nodes.length}>
-          Replication
+        <Card.Header icon={<CopyGlyph size="sm" />} count={nodes.length}>
+          <Card.Title>Replication</Card.Title>
         </Card.Header>
         <DataGrid<RetentionNode>
           rows={nodes}
@@ -565,7 +565,7 @@ export function SnapshotsCard({
           solo ? undefined : `${donorsCounted(snapshots)} of ${SNAPSHOT_DONORS_REQUIRED} donors`
         }
       >
-        Snapshots and joining
+        <Card.Title>Snapshots and joining</Card.Title>
       </Card.Header>
       {solo ? (
         <Card.Body padding="md">
@@ -1009,11 +1009,11 @@ export function LogRetention({ domains }: { domains: RetentionDomain[] }) {
   return (
     <Card padding="none">
       <Card.Header
-        icon={<DatabaseGlyph size="sm" />}
+        icon={<ClockGlyph size="sm" />}
         count={domains.length}
         subtitle="A log trims old history once all six checks allow it"
       >
-        Log retention
+        <Card.Title>Log retention</Card.Title>
       </Card.Header>
       <div>
         {domains.map((d) => (

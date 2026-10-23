@@ -217,7 +217,7 @@ function FleetScreen() {
         >
           <Card padding="none">
             <Card.Header icon={<ServerGlyph size="sm" />} count={nodes.length}>
-              Nodes
+              <Card.Title>Nodes</Card.Title>
             </Card.Header>
             <DataGrid<FleetNode>
               rows={nodes}
@@ -410,7 +410,9 @@ function FleetScreen() {
 
           {nodes.some((n) => n.config_error) && (
             <Card>
-              <Card.Header icon={<TriangleAlertGlyph size="sm" />}>Config apply errors</Card.Header>
+              <Card.Header icon={<TriangleAlertGlyph size="sm" />}>
+                <Card.Title>Config apply errors</Card.Title>
+              </Card.Header>
               <div className="col gap-2">
                 {nodes
                   .filter((n) => n.config_error)
@@ -428,7 +430,7 @@ function FleetScreen() {
           <div className="grid grid-auto-lg">
             <Card padding="none">
               <Card.Header icon={<UsersGlyph size="sm" />} count={data?.seats?.length ?? 0}>
-                Seat placement
+                <Card.Title>Seat placement</Card.Title>
               </Card.Header>
               <DataGrid<FleetSeatLease>
                 name="seats"
@@ -498,7 +500,7 @@ function FleetScreen() {
 
             <Card padding="none">
               <Card.Header icon={<CpuGlyph size="sm" />} count={data?.duties?.length ?? 0}>
-                Company-wide duties
+                <Card.Title>Company-wide duties</Card.Title>
               </Card.Header>
               <DataGrid<FleetDutyLease>
                 name="duties"
@@ -562,7 +564,7 @@ function FleetScreen() {
           {((data?.unplaceable?.length ?? 0) > 0 || (data?.unmanned_roles?.length ?? 0) > 0) && (
             <Card>
               <Card.Header icon={<TriangleAlertGlyph size="sm" />}>
-                Not running anywhere
+                <Card.Title>Not running anywhere</Card.Title>
               </Card.Header>
               <div className="col gap-2">
                 {data?.unmanned_roles?.map((r) => (
@@ -702,7 +704,9 @@ export function NodeScreen({ id }: { id: string }) {
               />
               <NodePanels node={node} answer={data} now={now} />
               <Card>
-                <Card.Header icon={<SlidersVerticalGlyph size="sm" />}>Placement</Card.Header>
+                <Card.Header icon={<SlidersVerticalGlyph size="sm" />}>
+                  <Card.Title>Placement</Card.Title>
+                </Card.Header>
                 <div className="col gap-2">
                   {/* ITS ROLES ARE A HEADER FACT (`nodeFacts`), which the peek
                       shares; this card keeps what only the page draws. */}
@@ -935,7 +939,9 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
           which revision it is doing it on. The second half is the question an
           operator came for; the first is the one they check next. */}
       <Card>
-        <Card.Header icon={<PowerGlyph size="sm" />}>Running</Card.Header>
+        <Card.Header icon={<PowerGlyph size="sm" />}>
+          <Card.Title>Running</Card.Title>
+        </Card.Header>
         <div className="col gap-2">
           <div className="row wrap gap-2">
             {/* THE ONE QUESTION THIS PANEL EXISTS FOR, as a state rather than
@@ -986,7 +992,7 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
           count={seats.length}
           subtitle="its own, and one per seat it holds"
         >
-          Leases
+          <Card.Title>Leases</Card.Title>
         </Card.Header>
         <div className="row wrap gap-2" style={{ padding: "var(--spacing-3)" }}>
           <span className="t-label">Its own lease</span>
@@ -1044,7 +1050,7 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
 
       <Card padding="none">
         <Card.Header icon={<CpuGlyph size="sm" />} count={duties.length}>
-          Duties
+          <Card.Title>Duties</Card.Title>
         </Card.Header>
         <DataGrid<FleetDutyLease>
           name="node-duties"

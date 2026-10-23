@@ -2484,7 +2484,9 @@ function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] }) {
     // refusal names the grant that would have admitted them.
     return (
       <Card>
-        <Card.Header icon={<RotateCwGlyph size="sm" />}>Provisioning passes</Card.Header>
+        <Card.Header icon={<RotateCwGlyph size="sm" />}>
+          <Card.Title>Provisioning passes</Card.Title>
+        </Card.Header>
         <span className="t-caption">{needsWords("Seeing passes", needs)}</span>
       </Card>
     );
@@ -2574,7 +2576,7 @@ function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] }) {
         count={runs.length}
         subtitle={`on ${scope || "this node"}`}
       >
-        Provisioning passes
+        <Card.Title>Provisioning passes</Card.Title>
       </Card.Header>
       <DataGrid<SetupRun>
         rows={runs}
@@ -2876,7 +2878,7 @@ export function IntegrationPeek({ kind }: { kind: string }) {
                   object from one with no Confluence at all. */}
               <Card>
                 <Card.Header icon={<LayersGlyph size="sm" />} count={entry.surfaces.length}>
-                  Surfaces
+                  <Card.Title>Surfaces</Card.Title>
                 </Card.Header>
                 <ul className="int-rows">
                   {entry.surfaces.map((surface) => {
@@ -2916,7 +2918,7 @@ export function IntegrationPeek({ kind }: { kind: string }) {
 
               <Card>
                 <Card.Header icon={<TriangleAlertGlyph size="sm" />} count={findings.length}>
-                  Findings
+                  <Card.Title>Findings</Card.Title>
                 </Card.Header>
                 {findings.length > 0 ? (
                   <ul className="col int-findings">
@@ -2965,7 +2967,9 @@ export function IntegrationPeek({ kind }: { kind: string }) {
                   a relay, and its events are filed under the product they
                   belong to, so a row for it could only ever be empty. */}
               <Card>
-                <Card.Header icon={<InboxGlyph size="sm" />}>Last delivery</Card.Header>
+                <Card.Header icon={<InboxGlyph size="sm" />}>
+                  <Card.Title>Last delivery</Card.Title>
+                </Card.Header>
                 <ul className="int-rows">
                   {entry.surfaces
                     .filter((surface) => surface.key !== "forge")
