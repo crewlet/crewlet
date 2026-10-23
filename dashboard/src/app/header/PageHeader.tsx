@@ -59,7 +59,8 @@ import {
   type MenuEntry,
   useMediaMatch,
 } from "@crewlethq/ui";
-import { ChevronDownGlyph, EllipsisGlyph, KeyGlyph, StarGlyph } from "@crewlethq/icons/glyphs";
+import { ChevronDownGlyph, EllipsisGlyph, StarGlyph } from "@crewlethq/icons/glyphs";
+import { LockMark } from "../frame/LockMark.tsx";
 import { href, samePath, useNavigator, useRoute } from "../router.tsx";
 import type { Crumb } from "../crumbs.ts";
 import { resolves } from "../routes.ts";
@@ -120,6 +121,7 @@ export function PageHeader({
   menu = [],
   star = true,
   runs,
+  grants,
   children,
 }: {
   crumbs: Crumb[];
@@ -138,6 +140,8 @@ export function PageHeader({
   star?: boolean;
   /** Which services the company runs: a tab reading one it does not is not drawn. */
   runs: ServicesRun;
+  /** What the reader holds, or null before the frame has read it, for the tabs' locks. */
+  grants: readonly string[] | null;
   /** What sits under the rows: the state bar. */
   children?: ReactNode;
 }) {
@@ -192,7 +196,14 @@ export function PageHeader({
         </div>
       </AppShell.Topbar>
       {row && row.renderer === "tabs" && (
-        <SectionTabs row={row} path={route.path} query={route.query} counts={counts} runs={runs} />
+        <SectionTabs
+          row={row}
+          path={route.path}
+          query={route.query}
+          counts={counts}
+          runs={runs}
+          grants={grants}
+        />
       )}
       {children}
     </div>
@@ -276,6 +287,7 @@ export function SectionTabs({
   query,
   counts,
   runs,
+  grants,
 }: {
   row: WorkspaceRow;
   path: string[];
@@ -283,6 +295,12 @@ export function SectionTabs({
   counts: Record<string, string>;
   /** Which services the company runs: a tab reading one it does not is not drawn. */
   runs: ServicesRun;
+  /**
+   * What the reader holds, or null before the frame has read it: a tab the
+   * reader cannot open is locked like the sidebar's rows and the Settings
+   * column's (`grantsMissing`), never drawn as open to then refuse.
+   */
+  grants: readonly string[] | null;
 }) {
   const nav = useNavigator();
   const tabs = row.sections.filter((s) => s.tab !== false && serviceShown(s, runs));
@@ -307,7 +325,21 @@ export function SectionTabs({
       value={current.key}
       items={tabs.map((s) => {
         const Glyph = glyphFor(s.icon);
-        return { value: s.key, label: s.label, icon: <Glyph size="sm" />, count: counts[s.key] };
+        const needs = grants === null ? [] : grantsMissing(s, grants);
+        return {
+          value: s.key,
+          label:
+            needs.length > 0 ? (
+              <span className="side-locked" title={`Needs ${accessNames(needs)} access`}>
+                {s.label}
+                <LockMark needs={needs} />
+              </span>
+            ) : (
+              s.label
+            ),
+          icon: <Glyph size="sm" />,
+          count: counts[s.key],
+        };
       })}
       renderItem={({ item, className, isActive, children }) => (
         <a
@@ -615,12 +647,7 @@ export function SectionColumn({
                     label={
                       <span className="section-column-label">
                         {s.label}
-                        {needs.length > 0 && (
-                          <>
-                            <KeyGlyph size="xs" aria-hidden="true" />
-                            <span className="sr-only">, needs {accessNames(needs)} access</span>
-                          </>
-                        )}
+                        <LockMark needs={needs} />
                       </span>
                     }
                     badge={figure?.badge}

@@ -234,9 +234,10 @@ describe("the navigation grammar", () => {
     expect(run("workspace")).toEqual(["work", "knowledge", "artifacts", "live"]);
     expect(run("foot")).toEqual(["settings"]);
     expect(run("menu")).toEqual(["account"]);
-    // THE COMPANY'S FIRST ROW READS "Overview" under the Company heading, and
-    // is the company's own page everywhere else.
-    expect(workspaceRow("company")?.navLabel).toBe("Overview");
+    // THE COMPANY'S FIRST ROW IS "Overview", the same name in the sidebar,
+    // the trail and the palette, which finds it by "company" too.
+    expect(workspaceRow("company")?.label).toBe("Overview");
+    expect(DESTINATIONS.find((d) => d.key === "company")?.keywords).toContain("company");
   });
 
   // SETTINGS IS FOUR GROUPS, in this order, and lists only what lives in it.
@@ -709,7 +710,11 @@ describe("the breadcrumb", () => {
       "Org chart",
       "Roster",
     ]);
-    expect(crumbsFor(["company"]).map((c) => c.label)).toEqual(["Company"]);
+    // THE COMPANY'S LANDING IS ITS GROUP, THEN THE PAGE: the row reads
+    // Overview under the Company heading, and the trail says both.
+    expect(crumbsFor(["company"]).map((c) => c.label)).toEqual(["Company", "Overview"]);
+    expect(crumbsFor(["company"])[0]?.path).toBeUndefined();
+    expect(titleOf(crumbsFor(["company"]))).toBe("Overview");
     expect(crumbsFor(["company", "integrations"]).map((c) => c.label)).toEqual(["Integrations"]);
     expect(crumbsFor(["settings", "mcp-tools"]).map((c) => c.label)).toEqual([
       "Settings",

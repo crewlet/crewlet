@@ -50,7 +50,14 @@ import {
   type ReactNode,
 } from "react";
 import { Announcer, AppShell, useMediaMatch } from "@crewlethq/ui";
-import { DESTINATIONS, WORKSPACES, serviceShown, workspaceOf, workspaceRow } from "./nav.ts";
+import {
+  DESTINATIONS,
+  WORKSPACES,
+  landingPath,
+  serviceShown,
+  workspaceOf,
+  workspaceRow,
+} from "./nav.ts";
 import { useServicesRun } from "~/lib/services.ts";
 import { samePath, useNavigator, useRoute } from "./router.tsx";
 import { crumbsFor, titleOf, type Labels } from "./crumbs.ts";
@@ -483,7 +490,7 @@ function Frame({ children }: { children: ReactNode }) {
     ...Object.fromEntries(
       WORKSPACES.map((ws) => [
         `go.${ws.key}`,
-        { run: () => nav.to(ws.path), when: serviceShown(ws, runs) },
+        { run: () => nav.to(landingPath(ws, held, runs)), when: serviceShown(ws, runs) },
       ]),
     ),
     // READ AT THE PRESS, off the store, rather than through `useAgents`: the
@@ -623,6 +630,7 @@ function Frame({ children }: { children: ReactNode }) {
                 menu={menu}
                 star={!ownStar}
                 runs={runs}
+                grants={held}
               >
                 <StateBar degraded={degraded} coverage={coverage} />
               </PageHeader>

@@ -132,6 +132,7 @@ describe("the star", () => {
               topbar={
                 <PageHeader
                   runs={EVERY}
+                  grants={null}
                   crumbs={[]}
                   row={undefined}
                   counts={{}}
@@ -252,6 +253,7 @@ describe("the trail", () => {
           topbar={
             <PageHeader
               runs={EVERY}
+              grants={null}
               crumbs={[
                 { label: "Work", path: ["work"], icon: "square-kanban" },
                 { label: "All projects", switch: "project" },
@@ -310,6 +312,7 @@ describe("who is working", () => {
             topbar={
               <PageHeader
                 runs={EVERY}
+                grants={null}
                 crumbs={[]}
                 row={undefined}
                 counts={{}}
@@ -441,6 +444,7 @@ describe("the section tabs fold what does not fit into More", () => {
             query={new URLSearchParams()}
             counts={{ queue: "2", checklist: "0" }}
             runs={EVERY}
+            grants={null}
           />
         </Router>,
       );
@@ -501,6 +505,7 @@ test("a section's figure rides beside its name, and only if published", () => {
         query={new URLSearchParams()}
         counts={{ roster: "8", teams: "6" }}
         runs={EVERY}
+        grants={null}
       />
     </Router>,
   );
@@ -620,4 +625,32 @@ describe("Settings' section picker on a phone", () => {
     render(column(["settings", "models"]));
     expect(toggle().getAttribute("aria-expanded")).toBe("false");
   });
+});
+
+// A TAB THE READER CANNOT OPEN IS LOCKED, as the sidebar's rows and the
+// Settings column's are: Live's Turns, Agent-to-agent and Event log looked
+// open to a Tracker-only reader and then refused. Mutation: drop the grants
+// from the tabs and no tab names what it needs.
+test("a section tab the reader cannot open names the access it needs", () => {
+  const live = WORKSPACES.find((w) => w.key === "live")!;
+  const locked = live.sections.filter((s) => s.grants && !s.grants.includes("tracker"));
+  expect(locked.length).toBeGreaterThan(0);
+  render(
+    <Router>
+      <SectionTabs
+        row={live}
+        path={live.sections[0]!.path}
+        query={new URLSearchParams()}
+        counts={{}}
+        runs={EVERY}
+        grants={["tracker"]}
+      />
+    </Router>,
+  );
+  for (const s of locked) {
+    const tab = document.querySelector(`[data-section="${s.key}"]`)!;
+    expect(tab.textContent).toMatch(/needs Admin access/);
+  }
+  const open = document.querySelector(`[data-section="${live.sections[0]!.key}"]`)!;
+  expect(open.textContent).not.toMatch(/needs/);
 });

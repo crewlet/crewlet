@@ -70,11 +70,13 @@ import {
   StatusDot,
   useAppShell,
 } from "@crewlethq/ui";
-import { ActivityGlyph, KeyGlyph, PinGlyph, StarGlyph } from "@crewlethq/icons/glyphs";
+import { ActivityGlyph, PinGlyph, StarGlyph } from "@crewlethq/icons/glyphs";
+import { LockMark } from "../frame/LockMark.tsx";
 import { href, samePath, useRoute } from "~/app/router.tsx";
 import {
   SIDEBAR_GROUPS,
   WORKSPACES,
+  landingPath,
   pathShown,
   sectionOpen,
   serviceShown,
@@ -221,25 +223,34 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
         : {},
   };
 
+  // ONE CURRENT ROW. A pin, a star or a running turn that opens exactly this
+  // page is the row the reader followed, and the workspace row containing it
+  // gives the mark up: both carried the current fill and `aria-current`.
+  const viewKey = route.query.get("view") ?? "";
+  const pinned = usePinned({
+    owner: viewer.owner,
+    tracker: viewer.tracker && runs.tracker,
+    enabled: !unserved,
+  });
+  // NOT A PLACE THE COMPANY DOES NOT RUN THE SERVICE FOR: its star's row is
+  // drawn nowhere, and the star is kept until it runs it again.
+  const stars = useStarred().filter((s) => pathShown(s.path, runs));
+  const shortcutHere =
+    (!unserved && pinnedHere(pinned, route.path, viewKey)) ||
+    stars.some((s) => samePath(route.path, s.path)) ||
+    running.shown.some((row) => samePath(route.path, watchLink(turnIdOf(row)).path));
+
   const row = (ws: WorkspaceRow) => {
     const needs = held === null ? [] : workspaceMissing(ws, held);
     return (
       <NavRow
         key={ws.key}
-        label={
-          needs.length > 0 ? (
-            <Locked
-              label={ws.navLabel ?? ws.label}
-              needs={needs}
-              said={`needs ${accessNames(needs)} access`}
-            />
-          ) : (
-            (ws.navLabel ?? ws.label)
-          )
-        }
+        label={needs.length > 0 ? <Locked label={ws.label} needs={needs} /> : ws.label}
         icon={ws.icon}
-        path={ws.path}
-        current={here === ws.key}
+        // WHERE THE ROW OPENS for this reader ([landingPath]): Settings' row
+        // opens the first of its sections the reader may open.
+        path={landingPath(ws, held, runs)}
+        current={here === ws.key && !shortcutHere}
         {...figures[ws.key]}
       />
     );
@@ -319,16 +330,11 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
             cost that list and never the navigation above it. */}
         {!unserved && (
           <RailBoundary label="Pinned" resetKey={at}>
-            <PinnedSection
-              path={route.path}
-              viewKey={route.query.get("view") ?? ""}
-              owner={viewer.owner}
-              tracker={viewer.tracker && runs.tracker}
-            />
+            <PinnedSection path={route.path} viewKey={viewKey} pinned={pinned} />
           </RailBoundary>
         )}
         <RailBoundary label="Starred" resetKey={at}>
-          <StarredSection path={route.path} />
+          <StarredSection path={route.path} stars={stars} />
         </RailBoundary>
         {/* LAST, so a turn starting or ending moves nothing above it. */}
         <RailBoundary label="Running" resetKey={at}>
@@ -340,15 +346,14 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
 }
 
 /**
- * A row's label with the lock beside it: its title names what would open it,
- * and a screen reader hears `said` after the label.
+ * A row's label with the lock beside it ([LockMark]): its title names what
+ * would open it, and a screen reader hears it after the label.
  */
-function Locked({ label, needs, said }: { label: string; needs: readonly Grant[]; said: string }) {
+function Locked({ label, needs }: { label: string; needs: readonly Grant[] }) {
   return (
     <span className="side-locked" title={`Needs ${accessNames(needs)} access`}>
       {label}
-      <KeyGlyph size="xs" aria-hidden="true" />
-      <span className="sr-only">, {said}</span>
+      <LockMark needs={needs} />
     </span>
   );
 }
@@ -419,31 +424,54 @@ function NavRow({ label, icon, glyph, lead, path, query, current, badge, count }
  * serves, from the one listing the gallery and the page read (`usePins`), and
  * a press anywhere moves this list at once.
  */
-function PinnedSection({
-  path,
-  viewKey,
+function usePinned({
   owner,
   tracker,
+  enabled,
 }: {
-  path: string[];
-  /** The `view=` the reader is on, which is what marks a pinned row current. */
-  viewKey: string;
   /** The name the reader's own record is kept under, or "" for nobody's. */
   owner: string;
   /** Whether the reader holds Tracker, which saved views need. */
   tracker: boolean;
+  /** False where the engine serves this browser nothing at all. */
+  enabled: boolean;
 }) {
   const views = useQuery(
     "work_saved_views",
     { counts: true },
     {
-      enabled: tracker && owner !== "",
+      enabled: enabled && tracker && owner !== "",
       pollMs: 120_000,
     },
   );
-  const artifacts = usePins();
-  const pinned = tracker ? (views.data?.views ?? []).filter((v) => v.pinned && v.id) : [];
-  const pinnedArtifacts = artifacts.data?.items ?? [];
+  const artifacts = usePins(enabled);
+  return {
+    views: tracker ? (views.data?.views ?? []).filter((v) => v.pinned && v.id) : [],
+    artifacts: artifacts.data?.items ?? [],
+  };
+}
+
+type Pinned = ReturnType<typeof usePinned>;
+
+/** Whether one of the reader's pins opens exactly the page they are on. */
+function pinnedHere(pinned: Pinned, path: readonly string[], viewKey: string): boolean {
+  return (
+    pinned.views.some((v) => samePath(path, viewRun(v).path) && viewKey === v.key) ||
+    pinned.artifacts.some((item) => samePath(path, artifactPath(item.id)))
+  );
+}
+
+function PinnedSection({
+  path,
+  viewKey,
+  pinned: { views: pinned, artifacts: pinnedArtifacts },
+}: {
+  path: string[];
+  /** The `view=` the reader is on, which is what marks a pinned row current. */
+  viewKey: string;
+  /** What the reader pinned ([usePinned]). */
+  pinned: Pinned;
+}) {
   if (pinned.length === 0 && pinnedArtifacts.length === 0) return null;
   return (
     <SidebarNav.Group label="Pinned">
@@ -495,11 +523,7 @@ function PinnedSection({
  * not here. A stored star whose path no longer resolves is dropped when the
  * list is read (`lib/starred.ts`), so every row here leads somewhere.
  */
-function StarredSection({ path }: { path: string[] }) {
-  // NOT A PLACE THE COMPANY DOES NOT RUN THE SERVICE FOR: its row is drawn
-  // nowhere, and its star is kept until it runs it again.
-  const runs = useServicesRun();
-  const stars = useStarred().filter((s) => pathShown(s.path, runs));
+function StarredSection({ path, stars }: { path: string[]; stars: ReturnType<typeof useStarred> }) {
   if (stars.length === 0) return null;
   return (
     <SidebarNav.Group label="Starred">

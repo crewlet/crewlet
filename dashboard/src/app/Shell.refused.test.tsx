@@ -212,6 +212,9 @@ test("a session holding no app finds Settings unlocked, and Spend open in it", a
   const settings = within(foot).getByRole("link", { name: /^Settings/ });
   expect(settings.querySelector(".side-locked")).toBeNull();
   expect(settings.textContent).toBe("Settings");
+  // AND IT OPENS WHERE THE READER MAY READ: Models & keys is Admin's, so the
+  // row leads to Token spend rather than to a refusal ([landingPath]).
+  await waitFor(() => expect(settings.getAttribute("href")).toBe("#/settings/spend"));
   const column = await screen.findByRole("navigation", { name: "Settings sections" });
   const spend = within(column)
     .getAllByRole("link")

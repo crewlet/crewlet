@@ -654,6 +654,13 @@
   flex: 0 1 auto;
   min-width: 0;
 }
+/* A SCREEN WITH NO ACTIONS LEAVES NO GAP: the empty slot was still a flex
+   item, and the row's gap stood the star 8px short of the bar's gutter on
+   every page that adds nothing, out of line with the last control on every
+   page that does. */
+.page-actions:empty {
+  display: none;
+}
 
 /* THE FRAME'S STAR AND COPY LINK are one element only so the phone rule below
    can fold them with one selector; on a wide bar they are the controls row's

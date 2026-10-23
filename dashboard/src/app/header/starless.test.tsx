@@ -44,6 +44,7 @@ function bar(workspace: Workspace) {
               title={row.label}
               workspace={workspace}
               runs={{ tracker: true, knowledge: true }}
+              grants={null}
             />
           }
         />

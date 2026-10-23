@@ -201,12 +201,6 @@ export interface Section {
 export interface WorkspaceRow {
   key: Workspace;
   label: string;
-  /**
-   * The row's words in the sidebar, where they differ from its name in the
-   * trail and the palette: Company's first row reads "Overview" under the
-   * Company heading, and the page it opens is the company's own.
-   */
-  navLabel?: string;
   /** A glyph name, for the reason [Section.icon] gives. */
   icon: GlyphName;
   /** The workspace's landing address. */
@@ -480,12 +474,15 @@ export const WORKSPACES: WorkspaceRow[] = [
     // THE COMPANY'S OWN PAGE: its name, mission, vision and clock, which
     // every signed-in reader reads (the charter is the org projection's).
     key: "company",
-    label: "Company",
-    navLabel: "Overview",
+    // ONE NAME EVERYWHERE: the row reads "Overview" under the Company
+    // heading, and the page it opened was titled "Company", so the active row
+    // and the page disagreed. The trail says both, Company › Overview
+    // (`crumbs.ts`), and the palette finds it by either.
+    label: "Overview",
     icon: "building-complex",
     path: ["company"],
     hint: "Who the company is: its name, mission, vision and clock",
-    keywords: ["charter", "mission", "vision", "timezone", "general"],
+    keywords: ["company", "charter", "mission", "vision", "timezone", "general"],
     chord: "c",
     place: "company",
     renderer: "none",
@@ -1158,8 +1155,10 @@ export const DESTINATIONS: Destination[] = WORKSPACES.flatMap((row) => {
     path: row.path,
     hint: row.hint,
     // A LANDING PAGE IS ALSO ITS LANDING SECTION, so it is found by that
-    // section's words as well as the workspace's, and locked by that
-    // section's grants where the workspace names none of its own.
+    // section's words as well as the workspace's, and its grants are what
+    // opens THAT PAGE (a Home widget summarising it reads them). The
+    // palette's entry for the workspace is locked as the workspace is, and
+    // opens where the reader may read ([landingPath], `palette/hits.ts`).
     ...keywordsOf([...(row.keywords ?? []), ...(own?.keywords ?? [])]),
     ...grantsOf(row.grants ?? own?.grants),
     ...serviceOf(row.service ?? own?.service),
@@ -1282,6 +1281,26 @@ export function workspaceOpen(row: WorkspaceRow, held: readonly string[]): boole
   if (own.some((s) => s.personal)) return true;
   if (!sectionOpen({ grants: row.grants }, held)) return false;
   return own.length === 0 || own.some((s) => sectionOpen(s, held));
+}
+
+/**
+ * Where a workspace's row, its `g` chord and its palette entry open for a
+ * reader holding `held`: its own path, or, where that landing section is
+ * closed to them, the first of its sections they can open and the company
+ * runs. Settings lands on Models & keys, which is Admin's, and a reader
+ * holding only Tracker was sent to a refusal although Token spend and
+ * Expensive tasks are theirs. `held` null is a reader not yet read: the
+ * workspace's own path, as the frame draws every lock only once it knows.
+ */
+export function landingPath(
+  row: WorkspaceRow,
+  held: readonly string[] | null,
+  runs: ServicesRun,
+): string[] {
+  if (held === null) return row.path;
+  const own = row.sections.find((s) => samePath(s.path, row.path));
+  if (!own || sectionOpen(own, held)) return row.path;
+  return row.sections.find((s) => serviceShown(s, runs) && sectionOpen(s, held))?.path ?? row.path;
 }
 
 /**

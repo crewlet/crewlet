@@ -34,7 +34,7 @@
 import { avatarOf, type AgentAvatar } from "~/lib/avatar.ts";
 import type { GlyphName } from "@crewlethq/icons/glyphs";
 import { unitRoute } from "~/lib/seats.ts";
-import { workspaceRow, type Section, type WorkspaceRow } from "./nav.ts";
+import { SIDEBAR_GROUPS, workspaceRow, type Section, type WorkspaceRow } from "./nav.ts";
 import { ITEM_KEY_SHAPE, resolve, type SignInScreen } from "./routes.ts";
 import { ALL_PROJECTS, LENS_LABELS, type ScopeAt } from "./scope.ts";
 
@@ -208,9 +208,13 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
   };
 
   switch (where.screen) {
+    case "overview":
+      // THE GROUP, THEN THE PAGE: the row reads "Overview" under the Company
+      // heading, and the trail says both. The group is not a link: it would
+      // lead to the page it is on.
+      return [{ label: rootLabel(row), icon: row.icon }, { label: row.label }];
     case "home":
     case "inbox":
-    case "overview":
     case "policies":
     case "org-chart":
     case "budgets":
@@ -435,6 +439,17 @@ function allProjects(): Crumb {
 
 function root(row: WorkspaceRow, link: boolean): Crumb {
   return link
-    ? { label: row.label, path: row.path, icon: row.icon }
-    : { label: row.label, icon: row.icon };
+    ? { label: rootLabel(row), path: row.path, icon: row.icon }
+    : { label: rootLabel(row), icon: row.icon };
+}
+
+/**
+ * What the trail calls a workspace: its own name, or, for the row that IS a
+ * sidebar group's landing (its path the group's own segment, Company's
+ * Overview at `#/company`), the group's, so a mistyped `#/company/…` reads
+ * "Company › Not found" rather than "Overview › Not found".
+ */
+function rootLabel(row: WorkspaceRow): string {
+  const group = SIDEBAR_GROUPS.find((g) => g.place === row.place && g.label !== "");
+  return group && row.path.length === 1 && row.path[0] === row.place ? group.label : row.label;
 }

@@ -692,7 +692,9 @@ glyph, listed for every reader the engine serves because a share alone admits
 a reader to Artifacts, and read from the one listing All and an artifact's
 Pin item read (`lib/artifacts/pins.ts`), so a pin made anywhere moves the
 sidebar at once),
-**Starred** (drawn only when there is one), and **Running** — one row per seat
+**Starred** (drawn only when there is one; **one row is current**: a pin, a
+star or a running turn that opens exactly the page on screen is the current
+row, and the workspace row containing it gives the mark up), and **Running** — one row per seat
 the engine says is working, drawn while one is: the seat's badge with its
 status glyph, its name, the key of the item its turn is charged to as the lead,
 and a link that WATCHES the turn (its Transcript, the phase it is on open, or
@@ -1168,7 +1170,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/artifacts/new/doc` · `#/artifacts/new/slides` · `#/artifacts/new/sheet` · `#/artifacts/new/design` · `#/artifacts/new/dashboard` · `#/artifacts/new/html` | **New doc**, **New slide deck**, **New sheet**, **New design**, **New dashboard**, **New HTML page**: each kind's own create page, in one shared frame (the artifact page's slim bar, then a full-bleed body the kind draws), each a chunk of its own. A doc or a deck starts from the engine's starter and a sheet blank or from the Review sheet template, owned by the reader *(needs Artifacts access)*. A design starts as the canvas a person lays out: a starting layout (landing page, app screens, one screen at three sizes, a presentation or a blank canvas), then boards shaped on the canvas (Frame `F` places one; Text and Sticky place notes) with a panel that follows the selection (a board's name, frame preset or size, order and brief) and the hand-off panel beside it (the design's name, brief and references and who builds it); Create and ask publishes the boards as placeholder pages, shares the design with the chosen agent as an editor, files the agent a task carrying the brief and every board, links the design to it, and opens the design, whose boards fill in as the agent publishes. Every page offers **Ask an agent** in its bar, which opens the hand-off panel beside the page rather than replacing it ([Asking an agent from a create page is a panel, not a mode](#asking-an-agent-from-a-create-page-is-a-panel-not-a-mode)); a design and an HTML page arrive with it open where it fits beside the page. The gallery's Make row and its New menu open them | `item=` (the task it is made for, which lists it on that task's Artifacts card) · `panel=ask\|closed` (the hand-off panel; `closed` on a design or an HTML page, which open with it) |
 | `#/artifacts/new` | Not a page: an earlier link, rewritten in place to its kind's page when it carries `kind=`, and to the gallery when it does not | `kind=` (read once, then dropped) |
 | `#/artifacts/{id}` | **Artifact**: addressed by its id, drawn under ONE slim bar in the frame's place ([An open artifact is the screen](#an-open-artifact-is-the-screen)). A page runs in a sandboxed frame on the artifact origin, edge to edge, a doc is rendered here tab by tab by the dashboard's own Markdown renderer with its outline beside it, Edit (the text in place, in the rich editor, and the tabs: add, rename, reorder, remove; each save a version, a raced save merged onto the newer one) and Print, a deck is drawn from its canonical tree with Edit, Grid and Present in the bar, a sheet is drawn from its schema. The bar holds the way back, the title (renamed in place by an editor), the version chip, the kind's views, who is here, and the controls that open a panel at the side: Details (what the page header and its fact line used to say), History (versions, Compare, Restore, labels and the change record), Data where it keeps any (rows, the schema editor and every write, with Undo), People (who is here, with Follow) and, from More, Settings (details, what it can do, its owner, the trash); Share and More close the bar. A reader with no relation is told it is not there or not theirs, in one card | `panel=details\|history\|data\|people\|settings` (pushes; the old `tab=` and `rail=people` are read as the panel they became and rewritten) · `expand=1` (the panel takes the workspace) · `version=` · `against=` · `lens=` · `sheet=` (which collection a sheet draws) · `doctab=` (which tab of a doc is on show) · `data=rows\|schema\|history` · `mode=grid\|present\|presenter` · `slide=` · `follow=` |
-| `#/settings/models` · `#/settings/models/{id}` | **Settings › Models & keys**, the column's landing and the Settings row's address, every `providers.llm` entry, the keys it rotates through by variable name, which a vendor is refusing and when each comes back (`credential_pool`), and the seats whose chain names it; one model's keys whole and its seats, and its **Edit** *(needs Admin access)*. `{id}` is the entry's config key, the name a seat's `llm:` writes | |
+| `#/settings/models` · `#/settings/models/{id}` | **Settings › Models & keys**, the column's landing and the Settings row's address for a reader who may open it (one who may not is taken to the first section they can, Token spend for a reader holding Tracker), every `providers.llm` entry, the keys it rotates through by variable name, which a vendor is refusing and when each comes back (`credential_pool`), and the seats whose chain names it; one model's keys whole and its seats, and its **Edit** *(needs Admin access)*. `{id}` is the entry's config key, the name a seat's `llm:` writes | |
 | `#/settings/mcp-tools` · `#/settings/mcp-tools/{tool}` · `#/settings/mcp-tools/servers/{name}` | **MCP Tools**, the engine's runtime beside the models, every MCP server with what each node did with it, and every tool a seat can call, by origin *(needs Admin access, like every company setting: it is where MCP servers are added and their templates read; which tools a seat has is on that seat's page, from the overview's `tools` push)*. ONE tail segment is a tool and two are an origin filter, discriminated on LENGTH, because a tool name is a third party's string | `q=` · `origin=` · `add=server` (the add form) |
 | `#/settings/secrets` · `#/settings/secrets/{name}` | **Secrets** — names and provenance, never values *(needs Admin access)* | |
 | `#/settings/limits` | **Limits**, the caps the engine holds every turn to, as it enforces them: the turn's guardrails (review rounds, tool rounds, delegation depth), delegation, notifications and a scheduled turn's timeout, each saying whether the company document sets it or it is the engine's default *(needs Admin access)*. Read-only | |
@@ -2166,7 +2168,9 @@ show its ancestry beside the controls takes a line of its own.
   tabs that fit, in the workspace's order, and a "More" menu at its end holds
   the rest, each with its figure. The tab you are on is always drawn, taking
   the last place that fits; a tab only ever leaves from the end, so the order
-  never changes with the width. The widths are measured, and measured again
+  never changes with the width. A tab the reader cannot open draws the same
+  lock the sidebar and the Settings column draw (`LockMark`), naming the access
+  it needs. The widths are measured, and measured again
   whenever the strip or a tab changes size (a figure arriving, the web font
   loading, the density preference). **An object's own tabs fold the same
   way** (`ObjectTabs`, a seat's Overview … Settings): the kit's underline row
@@ -3230,8 +3234,12 @@ squeezed out by its handle and unit), **Edit org**, and **Add seat**, which goes
 to the builder for an admin and is held with its reason for
 everybody else.
 On a phone Edit org folds into the bar's More menu, so Add seat stays in view.
-It is the same bar on every section of the Org chart and on Company ›
-Schedules, where a found seat opens beside the list as it does on Teams.
+It is the same bar on every section of the Org chart. **Edit org is one
+control** (`EditOrgButton`): the chart's bar, Company › Overview and Company ›
+Policies draw the same secondary button, asked the builder's own gate, so a
+reader who may not write the chart sees it held with the reason rather than a
+link to a refusal. Company › Schedules is its own row and its bar is its own:
+it carries none of the chart's controls.
 The section tabs carry the Roster and Teams figures on every section of the
 Org chart, as the kit's count beside each name (the figure an object's own
 tabs draw). Those sections, and Schedules, open on their work, with no
@@ -3858,6 +3866,11 @@ is one nobody reads. An applied or pending change closes it with a toast; an
 unknown one closes it with the toast that stays, carrying Retry.
 
 ### It remembers, and it closes
+
+An empty palette lists every place **under the sidebar's own headings** (Go to,
+Company, Workspace, Settings and Account), so the tree the sidebar draws is the
+palette's too, and a workspace's entry opens where its row does: Settings on
+the first section the reader may open (`landingPath`), never on a lock.
 
 An empty palette offers **recents** — the last few objects this reader opened,
 most recently visited first, per browser AND PER READER: recents and stars are

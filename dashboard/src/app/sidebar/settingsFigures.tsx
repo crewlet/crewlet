@@ -161,9 +161,14 @@ export function useSettingsSidebar({
     enabled: backups,
     pollMs: SETTINGS_POLL_MS.retention,
   });
-  return settingsFigures({
+  const figures = settingsFigures({
     health,
     fleet: !nodes ? null : published ? published.answer : fleet.data,
     retention: backups ? retention.data : null,
   });
+  // A LOCKED ROW DRAWS NO FIGURE, whatever answer it would come from: Nodes
+  // and Configuration read the health push every reader holds, and drew "1"
+  // and "epoch 1" beside their locks while the equally locked Backups row
+  // drew nothing. Every locked row is drawn the same way.
+  return Object.fromEntries(Object.entries(figures).filter(([key]) => opens(key, grants)));
 }

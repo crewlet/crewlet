@@ -10,6 +10,8 @@
  * "can I trust what I am looking at", and only three screens publish them.
  */
 
+import { toggleStar } from "~/lib/starred.ts";
+import { noteReader } from "~/lib/reader.ts";
 import { useRef, type ReactNode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useSearchTarget } from "./searchTarget.ts";
@@ -534,6 +536,26 @@ describe("the sidebar's figures", () => {
     expect(current).not.toContain(watching("t-a"));
   });
 
+  // ONE CURRENT ROW: a starred page's Starred row is the one the reader
+  // followed, and the workspace row containing it gives the mark up. Both
+  // carried the current fill and `aria-current`. Mutation: mark the workspace
+  // row current whatever a shortcut says and the list holds two.
+  test("a starred page is current in Starred alone, not in its workspace too", async () => {
+    location.hash = "#/live/events";
+    noteReader("p-star");
+    const { store, socket } = answering({});
+    mountShell(store, socket);
+    await settle();
+    act(() => void toggleStar({ path: ["live", "events"], label: "Event log", workspace: "live" }));
+    await settle();
+    const nav = screen.getByRole("navigation", { name: "Navigation" });
+    const current = [...nav.querySelectorAll('a[aria-current="page"]')].map((a) =>
+      a.getAttribute("href"),
+    );
+    expect(current).toEqual(["#/live/events"]);
+    act(() => void toggleStar({ path: ["live", "events"], label: "Event log", workspace: "live" }));
+  });
+
   // `g r` IS "TAKE ME TO THE RUNNING TURN": the one turn's watch link when one
   // seat is working, and Now running — every one of them — when several are,
   // or none.
@@ -965,6 +987,26 @@ describe("the page header", () => {
     mountShell(store, socket);
     await settle();
     expect(asked.map((a) => a.what).filter((w) => OPERATOR_ANSWERS.includes(w))).toEqual([]);
+  });
+
+  // A LOCKED ROW DRAWS NO FIGURE: Nodes and Configuration read the health
+  // push every reader holds, and drew "1" and "epoch 1" beside their locks
+  // while the equally locked Backups row drew nothing. Mutation: drop the
+  // gate and the locked rows count.
+  test("a Settings row the reader cannot open draws no figure", async () => {
+    location.hash = "#/settings/spend";
+    const { store, socket } = answering({
+      viewer: { login: "lee", grants: ["tracker"], handle: "", owner: "lee", name: "", kind: "" },
+    });
+    mountShell(store, socket);
+    act(() => store.applyHealth(healthFrame({ applied_epoch: 2, nodes: 1 })));
+    await settle();
+    const column = screen.getByRole("navigation", { name: "Settings sections" });
+    const row = (start: string) =>
+      Array.from(column.querySelectorAll("a")).find((a) => a.textContent?.startsWith(start));
+    expect(row("Nodes")?.textContent).toMatch(/needs Admin/);
+    expect(row("Nodes")?.textContent).not.toMatch(/node live/);
+    expect(row("Configuration")?.textContent).not.toMatch(/epoch/);
   });
 
   // A FIGURE SAYS WHAT IT COUNTS: the applied epoch read "e2", a code.

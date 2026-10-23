@@ -138,6 +138,7 @@ import {
   TASK_HITS,
   colleagueSendable,
   commandHits,
+  destinationGroups,
   destinationHits,
   idHits,
   matchingSeats,
@@ -963,11 +964,12 @@ export function CommandPalette({
     if (!term) {
       push("recent", "Recent", asItems(recentHits(recents, nav, runs)));
       push("running", "Running now", runningRows());
-      push(
-        "go",
-        "Go to",
-        asItems([...destinationHits("", nav, Infinity, standing, runs), ...switchHits]),
-      );
+      // EVERY PLACE, UNDER THE SIDEBAR'S OWN HEADINGS ([destinationGroups]),
+      // and Switch project with Work's, where it belongs.
+      for (const g of destinationGroups(nav, standing, runs)) {
+        const extra = g.place === "workspace" ? switchHits : [];
+        push(`go-${g.place}`, g.label, asItems([...g.hits, ...extra]));
+      }
     } else {
       push("ids", "Open by id", asItems(idHits(term, nav)));
       push(

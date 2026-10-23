@@ -1452,6 +1452,9 @@ test("the work search form wraps before its phrase field goes under a readable w
 test("the lens slot vanishes when empty and takes the slack beside the trail when not", () => {
   const css = sheet("frame.css");
   expect(block(css, ".page-lenses:empty")).toMatch(/display:\s*none/);
+  // AND SO DOES THE ACTIONS SLOT: empty, it took the row's gap and stood the
+  // star 8px short of the gutter.
+  expect(block(css, ".page-actions:empty")).toMatch(/display:\s*none/);
   expect(block(css, ".page-lenses")).toMatch(/flex:\s*1 0 auto/);
   const trail = block(css, ".page-bar:has(> .page-lenses:not(:empty)) > .page-trail");
   expect(trail).toMatch(/flex:\s*0 100 auto/);
