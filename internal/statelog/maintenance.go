@@ -193,11 +193,11 @@ func PermitPhase(op coord.MaintenanceOperation, ev PhaseEvidence) (coord.Mainten
 //
 // TWO CONDITIONS AND NO COMPARISON.
 //
-//  1. Every participant that is not excluded has acknowledged THIS operation
-//     and THIS attempt, from seal mode, with an incarnation that is not the
-//     one recorded in the baseline. Inequality is the evidence: an incarnation
-//     is minted per process, so a different one means the process holding any
-//     outstanding request is gone.
+//  1. Every participant that is not excluded has an acknowledgement the seal
+//     takes ([SealRestarts]): this operation, this attempt, from seal mode,
+//     with an incarnation that is not the one recorded in the baseline.
+//     Inequality is the evidence: an incarnation is minted per process, so a
+//     different one means the process holding any outstanding request is gone.
 //  2. Every journal record for this operation is completed or retired.
 //
 // The second used to be written as "no record from an attempt earlier than
@@ -206,11 +206,41 @@ func PermitPhase(op coord.MaintenanceOperation, ev PhaseEvidence) (coord.Mainten
 // the schedule the mechanism was built for, and a strictly-earlier comparison
 // passes straight over it. There is nothing to compare now.
 func SealHolds(op coord.MaintenanceOperation, acks []coord.MaintenanceAck) (bool, string) {
+	_, missing := SealRestarts(op, acks)
+	for _, record := range op.Journal {
+		if record.State == coord.JournalIssued {
+			missing = append(missing, fmt.Sprintf(
+				"a write attempt from attempt %d by %s is unresolved",
+				record.Attempt, record.By))
+		}
+	}
+	if len(missing) > 0 {
+		return false, strings.Join(missing, "; ")
+	}
+	return true, ""
+}
+
+// SealRestarts reads the acknowledgements as the barrier does: whether every
+// participant that is not excluded has one the seal takes, and which process
+// each names.
+//
+// THE ONE STATEMENT OF WHICH ACKNOWLEDGEMENT A SEAL TAKES. The barrier retires
+// the journal on it and [SealHolds] holds on it, and a retirement read from
+// another rule than the seal's would retire a record the seal then refuses, or
+// the reverse. The coordinator kept a copy of this rule of its own, so a
+// change to one had to be found in the other.
+//
+// Restarted is each participant's acknowledging process when every one is
+// taken, and nil when any is not. Missing says what is wrong with each one that
+// is not, in participant order.
+func SealRestarts(op coord.MaintenanceOperation, acks []coord.MaintenanceAck) (
+	restarted map[string]string, missing []string) {
+
 	byNode := make(map[string]coord.MaintenanceAck, len(acks))
 	for _, ack := range acks {
 		byNode[ack.NodeID] = ack
 	}
-	var missing []string
+	restarted = map[string]string{}
 	for _, node := range op.Participants {
 		if slices.Contains(op.Excluded, node) {
 			// AN OPERATOR'S ASSERTION that this participant's process
@@ -241,19 +271,14 @@ func SealHolds(op coord.MaintenanceOperation, acks []coord.MaintenanceAck) (bool
 		case ack.Incarnation == op.WriteIncarnations[node]:
 			missing = append(missing, node+" acknowledged with the same "+
 				"incarnation it was baselined at, so its process did not restart")
-		}
-	}
-	for _, record := range op.Journal {
-		if record.State == coord.JournalIssued {
-			missing = append(missing, fmt.Sprintf(
-				"a write attempt from attempt %d by %s is unresolved",
-				record.Attempt, record.By))
+		default:
+			restarted[node] = ack.Incarnation
 		}
 	}
 	if len(missing) > 0 {
-		return false, strings.Join(missing, "; ")
+		return nil, missing
 	}
-	return true, ""
+	return restarted, nil
 }
 
 // BarrierEvidence is what a verified global stop observed.
