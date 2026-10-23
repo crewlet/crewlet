@@ -7798,7 +7798,9 @@ of the one Alarms card with its warning glyph rather than a callout framed
 inside it. The backup they ask for is the page bar's **Take a backup**, the
 only one on the screen. Then the record of
 backups, then **Replication**, then **Log retention**: a row per log with its
-facts and what holds its trim in words ("held by the backup"), and its six
+facts and what holds its trim in words ("held by the backup"), said once in
+the card's head where most logs share it ("Held by the backup on every log"),
+so only a log that differs carries the tag, and its six
 checks behind a disclosure, each in words beside the term's own name, with the
 remedy printed only for the check that decides the trim. **Snapshots and
 joining** ends the page; a single node, which takes no snapshots by design,
