@@ -58,19 +58,25 @@ import {
   ArtifactMakeRow,
   ArtifactNameCell,
   Button,
+  Card,
+  Inline,
   Input,
   LivePreviewBudgetProvider,
-  Meter,
+  Section,
   SegmentedControl,
   Select,
   Skeleton,
+  Spacer,
+  Stack,
   TableEntityCell,
+  Text,
   PrincipalAvatar,
 } from "@crewlethq/ui";
 import {
+  ChevronRightGlyph,
+  GaugeGlyph,
   LayoutGridGlyph,
   ListGlyph,
-  PinGlyph,
   PlusGlyph,
   SearchGlyph,
   TrashGlyph,
@@ -88,7 +94,7 @@ import {
 } from "~/app/routes.ts";
 import { QueryState } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { fmtBytes, fmtCount, fmtDate, relTime } from "~/lib/format.ts";
+import { fmtCount, fmtDate, relTime } from "~/lib/format.ts";
 import { STORAGE_KEYS } from "~/lib/storage.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useClient } from "~/lib/store-hooks.ts";
@@ -456,14 +462,13 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
           good.
         </p>
       )}
+      {/* THE KIT'S SECTION HEADING for every titled part of the gallery,
+          as every other page's sections take: three local titles here were
+          16px, 16px and 14px at two weights. */}
       {showPinned && (
-        <section className="artifacts-group" aria-labelledby="artifacts-pinned">
-          <h2 className="artifacts-group-title" id="artifacts-pinned">
-            <PinGlyph size="sm" aria-hidden="true" />
-            Pinned
-          </h2>
+        <Section title="Pinned" className="artifacts-group">
           <Listing items={pinned.items} view={view} name="artifacts-pinned" />
-        </section>
+        </Section>
       )}
       {listing.first.loading && <GallerySkeleton shape={shape} />}
       <QueryState
@@ -489,17 +494,14 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
           // UNDER PINNED, THE REST IS A GROUP TOO: a titled grid over an
           // untitled one read as the pins' grid running on.
           (showPinned ? (
-            <section className="artifacts-group" aria-labelledby="artifacts-recent">
-              <h2 className="artifacts-group-title" id="artifacts-recent">
-                Recent
-              </h2>
+            <Section title="Recent" className="artifacts-group">
               {rest}
-            </section>
+            </Section>
           ) : (
             rest
           ))}
       </QueryState>
-      {viewer.admin && section === "all" && !trashed && !filtered && <Usage />}
+      {viewer.admin && section === "all" && !trashed && !filtered && <StorageRow />}
     </LivePreviewBudgetProvider>
   );
 }
@@ -511,12 +513,9 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
 function MakeRow() {
   const runs = useServicesRun();
   return (
-    <section className="artifacts-make" aria-labelledby="artifacts-make-title">
-      <h2 className="artifacts-make-title" id="artifacts-make-title">
-        {MAKE_TITLE}
-      </h2>
+    <Section title={MAKE_TITLE}>
       <ArtifactMakeRow
-        aria-labelledby="artifacts-make-title"
+        aria-label={MAKE_TITLE}
         items={offeredKinds(runs).map((k) => ({
           kind: k,
           label: MAKE_WORDS[k],
@@ -524,7 +523,7 @@ function MakeRow() {
           href: href(newArtifactPath(k)),
         }))}
       />
-    </section>
+    </Section>
   );
 }
 
@@ -897,70 +896,32 @@ function Listing({
 }
 
 /**
- * The company's artifacts and datastores against the plan's quotas: an
- * administrator's, as one quiet line at the foot of All, each quota a figure
- * with a thin bar under it.
- *
- * THE COUNT IS THE COMPANY'S, not the listing's: it holds every artifact the
- * quota is charged for, the ones in anybody's trash until they are deleted for
- * good and the private ones no listing shows this reader, so it says so
- * rather than leaving "12 of 50k" over eleven cards to read as a mistake.
+ * Where the company's storage is read: Settings › File storage, which holds
+ * what the company keeps against the plan's quotas. A quiet related row at the
+ * foot of All for an administrator, the one reader that page is for: the
+ * quotas themselves were this gallery's foot once, the one block on it about
+ * the engine's storage rather than about artifacts a reader opens.
  */
-function Usage() {
-  const artifacts = useQuery("artifact_usage", undefined, { pollMs: GALLERY_POLL_MS });
-  const data = useQuery("artifact_data_usage", undefined, { pollMs: GALLERY_POLL_MS });
-  const a = artifacts.data;
-  const d = data.data;
-  if (artifacts.error || data.error || !a || !d) return null;
-  const quotas = [
-    {
-      key: "files",
-      label: "Files",
-      value: a.usage.bytes,
-      max: a.limits.company_bytes,
-      text: `${fmtBytes(a.usage.bytes)} of ${fmtBytes(a.limits.company_bytes)}`,
-    },
-    {
-      key: "artifacts",
-      label: "Artifacts",
-      value: a.usage.artifacts,
-      max: a.limits.artifacts,
-      text: `${fmtCount(a.usage.artifacts)} of ${fmtCount(a.limits.artifacts)}`,
-    },
-    {
-      key: "data",
-      label: "Data",
-      value: d.usage.footprint,
-      max: d.data_bytes,
-      text: `${fmtBytes(d.usage.footprint)} of ${fmtBytes(d.data_bytes)}`,
-    },
-  ];
+function StorageRow() {
   return (
-    <footer className="artifacts-storage" aria-labelledby="artifacts-storage-title">
-      <h2 className="artifacts-storage-title" id="artifacts-storage-title">
-        Company storage
-      </h2>
-      <dl className="artifacts-storage-quotas">
-        {quotas.map((quota) => (
-          <div key={quota.key} className="artifacts-storage-quota">
-            <dt>{quota.label}</dt>
-            <dd>
-              <span className="artifacts-storage-figure">{quota.text}</span>
-              <Meter
-                hideLabel
-                size="compact"
-                label={quota.label}
-                value={quota.value}
-                max={quota.max}
-                valueText={quota.text}
-              />
-            </dd>
-          </div>
-        ))}
-      </dl>
-      <p className="artifacts-storage-note">
-        Every version of every artifact the company holds, private ones and the trash included.
-      </p>
-    </footer>
+    <nav aria-label="Related" className="artifacts-related">
+      <Card href={href(["settings", "storage"])} interactive padding="sm">
+        <Inline gap={3}>
+          <span className="muted">
+            <GaugeGlyph size="sm" />
+          </span>
+          <Stack gap={1}>
+            <Text variant="cell">Company storage</Text>
+            <Text variant="caption">
+              What the company holds against its storage quotas, in Settings › File storage.
+            </Text>
+          </Stack>
+          <Spacer />
+          <span className="muted">
+            <ChevronRightGlyph size="sm" />
+          </span>
+        </Inline>
+      </Card>
+    </nav>
   );
 }

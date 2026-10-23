@@ -29,7 +29,10 @@ vi.mock("~/lib/store-hooks.ts", async () => {
 });
 vi.mock("~/lib/viewer.ts", async () => {
   const actual = await vi.importActual<typeof import("~/lib/viewer.ts")>("~/lib/viewer.ts");
-  return { ...actual, useViewer: () => ({ owner: "token:review", admin: false, handle: "" }) };
+  return {
+    ...actual,
+    useViewer: () => ({ owner: "token:review", admin: viewerAdmin, handle: "" }),
+  };
 });
 vi.mock("~/lib/artifacts/access.ts", async () => {
   const actual = await vi.importActual<typeof import("~/lib/artifacts/access.ts")>(
@@ -69,6 +72,8 @@ function row(over: Partial<ArtifactListItem>): ArtifactListItem {
 let items: ArtifactListItem[];
 /** Whether the reader may make an artifact (`useArtifactAccess`'s `can`). */
 let authoring = true;
+/** The reader is an administrator, for whom All ends on the storage row. */
+let viewerAdmin = false;
 
 beforeEach(() => {
   items = [
@@ -86,6 +91,7 @@ afterEach(() => {
   cleanup();
   localStorage.clear();
   authoring = true;
+  viewerAdmin = false;
 });
 
 /** The list shape, as a reader who chose it on this browser before. */
@@ -389,7 +395,22 @@ test("a reader who cannot make an artifact is not told to start one above", () =
   authoring = false;
   items = [];
   mount("all");
-  expect(document.querySelector(".artifacts-make")).toBeNull();
+  expect(screen.queryByRole("region", { name: "Start a new artifact" })).toBeNull();
   expect(screen.getByText("Artifacts shared with you appear here.")).toBeTruthy();
   expect(screen.queryByText(/Start one above/)).toBeNull();
+});
+
+// THE QUOTAS ARE SETTINGS' NOW: Settings › File storage holds what the
+// company keeps against them, and All ends on one quiet related row there for
+// the administrator that page is for, and on nothing for anybody else.
+test("All ends on a related row to the company's storage, for an administrator only", () => {
+  viewerAdmin = true;
+  mount("all");
+  const related = screen.getByRole("navigation", { name: "Related" });
+  expect(within(related).getByRole("link").getAttribute("href")).toBe("#/settings/storage");
+  expect(screen.queryByText("Company storage quotas")).toBeNull();
+  cleanup();
+  viewerAdmin = false;
+  mount("all");
+  expect(screen.queryByRole("navigation", { name: "Related" })).toBeNull();
 });
