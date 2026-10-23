@@ -6769,7 +6769,10 @@ palette and the trail.
   time of day on that same clock (its age is the time's title, since an age
   under a date heading contradicted it) and its note: a save's own, a
   comment's words or a new page's first line, never the title again. **Every
-  change** opens the audit log narrowed to the knowledge base. Four small
+  change** opens the audit log narrowed to the knowledge base. With nothing
+written beside the featured change the column is not drawn, since the big
+tile is then the whole of it. The tiles share one inset and three equal
+columns. Four small
   tiles list three pages each and say one line when empty: **Continue
   reading**, the pages this browser opened last, and **Pinned**, the pages
   this reader starred from a page's More menu, each page read for its title
