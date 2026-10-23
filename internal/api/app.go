@@ -1751,7 +1751,7 @@ func writeQueryError(w http.ResponseWriter, r *http.Request, what string, err er
 		// The reason reaches the LOG, not the caller: it can carry a
 		// database path or a driver's own message, and nothing about
 		// holding a grant makes a caller somebody that path is for.
-		log.WarnContext(r.Context(), "api_query_failed", "what", what, "error", err)
+		stream.LogFailed(r.Context(), log, "api_query_failed", err, "what", what)
 		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeQueryFailed)
 	}
 }

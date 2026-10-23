@@ -191,8 +191,9 @@ func toPerson(r tools.Result, words caveat.Refusal) tools.Result {
 // failed for a reason its backend classed ([sandbox.WhyOf]: its provider not
 // answering, at a limit, refusing the company's key or wanting its account
 // paid, or a setup a person has to change), told by the class and never the
-// provider's own words, whose wait follows the class ([sandbox.Why.Waits]); a
-// wait that ran out of time or was abandoned. Everything else that reaches a
+// provider's own words, whose wait follows the class ([sandbox.Why.Waits]); the
+// node running a coding run unable to answer about it for a reason of its own
+// ([sandbox.ErrTailUnanswered]); a wait that ran out of time or was abandoned. Everything else that reaches a
 // tool unmarked — a read
 // of this node's own store that broke, a database that refused a statement, a
 // path in its own code that went wrong — is a fault.
@@ -438,6 +439,15 @@ func condition(err error) (conditionSaid, bool) {
 		return conditionSaid{clause: "this node could not reach its event broker — " +
 			"the connection is reconnecting, or the broker did not answer in time",
 			person: "This node lost touch with the rest of the fleet. " +
+				statelog.TryAgainSoon}, true
+	case errors.Is(err, sandbox.ErrTailUnanswered):
+		// THE NODE RUNNING A CODING RUN COULD NOT READ IT FOR A REASON OF
+		// ITS OWN a wait clears: the run's seat moving, the node stopping,
+		// or what it reads the run's record from not answering. Its own
+		// log has which.
+		return conditionSaid{clause: "the node running the coding run couldn't " +
+			"answer just now",
+			person: "The node running this coding run couldn't answer just now. " +
 				statelog.TryAgainSoon}, true
 	case errors.Is(err, steer.ErrUnverified):
 		// THE FLEET'S NODES DO NOT HOLD THE SAME KEYS, so the node running a
