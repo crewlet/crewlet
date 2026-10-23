@@ -114,13 +114,25 @@ func UnavailableOf(err error) Unavailable {
 // runs the node — a state-log refusal's own detail among it — through the
 // answering surface's own logger under event, with its own fields: the answer
 // carries a person's sentence for it ([Unavailable.Detail]) and never the
-// error. At [statelog.ConditionLevel], with DEBUG for a condition that clears,
-// since a screen asks a question again after every hint for as long as a node
-// is catching up, and a line per ask is noise beside the alarm that names it.
+// error. At DEBUG for a condition that clears, since a screen asks a question
+// again after every hint for as long as a node is catching up, and a line per
+// ask is noise beside the alarm that names it; at WARN for one no wait clears,
+// which is somebody's to act on.
+//
+// WHICH IS WHICH IS THE ANSWER'S OWN HINT ([builtin.RetryAfter], the one
+// [UnavailableOf] sends), never the state log's alone: read through
+// [statelog.ConditionLevel], every condition that is not a state-log refusal
+// (a company's file storage full, a fleet whose nodes don't hold the same
+// keys) went out with no Retry-After and was written at DEBUG, where nobody
+// running the node reads it.
 func LogUnavailable(ctx context.Context, logger *slog.Logger, event string, err error,
 	fields ...any) {
 
-	logger.Log(ctx, statelog.ConditionLevel(err, slog.LevelDebug), event,
+	level := slog.LevelDebug
+	if builtin.RetryAfter(err, HealthInterval) == 0 {
+		level = slog.LevelWarn
+	}
+	logger.Log(ctx, level, event,
 		append(fields[:len(fields):len(fields)], "error", err.Error())...)
 }
 
