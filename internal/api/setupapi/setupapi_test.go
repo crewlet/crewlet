@@ -83,6 +83,9 @@ type vault struct {
 	// attribution asserts.
 	authors map[string]secrets.Author
 	fail    error
+	// failName, when set, keeps fail to the one name: a case where one
+	// seal lands and the next does not.
+	failName string
 }
 
 func (v *vault) Set(_ context.Context, name, value string, by secrets.Author,
@@ -90,7 +93,7 @@ func (v *vault) Set(_ context.Context, name, value string, by secrets.Author,
 
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if v.fail != nil {
+	if v.fail != nil && (v.failName == "" || v.failName == name) {
 		return v.fail
 	}
 	if v.values == nil {
