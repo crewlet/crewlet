@@ -137,7 +137,20 @@ func (e *Engine) SetCapacity(ctx context.Context, req CapacityRequest) (
 	if err != nil {
 		return coord.MaintenanceOperation{}, err
 	}
-	return e.driveCapacity(ctx, running, op)
+	return e.driveCapacity(ctx, running.log, op)
+}
+
+// capacityLog is the two calls a capacity window makes on the log it resizes:
+// set its ceiling, and read its ceiling and usage back.
+//
+// DECLARED HERE, AS THEIR CONSUMER, so the window's whole drive (the request,
+// the seal, the verify and the release) runs against a log a test holds,
+// where the concrete broker log tied every step past the baseline to a
+// running cluster and the tests forged the phases those steps write instead.
+// A nil one is a drive in a mode or a phase that touches no log.
+type capacityLog interface {
+	SetMaxBytes(ctx context.Context, maxBytes uint64) error
+	Stats(ctx context.Context) (jetstream.LogStats, error)
 }
 
 // growthRoom is how far the broker will let a running log's ceiling grow, as
@@ -377,11 +390,11 @@ func (e *Engine) openCapacity(ctx context.Context, req CapacityRequest,
 }
 
 // driveCapacity advances the operation as far as this mode's evidence allows.
-func (e *Engine) driveCapacity(ctx context.Context, running *runningLog,
+func (e *Engine) driveCapacity(ctx context.Context, resized capacityLog,
 	op coord.MaintenanceOperation) (coord.MaintenanceOperation, error) {
 
 	for range len(coord.MaintenancePhases) + 1 {
-		next, err := e.advanceCapacity(ctx, running, op)
+		next, err := e.advanceCapacity(ctx, resized, op)
 		if err != nil {
 			return op, err
 		}
@@ -402,7 +415,7 @@ func (e *Engine) driveCapacity(ctx context.Context, running *runningLog,
 
 // advanceCapacity takes one step: gather what this mode can establish, ask the
 // table, and persist whatever it answered.
-func (e *Engine) advanceCapacity(ctx context.Context, running *runningLog,
+func (e *Engine) advanceCapacity(ctx context.Context, resized capacityLog,
 	op coord.MaintenanceOperation) (coord.MaintenanceOperation, error) {
 
 	switch op.Phase {
@@ -413,9 +426,9 @@ func (e *Engine) advanceCapacity(ctx context.Context, running *runningLog,
 		return e.baseline(ctx, op)
 	case coord.PhaseBaselined:
 		if e.mode.WritesConfiguration() {
-			return e.apply(ctx, running, op)
+			return e.apply(ctx, resized, op)
 		}
-		return e.seal(ctx, running, op)
+		return e.seal(ctx, resized, op)
 	case coord.PhaseApplied:
 		if e.mode.WritesConfiguration() {
 			// APPLIED IS NOT DONE and this mode cannot finish it: the
@@ -423,11 +436,11 @@ func (e *Engine) advanceCapacity(ctx context.Context, running *runningLog,
 			// configuration, which is this mode's own capability.
 			return op, nil
 		}
-		return e.seal(ctx, running, op)
+		return e.seal(ctx, resized, op)
 	case coord.PhaseSealing:
-		return e.seal(ctx, running, op)
+		return e.seal(ctx, resized, op)
 	case coord.PhaseSealed:
-		return e.verify(ctx, running, op)
+		return e.verify(ctx, resized, op)
 	case coord.PhaseConfirmed:
 		return e.release(ctx, op)
 	}
@@ -737,13 +750,13 @@ func oneIsOrItIs(nodes []string) string {
 // THE READ-BACK IS THE EVIDENCE, never the acknowledgement: what the phase
 // establishes is that the ceiling IS the target, which is a value the broker
 // reports rather than a request it accepted.
-func (e *Engine) apply(ctx context.Context, running *runningLog,
+func (e *Engine) apply(ctx context.Context, resized capacityLog,
 	op coord.MaintenanceOperation) (coord.MaintenanceOperation, error) {
 
-	if err := running.log.SetMaxBytes(ctx, op.TargetMaxBytes); err != nil {
+	if err := resized.SetMaxBytes(ctx, op.TargetMaxBytes); err != nil {
 		return op, e.applyFailure(ctx, op, err)
 	}
-	stats, err := running.log.Stats(ctx)
+	stats, err := resized.Stats(ctx)
 	if err != nil {
 		return op, fmt.Errorf("engine: read %s's ceiling back: %w", op.Stream, err)
 	}
@@ -873,7 +886,7 @@ func (e *Engine) capacityRefusal(ctx context.Context, want uint64) string {
 // barrier needs nothing from the journal, it runs, it retires what it covered,
 // and only then is the seal tested against a journal with no unresolved
 // entries left.
-func (e *Engine) seal(ctx context.Context, running *runningLog,
+func (e *Engine) seal(ctx context.Context, resized capacityLog,
 	op coord.MaintenanceOperation) (coord.MaintenanceOperation, error) {
 
 	if e.mode != statelog.ModeSeal {
@@ -889,7 +902,7 @@ func (e *Engine) seal(ctx context.Context, running *runningLog,
 	out := op
 	out.Phase = coord.PhaseSealing
 
-	stats, err := running.log.Stats(ctx)
+	stats, err := resized.Stats(ctx)
 	if err != nil {
 		return op, fmt.Errorf("engine: read %s's ceiling: %w", op.Stream, err)
 	}
@@ -923,10 +936,10 @@ func (e *Engine) seal(ctx context.Context, running *runningLog,
 // A MISMATCH IS A NUMBERED ATTEMPT rather than a re-apply: every node is in
 // seal mode, which refuses configuration writes, so there is nowhere legal for
 // a re-apply to run.
-func (e *Engine) verify(ctx context.Context, running *runningLog,
+func (e *Engine) verify(ctx context.Context, resized capacityLog,
 	op coord.MaintenanceOperation) (coord.MaintenanceOperation, error) {
 
-	stats, err := running.log.Stats(ctx)
+	stats, err := resized.Stats(ctx)
 	if err != nil {
 		return op, fmt.Errorf("engine: read %s's ceiling to verify: %w", op.Stream, err)
 	}
