@@ -274,7 +274,7 @@ export function useMessageSeatAccess(handle: string): WriteAccess {
 
 /** What a direct message to the reader's own seat says. */
 export const OWN_SEAT_DIRECT =
-  "This is your own seat — a direct message here would be to yourself.";
+  "This is your own seat, so a direct message here would be to yourself.";
 
 /**
  * Whether this browser may open a DIRECT conversation with the seat `handle`

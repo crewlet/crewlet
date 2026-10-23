@@ -132,7 +132,7 @@ test("a run that made no calls says so", () => {
   );
   expect(screen.getByText("Tool calls")).toBeTruthy();
   expect(
-    screen.getByText("Made no calls through the MCP bridge — not even its submission"),
+    screen.getByText("Made no calls through the MCP bridge, not even its submission"),
   ).toBeTruthy();
   unmount();
   render(<BridgeLog run={run({ status: "running", bridge_calls: [] })} />);

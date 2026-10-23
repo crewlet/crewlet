@@ -1147,7 +1147,7 @@ export function BridgeLog({ run }: { run: SandboxRun }) {
 function noCallsWords(run: SandboxRun): string {
   return run.status === "launching" || run.status === "running"
     ? "No calls through the MCP bridge yet"
-    : "Made no calls through the MCP bridge — not even its submission";
+    : "Made no calls through the MCP bridge, not even its submission";
 }
 
 /**

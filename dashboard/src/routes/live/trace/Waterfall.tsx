@@ -338,7 +338,7 @@ export function Waterfall({
                     data-span={s.id}
                     tabIndex={s.id === stop ? 0 : -1}
                     aria-pressed={s.id === selected}
-                    title={`${s.label}${s.sub ? ` · ${s.sub}` : ""} — ${
+                    title={`${s.label}${s.sub ? ` · ${s.sub}` : ""}: ${
                       s.open
                         ? `running for ${fmtDuration(now - s.start)}`
                         : fmtDuration(s.end - s.start)
@@ -581,7 +581,7 @@ function InvocationDetail({ span, record }: { span: Span; record: PhaseRecord })
   if (!run) {
     return (
       <span className="t-caption">
-        Still running — what it made and spent lands when its CLI exits.
+        Still running: what it made and spent lands when its CLI exits.
       </span>
     );
   }
@@ -595,14 +595,14 @@ function InvocationDetail({ span, record }: { span: Span; record: PhaseRecord })
         [
           "Rounds",
           made === 0
-            ? "none — it made no model request"
+            ? "none (it made no model request)"
             : made === 1
               ? `round ${run.firstRound}`
               : `rounds ${run.firstRound}–${run.lastRound}`,
         ],
         [
           "Requests",
-          run.requestsObserved ? "" : "not shown by its CLI — the whole run is one round",
+          run.requestsObserved ? "" : "not shown by its CLI, so the whole run is one round",
         ],
         [
           "Tokens",
