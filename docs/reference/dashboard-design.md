@@ -1152,7 +1152,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/company/org` | **Org chart**, the hierarchy every seat works inside; every human seat with its kind; what holds each one for an admin and for the holder themselves; and, for an admin, where a person is invited or created onto the vacant human seat they will hold | `unit=` · `seat=` |
 | `#/company/org/roster` | **Org chart › Roster**, every seat, and who is carrying how much | `view=seats\|workload` · `group=state\|unit\|flat` · `q=` |
 | `#/company/org/teams` · `#/company/org/teams/{unit}` | **Org chart › Teams**, every unit with what it is for and its goals; one unit's page | |
-| `#/company/org/edit` | **Org chart › Edit org**: the builder, opened from the chart's button, where the charter and the standing policies are written too *(saves as an admin, or as a unit's lead inside the units they lead)* | `view=visualization\|table` · `chart=structure\|reporting` · `unit=` · `seat=` (the selection; arriving with one opens its editor) · `add=unit\|agent\|human` (opens the Add once, then leaves the address) · `project=` (with `unit=` or `seat=`: Work's New project, which opens that node's editor on its Project field holding the key, then leaves the address) |
+| `#/company/org/edit` | **Org chart › Edit org**: the builder, opened from the chart's button, where the charter and the standing policies are written too *(saves as an admin, or as a unit's lead inside the units they lead)* | `view=visualization\|table` · `chart=structure\|reporting` · `unit=` · `seat=` (the selection; arriving with one opens its editor) · `add=unit\|agent\|human` (opens the Add once, then leaves the address) · `edit=charter\|policies` (opens the company's charter once, at its top or at its Policies, then leaves the address) · `project=` (with `unit=` or `seat=`: Work's New project, which opens that node's editor on its Project field holding the key, then leaves the address) |
 | `#/company/org/seats/{handle}` | **Seat**, an agent's or a person's profile; a person's says what holds the seat, its holder, the open invitation that names it (with **Cancel invitation**), or nobody, with **Invite** and **Add person**, the gestures drawn for an admin. Handles live only under `seats/` | agent: `tab=overview\|work\|turns\|memory\|schedules\|settings` · `conversation=` (Memory); human: overview · work · settings |
 | `#/company/schedules` · `#/company/schedules/{scope_type}/{scope_id}/{name}` | **Schedules**, recurring work; one schedule | |
 | `#/company/integrations` · `#/company/integrations/{kind}` | **Integrations**: **Built into Crewlet** first (Crewlet Works, Crewlet Knowledge, and Crewlet Chat, coming soon), each saying from the engine's own word whether the company runs it, runs another system in its place (Jira, Confluence) or none, with its counts and the way in where it is run; then the third-party catalogue, one tile per tool, under its own heading with its filter and the address vendors deliver to. No tabs *(needs Admin access)* | |
@@ -3238,10 +3238,14 @@ to the builder for an admin and is held with its reason for
 everybody else.
 On a phone Edit org folds into the bar's More menu, so Add seat stays in view.
 It is the same bar on every section of the Org chart. **Edit org is one
-control** (`EditOrgButton`): the chart's bar, Company › Overview and Company ›
-Policies draw the same secondary button, asked the builder's own gate, so a
-reader who may not write the chart sees it held with the reason rather than a
-link to a refusal. Company › Schedules is its own row and its bar is its own:
+control** (`EditOrgButton`): the chart's bar draws it as a secondary button,
+asked the builder's own gate, so a reader who may not write the chart sees it
+held with the reason rather than a link to a refusal. Company › Overview and
+Company › Policies draw the same button named for what they edit
+(`EditCharterButton`: **Edit charter** and **Edit policies**), which opens the
+company's editor in the builder (`edit=charter`, `edit=policies`) rather than
+the whole chart, asked the company's gate, since the charter is the company
+grant's and not a unit lead's. Company › Schedules is its own row and its bar is its own:
 it carries none of the chart's controls.
 The section tabs carry the Roster and Teams figures on every section of the
 Org chart, as the kit's count beside each name (the figure an object's own

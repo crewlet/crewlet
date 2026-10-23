@@ -83,13 +83,14 @@ two seats may share one:
 | `unit=<key>` | that unit's editor |
 | `add=agent`, `add=human` or `add=unit` | the Add on that kind at the company's top level (the org chart's **Add seat** is `add=agent`) |
 | `unit=<key>` and `add=…` | the Add under that unit |
+| `edit=charter` or `edit=policies` | the company's charter, at its top or with the focus in its **Policies** list ready for the next policy (Company › Overview's **Edit charter** and Company › Policies' **Edit policies**) |
 | `unit=<key>` or `seat=<handle>`, and `project=<KEY>` | that node's editor on its **Work** tab, its tracker project set to the key and not yet applied: Work's **New project** continues here, and saving it is what creates the project. Setting a project takes `admin`, so a reader without it finds the field held with that reason |
 
 It happens once, on arrival, and only when the builder can edit: once the
 draft is loaded, and not while a kept draft waits for **Keep** or
 **Discard**, a save's outcome is unknown or the company changed under the
 draft. The request waits through each of those
-and opens once they are settled. `add=` and `project=` are then taken out of
+and opens once they are settled. `add=`, `edit=` and `project=` are then taken out of
 the address, so a reload or a copied link does not ask a second time; `seat=` and `unit=`
 stay, because they are also the selection (see
 [Selecting a node](#selecting-a-node)). Selecting another node inside the
