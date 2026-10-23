@@ -345,11 +345,20 @@ func (r *retention) openMaintenance(ctx context.Context) *statelog.MaintenanceRe
 
 // outstanding names the participants the window's next step is still waiting
 // for: at `opened`, those with no restart into a maintenance mode recorded
-// ([statelog.BaselineMissing], what the baseline reads); past it, those whose
-// acknowledgement the seal is still waiting for. At `opened` the seal's reading
-// named every node as owing an acknowledgement bound to the window, which no
-// node writes before the verb runs, so a banner said the window was waiting on
-// the whole fleet while the next step was the operator's.
+// ([statelog.BaselineMissing], what the baseline reads); from the baseline to
+// the seal, those whose acknowledgement the seal does not take yet
+// ([statelog.SealOutstanding], the seal's own rule); and once it has sealed,
+// nobody, since the verify and the release wait on no node. At `opened` the
+// seal's reading named every node as owing an acknowledgement bound to the
+// window, which no node writes before the verb runs, so a banner said the
+// window was waiting on the whole fleet while the next step was the
+// operator's. Past it, a reading of its own that counted any acknowledgement
+// of the attempt said nothing was outstanding while the seal still waited on a
+// node in maintenance mode. And read at `sealed` or `confirmed`, the seal's
+// rule judges acknowledgements the seal has already taken against whatever
+// each node has written since: a node restarted again after the seal (into
+// maintenance mode, which a boot refused in service is told to do) was named
+// as outstanding by a window waiting on nobody but its operator.
 //
 // AN UNREADABLE ACK REGISTER YIELDS THE WHOLE PARTICIPANT SET rather than an
 // empty one: "nobody is outstanding" is the state that says the operation is
@@ -358,6 +367,10 @@ func (r *retention) openMaintenance(ctx context.Context) *statelog.MaintenanceRe
 func outstanding(ctx context.Context, fleet coord.Fleet,
 	op coord.MaintenanceOperation) []string {
 
+	switch op.Phase {
+	case coord.PhaseSealed, coord.PhaseConfirmed:
+		return nil
+	}
 	acks, err := fleet.MaintenanceAcks(ctx, op.Stream)
 	if err != nil {
 		acks = nil
@@ -365,24 +378,7 @@ func outstanding(ctx context.Context, fleet coord.Fleet,
 	if op.Phase == coord.PhaseOpened {
 		return statelog.BaselineMissing(op, acks)
 	}
-	excluded := map[string]bool{}
-	for _, node := range op.Excluded {
-		excluded[node] = true
-	}
-	acked := map[string]bool{}
-	for _, ack := range acks {
-		if ack.OperationID == op.OperationID && ack.Attempt == op.Attempt {
-			acked[ack.NodeID] = true
-		}
-	}
-	var missing []string
-	for _, node := range op.Participants {
-		if !excluded[node] && !acked[node] {
-			missing = append(missing, node)
-		}
-	}
-	sort.Strings(missing)
-	return missing
+	return statelog.SealOutstanding(op, acks)
 }
 
 // holdingAdmissions names the nodes whose admission keeps a window at `opened`

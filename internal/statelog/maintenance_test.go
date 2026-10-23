@@ -336,6 +336,27 @@ func TestAnotherLogsAcknowledgementIsNotASealOfThisOne(t *testing.T) {
 	}
 }
 
+// SealOutstanding NAMES THE NODES SealRestarts REFUSES, and only those: an
+// excluded node is owed nothing, a node the seal takes is not outstanding, and
+// the list is sorted so two reads compare.
+func TestSealOutstandingNamesTheNodesTheSealRefuses(t *testing.T) {
+	t.Parallel()
+	op := operation(coord.PhaseSealing)
+	op.Participants = []string{"node-3", "node-1", "node-2", "node-4"}
+	op.Excluded = []string{"node-4"}
+	acks := sealed(1)
+	acks[0].Mode = string(statelog.ModeMaintenance)
+	got := statelog.SealOutstanding(op, acks)
+	if want := []string{"node-1", "node-3"}; !slices.Equal(got, want) {
+		t.Fatalf("SealOutstanding = %v, want %v", got, want)
+	}
+	_, missing := statelog.SealRestarts(op, acks)
+	if len(missing) != len(got) {
+		t.Fatalf("SealRestarts names %d gap(s), SealOutstanding %d nodes: %v",
+			len(missing), len(got), missing)
+	}
+}
+
 // TestAnAcknowledgementFromAPublishingModeIsNotEvidence: a node that started
 // its publishers has not established that it cannot have issued the request.
 func TestAnAcknowledgementFromAPublishingModeIsNotEvidence(t *testing.T) {

@@ -336,7 +336,7 @@ func TestAnAbandonmentIsConfirmedBeforeItRuns(t *testing.T) {
 // the status names. The seal's list there named every node restarted before
 // the window as owing a seal restart the procedure hadn't asked for yet. Past
 // opened the seal is the next step and no step reads an admission again, so
-// the answer swaps.
+// the answer swaps; once it has sealed, nothing waits on a node.
 //
 // Mutation: answer the seal's list at every phase and the opened half fails;
 // answer the admissions at every phase and the baselined half fails.
@@ -401,6 +401,23 @@ func TestAWindowsStatusAnswersWhatItsNextStepWaitsOn(t *testing.T) {
 	if _, said := baselined["restarts_missing"]; said {
 		t.Errorf("the status past opened names the baseline's list: %v",
 			baselined["restarts_missing"])
+	}
+
+	// AND ONCE IT HAS SEALED IT IS SEALED, whatever the nodes wrote since:
+	// the seal's rule applied to node-2 restarted again said "not sealed"
+	// under PHASE sealed, and nothing after the seal waits on a node.
+	// Mutation: judge sealed and confirmed by the seal's rule and this fails.
+	for _, phase := range []coord.MaintenancePhase{coord.PhaseSealed, coord.PhaseConfirmed} {
+		log.mu.Lock()
+		log.window.Phase = phase
+		log.mu.Unlock()
+		after := read()
+		if after["sealed"] != true {
+			t.Errorf("the status at %s says sealed is %v", phase, after["sealed"])
+		}
+		if blocking, said := after["blocking"]; said {
+			t.Errorf("the status at %s names the seal's list: %v", phase, blocking)
+		}
 	}
 }
 
