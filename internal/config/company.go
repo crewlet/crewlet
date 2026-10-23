@@ -503,7 +503,7 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 			p.add(field("integrations.datadog.route_to"), ErrUnknownValue,
 				"%q is not an agent seat in this company. An alert naming no "+
 					"owner wakes this handle, and one that resolves to nothing "+
-					"— or to a human seat, which is dropped as a self-action — "+
+					"(or to a human seat, which is dropped as a self-action) "+
 					"is coverage that is not there. The agent seats are: %s",
 				fallback, strings.Join(handles, ", "))
 		}
@@ -520,7 +520,7 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 			p.add(entry(field("skill_variables"), key), ErrConflict,
 				"%s is reserved: the engine sets it from "+
 					"`api.external_url` in the OPERATOR's own Tier A file, "+
-					"which is where this deployment's address belongs — one "+
+					"which is where this deployment's address belongs: one "+
 					"company document then runs at staging's address and at "+
 					"production's without carrying either. Set it there and "+
 					"delete this line",
@@ -1545,7 +1545,7 @@ func (c *Company) validateSandboxPlacement() error {
 			p.add(field("providers.sandbox"), ErrMissing,
 				"every agent seat's executor runs as its coding CLI's own run, in a "+
 					"box this block configures, and this company configures none: %s. "+
-					"Add providers.sandbox — `local: {}` with `default_run_in: direct` "+
+					"Add providers.sandbox: `local: {}` with `default_run_in: direct` "+
 					"runs it on this host as the engine's user, `e2b:` in a remote box",
 				seats)
 		}

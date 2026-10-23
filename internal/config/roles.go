@@ -221,7 +221,7 @@ func (p *RolePlacement) validate(path Path) error {
 			hint = ". A ${VAR} is not resolved here: write the node id itself"
 		}
 		probs.add(at(path, "node"), ErrUnknownValue,
-			"%q is not a node id — one starts alphanumeric and holds only "+
+			"%q is not a node id: one starts alphanumeric and holds only "+
 				"letters, digits, '.', '_' or '-' (max 64 chars), and every "+
 				"node's own id is held to that, so this pin could never be "+
 				"satisfied%s", p.Node, hint)
@@ -243,7 +243,7 @@ func (p *RolePlacement) validate(path Path) error {
 					"node.labels, so this seat could never be placed")
 		case err != nil:
 			probs.add(where, ErrUnknownValue,
-				"%v — this seat is placed only on a node carrying the key "+
+				"%v. This seat is placed only on a node carrying the key "+
 					"under node.labels, and no node can carry one outside "+
 					"that grammar", err)
 		}
@@ -634,7 +634,7 @@ func (m *RoleMattermost) validate(path Path) error {
 		hint := ""
 		if envref.Has(m.Username) {
 			// Only a whole reference with space around it reaches here.
-			hint = fmt.Sprintf(" — and so does the ${VAR} that names one: write %q",
+			hint = fmt.Sprintf(", and so does the ${VAR} that names one: write %q",
 				strings.TrimSpace(m.Username))
 		}
 		p.add(username, ErrUnknownValue,

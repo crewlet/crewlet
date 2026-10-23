@@ -577,7 +577,7 @@ func (c *Company) AdvisoryWarnings() []Warning {
 			out = append(out, advisory(idx(args, unsupplied.at), fmt.Sprintf(
 				"`-e %[1]s` copies %[1]s from the container runtime's own environment, "+
 					"which is its fixed allowlist plus providers.sandbox.local.runtime_env "+
-					"and never the engine's — and neither carries %[1]s, so the box gets "+
+					"and never the engine's, and neither carries %[1]s, so the box gets "+
 					"nothing for it. Put what a box needs in role.sandbox.env or a setup "+
 					"step's env, which reach the box directly; or declare "+
 					"`%[1]s: \"${%[1]s}\"` under runtime_env to have the runtime pass the "+
@@ -928,7 +928,7 @@ func (b *Bootstrap) Warnings() []Warning {
 						"counted as a member: stream.cluster.peers names the OTHER "+
 						"members, and the quorum and replica rules count this node "+
 						"once. Remove it. Another name for this host that this file "+
-						"cannot recognise — a DNS alias, `localhost` — would be "+
+						"cannot recognise (a DNS alias, `localhost`) would be "+
 						"counted as a member it is not", d.Raw, d.Matches)))
 				continue
 			}
@@ -953,8 +953,8 @@ func (b *Bootstrap) Warnings() []Warning {
 			out = append(out, advisory(field("stream.cluster.peers"), fmt.Sprintf(
 				"names %d other members, so this fleet's broker has %d, and no stream "+
 					"keeps more than %d copies: every member past the %dth is a voter "+
-					"in the metadata group — one more member every election and every "+
-					"stream or consumer created waits on — holding no copy anybody "+
+					"in the metadata group (one more member every election and every "+
+					"stream or consumer created waits on) holding no copy anybody "+
 					"asked for. Beyond %d a fleet adds LEAVES, not members (a node that "+
 					"holds data is always a member)",
 				others, others+1, MaxStreamReplicas, MaxStreamReplicas,
@@ -972,7 +972,7 @@ func (b *Bootstrap) Warnings() []Warning {
 	if b.Node.Roles == nil {
 		if b.declaresFleet() {
 			out = append(out, advisory(field("node.roles"), fmt.Sprintf(
-				"is not declared, so this fleet node runs every role — %s — "+
+				"is not declared, so this fleet node runs every role (%s), "+
 					"including %q, which keeps a copy of the company's state on "+
 					"this disk, and %q, which runs agents here. Name the roles "+
 					"this node is for", strings.Join(nodeRoleNames, ", "),
@@ -1091,8 +1091,8 @@ func (b *Bootstrap) logsAtDebug() bool {
 // level this reads is the one the document holds once `crewlet run` has
 // folded `-log-level` and `-debug` into it — not necessarily the file's.
 func (b *Bootstrap) unrecordedDebug() string {
-	level := "`logging.level` — which `-log-level` and `-debug` override on " +
-		"`crewlet run` — is " + b.loggingLevelName()
+	level := "`logging.level` (which `-log-level` and `-debug` override on " +
+		"`crewlet run`) is " + b.loggingLevelName()
 	raise := "Pass `-debug` to `crewlet run`, or set `logging.level`"
 	switch {
 	case strings.TrimSpace(b.Logging.File.Path) == "":

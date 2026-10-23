@@ -744,7 +744,7 @@ func atlassianDeployment(p *problems, path Path, url, cloudID string, declared a
 		p.add(at(path, "url"), ErrConflict,
 			"%q is an Atlassian Cloud address, and integrations.atlassian.deployment "+
 				"declares %s: no Data Center instance is served there, so one "+
-				"of the two is wrong — declare %s, or give the instance's own address",
+				"of the two is wrong. Declare %s, or give the instance's own address",
 			url, AtlassianDataCenter, AtlassianCloud)
 	}
 	return deploy
