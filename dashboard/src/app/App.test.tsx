@@ -656,7 +656,7 @@ describe("a section, for a reader holding none of its grants", () => {
         grants: ["admin", "tracker", "knowledge"],
       }),
     );
-    expect(await screen.findByText(/Log positions are under/)).toBeDefined();
+    expect(await screen.findByRole("navigation", { name: "Related" })).toBeDefined();
     expect(screen.queryByText("Nodes needs Admin")).toBeNull();
   });
 

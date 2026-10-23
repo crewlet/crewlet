@@ -11,6 +11,8 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
+import { SessionReading } from "~/lib/frameSession.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { Fleet } from "./Fleet.tsx";
 
@@ -53,9 +55,13 @@ function mount() {
   const socket = new LiveSocket(store);
   return render(
     <ClientContext.Provider value={{ store, socket }}>
-      <Router>
-        <Fleet />
-      </Router>
+      <SessionReading>
+        <ViewerProvider>
+          <Router>
+            <Fleet />
+          </Router>
+        </ViewerProvider>
+      </SessionReading>
     </ClientContext.Provider>,
   );
 }

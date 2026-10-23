@@ -84,6 +84,16 @@ describe("broker membership", () => {
     expect(voterState(rows.find((r) => r.node === "node-a")!.voter)).toBe("leader");
   });
 
+  // THE HEAD COUNTS WHAT THE TABLE SHOWS: counting the group's voters said 0
+  // over a table listing the one node that advertises a broker. Mutation:
+  // count the voters and this reads 3.
+  test("the card's count is its rows, voters and advertising nodes alike", () => {
+    const { container } = panel(answer());
+    expect(container.querySelector(".crewlet-card__header .crewlet-count")?.textContent).toBe(
+      String(brokerRows(answer()).length),
+    );
+  });
+
   test("the group line says whose view it is and who leads — or that nobody does", () => {
     const a = answer();
     expect(groupSummary(a.group!, a.group_from)).toBe(
