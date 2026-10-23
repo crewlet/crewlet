@@ -1401,11 +1401,14 @@ func TestASecretStoreSinkReadsBackThroughTheRunsRoute(t *testing.T) {
 // ITS FIRST BATCH: the sink reads each one back to keep a working token, so a
 // run through a node asks for them beside the values it resolves, before it
 // does anything — and with its flag for a fresh value, which reads none back,
-// it asks for none. Each run here stops after the reads, before it reaches the
-// vendor: GitLab and Mattermost at the administrator token they were not
-// given — the invocation's environment holds none, whatever the process
-// exports ([operatorCredential]) — Slack at the deployment address no Tier A
-// and no -public-url gives it.
+// it asks for none. Slack reads back only the token of an app its ledger
+// records installed, which is the only one an install can spare, so a run
+// whose app nobody has installed asks for none either, whatever the store
+// holds. Each run here stops after the reads, before it reaches the vendor:
+// GitLab and Mattermost at the administrator token they were not given — the
+// invocation's environment holds none, whatever the process exports
+// ([operatorCredential]) — Slack at the deployment address no Tier A and no
+// -public-url gives it.
 func TestAProvisioningRunAsksForItsSeatsTokensInItsFirstBatch(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -1423,8 +1426,12 @@ func TestAProvisioningRunAsksForItsSeatsTokensInItsFirstBatch(t *testing.T) {
 			return []string{"mattermost", "provision", companyAt(t, readerCompanyDoc, vendor)}
 		}, []string{"MM_TOKEN_CEO"}, "-rotate", "no administrator token"},
 		{"slack provision", func(vendor string) []string {
-			return []string{"slack", "provision", companyAt(t, readerCompanyDoc, vendor)}
+			return []string{"slack", "provision",
+				installedSlackApps(t, companyAt(t, readerCompanyDoc, vendor), "ceo")}
 		}, []string{"SLACK_BOT_TOKEN_CEO"}, "-reinstall", "no address for this deployment"},
+		{"slack provision of an app nobody installed", func(vendor string) []string {
+			return []string{"slack", "provision", companyAt(t, readerCompanyDoc, vendor)}
+		}, nil, "-reinstall", "no address for this deployment"},
 	} {
 		for _, fresh := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s, fresh %v", tc.name, fresh), func(t *testing.T) {
@@ -1479,29 +1486,65 @@ func TestAnEnvironmentOnlyRunDecidesNoRoute(t *testing.T) {
 	}
 }
 
-// A SLACK RUN READS BACK ONLY THE SEATS IT PROVISIONS. A seat whose
+// A SLACK RUN READS BACK ONLY THE INSTALLED APPS IT PROVISIONS. A seat whose
 // signing_secret is a literal names a bot_token variable, but the run takes it
 // no further than its plan's note — nothing is created or installed for it —
 // so its token is never read back, and through a node never revealed for a
-// run that does not use it.
+// run that does not use it. Nor is the token of a seat whose app the ledger
+// does not record installed — recorded with no bot user, or not recorded at
+// all: that app is installed whatever the store holds, so a reveal of its
+// token answers nothing the run uses, and a refused one would refuse the run.
 //
 // Mutation: read back every seat whose bot_token is a variable, and the
-// half-literal seat's token is asked for.
-func TestASlackRunReadsBackOnlyTheSeatsItProvisions(t *testing.T) {
+// half-literal seat's token is asked for; read back every seat the run
+// provisions, and the two uninstalled seats' tokens are.
+func TestASlackRunReadsBackOnlyTheInstalledAppsItProvisions(t *testing.T) {
 	t.Parallel()
 	plans := []slack.SeatPlan{
 		{Handle: "ceo", TokenVar: "SLACK_BOT_TOKEN_CEO", SigningVar: "SLACK_SIGNING_SECRET_CEO"},
 		{Handle: "cto", TokenVar: "SLACK_BOT_TOKEN_CTO"},
+		{Handle: "cfo", TokenVar: "SLACK_BOT_TOKEN_CFO", SigningVar: "SLACK_SIGNING_SECRET_CFO"},
+		{Handle: "coo", TokenVar: "SLACK_BOT_TOKEN_COO", SigningVar: "SLACK_SIGNING_SECRET_COO"},
 	}
+	ledger := &slack.Ledger{Apps: map[string]slack.AppRecord{
+		"ceo": installedSlackRecord("ceo"),
+		"cto": installedSlackRecord("cto"),
+		// CREATED AND NEVER INSTALLED: a -no-install run's, or one whose
+		// operator skipped the click.
+		"cfo": {AppID: "A0CFO", ClientID: "1.2", ClientSecret: "cs", SigningSecret: "ss"},
+	}}
 	for _, tc := range []struct {
 		only, want []string
 	}{
 		{nil, []string{"SLACK_BOT_TOKEN_CEO"}},
 		{[]string{"cto"}, nil},
-		{[]string{"ceo", "cto"}, []string{"SLACK_BOT_TOKEN_CEO"}},
+		{[]string{"cfo", "coo"}, nil},
+		{[]string{"ceo", "cto", "cfo"}, []string{"SLACK_BOT_TOKEN_CEO"}},
 	} {
-		if got := slackTokenVars(plans, tc.only); !slices.Equal(got, tc.want) {
+		if got := slackTokenVars(plans, ledger, tc.only); !slices.Equal(got, tc.want) {
 			t.Errorf("-handles %v reads back %v, want %v", tc.only, got, tc.want)
 		}
 	}
+}
+
+// installedSlackRecord is the ledger's record of handle's app as a run that
+// completed its OAuth exchange leaves it.
+func installedSlackRecord(handle string) slack.AppRecord {
+	id := strings.ToUpper(handle)
+	return slack.AppRecord{AppID: "A0" + id, ClientID: "1.2", ClientSecret: "cs",
+		SigningSecret: "ss", BotUserID: "U0BOT" + id, TeamID: "T0ACME"}
+}
+
+// installedSlackApps writes the ledger beside company, recording each of
+// handles' apps installed.
+func installedSlackApps(t *testing.T, company string, handles ...string) string {
+	t.Helper()
+	ledger := &slack.Ledger{Apps: map[string]slack.AppRecord{}}
+	for _, handle := range handles {
+		ledger.Apps[handle] = installedSlackRecord(handle)
+	}
+	if err := ledger.Save(slack.LedgerPathFor(company)); err != nil {
+		t.Fatal(err)
+	}
+	return company
 }

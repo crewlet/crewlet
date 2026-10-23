@@ -154,12 +154,13 @@ func runSlackProvision(inv invocation, args []string, stdout, stderr io.Writer) 
 	}
 	ctx := context.Background()
 	if sinks.recordsInStore() {
-		// A RUN THAT RECORDS INTO THE STORE READS IT BACK — each seat's
-		// token, to leave an installed app alone — and reads those tokens
-		// in one batch up front. -reinstall reads none of them back.
+		// A RUN THAT RECORDS INTO THE STORE READS IT BACK — the token of
+		// each seat whose app the ledger records installed, to leave that
+		// install alone — and reads those tokens in one batch up front.
+		// -reinstall reads none of them back.
 		var readBack []string
 		if !*reinstall {
-			readBack = slackTokenVars(plans, splitHandles(*only))
+			readBack = slackTokenVars(plans, ledger, splitHandles(*only))
 		}
 		if _, err = companySecrets.stored(ctx, readBack, stdout); err != nil {
 			return err
@@ -217,12 +218,24 @@ func slackProvisions(plan slack.SeatPlan, only []string) bool {
 	return plan.Provisionable() && (len(only) == 0 || slices.Contains(only, plan.Handle))
 }
 
-// slackTokenVars is the variable each seat a run provisions records its bot
-// token under ([slackProvisions]).
-func slackTokenVars(plans []slack.SeatPlan, only []string) []string {
+// slackTokenVars is the variable each seat a run provisions
+// ([slackProvisions]) records its bot token under, for each one whose app the
+// ledger records installed — the tokens a `-secret-store` run reads back.
+//
+// ONLY AN INSTALLED APP'S, because only there can the store's answer spare an
+// install: an app nobody has installed has no token anywhere to keep, so its
+// install asks the store nothing. Read anyway, a token the store held for one
+// — left by a ledger that was lost, say, or set by hand — cost a reveal for
+// nothing, and a read that failed — a reveal refused to a machine token, which
+// is refused every one, or a row the keyring cannot open — refused the whole
+// run before it had created an app. A recorded app that turns out deleted in
+// Slack is replaced by a record that is not installed, which asks nothing
+// either, so the ledger as the run loads it names every token the run can read
+// back.
+func slackTokenVars(plans []slack.SeatPlan, ledger *slack.Ledger, only []string) []string {
 	var names []string
 	for _, plan := range plans {
-		if slackProvisions(plan, only) {
+		if slackProvisions(plan, only) && ledger.Apps[plan.Handle].Installed() {
 			names = append(names, plan.TokenVar)
 		}
 	}

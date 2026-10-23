@@ -413,12 +413,11 @@ func (o Options) seat(ctx context.Context, configToken string, seat SeatPlan, re
 					"step named on the Next: line of the run that installs the "+
 					"new app",
 				seat.Handle, record.AppID))
-			// THE HELD TOKEN IS A LEFTOVER. It belongs to the dead app
-			// and it satisfies the sink's half of the "already
-			// installed" check — but the replacement record carries no
-			// bot user id, and that is the half that can only come from
-			// a completed OAuth exchange. So the install runs, and the
-			// stale value is overwritten rather than trusted.
+			// THE HELD TOKEN IS A LEFTOVER. It belongs to the dead app,
+			// and the replacement record carries no bot user id, which
+			// only a completed OAuth exchange records — so the install
+			// asks the sink nothing and runs, and the stale value is
+			// overwritten rather than trusted.
 			record = AppRecord{}
 			delete(o.Ledger.Apps, seat.Handle)
 		}
@@ -506,8 +505,22 @@ func (o Options) seat(ctx context.Context, configToken string, seat SeatPlan, re
 // install completes the workspace install, or reports what is left to click.
 // It answers true when the install already stood and it did nothing: the
 // ledger records the app installed and the sink holds its bot token.
+//
+// THE SINK IS ASKED ONLY ABOUT AN APP THAT IS INSTALLED, because only there
+// can its answer spare an install: an app the ledger has never seen
+// installed — one this run created among them, or the replacement for one
+// deleted in the console — has no token anywhere for an install to revoke,
+// and is installed whatever the sink holds. Asked first, a sink that could
+// not answer refused that install for nothing: the run had created the app
+// and recorded its signing secret, and then left it uninstalled over a token
+// whose value could not change what the run did. `crewlet slack provision`
+// reads up front only the tokens of the seats whose app its ledger records
+// installed, for the same reason: a -secret-store run is not refused over any
+// other seat's token, through a node that refuses it the reveal (a machine
+// token, which may record a secret and is refused every reveal) or over a row
+// the keyring cannot open.
 func (o Options) install(ctx context.Context, seat SeatPlan, record AppRecord, res *Result) (bool, error) {
-	if !o.Reinstall {
+	if !o.Reinstall && record.Installed() {
 		held, ok, err := o.Sink.Value(ctx, seat.TokenVar)
 		if err != nil {
 			// UNREADABLE IS NOT UNHELD. Treating it as "no token" would
@@ -517,7 +530,7 @@ func (o Options) install(ctx context.Context, seat SeatPlan, record AppRecord, r
 			return false, fmt.Errorf("slack: %s: could not read %s: %w",
 				seat.Handle, seat.TokenVar, err)
 		}
-		if ok && held != "" && record.Installed() {
+		if ok && held != "" {
 			return true, nil
 		}
 	}
