@@ -242,6 +242,33 @@ test("every page of the directory is drawn, walked by its cursor", async () => {
   expect(screen.getAllByText(STAGE_WORDS.active!.label).length).toBeGreaterThan(0);
 });
 
+// THE RESTING STATE IS QUIET WORDS, AND ONLY NEWS IS A PILL: "Active" on every
+// person and service account, and "None" on every token, were pills down a
+// whole column. Mutation: draw a resting state as a tag and the first
+// expectation finds one.
+test("a list's resting state is words, and a state that differs is a pill", async () => {
+  stubIam();
+  mount();
+  const active = (await screen.findAllByText(STAGE_WORDS.active!.label)).filter((el) =>
+    el.closest(".grid-row"),
+  );
+  expect(active.length).toBeGreaterThan(0);
+  for (const word of active) expect(word.closest(".crewlet-tag")).toBeNull();
+  cleanup();
+
+  stubIam();
+  mount(ADMIN, ServiceAccounts);
+  expect(
+    (await screen.findByText(STAGE_WORDS.suspended!.label)).closest(".crewlet-tag"),
+  ).not.toBeNull();
+  cleanup();
+
+  stubIam();
+  mount(ADMIN, ApiTokens);
+  const spare = (await screen.findByText("token:spare")).closest(".grid-row") as HTMLElement;
+  expect(within(spare).getByText(TOKEN_ROW_WORDS.none!.label).closest(".crewlet-tag")).toBeNull();
+});
+
 // NO ROW IS DRAWN TWICE: the directory is split between the two pages that
 // read it, a service account on Service accounts and every other principal on
 // People. The second page's machine is a service account, in its stage's
