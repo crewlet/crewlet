@@ -21,6 +21,8 @@ import { Shell } from "~/app/Shell.tsx";
 import { Router } from "~/app/router.tsx";
 import { PAGE_ACTIONS_SLOT } from "~/app/frame/PageActions.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
+import { SessionReading } from "~/lib/frameSession.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, QueryError, Store } from "~/protocol/index.ts";
 import type { FleetNode } from "~/protocol/types.ts";
 import { fmtDateTime, relTime } from "~/lib/format.ts";
@@ -233,9 +235,13 @@ describe("the lease tables", () => {
       what === "fleet" ? Promise.resolve(answer) : new Promise(() => {});
     const view = render(
       <ClientContext.Provider value={{ store, socket }}>
-        <Router>
-          <Fleet />
-        </Router>
+        <SessionReading>
+          <ViewerProvider>
+            <Router>
+              <Fleet />
+            </Router>
+          </ViewerProvider>
+        </SessionReading>
       </ClientContext.Provider>,
     );
     expect(await screen.findByText("integration-reconciler")).toBeDefined();
@@ -274,9 +280,13 @@ describe("the lease tables", () => {
       what === "fleet" ? Promise.resolve(answer) : new Promise(() => {});
     return render(
       <ClientContext.Provider value={{ store, socket }}>
-        <Router>
-          <Fleet node={id} />
-        </Router>
+        <SessionReading>
+          <ViewerProvider>
+            <Router>
+              <Fleet node={id} />
+            </Router>
+          </ViewerProvider>
+        </SessionReading>
       </ClientContext.Provider>,
     );
   }
@@ -417,7 +427,11 @@ describe("the Nodes table", () => {
       what === "fleet" ? Promise.resolve(answer) : new Promise(() => {});
     return render(
       <ClientContext.Provider value={{ store, socket }}>
-        <Router>{ui}</Router>
+        <SessionReading>
+          <ViewerProvider>
+            <Router>{ui}</Router>
+          </ViewerProvider>
+        </SessionReading>
       </ClientContext.Provider>,
     );
   }

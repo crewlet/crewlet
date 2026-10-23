@@ -23,12 +23,10 @@
  */
 
 import { useId } from "react";
-import { Card, EmptyState, Inline, List, ListItem, Spacer, Stack, Text } from "@crewlethq/ui";
-import { ChevronRightGlyph, GaugeGlyph, ShieldGlyph } from "@crewlethq/icons/glyphs";
+import { Card, EmptyState, List, ListItem } from "@crewlethq/ui";
+import { GaugeGlyph, ShieldGlyph } from "@crewlethq/icons/glyphs";
 import { PageNote } from "~/app/frame/PageNote.tsx";
-import { closedBy } from "~/app/nav.ts";
-import { href } from "~/app/router.tsx";
-import { useHeldReading } from "~/lib/viewer.ts";
+import { RelatedRow } from "~/app/frame/RelatedRow.tsx";
 import type { OrgProjection } from "~/protocol/index.ts";
 import { EditCharterButton } from "~/routes/agents/header.tsx";
 import { CharterPage } from "./charter.tsx";
@@ -72,41 +70,13 @@ function PolicyList({ org }: { org: OrgProjection }) {
           />
         )}
       </Card>
-      <RelatedLimits />
+      {/* THE ENGINE'S CAPS, the one related place, for a reader who may open it. */}
+      <RelatedRow
+        path={LIMITS_PATH}
+        icon={<GaugeGlyph size="sm" />}
+        title="Engine limits"
+        description="The caps the engine holds every turn to, in Settings › Limits."
+      />
     </>
-  );
-}
-
-/**
- * The engine's caps, as the one related place: a quiet row under the list,
- * for a reader who may open it. A reader the page would refuse is not sent
- * there (the rule `ServiceNotice` keeps for Integrations).
- */
-function RelatedLimits() {
-  const held = useHeldReading();
-  if (held === null || closedBy(LIMITS_PATH, held.grants) !== null) return null;
-  return (
-    // ONE LINKED ROW ON THE CARD'S OWN INSET, so its glyph stands under the
-    // list's and its words under the policies': a footnote under the card
-    // was a sentence a reader had to find the link inside.
-    <nav aria-label="Related">
-      <Card href={href(LIMITS_PATH)} interactive padding="sm">
-        <Inline gap={3}>
-          <span className="muted">
-            <GaugeGlyph size="sm" />
-          </span>
-          <Stack gap={1}>
-            <Text variant="cell">Engine limits</Text>
-            <Text variant="caption">
-              The caps the engine holds every turn to, in Settings › Limits.
-            </Text>
-          </Stack>
-          <Spacer />
-          <span className="muted">
-            <ChevronRightGlyph size="sm" />
-          </span>
-        </Inline>
-      </Card>
-    </nav>
   );
 }
