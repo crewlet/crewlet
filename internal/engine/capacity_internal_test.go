@@ -626,6 +626,76 @@ func TestTheCapacityProcedureRunsInTheRestartsItNames(t *testing.T) {
 	}
 }
 
+// A SEAL STILL WAITING ON A NODE IS AN ANSWER, NOT A FAULT.
+//
+// Running the verb from seal mode before every node has restarted into it is
+// the ordinary way to ask what the seal still waits on. The seal wrote the
+// window back on every pass whether or not anything had moved, so the drive
+// never saw it settle and answered that the operation "didn't settle in 7
+// transitions, more than the table has phases": an invariant breach, which the
+// route reports as a fault, for a window doing exactly what it should. A pass
+// that moves nothing writes nothing.
+//
+// Mutation: make the seal write the window whatever it found and the first run
+// from seal mode fails with the breach.
+func TestASealStillWaitingOnANodeIsAnAnswerNotAFault(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fleet := coordmem.NewFleet()
+	streams := []string{"CREWLET_TRACKER_LOG"}
+	for _, id := range []string{"node-a", "node-b"} {
+		e := nodeOn(fleet, id, "maintenance", statelog.ModeMaintenance, dataNode)
+		if err := e.handshake(ctx, streams); err != nil {
+			t.Fatal(err)
+		}
+		if err := fleet.PutPositions(ctx, coord.NodePositions{
+			NodeID: id, At: time.Now().UTC(), Domains: map[string]coord.DomainPosition{},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	coordinator := nodeOn(fleet, "node-a", "maintenance", statelog.ModeMaintenance, dataNode)
+	resized := &ceilingLog{max: 1 << 32}
+	applied, err := coordinator.driveCapacity(ctx, resized, openWindow(t, coordinator))
+	if err != nil || applied.Phase != coord.PhaseApplied {
+		t.Fatalf("the verb from maintenance mode left %s (err %v)", applied.Phase, err)
+	}
+
+	// ONLY node-a restarts into seal mode.
+	sealing := nodeOn(fleet, "node-a", "seal", statelog.ModeSeal, dataNode)
+	if err := sealing.handshake(ctx, streams); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := sealing.driveCapacity(ctx, resized, applied)
+	if err != nil {
+		t.Fatalf("a seal waiting on node-b was reported as a fault: %v", err)
+	}
+	if pending.Phase != coord.PhaseSealing {
+		t.Fatalf("the window stands at %s, want sealing", pending.Phase)
+	}
+	again, err := sealing.driveCapacity(ctx, resized, pending)
+	if err != nil {
+		t.Fatalf("asking again: %v", err)
+	}
+	if again.Revision != pending.Revision {
+		t.Errorf("asking again rewrote a window nothing had moved (revision %d "+
+			"to %d)", pending.Revision, again.Revision)
+	}
+
+	// AND node-b's restart is what moves it.
+	if err := nodeOn(fleet, "node-b", "seal", statelog.ModeSeal, dataNode).
+		handshake(ctx, streams); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sealing.driveCapacity(ctx, resized, again); err != nil {
+		t.Fatalf("the verb once node-b restarted: %v", err)
+	}
+	if _, found, err := fleet.Maintenance(ctx, applied.Stream); err != nil || found {
+		t.Fatalf("the window is still open once every node restarted into seal "+
+			"mode (found=%t, err=%v)", found, err)
+	}
+}
+
 // ceilingLog is a log a capacity window drives end to end with no broker: its
 // ceiling is what the last request set, and onSet, when given, runs as each
 // request leaves and may refuse it.

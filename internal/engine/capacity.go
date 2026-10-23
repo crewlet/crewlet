@@ -906,10 +906,14 @@ func (e *Engine) seal(ctx context.Context, resized capacityLog,
 	if err != nil {
 		return op, fmt.Errorf("engine: read %s's ceiling: %w", op.Stream, err)
 	}
+	retired := false
 	if restarted, incarnations := barrierEvidence(op, acks); restarted {
 		out = statelog.Retire(out, statelog.BarrierEvidence{
 			Incarnations: incarnations, ObservedMaxBytes: stats.MaxBytes,
 			At: time.Now().UTC(),
+		})
+		retired = slices.ContainsFunc(op.Journal, func(r coord.JournalRecord) bool {
+			return r.State == coord.JournalIssued
 		})
 	}
 	out.ObservedMaxBytes = stats.MaxBytes
@@ -921,12 +925,20 @@ func (e *Engine) seal(ctx context.Context, resized capacityLog,
 		return op, err
 	}
 	out.Phase = next
-	if err := e.backends.Fleet.UpdateMaintenance(ctx, out); err != nil {
-		return op, err
-	}
 	if held, missing := statelog.SealHolds(out, acks); !held {
 		log.InfoContext(ctx, "capacity_seal_pending", "stream", op.Stream,
 			"operation", op.OperationID, "attempt", op.Attempt, "missing", missing)
+	}
+	// A PASS THAT MOVED NOTHING WRITES NOTHING. A seal still waiting on a
+	// node is the answer to the verb run before every node restarted into
+	// this mode, and the drive takes an unchanged window as settled: written
+	// back on every pass, it never settled, and the verb answered a window
+	// doing what it should as an operation that "didn't settle", a fault.
+	if out.Phase == op.Phase && !retired && out.ObservedMaxBytes == op.ObservedMaxBytes {
+		return op, nil
+	}
+	if err := e.backends.Fleet.UpdateMaintenance(ctx, out); err != nil {
+		return op, err
 	}
 	return e.reread(ctx, op.Stream)
 }
