@@ -432,7 +432,9 @@ thirty-second retry within a minute. The register row naming a new artefact is
 published as soon as it is taken, not on the position heartbeat's next beat.
 Its manifest names every log it carries: a joiner refuses an
 artefact naming a log it does not run, or missing one it does, before a byte
-moves. Artefacts live in `store.snapshot_dir` itself.
+moves. Artefacts live in `store.snapshot_dir` itself. The copy is taken with
+`VACUUM INTO`, as a backup's is, so it needs a writable temporary directory
+while it runs (see [Deployment](deployment.md#the-store)).
 
 ```
 crewlet retention snapshots
@@ -505,7 +507,7 @@ answer rather than a silence:
 | `ahead_of_log` | this node's checkpoint is past the log's end, so its rows are keyed to a sequence space the stream no longer has |
 | `log_diverged` | the log holds, at this node's checkpoint, another record than the one it consumed there — a broker restored from an older copy and written past these rows — so they are a history the log does not continue |
 | `recent` | the newest artefact is younger than `snapshot_interval` **and names every domain this node runs, at the generation this node is on**; a young artefact short of a domain is replaced at once (`statelog_snapshot_recent_but_short`), because no joiner can adopt it — see [Running a Fleet](fleet.md#draining-and-rolling-upgrades). And see below |
-| `failed` | the copy was attempted and errored; the engine log carries the error |
+| `failed` | the copy was attempted and errored; the engine log carries the error. A temporary directory the node can't write is one cause, and the error names the variable and the directory |
 
 `recent` is the one reason a healthy node reaches, and it is therefore **not**
 published: a node whose newest artefact is inside the interval is a node that

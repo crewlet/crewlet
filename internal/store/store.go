@@ -1131,7 +1131,8 @@ func openPool(path string, busy time.Duration,
 			// and two things run it: a backup, and the state-log snapshot
 			// every data node takes for its peers. The driver builds the
 			// copy on a connection of its own, which no session pragma
-			// here reaches.
+			// here reaches; [tempDirRefused] names the variable when that
+			// directory refuses it.
 			"PRAGMA temp_store = MEMORY",
 			fmt.Sprintf("PRAGMA busy_timeout = %d", busy.Milliseconds()),
 		},

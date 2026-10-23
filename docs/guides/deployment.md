@@ -1747,7 +1747,13 @@ rest in memory until its statement ends, where it used to spill to disk; a
 hash join and a de-duplicating table now build in memory with no spill at all,
 where a join used to spill past 64 MiB. The reads a node runs all the time are
 planned not to sort; what can is a schema migration that indexes a table
-already holding most of a node's data.
+already holding most of a node's data. A
+[backup](backup.md#what-crewlet-backup-produces) and the
+[snapshot](retention.md#snapshots) each data node
+takes for its peers are the exception: both copy the database with
+`VACUUM INTO`, which needs a writable temporary directory while the copy runs.
+A data node that has none takes no snapshot, so it has nothing to offer a peer
+that has fallen behind the log.
 
 **The engine owns the file exclusively.** A second process pointed at the same
 path is not a degraded configuration, it is corruption waiting for a schedule
