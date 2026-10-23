@@ -5766,13 +5766,25 @@ transport's own codes:
 | `draining` | `503` | This node is [draining](#during-a-drain) |
 | `starting` | `503` | This node is [still starting](#while-a-node-is-starting): its listener is bound and the surface that serves this route is not up yet; `Retry-After: 10` |
 
-And the tool's own refusal, carrying the tool's sentence as `detail` — except a
-`conflict` or an `exists` a native domain decided (a room archived, an item in
-the trash, a label another tag carries, a write that lost its race), whose
-`detail` is the domain's own sentence: what refused the change and what changes
-it, written for the person reading it. The tool's sentence for those is written
-for a model, naming the tool to call next and what to send it, and travels
-beside it as `tool_detail`:
+And the tool's own refusal, carrying the tool's sentence as `detail`, except
+where the engine has words of its own for the person reading it:
+
+- a `conflict` or an `exists` a native domain decided (a room archived, an item
+  in the trash, a label another tag carries, a write that lost its race), and
+  a write about something deleted, whose `detail` is the domain's own
+  sentence: what refused the change and what changes it;
+- an `unavailable` about a condition of the node or the fleet (a node behind
+  its log, a full log, a store that didn't answer, a note the node running a
+  turn couldn't verify because the two nodes don't hold the same keys), whose
+  `detail` says what happened and what to do, in step with the answer's
+  `Retry-After`.
+
+The tool's sentence for those is written for a model, naming the tool to call
+next and what to send it, and travels beside the `detail` as `tool_detail`. A
+`tool_detail` is therefore how a client knows the `detail` was written for a
+person, and a reused `Idempotency-Key`, whose `detail` is written for whoever
+sent the header, carries none; the dashboard shows a `detail` that has one in
+place of its own sentence for the code:
 
 | `error` | Status |
 |---|---|

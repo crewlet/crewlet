@@ -390,6 +390,31 @@ func TestADeletionAndAReusedKeyAreToldWithoutTheFrameworksWords(t *testing.T) {
 	}
 }
 
+// A REUSED KEY'S ANSWER CARRIES NO tool_detail, because a tool_detail says the
+// detail beside it was written for a person and the dashboard shows it in
+// place of its own sentence: a reused key's detail is written for whoever sent
+// the header, and a person pressing a button again was told to send a key they
+// never chose. Mutation: keep the tool's sentence in the op-reused arm and
+// this fails.
+func TestAReusedKeyCarriesNoToolDetail(t *testing.T) {
+	t.Parallel()
+	reused := &statelog.Unavailable{Reason: statelog.ReasonOpReused,
+		Detail: `operation "op" landed on crewlet.tracker.task.t-2 at 3:4`}
+	rec := httptest.NewRecorder()
+	operator.FailResult(rec, crewletmcp.Result{Failed: true,
+		Output: "update_work_item did not land.",
+		Cause:  crewletmcp.Classify(crewletmcp.RefusalUnavailable, reused)},
+		newKey(), httpjson.Detail{"tool": "update_work_item"})
+	body := decode(t, rec)
+	if rec.Code != http.StatusConflict || body["field"] != opkey.Header {
+		t.Fatalf("a reused key answered %d %v, want 409 naming the header", rec.Code, body)
+	}
+	if said, ok := body["tool_detail"]; ok {
+		t.Errorf("a reused key's answer carries tool_detail %q, which tells a client "+
+			"its detail was written for a person", said)
+	}
+}
+
 // THE CLASS OF A WRITER'S ERROR IS THE TOOLS' OWN RULE: a content refusal the
 // domain marked keeps its class, a condition waiting clears is `unavailable` —
 // an estate the router found nobody to serve among them — and anything

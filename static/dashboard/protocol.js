@@ -3889,6 +3889,16 @@ var ACTIONS = {
 * changes. Every other class's `detail` is written for a model reading a tool
 * result, and a person reading it would be told about `if_match` and record
 * ids.
+*
+* TWO ANSWERS OVERRULE A SENTENCE HERE, because each could only contradict it
+* (`protocol/act.ts`, `sentenceOf`): a refusal whose `detail` the engine wrote
+* for the person, which it says by carrying the tool's own sentence beside it
+* as `tool_detail` (a condition of the node told in step with its
+* `Retry-After`, a domain's words for a conflict, a collision or a deletion),
+* is shown in that `detail`; and a sentence below that asks for a wait
+* (`unavailable`, `identity_unavailable`) gives way to the engine's own
+* sentence for the code where the answer carries no `Retry-After`, since the
+* engine said waiting won't change it.
 */
 var ACT_ERRORS = {
 	invalid_token: "Signed out. Sign in again.",
@@ -4083,17 +4093,62 @@ function refusalOf(tool, opId, err, floors) {
 		const { domain, refreshes } = ROWS[tool];
 		floors.written(domain, null, refreshes);
 	}
+	const retryable = err.retryHint !== null && retryAfterMs(err.retryHint) !== null;
 	return {
 		kind: "refused",
 		tool,
 		opId,
 		code,
-		sentence: (code === "" ? null : ACT_ERRORS[code]) ?? (err.detail || err.sentence || `The engine refused the change (status ${err.status}).`),
+		sentence: sentenceOf(code, err, retryable),
 		detail: err.detail,
 		hint: err.hint,
 		grants: err.grants,
-		retryable: err.retryHint !== null && retryAfterMs(err.retryHint) !== null
+		retryable
 	};
 }
+/**
+* The refusals whose fixed sentence asks the person to wait, and which the
+* engine answers with no `Retry-After` where no wait clears them: a
+* condition that is stuck (a full log, an evicted node, a note the running
+* node could not verify) or a refusal only a person's change clears (a model
+* the company has not set up). The engine then answers its own sentence for
+* the code, the one that says waiting won't help (`internal/api/httpjson`'s
+* `waitless`), and the dashboard's "Try again in a moment" would say the
+* opposite. Every other code whose sentence asks for a wait is one the
+* engine always answers with a `Retry-After`: `draining`
+* (internal/api/drain.go), `starting` (internal/api/boot.go) and
+* `no_active_revision` (httpjson's `NoActiveRevision`).
+*/
+var WAITLESS_WHERE_STUCK = /* @__PURE__ */ new Set(["unavailable", "identity_unavailable"]);
+/**
+* The sentence a person is shown for a refusal.
+*
+* THE DASHBOARD'S OWN, from `contract/errors.ts`, wherever it has one and the
+* engine's answer cannot contradict it. Two exceptions, and each is a case
+* where it can:
+*
+*  - THE ENGINE WROTE THE DETAIL FOR THE PERSON where it carries the tool's
+*    own sentence beside it as `tool_detail` (internal/api/operator's
+*    `Said`): a domain's words for a conflict, a collision or a deletion, and
+*    a person's words for a condition of the node or the fleet, which say what
+*    happened and what to do in step with the answer's `Retry-After`. A fixed
+*    sentence here cannot follow that hint: one condition is told "an
+*    administrator needs to make room", another "try again in a moment";
+*  - A FIXED SENTENCE ASKING FOR A WAIT the answer does not carry
+*    ([WAITLESS_WHERE_STUCK]) gives way to the engine's own sentence for the
+*    code, which says waiting won't change it. The `detail` beside it is the
+*    tool's own, written for a model, so it is not the one shown.
+*
+* A code this build does not know, or one whose sentence is the engine's
+* (`null`), is the engine's `detail`.
+*/
+function sentenceOf(code, err, retryable) {
+	const own = code === "" ? null : ACT_ERRORS[code];
+	if (typeof err.body.tool_detail === "string" && err.detail !== "") return err.detail;
+	if (own !== null && code !== "" && !retryable && WAITLESS_WHERE_STUCK.has(code)) return err.sentence || err.detail || NO_WAIT_CLEARS;
+	return own ?? (err.detail || err.sentence || `The engine refused the change (status ${err.status}).`);
+}
+/** What a refusal no wait clears says where the engine's answer said nothing. */
+var NO_WAIT_CLEARS = "This can't be done here, and waiting won't change that.";
 //#endregion
 export { BROKER_FINDING_KINDS, BROKER_KINDS, BROKER_REMOVE_TIMEOUT_MS, DETAILED_QUERY_ERRORS, LiveSocket, QueryError, REQUEST_TIMEOUT_MS, RestError, SESSION_KEEPALIVE_MS, SessionFloors, SessionKeepAlive, Store, act, api, auth, confirmStepUp, currentSessionNeed, domainOf, isAbort, isLogRefusal, keepsOperation, lastAnsweredAt, layoutOpID, needSession, newActOpID, newGateOpID, onSessionNeed, onStepUpAsked, queryErrorCode, refusedGrants, rest, retryAfterMs, retryAfterSeconds, sessionNeedsEnrolment, sessionRestored, setStepUpConfirmer, setTabReader, stepUpAsked, unavailableRetryMs, whenRequestsSettle };

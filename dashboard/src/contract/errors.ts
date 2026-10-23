@@ -74,6 +74,16 @@ export type QueryErrorCode =
  * changes. Every other class's `detail` is written for a model reading a tool
  * result, and a person reading it would be told about `if_match` and record
  * ids.
+ *
+ * TWO ANSWERS OVERRULE A SENTENCE HERE, because each could only contradict it
+ * (`protocol/act.ts`, `sentenceOf`): a refusal whose `detail` the engine wrote
+ * for the person, which it says by carrying the tool's own sentence beside it
+ * as `tool_detail` (a condition of the node told in step with its
+ * `Retry-After`, a domain's words for a conflict, a collision or a deletion),
+ * is shown in that `detail`; and a sentence below that asks for a wait
+ * (`unavailable`, `identity_unavailable`) gives way to the engine's own
+ * sentence for the code where the answer carries no `Retry-After`, since the
+ * engine said waiting won't change it.
  */
 export const ACT_ERRORS = {
   // Who is asking — the request guard's, before any tool is named.

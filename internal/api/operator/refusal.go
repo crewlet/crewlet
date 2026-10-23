@@ -273,10 +273,15 @@ func fail(w http.ResponseWriter, cause error, sentence, key string, about httpjs
 		// [opkey.Reused] ALONE: the sentence the call was refused with
 		// is the framework's (a writer's) or the tool's restatement of
 		// it for a model (a tool's), and either names the operation, the
-		// subject it landed on and the one this request is about.
+		// subject it landed on and the one this request is about. AND WITH
+		// NO tool_detail, which says the detail was written for a person:
+		// this one is written for whoever sent the header, and a person who
+		// pressed a button again was shown it, told to send a key they
+		// never chose, where the dashboard's own sentence says to look again.
 		detail["field"] = opkey.Header
 		detail["op_id"] = key
 		detail["detail"] = opkey.Reused
+		delete(detail, keyToolDetail)
 		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeInvalidInput, detail)
 	case refusedFor(cause, statelog.ReasonDeleted):
 		// A PERMANENT DELETION MARKER on what the write is about: it was

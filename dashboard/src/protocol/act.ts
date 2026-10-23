@@ -103,8 +103,10 @@ export type ActResult =
       /**
        * The engine's own `detail`, verbatim — `""` where it sent none. The
        * sentence above is the dashboard's for most codes, written about a
-       * change; a screen shows this instead where the tool that refused
-       * words every refusal for the person asking (`answer_knowledge`).
+       * change, and this detail where the engine wrote it for the person
+       * ([sentenceOf]); a screen shows this instead where the tool that
+       * refused words every refusal for the person asking
+       * (`answer_knowledge`).
        */
       detail: string;
       /** The engine's own remedy, where it sent one. */
@@ -263,23 +265,75 @@ function refusalOf(
     const { domain, refreshes } = ROWS[tool];
     floors.written(domain, null, refreshes);
   }
-  const own = code === "" ? null : ACT_ERRORS[code];
-  const sentence =
-    own ?? (err.detail || err.sentence || `The engine refused the change (status ${err.status}).`);
+  // THE ENGINE SAYS WHETHER WAITING CHANGES IT: a `503` it wrote carries a
+  // `Retry-After` where it does and none where it does not (a full log, a
+  // record this node cannot decode) — read through the one interpreter of
+  // that hint, so a press offered "Try again" is one the engine said could
+  // land.
+  const retryable = err.retryHint !== null && retryAfterMs(err.retryHint) !== null;
   return {
     kind: "refused",
     tool,
     opId,
     code,
-    sentence,
+    sentence: sentenceOf(code, err, retryable),
     detail: err.detail,
     hint: err.hint,
     grants: err.grants,
-    // THE ENGINE SAYS WHETHER WAITING CHANGES IT: a `503` it wrote carries a
-    // `Retry-After` where it does and none where it does not (a full log, a
-    // record this node cannot decode) — read through the one interpreter of
-    // that hint, so a press offered "Try again" is one the engine said could
-    // land.
-    retryable: err.retryHint !== null && retryAfterMs(err.retryHint) !== null,
+    retryable,
   };
 }
+
+/**
+ * The refusals whose fixed sentence asks the person to wait, and which the
+ * engine answers with no `Retry-After` where no wait clears them: a
+ * condition that is stuck (a full log, an evicted node, a note the running
+ * node could not verify) or a refusal only a person's change clears (a model
+ * the company has not set up). The engine then answers its own sentence for
+ * the code, the one that says waiting won't help (`internal/api/httpjson`'s
+ * `waitless`), and the dashboard's "Try again in a moment" would say the
+ * opposite. Every other code whose sentence asks for a wait is one the
+ * engine always answers with a `Retry-After`: `draining`
+ * (internal/api/drain.go), `starting` (internal/api/boot.go) and
+ * `no_active_revision` (httpjson's `NoActiveRevision`).
+ */
+const WAITLESS_WHERE_STUCK: ReadonlySet<ActErrorCode> = new Set<ActErrorCode>([
+  "unavailable",
+  "identity_unavailable",
+]);
+
+/**
+ * The sentence a person is shown for a refusal.
+ *
+ * THE DASHBOARD'S OWN, from `contract/errors.ts`, wherever it has one and the
+ * engine's answer cannot contradict it. Two exceptions, and each is a case
+ * where it can:
+ *
+ *  - THE ENGINE WROTE THE DETAIL FOR THE PERSON where it carries the tool's
+ *    own sentence beside it as `tool_detail` (internal/api/operator's
+ *    `Said`): a domain's words for a conflict, a collision or a deletion, and
+ *    a person's words for a condition of the node or the fleet, which say what
+ *    happened and what to do in step with the answer's `Retry-After`. A fixed
+ *    sentence here cannot follow that hint: one condition is told "an
+ *    administrator needs to make room", another "try again in a moment";
+ *  - A FIXED SENTENCE ASKING FOR A WAIT the answer does not carry
+ *    ([WAITLESS_WHERE_STUCK]) gives way to the engine's own sentence for the
+ *    code, which says waiting won't change it. The `detail` beside it is the
+ *    tool's own, written for a model, so it is not the one shown.
+ *
+ * A code this build does not know, or one whose sentence is the engine's
+ * (`null`), is the engine's `detail`.
+ */
+function sentenceOf(code: ActErrorCode | "", err: RestError, retryable: boolean): string {
+  const own = code === "" ? null : ACT_ERRORS[code];
+  if (typeof err.body.tool_detail === "string" && err.detail !== "") return err.detail;
+  if (own !== null && code !== "" && !retryable && WAITLESS_WHERE_STUCK.has(code)) {
+    return err.sentence || err.detail || NO_WAIT_CLEARS;
+  }
+  return (
+    own ?? (err.detail || err.sentence || `The engine refused the change (status ${err.status}).`)
+  );
+}
+
+/** What a refusal no wait clears says where the engine's answer said nothing. */
+const NO_WAIT_CLEARS = "This can't be done here, and waiting won't change that.";
