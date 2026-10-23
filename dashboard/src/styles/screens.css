@@ -9780,25 +9780,36 @@ a.live-row:focus-visible {
   flex-direction: column;
   gap: var(--spacing-4);
 }
-.budget-readonly {
-  margin: 0 0 var(--spacing-3);
-  color: var(--color-text-tertiary);
-}
-/* THE COMPANY'S THREE WINDOWS side by side, on the same elevated rung and at
-   the same gap as the Spend overview's tiles, so a window reads as the same
-   object on both screens. They stack below the width where a tile's figure,
-   bar and ceiling editor no longer fit a third of the card. THE CARD'S
-   INSET ON EVERY SIDE: with none on top the tiles sat flush against the
-   header's rule while keeping 16px on the other three. */
-.budget-tiles {
+/* THE COMPANY'S ROW, ON THE SEATS' COLUMNS. Budgets.tsx hands this row and the
+   seats' table one track list (`TRACKS`), so each window stands over its
+   column in the table below (as `--budget-tracks`). The cells keep the table cell's own inline inset
+   (`.grid-cell`: --spacing-3), which is what puts their words on the table's
+   words. No ground of its own: a grey tile inside the card was a frame
+   inside the frame. A hairline between windows, as a stat row draws. */
+.budget-row {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--spacing-3);
-  padding: var(--spacing-4);
+  grid-template-columns: var(--budget-tracks);
+  align-items: stretch;
 }
+.budget-row > * {
+  padding: var(--spacing-3);
+}
+.budget-row > .budget-tile {
+  border-left: 1px solid var(--color-border-default);
+}
+.budget-row-scope {
+  margin: 0;
+  align-self: center;
+}
+/* Narrow, the row is a column: the scope's line, then each window under the
+   one before it, as the table's phone card stacks its cells. */
 @container page (width < 760px) {
-  .budget-tiles {
+  .budget-row {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .budget-row > .budget-tile {
+    border-left: 0;
+    border-top: 1px solid var(--color-border-default);
   }
 }
 .budget-tile {
@@ -9806,9 +9817,6 @@ a.live-row:focus-visible {
   flex-direction: column;
   gap: var(--spacing-2);
   min-width: 0;
-  padding: var(--spacing-3);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-elevated);
 }
 .budget-tile-head,
 .budget-tile-figure,

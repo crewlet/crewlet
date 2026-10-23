@@ -1693,10 +1693,16 @@ describe("the Spend overview's rows", () => {
     expect(block(css, ".prof-body")).toMatch(/padding:\s*var\(--spacing-5\) var\(--spacing-5\)/);
   });
 
-  // THE COMPANY'S BUDGET TILES KEEP THE CARD'S INSET ON EVERY SIDE: with none
-  // on top they sat flush against the header's rule.
-  test("the company's budget tiles are inset on every side", () => {
-    expect(block(css, ".budget-tiles")).toMatch(/padding:\s*var\(--spacing-4\);/);
+  // THE COMPANY'S BUDGET ROW STANDS ON THE SEATS' COLUMNS: its cells take the
+  // table cell's inline inset, so each window's words start on its column's,
+  // and no window draws a ground of its own inside the card.
+  test("the company's budget row takes the seats' columns and the cell's inset", () => {
+    expect(block(css, ".budget-row")).toMatch(/grid-template-columns:\s*var\(--budget-tracks\);/);
+    expect(block(css, ".budget-row > *")).toMatch(/padding:\s*var\(--spacing-3\);/);
+    expect(block(sheet("frame.css"), ".grid-cell")).toMatch(
+      /padding:\s*var\(--spacing-1\) var\(--spacing-3\);/,
+    );
+    expect(block(css, ".budget-tile")).not.toMatch(/background/);
   });
 
   // ONE CARD HEADER IN SETTINGS: Spend's cards drew a bespoke head (a 16px

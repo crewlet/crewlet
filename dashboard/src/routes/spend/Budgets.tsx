@@ -13,10 +13,18 @@
  * # The company first, then its seats
  *
  * Everything a seat spends is the company's spend too, so a company ceiling
- * binds every seat at once and is the one read first: its three windows are
- * tiles, each with the date it resets on. The seats follow as one table with
- * a column per window, because a column is how a reader finds the one seat
- * near its ceiling among seven.
+ * binds every seat at once and is the one read first. The seats follow as one
+ * table with a column per window, because a column is how a reader finds the
+ * one seat near its ceiling among seven.
+ *
+ * ONE SET OF TRACKS FOR BOTH. The company's row is drawn on the seats' own
+ * columns (`TRACKS`, handed to the table and to the row alike), so Today,
+ * This week and This month stand over the same three columns in both cards:
+ * as three tiles of their own they started at x positions no seat column
+ * shared, and their grey ground drew a frame inside the card's frame. The
+ * company row's first track, where a seat's name stands below, says once what
+ * the windows are: every seat together, on the company clock, and when each
+ * turns over.
  *
  * # The state is the engine's
  *
@@ -45,15 +53,14 @@
  * could ask.
  */
 
-import { useMemo } from "react";
+import { useMemo, type CSSProperties } from "react";
 import { Callout, Card, EmptyValue, Meter, Skeleton, TableEntityCell } from "@crewlethq/ui";
-import { BuildingComplexGlyph, DatabaseGlyph, UsersGlyph } from "@crewlethq/icons/glyphs";
+import { BuildingComplexGlyph, DatabaseGlyph, KeyGlyph, UsersGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { plainSeat } from "~/app/frame/cells.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
-import { PageNote } from "~/app/frame/PageNote.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
-import { CeilingEditor, resetsWords } from "~/components/budgetWrite.tsx";
+import { CeilingEditor } from "~/components/budgetWrite.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { BUDGET_WINDOWS } from "~/contract/config.ts";
 import { PERIOD_ADJECTIVE, windowOf } from "~/lib/budget.ts";
@@ -79,6 +86,15 @@ const HEADING: Readonly<Record<Period, string>> = {
 };
 
 const COMPANY: CeilingScope = { kind: "company" };
+
+/**
+ * The four tracks the company's row and the seats' table share: the scope,
+ * then one per window, equal. One value for both, so the company's windows
+ * stand over the seats' columns by construction rather than by a number each
+ * side measured.
+ */
+const TRACK = "minmax(0, 1fr)";
+const TRACKS = [TRACK, TRACK, TRACK, TRACK].join(" ");
 
 /** A window's state in words, for the reader who is told the bar rather than shown it. */
 function stateWords(w: BudgetWindow): string {
@@ -167,7 +183,6 @@ function CompanyWindow({
               zone={zone}
               onApplied={onApplied}
             />
-            <span className="t-caption muted">{resetsWords(w, zone)}</span>
           </div>
           <RefusedLine w={w} now={now} />
         </>
@@ -222,7 +237,7 @@ function SeatWindow({
   );
 }
 
-/** When each window turns over, once for every seat: they share the company clock. */
+/** When each window turns over, once for every scope: they share the company clock. */
 function resetLine(answer: BudgetsAnswer): string {
   const zone = answer.timezone;
   const parts = BUDGET_WINDOWS.flatMap(({ period }) => {
@@ -234,7 +249,13 @@ function resetLine(answer: BudgetsAnswer): string {
       ? ["today at midnight"]
       : [`the ${period} on ${companyDateLabel(dayLabelIn(at, zone))}`];
   });
-  return parts.length ? `Resets ${parts.join(", ")}` : "";
+  return parts.length ? `Resets ${parts.join(", ")}.` : "";
+}
+
+/** What the company row's first track says about every window, once. */
+function companyLine(answer: BudgetsAnswer): string {
+  const zone = answer.timezone || "UTC";
+  return `Every seat together, on the company clock (${zone}). ${resetLine(answer)}`.trim();
 }
 
 export function Budgets() {
@@ -280,14 +301,16 @@ export function Budgets() {
 
   return (
     <>
-      <PageNote>Token limits per day, week and month{zone ? ` (${zone})` : ""}.</PageNote>
-
       {/* THE REASON, ONCE, where the pencils are all disabled for the same
           one: every control still says it on its own, but a reader scanning
           a table of dimmed pencils should not have to hover one to learn
-          why. Not while the viewer is still being asked. */}
+          why. The notice every admin page draws for a reader it holds, not a
+          loose caption under the page's own. Not while the viewer is still
+          being asked. */}
       {!access.can && access.block !== "loading" && (
-        <p className="budget-readonly t-caption">{access.reason}</p>
+        <Callout variant="neutral" icon={<KeyGlyph size="md" />}>
+          {access.reason}
+        </Callout>
       )}
 
       {budgets.loading && !answer && (
@@ -306,10 +329,11 @@ export function Budgets() {
       {answer && answer.durable && (
         <div className="budgets">
           <Card padding="none">
-            <Card.Header icon={<BuildingComplexGlyph size="sm" />} subtitle="Includes every seat">
+            <Card.Header icon={<BuildingComplexGlyph size="sm" />}>
               <Card.Title>The company</Card.Title>
             </Card.Header>
-            <div className="budget-tiles">
+            <div className="budget-row" style={{ "--budget-tracks": TRACKS } as CSSProperties}>
+              <p className="budget-row-scope t-caption muted">{companyLine(answer)}</p>
               {BUDGET_WINDOWS.map(({ period }) => (
                 <CompanyWindow
                   key={period}
@@ -324,7 +348,9 @@ export function Budgets() {
           </Card>
 
           <Card padding="none">
-            <Card.Header icon={<UsersGlyph size="sm" />} subtitle={resetLine(answer)}>
+            {/* NO SUBTITLE: when the windows turn over is the company row's,
+                said once above the columns it is about. */}
+            <Card.Header icon={<UsersGlyph size="sm" />}>
               <Card.Title>Agent seats</Card.Title>
             </Card.Header>
             <DataGrid
@@ -350,6 +376,7 @@ export function Budgets() {
                 {
                   key: "seat",
                   header: "Seat",
+                  width: TRACK,
                   sortValue: (s) => s.role,
                   cell: (s) => <TableEntityCell {...plainSeat({ ...seatBadge(s.role) })} />,
                 },
@@ -358,18 +385,21 @@ export function Budgets() {
                 {
                   key: "day",
                   header: "Today",
+                  width: TRACK,
                   sortValue: (s) => windowOf(s.windows, "day")?.used ?? 0,
                   cell: (s) => seatWindow(s, "day"),
                 },
                 {
                   key: "week",
                   header: "This week",
+                  width: TRACK,
                   sortValue: (s) => windowOf(s.windows, "week")?.used ?? 0,
                   cell: (s) => seatWindow(s, "week"),
                 },
                 {
                   key: "month",
                   header: "This month",
+                  width: TRACK,
                   sortValue: (s) => windowOf(s.windows, "month")?.used ?? 0,
                   cell: (s) => seatWindow(s, "month"),
                 },

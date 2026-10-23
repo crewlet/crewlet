@@ -7114,10 +7114,13 @@ tokens at the end — rather than a labelled card per task.
 where what it spent is Settings › Token spend), is every scope's three calendar windows on the company clock
 — the day, the ISO week and the month — from the `budgets` answer: what each
 has spent, its ceiling or **No ceiling**, when it resets and, while the gate is
-refusing it, since when. **The company** comes first, as three tiles, because
+refusing it, since when. **The company** comes first, as one row, because
 everything a seat spends is the company's spend too and its ceiling binds every
 seat at once; **Agent seats** follow as one table with a column per window, so
-the one seat near its ceiling is found down a column. A window's bar is a kit
+the one seat near its ceiling is found down a column. The company's row stands
+on the table's own columns (one track list handed to both), so each window
+sits over its column, and its first track says once what the windows are:
+every seat together, on the company clock, and when each turns over. A window's bar is a kit
 `Meter` handed the engine's `state`, and the page divides nothing itself; a
 window with no ceiling draws no bar, because a bar needs something to be a
 fraction of. A
@@ -7139,7 +7142,7 @@ to what. After a save the figure shows the new ceiling marked **applying…**
 until this node reports the saved epoch, and then re-reads. A conflict saves
 nothing and offers **Reload**; so does a request that may have landed. The
 pencils are drawn for every reader and disabled, with the reason said once
-above the page, for a reader without Admin — except a seat's, for
+above the page in the standard notice, for a reader without Admin — except a seat's, for
 the lead of the unit it sits in, whom the engine admits to that seat's write
 (`useOrgWriteAccess`, `lib/leadScope.ts`).
 

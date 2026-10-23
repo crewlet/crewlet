@@ -220,6 +220,23 @@ test("the seats' table runs to its card's edges", async () => {
   expect(seats.querySelector(".grid-wrap")!.hasAttribute("data-flush")).toBe(true);
 });
 
+// ONE SET OF COLUMNS: the company's windows stand over the seats' columns,
+// because the row and the table are handed the same tracks. Three tiles of
+// their own started at x positions no seat column shared.
+test("the company's row and the seats' table share their tracks", async () => {
+  mount(answer());
+  await settle();
+  const row = document.querySelector<HTMLElement>(".budget-row")!;
+  const table = screen
+    .getByText("Agent seats")
+    .closest(".crewlet-card")!
+    .querySelector<HTMLElement>(".grid-wrap")!;
+  expect(row.style.getPropertyValue("--budget-tracks")).toBe(table.style.gridTemplateColumns);
+  expect(row.children).toHaveLength(4);
+  // The resets are said once, in the company row, and not again over the seats.
+  expect(screen.getAllByText(/Resets today at midnight/)).toHaveLength(1);
+});
+
 // THE ENGINE'S STATE, AS SERVED. 95% served `ok` is drawn ok and 50% served
 // `near` is drawn near: a bar that re-derived its tone from the fill would
 // get both of these the other way round.
@@ -236,8 +253,13 @@ test("each bar is the state the engine served, whatever its fill", async () => {
   expect(tone("PM's daily token budget")).not.toBe("danger");
   expect(tone("PM's weekly token budget")).toBe("warning");
   expect(tone("PM's monthly token budget")).toBe("danger");
-  // And the zone the page states is the one the engine counts the windows in.
-  expect(screen.getByText("Token limits per day, week and month (UTC).")).toBeTruthy();
+  // And the zone the page states is the one the engine counts the windows in,
+  // said once, in the company row's first track, with when each turns over.
+  expect(
+    screen.getByText(
+      /^Every seat together, on the company clock \(UTC\)\. Resets today at midnight/,
+    ),
+  ).toBeTruthy();
 });
 
 // A CHECK, THEN THE SAVE — and a seat is written as the seat, read at the
