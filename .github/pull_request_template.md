@@ -16,6 +16,9 @@
       `static/dashboard` is rebuilt and committed with `make dashboard &&
       git add -A -- static/dashboard`
 - [ ] Docs updated (`docs/`) — config, CLI, or behavior changes are reflected
+- [ ] A bug or tuning value found along the way is fixed here, in a commit of
+      its own, when it affects this change, and otherwise has an issue linked
+      above (see CONTRIBUTING.md, "A bug you find along the way")
 - [ ] Every commit is signed off — `git commit -s` (see CONTRIBUTING.md,
       "Sign your work"); CI's `sign-off` job fails the build without it
 - [ ] Commit subjects are `type(scope): summary` (see CONTRIBUTING.md)
