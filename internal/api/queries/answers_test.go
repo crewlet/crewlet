@@ -168,13 +168,16 @@ func TestEachSourceRegistersItsOwnQuestions(t *testing.T) {
 		// breakdown has no dimension for — folded from the usage domain's
 		// company days, a source of its own rather than the fleet's turn
 		// detail; `seat_activity` is every seat's turns over those same
-		// days, summed across nodes.
+		// days, summed across nodes. `company_feed` because the schedules'
+		// runs are one of the halves it merges, and a feed of only those
+		// is still the feed: it is registered wherever any half is.
 		{"the usage domain alone", queries.Sources{Usage: db.Replicated()},
-			[]string{"page_reads", "seat_activity", "token_series", "viewer"}},
+			[]string{"company_feed", "page_reads", "seat_activity", "token_series", "viewer"}},
 		{"all of them", queries.Sources{
 			State: state, Events: fleetOf(db.Events()), Usage: db.Replicated(),
-		}, []string{"agent", "event", "event_series", "events", "live_call", "page_reads",
-			"phases", "seat_activity", "token_series", "tokens", "trace", "turn", "turns", "viewer"}},
+		}, []string{"agent", "company_feed", "event", "event_series", "events", "live_call",
+			"page_reads", "phases", "seat_activity", "token_series", "tokens", "trace", "turn",
+			"turns", "viewer"}},
 	} {
 		if got := registryOver(t, c.sources).Names(); !slices.Equal(got, c.names) {
 			t.Errorf("%s answers\n  %v\nwant\n  %v", c.what, got, c.names)

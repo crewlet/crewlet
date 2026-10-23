@@ -773,23 +773,25 @@ func Register(r *Registry, s Sources) {
 		r.Register("work_routing", Requires(iam.GrantTracker), s.workRouting)
 		r.Register("work_catalogue", Requires(iam.GrantTracker), s.workCatalogue)
 		r.Register("work_person", Requires(iam.GrantTracker), s.workPerson)
-		// THE LANDING SCREEN'S SERIES AND FEED. The series is the
-		// tracker's history replayed backward from today's census; the
-		// feed merges the tracker's completions, creates and hand-offs
-		// with the pages' and the schedules' where this node keeps them.
-		// See home.go. The feed is the overview's and everybody's: each
-		// row is filtered by the app it belongs to ([authz.Shows]).
+		// THE LANDING SCREEN'S SERIES: the tracker's history replayed
+		// backward from today's census. See home.go.
 		r.Register("work_flow", Requires(iam.GrantTracker), s.workFlow)
+	}
+	// THE LANDING SCREEN'S TWO MERGED ANSWERS, registered wherever ANY half
+	// they merge is wired rather than behind the tracker alone: the feed
+	// merges the tracker's completions, creates and hand-offs with the
+	// pages' and the schedules' where this node keeps them, and what is
+	// waiting on a person is their open asks beside the coding runs parked
+	// on a question to them, scoped as `work_my_work` is. Each leaves out a
+	// half that is not kept here ([keptHere]) and answers the rest, so a
+	// company on Jira still sees its schedules' runs and the runs waiting on
+	// a person. Both are the overview's and everybody's: each row is
+	// filtered by the app it belongs to ([authz.Shows]), and a person's own
+	// asks need no tracker to be listed, since answering them needs none
+	// (section 5a of ADR-0033).
+	if s.Work != nil || s.Pages != nil || s.Usage != nil {
 		r.Register("company_feed", Everybody(), s.companyFeed)
 	}
-	// WHAT IS WAITING ON A PERSON: their open asks beside the coding runs
-	// parked on a question to them, scoped as `work_my_work` is, and
-	// registered wherever EITHER half is wired rather than behind the
-	// tracker alone. It leaves out a tracker that is not kept here
-	// ([keptHere]) and answers the runs, so a company on Jira still sees
-	// what waits on a person. Everybody's: a person's own asks need no
-	// tracker to be listed, since answering them needs none (section 5a of
-	// ADR-0033).
 	if s.Work != nil || s.Sandbox != nil {
 		r.Register("decisions", Everybody(), s.decisions)
 	}

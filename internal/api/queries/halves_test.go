@@ -1,6 +1,7 @@
 package queries_test
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"slices"
@@ -8,7 +9,9 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -33,6 +36,14 @@ type absentWork struct {
 }
 
 func (a absentWork) Kept() error { return a.err }
+
+// absentPages is [absentWork] for the knowledge base.
+type absentPages struct {
+	queries.PageReader
+	err error
+}
+
+func (a absentPages) Kept() error { return a.err }
 
 // keptWork is a tracker source that says it is kept and answers from w.
 type keptWork struct{ *stubWork }
@@ -95,6 +106,104 @@ func TestDecisionsAnswerTheParkedRunsWhereTheTrackerIsNotKept(t *testing.T) {
 			}
 			if answer["total"] != len(tc.want) {
 				t.Errorf("total = %v, want %d", answer["total"], len(tc.want))
+			}
+		})
+	}
+}
+
+// THE FEED KEEPS A KIND ONLY WHERE ITS HALF IS THE ENGINE'S OWN, and answers
+// the rest. A company on Jira still sees its schedules' runs and its pages, a
+// company on Confluence its work and its schedules' runs; a kind named in
+// `kinds=` whose half is not kept is refused by name, as a page kind on a
+// node with no pages always was; and a half this node cannot place yet makes
+// the feed unavailable rather than short.
+//
+// Mutation: keep the tracker's kinds or the page kind whenever its source is
+// wired, as `feedKept` did, and the absent half is read (a panic here, the
+// whole feed refused in production).
+func TestTheFeedKeepsOnlyTheKindsWhoseHalfIsKept(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	base := time.Date(2031, 4, 16, 10, 0, 0, 0, time.UTC)
+	ran := base.Add(-30 * time.Minute)
+	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `
+			INSERT INTO usage_schedule_runs
+				(day, node, scope_type, scope_id, name, fired_at, target,
+				 outcome, trace_id, turn_id, version)
+			VALUES (?, 'n1', 'role', 'pm', 'standup', ?, 'pm', 'fired', '', '', 1)`,
+			ran.Format("2006-01-02"), store.EncodeTime(ran))
+		return err
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	work := &stubWork{feed: tracker.FeedPage{Rows: []tracker.FeedRow{
+		{Task: "a", Kind: tracker.FeedCompleted, At: base,
+			Cursor: tracker.FeedCursor{At: base, Seq: 9}.String()},
+	}, Complete: true}}
+	wiki := &stubPages{changes: []pages.PageChange{
+		{ID: "h-1", PageID: "p", Kind: pages.ChangeSaved, At: base.Add(-time.Hour), LogSeq: 4},
+	}}
+
+	rowKinds := func(t *testing.T, s queries.Sources, kinds string) ([]string, error) {
+		t.Helper()
+		got, err := askNative(t, s, "company_feed", map[string]any{"kinds": kinds})
+		if err != nil {
+			return nil, err
+		}
+		var out []string
+		for _, row := range got.(map[string]any)["rows"].([]queries.FeedEntry) {
+			switch {
+			case row.Work != nil:
+				out = append(out, "work")
+			case row.Page != nil:
+				out = append(out, "page")
+			case row.Schedule != nil:
+				out = append(out, "schedule")
+			}
+		}
+		return out, nil
+	}
+
+	for _, tc := range []struct {
+		name    string
+		sources queries.Sources
+		kinds   string
+		want    []string
+		wantErr error
+	}{
+		{"both halves kept", queries.Sources{Work: keptWork{work}, Pages: wiki,
+			Usage: db.Replicated()}, "", []string{"work", "schedule", "page"}, nil},
+		{"the company runs Jira", queries.Sources{Work: absentWork{err: errNotOurs},
+			Pages: wiki, Usage: db.Replicated()}, "", []string{"schedule", "page"}, nil},
+		{"the company runs Confluence", queries.Sources{Work: keptWork{work},
+			Pages: absentPages{err: errNotOurs}, Usage: db.Replicated()}, "",
+			[]string{"work", "schedule"}, nil},
+		{"neither half is the engine's", queries.Sources{Work: absentWork{err: errNotOurs},
+			Pages: absentPages{err: errNotOurs}, Usage: db.Replicated()}, "",
+			[]string{"schedule"}, nil},
+		{"a tracker kind named on Jira", queries.Sources{Work: absentWork{err: errNotOurs},
+			Pages: wiki, Usage: db.Replicated()}, "completed,schedule", nil, queries.ErrBadParams},
+		{"the page kind named on Confluence", queries.Sources{Work: keptWork{work},
+			Pages: absentPages{err: errNotOurs}, Usage: db.Replicated()}, "page", nil,
+			queries.ErrBadParams},
+		{"a half this node cannot place yet", queries.Sources{Work: absentWork{err: errNotUpYet},
+			Pages: wiki, Usage: db.Replicated()}, "", nil, queries.ErrUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := rowKinds(t, tc.sources, tc.kinds)
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("company_feed = %v, want %v", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("company_feed: %v", err)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("the feed's rows are %v, want %v newest first", got, tc.want)
 			}
 		})
 	}
