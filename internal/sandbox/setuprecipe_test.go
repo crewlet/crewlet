@@ -38,19 +38,20 @@ func TestTheGuidesStockImageRecipeIsToldByWhoClearsIt(t *testing.T) {
 	t.Parallel()
 	step := stockImageRecipe(t)
 	stubs := t.TempDir()
+	// WRITTEN WHERE NO FORK CAN HOLD ONE OPEN ([sandbox.WriteExecutable]):
+	// the subtests exec them through sh beside every case of this binary
+	// that forks, and a stub a fork inherited open for writing is one Linux
+	// refuses to run (ETXTBSY).
 	for name, body := range recipeStubs {
-		if err := os.WriteFile(filepath.Join(stubs, name), []byte(body), 0o755); err != nil {
-			t.Fatal(err)
-		}
+		sandbox.WriteExecutable(t, filepath.Join(stubs, name), body)
 	}
 	// THE STUBS ARE ALL THE STEP CAN RUN, with the host's own copy of each
 	// tool it needs that reaches nothing linked in beside them
 	// ([recipeTools]), and PATH is that one directory. A shell that cannot
-	// run a stub (one a fork of this process still holds open for writing, a
-	// TMPDIR mounted noexec) goes on down PATH, and down the host's it found
-	// the host's own npm or curl: the case made a real install or a real
-	// download, and was classed by whatever that met. With nothing else on
-	// PATH, a stub that does not run fails the case.
+	// run a stub (on a TMPDIR mounted noexec, say) goes on down PATH, and
+	// down the host's it found the host's own npm or curl: the case made a
+	// real install or a real download, and was classed by whatever that met.
+	// With nothing else on PATH, a stub that does not run fails the case.
 	for _, tool := range recipeTools {
 		host, err := exec.LookPath(tool)
 		if err != nil {

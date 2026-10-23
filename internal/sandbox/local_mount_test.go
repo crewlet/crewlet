@@ -38,16 +38,14 @@ func fakeRuntime(t *testing.T, name, wantFormat, info string, exit int) string {
 printf '%%s' '%s'
 exit %d
 `, wantFormat, info, exit)
-	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	waitExecutable(t, path)
+	writeExecutable(t, path, script)
 	return path
 }
 
-// waitExecutable blocks until a just-written script can actually be exec'd.
+// writeExecutable writes a script a case is about to exec, where no process
+// this one forks can still hold it open.
 //
-// # A FRESHLY WRITTEN EXECUTABLE CAN BE ETXTBSY, and this file execs one
+// # A FRESHLY WRITTEN EXECUTABLE CAN BE ETXTBSY, and this package execs them
 //
 // os.WriteFile closes its own descriptor, but any goroutine that forked
 // while it was open inherited it, and Linux refuses to exec a file that any
@@ -62,22 +60,21 @@ exit %d
 // rootless subtest failed asserting on an argv that carried --user — a
 // result indistinguishable from the detection genuinely being wrong.
 //
-// Waiting here is enough rather than a retry at every call site: nothing
-// reopens the file for writing afterwards, so once one exec gets through,
-// every later one does.
-func waitExecutable(t *testing.T, path string) {
+// syscall.ForkLock is what a fork takes for writing, so holding it for
+// reading while the file is open keeps every fork of this process out of
+// that window: no child can inherit the descriptor, rather than one that did
+// being waited out by running the script until it starts. Every script this
+// package's cases exec is written through it, the external suite's stubs too
+// ([WriteExecutable]). The coding-agent suite (internal/sandbox/codingagent)
+// closes the same window another way: cp writes each of its stand-ins, so
+// that suite's own process never holds one open for a fork to inherit.
+func writeExecutable(t *testing.T, path, script string) {
 	t.Helper()
-	for attempt := range 100 {
-		err := exec.Command(path).Run() //nolint:noctx // a local probe of one script
-		if !errors.Is(err, syscall.ETXTBSY) {
-			return
-		}
-		// A few milliseconds is a fork/exec, which is what this waits
-		// out; 100 attempts is half a second of a window measured in
-		// microseconds.
-		time.Sleep(time.Duration(attempt+1) * time.Millisecond)
+	syscall.ForkLock.RLock()
+	defer syscall.ForkLock.RUnlock()
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil { //nolint:gosec // the case's own program, to be run
+		t.Fatal(err)
 	}
-	t.Fatalf("%s stayed ETXTBSY: something is holding it open for writing", path)
 }
 
 // The template each runtime answers. Docker carries the flag among its
@@ -411,10 +408,7 @@ func TestAnImageTheRuntimeWillNotStartIsConfiguration(t *testing.T) {
 	t.Parallel()
 	runtime := filepath.Join(t.TempDir(), "docker")
 	script := "#!/bin/sh\n[ \"$1\" = run ] && { echo 'pull access denied for img' >&2; exit 125; }\nexit 0\n"
-	if err := os.WriteFile(runtime, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	waitExecutable(t, runtime)
+	writeExecutable(t, runtime, script)
 	l := &Local{
 		opts: LocalOptions{Placement: Container, Image: "img"},
 		root: t.TempDir(),
@@ -450,10 +444,7 @@ func TestALaunchItsCallerCancelledIsNoClass(t *testing.T) {
 	runtime := filepath.Join(t.TempDir(), "docker")
 	started := filepath.Join(t.TempDir(), "started")
 	script := "#!/bin/sh\n[ \"$1\" = run ] && { : > \"" + started + "\"; exec sleep 60; }\nexit 0\n"
-	if err := os.WriteFile(runtime, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	waitExecutable(t, runtime)
+	writeExecutable(t, runtime, script)
 	l := &Local{
 		opts: LocalOptions{Placement: Container, Image: "img"},
 		root: t.TempDir(),
@@ -505,15 +496,12 @@ rm) printf '%s' "$*" >> "` + filepath.Join(t.TempDir(), "removed") + `"; exit 0 
 *) exit 0 ;;
 esac
 `
-	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	// The same wait fakeRuntime takes, for the same reason: this script is
-	// written and then exec'd by parallel subtests, so it inherits the same
-	// ETXTBSY window. It fails differently here — Create's mount proof cannot
-	// start the container at all — and that reads as the proof legitimately
-	// refusing a box, which is exactly what these cases assert.
-	waitExecutable(t, path)
+	// Written the way fakeRuntime writes, for the same reason: this script
+	// is exec'd by parallel subtests, which fork. It would fail differently
+	// here — Create's mount proof cannot start the container at all — and
+	// that reads as the proof legitimately refusing a box, which is exactly
+	// what these cases assert.
+	writeExecutable(t, path, script)
 	return path
 }
 
@@ -564,7 +552,7 @@ func TestCreateAcceptsABoxWhoseMountIsShared(t *testing.T) {
 
 // THE FAKE RUNTIME IS EXECUTABLE BY THE TIME fakeRuntime RETURNS.
 //
-// The guard for [waitExecutable]. Without it this package's own rootless
+// The guard for [writeExecutable]. Without it this package's own rootless
 // probe intermittently could not START the script it had just written —
 // Linux refuses to exec a file another process holds open for writing, and a
 // goroutine that forks while os.WriteFile has it open inherits exactly that.
