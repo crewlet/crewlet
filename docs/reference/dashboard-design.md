@@ -7578,8 +7578,8 @@ it holds everything else — the facts, the agents and any faulted surface
 (open on arrival, behind a disclosure that can fold it away), each agent's own
 step at the vendor (*Create app on GitHub*, *Install on GitHub*), the settings
 square, **Disconnect**, the provisioning passes and each surface's deliveries.
-A dashed tile at the end of the grid, **Add an MCP server**, opens the add form
-on Settings › MCP Tools (`?add=server`) for every other tool an agent can reach. See [integration reconcile](../concepts/integration-reconcile.md#what-the-dashboard-shows).
+The catalogue ends at the tools this build serves: every other tool an agent
+can reach is an MCP server, added on Settings › MCP Tools. See [integration reconcile](../concepts/integration-reconcile.md#what-the-dashboard-shows).
 
 **MCP Tools** (`#/settings/mcp-tools`, once Tools & MCP) is admin's, like every engine setting: it is where MCP
 servers are added and their launches read, and which tools a seat has is
