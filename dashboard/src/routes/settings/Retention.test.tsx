@@ -20,7 +20,9 @@ import {
   DomainSize,
   donorsCounted,
   gateAction,
+  LogRetention,
   LogRow,
+  sharedTrimStatus,
   MaintenanceBanner,
   NodePositions,
   ServedLevelBanner,
@@ -636,4 +638,31 @@ test("the donors are the nodes holding an artefact, one row each", () => {
     donorsCounted([held("node-a"), held("node-b"), { node_id: "node-c", skip: "lagging" }]),
   ).toBe(2);
   expect(donorsCounted([{ node_id: "node-c" }])).toBe(0);
+});
+
+// ONE CAUSE ON EVERY LOG IS SAID ONCE: "held by the backup" on all seven rows
+// was one fact seven times, and at a phone's width the tag kept its width while
+// the log's name was cut. The head says the shared state, and only a log that
+// differs carries a tag. Mutation: tag every row and the first count is three.
+test("log retention says the trim state most logs share once, and tags only the logs that differ", () => {
+  const held = { blocked_by: "backup_floor" as const };
+  const domains = [
+    domain({ domain: "tracker", ...held }),
+    domain({ domain: "pages", ...held }),
+    domain({ domain: "usage" }),
+  ];
+  expect(sharedTrimStatus(domains)).toEqual({
+    key: "held:backup_floor",
+    label: "held by the backup",
+    count: 2,
+  });
+  const { container } = render(<LogRetention domains={domains} />);
+  expect(screen.getByText("Held by the backup on 2 of 3 logs")).toBeTruthy();
+  expect(screen.queryAllByText("held by the backup")).toHaveLength(0);
+  expect(screen.getByText("advancing").closest(".crewlet-tag")).not.toBeNull();
+  expect(container.querySelectorAll(".log-row")).toHaveLength(3);
+
+  // NO MAJORITY, NO SHARED LINE: every row says its own.
+  expect(sharedTrimStatus([domain({ ...held }), domain()])).toBeNull();
+  expect(sharedTrimStatus([domain()])).toBeNull();
 });

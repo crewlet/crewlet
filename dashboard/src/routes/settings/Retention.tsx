@@ -63,6 +63,7 @@ import {
   TableKeyCell,
   TableDateCell,
   TableStatusCell,
+  type Tone,
 } from "@crewlethq/ui";
 import {
   DatabaseGlyph,
@@ -981,22 +982,52 @@ function PositionStanding({ d }: { d: RetentionNodeDomain }) {
  * and told a healthy single node to evict itself.
  */
 export function LogRetention({ domains }: { domains: RetentionDomain[] }) {
+  // THE SHARED STATE IS SAID ONCE, in the head, and only a log that differs
+  // carries a tag: "held by the backup" on all seven rows was one cause said
+  // seven times, and at a phone's width it was the tag that kept its width
+  // while the log's own name was cut to "track...".
+  const shared = sharedTrimStatus(domains);
   return (
     <Card padding="none">
       <Card.Header
         icon={<ClockGlyph size="sm" />}
         count={domains.length}
-        subtitle="A log trims old history once all six checks allow it"
+        subtitle={
+          shared
+            ? `${asSentence(shared.label).replace(/\.$/, "")} on ${shared.count === domains.length ? "every log" : `${shared.count} of ${domains.length} logs`}`
+            : "A log trims old history once all six checks allow it"
+        }
       >
         <Card.Title>Log retention</Card.Title>
       </Card.Header>
       <div>
         {domains.map((d) => (
-          <LogRow key={d.domain} domain={d} />
+          <LogRow key={d.domain} domain={d} quiet={shared?.key === trimStatusOf(d).key} />
         ))}
       </div>
     </Card>
   );
+}
+
+/**
+ * The trim state more than half of the logs share, with how many share it,
+ * or null where there is no such state (one log, or no majority): then every
+ * row says its own.
+ */
+export function sharedTrimStatus(
+  domains: RetentionDomain[],
+): { key: string; label: string; count: number } | null {
+  if (domains.length < 2) return null;
+  const counts = new Map<string, { label: string; count: number }>();
+  for (const d of domains) {
+    const { key, label } = trimStatusOf(d);
+    const seen = counts.get(key);
+    counts.set(key, { label, count: (seen?.count ?? 0) + 1 });
+  }
+  for (const [key, { label, count }] of counts) {
+    if (count * 2 > domains.length) return { key, label, count };
+  }
+  return null;
 }
 
 /**
@@ -1007,7 +1038,14 @@ export function LogRetention({ domains }: { domains: RetentionDomain[] }) {
  * status and the same checks: two renderings of a log let the card and the
  * page disagree about whether it is advancing.
  */
-export function LogRow({ domain: d }: { domain: RetentionDomain }) {
+export function LogRow({
+  domain: d,
+  quiet = false,
+}: {
+  domain: RetentionDomain;
+  /** The state is the one its card's head already says for most logs: no tag. */
+  quiet?: boolean;
+}) {
   return (
     <div className="log-row">
       <DomainRefusals domain={d} />
@@ -1016,7 +1054,7 @@ export function LogRow({ domain: d }: { domain: RetentionDomain }) {
         mono
         size="compact"
         meta={<LogFacts domain={d} />}
-        actions={<TrimStatus domain={d} />}
+        actions={quiet ? undefined : <TrimStatus domain={d} />}
       >
         <div className="col gap-2">
           <Checks domain={d} />
@@ -1071,19 +1109,35 @@ function LogFacts({ domain: d }: { domain: RetentionDomain }) {
  * the name is what the CLI prints and the guide is indexed by.
  */
 export function TrimStatus({ domain: d }: { domain: RetentionDomain }) {
+  const { label, tone, title } = trimStatusOf(d);
+  return (
+    <Tag variant={tone} title={title}>
+      {label}
+    </Tag>
+  );
+}
+
+/** The trim's status in words, one source for the tag and the card's shared line. */
+function trimStatusOf(d: RetentionDomain): {
+  key: string;
+  label: string;
+  tone: Tone;
+  title?: string;
+} {
   switch (d.trim_floor_state) {
     case "published":
-      return d.blocked_by ? (
-        <Tag variant="warning" title={`Held by the ${d.blocked_by} check`}>
-          held by {TERM_WORDS[d.blocked_by].holds}
-        </Tag>
-      ) : (
-        <Tag variant="success">advancing</Tag>
-      );
+      return d.blocked_by
+        ? {
+            key: `held:${d.blocked_by}`,
+            label: `held by ${TERM_WORDS[d.blocked_by].holds}`,
+            tone: "warning",
+            title: `Held by the ${d.blocked_by} check`,
+          }
+        : { key: "advancing", label: "advancing", tone: "success" };
     case "unreadable":
-      return <Tag variant="warning">floor unreadable</Tag>;
+      return { key: "unreadable", label: "floor unreadable", tone: "warning" };
     default:
-      return <Tag variant="neutral">no conclusion yet</Tag>;
+      return { key: "none", label: "no conclusion yet", tone: "neutral" };
   }
 }
 
