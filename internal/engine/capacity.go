@@ -1052,11 +1052,30 @@ func (e *Engine) verify(ctx context.Context, resized capacityLog,
 }
 
 // release deletes the record, which is the one write that ends the exclusion.
+//
+// # A delete that lost its race is not a release
+//
+// The delete is conditional on the revision this drive read, so a window
+// somebody changed since (an exclusion or an abandonment landing after the
+// verify, or a second coordinator's write) refuses it with
+// [coord.ErrMaintenanceMoved]. That refusal was taken as the release: the node
+// logged that the exclusion was released while the record still held the fleet,
+// and the drive's next pass asked to delete it at no revision, which the store
+// refuses, so the verb answered a fault for a window still open. It is read
+// instead, like a delete whose answer was lost: gone, or holding another
+// operation, is released; still this operation is handed back at the revision
+// it is now at, and the drive decides again from where it stands.
+//
+// A WINDOW THIS DRIVE ALREADY RELEASED HAS NO REVISION, and asking the store to
+// delete it again asked a question its answer was already known to.
 func (e *Engine) release(ctx context.Context, op coord.MaintenanceOperation) (
 	coord.MaintenanceOperation, error) {
 
+	if op.Revision == 0 {
+		return op, nil
+	}
 	err := e.backends.Fleet.CloseMaintenance(ctx, op.Stream, op.OperationID, op.Revision)
-	if err != nil && !errors.Is(err, coord.ErrMaintenanceMoved) {
+	if err != nil {
 		// AN UNKNOWN DELETE IS RESOLVED BY READING. It may have
 		// committed with its response lost, and assuming either way is
 		// how a retry deletes the NEXT operation's record.
@@ -1066,7 +1085,12 @@ func (e *Engine) release(ctx context.Context, op coord.MaintenanceOperation) (
 		}
 		switch statelog.ResolveDelete(op.OperationID, current, found) {
 		case statelog.DeleteDone, statelog.DeleteNotMine:
-			return op, nil
+			out := op
+			out.Revision = 0
+			return out, nil
+		}
+		if errors.Is(err, coord.ErrMaintenanceMoved) {
+			return current, nil
 		}
 		return op, err
 	}
