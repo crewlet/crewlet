@@ -54,7 +54,7 @@ export interface SetBy {
 }
 
 /** The provenance, with the turn that set it turned into its page. */
-function kitSetBy(setBy: SetBy): KitSetBy {
+export function kitSetBy(setBy: SetBy): KitSetBy {
   return {
     actor: setBy.actor,
     ago: setBy.ago,

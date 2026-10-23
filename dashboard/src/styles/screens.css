@@ -5455,7 +5455,7 @@ span.list-position-step {
    than a button label's. Selected by ELEMENT rather than by the kit's class
    names: the menu's markup is the kit's, and the one button a `.cell-edit`
    holds is its trigger (the menu's items are portalled out of it). */
-.props > dd > .cell-edit button {
+.crewlet-property-list .crewlet-description-list__detail > .cell-edit button {
   margin-inline-start: calc(-1 * var(--spacing-2) - 1px);
   font-size: inherit;
   color: inherit;
@@ -6640,15 +6640,6 @@ span.list-position-step {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-1);
-}
-/* EVERY HEADING IN THE RAIL IN ONE CASE: the property groups' headings
-   ("Fields", "Record") take the sentence case its own sections (Relations,
-   Pages, Watching) are set in, rather than the frame rail's small caps — one
-   column, one voice, as the artboard sets it. */
-.task-rail-body .props-section {
-  font-size: var(--font-size-xs);
-  letter-spacing: normal;
-  text-transform: none;
 }
 .task-rail-assignee {
   flex-wrap: wrap;

@@ -1670,7 +1670,11 @@ a reason, so the next one cannot arrive quietly or outlive its cause.
 ### An object's own facts
 
 `PropertiesRail` is the rail beside an object — its state, its people, its
-plan, its record. Two components did this: a flat `KeyValue` with no sections
+plan, its record. It draws with `@crewlethq/ui`'s `PropertyList` (each section
+a description list on one subgrid, so every label shares one term column, read
+from the description list's own measure), and translates the engine's routes,
+turns by id and change log instants into it; the rules below are the kit's and
+its suite holds them. Two components did this before it: a flat `KeyValue` with no sections
 used by the event, the run, the turn and the seat, and the work item's own
 sectioned rail used by nothing else. They had different label widths, different
 gaps and different rules about an absent value, so the same kind of panel read
@@ -1928,7 +1932,7 @@ copy of it is how the two drift. What `dashboard/src/app/` owns:
 | `DetailRail` | the peek's chrome: resizable, a column of the sheet where the frame leaves the list beside it its floor (1160 px on most screens, 1396 beside Settings' column), a drawer under that |
 | `PeekHost` + `peeks.tsx` | the one peek in the product, mounted by the shell in the kit's footer slot: the body belongs to the KIND, so a list opens a peek by naming what it points at. `usePeekNeighbours` is how a list publishes the order `[` and `]` walk |
 | `DataGrid` + `cells` | sorting in the URL, bands from a grouped answer, typed cells; a row becomes a labelled card under 640 px, or two unlabelled lines on a `compact` grid |
-| `PropertiesRail` | an object's own facts, in sections, with who set each |
+| `PropertiesRail` | an object's own facts, in sections, with who set each: the kit's `PropertyList`, given routes and turns |
 | `Histogram` + `FacetRail` | a log's time axis, and one dimension of it as chips |
 | `TimeRangePicker` | the one control for `window=` |
 | `PageActions` + `PageNote` | a screen's own controls, portalled into the bar; its one sentence of explanation, wrapped so its last line never holds a word alone |

@@ -373,7 +373,9 @@ test("a priority of none is the word, with the change that set it", async () => 
   const value = rowValue("Priority");
   expect(value.textContent).toContain("No priority");
   expect(value.textContent).not.toContain(EMPTY_VALUE);
-  expect(value.querySelector(".props-setby")!.textContent).toContain("set by agent-ceo");
+  expect(value.querySelector(".crewlet-property-list__set-by")!.textContent).toContain(
+    "set by agent-ceo",
+  );
 });
 
 // AN ABSENT PRIORITY IS STILL A DASH, with no attribution: no value reached
@@ -382,7 +384,7 @@ test("a task carrying no priority at all still dashes", async () => {
   const { container } = rail(detail());
   await settle();
   expect(rowValue("Priority").textContent).toBe(`${EMPTY_VALUE}Not set`);
-  expect(container.querySelectorAll(".props-setby")).toHaveLength(0);
+  expect(container.querySelectorAll(".crewlet-property-list__set-by")).toHaveLength(0);
 });
 
 // THE PROJECT IS THE TASK'S ADDRESS: the name is what a person calls it and
@@ -540,7 +542,9 @@ test("a property names the change that set it, and only that change", async () =
     }),
   );
   await settle();
-  const lines = [...container.querySelectorAll(".props-setby")].map((el) => el.textContent);
+  const lines = [...container.querySelectorAll(".crewlet-property-list__set-by")].map(
+    (el) => el.textContent,
+  );
   expect(lines).toHaveLength(1);
   expect(lines[0]).toContain("bo");
 });
@@ -1575,7 +1579,9 @@ test("the peek names a person, exactly as the page does", async () => {
   });
   await settle();
   expect(screen.getAllByText("Ada Okonkwo").length).toBeGreaterThan(0);
-  const setBy = [...container.querySelectorAll(".props-setby")].map((el) => el.textContent ?? "");
+  const setBy = [...container.querySelectorAll(".crewlet-property-list__set-by")].map(
+    (el) => el.textContent ?? "",
+  );
   expect(setBy.length).toBeGreaterThan(0);
   expect(setBy.every((line) => line.includes("Ada Okonkwo"))).toBe(true);
 });
@@ -1647,10 +1653,12 @@ test("a task a bound person filed names them in the reporter and set-by lines", 
   const reporter = rowValue("Reporter");
   expect(reporter.textContent).toContain("Jane Founder");
   expect(reporter.textContent).not.toContain("session:s-1");
-  const lines = [...container.querySelectorAll(".props-setby")].map((el) => el.textContent ?? "");
+  const lines = [...container.querySelectorAll(".crewlet-property-list__set-by")].map(
+    (el) => el.textContent ?? "",
+  );
   expect(lines).toHaveLength(1);
   expect(lines[0]).toContain("set by Jane Founder");
-  expect(rowValue("Priority").querySelector(".props-setby")).not.toBeNull();
+  expect(rowValue("Priority").querySelector(".crewlet-property-list__set-by")).not.toBeNull();
 });
 
 // THE PEEK STATES EACH PROPERTY ONCE: its header is the identity and the state
