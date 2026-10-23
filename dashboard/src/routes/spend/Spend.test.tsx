@@ -964,3 +964,23 @@ test("every empty Spend card says so with the one compact empty state", async ()
   const aux = screen.getByText("The auxiliary model spent no tokens in this window");
   expect(aux.closest(".crewlet-empty-state")).not.toBeNull();
 });
+
+// ONE HEAD HEIGHT ACROSS A ROW: the wide card and the side cards beside it
+// stack their subtitle under the title at every width, so a row does not
+// draw one head inline and its neighbour's stacked.
+test("every Spend card with a subtitle stacks it under its title", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  for (const file of [
+    "ByAgent.tsx",
+    "ByModel.tsx",
+    "ByUnit.tsx",
+    "Workers.tsx",
+    "ExpensiveTasks.tsx",
+  ]) {
+    const source = readFileSync(join(process.cwd(), "src/routes/spend", file), "utf8");
+    const subtitles = source.match(/\bsubtitle=/g)?.length ?? 0;
+    expect(subtitles, file).toBeGreaterThan(0);
+    expect(source.match(/subtitlePlacement="below"/g)?.length ?? 0, file).toBe(subtitles);
+  }
+});
