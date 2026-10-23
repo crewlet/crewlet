@@ -123,6 +123,19 @@ What is worth knowing about it:
   a surprise on the worst day of the deployment's life; the digest is what
   tells a copy that was truncated in transit from one that was bad when it was
   made. Each is self-contained: no `-wal` travels with it.
+- **`VACUUM INTO` needs a writable temporary directory.** The database engine
+  builds the copy on a connection of its own, which keeps a temporary database
+  in a new directory under `TURSO_TMPDIR`, `SQLITE_TMPDIR` or `TMPDIR` (the
+  first one set, else `/tmp`), and sorts a large index into another under
+  `TMPDIR`. It removes both when the copy ends, so what a process killed in
+  the middle of a copy leaves there is that copy's directories and nothing
+  else. A backup and the
+  [snapshot](retention.md#snapshots) every data
+  node takes for its peers are the only things the store writes there: every
+  connection the engine opens keeps its temporary storage in memory (see
+  [Deployment](deployment.md#the-store)). A node whose temporary directory is
+  missing or read-only fails every backup and every snapshot, and the error
+  names the variable and the directory it holds.
 - **A node is two databases, and a backup carries both.** The node estate holds
   the audit log, memory, the config revisions and the secret bootstrap; the
   replicated estate holds everything a state log's applier writes. They are
