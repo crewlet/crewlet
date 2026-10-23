@@ -7,8 +7,9 @@
 import { Button, Card, Divider, ErrorBoundary, Link, Note, Text } from "@crewlethq/ui";
 import { LinkGlyph } from "@crewlethq/icons/glyphs";
 import { renderMarkdown } from "~/lib/markdown.ts";
+import { useServicesRun } from "~/lib/services.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { WidgetNote, destinationOf } from "./kit.tsx";
+import { WidgetNote, destinationOf, widgetMissing } from "./kit.tsx";
 import { canUse, widgetDef } from "./registry.tsx";
 import { isExternal, type ContribWidget, type Leaf, type LinksWidget } from "./model.ts";
 
@@ -63,17 +64,29 @@ function Unavailable({ children }: { children: string }) {
   );
 }
 
+/** Each of Crewlet's services by the name a reader knows it by. */
+const SERVICE_NAMES = { tracker: "Crewlet Works", knowledge: "Crewlet Knowledge" } as const;
+
 /**
  * A widget a section offers, drawn by the section's component, or the
  * sentence that says why it is not: its section no longer offers it, the
- * reader's access no longer opens its page, or it failed to draw. A failure
- * costs that one widget, never the board.
+ * company does not run the service it reads (said only while Home is edited:
+ * in view the board closes up over it), the reader's access no longer opens
+ * its page, or it failed to draw. A failure costs that one widget, never the
+ * board.
  */
 function Contributed({ widget }: { widget: ContribWidget }) {
   const viewer = useViewer();
+  const runs = useServicesRun();
   const def = widgetDef(widget.widget);
   if (!def)
     return <Unavailable>This widget is no longer available. Remove it in Edit Home.</Unavailable>;
+  const service = widgetMissing(def, widget.params, runs);
+  if (service !== undefined) {
+    return (
+      <Unavailable>{`Hidden: the company does not run ${SERVICE_NAMES[service]}. Remove it in Edit Home.`}</Unavailable>
+    );
+  }
   if (viewer.loading) return null;
   if (!canUse(def, viewer.grants)) {
     const page = destinationOf(def.from)?.label ?? def.label;

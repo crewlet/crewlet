@@ -7781,17 +7781,32 @@ a.work-cal-chip {
 
 /* 928px IS FIVE TILES' FLOOR: a tile's value line holds the figure and the
    kit's 96px trend slot inside 16px of padding each side, 176px, and five of
-   them take four 12px gaps. Below it the figures fold to three a row, and the
-   board's blocks stack (`STACKS_BELOW` in `routes/home/Home.tsx`), since the
-   decisions card's buttons need the width the live column would take. */
+   them take four 12px gaps. Below it the figures fold into rows that FILL:
+   four are two by two, and five are three over two on a six-track grid (the
+   first three spanning two tracks, the last two spanning three), since three
+   a row left a third-width hole beside the last two. The board's blocks stack
+   too (`STACKS_BELOW` in `routes/home/Home.tsx`), since the decisions card's
+   buttons need the width the live column would take. */
 @container page (width < 928px) {
-  .home-kpis:is([data-count="4"], [data-count="5"]) {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+  .home-kpis[data-count="4"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .home-kpis[data-count="5"] {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+  .home-kpis[data-count="5"] > * {
+    grid-column: span 2;
+  }
+  .home-kpis[data-count="5"] > :nth-child(n + 4) {
+    grid-column: span 3;
   }
 }
 @container page (width < 640px) {
   .home-kpis[data-count] {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .home-kpis[data-count] > * {
+    grid-column: auto;
   }
 }
 

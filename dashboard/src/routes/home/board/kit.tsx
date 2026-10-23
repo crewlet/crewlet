@@ -84,6 +84,13 @@ export interface WidgetDef {
   label: string;
   /** One short line on what it shows, for the tray. */
   description: string;
+  /**
+   * The line where what it shows depends on the services the company runs:
+   * Figures draws no task figures without Crewlet Works, and a line that
+   * promised them described a widget the reader will not get
+   * ([widgetDescription]). Absent, [description] holds everywhere.
+   */
+  describe?: (runs: ServicesRun) => string;
   icon: ComponentType<GlyphProps>;
   /** Its tint in the tray. Decorative, per widget. */
   hue: NodeHue;
@@ -114,19 +121,35 @@ export function destinationOf(from: string): Destination | undefined {
 }
 
 /**
- * Whether a widget has anything to show where the company runs `runs`: its
- * page is offered ([serviceShown]), and the service it reads itself, if any,
- * is run.
+ * The service a widget cannot draw without that the company does not run,
+ * if any: its page's ([serviceShown]), then the one it reads itself.
  */
+export function widgetMissing(
+  def: Pick<WidgetDef, "from" | "service">,
+  params: Readonly<Record<string, string>>,
+  runs: ServicesRun,
+): Service | undefined {
+  const dest = destinationOf(def.from);
+  if (dest !== undefined && !serviceShown(dest, runs)) return dest.service;
+  const service = def.service?.(params);
+  return service !== undefined && !runs[service] ? service : undefined;
+}
+
+/** What the tray says a widget shows, where the company runs `runs`. */
+export function widgetDescription(
+  def: Pick<WidgetDef, "description" | "describe">,
+  runs: ServicesRun,
+): string {
+  return def.describe?.(runs) ?? def.description;
+}
+
+/** Whether a widget has anything to show where the company runs `runs` ([widgetMissing]). */
 export function widgetShown(
   def: Pick<WidgetDef, "from" | "service">,
   params: Readonly<Record<string, string>>,
   runs: ServicesRun,
 ): boolean {
-  const dest = destinationOf(def.from);
-  if (dest !== undefined && !serviceShown(dest, runs)) return false;
-  const service = def.service?.(params);
-  return service === undefined || runs[service];
+  return widgetMissing(def, params, runs) === undefined;
 }
 
 /** Whether a reader holding `grants` may open a page: its workspace's grants and its own, as the sidebar locks them. */

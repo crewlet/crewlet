@@ -34,7 +34,7 @@ import { useViewer } from "~/lib/viewer.ts";
 import { plural } from "~/lib/format.ts";
 import { ENTRIES, LAYOUT_CATEGORIES, TEMPLATES, summary, type LayoutCategory } from "./catalog.tsx";
 import { AREAS, WIDGETS, canUse } from "./registry.tsx";
-import { widgetShown } from "./kit.tsx";
+import { widgetDescription, widgetShown } from "./kit.tsx";
 import { useServicesRun } from "~/lib/services.ts";
 import { contrib, widgetsOn, type Board, type Widget } from "./model.ts";
 
@@ -95,12 +95,12 @@ export function WidgetTray({
         (d) =>
           widgetShown(d, {}, runs) &&
           canUse(d, viewer.grants) &&
-          matches(d.label, d.description, area.label),
+          matches(d.label, widgetDescription(d, runs), area.label),
       )
       .map((d) => ({
         key: d.key,
         label: d.label,
-        description: d.description,
+        description: widgetDescription(d, runs),
         icon: <d.icon size="sm" />,
         hue: d.hue,
         placed: d.once === true && on.has(d.key),

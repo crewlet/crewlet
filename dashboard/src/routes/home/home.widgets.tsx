@@ -46,6 +46,8 @@ import {
 interface HomeCard {
   label: string;
   description: string;
+  /** The line as the services the company runs decide it, as [WidgetDef.describe]. */
+  describe?: WidgetDef["describe"];
   icon: ComponentType<GlyphProps>;
   hue: NodeHue;
   size: WidgetSize;
@@ -64,6 +66,10 @@ const CARDS: Record<SectionId, HomeCard> = {
   kpis: {
     label: "Figures",
     description: "Agents, decisions, tasks and tokens at a glance",
+    describe: (runs) =>
+      runs.tracker
+        ? "Agents, decisions, tasks and tokens at a glance"
+        : "Agents, decisions and tokens at a glance",
     icon: GaugeGlyph,
     hue: "blue",
     size: { w: 12, minW: 6, minH: 6, vertical: false },
@@ -108,6 +114,16 @@ const CARDS: Record<SectionId, HomeCard> = {
   feed: {
     label: "Recent activity",
     description: "Work finished, handed off and published",
+    // WHAT THE FEED HOLDS: the tracker's finished work and hand-offs, the
+    // schedules' runs and Knowledge's pages, each only where it is run.
+    describe: (runs) =>
+      runs.tracker
+        ? runs.knowledge
+          ? "Work finished, handed off and published"
+          : "Work finished and handed off"
+        : runs.knowledge
+          ? "Schedules run and pages published"
+          : "Schedules run",
     icon: RotateCcwClockGlyph,
     hue: "cyan",
     size: { w: 12, minW: 4, minH: 10, vertical: true },

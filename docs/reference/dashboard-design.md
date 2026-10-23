@@ -839,7 +839,11 @@ create page's Ask an agent, and New design, whose one way to finish files a
 task); without Crewlet Knowledge, Knowledge does. The Inbox stays, because
 the seat and budget conditions waiting on a person arrive under every
 backend: it draws those, and one line in place of its updates. Home leaves
-out the blocks and figures that cannot arrive. An address under a hidden
+out the blocks and figures that cannot arrive, and each row of the board
+closes up over them: the columns a hidden block held go to the blocks left in
+its row, so no row is drawn short (the saved widths are kept, and Edit Home
+shows the hidden block's cell saying why). The tray's lines say what each
+widget shows where it is placed. An address under a hidden
 place draws a notice in place (`app/ServiceNotice.tsx`): what the company runs
 instead, in the engine's word, and why the page asked for is not here (a New
 design address says a design is made by an agent working a task). It is
