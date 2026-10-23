@@ -61,11 +61,12 @@ async function draw(
     rooms = [] as { id: string; name: string; kind: string }[],
     frames = [] as Record<string, unknown>[],
     asked = [] as string[],
+    services = undefined as Record<string, string> | undefined,
   } = {},
 ) {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
   const store = new Store();
-  store.applyOrg(withDerived(ORG) as never);
+  store.applyOrg(withDerived(services ? { ...ORG, services } : ORG) as never);
   for (const frame of frames) store.applyChatChange(frame as never);
   const socket = new LiveSocket(store);
   const answers: Record<string, unknown> = {
@@ -410,7 +411,7 @@ describe.each([
 // spelled as a colour or an issue's number: only the company's rooms, as the
 // frame reads them for this reader, say which the words mean.
 describe("rooms", () => {
-  const CHATTER = { ...VIEWER, grants: [...VIEWER.grants, "chatlet"], chat_backend: "chatlet" };
+  const CHATTER = { ...VIEWER, grants: [...VIEWER.grants, "chatlet"] };
   const ROOMS = [
     { id: "room-e2e", name: "e2e", kind: "public" },
     { id: "room-2026", name: "2026", kind: "private" },
@@ -454,6 +455,21 @@ describe("rooms", () => {
   test("for a reader who holds no Chatlet, no room is asked for and the words read by their shape", async () => {
     const asked: string[] = [];
     const el = await draw(md("Ask in #e2e, not #2026."), { rooms: ROOMS, asked });
+    expect(asked).not.toContain("chat_room_names");
+    expect(el.querySelector("a")).toBeNull();
+    expect(swatch(el)).toBe("#ee22ee");
+  });
+
+  // Mutation: ask the names whatever chat the company runs, and the vendor's
+  // company below is asked for rooms it has none of.
+  test("on a company whose chat is a vendor's, no room is asked for and none is drawn", async () => {
+    const asked: string[] = [];
+    const el = await draw(md("Ask in #e2e."), {
+      viewer: CHATTER,
+      rooms: ROOMS,
+      asked,
+      services: { tracker: "worklet", knowledge: "doclet", chat: "vendor" },
+    });
     expect(asked).not.toContain("chat_room_names");
     expect(el.querySelector("a")).toBeNull();
     expect(swatch(el)).toBe("#ee22ee");

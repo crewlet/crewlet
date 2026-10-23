@@ -23,8 +23,10 @@
  * ONLY WHERE CHAT IS THE ENGINE'S AND THIS READER READS IT AS A SEAT, as every
  * Chatlet read in the frame is gated: one without the app reads no room, a
  * company on a vendor's chat or none has no room of the engine's to name, and
- * a credential acting as no seat is refused every chat question. None outside
- * the frame, for the reason `lib/linkHosts.ts` gives.
+ * nothing is asked before the engine has said the company runs Chatlet
+ * (`lib/services.ts`), and a credential acting as no seat is refused every
+ * chat question. None outside the frame, for the reason `lib/linkHosts.ts`
+ * gives.
  *
  * NOT POLLED, and asked again when the reader comes back to the tab: a room is
  * a rare, deliberate act, the frames carry the ones made meanwhile, and the
@@ -33,6 +35,7 @@
 
 import { createContext, createElement, useContext, useMemo, type ReactNode } from "react";
 import type { StoreState } from "~/protocol/index.ts";
+import { useServicesAsk } from "./services.ts";
 import { useSlice } from "./store-hooks.ts";
 import { useQuery } from "./useQuery.ts";
 import { useViewer } from "./viewer.ts";
@@ -60,8 +63,8 @@ function sighted(state: StoreState): string {
 
 export function RoomNamesProvider({ children }: { children: ReactNode }) {
   const viewer = useViewer();
-  const enabled =
-    viewer.chatlet && viewer.chatBackend === "chatlet" && !viewer.unbound && !viewer.asking;
+  const ask = useServicesAsk();
+  const enabled = ask.chat && viewer.chatlet && !viewer.unbound && !viewer.asking;
   const { data } = useQuery("chat_room_names", {}, { enabled, refetchOnFocus: true });
   const seen = useSlice(["chat"], sighted);
   const rooms = useMemo(() => {

@@ -3,22 +3,21 @@
  * the press it opens onto would be, and a way into chat's New direct message
  * with the seat already chosen.
  *
- * Mutation: draw it whatever the backend and the vendor case goes red; send
- * it anywhere but `#/chatlet?dm=` and the press case does.
+ * Mutation: draw it whatever the company runs and the vendor case goes red;
+ * send it anywhere but `#/chatlet?dm=` and the press case does.
  */
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { Router } from "~/app/router.tsx";
-import { useConnection } from "~/lib/store-hooks.ts";
+import { useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { useViewer, type ViewerState } from "~/lib/viewer.ts";
 import { OWN_SEAT_DIRECT, WRITE_REASONS } from "~/lib/useWriteAccess.ts";
+import type { OrgServices } from "~/contract/services.ts";
+import type { OrgProjection } from "~/protocol/index.ts";
 import { DirectMessageSeatButton } from "./DirectMessage.tsx";
 
-// `useOrg` ANSWERS NOTHING, which is a projection not yet arrived: every
-// service is drawn as run (`lib/services.ts`), so the door is decided by chat
-// alone.
 vi.mock("~/lib/store-hooks.ts", () => ({ useConnection: vi.fn(), useOrg: vi.fn() }));
 vi.mock("~/lib/viewer.ts", () => ({ useViewer: vi.fn() }));
 
@@ -42,11 +41,13 @@ const ADA: ViewerState = {
   asking: false,
   configWriter: false,
   configManagedBy: [],
-  chatBackend: "chatlet",
   chatVendors: [],
   assistant: "disabled",
   assistantModel: null,
 };
+
+/** What the engine says the company runs: Crewlet's own, all three. */
+const CHATLET: OrgServices = { tracker: "worklet", knowledge: "doclet", chat: "chatlet" };
 
 beforeEach(() => {
   location.hash = "#/agents/swe";
@@ -59,8 +60,9 @@ afterEach(() => {
   location.hash = "#/";
 });
 
-function mount(viewer: ViewerState, handle = "swe") {
+function mount(viewer: ViewerState, handle = "swe", services: OrgServices = CHATLET) {
   vi.mocked(useViewer).mockReturnValue(viewer);
+  vi.mocked(useOrg).mockReturnValue({ name: "Acme", services } as OrgProjection);
   render(
     <Router>
       <DirectMessageSeatButton handle={handle} />
@@ -77,11 +79,11 @@ test("opens chat's New direct message with the seat chosen", async () => {
 });
 
 test.each([
-  ["a company on a vendor's chat", { ...ADA, chatBackend: "vendor" as const }],
-  ["a company with no chat", { ...ADA, chatBackend: "none" as const }],
-  ["a reader the viewer names no backend to", { ...ADA, chatlet: false, chatBackend: "" as const }],
-])("is not drawn for %s", (_, viewer) => {
-  expect(mount(viewer)).toBeNull();
+  ["a company on a vendor's chat", ADA, { ...CHATLET, chat: "vendor" as const }],
+  ["a company with no chat", ADA, { ...CHATLET, chat: "none" as const }],
+  ["a reader without Chatlet", { ...ADA, chatlet: false }, CHATLET],
+])("is not drawn for %s", (_, viewer, services) => {
+  expect(mount(viewer, "swe", services)).toBeNull();
 });
 
 test.each([

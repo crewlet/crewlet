@@ -65,7 +65,7 @@ function Unavailable({ children }: { children: string }) {
 }
 
 /** No service at all: what a widget is measured against to ask whether it reads one. */
-const NONE_RUN: ServicesRun = { tracker: false, knowledge: false };
+const NONE_RUN: ServicesRun = { tracker: false, knowledge: false, chat: false };
 
 /** The card a widget holds while the board waits to learn what the company runs. */
 function WidgetSkeleton() {

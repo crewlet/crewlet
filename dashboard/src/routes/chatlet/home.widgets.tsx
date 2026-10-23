@@ -10,10 +10,12 @@
  *
  * READ AS A SEAT, OR NOT ASKED. Every chat question is answered for the seat
  * the session holds and refused to a credential acting as none, so such a
- * reader is told so in one line and nothing is asked; and a company whose chat
- * is a vendor's or nobody's serves no chat question, so the widget says where
- * its chat is instead. Who may add either at all is the navigation's: the chat
- * row's app.
+ * reader is told so in one line and nothing is asked. A company whose chat is
+ * a vendor's or nobody's is offered neither widget, since Home's board hides
+ * what reads a service the company does not run (`kit.tsx`'s `widgetShown`),
+ * and nothing is asked before the engine has said it runs Chatlet
+ * (`lib/services.ts`). Who may add either at all is the navigation's: the
+ * chat row's app.
  */
 
 import { useEffect, useMemo } from "react";
@@ -26,6 +28,7 @@ import { indexOrg } from "~/lib/seats.ts";
 import { useClient, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
+import { useServicesAsk } from "~/lib/services.ts";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import {
   WidgetCard,
@@ -36,34 +39,26 @@ import {
 } from "~/routes/home/board/kit.tsx";
 import { useChatActivity, useChatFrames, useChatRead, useCoalesced } from "./live.ts";
 import { badgesAreMeasured, isDirect, roomMark, roomTitle, unreadLabel } from "./rooms.ts";
-import { vendorChatName } from "./vendors.ts";
 
 const ROWS = 5;
 
 /**
  * Whether this reader's chat widgets ask anything, and the line each draws in
- * place of its rooms where they do not — the chat screen's own two answers,
- * said in a line: a company whose chat is not the engine's own, and a
- * credential acting as no seat. The first viewer read still out asks nothing
- * and says nothing, as the screen waits it out.
+ * place of its rooms where they do not: the chat screen's own answer to a
+ * credential acting as no seat, said in a line. The first viewer read still
+ * out asks nothing and says nothing, as the screen waits it out, and so does
+ * a company the engine has not yet said runs Chatlet.
  */
 function useChatHome(): { asks: boolean; note: string; viewer: string } {
   const viewer = useViewer();
-  const backend = viewer.chatBackend;
-  if (backend === "none") return { asks: false, note: "This company runs no chat.", viewer: "" };
-  if (backend === "vendor")
-    return {
-      asks: false,
-      note: `This company's chat is on ${vendorChatName(viewer.chatVendors)}.`,
-      viewer: "",
-    };
+  const runs = useServicesAsk().chat;
   if (viewer.unbound)
     return {
       asks: false,
       note: "Chatlet is read as a seat, and this sign-in holds none.",
       viewer: "",
     };
-  return { asks: !viewer.asking, note: "", viewer: viewer.handle };
+  return { asks: runs && !viewer.asking, note: "", viewer: viewer.handle };
 }
 
 /** A handle to a display name, off the chart. */

@@ -26,7 +26,9 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { SessionReading } from "~/lib/frameSession.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { Store, type QueryName } from "~/protocol/index.ts";
+import type { OrgServices } from "~/contract/services.ts";
 import { healthFrame } from "./health.ts";
+import { withDerived } from "./org.ts";
 
 /** Every chat change the dashboard makes, as the engine serves it to a person. */
 const CHAT_ACTS = [
@@ -46,7 +48,7 @@ const CHAT_ACTS = [
 /**
  * A person signed in as `ada.lovelace` and bound to the seat `ada`, holding the
  * Chatlet app — and nothing else, so a case that passes is not passing on admin —
- * who may make every chat change, on a company running the engine's own chat.
+ * who may make every chat change.
  */
 export const ADA = {
   login: "ada.lovelace",
@@ -59,8 +61,14 @@ export const ADA = {
   project: "",
   config_writer: false,
   config_managed_by: [],
-  chat_backend: "chatlet",
   chat_vendors: [],
+};
+
+/** What a company running Crewlet's own three services publishes as `services`. */
+export const NATIVE_SERVICES: OrgServices = {
+  tracker: "worklet",
+  knowledge: "doclet",
+  chat: "chatlet",
 };
 
 /** What `GET /auth/session` answers for [ADA]: the person, and the seat they hold. */
@@ -185,7 +193,9 @@ type Answerer = (what: string, params?: Record<string, unknown>) => Promise<unkn
  * Mount a piece of the chat screen as the frame would: a connected socket
  * whose questions answer from `answers` (or from `answer`, for a suite whose
  * answers turn on a question's parameters), the session and the viewer read
- * every screen shares, a toast host and the router.
+ * every screen shares, a toast host and the router — and, where `services` is
+ * given, an org projection publishing them, which a piece that waits for the
+ * engine to say the company runs Chatlet (`lib/services.ts`) reads.
  */
 export function mountChat(
   children: ReactNode,
@@ -195,6 +205,7 @@ export function mountChat(
     viewer = ADA,
     connected = true,
     strict = false,
+    services,
   }: {
     answers?: Partial<Record<QueryName, unknown>>;
     answer?: Answerer;
@@ -204,10 +215,13 @@ export function mountChat(
      *  the one place React's development-only extra setup and cleanup of
      *  every effect happens; nested under these providers it does not. */
     strict?: boolean;
+    /** What the company runs, published on an org projection; none by default. */
+    services?: OrgServices;
   } = {},
 ) {
   const store = new Store();
   if (connected) store.applyHealth(healthFrame({ nodes: 1 }));
+  if (services) store.applyOrg(withDerived({ name: "Acme", roles: [], services }));
   const socket = {
     query: vi.fn(async (what: string, params?: Record<string, unknown>) => {
       if (what === "viewer") return viewer;

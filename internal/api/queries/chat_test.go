@@ -1407,30 +1407,32 @@ func TestTheCallersFreshnessReachesEveryChatRead(t *testing.T) {
 
 // ---- the viewer -------------------------------------------------------- //
 
-// WHICH CHAT THIS COMPANY RUNS IS ANSWERED TO A HOLDER OF `chatlet`, and to
-// nobody else.
+// WHERE A COMPANY TALKS, WHEN IT IS A VENDOR'S CHAT, IS ANSWERED TO A HOLDER
+// OF `chatlet`, and to nobody else.
 //
-// A screen asks it before it draws a room, because a chat question on a
-// company whose chat is not the engine's answers `unknown_query`, which reads
-// as a subsystem missing on this node. And it is Chatlet's disclosure,
-// held to who may read the app as every app's are: a caller without the grant
-// is answered the empty values, never the company's choice.
-func TestTheViewerSaysWhichChatTheCompanyRunsToAHolderOfChat(t *testing.T) {
+// Whether the company runs the engine's own chat at all is every reader's, as
+// the org projection's `services`; which vendors it talks on is the one
+// further fact a screen naming where the company talks needs, and it is Chatlet's disclosure,
+// held to who may read the app as every app's are: a
+// caller without the grant is answered an empty list, never the vendors. A
+// company on the engine's own chat or on none declares no vendor to name.
+//
+// Mutation: answer the vendors whatever the grant, or on a company whose chat
+// is not a vendor's, and a row below fails.
+func TestTheViewerNamesAVendorChatToAHolderOfChat(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name, doc   string
 		grants      []iam.Grant
-		wantBackend string
 		wantVendors []string
 	}{
-		{"chatlet, to a holder of chatlet", "", []iam.Grant{iam.GrantChatlet}, "chatlet", []string{}},
-		{"chatlet, to a seat without it", "", []iam.Grant{iam.GrantWorklet}, "", []string{}},
+		{"chatlet, to a holder of chatlet", "", []iam.Grant{iam.GrantChatlet}, []string{}},
 		{"none, to a holder of chat", "chat:\n  backend: none\n",
-			[]iam.Grant{iam.GrantChatlet}, "none", []string{}},
+			[]iam.Grant{iam.GrantChatlet}, []string{}},
 		{"a vendor, to a holder of chat", "integrations:\n  slack: {}\n",
-			[]iam.Grant{iam.GrantChatlet}, "vendor", []string{"slack"}},
+			[]iam.Grant{iam.GrantChatlet}, []string{"slack"}},
 		{"a vendor, to a seat without it", "integrations:\n  slack: {}\n",
-			[]iam.Grant{iam.GrantWorklet}, "", []string{}},
+			[]iam.Grant{iam.GrantWorklet}, []string{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -1444,8 +1446,9 @@ func TestTheViewerSaysWhichChatTheCompanyRunsToAHolderOfChat(t *testing.T) {
 			queries.Register(r, s)
 			answered, err := r.Answer(asSeat(t, "ana", tc.grants...), "viewer", nil)
 			got := chatJSON(t, answered, err)
-			if got["chat_backend"] != tc.wantBackend {
-				t.Errorf("chat_backend = %v, want %q", got["chat_backend"], tc.wantBackend)
+			if _, present := got["chat_backend"]; present {
+				t.Errorf("chat_backend = %v: whether the company runs the engine's chat "+
+					"is the org projection's `services`, and a second answer drifts", got["chat_backend"])
 			}
 			vendors, present := got["chat_vendors"].([]any)
 			if !present {

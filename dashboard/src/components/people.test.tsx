@@ -39,6 +39,8 @@ import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
+import type { OrgServices } from "~/contract/services.ts";
+import { withDerived } from "~/test/org.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -149,9 +151,10 @@ function mount(node: React.ReactNode) {
 
 /**
  * The reach note as an admin granting access reads it, on a company whose
- * chat is `chat_backend` — the one fact about the reader it reads.
+ * chat is `chat` (the org projection's `services`): the one fact about the
+ * company it reads.
  */
-async function reach(node: React.ReactNode, chatBackend: string) {
+async function reach(node: React.ReactNode, chat: OrgServices["chat"]) {
   const viewer = {
     login: "ada.admin",
     owner: "ada",
@@ -163,11 +166,17 @@ async function reach(node: React.ReactNode, chatBackend: string) {
     project: "",
     config_writer: true,
     config_managed_by: [],
-    chat_backend: chatBackend,
     chat_vendors: [],
   };
   const store = new Store();
   store.setConnected(true);
+  store.applyOrg(
+    withDerived({
+      name: "Acme",
+      roles: [],
+      services: { tracker: "worklet", knowledge: "doclet", chat },
+    }),
+  );
   const socket = { query: vi.fn(async (what: string) => (what === "viewer" ? viewer : {})) };
   render(
     <ClientContext.Provider value={{ store, socket } as never}>
@@ -853,18 +862,16 @@ test("the reach note speaks to the reader about their own access", async () => {
   expect(document.body.textContent).toBe("");
 });
 
-// WITHOUT CHATLET, WHAT AGENTS SAY NEVER REACHES THEM — on a company running the
-// engine's own chat, and only there: on a vendor's the conversation is the
-// vendor's, and a reader the viewer names no backend to is told nothing it
-// cannot stand behind. The tracker's note comes first where both are missing.
-// Mutation: drop the backend check and the vendor row goes red; drop the
+// WITHOUT CHATLET, WHAT AGENTS SAY NEVER REACHES THEM, on a company running
+// Chatlet, and only there: on a vendor's the conversation is the
+// vendor's. The tracker's note comes first where both are missing.
+// Mutation: drop the services check and the vendor row goes red; drop the
 // chat note and the chatlet row does.
 test.each([
   ["chatlet", true],
   ["vendor", false],
   ["none", false],
-  ["", false],
-])(
+] as const)(
   "on a company whose chat is %j, a person without Chatlet is told so: %s",
   async (backend, said) => {
     await reach(<AppReachNote grants={["worklet"]} />, backend);

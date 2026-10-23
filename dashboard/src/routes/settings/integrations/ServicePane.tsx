@@ -18,6 +18,10 @@
  *  - THE SETTINGS. The company document's `tracker` and `knowledge` blocks,
  *    with the engine's own defaults where a key is unset, read only by an
  *    Admin, as the `config` question is.
+ *  - CHATLET COUNTS NOTHING: the rooms it answers for are the reader's own
+ *    seat's, never the company's, so its page names no count and no roster,
+ *    only what it gives and the way in, which is offered to a holder of Chatlet
+ *    as Worklet and Doclet offer theirs to a holder of their apps.
  *
  * A service the company runs elsewhere says what replaces it and what
  * running it here would mean, with no control: switching is not offered yet.
@@ -44,17 +48,17 @@ import { documentUnits, handleLabel, indexOrg, type Seat } from "~/lib/seats.ts"
 import { useViewer } from "~/lib/viewer.ts";
 import { useServicesAsk } from "~/lib/services.ts";
 import { useNow } from "~/lib/clock.ts";
-import { DOCLET, WORKLET, needsWords } from "~/lib/access.ts";
+import { CHATLET, DOCLET, WORKLET, needsWords } from "~/lib/access.ts";
 import { fmtCount, plural, relTime } from "~/lib/format.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import type { CompanyDocument } from "~/protocol/types.ts";
 import { FeedRow, ServiceMark, ServiceState } from "./parts.tsx";
-import type { BuiltInService, Model } from "./model.ts";
+import type { BuiltInService, Model, ReplacingApp } from "./model.ts";
 
 /** What a settings row says for a key the company document leaves unset. */
 const DEFAULT = "The engine's default";
 
-/** What a service gives the company, for the off state and Chat. */
+/** What a service gives the company: what running it here would give, or what Chatlet gives. */
 const GIVES: Record<BuiltInService["key"], string[]> = {
   worklet: [
     "Projects and tasks, on boards and lists",
@@ -109,20 +113,56 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
 
+/** What each service holds, as the off state's sentences name it. */
+const HOLDS: Record<BuiltInService["key"], string> = {
+  worklet: "tasks",
+  doclet: "pages",
+  chat: "conversations",
+};
+
+/** A replacing app's name on its own line and button. */
+const APP_NAMES: Record<ReplacingApp, string> = {
+  jira: "Jira",
+  confluence: "Confluence",
+  slack: "Slack",
+  mattermost: "Mattermost",
+};
+
+/**
+ * The tool on the directory that connects a replacing app: Jira and
+ * Confluence are one Atlassian connection, and a chat vendor is its own.
+ */
+function connectionOf(app: ReplacingApp): "atlassian" | "slack" | "mattermost" {
+  return app === "jira" || app === "confluence" ? "atlassian" : app;
+}
+
 /** What replaces a service the company does not run here. */
 function Elsewhere({ service, model }: { service: BuiltInService; model: Model | null }) {
   const by = service.replacedBy;
-  const tool = model?.byKey.get("atlassian");
-  const what = service.key === "worklet" ? "tasks" : "pages";
+  const what = HOLDS[service.key];
+  const apps = by?.keys ?? [];
+  const only = apps.length === 1 ? apps[0] : undefined;
+  // THE SENTENCE NAMES THE CONNECTION THE APP RIDES: Jira and Confluence
+  // through the one Atlassian integration, a chat vendor as itself. A vendor
+  // nobody named (the `viewer` answer tells the names to a holder of Chatlet) is
+  // still a vendor's chat, said in words.
+  const how =
+    service.key === "chat"
+      ? `Your agents talk on ${by?.name}`
+      : `Your agents work in ${by?.name} through the Atlassian integration`;
   return (
     <div className="int-service-off">
       <Callout
         variant="neutral"
-        icon={by ? <VendorMark vendor="atlassian" size="md" /> : undefined}
-        title={by ? `${by.name} does this for your company` : "Nothing does this for your company"}
+        icon={only ? <VendorMark vendor={connectionOf(only)} size="md" /> : undefined}
+        title={
+          by
+            ? `${capitalised(by.name)} ${apps.length > 1 ? "do" : "does"} this for your company`
+            : "Nothing does this for your company"
+        }
       >
         {by
-          ? `Your agents work in ${by.name} through the Atlassian integration, so ${service.name} is not in use. Running both would leave two places for the same ${what}.`
+          ? `${how}, so ${service.name} is not in use. Running both would leave two places for the same ${what}.`
           : `The company document leaves ${service.name} out and names nothing in its place.`}
       </Callout>
       <section aria-label={`What ${service.name} would give you`}>
@@ -139,22 +179,35 @@ function Elsewhere({ service, model }: { service: BuiltInService; model: Model |
         The company document decides which system holds the company&apos;s {what}, so this page
         offers no switch: moving them is a change to plan, not a toggle.
       </p>
-      {by && (
+      {apps.length > 0 && (
         <div className="int-row-start">
-          <ButtonLink
-            size="small"
-            variant="secondary"
-            href={href(["company", "integrations", by.key])}
-          >
-            Open {by.name}
-          </ButtonLink>
-          {tool && !tool.configured && (
-            <span className="t-caption">Atlassian is not connected.</span>
-          )}
+          {apps.map((app) => (
+            <ButtonLink
+              key={app}
+              size="small"
+              variant="secondary"
+              href={href(["company", "integrations", app])}
+            >
+              Open {APP_NAMES[app]}
+            </ButtonLink>
+          ))}
+          {[...new Set(apps.map(connectionOf))].map((key) => {
+            const tool = model?.byKey.get(key);
+            return tool && !tool.configured ? (
+              <span key={key} className="t-caption">
+                {tool.entry.name} is not connected.
+              </span>
+            ) : null;
+          })}
         </div>
       )}
     </div>
   );
+}
+
+/** A phrase as the start of a sentence: "a vendor's chat" is "A vendor's chat". */
+function capitalised(phrase: string): string {
+  return phrase.charAt(0).toUpperCase() + phrase.slice(1);
 }
 
 /** One agent's line on a service's Agents tab. */
@@ -241,7 +294,6 @@ export function ServicePane({ service, model }: { service: BuiltInService; model
       actions={actions}
     />
   );
-  if (service.key === "chat") return <ChatPane service={service} head={head} />;
   if (!service.known) return <div className="int-detail">{head(service.sentence)}</div>;
   if (!service.on) {
     return (
@@ -251,6 +303,7 @@ export function ServicePane({ service, model }: { service: BuiltInService; model
       </div>
     );
   }
+  if (service.key === "chat") return <ChatPane service={service} head={head} />;
   return service.key === "worklet" ? (
     <WorkletPane service={service} head={head} />
   ) : (
@@ -631,49 +684,37 @@ function DocletPane({ service, head }: { service: BuiltInService; head: Head }) 
   );
 }
 
-/** Crewlet Chat: what it will do, and nothing it cannot count yet. */
+/** Chatlet in use: what it gives and the way in, and no count (see the file's doc). */
 function ChatPane({ service, head }: { service: BuiltInService; head: Head }) {
+  // THE WAY IN IS CHATLET'S: every room is behind the Chatlet app, so a reader
+  // without it is told what would open it rather than offered a link to a
+  // screen that refuses them.
+  const viewer = useViewer();
   return (
     <div className="int-detail">
-      {head("Talk with your agents in Crewlet itself.")}
-      <div className="int-soon">
-        <div aria-hidden>
-          <ServiceMark service={{ ...service, soon: false }} size={64} />
-        </div>
-        <div className="int-soon-copy">
-          <h3 className="int-step-title">Coming soon</h3>
-          <p className="t-body">
-            Chat puts the conversation where the work already is, so asking an agent something does
-            not mean leaving Crewlet for another app.
-          </p>
-          <List variant="plain" className="int-checks">
-            {GIVES.chat.map((line) => (
-              <List.Item key={line} leading={<CheckGlyph size="sm" aria-hidden />}>
-                {line}
-              </List.Item>
-            ))}
-          </List>
-          <p className="t-caption">
-            Until it ships, your team talks with agents in Slack or Mattermost.
-          </p>
-          <div className="int-row-start">
-            <ButtonLink
-              size="small"
-              variant="secondary"
-              href={href(["company", "integrations", "slack"])}
-            >
-              Slack
-            </ButtonLink>
-            <ButtonLink
-              size="small"
-              variant="secondary"
-              href={href(["company", "integrations", "mattermost"])}
-            >
-              Mattermost
-            </ButtonLink>
-          </div>
-        </div>
-      </div>
+      {head(
+        service.sentence,
+        viewer.chatlet && service.open && (
+          <ButtonLink size="small" variant="primary" href={href(service.open.path)}>
+            {service.open.label}
+          </ButtonLink>
+        ),
+      )}
+      {!viewer.chatlet && (
+        <Callout variant="neutral">
+          {needsWords("Talking with your agents in it", [CHATLET])}
+        </Callout>
+      )}
+      <section aria-label={`What ${service.name} gives you`}>
+        <h3 className="t-label">What it gives you</h3>
+        <List variant="plain" className="int-checks">
+          {GIVES.chat.map((line) => (
+            <List.Item key={line} leading={<CheckGlyph size="sm" aria-hidden />}>
+              {line}
+            </List.Item>
+          ))}
+        </List>
+      </section>
     </div>
   );
 }

@@ -25,6 +25,7 @@ import {
   actEngine,
   applied,
   mountChat,
+  NATIVE_SERVICES,
   unknown,
   type ActReply,
   type Pressed,
@@ -134,7 +135,8 @@ function mount(found: string[], named?: { id: string; name: string; kind: string
   const panel = <Browse onClose={onClose} />;
   const { store, socket } = mountChat(
     named ? <RoomNamesProvider>{panel}</RoomNamesProvider> : panel,
-    { answer },
+    // THE NAMES ARE ASKED once the engine has said the company runs Chatlet.
+    named ? { answer, services: NATIVE_SERVICES } : { answer },
   );
   return { store, query: socket.query, onClose };
 }

@@ -95,7 +95,6 @@ import { Search } from "./Search.tsx";
 import { StartDirect } from "./StartDirect.tsx";
 import { StartRoom } from "./StartRoom.tsx";
 import { badgesAreMeasured, isDirect, roomMark, roomTitle, unreadLabel } from "./rooms.ts";
-import { vendorChatName } from "./vendors.ts";
 
 /** Which of the three lists the main column is showing. */
 export type ChatView = "room" | "mentions" | "search";
@@ -215,25 +214,20 @@ function ChatAs({ channel = "", view = "room", seat }: ChatPlace & { seat: RefOb
   // seat, which it would only refuse. `unbound` is an answer by construction:
   // a login with no seat exists only in a viewer that came back.
   //
-  // AND NOT AT ALL on a company whose chat is somebody else's, or nobody's:
-  // the engine serves no chat question there, and the screen says which
-  // instead ([ChatElsewhere]).
-  const elsewhere = viewer.chatBackend === "vendor" || viewer.chatBackend === "none";
+  // A company whose chat is somebody else's, or nobody's, is served no chat
+  // question, and never sees this screen once the engine has said so: the
+  // frame draws where its chat is in its place (`app/ServiceNotice.tsx`), as
+  // it does for Worklet on a company running Jira.
   useEffect(() => {
     if (dm === "" || viewer.asking || org === null) return;
     nav.filter({ dm: null });
-    // NO DIALOG WHERE NOTHING COULD BE SAID: a company whose chat is
-    // elsewhere, and a credential acting as no seat, each get this screen's
-    // own sentence instead.
-    if (elsewhere || viewer.unbound) return;
+    // NO DIALOG WHERE NOTHING COULD BE SAID: a credential acting as no seat
+    // gets this screen's own sentence instead.
+    if (viewer.unbound) return;
     setDirectWith(people.some((person) => person.value === dm) ? [dm] : []);
     setGesture("direct");
-  }, [dm, viewer.asking, viewer.unbound, org, elsewhere, people, nav]);
-  const rail = useQuery(
-    "chat_channels",
-    {},
-    { enabled: !viewer.asking && !viewer.unbound && !elsewhere },
-  );
+  }, [dm, viewer.asking, viewer.unbound, org, people, nav]);
+  const rail = useQuery("chat_channels", {}, { enabled: !viewer.asking && !viewer.unbound });
 
   // THE RAIL SEEDS THIS TAB'S READ STATE, which nothing else would until a
   // flush landed somewhere: the live channel pushes it only when it moves.
@@ -266,12 +260,6 @@ function ChatAs({ channel = "", view = "room", seat }: ChatPlace & { seat: RefOb
 
   if (viewer.asking) {
     return <Skeleton variant="text" rows={6} label="Working out who you are" />;
-  }
-  // BEFORE THE BINDING: on a company whose chat is not the engine's own there
-  // is nothing a binding would open, and the remedy is a different line.
-  const backend = viewer.chatBackend;
-  if (backend === "vendor" || backend === "none") {
-    return <ChatElsewhere backend={backend} vendors={viewer.chatVendors} />;
   }
   if (viewer.unbound) {
     return (
@@ -463,55 +451,6 @@ function Landing({ rail }: { rail: ChatChannelsAnswer | null }) {
       icon={<MessageSquareGlyph size="xl" />}
       title="Pick a room"
       description="Rooms are on the left, newest activity first. Your mentions are the one list that spans all of them."
-    />
-  );
-}
-
-/**
- * A company whose chat is not the engine's own: on a vendor's, or none.
- *
- * NOT CONFIGURED IS NOT EMPTY, and neither is it a fault. Every chat question
- * is served only where `chat.backend` is `chatlet`, so asked here each one
- * came back `unknown_query` — "the subsystem behind it is not running on this
- * node", which sends an operator to debug a node over a company's own choice.
- * The row stays, as Knowledge's does with no backend: a workspace that
- * vanished would read as a product with no chat at all. And nothing here
- * offers to start a conversation, because nothing here could hold one.
- */
-function ChatElsewhere({
-  backend,
-  vendors,
-}: {
-  backend: "vendor" | "none";
-  vendors: readonly string[];
-}) {
-  if (backend === "none") {
-    return (
-      <EmptyState
-        icon={<MessageSquareGlyph size="xl" />}
-        title="This company runs no chat"
-        description={
-          <>
-            <InlineCode>chat.backend</InlineCode> is <InlineCode>none</InlineCode>. Set it to{" "}
-            <InlineCode>chatlet</InlineCode> to give the company its own rooms.
-          </>
-        }
-      />
-    );
-  }
-  const where = vendorChatName(vendors);
-  return (
-    <EmptyState
-      icon={<MessageSquareGlyph size="xl" />}
-      title={`This company’s chat is on ${where}`}
-      description={
-        <>
-          <InlineCode>chat.backend</InlineCode> is <InlineCode>vendor</InlineCode>, so people and
-          agents talk there. To use the engine&rsquo;s own chat, set it to{" "}
-          <InlineCode>chatlet</InlineCode> and remove the vendor&rsquo;s chat integration. The two
-          can&rsquo;t run together.
-        </>
-      }
     />
   );
 }

@@ -2091,6 +2091,8 @@ Which **chat surface** this company talks on, the third axis and the same shape 
 
 The value is `vendor` rather than a product name — the other two axes name theirs — because a company legitimately runs **both** Mattermost and Slack: they are different workspaces with different people in them, and an org migrating between them runs the pair for months.
 
+The backend this axis resolves to is published to every signed-in reader beside the other two, as `chat` in [`services` on the org answer](../reference/api-endpoints.md#get-org): a company that does not run Chatlet has no Chatlet in the dashboard. Which vendors it talks on is told only to a reader holding Chatlet.
+
 See [Chatlet](../concepts/chatlet.md) for what Chatlet is, who a message wakes, and what it deliberately does not do.
 
 ### Chatlet's own policy

@@ -675,19 +675,15 @@ func (s Sources) chatDefaultPrivate() bool {
 	return c.Chat.Chatlet.DefaultPrivate()
 }
 
-// chatBackend is the chat surface the company runs and, on a vendor, the
-// vendor surfaces it declares — or "" with no company. The vendors are never
-// nil.
-func (s Sources) chatBackend() (config.ChatBackend, []string) {
+// chatVendors is the vendor chat surfaces a company talking on a vendor's
+// chat declares: empty, never nil, on a company that talks on the engine's
+// own chat or on none, and with no company.
+func (s Sources) chatVendors() []string {
 	c := s.company()
-	if c == nil {
-		return "", []string{}
+	if c == nil || c.ChatBackendFor() != config.ChatVendor {
+		return []string{}
 	}
-	backend := c.ChatBackendFor()
-	if backend != config.ChatVendor {
-		return backend, []string{}
-	}
-	return backend, c.ChatVendors()
+	return c.ChatVendors()
 }
 
 // company is the running company's document, or nil before one is running.

@@ -19,7 +19,7 @@ import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { useManagedConfig } from "~/lib/useWriteAccess.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { SERVICE_NAMES, useBackends, type OrgServices } from "~/lib/services.ts";
+import { SERVICE_NAMES, chatVendorName, useBackends, type OrgServices } from "~/lib/services.ts";
 import { asSentence, plural } from "~/lib/format.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { rest, RestError } from "~/protocol/index.ts";
@@ -203,27 +203,32 @@ export interface Tool {
   asks: SetupRequirement[];
 }
 
+/** An app that can do a built-in service's work instead, by its directory line's key. */
+export type ReplacingApp = "jira" | "confluence" | "slack" | "mattermost";
+
 export interface BuiltInService {
   key: "worklet" | "doclet" | "chat";
   name: string;
   /**
    * Who makes it, where the directory names a product beside its maker (Jira
-   * beside Atlassian): Crewlet, for Worklet and Doclet. Absent where the name
-   * already says it (Crewlet Chat).
+   * beside Atlassian): Crewlet, for Worklet, Doclet and Chatlet.
    */
   vendor?: string;
   /** Whether the engine has said what the company runs: false on a node running no company. */
   known: boolean;
-  /** In use here, run elsewhere, or not shipped yet. */
+  /** In use here, or run elsewhere (or not at all). */
   on: boolean;
-  soon: boolean;
   /**
    * What the service is, whether or not the company uses it: what runs in
    * its place is said once, by the page beneath the header.
    */
   sentence: string;
-  /** The product that does this service's work instead, where the company runs one. */
-  replacedBy?: { key: "jira" | "confluence"; name: string };
+  /**
+   * What does this service's work instead, where the company runs something:
+   * the apps it runs in its place (Jira, Confluence, the chat vendors it talks
+   * on), each by its line's key, and their names as one phrase.
+   */
+  replacedBy?: { keys: ReplacingApp[]; name: string };
   open?: { label: string; path: string[] };
 }
 
@@ -458,13 +463,18 @@ function seatRowsOf(
   });
 }
 
-/** The built-in services, from the engine's projection alone (everybody's). */
+/**
+ * The built-in services, from the engine's projection (everybody's), with the
+ * chat vendors named by the `viewer` answer, which tells them to a reader
+ * holding Chatlet.
+ */
 export function useBuiltIns(): BuiltInService[] {
   const backends = useBackends();
-  return useMemo(() => builtIns(backends), [backends]);
+  const vendors = useViewer().chatVendors;
+  return useMemo(() => builtIns(backends, vendors), [backends, vendors]);
 }
 
-/** A node running no company has nothing to say about either service. */
+/** A node running no company has nothing to say about any service. */
 const NO_COMPANY = "This node runs no company yet.";
 
 /**
@@ -472,9 +482,18 @@ const NO_COMPANY = "This node runs no company yet.";
  * has said (a node running no company), each says so rather than guessing
  * either way.
  */
-export function builtIns(backends: OrgServices | null): BuiltInService[] {
+export function builtIns(
+  backends: OrgServices | null,
+  chatVendors: readonly string[] = [],
+): BuiltInService[] {
   const tracker = backends?.tracker;
   const knowledge = backends?.knowledge;
+  const chat = backends?.chat;
+  // THE LINES A VENDOR CHAT IS LISTED ON: the ones the directory has. A vendor
+  // nobody named is still a vendor's chat, said in words, with no line to open.
+  const vendorLines = chatVendors.filter(
+    (v): v is "slack" | "mattermost" => v === "slack" || v === "mattermost",
+  );
   return [
     {
       key: "worklet",
@@ -482,9 +501,8 @@ export function builtIns(backends: OrgServices | null): BuiltInService[] {
       vendor: "Crewlet",
       known: tracker !== undefined,
       on: tracker === "worklet",
-      soon: false,
       sentence: tracker === undefined ? NO_COMPANY : "Projects, tasks, your inbox and My work.",
-      ...(tracker === "jira" ? { replacedBy: { key: "jira", name: "Jira" } as const } : {}),
+      ...(tracker === "jira" ? { replacedBy: { keys: ["jira"], name: "Jira" } } : {}),
       ...(tracker === "worklet" ? { open: { label: "Open Worklet", path: ["worklet"] } } : {}),
     },
     {
@@ -493,21 +511,25 @@ export function builtIns(backends: OrgServices | null): BuiltInService[] {
       vendor: "Crewlet",
       known: knowledge !== undefined,
       on: knowledge === "doclet",
-      soon: false,
       sentence:
         knowledge === undefined ? NO_COMPANY : "Spaces and pages, agent skills and diaries.",
       ...(knowledge === "confluence"
-        ? { replacedBy: { key: "confluence", name: "Confluence" } as const }
+        ? { replacedBy: { keys: ["confluence"], name: "Confluence" } }
         : {}),
       ...(knowledge === "doclet" ? { open: { label: "Open Doclet", path: ["doclet"] } } : {}),
     },
     {
       key: "chat",
-      name: "Crewlet Chat",
-      known: true,
-      on: false,
-      soon: true,
-      sentence: "Talk with your agents in Crewlet itself.",
+      name: "Chatlet",
+      vendor: "Crewlet",
+      known: chat !== undefined,
+      on: chat === "chatlet",
+      sentence:
+        chat === undefined ? NO_COMPANY : "Rooms, threads and direct messages with your agents.",
+      ...(chat === "vendor"
+        ? { replacedBy: { keys: vendorLines, name: chatVendorName(chatVendors) } }
+        : {}),
+      ...(chat === "chatlet" ? { open: { label: "Open Chatlet", path: ["chatlet"] } } : {}),
     },
   ];
 }

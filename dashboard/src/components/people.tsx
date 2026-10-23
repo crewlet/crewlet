@@ -85,7 +85,7 @@ import { useNow } from "~/lib/clock.ts";
 import { loginProblem } from "~/lib/login.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { useViewer } from "~/lib/viewer.ts";
+import { useServicesRun } from "~/lib/services.ts";
 import { useIamGesture, type IamAnswer, type IamGesture } from "~/lib/iamWrite.ts";
 import { useWaiting } from "~/lib/waiting.ts";
 import { useRest, type RestOptions, type RestResult } from "~/lib/useRest.ts";
@@ -311,13 +311,12 @@ export function AccessPicker({
  *     reaches them: an agent asks a person, assigns them a task or waits on
  *     their answer through Worklet, and their inbox and My work are its.
  *     They can still open and answer a work item an agent asks them about;
- *   - WITHOUT CHATLET, on a company running the engine's own chat, what the
- *     agents SAY to them never reaches them: an agent names a person in a
- *     room or writes to them directly, and both are read only in Chatlet. Said
- *     only where the viewer names the company's chat as the engine's own
- *     (`chat_backend` — told to a reader holding Chatlet, which every admin
- *     granting access does): on a vendor's, that conversation is the
- *     vendor's and this permission reaches none of it.
+ *   - WITHOUT CHATLET, on a company running Chatlet, what the agents SAY
+ *     to them never reaches them: an agent names a person in a room or
+ *     writes to them directly, and both are read only in Chatlet. Said only
+ *     where the company runs Chatlet (`lib/services.ts`): on a vendor's
+ *     chat, that conversation is the vendor's and this permission reaches
+ *     none of it.
  *
  * The tracker's first when both are missing: it is where agents send WORK,
  * and a person who cannot see it cannot be asked for anything at all.
@@ -333,7 +332,7 @@ export function AppReachNote({
   /** The access is the reader's own, and the note speaks to them. */
   you?: boolean;
 }) {
-  const chatlet = useViewer().chatBackend === "chatlet";
+  const chatlet = useServicesRun().chat;
   const have = expand(grants);
   if (!APPS.some((app) => have.includes(app)) && !have.includes(ADMIN)) {
     return <Callout variant="warning">Overview only: no tasks, pages or chat.</Callout>;

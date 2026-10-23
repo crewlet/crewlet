@@ -467,8 +467,6 @@ const NO_GAP: Record<string, string> = {
 /** Every sentence a gap is said in ends by saying the answer may be wrong. */
 const GAP = /may be (incomplete|short)/i;
 
-const CHATLET = { ...ADMIN, chat_backend: "chatlet" };
-
 /** The REST reads a widget makes, answered short as [PARTIAL] answers the socket's. */
 const PARTIAL_REST: Record<string, unknown> = {
   "/iam/people?limit=200": { people: [] },
@@ -491,7 +489,7 @@ describe("a widget over an answer that could not account for everything", () => 
     "%s says what its answer missed, and never its own claim of nothing",
     async (_key, def) => {
       serveRest(PARTIAL_REST);
-      const { container } = mount(<Chosen def={def} />, CHATLET, {}, PARTIAL);
+      const { container } = mount(<Chosen def={def} />, ADMIN, {}, PARTIAL);
       await settle();
       const text = container.textContent ?? "";
       expect(text).not.toMatch(BOUNDARY);
