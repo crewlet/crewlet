@@ -322,6 +322,12 @@ func TestAnAbandonmentIsConfirmedBeforeItRuns(t *testing.T) {
 		t.Fatalf("an abandonment with no confirmation answered %d %v, want 400 "+
 			"confirm_required", code, body)
 	}
+	// THE STATUS READ AS THE CLI TAKES IT, here and on a mismatch below: the
+	// CLI refuses one that names no log.
+	const status = "`crewlet retention maintenance status -stream CREWLET_TRACKER_LOG`"
+	if detail, _ := body["detail"].(string); !strings.Contains(detail, status) {
+		t.Errorf("the refusal %q doesn't name %s", detail, status)
+	}
 	if log.abandoned != (iam.Actor{}) {
 		t.Fatalf("the engine was asked to abandon with no confirmation: %+v", log.abandoned)
 	}
@@ -338,8 +344,9 @@ func TestAnAbandonmentIsConfirmedBeforeItRuns(t *testing.T) {
 		t.Errorf("the engine was handed confirmation %q, want the one sent", log.confirmed)
 	}
 	detail, _ := body["detail"].(string)
-	if !strings.Contains(detail, "capacity:open") {
-		t.Errorf("the refusal %q doesn't name the operation that is open", detail)
+	if !strings.Contains(detail, "capacity:open") || !strings.Contains(detail, status) {
+		t.Errorf("the refusal %q doesn't name the operation that is open and %s",
+			detail, status)
 	}
 	if op, _ := body["operation"].(map[string]any); op["operation_id"] != "capacity:open" {
 		t.Errorf("the refusal carries operation %v, want the open one", body["operation"])

@@ -460,8 +460,9 @@ func TestTheAttemptBudgetSurvivesCoordinatorFailure(t *testing.T) {
 	if blocked.Blocked != "capacity_operation_unsealed" {
 		t.Fatalf("the exhausted operation is blocked by %q", blocked.Blocked)
 	}
-	if !strings.Contains(err.Error(), "maintenance status") {
-		t.Fatalf("the refusal does not say where to look: %v", err)
+	if want := "`crewlet retention maintenance status -stream " + op.Stream + "`"; !strings.Contains(err.Error(), want) {
+		t.Fatalf("the refusal does not say where to look as the CLI takes it, %s: %v",
+			want, err)
 	}
 }
 

@@ -2654,6 +2654,10 @@ func TestAnUnknownCreateThatNeverResolvesRefusesRatherThanReportingNoWindow(t *t
 	if !strings.Contains(err.Error(), "may already be excluded") {
 		t.Errorf("the refusal does not say the fleet may already be excluded: %v", err)
 	}
+	if want := "`crewlet retention maintenance status -stream CREWLET_TRACKER_LOG`"; !strings.Contains(err.Error(), want) {
+		t.Errorf("the refusal doesn't name the status read as the CLI takes it, %s: %v",
+			want, err)
+	}
 }
 
 // TestOnlyAPeerAtALaterGenerationHasReanchoredTheStream.
@@ -2858,7 +2862,8 @@ func TestARefusedCeilingIsReportedAsARefusalAndNotAsAnUnknown(t *testing.T) {
 	ctx := context.Background()
 	e, _, stream := capacityNode(t, budgetHost{room: jetstream.StorageBudget{
 		Limit: 8 << 30, Committed: 7 << 30, Source: jetstream.BudgetServerStore}})
-	op := coord.MaintenanceOperation{Stream: stream, TargetMaxBytes: 7 << 30}
+	op := coord.MaintenanceOperation{Stream: stream, OperationID: "capacity:open",
+		TargetMaxBytes: 7 << 30}
 
 	// THE SHAPE [jetstream.DomainLog.SetMaxBytes] PRODUCES, which names
 	// the sentinel over the broker's own numberless answer.
@@ -2878,6 +2883,10 @@ func TestARefusedCeilingIsReportedAsARefusalAndNotAsAnUnknown(t *testing.T) {
 		strconv.FormatInt(7<<30, 10), // already reserved
 		strconv.FormatInt(8<<30, 10), // the limit
 		"stream.store_max_bytes",     // the lever
+		// AND THE ABANDONMENT AS THE CLI TAKES IT, its confirmation
+		// included: without -confirm the node refuses it as written.
+		"`crewlet retention maintenance abandon -stream " + stream +
+			" -confirm capacity:open`",
 	} {
 		if !strings.Contains(refused.Error(), needle) {
 			t.Errorf("the refusal does not mention %q:\n%v", needle, refused)

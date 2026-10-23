@@ -442,9 +442,10 @@ func NextAttempt(op coord.MaintenanceOperation, observed uint64,
 		out.Blocked = "capacity_operation_unsealed"
 		return out, &Telling{Say: fmt.Sprintf("the capacity operation on %s has "+
 			"used all %d attempts at %d bytes and the broker reports %d, so it "+
-			"needs a person now. `crewlet retention maintenance status` names "+
-			"the attempt count and every participant that didn't acknowledge",
-			op.Stream, ControlRaiseAttempts, op.TargetMaxBytes, observed)}
+			"needs a person now. `crewlet retention maintenance status -stream "+
+			"%s` names the attempt count and every participant that didn't "+
+			"acknowledge", op.Stream, ControlRaiseAttempts, op.TargetMaxBytes,
+			observed, op.Stream)}
 	}
 	out := op
 	out.Attempt++
