@@ -39,7 +39,7 @@ export function SignInPolicy() {
       </PageNote>
       <QueryState error={error} refusal={refusal} detail={detail} loading={loading && !data}>
         {data && (
-          <div className="col gap-4">
+          <div className="col gap-4 settings-terms">
             <Card>
               <Card.Header icon={<ShieldUserGlyph size="sm" />}>
                 <Card.Title>Signing in</Card.Title>

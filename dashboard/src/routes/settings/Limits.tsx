@@ -95,7 +95,10 @@ export function Limits() {
             description="This node runs no company, so no turn runs to be limited."
           />
         )}
-        <div className="col gap-4">
+        {/* ONE TERM COLUMN FOR EVERY CARD: each sized its own to its longest
+            term, so the values started at a different x in every card and
+            the stack did not read as one table. */}
+        <div className="col gap-4 settings-terms">
           {groups.map(({ group, rows: caps }) => (
             <Card key={group}>
               <Card.Header icon={<GaugeGlyph size="sm" />}>

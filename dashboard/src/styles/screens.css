@@ -11784,3 +11784,13 @@ a.live-row:focus-visible {
 .dashboard-note {
   height: 100%;
 }
+
+/* ---- A Settings page of term lists that read as one table ----------------
+   Limits and Sign-in policy stack several cards of terms and values, and each
+   list sized its term column to its own longest term, so the values started
+   at a different x in every card. The kit's term track is an inherited custom
+   property (`--crewlet-description-list-term`), set here once for the page;
+   below the kit's narrow step a term stands over its value as before. */
+.settings-terms {
+  --crewlet-description-list-term: 18rem;
+}
