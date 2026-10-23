@@ -181,7 +181,7 @@ export function NodeEditor({
   onClose: () => void;
 }) {
   const { state } = useBuilder();
-  if (nodeKey === COMPANY_KEY) return <CompanyEditor onClose={onClose} />;
+  if (nodeKey === COMPANY_KEY) return <CompanyEditor section={section} onClose={onClose} />;
   const found = locate(state.draft, nodeKey);
   if (!found) {
     return (
@@ -733,7 +733,14 @@ function Owns({
 
 const COMPANY_FIELDS: Segment[][] = [["name"], ["mission"], ["vision"], ["policies"]];
 
-function CompanyEditor({ onClose }: { onClose: () => void }) {
+function CompanyEditor({
+  section,
+  onClose,
+}: {
+  /** `policies` opens the charter with the focus in its Policies list. */
+  section: EditorSectionName | undefined;
+  onClose: () => void;
+}) {
   const api = useBuilder();
   const { state } = api;
   const { initial, form, set, dirty } = useForm<CompanyForm>(() =>
@@ -828,6 +835,7 @@ function CompanyEditor({ onClose }: { onClose: () => void }) {
         onChange={(policies) => set({ policies })}
         optional
         disabled={disabled}
+        focusOnMount={section === "policies" && !disabled}
         error={withProblems(errorFor(["policies"]))}
       />
     </EditorShell>

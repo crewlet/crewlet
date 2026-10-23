@@ -478,6 +478,17 @@ function keyOfParams(state: BuilderState, params: SelectionParams): NodeKey | nu
   return null;
 }
 
+/**
+ * What an `edit=` asks the company's editor to open at: its top for the
+ * charter, its Policies list for `policies`, or `null` for a value that names
+ * neither.
+ */
+function charterPartOf(value: string): { section?: EditorSectionName } | null {
+  if (value === "charter") return {};
+  if (value === "policies") return { section: "policies" };
+  return null;
+}
+
 /** The kind an `add=` asks for, or `null` for a value that names none. */
 function addKindOf(value: string): AddKind | null {
   return value === "unit" || value === "agent" || value === "human" ? value : null;
@@ -485,8 +496,9 @@ function addKindOf(value: string): AddKind | null {
 
 /**
  * What the address a reader ARRIVED at asks the builder to do, beyond showing
- * the organization: open one node's editor (`seat=` or `unit=`), or open an
- * Add (`add=`, under the unit `unit=` names or at the company's root).
+ * the organization: open one node's editor (`seat=` or `unit=`), open an
+ * Add (`add=`, under the unit `unit=` names or at the company's root), or open
+ * the company's charter (`edit=charter`, or `edit=policies` on its Policies).
  *
  * WHY A LINK OPENS SOMETHING AT ALL. Every way into this section from another
  * screen is a request to change one thing: the profile's "Edit" beside a
@@ -523,6 +535,13 @@ interface Arrival {
   readonly unit: string;
   readonly seat: string;
   readonly add: string;
+  /**
+   * The part of the company's charter to open (`charter` or `policies`), from
+   * Company › Overview's Edit charter and Company › Policies' Edit policies.
+   * Taken out of the address once answered, as `add=` is: it is a request,
+   * never the selection.
+   */
+  readonly edit: string;
   /**
    * A tracker project key for the node, from Work's New project: its editor
    * opens on the Project field holding the key, not yet applied. Taken out of
@@ -676,6 +695,7 @@ function BuilderScreen({
   const [unitParam] = useParam("unit", "", "filter");
   const [seatParam] = useParam("seat", "", "filter");
   const [addParam] = useParam("add", "", "filter");
+  const [editParam] = useParam("edit", "", "filter");
   const [projectParam] = useParam("project", "", "filter");
   const viewPanel = useId();
   const chartPanel = useId();
@@ -1134,8 +1154,8 @@ function BuilderScreen({
   // Read once, in the first render, and spent the moment it is answered or the
   // reader moves the selection before the builder could answer it.
   const arrival = useRef<Arrival | null>(
-    unitParam !== "" || seatParam !== "" || addParam !== ""
-      ? { unit: unitParam, seat: seatParam, add: addParam, project: projectParam }
+    unitParam !== "" || seatParam !== "" || addParam !== "" || editParam !== ""
+      ? { unit: unitParam, seat: seatParam, add: addParam, edit: editParam, project: projectParam }
       : null,
   );
   useEffect(() => {
@@ -1157,6 +1177,13 @@ function BuilderScreen({
       // company's root is not what the link meant either.
       if (asked.unit !== "" && parent === null) return;
       openDialog({ type: "add", parent, kind });
+      return;
+    }
+    if (asked.edit !== "") {
+      nav.filter({ edit: null });
+      const part = charterPartOf(asked.edit);
+      if (part === null) return;
+      openDialog({ type: "editor", key: COMPANY_KEY, ...part });
       return;
     }
     if (asked.project !== "") nav.filter({ project: null });
