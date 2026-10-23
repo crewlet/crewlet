@@ -887,7 +887,7 @@ var outrankRoutes = []outrankRoute{
 				return err.Error()
 			}
 			return "the fleet's store, reached through this node's broker on " +
-				boot.Stream.StoreDir + " — this node's engine is stopped"
+				boot.Stream.StoreDir + " (this node's engine is stopped)"
 		},
 	},
 }
