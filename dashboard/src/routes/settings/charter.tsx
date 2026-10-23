@@ -19,7 +19,7 @@
  */
 
 import type { ReactNode } from "react";
-import { Card, Skeleton } from "@crewlethq/ui";
+import { Card, Skeleton, Stack } from "@crewlethq/ui";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { EditCharterButton, type CharterPart } from "~/routes/agents/header.tsx";
 import { useOrg } from "~/lib/store-hooks.ts";
@@ -51,8 +51,11 @@ export function CharterPage({
       {org ? (
         // ONE READABLE COLUMN for the company's own words: across the whole
         // canvas a policy ran to a line no reader follows, and a lone card
-        // sat in an empty field. See `.charter-page`.
-        <div className="col gap-4 charter-page">{children(org)}</div>
+        // sat in an empty field. See `.charter-page`. In the page's own
+        // rhythm, the 20px every screen's blocks stand apart.
+        <Stack gap={5} className="charter-page">
+          {children(org)}
+        </Stack>
       ) : (
         <div aria-busy="true">
           <Card>
