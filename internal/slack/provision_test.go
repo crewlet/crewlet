@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -383,18 +384,69 @@ func TestAnUnreadableSinkDoesNotTriggerAnInstall(t *testing.T) {
 	t.Parallel()
 	ws := newWorkspace(t)
 	withCreate(ws)
+	ws.replies["oauth.v2.access"] = `{"ok":true,"access_token":"xoxb-minted",
+		"bot_user_id":"U0BOTSWE","team":{"id":"T0ACME"}}`
 	recorder := newSink()
 
-	_, _, _, err := run(t, ws, func(o *slack.Options) {
+	// AN INSTALLED APP, whose working token is the thing an install
+	// would revoke.
+	_, ledger, path, err := run(t, ws, func(o *slack.Options) {
 		o.Sink = recorder
 		o.Install = func(context.Context, string, string) (string, error) {
+			return "the-temporary-code", nil
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ledger.Apps["swe"].Installed() {
+		t.Fatal("the first run installed nothing, so this case proves nothing")
+	}
+
+	recorder.err = errUnreadable
+	_, err = slack.Reconcile(context.Background(), slack.Options{
+		Admin: slack.NewAdmin(rewriting(t, ws)), Seats: plans(),
+		Ledger: ledger, LedgerPath: path, Sink: recorder,
+		BaseURL: "https://engine.example.com",
+		Install: func(context.Context, string, string) (string, error) {
 			t.Error("an install was attempted against an unreadable sink")
 			return "", nil
-		}
-		recorder.err = errUnreadable
+		},
 	})
 	if err == nil {
 		t.Fatal("an unreadable sink was treated as an empty one")
+	}
+}
+
+// AN APP NOBODY HAS INSTALLED ASKS NO SINK. It has no token anywhere for an
+// install to revoke, so a sink that cannot say what it holds — `-secret-store`
+// on a stopped node, which records into rows that cannot speak for the
+// fleet's — refuses nothing: the app this run created is installed and its
+// first token recorded.
+func TestAnAppNobodyInstalledIsInstalledWhateverItsSinkCanSay(t *testing.T) {
+	t.Parallel()
+	ws := newWorkspace(t)
+	withCreate(ws)
+	ws.replies["oauth.v2.access"] = `{"ok":true,"access_token":"xoxb-minted",
+		"bot_user_id":"U0BOTSWE","team":{"id":"T0ACME"}}`
+	recorder := newSink()
+	recorder.err = errUnreadable
+
+	res, _, _, err := run(t, ws, func(o *slack.Options) {
+		o.Sink = recorder
+		o.Install = func(context.Context, string, string) (string, error) {
+			return "the-temporary-code", nil
+		}
+	})
+	if err != nil {
+		t.Fatalf("the first install of an app this run created was refused: %v", err)
+	}
+	if !slices.Equal(res.Created, []string{"swe"}) || !slices.Equal(res.Installed, []string{"swe"}) {
+		t.Fatalf("created %v, installed %v — want the app created and installed",
+			res.Created, res.Installed)
+	}
+	if got := recorder.value("SWE_SLACK_TOKEN"); got != "xoxb-minted" {
+		t.Errorf("recorded %q as the bot token, want the install's", got)
 	}
 }
 

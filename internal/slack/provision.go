@@ -479,8 +479,17 @@ func (o Options) seat(ctx context.Context, configToken string, seat SeatPlan, re
 }
 
 // install completes the workspace install, or reports what is left to click.
+//
+// THE SINK IS ASKED ONLY ABOUT AN APP THAT IS INSTALLED, because only there
+// can its answer spare one: an app the ledger has never seen installed — one
+// this run created among them — has no token anywhere to keep, and is
+// installed whatever the sink holds. Asked first, an unreadable answer
+// refused that install for nothing, which is what `-secret-store` on a
+// stopped node gave every app it had just created: the node's own rows
+// cannot say what the fleet holds, and the app's first install was refused
+// over a token no store could hold.
 func (o Options) install(ctx context.Context, seat SeatPlan, record AppRecord, res *Result) error {
-	if !o.Reinstall {
+	if !o.Reinstall && record.Installed() {
 		held, ok, err := o.Sink.Value(ctx, seat.TokenVar)
 		if err != nil {
 			// UNREADABLE IS NOT UNHELD. Treating it as "no token" would
@@ -490,7 +499,7 @@ func (o Options) install(ctx context.Context, seat SeatPlan, record AppRecord, r
 			return fmt.Errorf("slack: %s: could not read %s: %w",
 				seat.Handle, seat.TokenVar, err)
 		}
-		if ok && held != "" && record.Installed() {
+		if ok && held != "" {
 			return nil
 		}
 	}
