@@ -78,7 +78,7 @@ describe("a seat's live state", () => {
         view={seat({ name: "Builder", handle: "builder" })}
       />,
     );
-    expect(screen.getByText("working")).toBeDefined();
+    expect(screen.getByText("Working")).toBeDefined();
   });
 
   /*
@@ -94,7 +94,7 @@ describe("a seat's live state", () => {
       />,
     );
     expect(screen.queryByText("working")).toBeNull();
-    expect(screen.getByText("offline")).toBeDefined();
+    expect(screen.getByText("Offline")).toBeDefined();
   });
 
   /*
@@ -140,7 +140,7 @@ describe("a seat's live state", () => {
    */
   test("a saved agent seat the engine never mentions is offline", () => {
     render(<LiveState api={api([])} view={seat()} />);
-    expect(screen.getByText("offline")).toBeDefined();
+    expect(screen.getByText("Offline")).toBeDefined();
   });
 
   /*
@@ -155,7 +155,7 @@ describe("a seat's live state", () => {
         view={seat()}
       />,
     );
-    expect(screen.getByText("needs you")).toBeDefined();
+    expect(screen.getByText("Needs you")).toBeDefined();
   });
 
   /*
@@ -170,6 +170,6 @@ describe("a seat's live state", () => {
     );
     const slot = container.querySelector(".bnode-state");
     expect(slot).not.toBeNull();
-    expect(slot!.textContent).toBe("working");
+    expect(slot!.textContent).toBe("Working");
   });
 });

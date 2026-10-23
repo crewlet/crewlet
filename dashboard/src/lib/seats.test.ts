@@ -674,6 +674,11 @@ describe("what a seat is doing", () => {
         { now },
       ),
     ).toBe("Idle · last turn 24m ago");
+    // AN IDLE SEAT THAT NEVER RAN says that, not "Idle" a second time beside
+    // the pill that already says it.
+    expect(stateLine({ id: "a", agent_id: "a", role: "Dev A", activity: "idle" }, { now })).toBe(
+      "No turn yet",
+    );
     expect(stateLine(undefined, { now })).toBe("No state from the engine yet");
     expect(stateLine(null, { now, seat: index.byName.get("Jane Founder")! })).toMatch(
       /human|Human/,

@@ -228,3 +228,13 @@ test("a unit's page and peek are found by its key, never by its name", async () 
     cleanup();
   }
 });
+
+// A UNIT ROW SAYS ITS KIND AND ITS LEAD AS QUIET FACTS: "Engineering ENG
+// team Ada Lovelace" drawn as pills read as four badges on every row.
+test("a unit's kind and lead are words, not pills", async () => {
+  await teams(ORG);
+  for (const row of document.querySelectorAll(".org-unit-head")) {
+    expect(row.querySelector(".crewlet-tag")).toBeNull();
+  }
+  expect(document.querySelectorAll(".org-unit-fact").length).toBeGreaterThan(0);
+});

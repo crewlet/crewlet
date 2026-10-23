@@ -385,7 +385,7 @@ export function People() {
         // by too.
         onClick={rowPeekHandler(() => openPeek({ kind: "seat", id: seat.handle }))}
       >
-        <SeatCard seat={seat} agent={agent} nameOf={nameOf} />
+        <SeatCard seat={seat} agent={agent} nameOf={nameOf} stateInHeading={group === "state"} />
       </div>
     ) : (
       <RemovedCard key={key} agent={agent!} nameOf={nameOf} />
