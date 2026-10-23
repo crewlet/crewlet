@@ -4,7 +4,7 @@
  * and offering Company › Integrations only to a reader who may open it.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Router } from "./router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -69,7 +69,10 @@ test("a reader who cannot open Integrations is told in place and offered no link
   mount("tracker", ["work"], JIRA, ["tracker"]);
   expect(await screen.findByText("Jira handles this company's work")).toBeTruthy();
   expect(screen.getByText("Work is part of Crewlet Works, which is not in use here.")).toBeTruthy();
-  await new Promise((r) => setTimeout(r, 0));
+  // INSIDE `act`, so every render the reads cause has landed before the absence is read.
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 0));
+  });
   expect(screen.queryByRole("link")).toBeNull();
 });
 

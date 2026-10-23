@@ -111,7 +111,10 @@ test("a dismissed custom window leaves the reader on a tab stop", async () => {
   act(() => custom.focus());
   fireEvent.click(custom);
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-  await new Promise((r) => setTimeout(r, 0));
+  // INSIDE `act`, so the close's render is flushed rather than left to race the tick.
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 0));
+  });
   expect(document.activeElement).toBe(custom);
   expect(custom.getAttribute("tabindex")).toBe("0");
   const stops = screen.getAllByRole("radio").filter((r) => r.getAttribute("tabindex") === "0");

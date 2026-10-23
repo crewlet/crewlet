@@ -583,8 +583,11 @@ describe("a section, for a reader holding none of its grants", () => {
       location.hash = buildHash(section.path);
       const { view } = mountAs(Promise.reject(new QueryError("timeout")));
       const content = () => view.container.querySelector(".crewlet-app-shell__content")!;
-      for (let i = 0; i < 8; i++) await Promise.resolve();
-      await new Promise((r) => setTimeout(r, 0));
+      // THE FAILED READ'S RENDER IS AWAITED INSIDE `act`, which flushes the
+      // update the rejection schedules. Awaited outside it, the render waited
+      // on React's scheduler, and a timer tick only usually came after it: on
+      // a loaded runner the screen still said "Checking your access".
+      for (let i = 0; i < 8; i++) await act(async () => Promise.resolve());
       expect(
         screen.queryByText(`You need ${accessNames(section.grants!)} access`),
         section.key,
