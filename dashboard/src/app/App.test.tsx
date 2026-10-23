@@ -710,13 +710,27 @@ describe("a section, for a reader holding none of its grants", () => {
 
   // THE CHARTER IS PUBLIC; the tool registry is Admin's, since what each
   // seat may call is how the company is run.
-  test("the company's Overview is open to anybody, and MCP Tools is Admin's", async () => {
+  //
+  // PRINCIPLES ARE JUDGED ON THE ANSWER, so the case waits for the frame to
+  // have applied it: the sidebar locking Worklet is that answer drawn. Judged
+  // any sooner, the frame has not been told who is reading, and the page is
+  // open to them whatever its rule says.
+  test("the company's Principles are open to anybody, and MCP Tools is Admin's", async () => {
     location.hash = buildHash(["company"]);
-    const overview = mountAs(Promise.resolve({ login: "", owner: "", grants: [] }));
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(overview.view.container.textContent).not.toMatch(/Company needs /);
-    overview.view.unmount();
+    const principles = mountAs(Promise.resolve({ login: "", owner: "", grants: [] }));
+    const sidebar = await screen.findByRole("navigation", { name: "Navigation" });
+    await waitFor(() =>
+      expect(
+        within(sidebar)
+          .getByRole("link", { name: /^Worklet/ })
+          .querySelector("[title='Needs Worklet access']"),
+      ).not.toBeNull(),
+    );
+    expect(screen.queryByText(/^You need .* access$/)).toBeNull();
+    // THE PAGE'S OWN CARDS: `#/company` opens Principles, whose cards hold
+    // the company's charter, which every signed-in reader reads.
+    expect(screen.getByRole("heading", { name: "Standing policies" })).toBeDefined();
+    principles.view.unmount();
     cleanup();
     location.hash = buildHash(["settings", "mcp-tools"]);
     mountAs(Promise.resolve({ login: "reader", owner: "reader", grants: ["worklet"] }));
