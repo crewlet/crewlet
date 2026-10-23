@@ -157,7 +157,7 @@ export function RetentionStatus({ retention }: { retention: QueryResult<Retentio
           Refresh failed ({error}). Showing the last good reading.
         </Callout>
       )}
-      {data?.maintenance && <MaintenanceBanner op={data.maintenance} now={now} />}
+      <MaintenanceBanners windows={data?.maintenance} now={now} />
       <ServedLevelBanner level={data?.read_level} />
       {data && standing > 0 && <AlarmList alarms={data.alarms} now={now} />}
     </>
@@ -693,6 +693,28 @@ export function ServedLevelBanner({ level }: { level?: string }) {
   if (!level || level === "stale") return null;
   return (
     <Callout variant="warning">How current these figures are can’t be measured right now.</Callout>
+  );
+}
+
+/**
+ * MaintenanceBanners draws a banner per open capacity window, the oldest first
+ * as the engine orders them. A window is per log and two can be open at once,
+ * each waiting on its own nodes, so one banner for the oldest hid what the other
+ * was waiting on until the first had closed.
+ */
+export function MaintenanceBanners({
+  windows,
+  now,
+}: {
+  windows?: RetentionMaintenance[];
+  now: number;
+}) {
+  return (
+    <>
+      {(windows ?? []).map((op) => (
+        <MaintenanceBanner key={op.stream} op={op} now={now} />
+      ))}
+    </>
   );
 }
 

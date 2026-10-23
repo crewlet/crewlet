@@ -1383,10 +1383,12 @@ it — the stream, the phase, the attempt, how long it has been open, who ran
 the verb, any admission holding it at `opened`, and who is still
 outstanding — because every number underneath describes a fleet in which
 nothing is running, and a blocked trim read without knowing that sends you
-after the wrong thing. At `opened`, outstanding means no restart into a
-maintenance mode recorded; from the baseline to the seal, no acknowledgement
-for the seal; once the window has sealed, nobody, since the verify and the
-release wait on no node. **Nothing
+after the wrong thing. With windows open on more than one log, each gets its
+own, the oldest first. At `opened`, outstanding means no restart into a
+maintenance mode recorded; from the baseline to the seal, every node the seal
+still waits on: one with no acknowledgement from `seal`, or one still the
+process that was running when the request left. Once the window has sealed,
+nobody is outstanding: the verify and the release wait on no node. **Nothing
 outstanding is not progress**: unless an admission holds the window, it means
 the operation is waiting on its operator, and both surfaces say so rather than
 printing an empty list.

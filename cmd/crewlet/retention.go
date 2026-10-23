@@ -116,11 +116,10 @@ type retentionReport struct {
 	Replica   retentionReplicaRow `json:"replica"`
 	Alarms    []retentionAlarm    `json:"alarms"`
 
-	// Maintenance is the capacity operation holding the fleet, absent
-	// when there is none. A POINTER because absent and zeroed are
-	// different answers: a zeroed block claims an operation in phase ""
-	// with nobody outstanding.
-	Maintenance *maintenanceRow `json:"maintenance"`
+	// Maintenance is every capacity operation holding the fleet, the
+	// oldest first, and empty when there is none: a window is per log, and
+	// two can be open at once.
+	Maintenance []maintenanceRow `json:"maintenance"`
 }
 
 // maintenanceRow is one open capacity operation, as `retention status`
@@ -334,7 +333,8 @@ func retentionStatus(environ config.Source, args []string, stdout, stderr io.Wri
 	// below it describes a fleet in which nothing is running: no seats, no
 	// duties, no scheduler and no write routes. An operator reading a
 	// blocked trim without knowing that goes looking for the wrong thing.
-	if m := report.Maintenance; m != nil {
+	// EVERY WINDOW, each waiting on its own nodes.
+	for _, m := range report.Maintenance {
 		fmt.Fprintf(stdout, "MAINTENANCE IS OPEN on %s: no publisher is running "+
 			"anywhere in this fleet.\n", m.Stream)
 		fmt.Fprintf(stdout, "  phase %s, attempt %d, open since %s",

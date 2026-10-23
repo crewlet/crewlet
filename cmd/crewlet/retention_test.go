@@ -542,13 +542,13 @@ func TestRetentionStatusLeadsWithAnOpenMaintenanceWindow(t *testing.T) {
 	t.Parallel()
 	node := newFakeRetentionNode(t)
 	report := blockedReport()
-	report.Maintenance = &statelog.MaintenanceReport{
+	report.Maintenance = []statelog.MaintenanceReport{{
 		Stream: "CREWLET_TRACKER_LOG", OperationID: "op-9",
 		Phase: "observe", Attempt: 2,
 		TargetMaxBytes: 2000000000, OriginalMaxBytes: 1000000000,
 		Since: time.Date(2031, 4, 2, 2, 0, 0, 0, time.UTC), By: "sre@example.com",
 		ParticipantsMissing: []string{"node-4", "node-7"},
-	}
+	}}
 	node.report = report
 
 	stdout, _, err := cli(t, "retention", "status", bootstrapForURL(t, node.server.URL))
@@ -568,6 +568,41 @@ func TestRetentionStatusLeadsWithAnOpenMaintenanceWindow(t *testing.T) {
 	}
 }
 
+// EVERY OPEN WINDOW IS PRINTED, each with what it waits on. A window is per
+// log and two can be open at once; printed as the oldest alone, the other's
+// outstanding nodes went unsaid until the first had closed.
+//
+// Mutation: print the first window alone and the pages log's line is missing.
+func TestRetentionStatusPrintsEveryOpenWindow(t *testing.T) {
+	t.Parallel()
+	node := newFakeRetentionNode(t)
+	report := blockedReport()
+	report.Maintenance = []statelog.MaintenanceReport{{
+		Stream: "CREWLET_TRACKER_LOG", OperationID: "op-9", Phase: "sealing", Attempt: 1,
+		Since:               time.Date(2031, 4, 2, 2, 0, 0, 0, time.UTC),
+		ParticipantsMissing: []string{"node-4"},
+	}, {
+		Stream: "CREWLET_PAGES_LOG", OperationID: "op-10", Phase: "sealing", Attempt: 1,
+		Since:               time.Date(2031, 4, 2, 3, 0, 0, 0, time.UTC),
+		ParticipantsMissing: []string{"node-7"},
+	}}
+	node.report = report
+
+	stdout, _, err := cli(t, "retention", "status", bootstrapForURL(t, node.server.URL))
+	if err != nil {
+		t.Fatalf("retention status: %v", err)
+	}
+	tracker := strings.Index(stdout, "MAINTENANCE IS OPEN on CREWLET_TRACKER_LOG")
+	pages := strings.Index(stdout, "MAINTENANCE IS OPEN on CREWLET_PAGES_LOG")
+	if tracker < 0 || pages < tracker {
+		t.Fatalf("the report does not lead with both windows, the oldest first:\n%s", stdout)
+	}
+	if !strings.Contains(stdout[tracker:pages], "waiting on node-4") ||
+		!strings.Contains(stdout[pages:], "waiting on node-7") {
+		t.Errorf("each window does not say what it waits on:\n%s", stdout)
+	}
+}
+
 // NOBODY OUTSTANDING IS NOT PROGRESS. It is the operation waiting on whoever
 // ran the verb, and printing nothing there reads as "nearly done" — which is
 // the one reading that stops somebody finishing it.
@@ -575,11 +610,11 @@ func TestAnOperationWithNobodyOutstandingSaysWhoItIsWaitingFor(t *testing.T) {
 	t.Parallel()
 	node := newFakeRetentionNode(t)
 	report := blockedReport()
-	report.Maintenance = &statelog.MaintenanceReport{
+	report.Maintenance = []statelog.MaintenanceReport{{
 		Stream: "CREWLET_TRACKER_LOG", OperationID: "op-9",
 		Phase: "sealed", Attempt: 1,
 		Since: time.Date(2031, 4, 2, 2, 0, 0, 0, time.UTC),
-	}
+	}}
 	node.report = report
 
 	stdout, _, err := cli(t, "retention", "status", bootstrapForURL(t, node.server.URL))
@@ -604,12 +639,12 @@ func TestAWindowHeldByAnAdmissionSaysSo(t *testing.T) {
 	t.Parallel()
 	node := newFakeRetentionNode(t)
 	report := blockedReport()
-	report.Maintenance = &statelog.MaintenanceReport{
+	report.Maintenance = []statelog.MaintenanceReport{{
 		Stream: "CREWLET_TRACKER_LOG", OperationID: "op-9",
 		Phase: "opened", Attempt: 1,
 		Since:              time.Date(2031, 4, 2, 2, 0, 0, 0, time.UTC),
 		AdmissionsBlocking: []string{"node-3"},
-	}
+	}}
 	node.report = report
 
 	stdout, _, err := cli(t, "retention", "status", bootstrapForURL(t, node.server.URL))
@@ -632,14 +667,14 @@ func TestAWindowHeldByAnAdmissionSaysSo(t *testing.T) {
 func TestAnAbandonedWindowSaysWhoAbandonedIt(t *testing.T) {
 	node := newFakeRetentionNode(t)
 	report := blockedReport()
-	report.Maintenance = &statelog.MaintenanceReport{
+	report.Maintenance = []statelog.MaintenanceReport{{
 		Stream: "CREWLET_TRACKER_LOG", OperationID: "op-9",
 		Phase: "sealing", Attempt: 1,
 		Since: time.Date(2031, 4, 2, 2, 0, 0, 0, time.UTC),
 		By:    "sre@example.com", Blocked: "abandoned_by_operator",
 		AbandonedBy: coord.MaintenanceParty{By: "ana.admin",
 			OperatorID: "pat:0192f00d-0000-7000-8000-00000000000a"},
-	}
+	}}
 	node.report = report
 
 	stdout, _, err := cli(t, "retention", "status", bootstrapForURL(t, node.server.URL))

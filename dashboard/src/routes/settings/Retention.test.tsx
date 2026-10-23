@@ -24,6 +24,7 @@ import {
   LogRow,
   sharedTrimStatus,
   MaintenanceBanner,
+  MaintenanceBanners,
   NodePositions,
   ServedLevelBanner,
   SnapshotsCard,
@@ -280,6 +281,47 @@ test("an open capacity operation is rendered as an outage in progress", () => {
   );
   expect(screen.getByRole("alert").className).toContain("danger");
   expect(screen.getByText(/Waiting on node-b, node-c/)).toBeTruthy();
+});
+
+// EVERY OPEN WINDOW GETS ITS OWN BANNER. A window is per log and two can be
+// open at once, each waiting on its own nodes; one banner for the oldest hid
+// what the other was waiting on. Mutation: draw the first window alone and the
+// pages log's banner is missing.
+test("every open capacity window is drawn with what it waits on", () => {
+  const since = new Date(Date.now() - 60_000).toISOString();
+  render(
+    <MaintenanceBanners
+      windows={[
+        {
+          stream: "CREWLET_TRACKER_LOG",
+          operation_id: "op-1",
+          phase: "sealing",
+          attempt: 1,
+          target_max_bytes: 2_000_000_000,
+          original_max_bytes: 1_000_000_000,
+          since,
+          participants_missing: ["node-b"],
+        },
+        {
+          stream: "CREWLET_PAGES_LOG",
+          operation_id: "op-2",
+          phase: "sealing",
+          attempt: 1,
+          target_max_bytes: 2_000_000_000,
+          original_max_bytes: 1_000_000_000,
+          since,
+          participants_missing: ["node-c"],
+        },
+      ]}
+      now={Date.now()}
+    />,
+  );
+  const banners = screen.getAllByRole("alert");
+  expect(banners).toHaveLength(2);
+  expect(within(banners[0]!).getByText(/Maintenance on CREWLET_TRACKER_LOG/)).toBeTruthy();
+  expect(within(banners[0]!).getByText(/Waiting on node-b/)).toBeTruthy();
+  expect(within(banners[1]!).getByText(/Maintenance on CREWLET_PAGES_LOG/)).toBeTruthy();
+  expect(within(banners[1]!).getByText(/Waiting on node-c/)).toBeTruthy();
 });
 
 // A WINDOW HELD BY AN ADMISSION SAYS SO, ahead of who it waits on. Every node

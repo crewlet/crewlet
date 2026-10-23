@@ -17,6 +17,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -1259,10 +1260,7 @@ func TestWhoExcludedANodeAndWhoAbandonedTheWindowAreOnTheWindow(t *testing.T) {
 	// retention status` leads with while the window holds the fleet.
 	r := &retention{fleet: fleet, state: runsLogs(&stateLog{},
 		&runningLog{domain: worklet.Domain{}, spec: worklet.Domain{}.Stream()})}
-	row := r.openMaintenance(ctx)
-	if row == nil {
-		t.Fatal("the report shows no window while one is open")
-	}
+	row := onlyWindow(t, r.openMaintenance(ctx))
 	if row.AbandonedBy != op.AbandonedBy {
 		t.Errorf("the report names %+v as having abandoned the window, want %+v",
 			row.AbandonedBy, op.AbandonedBy)
@@ -1310,10 +1308,7 @@ func TestTheReportAtOpenedSaysWhatTheBaselineWaitsOn(t *testing.T) {
 	r := &retention{fleet: fleet, state: runsLogs(&stateLog{},
 		&runningLog{domain: worklet.Domain{}, spec: worklet.Domain{}.Stream()})}
 
-	row := r.openMaintenance(ctx)
-	if row == nil {
-		t.Fatal("the report shows no window while one is open")
-	}
+	row := onlyWindow(t, r.openMaintenance(ctx))
 	if !slices.Equal(row.ParticipantsMissing, []string{"node-2", "node-3"}) {
 		t.Errorf("at opened the report waits on %v, want node-2 and node-3, the "+
 			"nodes with no restart recorded", row.ParticipantsMissing)
@@ -1329,7 +1324,7 @@ func TestTheReportAtOpenedSaysWhatTheBaselineWaitsOn(t *testing.T) {
 	if err := fleet.UpdateMaintenance(ctx, op); err != nil {
 		t.Fatal(err)
 	}
-	row = r.openMaintenance(ctx)
+	row = onlyWindow(t, r.openMaintenance(ctx))
 	if !slices.Equal(row.ParticipantsMissing, []string{"node-1", "node-2", "node-3"}) {
 		t.Errorf("past opened the report waits on %v, want every node the seal "+
 			"has no acknowledgement from", row.ParticipantsMissing)
@@ -1380,10 +1375,7 @@ func TestTheReportPastOpenedWaitsOnWhoTheSealWaitsOn(t *testing.T) {
 	}
 	r := &retention{fleet: fleet, state: runsLogs(&stateLog{},
 		&runningLog{domain: worklet.Domain{}, spec: worklet.Domain{}.Stream()})}
-	row := r.openMaintenance(ctx)
-	if row == nil {
-		t.Fatal("the report shows no window while one is open")
-	}
+	row := onlyWindow(t, r.openMaintenance(ctx))
 	if want := []string{"node-1", "node-2", "node-4"}; !slices.Equal(row.ParticipantsMissing, want) {
 		t.Errorf("the report waits on %v, want %v: the nodes the seal still waits on",
 			row.ParticipantsMissing, want)
@@ -1405,15 +1397,76 @@ func TestTheReportPastOpenedWaitsOnWhoTheSealWaitsOn(t *testing.T) {
 		if err := fleet.UpdateMaintenance(ctx, held); err != nil {
 			t.Fatal(err)
 		}
-		row := r.openMaintenance(ctx)
-		if row == nil {
-			t.Fatalf("the report shows no window at %s", phase)
-		}
+		row := onlyWindow(t, r.openMaintenance(ctx))
 		if len(row.ParticipantsMissing) != 0 {
 			t.Errorf("a window at %s waits on %v, want nobody: nothing after the "+
 				"seal waits on a node", phase, row.ParticipantsMissing)
 		}
 	}
+}
+
+// THE REPORT NAMES EVERY OPEN WINDOW, the oldest first, each with what it
+// waits on.
+//
+// A window is per log and two can be open at once. The report carried the
+// oldest alone, so while both were open the banner said nothing of what the
+// other was waiting on until the first had closed.
+//
+// Mutation: report the oldest window alone and the pages log's is missing.
+func TestTheReportNamesEveryOpenWindow(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fleet := coordmem.NewFleet()
+	now := time.Now().UTC()
+	for _, w := range []struct {
+		stream  string
+		opened  time.Time
+		waiting string
+	}{
+		{"CREWLET_PAGES_LOG", now, "node-2"},
+		{"CREWLET_TRACKER_LOG", now.Add(-time.Hour), "node-1"},
+	} {
+		if _, _, err := fleet.OpenMaintenance(ctx, coord.MaintenanceOperation{
+			Stream: w.stream, OperationID: "capacity:" + w.stream,
+			TargetMaxBytes: 1 << 33, Phase: coord.PhaseOpened, Attempt: 1,
+			Participants: []string{"node-1", "node-2"}, EnteredAt: w.opened,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		other := "node-1"
+		if w.waiting == "node-1" {
+			other = "node-2"
+		}
+		if err := fleet.PutMaintenanceAck(ctx, coord.MaintenanceAck{
+			Stream: w.stream, NodeID: other, Incarnation: other + ":2",
+			Mode: string(statelog.ModeMaintenance),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := &retention{fleet: fleet, state: runsLogs(&stateLog{},
+		&runningLog{domain: worklet.Domain{}, spec: worklet.Domain{}.Stream()},
+		&runningLog{domain: doclet.Domain{}, spec: doclet.Domain{}.Stream()})}
+	rows := r.openMaintenance(ctx)
+	var got []string
+	for _, row := range rows {
+		got = append(got, row.Stream+" waits on "+strings.Join(row.ParticipantsMissing, ","))
+	}
+	want := []string{"CREWLET_TRACKER_LOG waits on node-1", "CREWLET_PAGES_LOG waits on node-2"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("the report reads %q, want %q: every open window, the oldest first",
+			got, want)
+	}
+}
+
+// onlyWindow is the one window a report names, failing the case when it names
+// another number.
+func onlyWindow(t *testing.T, rows []statelog.MaintenanceReport) statelog.MaintenanceReport {
+	t.Helper()
+	if len(rows) != 1 {
+		t.Fatalf("the report names %d windows, want the one open: %+v", len(rows), rows)
+	}
+	return rows[0]
 }
 
 // toldRefusal is err's told sentence ([statelog.Told]) as an error, failing the
