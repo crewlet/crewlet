@@ -941,8 +941,14 @@ test("a column chip takes its name from the effective axis", async () => {
  * shape. A comparison that sorted these would pass on a table drawing the
  * list's arrangement.
  */
+/**
+ * The words each head DRAWS: a glyph column's name is said to a screen reader
+ * (and on hover) rather than drawn, so it is not read here.
+ */
 const heads = (container: HTMLElement) =>
-  [...container.querySelectorAll(".grid-th")].map((el) => (el.textContent ?? "").trim());
+  [...container.querySelectorAll(".grid-th")].map((el) =>
+    (el.querySelector(".truncate")?.textContent ?? "").trim(),
+  );
 
 /** What the list draws with nothing chosen: the compact row, as columns. */
 const LIST_SET = ["", "Key", "Status", "Title", "Due", "", "", "Updated"];

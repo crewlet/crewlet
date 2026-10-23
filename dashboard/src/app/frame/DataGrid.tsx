@@ -37,7 +37,7 @@ import {
 } from "react";
 import { useParam } from "../router.tsx";
 import { peekHref, usePeek } from "./DetailRail.tsx";
-import { Button, EmptyState, cx, useMediaMatch } from "@crewlethq/ui";
+import { Button, EmptyState, VisuallyHidden, cx, useMediaMatch } from "@crewlethq/ui";
 import { ChevronDownGlyph, ChevronUpGlyph } from "@crewlethq/icons/glyphs";
 // A GRID'S EMPTY MARK IS NAME-KEYED, because `empty.icon` is part of the prop
 // every screen fills in — so the name→drawing lookup stays in `~/ui/Icon.tsx`.
@@ -1013,9 +1013,18 @@ export function DataGrid<T>({
             </>
           );
           if (!column.sortValue) {
+            // A GLYPH HEAD IS STILL A NAMED COLUMN. With no word to draw, the
+            // header carried nothing at all, so a screen reader met an
+            // unnamed column and a pointer had no way to ask what one of
+            // twenty pixels of marks was. The column's own word (`label`,
+            // which the phone's card already spends) names it, said to
+            // assistive technology and shown on hover.
+            const unworded = !(typeof column.header === "string" && column.header);
+            const named = unworded && !column.action ? column.label : undefined;
             return (
-              <div key={column.key} className={className} role="columnheader">
+              <div key={column.key} className={className} role="columnheader" title={named}>
                 {body}
+                {named && <VisuallyHidden>{named}</VisuallyHidden>}
               </div>
             );
           }
