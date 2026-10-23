@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/words"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -893,7 +894,8 @@ func TestACommentCarriesTheTurnsKeyAndItsMentions(t *testing.T) {
 }
 
 // A BAD ENUM IS REFUSED WITH THE LIST, so the model's next call is right
-// rather than being another guess.
+// rather than being another guess: every value, each quoted as the refused one
+// beside it is, read whole.
 func TestABadEnumIsRefusedWithTheValidValues(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -901,21 +903,27 @@ func TestABadEnumIsRefusedWithTheValidValues(t *testing.T) {
 	// THE CLOSE REASON IS THE STATUS. The tracker has no separate field:
 	// `cancelled` IS "finished without being delivered", which is what
 	// makes it invisible to a delivery count with no second value to keep in step.
-	for _, tc := range []struct{ field, value, want string }{
-		{"status", "wip", "in_progress"},
-		{"status", "wontfix", "cancelled"},
-		{"priority", "P0", "urgent"},
+	statuses := "The statuses are: " + words.And(worklet.Statuses) + "."
+	priorities := "The priorities are: " + words.And(worklet.Priorities) + "."
+	for _, tc := range []struct {
+		tool       string
+		args       map[string]any
+		want, list string
+	}{
+		{builtin.UpdateWorkItemTool, map[string]any{"item": "ENG-1", "status": "wip"}, "in_progress", statuses},
+		{builtin.UpdateWorkItemTool, map[string]any{"item": "ENG-1", "status": "wontfix"}, "cancelled", statuses},
+		{builtin.UpdateWorkItemTool, map[string]any{"item": "ENG-1", "priority": "P0"}, "urgent", priorities},
+		{builtin.CreateWorkItemTool, map[string]any{"title": "somewhere", "project": "ENG", "priority": "P0"},
+			"urgent", priorities},
 	} {
-		got := callWork(t, reg, builtin.UpdateWorkItemTool, map[string]any{
-			"item": "ENG-1", tc.field: tc.value,
-		})
+		got := callWork(t, reg, tc.tool, tc.args)
 		if !got.Failed {
-			t.Errorf("%s=%q was accepted", tc.field, tc.value)
+			t.Errorf("%s %v was accepted", tc.tool, tc.args)
 			continue
 		}
-		if !strings.Contains(got.Output, tc.want) {
-			t.Errorf("the refusal of %s=%q does not list the valid values: %s",
-				tc.field, tc.value, got.Output)
+		if !strings.Contains(got.Output, tc.want) || !strings.Contains(got.Output, tc.list) {
+			t.Errorf("the refusal of %s %v does not list the valid values as %q: %s",
+				tc.tool, tc.args, tc.list, got.Output)
 		}
 	}
 }
@@ -1943,8 +1951,9 @@ func TestACreateStartsInTheStatusItNames(t *testing.T) {
 	bad := callWork(t, reg, builtin.CreateWorkItemTool, map[string]any{
 		"title": "somewhere", "project": "ENG", "status": "shipping",
 	})
-	if !bad.Failed || !strings.Contains(bad.Output, "shipping") {
-		t.Errorf("an unknown status was not refused by name: %s", bad.Output)
+	if !bad.Failed || !strings.Contains(bad.Output, `"shipping" is not a status. The statuses are: `+
+		words.And(worklet.Statuses)+".") {
+		t.Errorf("an unknown status was not refused by name, naming every status: %s", bad.Output)
 	}
 	if len(trk.created) != 2 {
 		t.Errorf("the refused create filed a task anyway (%d filed)", len(trk.created))

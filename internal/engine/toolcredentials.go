@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A tool server is started only with what its configuration references.
@@ -726,7 +727,7 @@ func (m *credentialMissing) reason() string {
 	if remedy := m.optionalRemedy(); remedy != "" {
 		parts = append(parts, remedy)
 	}
-	var waits []string
+	var waits []words.Said
 	for _, kind := range m.mintingKinds() {
 		var names []string
 		for name, k := range m.minting {
@@ -744,10 +745,10 @@ func (m *credentialMissing) reason() string {
 				kind, verb, varRefs(names), why))
 			continue
 		}
-		waits = append(waits, fmt.Sprintf("the %s integration to %s %s", kind, verb, varRefs(names)))
+		waits = append(waits, words.Said(fmt.Sprintf("the %s integration to %s %s", kind, verb, varRefs(names))))
 	}
 	if len(waits) > 0 {
-		parts = append(parts, "waiting for "+strings.Join(waits, " and "))
+		parts = append(parts, "waiting for "+words.And(waits))
 	}
 	return strings.Join(parts, "; ")
 }
@@ -764,15 +765,15 @@ func (m *credentialMissing) optionalRemedy() string {
 	for key, where := range m.optional {
 		byWhere[where] = append(byWhere[where], key)
 	}
-	var lists []string
+	var lists []words.Said
 	for _, where := range slices.Sorted(maps.Keys(byWhere)) {
 		keys := byWhere[where]
 		slices.Sort(keys)
-		lists = append(lists, joined(keys)+" under "+where)
+		lists = append(lists, words.Said(asWritten(keys)+" under "+where))
 	}
 	keys := slices.Collect(maps.Keys(m.optional))
 	return fmt.Sprintf("or, if %s can go without %s, list %s",
-		m.reader, plural(keys, "it", "them"), strings.Join(lists, " and "))
+		m.reader, plural(keys, "it", "them"), words.And(lists))
 }
 
 // Error is the sentence the heartbeat carries and the log writes: why the
@@ -824,20 +825,22 @@ func plural(names []string, one, many string) string {
 
 // varRefs renders variable names as the references an operator wrote:
 // "${A}", "${A} and ${B}", "${A}, ${B} and ${C}".
-func varRefs(names []string) string {
-	refs := make([]string, len(names))
-	for i, name := range names {
-		refs[i] = "${" + name + "}"
+func varRefs(vars []string) string {
+	refs := make([]words.Said, len(vars))
+	for i, name := range vars {
+		refs[i] = words.Said("${" + name + "}")
 	}
-	return joined(refs)
+	return words.And(refs)
 }
 
-// joined renders a list for a sentence: "A", "A and B", "A, B and C".
-func joined(items []string) string {
-	if len(items) == 1 {
-		return items[0]
+// asWritten renders keys and paths as an operator writes them in the file, unquoted
+// beside the references [varRefs] writes: "A", "A and B", "A, B and C".
+func asWritten(items []string) string {
+	said := make([]words.Said, len(items))
+	for i, item := range items {
+		said[i] = words.Said(item)
 	}
-	return strings.Join(items[:len(items)-1], ", ") + " and " + items[len(items)-1]
+	return words.And(said)
 }
 
 // mintingStates reads the fleet's record of every integration that mints a

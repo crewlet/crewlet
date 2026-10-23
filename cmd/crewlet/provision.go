@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The provisioning commands, and the flags they share.
@@ -195,13 +196,9 @@ type outrankedSinkError struct {
 func (e *outrankedSinkError) Is(target error) bool { return target == errOutrankedSink }
 
 func (e *outrankedSinkError) Error() string {
-	refs := make([]string, len(e.names))
+	refs := make([]words.Said, len(e.names))
 	for i, name := range e.names {
-		refs[i] = "${" + name + "}"
-	}
-	held := refs[0]
-	if n := len(refs); n > 1 {
-		held = strings.Join(refs[:n-1], ", ") + " and " + refs[n-1]
+		refs[i] = words.Said("${" + name + "}")
 	}
 	return fmt.Sprintf("%s: the company's secret store (%s) holds %s, which this run "+
 		"can mint into, and the only place it would record a new value is %s. The "+
@@ -210,7 +207,7 @@ func (e *outrankedSinkError) Error() string {
 		"on with the stored value. Record with -secret-store instead, which reads the "+
 		"stored value back and writes into that store, or remove the value from the "+
 		"store first (crewlet secrets unset NAME). Nothing was sent to %s.",
-		e.command, e.store, held, e.sink, e.vendor, e.vendor)
+		e.command, e.store, words.And(refs), e.sink, e.vendor, e.vendor)
 }
 
 // freshSwitch is a provisioning command's flag for a fresh webhook secret —
@@ -438,7 +435,7 @@ func runGitLabProvision(inv invocation, args []string, stdout, stderr io.Writer)
 	// working out which seats landed.
 	if modeGiven && !gitlab.Mode(*mode).Valid() {
 		return fmt.Errorf("-mode %q is not one of %s",
-			*mode, strings.Join(gitlab.Modes(), ", "))
+			*mode, words.Or(gitlab.Modes()))
 	}
 
 	company, err := config.LoadCompanyToRun(companyPath, nil)

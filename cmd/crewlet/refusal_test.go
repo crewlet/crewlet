@@ -290,7 +290,7 @@ func TestARefusalNoGrantLiftsSaysTheRule(t *testing.T) {
 		{authz.ReasonNotLead, []iam.Grant{iam.GrantAdmin},
 			[]string{"(not_lead)", "its lead", "With Admin access"}},
 		{authz.ReasonNoGrant, []iam.Grant{iam.GrantWorklet},
-			[]string{"doesn't have worklet. Ask an admin for it"}},
+			[]string{`doesn't have "worklet". Ask an admin for it`}},
 	} {
 		_, _, detail := authz.RefusalFields(authz.Decision{Reason: c.reason, Grants: c.grants})
 		raw, err := json.Marshal(httpjson.Envelope(httpjson.CodeUnauthorized, detail))

@@ -3029,7 +3029,7 @@ func TestAnUnknownModeIsRefused(t *testing.T) {
 	if err == nil {
 		t.Fatal("an unknown mode ran")
 	}
-	if !strings.Contains(err.Error(), "group, instance") {
+	if !strings.Contains(err.Error(), `"group" or "instance"`) {
 		t.Errorf("the error does not name the modes: %v", err)
 	}
 	if len(f.calls) != 0 {

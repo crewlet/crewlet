@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -22,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A BEARER WRITE PASSES THE NODE'S OWN CROSS-SITE CHECK.
@@ -2001,22 +2003,21 @@ func TestANextPageLineQuotesWhatAShellWouldSplit(t *testing.T) {
 }
 
 // THE FLAG'S NAMES ARE A LIST READ AS ONE, its last joined by the sentence's
-// own word: "a, b, c, comma-separated, or none" read "comma-separated" as a
-// fourth member. Mutation: join every name with a comma again and this fails.
+// own word and every name quoted as the value typed beside it is: "a, b, c,
+// comma-separated, or none" read "comma-separated" as a fourth member, and the
+// private join that fixed it left every name unquoted. Mutation: join the
+// names by hand again in iamGrantWords and this fails.
 func TestThePermissionListReadsAsAList(t *testing.T) {
 	t.Parallel()
-	for _, c := range []struct {
-		set         []iam.Grant
-		conjunction string
-		want        string
-	}{
-		{[]iam.Grant{"a", "b", "c"}, "or", "a, b or c"},
-		{[]iam.Grant{"a", "b"}, "and", "a and b"},
-		{[]iam.Grant{"a"}, "or", "a"},
-		{nil, "or", ""},
-	} {
-		if got := iamWords(c.set, c.conjunction); got != c.want {
-			t.Errorf("iamWords(%v, %q) = %q, want %q", c.set, c.conjunction, got, c.want)
+	if got, want := iamGrantWords(), words.Or(iam.AllGrants); got != want {
+		t.Errorf("the permissions read %q, want %q", got, want)
+	}
+	if got, want := iamAppWords(), words.And(iam.Apps); got != want {
+		t.Errorf("the apps read %q, want %q", got, want)
+	}
+	for _, g := range iam.AllGrants {
+		if !strings.Contains(iamGrantWords(), strconv.Quote(string(g))) {
+			t.Errorf("the permissions do not name %q", g)
 		}
 	}
 }

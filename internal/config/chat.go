@@ -1,7 +1,6 @@
 package config
 
 import (
-	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/org"
@@ -446,7 +445,7 @@ func (c *Company) validateChat() error {
 
 	if b := c.Chat.Backend; b != "" && !b.Valid() {
 		p.add(field("chat.backend"), ErrShape,
-			"chat.backend must be one of: %s", names(ChatBackends))
+			"chat.backend must be one of %s", words.Or(ChatBackends))
 	}
 
 	vendors := c.chatVendorPaths()
@@ -458,17 +457,28 @@ func (c *Company) validateChat() error {
 	// half of. Refused at the authored path so the message names what to
 	// delete.
 	if c.Chat.Backend == ChatChatlet && len(vendors) > 0 {
-		p.add(field("chat.backend"), ErrConflict,
-			"Chatlet and %s can't both run, because conversations would "+
-				"be split between them. Remove one", names(vendors))
-	}
-	if c.Chat.Backend == ChatVendor && len(vendors) == 0 {
-		ways := make([]string, len(chatVendors))
-		for i, vendor := range chatVendors {
-			ways[i] = vendor.howToDeclare
+		paths := make([]words.Said, len(vendors))
+		for i, path := range vendors {
+			paths[i] = words.Said(path)
+		}
+		// THE VENDOR SIDE IS ONE, however many blocks declare it: what can't
+		// both run is Chatlet and the vendor chat, so "one" is Chatlet or
+		// every block, never a single block of two.
+		vendor := words.And(paths)
+		if len(paths) > 1 {
+			vendor = "the vendor surfaces at " + vendor
 		}
 		p.add(field("chat.backend"), ErrConflict,
-			"chat.backend: vendor needs %s", strings.Join(ways, " or "))
+			"Chatlet and %s can't both run, because conversations would "+
+				"be split between them. Remove one", vendor)
+	}
+	if c.Chat.Backend == ChatVendor && len(vendors) == 0 {
+		ways := make([]words.Said, len(chatVendors))
+		for i, vendor := range chatVendors {
+			ways[i] = words.Said(vendor.howToDeclare)
+		}
+		p.add(field("chat.backend"), ErrConflict,
+			"chat.backend: vendor needs %s", words.Or(ways))
 	}
 
 	// A CHATLET BLOCK ON A COMPANY THAT DOES NOT RUN CHATLET describes nothing, and

@@ -16,12 +16,13 @@ import (
 // answer for the whole company.
 func TestAPlacementNeedsItsBackend(t *testing.T) {
 	t.Parallel()
-	for _, tc := range []struct{ name, yaml, field string }{
+	for _, tc := range []struct{ name, yaml, field, has string }{
 		{"a company default naming an unconfigured backend",
-			"    local: {}\n    default_run_in: e2b\n", "providers.sandbox.default_run_in"},
+			"    local: {}\n    default_run_in: e2b\n", "providers.sandbox.default_run_in",
+			`(this catalogue has "direct" and "container")`},
 		{"an entry naming an unconfigured backend",
 			"    e2b: {api_key: k}\n  llm:\n    main: {model: sonnet, run_in: direct}\n" +
-				"roles:\n  - name: SWE\n", "providers.llm.main.run_in"},
+				"roles:\n  - name: SWE\n", "providers.llm.main.run_in", `(this catalogue has "e2b")`},
 		// The seats inside `units:` reach their entries too. They did not,
 		// for as long as the walk that reaches them was written inline in
 		// one rule — which exempted most of a real company's seats from
@@ -30,13 +31,19 @@ func TestAPlacementNeedsItsBackend(t *testing.T) {
 			"    e2b: {api_key: k}\n  llm:\n    main: {model: sonnet}\n" +
 				"    boxed: {model: sonnet, run_in: container}\n" +
 				"roles:\n  - name: CEO\n    llm: main\nunits:\n  - name: Platform\n    roles:\n" +
-				"      - name: SWE\n        llm: boxed\n", "providers.llm.boxed.run_in"},
+				"      - name: SWE\n        llm: boxed\n", "providers.llm.boxed.run_in",
+			`(this catalogue has "e2b")`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			err := rejects(t, "name: Acme\nproviders:\n  sandbox:\n"+tc.yaml, tc.field)
 			if !errors.Is(err, ErrConflict) {
 				t.Fatalf("want ErrConflict, got %v", err)
+			}
+			// THE CELLS IT HAS ARE A LIST READ WHOLE, each quoted as the
+			// value it was refused beside.
+			if !strings.Contains(err.Error(), tc.has) {
+				t.Errorf("the refusal does not say %s:\n%v", tc.has, err)
 			}
 		})
 	}
@@ -62,10 +69,16 @@ func TestAnAmbiguousCatalogueNeedsADefaultOnlyWhereAnEntryWouldReadIt(t *testing
 	// and only there: the default is one of that refusal's remedies, so a
 	// second refusal at the catalogue would say the one mistake twice.
 	silent := "  llm:\n    main: {model: sonnet}\nroles:\n  - name: SWE\n"
-	for _, doc := range []string{local + silent, both + silent} {
+	for doc, places := range map[string]string{
+		local + silent: `("direct" and "container")`,
+		both + silent:  `("direct", "container" and "e2b")`,
+	} {
 		err := rejects(t, doc, "providers.llm.main.run_in")
 		if !errors.Is(err, ErrMissing) {
 			t.Fatalf("want ErrMissing, got %v", err)
+		}
+		if !strings.Contains(err.Error(), "more than one place to run one "+places) {
+			t.Errorf("the refusal does not name the places as %s:\n%v", places, err)
 		}
 		if problems := Problems(err); len(problems) != 1 {
 			t.Errorf("want the one refusal at the entry, got %d:\n%v", len(problems), err)
@@ -107,13 +120,16 @@ func TestAnAmbiguousCatalogueNeedsADefaultOnlyWhereAnEntryWouldReadIt(t *testing
 // is pointed at later has somewhere to go.
 func TestACatalogueNothingReachesIsRefused(t *testing.T) {
 	t.Parallel()
-	for _, doc := range []string{
-		"name: Acme\nproviders:\n  sandbox:\n    local: {}\n",
-		"name: Acme\nproviders:\n  sandbox:\n    local: {}\n    e2b: {api_key: k}\n",
+	for doc, places := range map[string]string{
+		"name: Acme\nproviders:\n  sandbox:\n    local: {}\n":                        `("direct" and "container")`,
+		"name: Acme\nproviders:\n  sandbox:\n    local: {}\n    e2b: {api_key: k}\n": `("direct", "container" and "e2b")`,
 	} {
 		err := rejects(t, doc, "providers.sandbox.default_run_in")
 		if !errors.Is(err, ErrMissing) {
 			t.Fatalf("want ErrMissing, got %v", err)
+		}
+		if !strings.Contains(err.Error(), "more than one place to run an executor "+places) {
+			t.Errorf("the refusal does not name the places as %s:\n%v", places, err)
 		}
 	}
 	// The two ways to reach a cell both satisfy it, or the rule would be

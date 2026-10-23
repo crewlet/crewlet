@@ -345,7 +345,7 @@ func TestAnAskedWakeRendersTheOptionsAndTheAnsweringCall(t *testing.T) {
 		"- `hold` — Hold for the audit: about a week",
 		"The audit reviews last quarter's code.",
 		`{"item":"ENG-1","answers":"c-ask","choice":"ship","body":`,
-		"one of: ship, hold",
+		`one of "ship" or "hold"`,
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("the asked wake does not say %q:\n%s", want, prompt)

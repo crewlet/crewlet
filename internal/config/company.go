@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Company is Tier B — founder-owned, live-editable, versioned in the store.
@@ -1068,11 +1069,11 @@ func (c *Company) validateProviderKeys() error {
 			for _, key := range field.keys {
 				if _, ok := c.Providers.LLM[key]; !ok {
 					p.add(field.path, ErrUnknownValue,
-						"%q is not a configured provider: providers.llm has %s. "+
+						"%q is not a configured provider. Use one of providers.llm's: %s. "+
 							"A key that misses is not an error at run time: the seat "+
 							"falls back to another model and bills against it, so this "+
 							"is the only place the typo can be seen",
-						key, strings.Join(known, ", "))
+						key, words.Or(known))
 				}
 			}
 		}
@@ -1416,7 +1417,7 @@ func (c *Company) validateExecutors() error {
 					"opencode (and keep these entries for the reviewer, workers and "+
 					"side passes with llm_review, llm_subagent, llm_auxiliary or "+
 					"llm_judge), or move one of them to claude-code or opencode",
-				c.describeChain(seat.chain), names(CodingAgents))
+				c.describeChain(seat.chain), words.And(CodingAgents))
 			continue
 		}
 		if seat.named {
@@ -1457,7 +1458,7 @@ func (c *Company) validateExecutors() error {
 				"coding CLI's own run, which only %s have. %s. Move this entry to "+
 				"claude-code or opencode, or point those seats' `llm` at an entry "+
 				"that drives one",
-			which, entry.AgentName(), names(CodingAgents), seats)
+			which, entry.AgentName(), words.And(CodingAgents), seats)
 	}
 	return p.err()
 }
@@ -1491,7 +1492,7 @@ func (c *Company) executorWarnings() []Warning {
 			"so a launch skips it and runs on %s alone. That is fine if it is there "+
 			"for the reviewer, workers and side passes, which fall back to `llm`; "+
 			"otherwise take it out",
-			handle, c.describeChain(skipped), names(CodingAgents), c.describeChain(runners)))
+			handle, c.describeChain(skipped), words.And(CodingAgents), c.describeChain(runners)))
 		w.Seat = handle
 		out = append(out, w)
 	}
@@ -1575,14 +1576,14 @@ func (c *Company) validateSandboxPlacement() error {
 				"a seat's executor launches on this entry, in a box, and the "+
 					"catalogue offers more than one place to run one (%s), so this "+
 					"entry has to name one: or providers.sandbox.default_run_in has to",
-				names(catalogue.available()))
+				words.And(catalogue.available()))
 		case !slices.Contains(Placements, run):
 			// Spelling is the entry's own rule; it already reported.
 		case !catalogue.Configured(run):
 			p.add(where, ErrConflict,
 				"%q needs the %s backend configured under providers.sandbox "+
 					"(this catalogue has %s)",
-				run, run.backend(), names(catalogue.available()))
+				run, run.backend(), words.And(catalogue.available()))
 		}
 	}
 
@@ -1605,7 +1606,7 @@ func (c *Company) validateSandboxPlacement() error {
 				"and nothing names one, so no backend is built and a seat added later "+
 				"has nowhere to run. Name the default, or remove the block while no "+
 				"agent seat runs on a model",
-			names(catalogue.available()))
+			words.And(catalogue.available()))
 	}
 	if local := catalogue.localBlock(); local != nil {
 		// THE IMAGE IS ONLY NEEDED WHERE A CONTAINER IS ACTUALLY RUN, and

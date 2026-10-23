@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/words"
 
 	"github.com/google/uuid"
 )
@@ -119,7 +120,7 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 	state, ok := s.state(company, fc.roster, kind)
 	if !ok {
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeUnknownKind, map[string]string{
-			"hint": "one of " + kindList(),
+			"hint": "one of " + words.Or(integration.Kinds),
 		})
 		return
 	}

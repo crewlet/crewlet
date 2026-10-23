@@ -626,12 +626,15 @@ func artifactsUpdate(environ config.Source, args []string, stdout, stderr io.Wri
 		})
 }
 
-// fieldList names fields as a sentence does: `a`, `a and b`, `a, b and c`.
+// fieldList names fields as a sentence does: `a`, `a and b`, `a, b and c`,
+// each as the flag names it rather than quoted, since the line reads as what
+// was done ("updated the title and description of …").
 func fieldList(fields []string) string {
-	if len(fields) < 2 {
-		return strings.Join(fields, "")
+	said := make([]words.Said, len(fields))
+	for i, field := range fields {
+		said[i] = words.Said(field)
 	}
-	return strings.Join(fields[:len(fields)-1], ", ") + " and " + fields[len(fields)-1]
+	return words.And(said)
 }
 
 func artifactsShare(environ config.Source, args []string, stdout, stderr io.Writer) error {
@@ -891,14 +894,14 @@ func entryFor(files []localFile, asked string, kind artifacts.Kind) (string, err
 		return found[0], nil
 	case len(found) > 1:
 		return "", fmt.Errorf("the files hold %s: name the entry with -entry, or the kind "+
-			"with -kind", strings.Join(found, " and "))
+			"with -kind", words.And(found))
 	case len(files) == 1:
 		return files[0].path, nil
 	case len(candidates) == 0:
 		return "", fmt.Errorf("name the entry with -entry: a %s opens on no default file", kind)
 	}
 	return "", fmt.Errorf("name the entry with -entry: there is no %s",
-		strings.Join(candidates, " or "))
+		words.Or(candidates))
 }
 
 // kindFor is the kind a new artifact is created as: the one -kind names, else
@@ -994,7 +997,7 @@ func artifactsPublish(environ config.Source, args []string, stdout, stderr io.Wr
 	}
 	asked := artifacts.Kind(*kind)
 	if asked != "" && !asked.Valid() {
-		return fmt.Errorf("-kind %s is not a kind; name one of %s", asked, kindNames())
+		return fmt.Errorf("-kind %q is not a kind; name one of %s", asked, words.Or(artifacts.Kinds))
 	}
 	entryPath, err := entryFor(files, *entry, asked)
 	if err != nil {

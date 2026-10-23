@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Prompt is what a change to a task asks of the seat it reached.
@@ -481,8 +482,8 @@ func promptAskedDecision(b *strings.Builder, meta map[string]string, d decision.
 		Choice: choice, Body: "<why, in a sentence or two>",
 	}
 	b.WriteString("\nAnswer with ONE call to `" + CommentOnWorkTool + "`, " +
-		"naming the option you choose by its id in `choice` (one of: " +
-		strings.Join(d.OptionIDs(), ", ") + "):\n\n" +
+		"naming the option you choose by its id in `choice` (one of " +
+		words.Or(d.OptionIDs()) + "):\n\n" +
 		"```json\n" + jsonText(call) + "\n```\n\n" +
 		"If none of the options is right, answer without `choice` and say in " +
 		"`body` what you would do instead — that is an answer too. The asker " +

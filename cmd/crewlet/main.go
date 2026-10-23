@@ -743,20 +743,12 @@ func validateConfigs(args []string, stdout, stderr io.Writer) error {
 		return errors.New("name at most one document")
 	}
 	if !Tier(*tier).Valid() {
-		return fmt.Errorf("-tier %q is not one of %s", *tier, tierNames())
+		return fmt.Errorf("-tier %q is not one of %s", *tier, words.Or(tiers))
 	}
 	if file != "" {
 		return validateOne(file, Tier(*tier), *asJSON, stdout)
 	}
 	return validateBoth(cfg, *asJSON, stdout)
-}
-
-func tierNames() string {
-	out := make([]string, 0, len(tiers))
-	for _, t := range tiers {
-		out = append(out, string(t))
-	}
-	return strings.Join(out, ", ")
 }
 
 // validateOne checks the single document an operator named.

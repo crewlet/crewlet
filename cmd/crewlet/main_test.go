@@ -1582,7 +1582,7 @@ func TestValidateRefusesAnUnknownTier(t *testing.T) {
 	if err == nil {
 		t.Fatal("an unknown tier ran")
 	}
-	if !strings.Contains(err.Error(), "auto, company, bootstrap") {
+	if !strings.Contains(err.Error(), `-tier "middle" is not one of "auto", "company" or "bootstrap"`) {
 		t.Errorf("the error does not name the set: %v", err)
 	}
 }

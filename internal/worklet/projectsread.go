@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Reading a company's projects — the listing, and one project in full.
@@ -405,7 +406,7 @@ func ParseProjectQuery(p Params) (ProjectQuery, error) {
 		mode := ArchivedMode(raw)
 		if !mode.Valid() {
 			return ProjectQuery{}, fmt.Errorf("worklet: archived is one of %s, "+
-				"and %q is none of them", strings.Join(ArchivedModeNames(), ", "),
+				"and %q is none of them", words.Or(ArchivedModeNames()),
 				raw)
 		}
 		q.Archived = mode
@@ -425,7 +426,7 @@ func ParseProjectQuery(p Params) (ProjectQuery, error) {
 		if !order.Valid() {
 			return ProjectQuery{}, fmt.Errorf("worklet: sort is one of %s, "+
 				"each optionally with a leading `-` for descending, and %q is "+
-				"none of them", strings.Join(ProjectSortNames(), ", "), raw)
+				"none of them", words.Or(ProjectSortNames()), raw)
 		}
 		q.Sort, q.Descending = order, descending
 	}
@@ -448,11 +449,11 @@ func (r *Reader) Projects(ctx context.Context, q ProjectQuery) (
 		return ProjectListing{}, fmt.Errorf("worklet: this project read names "+
 			"no archival set — `archived` is one of %s, and a surface resolves "+
 			"an absent one to its own default before it reads",
-			strings.Join(ArchivedModeNames(), ", "))
+			words.Or(ArchivedModeNames()))
 	}
 	if q.Sort != "" && !q.Sort.Valid() {
 		return ProjectListing{}, fmt.Errorf("worklet: %q is not a project sort "+
-			"key — one of %s", q.Sort, strings.Join(ProjectSortNames(), ", "))
+			"key — one of %s", q.Sort, words.Or(ProjectSortNames()))
 	}
 	limit := q.Limit
 	if limit <= 0 || limit > MaxProjectsPerAnswer {

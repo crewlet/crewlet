@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Tier names one of the two config documents.
@@ -144,8 +145,8 @@ func Schema(tier Tier) ([]byte, error) {
 		// empty document by name rather than reading it as defaults.
 		rootType = "object"
 	default:
-		return nil, fault(nil, ErrUnknownValue, "unknown schema tier %q (want %s or %s)",
-			tier, TierBootstrap, TierCompany)
+		return nil, fault(nil, ErrUnknownValue, "%q isn't a schema tier. Use %s",
+			string(tier), words.Or(SchemaTiers))
 	}
 
 	body := g.structSchema(root, false)
@@ -891,14 +892,3 @@ var SchemaTiers = []Tier{TierBootstrap, TierCompany}
 
 // String renders a tier for a CLI flag's help text.
 func (t Tier) String() string { return string(t) }
-
-// ParseTier coerces a tier name, listing the valid ones on a miss.
-func ParseTier(name string) (Tier, error) {
-	for _, t := range SchemaTiers {
-		if string(t) == name {
-			return t, nil
-		}
-	}
-	return "", fmt.Errorf("%w: unknown schema tier %q (want %s)",
-		ErrUnknownValue, name, strings.Join(strs(SchemaTiers), " or "))
-}

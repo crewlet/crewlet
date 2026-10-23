@@ -28,6 +28,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/structured"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/toolname"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The names of the two structured-output tools. A phase ENDS by calling its
@@ -193,7 +194,7 @@ func citations(cited []string, reply turn.Reply, calls []ledger.Call, s turn.Sur
 	}
 	return fmt.Errorf("deliveries names no call that delivered: cite one of %s, "+
 		"or report the outcome honestly if none of them is the delivery",
-		strings.Join(eligible, ", "))
+		words.Or(eligible))
 }
 
 // reviewPayload is the wire shape of a submitted review.

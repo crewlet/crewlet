@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Bootstrap is Tier A — ops-owned, on disk, restart-only.
@@ -224,11 +225,11 @@ func (l *Logging) validate(path Path) error {
 	var p problems
 	if l.Level != "" && !l.Level.Valid() {
 		p.add(at(path, "level"), ErrUnknownValue, "%q (want %s)",
-			l.Level, names(logging.Levels))
+			l.Level, words.Or(logging.Levels))
 	}
 	if l.Format != "" && !l.Format.Valid() {
 		p.add(at(path, "format"), ErrUnknownValue, "%q (want %s)",
-			l.Format, names(logging.Formats))
+			l.Format, words.Or(logging.Formats))
 	}
 	p.wrap(l.File.validate(at(path, "file")))
 	// A NODE THAT LOGS NOWHERE. `stderr: false` is a statement about the
@@ -249,11 +250,11 @@ func (f *LogFile) validate(path Path) error {
 	var p problems
 	if f.Format != "" && !f.Format.Valid() {
 		p.add(at(path, "format"), ErrUnknownValue, "%q (want %s)",
-			f.Format, names(logging.Formats))
+			f.Format, words.Or(logging.Formats))
 	}
 	if f.Level != "" && !f.Level.Valid() {
 		p.add(at(path, "level"), ErrUnknownValue, "%q (want %s)",
-			f.Level, names(logging.Levels))
+			f.Level, words.Or(logging.Levels))
 	}
 	// THE CAPS ARE CHECKED WHETHER OR NOT A PATH IS SET. A block carrying
 	// `max_size_mb: 0` and no path is a half-written setting, and reporting
@@ -1127,11 +1128,11 @@ func (n *Node) validate(path Path) error {
 		p.add(at(path, "roles"), ErrMissing,
 			"name at least one of %s: a node with no roles does nothing at "+
 				"all. Omit the key to run every role, which is the "+
-				"single-process default", strings.Join(nodeRoleNames, ", "))
+				"single-process default", words.Or(nodeRoleNames))
 	}
 	if _, err := placement.ParseRoles(n.Roles); err != nil {
 		p.add(at(path, "roles"), ErrUnknownValue, "%s (want %s)",
-			err, strings.Join(nodeRoleNames, ", "))
+			err, words.Or(nodeRoleNames))
 	}
 
 	// THE KEY GRAMMAR IS THE PLACEMENT VOCABULARY'S, not this file's: a
@@ -2165,7 +2166,7 @@ func (s *Stream) durable(path Path) error {
 func (s *Stream) validate(path Path) error {
 	var p problems
 	if s.Type != "" && !slices.Contains(StreamTypes, s.Type) {
-		p.add(at(path, "type"), ErrUnknownValue, "%q (want %s)", s.Type, names(StreamTypes))
+		p.add(at(path, "type"), ErrUnknownValue, "%q (want %s)", s.Type, words.Or(StreamTypes))
 		return p.err() // the rest of the rules key on the type
 	}
 	external := s.Type == StreamNATS
@@ -2539,7 +2540,7 @@ func (t NATSTLS) validate(path Path) error {
 func (c *Coordination) validate(path Path) error {
 	var p problems
 	if c.Type != "" && !slices.Contains(CoordinationTypes, c.Type) {
-		p.add(at(path, "type"), ErrUnknownValue, "%q (want %s)", c.Type, names(CoordinationTypes))
+		p.add(at(path, "type"), ErrUnknownValue, "%q (want %s)", c.Type, words.Or(CoordinationTypes))
 	}
 	// THE js TAG CANNOT EXPRESS "0 OR AT LEAST 15", so the schema publishes
 	// min=0 and the floor lives here, in a message naming both forms.

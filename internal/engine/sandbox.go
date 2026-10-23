@@ -565,7 +565,7 @@ func (r runEnv) logFacts(ctx context.Context, seat string) {
 	}
 	attrs := append([]any{"seat", seat, "keys", r.facted}, r.facts.logAttrs()...)
 	attrs = append(attrs, "detail", "the run starts without the engine's own "+
-		plural(r.facted, "fact", "facts")+" from "+joined(r.facted)+": "+r.facts.reason())
+		plural(r.facted, "fact", "facts")+" from "+asWritten(r.facted)+": "+r.facts.reason())
 	if r.facts.waiting() {
 		log.InfoContext(ctx, "sandbox_env_unresolved", attrs...)
 		return
@@ -3480,6 +3480,17 @@ func entrySignsIn(agent *cliagent.Provider, env map[string]string) bool {
 	return false
 }
 
+// saidNames is variable names as a refusal writes them, bare beside the
+// variable the api-key arm names: [words.Or] quotes a value and leaves a
+// [words.Said] as it is.
+func saidNames(names []string) []words.Said {
+	said := make([]words.Said, len(names))
+	for i, name := range names {
+		said[i] = words.Said(name)
+	}
+	return said
+}
+
 // credentialRefusal is the [SandboxCredentialError] for a remote run nothing
 // in whose environment signs its CLI in, carrying the remedy for THIS entry.
 //
@@ -3545,7 +3556,7 @@ func credentialRefusal(agent *cliagent.Provider, key, seat string, placement san
 			return &SandboxCredentialError{msg: fmt.Sprintf(
 				"%s; or set %s in this seat's role.sandbox.env, or run the entry in a local cell "+
 					"(%s), which is seeded with its login",
-				lead, strings.Join(sign.Variables, " or "), localCell)}
+				lead, words.Or(saidNames(sign.Variables)), localCell)}
 		}
 	}
 	// A token variable no store can hold: `-capture-token` refuses to mint

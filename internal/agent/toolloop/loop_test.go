@@ -441,7 +441,7 @@ func TestTheFinishingCorrectiveNamesEveryOfferedTerminator(t *testing.T) {
 		want    string
 		notWant string
 	}{
-		{"both offered", []string{"approve", "reject"}, "one of `approve`, `reject`", ""},
+		{"both offered", []string{"approve", "reject"}, "one of `approve` or `reject`", ""},
 		{"one offered", []string{"approve"}, "`approve`", "reject"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

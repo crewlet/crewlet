@@ -142,7 +142,7 @@ func TestAChoiceMustNameAnOptionOfTheAskItAnswers(t *testing.T) {
 		return err
 	}
 	err := answer("op-bad", "c-bad", "c-ask", "wait")
-	if !errors.Is(err, worklet.ErrInvalid) || !strings.Contains(err.Error(), "ship, hold") {
+	if !errors.Is(err, worklet.ErrInvalid) || !strings.Contains(err.Error(), `it offers "ship" or "hold"`) {
 		t.Fatalf("a choice the ask did not offer: %v — want invalid, listing "+
 			"the options", err)
 	}

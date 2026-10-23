@@ -42,6 +42,7 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/whsec"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 var pinned = time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
@@ -705,6 +706,8 @@ func TestTheExternalURLIsAnsweredOnce(t *testing.T) {
 	}
 }
 
+// AN UNKNOWN KIND IS REFUSED BY NAME, its hint offering the kinds this build
+// serves as the alternatives they are.
 func TestAnUnknownKindIsRefusedByName(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
@@ -714,8 +717,12 @@ func TestAnUnknownKindIsRefusedByName(t *testing.T) {
 	if res.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404: %s", res.Code, res.Body)
 	}
-	if got := decode(t, res)["error"]; got != "unknown_kind" {
+	body := decode(t, res)
+	if got := body["error"]; got != "unknown_kind" {
 		t.Errorf("error = %v", got)
+	}
+	if got, want := body["hint"], "One of "+words.Or(integration.Kinds)+"."; got != want {
+		t.Errorf("hint = %v, want %q", got, want)
 	}
 }
 

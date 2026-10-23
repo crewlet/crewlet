@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tools/argval"
+	"github.com/crewlet/crewlet/internal/words"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -426,24 +427,14 @@ func (t *markInbox) Parameters() map[string]any {
 				"type":  "array",
 				"items": map[string]any{"type": "string"},
 				"description": "Which wake reasons land in the PRIMARY half " +
-					"of `" + worklet.WorkInboxTool + "`, the rest being context. One of: " +
-					reasonList() + ". An empty list takes the shipped " +
-					"default (" + defaultPrimaryList() + ") rather than " +
+					"of `" + worklet.WorkInboxTool + "`, the rest being context. One of " +
+					words.Or(worklet.Reasons) + ". An empty list takes the shipped " +
+					"default (" + words.And(worklet.DefaultPrimaryReasons) + ") rather than " +
 					"making nothing primary; omit it to leave your choice " +
 					"as it is.",
 			},
 		},
 	})
-}
-
-// defaultPrimaryList is the shipped split as one sentence, derived for the
-// reason [reasonList] is derived.
-func defaultPrimaryList() string {
-	names := make([]string, 0, len(worklet.DefaultPrimaryReasons))
-	for _, reason := range worklet.DefaultPrimaryReasons {
-		names = append(names, string(reason))
-	}
-	return strings.Join(names, ", ")
 }
 
 func (t *markInbox) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
@@ -813,7 +804,7 @@ func inboxGesture(args map[string]any) (worklet.InboxGesture, string) {
 			reason := worklet.Reason(strings.TrimSpace(raw))
 			if !slices.Contains(worklet.Reasons, reason) {
 				return g, fmt.Sprintf("%q is not a wake reason. The reasons "+
-					"are: %s.", raw, reasonList())
+					"are: %s.", raw, words.And(worklet.Reasons))
 			}
 			reasons = append(reasons, reason)
 		}
@@ -971,8 +962,8 @@ func (t *workInbox) Parameters() map[string]any {
 			"reasons": map[string]any{
 				"type":  "array",
 				"items": map[string]any{"type": "string"},
-				"description": "Narrow to these wake reasons. One of: " +
-					reasonList() + ". Omit for every reason, which is not " +
+				"description": "Narrow to these wake reasons. One of " +
+					words.Or(worklet.Reasons) + ". Omit for every reason, which is not " +
 					"the same as the primary half — that CLASSIFIES and this " +
 					"FILTERS.",
 			},
@@ -1048,7 +1039,7 @@ func (t *workInbox) Call(ctx context.Context, args map[string]any) (tools.Result
 		reason := worklet.Reason(strings.TrimSpace(raw))
 		if !slices.Contains(worklet.Reasons, reason) {
 			return failed(fmt.Sprintf("%q is not a wake reason. The reasons "+
-				"are: %s.", raw, reasonList())), nil
+				"are: %s.", raw, words.And(worklet.Reasons))), nil
 		}
 		q.Reasons = append(q.Reasons, reason)
 	}
@@ -1093,15 +1084,4 @@ func snoozeScopeNames() []string {
 		out = append(out, string(scope))
 	}
 	return out
-}
-
-// reasonList is the wake reasons as one sentence, DERIVED rather than typed
-// out: a reason added to the set has to reach the description, and a literal
-// list is the reader it would not reach.
-func reasonList() string {
-	names := make([]string, 0, len(worklet.Reasons))
-	for _, reason := range worklet.Reasons {
-		names = append(names, string(reason))
-	}
-	return strings.Join(names, ", ")
 }

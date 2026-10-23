@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/words"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -93,8 +94,8 @@ func (t *placeWorkItem) Parameters() map[string]any {
 			},
 			"status": map[string]any{
 				"type": "string",
-				"description": "The lane it was dropped into — one of: " +
-					statusList() + ". Send the lane it was dropped into " +
+				"description": "The lane it was dropped into — one of " +
+					words.Or(worklet.Statuses) + ". Send the lane it was dropped into " +
 					"even when it is the item's own: that writes nothing on " +
 					"the item. Omitted keeps its own. Given with neither " +
 					"neighbour, it is a drop into an empty lane: the status " +
@@ -164,7 +165,7 @@ func (t *placeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		status := worklet.Status(raw)
 		if !status.Valid() {
 			return failed(fmt.Sprintf("%q is not a status. The statuses are: %s.",
-				clip(raw), statusList())), nil
+				clip(raw), words.And(worklet.Statuses))), nil
 		}
 		// AS SENT — see the file head. The tracker decides a drop into
 		// the lane the card is in to write nothing on the task.

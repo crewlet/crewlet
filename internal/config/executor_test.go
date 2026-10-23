@@ -152,8 +152,8 @@ func TestAnExecutorChainWithNoRunnerIsRefused(t *testing.T) {
 			name: "a seat's own chain of another CLI",
 			llm:  ccEntry + codexEntry, roles: "  - name: SWE\n    llm: codex\n",
 			path: "roles[0].llm",
-			says: []string{"providers.llm.codex (codex)", "claude-code", "opencode", "llm_review",
-				"move one of them"},
+			says: []string{"providers.llm.codex (codex)", `only "claude-code" and "opencode" have`,
+				"llm_review", "move one of them"},
 		},
 		{
 			name: "a unit's seat, at its own path",
@@ -168,8 +168,8 @@ func TestAnExecutorChainWithNoRunnerIsRefused(t *testing.T) {
 			roles: "  - name: CEO\n  - name: PM\n  - name: Ops\n" +
 				"  - name: SWE\n    llm: cc\n",
 			path: "providers.llm.default.agent",
-			says: []string{`the one called "default"`, "codex", `seat "ceo"`, "2 more seats",
-				"point those seats' `llm`"},
+			says: []string{`the one called "default"`, "codex", `only "claude-code" and "opencode" have`,
+				`seat "ceo"`, "2 more seats", "point those seats' `llm`"},
 		},
 		{
 			name: "a silent seat falling to the first declared entry",
@@ -274,7 +274,8 @@ func TestAMixedExecutorChainIsAdvisedAbout(t *testing.T) {
 	if w.Path != "roles[0].llm" || w.Seat != "mixed" || w.Kind != WarningAdvisory {
 		t.Errorf("advisory = %+v, want one at roles[0].llm for seat mixed", w)
 	}
-	for _, said := range []string{"providers.llm.codex (codex)", "providers.llm.cc (claude-code), providers.llm.oc (opencode)"} {
+	for _, said := range []string{"providers.llm.codex (codex)", `which only "claude-code" and "opencode" have`,
+		"providers.llm.cc (claude-code), providers.llm.oc (opencode)"} {
 		if !strings.Contains(w.Message, said) {
 			t.Errorf("the advisory does not say %q: %s", said, w.Message)
 		}
@@ -477,6 +478,9 @@ func TestAnEntrysRunInIsACatalogueCell(t *testing.T) {
 	if !errors.Is(err, ErrUnknownValue) {
 		t.Fatalf("want ErrUnknownValue, got %v", err)
 	}
+	if want := `"self" (want "direct", "container" or "e2b")`; !strings.Contains(err.Error(), want) {
+		t.Errorf("the refusal does not offer the cells as %s:\n%v", want, err)
+	}
 	for _, cell := range Placements {
 		mustCompany(t, executorCompany("    sub:\n      model: sonnet\n      run_in: "+string(cell)+"\n",
 			"  - name: SWE\n    llm: sub\n"))
@@ -502,7 +506,7 @@ func TestARunInOnACLIThatLaunchesNoRunIsRefused(t *testing.T) {
 			if !errors.Is(err, ErrConflict) {
 				t.Fatalf("want ErrConflict, got %v", err)
 			}
-			for _, remedy := range []string{"Remove the field", "claude-code", "opencode"} {
+			for _, remedy := range []string{"Remove the field", `only "claude-code" and "opencode" launch`} {
 				if !strings.Contains(err.Error(), remedy) {
 					t.Errorf("the refusal does not name %q:\n%v", remedy, err)
 				}

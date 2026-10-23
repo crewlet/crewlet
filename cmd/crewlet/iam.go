@@ -26,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // `crewlet iam` — the company's identity directory from a terminal.
@@ -750,28 +751,18 @@ func iamGrants(flagged string) (iamGrantList, error) {
 // goes on naming three permissions after there are four;
 // TestTheCLINeverSpellsTheGrantListByHand reads the source for one.
 //
-// THE BARE NAMES THE FLAG TAKES, the last joined with "or", and the sentence
-// around it says how they are joined: it read "Use admin, worklet, doclet,
-// artifacts, chatlet, comma-separated, or none", where "comma-separated" was one
-// more member of the list.
-func iamGrantWords() string { return iamWords(iam.AllGrants, "or") }
+// THE NAMES THE FLAG TAKES, said as a sentence says a set ([words.Or]: each
+// quoted as the value beside it is, the last joined with "or"), and the
+// sentence around it says how they are joined: it read "Use admin, worklet,
+// doclet, artifacts, chatlet, comma-separated, or none", where
+// "comma-separated" was one more member of the list.
+func iamGrantWords() string { return words.Or(iam.AllGrants) }
 
 // iamAppWords is the APPS among them ([iam.Apps]), which is what a person's
 // invitation or create carries when -grants is left out — read off the same
 // list, for the same reason, and joined with "and", since it is every one of
 // them.
-func iamAppWords() string { return iamWords(iam.Apps, "and") }
-
-func iamWords(set []iam.Grant, conjunction string) string {
-	names := make([]string, 0, len(set))
-	for _, g := range set {
-		names = append(names, string(g))
-	}
-	if len(names) < 2 {
-		return strings.Join(names, "")
-	}
-	return strings.Join(names[:len(names)-1], ", ") + " " + conjunction + " " + names[len(names)-1]
-}
+func iamAppWords() string { return words.And(iam.Apps) }
 
 // iamHelp is [iamUsage] with its blanks filled: the default config path, and
 // the permission and app vocabularies, which are the engine's own lists rather

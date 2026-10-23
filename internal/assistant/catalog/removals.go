@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/assistant/wire"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A REPLACE NEVER REMOVES BY OMISSION (ADR-0055).
@@ -218,14 +219,14 @@ func undeclaredRemoval(title string, undeclared, unmade []string) *PreviewRefusa
 	}}
 }
 
-// inWords is a list of paths joined as a sentence: "project", "project and
-// space", "project, space and lead".
+// inWords is a list of paths as a sentence says it: "project", "project and
+// space", "project, space and lead". Each path is a [words.Said], written as
+// the body writes it rather than quoted, because that is how this refusal's
+// other sentences name a path and how the model writes it back in `removes`.
 func inWords(paths []string) string {
-	switch len(paths) {
-	case 0:
-		return ""
-	case 1:
-		return paths[0]
+	said := make([]words.Said, len(paths))
+	for i, p := range paths {
+		said[i] = words.Said(p)
 	}
-	return strings.Join(paths[:len(paths)-1], ", ") + " and " + paths[len(paths)-1]
+	return words.And(said)
 }

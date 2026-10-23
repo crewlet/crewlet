@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tools/argval"
+	"github.com/crewlet/crewlet/internal/words"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -823,7 +824,7 @@ func (t *listWorkItems) Parameters() map[string]any {
 			"status": map[string]any{
 				"type":        "array",
 				"items":       map[string]any{"type": "string"},
-				"description": "Statuses to include: " + statusList() + ".",
+				"description": "Statuses to include: " + words.Or(worklet.Statuses) + ".",
 			},
 			"open_only": map[string]any{
 				"type": "boolean",
@@ -868,7 +869,7 @@ func (t *listWorkItems) Parameters() map[string]any {
 			},
 			"priority": map[string]any{
 				"type":        "string",
-				"description": "One of: " + priorityList() + ". Comma separate for several.",
+				"description": "One of " + words.Or(worklet.Priorities) + ". Comma separate for several.",
 			},
 			"due": map[string]any{
 				"type": "string",
@@ -1506,11 +1507,11 @@ func (t *createWorkItem) Parameters() map[string]any {
 			},
 			"priority": map[string]any{
 				"type":        "string",
-				"description": "One of: " + priorityList() + ". Default none.",
+				"description": "One of " + words.Or(worklet.Priorities) + ". Default none.",
 			},
 			"status": map[string]any{
 				"type": "string",
-				"description": "Where it starts: one of " + statusList() +
+				"description": "Where it starts: one of " + words.Or(worklet.Statuses) +
 					". Default todo — name another only when the work is " +
 					"already under way or already done as it is filed.",
 			},
@@ -1696,7 +1697,7 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	}
 	if !task.Priority.Valid() {
 		return failed(fmt.Sprintf("%q is not a priority. The priorities are: %s.",
-			clip(string(task.Priority)), priorityList())), nil
+			clip(string(task.Priority)), words.And(worklet.Priorities))), nil
 	}
 	// WHERE IT STARTS, when the caller says. A person filing work from a
 	// board lane files it INTO that lane, and a create that could only land
@@ -1710,7 +1711,7 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		status := worklet.Status(raw)
 		if !status.Valid() {
 			return failed(fmt.Sprintf("%q is not a status. The statuses are: %s.",
-				clip(raw), statusList())), nil
+				clip(raw), words.And(worklet.Statuses))), nil
 		}
 		task.Status, task.StatusGroup = status, status.Group()
 	}
@@ -2254,7 +2255,7 @@ func (d WorkDeps) resolveHandle(ctx context.Context, tool, field,
 		}
 		return "", fmt.Sprintf("%s Look them up with %s rather than guessing. "+
 			"The seats are: %s.", missing, LookupColleagueTool,
-			strings.Join(allHandles(seats), ", "))
+			words.And(allHandles(seats)))
 	}
 	if !d.mayReadRoster(ctx) {
 		return "", fmt.Sprintf("%s names %s %q and more than one person here "+
@@ -2262,7 +2263,7 @@ func (d WorkDeps) resolveHandle(ctx context.Context, tool, field,
 			tool, field, clip(handle))
 	}
 	return "", fmt.Sprintf("%s names %s %q and it matches %s. Name one of them "+
-		"exactly.", tool, field, clip(handle), strings.Join(matchHandles(found), " or "))
+		"exactly.", tool, field, clip(handle), words.Or(matchHandles(found)))
 }
 
 // mayReadRoster reports whether this call's caller may read the company's
@@ -2519,7 +2520,7 @@ func (t *updateWorkItem) Parameters() map[string]any {
 				"type":        "string",
 				"description": "The item to change. " + itemRef,
 			},
-			"status":   map[string]any{"type": "string", "description": "One of: " + statusList() + "."},
+			"status":   map[string]any{"type": "string", "description": "One of " + words.Or(worklet.Statuses) + "."},
 			"assignee": map[string]any{"type": "string", "description": "A seat's handle, or \"\" to unassign."},
 			"reason": map[string]any{
 				"type": "string",
@@ -2530,7 +2531,7 @@ func (t *updateWorkItem) Parameters() map[string]any {
 					MaxAssignmentReason),
 			},
 			"checklist": checklistSchema(),
-			"priority":  map[string]any{"type": "string", "description": "One of: " + priorityList() + "."},
+			"priority":  map[string]any{"type": "string", "description": "One of " + words.Or(worklet.Priorities) + "."},
 			"title":     map[string]any{"type": "string"},
 			"body":      map[string]any{"type": "string", "description": "Replaces the description."},
 			"labels": map[string]any{
@@ -3185,7 +3186,7 @@ func patchFromArgs(args map[string]any, actor Actor, now time.Time,
 		priority := worklet.Priority(raw)
 		if !priority.Valid() {
 			return patch, kind, fmt.Sprintf("%q is not a priority. The "+
-				"priorities are: %s.", clip(raw), priorityList())
+				"priorities are: %s.", clip(raw), words.And(worklet.Priorities))
 		}
 		patch.Priority = &priority
 		// AND THE KIND STAYS `fields`, which is what a task's priority
@@ -3205,7 +3206,7 @@ func patchFromArgs(args map[string]any, actor Actor, now time.Time,
 		status := worklet.Status(raw)
 		if !status.Valid() {
 			return patch, kind, fmt.Sprintf("%q is not a status. The statuses "+
-				"are: %s.", clip(raw), statusList())
+				"are: %s.", clip(raw), words.And(worklet.Statuses))
 		}
 		patch.Status = &status
 		kind = worklet.ChangeStatus
@@ -4398,9 +4399,6 @@ func (d WorkDeps) zone() *time.Location {
 	return time.UTC
 }
 
-func statusList() string   { return joinValues(worklet.Statuses) }
-func priorityList() string { return joinValues(worklet.Priorities) }
-
 // openGroups is the status groups where work has not finished, DERIVED from
 // the closed set rather than listed.
 //
@@ -4415,15 +4413,6 @@ func openGroups() []string {
 		}
 	}
 	return out
-}
-
-// joinValues renders a closed set for a tool description.
-func joinValues[T ~string](values []T) string {
-	out := make([]string, len(values))
-	for i, v := range values {
-		out[i] = string(v)
-	}
-	return strings.Join(out, ", ")
 }
 
 // positionOf is the `position` a write's answer carries: where its record

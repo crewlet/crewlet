@@ -108,6 +108,7 @@ import (
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/slack"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 var log = logging.Get("api.setup")
@@ -826,7 +827,7 @@ func (s *Service) one(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeUnknownKind, map[string]string{
 			"detail": "this build serves no setup for " + string(kind),
-			"hint":   "one of " + kindList(),
+			"hint":   "one of " + words.Or(integration.Kinds),
 		})
 		return
 	}
@@ -2039,14 +2040,6 @@ func inboundPath(kind integration.Kind) string {
 	}
 }
 
-func kindList() string {
-	names := make([]string, 0, len(integration.Kinds))
-	for _, k := range integration.Kinds {
-		names = append(names, string(k))
-	}
-	return strings.Join(names, ", ")
-}
-
 // inputs serves POST /setup/integrations/{kind}/inputs.
 func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 	kind := integration.Kind(r.PathValue("kind"))
@@ -2058,7 +2051,7 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 	state, ok := s.stateFor(r.Context(), company, fc.roster, kind)
 	if !ok {
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeUnknownKind, map[string]string{
-			"hint": "one of " + kindList(),
+			"hint": "one of " + words.Or(integration.Kinds),
 		})
 		return
 	}
@@ -2245,7 +2238,7 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 	state, ok := s.stateFor(r.Context(), company, fc.roster, kind)
 	if !ok {
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeUnknownKind, map[string]string{
-			"hint": "one of " + kindList(),
+			"hint": "one of " + words.Or(integration.Kinds),
 		})
 		return
 	}

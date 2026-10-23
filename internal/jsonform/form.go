@@ -457,11 +457,12 @@ func keysOf(f *Form) []string {
 	return f.Keys()
 }
 
-// OneOf is a closed set as a reference names it: "one of `a`, `b`, `c`".
+// OneOf is a closed set as a reference names it: "one of `a`, `b` or `c`",
+// each member in the backticks the reference writes a value in ([words.Said]).
 func OneOf[T ~string](values []T) string {
-	parts := make([]string, len(values))
+	parts := make([]words.Said, len(values))
 	for i, v := range values {
-		parts[i] = "`" + string(v) + "`"
+		parts[i] = words.Said("`" + string(v) + "`")
 	}
-	return "one of " + strings.Join(parts, ", ")
+	return "one of " + words.Or(parts)
 }

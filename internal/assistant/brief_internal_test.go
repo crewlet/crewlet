@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A CITED NAME IS A WHOLE NAME: ENG-1 is not cited by an answer that names
@@ -181,8 +182,8 @@ func TestTheBriefRulesNameEveryCitableKind(t *testing.T) {
 		t.Errorf("the brief's rules do not name the records a row may cite as %q", listed)
 	}
 	for _, k := range catalog.BriefRefKinds {
-		words, ok := briefCiteWords[k]
-		if !ok || !strings.Contains(listed, words) {
+		phrase, ok := briefCiteWords[k]
+		if !ok || !strings.Contains(listed, phrase) {
 			t.Errorf("the brief's rules have no words for %s, which a row may cite", k)
 		}
 	}
@@ -190,5 +191,23 @@ func TestTheBriefRulesNameEveryCitableKind(t *testing.T) {
 		if !slices.Contains(catalog.BriefRefKinds, k) {
 			t.Errorf("the brief's rules name %s, which no row may cite", k)
 		}
+	}
+}
+
+// THE BRIEF'S QUESTION OFFERS EVERY KIND A NEED MAY CITE AS THE ANSWER WRITES
+// IT, from the same list ([catalog.BriefRefKinds]), each quoted as the value it
+// is and the last joined by "or" ([words.Or]). It said them as "A row may cite
+// a task, project, seat, page, artifact, room": unquoted and with no "or", so
+// the set a ref_kind comes from read as a list. Mutation: join the kinds by
+// hand again, or leave one out, and this fails.
+func TestTheBriefQuestionOffersEveryCitableKind(t *testing.T) {
+	t.Parallel()
+	in := basePrompt()
+	in.Page = &wire.PageContext{Screen: "inbox", Title: "Inbox", Params: map[string]string{},
+		Query: map[string]string{}, Resources: []wire.Resource{}, Accepts: []string{}}
+	want := "A need's ref_kind is one of " + words.Or(catalog.BriefRefKinds) + "."
+	if question := briefQuestion(in); !strings.Contains(question, want) {
+		t.Errorf("the brief's question does not offer the kinds a need may cite as %q:\n%s",
+			want, question)
 	}
 }

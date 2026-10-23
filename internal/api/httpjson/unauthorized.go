@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // What `unauthorized` says, which depends on the rule that refused.
@@ -164,18 +165,18 @@ func lacksSentence(named string) string {
 // in the list's own order, joined by commas with "or" before the last —
 // "Admin, Worklet or Doclet", the words People & access gives the
 // permissions.
+//
+// SAID, not quoted: a person reads an app by its name, as the screen that
+// grants it prints it, and never as a value they type.
 func grantWords(grants []string) string {
-	words := make([]string, 0, len(grants))
+	said := make([]words.Said, 0, len(grants))
 	for _, word := range grants {
 		if word != "" {
 			word = strings.ToUpper(word[:1]) + word[1:]
 		}
-		words = append(words, word)
+		said = append(said, words.Said(word))
 	}
-	if n := len(words); n > 1 {
-		return strings.Join(words[:n-1], ", ") + " or " + words[n-1]
-	}
-	return strings.Join(words, "")
+	return words.Or(said)
 }
 
 // grantNames is grants as the words a refusal's detail carries them in.

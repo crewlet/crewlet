@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/decision"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A DECISION IS A STRUCTURED ASK: ADR-0023.
@@ -257,7 +258,7 @@ func checkChoice(task, ask string, d *decision.Decision, choice string) error {
 	if _, ok := d.Option(choice); !ok {
 		return invalidSaying(caveat.NotAnOption(), "the choice %q is not an option of the "+
 			"decision in %s on task %s — it offers %s", choice, ask, task,
-			strings.Join(d.OptionIDs(), ", "))
+			words.Or(d.OptionIDs()))
 	}
 	return nil
 }

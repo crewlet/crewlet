@@ -15,6 +15,7 @@ import (
 	"golang.org/x/text/unicode/norm"
 
 	"github.com/crewlet/crewlet/internal/jsonform"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // ---- reading a kit -------------------------------------------------------- //
@@ -378,9 +379,11 @@ func (r *reader) lines2(name string, list []string, brand string) {
 
 // face holds one typeface to EXACTLY ONE source, or to being unset.
 func (r *reader) face(name string, f Face) {
-	var named []string
+	// The keys a face names are said as `brand.json` writes them, unquoted
+	// like the rest of the refusal's sentence ([words.Said]).
+	var named []words.Said
 	for _, s := range []struct {
-		key string
+		key words.Said
 		set bool
 	}{{"kit", f.Kit != ""}, {"stack", f.Stack != ""}, {"family", f.Family != ""}} {
 		if s.set {
@@ -399,13 +402,13 @@ func (r *reader) face(name string, f Face) {
 	case sources > 1:
 		r.field(name, RuleField, "names %s: a face has exactly one source, so keep one of kit "+
 			"(a kit face), stack (a system stack) and family (an uploaded family) and remove the "+
-			"others", strings.Join(named, " and "))
+			"others", words.And(named))
 		return
 	case f.Kit != "" && !slices.Contains(KitFaces, f.Kit):
-		r.field(name+".kit", RuleField, "%q is not a kit face: name one of %s", f.Kit, strings.Join(KitFaces, ", "))
+		r.field(name+".kit", RuleField, "%q is not a kit face: name one of %s", f.Kit, words.Or(KitFaces))
 	case f.Stack != "" && !slices.Contains(SystemStacks, f.Stack):
 		r.field(name+".stack", RuleField, "%q is not a system stack: name one of %s", f.Stack,
-			strings.Join(SystemStacks, ", "))
+			words.Or(SystemStacks))
 	}
 	if f.Family == "" {
 		if len(f.Files) > 0 || f.Licensed {

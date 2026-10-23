@@ -82,9 +82,9 @@ func TestAnActionsArgumentsRefuseAGuessInTheScreensOwnTerms(t *testing.T) {
 		"the second guess": {`{"scope": "qa", "value": "1.5M", "window": "day"}`,
 			`args takes no "scope"; it takes ceiling, period, seat`},
 		"a seat the screen does not draw": {`{"seat": "nobody", "period": "day", "ceiling": "1M"}`,
-			`args.seat is one of "qa", "engineer", not "nobody"`},
+			`args.seat is one of "qa" or "engineer", not "nobody"`},
 		"a window the screen has not": {`{"seat": "qa", "period": "year", "ceiling": "1M"}`,
-			`args.period is one of "day", "week", "month"`},
+			`args.period is one of "day", "week" or "month"`},
 		"a value of the wrong type": {`{"period": "day", "ceiling": 3}`,
 			`args.ceiling is text or null`},
 		"a required member left out": {`{"seat": "qa", "ceiling": "1M"}`,
@@ -115,7 +115,7 @@ func TestAnOperationIsHeldToTheShapeItsOpNames(t *testing.T) {
 	ops := decode(t, opsArgs)
 	for name, c := range map[string]struct{ value, want string }{
 		"an operation the screen does not make": {`{"ops": [{"op": "rename", "seat": "qa"}]}`,
-			`args.ops[0].op is one of "remove", "add_seat"`},
+			`args.ops[0].op is one of "remove" or "add_seat"`},
 		"a remove carrying an add's member": {`{"ops": [{"op": "remove", "seat": "qa", "data": {}}]}`,
 			`args.ops[0] takes no "data"`},
 		"too many operations": {`{"ops": [{"op": "remove", "seat": "a"}, {"op": "remove", "seat": "b"}, ` +
@@ -282,7 +282,7 @@ func TestEveryFaultOfAnActionsArgumentsIsNamedAtOnce(t *testing.T) {
 	if err == nil {
 		t.Fatal("three faults were accepted")
 	}
-	for _, want := range []string{`args takes no "handle"`, `args.seat is one of "qa", "engineer", not "nobody"`,
+	for _, want := range []string{`args takes no "handle"`, `args.seat is one of "qa" or "engineer", not "nobody"`,
 		`args.ceiling is text or null`, `args needs "period"`} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal %q does not say %q", err, want)

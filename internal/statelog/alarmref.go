@@ -3,6 +3,8 @@ package statelog
 import (
 	"fmt"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // AlarmReference renders the alarm table as the published markdown page.
@@ -22,11 +24,11 @@ func AlarmReference() string {
 	fmt.Fprintf(&b, alarmHeader,
 		spoken(AlarmInterval), spoken(TrimInterval), spoken(StallGrace))
 	if perLog := PerLogKinds(); len(perLog) > 0 {
-		named := make([]string, len(perLog))
+		named := make([]words.Said, len(perLog))
 		for i, kind := range perLog {
-			named[i] = "`" + string(kind) + "`"
+			named[i] = words.Said("`" + string(kind) + "`")
 		}
-		fmt.Fprintf(&b, perLogNote, sentenceList(named))
+		fmt.Fprintf(&b, perLogNote, words.And(named))
 	}
 	b.WriteString("\n| Alarm | What it means | What to do |\n")
 	b.WriteString("|---|---|---|\n")
@@ -202,12 +204,3 @@ The ` + "`seat_budget_parked`" + ` line names the window and when it resets, and
 the budgets surfaces show the refusing window. See the budget park in
 docs/concepts/agent-runtime.md.
 `
-
-// sentenceList joins names the way a sentence does: "a", "a and b", "a, b
-// and c".
-func sentenceList(names []string) string {
-	if len(names) < 2 {
-		return strings.Join(names, "")
-	}
-	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
-}

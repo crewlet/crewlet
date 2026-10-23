@@ -71,7 +71,8 @@ func TestADecisionIsValidatedField(t *testing.T) {
 		{"a long detail", func(d *decision.Decision) {
 			d.Options[1].Detail = long(decision.MaxOptionDetail + 1)
 		}, "options[1].detail"},
-		{"a recommendation not on offer", func(d *decision.Decision) { d.Recommended = "wait" }, "decision.recommended"},
+		{"a recommendation not on offer", func(d *decision.Decision) { d.Recommended = "wait" },
+			`decision.recommended is "wait", which is not one of its options ("ship" or "hold")`},
 		{"a long rationale", func(d *decision.Decision) {
 			d.Rationale = long(decision.MaxRationale + 1)
 		}, "decision.rationale"},

@@ -312,7 +312,7 @@ func (s *ActionArgs) problems(path string, v any) []error {
 			add("%s is %q", path, *s.Const)
 		}
 		if len(s.Enum) > 0 && !slices.Contains(s.Enum, value) {
-			add("%s is one of %s, not %q", path, quoted(s.Enum), value)
+			add("%s is one of %s, not %q", path, words.Or(s.Enum), value)
 		}
 		if s.MinLength != nil && n < *s.MinLength {
 			add("%s is at least %d characters", path, *s.MinLength)
@@ -380,7 +380,7 @@ func (s *ActionArgs) oneOfProblems(path string, v any) []error {
 				return variant.problems(path, v)
 			}
 		}
-		return []error{fmt.Errorf("%s.%s is one of %s", path, key, quoted(values))}
+		return []error{fmt.Errorf("%s.%s is one of %s", path, key, words.Or(values))}
 	}
 	var first []error
 	for _, variant := range s.OneOf {
@@ -475,15 +475,6 @@ func typeWords(types ArgTypes) string {
 		out = append(out, said[t])
 	}
 	return words.Or(out)
-}
-
-// quoted lists values the way a refusal names them.
-func quoted(values []string) string {
-	out := make([]string, len(values))
-	for i, v := range values {
-		out[i] = fmt.Sprintf("%q", v)
-	}
-	return strings.Join(out, ", ")
 }
 
 // utf16Len is a string's length as JSON Schema (and the dashboard) count it.

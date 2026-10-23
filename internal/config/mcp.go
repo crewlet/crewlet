@@ -8,6 +8,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // MCPTransport is how the engine reaches a tool server.
@@ -235,7 +236,7 @@ func (m *MCPServer) validate(path Path) error {
 	}
 	if m.Transport != "" && !slices.Contains(MCPTransports, m.Transport) {
 		p.add(at(path, "transport"), ErrUnknownValue, "%q (want %s)",
-			m.Transport, names(MCPTransports))
+			m.Transport, words.Or(MCPTransports))
 		return p.err()
 	}
 

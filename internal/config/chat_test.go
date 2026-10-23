@@ -187,6 +187,16 @@ func TestTheChatAxisRefusesWhatItCannotResolve(t *testing.T) {
 		if !strings.Contains(err.Error(), "roles[0].integrations.slack") {
 			t.Errorf("refusal = %q, want it to name the seat's own app", err)
 		}
+		// AND TWO VENDOR SURFACES ARE ONE SIDE, not two members of a pair:
+		// "Remove one" is Chatlet or both blocks, and "both" is Chatlet and
+		// the vendor chat, never three things.
+		err = rejects(t, "name: Acme\nchat: {backend: chatlet}\n"+mattermostBlock+
+			"  slack: {typing_status: addressed}\n", "chat.backend")
+		const both = "Chatlet and the vendor surfaces at integrations.mattermost and " +
+			"integrations.slack can't both run"
+		if !strings.Contains(err.Error(), both) {
+			t.Errorf("refusal = %q, want it to say %q", err, both)
+		}
 	})
 
 	t.Run("a vendor backend with no vendor block is refused", func(t *testing.T) {
@@ -223,12 +233,10 @@ func TestTheChatAxisRefusesWhatItCannotResolve(t *testing.T) {
 		if !errors.Is(err, ErrShape) {
 			t.Fatalf("want ErrShape, got %v", err)
 		}
-		// THE SET IS PRINTED, because "invalid value" leaves an author
+		// THE SET IS OFFERED, because "invalid value" leaves an author
 		// guessing at exactly the moment they have already guessed once.
-		for _, want := range strs(ChatBackends) {
-			if !strings.Contains(err.Error(), want) {
-				t.Errorf("refusal = %q, want it to offer %q", err, want)
-			}
+		if want := `must be one of "chatlet", "vendor" or "none"`; !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal = %q, want it to offer the backends as %s", err, want)
 		}
 	})
 

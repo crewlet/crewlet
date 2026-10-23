@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // verify serves POST /setup/integrations/{kind}/verify: a typed credential
@@ -48,7 +49,7 @@ func (s *Service) verify(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeUnknownKind, map[string]string{
 			"detail": "this build serves no setup for " + string(kind),
-			"hint":   "one of " + kindList(),
+			"hint":   "one of " + words.Or(integration.Kinds),
 		})
 		return
 	}

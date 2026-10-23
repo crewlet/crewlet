@@ -311,8 +311,7 @@ func (d Decision) Validate() error {
 	}
 	if d.Recommended != "" && !seen[d.Recommended] {
 		note(invalid("decision.recommended is %q, which is not one "+
-			"of its options (%s)", d.Recommended,
-			strings.Join(d.OptionIDs(), ", ")))
+			"of its options (%s)", d.Recommended, words.Or(d.OptionIDs())))
 	}
 	note(CheckText("decision.rationale", d.Rationale, MaxRationale, false))
 	if len(d.Evidence) > MaxEvidence {
@@ -349,7 +348,7 @@ func (d Decision) CheckChoice(choice string) error {
 	}
 	if _, ok := d.Option(choice); !ok {
 		return invalid("the choice %q is not an option of this decision: it offers %s",
-			choice, strings.Join(d.OptionIDs(), ", "))
+			choice, words.Or(d.OptionIDs()))
 	}
 	return nil
 }

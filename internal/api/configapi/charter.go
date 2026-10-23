@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/plainjson"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE CHARTER: the company's mission, vision and standing policies, read and
@@ -149,7 +150,7 @@ func charterPatch(ch config.Charter) ([]byte, error) {
 // charterSummary is the revision summary a charter write records when its
 // caller names none: which of the three it changed.
 func charterSummary(was, is config.Charter) string {
-	var parts []string
+	var parts []words.Said
 	if was.Mission != is.Mission {
 		parts = append(parts, "mission")
 	}
@@ -159,15 +160,10 @@ func charterSummary(was, is config.Charter) string {
 	if !slices.Equal(was.Policies, is.Policies) {
 		parts = append(parts, "policies")
 	}
-	switch len(parts) {
-	case 0:
+	if len(parts) == 0 {
 		return "left the company's principles as they were"
-	case 1:
-		return "edited the company's " + parts[0]
-	default:
-		return "edited the company's " + strings.Join(parts[:len(parts)-1], ", ") +
-			" and " + parts[len(parts)-1]
 	}
+	return "edited the company's " + words.And(parts)
 }
 
 // getCharter serves GET /config/charter: the active document's charter, its

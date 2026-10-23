@@ -415,7 +415,7 @@ func TestAnswerRunDeliversAChoiceOfTheQuestionsOwnOptions(t *testing.T) {
 		args map[string]any
 		want string
 	}{
-		{"an unoffered choice", map[string]any{"turn_id": "t1", "choice": "rewrite"}, "keep, exact"},
+		{"an unoffered choice", map[string]any{"turn_id": "t1", "choice": "rewrite"}, `it offers "keep" or "exact"`},
 		{"a choice on an open question", map[string]any{"turn_id": "t2", "choice": "keep"}, "no options"},
 		{"neither a choice nor words", map[string]any{"turn_id": "t1"}, "`choice`"},
 	} {

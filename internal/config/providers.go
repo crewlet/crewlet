@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Providers is the Tier B model surface: which LLMs a seat can be pointed
@@ -655,7 +656,7 @@ func (l *LLMProvider) validate(path Path) error {
 	}
 	if l.Agent != "" && !l.Agent.Valid() {
 		p.add(at(path, "agent"), ErrUnknownValue, "%q (want %s)",
-			l.Agent, names(CLIAgentNames))
+			l.Agent, words.Or(CLIAgentNames))
 	}
 	// Left unbounded, a timeout of 0 or a negative one passes validation
 	// and reaches a process supervisor that reads it as "expire
@@ -673,7 +674,7 @@ func (l *LLMProvider) validate(path Path) error {
 	}
 	if l.Auth.Mode != "" && !slices.Contains(CLIAgentAuthModes, l.Auth.Mode) {
 		p.add(at(path, "auth.mode"), ErrUnknownValue, "%q (want %s)",
-			l.Auth.Mode, names(CLIAgentAuthModes))
+			l.Auth.Mode, words.Or(CLIAgentAuthModes))
 	}
 	// THE SPELLING, and that the entry can be placed at all. Whether the
 	// cell is configured is a question about providers.sandbox, and whether
@@ -688,13 +689,13 @@ func (l *LLMProvider) validate(path Path) error {
 	case l.RunIn == "":
 	case !slices.Contains(Placements, l.RunIn):
 		p.add(at(path, "run_in"), ErrUnknownValue, "%q (want %s)",
-			l.RunIn, names(Placements))
+			l.RunIn, words.Or(Placements))
 	case (l.Agent == "" || l.Agent.Valid()) && !l.runsExecutor():
 		p.add(at(path, "run_in"), ErrConflict,
 			"%s has no in-box runner, so no run is ever launched on this entry and nothing "+
 				"reads where it would be placed — only %s launch an executor run. Remove the "+
 				"field, or move the entry to one of those CLIs",
-			l.AgentName(), names(CodingAgents))
+			l.AgentName(), words.And(CodingAgents))
 	}
 	p.wrap(l.validateProfile(path))
 	return p.err()
@@ -1103,13 +1104,19 @@ func relocationRemedy(field, root, dir string, kept []string) string {
 	if len(kept) == 0 {
 		return remedy + "; a different directory is set with overrides." + field
 	}
-	fields := strings.Join(kept, ", ")
-	if n := len(kept); n > 1 {
-		fields = strings.Join(kept[:n-1], ", ") + " and " + kept[n-1]
-	}
 	return fmt.Sprintf("%s; a different directory is set with overrides.%s, moving the "+
 		"%s kept under %s beneath it in the same override, since the CLI finds them "+
-		"through this variable", remedy, field, fields, dir)
+		"through this variable", remedy, field, fieldNames(kept), dir)
+}
+
+// fieldNames is a profile's field names as a sentence about the file says
+// them, bare beside the overrides paths it names: "a", "a and b".
+func fieldNames(fields []string) string {
+	said := make([]words.Said, len(fields))
+	for i, f := range fields {
+		said[i] = words.Said(f)
+	}
+	return words.And(said)
 }
 
 // ---- embeddings ------------------------------------------------------ //
@@ -1619,7 +1626,7 @@ func (e *EmbeddingProvider) ResolvedKey(r *Resolver) string {
 func (e *EmbeddingProvider) validate(path Path) error {
 	var p problems
 	if e.Type != "" && !slices.Contains(EmbeddingProviderTypes, e.Type) {
-		p.add(at(path, "type"), ErrUnknownValue, "%q (want %s)", e.Type, names(EmbeddingProviderTypes))
+		p.add(at(path, "type"), ErrUnknownValue, "%q (want %s)", e.Type, words.Or(EmbeddingProviderTypes))
 	}
 	if strings.TrimSpace(e.Model) == "" {
 		p.add(at(path, "model"), ErrMissing, "name the embedding model")

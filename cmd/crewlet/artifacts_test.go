@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifacts/dashspec"
 	"github.com/crewlet/crewlet/internal/artifactupload"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // fakeArtifactsNode answers the artifacts surface, recording what it was sent.
@@ -294,6 +295,22 @@ func TestArtifactsPublishWalksALinkedRoot(t *testing.T) {
 	}
 	if got := node.declaredPaths(); !slices.Equal(got, []string{"css/app.css", "index.html"}) {
 		t.Errorf("declared %v", got)
+	}
+}
+
+// AN UNKNOWN KIND IS REFUSED BEFORE ANYTHING IS SENT, offering the kinds this
+// build serves as the alternatives they are, the kind it was given quoted as
+// they are.
+func TestArtifactsPublishRefusesAnUnknownKind(t *testing.T) {
+	t.Parallel()
+	node := newFakeArtifactsNode(t)
+	_, _, err := cli(t, "artifacts", "publish", site(t), "-kind", "page", bootstrapForURL(t, node.server.URL))
+	want := `-kind "page" is not a kind; name one of ` + words.Or(artifacts.Kinds)
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("publish -kind page = %v, want it refused as %q", err, want)
+	}
+	if len(node.intents) != 0 || len(node.publishes) != 0 {
+		t.Errorf("sent %d intents and %d publishes before refusing", len(node.intents), len(node.publishes))
 	}
 }
 
@@ -709,7 +726,7 @@ func TestArtifactsPublishRefusesTwoCandidateEntries(t *testing.T) {
 	node := newFakeArtifactsNode(t)
 	dir := writeTree(t, map[string]string{"index.html": "<!doctype html>", "index.md": "# Plan"})
 	_, _, err := cli(t, "artifacts", "publish", dir, bootstrapForURL(t, node.server.URL))
-	if err == nil || !strings.Contains(err.Error(), "index.html and index.md") {
+	if err == nil || !strings.Contains(err.Error(), `"index.html" and "index.md"`) {
 		t.Fatalf("publish of two entries answered %v", err)
 	}
 	if len(node.intents) != 0 {
