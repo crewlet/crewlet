@@ -62,7 +62,7 @@ func TestEveryGateAndCapacityRefusalIsTold(t *testing.T) {
 			"node-4 may not be readmitted"},
 		"an unknown phase":         {phaseErr, `phase "melting"`},
 		"an unknown phase abandon": {abandonErr, `phase "melting"`},
-		"its attempts used":        {attemptsErr, "needs a person now"},
+		"its attempts used":        {attemptsErr, "won't send the change again"},
 	} {
 		said, ok := statelog.Tell(c.err)
 		if !ok {

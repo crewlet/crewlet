@@ -7194,6 +7194,15 @@ takes `admin`.
 | `POST /worklet/retention/maintenance/abandon?stream=NAME&confirm=OPERATION-ID` | From `opened` clears the operation outright and answers no `operation`; from anywhere else enters the seal, and the operation records who abandoned it as `abandoned_by`. Either answers `open_windows` and `unread_windows` as `capacity` does. `confirm` repeats the open operation's id and is checked before anything changes: a missing one is `400 confirm_required`, and one naming another operation is `400 confirm_required` naming the open one in `detail`, with it in `operation`. |
 | `POST /worklet/retention/maintenance/exclude?stream=NAME&node=ID&confirm=ID` | Waives one node's acknowledgement and withdraws its admission, and the operation records who asserted it under `excluded_by`, keyed by the node. An excluded node's admission no longer stops the window, whether or not it could be withdrawn. Answers `open_windows` and `unread_windows` as `capacity` does. |
 
+**A blocked operation says why twice**: `blocked` is a code for scripts
+(`abandoned_by_operator`, `capacity_operation_unsealed`), and `blocked_detail`
+beside it is the sentence a person reads: what blocked the window and what
+clears it, with every command as the CLI takes it. An abandoned window's
+sentence is decided by its seal, so an answer carrying one reads the window's
+acknowledgements to say it. Every answer here that carries an `operation`
+carries both, and so does each entry in the retention report's `maintenance`
+list. A code this node's build doesn't know still gets a sentence, saying so.
+
 **Every gesture on the window names who made it**: `by` and `operator_id` for
 whoever opened it, and the same pair under `abandoned_by` and, per node, under
 `excluded_by` — the author and the credential they acted through, as every

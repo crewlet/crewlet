@@ -153,6 +153,10 @@ type maintenanceRow struct {
 	AcksUnread       bool `json:"acks_unread"`
 	AdmissionsUnread bool `json:"admissions_unread"`
 
+	// BlockedDetail is the node's sentence for Blocked, which is what this
+	// command prints: who blocked the window and what clears it.
+	BlockedDetail string `json:"blocked_detail"`
+
 	// AbandonedBy is who abandoned it, once somebody has.
 	AbandonedBy capacityParty `json:"abandoned_by"`
 }
@@ -356,8 +360,8 @@ func retentionStatus(environ config.Source, args []string, stdout, stderr io.Wri
 		}
 		fmt.Fprintln(stdout, ".")
 		if m.Blocked != "" {
-			fmt.Fprintf(stdout, "  BLOCKED: %s. This needs a person, not time.\n",
-				m.Blocked)
+			fmt.Fprintf(stdout, "  BLOCKED, and it needs a person, not time. %s\n",
+				m.BlockedDetail)
 		}
 		if m.AbandonedBy.By != "" {
 			fmt.Fprintf(stdout, "  abandoned by %s.\n", m.AbandonedBy.describe())

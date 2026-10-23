@@ -76,6 +76,7 @@ import { DataGrid } from "~/app/frame/DataGrid.tsx";
 
 import { href, useRoute } from "~/app/router.tsx";
 import { ALARMS_AT, alarmKindTitle, alarmLogLines, type AlarmLogLine } from "~/lib/alarms.ts";
+import { authorLabel } from "~/lib/attribution.ts";
 import { bindingTerm, TERM_WORDS } from "~/lib/retention.ts";
 import { andList } from "~/lib/words.ts";
 import { reveal } from "~/lib/scroller.ts";
@@ -770,13 +771,21 @@ export function MaintenanceBanner({ op, now }: { op: RetentionMaintenance; now: 
           <strong>Maintenance on {op.stream}</strong>: no node starts in service until it closes.
           Phase <InlineCode>{op.phase}</InlineCode>, attempt {op.attempt}, since{" "}
           {relTime(op.since, now)}
-          {op.by && <> ({op.by})</>}. Resizing {fmtBytes(op.original_max_bytes)} to{" "}
-          {fmtBytes(op.target_max_bytes)}.
+          {/* NOT IN PARENTHESES: the author's credential is in its own. */}
+          {op.by && <>, run by {authorLabel(op.by, op.operator_id)}</>}. Resizing{" "}
+          {fmtBytes(op.original_max_bytes)} to {fmtBytes(op.target_max_bytes)}.
         </span>
         {op.blocked && (
+          // THE NODE'S WORDS, NEVER THE CODE: `blocked` is for scripts, and
+          // `capacity_operation_unsealed` told a person nothing they could do.
+          // Every node's answer carries the sentence beside the code, and it
+          // never names who abandoned the window, which the line below does.
           <span>
-            <strong>Blocked:</strong> {op.blocked}. Needs a person.
+            <strong>Needs a person.</strong> {op.blocked_detail}
           </span>
+        )}
+        {op.abandoned_by?.by && (
+          <span>Abandoned by {authorLabel(op.abandoned_by.by, op.abandoned_by.operator_id)}.</span>
         )}
         <span className="t-caption">
           {/* WHAT COULDN'T BE READ IS SAID AS THAT: drawn as an empty list,

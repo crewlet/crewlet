@@ -1113,7 +1113,7 @@ func (e *Engine) release(ctx context.Context, op coord.MaintenanceOperation) (
 	log.InfoContext(ctx, "capacity_operation_confirmed", "stream", op.Stream,
 		"operation", op.OperationID, "attempt", op.Attempt,
 		"target", op.TargetMaxBytes, "observed", op.ObservedMaxBytes,
-		"abandoned", op.Blocked == statelog.BlockedAbandoned,
+		"abandoned", op.Blocked == coord.BlockAbandoned,
 		"detail", "the exclusion on this log is released; once no log has a "+
 			"window open, restart every node without -mode to return the fleet "+
 			"to service")
@@ -1178,7 +1178,7 @@ func (e *Engine) AbandonCapacity(ctx context.Context, stream, operationID string
 	}
 	out := op
 	out.Phase = phase
-	out.Blocked = statelog.BlockedAbandoned
+	out.Blocked = coord.BlockAbandoned
 	out.AbandonedBy = partyOf(by)
 	if err := e.backends.Fleet.UpdateMaintenance(ctx, out); err != nil {
 		return op, err
@@ -1186,9 +1186,10 @@ func (e *Engine) AbandonCapacity(ctx context.Context, stream, operationID string
 	log.WarnContext(ctx, "capacity_operation_abandoning", "stream", stream,
 		"operation", op.OperationID, "was", op.Phase,
 		"by", by.Name, "operator", by.OperatorID,
-		"detail", "a request may be outstanding, so the fleet still has to "+
-			"restart with `-mode seal`: the observed ceiling is then recorded "+
-			"as the outcome whatever it is")
+		"detail", "a request may be outstanding, so the window closes once its "+
+			"seal holds, which needs every node restarted with `-mode seal` unless "+
+			"they already are: the observed ceiling is then recorded as the "+
+			"outcome whatever it is")
 	return e.reread(ctx, stream)
 }
 
@@ -1325,6 +1326,18 @@ func (e *Engine) CapacityStatus(ctx context.Context, stream string) (CapacitySta
 	state.Acks, state.AcksErr = e.backends.Fleet.MaintenanceAcks(ctx, stream)
 	state.Admissions, state.AdmissionsErr = e.backends.Fleet.Admissions(ctx)
 	return state, nil
+}
+
+// CapacityAcks is every acknowledgement of one log's window, which an answer
+// carrying a blocked window reads to say what closes it
+// ([statelog.BlockedDetail]).
+func (e *Engine) CapacityAcks(ctx context.Context, stream string) (
+	[]coord.MaintenanceAck, error) {
+
+	if e.backends == nil || e.backends.Fleet == nil {
+		return nil, errNoFleet
+	}
+	return e.backends.Fleet.MaintenanceAcks(ctx, stream)
 }
 
 // CapacityWindows is every capacity window open on a log, the oldest first,

@@ -454,15 +454,15 @@ func TestTheVerifyConfirmsAnAbandonedOperationAtWhatItFound(t *testing.T) {
 	op := operation(coord.PhaseSealed)
 	for _, c := range []struct {
 		name     string
-		blocked  string
+		blocked  coord.MaintenanceBlock
 		observed uint64
 		want     bool
 	}{
 		{"the target", "", op.TargetMaxBytes, true},
 		{"another ceiling", "", op.TargetMaxBytes - 1, false},
-		{"another ceiling, out of attempts", statelog.BlockedUnsealed, op.TargetMaxBytes - 1, false},
-		{"another ceiling, abandoned", statelog.BlockedAbandoned, op.TargetMaxBytes - 1, true},
-		{"the target, abandoned", statelog.BlockedAbandoned, op.TargetMaxBytes, true},
+		{"another ceiling, out of attempts", coord.BlockUnsealed, op.TargetMaxBytes - 1, false},
+		{"another ceiling, abandoned", coord.BlockAbandoned, op.TargetMaxBytes - 1, true},
+		{"the target, abandoned", coord.BlockAbandoned, op.TargetMaxBytes, true},
 	} {
 		op.Blocked = c.blocked
 		if got := statelog.Verifies(op, c.observed); got != c.want {
@@ -483,11 +483,12 @@ func TestTheAttemptBudgetSurvivesCoordinatorFailure(t *testing.T) {
 		t.Fatalf("attempt %d was allowed past the budget of %d",
 			op.Attempt, statelog.ControlRaiseAttempts)
 	}
-	if blocked.Blocked != statelog.BlockedUnsealed {
+	if blocked.Blocked != coord.BlockUnsealed {
 		t.Fatalf("the exhausted operation is blocked by %q", blocked.Blocked)
 	}
-	if want := "`crewlet retention maintenance status -stream " + op.Stream + "`"; !strings.Contains(err.Error(), want) {
-		t.Fatalf("the refusal does not say where to look as the CLI takes it, %s: %v",
+	if want := "`crewlet retention maintenance abandon -stream " + op.Stream +
+		" -confirm " + op.OperationID + "`"; !strings.Contains(err.Error(), want) {
+		t.Fatalf("the refusal does not name the way out as the CLI takes it, %s: %v",
 			want, err)
 	}
 }

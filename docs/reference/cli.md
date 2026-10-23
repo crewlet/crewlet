@@ -1991,8 +1991,12 @@ WRITES REFUSED tracker: log_truncated: peer node-4 stands at sequence … of CRE
 While a capacity window is open on any log it leads with that window
 (`MAINTENANCE IS OPEN on <log>: no node starts in service until it closes.`),
 naming what it waits on, or saying it couldn't read that rather than printing a
-list. A log whose window the node couldn't read is said in a line of its own
-rather than left out:
+list, and a window that needs a person says why in the node's words
+(`BLOCKED`, never the code a script reads from `blocked`) and who abandoned it.
+`crewlet retention maintenance status`, `set-capacity` and the gestures print
+that sentence on a line of its own under the table, as the window's next step.
+A log whose window the node couldn't read is said in a line of its own rather
+than left out:
 
 ```
 This node couldn't read whether a capacity window is open on "CREWLET_PAGES_LOG". A data node restarted now won't start in service until it can read it. `crewlet retention maintenance status -stream CREWLET_PAGES_LOG` asks again.
@@ -2378,11 +2382,13 @@ itself. Any node can be excluded, whether or not it is a participant, and
 `abandon` changes what the operation is trying to reach and never the barrier
 it must cross. From `opened` it clears outright, since no request was issued,
 and says what's left before service as set-capacity does once it closes a
-window. From anywhere else the fleet still has to restart into `seal`, because
-a paused coordinator's request is outstanding whether or not a person has read
-a status page, and once the seal holds, set-capacity run again closes the
-window at whatever ceiling the log has then, rather than trying the target
-again. `-confirm` repeats the operation id from `status`, and the node checks
+window. From anywhere else it still crosses the seal, because a paused
+coordinator's request is outstanding whether or not a person has read a status
+page: every node restarted into `seal` since the request left, which a window
+abandoned after it sealed already has. Once the seal holds, set-capacity run
+again closes the window at whatever ceiling the log has then, rather than
+trying the target again, and the window's `BLOCKED` sentence says which of the
+two it is. `-confirm` repeats the operation id from `status`, and the node checks
 it against the operation that is open before it abandons anything: one naming
 another operation is refused and nothing changes.
 

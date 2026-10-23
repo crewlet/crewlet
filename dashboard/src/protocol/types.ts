@@ -2091,7 +2091,9 @@ export interface RetentionMaintenance {
   target_max_bytes: number;
   original_max_bytes: number;
   since: string;
+  /** Who opened it, and the credential they opened it through. */
   by?: string;
+  operator_id?: string;
   /**
    * The nodes the window's next step is still waiting for: at `opened`, those
    * with no restart into a maintenance mode recorded; from the baseline to the
@@ -2114,8 +2116,15 @@ export interface RetentionMaintenance {
    */
   acks_unread?: boolean;
   admissions_unread?: boolean;
-  /** Why it cannot proceed without a person, empty while it can. */
+  /**
+   * Why it cannot proceed without a person, empty while it can: a CODE for
+   * scripts, never drawn. `blocked_detail` is the same in the node's words,
+   * who blocked it and what clears it, and it is what the banner shows.
+   */
   blocked?: string;
+  blocked_detail?: string;
+  /** Who abandoned it, and the credential they used, once somebody has. */
+  abandoned_by?: { by: string; operator_id?: string };
 }
 
 /** One registered domain's row. */

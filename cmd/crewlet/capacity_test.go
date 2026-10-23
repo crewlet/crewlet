@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/httpx"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // fakeCapacityNode answers the maintenance surface, recording what it was
@@ -429,7 +429,7 @@ func TestAnAbandonedWindowSaysTheCeilingItClosedAt(t *testing.T) {
 	node := newFakeCapacityNode(t)
 	op := node.op()
 	op["phase"] = "confirmed"
-	op["blocked"] = statelog.BlockedAbandoned
+	op["blocked"] = coord.BlockAbandoned
 	op["observed_max_bytes"] = 4294967296
 	node.operation, node.gesture = op, op
 	base := bootstrapForURL(t, node.server.URL)
@@ -452,6 +452,50 @@ func TestAnAbandonedWindowSaysTheCeilingItClosedAt(t *testing.T) {
 		if !strings.Contains(page, want) || strings.Contains(page, "verified at the target") {
 			t.Errorf("an abandoned window never says %q, or says it was verified:\n%s",
 				want, page)
+		}
+	}
+}
+
+// A BLOCKED WINDOW SAYS WHY IN THE NODE'S WORDS, NEVER ITS CODE, ON A LINE OF
+// ITS OWN, AND NOTHING BESIDE IT CONTRADICTS IT.
+//
+// The BLOCKED line printed `capacity_operation_unsealed`, a code that told a
+// person nothing they could act on. The node carries a sentence beside every
+// code, and the page prints that. Put in a table cell, the sentence set the
+// width of its column for every row, so `on <log>`, `attempt N` and `by` sat
+// some 280 characters to the right; and the phase's own next step ("Run
+// set-capacity again to verify and confirm") contradicted it on a window out of
+// attempts, where set-capacity is blocked again.
+//
+// Mutation: print the code, put the sentence back in the table, or print the
+// phase's line beside it, and this fails.
+func TestABlockedWindowSaysWhyInWordsNotItsCode(t *testing.T) {
+	t.Parallel()
+	detail := "Crewlet stopped after 3 attempts at 8.0 GiB, because the broker " +
+		"still reports 4.0 GiB, and it won't send the change again."
+	node := newFakeCapacityNode(t)
+	op := node.op()
+	op["phase"] = "sealed"
+	op["blocked"] = coord.BlockUnsealed
+	op["blocked_detail"] = detail
+	node.operation = op
+	page, _, err := cli(t, "retention", "maintenance", "status",
+		bootstrapForURL(t, node.server.URL), "-stream", "CREWLET_TRACKER_LOG")
+	if err != nil {
+		t.Fatalf("maintenance status: %v", err)
+	}
+	if strings.Contains(page, string(coord.BlockUnsealed)) {
+		t.Errorf("the page prints the block's code:\n%s", page)
+	}
+	if want := "\nThis window needs a person. " + detail + "\n"; !strings.Contains(page, want) {
+		t.Errorf("the page never says %q on a line of its own:\n%s", want, page)
+	}
+	if strings.Contains(page, "Run `crewlet retention set-capacity") {
+		t.Errorf("the page offers set-capacity beside a block that refuses it:\n%s", page)
+	}
+	for line := range strings.SplitSeq(page, "\n") {
+		if strings.HasPrefix(line, "OPERATION") && len(line) > 60 {
+			t.Errorf("the table's OPERATION row is %d characters wide: %q", len(line), line)
 		}
 	}
 }
