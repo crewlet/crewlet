@@ -130,13 +130,12 @@ export function Limits() {
             description="This node runs no company, so no turn runs to be limited."
           />
         )}
-        {groups.length > 0 && (
-          <div className="col gap-4">
-            {groups.map(({ group, rows: caps }) => (
-              <LimitGroupCard key={group} group={group} caps={caps} />
-            ))}
-          </div>
-        )}
+        {/* THE SECTION'S OWN RHYTHM: the cards stand in the section body,
+            whose gap every Settings page shares, rather than in a stack of
+            their own a step tighter. */}
+        {groups.map(({ group, rows: caps }) => (
+          <LimitGroupCard key={group} group={group} caps={caps} />
+        ))}
       </QueryState>
     </>
   );

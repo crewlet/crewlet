@@ -50,10 +50,11 @@ export function SignInPolicy() {
       </PageNote>
       <QueryState error={error} refusal={refusal} detail={detail} loading={loading && !data}>
         {data && (
-          <div className="col gap-4">
+          <>
             <Card padding="none">
               <Card.Header icon={<ShieldUserGlyph size="sm" />}>
                 <Card.Title id="sign-in-signing">Signing in</Card.Title>
+        {/* In the section body's own rhythm, as every Settings page stacks. */}
               </Card.Header>
               <SettingsTable aria-labelledby="sign-in-signing">
                 <SettingsTable.Row
@@ -98,7 +99,7 @@ export function SignInPolicy() {
                 </SettingsTable.Row>
               </SettingsTable>
             </Card>
-          </div>
+          </>
         )}
       </QueryState>
     </>
