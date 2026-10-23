@@ -266,11 +266,24 @@ func (j *scriptJob) signal(sig syscall.Signal) {
 }
 
 // await polls until cond holds, failing the case after ten seconds — the
-// script's own steps take milliseconds against the fake.
+// script's own steps take milliseconds against the fake — or AT ONCE when the
+// script has exited without it holding: nothing an exited script left behind
+// will change, and a case that waited out its bound reported a script that
+// stopped at its first line as one that was slow.
 func (j *scriptJob) await(what string, cond func() bool) {
 	j.t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for !cond() {
+		select {
+		case err := <-j.exited:
+			j.exited <- err
+			if cond() {
+				return
+			}
+			j.t.Fatalf("the script exited (%v) before %s; calls:\n%s\nstderr:\n%s", err, what,
+				strings.Join(j.calls(), "\n"), j.stderr.String())
+		default:
+		}
 		if time.Now().After(deadline) {
 			j.t.Fatalf("waited 10s for %s; calls:\n%s\nstderr:\n%s", what,
 				strings.Join(j.calls(), "\n"), j.stderrSoFar())
