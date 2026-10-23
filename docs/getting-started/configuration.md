@@ -1519,6 +1519,8 @@ retention:
                                   #   that intends to keep working
 ```
 
+**The sign-in settings are readable from the dashboard, not editable there.** `api.auth.totp`, `min_password_length` and `session` are this node's own file, so an administrator reads what THIS node enforces through the [`sign_in_policy`](../reference/api-endpoints.md#queries) question, every value as the engine applies it (an unset setting arrives as its default) and the session's idle lifetime beside them, which is a constant of the engine. Nodes of one fleet may disagree, and the answer names the node it describes. Changing any of them is an edit to this file and a restart.
+
 **`crewlet validate` prints warnings as well as refusals**, and they are
 separate on purpose: the exit code turns on refusals alone, so a CI step gates
 on what cannot run and still prints what its operator should read. A warning is

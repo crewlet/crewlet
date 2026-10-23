@@ -178,6 +178,11 @@ type Sources struct {
 	// exactly the edits that surface admits.
 	CompanyWriters []string
 
+	// SignIn is this node's sign-in posture, read from its Tier A
+	// `api.auth` ([SignInPolicyOf]). Nil leaves `sign_in_policy`
+	// unregistered; internal/api fills it from the Bootstrap it is handed.
+	SignIn *SignInPolicy
+
 	// Coord is the lease table: the fleet's one shared answer to "which
 	// node holds what". Nil leaves the fleet question unregistered.
 	Coord coord.Backend
@@ -706,6 +711,12 @@ func Register(r *Registry, s Sources) {
 		// machine to take out to lose the company's history — and it is
 		// read by a person or their cron.
 		r.Register("retention", Requires(iam.GrantAdmin), s.retention)
+	}
+	if s.SignIn != nil {
+		// HOW A PERSON SIGNS IN HERE, for the administrators who answer
+		// for it: posture rather than a secret, but the deployment's, read
+		// beside the people and tokens it governs. See [SignInPolicy].
+		r.Register("sign_in_policy", Requires(iam.GrantAdmin), s.signInPolicy)
 	}
 	// The NATIVE backends, each gated on its own reader: a company can run
 	// the native tracker on Confluence, or the native knowledge base on
