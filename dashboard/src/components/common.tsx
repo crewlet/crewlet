@@ -507,7 +507,12 @@ export function QueryState({
    * (`routes/spend/Spend.tsx`); that one now says what to do about it, so the
    * type says what the component always meant.
    */
-  empty?: { title: ReactNode; hint: ReactNode };
+  empty?: {
+    title: ReactNode;
+    hint: ReactNode;
+    /** The one way on from an empty answer, where the reader has one. */
+    action?: ReactNode;
+  };
   children?: ReactNode;
 }) {
   if (error === "unauthorized" && refusal && !isLogRefusal(refusal)) {
@@ -536,7 +541,12 @@ export function QueryState({
       // `size="compact"` IS our `inline`, and the default mark is the inbox
       // glyph ours passed by hand — so both props this used to spell are the
       // component's own defaults now.
-      <EmptyState size="compact" title={empty.title} description={empty.hint} />
+      <EmptyState
+        size="compact"
+        title={empty.title}
+        description={empty.hint}
+        action={empty.action}
+      />
     );
   }
   return <>{children}</>;

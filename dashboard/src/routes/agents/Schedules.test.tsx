@@ -210,7 +210,10 @@ test("the cron cell does not stretch the expression to the sentence under it", (
 });
 
 /** The screen itself, over the chart's org and one schedule with one fire. */
-async function mountScreen(scope?: string[]) {
+async function mountScreen(
+  scope?: string[],
+  over: { schedules?: unknown[]; grants?: string[] } = {},
+) {
   Object.defineProperty(globalThis, "WebSocket", {
     writable: true,
     value: class {
@@ -239,13 +242,15 @@ async function mountScreen(scope?: string[]) {
     Promise.resolve(
       what === "schedules"
         ? {
-            schedules: [row({ scope_id: "pm", scope_name: "pm", runners: ["pm"] })],
-            recent_runs: [fire],
+            schedules: over.schedules ?? [
+              row({ scope_id: "pm", scope_name: "pm", runners: ["pm"] }),
+            ],
+            recent_runs: over.schedules ? [] : [fire],
           }
         : what === "schedule_runs"
           ? { runs: [fire], truncated: false }
           : what === "viewer"
-            ? { login: "", owner: "", acts: [] }
+            ? { login: "ana", owner: "ana", acts: [], grants: over.grants ?? [] }
             : {},
     );
   const view = render(
@@ -398,4 +403,20 @@ test("the one schedule's fires fill their card on who each fire woke", async () 
   expect(fires).toBeDefined();
   // Fired, then Woke — the one flexible track — then the two content-sized.
   expect(fires!.style.gridTemplateColumns).toMatch(/^\S+ minmax\(12rem, 1fr\) /);
+});
+
+// NO FIGURES OVER NOTHING: three tiles reading 0 above an empty state that
+// says no schedule is defined said it four times. And the empty state's one
+// way on, the document a schedule is written in, is offered only to a reader
+// who may open it.
+test("no schedule draws no figures, and offers the configuration to a reader who may read it", async () => {
+  await mountScreen(undefined, { schedules: [], grants: ["admin"] });
+  expect(screen.getByText("No recurring work is defined")).toBeTruthy();
+  expect(document.querySelector(".crewlet-stat-group")).toBeNull();
+  expect(screen.getByRole("link", { name: "Open the configuration" }).getAttribute("href")).toBe(
+    "#/settings/config",
+  );
+  cleanup();
+  await mountScreen(undefined, { schedules: [], grants: ["tracker"] });
+  expect(screen.queryByRole("link", { name: "Open the configuration" })).toBeNull();
 });
