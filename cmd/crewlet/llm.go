@@ -65,7 +65,7 @@ import (
 // sends to certify a tool call comes back. The other subcommands stay
 // cli-agent only: there is no login to broker, list or export.
 
-const llmUsage = `crewlet llm — subscription CLI backends: logins, health and tokens;
+const llmUsage = `crewlet llm: subscription CLI backends: logins, health and tokens;
 and the health of the anthropic entries beside them
 
 Usage:
@@ -97,8 +97,8 @@ Flags:
   -print-token   Write a captured token to stdout instead of the store (login only)
 
 list, status, export and doctor resolve ${VAR}, a configured credential bundle
-included, from this node's own secret rows (-config) and this shell — not from
-the fleet's secret store the engine reads first — and say so on stderr.
+included, from this node's own secret rows (-config) and this shell (not from
+the fleet's secret store the engine reads first), and say so on stderr.
 `
 
 // runLLM dispatches `crewlet llm`.
@@ -139,7 +139,7 @@ func runLLM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 	secretStore := fs.Bool("secret-store", false,
 		"write the bundle into the encrypted secret store (export only)")
 	noSmoke := fs.Bool("no-smoke", false,
-		"skip the real completions — the tool call and both isolation probes (doctor only)")
+		"skip the real completions: the tool call and both isolation probes (doctor only)")
 	printToken := fs.Bool("print-token", false,
 		"write a captured token to stdout instead of storing it (login only)")
 	// THE FLAG `crewlet secrets` AND THE PROVISIONERS TAKE, for their
@@ -310,7 +310,7 @@ func cliAgents(company *config.Company, resolver *config.Resolver, companyPath s
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf(
-			"%s declares no cli-agent providers — see "+
+			"%s declares no cli-agent providers. See "+
 				"docs/concepts/subscription-llm-backends.md for the config block",
 			companyPath)
 	}
@@ -461,7 +461,7 @@ func doctorEntries(company *config.Company, resolver *config.Resolver, companyPa
 	if !slices.ContainsFunc(out, doctorEntry.examined) {
 		return nil, fmt.Errorf(
 			"%s declares no cli-agent or anthropic providers, which are the entries "+
-				"doctor examines — see docs/concepts/subscription-llm-backends.md",
+				"doctor examines. See docs/concepts/subscription-llm-backends.md",
 			companyPath)
 	}
 	return out, nil
@@ -490,7 +490,7 @@ func (b bundleFailure) Render(w io.Writer) {
 	fmt.Fprintf(w, "%-14s: %s\n", "provider", b.key)
 	fmt.Fprintln(w, "problems:")
 	fmt.Fprintf(w, "  - its configured credential bundle did not restore, so the engine would run it "+
-		"signed out — export the bundle again (`crewlet llm export`): %v\n", b.err)
+		"signed out. Export the bundle again (`crewlet llm export`): %v\n", b.err)
 }
 
 func unbuilt(key string, err error) func(context.Context, bool) diagnosis {
@@ -736,7 +736,7 @@ func exportLLM(ctx context.Context, environ config.Source, providers []cliAgentP
 	fmt.Fprintf(stdout,
 		"\nAn engine restores it into %s's credentials directory at boot and at\n"+
 			"every apply it publishes, when that directory is empty and nobody logged\n"+
-			"the entry out there since its last login — on a fleet, every such node.\n"+
+			"the entry out there since its last login (on a fleet, every such node).\n"+
 			"Each copy then descends from one refresh token, and a vendor that rotates\n"+
 			"them can log out whichever side refreshes second; a headless token, where\n"+
 			"the CLI mints one (`crewlet llm login %s -capture-token`), avoids that.\n"+
@@ -809,7 +809,7 @@ func importLLM(ctx context.Context, providers []cliAgentProvider, key string, st
 	present := func() error {
 		return fmt.Errorf(
 			"%s already has a login in %s, and restoring over it would replace "+
-				"a fresher refresh token with an older one — log it out first "+
+				"a fresher refresh token with an older one. Log it out first "+
 				"(`crewlet llm logout %s`) if you mean to replace it",
 			key, p.Workspace().CredentialsDir(), key)
 	}
@@ -829,7 +829,7 @@ func importLLM(ctx context.Context, providers []cliAgentProvider, key string, st
 	if len(raw) > maxBundleBytes {
 		return fmt.Errorf(
 			"the bundle on stdin exceeds %d bytes, which is far larger than any "+
-				"real credential directory — check what is on the other side of "+
+				"real credential directory. Check what is on the other side of "+
 				"the pipe (`crewlet llm export %s` produces one)",
 			maxBundleBytes, key)
 	}

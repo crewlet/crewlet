@@ -305,12 +305,12 @@ func engineCode(body []byte) string {
 func missingSurface(base, surface, code string) error {
 	if code == string(httpjson.CodeNoRoute) {
 		return fmt.Errorf("%s serves no %s surface: it is a node without the "+
-			"%s role, which serves only its probes and tool bridge — point -api at a node "+
+			"%s role, which serves only its probes and tool bridge. Point -api at a node "+
 			"whose node.roles include %s", base, surface,
 			placement.RoleIngress, placement.RoleIngress)
 	}
 	return fmt.Errorf("%s has no %s surface: whatever answered is not a "+
-		"Crewlet node's API — point -api (or api.host and api.port) at a node "+
+		"Crewlet node's API. Point -api (or api.host and api.port) at a node "+
 		"with the %s role rather than at a proxy or another service",
 		base, surface, placement.RoleIngress)
 }
@@ -332,7 +332,7 @@ func notTheNode(path string, status int, contentType string, body []byte) error 
 	said := foreignAnswer(contentType, body)
 	return noAnswer{fmt.Errorf("the answer to %s came back %d with no error code "+
 		"the engine writes, so it is not the node's own: something in front of it "+
-		"answered — a proxy or gateway, most often its read timeout — and the node "+
+		"answered (a proxy or gateway, most often its read timeout), and the node "+
 		"may still have done what was asked. It said: %s", path, status, said)}
 }
 

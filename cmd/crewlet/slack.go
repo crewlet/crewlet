@@ -171,7 +171,7 @@ func runSlackProvision(environ config.Source, args []string, stdout, stderr io.W
 func askForInstallCode(stdout io.Writer, stdin io.Reader) slack.Installer {
 	reader := bufio.NewReader(stdin)
 	return func(_ context.Context, handle, authorize string) (string, error) {
-		fmt.Fprintf(stdout, "\n%s — open this and click Allow:\n  %s\n", handle, authorize)
+		fmt.Fprintf(stdout, "\n%s: open this and click Allow:\n  %s\n", handle, authorize)
 		fmt.Fprintf(stdout,
 			"Paste the code the landing page shows (or the whole redirect "+
 				"URL), or press enter to skip %s: ", handle)
@@ -221,7 +221,7 @@ func printSlackResult(w io.Writer, res *slack.Result, ledgerPath string, sink in
 	fmt.Fprintf(w, "\nRecorded in %s; app ledger in %s.\n", sink.Describe(), ledgerPath)
 	// SAID EVERY RUN, because the ledger holds client secrets Slack
 	// serves once and an operator who commits it has published them.
-	fmt.Fprintf(w, "%s holds app client secrets — keep it out of version control.\n",
+	fmt.Fprintf(w, "%s holds app client secrets. Keep it out of version control.\n",
 		ledgerPath)
 
 	if len(res.Created) > 0 {
@@ -238,7 +238,7 @@ func printSlackResult(w io.Writer, res *slack.Result, ledgerPath string, sink in
 	printKept(w, res.Kept)
 	if len(res.Failed) > 0 {
 		handles := slices.Sorted(maps.Keys(res.Failed))
-		fmt.Fprintf(w, "\n%d seat(s) FAILED — everything else completed and is "+
+		fmt.Fprintf(w, "\n%d seat(s) FAILED. Everything else completed and is "+
 			"recorded, so re-running resumes:\n", len(handles))
 		for _, handle := range handles {
 			fmt.Fprintf(w, "  %-16s %s\n", handle, res.Failed[handle])
@@ -246,7 +246,7 @@ func printSlackResult(w io.Writer, res *slack.Result, ledgerPath string, sink in
 	}
 	if len(res.Pending) > 0 {
 		handles := slices.Sorted(maps.Keys(res.Pending))
-		fmt.Fprintf(w, "\n%d app(s) still need a workspace install — open each "+
+		fmt.Fprintf(w, "\n%d app(s) still need a workspace install. Open each "+
 			"and click Allow, then re-run:\n", len(handles))
 		for _, handle := range handles {
 			fmt.Fprintf(w, "  %-16s %s\n", handle, res.Pending[handle])

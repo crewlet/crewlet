@@ -60,7 +60,7 @@ import (
 // config — on disk or in the environment, never in the database it opens —
 // which is why these commands read Tier A and not the company document.
 
-const secretsUsage = `crewlet secrets — read and rotate the encrypted secret store
+const secretsUsage = `crewlet secrets: read and rotate the encrypted secret store
 
 Usage:
   crewlet secrets list                     What is set, and when it was last written
@@ -75,8 +75,8 @@ Flags:
   -api URL       The running node to write through; default is its own api.host:port
 
 A running engine holds its database, so these commands go through its
-authenticated /secrets surface — which is what puts a value on every node.
-Export CREWLET_API_TOKEN to authenticate. It is the only source — the Tier A
+authenticated /secrets surface, which is what puts a value on every node.
+Export CREWLET_API_TOKEN to authenticate. It is the only source: the Tier A
 api.auth.tokens list is what the node ACCEPTS, not a wallet this command helps
 itself from.
 `
@@ -351,8 +351,8 @@ func openSecretStore(ctx context.Context, environ config.Source, bootstrapPath, 
 	if err == nil {
 		return &secretTarget{
 			secretBackend: localSecrets{sv}, fleet: false,
-			where: boot.Store.Path + " — this node's own rows, which no peer " +
-				"can see until the engine migrates them at its next start",
+			where: boot.Store.Path + " (this node's own rows, which no peer " +
+				"can see until the engine migrates them at its next start)",
 		}, closeStore, nil
 	}
 	target, rerr := throughTheRunningNode(environ, boot, bootstrapPath, err)
@@ -383,7 +383,7 @@ func throughTheRunningNode(environ config.Source, boot *config.Bootstrap, bootst
 		// the API's own complaint without the lock reads as though the
 		// local store were never an option.
 		return nil, fmt.Errorf("%w\n\nthe engine for %s is running and holds "+
-			"its database, so this has to go through its API — and it cannot: "+
+			"its database, so this has to go through its API, and it cannot: "+
 			"%w\n\nEither stop `crewlet run` on this node and re-run, or "+
 			"supply the value through the process environment instead: the "+
 			"resolver falls back to it, so a rotation needs no downtime that way",
@@ -854,7 +854,7 @@ secrets:
 
   export %s=%s
 
-Key generation is always explicit — a silently generated key that nobody
+Key generation is always explicit: a silently generated key that nobody
 captured makes every encrypted row unrecoverable. Keep the id stable across
 restarts: it is stamped into every envelope this key seals, and only a
 rotation should introduce a new one.

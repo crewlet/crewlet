@@ -150,7 +150,7 @@ func renderBroker(w io.Writer, v brokerView) error {
 	case g == nil:
 		fmt.Fprintf(w, "The metadata group could not be read: %s\n", v.GroupError)
 	case g.Leader == "":
-		fmt.Fprintf(w, "Metadata group of %s, as %s reports it: NO LEADER — it is "+
+		fmt.Fprintf(w, "Metadata group of %s, as %s reports it: NO LEADER. It is "+
 			"electing one, or it has lost its quorum and can change nothing about "+
 			"itself.\n", g.Cluster, v.GroupFrom)
 	default:
@@ -308,7 +308,7 @@ func fleetBrokerRemove(environ config.Source, args []string, stdout, stderr io.W
 	var force *bool
 	client, err := nodeClientFor(environ, rest, "fleet broker remove", stderr, func(fs *flag.FlagSet) {
 		confirm = fs.String("confirm", "",
-			"repeat the node id (or the peer id) — a removed member no longer counts "+
+			"repeat the node id (or the peer id): a removed member no longer counts "+
 				"in any election")
 		peer = fs.String("peer", "",
 			"name the voter by the peer id the listing shows, for one no member can name")
@@ -331,7 +331,7 @@ func fleetBrokerRemove(environ config.Source, args []string, stdout, stderr io.W
 	if id == "" || *confirm != id {
 		fmt.Fprintln(stderr, fleetBrokerUsage)
 		return errors.New("removing a member changes the quorum every election and every " +
-			"create of the fleet's broker runs on — repeat the id in -confirm")
+			"create of the fleet's broker runs on. Repeat the id in -confirm")
 	}
 	query := url.Values{"confirm": {id}}
 	if *force {

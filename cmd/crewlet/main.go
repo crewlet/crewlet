@@ -225,7 +225,7 @@ func runIn(environ config.Source, args []string, stdout, stderr io.Writer) error
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintf(w, `crewlet %s — an engine for hierarchically organized AI agent companies
+	fmt.Fprintf(w, `crewlet %s: an engine for hierarchically organized AI agent companies
 
 Usage:
   crewlet run [flags]         Run the engine (API, agents and workers by default)
@@ -283,7 +283,7 @@ Config:
             Tier B to make active NOW, over whatever the fleet is running.
             The deliberate "this file is the company again" gesture.
             To change a RUNNING fleet with no restart at all, use
-            "crewlet config import" — it goes through the node's API.
+            "crewlet config import", which goes through the node's API.
 
 Environment:
   %s
@@ -355,7 +355,7 @@ func addConfigFlags(fs *flag.FlagSet) configFlags {
 // is not one yet.
 func companyName(c *config.Company) string {
 	if c == nil {
-		return "(unconfigured — no active revision and no Tier B file)"
+		return "(unconfigured: no active revision and no Tier B file)"
 	}
 	return c.Name
 }
@@ -470,7 +470,7 @@ func nameTheNeighbour(path string, err error) error {
 	if _, statErr := os.Stat(neighbour); statErr != nil {
 		return err
 	}
-	return fmt.Errorf("%w\n  (%s is there — this build's Tier A default is %q; "+
+	return fmt.Errorf("%w\n  (%s is there, and this build's Tier A default is %q; "+
 		"pass it as `crewlet run %s` or with -config)",
 		err, neighbour, defaultBootstrapPath, neighbour)
 }
@@ -1943,7 +1943,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// exists.
 	directory, keyring := e.IAM(), e.IdentityKeyring()
 	if directory == nil || keyring == nil {
-		return nil, errors.New("api: the engine opened no identity estate — " +
+		return nil, errors.New("api: the engine opened no identity estate, and " +
 			"engine.New opens it on every node holding the estate, company or not")
 	}
 	secretSurface, err := secretsapi.New(secretsapi.Options{

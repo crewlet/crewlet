@@ -101,7 +101,7 @@ func (k keyedWrite) confirmed(what, outcome string) error {
 	if said == "" {
 		return nil
 	}
-	return fmt.Errorf("%s: %s — the node could not confirm the write. To find out, %s",
+	return fmt.Errorf("%s: %s. The node could not confirm the write. To find out, %s",
 		what, said, k.retry())
 }
 
@@ -172,10 +172,10 @@ func (k keyedWrite) settle(stderr io.Writer, err error) error {
 	case refused.Unvouched:
 		return fmt.Errorf("%w\n\nThis node cannot tell whether it landed and will "+
 			"answer the same way until it can: check %s, or run it through another "+
-			"node with -api <that node> -op-id %s — never a fresh id", err, k.check,
+			"node with -api <that node> -op-id %s, never a fresh id", err, k.check,
 			k.operation)
 	case refused.Unsettled:
-		return fmt.Errorf("%w\n\nNo acknowledgement — this is the one outcome to "+
+		return fmt.Errorf("%w\n\nNo acknowledgement: this is the one outcome to "+
 			"retry: %s", err, k.retry())
 	default:
 		return fmt.Errorf("%w\n\nThis attempt wrote nothing. Once the node can take "+

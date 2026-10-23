@@ -64,7 +64,7 @@ func runBackup(environ config.Source, args []string, stdout, stderr io.Writer) e
 		// travels as an HTTP error and this one can say the thing that
 		// actually matters: the path is resolved somewhere else.
 		return fmt.Errorf("-dir %s is relative, and it is resolved on the engine's "+
-			"host rather than in this shell — give an absolute path", *dir)
+			"host rather than in this shell. Give an absolute path", *dir)
 	}
 
 	// DECODED INTO A SHAPE OF THIS COMMAND'S OWN rather than into

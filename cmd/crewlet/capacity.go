@@ -66,7 +66,7 @@ func retentionSetCapacity(environ config.Source, args []string, stdout, stderr i
 	client, err := nodeClientFor(environ, rest, "retention set-capacity", stderr,
 		func(fs *flag.FlagSet) {
 			confirm = fs.String("confirm", "",
-				"repeat the byte count — this restarts the whole fleet three times")
+				"repeat the byte count: this restarts the whole fleet three times")
 			assert = fs.Bool("i-have-excluded-all-publishers", false,
 				"on an external NATS cluster only: your explicit assertion that "+
 					"nothing else holds a connection to that broker, which the "+
@@ -548,7 +548,7 @@ func maintenanceExclude(environ config.Source, args []string, stdout, stderr io.
 		fmt.Fprintln(stderr, "usage: crewlet retention maintenance exclude "+
 			"-stream <name> -node <node-id> -confirm <node-id>")
 		return errors.New("excluding a participant asserts that its process is " +
-			"stopped and holds no outstanding request — repeat the node id")
+			"stopped and holds no outstanding request. Repeat the node id")
 	}
 	var answer struct {
 		Operation *capacityOperation `json:"operation"`
@@ -600,8 +600,8 @@ func retentionReanchor(environ config.Source, args []string, stdout, stderr io.W
 					"adopts its snapshot instead")
 			discard = fs.Bool("discard", false,
 				"re-anchor a RESTORED log although it holds records this "+
-					"node's rows do not — written after the restore, by a node "+
-					"whose rows were the copy's age — accepting that they are "+
+					"node's rows do not (written after the restore, by a node "+
+					"whose rows were the copy's age), accepting that they are "+
 					"applied on no node. Without it the verb refuses and names "+
 					"the newest of them")
 		})
@@ -743,7 +743,7 @@ func reanchorCaseText(c statelog.ReanchorCase, cursor uint64) string {
 	if c == statelog.ReanchorRestored {
 		return fmt.Sprintf("This log was RESTORED from an older copy: it is the "+
 			"stream this node's rows are keyed to, and past the copy it is not "+
-			"their history — it ends below their checkpoint, or another record was "+
+			"their history: it ends below their checkpoint, or another record was "+
 			"written at their checkpoint's sequence after the restore. The "+
 			"rows already hold every record the copy kept, so it is followed from "+
 			"its END, after sequence %d, and none of them is replayed. %s What the "+
@@ -837,7 +837,7 @@ func verifyRestore(root string, cadence time.Duration, now time.Time,
 	fmt.Fprintf(stdout, "\nThe newest artefact is %s old.\n", age.Round(time.Minute))
 	if len(manifest.Domains) == 0 {
 		return errors.New("the manifest names no domain position, so a restore " +
-			"has no sequence to replay from — this artefact cannot be verified " +
+			"has no sequence to replay from, so this artefact cannot be verified " +
 			"as restorable")
 	}
 	if age > cadence {
