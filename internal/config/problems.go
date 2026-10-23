@@ -742,6 +742,11 @@ func (c *Company) peoplelessWarnings() []Warning {
 // assigning it in the tracker instead.
 //
 // AT THE SEAT'S `contact`, which is where the remedy is written.
+//
+// THE HANDLE IS QUOTED, never the sentence's first word: a handle is an
+// identifier, and a reader that puts an engine sentence in sentence case (the
+// dashboard's review raises an opening word) wrote `founder` as "Founder",
+// a seat nobody declared.
 func (c *Company) unreachableWarnings() []Warning {
 	if c.ChatBackendFor() != ChatVendor {
 		return nil
@@ -761,9 +766,9 @@ func (c *Company) unreachableWarnings() []Warning {
 			continue
 		}
 		handle := role.IdentityKey()
-		w := advisory(at(path, "contact"), fmt.Sprintf("%s is a human seat with "+
-			"no account on %s, so chat messages to it there reach nobody. Add a "+
-			"%s to its `contact`, or leave it if they only use the dashboard",
+		w := advisory(at(path, "contact"), fmt.Sprintf("the human seat %q has no "+
+			"account on %s, so chat messages to it there reach nobody. Add a %s to "+
+			"its `contact`, or leave it if they only use the dashboard",
 			handle, words.Or(titles), words.Or(keys)))
 		w.Seat = handle
 		out = append(out, w)
