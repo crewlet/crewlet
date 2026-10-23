@@ -736,7 +736,9 @@ export function ConfigScreen({
           {active.loading && <Skeleton variant="text" rows={6} label="Loading" />}
           <QueryState error={active.error} refusal={active.refusal} loading={active.loading}>
             {active.data ? (
-              <Card>
+              // FLUSH: the block is the card's content, so it takes the
+              // card's surface rather than drawing a second frame inside it.
+              <Card padding="none">
                 <Card.Header
                   icon={<FileTextGlyph size="sm" />}
                   subtitle="as the engine resolved it"
