@@ -876,6 +876,23 @@ func TestTheReportAtOpenedSaysWhatTheBaselineWaitsOn(t *testing.T) {
 	}
 }
 
+// toldRefusal is err's told sentence ([statelog.Told]) as an error, failing the
+// case where err tells its operator nothing or carries the package it was
+// written in: the retention routes answer the sentence alone, so a refusal an
+// operator acts on that isn't told is answered as a fault with its remedy in
+// this node's log, and an `engine:` in it is a package a person reads.
+func toldRefusal(t *testing.T, err error) error {
+	t.Helper()
+	said, told := statelog.Tell(err)
+	if !told {
+		t.Fatalf("%v tells its operator nothing, so the route answers it as a fault", err)
+	}
+	if strings.Contains(said, "engine:") || strings.Contains(said, "statelog:") {
+		t.Errorf("it tells %q, carrying the package it was written in", said)
+	}
+	return errors.New(said)
+}
+
 // TestABaselineOfNothingIsRefusedRatherThanRecorded.
 //
 // An empty baseline compares unequal to every later acknowledgement, so a
@@ -889,11 +906,12 @@ func TestABaselineOfNothingIsRefusedRatherThanRecorded(t *testing.T) {
 		Participants: []string{"node-1", "node-2"},
 	}
 
-	_, _, err := e.capacityIncarnations(ctx, op)
-	if err == nil {
+	_, _, refusal := e.capacityIncarnations(ctx, op)
+	if refusal == nil {
 		t.Fatal("a participant that never restarted was baselined at nothing, " +
 			"which the seal then satisfies without it ever coming back")
 	}
+	err := toldRefusal(t, refusal)
 	if !strings.Contains(err.Error(), "node-2") {
 		t.Errorf("the refusal does not name who has not restarted: %v", err)
 	}
@@ -1113,10 +1131,11 @@ func TestAnAdmissionStopsTheWindowsFirstRequest(t *testing.T) {
 	}
 
 	op := openWindow(t, e)
-	_, err := e.advanceCapacity(ctx, nil, op)
-	if err == nil {
+	_, refusal := e.advanceCapacity(ctx, nil, op)
+	if refusal == nil {
 		t.Fatal("the window baselined while a node held an admission")
 	}
+	err := toldRefusal(t, refusal)
 	// THE COMMANDS IT NAMES ARE ONES THE CLI RUNS, for this window's stream
 	// and this node, and the sentence reads right for one node.
 	for _, want := range []string{
@@ -1210,8 +1229,9 @@ func TestAServingNodesAdmissionLeavesNoWindowBehind(t *testing.T) {
 			if err == nil {
 				t.Fatalf("a window opened over a node that may be publishing: %+v", op)
 			}
+			said := toldRefusal(t, err)
 			for _, want := range tc.wantRefusal {
-				if !strings.Contains(err.Error(), want) {
+				if !strings.Contains(said.Error(), want) {
 					t.Errorf("the refusal does not say %q: %v", want, err)
 				}
 			}
@@ -1262,10 +1282,11 @@ func TestANodeRunningAtTheBaselineIsNamedWithTheWayOut(t *testing.T) {
 		coord.AcquireOptions{Owner: "node-9:boot-1", TTL: time.Minute}); err != nil {
 		t.Fatal(err)
 	}
-	_, err := e.advanceCapacity(ctx, nil, op)
-	if err == nil {
+	_, refusal := e.advanceCapacity(ctx, nil, op)
+	if refusal == nil {
 		t.Fatal("the window baselined over a running node's admission")
 	}
+	err := toldRefusal(t, refusal)
 	for _, want := range []string{
 		`"node-9" is running and holds an admission, so it may be publishing`,
 		"Nothing has been sent", "refuses every node that starts in service",
@@ -2096,7 +2117,7 @@ func TestARefusedCeilingIsReportedAsARefusalAndNotAsAnUnknown(t *testing.T) {
 	// THE NUMBERS THE BROKER COMPARED, read at the refusal: what is left,
 	// what is already reserved, the limit, and the field that sets it.
 	for _, needle := range []string{
-		"REFUSED", "abandon",
+		"the broker refused", "abandon",
 		strconv.FormatInt(1<<30, 10), // left to reserve
 		strconv.FormatInt(7<<30, 10), // already reserved
 		strconv.FormatInt(8<<30, 10), // the limit
@@ -2115,7 +2136,7 @@ func TestARefusedCeilingIsReportedAsARefusalAndNotAsAnUnknown(t *testing.T) {
 		t.Errorf("a lost request is reported as something other than an "+
 			"unknown, which is the one thing the journal record is for:\n%v", lost)
 	}
-	if strings.Contains(lost.Error(), "REFUSED") {
+	if strings.Contains(lost.Error(), "the broker refused") {
 		t.Errorf("a lost request is reported as a refusal:\n%v", lost)
 	}
 }
@@ -2142,7 +2163,7 @@ func TestARefusalWithNoReadableRoomIsStillARefusal(t *testing.T) {
 				t.Errorf("a refusal became an unknown because the clause "+
 					"beside it could not be built:\n%v", err)
 			}
-			if !strings.Contains(err.Error(), "REFUSED") {
+			if !strings.Contains(err.Error(), "the broker refused") {
 				t.Errorf("the refusal is no longer named:\n%v", err)
 			}
 		})

@@ -141,10 +141,11 @@ type PhaseEvidence struct {
 // following it would bypass the protection and never know.
 func PermitPhase(op coord.MaintenanceOperation, ev PhaseEvidence) (coord.MaintenancePhase, error) {
 	if !op.Phase.Valid() {
-		return "", fmt.Errorf("statelog: the operation on %s is in phase %q, "+
-			"which this build does not know: a build that cannot read a phase "+
-			"must not advance past it, because the phase it would skip is the "+
-			"one carrying the evidence rule it does not have", op.Stream, op.Phase)
+		return "", &Telling{Say: fmt.Sprintf("the capacity operation on %s is in "+
+			"phase %q, which this build doesn't know. A build that can't read a "+
+			"phase must not move past it, because the phase it would skip is the "+
+			"one carrying the evidence rule it doesn't have. Run it from a node "+
+			"on the newer build that wrote it", op.Stream, op.Phase)}
 	}
 	switch op.Phase {
 	case coord.PhaseOpened:
@@ -329,12 +330,11 @@ func NextAttempt(op coord.MaintenanceOperation, observed uint64,
 		out := op
 		out.ObservedMaxBytes = observed
 		out.Blocked = "capacity_operation_unsealed"
-		return out, fmt.Errorf("statelog: the capacity operation on %s has used "+
-			"all %d attempts at %d bytes and the broker reports %d: this is a "+
-			"person's decision now — `crewlet retention maintenance status` "+
-			"names the attempt count and every participant that did not "+
-			"acknowledge",
-			op.Stream, ControlRaiseAttempts, op.TargetMaxBytes, observed)
+		return out, &Telling{Say: fmt.Sprintf("the capacity operation on %s has "+
+			"used all %d attempts at %d bytes and the broker reports %d, so it "+
+			"needs a person now. `crewlet retention maintenance status` names "+
+			"the attempt count and every participant that didn't acknowledge",
+			op.Stream, ControlRaiseAttempts, op.TargetMaxBytes, observed)}
 	}
 	out := op
 	out.Attempt++
@@ -362,8 +362,9 @@ func NextAttempt(op coord.MaintenanceOperation, observed uint64,
 // looking as a process stopping.
 func AbandonPhase(op coord.MaintenanceOperation) (coord.MaintenancePhase, bool, error) {
 	if !op.Phase.Valid() {
-		return "", false, fmt.Errorf("statelog: the operation on %s is in phase "+
-			"%q, which this build does not know", op.Stream, op.Phase)
+		return "", false, &Telling{Say: fmt.Sprintf("the capacity operation on %s "+
+			"is in phase %q, which this build doesn't know. Abandon it from a "+
+			"node on the newer build that wrote it", op.Stream, op.Phase)}
 	}
 	if op.Phase == coord.PhaseOpened {
 		return coord.PhaseOpened, true, nil

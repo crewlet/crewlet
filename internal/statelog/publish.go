@@ -705,13 +705,13 @@ func NewPublisher(d Deps) (*Publisher, error) {
 	case d.Log == nil:
 		return nil, fmt.Errorf("statelog: publisher has no appender")
 	case d.Records == nil:
-		return nil, fmt.Errorf("statelog: publisher has no reader of its log — a " +
+		return nil, fmt.Errorf("statelog: publisher has no reader of its log: a " +
 			"write collapsed onto another node's copy of its operation is judged " +
 			"by that copy's writer, which only the record on the log names")
 	case d.Rows == nil:
 		return nil, fmt.Errorf("statelog: publisher has no rows")
 	case d.Fence == nil:
-		return nil, fmt.Errorf("statelog: publisher has no fence — every " +
+		return nil, fmt.Errorf("statelog: publisher has no fence, and every " +
 			"append checks eviction, and a publisher that cannot is one " +
 			"that collects acknowledgements for records every node drops")
 	case d.Gates == nil:
@@ -719,23 +719,23 @@ func NewPublisher(d Deps) (*Publisher, error) {
 	case d.Waiter == nil:
 		return nil, fmt.Errorf("statelog: publisher has no waiter")
 	case d.Voids == nil:
-		return nil, fmt.Errorf("statelog: publisher has no reanchor rules — a " +
+		return nil, fmt.Errorf("statelog: publisher has no reanchor rules: a " +
 			"record a reanchor voided wrote no ledger row, and a resolution that " +
 			"cannot ask would report it as a ledger contract violation")
 	case d.Identity == nil:
-		return nil, fmt.Errorf("statelog: publisher has no stream identity — " +
+		return nil, fmt.Errorf("statelog: publisher has no stream identity: " +
 			"every expectation it forms is a sequence on the stream its rows " +
 			"came from, and one that cannot ask whether that is still the live " +
 			"stream is one whose writes a rebuilt log arbitrates as its own")
 	case d.Generation == nil:
 		return nil, fmt.Errorf("statelog: publisher has no generation source")
 	case d.NodeID == "":
-		return nil, fmt.Errorf("statelog: publisher has no node id — the " +
+		return nil, fmt.Errorf("statelog: publisher has no node id: the " +
 			"eviction gate compares against it, so a record with none is a " +
 			"record no gate can drop")
 	case ReservationOf(d.Domain).Kept && d.Admission == nil:
 		return nil, fmt.Errorf("statelog: %s claims identity and its publisher "+
-			"has no admission — without one its ordinary writes fill the log to "+
+			"has no admission. Without one its ordinary writes fill the log to "+
 			"the broker's ceiling and the eviction that could unpin it is refused "+
 			"with them", d.Domain.Name())
 	case !ReservationOf(d.Domain).Kept && d.Admission != nil:
@@ -791,7 +791,7 @@ func (p *Publisher) Publish(ctx context.Context, req Request) (Result, error) {
 
 func (p *Publisher) publish(ctx context.Context, req Request) (Result, error) {
 	if req.OpID == "" {
-		return Result{}, fmt.Errorf("statelog: write has no op id — it is what " +
+		return Result{}, fmt.Errorf("statelog: write has no op id: it is what " +
 			"an ambiguous publish is resolved by, so a write without one has no " +
 			"third answer at all")
 	}
@@ -799,7 +799,7 @@ func (p *Publisher) publish(ctx context.Context, req Request) (Result, error) {
 		return Result{}, fmt.Errorf("statelog: write has no decide function")
 	}
 	if req.Scope.Empty() {
-		return Result{}, fmt.Errorf("statelog: write on %s declares no scope — an "+
+		return Result{}, fmt.Errorf("statelog: write on %s declares no scope: an "+
 			"empty scope claims the record makes nothing stale, which is the one "+
 			"claim a record no build may be able to read cannot make", req.Subject)
 	}
@@ -1042,7 +1042,7 @@ func (p *Publisher) heldHere(req Request, held OpEntry) error {
 	return &Unavailable{
 		Reason: ReasonOpReused,
 		Detail: fmt.Sprintf("operation %q landed on %s at %s, and this write is "+
-			"to %s — an operation id names one write, so a different one needs "+
+			"to %s. An operation id names one write, so a different one needs "+
 			"a fresh id", req.OpID, held.Subject, held.Position,
 			p.subjectOf(req.Subject)),
 		Position: held.Position,
@@ -1072,25 +1072,25 @@ func (p *Publisher) stamped(req Request, snap Snap) error {
 	env, err := p.domain.Envelope(snap.Decision.Payload)
 	if err != nil {
 		return fmt.Errorf("statelog: the %s record decided for %s does not "+
-			"decode through its own domain's envelope reader: %w — every "+
-			"applier reads it that way first", p.domain.Name(), req.Subject, err)
+			"decode through its own domain's envelope reader, which every "+
+			"applier reads it through first: %w", p.domain.Name(), req.Subject, err)
 	}
 	switch {
 	case env.Writer != want.Writer:
 		return fmt.Errorf("statelog: the %s record decided for %s names writer "+
-			"%q, and this publisher is %q — the eviction gate compares a record's "+
+			"%q, and this publisher is %q. The eviction gate compares a record's "+
 			"writer against every eviction on the log, so a record carrying "+
 			"another node's id, or none, is one no eviction of this node can "+
 			"drop; the domain's decision must put [Stamp.Writer] in its envelope",
 			p.domain.Name(), req.Subject, env.Writer, want.Writer)
 	case env.Gen != want.Gen:
 		return fmt.Errorf("statelog: the %s record decided for %s is stamped "+
-			"generation %d, and the snapshot it was decided from is at %d — the "+
+			"generation %d, and the snapshot it was decided from is at %d: the "+
 			"domain's decision must put [Stamp.Gen] in its envelope",
 			p.domain.Name(), req.Subject, env.Gen, want.Gen)
 	case env.OpID != req.OpID:
 		return fmt.Errorf("statelog: the %s record decided for %s carries "+
-			"operation %q and the write is %q — the ledger an ambiguous publish "+
+			"operation %q and the write is %q. The ledger an ambiguous publish "+
 			"is resolved by is keyed on the record's, so this write could never "+
 			"be answered for", p.domain.Name(), req.Subject, env.OpID, req.OpID)
 	case req.NodeGate && !p.domain.NodeGate(env):
@@ -1102,7 +1102,7 @@ func (p *Publisher) stamped(req Request, snap Snap) error {
 		// flagged by mistake it would spend the reserve and pass the fences.
 		return fmt.Errorf("statelog: the %s record decided for %s is a %s %q "+
 			"record, which is not a node's eviction or readmission, and the "+
-			"write is flagged a node gate — only those may pass the fences a "+
+			"write is flagged a node gate: only those may pass the fences a "+
 			"node gate is excused",
 			p.domain.Name(), req.Subject, env.Kind, env.Op)
 	}
@@ -1163,9 +1163,9 @@ func (p *Publisher) attempt(ctx context.Context, req Request, snap Snap, expect 
 		return Result{Rounds: round}, dispDone, &Unavailable{
 			Reason: ReasonRecordTooLarge,
 			Detail: fmt.Sprintf("the record is %d bytes and %s takes none larger "+
-				"than %d — the %s log's declared largest record, which its gate "+
+				"than %d (the %s log's declared largest record, which its gate "+
 				"reserve is sized by and the broker enforces as the stream's "+
-				"max_msg_size — so no retry places it, here or on any node: split "+
+				"max_msg_size), so no retry places it, here or on any node: split "+
 				"the change into smaller writes", size, p.stream, p.maxRecord,
 				p.domain.Name()),
 			OpID:  req.OpID,
@@ -1239,7 +1239,7 @@ func (p *Publisher) attempt(ctx context.Context, req Request, snap Snap, expect 
 		}
 		return Result{Rounds: round}, dispDone, &Unavailable{
 			Reason: ReasonLogFull,
-			Detail: fmt.Sprintf("the broker refused to store the record: %s — a "+
+			Detail: fmt.Sprintf("the broker refused to store the record: %s. A "+
 				"full log refuses appends rather than dropping records, so %s",
 				detail, remedy),
 			OpID: req.OpID,
@@ -1264,7 +1264,7 @@ func (p *Publisher) attempt(ctx context.Context, req Request, snap Snap, expect 
 	case faultRefused:
 		return Result{Rounds: round}, dispDone, &Unavailable{
 			Reason: ReasonBrokerRefused,
-			Detail: fmt.Sprintf("the broker refused to store the record (%s) — a "+
+			Detail: fmt.Sprintf("the broker refused to store the record (%s), a "+
 				"refusal this build has no remedy for, so the broker's own words "+
 				"are the one to act on, and asking again changes nothing", detail),
 			OpID:  req.OpID,
@@ -1352,7 +1352,7 @@ func (p *Publisher) refuseFromSnapshot(req Request, snap Snap) error {
 		return &Unavailable{
 			Reason: ReasonDeferred,
 			Detail: fmt.Sprintf("this node holds a record at version %d it cannot "+
-				"decode, at %s, whose scope covers %s — its rows are stale here "+
+				"decode, at %s, whose scope covers %s, so its rows are stale here "+
 				"and another node can serve this write",
 				snap.Deferral.Version, snap.Deferral.Position, req.Subject),
 			Position: snap.Deferral.Position,
@@ -1531,7 +1531,7 @@ func (p *Publisher) afterRejection(ctx context.Context, req Request, snap Snap, 
 		return nil, &Unavailable{
 			Reason: ReasonSkew,
 			Detail: fmt.Sprintf("%s holds sequence %d but this node expected %d, "+
-				"which it read from a record it applied — a store and a stream "+
+				"which it read from a record it applied: a store and a stream "+
 				"restored out of step", subject, seq, *expect),
 			Position: Position{Stream: p.stream, Seq: seq},
 			OpID:     req.OpID,
@@ -1962,7 +1962,7 @@ func (p *Publisher) resolve(ctx context.Context, req Request, at Position, lande
 			// so a copy it collapsed this append onto carries it. One
 			// that does not is a log this resolution cannot reason about.
 			return Result{}, fmt.Errorf("statelog: the broker collapsed operation "+
-				"%q onto the %s record at %s, which carries operation %q — the "+
+				"%q onto the %s record at %s, which carries operation %q. The "+
 				"duplicate window is keyed on the operation id, so this log does "+
 				"not hold what its acknowledgement said", req.OpID, p.domain.Name(),
 				at, env.OpID)
@@ -2009,14 +2009,14 @@ func (p *Publisher) resolve(ctx context.Context, req Request, at Position, lande
 		case !ours:
 			detail = fmt.Sprintf("this node is held by the gate at %s, the newest "+
 				"record on the subject, so whatever it appended under this "+
-				"operation applies nowhere — and if that landed, %s", at, spent)
+				"operation applies nowhere, and if that landed, %s", at, spent)
 		case writer != p.nodeID:
 			detail = fmt.Sprintf("the record at %s is node %s's copy of this "+
 				"operation, which this node's append was collapsed onto, and it "+
-				"was durable and applied nowhere — %s", at, writer, spent)
+				"was durable and applied nowhere: %s", at, writer, spent)
 		default:
 			detail = fmt.Sprintf("the record at %s was durable and applied "+
-				"nowhere — %s", at, spent)
+				"nowhere: %s", at, spent)
 		}
 		// AND WHOSE STANDING THE REASON STATES, when it is not this node's: the
 		// gate held the writer of a copy this node's append was collapsed onto,
@@ -2097,7 +2097,7 @@ func (p *Publisher) resolve(ctx context.Context, req Request, at Position, lande
 		// would republish a record that already landed, so it is reported
 		// instead of guessed at.
 		return Result{}, fmt.Errorf("statelog: %s applied the record at %s but "+
-			"wrote no %s row for operation %q — that ledger is what an ambiguous "+
+			"wrote no %s row for operation %q. That ledger is what an ambiguous "+
 			"publish is resolved by, and a record applied without one cannot be "+
 			"answered for", p.domain.Name(), at, p.domain.OpsTable(), req.OpID)
 	}
@@ -2265,7 +2265,7 @@ func (p *Publisher) checkTruncated(req Request) error {
 	}
 	return &Unavailable{
 		Reason: ReasonLogTruncated,
-		Detail: fmt.Sprintf("%v — so %s was not published", err, req.Subject),
+		Detail: fmt.Sprintf("%v, so %s was not published", err, req.Subject),
 		OpID:   req.OpID,
 		Cause:  err,
 	}
@@ -2372,7 +2372,7 @@ func (p *Publisher) checkIdentity(req Request) error {
 	}
 	return &Unavailable{
 		Reason: ReasonWrongStream,
-		Detail: fmt.Sprintf("%v — a write here would be arbitrated against a "+
+		Detail: fmt.Sprintf("%v. A write here would be arbitrated against a "+
 			"history it was not decided from, so %s was not published", err, req.Subject),
 		OpID:  req.OpID,
 		Cause: err,

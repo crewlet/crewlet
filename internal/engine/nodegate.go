@@ -200,22 +200,33 @@ type GateRequest struct {
 // The HTTP route held that and nothing else did.
 func (r GateRequest) valid() error {
 	opID := statelog.CheckCallerOpID(r.OpID)
+	invalid := func(err error, format string, args ...any) error {
+		return &statelog.Telling{Say: fmt.Sprintf(format, args...),
+			Err: errors.Join(ErrInvalidGate, err)}
+	}
 	switch {
 	case r.Node == "":
-		return fmt.Errorf("%w: a node gate names no node", ErrInvalidGate)
+		return invalid(nil, "name the node")
 	case !config.ValidNodeID(r.Node):
-		return fmt.Errorf("%w: %q is not a node id any node can run under — one "+
-			"starts alphanumeric and holds only letters, digits, '.', '_' or '-', "+
-			"at most 64 characters", ErrInvalidGate, r.Node)
+		return invalid(nil, "%q isn't a node id any node can run under. One "+
+			"starts with a letter or a digit and holds only letters, digits, "+
+			"'.', '_' or '-', at most 64 characters", r.Node)
 	case r.OpID == "":
-		return fmt.Errorf("%w: the gate on %s has no operation id — a retry "+
+		return invalid(nil, "the gate on %s has no operation id, and a retry "+
 			"under a fresh one would be a second gesture rather than the same "+
-			"one finished", ErrInvalidGate, r.Node)
+			"one finished", r.Node)
 	case opID != nil:
-		return fmt.Errorf("%w: the gate on %s: %w", ErrInvalidGate, r.Node, opID)
+		var refused *statelog.CallerOpIDError
+		if errors.As(opID, &refused) {
+			return invalid(opID, "the operation id %s; send back the op_id an "+
+				"earlier answer returned, unchanged, or leave it out to start "+
+				"afresh", refused.Fault)
+		}
+		return invalid(opID, "the gate on %s carries an operation id this "+
+			"engine wouldn't have minted", r.Node)
 	case iam.RecordOwner(r.By) == "":
-		return fmt.Errorf("%w: the gate on %s names no operator, and every "+
-			"log's record carries who ran it", ErrInvalidGate, r.Node)
+		return invalid(nil, "the gate on %s names no operator, and every "+
+			"log's record carries who ran it", r.Node)
 	}
 	return nil
 }
@@ -240,11 +251,18 @@ type GateUnjudged struct {
 }
 
 func (e *GateUnjudged) Error() string {
-	return fmt.Sprintf("engine: the eviction of %s cannot be judged: %v — a lease "+
-		"listing nobody could read is not one that came back clear", e.Node, e.Err)
+	return fmt.Sprintf("engine: the eviction of %s cannot be judged, since a lease "+
+		"listing nobody could read is not one that came back clear: %v", e.Node, e.Err)
 }
 
 func (e *GateUnjudged) Unwrap() error { return e.Err }
+
+// Tell is the refusal as the operator who asked reads it ([statelog.Told]):
+// what couldn't be judged, without the read that failed, which the log keeps.
+func (e *GateUnjudged) Tell() string {
+	return fmt.Sprintf("couldn't tell whether %s is still running, because this "+
+		"node couldn't read the presence leases, so nothing was written", e.Node)
+}
 
 // Remedy is what the operator does about it: ask again once coordination
 // answers, or force the eviction, which does not need the leases.
@@ -256,10 +274,8 @@ func (e *GateUnjudged) Unwrap() error { return e.Err }
 func (e *GateUnjudged) Remedy() statelog.GateRemedy {
 	return statelog.GateRemedy{
 		Actions: []statelog.GateAction{statelog.GateRetrySameOp, statelog.GateForce},
-		Detail: fmt.Sprintf("this node could not read the presence leases, so it "+
-			"cannot tell whether %s is still running: ask again once coordination "+
-			"answers, or — if you know %s is gone — force the eviction, which does "+
-			"not need them", e.Node, e.Node),
+		Detail: fmt.Sprintf("ask again once coordination answers, or, if you know "+
+			"%s is gone, force the eviction, which doesn't need the leases", e.Node),
 	}
 }
 
@@ -281,6 +297,11 @@ type ReadmissionUnjudged struct {
 	// published floors).
 	Log string
 
+	// Behind is a log the fleet has re-anchored and this node hasn't applied
+	// yet ([statelog.ReanchorNotApplied]): it read the bound, and the bound
+	// is in a generation this node doesn't hold.
+	Behind bool
+
 	Err error
 }
 
@@ -294,10 +315,38 @@ func (e *ReadmissionUnjudged) Error() string {
 
 func (e *ReadmissionUnjudged) Unwrap() error { return e.Err }
 
+// Tell is the refusal as the operator who asked reads it ([statelog.Told]):
+// what couldn't be judged, naming the log where one was being read, without
+// the read that failed, which the log keeps.
+func (e *ReadmissionUnjudged) Tell() string {
+	if e.Log == "" {
+		return fmt.Sprintf("couldn't judge whether %s can be counted again, "+
+			"because this node couldn't read the fleet's positions or floors, so "+
+			"nothing was written", e.Node)
+	}
+	if e.Behind {
+		return fmt.Sprintf("couldn't judge whether %s can be counted again on %s, "+
+			"because the fleet has re-anchored that log and this node hasn't "+
+			"applied it yet, so nothing was written", e.Node, e.Log)
+	}
+	return fmt.Sprintf("couldn't judge whether %s can be counted again on %s, "+
+		"because this node couldn't read that log's bound, so nothing was "+
+		"written", e.Node, e.Log)
+}
+
 // Remedy is what the operator does about it: ask again once the read answers,
 // here or through another node, which reads the same inputs from its own
 // connection and its own copy.
 func (e *ReadmissionUnjudged) Remedy() statelog.GateRemedy {
+	if e.Behind {
+		return statelog.GateRemedy{
+			Actions: []statelog.GateAction{statelog.GateRetrySameOp, statelog.GateOtherNode},
+			Detail: fmt.Sprintf("this node hasn't applied the fleet's re-anchor of %s "+
+				"yet, so it can't judge the readmission of %s there and wrote "+
+				"nothing: ask a node that has applied it, or ask here again once "+
+				"this node has", e.Log, e.Node),
+		}
+	}
 	return statelog.GateRemedy{
 		Actions: []statelog.GateAction{statelog.GateRetrySameOp, statelog.GateOtherNode},
 		Detail: fmt.Sprintf("this node could not read what the readmission of %s is "+
@@ -466,8 +515,8 @@ func (d DomainGate) Remedy() statelog.GateRemedy {
 		case statelog.ReasonWrongStream:
 			return only(statelog.GateReanchor, fmt.Sprintf("the log under %s's name "+
 				"is not the one this node's rows were derived from: re-anchor it "+
-				"first — nothing can be written to it until then — and then the same "+
-				"gesture under the same operation id finishes it", d.Stream))
+				"first, since nothing can be written to it until then, and then the "+
+				"same gesture under the same operation id finishes it", d.Stream))
 		case statelog.ReasonLogFull:
 			// PAST THE GATE RESERVE: a gate record is admitted into the
 			// room kept above the ceiling ordinary writes are refused
@@ -475,8 +524,8 @@ func (d DomainGate) Remedy() statelog.GateRemedy {
 			// spent — which no retry refills.
 			return only(statelog.GateSetCapacity, fmt.Sprintf("%s is full to its "+
 				"broker ceiling, past even the reserve kept there for gate records: "+
-				"raise its ceiling, which is the only thing that makes room for it — "+
-				"then the same gesture under the same operation id finishes it, where "+
+				"raise its ceiling, which is the only thing that makes room for it. "+
+				"Then the same gesture under the same operation id finishes it, where "+
 				"a fresh one would write every log that already holds the record "+
 				"again", d.Stream))
 		case statelog.ReasonSuperseded:
@@ -524,14 +573,14 @@ func (d DomainGate) Remedy() statelog.GateRemedy {
 		// gives is this typed refusal.
 		own := ""
 		if refusal.Detail != "" {
-			own = " — " + refusal.Detail
+			own = "; " + refusal.Detail
 		}
 		if refusal.Reason.Retryable() {
-			return retry("this refusal clears on this node by itself: " +
-				string(refusal.Reason) + own)
+			return retry("this refusal (" + string(refusal.Reason) + ") clears on " +
+				"this node by itself" + own)
 		}
 		return statelog.GateRemedy{
-			Detail: "no retry clears this refusal: " + string(refusal.Reason) + own,
+			Detail: "no retry clears this refusal (" + string(refusal.Reason) + ")" + own,
 		}
 	}
 	if errors.Is(d.Err, statelog.ErrConflict) {
@@ -578,7 +627,7 @@ func (d DomainGate) anotherNodesCopy(refusal *statelog.Unavailable) string {
 	}
 	return fmt.Sprintf("the record of this gesture at %s on %s is node %s's copy, "+
 		"which this node's own write was collapsed onto, and it applies nowhere "+
-		"because %s — a fact about node %s and not about this one. The broker holds "+
+		"because %s, a fact about node %s and not about this one. The broker holds "+
 		"its operation id for %s from when it landed. Once that has passed, the same "+
 		"gesture under the same operation id finishes it here: before then the id "+
 		"is collapsed onto that record and refused the same way, and a fresh id "+
@@ -610,7 +659,7 @@ func (d DomainGate) window() string {
 // id would answer `superseded` to anyone finishing it. The record in the way
 // applies nowhere, so the same id after the window cannot apply twice.
 func (d DomainGate) landedNowhere(at statelog.Position, who string) string {
-	return fmt.Sprintf("the record this gesture put on %s at %s applies nowhere — "+
+	return fmt.Sprintf("the record this gesture put on %s at %s applies nowhere: "+
 		"the broker holds its operation id for %s from when it landed. Once that "+
 		"has passed, run the gesture through %s under the same operation id: "+
 		"before then the id is collapsed onto that record and refused the same "+
@@ -801,7 +850,7 @@ func gateLogFor(s *stateLog, running *runningLog,
 	entry, found := registrationFor(name)
 	if !found || entry.NewGate == nil {
 		return gateLog{}, fmt.Errorf("engine: domain %q claims identity and the node "+
-			"gate has no writer for its log — an eviction would lift every "+
+			"gate has no writer for its log: an eviction would lift every "+
 			"other log's pin and leave the node counted on this one", name)
 	}
 	write, err := entry.NewGate(s, running, publisher)

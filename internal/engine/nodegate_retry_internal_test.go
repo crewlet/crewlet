@@ -594,7 +594,7 @@ func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
 		// told the node they ran it on was evicted when it was not.
 		"evicted, another node's copy": {gate: copied(statelog.ReasonEvicted),
 			actions: []statelog.GateAction{retry},
-			detail:  "node node-x's copy, which this node's own write was collapsed onto, and it applies nowhere because that node is evicted — a fact about node node-x and not about this one. The broker holds its operation id for the log's duplicate window, 2m0s, from when it landed. Once that has passed, the same gesture under the same operation id finishes it here"},
+			detail:  "node node-x's copy, which this node's own write was collapsed onto, and it applies nowhere because that node is evicted, a fact about node node-x and not about this one. The broker holds its operation id for the log's duplicate window, 2m0s, from when it landed. Once that has passed, the same gesture under the same operation id finishes it here"},
 		"overtaken, another node's copy": {gate: copied(statelog.ReasonOvertaken),
 			actions: []statelog.GateAction{retry},
 			detail:  "because that node wrote it from rows a restored reanchor had overtaken"},
@@ -607,7 +607,7 @@ func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
 		// copy meets today.
 		"a later gate, another node's copy": {gate: copied(statelog.Reason("a_later_gate")),
 			actions: []statelog.GateAction{retry},
-			detail:  "applies nowhere because a gate dropped it (a_later_gate) — a fact about node node-x"},
+			detail:  "applies nowhere because a gate dropped it (a_later_gate), a fact about node node-x"},
 		"wrong stream": {gate: refused(statelog.ReasonWrongStream),
 			actions: []statelog.GateAction{statelog.GateReanchor}, detail: "re-anchor"},
 		"log full": {gate: refused(statelog.ReasonLogFull),
