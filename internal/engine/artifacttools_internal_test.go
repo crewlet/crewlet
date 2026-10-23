@@ -56,8 +56,10 @@ func TestTheBoxIsListedThroughItselfAndBounded(t *testing.T) {
 	if string(data) != "<p>hi</p>" {
 		t.Errorf("streamed %q", data)
 	}
-	if _, err := b.Open(t.Context(), "dist/missing.js"); err == nil {
-		t.Fatal("a path that is not a regular file was opened")
+	// AND IT IS REFUSED AS THE CALLER'S PATH, which the tool tells its
+	// model to change, never as a fault of this node.
+	if _, err := b.Open(t.Context(), "dist/missing.js"); !errors.Is(err, sandbox.ErrNotRegularFile) {
+		t.Fatalf("a path that is not a regular file answered %v, want ErrNotRegularFile", err)
 	}
 	if last := ran[len(ran)-1]; !strings.Contains(last, "test ! -L") {
 		t.Errorf("an unlisted path was opened without the check: %q", last)
