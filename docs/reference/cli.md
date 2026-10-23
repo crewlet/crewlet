@@ -2306,7 +2306,11 @@ baselined it records again who is running before it sends its request; run
 from `seal` it collects
 the barrier, seals, verifies and confirms. It prints the phase it reached and
 the next gesture, with the command to run in full, never the transition
-table. A node holding an **admission** (one that may be publishing) stops it in
+table. Once its window closes it sends the fleet back to service only when no
+log has a window open and the node could read every log's, since a node won't
+start in service otherwise: it names each window still open with the
+command that finishes it, and each log whose window it couldn't read. A node
+holding an **admission** (one that may be publishing) stops it in
 one of two ways. If the process that wrote the admission is still running, the
 window is closed again as it opens and nothing is sent: restart that node with
 `-mode maintenance` and run the verb again. If it isn't running, the window
@@ -2354,12 +2358,13 @@ itself. Any node can be excluded, whether or not it is a participant, and
 `-node` names it.
 
 `abandon` changes what the operation is trying to reach and never the barrier
-it must cross. From `opened` it clears outright — no request was issued. From
-anywhere else the fleet still has to restart into `seal`, because a paused
-coordinator's request is outstanding whether or not a person has read a status
-page. `-confirm` repeats the operation id from `status`, and the node checks it
-against the operation that is open before it abandons anything: one naming
-another operation is refused and nothing changes.
+it must cross. From `opened` it clears outright, since no request was issued,
+and says what's left before service as set-capacity does once it closes a
+window. From anywhere else the fleet still has to restart into `seal`, because
+a paused coordinator's request is outstanding whether or not a person has read
+a status page. `-confirm` repeats the operation id from `status`, and the node
+checks it against the operation that is open before it abandons anything: one
+naming another operation is refused and nothing changes.
 
 ### `crewlet retention reanchor`
 

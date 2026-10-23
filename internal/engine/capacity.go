@@ -1097,8 +1097,9 @@ func (e *Engine) release(ctx context.Context, op coord.MaintenanceOperation) (
 	log.InfoContext(ctx, "capacity_operation_confirmed", "stream", op.Stream,
 		"operation", op.OperationID, "attempt", op.Attempt,
 		"target", op.TargetMaxBytes,
-		"detail", "the exclusion is released; restart every node without -mode "+
-			"to return the fleet to service")
+		"detail", "the exclusion on this log is released; once no log has a "+
+			"window open, restart every node without -mode to return the fleet "+
+			"to service")
 	out := op
 	out.Revision = 0
 	return out, nil
@@ -1107,7 +1108,10 @@ func (e *Engine) release(ctx context.Context, op coord.MaintenanceOperation) (
 // AbandonCapacity is the operator's exit.
 //
 // FROM `opened` IT CLEARS OUTRIGHT — no request has been issued, so there is
-// nothing to retire. From everywhere else it ENTERS THE SEAL: abandoning
+// nothing to retire — and answers no operation, since there is no window left
+// to show: answered at the phase it cleared from, the CLI printed a window at
+// `opened` and told the operator to run set-capacity again for the window they
+// had just abandoned. From everywhere else it ENTERS THE SEAL: abandoning
 // changes what the operation is trying to reach, never the barrier it must
 // cross, and a paused coordinator's request is outstanding whether or not a
 // person has read a status page.
@@ -1152,10 +1156,8 @@ func (e *Engine) AbandonCapacity(ctx context.Context, stream, operationID string
 			"operation", op.OperationID, "phase", op.Phase,
 			"by", by.Name, "operator", by.OperatorID,
 			"detail", "no configuration request had been issued, so the "+
-				"exclusion is released outright")
-		out := op
-		out.Revision = 0
-		return out, nil
+				"exclusion on this log is released outright")
+		return coord.MaintenanceOperation{}, nil
 	}
 	out := op
 	out.Phase = phase
@@ -1288,6 +1290,39 @@ func (e *Engine) CapacityStatus(ctx context.Context, stream string) (
 		return op, acks, nil, found, err
 	}
 	return op, acks, admissions, found, nil
+}
+
+// CapacityWindows is every capacity window open on a log, and every log whose
+// window this node couldn't read.
+//
+// IT IS WHAT STANDS BETWEEN THE FLEET AND SERVICE once a gesture has closed a
+// window: a node refuses to start in service while any log has a window open,
+// and while it can't read whether one has ([Engine.admit]). So the step that
+// returns the fleet to service is one a client says only when both are empty.
+// Said after every close, it sent an operator resizing two logs to restart in
+// service while the second window was still open, and every node refused to
+// boot. An unreadable log is never read as one with no window, for admit's
+// reason.
+func (e *Engine) CapacityWindows(ctx context.Context) (open []coord.MaintenanceOperation,
+	unread []string) {
+
+	streams := maintenanceStreams()
+	if e.backends == nil || e.backends.Fleet == nil {
+		return nil, streams
+	}
+	for _, stream := range streams {
+		op, found, err := e.backends.Fleet.Maintenance(ctx, stream)
+		switch {
+		case err != nil:
+			log.WarnContext(ctx, "capacity_window_unreadable", "stream", stream,
+				"err", err, "detail", "this log may have a capacity window open, "+
+					"and a node won't start in service while it does")
+			unread = append(unread, stream)
+		case found:
+			open = append(open, op)
+		}
+	}
+	return open, unread
 }
 
 // windowStream refuses a stream no capacity window can ever be open on with an

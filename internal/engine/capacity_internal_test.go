@@ -1123,6 +1123,46 @@ func TestAReleaseThatLostItsRaceReleasesTheWindowAsItNowStands(t *testing.T) {
 	}
 }
 
+// WHAT HOLDS THE FLEET OUT OF SERVICE IS READ ON EVERY LOG, three-valued.
+//
+// A node won't start in service while any log has a window open, or while it
+// can't read whether one has, so the answer to a gesture that closes a window
+// names both: an unreadable log is never read as one with no window. And an
+// abandonment that clears its window answers none, since there's no window
+// left to show.
+//
+// Mutation: drop the unread log, or read it as having no window, and the
+// first half fails; answer the cleared window and the second does.
+func TestTheWindowsLeftAreEveryOpenLogAndEveryUnreadOne(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fleet := coordmem.NewFleet()
+	coordinator := nodeOn(fleet, "node-1", "boot-1", statelog.ModeMaintenance, dataNode)
+	opened := openWindow(t, coordinator)
+
+	reader := nodeOn(&blindFleet{fleetStore: fleet, readErr: errors.New("store unreachable"),
+		readErrOn: "CREWLET_PAGES_LOG"}, "node-1", "boot-1", statelog.ModeMaintenance, dataNode)
+	open, unread := reader.CapacityWindows(ctx)
+	if len(open) != 1 || open[0].OperationID != opened.OperationID {
+		t.Errorf("the open windows are %+v, want the tracker's", open)
+	}
+	if !slices.Equal(unread, []string{"CREWLET_PAGES_LOG"}) {
+		t.Errorf("the unread logs are %v, want the pages log", unread)
+	}
+
+	cleared, err := coordinator.AbandonCapacity(ctx, opened.Stream, opened.OperationID,
+		iam.Actor{Name: "ops-3"})
+	if err != nil {
+		t.Fatalf("abandon from opened: %v", err)
+	}
+	if cleared.OperationID != "" {
+		t.Errorf("an abandonment that cleared its window answered %+v, want none", cleared)
+	}
+	if open, unread := coordinator.CapacityWindows(ctx); len(open) != 0 || len(unread) != 0 {
+		t.Errorf("after the clear the fleet still has %+v open and %v unread", open, unread)
+	}
+}
+
 // racedClose is a coordination store that runs before as its first close is
 // sent, and counts every close.
 type racedClose struct {
