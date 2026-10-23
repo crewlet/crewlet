@@ -75,6 +75,7 @@ test("a company running Crewlet's own says so, with what each holds and the way 
     within(card("Crewlet Knowledge")).getByRole("link", { name: "Open Knowledge" }),
   ).toBeTruthy();
   expect(within(card("Crewlet Chat")).getByText("Coming soon")).toBeTruthy();
+  expect(card("Crewlet Chat").classList.contains("crewlet-catalog-tile--quiet")).toBe(true);
 });
 
 // WHAT RUNS INSTEAD, IN THE ENGINE'S WORD, and nothing asked of a service the
@@ -106,20 +107,23 @@ test("a node running no company says so on both cards", async () => {
   expect((await screen.findAllByText("This node runs no company yet.")).length).toBe(2);
 });
 
-// A TILE WITH NO WAY IN DRAWS NO FOOTER: a rule with nothing under it read as
-// a missing control, beside siblings whose footer holds a count and a button.
-// A state is drawn only where it is news: On, and Coming soon in the neutral
-// outline.
-test("a tile with no way in draws no footer, and only news wears a pill", async () => {
+// EVERY TILE HAS A FOOT, a fact and the way in where there is one: Chat with
+// no foot stretched to its row as a block of blank space. A state is drawn
+// only where it is news, On; Coming soon and Not in use are the foot's quiet
+// facts.
+test("every tile has a foot, and only news wears a pill", async () => {
   mount({ tracker: "jira", knowledge: "native" });
   expect(await screen.findByText("1 space")).toBeTruthy();
-  expect(card("Crewlet Works").querySelector(".crewlet-catalog-tile__foot")).toBeNull();
-  expect(card("Crewlet Chat").querySelector(".crewlet-catalog-tile__foot")).toBeNull();
-  expect(card("Crewlet Knowledge").querySelector(".crewlet-catalog-tile__foot")).not.toBeNull();
-  const tagClass = (name: string, word: string) =>
-    within(card(name)).getByText(word).closest(".crewlet-tag")?.className ?? "";
-  expect(tagClass("Crewlet Chat", "Coming soon")).toMatch(/outline/);
-  expect(tagClass("Crewlet Knowledge", "On")).toMatch(/success/);
+  const foot = (name: string) =>
+    card(name).querySelector(".crewlet-catalog-tile__foot")?.textContent ?? null;
+  expect(foot("Crewlet Works")).toBe("Not in use");
+  expect(foot("Crewlet Chat")).toBe("Coming soon");
+  expect(foot("Crewlet Knowledge")).toBe("1 spaceOpen Knowledge");
+  expect(card("Crewlet Chat").querySelector(".crewlet-tag")).toBeNull();
+  expect(card("Crewlet Works").querySelector(".crewlet-tag")).toBeNull();
+  expect(
+    within(card("Crewlet Knowledge")).getByText("On").closest(".crewlet-tag")?.className,
+  ).toMatch(/success/);
 });
 
 // ONE HEADING PER SECTION, the kit's: the section is named by it, and each
