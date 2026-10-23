@@ -27,6 +27,7 @@
 import { Fragment, useMemo, useState } from "react";
 import {
   Button,
+  ButtonLink,
   Callout,
   Card,
   EmptyState,
@@ -196,11 +197,24 @@ function ModelList({
           <Card.Title>Models</Card.Title>
         </Card.Header>
         {providers.length === 0 ? (
-          <div style={{ padding: "var(--spacing-4)" }}>
-            <p className="t-body muted">
-              No model configured. Add one under <InlineCode>providers.llm</InlineCode>.
-            </p>
-          </div>
+          // THE KIT'S EMPTY STATE, as the MCP servers card beside it draws its
+          // own, with the way to where a model is added: a plain sentence in
+          // a padded box was the one empty card on Settings drawn by hand.
+          <EmptyState
+            size="compact"
+            icon={<CpuGlyph size="xl" />}
+            title="No model configured yet"
+            description={
+              <>
+                Add one under <InlineCode>providers.llm</InlineCode> in the company document.
+              </>
+            }
+            action={
+              <ButtonLink variant="secondary" size="small" href={href(["settings", "config"])}>
+                Open Configuration
+              </ButtonLink>
+            }
+          />
         ) : (
           <DataGrid<CredentialPoolRow>
             rows={providers}
