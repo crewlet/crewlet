@@ -146,7 +146,7 @@ func (s Sources) seatActivity(ctx context.Context, p Params) (any, error) {
 		days = p.Int("days", 0)
 		if days < 1 || days > tokens.MaxSpendRangeDays {
 			return nil, refuseAs(tokens.ErrWindowLength, "days is %v, and a seat's "+
-				"activity covers 1 to %d company days — ask for at most %d",
+				"activity covers 1 to %d company days. Ask for at most %d",
 				p.Values()["days"], tokens.MaxSpendRangeDays, tokens.MaxSpendRangeDays)
 		}
 	}
@@ -158,8 +158,8 @@ func (s Sources) seatActivity(ctx context.Context, p Params) (any, error) {
 	prev := window.Previous()
 	if previous && !horizon.Admits(prev) {
 		return nil, refuseAs(tokens.ErrOutOfRange, "the window before these %d days "+
-			"starts %s, before %s — the oldest day the %d-day usage history holds; "+
-			"ask for fewer days", days, prev.First.Label, horizon.Floor, horizon.Days)
+			"starts %s, before %s, the oldest day the %d-day usage history holds. "+
+			"Ask for fewer days", days, prev.First.Label, horizon.Floor, horizon.Days)
 	}
 
 	// ONE SEAT, by the handle a person reads — resolved through the chart

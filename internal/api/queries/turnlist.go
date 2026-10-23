@@ -111,7 +111,7 @@ func (s Sources) turns(ctx context.Context, p Params) (any, error) {
 			"not both", ErrBadParams)
 	}
 	if !since.IsZero() && !until.IsZero() && !since.Before(until) {
-		return nil, fmt.Errorf("%w: since=%s is not before until=%s — the window "+
+		return nil, fmt.Errorf("%w: since=%s is not before until=%s. The window "+
 			"starts at since and ends before until", ErrBadParams,
 			since.Format(time.RFC3339), until.Format(time.RFC3339))
 	}

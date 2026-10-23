@@ -209,7 +209,7 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 	if readOnly(name) {
 		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeReadOnlyTool,
 			httpjson.Detail{"tool": name, "detail": fmt.Sprintf("%s is a read, and "+
-				"this transport only writes — ask the question over the live "+
+				"this transport only writes: ask the question over the live "+
 				"socket or its REST route", name)})
 		return
 	}

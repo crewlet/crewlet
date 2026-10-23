@@ -618,7 +618,7 @@ func FailWrite(ctx context.Context, w http.ResponseWriter, err error, key string
 
 // writeFault is the sentence a writer's fault is answered with: whose it is,
 // that sending it again does not clear it, and where its reason is.
-const writeFault = "the write failed on a fault in this node itself — not " +
+const writeFault = "the write failed on a fault in this node itself, not " +
 	"anything about this request, and not something sending it again clears; " +
 	"the node's log has the details"
 

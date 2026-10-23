@@ -432,7 +432,7 @@ func (b *Bridge) resolve(token string) (s *Session, runID, reason string) {
 		return held, runID, ""
 	}
 	if held != nil {
-		return nil, runID, "this node holds a DIFFERENT session for that run — " +
+		return nil, runID, "this node holds a DIFFERENT session for that run: " +
 			"the run was relaunched and this token names the superseded one, " +
 			"which is a box that outlived the run it was started for"
 	}
