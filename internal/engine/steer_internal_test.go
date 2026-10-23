@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
@@ -26,7 +27,7 @@ var steerRing = statelog.OneKey("k1", "the steer cases' fleet key material")
 // mustSteerDesk is a desk over ring.
 func mustSteerDesk(t *testing.T, ring statelog.Keyring) *steerDesk {
 	t.Helper()
-	d, err := newSteerDesk(ring)
+	d, err := newSteerDesk("node-steer", ring)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -372,9 +373,15 @@ func TestANoteUnderAnUnheldKeyIsAnsweredUnverified(t *testing.T) {
 	running.register("run-1", steerSeat{agent: sweAgent, handle: "swe"}, box)
 
 	got := ask(t, clients[2], asking.wire, "run-1", 0)
-	if len(got) != 1 || got[0].Unverified == "" || got[0].Status != "" || got[0].Agent != "" {
+	if len(got) != 1 || got[0].Unverified == nil || got[0].Status != "" || got[0].Agent != "" {
 		t.Fatalf("a note under an unheld key was answered %+v, want the running node "+
 			"alone saying it could not verify it", got)
+	}
+	// AND NAMING ITSELF AND THE KEYS IT HOLDS, which the asking node logs as
+	// the node to add the key on: as a sentence about "this node" the asking
+	// node's log read it as itself. Mutation: drop either field and this fails.
+	if u := got[0].Unverified; u.Node != "node-steer" || !slices.Equal(u.HeldKeys, []string{"k1"}) {
+		t.Errorf("the running node answered %+v, want itself and the one key it holds", u)
 	}
 	if notes := box.Drain(); len(notes) != 0 {
 		t.Fatalf("a note the running node could not verify reached the turn: %+v", notes)
