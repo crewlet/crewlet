@@ -155,9 +155,11 @@ type RunFiled struct {
 //
 // What it refuses is what the turn said: `not_running` for a turn that has
 // ended, `notes_full` for one already holding as many unread notes as may wait,
-// and `notes_spent` for one that has taken as many notes as a turn takes — and
-// `unavailable` where the run's record, or the node running the turn, could not
-// be read or written.
+// and `notes_spent` for one that has taken as many notes as a turn takes. Where
+// the run's record, or the node running the turn, could not be read or written,
+// it says what stopped it ([nodeFailure]): a condition of the node or the fleet
+// is `unavailable`, with the wait that clears it, and a fault of this node's own
+// is `internal_error`, which no wait clears.
 type steerTurn struct {
 	deps      SteerDeps
 	authorize Authorizer
@@ -210,8 +212,8 @@ func (t *steerTurn) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (tools.Result, error) {
 
 	if t.deps.Asker == nil || t.deps.Actor == nil || t.deps.Wire == nil || t.deps.Runs == nil {
-		return refused(tools.RefusalUnavailable, SteerTurnTool+" is unavailable: "+
-			"this surface was built without a way to reach the fleet."), nil
+		return refusedBy(tools.RefusalUnavailable, waitless(), SteerTurnTool+
+			" is unavailable: this surface was built without a way to reach the fleet."), nil
 	}
 	actor, err := t.deps.Actor(ctx, turn)
 	if err != nil {
@@ -299,11 +301,16 @@ func (t *steerTurn) file(ctx context.Context, turnID string, note steer.Note) (t
 	defer cancel()
 	filed, err := t.deps.Runs.File(fileCtx, turnID, note)
 	if err != nil {
-		log.WarnContext(ctx, "steer_turn_unfiled", "turn_id", turnID, "note_id", note.ID,
-			"error", err.Error())
-		return refused(tools.RefusalUnavailable, fmt.Sprintf("The note could not be written "+
-			"to the record of turn %s's coding run. Try again: a retry is the same note, so "+
-			"the turn never takes it twice.", clip(turnID))), nil
+		// A CONDITION IS WRITTEN HERE, with the turn and the note, since
+		// [nodeFailure] logs only a fault: a store that did not answer may
+		// have taken the note all the same ([RunSteers.File]), and the note's
+		// id is what tells a later delivery of it from a second note.
+		if _, condition := Condition(err); condition {
+			log.WarnContext(ctx, "steer_turn_unfiled", "turn_id", turnID, "note_id", note.ID,
+				"error", err.Error())
+		}
+		return nodeFailure(ctx, SteerTurnTool, err, fmt.Sprintf("Could not file the note on "+
+			"the record of turn %s's coding run", clip(turnID)), ""), nil
 	}
 	return t.answered(turnID, note.ID, filed.Status, filed.Reads, filed.AgentHandle)
 }
@@ -351,10 +358,15 @@ func (t *steerTurn) runSeat(ctx context.Context, turnID string) (RunSeat, bool, 
 	defer cancel()
 	seat, recorded, err := t.deps.Runs.Seat(readCtx, turnID)
 	if err != nil {
-		log.WarnContext(ctx, "steer_turn_record_unread", "turn_id", turnID, "error", err.Error())
-		return RunSeat{}, false, refusalOf(refused(tools.RefusalUnavailable, fmt.Sprintf("The "+
-			"record of turn %s's coding run could not be read, so nothing was sent. Try again.",
-			clip(turnID))))
+		// A CONDITION IS WRITTEN HERE, with the turn, since [nodeFailure]
+		// logs only a fault.
+		if _, condition := Condition(err); condition {
+			log.WarnContext(ctx, "steer_turn_record_unread", "turn_id", turnID,
+				"error", err.Error())
+		}
+		return RunSeat{}, false, refusalOf(nodeFailure(ctx, SteerTurnTool, err,
+			fmt.Sprintf("Could not read the record of turn %s's coding run", clip(turnID)),
+			"Nothing was sent."))
 	}
 	return seat, recorded, nil
 }
@@ -384,15 +396,19 @@ func (t *steerTurn) maySteer(ctx context.Context, turnID string, seat RunSeat, r
 	if recorded {
 		// THE RECORD'S ANCHOR, and nothing else: no scatter is asked about a
 		// turn whose run record already names its seat.
+		// NO WAIT CLEARS EITHER: the launch sealed the anchor once, so one
+		// that names no seat, or does not verify, stays so, and one under a
+		// key this node does not hold opens only once an operator brings the
+		// keyrings into agreement.
 		if seat.Unverified != "" {
-			return refusalOf(refused(tools.RefusalUnavailable, fmt.Sprintf("Whose turn %s "+
-				"is cannot be decided: %s. Nothing was sent.", clip(turnID), seat.Unverified)))
+			return refusalOf(refusedBy(tools.RefusalUnavailable, waitless(), fmt.Sprintf("Whose "+
+				"turn %s is cannot be decided: %s. Nothing was sent.", clip(turnID), seat.Unverified)))
 		}
 		owner, named := t.seatOf(seat.Agent, seat.Handle)
 		if !named {
-			return refusalOf(refused(tools.RefusalUnavailable, fmt.Sprintf("The record of "+
-				"turn %s's coding run names no seat, so whether you may steer it cannot be "+
-				"decided. Nothing was sent.", clip(turnID))))
+			return refusalOf(refusedBy(tools.RefusalUnavailable, waitless(), fmt.Sprintf("The "+
+				"record of turn %s's coding run names no seat, so whether you may steer it "+
+				"cannot be decided. Nothing was sent.", clip(turnID))))
 		}
 		return askAuthority(ctx, t.authorize, authz.ActionTurnSteer,
 			authz.Object{Kind: authz.KindPerson, ID: turnID, Owner: owner})
@@ -406,7 +422,7 @@ func (t *steerTurn) maySteer(ctx context.Context, turnID string, seat RunSeat, r
 	case !answered:
 		// NOTHING WAS OFFERED, so this is not the offer's `unknown`: no
 		// note is in flight to be uncertain about.
-		return refusalOf(refused(tools.RefusalUnavailable, fmt.Sprintf("No node "+
+		return refusalOf(refusedBy(tools.RefusalUnavailable, waits(), fmt.Sprintf("No node "+
 			"answered for turn %s within %s: it is not running anywhere, or the node "+
 			"running it did not answer in time. Nothing was sent; try again.",
 			clip(turnID), SteerAskBudget)))
@@ -415,7 +431,7 @@ func (t *steerTurn) maySteer(ctx context.Context, turnID string, seat RunSeat, r
 	}
 	owner, named := t.seatOf(reply.Agent, reply.AgentHandle)
 	if !named {
-		return refusalOf(refused(tools.RefusalUnavailable, fmt.Sprintf("The node "+
+		return refusalOf(refusedBy(tools.RefusalUnavailable, waits(), fmt.Sprintf("The node "+
 			"running turn %s could not name the seat it runs for, so whether you may "+
 			"steer it cannot be decided. Nothing was sent; try again shortly.",
 			clip(turnID))))

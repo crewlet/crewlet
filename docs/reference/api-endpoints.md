@@ -5728,9 +5728,14 @@ again is safe for that reason.
 It refuses `not_running` for a turn that has ended, `notes_full` for one already
 holding five notes it has not read yet (once it reads them, the note may be sent
 again), `notes_spent` for one that has taken the ten notes a turn takes (sending
-it again changes nothing: put the rest on the work item), `unavailable` where the
-run's record could not be read or written (a retry is the same note), and
-`invalid` for an empty or oversized note.
+it again changes nothing: put the rest on the work item), and `invalid` for an
+empty or oversized note. Where the run's record could not be read or written,
+the answer is what stopped it: `unavailable` for a condition of the node or the
+fleet, such as a coordination store that did not answer, with a `Retry-After`
+where waiting clears it, and `internal_error` for a fault of this node's own,
+such as a record it cannot decode, which no wait clears. A filing the store did
+not answer may have landed all the same: sent again under the same
+`Idempotency-Key` it is the same note, so the turn never takes it twice.
 
 The note is **signed**: a scattered request and the running node's answer are
 signed under the fleet keyring and bound to that one request, and a note on a
@@ -5825,7 +5830,9 @@ It refuses `invalid` for an empty question, `forbidden` for a caller no seat
 binds or a seat the chart no longer has, `budget_exhausted` as above (with
 `detail` in a person's words and `remedy: {"setting": "company_token_budget"}`),
 and
-`unavailable` for a counter it cannot read (nothing is spent), a knowledge base
+`unavailable` for a counter the coordination store did not answer for (nothing
+is spent, and a counter this node cannot read for a fault of its own is
+`internal_error`, which no wait clears), a knowledge base
 and tracker that could not be searched at all, no model configured, or a model
 that failed or wrote nothing — a reply that spent tokens and wrote nothing is
 still charged. Over `/operator/act` an `unavailable` other than a usage

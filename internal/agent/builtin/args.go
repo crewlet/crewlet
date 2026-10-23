@@ -328,6 +328,21 @@ var errWaitless = errors.New("builtin: no wait clears this")
 // words.
 func waitless() error { return errWaitless }
 
+// errWaits is the mark beneath an unavailable refusal a wait can clear
+// ([waits]).
+var errWaits = errors.New("builtin: waiting can clear this")
+
+// waits is the cause of an unavailable refusal a wait can clear and no
+// condition names: a read that didn't answer, an index still being built, a
+// node that didn't answer in time. [RetryAfter] answers it with the hint, as
+// it answers any cause it doesn't know. It is a mark rather than nothing so
+// every unavailable refusal says which it is, waits, [waitsUntil] or
+// [waitless]: a bare one said neither, and the walk that kept the waitless
+// ones marked guessed from their wording, which a sentence reworded in the
+// voice it judged ("isn't configured" for "is not configured") passed
+// straight through (TestEveryUnavailableRefusalSaysWhetherAWaitClearsIt).
+func waits() error { return errWaits }
+
 // RetryAfter is how long somebody told about err should wait before asking
 // again: NONE for a condition no wait clears ([condition]'s stuck — a log at
 // its ceiling, a company whose file storage is full) and for a refusal a tool

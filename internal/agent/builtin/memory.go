@@ -138,7 +138,7 @@ func (t *useSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 		return refused(tools.RefusalForbidden, UseSkillTool+" can only be called during a turn, on behalf of a seat."), nil
 	}
 	if t.skills == nil {
-		return refused(tools.RefusalUnavailable, "Skill synthesis is not configured on this deployment."), nil
+		return refusedBy(tools.RefusalUnavailable, waitless(), "Skill synthesis is not configured on this deployment."), nil
 	}
 	name := strings.TrimSpace(argString(args, "skill_name"))
 	if name == "" {
@@ -309,7 +309,7 @@ func (t *queryEpisodes) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		return refused(tools.RefusalForbidden, QueryEpisodesTool+" can only be called during a turn, on behalf of a seat."), nil
 	}
 	if t.episodes == nil {
-		return refused(tools.RefusalUnavailable, "Episode memory is not configured on this deployment."), nil
+		return refusedBy(tools.RefusalUnavailable, waitless(), "Episode memory is not configured on this deployment."), nil
 	}
 	limit := clampInt(argInt(args, "limit", t.defaultLimit()), 1, maxEpisodeLimit)
 	outcome := strings.TrimSpace(argString(args, "outcome_filter"))
@@ -487,7 +487,7 @@ func (t *refreshMemory) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		return refused(tools.RefusalForbidden, RefreshMemoryTool+" "+why), nil
 	}
 	if t.diary == nil {
-		return refused(tools.RefusalUnavailable, "Durable memory is not configured on this deployment."), nil
+		return refusedBy(tools.RefusalUnavailable, waitless(), "Durable memory is not configured on this deployment."), nil
 	}
 	limit := clampInt(argInt(args, "limit", noteLimit), 1, maxEpisodeLimit)
 
@@ -519,7 +519,7 @@ func (t *refreshMemory) filtered(ctx context.Context, turn *turnctx.Turn,
 	agentID, hint string, limit int,
 ) (tools.Result, error) {
 	if t.recall == nil {
-		return refused(tools.RefusalUnavailable, "This deployment cannot re-filter your notes by "+
+		return refusedBy(tools.RefusalUnavailable, waitless(), "This deployment cannot re-filter your notes by "+
 			"relevance — call "+RefreshMemoryTool+" without `context_hint` for your "+
 			"most recent ones instead."), nil
 	}
@@ -649,7 +649,7 @@ func (t *reflectAndPersist) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return refused(tools.RefusalForbidden, ReflectAndPersistTool+" "+why), nil
 	}
 	if t.diary == nil {
-		return refused(tools.RefusalUnavailable, "Durable memory is not configured on this deployment."), nil
+		return refusedBy(tools.RefusalUnavailable, waitless(), "Durable memory is not configured on this deployment."), nil
 	}
 	content := strings.TrimSpace(argString(args, "content"))
 	switch {
@@ -722,7 +722,7 @@ func (t *markOnboarded) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		return refused(tools.RefusalForbidden, MarkOnboardedTool+" "+why), nil
 	}
 	if t.onboarding == nil {
-		return refused(tools.RefusalUnavailable, "Onboarding is not configured on this deployment."), nil
+		return refusedBy(tools.RefusalUnavailable, waitless(), "Onboarding is not configured on this deployment."), nil
 	}
 	// REFUSED, not clipped — the same bound reflect_and_persist enforces on
 	// the same store, by the same rule. This used to clip silently, so the

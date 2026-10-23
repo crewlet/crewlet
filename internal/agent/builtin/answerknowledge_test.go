@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/compact"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -484,7 +485,13 @@ func TestAnUnboundCredentialIsRefusedBeforeAnythingIsSpent(t *testing.T) {
 
 // A SPENT COMPANY WINDOW REFUSES BEFORE THE CALL, naming the window and when
 // it resets; an unreadable counter refuses too, rather than letting a call
-// through that no ceiling was checked against.
+// through that no ceiling was checked against — as what stopped the read: a
+// coordination store that did not answer is `unavailable`, which a wait
+// clears, and a counter this node cannot read is its own fault,
+// `internal_error`, never a refusal that invites polling a broken read.
+//
+// Mutation: answer the counter's error as a bare unavailable and the fault's
+// row goes red.
 func TestASpentBudgetRefusesTheAnswerBeforeItIsWritten(t *testing.T) {
 	t.Parallel()
 	rig := newAnswerRig()
@@ -501,11 +508,23 @@ func TestASpentBudgetRefusesTheAnswerBeforeItIsWritten(t *testing.T) {
 		t.Errorf("the model was asked %d times past a spent budget", rig.model.calls)
 	}
 
-	rig = newAnswerRig()
-	rig.budget.err = errors.New("counter unreachable")
-	if res, _, _ := ask(t, rig.tool(t), "How do we deploy?"); !res.Failed ||
-		tools.RefusalOf(res) != tools.RefusalUnavailable || rig.model.calls != 0 {
-		t.Fatalf("an unreadable counter let the answer through: %+v", res)
+	unanswered := fmt.Errorf("coord: read the company's windows: %w", coord.ErrUnavailable)
+	undecodable := errors.New("coord: decode the company's windows: unexpected end of JSON input")
+	for err, want := range map[error]tools.Refusal{
+		unanswered:  tools.RefusalUnavailable,
+		undecodable: tools.RefusalInternalError,
+	} {
+		rig = newAnswerRig()
+		rig.budget.err = err
+		res, _, _ := ask(t, rig.tool(t), "How do we deploy?")
+		if !res.Failed || tools.RefusalOf(res) != want || rig.model.calls != 0 {
+			t.Fatalf("a counter that answered %v let the answer through or was told as %s, "+
+				"want %s: %+v", err, tools.RefusalOf(res), want, res)
+		}
+		if !strings.Contains(res.Output, "nothing was spent") || strings.Contains(res.Output, "JSON") {
+			t.Errorf("a counter that answered %v is told %q, want what was spent and none "+
+				"of the error", err, res.Output)
+		}
 	}
 }
 

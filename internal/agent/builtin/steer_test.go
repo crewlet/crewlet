@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
@@ -734,9 +735,20 @@ func TestAuthorityIsDecidedOnTheAnchoredSeat(t *testing.T) {
 // EVERY FILING OUTCOME HAS ITS REFUSAL, each in the class the person's surface
 // acts on and with its own sentence: a turn that holds too many unread notes,
 // one that has taken all it takes, one that has ended — and a record that
-// could not be read or written, which sent nothing and says to try again.
+// could not be read or written, told as what stopped it. A store that did not
+// answer is a condition, `unavailable` in its own words with the wait that
+// clears it; anything else is a fault of this node, `internal_error`, its error
+// in the log and never in the sentence, and no retry invited: a record this
+// node cannot decode was answered "Try again" under the undecided hint, and
+// polled for as long as the person kept pressing.
+//
+// Mutation: answer a record's failure as a bare unavailable again, or put the
+// error's text into the sentence, and the fault rows go red.
 func TestEveryFilingOutcomeHasItsRefusal(t *testing.T) {
 	t.Parallel()
+	unanswered := fmt.Errorf("coord/kv: write the sandbox run: %w: %w", coord.ErrUnavailable,
+		errors.New("nats: timeout"))
+	undecodable := errors.New("sandbox: decode run run-1: unexpected end of JSON input")
 	for _, tc := range []struct {
 		name   string
 		runs   func(t *testing.T) *runRecords
@@ -752,14 +764,26 @@ func TestEveryFilingOutcomeHasItsRefusal(t *testing.T) {
 		{"closed", func(t *testing.T) *runRecords {
 			return recordedTurn(t, builtin.RunFiled{Status: steer.StatusClosed})
 		}, tools.RefusalNotRunning, "is not running"},
-		{"a record that could not be written", func(t *testing.T) *runRecords {
+		{"a record the store did not write", func(t *testing.T) *runRecords {
 			runs := recordedTurn(t, builtin.RunFiled{})
-			runs.fileErr = errors.New("coord: the store is unavailable")
+			runs.fileErr = unanswered
 			return runs
-		}, tools.RefusalUnavailable, "a retry is the same note"},
-		{"a record that could not be read", func(*testing.T) *runRecords {
-			return &runRecords{seatErr: errors.New("coord: the store is unavailable")}
-		}, tools.RefusalUnavailable, "could not be read, so nothing was sent"},
+		}, tools.RefusalUnavailable, "Could not file the note on the record of turn run-1's " +
+			"coding run (the coordination store did not answer). Try again shortly."},
+		{"a record the store did not read", func(*testing.T) *runRecords {
+			return &runRecords{seatErr: unanswered}
+		}, tools.RefusalUnavailable, "Could not read the record of turn run-1's coding run " +
+			"(the coordination store did not answer). Nothing was sent. Try again shortly."},
+		{"a filing this node could not make", func(t *testing.T) *runRecords {
+			runs := recordedTurn(t, builtin.RunFiled{})
+			runs.fileErr = undecodable
+			return runs
+		}, tools.RefusalInternalError, "Could not file the note on the record of turn run-1's " +
+			"coding run: a fault in this node itself"},
+		{"a record this node cannot read", func(*testing.T) *runRecords {
+			return &runRecords{seatErr: undecodable}
+		}, tools.RefusalInternalError, "Could not read the record of turn run-1's coding " +
+			"run: a fault in this node itself"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -769,6 +793,11 @@ func TestEveryFilingOutcomeHasItsRefusal(t *testing.T) {
 			if !res.Failed || tools.RefusalOf(res) != tc.want || !strings.Contains(res.Output, tc.saying) {
 				t.Errorf("answered failed=%v %s: %q, want %s saying %q", res.Failed,
 					tools.RefusalOf(res), res.Output, tc.want, tc.saying)
+			}
+			for _, own := range []string{"nats", "coord/kv", "JSON", "decode"} {
+				if strings.Contains(res.Output, own) {
+					t.Errorf("the sentence %q carries the error's own %q", res.Output, own)
+				}
 			}
 			if len(asker.asked) != 0 {
 				t.Errorf("the fleet was asked %+v", asker.asked)

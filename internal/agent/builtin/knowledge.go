@@ -162,7 +162,7 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		company = t.org()
 	}
 	if company == nil {
-		return refused(tools.RefusalUnavailable,
+		return refusedBy(tools.RefusalUnavailable, waits(),
 			"No organization is in scope, so there is no knowledge base to search."), nil
 	}
 	// THE CHEAP GATE FIRST, exactly as the turn-start prefetch does it:

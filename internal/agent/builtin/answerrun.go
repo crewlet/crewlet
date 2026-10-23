@@ -180,8 +180,8 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (tools.Result, error) {
 
 	if t.deps.Desk == nil || t.deps.Actor == nil {
-		return refused(tools.RefusalUnavailable, AnswerRunTool+" is unavailable: "+
-			"this surface was built without the run record."), nil
+		return refusedBy(tools.RefusalUnavailable, waitless(), AnswerRunTool+
+			" is unavailable: this surface was built without the run record."), nil
 	}
 	actor, err := t.deps.Actor(ctx, turn)
 	if err != nil {
