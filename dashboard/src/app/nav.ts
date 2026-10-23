@@ -826,7 +826,8 @@ export const WORKSPACES: WorkspaceRow[] = [
     // its own row.
     key: "settings",
     label: "Settings",
-    icon: "sliders-vertical",
+    // THE GEAR: what a reader looks for to change how the engine runs.
+    icon: "settings",
     path: ["settings", "models"],
     owns: ["settings"],
     hint: "What the engine runs: models, tools, spend, access and its nodes",
