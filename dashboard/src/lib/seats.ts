@@ -1535,8 +1535,11 @@ export function stateLine(
       return item ? `${doing.on} ${item}` : doing.alone;
     }
     case "idle": {
+      // THE LINE SAYS WHAT THE STATE DOES NOT. Beside a pill reading Idle, a
+      // line reading "Idle" said the state twice; a seat that has never run
+      // says that instead, which is the fact the pill cannot carry.
       const last = row?.last_turn?.ended_at;
-      return last ? `Idle · last turn ${shortAge(last, now)} ago` : "Idle";
+      return last ? `Idle · last turn ${shortAge(last, now)} ago` : "No turn yet";
     }
     default:
       return labelOf(row, now, nameOf);
