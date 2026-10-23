@@ -537,14 +537,17 @@ func (l *lockedLines) records(t *testing.T) []map[string]any {
 	return out
 }
 
-// THE RUNNING NODE COULD NOT VERIFY THE NOTE: it took nothing, and the person
-// is told that and who fixes it, rather than `unknown`, which a retry would
-// never change, and under no wait, since only an operator bringing the keys
-// into agreement does. The keys and the turn go to the log: said to the person
-// steering, they were a turn id and key ids nobody at a dashboard chose. On the
-// probe as on the offer, and nothing is offered after a probe that says so.
-// Mutation: put reply.Unverified back into the sentence, or drop the waitless
-// mark, and this fails.
+// THE RUNNING NODE COULD NOT VERIFY THE NOTE: it took nothing, and the refusal
+// says so rather than `unknown`, which a retry would never change, and under
+// no wait, since only an operator bringing the keys into agreement does. It is
+// a CONDITION ([steer.ErrUnverified]), so each reader has words of their own:
+// the person's sentence says who fixes it, and the assistant that called the
+// tool is told the same and that sending it again won't help. The keys and the
+// turn go to the log: said to the person steering, they were a turn id and key
+// ids nobody at a dashboard chose. On the probe as on the offer, and nothing is
+// offered after a probe that says so.
+// Mutation: put reply.Unverified back into the sentence, refuse on another
+// cause, or let the condition clear on a wait, and this fails.
 func TestANoteTheRunningNodeCouldNotVerifyIsRefusedAsUnavailable(t *testing.T) {
 	t.Parallel()
 	unverified := steer.Reply{Version: 1, TurnID: "run-1",
@@ -559,13 +562,20 @@ func TestANoteTheRunningNodeCouldNotVerifyIsRefusedAsUnavailable(t *testing.T) {
 			res, _ := steerCall(t, newSteerRig(t, asker, requestKey(), caller, seatLeads),
 				"run-1", "use staging")
 			if !res.Failed || tools.RefusalOf(res) != tools.RefusalUnavailable ||
-				!strings.Contains(res.Output, "An administrator") {
+				!strings.Contains(res.Output, "an administrator") {
 				t.Fatalf("answered %s: %q, want unavailable saying who fixes it",
 					tools.RefusalOf(res), res.Output)
 			}
-			for _, leak := range []string{"run-1", "node-2", "k0", "secrets.keys"} {
-				if strings.Contains(res.Output, leak) {
-					t.Errorf("the refusal %q names %q, which only the log should", res.Output, leak)
+			person, ok := builtin.ConditionSentence(res.Cause)
+			if !ok || !strings.Contains(person, "your note") ||
+				!strings.Contains(person, "An administrator") {
+				t.Errorf("a person is told %q (%v), want who fixes it", person, ok)
+			}
+			for _, said := range []string{res.Output, person} {
+				for _, leak := range []string{"run-1", "node-2", "k0", "secrets.keys"} {
+					if strings.Contains(said, leak) {
+						t.Errorf("the refusal %q names %q, which only the log should", said, leak)
+					}
 				}
 			}
 			if builtin.RetryAfter(res.Cause, time.Second) != 0 {

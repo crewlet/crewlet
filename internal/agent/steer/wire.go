@@ -1,6 +1,7 @@
 package steer
 
 import (
+	"errors"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/iam"
@@ -137,3 +138,10 @@ type Unverified struct {
 
 // Answers is the id of the request this reply answers (internal/signedask).
 func (r Reply) Answers() string { return r.Request }
+
+// ErrUnverified is a note the running node took nothing of because it could
+// not verify it ([Reply.Unverified]): a condition of the fleet rather than of
+// the request, cleared only by an operator giving the two nodes the same keys,
+// never by a wait. The steer tool refuses on it, which is how every surface
+// that tells a person a condition in their own words knows this one.
+var ErrUnverified = errors.New("steer: the node running the turn could not verify the note")

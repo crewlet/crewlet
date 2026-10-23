@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
@@ -183,7 +184,9 @@ func toPerson(r tools.Result, words caveat.Refusal) tools.Result {
 // held for longer than the write would wait ([store.ErrBusy]); an event queue
 // that is not live while this node starts or stops ([queue.ErrNotLive]); an
 // event broker this node could not reach — its connection reconnecting, or the
-// broker not answering in time ([queue.ErrUnavailable]); a wait that ran out of
+// broker not answering in time ([queue.ErrUnavailable]); a note the node
+// running its turn could not verify because the two nodes do not hold the same
+// keys ([steer.ErrUnverified]), which no wait clears; a wait that ran out of
 // time or was abandoned. Everything else that reaches a tool unmarked — a read
 // of this node's own store that broke, a database that refused a statement, a
 // path in its own code that went wrong — is a fault.
@@ -229,12 +232,15 @@ func toPerson(r tools.Result, words caveat.Refusal) tools.Result {
 //
 // A condition reaches a MODEL inside a tool's sentence ("Could not read your
 // notes (…). Try again shortly."), and a PERSON on a screen, through every
-// surface that answers one: the operator's, the human write surface, the
-// identity directory, the artifacts. So each condition is told twice, from one
-// classification ([condition]), and the two can never cover different sets:
-// [Condition] is the model's clause and [ConditionSentence] the person's
-// whole sentence, what happened and what to do, in the short voice a screen
-// is written in.
+// surface that tells one in a person's words: the identity directory, the
+// artifacts, the configuration, a read of the human write surface. So each
+// condition is told twice, from one classification ([condition]), and the two
+// can never cover different sets: [Condition] is the model's clause and
+// [ConditionSentence] the person's whole sentence, what happened and what to
+// do, in the short voice a screen is written in. The act route and a write of
+// the human write surface tell a person only words the refusal catalog wrote
+// (ADR-0060), and the catalog words no condition, so there one is told in its
+// code's own sentence, under the hint [RetryAfter] gives it.
 //
 // NEITHER IS EVER THE ERROR'S OWN TEXT. A state-log refusal is told in the
 // state log's own words for it ([statelog.ConditionWords]), one per code: its
@@ -427,6 +433,16 @@ func condition(err error) (conditionSaid, bool) {
 			"the connection is reconnecting, or the broker did not answer in time",
 			person: "This node lost touch with the rest of the fleet. " +
 				statelog.TryAgainSoon}, true
+	case errors.Is(err, steer.ErrUnverified):
+		// THE FLEET'S NODES DO NOT HOLD THE SAME KEYS, so the node running a
+		// turn took nothing it could not verify: only an operator giving them
+		// the same keys clears it. The keys go to the log; the person's
+		// sentence says who fixes it.
+		return conditionSaid{clause: "the node running the turn couldn't verify " +
+			"the note, because the two nodes don't hold the same keys",
+			person: "The node running this turn couldn't verify your note, so it " +
+				"took nothing. An administrator needs to give the fleet's nodes the " +
+				"same keys.", stuck: true}, true
 	case errors.Is(err, context.DeadlineExceeded):
 		return conditionSaid{clause: "it ran out of time",
 			person: "This took too long, so it stopped. " + statelog.TryAgainSoon}, true
