@@ -35,6 +35,7 @@ import type { LIVE_CALL_DETAIL } from "../contract/wire.ts";
 import type { McpServersStatusAnswer } from "../contract/mcp.ts";
 import type { CredentialPoolAnswer } from "../contract/credentials.ts";
 import type { Coverage } from "../contract/coverage.ts";
+import type { OrgServices } from "../contract/services.ts";
 import type { EngineHealth } from "../contract/health.ts";
 import type { StopReason } from "../contract/stops.ts";
 import type {
@@ -1397,6 +1398,13 @@ export interface OrgProjection {
   timezone?: string;
   /** The company's own ceilings per window, as written; absent = uncapped. */
   token_budget?: TokenBudget;
+  /**
+   * Which tracker and knowledge base the company runs, as the engine
+   * resolved them (see `contract/services.ts`). Every reader is handed it.
+   * Absent only on `{}`, a node running no company: not known yet, never
+   * "none".
+   */
+  services?: OrgServices;
   roles?: OrgSeat[];
   units?: OrgUnit[];
   derived?: Derived;

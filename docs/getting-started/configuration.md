@@ -2038,6 +2038,8 @@ Which **work tracker** this company runs, on exactly the terms `knowledge.backen
 
 The two axes are **separate** on purpose. A company running a native tracker against a Confluence wiki, or Jira against native pages, is an ordinary arrangement rather than a mixture to refuse — they are two products with separate routing and separate lead maps.
 
+The backend each axis resolves to, and nothing else of either block, is published to every signed-in reader as [`services` on the org answer](../reference/api-endpoints.md#get-org), because it decides which of the dashboard's own surfaces exist: a company that does not run the native tracker has no Work or My work there, and one that does not run the native knowledge base has no Knowledge.
+
 ### The native tracker's own policy
 
 ```yaml

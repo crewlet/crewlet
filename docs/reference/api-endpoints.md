@@ -3000,7 +3000,7 @@ opens — before a single turn has run:
 | Section | What it is |
 |---|---|
 | `agents` | The company's agent seats, each merged with its live overlay. Every seat in the company, not the ones this node runs, because the dashboard is a view of the company. Human seats are excluded — they have no turn, no phase and no spend; they appear in `org` with `"kind": "human"` |
-| `org` | The same projection [`GET /org`](#get-org) answers, built for the socket's audience: the charter, the company's resolved `timezone` and its `token_budget`, root-level `roles` and `units` nesting to any depth, with only the fields that projection declares for each — a seat's resolved `llm` chain and `tool_sources` only to an audience holding `admin` |
+| `org` | The same projection [`GET /org`](#get-org) answers, built for the socket's audience: the charter, the company's resolved `timezone`, its `token_budget` and the `services` it runs, root-level `roles` and `units` nesting to any depth, with only the fields that projection declares for each, a seat's resolved `llm` chain and `tool_sources` only to an audience holding `admin` |
 | `tools` | The catalogue this node serves, each entry tagged with the `source` that registered it — `builtin` or the MCP server's name. Empty on a node with no active revision, which has no catalogue yet |
 | `events`, `sandboxes`, `tokens`, `budget`, `health` | The live projection: what has happened |
 
@@ -4482,6 +4482,7 @@ response.
   "policies": ["..."],
   "timezone": "Europe/Berlin",
   "token_budget": {"month": 40000000},
+  "services": {"tracker": "native", "knowledge": "confluence"},
   "roles": [
     {"name": "Founder", "kind": "human", "manages": ["cto"], "availability": "CET business hours"}
   ],
@@ -4575,7 +4576,7 @@ where a seat was WRITTEN — a fact about a document an ordinary reader is given
 no way to point into. Membership is each unit's `seats`.
 
 **What it carries, and nothing else.** The company's `name`, `mission`,
-`vision`, `policies`, `timezone`, `token_budget` and `derived`; for each seat its `name`, `kind`, `handle`, `goal`,
+`vision`, `policies`, `timezone`, `token_budget`, `services` and `derived`; for each seat its `name`, `kind`, `handle`, `goal`,
 `backstory`, `responsibilities`, `behavioral_guidelines`, `manages`,
 `availability`, `token_budget`, `avatar`, `llm` and `tool_sources`; for each unit its `name`, `type`, `purpose`, `lead`, `goals`,
 `channel`, `knowledge`, `roles` and `children`. Every value is the one the
@@ -4591,6 +4592,19 @@ name here — `UTC` where the document writes none — rather than an empty
 string a client would default to its own browser's zone. Every day the engine
 cuts is cut on it ("today", a due band, an overdue mark, a person's own day), so
 a screen deciding which day something falls on cuts on this.
+
+**`services` is which tracker and knowledge base the company runs**, as the
+engine resolves them, on every answer for a company and to every reader:
+`tracker` is `native` (Crewlet's own tracker), `jira` or `none`, and
+`knowledge` is `native` (Crewlet's own knowledge base), `confluence` or
+`none`. A `backend` the document leaves empty is resolved here as the engine
+resolves it: the vendor whose `integrations` block is connected, else
+`native`. Both are closed sets. It is what decides which of the dashboard's
+own surfaces exist: a company that does not run the native tracker has no
+Work and no My work, and every work question is refused there. It names the
+backend and nothing else of the `tracker:` and `knowledge:` blocks, which
+stay guarded: no project or space key, no site, no URL, no credential. Absent
+only from `{}`, so a reader never mistakes "no company yet" for `none`.
 
 **`token_budget` is the ceilings as written**, on the company and on each seat
 that names its own: one number per calendar window it caps (`day`, `week`,
@@ -4639,8 +4653,9 @@ reference, `workers`, `learning_enabled`, `mcp_env`, `sandbox`, `placement`,
 `integrations` and `schedules`, and its authored `llm` / `llm_*` fields (their
 effect is the resolved `llm` above); a unit's `mcp_env`, `integrations` and
 `schedules`; and every company block outside the charter and its budget
-(providers, MCP servers, integrations, knowledge, the tracker, notification and
-learning settings, worker templates). Those are read through the
+(providers, MCP servers, integrations, the knowledge and tracker blocks beyond
+the resolved `services`, notification and learning settings, worker
+templates). Those are read through the
 `admin`-gated `config` query or
 [`GET /config`](#config--live-config-management-auth-gated), which masks
 credentials. Schedules also have a read surface of their own, under the same
