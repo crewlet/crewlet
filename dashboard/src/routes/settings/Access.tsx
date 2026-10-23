@@ -742,6 +742,9 @@ export function People() {
   // could still invite somebody onto.
   const vacant = seatRows.filter((s) => !s.holder && !s.invitation).length;
   const invited = seatRows.filter((s) => !s.holder && s.invitation).length;
+  // FIRST RUN: nobody has joined, and the first-person callout below names
+  // the one next step. See [FirstPerson].
+  const firstRun = health?.identity === "unclaimed" && settled(invitations) && settled(seats);
 
   return (
     <>
@@ -749,9 +752,12 @@ export function People() {
         {/* INVITING IS THE PAGE'S MAIN TASK, so it leads: it picks an open
             seat and opens that seat's invitation, since a person still comes
             from a seat (see the file's doc). */}
+        {/* ONE PRIMARY ACTION FOR ONE STEP: while the first-person callout
+            is drawn its button is the step, and this one steps back. */}
         {manages && (
           <Button
-            variant="primary"
+            variant={firstRun ? "secondary" : "primary"}
+            size="small"
             leadingIcon={<SendGlyph size="sm" />}
             onClick={() => setInviting(true)}
           >
@@ -798,7 +804,7 @@ export function People() {
           or, with no human seat at all, adding one. Drawn once the
           invitations AND the seats have answered or been refused, so it never
           says the wrong one first. */}
-      {health?.identity === "unclaimed" && settled(invitations) && settled(seats) && (
+      {firstRun && (
         <FirstPerson
           waiting={(invitations.data ?? []).filter((i) => i.state === "open")}
           seats={seats}
@@ -851,9 +857,11 @@ export function People() {
               // rule), and the grid marks the row the peek is open on.
               rowHref={(p) => peekHref(personRef(p.id))}
               onRowActivate={peekRow(openPeek)}
+              // THE HINT ADDS WHAT THE PAGE NOTE DOES NOT: it repeated the note
+              // word for word 530px below it.
               empty={{
                 title: "Nobody’s here yet",
-                hint: "Invite people from their seat in the org chart.",
+                hint: "A person is listed once they accept their invitation, or are created on their seat.",
               }}
               columns={[
                 {
@@ -1027,6 +1035,7 @@ export function ServiceAccounts() {
         {manages && (
           <Button
             variant="primary"
+            size="small"
             leadingIcon={<PlusGlyph size="sm" />}
             onClick={() => setCreating(true)}
           >
@@ -1174,18 +1183,22 @@ export function ApiTokens() {
               hint: "Tokens are set in api.auth.tokens in the bootstrap file and change with a restart.",
             }}
             columns={[
+              // IDENTIFIERS ARE NEVER CUT: a token's label and the login it
+              // signs in as are what an operator matches against the
+              // bootstrap file, and they read "token:fo…" beside a Seat column
+              // holding a dash in most of the grid. Their tracks are their
+              // own width; the seat takes what is left.
               {
                 key: "id",
                 header: "Label",
-                shrink: true,
+                width: "max-content",
                 sortValue: (t) => t.id,
                 cell: (t) => <TableKeyCell value={t.id} />,
               },
               {
                 key: "login",
                 header: "Signs in as",
-                shrink: true,
-                drop: 1,
+                width: "max-content",
                 sortValue: (t) => t.login,
                 cell: (t) => <TableKeyCell value={t.login} />,
               },
@@ -1199,7 +1212,6 @@ export function ApiTokens() {
               {
                 key: "seat",
                 header: "Seat",
-                floor: "10rem",
                 sortValue: (t) => t.seat ?? "",
                 cell: (t) => <BoundSeat seat={t.seat} index={index} />,
               },
@@ -1410,6 +1422,11 @@ function Findings({
   const findings = check.data?.findings ?? [];
   const unchecked = check.data?.bindings_unchecked ?? 0;
   const byId = new Map(people.map((p) => [p.id, p]));
+  // NOTHING TO SAY IS NO CARD: "Needs attention 0 / All good." was a whole
+  // bordered section above the one list the page is about. Drawn when there
+  // is a finding, a binding that could not be checked, or a check that
+  // failed; a check still running draws nothing until it has said.
+  if (!check.code && findings.length === 0 && unchecked === 0) return null;
   return (
     <Card padding="none">
       <Card.Header icon={<TriangleAlertGlyph size="sm" />} count={findings.length}>
@@ -1423,11 +1440,6 @@ function Findings({
       >
         <Card.Body padding="md">
           <Stack gap={2}>
-            {findings.length === 0 && (
-              <Text as="p" variant="body" tone="tertiary">
-                All good.
-              </Text>
-            )}
             {findings.map((f, i) => {
               const words = findingWords(f.kind);
               const row = f.person ? byId.get(f.person) : undefined;

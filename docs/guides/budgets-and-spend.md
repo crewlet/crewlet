@@ -11,7 +11,7 @@ Spend draws it.
 | Its window | One calendar window — the day, the ISO week or the month — on the company's clock | The live 24 hours, or any run of 1 to 90 company days |
 | Where it lives | The coordination store (`budgets`), one record per scope | The live projection for the last 24 hours; the replicated `usage` domain for every named window |
 | What it is for | Stopping a turn whose round did not fit a ceiling, and every round after it | Understanding where the tokens went |
-| Read by | `GET /budgets`, the `budget` push, the meters on the Spend, Budgets and seat screens | `GET /tokens/breakdown`, `GET /tokens/series`, the figures and chart on Settings › Spend |
+| Read by | `GET /budgets`, the `budget` push, the meters on the Spend, Budgets and seat screens | `GET /tokens/breakdown`, `GET /tokens/series`, the figures and chart on Settings › Token spend |
 
 They are never comparable. The counter is the one figure a ceiling can be divided
 into; the rollup is the one that can say *why*. Both count the same calls —
@@ -113,7 +113,7 @@ no list of turns and a chart has no hourly column. The costliest turns over a
 window are the turn list sorted by tokens (`GET /turns?sort=-tokens`), which
 reads the fleet's own event logs and so reaches back as far as those do.
 
-The dashboard's Settings › Spend reads named windows only, 7, 30 or 90 company
+The dashboard's Settings › Token spend reads named windows only, 7, 30 or 90 company
 days (it opens on 30), or two dates you name on the company's clock — so every
 figure on it is the company's and every card says which window it is of. A
 window the engine refuses is shown once, in the engine's own sentence, with no

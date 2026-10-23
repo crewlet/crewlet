@@ -166,8 +166,14 @@ function ModelList({
             icon={<CpuGlyph size="xs" />}
             label="Models"
             value={providers.length}
+            // NONE IS NOT ALL READY: "0, all ready" said every model worked on
+            // a node with no model to run a turn on.
             sub={
-              attention ? `${attention} need${attention === 1 ? "s" : ""} attention` : "all ready"
+              providers.length === 0
+                ? "none configured"
+                : attention
+                  ? `${attention} need${attention === 1 ? "s" : ""} attention`
+                  : "all ready"
             }
           />
           <StatCard

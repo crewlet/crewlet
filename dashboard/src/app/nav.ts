@@ -888,11 +888,14 @@ export const WORKSPACES: WorkspaceRow[] = [
       },
       {
         key: "spend",
-        label: "Spend",
+        // NOT "SPEND" UNDER SPEND: where the company runs no Crewlet Works
+        // the group holds this row alone, and it read "Spend › Spend". The
+        // name its Home widget already carries.
+        label: "Token spend",
         icon: "coins",
         path: ["settings", "spend"],
         hint: "Tokens over time, by phase, agent, model and team",
-        keywords: ["cost", "tokens", "usage"],
+        keywords: ["spend", "cost", "tokens", "usage"],
         group: "Spend",
       },
       {

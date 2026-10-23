@@ -47,6 +47,7 @@ import {
   Card,
   Checkbox,
   EmptyState,
+  EmptyValue,
   InlineCode,
   Input,
   Modal,
@@ -320,7 +321,14 @@ export function BrokerMembership({
             sortValue: (r) => (r.voter ? r.peer : ""),
             // THE ID A REMOVAL OF A VOTER NOBODY CAN NAME GOES BY, and the
             // one the group counts every voter by.
-            cell: (r) => (r.voter ? <InlineCode>{r.peer}</InlineCode> : null),
+            cell: (r) =>
+              r.voter ? (
+                <InlineCode>{r.peer}</InlineCode>
+              ) : (
+                // A MEMBER THAT VOTES IN NO GROUP HAS NO PEER ID, said as every
+                // other empty value on the page is, never a blank cell.
+                <EmptyValue label="Not a voter" />
+              ),
           },
         ]}
       />

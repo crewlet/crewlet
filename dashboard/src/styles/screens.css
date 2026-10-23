@@ -9492,29 +9492,19 @@ a.live-row:focus-visible {
 .spend-card {
   min-width: 0;
 }
-/* THE CAPTION GOES UNDER THE TITLE WHEN THE TWO DO NOT FIT ON ONE LINE: held
-   beside it, By agent's sentence stood a two-line column at the end of the
-   head on every phone. A caption that fits keeps its place at the end. */
-.spend-card-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--spacing-1) var(--spacing-3);
-  padding: var(--spacing-4) var(--spacing-4) var(--spacing-3);
-}
-/* A padded card (a list) draws its head flush with its own padding. */
-.spend-list .spend-card-head {
-  padding: 0 0 var(--spacing-3);
-}
+/* EVERY SPEND CARD HEADS WITH THE KIT'S `Card.Header`, as every other card
+   in Settings does: an icon, the title, the window as its subtitle. A body
+   line under it keeps the card's inset on every side. */
 .spend-card-body {
   margin: 0;
-  padding: 0 var(--spacing-4) var(--spacing-4);
+  padding: var(--spacing-4);
 }
+/* THE CHART'S TITLE, which shares its row with the chart's legend in the
+   kit's StackedColumns head, at the card title's size and weight. */
 .spend-title {
   flex: none;
   margin: 0;
-  font-size: var(--font-size-md);
+  font-size: var(--font-size-sm);
   font-weight: var(--font-weight-semibold);
   color: var(--color-text-primary);
 }

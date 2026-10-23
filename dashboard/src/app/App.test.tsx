@@ -620,7 +620,7 @@ describe("a section, for a reader holding none of its grants", () => {
     }
     const row = (href: string) => rows.find((a) => a.getAttribute("href") === href);
     await waitFor(() => expect(row("#/settings/people")?.textContent).toMatch(/needs Admin/));
-    expect(row("#/settings/spend")?.textContent).toBe("Spend");
+    expect(row("#/settings/spend")?.textContent).toBe("Token spend");
     expect(row("#/settings/people")?.getAttribute("title")).toBe(
       settings.sections.find((s) => s.key === "people")!.hint,
     );
@@ -641,7 +641,7 @@ describe("a section, for a reader holding none of its grants", () => {
     expect(row("#/settings/mcp-tools")?.textContent).toMatch(/needs Admin access/);
     expect(row("#/settings/limits")?.textContent).toMatch(/needs Admin access/);
     expect(row("#/settings/spend/tasks")?.textContent).toMatch(/needs Tracker access/);
-    expect(row("#/settings/spend")?.textContent).toBe("Spend");
+    expect(row("#/settings/spend")?.textContent).toBe("Token spend");
   });
 
   test("an operator is given the screen", async () => {

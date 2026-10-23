@@ -3156,7 +3156,7 @@ after any phase completed or any record aged out, so a client holding it
 stays live without a fetch — and a company that has gone quiet sees its
 spend leave the window as it ages rather than keep its last busy day —
 without a second implementation of the aggregation in the browser. (The
-bundled dashboard's Settings › Spend reads [named windows](#token-spend-breakdown)
+bundled dashboard's Settings › Token spend reads [named windows](#token-spend-breakdown)
 instead.) What a seat has spent is that rollup's per-agent row: the
 projection keeps no second total of its own.
 
@@ -7849,7 +7849,7 @@ parameters:
   `previous` — is the projection's: the spend records of the last
   24 hours (`livestate.LiveSpendWindow`, rolling), held in memory and pushed as
   the [`tokens` push](#pushes), for a client that wants the last day as it
-  happens. No screen of the bundled dashboard draws it: Settings › Spend reads
+  happens. No screen of the bundled dashboard draws it: Settings › Token spend reads
   named windows only, so its figures are the company's. It is the only answer
   with a per-turn tail (`by_turn`) and a watermark (`aggregated_through`).
 - **Every named window** is whole **company days** read from the replicated

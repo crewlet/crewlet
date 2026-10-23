@@ -11,6 +11,7 @@ import {
   LIST_FLOOR,
   PEEK_WIDTH,
   PHONE_BREAKPOINT,
+  SECTION_COLUMN_MIN,
   SCROLLBAR_GUTTER,
   SHELL_BREAKPOINT,
   columnWidth,
@@ -123,6 +124,8 @@ function atRuleBody(css: string, prelude: string): string {
 
 /** The phone breakpoint's query, as every sheet writes it. */
 const PHONE = `@media (width < ${PHONE_BREAKPOINT}px)`;
+/** Where Settings' column folds to its picker (`app/layout.ts`'s SECTION_COLUMN_MIN). */
+const FOLD = `@media (width < ${SECTION_COLUMN_MIN}px)`;
 
 /** The body of the first rule whose selector is exactly `selector`. */
 function block(css: string, selector: string): string {
@@ -381,7 +384,7 @@ describe("the frame's layout", () => {
   // builder's buttons swapped for its menu at 860 in the sheet and at 640 in
   // the script.
   test("every media query's width is a breakpoint app/layout.ts declares", () => {
-    const allowed = new Set([PHONE_BREAKPOINT, SHELL_BREAKPOINT]);
+    const allowed = new Set([PHONE_BREAKPOINT, SHELL_BREAKPOINT, SECTION_COLUMN_MIN]);
     const stray: string[] = [];
     for (const name of readdirSync(STYLES).filter((f) => f.endsWith(".css"))) {
       const css = sheet(name);
@@ -459,21 +462,25 @@ describe("the frame's layout", () => {
   // scroller its content box is the viewport, the `max-content` columns alone
   // exceed it, and every `1fr` resolves to ZERO — the title column vanishing
   // to make room for a due date.
-  // THE SETTINGS COLUMN IS ONE ROW ON A PHONE. Stacked whole above the section
-  // it took about 520px, and Nodes' and Secrets' own content began below the
-  // fold. Below the breakpoint the list folds behind the toggle naming the
-  // section; at every other width the toggle is not drawn at all, so the
-  // column beside a section is never a second, collapsed copy of itself.
-  test("the Settings column folds to a picker below the phone breakpoint, and only there", () => {
+  // THE SETTINGS COLUMN IS ONE ROW WHERE THE SECTION WOULD BE TOO NARROW.
+  // Stacked whole above the section on a phone it took about 520px; beside
+  // the section at 1024 it left a 489px section whose tables and stat tiles
+  // cut their values. Below SECTION_COLUMN_MIN the list folds behind the
+  // toggle naming the section; at every other width the toggle is not drawn
+  // at all, so the column beside a section is never a second, collapsed copy
+  // of itself.
+  test("the Settings column folds to a picker below SECTION_COLUMN_MIN, and only there", () => {
     const css = sheet("frame.css");
-    const wide = css.split(PHONE)[0]!;
-    const narrow = css.slice(css.indexOf(PHONE));
+    const wide = css.split(FOLD)[0]!;
+    const narrow = atRuleBody(css, FOLD);
+    expect(SECTION_COLUMN_MIN).toBe(1212);
     expect(block(wide, ".section-picker-toggle")).toMatch(/display:\s*none/);
     expect(wide).not.toMatch(/\.section-picker:not\(\[data-open\]\)/);
     expect(block(narrow, ".section-picker-toggle")).toMatch(/display:\s*flex/);
     expect(block(narrow, ".section-picker:not([data-open]) .section-picker-list")).toMatch(
       /display:\s*none/,
     );
+    expect(block(narrow, ".section-frame")).toMatch(/grid-template-columns:\s*minmax\(0, 1fr\)/);
   });
 
   // THE COLUMN IS AS TALL AS THE VIEW, NEVER AS THE GRID. A sticky box moves
@@ -484,7 +491,7 @@ describe("the frame's layout", () => {
   // the scroller's view, which only a size container can hand a descendant.
   test("the Settings column is the scroller's height, so it stays put while the section scrolls", () => {
     const css = sheet("frame.css");
-    const wide = css.split(PHONE)[0]!;
+    const wide = css.split(FOLD)[0]!;
     const column = block(wide, ".section-column");
     expect(column).toMatch(/position:\s*sticky/);
     expect(column).toMatch(/height:\s*100cqb/);
@@ -505,10 +512,10 @@ describe("the frame's layout", () => {
       /\.crewlet-app-shell__main:has\([^)]*section-frame[^)]*\)\s*\{[^}]*container:/,
     );
 
-    // ON A PHONE the column is back in the flow, and the frame's spare height
+    // FOLDED, the column is back in the flow, and the frame's spare height
     // goes to the section: two `auto` rows split it and opened a band of
     // nothing between the folded picker and the section it names.
-    const narrow = css.slice(css.indexOf(PHONE));
+    const narrow = atRuleBody(css, FOLD);
     expect(block(narrow, ".section-frame")).toMatch(/grid-template-rows:\s*auto 1fr/);
     const stacked = block(narrow, ".section-column");
     expect(stacked).toMatch(/position:\s*static/);
@@ -1555,8 +1562,8 @@ test("the span detail sits beside the waterfall at a laptop's page width", () =>
 // default wrap's border stood a pixel inside the card's, a table inset in the
 // frame the card already is; `flush` takes the border, the radius and the
 // ground away and keeps one rule above the head.
-test("a flush grid draws no frame inside its card", () => {
-  const body = block(sheet("frame.css"), ".grid-wrap[data-flush]");
+test("a flush grid draws no frame inside its card, and every grid in a card is flush", () => {
+  const body = block(sheet("frame.css"), ".grid-wrap[data-flush],\n.crewlet-card .grid-wrap");
   expect(body).toMatch(/border:\s*0/);
   expect(body).toMatch(/border-top:\s*1px solid/);
   expect(body).toMatch(/border-radius:\s*0/);
@@ -1566,7 +1573,7 @@ test("a flush grid draws no frame inside its card", () => {
 // UNDER A CARD HEADER THE GRID DRAWS NO RULE OF ITS OWN: the kit's header
 // rules itself off, and the flush grid's rule under it made two lines.
 test("a flush grid under a card's header leaves the rule to the header", () => {
-  expect(block(sheet("frame.css"), ".crewlet-card__header + .grid-wrap[data-flush]")).toMatch(
+  expect(block(sheet("frame.css"), ".crewlet-card__header + .grid-wrap")).toMatch(
     /border-top:\s*0/,
   );
 });
@@ -1667,10 +1674,11 @@ describe("the Spend overview's rows", () => {
     expect(block(css, ".spend-tiles:empty")).toMatch(/display:\s*none/);
   });
 
-  // ON A PHONE A HEAD'S CAPTION GOES UNDER ITS TITLE. Held beside it, By
-  // agent's sentence stood a two-line column at the end of the head.
-  test("a card's caption wraps under its title when the two do not fit", () => {
-    expect(block(css, ".spend-card-head")).toMatch(/flex-wrap:\s*wrap/);
+  // ONE CARD HEADER IN SETTINGS: Spend's cards drew a bespoke head (a 16px
+  // title, no icon, the caption at its end) beside every other card's kit
+  // header. They head with `Card.Header` now, and the bespoke rule is gone.
+  test("Spend's cards keep no head of their own", () => {
+    expect(css).not.toMatch(/\.spend-card-head\b/);
   });
 
   // A SEAT IS TWO LINES ON A PHONE, at every density. With today's bar on its

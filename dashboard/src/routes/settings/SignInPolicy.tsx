@@ -30,11 +30,11 @@ export function SignInPolicy() {
       <PageNote>
         {data ? (
           <>
-            This node&rsquo;s, <InlineCode>{data.node}</InlineCode>. Set in its crewlet.yaml
-            (api.auth), and changed with a restart.
+            Set in this node&rsquo;s crewlet.yaml (<InlineCode>{data.node}</InlineCode>, under
+            api.auth), and changed with a restart.
           </>
         ) : (
-          "Set in each node's crewlet.yaml (api.auth), and changed with a restart."
+          "Set in each node's crewlet.yaml (under api.auth), and changed with a restart."
         )}
       </PageNote>
       <QueryState error={error} refusal={refusal} detail={detail} loading={loading && !data}>

@@ -74,7 +74,14 @@ import { SessionReading, useFrameSession } from "~/lib/frameSession.ts";
 import { InboxCountsProvider } from "~/lib/useInboxCounts.ts";
 import { QueueCountProvider } from "~/lib/useQueueCount.ts";
 import { useViewerPrefs } from "~/lib/prefs.ts";
-import { PEEK_WIDTH, columnWidth, densityScale, listReserve, peekColumnMin } from "./layout.ts";
+import {
+  PEEK_WIDTH,
+  SECTION_COLUMN_MIN,
+  columnWidth,
+  densityScale,
+  listReserve,
+  peekColumnMin,
+} from "./layout.ts";
 import { goSignIn } from "~/lib/session.ts";
 import type { CoverageFacts } from "~/components/work.tsx";
 import type { FleetAnswer } from "~/protocol/index.ts";
@@ -504,7 +511,12 @@ function Frame({ children }: { children: ReactNode }) {
   // WHICH SHAPE THE PEEK TAKES — see the file's doc. The frame is described
   // by what stands in front of the list, and the width asked is the one at
   // which this frame, at this density, still leaves the list its floor.
-  const column = columnWidth(row?.renderer);
+  // THE COLUMN STANDS BESIDE THE SECTION only where the window holds both
+  // ([SECTION_COLUMN_MIN]); below that it folds to its one-row picker over
+  // the section, and the peek arithmetic counts no column.
+  const sectionColumn = columnWidth(row?.renderer);
+  const sideBySide = useMediaMatch(`(width >= ${SECTION_COLUMN_MIN}px)`);
+  const column = sideBySide ? sectionColumn : 0;
   const frame = { column, scale: densityScale(prefs.density) };
   const roomy = useMediaMatch(`(width >= ${peekColumnMin(frame)}px)`);
   const peekShape = peekable(peek) ? (roomy ? "column" : "drawer") : undefined;
@@ -622,13 +634,13 @@ function Frame({ children }: { children: ReactNode }) {
             </PeekRestingWidth.Provider>
           }
         >
-          {row && column > 0 ? (
+          {row && sectionColumn > 0 ? (
             // THE COLUMN'S WIDTH IS THE ONE THE PEEK ARITHMETIC COUNTED
             // ([columnWidth]), handed to the grid rather than written again
             // in the stylesheet, so the two cannot drift.
             <div
               className="section-frame"
-              style={{ "--section-column": `${column}px` } as CSSProperties}
+              style={{ "--section-column": `${sectionColumn}px` } as CSSProperties}
             >
               <SectionColumn
                 row={row}

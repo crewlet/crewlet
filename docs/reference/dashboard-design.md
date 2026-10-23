@@ -788,7 +788,7 @@ in `nav.ts`, over three kinds of section (ADR-0033). The reader's own, their
 Account, needs nothing. The OVERVIEW needs nothing beyond being signed in:
 Home, Company › Overview and Policies, the Org chart (the chart, the roster,
 Teams and every seat page's status), Schedules, Budgets, Live › Now running and
-Coding runs, and Settings › Spend: what every seat is doing, what it has spent,
+Coding runs, and Settings › Token spend: what every seat is doing, what it has spent,
 what it may spend and who answers to whom, which everybody who works here
 reads. An APP's sections need that app: Inbox, My work, Work and Settings ›
 Expensive tasks are the tracker's, Knowledge is the knowledge base's. And the
@@ -1151,7 +1151,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/company/org/seats/{handle}` | **Seat**, an agent's or a person's profile; a person's says what holds the seat, its holder, the open invitation that names it (with **Cancel invitation**), or nobody, with **Invite** and **Add person**, the gestures drawn for an admin. Handles live only under `seats/` | agent: `tab=overview\|work\|turns\|memory\|schedules\|settings` · `conversation=` (Memory); human: overview · work · settings |
 | `#/company/schedules` · `#/company/schedules/{scope_type}/{scope_id}/{name}` | **Schedules**, recurring work; one schedule | |
 | `#/company/integrations` · `#/company/integrations/{kind}` | **Integrations**: **Built into Crewlet** first (Crewlet Works, Crewlet Knowledge, and Crewlet Chat, coming soon), each saying from the engine's own word whether the company runs it, runs another system in its place (Jira, Confluence) or none, with its counts and the way in where it is run; then the third-party catalogue, one tile per tool, under its own heading with its filter and the address vendors deliver to. No tabs *(needs Admin access)* | |
-| `#/company/budgets` | **Budgets**, the company's and every agent seat's day, week and month: spent, the ceiling (raised in place by an admin whose credential the document admits), and what is refusing. Last in Company: what the company decides, while what it spent is Settings › Spend | `window=` is not read here |
+| `#/company/budgets` | **Budgets**, the company's and every agent seat's day, week and month: spent, the ceiling (raised in place by an admin whose credential the document admits), and what is refusing. Last in Company: what the company decides, while what it spent is Settings › Token spend | `window=` is not read here |
 | `#/live` | **Live › Now running** — the running turns, the coding runs waiting on a person and the rest in a box, the activity strip and the recent phases | `window=15m\|1h\|6h` (the activity strip) · `seat=` (a handle) · `phase=` · `failed=true` (the same spelling Turns uses) |
 | `#/live/turns` · `#/live/turns/{id}` | **Turns** — the turns that ended over the window, counted by the engine, then every turn one row each; one turn *(needs Admin access)* | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `seat=` (a handle) · `failed=true\|false` · `sort=-started\|-tokens` (the engine's order) |
 | `#/live/runs` · `#/live/runs/{turn_id}` | **Coding runs** — live and durable; a run's own page draws the run alone, answered in place, and a collected run's page reads its turn | |
@@ -1172,8 +1172,8 @@ a screen, and every workspace and section the code declares is below.
 | `#/settings/mcp-tools` · `#/settings/mcp-tools/{tool}` · `#/settings/mcp-tools/servers/{name}` | **MCP Tools**, the engine's runtime beside the models, every MCP server with what each node did with it, and every tool a seat can call, by origin *(needs Admin access, like every company setting: it is where MCP servers are added and their templates read; which tools a seat has is on that seat's page, from the overview's `tools` push)*. ONE tail segment is a tool and two are an origin filter, discriminated on LENGTH, because a tool name is a third party's string | `q=` · `origin=` · `add=server` (the add form) |
 | `#/settings/secrets` · `#/settings/secrets/{name}` | **Secrets** — names and provenance, never values *(needs Admin access)* | |
 | `#/settings/limits` | **Limits**, the caps the engine holds every turn to, as it enforces them: the turn's guardrails (review rounds, tool rounds, delegation depth), delegation, notifications and a scheduled turn's timeout, each saying whether the company document sets it or it is the engine's default *(needs Admin access)*. Read-only | |
-| `#/settings/spend` | **Settings › Spend**: the window's tokens against the one before, the monthly budget, the prompt-cache share and the median task; daily tokens by phase (or model, provider, seat, unit, worker); then by agent beside by provider and by team, and the three most expensive tasks beside the auxiliary model by purpose (tokens only) | `window=7d\|30d\|90d\|<from>/<to>` (whole company days, kept across Settings' sections) · `group=phase\|model\|provider\|seat\|unit\|worker` |
-| `#/settings/spend/tasks` | **Settings › Spend › Expensive tasks**, the tasks last changed inside the window, most tokens first, each with what drove it: turns, workers, reopens and send-backs *(needs Tracker access; not offered where the company runs no Crewlet Works)* | `window=7d\|30d\|90d\|<from>/<to>` (kept across the sections) |
+| `#/settings/spend` | **Settings › Token spend**: the window's tokens against the one before, the monthly budget, the prompt-cache share and the median task; daily tokens by phase (or model, provider, seat, unit, worker); then by agent beside by provider and by team, and the three most expensive tasks beside the auxiliary model by purpose (tokens only) | `window=7d\|30d\|90d\|<from>/<to>` (whole company days, kept across Settings' sections) · `group=phase\|model\|provider\|seat\|unit\|worker` |
+| `#/settings/spend/tasks` | **Settings › Token spend › Expensive tasks**, the tasks last changed inside the window, most tokens first, each with what drove it: turns, workers, reopens and send-backs *(needs Tracker access; not offered where the company runs no Crewlet Works)* | `window=7d\|30d\|90d\|<from>/<to>` (kept across the sections) |
 | `#/settings/people` | **People**, the identity directory but its service accounts: every person with their stage, login, access and the seat they are bound to, their credentials and sessions, the invitations nobody has redeemed (`/iam/invitations`), the directory's report on them (`/iam/check`), and every human seat with whatever holds it, a person, a service account or an open invitation (`/iam/seats`) *(needs Admin access)*. An admin changes, suspends, resets, signs out and removes people, and cancels invitations. It invites and creates nobody: a person comes from the vacant human seat they will hold, on the org chart. An invitation's link and a reset link are shown once and never read back. No tail: a row opens in the peek (`peek=person:{id}`, by the directory's id), which is the only page a directory row has | `peek=person:{id}` (the opened person, closed when a removal made from it lands; an id the directory does not hold is said in the peek) |
 | `#/settings/service-accounts` | **Service accounts**, the machine principals: each with its stage, login, access and the seat it acts as, and the directory's report on them; an admin creates one (on a human seat or none) and mints its token, shown once *(needs Admin access)*. A row opens in the peek, as on People | `peek=person:{id}` |
 | `#/settings/tokens` | **API tokens**, this node's Tier A token labels, each joined to the directory row its login names and the seat that row binds (`/iam/node-tokens`), and, where the company document is managed, the tokens that alone may write it *(needs Admin access)*. Never a value. A person's own tokens are on their Account | |
@@ -7088,7 +7088,7 @@ tokens at the end — rather than a labelled card per task.
 ## Company › Budgets, raised in place
 
 `#/company/budgets`, the last row under Company (what the company decides,
-where what it spent is Settings › Spend), is every scope's three calendar windows on the company clock
+where what it spent is Settings › Token spend), is every scope's three calendar windows on the company clock
 — the day, the ISO week and the month — from the `budgets` answer: what each
 has spent, its ceiling or **No ceiling**, when it resets and, while the gate is
 refusing it, since when. **The company** comes first, as three tiles, because
@@ -7217,7 +7217,9 @@ Settings is what the ENGINE runs, and nothing the company decides. It is the
 one workspace that draws its sections as a **column** beside the screen rather
 than as tabs in the page bar, in four groups: **Runtime** (Models & keys, MCP
 Tools, Secrets and Limits: what a turn runs on and the caps it is held to),
-**Spend** (Spend and Expensive tasks: the readings, never the ceilings),
+**Spend** (Token spend and Expensive tasks: the readings, never the
+ceilings; the row is not called Spend, since without Crewlet Works it is the
+group's only row and read "Spend › Spend"),
 **Access** (People, Service accounts, API tokens, Sign-in policy and Audit
 log) and **Engine** (Nodes, Configuration, Backups & retention and File
 storage). **It lists only what lives in it.** A place that moved to Company
@@ -7227,10 +7229,15 @@ Budgets lives once, under Company, and Settings draws no row for it. The
 reader's Account is the user block's, and how this browser looks is the
 preferences popover's, so the column has no group of the reader's own and no
 row that leaves Settings. Every row's title is its hint, the words the palette
-shows under it. A section closed to the reader draws a lock naming what it
+shows under it. **The column stands beside the section only where the window
+holds both** (`SECTION_COLUMN_MIN`, 1212px: the sidebar, the sheet, the column
+and a 720px section floor, in `app/layout.ts`); below that it folds to the
+one-row picker the phone draws, naming the section the reader is on, and the
+section takes the screen's width. At 1024 the column beside it left a 489px
+section, whose tables drew their columns 46px wide. A section closed to the reader draws a lock naming what it
 lacks and **is never hidden**: a section that vanished for a reader without
 its access is one they cannot know exists. Closed is one rule, `sectionOpen`:
-Spend's readings are the overview's and open to everybody, Expensive tasks is
+Token spend's readings are open to everybody, Expensive tasks is
 the tracker's, and every other Settings section is admin's. It is the same rule
 the sidebar locks a row by (a row only when nothing in its workspace is open,
 so Settings never, since Spend always is) and the frame draws a section's

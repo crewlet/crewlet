@@ -216,7 +216,7 @@ test("a session holding no app finds Settings unlocked, and Spend open in it", a
   const spend = within(column)
     .getAllByRole("link")
     .find((a) => a.getAttribute("href") === "#/settings/spend");
-  expect(spend?.textContent).toBe("Spend");
+  expect(spend?.textContent).toBe("Token spend");
 });
 
 // ONE READING OF WHAT THE READER HOLDS: Settings' column draws its locks off

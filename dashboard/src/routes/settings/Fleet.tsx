@@ -372,6 +372,9 @@ function FleetScreen() {
                   key: "lease",
                   header: "Lease",
                   shrink: true,
+                  // RIGHT, as a duration is in Seat placement and Company-wide
+                  // duties on this same page.
+                  align: "right",
                   // FIRST TO GIVE WAY. Every row here holds an unexpired lease
                   // — a node is listed exactly as long as it does — so this
                   // column is a countdown that reads "healthy" by construction
@@ -395,6 +398,7 @@ function FleetScreen() {
                   key: "up",
                   header: "Up since",
                   shrink: true,
+                  align: "right",
                   // The node's peek carries it beside In flight ("Running").
                   drop: 3,
                   sortValue: (n) => n.started_at ?? "",
@@ -453,8 +457,10 @@ function FleetScreen() {
                     // a second `1fr` this column took half of what the fixed
                     // columns left — about 155px for a nine-character node id —
                     // and the seat name the row exists to show was the value
-                    // cut ("Agent Frontend …") at a 1440 frame.
-                    shrink: true,
+                    // cut ("Agent Frontend …") at a 1440 frame. ITS OWN WIDTH,
+                    // never capped: a node id is short, and capped it read
+                    // "walk-nat…" beside a seat column with room to spare.
+                    width: "max-content",
                     sortValue: (s) => s.node,
                     // The NODE, not the lease's `owner` — that is the fencing
                     // token (a node id plus a per-process suffix), and showing
@@ -516,8 +522,9 @@ function FleetScreen() {
                     // Content-sized for the reason the seat table's is: the
                     // duty's name is the flexible track, and as a second `1fr`
                     // this column left "integration-reconci…" cut beside
-                    // spare space of its own.
-                    shrink: true,
+                    // spare space of its own. Its own width, never capped, for
+                    // the reason the seat table's is.
+                    width: "max-content",
                     sortValue: (d) => d.node,
                     cell: (d) => <HeldBy node={d.node} />,
                   },

@@ -604,6 +604,11 @@ const ALLOWED: Allowed[] = [
     pkg: "@crewlethq/ui/styles.css",
   },
   {
+    name: "crewlet-card",
+    why: "uilet's Card writes it on every card. styles/frame.css draws the dashboard's own DataGrid flush inside one (`.crewlet-card .grid-wrap`): the card is the frame, and a bordered grid a pixel inside its border was a double edge on fifteen pages that each had to remember the `flush` prop. A rule about OUR grid's composition inside the package's component; the card itself is untouched.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
     name: "crewlet-card__header",
     why: "uilet's Card writes it on a card's head. styles/screens.css lets Home's Recent activity head WRAP on a phone (`.home-feed`), so the title and its four filters take the whole width and 'Full event log' the line under them; unwrapped, the filter was squeezed into what the link left and its last option sat behind a scroll. And on a narrow screen every head holding both a subtitle and actions wraps, so the subtitle takes a line of its own (Configuration's Active revision drew 'Active' over 'revision' beside a cut subtitle). Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
@@ -668,7 +673,7 @@ const ALLOWED: Allowed[] = [
   },
   {
     name: "crewlet-table-cell__key",
-    why: "uilet's TableKeyCell writes it on an identifier. styles/screens.css gives the work item key on Settings › Spend › Expensive tasks' phone rows (`.spend-tasks`) a seven-character floor, so every title on the compact row starts at one x rather than at an indent set by each key's own width. Another rule about OUR composition of the package's component.",
+    why: "uilet's TableKeyCell writes it on an identifier. styles/screens.css gives the work item key on Settings › Token spend › Expensive tasks' phone rows (`.spend-tasks`) a seven-character floor, so every title on the compact row starts at one x rather than at an indent set by each key's own width. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {

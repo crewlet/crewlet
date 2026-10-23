@@ -1073,3 +1073,36 @@ test("the seat-tab reading sees both link spellings", () => {
   // Another object's tab is not a seat's.
   expect(read('href(["work", key], { tab: "turns" });')).toEqual([]);
 });
+
+// THE PAGE BAR'S CONTROLS ARE ONE SIZE. Invite person, New service account
+// and Store a secret were the kit's medium buttons, 30px, in a bar whose every
+// other control is a 26px small one, so the bar changed height between
+// Settings sections. Every kit button written straight into `PageActions` says
+// `size="small"`; the product's own buttons (New task and the rest) set it
+// themselves. Mutation: drop one and this names it.
+test("every kit button in the page bar is the bar's small size", () => {
+  const KIT = new Set(["Button", "ButtonLink", "SplitButton"]);
+  const offenders: string[] = [];
+  for (const m of modules()) {
+    if (m.lang !== "tsx") continue;
+    walk(parse(m.text, m.lang), (node) => {
+      if (node.type !== "JSXElement") return;
+      const open = node.openingElement as Node;
+      if ((open.name as Node & { name?: string }).name !== "PageActions") return;
+      walk(node, (inner) => {
+        if (inner.type !== "JSXOpeningElement") return;
+        const name = (inner.name as Node & { name?: string }).name ?? "";
+        if (!KIT.has(name)) return;
+        const size = (inner.attributes as Node[]).find(
+          (a) => (a.name as (Node & { name?: string }) | undefined)?.name === "size",
+        );
+        const value = (size?.value as (Node & { value?: unknown }) | undefined)?.value;
+        if (value !== "small") {
+          offenders.push(`${m.path}:${lineOf(m.text)(inner.start)} ${name}`);
+        }
+      });
+      return false;
+    });
+  }
+  expect(offenders).toEqual([]);
+});

@@ -34,7 +34,7 @@ import {
   SearchGlyph,
   TriangleAlertGlyph,
 } from "@crewlethq/icons/glyphs";
-import { Section, SeatChip } from "~/components/common.tsx";
+import { SeatChip } from "~/components/common.tsx";
 import { uiletTone } from "~/ui/primitives.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 
@@ -730,15 +730,13 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
         </StatGroup>
       </Card>
 
-      <Section title="MCP servers">
-        <McpServers
-          data={status.data}
-          loading={status.loading}
-          error={status.error}
-          refusal={status.refusal}
-          seats={seats}
-        />
-      </Section>
+      <McpServers
+        data={status.data}
+        loading={status.loading}
+        error={status.error}
+        refusal={status.refusal}
+        seats={seats}
+      />
 
       <div className="toolbar">
         {/* A BASIS, NOT ZERO: at `flex: 1` the field's basis was 0, so on a
@@ -897,7 +895,10 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
                 cell: (t) => {
                   const c = capabilityOf(t.annotations);
                   return (
-                    <span className="row gap-1">
+                    // THE TAGS WRAP rather than clip: two side by side in a
+                    // capped column cut the second mid-word ("out", a lone
+                    // "‹") at 1024.
+                    <span className="row wrap gap-1">
                       <Tag variant={capabilityVariant(c)}>{c}</Tag>
                       {t.annotations?.open_world === "yes" && (
                         <Tag appearance="outline">outside</Tag>

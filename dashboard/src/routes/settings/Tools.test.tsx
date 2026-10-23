@@ -840,3 +840,20 @@ test("a variable that may be unset is added as an optional key", async () => {
     optional_keys: ["NPM_CONFIG_REGISTRY"],
   });
 });
+
+// A CARD IN EVERY STATE: refused, the servers' section was a bare heading
+// over a floating sentence, beside the framed catalogue under it. Headed like
+// every other Settings section, the refusal is inside it.
+test("the servers' section is a card headed MCP servers, refused or empty", async () => {
+  mount(<Tools />, { viewer: READER, refuse: true });
+  await settle();
+  const heading = screen.getByRole("heading", { name: "MCP servers" });
+  const card = heading.closest(".crewlet-card") as HTMLElement;
+  expect(card).not.toBeNull();
+  expect(within(card).getByText(/This answer needs Admin access/)).toBeDefined();
+  cleanup();
+  mount(<Tools />, { answer: { ...status, servers: [] } });
+  await settle();
+  const empty = screen.getByRole("heading", { name: "MCP servers" }).closest(".crewlet-card");
+  expect(within(empty as HTMLElement).getByText("No MCP servers yet")).toBeDefined();
+});

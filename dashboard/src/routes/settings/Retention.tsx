@@ -432,6 +432,15 @@ export function RetentionPanels({
                   <TableKeyCell value={n.node_id} href={href(["settings", "nodes", n.node_id])} />
                   {n.node_id === thisNode && <Tag variant="brand">this one</Tag>}
                   {n.counted && !n.live && <Tag variant="warning">counted · not live</Tag>}
+                  {/* A LIVE NODE'S EVICTION IS REFUSED unless forced, and the
+                      button alone read as though it would simply work. Said
+                      with the node's other states, under the Node head: in
+                      the action column it was a fact under no header. */}
+                  {gateAction(n, gestures).evict && n.live && (
+                    <Tag variant="neutral" title="Still running. Eviction needs force.">
+                      live
+                    </Tag>
+                  )}
                   {n.evicted && <Tombstone evicted={n.evicted} now={now} />}
                 </span>
               ),
@@ -439,6 +448,9 @@ export function RetentionPanels({
             {
               key: "position",
               header: "Position",
+              // ITS LINES WHOLE: a floor wide enough for the longest log's
+              // line, and the counted and reported facts give way first.
+              floor: "15rem",
               sortValue: (n) => firstDomain(n)?.seq ?? -1,
               cell: (n) => <NodePositions node={n} />,
             },
@@ -446,6 +458,7 @@ export function RetentionPanels({
               key: "counted",
               header: "Counted",
               shrink: true,
+              drop: 2,
               sortValue: (n) => (n.counted ? 1 : 0),
               // ONE STATE IN ONE SPELLING. A badge on the yes branch and
               // faint prose on the no branch read as two different kinds of
@@ -467,6 +480,7 @@ export function RetentionPanels({
               key: "reported",
               header: "Reported",
               shrink: true,
+              drop: 1,
               sortValue: (n) => n.at ?? "",
               cell: (n) =>
                 n.at ? (
@@ -487,23 +501,13 @@ export function RetentionPanels({
               cell: (n) => {
                 const action = gateAction(n, gestures);
                 return (
-                  <span className="row gap-1">
-                    {/* A LIVE NODE'S EVICTION IS REFUSED unless forced, and
-                        the button alone read as though it would simply
-                        work. */}
-                    {action.evict && n.live && (
-                      <Tag variant="neutral" title="Still running. Eviction needs force.">
-                        live
-                      </Tag>
-                    )}
-                    <Button
-                      variant="ghost"
-                      size="small"
-                      onClick={() => setGate({ node: n.node_id, evict: action.evict })}
-                    >
-                      {action.label}
-                    </Button>
-                  </span>
+                  <Button
+                    variant="ghost"
+                    size="small"
+                    onClick={() => setGate({ node: n.node_id, evict: action.evict })}
+                  >
+                    {action.label}
+                  </Button>
                 );
               },
             },
@@ -920,7 +924,9 @@ export function NodePositions({ node }: { node: RetentionNode }) {
   return (
     <span className="col gap-1">
       {domains.map(([name, d]) => (
-        <span key={name} className="row gap-1 t-caption">
+        // ONE LINE PER LOG: a log's name broke letter by letter ("i / a / m")
+        // in a narrow column, and a row grew to 270px.
+        <span key={name} className="row gap-1 t-caption nowrap">
           <InlineCode>{name}</InlineCode>
           {/* THE GENERATION BESIDE THE SEQUENCE, because a sequence is a
               number in ONE generation's space: the readmission refusal tells

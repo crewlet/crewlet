@@ -892,9 +892,13 @@ export function Audit() {
         cell: (row) => <TableDateCell value={row.at} now={now} />,
       },
       {
+        // WHERE GIVES WAY AFTER THE CREDENTIAL AND THE KIND: the subsystem is
+        // read off What as often as not, and a log whose When, What and To
+        // were drawn 46px wide so that Where could stay said nothing at all.
         key: "source",
         header: "Where",
         shrink: true,
+        drop: 3,
         sortValue: (row) => row.source,
         cell: (row) => <TableTextCell>{SOURCE_LABEL[row.source]}</TableTextCell>,
       },
@@ -979,10 +983,13 @@ export function Audit() {
         // THE LINE THAT SAYS WHAT CHANGED is the point of the row, so it keeps
         // a reading width: at zero every content-sized column beside it took
         // its share, and an administrator's read printed as "R…" at 1440.
-        // The credential and the author's kind give way first (`drop`).
+        // The credential, the author's kind and the subsystem give way first
+        // (`drop`). 12rem rather than 16: at 16 the floor held 163px of empty
+        // track on a page of dashes at 1440 while Through was dropped "to
+        // fit", and at 1024 it took half the grid from the columns beside it.
         key: "detail",
         header: "Detail",
-        floor: "16rem",
+        floor: "12rem",
         cell: (row) =>
           row.detail ? (
             // THE WHOLE LINE ON THE TITLE, and the serving node under it: the

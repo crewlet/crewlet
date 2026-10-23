@@ -1,5 +1,5 @@
 /**
- * Spend › Overview and Settings › Spend › Expensive tasks, rendered over wire-shaped
+ * Settings › Token spend and Settings › Expensive tasks, rendered over wire-shaped
  * answers.
  *
  * What these hold, one case each: every figure is the window's that ANSWERED
@@ -854,6 +854,30 @@ test("the ranked lists stand in the narrow track, beside the seats and the tasks
   // The wide card leads its row: first in the track, and first to be read.
   expect(row("By agent")!.firstElementChild).toBe(card("By agent"));
   expect(row("Most expensive tasks")!.firstElementChild).toBe(card("Most expensive tasks"));
+});
+
+// WITHOUT CREWLET WORKS THERE ARE NO TASKS TO RANK, and the auxiliary model's
+// card joins the side column rather than standing alone in a row of its own.
+test("where the company runs no Crewlet Works, the auxiliary model joins the side column", async () => {
+  mount(
+    "#/settings/spend?window=30d",
+    <Spend />,
+    { tokens: rollup(1_000), viewer: VIEWER },
+    (store) =>
+      store.applyOrg(
+        withDerived({
+          timezone: "UTC",
+          roles: [{ name: "CEO", handle: "ceo" }],
+          services: { tracker: "jira", knowledge: "native" },
+        }),
+      ),
+  );
+  await settle();
+  const card = (title: string) =>
+    screen.getByRole("heading", { name: title }).closest(".spend-card") as HTMLElement;
+  expect(card("Auxiliary model").parentElement!.className).toBe("spend-side");
+  expect(screen.queryByRole("heading", { name: "Most expensive tasks" })).toBeNull();
+  expect(document.querySelectorAll(".spend-pair").length).toBe(1);
 });
 
 // ONE LABEL COLUMN FOR THE THREE RANKED LISTS. They stand in one track, and By
