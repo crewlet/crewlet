@@ -261,7 +261,9 @@ var typedKinds = []typedKind{
 	{"statelog.FreshnessError", reflect.TypeFor[*statelog.FreshnessError]()},
 	{"statelog.EvictionRefusal", reflect.TypeFor[*statelog.EvictionRefusal]()},
 	{"statelog.ReadmissionRefusal", reflect.TypeFor[*statelog.ReadmissionRefusal]()},
+	{"statelog.ReanchorNotApplied", reflect.TypeFor[*statelog.ReanchorNotApplied]()},
 	{"statelog.Refused", reflect.TypeFor[*statelog.Refused]()},
+	{"statelog.Telling", reflect.TypeFor[*statelog.Telling]()},
 	{"statelog.Unavailable", reflect.TypeFor[*statelog.Unavailable]()},
 
 	{"iamdomain.ErrFutureVersion", reflect.TypeFor[*iamdomain.ErrFutureVersion]()},

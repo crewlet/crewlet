@@ -790,8 +790,13 @@ const (
 	// the remedy — told apart from [CodeUnknownStream] so an operator does
 	// not go looking for a typo.
 	CodeStreamUnreadable Code = "stream_unreadable"
-	// CodeReanchorRefused is a reanchor the stream refused.
+	// CodeReanchorRefused is a reanchor the stream refused, or one that
+	// stopped where the detail says what is known and what to do.
 	CodeReanchorRefused Code = "reanchor_refused"
+	// CodeReanchorFailed is a reanchor that stopped on a fault nothing in the
+	// transition told: 500, the detail saying how to learn where it stands,
+	// and the fault in this node's log.
+	CodeReanchorFailed Code = "reanchor_failed"
 	// CodeTargetRequired is a capacity change that named no stream or no
 	// byte ceiling.
 	CodeTargetRequired Code = "target_required"
@@ -799,6 +804,10 @@ const (
 	// detail carries the operation already open, when there is one, since
 	// "never opened" and "open and stuck" have opposite next steps.
 	CodeCapacityRefused Code = "capacity_refused"
+	// CodeCapacityFailed is a capacity gesture that stopped on a fault
+	// nothing in the operation told: 500, the detail saying how to learn
+	// where it stands, and the fault in this node's log.
+	CodeCapacityFailed Code = "capacity_failed"
 	// CodeMaintenanceUnreadable is a capacity window whose state could not
 	// be read.
 	CodeMaintenanceUnreadable Code = "maintenance_unreadable"
@@ -1298,19 +1307,23 @@ var codes = map[Code]string{
 		"fleet is back in normal mode.",
 	CodeReadmissionRefused: "That node is too far behind to be counted again " +
 		"yet, so nothing was written. The detail gives the positions.",
-	CodeGateFailed: "The eviction or readmission was not recorded. The detail " +
-		"says why.",
+	CodeGateFailed: "The eviction or readmission was not judged, so nothing was " +
+		"written. The reason is in this node's log; try again with the same `op_id`.",
 	CodeStreamRequired: "Name the stream this is about.",
 	CodeStreamUnreadable: "This node could not read that stream just now, so " +
 		"nothing was decided. Ask again in a moment.",
-	CodeReanchorRefused: "The reanchor was refused and nothing changed. The " +
-		"detail says why.",
+	CodeReanchorRefused: "The reanchor was refused or stopped. The detail says " +
+		"why, what was committed and what to do.",
+	CodeReanchorFailed: "The reanchor stopped on an error, and this node's log " +
+		"says which. Read where the reanchor stands before running it again.",
 	CodeTargetRequired: "Name the stream and the byte ceiling to move it to. A " +
 		"target is fixed for the life of the operation, so neither has a default.",
 	CodeCapacityRefused: "The capacity change was refused. The detail says why, " +
 		"and names the operation already open when there is one.",
-	CodeMaintenanceUnreadable: "The maintenance window's state could not be " +
-		"read. The detail says why.",
+	CodeCapacityFailed: "The capacity change stopped on an error, and this " +
+		"node's log says which. Read the maintenance status before going on.",
+	CodeMaintenanceUnreadable: "The maintenance window's state couldn't be " +
+		"read. Try again, and if it keeps failing, this node's log says why.",
 
 	CodeVoterInvalid: "That names no voter a removal could reach, so nothing " +
 		"changed. Name it by the node id or the peer id the broker listing shows.",

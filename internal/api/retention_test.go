@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -82,6 +83,10 @@ type fakeStateLog struct {
 	// reanchored is the last reanchor asked for, and plan what it answers.
 	reanchored engine.ReanchorRequest
 	plan       statelog.ReanchorPlan
+
+	// gestureErr, where set, is what every capacity gesture, the reanchor and
+	// the maintenance status answer instead of their defaults.
+	gestureErr error
 }
 
 func (f *fakeStateLog) ReanchorStatus(_ context.Context, stream string) (
@@ -114,7 +119,8 @@ func (f *fakeStateLog) generationOf(stream string) (uint32, error) {
 	f.asked = stream
 	generation, runs := f.generations[stream]
 	if !runs {
-		return 0, fmt.Errorf("%w: %q", engine.ErrUnknownStream, stream)
+		streams := slices.Sorted(maps.Keys(f.generations))
+		return 0, &engine.UnknownStreamError{Stream: stream, Streams: streams}
 	}
 	return generation, nil
 }
@@ -125,6 +131,9 @@ func (f *fakeStateLog) Reanchor(_ context.Context, req engine.ReanchorRequest) (
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.reanchored = req
+	if f.gestureErr != nil {
+		return statelog.ReanchorPlan{}, f.gestureErr
+	}
 	if f.plan.Generation == 0 {
 		return statelog.ReanchorPlan{}, errors.New("not exercised here")
 	}
@@ -137,7 +146,12 @@ func (f *fakeStateLog) SetCapacity(_ context.Context, req engine.CapacityRequest
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.capacity = req
-	return coord.MaintenanceOperation{}, errors.New("not exercised here")
+	if f.gestureErr != nil {
+		return coord.MaintenanceOperation{}, f.gestureErr
+	}
+	// THE REFUSAL A NODE IN NORMAL MODE GIVES, which [fakeStateLog.Mode] is.
+	return coord.MaintenanceOperation{}, &statelog.Telling{Say: "this node is " +
+		"publishing, so a capacity change can't run here"}
 }
 
 func (f *fakeStateLog) AbandonCapacity(_ context.Context, _, operationID string,
@@ -151,6 +165,9 @@ func (f *fakeStateLog) AbandonCapacity(_ context.Context, _, operationID string,
 		return coord.MaintenanceOperation{Stream: "CREWLET_TRACKER_LOG",
 			OperationID: "capacity:open", Phase: coord.PhaseBaselined}, f.abandonErr
 	}
+	if f.gestureErr != nil {
+		return coord.MaintenanceOperation{}, f.gestureErr
+	}
 	return coord.MaintenanceOperation{}, errors.New("not exercised here")
 }
 
@@ -160,6 +177,9 @@ func (f *fakeStateLog) ExcludeParticipant(_ context.Context, _, _ string,
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.excluded = by
+	if f.gestureErr != nil {
+		return coord.MaintenanceOperation{}, f.gestureErr
+	}
 	return coord.MaintenanceOperation{}, errors.New("not exercised here")
 }
 
@@ -168,6 +188,9 @@ func (f *fakeStateLog) CapacityStatus(context.Context, string) (
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.gestureErr != nil {
+		return coord.MaintenanceOperation{}, nil, nil, false, f.gestureErr
+	}
 	if f.window == nil {
 		return coord.MaintenanceOperation{}, nil, nil, false, errors.New("not exercised here")
 	}
@@ -524,6 +547,169 @@ func TestAnAcknowledgementNamingAnUnknownStreamIsRefused(t *testing.T) {
 	}
 }
 
+// A RETENTION ROUTE TELLS ITS OPERATOR THE REFUSAL AND KEEPS THE FAULT FOR ITS
+// LOG.
+//
+// Every one of these routes answered `err.Error()` as its detail, so an
+// operator's command line printed the package that wrote the refusal
+// ("engine: ...", "statelog: reanchor refused: ...") and, where a read had
+// failed underneath, the broker's own words. A refusal the engine tells
+// ([statelog.Told]) is answered in its sentence alone; anything else is a
+// fault, answered in the route's own words with a code of its own and never
+// with the error's text. Mutation: answer `err.Error()` again at any one of
+// these and its case fails.
+func TestARetentionRouteTellsItsRefusalAndKeepsItsFaultForTheLog(t *testing.T) {
+	t.Parallel()
+	raw := errors.New("nats: timeout")
+	told := &statelog.Telling{Say: "there's no capacity operation on CREWLET_TRACKER_LOG", Err: raw}
+	reanchorTold := &statelog.Telling{Say: "the confirmation names \"x\"", Err: statelog.ErrReanchorRefused}
+	// THE ENGINE'S ANSWER TO A STREAM NO WINDOW CAN BE OPEN ON, which every
+	// window verb gives before it reads anything (the engine's own suite
+	// holds that it does): here is what each route makes of it.
+	unknown := &engine.UnknownStreamError{Stream: "NOPE", Streams: []string{"CREWLET_TRACKER_LOG"}}
+	cases := []struct {
+		name, method, path string
+		err                error
+		status             int
+		code               httpjson.Code
+		detail             string // the whole detail, or "" to check only that it is clean
+	}{
+		{"an unknown stream on an acknowledgement", http.MethodPost,
+			"/worklet/retention/ack?stream=NOPE&position=9", nil,
+			http.StatusNotFound, httpjson.CodeUnknownStream,
+			`"NOPE" isn't a log this node keeps. Use "CREWLET_TRACKER_LOG".`},
+		{"an unknown stream on a reanchor status", http.MethodGet,
+			"/worklet/retention/reanchor?stream=NOPE", nil,
+			http.StatusNotFound, httpjson.CodeUnknownStream,
+			`"NOPE" isn't a log this node keeps. Use "CREWLET_TRACKER_LOG".`},
+		{"a capacity refusal", http.MethodPost,
+			"/worklet/retention/capacity?stream=CREWLET_TRACKER_LOG&bytes=9&confirm=9", told,
+			http.StatusConflict, httpjson.CodeCapacityRefused,
+			"There's no capacity operation on CREWLET_TRACKER_LOG."},
+		{"a capacity fault", http.MethodPost,
+			"/worklet/retention/capacity?stream=CREWLET_TRACKER_LOG&bytes=9&confirm=9", raw,
+			http.StatusInternalServerError, httpjson.CodeCapacityFailed,
+			"The capacity change on CREWLET_TRACKER_LOG stopped on an error, and " +
+				"this node's log says which. Read where it stands with `crewlet " +
+				"retention maintenance status -stream CREWLET_TRACKER_LOG` before going on."},
+		{"an abandon fault", http.MethodPost,
+			"/worklet/retention/maintenance/abandon?stream=CREWLET_TRACKER_LOG&confirm=capacity:open", raw,
+			http.StatusInternalServerError, httpjson.CodeCapacityFailed,
+			"The abandonment on CREWLET_TRACKER_LOG stopped on an error, and " +
+				"this node's log says which. Read where it stands with `crewlet " +
+				"retention maintenance status -stream CREWLET_TRACKER_LOG` before going on."},
+		{"an exclusion fault", http.MethodPost,
+			"/worklet/retention/maintenance/exclude?stream=CREWLET_TRACKER_LOG&node=n1&confirm=n1", raw,
+			http.StatusInternalServerError, httpjson.CodeCapacityFailed,
+			"The exclusion on CREWLET_TRACKER_LOG stopped on an error, and " +
+				"this node's log says which. Read where it stands with `crewlet " +
+				"retention maintenance status -stream CREWLET_TRACKER_LOG` before going on."},
+		{"an unknown stream on an abandonment", http.MethodPost,
+			"/worklet/retention/maintenance/abandon?stream=NOPE&confirm=capacity:open", unknown,
+			http.StatusNotFound, httpjson.CodeUnknownStream,
+			`"NOPE" isn't a log this node keeps. Use "CREWLET_TRACKER_LOG".`},
+		{"an unknown stream on an exclusion", http.MethodPost,
+			"/worklet/retention/maintenance/exclude?stream=NOPE&node=n1&confirm=n1", unknown,
+			http.StatusNotFound, httpjson.CodeUnknownStream,
+			`"NOPE" isn't a log this node keeps. Use "CREWLET_TRACKER_LOG".`},
+		{"an unknown stream on a maintenance status", http.MethodGet,
+			"/worklet/retention/maintenance?stream=NOPE", unknown,
+			http.StatusNotFound, httpjson.CodeUnknownStream,
+			`"NOPE" isn't a log this node keeps. Use "CREWLET_TRACKER_LOG".`},
+		{"an exclusion refusal", http.MethodPost,
+			"/worklet/retention/maintenance/exclude?stream=CREWLET_TRACKER_LOG&node=n1&confirm=n1", told,
+			http.StatusConflict, httpjson.CodeCapacityRefused,
+			"There's no capacity operation on CREWLET_TRACKER_LOG."},
+		{"a reanchor refusal", http.MethodPost,
+			"/worklet/retention/reanchor?stream=CREWLET_TRACKER_LOG&confirm=x", reanchorTold,
+			http.StatusConflict, httpjson.CodeReanchorRefused,
+			`The confirmation names "x".`},
+		{"a reanchor fault", http.MethodPost,
+			"/worklet/retention/reanchor?stream=CREWLET_TRACKER_LOG&confirm=x", raw,
+			http.StatusInternalServerError, httpjson.CodeReanchorFailed, ""},
+		{"an unreadable maintenance window", http.MethodGet,
+			"/worklet/retention/maintenance?stream=CREWLET_TRACKER_LOG", nil,
+			http.StatusInternalServerError, httpjson.CodeMaintenanceUnreadable, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			node := &fakeStateLog{generations: map[string]uint32{"CREWLET_TRACKER_LOG": 3},
+				gestureErr: c.err}
+			b := closedPosture()
+			a := newApp(t, api.Options{Bootstrap: &b, Retention: &fakeBackupRegister{},
+				Capacity: node})
+			req := httptest.NewRequest(c.method, c.path, nil)
+			req.Header.Set("Authorization", "Bearer secret")
+			rec := httptest.NewRecorder()
+			a.ServeHTTP(rec, req)
+			var body map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("the answer is not JSON: %v (%s)", err, rec.Body)
+			}
+			if rec.Code != c.status || body["error"] != string(c.code) {
+				t.Fatalf("answered %d %v, want %d %s: %v", rec.Code, body["error"],
+					c.status, c.code, body)
+			}
+			detail, _ := body["detail"].(string)
+			if c.detail != "" && detail != c.detail {
+				t.Errorf("detail = %q, want %q", detail, c.detail)
+			}
+			for _, leak := range []string{"nats:", "engine:", "statelog:", "not exercised"} {
+				if strings.Contains(detail, leak) {
+					t.Errorf("detail %q carries %q, which only the log should", detail, leak)
+				}
+			}
+			if detail == "" {
+				t.Error("the answer carries no detail")
+			}
+		})
+	}
+}
+
+// AN OPERATION ID THE GRAMMAR REFUSES IS TOLD BY WHAT IS WRONG WITH IT, naming
+// the field it came in, and never in the framework's own text, which named the
+// tool argument a model sends rather than the parameter this route reads.
+// Mutation: answer the error's text again and this fails.
+func TestAGateRefusalOfAnOperationIDSaysWhatIsWrongWithIt(t *testing.T) {
+	t.Parallel()
+	b := closedPosture()
+	code, body := postAck(t, newApp(t, api.Options{Bootstrap: &b, Nodes: &fakeNodeGate{}}),
+		"/worklet/retention/evict/node-4?confirm=node-4&op_id=op-abc")
+	if code != http.StatusBadRequest || body["field"] != "op_id" {
+		t.Fatalf("an invented op_id answered %d %v, want 400 naming the field", code, body)
+	}
+	want := "The op_id is not an operation id this engine accepts, which is a " +
+		"UUIDv7, optionally followed by a dot and a name. Send back the op_id an " +
+		"earlier answer returned, unchanged, or leave it out to start the gesture afresh."
+	if body["detail"] != want {
+		t.Errorf("detail = %q, want %q", body["detail"], want)
+	}
+}
+
+// A GATE THAT FAILED BEFORE ANYTHING WAS WRITTEN SAYS SO AND HANDS BACK ITS
+// OPERATION, so the same request can be sent again: the detail is the route's
+// words, the fault is the log's. Mutation: answer the error's text again, or
+// drop the op_id, and this fails.
+func TestAGateFaultSaysNothingWasWrittenAndHandsBackItsOperation(t *testing.T) {
+	t.Parallel()
+	b := closedPosture()
+	gate := &fakeNodeGate{readmit: errors.New("engine: read the floors: nats: timeout")}
+	code, body := postAck(t, newApp(t, api.Options{Bootstrap: &b, Nodes: gate}),
+		"/worklet/retention/readmit/node-4?confirm=node-4")
+	if code != http.StatusInternalServerError || body["error"] != "gate_failed" {
+		t.Fatalf("an untyped failure answered %d %v, want 500 gate_failed", code, body)
+	}
+	detail, _ := body["detail"].(string)
+	if strings.Contains(detail, "nats") || strings.Contains(detail, "engine:") ||
+		!strings.Contains(detail, "nothing was written") {
+		t.Errorf("detail = %q, want the route's own words saying nothing was written", detail)
+	}
+	if op, _ := body["op_id"].(string); op == "" || body["node"] != "node-4" {
+		t.Errorf("the answer carries op_id %v and node %v, want both", body["op_id"], body["node"])
+	}
+}
+
 // THE DEPLOYMENT'S CONTROLS REFUSE IN THE ENVELOPE EVERY OTHER ROUTE USES.
 //
 // A backup, a budget reset, the retention gestures and the capacity window
@@ -659,8 +845,8 @@ func TestAReadmissionBelowTheFloorIsRefusedAsAnAnswer(t *testing.T) {
 		t.Errorf("error = %v, want readmission_refused", body["error"])
 	}
 	detail, _ := body["detail"].(string)
-	if detail != httpjson.Sentence(refusal.Error()) {
-		t.Errorf("detail = %q, want the refusal's own sentence %q", detail, refusal.Error())
+	if detail != httpjson.Sentence(refusal.Tell()) {
+		t.Errorf("detail = %q, want the refusal's own sentence %q", detail, refusal.Tell())
 	}
 	if hint, _ := body["hint"].(string); hint != httpjson.Sentence(refusal.Remedy().Detail) {
 		t.Errorf("hint = %q, want the refusal's remedy", hint)
@@ -931,6 +1117,11 @@ func TestTheReanchorStatusTellsAnUnknownStreamFromAnUnreadableOne(t *testing.T) 
 	if code != http.StatusServiceUnavailable || body["error"] != "stream_unreadable" {
 		t.Fatalf("a stream the broker did not answer for answered %d: %v — "+
 			"reported as unknown, the operator goes looking for a typo", code, body)
+	}
+	if detail, _ := body["detail"].(string); strings.Contains(detail, "nats") ||
+		!strings.Contains(detail, "CREWLET_PAGES_LOG") {
+		t.Errorf("detail = %q, want the stream named and the broker's words left "+
+			"to the log", detail)
 	}
 	// THE ACKNOWLEDGEMENT DOES NOT ASK THE BROKER FOR AN INSTANT IT DOES NOT
 	// USE: the generation is the node's own.

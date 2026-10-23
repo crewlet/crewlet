@@ -40,7 +40,7 @@ func reanchorInputs() statelog.ReanchorInputs {
 		StreamCreatedAt:  reanchorCreated,
 		KeyedTo:          keyedCreated,
 		FirstSeq:         0,
-		PeersReanchored:  0,
+		ReanchoredPeers:  nil,
 		Position:         9_000,
 		Highest:          9_000,
 		RegisterReadable: true,
@@ -91,7 +91,7 @@ func TestAReanchorRefusesEveryWayItCanBeWrong(t *testing.T) {
 		"a peer has already re-anchored the stream": {
 			in: func() statelog.ReanchorInputs {
 				in := reanchorInputs()
-				in.PeersReanchored = 1
+				in.ReanchoredPeers = []string{"node-2"}
 				return in
 			}(),
 			guard: confirmed(),
@@ -114,7 +114,7 @@ func TestAReanchorRefusesEveryWayItCanBeWrong(t *testing.T) {
 				return in
 			}(),
 			guard: confirmed(),
-			names: "node-ahead reached 9000 holding history the log does not — only " +
+			names: "node-ahead reached 9000 holding history the log doesn't. Only " +
 				"the most caught-up node may reanchor, because everything above its " +
 				"own position is what the reanchor discards; re-anchor on node-ahead",
 		},
@@ -145,6 +145,14 @@ func TestAReanchorRefusesEveryWayItCanBeWrong(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tc.names) {
 				t.Errorf("the refusal does not say %q: %v", tc.names, err)
+			}
+			// TOLD TO THE OPERATOR IN ITS OWN SENTENCE, without the
+			// package that wrote it: the retention route answers the
+			// sentence and logs the error ([statelog.Told]).
+			said, told := statelog.Tell(err)
+			if !told || !strings.Contains(said, tc.names) ||
+				strings.Contains(said, "statelog:") || strings.Contains(said, "—") {
+				t.Errorf("the refusal tells %q (told %v), want its sentence alone", said, told)
 			}
 		})
 	}
@@ -180,7 +188,7 @@ func TestAReanchorRefusesEveryWayItCanBeWrong(t *testing.T) {
 		t.Fatalf("a forced reanchor was refused: %v", err)
 	}
 	reanchored := reanchorInputs()
-	reanchored.PeersReanchored = 1
+	reanchored.ReanchoredPeers = []string{"node-2"}
 	if _, err := statelog.PermitReanchor(reanchored, statelog.ReanchorGuard{
 		Confirm: confirmed().Confirm, Force: true,
 	}); err == nil {
@@ -188,6 +196,58 @@ func TestAReanchorRefusesEveryWayItCanBeWrong(t *testing.T) {
 			"stream — that is not a judgement an operator can make, because the " +
 			"divergence it produces is silent and there is no log left to " +
 			"reconcile from")
+	}
+}
+
+// A REANCHOR REFUSED OVER A RE-ANCHORED PEER NAMES IT, AND HOW TO EVICT IT.
+//
+// The refusal sends the operator to a re-anchored peer, to adopt its snapshot
+// or to evict it if it is gone, and both need its name. It counted the peers,
+// and the names were glued on by the engine outside the sentence the operator
+// is told, so the route answered "1 peer(s) have already re-anchored" and the
+// names reached only the log. Mutation: refuse with the count, or without the
+// evict command, and this fails.
+func TestARefusalOverAReanchoredPeerNamesIt(t *testing.T) {
+	t.Parallel()
+	in := reanchorInputs()
+	in.ReanchoredPeers = []string{"node-2"}
+	_, err := statelog.PermitReanchor(in, confirmed())
+	said, told := statelog.Tell(err)
+	if !told {
+		t.Fatalf("the refusal tells the operator nothing: %v", err)
+	}
+	for _, want := range []string{`"node-2" has already re-anchored`,
+		"Adopt its snapshot", "`crewlet retention evict node-2 -confirm node-2`"} {
+		if !strings.Contains(said, want) {
+			t.Errorf("the refusal %q doesn't say %q", said, want)
+		}
+	}
+	in.ReanchoredPeers = []string{"node-2", "node-3"}
+	_, err = statelog.PermitReanchor(in, confirmed())
+	said, _ = statelog.Tell(err)
+	for _, want := range []string{`"node-2" and "node-3" have already re-anchored`,
+		"Adopt a snapshot from one of them instead"} {
+		if !strings.Contains(said, want) {
+			t.Errorf("two peers are not named as two: %q doesn't say %q", said, want)
+		}
+	}
+
+	// AND A LOG THAT STILL HOLDS WHAT THE ROWS ARE MISSING names them too:
+	// it is what a node a peer re-anchored past reads, stopped on the
+	// peer's generation, and the case is decided before the fleet is.
+	// Mutation: drop the peers from that refusal and this fails.
+	in = reanchorInputs()
+	in.KeyedTo = reanchorCreated.Truncate(time.Microsecond)
+	in.FirstSeq, in.LastSeq = 1, in.Position+50
+	in.ReanchoredPeers = []string{"node-2"}
+	_, err = statelog.PermitReanchor(in, confirmed())
+	said, _ = statelog.Tell(err)
+	for _, want := range []string{"nothing to re-anchor",
+		`"node-2" has re-anchored it past this node. Adopt its snapshot instead`,
+		"`crewlet retention evict node-2 -confirm node-2`"} {
+		if !strings.Contains(said, want) {
+			t.Errorf("the refusal %q doesn't say %q", said, want)
+		}
 	}
 }
 
@@ -202,7 +262,7 @@ func TestADomainClaimingNoIdentityIsNotHeldToTheFleetGuards(t *testing.T) {
 	t.Parallel()
 	in := reanchorInputs()
 	in.ClaimsIdentity = false
-	in.PeersReanchored = 2
+	in.ReanchoredPeers = []string{"node-2", "node-3"}
 	in.Position = 10
 	in.RegisterReadable = false
 	plan, err := statelog.PermitReanchor(in, confirmed())
@@ -433,6 +493,9 @@ type reanchorLog struct {
 	order   *[]string
 	// lose makes the next append go unanswered, having landed or not.
 	lose, loseLanded bool
+	// refuse is what the broker answers every append with, nil while it
+	// stores them.
+	refuse error
 	// dedupeFirst is the CLUSTERED broker's order: a message id already in
 	// the duplicate window is acknowledged as a duplicate of the record it
 	// landed as before any expectation is checked. The solo broker — the
@@ -467,6 +530,9 @@ func (l *reanchorLog) Append(_ context.Context, subject, msgID string, expect *u
 	l.appends++
 	if l.order != nil {
 		*l.order = append(*l.order, "append")
+	}
+	if l.refuse != nil {
+		return 0, false, l.refuse
 	}
 	if l.lose {
 		l.lose = false
@@ -972,6 +1038,56 @@ func TestTheReanchorsStepsRunInTheOrderItsCrashMatrixAssumes(t *testing.T) {
 	if len(f.runner.created) != 1 || !f.runner.created[0].Equal(reanchorCreated) {
 		t.Fatalf("the runner was re-keyed to %v, want the confirmed %s",
 			f.runner.created, reanchorCreated)
+	}
+}
+
+// A GENERATION RECORD THE BROKER REFUSES IS TOLD WITH ITS OWN REMEDY.
+//
+// A full log is cleared by raising its ceiling and re-running; a record too
+// large and any other refusal are not cleared by re-running at all. The three
+// were one sentence that said the broker refused and that this node's log had
+// its words, so nobody was told what to do. Mutation: fold the arms back into
+// one sentence and every row fails.
+func TestARefusedGenerationRecordIsToldWithItsRemedy(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		refuse error
+		want   []string
+		never  string
+	}{
+		{"a full log", &natsjs.APIError{ErrorCode: 10077, Code: 503,
+			Description: "maximum bytes exceeded"},
+			[]string{"at its ceiling", "`crewlet retention set-capacity ", "re-run the reanchor"},
+			"won't change"},
+		{"a record too large", &natsjs.APIError{ErrorCode: 10054, Code: 400,
+			Description: "message size exceeds maximum allowed"},
+			[]string{"larger than", "re-running the reanchor won't change that"},
+			"set-capacity"},
+		{"any other refusal", &natsjs.APIError{ErrorCode: 10999, Code: 400,
+			Description: "something the server named"},
+			[]string{"refused to store", "re-running the reanchor won't change that"},
+			"set-capacity"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newReanchorFixture(t)
+			f.log.refuse = tc.refuse
+			_, err := statelog.Reanchor(t.Context(), f.deps(probeDomain{}),
+				reanchorInputs(), confirmed())
+			said, told := statelog.Tell(err)
+			if !told {
+				t.Fatalf("the refusal tells the operator nothing: %v", err)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(said, want) {
+					t.Errorf("%q doesn't say %q", said, want)
+				}
+			}
+			if strings.Contains(said, tc.never) {
+				t.Errorf("%q says %q, which is another refusal's remedy", said, tc.never)
+			}
+		})
 	}
 }
 

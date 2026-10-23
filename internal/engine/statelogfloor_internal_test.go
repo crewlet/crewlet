@@ -615,10 +615,10 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 	}
 	// THE ABSENT NODE'S LAST HEARTBEAT, from before the fleet moved on: the
 	// tracker at trackerSeq, every other log it runs at its start.
-	report := func(trackerSeq uint64) {
+	reportIn := func(generation uint32, trackerSeq uint64) {
 		t.Helper()
 		domains := map[string]coord.DomainPosition{
-			running.domain.Name(): {Generation: at.Generation, Seq: trackerSeq,
+			running.domain.Name(): {Generation: generation, Seq: trackerSeq,
 				AppliedThrough: trackerSeq},
 			vectors.domain.Name(): {Generation: vectors.runner.Committed().Generation},
 		}
@@ -631,6 +631,10 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("publish %s's position: %v", away, err)
 		}
+	}
+	report := func(trackerSeq uint64) {
+		t.Helper()
+		reportIn(at.Generation, trackerSeq)
 	}
 	floor := func(r *runningLog, f uint64) {
 		t.Helper()
@@ -700,6 +704,26 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 		refusedIn(r.domain.Name(), 0, 5, logFirstOf(t, r))
 		floor(r, 0)
 	}
+
+	// A LOG THE FLEET RE-ANCHORED PAST THIS NODE: the absent node last ran
+	// the tracker at a later generation than this node does, so this node
+	// can't judge it there, and says so as a condition a node that has
+	// applied the re-anchor clears, writing nothing. It was a plain error,
+	// answered as a 500 fault with that remedy in this node's log alone.
+	// Mutation: drop the mapping in Readmissible and this fails.
+	reportIn(at.Generation+1, 1)
+	before := end()
+	_, behindErr := gate.Readmit(t.Context(), readmit)
+	var unjudged *ReadmissionUnjudged
+	if !errors.As(behindErr, &unjudged) || !unjudged.Behind ||
+		unjudged.Log != running.domain.Name() {
+		t.Fatalf("readmitting %s past a re-anchor answered %v, want it unjudged "+
+			"on %s as behind", away, behindErr, running.domain.Name())
+	}
+	if last := end(); !slices.Equal(last, before) {
+		t.Fatalf("the logs moved from %v to %v on an unjudged readmission", before, last)
+	}
+	report(at.Seq - 1)
 
 	// AND ONCE IT HOLDS EVERYTHING THAT MAY BE GONE, IT IS TAKEN BACK — on
 	// every log.

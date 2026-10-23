@@ -999,12 +999,13 @@ func TestAGateRefusalsWaitNamesWhatItWaitsOn(t *testing.T) {
 			fmt.Errorf("engine: readmit node node-4: %w", &engine.ReadmissionUnjudged{
 				Node: "node-4",
 				Err:  errors.New("read the positions register: coordination is unreachable")})},
+		// THE ENGINE'S OWN ERROR, whose told sentence is the detail this
+		// command prints: a hand-built ErrNotPublishing told nothing, so
+		// the line the operator reads was never exercised.
 		{"an eviction in a capacity window", "evict", "not_publishing",
-			fmt.Errorf("%w: an eviction appends a record to the state log, and this "+
-				"node runs in seal mode", engine.ErrNotPublishing)},
+			engine.NotPublishing("an eviction", statelog.ModeSeal)},
 		{"a readmission in a capacity window", "readmit", "not_publishing",
-			fmt.Errorf("%w: a readmission appends a record to the state log, and this "+
-				"node runs in seal mode", engine.ErrNotPublishing)},
+			engine.NotPublishing("a readmission", statelog.ModeSeal)},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			node.mu.Lock()
@@ -1025,6 +1026,13 @@ func TestAGateRefusalsWaitNamesWhatItWaitsOn(t *testing.T) {
 					t.Errorf("a %s refusal carries %s's advice %q: %v\n%s", c.code,
 						code, line, got, said)
 				}
+			}
+			// The node capitalises the sentence, so it is matched from its
+			// second letter.
+			if told, ok := statelog.Tell(c.err); ok && c.code == "not_publishing" &&
+				!strings.Contains(said, told[1:]) {
+				t.Errorf("the refusal never prints the engine's own sentence %q:\n%s",
+					told, said)
 			}
 		})
 	}

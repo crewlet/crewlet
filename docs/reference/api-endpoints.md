@@ -6937,6 +6937,13 @@ run under — the [`node.id`](../concepts/configuration.md#nodeid) rule, since t
 id becomes a subject token on every log — is `400 invalid_gate`, with nothing
 judged or written.
 
+**A refusal's `detail` is the refusal's own sentence**, the one its operator
+acts on, and never the error underneath: no package name in front of it and no
+broker's or store's words behind it. Those go to this node's log. A judgement
+that stopped on a fault nothing told is `500 gate_failed`, saying nothing was
+written and carrying `node` and `op_id`, so the same request can be sent again
+under it.
+
 The gate is written **as the caller**: the eviction's `by` — what `crewlet
 retention status` prints as "evicted by" — is their name as [a write is
 attributed](#who-a-write-is-attributed-to), and the record carries the
@@ -7124,7 +7131,15 @@ node that served the request. An abandonment from `opened` clears the record
 it would have been written on, so only that log names who made it.
 
 **A node in `normal` mode refuses the write routes**, naming the restart: the
-usage a resize is decided against has to be a quantity nothing can move. The
+usage a resize is decided against has to be a quantity nothing can move.
+
+**Every refusal is `409 capacity_refused` in the refusal's own words**: what
+was refused and what to do, the numbers it turns on included, and never the
+error underneath, which goes to this node's log. A gesture that stopped on a
+fault nothing told is `500 capacity_failed`, pointing at the status read; a
+status read that fails is `500 maintenance_unreadable`; and a stream this node
+doesn't keep is `404 unknown_stream`, naming the ones it does. Each answer to a
+write carries `operation` where there is one. The
 three-mode boot is `crewlet run -mode`; see
 [the CLI reference](cli.md#crewlet-run).
 
@@ -7156,6 +7171,14 @@ reanchor_refused`, and with it the answer carries the newest one as
 question. A node in a [capacity window](../guides/retention.md#changing-a-logs-ceiling)
 refuses every reanchor `409 reanchor_refused`, naming its mode: the reanchor
 appends a generation record, and the window's mode appends nothing.
+
+Every refusal, and every transition that stopped where it can say what was
+committed and what to do, is `409 reanchor_refused` in those words, as
+`nothing_to_reanchor` and `discarding` are: no package name and no broker's
+words, which go to this node's log. A transition that stopped on a fault
+nothing told is `500 reanchor_failed`, pointing at the status read; a status
+read the broker didn't answer is `503 stream_unreadable`; and a stream this
+node doesn't keep is `404 unknown_stream`, naming the ones it does.
 
 ## Artifacts
 

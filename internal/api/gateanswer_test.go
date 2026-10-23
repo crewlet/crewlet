@@ -109,14 +109,17 @@ func gateRefusalScenarios() map[string]error {
 	live := statelog.PermitEviction("node-4", []statelog.Presence{{NodeID: "node-4"}}, false)
 	return map[string]error{
 		"eviction_refused": fmt.Errorf("engine: evict node node-4: %w", live),
-		"not_publishing": fmt.Errorf("%w: an eviction appends a record to the "+
-			"state log, and this node runs in seal mode", engine.ErrNotPublishing),
+		"not_publishing":   engine.NotPublishing("an eviction", statelog.ModeSeal),
 		"eviction_unjudged": &engine.GateUnjudged{Node: "node-4",
 			Err: errors.New("list the live nodes: coordination is unreachable")},
 		"readmission_unjudged": fmt.Errorf("engine: readmit node node-4: %w",
 			&engine.ReadmissionUnjudged{Node: "node-4", Log: "tracker",
 				Err: errors.New("read its readmission bound: engine: read tracker's " +
 					"first surviving sequence: the stream has no leader")}),
+		"readmission_unjudged_behind": fmt.Errorf("engine: readmit node node-4: %w",
+			&engine.ReadmissionUnjudged{Node: "node-4", Log: "tracker", Behind: true,
+				Err: &statelog.ReanchorNotApplied{Node: "node-4", Domain: "tracker",
+					Reported: 3, Runs: 2}}),
 		"readmission_unjudged_register": fmt.Errorf("engine: readmit node node-4: %w",
 			&engine.ReadmissionUnjudged{Node: "node-4",
 				Err: errors.New("read the positions register: coordination is unreachable")}),
@@ -302,6 +305,9 @@ func TestEveryGateRefusalCarriesItsActions(t *testing.T) {
 		// fleet's register — is asked again, here or through another node.
 		"readmission_unjudged":          {statelog.GateRetrySameOp, statelog.GateOtherNode},
 		"readmission_unjudged_register": {statelog.GateRetrySameOp, statelog.GateOtherNode},
+		// AND A LOG THE FLEET RE-ANCHORED PAST THIS NODE is asked again
+		// once this node applies it, or through a node that has.
+		"readmission_unjudged_behind": {statelog.GateRetrySameOp, statelog.GateOtherNode},
 	}
 	for name, err := range gateRefusalScenarios() {
 		refusal, ok := api.RenderGateRefusal("node-4", refusalOpID(name), err)
