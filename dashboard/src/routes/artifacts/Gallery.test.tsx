@@ -124,9 +124,13 @@ test("the reader's own artifact is owned by You, and anybody else's by their nam
   const grid = document.body;
   // It said "token:review", the credential's spelling, on every row.
   expect(within(grid).queryByText("token:review")).toBeNull();
-  const own = within(grid).getByText("Architecture notes").closest(".grid-row") as HTMLElement;
+  const own = within(grid)
+    .getByText("Architecture notes")
+    .closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(own).getByText("You")).toBeTruthy();
-  const theirs = within(grid).getByText("Vendor scorecard").closest(".grid-row") as HTMLElement;
+  const theirs = within(grid)
+    .getByText("Vendor scorecard")
+    .closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(theirs).getByText("maya")).toBeTruthy();
   expect(within(theirs).getByText("Can edit")).toBeTruthy();
 });
@@ -151,13 +155,17 @@ test("a list row draws the kind's mark, the kind and description under the title
   ];
   mount("all");
   expect(headers()).toEqual(["Name", "Access", "Owner", "Edited", "Your role", ""]);
-  const own = screen.getByText("Architecture notes").closest(".grid-row") as HTMLElement;
+  const own = screen
+    .getByText("Architecture notes")
+    .closest(".crewlet-data-grid__row") as HTMLElement;
   expect(own.querySelector(".crewlet-artifact-name__mark.crewlet-kind--doc")).not.toBeNull();
   expect(own.querySelector(".crewlet-artifact-name__detail")?.textContent).toBe(
     "Doc·, How the engine replicates its estate",
   );
   expect(within(own).getByText("Private")).toBeTruthy();
-  const theirs = screen.getByText("Vendor scorecard").closest(".grid-row") as HTMLElement;
+  const theirs = screen
+    .getByText("Vendor scorecard")
+    .closest(".crewlet-data-grid__row") as HTMLElement;
   expect(theirs.querySelector(".crewlet-artifact-name__mark.crewlet-kind--sheet")).not.toBeNull();
   expect(theirs.querySelector(".crewlet-artifact-name__detail")?.textContent).toBe("Sheet");
   expect(within(theirs).getByText("Company")).toBeTruthy();

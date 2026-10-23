@@ -338,16 +338,17 @@ describe("the recent runs grid beside a peek", () => {
     vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (
       this: HTMLElement,
     ) {
-      return this.classList.contains("grid-wrap") ? box : 0;
+      return this.classList.contains("crewlet-data-grid") ? box : 0;
     });
     // Every head cell 120px wide, laid end to end from the wrap's left edge.
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
       this: HTMLElement,
     ) {
-      const at = this.classList.contains("grid-th")
+      const at = this.classList.contains("crewlet-data-grid__th")
         ? [...this.parentElement!.children].indexOf(this)
         : -1;
-      const right = at >= 0 ? (at + 1) * HEAD : this.classList.contains("grid-wrap") ? box : 0;
+      const right =
+        at >= 0 ? (at + 1) * HEAD : this.classList.contains("crewlet-data-grid") ? box : 0;
       return { left: 0, right, top: 0, bottom: 0, width: right, height: 0 } as DOMRect;
     });
   });
@@ -355,11 +356,11 @@ describe("the recent runs grid beside a peek", () => {
 
   /** The runs grid: the one whose head names the tick. */
   const runsGrid = (container: HTMLElement) =>
-    [...container.querySelectorAll<HTMLElement>(".grid-wrap")].find((g) =>
+    [...container.querySelectorAll<HTMLElement>(".crewlet-data-grid")].find((g) =>
       g.textContent?.includes("For the tick"),
     )!;
   const heads = (grid: HTMLElement) =>
-    [...grid.querySelectorAll(".grid-th")].map((h) => h.textContent);
+    [...grid.querySelectorAll(".crewlet-data-grid__th")].map((h) => h.textContent);
 
   test("the schedule's name keeps its floor and the facts give way in order", async () => {
     box = 600; // six 120px heads: one has to go
@@ -397,7 +398,7 @@ describe("the recent runs grid beside a peek", () => {
 // band stopped over nothing.
 test("the one schedule's fires fill their card on who each fire woke", async () => {
   const { container } = await mountScreen(["role", "pm", "standup"]);
-  const fires = [...container.querySelectorAll<HTMLElement>(".grid-wrap")].find((g) =>
+  const fires = [...container.querySelectorAll<HTMLElement>(".crewlet-data-grid")].find((g) =>
     g.textContent?.includes("Woke"),
   );
   expect(fires).toBeDefined();

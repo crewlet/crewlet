@@ -45,6 +45,7 @@ import {
   TableEntityCell,
   TableTextCell,
   PageNote,
+  type DataGridActivationEvent,
 } from "@crewlethq/ui";
 import {
   CalendarGlyph,
@@ -617,7 +618,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
    * keeps the row a real link to the schedule's page. The `enter` chord
    * carries no button at all and is never "open elsewhere".
    */
-  function openSchedule(ref: ObjectRef, e: React.MouseEvent | React.KeyboardEvent): void {
+  function openSchedule(ref: ObjectRef, e: DataGridActivationEvent): void {
     const go = () => openPeek(ref);
     if (!("button" in e)) {
       go();

@@ -217,7 +217,7 @@ test("the seats' table runs to its card's edges", async () => {
   mount(answer());
   await settle();
   const seats = screen.getByText("Agent seats").closest(".crewlet-card")!;
-  expect(seats.querySelector(".grid-wrap")!.hasAttribute("data-flush")).toBe(true);
+  expect(seats.querySelector(".crewlet-data-grid")!.hasAttribute("data-flush")).toBe(true);
 });
 
 // ONE SET OF COLUMNS: the company's windows stand over the seats' columns,
@@ -230,7 +230,7 @@ test("the company's row and the seats' table share their tracks", async () => {
   const table = screen
     .getByText("Agent seats")
     .closest(".crewlet-card")!
-    .querySelector<HTMLElement>(".grid-wrap")!;
+    .querySelector<HTMLElement>(".crewlet-data-grid")!;
   expect(row.style.getPropertyValue("--budget-tracks")).toBe(table.style.gridTemplateColumns);
   expect(row.children).toHaveLength(4);
   // The resets are said once, in the company row, and not again over the seats.

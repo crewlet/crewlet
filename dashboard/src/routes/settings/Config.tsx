@@ -35,6 +35,7 @@ import {
   TableTextCell,
   Tag,
   PageNote,
+  type DataGridActivationEvent,
 } from "@crewlethq/ui";
 import {
   FileTextGlyph,
@@ -132,7 +133,7 @@ export function RevisionAuthor({ revision }: { revision: RevisionMeta }) {
   return (
     // THE NAME OUTRANKS ITS KIND. In a narrow By column the name was cut to
     // "n…" beside a whole `operator` chip, which is the half of the fact a
-    // reader can least do without. In a revisions table (`.grid-cell >
+    // reader can least do without. In a revisions table (`.crewlet-data-grid__cell >
     // .revision-author`) the chip wraps onto a line the cell does not draw
     // before the name gives up a character; the title keeps both.
     <span
@@ -606,7 +607,7 @@ export function ConfigScreen({
    * carries no button at all and is never "open elsewhere".
    */
   const openRevision = useCallback(
-    (row: RevisionMeta, e: React.MouseEvent | React.KeyboardEvent) => {
+    (row: RevisionMeta, e: DataGridActivationEvent) => {
       const go = () => {
         setRevision(row.revision_id);
         // AND DROPS THE SIDE A LINK NAMED. A row picked here is "compare this

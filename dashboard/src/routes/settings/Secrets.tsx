@@ -42,6 +42,7 @@ import {
   TableKeyCell,
   TableDateCell,
   TableTextCell,
+  type DataGridActivationEvent,
 } from "@crewlethq/ui";
 import {
   PlusGlyph,
@@ -453,7 +454,7 @@ export function Secrets({ name }: { name?: string }) {
    * carries no button at all and is never "open elsewhere".
    */
   const openCredential = useCallback(
-    (row: SecretRow, e: React.MouseEvent | React.KeyboardEvent) => {
+    (row: SecretRow, e: DataGridActivationEvent) => {
       const go = () => openPeek({ kind: "credential", id: row.name });
       if (!("button" in e)) {
         go();

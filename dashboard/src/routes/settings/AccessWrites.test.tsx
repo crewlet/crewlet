@@ -299,7 +299,7 @@ async function settle() {
 async function invitationRow(): Promise<HTMLElement> {
   const cells = await screen.findAllByText("sam@example.com");
   const row = cells
-    .map((cell) => cell.closest(".grid-row") as HTMLElement | null)
+    .map((cell) => cell.closest(".crewlet-data-grid__row") as HTMLElement | null)
     .find((r) => r && within(r).queryByRole("button", { name: /^Cancel the invitation/ }));
   if (!row) throw new Error("no invitation row carries a cancellation");
   return row;

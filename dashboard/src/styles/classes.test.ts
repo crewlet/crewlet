@@ -235,8 +235,8 @@ function args(list: string): string[] {
  *
  * BALANCED RATHER THAN LINE-BY-LINE, which is the one thing this grew. The
  * reader it replaced matched `className={cx(` and then took `[^)]*` on that
- * one line, so every `cx(` prettier had broken across lines — `grid-th`,
- * `grid-row`, `phase-card`, `tool-row` and a hundred others — contributed
+ * one line, so every `cx(` prettier had broken across lines — `crewlet-data-grid__th`,
+ * `crewlet-data-grid__row`, `phase-card`, `tool-row` and a hundred others — contributed
  * NOTHING, while the doc claimed "anything a screen hard-codes is covered".
  * Ten more names are checked now and none of them was undeclared, which is
  * luck rather than evidence: nothing had been looking.
@@ -604,8 +604,18 @@ const ALLOWED: Allowed[] = [
     pkg: "@crewlethq/ui/styles.css",
   },
   {
-    name: "crewlet-card",
-    why: "uilet's Card writes it on every card. styles/frame.css draws the dashboard's own DataGrid flush inside one (`.crewlet-card .grid-wrap`): the card is the frame, and a bordered grid a pixel inside its border was a double edge on fifteen pages that each had to remember the `flush` prop. A rule about OUR grid's composition inside the package's component; the card itself is untouched.",
+    name: "crewlet-data-grid",
+    why: "uilet's DataGrid writes it on every list's root. styles/screens.css composes Spend's two phone tables inside it (`.spend-tasks`, `.spend-agents`): a task's compact row reads along its title's baseline and its key is a column, and a seat's day bar steps aside on the compact row. Rules about OUR composition of the package's component; the grid itself is untouched.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-data-grid__row",
+    why: "uilet's DataGrid writes it on every row. styles/screens.css gives the artifacts list's rows their two-line height (`.artifacts-list`) and sets a task's compact phone row on its baseline (`.spend-tasks`). Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-data-grid__cell",
+    why: "uilet's DataGrid writes it on every cell. styles/frame.css lets a turn's summary and its item key wrap inside a phone card's cell (`.turn-what`), and styles/screens.css sets the artifacts list's quieter facts and a revision's author line inside one. Rules about OUR cells' content inside the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {

@@ -26,6 +26,7 @@ import {
   TableKeyCell,
   TableTextCell,
   TableNumberCell,
+  type DataGridActivationEvent,
 } from "@crewlethq/ui";
 import {
   WrenchGlyph,
@@ -619,7 +620,7 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
    * carries no button at all and is never "open elsewhere".
    */
   const openTool = useCallback(
-    (tool: ToolRow, e: React.MouseEvent | React.KeyboardEvent) => {
+    (tool: ToolRow, e: DataGridActivationEvent) => {
       const go = () => openPeek({ kind: "tool", id: tool.name });
       if (!("button" in e)) {
         go();

@@ -250,7 +250,7 @@ test("a list's resting state is words, and a state that differs is a pill", asyn
   stubIam();
   mount();
   const active = (await screen.findAllByText(STAGE_WORDS.active!.label)).filter((el) =>
-    el.closest(".grid-row"),
+    el.closest(".crewlet-data-grid__row"),
   );
   expect(active.length).toBeGreaterThan(0);
   for (const word of active) expect(word.closest(".crewlet-tag")).toBeNull();
@@ -265,7 +265,9 @@ test("a list's resting state is words, and a state that differs is a pill", asyn
 
   stubIam();
   mount(ADMIN, ApiTokens);
-  const spare = (await screen.findByText("token:spare")).closest(".grid-row") as HTMLElement;
+  const spare = (await screen.findByText("token:spare")).closest(
+    ".crewlet-data-grid__row",
+  ) as HTMLElement;
   expect(within(spare).getByText(TOKEN_ROW_WORDS.none!.label).closest(".crewlet-tag")).toBeNull();
 });
 
@@ -295,7 +297,9 @@ test("people and service accounts split the directory, and no row is on both", a
 test("a person's row draws their badge by their name and their seat by its handle", async () => {
   stubIam();
   mount();
-  const ana = (await screen.findByText("Ana Diaz")).closest(".grid-row") as HTMLElement;
+  const ana = (await screen.findByText("Ana Diaz")).closest(
+    ".crewlet-data-grid__row",
+  ) as HTMLElement;
   expect(ana.querySelector(".crewlet-avatar")).not.toBeNull();
   const seat = within(ana).getByRole("link", { name: "@jane" });
   expect(seat.getAttribute("href")).toBe("#/company/org/seats/jane");
@@ -305,7 +309,7 @@ test("a person's row draws their badge by their name and their seat by its handl
   stubIam();
   mount(ADMIN, ServiceAccounts);
   const ci = (await screen.findAllByText("ci:release"))
-    .map((el) => el.closest(".grid-row") as HTMLElement)
+    .map((el) => el.closest(".crewlet-data-grid__row") as HTMLElement)
     .find(Boolean)!;
   expect(ci.querySelector(".crewlet-avatar__icon svg")).not.toBeNull();
 });
@@ -316,7 +320,7 @@ test("a human seat's holder is named in plain text, its stage only when not acti
   stubIam();
   mount();
   const jane = (await screen.findAllByRole("link", { name: /Jane Founder/ }))
-    .map((link) => link.closest(".grid-row") as HTMLElement)
+    .map((link) => link.closest(".crewlet-data-grid__row") as HTMLElement)
     .find((row) => row && within(row).queryByText("ana.diaz"))!;
   const held = within(jane).getByText("ana.diaz");
   expect(held.closest(".crewlet-tag")).toBeNull();
@@ -338,10 +342,12 @@ test("a row this node cannot open is drawn as sealed", async () => {
 test("a seat names who holds it and a token the seat its row binds", async () => {
   stubIam();
   mount(ADMIN, ApiTokens);
-  const deploy = (await screen.findByText("token:deploy")).closest(".grid-row") as HTMLElement;
+  const deploy = (await screen.findByText("token:deploy")).closest(
+    ".crewlet-data-grid__row",
+  ) as HTMLElement;
   expect(within(deploy).getByText(TOKEN_ROW_WORDS.held!.label)).toBeTruthy();
   expect(within(deploy).getByRole("link", { name: /Jane Founder/ })).toBeTruthy();
-  const spare = screen.getByText("token:spare").closest(".grid-row") as HTMLElement;
+  const spare = screen.getByText("token:spare").closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(spare).getByText(TOKEN_ROW_WORDS.none!.label)).toBeTruthy();
   // The row's hint is the command that binds it, whole: the CLI refuses a
   // service account's create naming no `-grants`, so without it the command
@@ -371,11 +377,13 @@ test("a seat names who holds it and a token the seat its row binds", async () =>
   // AND ITS ROW NAMES THE INVITATION rather than "Open seat".
   const sam = screen
     .getAllByRole("link", { name: /Sam Support/ })
-    .map((link) => link.closest(".grid-row") as HTMLElement)
+    .map((link) => link.closest(".crewlet-data-grid__row") as HTMLElement)
     .find((row) => row && within(row).queryByText("Invited"))!;
   expect(within(sam).getByText("sam@example.com")).toBeTruthy();
   expect(within(sam).queryByText("Open seat")).toBeNull();
-  const lee = screen.getByRole("link", { name: /Lee Legal/ }).closest(".grid-row") as HTMLElement;
+  const lee = screen
+    .getByRole("link", { name: /Lee Legal/ })
+    .closest(".crewlet-data-grid__row") as HTMLElement;
   // A SEAT NOTHING HOLDS READS "Open seat", in words, rather than a dash.
   expect(within(lee).getAllByText("Open seat").length).toBeGreaterThan(0);
 });
@@ -401,7 +409,7 @@ test("a finding is drawn in words, never as its code or the engine's detail", as
   mount(ADMIN, ServiceAccounts);
   // A SERVICE ACCOUNT BOUND TO NONE reads as the ordinary state it is.
   const ci = (await screen.findAllByText("ci:release"))
-    .map((cell) => cell.closest(".grid-row") as HTMLElement | null)
+    .map((cell) => cell.closest(".crewlet-data-grid__row") as HTMLElement | null)
     .find((row) => row !== null)!;
   expect(within(ci).getByText("No seat")).toBeTruthy();
 });
@@ -422,7 +430,7 @@ test("a row bound to an agent seat draws the agent's badge", async () => {
   );
   mount(ADMIN, ApiTokens);
   const row = async (login: string) =>
-    (await screen.findByText(login)).closest(".grid-row") as HTMLElement;
+    (await screen.findByText(login)).closest(".crewlet-data-grid__row") as HTMLElement;
   const outline = (r: HTMLElement) => {
     const mark = r.querySelector(".crewlet-avatar") as HTMLElement;
     return mark.classList.contains("crewlet-avatar--human") ? "human" : "agent";
@@ -505,8 +513,10 @@ test("a reader without Admin is told what reading a seat's surfaces needs", asyn
 test("activating a row opens that person in the peek, by their id", async () => {
   stubIam();
   mount();
-  const row = (await screen.findByText("Ana Diaz")).closest(".grid-row") as HTMLElement;
-  const link = row.querySelector<HTMLAnchorElement>("a.row-link")!;
+  const row = (await screen.findByText("Ana Diaz")).closest(
+    ".crewlet-data-grid__row",
+  ) as HTMLElement;
+  const link = row.querySelector<HTMLAnchorElement>("a.crewlet-data-grid__row-link")!;
   expect(link.getAttribute("href")).toBe("#/settings/people?peek=person%3Ap-ana");
   fireEvent.click(link);
   await waitFor(() => expect(location.hash).toContain("peek=person%3Ap-ana"));
@@ -535,7 +545,7 @@ test("no grid beside or inside the person peek floors a flexible column at zero"
   await within(rail).findByText("Authenticator app");
   await within(rail).findByText("Signed in");
   const tracks = (wrap: Element) => {
-    const heads = [...wrap.querySelectorAll(":scope > .grid-head > *")].map(
+    const heads = [...wrap.querySelectorAll(":scope > .crewlet-data-grid__head > *")].map(
       (h) => h.textContent?.trim() ?? "",
     );
     const list = splitTracks((wrap as HTMLElement).style.gridTemplateColumns);
@@ -544,9 +554,9 @@ test("no grid beside or inside the person peek floors a flexible column at zero"
   const people = screen
     .getAllByText("Ana Diaz")
     .find((e) => !rail.contains(e))!
-    .closest(".grid-wrap")!;
-  const credentials = within(rail).getByText("Password").closest(".grid-wrap")!;
-  const sessions = within(rail).getByText("Signed in").closest(".grid-wrap")!;
+    .closest(".crewlet-data-grid")!;
+  const credentials = within(rail).getByText("Password").closest(".crewlet-data-grid")!;
+  const sessions = within(rail).getByText("Signed in").closest(".crewlet-data-grid")!;
   for (const wrap of [people, credentials, sessions]) {
     expect([...tracks(wrap).values()].filter((t) => t === "minmax(0, 1fr)")).toEqual([]);
   }
@@ -674,7 +684,7 @@ test("an ended session says why and draws no deadline it never reached", async (
   );
   mount();
   const reason = await screen.findByText("ended with every session they held");
-  const row = reason.closest(".grid-row") as HTMLElement;
+  const row = reason.closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(row).getByText("Not recorded")).toBeTruthy();
   expect(within(row).queryByText(/^in /)).toBeNull();
   // AND IT CAN BE READ WHOLE. The State column was a shrink column, capped at
@@ -682,7 +692,11 @@ test("an ended session says why and draws no deadline it never reached", async (
   // its edge with no way to read the rest. It is the flexible column now, and
   // a reason longer than it is cut with an ellipsis and whole on its title.
   // Mutation: make the State column shrink again, or drop the title.
-  expect(reason.closest(".grid-cell")?.classList.contains("shrink")).toBe(false);
+  expect(
+    reason
+      .closest(".crewlet-data-grid__cell")
+      ?.classList.contains("crewlet-data-grid__cell--shrink"),
+  ).toBe(false);
   expect(reason.getAttribute("title")).toBe("ended with every session they held");
 });
 
@@ -736,13 +750,15 @@ test("a reset link says it sets a password, never that it carries access", async
       : null,
   );
   mount();
-  const link = (await screen.findByText("Password reset link")).closest(".grid-row") as HTMLElement;
+  const link = (await screen.findByText("Password reset link")).closest(
+    ".crewlet-data-grid__row",
+  ) as HTMLElement;
   expect(within(link).getByText("One-time")).toBeTruthy();
   expect(within(link).queryByText("Same as owner")).toBeNull();
   // AN UNUSED LINK IS NOT "IN USE": nobody has opened it yet.
   expect(within(link).getByText("Not used yet")).toBeTruthy();
   expect(within(link).queryByText("In use")).toBeNull();
-  const password = screen.getByText("Password").closest(".grid-row") as HTMLElement;
+  const password = screen.getByText("Password").closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(password).getByText("Same as owner")).toBeTruthy();
   expect(within(password).getByText("In use")).toBeTruthy();
 });
@@ -791,12 +807,12 @@ test("an ended credential draws no deadline it will never reach", async () => {
       : null,
   );
   mount();
-  const used = (await screen.findByText("Used")).closest(".grid-row") as HTMLElement;
+  const used = (await screen.findByText("Used")).closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(used).getByText("Already ended")).toBeTruthy();
-  const lapsed = screen.getByText(/· lapsed/).closest(".grid-row") as HTMLElement;
+  const lapsed = screen.getByText(/· lapsed/).closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(lapsed).queryByText("Already ended")).toBeNull();
   expect(within(lapsed).getByText("Expired")).toBeTruthy();
-  const live = screen.getByText(/· live/).closest(".grid-row") as HTMLElement;
+  const live = screen.getByText(/· live/).closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(live).getByText(/^in /)).toBeTruthy();
 });
 
@@ -813,7 +829,7 @@ test("an invitation names its sender by the chart and says its address was erase
   await screen.findAllByText("sam@example.com");
   fireEvent.click(screen.getByRole("checkbox", { name: "Show used and expired" }));
   const erased = await screen.findByText("Erased with the person it invited");
-  const row = erased.closest(".grid-row") as HTMLElement;
+  const row = erased.closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(row).getByText("Jane Founder")).toBeTruthy();
 });
 
@@ -829,7 +845,9 @@ test("the open invitations are listed, and the toggle asks for every state", asy
   expect(screen.getAllByText("Locked").length).toBeGreaterThan(0);
   expect(screen.queryByText("old@example.com")).toBeNull();
   fireEvent.click(screen.getByRole("checkbox", { name: "Show used and expired" }));
-  const row = (await screen.findByText("old@example.com")).closest(".grid-row") as HTMLElement;
+  const row = (await screen.findByText("old@example.com")).closest(
+    ".crewlet-data-grid__row",
+  ) as HTMLElement;
   expect(within(row).getByText(INVITATION_WORDS.redeemed!.label)).toBeTruthy();
   expect(
     asked.some((u) => u.pathname === "/iam/invitations" && u.searchParams.get("all") === "true"),

@@ -91,11 +91,19 @@ function serving(shape: string, more: Partial<Record<QueryName, unknown>> = {}) 
 
 /** Where each shape draws a row: the element carrying its link and its click. */
 const ANCHOR: Record<string, string> = {
-  list: ".grid-row",
-  table: ".grid-row",
+  list: ".crewlet-data-grid__row",
+  table: ".crewlet-data-grid__row",
   board: ".work-card",
   timeline: ".tl-bar",
   calendar: ".work-cal-chip",
+};
+
+/** The class that marks the open one, in this shape: a grid row's is the kit's. */
+const OPEN: Record<string, string> = {
+  list: "crewlet-data-grid__row--selected",
+  table: "crewlet-data-grid__row--selected",
+  board: "selected",
+  timeline: "selected",
 };
 
 /** The element a title is drawn in, in this shape — the one marked as open. */
@@ -110,10 +118,10 @@ function anchorOf(shape: string, title: string): HTMLElement {
 
 /**
  * The row's own link: the element itself where the row IS an anchor, and the
- * overlay a grid row stretches over its cells (`DataGrid`'s `.row-link`).
+ * overlay a grid row stretches over its cells (`DataGrid`'s `.crewlet-data-grid__row-link`).
  */
 const linkIn = (el: HTMLElement): HTMLElement =>
-  el.matches("a") ? el : (el.querySelector<HTMLElement>("a.row-link") ?? el);
+  el.matches("a") ? el : (el.querySelector<HTMLElement>("a.crewlet-data-grid__row-link") ?? el);
 
 /**
  * Where the row's link goes, without the list it carries: a task opened from a
@@ -156,18 +164,18 @@ for (const shape of ["list", "table", "board", "timeline", "calendar"]) {
     // addresses can say: matched on the key, both of the pair lit up.
     if (shape !== "calendar") {
       await waitFor(() =>
-        expect(anchorOf(shape, DUPLICATE_TITLE).classList.contains("selected")).toBe(true),
+        expect(anchorOf(shape, DUPLICATE_TITLE).classList.contains(OPEN[shape]!)).toBe(true),
       );
-      expect(anchorOf(shape, CLAIMANT_TITLE).classList.contains("selected")).toBe(false);
+      expect(anchorOf(shape, CLAIMANT_TITLE).classList.contains(OPEN[shape]!)).toBe(false);
     }
 
     fireEvent.click(linkIn(anchorOf(shape, CLAIMANT_TITLE)));
     await waitFor(() => expect(peekNow()).toBe(`item:${SHARED_KEY}`));
     if (shape !== "calendar") {
       await waitFor(() =>
-        expect(anchorOf(shape, CLAIMANT_TITLE).classList.contains("selected")).toBe(true),
+        expect(anchorOf(shape, CLAIMANT_TITLE).classList.contains(OPEN[shape]!)).toBe(true),
       );
-      expect(anchorOf(shape, DUPLICATE_TITLE).classList.contains("selected")).toBe(false);
+      expect(anchorOf(shape, DUPLICATE_TITLE).classList.contains(OPEN[shape]!)).toBe(false);
     }
     // AND BOTH ARE STILL DRAWN UNDER THE KEY a person reads: the address
     // decides where a row goes, never what it is called.

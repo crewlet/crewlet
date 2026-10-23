@@ -154,8 +154,8 @@ describe("a company page", () => {
 
   it("names a fenced block for a recipe that exists", () => {
     // WHAT THE NAME COSTS WHEN IT IS WRONG. This block was `class="code
-    // plain"`, and neither name is a recipe for a `pre` — `.grid-th.plain` is
-    // a table header and nothing declares `.code` at all. So a fenced sample
+    // plain"`, and neither name is a recipe for a `pre`: both are generic,
+    // and nothing declares `.code` at all. So a fenced sample
     // in a page body, a work item's description or a phase prompt rendered
     // with no surface and, worse, with a `pre`'s own `white-space: pre` and
     // `overflow: visible`: one long line pushed the whole PAGE sideways. The

@@ -284,7 +284,7 @@ test("a plain click on a row peeks and a modified click follows the link", () =>
   for (const shape of ["list", "table"] as const) {
     const onOpen = vi.fn();
     const { container } = mount(shape, [row({})], undefined, onOpen);
-    const anchor = container.querySelector("a.row-link") as HTMLAnchorElement;
+    const anchor = container.querySelector("a.crewlet-data-grid__row-link") as HTMLAnchorElement;
     expect(anchor).toBeTruthy();
     expect(anchor.getAttribute("href")).toBe("#/work/ENG-9");
 
@@ -320,7 +320,7 @@ test("the title keeps a floor and the status is drawn whole, in both sets", () =
   for (const shape of ["list", "table"] as const) {
     const { container } = mount(shape, [row()]);
     const template =
-      container.querySelector<HTMLElement>(".grid-wrap")?.style.gridTemplateColumns ?? "";
+      container.querySelector<HTMLElement>(".crewlet-data-grid")?.style.gridTemplateColumns ?? "";
     expect(template, shape).toMatch(/minmax\(16rem, 1fr\)/);
     // And the status word is never cut to fit.
     expect(template, shape).toContain("max-content");
@@ -334,15 +334,21 @@ test("the title keeps a floor and the status is drawn whole, in both sets", () =
 // would push the title onto the second line.
 test("the list is compact on a phone with its key and title leading, the table is labelled", () => {
   const list = mount("list", [row({ assignee: "iris" })]);
-  const wrap = list.container.querySelector(".grid-wrap")!;
+  const wrap = list.container.querySelector(".crewlet-data-grid")!;
   expect(wrap.getAttribute("data-phone-rows")).toBe("compact");
-  const leads = [...wrap.querySelectorAll(".grid-row > .grid-cell[data-lead]")];
+  const leads = [
+    ...wrap.querySelectorAll(".crewlet-data-grid__row > .crewlet-data-grid__cell[data-lead]"),
+  ];
   expect(leads.map((c) => c.getAttribute("data-label"))).toEqual(["Key", "Title"]);
   // AND ITS LINE OF FACTS LEAVES OUT WHEN IT LAST MOVED — the one fact that
   // wrapped a third line — and nothing else.
-  const omitted = [...wrap.querySelectorAll(".grid-row > .grid-cell[data-phone-omit]")];
+  const omitted = [
+    ...wrap.querySelectorAll(".crewlet-data-grid__row > .crewlet-data-grid__cell[data-phone-omit]"),
+  ];
   expect(omitted.map((c) => c.getAttribute("data-label"))).toEqual(["Updated"]);
   cleanup();
   const table = mount("table", [row()]);
-  expect(table.container.querySelector(".grid-wrap")!.hasAttribute("data-phone-rows")).toBe(false);
+  expect(table.container.querySelector(".crewlet-data-grid")!.hasAttribute("data-phone-rows")).toBe(
+    false,
+  );
 });

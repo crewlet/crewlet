@@ -51,12 +51,8 @@ import { useMemo } from "react";
 import { fmtCount } from "~/lib/format.ts";
 import { buildHash, useParam, useRoute } from "~/app/router.tsx";
 import { usePageCoverage } from "~/app/Shell.tsx";
-import {
-  ColumnChooser,
-  DataGrid,
-  columnChoicesOf,
-  type GridColumn,
-} from "~/app/frame/DataGrid.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import { ColumnChooser, columnChoicesOf, type DataGridColumn } from "@crewlethq/ui";
 import { linkedSeat } from "~/app/frame/cells.tsx";
 import { peekHref, peekRow, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
@@ -302,7 +298,7 @@ export function Projects() {
   // two lists against each other, and the Go gate holds `PROJECT_SORT_KEYS`
   // against the engine's own. Under `serverSorted` the accessors are never
   // called; they stay because they say what each column's value IS.
-  const columns = useMemo<GridColumn<WorkProjectRow>[]>(
+  const columns = useMemo<DataGridColumn<WorkProjectRow>[]>(
     () => [
       {
         key: "key",

@@ -386,13 +386,15 @@ test("the catalogue names origins in words, and only where they differ", async (
 test("each server is drawn with the engine's state and a cell per node", async () => {
   mount(<Tools />);
   await settle();
-  const github = screen.getByText("Partly failing").closest(".grid-row") as HTMLElement;
+  const github = screen
+    .getByText("Partly failing")
+    .closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(github).getByText("Partly failing")).toBeDefined();
   expect(within(github).getByText(/401 Bad credentials/)).toBeDefined();
   expect(within(github).getByText(/backend-dev/)).toBeDefined();
   expect(within(github).getAllByText(/not reported/).length).toBe(1);
   expect(within(github).getByText("1 seat")).toBeDefined();
-  const docs = screen.getByText("Running").closest(".grid-row") as HTMLElement;
+  const docs = screen.getByText("Running").closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(docs).getByText("Running")).toBeDefined();
   expect(within(docs).getByText("Every agent seat")).toBeDefined();
   expect(screen.getByText(/No report from/).textContent).toBe(
@@ -486,7 +488,9 @@ test("a server waiting for a provisioned credential names what it waits for, not
   };
   mount(<Tools />, { answer: waiting });
   await settle();
-  const github = screen.getByText("Waiting for credentials").closest(".grid-row") as HTMLElement;
+  const github = screen
+    .getByText("Waiting for credentials")
+    .closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(github).getByText(/1 waiting/)).toBeDefined();
   const line = within(github).getByText(`for backend-dev: ${wait}`);
   expect(line.classList.contains("mcp-wait")).toBe(true);
@@ -507,7 +511,9 @@ test("a server waiting for a provisioned credential names what it waits for, not
 test("a node's failure sits under its chip without repeating the node", async () => {
   mount(<Tools />);
   await settle();
-  const github = screen.getByText("Partly failing").closest(".grid-row") as HTMLElement;
+  const github = screen
+    .getByText("Partly failing")
+    .closest(".crewlet-data-grid__row") as HTMLElement;
   const reason = within(github).getByText("for backend-dev: 401 Bad credentials");
   expect(reason.classList.contains("mcp-failure")).toBe(true);
   expect(reason.textContent?.startsWith("node-b")).toBe(false);
@@ -519,9 +525,11 @@ test("a node's failure sits under its chip without repeating the node", async ()
 test("a server's annotation keys that match no tool are counted in its row and named on its page", async () => {
   mount(<Tools />);
   await settle();
-  const github = screen.getByText("Partly failing").closest(".grid-row") as HTMLElement;
+  const github = screen
+    .getByText("Partly failing")
+    .closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(github).getByText("1 tool_annotations key matches no tool")).toBeDefined();
-  const docs = screen.getByText("Running").closest(".grid-row") as HTMLElement;
+  const docs = screen.getByText("Running").closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(docs).queryByText(/tool_annotations/)).toBeNull();
   cleanup();
 
@@ -537,9 +545,11 @@ test("a server's annotation keys that match no tool are counted in its row and n
 test("each server's reach in the grid is the seats the engine grants it", async () => {
   mount(<Tools />);
   await settle();
-  const github = screen.getByText("Partly failing").closest(".grid-row") as HTMLElement;
+  const github = screen
+    .getByText("Partly failing")
+    .closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(github).getByText("1 seat")).toBeDefined();
-  const docs = screen.getByText("Running").closest(".grid-row") as HTMLElement;
+  const docs = screen.getByText("Running").closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(docs).getByText("Every agent seat")).toBeDefined();
 });
 

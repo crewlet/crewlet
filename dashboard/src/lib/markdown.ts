@@ -541,9 +541,8 @@ function renderBlock(
       return createElement("p", { key }, renderInline(block.text, key, options));
     case "code":
       // `md-code`, in the same family as `md-table`, `md-tasks` and
-      // `md-task-body`. It was `code plain`, which is two names this
-      // stylesheet spends on something else — `.grid-th.plain` is a table
-      // header — and NEITHER of them was ever a recipe for this block. So a
+      // `md-task-body`. It was `code plain`, two generic names (a table
+      // header once spent `plain`), and NEITHER of them was ever a recipe for this block. So a
       // fenced sample in a page body, a work item's description, a comment or
       // a phase prompt had no surface, no padding and, because a `pre`
       // defaults to `white-space: pre` with `overflow: visible`, no way to

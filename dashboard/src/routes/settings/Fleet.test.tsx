@@ -245,9 +245,9 @@ describe("the lease tables", () => {
       </ClientContext.Provider>,
     );
     expect(await screen.findByText("integration-reconciler")).toBeDefined();
-    const leaseGrids = [...view.container.querySelectorAll<HTMLElement>(".grid-wrap")].filter((g) =>
-      /Held by/i.test(g.textContent ?? ""),
-    );
+    const leaseGrids = [
+      ...view.container.querySelectorAll<HTMLElement>(".crewlet-data-grid"),
+    ].filter((g) => /Held by/i.test(g.textContent ?? ""));
     expect(leaseGrids.length).toBe(2);
     for (const grid of leaseGrids) {
       const tracks =
@@ -293,9 +293,11 @@ describe("the lease tables", () => {
 
   /** Each grid on screen, by its column heads, with the text of each body row. */
   function grids(container: HTMLElement) {
-    return [...container.querySelectorAll<HTMLElement>(".grid-wrap")].map((g) => ({
-      heads: [...g.querySelectorAll(".grid-head > .grid-th")].map((h) => h.textContent?.trim()),
-      rows: [...g.querySelectorAll<HTMLElement>(".grid-row")],
+    return [...container.querySelectorAll<HTMLElement>(".crewlet-data-grid")].map((g) => ({
+      heads: [...g.querySelectorAll(".crewlet-data-grid__head > .crewlet-data-grid__th")].map((h) =>
+        h.textContent?.trim(),
+      ),
+      rows: [...g.querySelectorAll<HTMLElement>(".crewlet-data-grid__row")],
     }));
   }
 
@@ -339,11 +341,14 @@ describe("the lease tables", () => {
     for (const id of [undefined, "harness-0"]) {
       const view = mountFleet(id, answer);
       expect(await screen.findByText("integration-reconciler")).toBeDefined();
-      const seats = [...view.container.querySelectorAll<HTMLElement>(".grid-wrap")].find((g) =>
-        [...g.querySelectorAll(".grid-head > .grid-th")].some((h) => h.textContent === "Seat"),
+      const seats = [...view.container.querySelectorAll<HTMLElement>(".crewlet-data-grid")].find(
+        (g) =>
+          [...g.querySelectorAll(".crewlet-data-grid__head > .crewlet-data-grid__th")].some(
+            (h) => h.textContent === "Seat",
+          ),
       )!;
       fireEvent.click(within(seats).getByRole("button", { name: "Since" }));
-      const order = [...seats.querySelectorAll<HTMLElement>(".grid-row")].map((r) =>
+      const order = [...seats.querySelectorAll<HTMLElement>(".crewlet-data-grid__row")].map((r) =>
         r.textContent?.includes("seat-earlier") ? "earlier" : "later",
       );
       expect(order, id ?? "the fleet").toEqual(["earlier", "later"]);
@@ -367,7 +372,7 @@ describe("the lease tables", () => {
   test("Held by is the same link to the node in both lease tables", async () => {
     const view = mountFleet();
     expect(await screen.findByText("integration-reconciler")).toBeDefined();
-    const held = [...view.container.querySelectorAll(".grid-wrap a")].filter(
+    const held = [...view.container.querySelectorAll(".crewlet-data-grid a")].filter(
       (a) => a.textContent === "harness-0",
     );
     expect(held).toHaveLength(2);
@@ -438,15 +443,18 @@ describe("the Nodes table", () => {
 
   /** The Nodes grid: the one whose heads begin with Node. */
   function nodesGrid(container: HTMLElement) {
-    const grid = [...container.querySelectorAll<HTMLElement>(".grid-wrap")].find(
-      (g) => g.querySelector(".grid-th")?.textContent?.trim().startsWith("Node") ?? false,
+    const grid = [...container.querySelectorAll<HTMLElement>(".crewlet-data-grid")].find(
+      (g) =>
+        g.querySelector(".crewlet-data-grid__th")?.textContent?.trim().startsWith("Node") ?? false,
     );
     expect(grid, "the Nodes grid is drawn").toBeDefined();
     return grid!;
   }
 
   const heads = (grid: HTMLElement) =>
-    [...grid.querySelectorAll(".grid-head > .grid-th")].map((h) => h.textContent?.trim());
+    [...grid.querySelectorAll(".crewlet-data-grid__head > .crewlet-data-grid__th")].map((h) =>
+      h.textContent?.trim(),
+    );
 
   afterEach(() => {
     cleanup();
@@ -475,13 +483,15 @@ describe("the Nodes table", () => {
   test("the node the peek is open on is the marked row", async () => {
     const view = mount(<Fleet />, "#/settings/nodes?peek=node:harness-0");
     expect(await screen.findByText("workers")).toBeDefined();
-    const rows = [...nodesGrid(view.container).querySelectorAll(".grid-row")];
+    const rows = [...nodesGrid(view.container).querySelectorAll(".crewlet-data-grid__row")];
     expect(rows).toHaveLength(1);
-    expect(rows[0]!.classList.contains("selected")).toBe(true);
+    expect(rows[0]!.classList.contains("crewlet-data-grid__row--selected")).toBe(true);
     cleanup();
     const unpeeked = mount(<Fleet />);
     expect(await screen.findByText("workers")).toBeDefined();
-    expect(nodesGrid(unpeeked.container).querySelector(".grid-row.selected")).toBeNull();
+    expect(
+      nodesGrid(unpeeked.container).querySelector(".crewlet-data-grid__row--selected"),
+    ).toBeNull();
   });
 
   // LAID OUT, as the browser measured each column at its content: the node
@@ -511,7 +521,7 @@ describe("the Nodes table", () => {
       vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (
         this: HTMLElement,
       ) {
-        return this.classList.contains("grid-wrap") ? box : 0;
+        return this.classList.contains("crewlet-data-grid") ? box : 0;
       });
       // Each head is its column's natural width, laid end to end.
       vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
@@ -522,13 +532,13 @@ describe("the Nodes table", () => {
           const name = Object.keys(NATURAL).find((k) => text.startsWith(k));
           return name ? NATURAL[name]! : 60;
         };
-        if (this.classList.contains("grid-th")) {
+        if (this.classList.contains("crewlet-data-grid__th")) {
           const siblings = [...this.parentElement!.children];
           const left = siblings.slice(0, siblings.indexOf(this)).reduce((n, h) => n + width(h), 0);
           const right = left + width(this);
           return { left, right, width: width(this), top: 0, bottom: 0, height: 0 } as DOMRect;
         }
-        const right = this.classList.contains("grid-wrap") ? box : 0;
+        const right = this.classList.contains("crewlet-data-grid") ? box : 0;
         return { left: 0, right, width: right, top: 0, bottom: 0, height: 0 } as DOMRect;
       });
     });
@@ -545,7 +555,7 @@ describe("the Nodes table", () => {
       const grid = nodesGrid(view.container);
       return {
         heads: heads(grid),
-        hidden: grid.parentElement?.querySelector(".grid-foot")?.textContent ?? "",
+        hidden: grid.parentElement?.querySelector(".crewlet-data-grid__foot")?.textContent ?? "",
       };
     }
 

@@ -105,7 +105,8 @@ function mount(
 }
 
 /** The row a title sits in. */
-const rowOf = (title: string) => screen.getByText(title).closest(".grid-row") as HTMLElement;
+const rowOf = (title: string) =>
+  screen.getByText(title).closest(".crewlet-data-grid__row") as HTMLElement;
 
 /** The drawing a row's type mark actually renders. */
 const pathOf = (row: HTMLElement) => row.querySelector(".work-type path")?.getAttribute("d");

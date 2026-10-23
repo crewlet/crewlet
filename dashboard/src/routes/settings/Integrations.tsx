@@ -69,7 +69,8 @@ import {
 import { VendorMark, type Vendor } from "@crewlethq/icons";
 import { TOOL_TONE } from "~/lib/toolState.ts";
 import { QueryState } from "~/components/common.tsx";
-import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import { type DataGridColumn } from "@crewlethq/ui";
 import { linkedSeat } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
@@ -2492,7 +2493,7 @@ function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] }) {
     );
   }
 
-  const columns: GridColumn<SetupRun>[] = [
+  const columns: DataGridColumn<SetupRun>[] = [
     {
       key: "ran",
       header: "Ran",

@@ -1,459 +1,53 @@
 /**
- * The grid every list in the product is drawn with.
+ * The grid every list in the product is drawn with: the kit's `DataGrid`,
+ * bound to this dashboard's address, its peek rail and its keymap.
  *
- * # The sort lives in the URL
+ * The visual is uilet's (columns, give-way, bands, the row link, the phone
+ * card, flush in a card). What lives here is what only this application can
+ * answer, and nothing it draws:
  *
- * `ui/DataTable.tsx` held its sort in component state, which broke the one
- * rule this dashboard has about screens: every screen, section and filter is
- * in the URL. A sorted ops table could not be sent to anybody, did not survive
- * a reload, and came back unsorted from the Back button — on the tables an
- * operator is most likely to be sharing.
+ * # The sort and the column set live in the URL
  *
- * # Bands are the answer's own groups
+ * Every screen, section and filter is in the URL, so a sorted ops table can be
+ * sent to somebody, survives a reload and comes back sorted from Back. THE
+ * PRIMARY GRID ON A SCREEN TAKES `sort=` AND `cols=` and every other takes
+ * `sort.<name>=` (`name`), because several screens carry two or three grids and
+ * unnamed they would all read one key. `colsName` keys the column set apart
+ * from the sort where one grid has two column sets (the work list and table):
+ * the order is the question's and the arrangement is the drawing's.
  *
- * A grouped answer arrives with `groups[]`, each carrying its own count over
- * the WHOLE set and a bounded slice of rows. So a band's count is the engine's
- * and the rows under it are a page — the band says both, because a column head
- * reading `12` over 12 visible rows out of 300 is the number a person plans
- * against.
+ * # The row the peek is open on is marked
  *
- * # A selection is a read gesture
+ * By comparing ADDRESSES: a row's link is its object's page, and the peek
+ * names an object whose page is `peekHref` of it, so the mark cannot name a
+ * different row from the one the rail shows. `isSelected` stays for a mark
+ * that is not the peek.
  *
- * There is no bulk action, because there is no write. What a selection is for
- * is copying keys and exporting the rows that are loaded — and the footer says
- * how many that is, so an export never claims more than the page it has.
+ * # Which grid the keyboard drives
+ *
+ * `j`, `k` and `enter` are bound on `window`, because a grid whose rows are
+ * links takes no focus of its own. Several screens carry two or three grids at
+ * once (and a page's grid sits under another in the peek rail), so the
+ * reader's LAST POINTER GESTURE says which grid they are in; with none yet the
+ * first drivable grid mounted drives. A grid showing its empty state
+ * registers nothing. Module state rather than a context: the grids that must
+ * agree are often in different subtrees, and a provider around both would be
+ * the shell, which knows nothing about grids.
  */
 
+import { useCallback, useEffect, useId, useRef, useSyncExternalStore, type ReactNode } from "react";
 import {
-  useCallback,
-  useEffect,
-  useId,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  useSyncExternalStore,
-  type ReactNode,
-} from "react";
+  DataGrid as KitDataGrid,
+  type DataGridBand,
+  type DataGridHandle,
+  type DataGridProps,
+} from "@crewlethq/ui";
+import type { GlyphName } from "@crewlethq/icons/glyphs";
 import { useParam } from "../router.tsx";
 import { peekHref, usePeek } from "./DetailRail.tsx";
-import { Button, EmptyState, VisuallyHidden, cx, useMediaMatch } from "@crewlethq/ui";
-import { ChevronDownGlyph, ChevronUpGlyph } from "@crewlethq/icons/glyphs";
-// A GRID'S EMPTY MARK IS NAME-KEYED, because `empty.icon` is part of the prop
-// every screen fills in — so the name→drawing lookup stays in `~/ui/Icon.tsx`.
-import type { GlyphName } from "@crewlethq/icons/glyphs";
 import { Mark } from "~/ui/glyph.tsx";
 import { useKeymap } from "../keymap.ts";
-import { PHONE_BREAKPOINT } from "../layout.ts";
 
-export interface GridColumn<T> {
-  key: string;
-  header: ReactNode;
-  cell: (row: T) => ReactNode;
-  /** The value sorted on. Omit to make the column unsortable. */
-  sortValue?: (row: T) => string | number | null | undefined;
-  align?: "left" | "right";
-  /**
-   * The column's name where `header` cannot carry one — a glyph head, or none
-   * at all. Used by the card layout a grid takes on a phone, where every value
-   * draws its own name beside it; ignored everywhere `header` is drawn.
-   */
-  label?: string;
-  /**
-   * A column of ROW ACTIONS: every cell is a control that names itself — a
-   * "Revoke" button, an icon button with its own label — or a mark standing in
-   * for one ("This browser"). On the phone's card layout such a cell draws
-   * NO NAME beside it: the button is its own name, and the label the column
-   * once had to carry printed the word twice, `SIGN OUT  Sign out` on every
-   * session row. So it is declared IN PLACE OF [label] — `app/source.test.ts`
-   * accepts it where it asks an empty head for one — and a `label` beside it
-   * is only ever a chooser's or the "Hidden to fit" note's word, never drawn
-   * on the card. Its head stays empty, since a word over a column of buttons
-   * says nothing the buttons do not.
-   */
-  action?: boolean;
-  /** Shrink to content and never wrap. */
-  shrink?: boolean;
-  /**
-   * On a grid drawn with `phoneRows="compact"`, a cell of the row's FIRST line
-   * — what the row is (a key, a title) — where every other cell is a fact
-   * about it on the line under. Ignored on the labelled card and at any width
-   * with columns.
-   */
-  phoneLead?: boolean;
-  /**
-   * Left off the COMPACT phone row, whose contract is two lines: the lead,
-   * then one line of facts. A fact the row's own page answers one click away
-   * (when it last moved) is the one that gives way there — drawn, it wrapped
-   * onto an orphan third line on every task with a status and a due date, and
-   * the rows of one list stood at three heights. Ignored on the labelled card
-   * and at any width with columns, where [drop] decides instead.
-   */
-  phoneOmit?: boolean;
-  width?: string;
-  /** Hidden unless named in `cols=`. */
-  optional?: boolean;
-  /**
-   * The narrowest a FLEXIBLE column may be drawn — its track is
-   * `minmax(floor, 1fr)` rather than `minmax(0, 1fr)`. For the column that
-   * is the point of the list (a title, a name): at zero it gave way to every
-   * content-sized column beside it, and a work list beside a peek at 1280
-   * drew its titles 70px wide ("Which regi…"). Ignored on a `shrink` or a
-   * `width` column, whose track is sized another way.
-   */
-  floor?: string;
-  /**
-   * The order this column GIVES WAY in when the grid cannot draw every column
-   * at its size: the lowest number goes first, and a column without one never
-   * goes. See [fitColumns] — a grid that cannot fit drops columns rather than
-   * cutting them off at its clipped edge, and says which it dropped.
-   */
-  drop?: number;
-}
-
-/** One column a reader may turn on or off, as a chooser offers it. */
-export interface ColumnChoice {
-  key: string;
-  label: string;
-  /** Off until `cols=` names it. */
-  optional?: boolean;
-}
-
-/**
- * The choices a chooser offers, DERIVED from the columns a grid draws.
- *
- * A chooser holding its own list of names would be a second declaration of the
- * grid's columns — wrong the first time one is added, and indistinguishable
- * from a correct one. This takes the three facts a chooser needs off the
- * columns themselves, so a column added to a grid appears in its menu with no
- * second edit.
- *
- * THE CELL RENDERERS ARE NEVER CALLED. A name and a flag are properties of the
- * COLUMN, so nothing here touches a row — which is what lets a caller derive
- * the choices from a column list built over a stub context.
- */
-export function columnChoicesOf<T>(columns: GridColumn<T>[]): ColumnChoice[] {
-  return columns.map((column) => ({
-    key: column.key,
-    // THE HEAD, OR THE NAME THE COLUMN CARRIES WHERE THE HEAD IS A GLYPH —
-    // which is exactly what [GridColumn.label] is for on the card layout a
-    // narrow grid takes.
-    label:
-      typeof column.header === "string" && column.header
-        ? column.header
-        : (column.label ?? column.key),
-    optional: column.optional,
-  }));
-}
-
-/**
- * The checkbox list a reader chooses columns with, wherever it is drawn.
- *
- * ONE IMPLEMENTATION, because the two rules below are not obvious and a second
- * copy would have to re-derive both. It was the work list's Display menu
- * alone; the projects directory now draws the same control beside its segment,
- * and a screen whose grid has an optional column and no chooser is a column
- * nobody can reach — which is what `#/work/projects` shipped as when Unit
- * became optional.
- *
- * AN EMPTY `cols=` IS THE DEFAULT SET, NOT AN EMPTY GRID. [DataGrid] reads it
- * that way, so the boxes have to show the default until somebody moves one —
- * a chooser that drew an empty value as "nothing ticked" would say the grid is
- * blank while it is drawing every ordinary column.
- *
- * IT WRITES THE DECLARATION ORDER, NEVER THE CLICK ORDER. `cols=` carries an
- * ORDER as well as a selection, so a value built from a Set's insertion order
- * would rearrange the grid every time somebody ticked a box.
- *
- * The caller owns the KEY: the work list's is per shape (`cols.list=` /
- * `cols.table=`, since its two column sets declare two orders) and a screen
- * with one grid takes the bare `cols=` — see [DataGrid]'s own `name` and
- * `colsName`.
- */
-export function ColumnChooser({
-  choices,
-  value,
-  onChange,
-  label = "Columns",
-}: {
-  choices: ColumnChoice[];
-  /** `cols=` as it stands, empty for the default set. */
-  value: string;
-  onChange: (cols: string) => void;
-  /** The heading above the boxes, where a menu wants another word. */
-  label?: string;
-}) {
-  if (choices.length === 0) return null;
-  const chosen = new Set(value ? value.split(",").filter(Boolean) : []);
-  return (
-    <>
-      <div className="grid-cols-label">{label}</div>
-      <div className="grid-cols-choices">
-        {choices.map((choice) => {
-          const on = chosen.size === 0 ? !choice.optional : chosen.has(choice.key);
-          return (
-            <label key={choice.key} className="grid-cols-choice">
-              <input
-                type="checkbox"
-                checked={on}
-                onChange={() => {
-                  const next = new Set(
-                    chosen.size === 0
-                      ? choices.filter((c) => !c.optional).map((c) => c.key)
-                      : chosen,
-                  );
-                  if (on) next.delete(choice.key);
-                  else next.add(choice.key);
-                  onChange(
-                    choices
-                      .filter((c) => next.has(c.key))
-                      .map((c) => c.key)
-                      .join(","),
-                  );
-                }}
-              />
-              <span>{choice.label}</span>
-            </label>
-          );
-        })}
-      </div>
-    </>
-  );
-}
-
-export interface GridBand<T> {
-  key: string;
-  label: ReactNode;
-  /**
-   * The axis value's own mark, drawn before the label.
-   *
-   * A SIBLING OF THE LABEL RATHER THAN PART OF IT, because the head is a flex
-   * row with a gap: folded into `label` the mark sits inside the truncating
-   * span, where the gap never reaches it and an ellipsis eventually eats it.
-   * An axis with no mark passes nothing rather than a placeholder.
-   */
-  mark?: ReactNode;
-  /** The engine's count over the whole group, where it gave one. */
-  total?: number;
-  rows: T[];
-  /**
-   * The bands INSIDE this one, where the answer was grouped twice.
-   *
-   * ONE LEVEL, and a band carries rows OR sub-bands, never both — which is the
-   * shape the answer arrives in: sub-groups REPLACE a group's rows exactly as
-   * groups replace the ungrouped ones, because an answer carrying both would be
-   * the same rows twice. A grid that knew only `rows` drew a run of EMPTY bands
-   * over a twice-grouped answer with the rows nowhere at all, which is what the
-   * work table did for as long as its Display menu offered a second axis.
-   */
-  bands?: GridBand<T>[];
-  /** A per-band aggregate line. */
-  footer?: ReactNode;
-}
-
-/** Every row a band holds, its sub-bands' included, in the order they draw. */
-function bandRows<T>(band: GridBand<T>): T[] {
-  return band.bands ? band.bands.flatMap(bandRows) : band.rows;
-}
-
-/**
- * A three-way comparator that is STABLE on equal operands.
- *
- * Rows arrive from a live push several times a second, and a comparator that
- * answers -1 for equal operands — the `a < b ? 1 : -1` idiom — makes equal rows
- * swap places on every render: a list that shuffles itself while somebody is
- * reading it.
- */
-function compare(a: string | number, b: string | number): number {
-  if (typeof a === "number" && typeof b === "number") {
-    // NaN sorts last rather than poisoning the comparator's transitivity.
-    if (Number.isNaN(a)) return Number.isNaN(b) ? 0 : 1;
-    if (Number.isNaN(b)) return -1;
-    return a < b ? -1 : a > b ? 1 : 0;
-  }
-  return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" });
-}
-
-/**
- * The most of a grid one `shrink` column may take.
- *
- * A cap has to leave room for the flexible columns that are the point of the
- * list — a title, a subject, a name — and a grid's widest shrink column is
- * routinely a status pill, a handle or a timestamp, all of which sit far under
- * this. What it bites on is the value that had no business being a column of
- * its own width: the schedules grid's Wakes at 502px of an 822px grid, the
- * work table's Assignee at 220px of 644.
- *
- * 20% rather than a pixel count because it has to hold at every width — a
- * fraction of the grid is the same promise on a phone and on a wide screen,
- * where a pixel cap is a desktop's proportions pinned onto a laptop. Two
- * shrink columns at the cap still leave three fifths of the grid, and a grid
- * carrying five columns that each want a fifth of it is one whose author has
- * to choose, which is what `optional` is for.
- */
-const SHRINK_CAP = "20%";
-
-/** [SHRINK_CAP] as a fraction, for the measurement that asks whether a column is below it. */
-const SHRINK_SHARE = 0.2;
-
-/** How many rows [squeezed] reads: a page's first screen, which is what a reader sees. */
-const SQUEEZE_SAMPLE_ROWS = 12;
-
-/** What the fit has decided for one set of columns, at one width. */
-interface Fit {
-  /** The column set it was decided for (`cols=` changes it). */
-  readonly set: string;
-  /** The wrap's width when it last decided. */
-  readonly width: number;
-  /** The keys it dropped, in the order it dropped them. */
-  readonly dropped: readonly string[];
-}
-
-const NO_DROPS: readonly string[] = [];
-const NO_FIT: Fit = { set: "", width: 0, dropped: NO_DROPS };
-
-/**
- * The next fit, or null when this one stands. PURE, so the rules are held
- * without a layout engine:
- *
- * - the box GREW past the width columns were dropped at: start again from all
- *   of them (the effect that follows drops again only what still does not fit);
- * - the tracks OVERRUN the box: drop the visible column with the lowest
- *   `drop`, if there is one;
- * - otherwise remember a narrower width, so growing back past it re-tries.
- */
-export function fitColumns({
-  fit,
-  width,
-  overflows,
-  visible,
-}: {
-  fit: Fit;
-  width: number;
-  overflows: boolean;
-  visible: readonly { key: string; drop?: number }[];
-}): Fit | null {
-  if (fit.dropped.length > 0 && width > fit.width) {
-    return { set: fit.set, width, dropped: NO_DROPS };
-  }
-  if (overflows) {
-    let next: { key: string; drop?: number } | undefined;
-    for (const c of visible) {
-      if (c.drop === undefined) continue;
-      if (!next || c.drop < next.drop!) next = c;
-    }
-    if (next) return { set: fit.set, width, dropped: [...fit.dropped, next.key] };
-  }
-  if (width !== fit.width && (fit.dropped.length > 0 || fit.width === 0)) {
-    return { ...fit, width };
-  }
-  return null;
-}
-
-/**
- * Whether the tracks run past the wrap's inner edge: the head's last cell,
- * against the padding box. Measured on the head because every track has a
- * cell in it, whatever the rows hold.
- */
-function overflowing(wrap: HTMLElement): boolean {
-  const last = wrap.querySelector(":scope > .grid-head")?.lastElementChild;
-  if (!last) return false;
-  const inner = wrap.getBoundingClientRect().left + wrap.clientLeft + wrap.clientWidth;
-  return last.getBoundingClientRect().right > inner + 0.5;
-}
-
-/**
- * Whether a content-sized column has been SQUEEZED: drawn narrower than its
- * cap AND cutting a value short. The other way a grid fails to fit, and the
- * quieter one. A `shrink` track's floor is its content's min-content, and a
- * value that ellipsises (a status pill, a truncating name) has almost none —
- * so rather than overrun the box, the grid shrinks those columns to a letter
- * ("T…" for "To do") while the columns that could have gone stay. Below its
- * cap is the test that separates the two causes: a column AT its cap is cut by
- * the cap's own rule, which dropping another column would not change.
- *
- * Read over the head and the first screen of rows, and only on elements with a
- * box of their own (an inline run or a glyph has no client width to compare).
- */
-function squeezed<T>(wrap: HTMLElement, visible: readonly GridColumn<T>[]): boolean {
-  const heads = wrap.querySelector(":scope > .grid-head")?.children;
-  if (!heads) return false;
-  const cap = wrap.clientWidth * SHRINK_SHARE - 1;
-  const rows = [...wrap.querySelectorAll(":scope > .grid-body .grid-row")].slice(
-    0,
-    SQUEEZE_SAMPLE_ROWS,
-  );
-  for (let i = 0; i < visible.length; i++) {
-    const column = visible[i]!;
-    if (!column.shrink || column.width) continue;
-    const head = heads[i];
-    if (!head || head.getBoundingClientRect().width >= cap) continue;
-    for (const row of rows) {
-      const cell = row.querySelectorAll(":scope > .grid-cell")[i];
-      if (cell && cutShort(cell)) return true;
-    }
-  }
-  return false;
-}
-
-/**
- * Whether an element, or anything with a box inside it, is drawn narrower than
- * what it holds. A box one pixel wide is the screen-reader-only text a cell
- * carries (`.sr-only` — "Unassigned" beside an empty avatar), which is narrower
- * than its words on purpose and says nothing about the column's width.
- */
-function cutShort(el: Element): boolean {
-  for (const node of [el, ...el.querySelectorAll("*")]) {
-    const box = node as HTMLElement;
-    if (box.clientWidth > 1 && box.scrollWidth > box.clientWidth + 1) return true;
-  }
-  return false;
-}
-
-/** "Due and Updated" — the dropped columns by the name a reader knows them by. */
-function droppedNames<T>(columns: readonly GridColumn<T>[], dropped: readonly string[]): string {
-  const names = dropped.map((key) => {
-    const c = columns.find((col) => col.key === key);
-    return (typeof c?.header === "string" && c.header) || c?.label || key;
-  });
-  return names.length <= 1
-    ? (names[0] ?? "")
-    : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
-}
-
-/** `sort=-updated` → `{key: "updated", desc: true}`. */
-export function parseSort(raw: string): { key: string; desc: boolean } | null {
-  if (!raw) return null;
-  return raw.startsWith("-") ? { key: raw.slice(1), desc: true } : { key: raw, desc: false };
-}
-
-/**
- * WHICH GRID THE KEYBOARD IS DRIVING.
- *
- * `j`, `k` and `enter` are bound on `window`, because there is nothing else to
- * bind them to: a grid whose rows are anchors takes no focus of its own, and
- * asking the reader to click a list before they can walk it is not a keyboard
- * shortcut. But several screens carry two or three grids at once — the spend
- * by seat and the recent turns, a node's leases and its duties, a page's grid
- * and another inside the peek rail over it — and `window` is one target, so
- * every mounted grid received every keystroke. One `j` moved two cursors and
- * set two `scrollIntoView`s fighting over the viewport; one Enter opened a
- * seat peek and then a turn peek over it, so the object the reader got was
- * never the one their cursor was on.
- *
- * The reader's LAST POINTER GESTURE says which grid they are in — it is the
- * only signal there is, since neither grid can be focused. With no gesture yet
- * the first DRIVABLE grid mounted drives, which on every screen that has one
- * is the primary grid: a reader who has clicked nothing keeps exactly the
- * behaviour they had. A grid showing its empty state registers nothing, so an
- * empty list at the top of a screen does not swallow the keystrokes meant for
- * the populated one under it.
- *
- * Module state rather than a context: the two grids that need to agree are
- * frequently in different subtrees (a screen and the peek rail over it), and a
- * provider around both would have to be the shell, which knows nothing about
- * grids.
- */
 const drivable: string[] = [];
 let touched: string | null = null;
 let revision = 0;
@@ -477,10 +71,9 @@ function drivingRevision(): number {
 }
 
 /**
- * Whether ANY grid on screen holds `j` and `k` — for a screen that binds the
+ * Whether ANY grid on screen holds `j` and `k`: for a screen that binds the
  * same two keys to something of its own (a task page stepping through the list
- * it was opened from) and must stand aside while a grid on it takes them, so
- * one press is never two actions.
+ * it was opened from) and must stand aside while a grid takes them.
  */
 export function useAnyGridDriving(): boolean {
   useSyncExternalStore(watchDriving, drivingRevision);
@@ -492,236 +85,56 @@ function isDriving(gridId: string): boolean {
   return drivable[0] === gridId;
 }
 
+/** How many rows a grid draws, its bands' rows included. */
+function rowCount<T>(rows: T[] | undefined, bands: DataGridBand<T>[] | undefined): number {
+  const inBand = (band: DataGridBand<T>): number =>
+    band.bands ? band.bands.reduce((n, sub) => n + inBand(sub), 0) : band.rows.length;
+  return bands ? bands.reduce((n, band) => n + inBand(band), 0) : (rows?.length ?? 0);
+}
+
+export interface GridProps<T> extends Omit<
+  DataGridProps<T>,
+  "sort" | "onSortChange" | "cols" | "onColsChange" | "handleRef" | "onPointerDown" | "empty"
+> {
+  /** The sort before the reader chose one, as `key` or `-key`. */
+  defaultSort?: string;
+  /** Which grid on this screen, for the URL keys (`sort.<name>=`). */
+  name?: string;
+  /** Which column set `cols=` names, where that is not `name`. */
+  colsName?: string;
+  /** What an empty grid says; its mark is named, as every screen names it. */
+  empty?: { title: ReactNode; hint?: ReactNode; icon?: GlyphName; action?: ReactNode };
+}
+
 export function DataGrid<T>({
-  rows,
-  bands,
-  columns,
-  rowKey,
-  onRowActivate,
-  rowHref,
-  isSelected,
-  isFailed,
   defaultSort = "",
-  /** Sorting is the ENGINE's on a paged answer: it orders the whole set. */
-  serverSorted,
-  empty,
-  footer,
-  onLoadMore,
-  loadedNote,
   name,
   colsName,
-  phoneRows = "labelled",
-  flush = false,
-}: {
-  rows?: T[];
-  bands?: GridBand<T>[];
-  columns: GridColumn<T>[];
-  rowKey: (row: T) => string;
-  /** A plain click. The row is still an anchor when `rowHref` is given. */
-  onRowActivate?: (row: T, e: React.MouseEvent | React.KeyboardEvent) => void;
-  /** The row's object's page. A row whose link is the open peek's page is marked. */
-  rowHref?: (row: T) => string;
-  /** A mark that is not the peek — the object a path addresses, a lens's subject. */
-  isSelected?: (row: T) => boolean;
-  isFailed?: (row: T) => boolean;
-  defaultSort?: string;
-  serverSorted?: boolean;
-  /** What an empty grid says, and the one control that is its next step. */
-  empty?: { title: ReactNode; hint?: ReactNode; icon?: GlyphName; action?: ReactNode };
-  footer?: ReactNode;
-  onLoadMore?: () => void;
-  /** "40 of 312 loaded" — what an export would actually contain. */
-  loadedNote?: string;
-  /**
-   * Which grid on this screen, for the URL keys.
-   *
-   * THE PRIMARY GRID ON A SCREEN TAKES `sort=` AND `cols=` and every other
-   * one takes `sort.<name>=`. Several screens carry two or three grids — the
-   * spend by seat and the recent turns, a node's leases and its duties — and
-   * unnamed they would all read the ONE `sort` key: sorting the lower table
-   * would silently re-sort the upper one, and a link to a sorted screen would
-   * mean something different depending on which table the reader had touched.
-   *
-   * A name rather than an index, because an index is a fact about the source
-   * order: inserting a grid above would move every link's meaning by one.
-   */
-  name?: string;
-  /**
-   * WHICH COLUMN SET this grid's `cols=` names, where that is not `name`.
-   *
-   * The two keys answer two different questions and only usually have one
-   * answer. `sort=` is a fact about the QUESTION — on a server-sorted list the
-   * key goes to the engine, which orders the whole set the same way whatever
-   * draws it — and `cols=` is a fact about the DRAWING. The work screen is
-   * where they come apart: its list and its table are one grid with two column
-   * sets, so the order is shared between them and the column arrangement is
-   * not. A `cols=` carries an ORDER as well as a selection and that order is
-   * the set's own declaration order, so one key read against both sets draws
-   * the list's columns in the table's order — a row nobody arranged.
-   *
-   * Defaults to `name`, which is what every grid with one column set wants.
-   */
-  colsName?: string;
-  /**
-   * HOW A ROW IS DRAWN ON A PHONE, where there are no columns.
-   *
-   * `labelled` — the default — is a card of one labelled line per value: every
-   * grid can take it, whatever its columns are, because each value names
-   * itself. `compact` is two lines with no labels: the [GridColumn.phoneLead]
-   * cells, then every other value as a run of marks. It is for a grid whose
-   * values are marks that read without a name (a status pill, an avatar, a
-   * date) and whose reader is scanning MANY rows — the work list, where the
-   * labelled card stood eight lines and 230px tall per task and a phone showed
-   * two and a half of them.
-   */
-  phoneRows?: "labelled" | "compact";
-  /**
-   * THE GRID IS A CARD'S BODY rather than a box inside it: no border, no
-   * radius and no ground of its own, one rule above its head, so its rows run
-   * to the card's edges. A bordered box inside a bordered card drew two edges
-   * a pixel apart — a table inset in a frame the card already is.
-   */
-  flush?: boolean;
-}) {
-  const [sortRaw, setSort] = useParam(name ? `sort.${name}` : "sort", defaultSort);
+  empty,
+  isSelected,
+  rowHref,
+  onRowActivate,
+  rows,
+  bands,
+  ...rest
+}: GridProps<T>) {
+  const [sort, setSort] = useParam(name ? `sort.${name}` : "sort", defaultSort);
   const columnSet = colsName ?? name;
-  const [colsRaw, setCols] = useParam(columnSet ? `cols.${columnSet}` : "cols", "");
-  const sort = parseSort(sortRaw);
-  const body = useRef<HTMLDivElement>(null);
-  const [cursor, setCursor] = useState(-1);
-  // UNIQUE PER MOUNTED GRID, not per `name`. A page and the peek rail over it
-  // both render grids at once, and `name` distinguishes the grids on ONE
-  // screen — two screens' "recent" grids would mint the same row ids and an
-  // `aria-labelledby` would resolve to whichever came first in the document.
+  const [cols, setCols] = useParam(columnSet ? `cols.${columnSet}` : "cols", "");
+  const handle = useRef<DataGridHandle>(null);
   const gridId = useId();
 
-  const shownColumns = useMemo(() => {
-    const asked = colsRaw
-      .split(",")
-      .map((c) => c.trim())
-      .filter(Boolean);
-    if (asked.length === 0) return columns.filter((c) => !c.optional);
-    // THE ORDER THE READER ASKED FOR, not the declaration order: `cols=` is a
-    // column arrangement, and re-sorting it into declaration order would make
-    // the key look ignored.
-    const byKey = new Map(columns.map((c) => [c.key, c]));
-    const picked = asked.map((key) => byKey.get(key)).filter((c): c is GridColumn<T> => !!c);
-    return picked.length > 0 ? picked : columns.filter((c) => !c.optional);
-  }, [columns, colsRaw]);
-
-  // ---- Fitting the columns to the box ------------------------------------
-  //
-  // THE WRAP CLIPS (it is `overflow: clip`, which is what keeps the sticky
-  // head working), so a grid whose columns do not fit loses its last ones at
-  // the edge with nothing to scroll — or, with no floor anywhere, keeps them
-  // all and squeezes its one flexible column to nothing. Neither is a list.
-  // So when the tracks overrun the box — or a content-sized column is squeezed
-  // to a letter below its cap ([squeezed]) — the column with the lowest `drop`
-  // goes, and again, until they fit or nothing droppable is left; when the box
-  // GROWS, every column gets another chance. All of it happens in a layout
-  // effect, so the intermediate shapes are never painted.
-  //
-  // NOT ON A PHONE, where a row is a labelled card and has no tracks to
-  // overrun: a card shows every value, one per line.
-  // STATE, NOT A REF: a grid showing its empty state renders no wrap to
-  // measure, and the observer below has to attach when the rows arrive.
-  const [wrap, setWrap] = useState<HTMLDivElement | null>(null);
-  const phone = useMediaMatch(`(width < ${PHONE_BREAKPOINT}px)`);
-
-  // THE ROW THE RAIL IS OPEN ON IS MARKED, in every grid, by comparing
-  // ADDRESSES: a row's link is its object's page, and the peek names an object
-  // whose page is `peekHref` of it — the one function every row link to a
-  // peekable object is already built with. So the mark cannot name a
-  // different row from the one the rail shows, which is what four
-  // per-screen spellings of "which row is open" risked, and a grid that never
-  // wrote one (Nodes, Secrets, a seat's turns, the spend tables, the page
-  // list, most of Settings) no longer leaves the reader to find the row a
-  // peek beside it describes. `isSelected` stays for a mark that is not the
-  // peek — the credential a path addresses, the revision the Diff lens reads.
   const peek = usePeek();
   const peeked = peek ? peekHref(peek) : "";
-  const shownKeys = shownColumns.map((c) => c.key).join(",");
-  const [fit, setFit] = useState<Fit>(NO_FIT);
-  const dropped = !phone && fit.set === shownKeys ? fit.dropped : NO_DROPS;
-  const visibleColumns = useMemo(
-    () =>
-      dropped.length === 0 ? shownColumns : shownColumns.filter((c) => !dropped.includes(c.key)),
-    [shownColumns, dropped],
-  );
-  // A resize the wrap reports is a re-render, which is what re-runs the fit.
-  const [, setBoxWidth] = useState(0);
-  useLayoutEffect(() => {
-    if (!wrap) return;
-    const watch = new ResizeObserver(() => setBoxWidth(wrap.clientWidth));
-    watch.observe(wrap);
-    return () => watch.disconnect();
-  }, [wrap]);
-  // AFTER EVERY COMMIT, deliberately without dependencies: new rows, a sort
-  // or a resize can each change what fits, and the decision is one compare.
-  useLayoutEffect(() => {
-    const el = wrap;
-    if (!el || phone) return;
-    const next = fitColumns({
-      fit: fit.set === shownKeys ? fit : { ...NO_FIT, set: shownKeys },
-      width: el.clientWidth,
-      overflows: overflowing(el) || squeezed(el, visibleColumns),
-      visible: visibleColumns,
-    });
-    if (next !== null) setFit(next);
-  });
-
-  const sortRows = useCallback(
-    (input: T[]): T[] => {
-      if (!sort || serverSorted) return input;
-      const column = columns.find((c) => c.key === sort.key);
-      if (!column?.sortValue) return input;
-      const get = column.sortValue;
-      // A COPY, always: sorting the array a parent memoised would mutate the
-      // caller's own state and make the next render's diff a lie.
-      return [...input].sort((a, b) => {
-        const av = get(a);
-        const bv = get(b);
-        // An absent value sorts last in both directions: "nothing recorded"
-        // is not the smallest value, it is not a value.
-        if (av == null && bv == null) return 0;
-        if (av == null) return 1;
-        if (bv == null) return -1;
-        const cmp = compare(av, bv);
-        return sort.desc ? -cmp : cmp;
-      });
-    },
-    [columns, sort, serverSorted],
+  const marked = useCallback(
+    (row: T) => Boolean(isSelected?.(row)) || (peeked !== "" && rowHref?.(row) === peeked),
+    [isSelected, peeked, rowHref],
   );
 
-  const flat = useMemo(() => {
-    // THROUGH THE SUB-BANDS TOO, and in the order they draw: this is the list
-    // `j`, `k` and `enter` walk, so a row the grid renders and this misses is a
-    // row the cursor steps over — and a row counted here that is not rendered
-    // puts every later `data-row-index` one place out.
-    const walk = (band: GridBand<T>): T[] =>
-      band.bands ? band.bands.flatMap(walk) : sortRows(band.rows);
-    if (bands) return bands.flatMap(walk);
-    return sortRows(rows ?? []);
-  }, [bands, rows, sortRows]);
-
-  // `j` and `k` walk a cursor row; `enter` activates it. No selection, because
-  // there is nothing to do with one.
-  const step = useCallback(
-    (by: number) =>
-      setCursor((at) => {
-        const next = Math.max(0, Math.min(flat.length - 1, at + by));
-        body.current
-          ?.querySelector<HTMLElement>(`[data-row-index="${next}"]`)
-          ?.scrollIntoView({ block: "nearest" });
-        return next;
-      }),
-    [flat.length],
-  );
-  // `when` below is a value captured at render, so a pointer gesture that
-  // changes nothing on screen still has to re-render every grid for them to
-  // agree about whose keystroke the next one is.
+  // A pointer gesture that changes nothing on screen still has to re-render
+  // every grid for them to agree about whose keystroke the next one is.
   useSyncExternalStore(watchDriving, drivingRevision);
-  const canDrive = flat.length > 0;
+  const canDrive = rowCount(rows, bands) > 0;
   useEffect(() => {
     if (!canDrive) return;
     drivable.push(gridId);
@@ -729,14 +142,12 @@ export function DataGrid<T>({
     return () => {
       const at = drivable.indexOf(gridId);
       if (at >= 0) drivable.splice(at, 1);
-      // A grid the reader touched and then left takes nothing with it: the
-      // fallback has to be free to name the next one.
+      // A grid the reader touched and then left takes nothing with it.
       if (touched === gridId) touched = null;
       announce();
     };
   }, [gridId, canDrive]);
   const driving = isDriving(gridId);
-
   const claimKeyboard = useCallback(() => {
     if (touched === gridId) return;
     touched = gridId;
@@ -744,345 +155,38 @@ export function DataGrid<T>({
   }, [gridId]);
 
   useKeymap({
-    "list.next": { run: () => step(1), when: driving },
-    "list.previous": { run: () => step(-1), when: driving },
+    "list.next": { run: () => handle.current?.step(1), when: driving },
+    "list.previous": { run: () => handle.current?.step(-1), when: driving },
     "list.open": {
-      when: driving && cursor >= 0 && cursor < flat.length && Boolean(onRowActivate),
+      when: driving && Boolean(onRowActivate),
       run: (e) => {
-        const row = flat[cursor];
-        if (row && onRowActivate) onRowActivate(row, e as unknown as React.KeyboardEvent);
+        handle.current?.activate(e as KeyboardEvent);
       },
     },
   });
 
-  function headerClick(column: GridColumn<T>): void {
-    if (!column.sortValue) return;
-    if (sort?.key === column.key && !sort.desc) setSort(`-${column.key}`);
-    else if (sort?.key === column.key && sort.desc) setSort("");
-    else setSort(column.key);
-  }
-
-  // THE TRACK LIST IS DECLARED ONCE, ON THE WRAP.
-  //
-  // The head and every row used to be a grid container of its own, each handed
-  // this same string — which looks like one layout and is not: an intrinsic
-  // track (`max-content`, and `minmax(0, 1fr)` once it is out of free space)
-  // resolves against the content of ITS OWN container, so every row sized its
-  // columns against its own cells alone. Measured against a running engine: a
-  // work table's fifth column started at 78.4px in the head and 74px in the
-  // rows, and the audit's last column sat 245px from the heading that named
-  // it. A grid whose columns do not line up is not a grid.
-  //
-  // So the wrap owns the tracks and everything between it and a cell is a
-  // `subgrid` passthrough (see `.grid-head`/`.grid-body`/`.grid-band`/
-  // `.grid-row` in frame.css) — which is also what makes a head cell and a
-  // cell twenty rows below it size the SAME track.
-  // AND A SHRINK COLUMN IS CAPPED, because `max-content` is not "shrink to
-  // content" — it is GROW to content, without a ceiling, and grid resolves it
-  // before it gives anything to a `minmax(0, 1fr)`. So one long value in a
-  // narrow column starves every flexible one to ZERO and still overflows.
-  //
-  // Measured against a running engine, and it is the flexible columns that
-  // vanish: the schedules grid in an 822px content column drew Wakes at 502px
-  // — sixty per cent of the grid — with Name and Task at 0px, and STILL ran to
-  // 1139px of content inside a box that clips. The work table at 1000px drew
-  // Assignee at 220px with TITLE at zero. A tracker whose title column is
-  // invisible is not a list.
-  //
-  // `fit-content(<percentage>)` is `min(max-content, max(min-content, <cap>))`
-  // — so a column under the cap is untouched and keeps sizing to its content,
-  // and only one that would take more than its share gives way. ONE FRACTION
-  // FOR EVERY GRID rather than a pixel floor per column, which is a number
-  // that would have to be invented nineteen times and re-invented at every
-  // width. It resolves against the grid's own content box, so it scales with
-  // the window instead of pinning a laptop to a desktop's proportions.
-  const template = visibleColumns
-    .map(
-      (c) => c.width ?? (c.shrink ? `fit-content(${SHRINK_CAP})` : `minmax(${c.floor ?? 0}, 1fr)`),
-    )
-    .join(" ");
-
-  // A GROUPED ANSWER WITH NO ROWS ON THIS PAGE IS NOT AN EMPTY ANSWER.
-  //
-  // A band carries the engine's count over its WHOLE group and a bounded slice
-  // of rows, so a band whose slice is empty still says how many are in it —
-  // "Ada Okonkwo · 0 of 3" is an answer, and "Nothing matches" drawn over it is
-  // a different and false one. The empty state is for a grid with nothing to
-  // draw at all, which with bands means no band either.
-  if (flat.length === 0 && !bands?.length && empty) {
-    return (
-      // FLUSH WHEN EMPTY TOO: the card is still the frame, and an empty state
-      // drawn in a bordered wrap was a box inside the card's own border.
-      <div className="grid-wrap" data-flush={flush || undefined}>
-        {/* `compact` IS OUR `inline`: an empty state inside a panel rather
-            than across a screen. The mark is left to theirs when a screen
-            names none — their default is the same inbox drawing ours was. */}
-        <EmptyState
-          size="compact"
-          icon={empty.icon && <Mark name={empty.icon} size={32} />}
-          title={empty.title}
-          description={empty.hint}
-          action={empty.action}
-        />
-      </div>
-    );
-  }
-
-  let index = -1;
-  function renderRow(row: T): ReactNode {
-    index += 1;
-    const at = index;
-    const key = rowKey(row);
-    const link = rowHref?.(row);
-    // THE CELL CARRIES ITS COLUMN'S OWN NAME.
-    //
-    // Below the drawer breakpoint a row is not a row: the column heads go and
-    // each cell is drawn as a labelled line, because a nine-column table in a
-    // 390px card clips six of them with nothing to scroll (the wrap is
-    // `overflow: clip`, which is what keeps the sticky head working). A label
-    // per cell is the only way a value keeps its meaning once the head it sat
-    // under is gone.
-    //
-    // FROM THE HEADER WHERE THE HEADER IS A WORD, and from `label` where it is
-    // not. A head may be a glyph or nothing at all — a type mark, a row action,
-    // a pair of state tags — because the column is twenty pixels wide and a
-    // word does not fit in it. `attr()` can only read text, and a head like
-    // that leaves the card with an unnamed line: measured on the tracker at
-    // 390px as a bare type mark floating between KEY and TITLE, which reads as
-    // a rendering fault rather than as a value. The head cannot carry the word
-    // — that is what made it a glyph — so the column says it separately, and
-    // the card is the only layout that spends it.
-    //
-    // THE LABEL IS SET UNCONDITIONALLY AND THE SHEET DROPS THE LINE. A column
-    // draws no value on a row that has none — `PriorityMark` renders null for
-    // `normal`, which nearly every task is — and in the card that left the
-    // label alone on a line: `PRIORITY` with nothing beside it. Nothing here
-    // can see that, because a component that renders null is an element like
-    // any other until the browser draws it; `.grid-cell:empty` in `frame.css`
-    // is the browser answering, and the element has to stay in the DOM anyway
-    // or the wide layout's positional tracks move. What this file owes that
-    // rule is that a cell with no value has no child nodes — which is what
-    // `DataGrid.test.tsx` holds, since a mark wrapped in an always-rendered
-    // span would defeat it silently.
-    //
-    // AND AN ACTION COLUMN'S CELL NAMES ITSELF ([GridColumn.action]): a
-    // button's own word is the line, so the card draws no name before it.
-    const inner = visibleColumns.map((column) => (
-      <span
-        key={column.key}
-        className={cx("grid-cell", column.align === "right" && "right", column.shrink && "shrink")}
-        data-lead={column.phoneLead || undefined}
-        data-phone-omit={column.phoneOmit || undefined}
-        data-label={
-          column.action
-            ? undefined
-            : (typeof column.header === "string" && column.header ? column.header : column.label) ||
-              undefined
-        }
-      >
-        {column.cell(row)}
-      </span>
-    ));
-    const marked = Boolean(isSelected?.(row)) || (peeked !== "" && link === peeked);
-    const className = cx(
-      "grid-row",
-      marked && "selected",
-      isFailed?.(row) && "failed",
-      cursor === at && "cursor",
-    );
-    // THE ROW'S OWN LINK IS AN OVERLAY, NOT THE ROW.
-    //
-    // The row used to BE an `<a>` when `rowHref` was given, and a cell that
-    // links (`linkedSeat`, `SeatChip`, `TableKeyCell`) then put an anchor inside an
-    // anchor. That is not merely invalid: the HTML parser CLOSES the outer one
-    // at the inner one, so the row link covered only the cells before the
-    // first seat chip and the rest of the row silently stopped being
-    // clickable. Both halves looked identical and one of them did nothing.
-    //
-    // Stretched over the row instead, the link keeps everything it had — a
-    // real href, so ⌘-click, middle-click and "copy link address" all work —
-    // and the cells' own links sit above it (`.grid-row a { position:
-    // relative }`), so a click on a seat reaches the seat and a click on the
-    // row reaches the row.
-    //
-    // It takes its accessible name FROM THE ROW, which is what the anchor row
-    // announced before: the name computation walks the element `aria-labelledby`
-    // points at, so a screen reader still reads the cells rather than "link".
-    const rowId = `${gridId}-row-${at}`;
-    return (
-      <div
-        key={key}
-        id={link !== undefined ? rowId : undefined}
-        className={className}
-        data-row-index={at}
-        role={link === undefined && onRowActivate ? "button" : undefined}
-        tabIndex={link === undefined && onRowActivate ? 0 : undefined}
-        aria-current={link === undefined && marked ? "true" : undefined}
-        onClick={link === undefined && onRowActivate ? (e) => onRowActivate(row, e) : undefined}
-      >
-        {link !== undefined && (
-          <a
-            className="row-link"
-            href={link}
-            aria-labelledby={rowId}
-            // THE MARK IS SAID, NOT ONLY PAINTED: the tint is the one cue a
-            // sighted reader gets, and a screen reader walking the rows hears
-            // which one is the open one.
-            aria-current={marked ? "true" : undefined}
-            onClick={(e) => onRowActivate?.(row, e)}
-          />
-        )}
-        {inner}
-      </div>
-    );
-  }
-
-  /**
-   * One band, and the bands inside it.
-   *
-   * RECURSIVE BECAUSE THE ANSWER IS. A second axis comes back as sub-groups
-   * under each group, and nesting a heading under a heading is what a second
-   * axis MEANS where every row is a line — the alternative, one flat band per
-   * pair, throws away which of the two axes a heading belongs to.
-   *
-   * NO `depth` CLASS: a sub-band's head is inset and quieter so that a band at
-   * its parent's inset does not read as its sibling, and the sheet says that
-   * with `.grid-band .grid-band > .grid-band-head` — the nesting IS the fact,
-   * and a class spelling it out is a second copy of what the DOM already says.
-   */
-  function renderBand(band: GridBand<T>): ReactNode {
-    // THE LOADED COUNT IS THIS BAND'S OWN ROWS, its sub-bands' included — a
-    // band that carries sub-bands carries no rows of its own, so counting
-    // `rows` alone reported every twice-grouped band as holding nothing.
-    const loaded = bandRows(band).length;
-    return (
-      <div key={band.key} className="grid-band">
-        <div className="grid-band-head">
-          {band.mark}
-          <span className="truncate">{band.label}</span>
-          {/* THE ENGINE'S COUNT AND THE LOADED COUNT, apart. A band head
-              reading 12 over 12 of 300 rows is the number a person plans
-              against. */}
-          <span className="grid-band-count t-num">
-            {band.total != null && band.total !== loaded ? `${loaded} of ${band.total}` : loaded}
-          </span>
-        </div>
-        {band.bands ? band.bands.map((sub) => renderBand(sub)) : sortRows(band.rows).map(renderRow)}
-        {band.footer && <div className="grid-band-foot">{band.footer}</div>}
-      </div>
-    );
-  }
-
   return (
-    // THE POINTER IS WHAT SAYS WHICH GRID THE READER IS IN — see the registry
-    // above. `pointerdown` rather than `click`, so a drag on a header or a
-    // press that never becomes a click still hands the keyboard over.
-    <div
-      ref={setWrap}
-      className="grid-wrap"
-      data-phone-rows={phoneRows === "compact" ? "compact" : undefined}
-      data-flush={flush || undefined}
-      style={{ gridTemplateColumns: template }}
+    <KitDataGrid
+      {...rest}
+      rows={rows}
+      bands={bands}
+      rowHref={rowHref}
+      onRowActivate={onRowActivate}
+      isSelected={marked}
+      sort={sort}
+      onSortChange={setSort}
+      cols={cols}
+      onColsChange={setCols}
+      handleRef={handle}
       onPointerDown={claimKeyboard}
-    >
-      <div className="grid-head" role="row">
-        {visibleColumns.map((column) => {
-          const sorted = sort?.key === column.key;
-          const className = cx(
-            "grid-th",
-            column.align === "right" && "right",
-            column.shrink && "shrink",
-            sorted && "sorted",
-            !column.sortValue && "plain",
-          );
-          // A COLUMN THAT CANNOT BE SORTED IS NOT A BUTTON.
-          //
-          // Every head used to be one, `disabled` where there was no order to
-          // ask for — which is the right BEHAVIOUR and the wrong element. A
-          // disabled button is still a button in the accessibility tree, so
-          // the heads whose label is a glyph or nothing at all (a type mark, a
-          // row action) were announced as "button" with no name, and a reader
-          // on a screen reader met one unnamed control per such column per
-          // grid. `role="columnheader"` is what those cells are; the sortable
-          // ones stay buttons, because a button is what they are.
-          const body = (
-            <>
-              <span className="truncate">{column.header}</span>
-              {sorted &&
-                (sort?.desc ? <ChevronDownGlyph size="xs" /> : <ChevronUpGlyph size="xs" />)}
-            </>
-          );
-          if (!column.sortValue) {
-            // A GLYPH HEAD IS STILL A NAMED COLUMN. With no word to draw, the
-            // header carried nothing at all, so a screen reader met an
-            // unnamed column and a pointer had no way to ask what one of
-            // twenty pixels of marks was. The column's own word (`label`,
-            // which the phone's card already spends) names it, said to
-            // assistive technology and shown on hover.
-            const unworded = !(typeof column.header === "string" && column.header);
-            const named = unworded && !column.action ? column.label : undefined;
-            return (
-              <div key={column.key} className={className} role="columnheader" title={named}>
-                {body}
-                {named && <VisuallyHidden>{named}</VisuallyHidden>}
-              </div>
-            );
-          }
-          return (
-            <button
-              key={column.key}
-              type="button"
-              className={className}
-              onClick={() => headerClick(column)}
-              aria-sort={sorted ? (sort?.desc ? "descending" : "ascending") : undefined}
-              // AND A SORTABLE HEAD IS NAMED EVEN WHERE ITS HEAD IS NOT A WORD.
-              // The rule above takes the unsortable glyph heads out of the
-              // button role; what it cannot do is stop a SORTABLE column being
-              // declared with a glyph or an empty head, which renders a
-              // control whose whole accessible name is the sort arrow. Such a
-              // column already carries the word separately for the phone's
-              // card layout (`label`, held by `app/source.test.ts`), so the
-              // name is there to be spent.
-              aria-label={
-                typeof column.header === "string" && column.header ? undefined : column.label
-              }
-            >
-              {body}
-            </button>
-          );
-        })}
-      </div>
-
-      <div className="grid-body" ref={body}>
-        {bands ? bands.map((band) => renderBand(band)) : sortRows(rows ?? []).map(renderRow)}
-      </div>
-
-      {(footer || onLoadMore || loadedNote || dropped.length > 0) && (
-        <div className="grid-foot">
-          {footer}
-          <span className="spacer" />
-          {/* A DROPPED COLUMN IS SAID. A column that vanished without a word is
-              a value the reader cannot tell was ever there; this names what
-              the width took, and widening the window (or closing the peek)
-              brings it back. */}
-          {dropped.length > 0 && (
-            <span className="t-caption">Hidden to fit: {droppedNames(shownColumns, dropped)}</span>
-          )}
-          {loadedNote && <span className="t-caption">{loadedNote}</span>}
-          {onLoadMore && (
-            <Button size="small" variant="secondary" onClick={onLoadMore}>
-              Load more
-            </Button>
-          )}
-        </div>
-      )}
-      {/* A COLUMN CHOOSER THAT CLEARS. `cols=` is a URL key like any other
-          and the way back from a hand-edited one has to be visible. */}
-      {colsRaw && (
-        <button className="grid-cols-reset" onClick={() => setCols("")}>
-          Show every column
-        </button>
-      )}
-    </div>
+      empty={
+        empty && {
+          title: empty.title,
+          hint: empty.hint,
+          action: empty.action,
+          icon: empty.icon && <Mark name={empty.icon} size={32} />,
+        }
+      }
+    />
   );
 }

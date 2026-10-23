@@ -358,8 +358,6 @@ img {
    one included, so there is nothing to opt out of here. */
 .working-now,
 .peek-grip,
-.grid-row,
-.grid-th:not(.plain),
 .list-row.clickable,
 .work-row,
 .turn-row,

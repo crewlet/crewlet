@@ -78,7 +78,8 @@ import {
 import { href, useNavigator, useParam, useRoute } from "~/app/router.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { RelatedRow } from "~/app/frame/RelatedRow.tsx";
-import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import { type DataGridColumn } from "@crewlethq/ui";
 import { useSearchTarget } from "~/app/searchTarget.ts";
 import {
   LEGACY_ARTIFACT_SECTIONS,
@@ -763,7 +764,7 @@ function Listing({
   // "You" and "Owner" on every row; the trash's rows say when each went in
   // and when it goes for good in their place.
   const own = section === "yours";
-  const columns: GridColumn<ArtifactListItem>[] = [
+  const columns: DataGridColumn<ArtifactListItem>[] = [
     {
       key: "title",
       header: "Name",

@@ -3725,7 +3725,7 @@ a.knowledge-reader-how:hover {
    dead sticky head — the audit's 84 rows and the cost breakdown's 50 scrolled
    their column names off the top of the window, so the reader was left
    matching values to headers they could no longer see. This is the SAME
-   correction `.grid-wrap` already carries in frame.css, for the same reason
+   correction `.crewlet-data-grid` already carries in frame.css, for the same reason
    and against the same property.
 
    `clip` gives up programmatic scrolling, which is all `hidden` ever offered
@@ -5797,7 +5797,7 @@ span.list-position-step {
   background: var(--color-surface-subtle);
   border: 1px solid var(--color-border-default);
   border-radius: var(--radius-md);
-  /* THE LIST MAKES NO SCROLLPORT OF ITS OWN — the same rule `.grid-wrap` gives
+  /* THE LIST MAKES NO SCROLLPORT OF ITS OWN — the same rule `.crewlet-data-grid` gives
      in frame.css, and for the same reason. What the panel wants is the rows
      rounded off at its own radius, which `clip` does exactly as `hidden` did;
      what `hidden` ADDS is a scroll container, and a sticky box is confined to
@@ -9564,38 +9564,40 @@ a.live-row:focus-visible {
      at their own width — the compact row gives EVERY lead cell the rest of
      the line, which is right for a key-and-title row and wrong for figures. */
   .spend-agents
-    .grid-wrap[data-phone-rows="compact"]
-    .grid-cell[data-lead]:not(:has(.crewlet-table-cell__entity)) {
+    .crewlet-data-grid[data-phone-rows="compact"]
+    .crewlet-data-grid__cell[data-lead]:not(:has(.crewlet-table-cell__entity)) {
     flex: none;
     font-weight: inherit;
   }
   /* A TASK'S PHONE ROW READS ALONG ITS FIRST LINE: the key and the tokens sit
      on the title's baseline, not centred against a title and the facts under
      it — centred, a two-line title left its key floating between the two. */
-  .spend-tasks .grid-wrap[data-phone-rows="compact"] .grid-row {
+  .spend-tasks .crewlet-data-grid[data-phone-rows="compact"] .crewlet-data-grid__row {
     align-items: baseline;
   }
   /* THE KEY IS A COLUMN ON A PHONE TOO, so every title starts at one x:
      sized to its own width, ENG-4 and LEAD-6 put the titles beside them at
      two different indents. Seven characters of the key's own monospace fit a
      project key and a two-digit number; a longer key grows its own row. */
-  .spend-tasks .grid-wrap[data-phone-rows="compact"] .crewlet-table-cell__key {
+  .spend-tasks .crewlet-data-grid[data-phone-rows="compact"] .crewlet-table-cell__key {
     display: inline-block;
     min-width: 7ch;
   }
   /* THE BAR IS FOR SCANNING A COLUMN, and a compact row has none — and the
      figure takes its own width at the line's end, where the compact row
      would otherwise split the line between it and the title. */
-  .spend-tasks .grid-wrap[data-phone-rows="compact"] .spend-share-track {
+  .spend-tasks .crewlet-data-grid[data-phone-rows="compact"] .spend-share-track {
     display: none;
   }
-  .spend-tasks .grid-wrap[data-phone-rows="compact"] .grid-cell[data-lead]:has(.spend-task-spend) {
+  .spend-tasks
+    .crewlet-data-grid[data-phone-rows="compact"]
+    .crewlet-data-grid__cell[data-lead]:has(.spend-task-spend) {
     flex: none;
   }
-  .spend-tasks .grid-wrap[data-phone-rows="compact"] .spend-task-spend {
+  .spend-tasks .crewlet-data-grid[data-phone-rows="compact"] .spend-task-spend {
     width: auto;
   }
-  .spend-tasks .grid-wrap[data-phone-rows="compact"] .spend-task-spend > :last-child {
+  .spend-tasks .crewlet-data-grid[data-phone-rows="compact"] .spend-task-spend > :last-child {
     flex: none;
   }
   .spend-agents .spend-share-track {
@@ -9605,13 +9607,13 @@ a.live-row:focus-visible {
      has none: the percentage and its unit say the same. With the bar, a capped
      seat's second line did not fit and the seat stood three lines tall at
      every density. */
-  .spend-agents .grid-wrap[data-phone-rows="compact"] .spend-day-meter {
+  .spend-agents .crewlet-data-grid[data-phone-rows="compact"] .spend-day-meter {
     display: none;
   }
   /* ONE LINE FOR A NAME on the compact row: the card layout wraps a value
      because it has a line of its own, and here a wrapped name stood a seat
      three lines tall beside figures that fit on one. */
-  .spend-agents .grid-cell[data-lead] .truncate {
+  .spend-agents .crewlet-data-grid__cell[data-lead] .truncate {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -9762,7 +9764,7 @@ a.live-row:focus-visible {
 /* THE COMPANY'S ROW, ON THE SEATS' COLUMNS. Budgets.tsx hands this row and the
    seats' table one track list (`TRACKS`), so each window stands over its
    column in the table below (as `--budget-tracks`). The cells keep the table cell's own inline inset
-   (`.grid-cell`: --spacing-3), which is what puts their words on the table's
+   (`.crewlet-data-grid__cell`: --spacing-3), which is what puts their words on the table's
    words. No ground of its own: a grey tile inside the card was a frame
    inside the frame. A hairline between windows, as a stat row draws. */
 .budget-row {
@@ -9982,7 +9984,7 @@ a.live-row:focus-visible {
    a small control's height, which holds the chip at every density, and the
    name is set on it, so the line is that tall with or without the chip and
    the name sits where it does in every other cell. The title says both. */
-.grid-cell > .revision-author {
+.crewlet-data-grid__cell > .revision-author {
   flex-wrap: wrap;
   row-gap: var(--spacing-1);
   height: var(--size-control-sm);
@@ -10267,10 +10269,10 @@ a.live-row:focus-visible {
    ledger's and every row of it stands at one height. The facts after the
    name are the quieter steps: who can open it and the owner in the
    secondary, when and the reader's role in the tertiary. */
-.artifacts-list .grid-row {
+.artifacts-list .crewlet-data-grid__row {
   min-height: calc(var(--size-row-md) + var(--spacing-4));
 }
-.artifacts-list .grid-cell {
+.artifacts-list .crewlet-data-grid__cell {
   color: var(--color-text-secondary);
 }
 .artifacts-when,

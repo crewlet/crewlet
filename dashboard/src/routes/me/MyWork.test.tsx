@@ -691,9 +691,9 @@ test("the assignee is locked on the wire and absent from the URL and the chips",
   // "Status" is also a column head and a Display option one bar over.
   // (The grid's assignee column still names its glyph head for a screen
   // reader; that is the column, not a chip.)
-  expect(screen.queryAllByText("Assignee").filter((el) => !el.closest(".grid-head"))).toHaveLength(
-    0,
-  );
+  expect(
+    screen.queryAllByText("Assignee").filter((el) => !el.closest(".crewlet-data-grid__head")),
+  ).toHaveLength(0);
   fireEvent.click(screen.getByRole("button", { name: "Filter" }));
   await waitFor(() => expect(screen.getByText("priority=")).toBeTruthy());
   expect(screen.queryByText("assignee=")).toBeNull();
