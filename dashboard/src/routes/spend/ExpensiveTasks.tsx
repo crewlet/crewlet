@@ -27,7 +27,7 @@
  */
 
 import { SquareKanbanGlyph } from "@crewlethq/icons/glyphs";
-import { Card, Skeleton, TableKeyCell, TableNumberCell } from "@crewlethq/ui";
+import { Card, EmptyState, Skeleton, TableKeyCell, TableNumberCell } from "@crewlethq/ui";
 import { href } from "~/app/router.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
@@ -128,9 +128,13 @@ export function ExpensiveTasksCard({
             <Skeleton height="6rem" />
           </div>
         ) : rows.length === 0 ? (
-          <p className="spend-card-body spend-caption">
-            No task last changed in this window has spent tokens yet.
-          </p>
+          // THE SAME EMPTY STATE AS THE EXPENSIVE TASKS PAGE, in the card's
+          // compact size: one message, one treatment.
+          <EmptyState
+            size="compact"
+            title="No task last changed in this window has spent tokens"
+            description="Tasks appear once agents spend tokens on them."
+          />
         ) : (
           <ul className="spend-task-list">
             {rows.map((row) => (
