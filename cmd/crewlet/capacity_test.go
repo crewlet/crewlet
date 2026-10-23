@@ -238,6 +238,27 @@ func TestAWindowAtOpenedIsSentToMaintenanceMode(t *testing.T) {
 	}
 }
 
+// A SEALING WINDOW POINTS AT WHAT THE SEAL STILL WAITS ON, which is not only
+// who hasn't acknowledged: a node that acknowledged from seal mode while still
+// the process recorded as the request left is waited on too, and the status
+// page names it. Mutation: say "who hasn't acknowledged" again and this fails.
+func TestASealingWindowPointsAtWhatTheSealWaitsOn(t *testing.T) {
+	t.Parallel()
+	node := newFakeCapacityNode(t)
+	op := node.op()
+	op["phase"] = "sealing"
+	node.operation = op
+	stdout, _, err := cli(t, "retention", "set-capacity", "CREWLET_TRACKER_LOG",
+		"8589934592", bootstrapForURL(t, node.server.URL), "-confirm", "8589934592")
+	if err != nil {
+		t.Fatalf("set-capacity: %v", err)
+	}
+	if want := "`crewlet retention maintenance status -stream CREWLET_TRACKER_LOG` " +
+		"names who it's still waiting on."; !strings.Contains(stdout, want) {
+		t.Errorf("a sealing window never says %q:\n%s", want, stdout)
+	}
+}
+
 // A LATER ATTEMPT AT OPENED SAYS WHAT THE LAST ONE LEFT.
 //
 // A verify that reads a ceiling other than the target starts a new attempt
@@ -463,7 +484,8 @@ func TestTheExternalAssertionIsExplicit(t *testing.T) {
 
 // TestMaintenanceStatusNamesWhatIsHoldingTheSeal is the one page an operator
 // can see why a fleet is still excluded: who has not acknowledged, whose
-// incarnation is unchanged, and which write attempt is unresolved.
+// incarnation is unchanged, and which request is unresolved and when it was
+// sent.
 func TestMaintenanceStatusNamesWhatIsHoldingTheSeal(t *testing.T) {
 	t.Parallel()
 	node := newFakeCapacityNode(t)
@@ -475,11 +497,12 @@ func TestMaintenanceStatusNamesWhatIsHoldingTheSeal(t *testing.T) {
 	for _, want := range []string{
 		"op-1",                        // the operation
 		"attempt 1",                   // and its attempt
-		"node-1:old",                  // what each participant was baselined as
+		"node-1:old",                  // what each participant ran as the request left
 		"node-1:new",                  // and what it acknowledged as
 		"node-2",                      // the one that has not
 		"node-2 has not acknowledged", // said in words
-		"issued",                      // the unresolved write attempt
+		"issued",                      // the unresolved request
+		"2031-04-02T03:14:01Z",        // and when it was sent
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("the status never mentions %q:\n%s", want, stdout)

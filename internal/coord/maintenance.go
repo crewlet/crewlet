@@ -94,9 +94,9 @@ const (
 	PhaseOpened MaintenancePhase = "opened"
 
 	// PhaseBaselined — the participant set, every participant's
-	// incarnation and the journal record are persisted, BEFORE the
-	// request is issued. A crash from here must assume a request MAY be
-	// in flight.
+	// incarnation and the journal record are persisted, BEFORE the first
+	// request is issued, and again before every later one a resumed window
+	// sends. A crash from here must assume a request MAY be in flight.
 	PhaseBaselined MaintenancePhase = "baselined"
 
 	// PhaseApplied — a read-back observed the ceiling equal to the
@@ -109,8 +109,8 @@ const (
 	PhaseSealing MaintenancePhase = "sealing"
 
 	// PhaseSealed — every participant acked for this attempt with an
-	// incarnation that is not its baselined one, and every journal record
-	// for this operation is completed or retired.
+	// incarnation that is not the one recorded as the newest request left,
+	// and every journal record for this operation is completed or retired.
 	PhaseSealed MaintenancePhase = "sealed"
 
 	// PhaseConfirmed — the verify matched. The one remaining write is the
@@ -232,12 +232,16 @@ type MaintenanceOperation struct {
 	// waives nothing here.
 	Participants []string `json:"participants"`
 
-	// WriteIncarnations is each participant's incarnation as of the
-	// baseline, and the seal compares an ack against it.
+	// WriteIncarnations is each participant's incarnation as this attempt's
+	// newest request left, and the seal compares an ack against it.
 	//
-	// PERSISTED BEFORE THE REQUEST IS ISSUED. Recorded after the
-	// read-back, a crash in between leaves an operation that may have
-	// written with nothing to compare against.
+	// PERSISTED BEFORE EACH REQUEST IS ISSUED, by the process issuing it,
+	// in the write that adds the request's journal record. Recorded after
+	// the read-back, a crash in between leaves an operation that may have
+	// written with nothing to compare against; recorded once at the
+	// baseline, a request a resumed window sent later was compared against
+	// processes that were gone before it left, and a node restarted into
+	// seal mode in between passed the seal without restarting after it.
 	WriteIncarnations map[string]string `json:"write_incarnations,omitempty"`
 
 	// Excluded names participants an operator has asserted are stopped and
@@ -258,7 +262,8 @@ type MaintenanceOperation struct {
 	ExcludedBy map[string]MaintenanceParty `json:"excluded_by,omitempty"`
 
 	// Journal is every write attempt against this stream's configuration
-	// under this operation.
+	// under this operation: one record per request, written before it
+	// leaves.
 	Journal []JournalRecord `json:"journal,omitempty"`
 
 	// ObservedMaxBytes is what the last read-back saw, and Verified
@@ -323,7 +328,7 @@ type MaintenanceAck struct {
 	Attempt     int    `json:"attempt"`
 
 	// Incarnation is this PROCESS's identity, which the seal compares
-	// against the baselined one.
+	// against the one recorded as the newest request left.
 	//
 	// COMPARED FOR INEQUALITY rather than for order, because an
 	// incarnation is minted per process from a uuid: it is unique rather

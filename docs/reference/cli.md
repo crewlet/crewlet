@@ -2302,7 +2302,9 @@ embedded node, or a NATS account's own limit. A clustered member cannot, and
 there the broker refuses such a raise when the window applies it.
 
 Run from a node in `normal` mode it refuses outright, naming the restart. Run
-from `maintenance` it opens, baselines and applies; run from `seal` it collects
+from `maintenance` it opens, baselines and applies, and on a window already
+baselined it records again who is running before it sends its request; run
+from `seal` it collects
 the barrier, seals, verifies and confirms. It prints the phase it reached and
 the next gesture, with the command to run in full, never the transition
 table. A node holding an **admission** (one that may be publishing) stops it in
@@ -2326,11 +2328,12 @@ crewlet retention maintenance abandon -stream CREWLET_TRACKER_LOG -confirm capac
 ```
 
 `status` is the one page an operator can see why a fleet is still excluded: the
-operation, its phase and attempt, every participant's baselined incarnation
-against what it acknowledged as for this log (its ATTEMPT reads `no window`
+operation, its phase and attempt, the process each participant was running as
+the newest request left (RUNNING AT REQUEST) against what it acknowledged as
+for this log (its ATTEMPT reads `no window`
 for a node that restarted before a window opened on the log, and `another
 window` for one that last acknowledged an earlier window on it), any
-unresolved write attempt, and what the
+unresolved request and when it was sent, and what the
 window's next step is waiting on. At `opened` that is the baseline's: the
 participants with no restart into a maintenance mode recorded, and any
 admission still stopping the window's first request. From the baseline on it is
