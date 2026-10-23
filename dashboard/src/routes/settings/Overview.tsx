@@ -22,7 +22,7 @@ import { CharterPage } from "./charter.tsx";
 
 export function Overview() {
   return (
-    <CharterPage loading="Loading the company's charter">
+    <CharterPage loading="Loading the company's charter" edits="charter">
       {(org) => <Charter org={org} />}
     </CharterPage>
   );
@@ -31,7 +31,7 @@ export function Overview() {
 /** The company as the chart says it. */
 function Charter({ org }: { org: OrgProjection }) {
   return (
-    <div className="col gap-4">
+    <>
       <Card>
         <Card.Header icon={<BuildingComplexGlyph size="sm" />}>
           <Card.Title>The company</Card.Title>
@@ -62,6 +62,6 @@ function Charter({ org }: { org: OrgProjection }) {
           <p className="t-body measure">{org.vision}</p>
         </Card>
       )}
-    </div>
+    </>
   );
 }
