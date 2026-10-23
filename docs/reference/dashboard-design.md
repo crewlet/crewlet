@@ -1943,7 +1943,9 @@ and 230px per task; the table keeps the labels, since its question is a field
 at a time. A column whose head is a glyph or nothing names itself on the card
 with `label`, except a column of row actions, which says `action` instead:
 its button is its own name, so the card draws none beside it — a `label`
-there read `SIGN OUT  Sign out` on every session of the Account page. The Settings column stacks above the screen beside it, and the
+there read `SIGN OUT  Sign out` on every session of the Account page. The
+same `label` names such a column's head at every width, said to a screen
+reader and shown on hover, so no column of marks is an unnamed column. The Settings column stacks above the screen beside it, and the
 page bar's controls take a line of their own and scroll. Both are the kit's numbers, written as media-query literals that
 `frame.test.ts` holds against `app/layout.ts`, which reads them from the kit.
 

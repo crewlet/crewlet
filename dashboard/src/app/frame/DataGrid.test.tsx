@@ -271,10 +271,17 @@ test("a cell carries its column's name, and only when that name is a word", () =
   expect(label("act")).toEqual(ROWS.map(() => "Actions"));
   expect(label("none")).toEqual(ROWS.map(() => null));
 
-  // AND THE HEAD ROW IS UNTOUCHED BY ANY OF IT: `label` is the card's word,
-  // not a second head, so a glyph column still draws its glyph up there.
+  // AND THE HEAD ROW DRAWS NONE OF IT: `label` is the card's word, not a
+  // second head, so a glyph column still draws its glyph up there. It is the
+  // head's NAME where the head holds no word, said to a screen reader.
   const heads = [...container.querySelectorAll<HTMLElement>(".grid-head > *")];
-  expect(heads.map((h) => h.textContent)).toEqual(["Id", "·", "", ""]);
+  expect(heads.map((h) => h.querySelector(".truncate")?.textContent)).toEqual(["Id", "·", "", ""]);
+  expect(heads.map((h) => h.querySelector(".crewlet-visually-hidden")?.textContent ?? "")).toEqual([
+    "",
+    "Mark",
+    "Actions",
+    "",
+  ]);
 });
 
 // A BUTTON IS ITS OWN NAME.
@@ -372,7 +379,7 @@ test("a cell with no value is childless, and keeps its column's name", () => {
   // on a row that HAS a priority.
   expect(prio.map((c) => c.getAttribute("data-label"))).toEqual(ROWS.map(() => "Priority"));
   const heads = [...container.querySelectorAll<HTMLElement>(".grid-head > *")];
-  expect(heads.map((h) => h.textContent)).toEqual(["Id", "", "Who"]);
+  expect(heads.map((h) => h.querySelector(".truncate")?.textContent)).toEqual(["Id", "", "Who"]);
 });
 
 // A SHRINK COLUMN CANNOT STARVE THE ONES THE LIST IS FOR.
@@ -486,6 +493,29 @@ test("only a sortable column head is a button, and every button is named", () =>
   for (const button of buttons) {
     expect((button.getAttribute("aria-label") ?? button.textContent ?? "").trim()).not.toBe("");
   }
+});
+
+// AN UNSORTABLE GLYPH HEAD IS NAMED TOO: its column's word, said to a
+// screen reader and shown on hover, so no column of marks is an unnamed
+// column. An action column's buttons name themselves, so its head says none.
+test("an unsortable glyph head is named by the column's label, and an action head is not", () => {
+  render(
+    <Router>
+      <DataGrid<Row>
+        rows={ROWS}
+        rowKey={(r) => r.id}
+        columns={[
+          { key: "id", header: "Id", cell: (r) => r.id },
+          { key: "mark", header: "", label: "Priority", cell: () => <span>·</span> },
+          { key: "go", header: "", action: true, label: "Restore", cell: () => null },
+        ]}
+      />
+    </Router>,
+  );
+  const [, mark, go] = screen.getAllByRole("columnheader");
+  expect(mark!.textContent).toBe("Priority");
+  expect(mark!.getAttribute("title")).toBe("Priority");
+  expect(go!.textContent).toBe("");
 });
 
 // AND A SORTABLE HEAD WHOSE HEAD IS NOT A WORD IS STILL NAMED.
