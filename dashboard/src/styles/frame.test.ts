@@ -1399,13 +1399,6 @@ test("an org unit's head wraps rather than shrinking its name", () => {
   expect(block(css, ".org-unit-count")).toMatch(/white-space:\s*nowrap/);
 });
 
-// A STAT'S SECOND LINE KEEPS ITS ENDING. The kit's sub is one `nowrap` line
-// that ellipsises, which cut "6 seats idle and waiting for work" on a phone and
-// a caption at 1440 — the qualifying half of the sentence is its end.
-test("a stat card's sub wraps rather than ellipsising", () => {
-  expect(block(sheet("screens.css"), ".crewlet-statcard__sub")).toMatch(/white-space:\s*normal/);
-});
-
 // A CARD'S TITLE DOES NOT GIVE WAY WHILE ITS SUBTITLE CAN. The kit's 100-to-1
 // shrink is proportional, so a long subtitle on a phone still took a quarter
 // pixel off the name block and the title's ellipsis drew "When" as "Wh…".

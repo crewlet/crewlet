@@ -3749,46 +3749,6 @@ a.knowledge-reader-how:hover {
   max-width: 100%;
 }
 
-/* A STAT'S SECOND LINE WRAPS RATHER THAN ENDING IN AN ELLIPSIS. uilet sets it
-   `nowrap` and reserves exactly one line, so that a row of tiles where only
-   some carry one still stands at one height — but inside a StatGroup the grid
-   already stretches every tile in a row to the tallest, so the reserve buys
-   nothing there and the ellipsis costs the ending of every sentence longer
-   than a tile: "6 seats idle and waiting for …" on a phone, and a caption cut
-   mid-clause at 1440. The line qualifies the number above it, so its end is
-   the half that says what the number means. The one-line reserve stays; this
-   only lets a longer line have a second. What uilet needs is the same rule
-   upstream, after which this one and its ALLOWED entry go. */
-.crewlet-statcard__sub {
-  white-space: normal;
-  text-wrap: balance;
-}
-
-/* A ROW OF TILES SHARES ITS LINES, so every figure in a row stands at one
-   height whatever its label does. uilet stacks a tile's three lines — label,
-   number, sub — in a flex column of its own, so a label that wraps pushed its
-   number down by a line and no other: beside a node's peek at 1440, "Behind on
-   config" broke over two lines and its figure sat 18px below the other three.
-   As a subgrid over the group's rows, each line of every tile in a row takes
-   the tallest of that line across the row: a two-line label makes the label
-   row two lines tall for all four, and the numbers stay on one line. The span
-   is the three children uilet's StatCard always renders — a sub it was not
-   given is still an element, holding the reserve. */
-.crewlet-stat-group > .crewlet-statcard {
-  display: grid;
-  grid-template-rows: subgrid;
-  grid-row: span 3;
-}
-
-/* A LABEL SITS ON ITS NUMBER. Where one label in the row takes two lines, the
-   others end at the foot of the label row rather than floating in its middle,
-   so every label stands the kit's one gap above its own figure and the
-   wrapped label's first line is the one that rises. The label is the first
-   of the tile's three lines. */
-.crewlet-stat-group > .crewlet-statcard > :first-child {
-  align-self: end;
-}
-
 /* ONE STEP WIDER THAN THE PACKAGE'S OWN, and only inside a tool row. uilet's
    trigger sets `gap: var(--spacing-1)`, which is right for the card's own
    folds (Prompt, Tool surface) where the chevron and two words are the whole
