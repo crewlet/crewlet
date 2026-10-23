@@ -32,6 +32,10 @@ type fakeCapacityNode struct {
 	abandonConfirm, excluded string
 	gesture                  map[string]any
 
+	// left is what a set-capacity or abandonment answer names as still
+	// open: `open_windows` and `unread_windows`, none when unset.
+	left map[string]any
+
 	// reanchorCase is the case the node's status reports — "recreated" when
 	// unset, and none at all when it is "-" — with reanchorCursor the
 	// sequence it would put the checkpoint at.
@@ -58,7 +62,7 @@ func newFakeCapacityNode(t *testing.T) *fakeCapacityNode {
 		n.bytes = r.URL.Query().Get("bytes")
 		n.confirm = r.URL.Query().Get("confirm")
 		n.assert = r.URL.Query().Get("assert_excluded") == "true"
-		reply(w, map[string]any{"mode": "maintenance", "operation": n.op()})
+		reply(w, n.withLeft(map[string]any{"mode": "maintenance", "operation": n.op()}))
 	})
 	mux.HandleFunc("GET /worklet/retention/maintenance", func(w http.ResponseWriter, r *http.Request) {
 		n.stream = r.URL.Query().Get("stream")
@@ -82,7 +86,7 @@ func newFakeCapacityNode(t *testing.T) *fakeCapacityNode {
 	})
 	mux.HandleFunc("POST /worklet/retention/maintenance/abandon", func(w http.ResponseWriter, r *http.Request) {
 		n.abandonConfirm = r.URL.Query().Get("confirm")
-		reply(w, map[string]any{"operation": n.gesture})
+		reply(w, n.withLeft(map[string]any{"operation": n.gesture}))
 	})
 	mux.HandleFunc("POST /worklet/retention/maintenance/exclude", func(w http.ResponseWriter, r *http.Request) {
 		n.excluded = r.URL.Query().Get("node")
@@ -146,6 +150,14 @@ func (n *fakeCapacityNode) op() map[string]any {
 			"at": "2031-04-02T03:14:01Z",
 		}},
 	}
+}
+
+// withLeft is body with the windows this node names as still open.
+func (n *fakeCapacityNode) withLeft(body map[string]any) map[string]any {
+	for k, v := range n.left {
+		body[k] = v
+	}
+	return body
 }
 
 func reply(w http.ResponseWriter, body any) {
@@ -292,6 +304,106 @@ func TestALaterAttemptAtOpenedSaysWhatTheLastOneLeft(t *testing.T) {
 	}
 }
 
+// A WINDOW SET-CAPACITY CLOSED SAYS WHAT RETURNS THE FLEET TO SERVICE, and one
+// still open at `confirmed` names the verb that closes it.
+//
+// The verb's last answer printed the table and nothing after it, so the one
+// gesture left, restarting every node in service, was in no answer the
+// operator was given. A confirmed window the status page or an exclusion shows
+// has not been closed, so there the verb is the next step. Mutation: drop the
+// confirmed case and the first half fails; print the closed sentence on every
+// page and the second does.
+func TestAConfirmedWindowSaysWhatComesNext(t *testing.T) {
+	t.Parallel()
+	node := newFakeCapacityNode(t)
+	op := node.op()
+	op["phase"] = "confirmed"
+	op["observed_max_bytes"] = 8589934592
+	node.operation, node.gesture = op, op
+	base := bootstrapForURL(t, node.server.URL)
+
+	closed, _, err := cli(t, "retention", "set-capacity", "CREWLET_TRACKER_LOG",
+		"8589934592", base, "-confirm", "8589934592")
+	if err != nil {
+		t.Fatalf("set-capacity: %v", err)
+	}
+	if want := "the window is closed. Restart every node with no -mode to " +
+		"return the fleet to service."; !strings.Contains(closed, want) {
+		t.Errorf("the closed window never says %q:\n%s", want, closed)
+	}
+
+	open, _, err := cli(t, "retention", "maintenance", "exclude", base,
+		"-stream", "CREWLET_TRACKER_LOG", "-node", "node-a", "-confirm", "node-a")
+	if err != nil {
+		t.Fatalf("exclude: %v", err)
+	}
+	if strings.Contains(open, "window is closed") {
+		t.Errorf("a window an exclusion left open is said to be closed:\n%s", open)
+	}
+	if want := "still open. Run `crewlet retention set-capacity " +
+		"CREWLET_TRACKER_LOG 8589934592 -confirm 8589934592` again to close " +
+		"it."; !strings.Contains(open, want) {
+		t.Errorf("a confirmed window still open never says %q:\n%s", want, open)
+	}
+}
+
+// A CLOSED WINDOW SENDS THE FLEET TO SERVICE ONLY ONCE NOTHING ELSE HOLDS IT.
+//
+// A node won't start in service while any log has a window open, or while it
+// can't read whether one has, and a fleet resizing two logs closes one window
+// before the other. The closing line said to restart in service whatever was
+// still open, and every node refused the restart. Now it names every window
+// still open with the command that finishes it, and every log the node
+// couldn't read, for set-capacity's close and an abandonment's alike.
+// Mutation: say the return to service whatever the answer names and this
+// fails.
+func TestAClosedWindowWaitsOnEveryOtherBeforeService(t *testing.T) {
+	t.Parallel()
+	node := newFakeCapacityNode(t)
+	op := node.op()
+	op["phase"] = "confirmed"
+	op["observed_max_bytes"] = 8589934592
+	node.operation = op
+	node.left = map[string]any{
+		"open_windows": []map[string]any{{
+			"stream": "CREWLET_PAGES_LOG", "operation_id": "op-2",
+			"phase": "applied", "target_max_bytes": 8589934592,
+		}},
+		"unread_windows": []string{"CREWLET_VECTORS_LOG"},
+	}
+	base := bootstrapForURL(t, node.server.URL)
+	closed, _, err := cli(t, "retention", "set-capacity", "CREWLET_TRACKER_LOG",
+		"8589934592", base, "-confirm", "8589934592")
+	if err != nil {
+		t.Fatalf("set-capacity: %v", err)
+	}
+	cleared, _, err := cli(t, "retention", "maintenance", "abandon", base,
+		"-stream", "CREWLET_TRACKER_LOG", "-confirm", "op-1")
+	if err != nil {
+		t.Fatalf("abandon: %v", err)
+	}
+	for page, stdout := range map[string]string{"set-capacity": closed, "abandon": cleared} {
+		if strings.Contains(stdout, "return the fleet to service") {
+			t.Errorf("%s sends the fleet to service with a window still open:\n%s",
+				page, stdout)
+		}
+		for _, want := range []string{
+			"Don't restart in service yet",
+			"CREWLET_PAGES_LOG's window is still open, at applied. Finish it with " +
+				"`crewlet retention set-capacity CREWLET_PAGES_LOG 8589934592 " +
+				"-confirm 8589934592`.",
+			"couldn't read whether CREWLET_VECTORS_LOG has a window open. Check " +
+				"with `crewlet retention maintenance status -stream " +
+				"CREWLET_VECTORS_LOG`.",
+			"Once every window is closed, restart every node with no -mode.",
+		} {
+			if !strings.Contains(stdout, want) {
+				t.Errorf("%s never says %q:\n%s", page, want, stdout)
+			}
+		}
+	}
+}
+
 // AN EXCLUSION SENDS ITS READER TO SET-CAPACITY, AND SAYS WHAT IT WITHDREW.
 //
 // The lines after an exclusion are the ones every gesture prints, which told
@@ -346,8 +458,9 @@ func TestAnAbandonmentSendsItsConfirmation(t *testing.T) {
 	if node.abandonConfirm != "op-1" {
 		t.Errorf("the node was asked to abandon confirming %q, want op-1", node.abandonConfirm)
 	}
-	if !strings.Contains(stdout, "cleared") {
-		t.Errorf("a window cleared outright is not said to be:\n%s", stdout)
+	if want := "The window on CREWLET_TRACKER_LOG is closed, and nothing was " +
+		"sent. Restart every node with no -mode"; !strings.Contains(stdout, want) {
+		t.Errorf("a window cleared outright never says %q:\n%s", want, stdout)
 	}
 }
 

@@ -63,9 +63,17 @@ type fakeStateLog struct {
 	excluded  iam.Actor
 
 	// confirmed is the operation the last abandon's confirmation named, and
-	// abandonErr what the engine answers it.
-	confirmed  string
-	abandonErr error
+	// abandonErr what the engine answers it. abandonClears answers it as an
+	// abandonment from `opened`, which clears the window and answers none.
+	confirmed     string
+	abandonErr    error
+	abandonClears bool
+
+	// openWindows and unreadWindows are every window open on any log and
+	// every log whose window couldn't be read, as a gesture's answer names
+	// them.
+	openWindows   []coord.MaintenanceOperation
+	unreadWindows []string
 
 	// window is the operation the capacity status reads, with the
 	// acknowledgements and admissions beside it; a nil one is unread.
@@ -168,6 +176,9 @@ func (f *fakeStateLog) AbandonCapacity(_ context.Context, _, operationID string,
 	if f.gestureErr != nil {
 		return coord.MaintenanceOperation{}, f.gestureErr
 	}
+	if f.abandonClears {
+		return coord.MaintenanceOperation{}, nil
+	}
 	return coord.MaintenanceOperation{}, errors.New("not exercised here")
 }
 
@@ -195,6 +206,12 @@ func (f *fakeStateLog) CapacityStatus(context.Context, string) (
 		return coord.MaintenanceOperation{}, nil, nil, false, errors.New("not exercised here")
 	}
 	return *f.window, f.acks, f.admissions, true, nil
+}
+
+func (f *fakeStateLog) CapacityWindows(context.Context) ([]coord.MaintenanceOperation, []string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.openWindows, f.unreadWindows
 }
 
 func (f *fakeStateLog) Mode() statelog.MaintenanceMode { return statelog.ModeNormal }
@@ -418,6 +435,47 @@ func TestAWindowsStatusAnswersWhatItsNextStepWaitsOn(t *testing.T) {
 		if blocking, said := after["blocking"]; said {
 			t.Errorf("the status at %s names the seal's list: %v", phase, blocking)
 		}
+	}
+}
+
+// A GESTURE THAT CLOSES A WINDOW NAMES EVERY WINDOW STILL OPEN, and every log
+// whose window couldn't be read.
+//
+// A node won't start in service while any log has a window open, or while it
+// can't read whether one has, and only the node can say which: the CLI told
+// an operator to restart in service whenever its own window closed, and with
+// a second log's window still open every node refused to boot. An abandonment
+// from `opened` clears its window, so it answers no operation, and the
+// windows beside it.
+//
+// Mutation: drop the windows from the answer and this fails.
+func TestAClosingGestureNamesTheWindowsStillOpen(t *testing.T) {
+	t.Parallel()
+	log := &fakeStateLog{
+		abandonClears: true,
+		openWindows: []coord.MaintenanceOperation{{
+			Stream: "CREWLET_PAGES_LOG", OperationID: "capacity:pages",
+			Phase: coord.PhaseApplied, TargetMaxBytes: 1 << 33,
+		}},
+		unreadWindows: []string{"CREWLET_VECTORS_LOG"},
+	}
+	b := closedPosture()
+	a := newApp(t, api.Options{Bootstrap: &b, Retention: &fakeBackupRegister{},
+		Capacity: log, Nodes: &fakeNodeGate{}})
+	code, body := postAck(t, a, "/worklet/retention/maintenance/abandon?"+
+		"stream=CREWLET_TRACKER_LOG&confirm=capacity:open")
+	if code != http.StatusOK {
+		t.Fatalf("the abandonment answered %d %v", code, body)
+	}
+	if op, said := body["operation"]; !said || op != nil {
+		t.Errorf("a cleared window answered operation %v, want none", op)
+	}
+	if got := fmt.Sprint(body["open_windows"]); got != "[map[operation_id:capacity:pages "+
+		"phase:applied stream:CREWLET_PAGES_LOG target_max_bytes:8.589934592e+09]]" {
+		t.Errorf("open_windows = %s, want the pages window", got)
+	}
+	if got := fmt.Sprint(body["unread_windows"]); got != "[CREWLET_VECTORS_LOG]" {
+		t.Errorf("unread_windows = %s, want the log nobody could read", got)
 	}
 }
 

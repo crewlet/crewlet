@@ -1204,13 +1204,16 @@ crewlet run -mode seal
 # 4. from any one of them
 crewlet retention set-capacity CREWLET_TRACKER_LOG 8589934592 -confirm 8589934592
 
-# 5. every node, back to service
+# 5. once every log's window is closed, every node, back to service
 crewlet run
 ```
 
 Resizing more than one log takes the same three restarts: run step 2 for each
 log before the seal restart and step 4 for each after it. Each log has its own
-window, and each window is sealed by its own acknowledgements.
+window, and each window is sealed by its own acknowledgements. A node won't
+start in service while any log has a window open, so the verb that closes a
+window says to restart in service only once none is: otherwise it names every
+window still open with the command that finishes it.
 
 ### The three modes
 

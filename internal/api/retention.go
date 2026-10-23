@@ -383,7 +383,41 @@ type capacityRunner interface {
 	ExcludeParticipant(ctx context.Context, stream, node string, by iam.Actor) (coord.MaintenanceOperation, error)
 	CapacityStatus(ctx context.Context, stream string) (
 		coord.MaintenanceOperation, []coord.MaintenanceAck, []coord.Admission, bool, error)
+	CapacityWindows(ctx context.Context) ([]coord.MaintenanceOperation, []string)
 	Mode() statelog.MaintenanceMode
+}
+
+// windowLeft is one capacity window an answer names as still open: its log,
+// its operation, where it stands and its target, which is what a client needs
+// to name the command that finishes it.
+type windowLeft struct {
+	Stream         string                 `json:"stream"`
+	OperationID    string                 `json:"operation_id"`
+	Phase          coord.MaintenancePhase `json:"phase"`
+	TargetMaxBytes uint64                 `json:"target_max_bytes"`
+}
+
+// windowsLeft adds to a capacity gesture's answer every window open on any
+// log once the gesture is done, the gesture's own included while it stands
+// (`open_windows`), and every log whose window this node couldn't read
+// (`unread_windows`).
+//
+// A NODE WON'T START IN SERVICE WHILE EITHER HOLDS, so returning the fleet to
+// service is the next step only when both are empty, and only the node can say
+// whether they are: a client told "restart in service" whenever its own window
+// closed sent an operator resizing two logs into a fleet-wide restart every
+// node refused.
+func (a *App) windowsLeft(ctx context.Context, body map[string]any) {
+	open, unread := a.capacity.CapacityWindows(ctx)
+	left := make([]windowLeft, 0, len(open))
+	for _, op := range open {
+		left = append(left, windowLeft{Stream: op.Stream, OperationID: op.OperationID,
+			Phase: op.Phase, TargetMaxBytes: op.TargetMaxBytes})
+	}
+	if unread == nil {
+		unread = []string{}
+	}
+	body["open_windows"], body["unread_windows"] = left, unread
 }
 
 // mountCapacity registers the maintenance surface.
@@ -563,9 +597,9 @@ func (a *App) serveSetCapacity(w http.ResponseWriter, r *http.Request) {
 	log.Info("capacity_requested", "by", by.Name, "operator", by.OperatorID,
 		"stream", stream,
 		"target", target, "phase", op.Phase)
-	writeJSON(w, http.StatusOK, map[string]any{
-		"operation": operationOrNil(op), "mode": a.capacity.Mode(),
-	})
+	body := map[string]any{"operation": operationOrNil(op), "mode": a.capacity.Mode()}
+	a.windowsLeft(r.Context(), body)
+	writeJSON(w, http.StatusOK, body)
 }
 
 // serveMaintenanceStatus answers GET /worklet/retention/maintenance.
@@ -706,7 +740,9 @@ func (a *App) capacityGesture(w http.ResponseWriter, r *http.Request, gesture, w
 	}
 	log.Info("capacity_gesture", "by", by.Name, "operator", by.OperatorID,
 		"gesture", gesture, "stream", stream)
-	writeJSON(w, http.StatusOK, map[string]any{"operation": operationOrNil(op)})
+	body := map[string]any{"operation": operationOrNil(op)}
+	a.windowsLeft(r.Context(), body)
+	writeJSON(w, http.StatusOK, body)
 }
 
 // capacityRefused answers a capacity gesture that did not go through: a stream
