@@ -358,7 +358,7 @@ func (r *retention) openMaintenance(ctx context.Context) *statelog.MaintenanceRe
 func outstanding(ctx context.Context, fleet coord.Fleet,
 	op coord.MaintenanceOperation) []string {
 
-	acks, err := fleet.MaintenanceAcks(ctx)
+	acks, err := fleet.MaintenanceAcks(ctx, op.Stream)
 	if err != nil {
 		acks = nil
 	}

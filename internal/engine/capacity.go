@@ -895,7 +895,7 @@ func (e *Engine) seal(ctx context.Context, resized capacityLog,
 		// second of the three restarts.
 		return op, nil
 	}
-	acks, err := e.backends.Fleet.MaintenanceAcks(ctx)
+	acks, err := e.backends.Fleet.MaintenanceAcks(ctx, op.Stream)
 	if err != nil {
 		return op, fmt.Errorf("engine: read the maintenance acknowledgements: %w", err)
 	}
@@ -1190,7 +1190,7 @@ func (e *Engine) CapacityStatus(ctx context.Context, stream string) (
 	if err != nil {
 		return coord.MaintenanceOperation{}, nil, nil, false, err
 	}
-	acks, err := e.backends.Fleet.MaintenanceAcks(ctx)
+	acks, err := e.backends.Fleet.MaintenanceAcks(ctx, stream)
 	if err != nil {
 		return op, nil, nil, found, err
 	}
@@ -1337,11 +1337,11 @@ func capacityMembers(held []coord.Lease) []string {
 }
 
 // capacityIncarnations is each participant's identity as of the baseline, read
-// from the acknowledgements every maintenance-mode node writes at boot: bound
-// to the window open when it booted, or WINDOWLESS where none was, which is
-// the ordinary case for a fleet restarted before the verb ran. Either names
-// the process, and that is all a baseline needs; which one the seal takes is
-// [statelog.SealHolds]'s question.
+// from the acknowledgements every maintenance-mode node writes for this log at
+// boot: bound to the window open when it booted, or WINDOWLESS where none was,
+// which is the ordinary case for a fleet restarted before the verb ran. Either
+// names the process, and that is all a baseline needs; which one the seal
+// takes is [statelog.SealRestarts]' question.
 //
 // A PARTICIPANT WITH NO ACKNOWLEDGEMENT HAS NO RESTART RECORDED into the mode
 // ([statelog.BaselineMissing], the one rule the status pages read too), and is
@@ -1354,13 +1354,13 @@ func capacityMembers(held []coord.Lease) []string {
 func (e *Engine) capacityIncarnations(ctx context.Context, op coord.MaintenanceOperation) (
 	map[string]string, []string, error) {
 
-	acks, err := e.backends.Fleet.MaintenanceAcks(ctx)
+	acks, err := e.backends.Fleet.MaintenanceAcks(ctx, op.Stream)
 	if err != nil {
 		return nil, nil, err
 	}
 	// THIS NODE AS IT IS, last so it wins over any record of its own.
 	acks = append(acks, coord.MaintenanceAck{
-		NodeID: e.id, Incarnation: e.incarnation, Mode: string(e.mode),
+		Stream: op.Stream, NodeID: e.id, Incarnation: e.incarnation, Mode: string(e.mode),
 	})
 	if missing := statelog.BaselineMissing(op, acks); len(missing) > 0 {
 		exclude := "<node-id>"

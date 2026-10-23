@@ -33,10 +33,10 @@ func operation(phase coord.MaintenancePhase) coord.MaintenanceOperation {
 // participants, this operation, this attempt, seal mode, fresh incarnations.
 func sealed(attempt int) []coord.MaintenanceAck {
 	return []coord.MaintenanceAck{
-		{NodeID: "node-1", OperationID: "op-1", Attempt: attempt,
-			Incarnation: "node-1:new", Mode: "seal"},
-		{NodeID: "node-2", OperationID: "op-1", Attempt: attempt,
-			Incarnation: "node-2:new", Mode: "seal"},
+		{Stream: "CREWLET_TRACKER_LOG", NodeID: "node-1", OperationID: "op-1",
+			Attempt: attempt, Incarnation: "node-1:new", Mode: "seal"},
+		{Stream: "CREWLET_TRACKER_LOG", NodeID: "node-2", OperationID: "op-1",
+			Attempt: attempt, Incarnation: "node-2:new", Mode: "seal"},
 	}
 }
 
@@ -308,6 +308,28 @@ func TestARestartBeforeTheWindowIsNotASeal(t *testing.T) {
 	}
 }
 
+// AN ACKNOWLEDGEMENT OF ANOTHER LOG'S WINDOW IS NOT A SEAL OF THIS ONE, even
+// one naming this operation, attempt, mode and a fresh process: a window is per
+// log, two can be open at once, and each is sealed by its own log's
+// acknowledgements.
+//
+// Mutation: read every log's acknowledgements in SealRestarts and the seal
+// holds here.
+func TestAnotherLogsAcknowledgementIsNotASealOfThisOne(t *testing.T) {
+	t.Parallel()
+	op := operation(coord.PhaseSealing)
+	elsewhere := sealed(1)
+	elsewhere[1].Stream = "CREWLET_PAGES_LOG"
+	held, missing := statelog.SealHolds(op, elsewhere)
+	if held {
+		t.Fatal("the seal held on an acknowledgement of another log's window")
+	}
+	if !strings.Contains(missing, "node-2 has not acknowledged") {
+		t.Fatalf("the refusal says %q, want node-2 named as not having "+
+			"acknowledged this log's window", missing)
+	}
+}
+
 // TestAnAcknowledgementFromAPublishingModeIsNotEvidence: a node that started
 // its publishers has not established that it cannot have issued the request.
 func TestAnAcknowledgementFromAPublishingModeIsNotEvidence(t *testing.T) {
@@ -514,27 +536,35 @@ func TestAnAdmissionBlocksTheFirstRequest(t *testing.T) {
 // before its baseline is a participant with no restart into a maintenance mode
 // recorded at all. A restart made before the window opened counts, and so does
 // one bound to another window, since the baseline only reads which process a
-// node is; an excluded participant waits on nothing.
+// node is; an excluded participant waits on nothing; and a restart recorded
+// only for another log's window is none for this one.
 //
 // Mutation: count only acknowledgements bound to this window and the
-// windowless row fails; ignore the exclusions and the excluded row fails.
+// windowless row fails; ignore the exclusions and the excluded row fails;
+// read every log's acknowledgements and the other log's row fails.
 func TestAWindowAtOpenedWaitsOnlyOnRestartsNobodyRecorded(t *testing.T) {
 	t.Parallel()
 	op := coord.MaintenanceOperation{
-		OperationID: "capacity:now", Attempt: 1, Phase: coord.PhaseOpened,
+		Stream: "CREWLET_TRACKER_LOG", OperationID: "capacity:now", Attempt: 1,
+		Phase: coord.PhaseOpened,
 		Participants: []string{"node-windowless", "node-elsewhere", "node-silent",
-			"node-excluded", "node-bound", "node-another-silent"},
+			"node-excluded", "node-bound", "node-another-silent", "node-other-log"},
 		Excluded: []string{"node-excluded"},
 	}
 	acks := []coord.MaintenanceAck{
-		{NodeID: "node-windowless", Incarnation: "node-windowless:2", Mode: "maintenance"},
-		{NodeID: "node-elsewhere", OperationID: "capacity:before", Attempt: 3,
+		{Stream: "CREWLET_TRACKER_LOG", NodeID: "node-windowless",
+			Incarnation: "node-windowless:2", Mode: "maintenance"},
+		{Stream: "CREWLET_TRACKER_LOG", NodeID: "node-elsewhere",
+			OperationID: "capacity:before", Attempt: 3,
 			Incarnation: "node-elsewhere:2", Mode: "seal"},
-		{NodeID: "node-bound", OperationID: "capacity:now", Attempt: 1,
+		{Stream: "CREWLET_TRACKER_LOG", NodeID: "node-bound",
+			OperationID: "capacity:now", Attempt: 1,
 			Incarnation: "node-bound:2", Mode: "maintenance"},
+		{Stream: "CREWLET_PAGES_LOG", NodeID: "node-other-log",
+			Incarnation: "node-other-log:2", Mode: "maintenance"},
 	}
 	got := statelog.BaselineMissing(op, acks)
-	want := []string{"node-another-silent", "node-silent"}
+	want := []string{"node-another-silent", "node-other-log", "node-silent"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("BaselineMissing = %v, want %v", got, want)
 	}

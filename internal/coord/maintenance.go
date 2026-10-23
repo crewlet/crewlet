@@ -73,7 +73,12 @@ var ErrMaintenanceMoved = errors.New("coord: the maintenance operation moved sin
 //   - AN ACK is one participant's evidence that its process restarted for this
 //     operation's current attempt. It is what the seal is established from,
 //     and it is per node because the barrier is about processes rather than
-//     about a fleet-wide fact anybody could assert.
+//     about a fleet-wide fact anybody could assert. And it is per LOG, because
+//     a window is: a fleet resizing two logs restarts once for both, and each
+//     boot acknowledges each log's window. Kept one per node, the boot's
+//     acknowledgement of one window replaced its acknowledgement of the other,
+//     and the window that lost read "acknowledged another operation" from
+//     every node for as long as both were open.
 
 // MaintenancePhase is where a capacity operation stands.
 //
@@ -293,9 +298,12 @@ type MaintenanceParty struct {
 	OperatorID string `json:"operator_id,omitempty"`
 }
 
-// MaintenanceAck is one participant's evidence that its process restarted.
+// MaintenanceAck is one participant's evidence that its process restarted,
+// for one log's window.
 type MaintenanceAck struct {
-	// NodeID is who acknowledged, and the key.
+	// Stream is which log's window this answers, and NodeID who
+	// acknowledged: the key is the two together ([MaintenanceAckKey]).
+	Stream string `json:"stream"`
 	NodeID string `json:"node_id"`
 
 	// OperationID and Attempt bind the acknowledgement. An ack that named
@@ -303,7 +311,8 @@ type MaintenanceAck struct {
 	// unrelated reason, so the seal takes none that does not name its own.
 	//
 	// BOTH EMPTY on the record a node writes as it boots into a maintenance
-	// mode while no window is open ([MaintenanceAck.Windowless]). It says
+	// mode while no window is open on the log ([MaintenanceAck.Windowless]).
+	// It says
 	// which process the node restarted as and in which mode, which is all
 	// a BASELINE reads, and it binds nothing, which is why no seal accepts
 	// it: the fleet restarts into maintenance mode before anybody runs the
@@ -331,8 +340,8 @@ type MaintenanceAck struct {
 	At time.Time `json:"at"`
 }
 
-// Windowless reports an acknowledgement made while no window was open, which
-// names no operation and no attempt.
+// Windowless reports an acknowledgement made while no window was open on its
+// log, which names no operation and no attempt.
 func (a MaintenanceAck) Windowless() bool { return a.OperationID == "" && a.Attempt == 0 }
 
 // Admission is one node's positive record that it is about to publish.
@@ -398,10 +407,12 @@ type MaintenanceRegister interface {
 	Admissions(ctx context.Context) ([]Admission, error)
 	ForgetAdmission(ctx context.Context, nodeID, incarnation string) error
 
-	// PutMaintenanceAck records one participant's restart, and
-	// MaintenanceAcks reads them all.
+	// PutMaintenanceAck records one participant's restart for one log's
+	// window, and MaintenanceAcks reads every one for the log named, in
+	// node order. Never another log's: a window on one log is sealed by
+	// its own acknowledgements, whatever else is open.
 	PutMaintenanceAck(ctx context.Context, ack MaintenanceAck) error
-	MaintenanceAcks(ctx context.Context) ([]MaintenanceAck, error)
+	MaintenanceAcks(ctx context.Context, stream string) ([]MaintenanceAck, error)
 }
 
 // MaintenanceKey addresses one stream's capacity operation, which is to say
@@ -425,11 +436,16 @@ func MaintenanceKey(stream string) string { return DocumentKey("maintenance", st
 func AdmissionKey(nodeID string) string { return DocumentKey("admitted", nodeID) }
 
 // MaintenanceAckKey addresses one participant's acknowledgement that its
-// process restarted for the current attempt. Per node for the reason an
-// admission is: the seal is established from evidence each process leaves
-// about itself, never from a fleet-wide fact a coordinator could assert on
-// everyone's behalf.
-func MaintenanceAckKey(nodeID string) string { return DocumentKey("maintenance-ack", nodeID) }
+// process restarted for the current attempt of one log's window. Per node for
+// the reason an admission is: the seal is established from evidence each
+// process leaves about itself, never from a fleet-wide fact a coordinator
+// could assert on everyone's behalf. And per log because a window is, and two
+// can be open at once: the log is the second segment, so one log's
+// acknowledgements are read with a filter the broker matches, never by
+// reading every log's and dropping the rest.
+func MaintenanceAckKey(stream, nodeID string) string {
+	return DocumentKey("maintenance-ack", stream, nodeID)
+}
 
 // MaintenanceResource is the coordinator lease's resource name.
 //
@@ -473,6 +489,10 @@ func (op MaintenanceOperation) Validate() error {
 // Validate reports why an acknowledgement cannot be written.
 func (a MaintenanceAck) Validate() error {
 	switch {
+	case strings.TrimSpace(a.Stream) == "":
+		return fmt.Errorf("coord: node %s acknowledged no log's window: an "+
+			"acknowledgement is kept per log, and one naming none would be read "+
+			"beside no window at all", a.NodeID)
 	case strings.TrimSpace(a.NodeID) == "":
 		return fmt.Errorf("coord: a maintenance acknowledgement names no node — " +
 			"it is the key, and the barrier is about which processes restarted")
