@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // MaxBodyBytes bounds one directory write.
@@ -359,13 +360,8 @@ func (s *Service) PostPeople(w http.ResponseWriter, r *http.Request) {
 // unknownStage is the refusal of a stage this build does not know, naming the
 // ones it does, read off [iam.Stages] so a stage added there is named here.
 func unknownStage(stage iam.Stage) string {
-	names := make([]string, len(iam.Stages))
-	for i, s := range iam.Stages {
-		names[i] = string(s)
-	}
-	last := len(names) - 1
 	return strconv.Quote(string(stage)) + " isn't a valid status. Use " +
-		strings.Join(names[:last], ", ") + " or " + names[last] + "."
+		words.Or(iam.Stages) + "."
 }
 
 // refuseSeatless answers a person's gesture that names no seat — `400

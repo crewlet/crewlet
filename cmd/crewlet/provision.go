@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The provisioning commands, and the flags they share.
@@ -265,7 +266,7 @@ func runGitLabProvision(environ config.Source, args []string, stdout, stderr io.
 	// working out which seats landed.
 	if modeGiven && !gitlab.Mode(*mode).Valid() {
 		return fmt.Errorf("-mode %q is not one of %s",
-			*mode, strings.Join(gitlab.Modes(), ", "))
+			*mode, words.Or(gitlab.Modes()))
 	}
 
 	company, err := config.LoadCompanyToRun(companyPath)

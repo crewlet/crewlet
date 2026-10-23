@@ -5,6 +5,8 @@ import (
 	"mime"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // EVERY ROW IS WELL FORMED: one row per extension, a default type, a known
@@ -68,6 +70,23 @@ func TestADeclaredTypeOnlyChoosesBetweenTheRowsOwnTypes(t *testing.T) {
 		if _, err := Resolve(c.path, c.declared); !errors.Is(err, ErrRefused) {
 			t.Errorf("Resolve(%q, %q) = %v, want ErrRefused", c.path, c.declared, err)
 		}
+	}
+}
+
+// A REFUSED FILE IS TOLD WHAT IT CAN BE, as a sentence says a set: every
+// extension an artifact may publish, and every type a declared file of its
+// extension is served as, each quoted and the last joined by "or". The first
+// was a run of bare extensions separated by spaces, and the second a hand
+// join. Mutation: join either set by hand again and this fails.
+func TestARefusedFileIsToldWhatItCanBe(t *testing.T) {
+	t.Parallel()
+	_, err := Resolve("run.exe", "")
+	if err == nil || !strings.HasSuffix(err.Error(), ". Use "+words.Or(extensions())) {
+		t.Errorf("an unknown extension is refused as %v, want every extension offered", err)
+	}
+	_, err = Resolve("clip.mp4", "text/plain")
+	if err == nil || !strings.HasSuffix(err.Error(), "served as "+words.Or([]string{"video/mp4", "audio/mp4"})) {
+		t.Errorf("a wrong declaration is refused as %v, want both types offered", err)
 	}
 }
 

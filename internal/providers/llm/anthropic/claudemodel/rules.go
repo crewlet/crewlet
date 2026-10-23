@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The rules an entry's settings are held to, against the profile its requests
@@ -36,12 +38,14 @@ const DefaultEffort = EffortHigh
 
 // The failures, for errors.Is.
 var (
-	// ErrNotInTable is a `claude_model` naming no row of the table.
-	ErrNotInTable = errors.New("not a model the capability table knows")
+	// ErrNotInTable is a `claude_model` naming no row of the table. The
+	// refusal is the id, this, and every id the table takes:
+	// `"x" isn't a Claude model this build knows. Use "a", "b" or "c"`.
+	ErrNotInTable = errors.New("isn't a Claude model this build knows")
 	// ErrOverrideNotNeeded is a `claude_model` beside a model the table
 	// already reads: one entry may not carry two answers to "which model
 	// is this".
-	ErrOverrideNotNeeded = errors.New("the capability table already reads this model")
+	ErrOverrideNotNeeded = errors.New("this build already knows this model")
 	// ErrTakesNoEffort is an effort level on a model that takes none.
 	ErrTakesNoEffort = errors.New("model takes no effort level")
 	// ErrEffortLevel is a level the model does not accept.
@@ -61,13 +65,12 @@ func Resolve(model, claudeModel string) (Profile, error) {
 		return profile, nil
 	}
 	if !Known(claudeModel) {
-		return Profile{}, fmt.Errorf("%w: %q (want one of %s)",
-			ErrNotInTable, claudeModel, strings.Join(IDs(), ", "))
+		return Profile{}, fmt.Errorf("%q %w. Use %s", claudeModel, ErrNotInTable, words.Or(IDs()))
 	}
 	if own, known := Lookup(model); known {
 		return Profile{}, fmt.Errorf(
 			"%w: %q is %s, so naming %s for it says the same thing twice "+
-				"or contradicts it; an override is only for an alias the table cannot read",
+				"or contradicts it; an override is only for an alias this build can't read",
 			ErrOverrideNotNeeded, model, own.ID, claudeModel)
 	}
 	profile, _ := Lookup(claudeModel)

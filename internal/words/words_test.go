@@ -19,7 +19,9 @@ type version int
 // A SET READS AS A SENTENCE SAYS ONE: every member quoted as %q quotes the
 // value beside it, the last two joined by the conjunction, the rest by
 // commas, and a named type spelt as its value rather than as Go prints the
-// slice. Mutation: return fmt.Sprint(set) from either and every case fails.
+// slice. A member its caller already said (a command, a phrase) is joined the
+// same way and written as it is. Mutation: return fmt.Sprint(set) from either
+// and every case fails; drop the Said arm of word and the three said cases do.
 func TestASetReadsAsASentenceSaysOne(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -39,6 +41,11 @@ func TestASetReadsAsASentenceSaysOne(t *testing.T) {
 		{"within the cap", words.AndMore([]string{"a", "b"}, 5), `"a" and "b"`},
 		{"past the cap", words.AndMore([]string{"a", "b", "c", "d"}, 2), `"a", "b" and 2 more`},
 		{"a cap below one", words.AndMore([]string{"a", "b"}, 0), `"a" and 1 more`},
+		{"said members", words.Or([]words.Said{"`crewlet llm login a`", "`crewlet llm import a`"}),
+			"`crewlet llm login a` or `crewlet llm import a`"},
+		{"said phrases", words.And([]words.Said{"${A}", "${B}", "the files under ~/.x"}),
+			"${A}, ${B} and the files under ~/.x"},
+		{"said past the cap", words.AndMore([]words.Said{"a", "b", "c"}, 1), "a and 2 more"},
 	}
 	for _, c := range cases {
 		if c.got != c.want {

@@ -212,11 +212,11 @@ func (p Prefilter) String() string {
 	if len(p.clauses) == 0 {
 		return "admits every text"
 	}
-	var parts []string
+	var parts []words.Said
 	for _, set := range p.Clauses() {
-		parts = append(parts, "one of "+words.Or(set))
+		parts = append(parts, words.Said("one of "+words.Or(set)))
 	}
-	return "needs " + strings.Join(parts, " and ")
+	return "needs " + words.And(parts)
 }
 
 const (

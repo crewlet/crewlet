@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Bootstrap is Tier A — ops-owned, on disk, restart-only.
@@ -1121,11 +1122,11 @@ func (n *Node) validate(path Path) error {
 		p.add(at(path, "roles"), ErrMissing,
 			"name at least one of %s: a node with no roles does nothing at "+
 				"all. Omit the key to run every role, which is the "+
-				"single-process default", strings.Join(nodeRoleNames, ", "))
+				"single-process default", words.Or(nodeRoleNames))
 	}
 	if _, err := placement.ParseRoles(n.Roles); err != nil {
 		p.add(at(path, "roles"), ErrUnknownValue, "%s (want %s)",
-			err, strings.Join(nodeRoleNames, ", "))
+			err, words.Or(nodeRoleNames))
 	}
 
 	// THE KEY GRAMMAR IS THE PLACEMENT VOCABULARY'S, not this file's: a

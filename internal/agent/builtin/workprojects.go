@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The project tools: where work is filed, and what each project expects of it.
@@ -86,7 +87,7 @@ func (t *listProjects) Parameters() map[string]any {
 					"the page is taken, so `-active` is the most started work " +
 					"anywhere rather than the most of one page, and `target` " +
 					"the soonest target date (projects with none last). One of " +
-					strings.Join(tracker.ProjectSortNames(), ", ") +
+					words.Or(tracker.ProjectSortNames()) +
 					", each optionally with a leading `-` for descending. " +
 					"Default " + string(tracker.ProjectSortKey) + ".",
 			},

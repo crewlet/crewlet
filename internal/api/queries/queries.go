@@ -214,11 +214,7 @@ func NewRefusal(what string, d authz.Decision) *Refusal {
 func (r *Refusal) Error() string {
 	var remedy string
 	if len(r.Grants) > 0 {
-		names := make([]string, 0, len(r.Grants))
-		for _, g := range r.Grants {
-			names = append(names, string(g))
-		}
-		remedy = "; carrying " + strings.Join(names, " or ") + " would admit it"
+		remedy = "; carrying " + words.Or(r.Grants) + " would admit it"
 	}
 	return fmt.Sprintf("queries: %q refused (%s)%s", r.What, r.Reason, remedy)
 }

@@ -503,7 +503,7 @@ func (r runEnv) logFacts(ctx context.Context, seat string) {
 	}
 	attrs := append([]any{"seat", seat, "keys", r.facted}, r.facts.logAttrs()...)
 	attrs = append(attrs, "detail", "the run starts without the engine's own "+
-		plural(r.facted, "fact", "facts")+" from "+joined(r.facted)+": "+r.facts.reason())
+		plural(r.facted, "fact", "facts")+" from "+asWritten(r.facted)+": "+r.facts.reason())
 	if r.facts.waiting() {
 		log.InfoContext(ctx, "sandbox_env_unresolved", attrs...)
 		return

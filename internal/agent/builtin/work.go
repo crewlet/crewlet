@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The native tracker's tool names, re-exported from the package that owns the
@@ -2239,7 +2240,7 @@ func (d WorkDeps) resolveHandle(ctx context.Context, tool, field,
 		}
 		return "", fmt.Sprintf("%s Look them up with %s rather than guessing. "+
 			"The seats are: %s.", missing, LookupColleagueTool,
-			strings.Join(allHandles(seats), ", "))
+			words.And(allHandles(seats)))
 	}
 	if !d.mayReadRoster(ctx) {
 		return "", fmt.Sprintf("%s names %s %q and more than one person here "+
@@ -2247,7 +2248,7 @@ func (d WorkDeps) resolveHandle(ctx context.Context, tool, field,
 			tool, field, clip(handle))
 	}
 	return "", fmt.Sprintf("%s names %s %q and it matches %s. Name one of them "+
-		"exactly.", tool, field, clip(handle), strings.Join(matchHandles(found), " or "))
+		"exactly.", tool, field, clip(handle), words.Or(matchHandles(found)))
 }
 
 // mayReadRoster reports whether this call's caller may read the company's

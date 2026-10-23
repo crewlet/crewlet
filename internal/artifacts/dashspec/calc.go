@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // ---- calculated datasets -------------------------------------------------- //
@@ -229,7 +230,7 @@ func stepColumns(st Step, in []Column, key string, with *Table) ([]Column, strin
 				return nil, "", fmt.Sprintf("where[%d] names the column %q, which the rows do not have",
 					i, w.Column)
 			case !w.Cmp.Valid():
-				return nil, "", fmt.Sprintf("where[%d].cmp is one of %s", i, quoteList(stringsOf(Comparisons)))
+				return nil, "", fmt.Sprintf("where[%d].cmp is one of %s", i, words.Or(Comparisons))
 			case w.Cmp.unary() && w.Value != nil:
 				return nil, "", fmt.Sprintf("where[%d] is %s, which takes no value", i, w.Cmp)
 			case !w.Cmp.unary() && w.Value == nil:
@@ -281,7 +282,7 @@ func stepColumns(st Step, in []Column, key string, with *Table) ([]Column, strin
 			return nil, "", fmt.Sprintf("column %q is not a column key", st.Column)
 		}
 		if !st.Fn.Valid() {
-			return nil, "", "fn is one of " + quoteList(stringsOf(ComputeFns))
+			return nil, "", "fn is one of " + words.Or(ComputeFns)
 		}
 		var t ColumnType
 		if st.Fn.dateFn() {
@@ -382,7 +383,7 @@ func stepColumns(st Step, in []Column, key string, with *Table) ([]Column, strin
 		}
 		return out, key, ""
 	}
-	return nil, "", "op is one of " + quoteList(stringsOf(Ops))
+	return nil, "", "op is one of " + words.Or(Ops)
 }
 
 // keyAfter is the key a step that writes column leaves: none, when it
@@ -397,7 +398,7 @@ func keyAfter(key, written string) string {
 // aggType is the type agg answers over the column of, or why it cannot.
 func aggType(agg Agg, of string, col func(string) (Column, bool)) (ColumnType, string) {
 	if !agg.Valid() {
-		return "", "agg is one of " + quoteList(stringsOf(Aggs))
+		return "", "agg is one of " + words.Or(Aggs)
 	}
 	if agg == AggCount {
 		if of != "" {
@@ -424,14 +425,6 @@ func aggType(agg Agg, of string, col func(string) (Column, bool)) (ColumnType, s
 		}
 	}
 	return c.Type, ""
-}
-
-func stringsOf[T ~string](values []T) []string {
-	out := make([]string, len(values))
-	for i, v := range values {
-		out[i] = string(v)
-	}
-	return out
 }
 
 // ---- running a calculation ------------------------------------------------ //

@@ -710,9 +710,9 @@ func (s *Store) refuseUndeclared(container string) error {
 	slices.Sort(declared)
 	where := "this company declares none yet"
 	if len(declared) > 0 {
-		where = "write in one of: " + strings.Join(declared, ", ")
+		where = "write in " + words.Or(declared)
 	}
-	return invalid("container", "%s is not a space this company declares — a "+
+	return invalid("container", "%q isn't a space this company declares. A "+
 		"page lives in a declared space: a unit's or a seat's `space:`, "+
 		"`knowledge.root_space`, or the tool-skills container "+
 		"(`knowledge.skills_container`). Declare it in the company document, "+
