@@ -7085,6 +7085,9 @@ the page column's, not the window's.
   is already in the row of the seat or person it was made for, under the
   Auxiliary band. It used to be headed "Background workers" and to claim the
   embedding pass, which is metered nowhere.
+- **An empty card says so one way**, the kit's compact empty state, whether it
+  holds a ranked list, a table or the chart, so no card answers "nothing in
+  this window" as a bare sentence beside another's empty state.
 - **Export** is a client CSV of the rollup and the by-agent table, every row
   labelled with its window and section, tokens only, and every text cell
   guarded so a spreadsheet opens a name as text rather than a formula.
