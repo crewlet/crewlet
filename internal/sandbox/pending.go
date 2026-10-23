@@ -1037,10 +1037,14 @@ type PendingStore interface {
 	// the row later would learn whichever job the row held by then.
 	//
 	// A RESET THE ROW REFUSES IS AN ERROR, never a launch that went ahead: a
-	// newer lease owns the run, or its ending is decided ([ErrRunEnding]). A
-	// launch told nothing went on to start a job on a row that never named
-	// it, in a box nothing would reclaim. A row that went between the create
-	// and the reset is created again.
+	// newer lease owns the run ([ErrSeatNotHeld]: this node no longer holds
+	// the seat), or its ending is decided ([ErrRunEnding]). The lease is
+	// asked first, so a row a newer lease owns is [ErrSeatNotHeld] whether or
+	// not that lease has decided its ending too, which the seat's next holder
+	// does as it recovers a launching run. A launch told nothing went on to
+	// start a job on a row that never named it, in a box nothing would
+	// reclaim. A row that went between the create and the reset is created
+	// again.
 	BeginLaunch(ctx context.Context, run PendingRun, fence Fence) (PendingRun, error)
 
 	Get(ctx context.Context, turnID string) (PendingRun, bool, error)
@@ -1185,6 +1189,15 @@ type PendingStore interface {
 	ExpirePause(ctx context.Context, turnID string) (bool, error)
 
 	// AttachSandbox records the box and the command a run is using.
+	//
+	// A REFUSED ATTACH IS AN ERROR, as a refused relaunch is
+	// ([PendingStore.BeginLaunch]), with the same two answers asked in the
+	// same order: a newer lease owns the run ([ErrSeatNotHeld]), whether or
+	// not its ending is decided too, or its ending is decided
+	// ([ErrRunEnding]). The caller is a launch about to start a job in that
+	// box, which must abandon the box rather than run a job the row does not
+	// name; and the box is attached after it is made and set up, which can
+	// take minutes, so the seat moving meanwhile is what this usually meets.
 	AttachSandbox(ctx context.Context, turnID string, box BoxRef, fence Fence) error
 
 	// MarkBoxPaused and ReleaseBox are the two halves of the box record:

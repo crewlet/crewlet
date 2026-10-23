@@ -3,6 +3,7 @@ package sandbox_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -267,5 +268,26 @@ func TestALaunchWhoseRowVanishesCreatesItAgain(t *testing.T) {
 	}
 	if got.LaunchID != opened.LaunchID || got.Status != sandbox.StatusLaunching {
 		t.Fatalf("the row holds job %q in %q; the launch answered %q", got.LaunchID, got.Status, opened.LaunchID)
+	}
+}
+
+// A LAUNCH UNDER A LEASE THE ROW HAS OUTGROWN IS THIS NODE NOT HOLDING THE
+// SEAT: the seat's next holder has the row. Said as anything else, a caller
+// told only that the record refused the launch had no sentinel to act on, and
+// the run_sandbox tool read it as a fault of the node.
+//
+// Mutation: drop the %w ErrSeatNotHeld from BeginLaunch's newer-lease arm.
+func TestALaunchUnderAnOutgrownLeaseIsASeatNotHeld(t *testing.T) {
+	t.Parallel()
+	store := sandbox.NewCoordStore(memory.NewFleet())
+	ctx := context.Background()
+	if _, err := store.BeginLaunch(ctx, sandbox.PendingRun{TurnID: "t1", AgentHandle: "swe"},
+		sandbox.Fence{Owner: "node-b:1", Epoch: 9}); err != nil {
+		t.Fatalf("the newer lease's launch: %v", err)
+	}
+	_, err := store.BeginLaunch(ctx, sandbox.PendingRun{TurnID: "t1", AgentHandle: "swe"},
+		sandbox.Fence{Owner: "node-a:1", Epoch: 3})
+	if !errors.Is(err, sandbox.ErrSeatNotHeld) {
+		t.Fatalf("a launch under an outgrown lease = %v, want ErrSeatNotHeld", err)
 	}
 }
