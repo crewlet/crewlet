@@ -137,8 +137,9 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 		},
 		"maintenance nobody finished": {
 			statelog.KindMaintenanceOpen,
-			statelog.Reading{MaintenanceOpenFor: 2 * time.Hour, MaintenancePhase: "observe"},
-			"observe",
+			statelog.Reading{MaintenanceOpenFor: 2 * time.Hour,
+				MaintenanceStream: "CREWLET_TRACKER_LOG", MaintenancePhase: "observe"},
+			"window on CREWLET_TRACKER_LOG has been open for 2h in phase \"observe\"",
 		},
 		"a volume with no room for a second copy": {
 			statelog.KindVolumeLow,
@@ -221,6 +222,60 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 			// not own or a threshold a zero value crosses.
 			if len(got) != 1 {
 				t.Errorf("one condition raised %v", kindsOf(got))
+			}
+		})
+	}
+}
+
+// A WINDOW THE ALARM HOLDS FROM AN EARLIER READ SAYS SO.
+//
+// A capacity window this node can't read now is judged on what it last read
+// there, as old as it was then, so a coordination blip neither clears the
+// alarm nor raises one. The figure is then the last read's, and the detail has
+// to say so, with when that read was where that is known, and that the window
+// can't be finished or abandoned through this node until it reads again: an
+// operator who reads "open for 2h" and finds it closed would otherwise read the
+// alarm as wrong.
+//
+// Mutation: drop the clause and the held reading reads as a fresh one.
+func TestTheMaintenanceAlarmSaysWhenItsFigureIsAnEarlierRead(t *testing.T) {
+	t.Parallel()
+	base := statelog.Reading{MaintenanceOpenFor: 2 * time.Hour,
+		MaintenanceStream: "CREWLET_TRACKER_LOG", MaintenancePhase: "sealing"}
+	for name, tc := range map[string]struct {
+		unreadable bool
+		readAgo    time.Duration
+		says       []string
+	}{
+		"read now": {false, 0, nil},
+		"held, read 3m ago": {true, 3 * time.Minute, []string{"had been open for 2h",
+			"when this node last read it, 3m ago",
+			"can't be finished or abandoned through this node until it can"}},
+		"held, read at no known time": {true, 0, []string{"when this node last read it. ",
+			"can't read the window now"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := base
+			r.MaintenanceUnreadable, r.MaintenanceReadAgo = tc.unreadable, tc.readAgo
+			var detail string
+			for _, a := range statelog.Evaluate(r) {
+				if a.Kind == statelog.KindMaintenanceOpen {
+					detail = a.Detail
+				}
+			}
+			if detail == "" {
+				t.Fatal("a window open two hours raised nothing")
+			}
+			if tc.says == nil {
+				if strings.Contains(detail, "last read") {
+					t.Errorf("a window read now says %q", detail)
+				}
+				return
+			}
+			for _, says := range tc.says {
+				if !strings.Contains(detail, says) {
+					t.Errorf("the alarm says %q, want it to say %q", detail, says)
+				}
 			}
 		})
 	}

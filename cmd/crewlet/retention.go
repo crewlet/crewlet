@@ -120,6 +120,10 @@ type retentionReport struct {
 	// oldest first, and empty when there is none: a window is per log, and
 	// two can be open at once.
 	Maintenance []maintenanceRow `json:"maintenance"`
+
+	// MaintenanceUnread is every log whose window the node couldn't read,
+	// which is not a log with no window open.
+	MaintenanceUnread []string `json:"maintenance_unread"`
 }
 
 // maintenanceRow is one open capacity operation, as `retention status`
@@ -142,6 +146,12 @@ type maintenanceRow struct {
 	ParticipantsMissing []string  `json:"participants_missing"`
 	AdmissionsBlocking  []string  `json:"admissions_blocking"`
 	Blocked             string    `json:"blocked"`
+
+	// AcksUnread and AdmissionsUnread say the node couldn't read what the
+	// two lists above are formed from, and neither list is then empty: it is
+	// unknown, and this command says so rather than printing a list.
+	AcksUnread       bool `json:"acks_unread"`
+	AdmissionsUnread bool `json:"admissions_unread"`
 
 	// AbandonedBy is who abandoned it, once somebody has.
 	AbandonedBy capacityParty `json:"abandoned_by"`
@@ -329,14 +339,16 @@ func retentionStatus(environ config.Source, args []string, stdout, stderr io.Wri
 		return err
 	}
 
-	// MAINTENANCE ABOVE EVERYTHING, because while it is open every number
-	// below it describes a fleet in which nothing is running: no seats, no
-	// duties, no scheduler and no write routes. An operator reading a
+	// MAINTENANCE ABOVE EVERYTHING, because while it is open the fleet is
+	// held: no node starts in service, and every node restarted for it runs
+	// no seats, duties, scheduler or write routes. An operator reading a
 	// blocked trim without knowing that goes looking for the wrong thing.
-	// EVERY WINDOW, each waiting on its own nodes.
+	// ONLY A NODE IN SERVICE ANSWERS THIS, so the line says what holds the
+	// fleet: "no publisher is running anywhere" was false of the node
+	// printing it. EVERY WINDOW, each waiting on its own nodes.
 	for _, m := range report.Maintenance {
-		fmt.Fprintf(stdout, "MAINTENANCE IS OPEN on %s: no publisher is running "+
-			"anywhere in this fleet.\n", m.Stream)
+		fmt.Fprintf(stdout, "MAINTENANCE IS OPEN on %s: no node starts in service "+
+			"until it closes.\n", m.Stream)
 		fmt.Fprintf(stdout, "  phase %s, attempt %d, open since %s",
 			m.Phase, m.Attempt, m.Since.UTC().Format(time.RFC3339))
 		if m.By != "" {
@@ -353,15 +365,23 @@ func retentionStatus(environ config.Source, args []string, stdout, stderr io.Wri
 		// AN ADMISSION FIRST: it holds a window at opened whoever has
 		// restarted, and it is the one thing no participant owes, so a
 		// page that named only who it waits on read as every node owing
-		// something while one node's stale claim held the window.
-		if len(m.AdmissionsBlocking) > 0 {
+		// something while one node's stale claim held the window. WHAT
+		// THE NODE COULDN'T READ IS SAID AS THAT: printed as an empty
+		// list, an unread register read as nobody owing anything.
+		switch {
+		case m.AdmissionsUnread:
+			fmt.Fprintln(stdout, "  couldn't read whether an admission is holding it.")
+		case len(m.AdmissionsBlocking) > 0:
 			fmt.Fprintf(stdout, "  held by an admission from %s: nothing is "+
 				"sent while it stands.\n", words.And(m.AdmissionsBlocking))
 		}
-		if len(m.ParticipantsMissing) > 0 {
-			fmt.Fprintf(stdout, "  waiting on %s.\n",
-				strings.Join(m.ParticipantsMissing, ", "))
-		} else if len(m.AdmissionsBlocking) == 0 {
+		switch {
+		case m.AcksUnread:
+			fmt.Fprintln(stdout, "  couldn't read which nodes have restarted for it, "+
+				"so who it's waiting on is unknown.")
+		case len(m.ParticipantsMissing) > 0:
+			fmt.Fprintf(stdout, "  waiting on %s.\n", words.And(m.ParticipantsMissing))
+		case len(m.AdmissionsBlocking) == 0 && !m.AdmissionsUnread:
 			// NOBODY OUTSTANDING IS NOT PROGRESS: it is the
 			// operation waiting on whoever ran the verb, and
 			// printing nothing here reads as "nearly done".
@@ -369,6 +389,22 @@ func retentionStatus(environ config.Source, args []string, stdout, stderr io.Wri
 				"operation is waiting on its operator.")
 		}
 		fmt.Fprintln(stdout)
+	}
+
+	// A WINDOW THE NODE COULDN'T READ IS NOT A LOG WITH NO WINDOW, and said
+	// beside the open ones because it may be one: the read that fails is the
+	// coordination read, during the outage this is often run in. Said as what
+	// the answering node knows: it is in service itself, and a data node
+	// restarted now meets the same read at its boot.
+	if unread := report.MaintenanceUnread; len(unread) > 0 {
+		stream, which := "<log>", " for one of them"
+		if len(unread) == 1 {
+			stream, which = unread[0], ""
+		}
+		fmt.Fprintf(stdout, "This node couldn't read whether a capacity window "+
+			"is open on %s. A data node restarted now won't start in service "+
+			"until it can read it. `crewlet retention maintenance status -stream "+
+			"%s` asks again%s.\n\n", words.And(unread), stream, which)
 	}
 
 	// A DOMAIN THIS NODE REFUSES, BEFORE ANYTHING ELSE ABOUT IT: every

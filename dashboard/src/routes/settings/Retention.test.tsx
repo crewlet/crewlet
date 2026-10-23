@@ -29,6 +29,7 @@ import {
   ServedLevelBanner,
   SnapshotsCard,
   Tombstone,
+  UnreadWindowsBanner,
 } from "./Retention.tsx";
 import { Router } from "~/app/router.tsx";
 import { engineAlarm, ENGINE_ALARMS_NOW } from "~/test/retentionAlarms.ts";
@@ -259,9 +260,11 @@ test("a log's gate reserve is drawn beside its headroom, and only where it keeps
 
 // --- maintenance, which was visible on no screen at all -------------------
 
-// MAINTENANCE STOPS EVERY PUBLISHER ON EVERY NODE, and an operator watching a
-// company go completely quiet had nothing to look at that said why. The alarm
-// that names it only fires after an hour.
+// A WINDOW HOLDS THE WHOLE FLEET, and an operator watching a company go quiet
+// had nothing to look at that said why. The alarm that names it only fires
+// after an hour. Only a node in service draws this screen, so the banner says
+// what holds the fleet, never that publishing has stopped, which was false of
+// the node drawing it. Mutation: say "publishing is paused" again.
 test("an open capacity operation is rendered as an outage in progress", () => {
   render(
     <MaintenanceBanner
@@ -280,7 +283,40 @@ test("an open capacity operation is rendered as an outage in progress", () => {
     />,
   );
   expect(screen.getByRole("alert").className).toContain("danger");
-  expect(screen.getByText(/Waiting on node-b, node-c/)).toBeTruthy();
+  expect(screen.getByText(/Waiting on node-b and node-c\./)).toBeTruthy();
+  expect(screen.getByRole("alert").textContent).toContain(
+    "no node starts in service until it closes",
+  );
+  expect(screen.getByRole("alert").textContent).not.toMatch(/publishing is paused/);
+});
+
+// WHAT THE NODE COULDN'T READ IS SAID AS THAT, never drawn as a list. The
+// acknowledgements and the admissions are read beside each window, and an
+// unreadable register drawn as an empty list read as nobody owing anything:
+// "Waiting on its operator" over a window that may be waiting on every node.
+// Mutation: draw the lists whatever the flags say, and the operator line
+// comes back.
+test("a window whose acknowledgements or admissions couldn't be read says so", () => {
+  render(
+    <MaintenanceBanner
+      op={{
+        stream: "CREWLET_TRACKER_LOG",
+        operation_id: "op-1",
+        phase: "opened",
+        attempt: 1,
+        target_max_bytes: 2_000_000_000,
+        original_max_bytes: 1_000_000_000,
+        since: new Date(Date.now() - 60_000).toISOString(),
+        acks_unread: true,
+        admissions_unread: true,
+      }}
+      now={Date.now()}
+    />,
+  );
+  const text = screen.getByRole("alert").textContent ?? "";
+  expect(text).toContain("Couldn’t read whether an admission is holding it.");
+  expect(text).toContain("Couldn’t read which nodes have restarted for it");
+  expect(text).not.toMatch(/Waiting on/);
 });
 
 // EVERY OPEN WINDOW GETS ITS OWN BANNER. A window is per log and two can be
@@ -369,6 +405,30 @@ test("an operation with nobody outstanding says it is waiting on its operator", 
   );
   expect(screen.getByText("Waiting on its operator.")).toBeTruthy();
   expect(screen.queryByText(/^Waiting on (?!its operator\.$)/)).toBeNull();
+});
+
+// A WINDOW THE NODE COULDN'T READ IS SAID, AND NAMED. Left out, a log whose
+// window the coordination read couldn't answer drew no banner, which reads as a
+// log with no window open during exactly the outage that stops the read.
+// Mutation: render nothing for it and the first half goes red; render it for
+// an empty list and the second does.
+test("a capacity window the node couldn't read is named, never drawn as none", () => {
+  render(
+    <UnreadWindowsBanner
+      streams={["CREWLET_CHAT_LOG", "CREWLET_PAGES_LOG", "CREWLET_TRACKER_LOG"]}
+    />,
+  );
+  // THE ANSWERING NODE IS IN SERVICE, so the banner says what a restart would
+  // meet rather than that publishing may be paused. One list style with the
+  // CLI. Mutation: say "publishing may be paused" again.
+  const said = screen.getByText(
+    /Couldn’t read whether a capacity window is open on CREWLET_CHAT_LOG, CREWLET_PAGES_LOG and CREWLET_TRACKER_LOG\./,
+  ).textContent;
+  expect(said).toContain("A data node restarted now won’t start in service until it can read it.");
+  expect(said).not.toMatch(/publishing/);
+  cleanup();
+  const { container } = render(<UnreadWindowsBanner streams={[]} />);
+  expect(container.textContent).toBe("");
 });
 
 // A DOCUMENT THAT CANNOT CLAIM AN AGE SAYS SO, and one that can says nothing.
