@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -53,6 +54,10 @@ func everyCondition() map[string]error {
 			objstore.ErrUnanswered, errTransport),
 		"a note the running node could not verify": fmt.Errorf("steer: ask: %w",
 			steer.ErrUnverified),
+	}
+	for _, why := range sandbox.Whys {
+		out["a sandbox "+string(why)] = fmt.Errorf("sandbox: read the box of run t-1: %w",
+			sandbox.Because(why, errTransport))
 	}
 	for _, r := range statelog.Reasons() {
 		out["write "+string(r)] = fmt.Errorf("worklet: decide: %w", &statelog.Unavailable{
@@ -110,11 +115,21 @@ func TestAConditionIsToldToItsTwoReadersWithoutItsOwnText(t *testing.T) {
 			}
 		}
 		// THE HINT IS THE ONE EVERY SURFACE SENDS BESIDE THESE WORDS
-		// ([builtin.RetryAfter]), which reads the same classification.
-		waits := builtin.RetryAfter(err, time.Second) > 0
-		if soon := strings.HasSuffix(person, statelog.TryAgainSoon); soon != waits {
-			t.Errorf("%s carries a Retry-After: %v, and tells a person %q", name,
-				waits, person)
+		// ([builtin.RetryAfter]), which reads the same classification, and
+		// the words agree with its size: "in a moment" for a wait under a
+		// minute, "in a few minutes" for one of a minute or more.
+		hint := builtin.RetryAfter(err, time.Second)
+		soon := strings.HasSuffix(person, statelog.TryAgainSoon)
+		later := strings.HasSuffix(person, statelog.TryAgainLater)
+		switch {
+		case hint == 0 && (soon || later):
+			t.Errorf("%s carries no Retry-After and tells a person %q", name, person)
+		case hint > 0 && hint < time.Minute && !soon:
+			t.Errorf("%s carries a Retry-After of %s and tells a person %q, want %q",
+				name, hint, person, statelog.TryAgainSoon)
+		case hint >= time.Minute && !later:
+			t.Errorf("%s carries a Retry-After of %s and tells a person %q, want %q",
+				name, hint, person, statelog.TryAgainLater)
 		}
 		if words, isRefusal := statelog.ConditionSentence(err); isRefusal && words != person {
 			t.Errorf("%s is told to a person as %q, not in the state log's own "+
@@ -191,5 +206,48 @@ func TestAConditionNoWaitClearsIsNotRetriedByAModel(t *testing.T) {
 		strings.Contains(got.Output, "won't clear") {
 		t.Errorf("a read refused for a node behind is told %q; want the retry and "+
 			"nothing for an administrator", got.Output)
+	}
+}
+
+// EVERY SANDBOX CLASS IS A CONDITION, AND WAITS EXACTLY WHERE THE CLASS SAYS. A
+// coding sandbox's backend marks what it failed with by what clears it
+// ([sandbox.Why]), and every reader outside a launch and a box read — the query
+// surface answering a running run's output among them — tells it through this
+// classification: unclassed here, a provider that did not answer was a fault
+// of this node, a 500 telling a client nothing would change it. The hint
+// follows the class's own word on whether a wait clears it, and the class
+// wins over a deadline its chain carries, since a provider's request that ran
+// out of time is the provider not answering.
+//
+// Mutation: drop a class from the classification, or mark a stuck class as
+// one that waits (or the reverse), and its row goes red; read a deadline
+// before the class and the last check does.
+func TestEverySandboxClassIsACondition(t *testing.T) {
+	t.Parallel()
+	for _, why := range sandbox.Whys {
+		err := sandbox.Because(why, errTransport)
+		if _, ok := builtin.Condition(err); !ok {
+			t.Errorf("a sandbox %s failure is not a condition", why)
+			continue
+		}
+		if waits := builtin.RetryAfter(err, time.Second) > 0; waits != why.Waits() {
+			t.Errorf("a sandbox %s failure carries a Retry-After: %v, but the class "+
+				"says a wait clears it: %v", why, waits, why.Waits())
+		}
+	}
+	// TWO CLASSES CLEAR ON THEIR OWN BUT NOT SOON, and their hint is the
+	// class's horizon rather than the health tick's five seconds: a limit
+	// clears when a box ends or its window passes, and a credential when an
+	// integration's pass has minted it. Mutation: give either the default
+	// hint (and its "in a moment") and this fails.
+	for _, why := range []sandbox.Why{sandbox.WhyProviderLimit, sandbox.WhyAwaitingCredential} {
+		if hint := builtin.RetryAfter(sandbox.Because(why, errTransport), 5*time.Second); hint < time.Minute {
+			t.Errorf("a sandbox %s failure hints a wait of %s, want a minute or more", why, hint)
+		}
+	}
+	timedOut := sandbox.Because(sandbox.WhyProviderRefused,
+		fmt.Errorf("e2b: create: %w", context.DeadlineExceeded))
+	if builtin.RetryAfter(timedOut, time.Second) != 0 {
+		t.Error("a refused key whose request also ran out of time was told to wait")
 	}
 }

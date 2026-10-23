@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -186,8 +187,13 @@ func toPerson(r tools.Result, words caveat.Refusal) tools.Result {
 // event broker this node could not reach — its connection reconnecting, or the
 // broker not answering in time ([queue.ErrUnavailable]); a note the node
 // running its turn could not verify because the two nodes do not hold the same
-// keys ([steer.ErrUnverified]), which no wait clears; a wait that ran out of
-// time or was abandoned. Everything else that reaches a tool unmarked — a read
+// keys ([steer.ErrUnverified]), which no wait clears; a coding sandbox that
+// failed for a reason its backend classed ([sandbox.WhyOf]: its provider not
+// answering, at a limit, refusing the company's key or wanting its account
+// paid, or a setup a person has to change), told by the class and never the
+// provider's own words, whose wait follows the class ([sandbox.Why.Waits]); a
+// wait that ran out of time or was abandoned. Everything else that reaches a
+// tool unmarked — a read
 // of this node's own store that broke, a database that refused a statement, a
 // path in its own code that went wrong — is a fault.
 //
@@ -443,6 +449,17 @@ func condition(err error) (conditionSaid, bool) {
 			person: "The node running this turn couldn't verify your note, so it " +
 				"took nothing. An administrator needs to give the fleet's nodes the " +
 				"same keys.", stuck: true}, true
+	}
+	// THE SANDBOX'S CLASS, read before a deadline or a cancellation its own
+	// chain may carry: the backend that met the failure knew what it was,
+	// and a provider's request that ran out of time is the provider not
+	// answering, which a class says and a deadline does not.
+	if why, ok := sandbox.WhyOf(err); ok {
+		if said, ok := sandboxConditions[why]; ok {
+			return said, true
+		}
+	}
+	switch {
 	case errors.Is(err, context.DeadlineExceeded):
 		return conditionSaid{clause: "it ran out of time",
 			person: "This took too long, so it stopped. " + statelog.TryAgainSoon}, true
@@ -452,6 +469,80 @@ func condition(err error) (conditionSaid, bool) {
 	}
 	return conditionSaid{}, false
 }
+
+// sandboxConditions is every class a coding sandbox's backend marks a failure
+// with ([sandbox.Why]), as each of a condition's two readers is told it: a
+// model by what failed, a person by what failed and who clears it.
+//
+// NO WAIT CLEARS A CLASS THE SANDBOX SAYS NO WAIT CLEARS ([sandbox.Why.Waits]):
+// a broken setup, a refused key, an unpaid account, a spent budget and a seat
+// that works in its own session are each somebody's to change, so each is
+// stuck and none is offered a retry. A launch and a box read word their own
+// classes in their own sentences ([notStarted], [boxFailure]); this is every
+// other reader's — a tool that met one in a call of its own, and the query
+// surface answering a running run's output ([sandbox.TailReader]), which
+// answers a class through this classification and its hint.
+// TestEverySandboxClassIsACondition holds every class to an entry here.
+//
+// TWO CLASSES CLEAR ON THEIR OWN BUT NOT SOON: a provider's account limit,
+// which clears when a box ends or its window passes, and a credential an
+// integration's pass is still minting. Each is told "in a few minutes" with a
+// hint of [sandboxLaterWait], the words the launch and a box read already used
+// for them: told "in a moment" with the health tick's five seconds, a person
+// watching a rate-limited run was offered a wait the class itself doesn't
+// promise.
+//
+// A SETUP'S DOWNLOAD THAT FAILED FOR NOW clears soon, as a provider that
+// didn't answer does: its recipe exits 75 ([sandbox.WhySetupUnavailable])
+// only once its own retries are spent on a service still failing on its
+// side, so it is told "in a moment", with the hint its caller gives.
+var sandboxConditions = map[sandbox.Why]conditionSaid{
+	sandbox.WhyConfiguration: {clause: "the coding sandbox isn't set up for this",
+		person: "The coding sandbox isn't set up for this. An administrator needs " +
+			"to fix its setup.", stuck: true},
+	sandbox.WhySetupUnavailable: {clause: "a download the coding sandbox's setup " +
+		"makes failed for now",
+		person: "A download the coding sandbox's setup makes failed for now. " +
+			statelog.TryAgainSoon},
+	sandbox.WhyOwnSession: {clause: "the seat does its code work in its own session, " +
+		"not in a sandbox",
+		person: "This seat does its code work in its own session, so it has no " +
+			"sandbox.", stuck: true},
+	sandbox.WhyBudget: {clause: "the seat has too little of its token budget left for " +
+		"a coding run",
+		person: "This seat has too little of its token budget left for a coding run. " +
+			"That changes when the budget's window turns over or an administrator " +
+			"raises its ceiling.", stuck: true},
+	sandbox.WhyAwaitingCredential: {clause: "the coding run's environment is waiting " +
+		"for a credential an integration is setting up",
+		person: "The coding run is waiting for a credential an integration is " +
+			"setting up. " + statelog.TryAgainLater, after: sandboxLaterWait},
+	sandbox.WhyCredentialUnavailable: {clause: "the service that issues the coding " +
+		"run's credential didn't issue it just now",
+		person: "The coding run's credential couldn't be issued just now. " +
+			statelog.TryAgainSoon},
+	sandbox.WhyProviderRefused: {clause: "the sandbox provider refused the company's " +
+		"credentials",
+		person: "The sandbox provider refused the company's credentials. An " +
+			"administrator needs to fix them.", stuck: true},
+	sandbox.WhyProviderBilling: {clause: "the sandbox provider's account for the " +
+		"company needs paying for",
+		person: "The sandbox provider's account needs paying for. An administrator " +
+			"needs to check it.", stuck: true},
+	sandbox.WhyProviderLimit: {clause: "the sandbox provider is at a limit of the " +
+		"company's account",
+		person: "The sandbox provider is at the company's account limit. " +
+			statelog.TryAgainLater, after: sandboxLaterWait},
+	sandbox.WhyProviderUnavailable: {clause: "the sandbox provider or the coding " +
+		"run's box didn't answer, or failed on its side",
+		person: "The coding sandbox didn't answer. " + statelog.TryAgainSoon},
+}
+
+// sandboxLaterWait is the hint for a sandbox class that clears on its own but
+// not soon: a minute, the shortest wait worth asking a limited provider or an
+// integration's pass again after, and short enough that a screen showing the
+// run recovers by itself rather than after a reload.
+const sandboxLaterWait = time.Minute
 
 // stateLogSaid is how a state-log refusal reads: the refusal read out of the
 // chain — a read refused ([statelog.Refused]), a write ([statelog.Unavailable])

@@ -99,11 +99,13 @@ func Sentence(err error) (string, bool) {
 // on its own: every one whose answer carries a Retry-After.
 const TryAgainSoon = "Try again in a moment."
 
-// TryAgainLater is what a person is told to do about the one condition that
-// clears on its own but not soon: another node's copy of their change under a
-// gate that blames its writer ([Unavailable.CopyWriter]), which the node that
-// refused takes itself once the log's duplicate window lets go of the
-// operation — minutes, not a moment ([Unavailable.RetryAfter]).
+// TryAgainLater is what a person is told to do about a condition that clears
+// on its own but not soon, whose hint is a minute or more: here, another
+// node's copy of their change under a gate that blames its writer
+// ([Unavailable.CopyWriter]), which the node that refused takes itself once
+// the log's duplicate window lets go of the operation — minutes, not a moment
+// ([Unavailable.RetryAfter]); beyond the state log, a coding sandbox's account
+// limit and a credential an integration is still minting.
 const TryAgainLater = "Try again in a few minutes."
 
 // WHO A CONDITION IS ABOUT is never "this node". A person's request reaches one
