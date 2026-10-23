@@ -339,7 +339,7 @@ func (c *envdClient) start(ctx context.Context, cmd string, opts ExecOptions, ba
 	resp, err := c.http.Do(req)
 	if err != nil {
 		cancel()
-		return e2bProcessResult{}, fmt.Errorf("e2b: start: %w", err)
+		return e2bProcessResult{}, Because(WhyProviderUnavailable, fmt.Errorf("e2b: start: %w", err))
 	}
 	defer resp.Body.Close()
 	stream := newIdleReader(resp.Body, cancel, e2bStreamIdleTimeout)
@@ -347,8 +347,8 @@ func (c *envdClient) start(ctx context.Context, cmd string, opts ExecOptions, ba
 	// above, where a linter can see it belongs to this response.
 	defer stream.stop()
 	if resp.StatusCode >= 400 {
-		return e2bProcessResult{}, fmt.Errorf("e2b: start: %d: %s",
-			resp.StatusCode, httpx.ReadRefusalFrom(resp.Header.Get("Content-Type"), stream))
+		return e2bProcessResult{}, envdRefused(resp.StatusCode, fmt.Errorf("e2b: start: %d: %s",
+			resp.StatusCode, httpx.ReadRefusalFrom(resp.Header.Get("Content-Type"), stream)))
 	}
 	return foldStream(stream, background)
 }
@@ -374,7 +374,7 @@ func foldStream(r io.Reader, background bool) (e2bProcessResult, error) {
 			if err == io.EOF || err == io.ErrUnexpectedEOF {
 				break
 			}
-			return out, fmt.Errorf("e2b: read stream: %w", err)
+			return out, Because(WhyProviderUnavailable, fmt.Errorf("e2b: read stream: %w", err))
 		}
 		length := binary.BigEndian.Uint32(header[1:])
 		if length > maxEnvdFrame {
@@ -387,7 +387,7 @@ func foldStream(r io.Reader, background bool) (e2bProcessResult, error) {
 		}
 		payload := make([]byte, length)
 		if _, err := io.ReadFull(r, payload); err != nil {
-			return out, fmt.Errorf("e2b: read stream: %w", err)
+			return out, Because(WhyProviderUnavailable, fmt.Errorf("e2b: read stream: %w", err))
 		}
 		if header[0]&connectEndFlag != 0 {
 			// The trailer, whose error is how a stream envd ended on a
@@ -566,7 +566,7 @@ func (c *envdClient) exchange(ctx context.Context, method, target string,
 	resp, err := c.http.Do(req)
 	if err != nil {
 		idle.stop()
-		return nil, nil, idle.silent(err)
+		return nil, nil, Because(WhyProviderUnavailable, idle.silent(err))
 	}
 	idle.inner = resp.Body
 	return resp, idle, nil
@@ -604,12 +604,12 @@ func (c *envdClient) readFile(ctx context.Context, path string) ([]byte, error) 
 		return nil, nil
 	}
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("e2b: read %s: %d: %s", path,
-			resp.StatusCode, httpx.ReadRefusal(resp))
+		return nil, envdRefused(resp.StatusCode, fmt.Errorf("e2b: read %s: %d: %s", path,
+			resp.StatusCode, httpx.ReadRefusal(resp)))
 	}
 	raw, err := readCapped(idle, path, MaxFileBytes)
 	if err != nil {
-		return nil, fmt.Errorf("e2b: read %s: %w", path, idle.silent(err))
+		return nil, Because(WhyProviderUnavailable, fmt.Errorf("e2b: read %s: %w", path, idle.silent(err)))
 	}
 	return raw, nil
 }
@@ -630,8 +630,8 @@ func (c *envdClient) openFile(ctx context.Context, path string) (io.ReadCloser, 
 	case resp.StatusCode >= 400:
 		defer idle.stop()
 		defer resp.Body.Close()
-		return nil, fmt.Errorf("e2b: open %s: %d: %s", path,
-			resp.StatusCode, httpx.ReadRefusal(resp))
+		return nil, envdRefused(resp.StatusCode, fmt.Errorf("e2b: open %s: %d: %s", path,
+			resp.StatusCode, httpx.ReadRefusal(resp)))
 	}
 	return &envdStream{body: resp.Body, idle: idle, path: path}, nil
 }
@@ -646,7 +646,7 @@ type envdStream struct {
 func (s *envdStream) Read(p []byte) (int, error) {
 	n, err := s.idle.Read(p)
 	if err != nil && !errors.Is(err, io.EOF) {
-		err = fmt.Errorf("e2b: read %s: %w", s.path, s.idle.silent(err))
+		err = Because(WhyProviderUnavailable, fmt.Errorf("e2b: read %s: %w", s.path, s.idle.silent(err)))
 	}
 	return n, err
 }
@@ -694,21 +694,21 @@ func (c *envdClient) readTail(ctx context.Context, path string, n int) (FileTail
 		start, total, ok := parseContentRange(resp.Header.Get("Content-Range"))
 		data, readErr := io.ReadAll(io.LimitReader(idle, int64(max(want, 1))))
 		if readErr != nil {
-			return FileTail{}, fmt.Errorf("e2b: read the end of %s: %w",
-				path, idle.silent(readErr))
+			return FileTail{}, Because(WhyProviderUnavailable, fmt.Errorf(
+				"e2b: read the end of %s: %w", path, idle.silent(readErr)))
 		}
 		if !ok || total < 0 {
 			total = start + int64(len(data))
 		}
 		tail = FileTail{Data: data, Size: max(total, start+int64(len(data)))}
 	case resp.StatusCode >= 400:
-		return FileTail{}, fmt.Errorf("e2b: read the end of %s: %d: %s", path,
-			resp.StatusCode, httpx.ReadRefusal(resp))
+		return FileTail{}, envdRefused(resp.StatusCode, fmt.Errorf(
+			"e2b: read the end of %s: %d: %s", path, resp.StatusCode, httpx.ReadRefusal(resp)))
 	default:
 		data, total, readErr := keepLast(idle, max(want, 1))
 		if readErr != nil {
-			return FileTail{}, fmt.Errorf("e2b: read the end of %s: %w",
-				path, idle.silent(readErr))
+			return FileTail{}, Because(WhyProviderUnavailable, fmt.Errorf(
+				"e2b: read the end of %s: %w", path, idle.silent(readErr)))
 		}
 		tail = FileTail{Data: data, Size: total}
 	}
@@ -844,7 +844,7 @@ func (c *envdClient) upload(ctx context.Context, path string, content []byte) er
 	defer resp.Body.Close()
 	defer idle.stop()
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("upload: %d: %s", resp.StatusCode, httpx.ReadRefusal(resp))
+		return envdRefused(resp.StatusCode, fmt.Errorf("upload: %d: %s", resp.StatusCode, httpx.ReadRefusal(resp)))
 	}
 	_, _ = io.Copy(io.Discard, io.LimitReader(idle, 1<<20))
 	return nil
@@ -935,7 +935,8 @@ func (c *envdClient) filesystem(ctx context.Context, method string, request any)
 	defer resp.Body.Close()
 	defer idle.stop()
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("%s: %d: %s", strings.ToLower(method), resp.StatusCode, httpx.ReadRefusal(resp))
+		return envdRefused(resp.StatusCode, fmt.Errorf("%s: %d: %s", strings.ToLower(method),
+			resp.StatusCode, httpx.ReadRefusal(resp)))
 	}
 	_, _ = io.Copy(io.Discard, io.LimitReader(idle, 1<<20))
 	return nil
@@ -945,6 +946,18 @@ func (c *envdClient) filesystem(ctx context.Context, method string, request any)
 // carries: [e2bEnvdUser], with no password, which is how envd's Basic scheme
 // names an account (the token that admits the call is X-Access-Token's).
 var envdBasicUser = "Basic " + base64.StdEncoding.EncodeToString([]byte(e2bEnvdUser+":"))
+
+// envdRefused is an answer of 400 or more from a box's agent, marked by what
+// its status means where it means something ([statusWhy]): the box failing on
+// its side, or the account at a limit. A refused access token is the box's own
+// credential, handed to the engine at its create, and no person's to fix, so
+// it is left for the caller to read as the fault it is.
+func envdRefused(status int, err error) error {
+	if why, ok := statusWhy(status, false); ok {
+		return Because(why, err)
+	}
+	return err
+}
 
 // filesQuery is the path-and-user pair every /files call carries.
 func filesQuery(path string) string {

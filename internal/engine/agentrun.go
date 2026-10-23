@@ -2,8 +2,8 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
@@ -17,6 +17,8 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
+	seatpkg "github.com/crewlet/crewlet/internal/seat"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The executor's engine half: turning a seat's executor into a detached run of
@@ -60,7 +62,8 @@ var _ runner.AgentLauncher = (*agentLauncher)(nil)
 //     person stopped, launches nothing. The runner asked the same fence when
 //     its phase opened; the prompt it built since can take a model call of
 //     its own, and a seat that moved or a stop placed meanwhile must not still
-//     buy a box.
+//     buy a box. Asked AGAIN of every refusal the steps below make
+//     ([agentLauncher.launch]), since the seat can move while they run.
 //  2. The node can launch at all: a sandbox runtime, the epoch's catalogue, a
 //     bridge something reaches, a surface bound to the seat.
 //  3. The BUDGET FLOOR ([executorHeadroom]): below it the launch is refused as
@@ -94,7 +97,6 @@ var _ runner.AgentLauncher = (*agentLauncher)(nil)
 // job it opened ([runner.Launched.LaunchID]): the record then answers for every
 // note, and its ending reports what no job ran with.
 func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunRequest) (runner.Launched, error) {
-	e, company, handle := l.engine, l.company, l.seat.Handle()
 	// THE TURN'S OWN FENCE, the closure its runner was built with, asked
 	// again — never one built here. A fence captures the seat's grant when
 	// it is BUILT and compares it when it is CALLED, so one built and called
@@ -105,11 +107,41 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	// this launch has to still be covered by.
 	if req.Fence == nil {
 		return runner.Launched{}, fmt.Errorf("seat %q's executor launch carries no fence from "+
-			"its turn; this is an assembly fault in the runner, not a setting", handle)
+			"its turn; this is an assembly fault in the runner, not a setting", l.seat.Handle())
 	}
 	if err := req.Fence(); err != nil {
 		return runner.Launched{}, err
 	}
+	launched, err := l.launch(ctx, req)
+	if err == nil || turn.Stopped(err) || errors.Is(err, seatpkg.ErrSeatMoved) {
+		return launched, err
+	}
+	// AND AGAIN OF EVERY REFUSAL PAST IT, whatever the launch answered: the
+	// seat can move while the launch runs, and what the launch meets then
+	// need not say so. The box is made and set up between the run's row and
+	// its attach, minutes for some setups, and the seat's next holder ends a
+	// run it finds launching without fencing it ([sandbox.Coordinator.RecoverSeat]),
+	// so the attach meets that ending, or no record at all. Returned as it
+	// was, that refusal was a broken turn to the dispatcher, which handed the
+	// delivery back on the failure path's backoff, behind the conversation's
+	// newer mail, where a seat that moved is deferred to its holder at once
+	// and the attachment quiesced. So a closed fence is the move, with the
+	// launch's own refusal kept beside it: the run store's
+	// [sandbox.ErrSeatNotHeld] is what hands a resumed turn's relaunch on to
+	// the seat's holder ([sandbox.Coordinator.OnEvent]), and the launch's
+	// class, where it has one, is still read off it. Where the fence still
+	// holds, the refusal is the launch's alone, a newer lease's included:
+	// one this node has not noticed yet, which its heartbeat settles.
+	if moved := req.Fence(); moved != nil {
+		return launched, fmt.Errorf("%w (the launch it was making: %w)", moved, err)
+	}
+	return launched, err
+}
+
+// launch is [agentLauncher.LaunchExecutor] past the turn's fence: steps 2 to 5
+// of its order.
+func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) (runner.Launched, error) {
+	e, company, handle := l.engine, l.company, l.seat.Handle()
 	var (
 		coordinator *sandbox.Coordinator
 		pending     sandbox.PendingStore
@@ -126,12 +158,15 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	// company no longer configures. Config refuses an agent seat with an
 	// executor and no providers.sandbox, so either half missing is a
 	// company built by hand or a runtime that could not start: said by name
-	// either way.
+	// either way, and classed as the configuration it is
+	// ([sandbox.WhyConfiguration]), which an operator changes and no wait
+	// does.
 	manager := company.catalogue
 	if coordinator == nil || manager == nil || pending == nil ||
 		company.Config.Providers.Sandbox == nil {
-		return runner.Launched{}, fmt.Errorf("seat %q's executor runs in a box, and this node "+
-			"has no sandbox runtime for this company: configure providers.sandbox", handle)
+		return runner.Launched{}, sandbox.Because(sandbox.WhyConfiguration, fmt.Errorf(
+			"seat %q's executor runs in a box, and this node has no sandbox runtime for "+
+				"this company: configure providers.sandbox", handle))
 	}
 	// NO BRIDGE IS A REFUSAL, not a degraded run. A coding agent with none
 	// of the seat's tools cannot answer anybody, cannot touch a ticket and
@@ -140,24 +175,31 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	// sign of why. Refused HERE, before the launch opens a job, as every
 	// case Open refuses is: the session is opened from inside the launch,
 	// and a refusal there costs a row opened and abandoned.
+	//
+	// AND CLASSED AS CONFIGURATION ([sandbox.WhyConfiguration]), as each
+	// refusal of a bridge below is and a node with no sandbox runtime above
+	// is: what clears it is a setting of the node, the variable or api.port,
+	// which an operator changes and no wait does.
 	if e.bridge == nil {
-		return runner.Launched{}, fmt.Errorf("an executor needs a tool bridge its box can dial, "+
-			"and this node has none: set %s to the fleet's address a box can reach (any node "+
-			"serving the API, or a load balancer in front of them); a direct box reaches "+
-			"this node's own listener on loopback without it wherever the node binds "+
-			"api.port on every interface or on loopback",
-			mcpbridge.BaseURLVar)
+		return runner.Launched{}, sandbox.Because(sandbox.WhyConfiguration, fmt.Errorf(
+			"an executor needs a tool bridge its box can dial, and this node has none: set %s "+
+				"to the fleet's address a box can reach (any node serving the API, or a load "+
+				"balancer in front of them); a direct box reaches this node's own listener on "+
+				"loopback without it wherever the node binds api.port on every interface or "+
+				"on loopback",
+			mcpbridge.BaseURLVar))
 	}
 	// A BRIDGE NOTHING REACHES IS REFUSED BY NAME, because the settings it
 	// takes are different fixes: an unset base URL is one variable, and a
 	// node that serves the API with no listener (api.port 0) is a second one
 	// the first message would send an operator past.
 	if !e.bridge.Reachable() {
-		return runner.Launched{}, fmt.Errorf("an executor needs a node serving its tool "+
-			"bridge, and nothing here reaches it: this node serves the API with api.port 0, so "+
-			"it binds no listener for the bridge's route; set api.port, and point %s "+
-			"at the nodes that serve the API as a sandbox reaches them",
-			mcpbridge.BaseURLVar)
+		return runner.Launched{}, sandbox.Because(sandbox.WhyConfiguration, fmt.Errorf(
+			"an executor needs a node serving its tool bridge, and nothing here reaches it: "+
+				"this node serves the API with api.port 0, so it binds no listener for the "+
+				"bridge's route; set api.port, and point %s at the nodes that serve the API "+
+				"as a sandbox reaches them",
+			mcpbridge.BaseURLVar))
 	}
 	// A SURFACE BOUND TO NO SEAT IS REFUSED BY NAME, before the launch, for
 	// the reason the two refusals above are: Open refuses it too — every
@@ -193,9 +235,10 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	// not on this host's loopback, and reaches the fleet only at the
 	// address the variable gives.
 	if e.bridge.Reaches(cell == sandbox.Direct) == "" {
-		return runner.Launched{}, fmt.Errorf("an executor needs a tool bridge its box can "+
-			"dial, and a box in the %s cell cannot reach this node on its loopback: set %s "+
-			"to the fleet's address that box can reach", cell, mcpbridge.BaseURLVar)
+		return runner.Launched{}, sandbox.Because(sandbox.WhyConfiguration, fmt.Errorf(
+			"an executor needs a tool bridge its box can dial, and a box in the %s cell "+
+				"cannot reach this node on its loopback: set %s to the fleet's address that "+
+				"box can reach", cell, mcpbridge.BaseURLVar))
 	}
 
 	// The run's calls, and with each what they have cost the engine so far,
@@ -479,11 +522,14 @@ func (l *agentLauncher) member(ctx context.Context, manager *sandbox.Manager,
 // Refused when there is none. Config refuses this chain on every write ("needs
 // a claude-code or opencode member"), so reaching it is a company built by hand
 // or a catalogue built without the runners: either way the operator's to fix,
-// and a retry changes nothing.
+// and a retry changes nothing, which is the class it carries
+// ([sandbox.WhyConfiguration]). So does a company with no providers.llm entry
+// at all, though no launch meets it, since such a company builds no launcher
+// ([Engine.agentRunFor]): what clears it is a person's edit too.
 func executorRunners(c *Company, seat *org.Role, manager *sandbox.Manager) ([]chain.Member, error) {
 	if c.Models == nil {
-		return nil, fmt.Errorf("seat %q cannot launch its executor: %w",
-			seat.Handle(), phase.ErrNoProviders)
+		return nil, sandbox.Because(sandbox.WhyConfiguration, fmt.Errorf(
+			"seat %q cannot launch its executor: %w", seat.Handle(), phase.ErrNoProviders))
 	}
 	members, err := c.Models.Chain(seat, phase.Execute)
 	if err != nil {
@@ -505,9 +551,9 @@ func executorRunners(c *Company, seat *org.Role, manager *sandbox.Manager) ([]ch
 		for i, m := range members {
 			keys[i] = m.Key
 		}
-		return nil, fmt.Errorf("seat %q's executor chain [%s] has no member whose CLI "+
-			"runs in a box (%s): point the seat's llm at an entry on one of them",
-			seat.Handle(), strings.Join(keys, ", "), strings.Join(codingagent.Names(), ", "))
+		return nil, sandbox.Because(sandbox.WhyConfiguration, fmt.Errorf("seat %q's executor "+
+			"chain (%s) has no member whose CLI runs in a box: point the seat's llm at an "+
+			"entry on %s", seat.Handle(), words.And(keys), words.Or(codingagent.Names())))
 	}
 	return runners, nil
 }

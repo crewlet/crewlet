@@ -3521,7 +3521,7 @@ func saidNames(names []string) []words.Said {
 //
 // Its own function rather than the tail of [sandboxCredentials] so that the
 // guard's VERDICT — which runs are refused — reads apart from its wording.
-func credentialRefusal(agent *cliagent.Provider, key, seat string, placement sandbox.Placement) *SandboxCredentialError {
+func credentialRefusal(agent *cliagent.Provider, key, seat string, placement sandbox.Placement) error {
 	// THE ENTRY'S CELL, which is what places an executor: its own run_in,
 	// or the catalogue's default for an entry that names none. A seat has
 	// no cell of its own to move.
@@ -3535,28 +3535,28 @@ func credentialRefusal(agent *cliagent.Provider, key, seat string, placement san
 		case len(sign.Variables) == 0 && len(sign.Misnamed) == 0:
 			// The mode hands the CLI nothing, so the remedy is the mode
 			// — and the login it names reaches a box only in a local cell.
-			return &SandboxCredentialError{msg: fmt.Sprintf(
-				"%s; that login reaches the box only in a local cell (%s)", lead, localCell)}
+			return refusedCredential(fmt.Sprintf(
+				"%s; that login reaches the box only in a local cell (%s)", lead, localCell))
 		case len(sign.Variables) == 0 && sign.Mode == cliagent.AuthAPIKey:
 			// Its one variable is outside the grammar, and the lead names
 			// that field as the remedy. Not role.sandbox.env: every write
 			// refuses the entry until the field changes, and a name
 			// carrying `=` sets a different variable wherever it is placed.
-			return &SandboxCredentialError{msg: lead}
+			return refusedCredential(lead)
 		case len(sign.Variables) == 0:
 			// inherit-env whose every variable is such a name: the login
 			// it seeds is the one sign-in left, and only a local cell has it.
-			return &SandboxCredentialError{msg: fmt.Sprintf(
+			return refusedCredential(fmt.Sprintf(
 				"%s; or run the entry in a local cell (%s), which is seeded with its login",
-				lead, localCell)}
+				lead, localCell))
 		case sign.Mode == cliagent.AuthAPIKey:
-			return &SandboxCredentialError{msg: fmt.Sprintf(
-				"%s; or give this seat its own %s in role.sandbox.env", lead, sign.Variables[0])}
+			return refusedCredential(fmt.Sprintf(
+				"%s; or give this seat its own %s in role.sandbox.env", lead, sign.Variables[0]))
 		default:
-			return &SandboxCredentialError{msg: fmt.Sprintf(
+			return refusedCredential(fmt.Sprintf(
 				"%s; or set %s in this seat's role.sandbox.env, or run the entry in a local cell "+
 					"(%s), which is seeded with its login",
-				lead, words.Or(saidNames(sign.Variables)), localCell)}
+				lead, words.Or(saidNames(sign.Variables)), localCell))
 		}
 	}
 	// A token variable no store can hold: `-capture-token` refuses to mint
@@ -3599,12 +3599,23 @@ func credentialRefusal(agent *cliagent.Provider, key, seat string, placement san
 		remedy = fmt.Sprintf("No headless token can travel: %s. Name the variable your build "+
 			"of the CLI reads there, or run the entry in a local cell (%s)", misnamedToken, localCell)
 	}
-	return &SandboxCredentialError{msg: fmt.Sprintf(
+	return refusedCredential(fmt.Sprintf(
 		"seat %q's executor runs on %q in %q, where its subscription login cannot follow it: "+
 			"the login stays on the engine host because it carries a refresh token whose "+
 			"rotation is fleet state, and nothing in this run's environment "+
 			"authenticates. %s",
-		seat, key, placement, remedy)}
+		seat, key, placement, remedy))
+}
+
+// refusedCredential is a [SandboxCredentialError] saying msg, CLASSED AT THE
+// SOURCE as the configuration it is ([sandbox.WhyConfiguration]), so whoever
+// is told the run did not start is told that a person's edit clears it, not a
+// wait. Every branch of [credentialRefusal] goes through it, whichever auth
+// mode decided the remedy. The executor that meets it fails its phase
+// whatever the class ([runner.AgentLauncher]): its run is the turn's executor
+// itself, and the sentence is for whoever reads the turn's failure.
+func refusedCredential(msg string) error {
+	return sandbox.Because(sandbox.WhyConfiguration, &SandboxCredentialError{msg: msg})
 }
 
 // underlay adds defaults to env WITHOUT overwriting what is already there.

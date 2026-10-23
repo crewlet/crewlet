@@ -277,6 +277,11 @@ func TestAMountOnAnotherHostIsRefused(t *testing.T) {
 	if !strings.Contains(err.Error(), "cannot see its own box directory") {
 		t.Fatalf("error = %v; it must name the cause, not the symptom", err)
 	}
+	// AND IT IS CLASSED AS THE HOST'S SETUP, which a person changes: the
+	// runtime is driving the wrong daemon, and no wait moves it.
+	if why, ok := WhyOf(err); !ok || why != WhyConfiguration {
+		t.Errorf("a mount on another host is classed %q (%v), want %q", why, ok, WhyConfiguration)
+	}
 }
 
 func TestAContainerThatCannotBeReachedIsRefused(t *testing.T) {
@@ -308,6 +313,47 @@ func TestABoxDirectoryTheEngineCannotManageIsRefused(t *testing.T) {
 	// run_args, and an error that does not name it leaves them guessing.
 	if !strings.Contains(err.Error(), "run_args") {
 		t.Fatalf("error = %v; it must name the field the operator has to change", err)
+	}
+	if why, ok := WhyOf(err); !ok || why != WhyConfiguration {
+		t.Errorf("a box directory the engine cannot manage is classed %q (%v), want %q",
+			why, ok, WhyConfiguration)
+	}
+}
+
+// AN IMAGE THE RUNTIME WILL NOT START is the host's setup — the image, the
+// runtime, its daemon or the flags — which a person changes; and a directory
+// the engine host itself could not make is no class at all, but the node's own
+// fault.
+//
+// Mutation: create the start refusal with localErrorf, and it reads as a fault
+// of the node.
+func TestAnImageTheRuntimeWillNotStartIsConfiguration(t *testing.T) {
+	t.Parallel()
+	runtime := filepath.Join(t.TempDir(), "docker")
+	script := "#!/bin/sh\n[ \"$1\" = run ] && { echo 'pull access denied for img' >&2; exit 125; }\nexit 0\n"
+	if err := os.WriteFile(runtime, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	waitExecutable(t, runtime)
+	l := &Local{
+		opts: LocalOptions{Placement: Container, Image: "img"},
+		root: t.TempDir(),
+		cli:  containerCLI{path: runtime},
+	}
+	box, err := l.Create(t.Context(), Spec{})
+	if err == nil {
+		_ = box.Close(t.Context())
+		t.Fatal("Create handed out a box whose container never started")
+	}
+	if !strings.Contains(err.Error(), "pull access denied") {
+		t.Errorf("the runtime's own account was dropped: %v", err)
+	}
+	if why, ok := WhyOf(err); !ok || why != WhyConfiguration {
+		t.Errorf("an image the runtime will not start is classed %q (%v), want %q", why, ok,
+			WhyConfiguration)
+	}
+	if why, ok := WhyOf(localErrorf("could not create local sandbox %s", "b")); ok {
+		t.Errorf("a directory the host could not make is classed %q", why)
 	}
 }
 

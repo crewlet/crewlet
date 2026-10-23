@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/subtle"
 	"errors"
+	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -73,6 +75,11 @@ import (
 //     first poll after GitHub issues one ([Engine.refreshRunTokens]); a
 //     refusal that lasts, which a person ends at GitHub, costs one request a
 //     wait, never one per poll, per nudge, per launch and per delivery.
+//     Which of the two it was decides what the failure says ([mintPasses]):
+//     GitHub not answering is a wait the next ask may end, and GitHub
+//     refusing (a revoked key, a suspended installation, a permission
+//     nobody approved) is a person's step on the agent's app, refused again
+//     at every ask until somebody takes it.
 //   - THE GITHUB INTEGRATION IS NOT ENABLED. Nothing issues anything: the
 //     gesture an operator makes after a leak is switching the block off,
 //     and it has to stop every token the engine hands out, so the variable
@@ -155,6 +162,34 @@ func (s *seatToken) unissued(name string) string {
 		return ""
 	}
 	return s.err.Error()
+}
+
+// passes reports whether the mint this resolution attempted failed in a way a
+// wait clears ([mintPasses]); false where none failed.
+func (s *seatToken) passes() bool {
+	return s != nil && s.err != nil && mintPasses(s.err)
+}
+
+// mintPasses reports whether a mint that failed with err is one a wait clears:
+// GitHub not reached (a request that got no answer, its own timeout among
+// them), or answering that it could not just now (408, its rate limit, which
+// it answers 429 or 403 ([github.APIError.RateLimited]), a 5xx).
+//
+// ANYTHING ELSE IS A PERSON'S, and refused again at every ask until it is
+// taken: an answer refusing the app (401, 403, 404, 422: a key GitHub does not
+// take, an installation suspended or removed, a permission nobody approved),
+// and a key the engine cannot sign a request with, which never reached GitHub.
+// Told as a wait, a suspended app was said to be asked for again, as though
+// the asking would end it; told as a person's, one blip of GitHub's sent an
+// operator to fix an app nothing was wrong with.
+func mintPasses(err error) bool {
+	var answered *github.APIError
+	if errors.As(err, &answered) {
+		return answered.RateLimited || answered.Status == http.StatusRequestTimeout ||
+			answered.Status >= http.StatusInternalServerError
+	}
+	var unanswered *url.Error
+	return errors.As(err, &unanswered)
 }
 
 // seatResolver is how one seat's values are read: the company's chain, with

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,12 +23,15 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -463,19 +467,215 @@ func TestALaunchWithEveryRunnerSittingOutIsAnExhaustedChain(t *testing.T) {
 
 // A CHAIN WITH NO RUNNER MEMBER IS REFUSED NAMING IT, and the CLIs that could
 // take it: config refuses this chain on every write, so reaching it is a
-// company built by hand, and the operator's to fix rather than a retry's.
+// company built by hand, and the operator's to fix rather than a retry's. The
+// chain is said as a list and the CLIs as the set an entry picks from, each
+// quoted, never as Go prints a slice or a list joined by hand.
+//
+// Mutation: print the chain with brackets or the CLIs joined by commas and
+// this goes red.
 func TestAChainWithNoRunnerMemberIsRefusedNamingIt(t *testing.T) {
 	t.Parallel()
-	c, seat := chainCompany(t, chainMember{key: "codex", agent: "codex", model: "gpt-golden"})
+	c, seat := chainCompany(t, chainMember{key: "codex", agent: "codex", model: "gpt-golden"},
+		chainMember{key: "gemini", agent: "gemini-cli", model: "gemini-golden"})
 	e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 	}))
 	l := launcherOn(e, c, seat, "t1")
 	_, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil))
-	if err == nil || !strings.Contains(err.Error(), "codex") || !strings.Contains(err.Error(), "claude-code") {
+	if err == nil || !strings.Contains(err.Error(), `("codex" and "gemini")`) ||
+		!strings.Contains(err.Error(), `"claude-code" or "opencode"`) {
 		t.Fatalf("LaunchExecutor = %v, want a refusal naming the chain and the runners", err)
 	}
+	// CLASSED AS THE CONFIGURATION IT IS, which whoever is told the run did
+	// not start reads: an operator's edit clears it, never a wait.
+	// Mutation: drop the class from executorRunners' refusal and this fails.
+	if why, ok := sandbox.WhyOf(err); !ok || why != sandbox.WhyConfiguration {
+		t.Errorf("the refusal is classed %q (%v), want %q", why, ok, sandbox.WhyConfiguration)
+	}
 	refusedCleanly(t, e, "t1", jobs)
+}
+
+// A COMPANY WITH NO MODELS AT ALL IS REFUSED AS CONFIGURATION. No such company
+// is given a launcher ([Engine.agentRunFor]), so only one built by hand meets
+// the refusal, but what it is told is still what clears it: a person's edit to
+// providers.llm, which no wait makes.
+//
+// Mutation: drop the class from executorRunners' refusal of no providers and
+// this goes red.
+func TestALaunchForACompanyWithNoModelsIsConfiguration(t *testing.T) {
+	t.Parallel()
+	c, seat := executorCompany(t)
+	e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
+	}))
+	c.Models = nil
+	l := launcherOn(e, c, seat, "t1")
+	_, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil))
+	if !errors.Is(err, phase.ErrNoProviders) {
+		t.Fatalf("a launch for a company with no models = %v, want ErrNoProviders", err)
+	}
+	if why, ok := sandbox.WhyOf(err); !ok || why != sandbox.WhyConfiguration {
+		t.Errorf("the refusal is classed %q (%v), want %q", why, ok, sandbox.WhyConfiguration)
+	}
+	refusedCleanly(t, e, "t1", jobs)
+}
+
+// A SEAT THAT MOVES WHILE ITS EXECUTOR LAUNCHES IS THE MOVE, whatever the
+// launch met, and the dispatcher hands the delivery on to the seat's holder.
+//
+// The box is made and set up between the run's row and its attach, minutes for
+// some setups, and the seat can move meanwhile. What the launch meets then
+// need not say so: the seat's next holder ends a launching run without fencing
+// it, so the attach finds that ending or no record, and only a row that holder
+// stamped first refuses it as a seat not held. Returned as the launch's own
+// failure, each was a broken turn, NAKed onto the failure path's backoff,
+// where a seat that moved is deferred to its holder at once. The turn's own
+// fence is what knows, so it is asked again; where it still holds, a newer
+// lease's refusal is the launch's alone, a disagreement the heartbeat
+// settles, and NAKed as before.
+//
+// Mutation: drop the fence asked again and every moved row NAKs; ask it only
+// of a seat-not-held refusal and the ended row does; answer the fence's error
+// alone and the store's ErrSeatNotHeld is gone from the rows that carry it;
+// wrap the move whatever the fence says and the unnoticed lease defers.
+func TestASeatThatMovesWhileItsExecutorLaunchesIsHandedOn(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		// held is what this node's seat lease answers for the seat.
+		held bool
+		// stamp has a newer lease claim the run's row as its box is made;
+		// recover has the seat's next holder recover the seat then.
+		stamp, recover bool
+		// moved closes the turn's fence as the box is made; letGo closes it
+		// once the launch has asked it the first time.
+		moved, letGo bool
+		notHeld      bool
+		want         queue.Outcome
+	}{
+		"a newer lease stamped the row as its box was made": {
+			held: true, stamp: true, moved: true, notHeld: true, want: queue.OutcomeDefer},
+		"the next holder ended the launching row as its box was made": {
+			held: true, recover: true, moved: true, want: queue.OutcomeDefer},
+		"the seat was let go once the turn's fence had passed": {
+			letGo: true, notHeld: true, want: queue.OutcomeDefer},
+		"a newer lease this node has not noticed": {
+			held: true, stamp: true, notHeld: true, want: queue.OutcomeNak},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			c, seat := executorCompany(t)
+			e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
+				Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
+			}))
+			pending := e.sandbox.Load().pending
+			cell := &movingCell{FakeProvider: sandbox.NewFakeProvider()}
+			manager, err := sandbox.NewManager(sandbox.ManagerOptions{
+				Providers:        map[sandbox.Placement]sandbox.Provider{sandbox.Direct: cell},
+				DefaultPlacement: sandbox.Direct,
+				Runners:          map[string]sandbox.Runner{"claude-code": jobs},
+			})
+			if err != nil {
+				t.Fatalf("NewManager: %v", err)
+			}
+			// THIS NODE WRITES UNDER ITS SEAT LEASE, as a fleet node does, and
+			// the seat's next holder recovers it over the same run store.
+			coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+				Answers: testAnswers(), Audience: noAudience{}, Queue: e.backends.Queue,
+				Pending: pending, Manager: manager, Resume: &resumer{engine: e}, Node: "node-a",
+				Lease: func(string) (sandbox.Fence, bool) {
+					return sandbox.Fence{Owner: "node-a:1", Epoch: 3}, tc.held
+				},
+			})
+			if err != nil {
+				t.Fatalf("NewCoordinator: %v", err)
+			}
+			successor, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+				Answers: testAnswers(), Audience: noAudience{}, Queue: e.backends.Queue,
+				Pending: pending, Manager: manager, Resume: &resumer{engine: e}, Node: "node-b",
+			})
+			if err != nil {
+				t.Fatalf("NewCoordinator: %v", err)
+			}
+			t.Cleanup(coordinator.Stop)
+			t.Cleanup(successor.Stop)
+			e.useSandbox(pending, coordinator)
+			c.catalogue = manager
+
+			var moved atomic.Bool
+			cell.creating = func(ctx context.Context) {
+				moved.Store(tc.moved)
+				if tc.stamp {
+					if won, err := pending.ClaimOwnership(ctx, "t1", "node-b:1", 7); err != nil || !won {
+						t.Errorf("the newer lease's claim = %v, %v", won, err)
+					}
+				}
+				if tc.recover {
+					if err := successor.RecoverSeat(ctx, seat.Handle(), "node-b:1", 7); err != nil {
+						t.Errorf("the next holder's recovery: %v", err)
+					}
+				}
+			}
+			l := launcherOn(e, c, seat, "t1")
+			req := launchRequest(l, nil)
+			var asked atomic.Int32
+			req.Fence = func() error {
+				if moved.Load() || (tc.letGo && asked.Add(1) > 1) {
+					return fmt.Errorf("%w: %q was held at epoch 3 and is not held here any more",
+						seatpkg.ErrSeatMoved, seat.Handle())
+				}
+				return nil
+			}
+			var (
+				launchErr error
+				deferred  []string
+			)
+			d := &Dispatcher{
+				NoteDeferred: func(handle string) { deferred = append(deferred, handle) },
+				Turn: func(ctx context.Context, _ Request) (turn.Result, error) {
+					_, launchErr = l.LaunchExecutor(ctx, req)
+					// AS THE RUNNER WRAPS IT on its way to the dispatcher.
+					return turn.Result{}, fmt.Errorf("runner: %s: launching the executor's run: %w",
+						phase.Execute, launchErr)
+				},
+			}
+			got := d.Dispatch(t.Context(), seat.Handle(), []*events.Event{
+				events.New(types.TaskAssigned{TaskID: "task-1"}, events.TraceContext{}),
+			})
+			if launchErr == nil {
+				t.Fatal("the launch went ahead on a run its seat's move refused")
+			}
+			if isMove := errors.Is(launchErr, seatpkg.ErrSeatMoved); isMove != (tc.want == queue.OutcomeDefer) {
+				t.Errorf("the launch answered %v: the seat's move in it is %v", launchErr, isMove)
+			}
+			if notHeld := errors.Is(launchErr, sandbox.ErrSeatNotHeld); notHeld != tc.notHeld {
+				t.Errorf("the launch answered %v: the run store's seat-not-held in it is %v, want %v",
+					launchErr, notHeld, tc.notHeld)
+			}
+			if got.Outcome != tc.want {
+				t.Errorf("the delivery's outcome is %v, want %v", got.Outcome, tc.want)
+			}
+			if handedOn := len(deferred) == 1; handedOn != (tc.want == queue.OutcomeDefer) {
+				t.Errorf("the seat host was told of a deferral %d times", len(deferred))
+			}
+			if started := jobs.Started(); len(started) != 0 {
+				t.Errorf("%d jobs started on a run the launch did not keep", len(started))
+			}
+		})
+	}
+}
+
+// movingCell is a cell whose Create runs creating first: what lands on the
+// run's row and on its seat while a launch makes the run's box.
+type movingCell struct {
+	*sandbox.FakeProvider
+	creating func(ctx context.Context)
+}
+
+func (c *movingCell) Create(ctx context.Context, spec sandbox.Spec) (sandbox.Sandbox, error) {
+	if c.creating != nil {
+		c.creating(ctx)
+	}
+	return c.FakeProvider.Create(ctx, spec)
 }
 
 // THE GUARD JUDGES THE PICKED MEMBER'S LOGIN, the one the box runs under. A
@@ -565,9 +765,19 @@ func TestTheExecutorFloorIsThreeValued(t *testing.T) {
 	if err := executorHeadroom(ctx, staticRemaining{left: 24999}, 25000); !errors.Is(err, toolloop.ErrBudgetExhausted) {
 		t.Errorf("a seat one token below the floor = %v, want a budget refusal", err)
 	}
-	err := executorHeadroom(ctx, staticRemaining{err: errors.New("store down")}, 25000)
+	down := errors.New("store down")
+	err := executorHeadroom(ctx, staticRemaining{err: down}, 25000)
 	if err == nil || errors.Is(err, toolloop.ErrBudgetExhausted) {
 		t.Errorf("an unreadable budget = %v, want refused, and not as an exhausted one", err)
+	}
+	// NOR AS ANY SANDBOX CLASS, and with what kept the counter from being
+	// read still in it: a store that did not answer is the caller's to word,
+	// not a budget somebody spent or a setup somebody has to fix.
+	if why, ok := sandbox.WhyOf(err); ok {
+		t.Errorf("an unreadable budget is classed %q", why)
+	}
+	if !errors.Is(err, down) {
+		t.Errorf("the refusal %v lost what kept the budget from being read", err)
 	}
 }
 
@@ -744,9 +954,15 @@ func TestAnExecutorIsRefusedWithoutACatalogueForItsCompany(t *testing.T) {
 	bare := &Engine{}
 	bare.epoch.current.Store(c)
 	l := launcherOn(bare, c, seat, "t1")
-	if _, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err == nil ||
-		!strings.Contains(err.Error(), "providers.sandbox") {
+	_, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil))
+	if err == nil || !strings.Contains(err.Error(), "providers.sandbox") {
 		t.Errorf("a launch on a node with no runtime = %v, want it refused naming providers.sandbox", err)
+	}
+	// A NODE THAT RUNS NO SANDBOX IS CONFIGURATION, which no wait clears.
+	// Mutation: drop the class from the refusal and this fails.
+	if why, ok := sandbox.WhyOf(err); !ok || why != sandbox.WhyConfiguration {
+		t.Errorf("a node with no runtime: the refusal %v is classed %q (%v), want %q", err,
+			why, ok, sandbox.WhyConfiguration)
 	}
 
 	dropped, seat := executorCompany(t)
@@ -992,7 +1208,10 @@ func composed(t *testing.T, cfg *config.Company) *Company {
 // the box launched, every tool call it made found nothing listening, and the
 // turn was rescued as incomplete with no sign of why. The refusal names
 // api.port, because the message for an unset base URL would send the operator
-// to a variable that is already set.
+// to a variable that is already set, and is classed as the configuration it
+// is, which a person's setting clears and no wait does.
+//
+// Mutation: drop the class from the refusal and this goes red.
 func TestAnExecutorIsRefusedOnANodeThatServesNoBridge(t *testing.T) {
 	t.Parallel()
 	c, seat := executorCompany(t)
@@ -1009,6 +1228,9 @@ func TestAnExecutorIsRefusedOnANodeThatServesNoBridge(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "api.port") {
 		t.Errorf("the refusal does not name the setting that fixes it: %v", err)
+	}
+	if why, ok := sandbox.WhyOf(err); !ok || why != sandbox.WhyConfiguration {
+		t.Errorf("the refusal is classed %q (%v), want %q", why, ok, sandbox.WhyConfiguration)
 	}
 	refusedCleanly(t, e, "t1", jobs)
 }

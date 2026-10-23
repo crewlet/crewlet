@@ -148,7 +148,7 @@ var modelCalls = map[string]modelCall{
 	// which its entries above hold, the continuation it composed, and the
 	// engine's own words beside them (how to ask a person, from the chart's
 	// names; the box the run works in, from the company's configuration).
-	"internal/engine/agentrun.go:LaunchExecutor": {tests: []string{
+	"internal/engine/agentrun.go:launch": {tests: []string{
 		"internal/agent/runner.TestALaunchedRunIsToldWhatAFenceIs",
 		"internal/agent/runner.TestARunReadsAReplyFencedAndAnAnswerByTurnAsItsAnswerersOwn",
 		"internal/engine.TestALaunchedRunIsToldHowToGetAPersonsAnswer",

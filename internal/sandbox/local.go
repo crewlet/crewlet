@@ -64,12 +64,27 @@ const BoxRootEnv = "CREWLET_SANDBOX_LOCAL_HOME"
 
 // LocalError reports a local box that could not be created, reached, or torn
 // down.
-type LocalError struct{ msg string }
+type LocalError struct {
+	msg string
+
+	// class is what clears it, where the backend knows ([WhyOf]); empty
+	// for a failure of the engine host's own — a directory it could not
+	// create — which is the node's fault to report as one.
+	class Why
+}
 
 func (e *LocalError) Error() string { return e.msg }
 
+func (e *LocalError) why() (Why, bool) { return e.class, e.class != "" }
+
 func localErrorf(format string, args ...any) error {
 	return &LocalError{msg: fmt.Sprintf(format, args...)}
+}
+
+// localRefusedf is a [LocalError] the backend can class: a container runtime
+// that will not start the configured image, or a mount it cannot share.
+func localRefusedf(why Why, format string, args ...any) error {
+	return &LocalError{msg: fmt.Sprintf(format, args...), class: why}
 }
 
 // BoxRoot is the directory local boxes are made under for a company whose
@@ -1090,8 +1105,14 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 		// failure, a mount that does not exist — and the operator reading
 		// it has no other copy. A 400-byte cut removed the second half of
 		// exactly the messages worth reading.
-		return nil, localErrorf("could not start sandbox container from image %q: %s",
-			l.opts.Image, detail)
+		//
+		// CLASSED AS CONFIGURATION, which every one of those is — the image,
+		// the runtime, its daemon, the flags — and which a pull failing on a
+		// network blip is not quite: telling which from the runtime's words
+		// is the reading of text this package does not do, and a person
+		// looking at the host is what both need when it does not clear.
+		return nil, localRefusedf(WhyConfiguration,
+			"could not start sandbox container from image %q: %s", l.opts.Image, detail)
 	}
 	box := &containerBox{
 		layout: layout, cli: l.cli, container: name,
