@@ -543,7 +543,7 @@ func (l *LLMProvider) validate(path Path) error {
 			p.add(at(path, "reasoning"), ErrConflict,
 				"thinking always runs on an anthropic entry, so there is nothing to "+
 					"switch: drop reasoning, and tune how hard it thinks with "+
-					"reasoning_effort — or, on a budget-era model (claude-haiku-4-5, "+
+					"reasoning_effort, or, on a budget-era model (claude-haiku-4-5, "+
 					"claude-sonnet-4-5, claude-opus-4-5 and older), turn thinking on with "+
 					"reasoning_budget_tokens")
 		case LLMCLIAgent:
@@ -723,7 +723,7 @@ func (l *LLMProvider) validateClaudeShape(path Path) error {
 		switch err := profile.CheckBudget(model, l.ReasoningBudgetTokens); {
 		case errors.Is(err, claudemodel.ErrTakesNoBudget):
 			p.add(at(path, "reasoning_budget_tokens"), ErrConflict,
-				"%v: drop it, and tune how hard the model thinks with reasoning_effort — "+
+				"%v: drop it, and tune how hard the model thinks with reasoning_effort, "+
 					"or, if model is a gateway alias for a budget-era model, name that "+
 					"model with claude_model", err)
 		case err != nil:
@@ -1307,14 +1307,14 @@ func (l *LLMProvider) validateCLICredentials(path Path) error {
 					"%q profile names none (api_key_env): this CLI reads each model "+
 					"provider's key from that provider's own variable. Leave auth.mode "+
 					"at subscription, drop api_keys, and set the key in cli.env under "+
-					"the variable of the provider its model names, as a ${VAR} — e.g. "+
+					"the variable of the provider its model names, as a ${VAR}, e.g. "+
 					`OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"`, agent)
 		case profile.APIKeyEnv == "":
 			p.add(at(path, "cli.auth.mode"), ErrConflict,
 				"api-key puts the api_keys value in the CLI's key variable, and the "+
 					"%q profile names none (api_key_env), so the key would reach "+
-					"nothing: this CLI reads a key only from %s, so put it there — "+
-					"`crewlet llm login`, or a credential bundle — or, if your build of "+
+					"nothing: this CLI reads a key only from %s, so put it there "+
+					"(`crewlet llm login`, or a credential bundle), or, if your build of "+
 					"the CLI does read a key variable, name it with "+
 					"cli.overrides.api_key_env",
 				agent, profile.LoginLocation())
@@ -1329,8 +1329,8 @@ func (l *LLMProvider) validateCLICredentials(path Path) error {
 		switch {
 		case profile.TokenEnv == "":
 			p.add(at(path, "cli.auth.token"), ErrConflict,
-				"the %q profile names no token_env — this CLI mints no headless "+
-					"token — so the token would reach nothing: remove it, or name the "+
+				"the %q profile names no token_env (this CLI mints no headless "+
+					"token), so the token would reach nothing: remove it, or name the "+
 					"variable your build of the CLI reads with cli.overrides.token_env", agent)
 		case mode != AuthSubscription:
 			p.add(at(path, "cli.auth.token"), ErrConflict,
@@ -1389,7 +1389,7 @@ func (l *LLMProvider) validateCLICredentials(path Path) error {
 					"%s is a variable the engine sets for every call of this CLI to keep "+
 						"it inside its seat's own home and its call's working directory "+
 						"(%s); a value here would replace that isolation for every seat, so "+
-						"drop it — %s", name, strings.Join(isolation, ", "),
+						"drop it: %s", name, strings.Join(isolation, ", "),
 					isolationRemedy(name, layer, profile))
 			}
 		}
@@ -1774,8 +1774,8 @@ var EmbeddingModels = map[string]EmbeddingModel{
 		InputTokens: 128_000, WrapTokens: EmbeddingWrapTokens,
 		Undocumented: "Cohere's Compatibility API " +
 			"(docs.cohere.com/docs/compatibility-api) states no limit on the " +
-			"inputs or the tokens one request may carry — the native Embed " +
-			"API's 96 texts a call is a different endpoint's",
+			"inputs or the tokens one request may carry (the native Embed " +
+			"API's 96 texts a call is a different endpoint's)",
 	},
 }
 
@@ -1984,7 +1984,7 @@ func (e *EmbeddingProvider) validate(path Path) error {
 			MinEmbeddingWidth, MaxEmbeddingWidth, e.Dimensions)
 	case e.Dimensions > 0 && e.Dimensions < MinEmbeddingWidth:
 		p.add(at(path, "dimensions"), ErrOutOfRange,
-			"%d is below the %d floor — leave it unset to take %q's own width, "+
+			"%d is below the %d floor: leave it unset to take %q's own width, "+
 				"or state a width of at least %d",
 			e.Dimensions, MinEmbeddingWidth, strings.TrimSpace(e.Model), MinEmbeddingWidth)
 	case e.Dimensions > MaxEmbeddingWidth:
@@ -2068,7 +2068,7 @@ func (e *EmbeddingProvider) validateLimits(path Path, p *problems) {
 			p.add(at(path, limit.field), ErrOutOfRange,
 				"%d is above the %d %s for %q as its vendor documents it; this "+
 					"field may only lower a documented limit (for a gateway or a "+
-					"proxy that accepts less) — leave it unset to take %d",
+					"proxy that accepts less): leave it unset to take %d",
 				limit.stated, documented, limit.what, name, documented)
 		case limit.stated == 0 && documented == 0 && known:
 			p.add(at(path, limit.field), ErrMissing,

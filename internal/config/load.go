@@ -99,7 +99,7 @@ func refuseUnresolvedLogFile(missing []Unresolved) error {
 		return fault(field(u.Path), ErrMissing,
 			"nothing answered for %s, so the log file has no name and this node "+
 				"would start with no durable log at all. Set the variable, or "+
-				"write the path literally — an empty path means \"no file\" and "+
+				"write the path literally: an empty path means \"no file\" and "+
 				"cannot be told apart from this",
 			strings.Join(u.Names, ", "))
 	}

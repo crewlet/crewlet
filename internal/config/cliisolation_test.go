@@ -148,7 +148,7 @@ func TestACLIEnvIsolationRefusalNamesTheFieldThatTakesIt(t *testing.T) {
 			}
 			doc := entry("cli: {agent: " + tc.agent + ", " + overrides + "env: {" + tc.variable + ": /srv/elsewhere}}")
 			err := rejects(t, doc, "providers.llm.sub.cli.env."+tc.variable)
-			if !strings.Contains(err.Error(), "so drop it — ") {
+			if !strings.Contains(err.Error(), "so drop it: ") {
 				t.Errorf("the refusal does not say to drop it:\n%v", err)
 			}
 			for _, want := range tc.names {
