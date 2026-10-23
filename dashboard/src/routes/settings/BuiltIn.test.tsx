@@ -84,7 +84,10 @@ test("a company on Jira and Confluence is told what runs instead, and asked noth
   const asked = mount({ tracker: "jira", knowledge: "confluence" });
   expect(await screen.findByText("Jira handles work items.")).toBeTruthy();
   expect(screen.getByText("Confluence holds the knowledge base.")).toBeTruthy();
-  expect(within(card("Crewlet Works")).getByText("Not in use")).toBeTruthy();
+  // NO PILL FOR A SERVICE RUN ELSEWHERE: the sentence says what runs, and the
+  // tile sits on the quieter ground.
+  expect(card("Crewlet Works").querySelector(".crewlet-tag")).toBeNull();
+  expect(card("Crewlet Works").classList.contains("crewlet-catalog-tile--quiet")).toBe(true);
   expect(within(card("Crewlet Works")).queryByRole("link")).toBeNull();
   expect(asked.filter((q) => q === "work_projects" || q === "containers")).toEqual([]);
 });
@@ -93,7 +96,7 @@ test("a company running neither is told it runs no tracker and no knowledge base
   mount({ tracker: "none", knowledge: "none" });
   expect(await screen.findByText("The company runs no work tracker.")).toBeTruthy();
   expect(screen.getByText("The company runs no knowledge base.")).toBeTruthy();
-  expect(within(card("Crewlet Knowledge")).getByText("Off")).toBeTruthy();
+  expect(card("Crewlet Knowledge").querySelector(".crewlet-tag")).toBeNull();
 });
 
 // THE PROJECTION NAMES NO SERVICES only on a node running no company, and the
@@ -105,15 +108,31 @@ test("a node running no company says so on both cards", async () => {
 
 // A TILE WITH NO WAY IN DRAWS NO FOOTER: a rule with nothing under it read as
 // a missing control, beside siblings whose footer holds a count and a button.
-// And Coming soon wears Not in use's neutral outline, one look for one state.
-test("a tile with no way in draws no footer, and Coming soon matches Not in use", async () => {
+// A state is drawn only where it is news: On, and Coming soon in the neutral
+// outline.
+test("a tile with no way in draws no footer, and only news wears a pill", async () => {
   mount({ tracker: "jira", knowledge: "native" });
   expect(await screen.findByText("1 space")).toBeTruthy();
-  expect(card("Crewlet Works").querySelector(".int-tile-foot")).toBeNull();
-  expect(card("Crewlet Chat").querySelector(".int-tile-foot")).toBeNull();
-  expect(card("Crewlet Knowledge").querySelector(".int-tile-foot")).not.toBeNull();
+  expect(card("Crewlet Works").querySelector(".crewlet-catalog-tile__foot")).toBeNull();
+  expect(card("Crewlet Chat").querySelector(".crewlet-catalog-tile__foot")).toBeNull();
+  expect(card("Crewlet Knowledge").querySelector(".crewlet-catalog-tile__foot")).not.toBeNull();
   const tagClass = (name: string, word: string) =>
     within(card(name)).getByText(word).closest(".crewlet-tag")?.className ?? "";
   expect(tagClass("Crewlet Chat", "Coming soon")).toMatch(/outline/);
-  expect(tagClass("Crewlet Works", "Not in use")).toMatch(/outline/);
+  expect(tagClass("Crewlet Knowledge", "On")).toMatch(/success/);
+});
+
+// ONE HEADING PER SECTION, the kit's: the section is named by it, and each
+// tile's name is a heading one level under it.
+test("the section is named by its heading, and each tile's name sits under it", () => {
+  mount({ tracker: "native", knowledge: "native" });
+  const section = screen.getByRole("region", { name: "Built into Crewlet" });
+  expect(
+    within(section).getByRole("heading", { level: 2, name: "Built into Crewlet" }),
+  ).toBeTruthy();
+  expect(
+    within(section)
+      .getAllByRole("heading", { level: 3 })
+      .map((h) => h.textContent),
+  ).toEqual(["Crewlet Works", "Crewlet Knowledge", "Crewlet Chat"]);
 });
