@@ -258,15 +258,17 @@ function mount(
     refuse = false,
     roster = org,
     answer = status,
+    catalogue = tools,
   }: {
     viewer?: Record<string, unknown>;
     refuse?: boolean;
     roster?: unknown;
     answer?: McpServersStatusAnswer;
+    catalogue?: ToolRow[];
   } = {},
 ) {
   const store = new Store();
-  store.applyTools(tools);
+  store.applyTools(catalogue);
   store.applyOrg(withDerived(roster) as never);
   store.setConnected(true);
   const socket = new LiveSocket(store);
@@ -354,6 +356,27 @@ test("the catalogue clamps a description and keeps the whole of it in reach", as
   const cell = await screen.findByText("Open an issue on a repository");
   expect(cell.classList.contains("clamp")).toBe(true);
   expect(cell.getAttribute("title")).toBe("Open an issue on a repository");
+});
+
+// THE LIST SAYS ONLY WHAT TELLS ROWS APART. A description stands alone (the
+// hint sentence under it repeated the Can tags, cut on every row), an origin
+// is words in a column drawn only where origins differ, the chips name them
+// the same way, and the bar carries no count the Total tile already says.
+test("the catalogue names origins in words, and only where they differ", async () => {
+  mount(<Tools />);
+  await settle();
+  expect(screen.queryByText(/tools? registered/)).toBeNull();
+  expect(screen.queryByText(/nothing said about/)).toBeNull();
+  expect(screen.getByRole("radio", { name: /^Built in/ })).toBeDefined();
+  expect(screen.getByRole("radio", { name: /^github/ })).toBeDefined();
+  // Drawn, or listed as hidden to fit: jsdom gives the grid no width.
+  expect(document.body.textContent).toMatch(/Origin/);
+  cleanup();
+
+  mount(<Tools />, { catalogue: tools.filter((t) => t.source === "builtin") });
+  await settle();
+  expect(screen.queryByRole("radiogroup", { name: "Tool origin" })).toBeNull();
+  expect(document.body.textContent).not.toMatch(/Origin/);
 });
 
 // PER-SERVER, PER-NODE, AS THE ENGINE SENT IT — the state its word, each node
@@ -546,7 +569,7 @@ test("a server with no tools opens its page, never an empty quoted search", asyn
     screen.getByText(/executable file not found in \$PATH/, { selector: ".mcp-failure-whole" }),
   ).toBeDefined();
   // The filter in force has a chip, and it is the chosen one.
-  const chip = screen.getByRole("radio", { name: /mcp:notes/ });
+  const chip = screen.getByRole("radio", { name: /^notes/ });
   expect(chip.getAttribute("aria-checked")).toBe("true");
   expect(screen.getByText("notes has registered no tools")).toBeDefined();
   await act(async () => {
