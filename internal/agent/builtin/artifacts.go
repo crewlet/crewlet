@@ -161,6 +161,10 @@ type ArtifactBox interface {
 	// Files lists every regular file under dir, at most max of them. The
 	// listing is the box's and is treated as untrusted: every path is held
 	// to the workspace and the published-path grammar again by the caller.
+	// A dir that names no directory of the workspace — missing, a file or
+	// a link — is [ErrNotADirectory], the caller's to change; a workspace
+	// that is gone is [ErrNoWorkspace]; and a walk that could not read all
+	// of dir is [ErrListIncomplete], never a shorter listing.
 	Files(ctx context.Context, dir string, max int) ([]string, error)
 
 	// Open streams one regular file. A path that names anything else is
@@ -170,6 +174,21 @@ type ArtifactBox interface {
 
 // ErrNoBox reports a turn with no coding run's box a publish may read.
 var ErrNoBox = errors.New("builtin: this turn holds no coding run's box to publish from")
+
+// ErrNotADirectory is a directory a publish named that the coding run's
+// workspace does not hold as one: it is missing, or it is a file or a link,
+// which a listing never follows. The caller's argument, as a path naming no
+// file is ([sandbox.ErrNotRegularFile]), and never a fault of this node.
+var ErrNotADirectory = errors.New("builtin: the path is not a directory in the coding run's workspace")
+
+// ErrNoWorkspace is a coding run's box whose workspace is gone: no dir a
+// publish names can list, so it is never the dir's fault ([ErrNotADirectory]).
+var ErrNoWorkspace = errors.New("builtin: the coding run's workspace is gone from its box")
+
+// ErrListIncomplete is a listing that could not read all of the dir it walked:
+// a directory under it the box's user can't open, or a read error. What it did
+// read is not the build, so it is refused rather than published short.
+var ErrListIncomplete = errors.New("builtin: the coding run's box could not list all of the directory")
 
 // ArtifactRequesters composes the principal a seat's turn is acting for.
 type ArtifactRequesters interface {

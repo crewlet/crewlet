@@ -448,6 +448,9 @@ type fakeBox struct {
 	files  map[string]string
 	listed []string // overrides the listing, for a box that lies
 	err    error    // every read's answer, for a box that cannot be read
+	// listErr is the listing's answer alone, for a directory the box does
+	// not hold as one.
+	listErr error
 
 	// midErr fails a read part way through a file its open found: a
 	// stream that stopped after its first bytes. laterErr fails every open
@@ -461,6 +464,9 @@ type fakeBox struct {
 func (b *fakeBox) Files(_ context.Context, dir string, max int) ([]string, error) {
 	if b.err != nil {
 		return nil, b.err
+	}
+	if b.listErr != nil {
+		return nil, b.listErr
 	}
 	if b.listed != nil {
 		return b.listed, nil

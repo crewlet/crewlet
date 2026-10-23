@@ -238,25 +238,69 @@ const boxListTimeout = 60
 // its terminator.
 const listEntryBytes = 2*artifacts.MaxPathBytes + 1
 
+// The listing command's own exits, each one no exit of the tools it runs nor a
+// box's own (124 for its timeout, 125 for a runtime's failure, 126 and 127 for
+// a command it can't run, above 128 for a signal) is.
+const (
+	// listNotADirectory is a dir the workspace does not hold as a
+	// directory: missing, a file or a link.
+	listNotADirectory = 3
+	// listNoWorkspace is a workspace that is gone from the box, which no
+	// dir the caller names can list.
+	listNoWorkspace = 4
+	// listIncomplete is find exiting non-zero: it walked part of the dir
+	// and could not read the rest (a directory the box's user can't open,
+	// a read error), so what it printed is not the whole listing.
+	listIncomplete = 5
+)
+
 // Files lists every regular file under dir through the box itself: find
 // prints NUL-terminated paths and never follows a link (`-type f` is false for
 // one), and the output is cut at what max entries can weigh, so a box cannot
 // hand the engine an unbounded answer.
+//
+// A DIR THE WORKSPACE DOES NOT HOLD AS A DIRECTORY IS THE CALLER'S
+// ([builtin.ErrNotADirectory]), asked of the box before find runs, and a
+// workspace that is gone is said as that ([builtin.ErrNoWorkspace]). find is
+// handed the dir as `./dir`, never bare, because a dir named `-delete` is a
+// find expression and ran over the whole workspace.
+//
+// FIND'S OWN EXIT IS CARRIED OUT OF THE PIPELINE, whose status is head's: a
+// walk that failed partway printed what it reached, and the listing was taken
+// as the whole build. A find that exits non-zero is [builtin.ErrListIncomplete]
+// unless head cut its output first, which killed it, and a find or a head the
+// box can't run is its image ([boxExited]). Any other exit is the box's.
 func (b *runBox) Files(ctx context.Context, dir string, max int) ([]string, error) {
 	limit := max * listEntryBytes
-	cmd := "cd " + shellQuote(b.root) + " && find " + shellQuote(dir) +
-		" -type f -print0 | head -c " + strconv.Itoa(limit)
+	start := "."
+	if dir != "." {
+		start = "./" + dir
+	}
+	q := shellQuote(start)
+	cmd := "cd " + shellQuote(b.root) + " 2>/dev/null || exit " + strconv.Itoa(listNoWorkspace) +
+		"; [ -d " + q + " ] && [ ! -L " + q + " ] || exit " + strconv.Itoa(listNotADirectory) +
+		"; exec 3>&1; st=$( { { find " + q + " -type f -print0; echo $? >&4; } | head -c " +
+		strconv.Itoa(limit) + " >&3; } 4>&1 ) || exit $?; case $st in 0) ;; 126|127) exit $st ;; " +
+		"*) exit " + strconv.Itoa(listIncomplete) + " ;; esac"
 	res, err := b.box.Exec(ctx, cmd, sandbox.ExecOptions{TimeoutSec: boxListTimeout})
-	if err != nil {
+	cut := len(res.Stdout) >= limit
+	switch {
+	case err != nil:
 		return nil, fmt.Errorf("engine: list %s in the box: %w", dir, err)
+	case res.ExitCode == listNotADirectory:
+		return nil, fmt.Errorf("engine: list %s in the box: %w", dir, builtin.ErrNotADirectory)
+	case res.ExitCode == listNoWorkspace:
+		return nil, fmt.Errorf("engine: list %s in the box: %w", dir, builtin.ErrNoWorkspace)
+	case res.ExitCode == listIncomplete && !cut:
+		return nil, fmt.Errorf("engine: list %s in the box: %w: %s", dir,
+			builtin.ErrListIncomplete, strings.TrimSpace(clipTail(res.Stderr)))
+	case res.ExitCode != 0 && res.ExitCode != listIncomplete:
+		return nil, boxExited("list "+dir, res)
 	}
-	if res.ExitCode != 0 {
-		return nil, fmt.Errorf("engine: list %s in the box exited %d: %s", dir, res.ExitCode,
-			strings.TrimSpace(clipTail(res.Stderr)))
-	}
-	if len(res.Stdout) >= limit {
+	if cut {
 		// CUT, SO THE LAST NAME MAY BE HALF OF ONE: answer one more entry
-		// than asked for, which the caller refuses as too many.
+		// than asked for, which the caller refuses as too many. A find
+		// head's cut killed exits non-zero, which says nothing more.
 		out := make([]string, 0, max+1)
 		for i := 0; i <= max; i++ {
 			out = append(out, "")
@@ -277,6 +321,13 @@ func (b *runBox) Files(ctx context.Context, dir string, max int) ([]string, erro
 	return out, nil
 }
 
+// checkNotARegularFile is the file check's own exit for a path that names no
+// regular file of the workspace, which no box's own exit is: test's own false
+// is 1, which is also what a container runtime's CLI exits with when it fails
+// itself, and read as the caller's path it told a box the runtime could not
+// reach as a file the caller named wrong.
+const checkNotARegularFile = 3
+
 // Open streams one regular file. A path the listing did not name is held to
 // being a regular file first, because a box streams a missing path as an
 // empty file and a link to wherever it points.
@@ -287,21 +338,45 @@ func (b *runBox) Open(ctx context.Context, p string) (io.ReadCloser, error) {
 	full := path.Join(b.root, p)
 	if !listed {
 		q := shellQuote(full)
-		res, err := b.box.Exec(ctx, "test -f "+q+" && test ! -L "+q,
-			sandbox.ExecOptions{TimeoutSec: boxListTimeout})
+		res, err := b.box.Exec(ctx, "test -f "+q+" && test ! -L "+q+" || exit "+
+			strconv.Itoa(checkNotARegularFile), sandbox.ExecOptions{TimeoutSec: boxListTimeout})
 		if err != nil {
 			return nil, fmt.Errorf("engine: check %s in the box: %w", p, err)
 		}
-		if res.ExitCode != 0 {
+		switch res.ExitCode {
+		case 0:
+		case checkNotARegularFile:
 			// THE CALLER'S PATH, which names nothing a publish can read:
 			// [sandbox.ErrNotRegularFile] is what the tool refuses it by,
 			// as the argument it is, where an unmarked error was told as a
-			// fault of this node.
+			// fault of this node. The check's own exit and nothing else: a
+			// check the box timed out, killed or couldn't run is the box's,
+			// never a path the caller named wrong.
 			return nil, fmt.Errorf("engine: %s is missing from the coding run's workspace, "+
 				"or %w", p, sandbox.ErrNotRegularFile)
+		default:
+			return nil, boxExited("check "+p, res)
 		}
 	}
 	return b.box.OpenFile(ctx, full)
+}
+
+// boxExited is a command the engine runs in a box exiting with a status the
+// command itself never answers with, classed by what clears it ([sandbox.Why]):
+// 126 or 127 is a box that cannot run its shell, or find or head (a listing
+// carries find's own status out for this), which is its image, a setup a
+// person changes; 124 (its timeout), above 128 (a signal ended it) and
+// anything else, a runtime's own failure among it, is the box failing on its
+// side, which clears when it answers again. Unclassed, every one was told as
+// a fault of this node. Its stderr goes to the log with the error, never to a
+// reader.
+func boxExited(what string, res sandbox.ExecResult) error {
+	err := fmt.Errorf("engine: %s in the box exited %d: %s", what, res.ExitCode,
+		strings.TrimSpace(clipTail(res.Stderr)))
+	if res.ExitCode == 126 || res.ExitCode == 127 {
+		return sandbox.Because(sandbox.WhyConfiguration, err)
+	}
+	return sandbox.Because(sandbox.WhyProviderUnavailable, err)
 }
 
 // shellQuote is s as one single-quoted shell word.
