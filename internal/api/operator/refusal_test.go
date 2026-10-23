@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/opkey"
@@ -288,6 +289,39 @@ func TestAStateOrACollisionIsToldToAPersonInTheDomainsWords(t *testing.T) {
 				t.Errorf("the answer lost what it was about: %v", body)
 			}
 		})
+	}
+}
+
+// A NOTE THE RUNNING NODE COULD NOT VERIFY IS TOLD TO A PERSON IN THEIR OWN
+// WORDS, UNDER NO WAIT: who fixes it as the `detail`, the assistant's sentence
+// beside it as `tool_detail`, and no Retry-After, since only an operator giving
+// the fleet's nodes the same keys changes the answer. A refusal carrying the
+// person's sentence alone, with no condition beneath it, reached the dashboard
+// as an unavailable with nothing to say it was worded for a person, so the
+// dashboard drew "Try again in a moment" over it.
+//
+// Mutation: drop the steer arm from builtin's condition table and the detail
+// is the model's sentence with no tool_detail; mark it as a condition a wait
+// clears and the answer carries a Retry-After.
+func TestAnUnverifiedNoteIsToldToAPersonUnderNoWait(t *testing.T) {
+	t.Parallel()
+	model := "The node running this turn couldn't verify the note; tell the person steering."
+	rec := httptest.NewRecorder()
+	operator.FailResult(rec, crewletmcp.Result{Failed: true, Output: model,
+		Cause: crewletmcp.Classify(crewletmcp.RefusalUnavailable,
+			fmt.Errorf("ask: %w", steer.ErrUnverified))}, newKey(),
+		httpjson.Detail{"tool": "steer_turn"})
+	body := decode(t, rec)
+	detail, _ := body["detail"].(string)
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(detail, "your note") ||
+		!strings.Contains(detail, "An administrator") {
+		t.Errorf("answered %d with detail %q, want 503 saying who fixes it", rec.Code, detail)
+	}
+	if got, _ := body["tool_detail"].(string); got != model {
+		t.Errorf("tool_detail is %q, want the assistant's sentence %q", got, model)
+	}
+	if after := rec.Header().Get("Retry-After"); after != "" {
+		t.Errorf("Retry-After: %s on a refusal no wait clears", after)
 	}
 }
 

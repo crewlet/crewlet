@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -253,7 +254,9 @@ func refusedBy(class tools.Refusal, cause error, msg string) tools.Result {
 // held for longer than the write would wait ([store.ErrBusy]); an event queue
 // that is not live while this node starts or stops ([queue.ErrNotLive]); an
 // event broker this node could not reach — its connection reconnecting, or the
-// broker not answering in time ([queue.ErrUnavailable]); a wait that ran out of
+// broker not answering in time ([queue.ErrUnavailable]); a note the node
+// running its turn could not verify because the two nodes do not hold the same
+// keys ([steer.ErrUnverified]), which no wait clears; a wait that ran out of
 // time or was abandoned. Everything else that reaches a tool unmarked — a read
 // of this node's own store that broke, a database that refused a statement, a
 // path in its own code that went wrong — is a fault.
@@ -474,6 +477,16 @@ func condition(err error) (conditionSaid, bool) {
 			"the connection is reconnecting, or the broker did not answer in time",
 			person: "This node lost touch with the rest of the fleet. " +
 				statelog.TryAgainSoon}, true
+	case errors.Is(err, steer.ErrUnverified):
+		// THE FLEET'S NODES DO NOT HOLD THE SAME KEYS, so the node running a
+		// turn took nothing it could not verify: only an operator giving them
+		// the same keys clears it. The keys go to the log; a person is told
+		// who fixes it.
+		return conditionSaid{clause: "the node running the turn couldn't verify " +
+			"the note, because the two nodes don't hold the same keys",
+			person: "The node running this turn couldn't verify your note, so it " +
+				"took nothing. An administrator needs to give the fleet's nodes the " +
+				"same keys.", stuck: true}, true
 	case errors.Is(err, context.DeadlineExceeded):
 		return conditionSaid{clause: "it ran out of time",
 			person: "This took too long, so it stopped. " + statelog.TryAgainSoon}, true
