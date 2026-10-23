@@ -2,6 +2,9 @@ package engine
 
 import (
 	"errors"
+	"maps"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -72,11 +75,16 @@ func TestARunSandboxLaunchIsRefusedUntilItsEnvironmentResolves(t *testing.T) {
 	if err == nil {
 		t.Fatal("a run whose code-host token is unset was launched")
 	}
-	for _, said := range []string{"no box was started", "${SWE_GITLAB_TOKEN} is not set",
+	// THE ERROR IS THE LOG'S DETAIL, the class is what the tool tells its
+	// model: a variable nobody set is a person's to set.
+	for _, said := range []string{"no box is started", "${SWE_GITLAB_TOKEN} is not set",
 		"list GITLAB_TOKEN under role.sandbox.optional_keys"} {
 		if !strings.Contains(err.Error(), said) {
 			t.Errorf("the refusal %q does not say %q", err, said)
 		}
+	}
+	if why, ok := sandbox.WhyOf(err); !ok || why != sandbox.WhyConfiguration {
+		t.Errorf("the refusal is classed %q (%v), want %q", why, ok, sandbox.WhyConfiguration)
 	}
 	if strings.Contains(err.Error(), "SWE_TEST_DATABASE") || strings.Contains(err.Error(), "NPM") {
 		t.Errorf("the refusal names what the run declared it may go without: %v", err)
@@ -127,12 +135,15 @@ func TestARunWaitingForAMintedCredentialIsRefusedSayingWhenItCanRun(t *testing.T
 	if run.gap == nil || !run.gap.waiting() {
 		t.Fatalf("gap = %+v: want a run waiting for the gitlab integration", run.gap)
 	}
-	refusal := run.gap.runRefusal()
-	for _, said := range []string{"waiting for the gitlab integration to mint ${SWE_GITLAB_TOKEN}",
-		"try again then"} {
-		if !strings.Contains(refusal, said) {
-			t.Errorf("the refusal %q does not say %q", refusal, said)
-		}
+	// A WAIT CLEARS IT, so the launch is classed as one, and the log says
+	// what it waits for.
+	if why := run.gap.launchWhy(); why != sandbox.WhyAwaitingCredential {
+		t.Errorf("a run waiting for a minted credential is classed %q, want %q",
+			why, sandbox.WhyAwaitingCredential)
+	}
+	if said := run.gap.reason(); !strings.Contains(said,
+		"waiting for the gitlab integration to mint ${SWE_GITLAB_TOKEN}") {
+		t.Errorf("the gap %q does not say what it waits for", said)
 	}
 	run.logGap(t.Context(), seat.Handle(), "no box is started")
 	if lines := logs.records("sandbox_env_unresolved", "swe"); len(lines) != 1 ||
@@ -167,15 +178,17 @@ func TestARunWaitingForAMintedCredentialIsRefusedSayingWhenItCanRun(t *testing.T
 	if stopped.gap == nil || stopped.gap.waiting() {
 		t.Fatalf("gap = %+v: want a run the blocked gitlab pass will not mint for", stopped.gap)
 	}
-	refusal = stopped.gap.runRefusal()
+	refusal := stopped.gap.reason()
 	for _, said := range []string{"the gitlab integration will not mint", "until a person acts",
 		"admin token"} {
 		if !strings.Contains(refusal, said) {
-			t.Errorf("the refusal %q does not say %q", refusal, said)
+			t.Errorf("the gap %q does not say %q", refusal, said)
 		}
 	}
-	if strings.Contains(refusal, "try again then") {
-		t.Errorf("a run no pass will mint for is told to try again: %q", refusal)
+	// AND NO WAIT CLEARS IT: a run no pass will mint for is a person's to
+	// supply, which the tool tells its model rather than to try again.
+	if why := stopped.gap.launchWhy(); why != sandbox.WhyConfiguration {
+		t.Errorf("a run no pass will mint for is classed %q, want %q", why, sandbox.WhyConfiguration)
 	}
 
 	// DECLARED OPTIONAL, IT IS STILL WAITED FOR: the declaration is for a
@@ -187,6 +200,80 @@ func TestARunWaitingForAMintedCredentialIsRefusedSayingWhenItCanRun(t *testing.T
 	if declared.gap == nil || !declared.gap.waiting() {
 		t.Errorf("gap = %+v: a key a pass mints, declared optional, must still wait for it",
 			declared.gap)
+	}
+}
+
+// A MINT GITHUB DID NOT ANSWER IS A WAIT, AND ONE IT REFUSED IS A PERSON'S, in
+// the class the run_sandbox tool tells its model. The seat's GitHub App token
+// is issued as the run's environment is read, and a mint that met GitHub
+// failing on its side, at its rate limit or not reached at all is asked for
+// again at the next launch: classed configuration, the seat was told an
+// administrator had to fix its setup, with no wait, over one blip of GitHub's.
+// One GitHub refused (a suspended installation, a revoked key) is refused
+// again at every attempt until somebody fixes the app, and the gap says so
+// where it said to wait for the next attempt; beside a variable nobody set, a
+// run is a person's to complete however its mint went.
+//
+// Mutation: class every unissued mint as configuration (launchWhy's old two
+// arms) and the waiting rows go red; class every one as a wait and the refused
+// rows do; read a 403 by its status alone and the rate limit's row does; let a
+// 503 beside an unset variable win and the last row does.
+func TestAMintGitHubDidNotAnswerIsAWaitAndOneItRefusedIsAPersons(t *testing.T) {
+	t.Parallel()
+	closed := httptest.NewServer(http.NotFoundHandler())
+	closed.Close()
+	for name, c := range map[string]struct {
+		// status is what the token endpoint answers, with its rate limit's
+		// header where limited is set, and url where GitHub is when it is
+		// not the fixture: one nothing listens on.
+		status  int
+		limited bool
+		url     string
+		also    map[string]string
+		want    sandbox.Why
+		says    string
+	}{
+		"a 503": {status: http.StatusServiceUnavailable,
+			want: sandbox.WhyCredentialUnavailable, says: "asked for again at the next attempt"},
+		"a 429": {status: http.StatusTooManyRequests,
+			want: sandbox.WhyCredentialUnavailable, says: "asked for again at the next attempt"},
+		"a 403 at GitHub's rate limit": {status: http.StatusForbidden, limited: true,
+			want: sandbox.WhyCredentialUnavailable, says: "asked for again at the next attempt"},
+		"GitHub not reached": {url: closed.URL,
+			want: sandbox.WhyCredentialUnavailable, says: "asked for again at the next attempt"},
+		"a suspended installation": {status: http.StatusForbidden,
+			want: sandbox.WhyConfiguration, says: "until somebody fixes the agent's GitHub App"},
+		"a revoked key": {status: http.StatusUnauthorized,
+			want: sandbox.WhyConfiguration, says: "until somebody fixes the agent's GitHub App"},
+		"a 503 beside a variable nobody set": {status: http.StatusServiceUnavailable,
+			also: map[string]string{"OTHER_TOKEN": "${BUILDER_NOBODY_SETS}"},
+			want: sandbox.WhyConfiguration, says: "${BUILDER_NOBODY_SETS} is not set"},
+	} {
+		gh := newAppGitHub(t)
+		gh.status, gh.limited = c.status, c.limited
+		at := gh.url
+		if c.url != "" {
+			at = c.url
+		}
+		co := appCompany(t, at, true)
+		builder := co.Org.AgentSeatByHandle("builder")
+		env := map[string]string{"GITHUB_TOKEN": "${GITHUB_APP_TOKEN_BUILDER}"}
+		maps.Copy(env, c.also)
+		run := appEngine(t, co).runEnvironment(t.Context(), co, builder,
+			&org.RoleSandbox{Env: env}, nil)
+		if run.gap == nil {
+			t.Errorf("%s: the run was given a token GitHub did not issue", name)
+			continue
+		}
+		if why := run.gap.launchWhy(); why != c.want {
+			t.Errorf("%s: classed %q (a wait: %v), want %q (a wait: %v)", name, why,
+				why.Waits(), c.want, c.want.Waits())
+		}
+		said := run.gap.reason()
+		if !strings.Contains(said, "${GITHUB_APP_TOKEN_BUILDER} could not be issued") ||
+			!strings.Contains(said, c.says) {
+			t.Errorf("%s: the gap says %q, want the mint's failure and %q", name, said, c.says)
+		}
 	}
 }
 

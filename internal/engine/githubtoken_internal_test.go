@@ -18,12 +18,14 @@ import (
 )
 
 // appGitHub stands in for an Enterprise Server's token endpoint: every mint
-// is a fresh, numbered token good for an hour, unless refuse is set.
+// is a fresh, numbered token good for an hour, unless status names what it
+// answers instead, with its rate limit's header where limited is set.
 type appGitHub struct {
-	mu     sync.Mutex
-	mints  int
-	refuse bool
-	url    string
+	mu      sync.Mutex
+	mints   int
+	status  int
+	limited bool
+	url     string
 
 	// asked is the permissions each mint requested, in order.
 	asked []map[string]string
@@ -39,9 +41,12 @@ func newAppGitHub(t *testing.T) *appGitHub {
 		}
 		g.mu.Lock()
 		defer g.mu.Unlock()
-		if g.refuse {
-			w.WriteHeader(http.StatusForbidden)
-			_, _ = w.Write([]byte(`{"message":"This installation has been suspended"}`))
+		if g.status != 0 {
+			if g.limited {
+				w.Header().Set("X-RateLimit-Remaining", "0")
+			}
+			w.WriteHeader(g.status)
+			_, _ = w.Write([]byte(`{"message":"` + http.StatusText(g.status) + `"}`))
 			return
 		}
 		var body struct {
@@ -279,7 +284,7 @@ func TestAServerNamingAnUninstalledAppsTokenWaitsForTheInstall(t *testing.T) {
 func TestATokenGitHubRefusesIsAFailureWithItsReason(t *testing.T) {
 	t.Parallel()
 	gh := newAppGitHub(t)
-	gh.refuse = true
+	gh.status = http.StatusForbidden
 	c := appCompany(t, gh.url, true)
 	e := appEngine(t, c)
 	builder := c.Org.AgentSeatByHandle("builder")

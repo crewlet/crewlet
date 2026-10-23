@@ -70,6 +70,11 @@ func TestARemoteRunWithNoTravellingCredentialIsRefused(t *testing.T) {
 		t.Fatalf("error is %T, want *SandboxCredentialError — the remedy is a "+
 			"config edit, and retrying it as a provider outage would loop", err)
 	}
+	// AND CLASSED AS ONE, which is what the run_sandbox tool tells its
+	// model from: a person's edit clears it, never a wait.
+	if why, ok := sandbox.WhyOf(err); !ok || why != sandbox.WhyConfiguration {
+		t.Errorf("the refusal is classed %q (%v), want %q", why, ok, sandbox.WhyConfiguration)
+	}
 	// The remedy has to be THIS operator's: codex mints no token, so
 	// telling them to capture one would send them at a flag that does not
 	// exist.

@@ -923,17 +923,31 @@ func TestACodingRunIsRefusedBelowTheBudgetFloor(t *testing.T) {
 	if err == nil {
 		t.Fatal("a seat with 500 tokens launched a run needing 2000")
 	}
-	for _, want := range []string{"500", "2000", "your own tools"} {
+	for _, want := range []string{"500", "2000", "turn_engine.sandbox_min_budget_tokens"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal is missing %q: %v", want, err)
 		}
 	}
+	// CLASSED AS THE BUDGET, which is what the tool tells its model: no wait
+	// sooner than the window's turn clears it.
+	if why, ok := sandbox.WhyOf(err); !ok || why != sandbox.WhyBudget {
+		t.Errorf("the refusal is classed %q (%v), want %q", why, ok, sandbox.WhyBudget)
+	}
 
 	// A READ THAT FAILED is refused too: launching a box on an unknown
 	// budget is how a company discovers its ceiling by spending past it.
-	if err := sandboxHeadroom(ctx,
-		leftover{err: errors.New("the coordination store is unreachable")}, 2000); err == nil {
+	// And it is NOT the budget: what kept the counter from being read is
+	// the caller's to word, a store that did not answer included.
+	unread := sandboxHeadroom(ctx,
+		leftover{err: coord.ErrUnavailable}, 2000)
+	if unread == nil {
 		t.Error("a run launched on a budget nobody could read")
+	}
+	if why, ok := sandbox.WhyOf(unread); ok {
+		t.Errorf("a budget nobody could read is classed %q, as though somebody spent it", why)
+	}
+	if !errors.Is(unread, coord.ErrUnavailable) {
+		t.Errorf("the refusal %v lost what kept the budget from being read", unread)
 	}
 
 	// And the two states that legitimately pass, or the assertions above

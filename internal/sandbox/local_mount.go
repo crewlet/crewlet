@@ -154,7 +154,7 @@ func verifyMount(ctx context.Context, box execer, layout boxLayout) error {
 		TimeoutSec: containerProbeTimeout.Seconds(),
 	})
 	if err != nil || result.ExitCode != 0 || strings.TrimSpace(result.Stdout) != token {
-		return localErrorf("container sandbox %s cannot see its own box directory: %s is "+
+		return localRefusedf(WhyConfiguration, "container sandbox %s cannot see its own box directory: %s is "+
 			"mounted at %s but the container reads something else there. The runtime is "+
 			"driving a daemon on another host (DOCKER_HOST, a forwarded socket), which "+
 			"cannot bind-mount this filesystem — point providers.sandbox.local.runtime at "+
@@ -171,7 +171,7 @@ func verifyMount(ctx context.Context, box execer, layout boxLayout) error {
 		if detail == nil {
 			detail = removeErr
 		}
-		return localErrorf("container sandbox %s writes its box directory as a user this "+
+		return localRefusedf(WhyConfiguration, "container sandbox %s writes its box directory as a user this "+
 			"engine cannot manage: the container created %s and this process can neither "+
 			"write into it nor remove it (%v). The engine would be left unable to install "+
 			"the agent's shim or reclaim the box's disk. Run the container as this user by "+

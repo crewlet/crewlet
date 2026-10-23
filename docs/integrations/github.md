@@ -603,8 +603,9 @@ as the agent's own app.
 
 | The seat's app | What a value naming the token does |
 |---|---|
-| Not created, not installed, or its key does not resolve | **Waits.** The variable is the GitHub integration's to issue, so a tool server naming it is held back as waiting for the app's installation (or as stopped until a person acts, by what the seat-app pass last recorded), and a coding run is refused with a sentence saying so. The reconcile records the installation within a tick of it, which applies a revision, and every read runs again |
-| Installed, and GitHub refuses the mint (a suspended installation, a revoked key, an installation that has not approved a permission the seat asks for) or cannot be reached | **Fails, with GitHub's reason**, and is retried: the seat's tool servers on their restart schedule, a coding run at the seat's next attempt |
+| Not created, not installed, or its key does not resolve | **Waits.** The variable is the GitHub integration's to issue, so a tool server naming it is held back as waiting for the app's installation (or as stopped until a person acts, by what the seat-app pass last recorded), and a coding run is refused as [`awaiting_credential`](../concepts/code-sandbox.md#when-a-run-does-not-start), its seat told to try again in a few minutes (or as `configuration` where that pass recorded it stopped). The reconcile records the installation within a tick of it, which applies a revision, and every read runs again |
+| Installed, and GitHub refuses the mint (a suspended installation, a revoked key, an installation that has not approved a permission the seat asks for) | **Fails, with GitHub's reason**, and is refused again at every attempt until somebody fixes the app: the seat's tool servers are retried on their restart schedule, and a coding run is refused as `configuration`, its seat told an administrator has to fix its setup |
+| Installed, and GitHub can't be reached or answers that it can't issue one just now (408, its rate limit, a 5xx) | **Fails, with GitHub's reason**, and is retried: the seat's tool servers on their restart schedule, and a coding run is refused as `credential_unavailable`, its seat told to try again shortly, which asks again |
 | `integrations.github` is off | **Nothing will issue it**, and it is reported as a variable nothing sets |
 
 ### Running locally, with no public address

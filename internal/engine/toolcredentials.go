@@ -273,12 +273,26 @@ func (m *seatMint) kind(name string) (integration.Kind, bool) {
 	return kind, ok
 }
 
-// unissued is why the engine could not issue name this time, or "".
-func (m *seatMint) unissued(name string) string {
+// unissued is why the engine could not issue name this time and whether a
+// wait clears it, or the zero [issueFailure] where it did not try or did.
+func (m *seatMint) unissued(name string) issueFailure {
 	if m == nil {
-		return ""
+		return issueFailure{}
 	}
-	return m.token.unissued(name)
+	said := m.token.unissued(name)
+	if said == "" {
+		return issueFailure{}
+	}
+	return issueFailure{said: said, passes: m.token.passes()}
+}
+
+// issueFailure is a credential the engine went to issue a seat at use and
+// could not: the issuer's reason, as the log and a tool server's sentence
+// carry it, and whether a wait clears it ([mintPasses]) or a person's step on
+// the agent's app does.
+type issueFailure struct {
+	said   string
+	passes bool
 }
 
 // credentialMissing is why a server was not started — a seat's child, a
@@ -321,9 +335,11 @@ type credentialMissing struct {
 	minting map[string]integration.Kind
 
 	// unissued are the variables the engine went to issue this seat at use
-	// and could not, each with why ([seatToken.unissued]): a failure, but a
-	// passing one, retried at the next attempt. Never a token.
-	unissued map[string]string
+	// and could not, each with why ([seatToken.unissued]) and whether a wait
+	// clears it: a failure, retried at the next attempt, which passes where
+	// GitHub did not answer and is a person's step where it refused. Never a
+	// token.
+	unissued map[string]issueFailure
 
 	// stopped is, for each integration that mints one of those and cannot
 	// until a person acts, what its last pass recorded about it
@@ -534,11 +550,11 @@ func credentialGap(
 		// issue and GitHub would not give is a failure with GitHub's
 		// reason, retried, never "waiting for the integration", which
 		// would read as a step somebody has yet to take.
-		if why := mint.unissued(name); why != "" {
+		if failure := mint.unissued(name); failure.said != "" {
 			if m.unissued == nil {
-				m.unissued = map[string]string{}
+				m.unissued = map[string]issueFailure{}
 			}
-			m.unissued[name] = why
+			m.unissued[name] = failure
 			continue
 		}
 		if kind, ok := mint.kind(name); ok {
@@ -565,6 +581,22 @@ func credentialGap(
 // recorded says a person must act first.
 func (m *credentialMissing) waiting() bool {
 	return len(m.unset) == 0 && len(m.empty) == 0 && len(m.stopped) == 0 && len(m.unissued) == 0
+}
+
+// personal reports a gap a person has to act on before anything clears it: a
+// variable nothing sets or one set to nothing, an integration that will not
+// mint until somebody acts, or a mint its issuer refused rather than one it
+// did not answer, which is a step on the agent's app that no attempt takes.
+func (m *credentialMissing) personal() bool {
+	if len(m.unset) > 0 || len(m.empty) > 0 || len(m.stopped) > 0 {
+		return true
+	}
+	for _, failure := range m.unissued {
+		if !failure.passes {
+			return true
+		}
+	}
+	return false
 }
 
 // arrival is what a value that is only waiting arrives with: the seal, for
@@ -718,8 +750,17 @@ func (m *credentialMissing) reason() string {
 			varRefs(m.empty), plural(m.empty, "is set to an empty value", "are set to empty values")))
 	}
 	for _, name := range slices.Sorted(maps.Keys(m.unissued)) {
+		failure := m.unissued[name]
+		if !failure.passes {
+			// REFUSED, which asking again at the next attempt does not
+			// change: the agent's app is a person's to fix first.
+			parts = append(parts, fmt.Sprintf("${%s} could not be issued: %s; it is "+
+				"not issued until somebody fixes the agent's GitHub App (its key, its "+
+				"installation or the permissions it asks for)", name, failure.said))
+			continue
+		}
 		parts = append(parts, fmt.Sprintf("${%s} could not be issued: %s; it is asked for "+
-			"again at the next attempt", name, m.unissued[name]))
+			"again at the next attempt", name, failure.said))
 	}
 	if remedy := m.optionalRemedy(); remedy != "" {
 		parts = append(parts, remedy)
@@ -782,19 +823,6 @@ func (m *credentialMissing) Error() string {
 		when = "; it starts once " + m.arrival()
 	}
 	return "not started: " + m.reason() + when
-}
-
-// runRefusal is why a coding run was not started, as the tool result its turn
-// reads: what is missing, and — the reader being a model — what to do about
-// the turn meanwhile.
-func (m *credentialMissing) runRefusal() string {
-	refusal := "this seat's run environment is not complete, so no box was started: " + m.reason()
-	if m.waiting() {
-		return refusal + "; a run launched once " + m.arrival() + " is given it: " +
-			"try again then, or do the work with your own tools"
-	}
-	return refusal + "; until somebody does, do the work with your own tools, or say " +
-		"what is missing"
 }
 
 // mintedVariables lists what a child waits for, sorted, for a log line.

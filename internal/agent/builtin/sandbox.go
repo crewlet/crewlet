@@ -2,7 +2,7 @@ package builtin
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
@@ -100,8 +100,7 @@ func (t *runSandbox) CallDetached(ctx context.Context, turn *turnctx.Turn, args 
 		// A launch that failed is a TOOL FAILURE, not an engine one: the
 		// model asked for something the engine could not do, and telling it
 		// so lets it fall back to its own tools rather than losing the turn.
-		return tools.DetachedResult{Result: refusedBy(tools.RefusalUnavailable, waits(),
-			fmt.Sprintf("the sandbox could not be started: %v", err))}, nil
+		return tools.DetachedResult{Result: notStarted(ctx, turn, err)}, nil
 	}
 
 	log.InfoContext(ctx, "run_sandbox_suspended",
@@ -119,4 +118,114 @@ func (t *runSandbox) CallDetached(ctx context.Context, turn *turnctx.Turn, args 
 			"sandbox_id": res.SandboxID,
 		},
 	}, nil
+}
+
+// notStarted is a launch that failed, as the model is told it: what kept the
+// run from starting, and whether waiting or a person's change clears it — and
+// the error itself to the node's log, never to the model.
+//
+// THE ERROR WAS THE ANSWER, and it was the wrong reader's. Every failure came
+// back as "the sandbox could not be started: " and the Go error after it — an
+// E2B status and its body, a container runtime's stderr, a coordination
+// store's transport error naming its host — and marked as one a wait clears,
+// so a model told its seat's sandbox setup could not start a run was invited
+// to try again for as long as its turn lasted. The backends class their
+// failures where they meet them ([sandbox.WhyOf]); this reads the class.
+//
+// IN ORDER: a call whose own context ended is told that, whatever the
+// provider's request it ended said; a seat this node no longer holds is no
+// run anybody here can start; a run whose ending is decided takes no new job
+// in this turn; then the class; and what nothing classed is a condition of
+// this node or a fault of it ([nodeFailure]), never filed under the nearest
+// class.
+func notStarted(ctx context.Context, turn *turnctx.Turn, err error) tools.Result {
+	const stopped = "No coding run was started"
+	why, classed := sandbox.WhyOf(err)
+	switch {
+	case ctx.Err() != nil:
+		logNotStarted(ctx, turn, "", err)
+		return nodeFailure(ctx, RunSandboxTool, ctx.Err(), stopped, "")
+	case errors.Is(err, sandbox.ErrSeatNotHeld):
+		logNotStarted(ctx, turn, "", err)
+		return refusedBy(tools.RefusalUnavailable, waitless(), stopped+": this node no "+
+			"longer holds your seat, so it can't start a run for it. Trying again won't "+
+			"help in this turn, so finish without the coding run.")
+	case errors.Is(err, sandbox.ErrRunEnding):
+		// THE TURN'S RUN IS BEING CLOSED, which is a state of the run and
+		// not a broken node: its ending is decided, and the row takes no
+		// new job until it is gone. Told as a fault, the model read that
+		// the node itself had failed.
+		logNotStarted(ctx, turn, "", err)
+		return refusedBy(tools.RefusalUnavailable, waitless(), stopped+": this turn's "+
+			"coding run is being closed, so no new one starts in this turn. Trying again "+
+			"won't help, so finish without the coding run.")
+	case !classed:
+		if _, condition := Condition(err); condition {
+			logNotStarted(ctx, turn, "", err)
+		}
+		return nodeFailure(ctx, RunSandboxTool, err, stopped, "")
+	}
+	logNotStarted(ctx, turn, why, err)
+	switch why {
+	case sandbox.WhyConfiguration:
+		return refusedBy(tools.RefusalUnavailable, waitless(), stopped+": this seat's "+
+			"sandbox isn't set up so it can start one, and waiting won't change that. Do "+
+			"the work with your own tools, or tell whoever asked that an administrator "+
+			"needs to fix the seat's sandbox setup; the node's log says what to change.")
+	case sandbox.WhySetupUnavailable:
+		return refusedBy(tools.RefusalUnavailable, waits(), stopped+": a download this "+
+			"seat's sandbox setup makes failed for now. Try again shortly, or do the work "+
+			"with your own tools.")
+	case sandbox.WhyOwnSession:
+		return refusedBy(tools.RefusalUnavailable, waitless(), stopped+": you do your "+
+			"code work in your own session, which already has a shell, an editor and a "+
+			"checkout, and a second box would hold work you couldn't see. Use the shell "+
+			"and editor you already have.")
+	case sandbox.WhyBudget:
+		return refused(tools.RefusalBudgetExhausted, stopped+": this seat has too little "+
+			"of its token budget left for one, and a coding run uses a box, a clone and a "+
+			"toolchain before it produces anything. Trying again won't help until the "+
+			"budget's window turns over or its ceiling is raised, so do the work with your "+
+			"own tools, or report that the budget is running low.")
+	case sandbox.WhyAwaitingCredential:
+		return refusedBy(tools.RefusalUnavailable, waits(), stopped+": this seat's run "+
+			"environment is waiting for a credential one of the company's integrations is "+
+			"setting up. Try again in a few minutes, or do the work with your own tools.")
+	case sandbox.WhyCredentialUnavailable:
+		return refusedBy(tools.RefusalUnavailable, waits(), stopped+": the service that "+
+			"issues this seat's credential for the run didn't issue it just now. Try again "+
+			"shortly, or do the work with your own tools.")
+	case sandbox.WhyProviderRefused:
+		return refusedBy(tools.RefusalUnavailable, waitless(), stopped+": the sandbox "+
+			"provider refused the company's credentials, and waiting won't change that. Do "+
+			"the work with your own tools, or tell whoever asked that an administrator needs "+
+			"to fix the sandbox provider's credentials.")
+	case sandbox.WhyProviderBilling:
+		return refusedBy(tools.RefusalUnavailable, waitless(), stopped+": the sandbox "+
+			"provider's account for the company needs paying for, and waiting won't change "+
+			"that. Do the work with your own tools, or tell whoever asked that an "+
+			"administrator needs to check the sandbox provider's account.")
+	case sandbox.WhyProviderLimit:
+		return refusedBy(tools.RefusalUnavailable, waits(), stopped+": the sandbox "+
+			"provider is at a limit of the company's account, with too many boxes running "+
+			"or too many requests. Try again later, or do the work with your own tools.")
+	case sandbox.WhyProviderUnavailable:
+		return refusedBy(tools.RefusalUnavailable, waits(), stopped+": the sandbox "+
+			"provider didn't answer, or failed on its side. Try again shortly, or do the "+
+			"work with your own tools.")
+	}
+	// A CLASS THIS BUILD HAS NO WORDS FOR is a fault of this build:
+	// TestEveryLaunchClassIsWorded holds every class to its words.
+	return faulted(ctx, RunSandboxTool, err, stopped+": "+faultSaid+".")
+}
+
+// logNotStarted writes a launch that failed, with its class where one was
+// given — the error the model is not told goes here. A fault is not written
+// here: [faulted] writes it, as every tool's.
+func logNotStarted(ctx context.Context, turn *turnctx.Turn, why sandbox.Why, err error) {
+	attrs := []any{"turn_id", turn.RunID, "error", err.Error()}
+	if why != "" {
+		attrs = append(attrs, "why", string(why))
+	}
+	log.WarnContext(ctx, "run_sandbox_not_started", attrs...)
 }

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
@@ -130,11 +131,75 @@ roles:
 		if !errors.As(err, &modelErr) {
 			t.Fatalf("%s: err = %v (%T), want *SandboxModelError", tc.name, err, err)
 		}
+		// A PAIRING NO WAIT CHANGES, which the tool tells its model as one a
+		// person's change clears.
+		if why, ok := sandbox.WhyOf(err); !ok || why != sandbox.WhyConfiguration {
+			t.Errorf("%s: the refusal is classed %q (%v), want %q", tc.name, why, ok,
+				sandbox.WhyConfiguration)
+		}
 		if started != 0 {
 			t.Errorf("%s: %d jobs started for a refused launch", tc.name, started)
 		}
 		if _, found, getErr := e.sandbox.Load().pending.Get(t.Context(), "t1"); getErr != nil || found {
 			t.Errorf("%s: a run row exists for a refused launch (found %v, err %v)", tc.name, found, getErr)
 		}
+	}
+}
+
+// A LAUNCH NO WAIT CAN START IS CLASSED AS ONE, so the run_sandbox tool tells
+// its model what to do instead rather than to try again: a seat whose sandbox
+// is off and a node that runs none are a person's configuration to change, and
+// a seat that does its code work in its own session is told to use the shell it
+// already has. Each is refused before a box exists.
+//
+// Mutation: drop the class from any of the three refusals, and its case goes
+// red.
+func TestARunSandboxLaunchClassesWhatNoWaitClears(t *testing.T) {
+	t.Setenv(config.CLIHomeEnv, t.TempDir())
+	c := runnableCompany(t, fmt.Sprintf(`
+name: Acme
+providers:
+  sandbox: {fake: true}
+  llm:
+    main:
+      model: claude-sonnet-5
+    sub:
+      agent: claude-code
+      model: sonnet
+      mode: box
+      state_dir: %q
+roles:
+  - name: Self
+    handle: self
+    llm: sub
+    sandbox: {enabled: true, run_in: self}
+  - name: Idle
+    handle: idle
+    llm: main
+    sandbox: {enabled: false}
+`, t.TempDir()))
+	e, jobs := codeWorkRig(t, c)
+	for handle, want := range map[string]sandbox.Why{
+		"self": sandbox.WhyOwnSession,
+		"idle": sandbox.WhyConfiguration,
+	} {
+		_, err := (&launcher{engine: e}).Launch(t.Context(),
+			&turnctx.Turn{RunID: "t-" + handle, Seat: c.Org.AgentSeatByHandle(handle)}, "fix it")
+		if why, ok := sandbox.WhyOf(err); !ok || why != want {
+			t.Errorf("%s: the refusal %v is classed %q (%v), want %q", handle, err, why, ok, want)
+		}
+	}
+	if started := len(jobs[codingagent.ClaudeCodeName].Started()); started != 0 {
+		t.Errorf("%d jobs started for refused launches", started)
+	}
+
+	// A NODE THAT RUNS NO SANDBOX AT ALL.
+	bare := &Engine{}
+	bare.epoch.current.Store(c)
+	_, err := (&launcher{engine: bare}).Launch(t.Context(),
+		&turnctx.Turn{RunID: "t-bare", Seat: c.Org.AgentSeatByHandle("idle")}, "fix it")
+	if why, ok := sandbox.WhyOf(err); !ok || why != sandbox.WhyConfiguration {
+		t.Errorf("a node with no sandbox: the refusal %v is classed %q (%v), want %q", err, why, ok,
+			sandbox.WhyConfiguration)
 	}
 }

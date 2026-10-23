@@ -40,6 +40,9 @@ type ConfigError struct{ msg string }
 
 func (e *ConfigError) Error() string { return e.msg }
 
+// why classes it as what it is: a catalogue a person writes.
+func (e *ConfigError) why() (Why, bool) { return WhyConfiguration, true }
+
 // ManagerOptions configures a [Manager].
 type ManagerOptions struct {
 	// Providers is the CATALOGUE: one backend per placement a company
