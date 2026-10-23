@@ -24,6 +24,12 @@ export interface ConfigAnswer {
   readonly status: number;
   readonly body: unknown;
   readonly etag?: string | null;
+  /**
+   * The answer's `Retry-After` in whole seconds, null or absent where it
+   * named no wait: a `503` the engine wrote carries one exactly where waiting
+   * clears its cause.
+   */
+  readonly retryAfter?: number | null;
 }
 
 /** Why the engine holds a revision the write was not built on. */
@@ -76,6 +82,13 @@ export type ConfigRefusal =
    * about to serve, so the same write sent again in a moment is right.
    */
   | { readonly kind: "starting"; readonly detail: string }
+  /**
+   * A `503` that stored nothing, for a condition of the node that waiting
+   * clears (it carried a `Retry-After`): who holds the human seats a write
+   * removes could not be read just now. Certain, like a drain's: a check asks
+   * again, and a save that met it wrote nothing.
+   */
+  | { readonly kind: "unavailable"; readonly detail: string }
   /**
    * Never answered, or answered with a 5xx that is neither of those: a
    * gateway that gave up, an engine that failed after storing the revision.
@@ -171,6 +184,39 @@ export function classifyConfigRefusal(answer: ConfigAnswer): ConfigRefusal {
     return {
       kind: "problems",
       problems: heldSeatProblems(body.held, text(body.detail) || code),
+      derived: null,
+      code,
+      hint: text(body.hint),
+    };
+  }
+  // A 503 THAT STORED NOTHING. `seat_holders_unavailable` refuses a write
+  // taking a human seat out of the company on a node that couldn't read who
+  // holds it: the engine refused it before writing anything. Read as
+  // unreachable, the builder settled that definite "nothing was written" as a
+  // save that might have landed, and showed the bare code. WHERE WAITING
+  // CLEARS IT (a Retry-After came with it) it is a condition to ask again
+  // about, which a check does and a save never doubts; where it does not (an
+  // evicted node, a full identity log) it is a problem with this change, on
+  // each seat the write removes, in the engine's own words for what clears
+  // it, and it stays until the draft or the node changes.
+  if (answer.status === 503 && code === "seat_holders_unavailable") {
+    const said = text(body.detail) || code;
+    if ((answer.retryAfter ?? 0) > 0) return { kind: "unavailable", detail: said };
+    const seats = Array.isArray(body.seats)
+      ? body.seats.filter((seat): seat is string => typeof seat === "string")
+      : [];
+    return {
+      kind: "problems",
+      problems:
+        seats.length > 0
+          ? seats.map((seat): ConfigProblem => ({
+              path: "",
+              segments: null,
+              kind: "seat_holders_unavailable",
+              seat,
+              message: said,
+            }))
+          : [{ path: "", segments: null, kind: "seat_holders_unavailable", message: said }],
       derived: null,
       code,
       hint: text(body.hint),

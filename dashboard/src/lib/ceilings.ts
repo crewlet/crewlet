@@ -246,6 +246,10 @@ export function refusalWords(
         message: `This node is still starting and stored nothing${refusal.detail ? `: ${refusal.detail}` : "."}`,
         reload: false,
       };
+    case "unavailable":
+      // The engine's own sentence: what stopped it, that nothing was
+      // stored, and that waiting clears it.
+      return { message: refusal.detail, reload: false };
     case "unreachable":
       return {
         message:

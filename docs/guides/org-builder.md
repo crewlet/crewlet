@@ -783,6 +783,14 @@ what holds it. The same refusal meets a held seat replaced
 ([Replacing a seat](#replacing-a-seat)), and a document written outside the
 builder that makes a held human seat an agent's.
 
+A node that cannot read who holds the seats a change removes refuses it
+`503 seat_holders_unavailable`, and nothing is written. Where waiting clears
+it (the engine names a wait), the check asks again by itself and reads *Could
+not reach the engine to check* meanwhile; where waiting does not (the node has
+been evicted, or its identity log is full), each seat the change removes shows
+the engine's own sentence for what clears it, and stays so until the draft
+changes or the node can read them again.
+
 Removing more than half of the saved company's seats asks for an
 acknowledgement first.
 

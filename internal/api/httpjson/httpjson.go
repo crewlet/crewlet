@@ -265,6 +265,13 @@ const (
 	// working password for as long as the outage lasted, which is the
 	// three-valued rule internal/coord states, applied to authentication.
 	CodeIdentityUnavailable Code = "identity_unavailable"
+	// CodeSeatHoldersUnavailable is a /config write that removes a human
+	// seat, answered while this node could not read the identity directory to
+	// learn whether anybody holds it: nothing was written. Its own code
+	// because [CodeIdentityUnavailable]'s sentence is about the CALLER, and
+	// the caller here was resolved; what could not be read is who holds the
+	// seats the write takes away. 503, under the identity estate's hint.
+	CodeSeatHoldersUnavailable Code = "seat_holders_unavailable"
 
 	// CodeCSRFOrigin is a state-changing request a cross-site page could
 	// have caused: an `Origin` naming somewhere this deployment is not
@@ -1188,6 +1195,8 @@ var codes = map[Code]string{
 		"Nothing changed.",
 	CodeIdentityUnavailable: "Can't check who you are right now. Try again " +
 		"in a moment.",
+	CodeSeatHoldersUnavailable: "Can't check who holds the seats this change " +
+		"removes right now, so nothing was written. Try again in a moment.",
 
 	CodePassInFlight: "A setup pass for this integration is already running. " +
 		"Wait for it to finish rather than starting a second one.",
@@ -1939,6 +1948,8 @@ var waitless = map[Code]string{
 	CodeUnavailable: "This can't be done here, and waiting won't change that.",
 	CodeIdentityUnavailable: "Can't check who you are here, and waiting won't " +
 		"change that.",
+	CodeSeatHoldersUnavailable: "Can't check here who holds the seats this " +
+		"change removes, so nothing was written. Waiting won't change that.",
 }
 
 // OutcomeUnknown is the `outcome` a write nobody on this node can account for

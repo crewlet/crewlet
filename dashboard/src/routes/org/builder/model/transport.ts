@@ -45,6 +45,8 @@ export interface HttpAnswer {
   readonly status: number;
   readonly body: unknown;
   readonly etag?: string | null;
+  /** Its `Retry-After` in whole seconds, null or absent where it named no wait. */
+  readonly retryAfter?: number | null;
 }
 
 /** A configuration write or dry run, or a lead's read of their unit, ready for the transport. */

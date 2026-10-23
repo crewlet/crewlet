@@ -1952,7 +1952,7 @@ may be a unit's lead who holds no grant over the directory:
     "qa-lead": {"invitation": "0192f00d-…",
                 "expires_at": "2026-06-15T09:12:00Z"}
   },
-  "hint": "Move each person to another human seat (PATCH /iam/people/{person} with seat) or remove them, unbind a service account (PATCH /iam/people/{person} with no seat), cancel an open invitation (DELETE /iam/invitations/{id}) — an administrator — then send the write again."
+  "hint": "Move each person to another human seat (PATCH /iam/people/{person} with seat) or remove them, unbind a service account (PATCH /iam/people/{person} with no seat), cancel an open invitation (DELETE /iam/invitations/{id}), each an admin's gesture, then send the write again."
 }
 ```
 
@@ -1967,9 +1967,10 @@ The check is advisory: a bind or an invitation landing between it and the
 activation is not seen, and an offline `crewlet config import` asks nothing,
 which leaves the residue [`GET /iam/check`](#get-iamcheck-walks-the-whole-directory)
 reports. A node that cannot read the directory answers `503
-identity_unavailable` naming the `seats` rather than allowing it, and so does
-one holding two rows bound to a seat the write removes; a write that takes no
-human seat away never asks.
+seat_holders_unavailable` naming the `seats` rather than allowing it, and so does
+one holding two rows bound to a seat the write removes; its `detail` says what
+clears it, and a read no wait clears (an evicted node, a full log) carries no
+`Retry-After`. A write that takes no human seat away never asks.
 
 #### A lead edits their own team
 
@@ -2461,7 +2462,7 @@ On either, re-read `/config` and send the edit again.
 - `412 Precondition Failed`: `revision_advanced` when `If-Match` names a revision that is not the fleet's, or stops being so before the write is activated, naming the revision it kept and its `node` as the `409` does where it lost at its activation; `already_configured` when `If-None-Match: *` meets an active revision — naming, for a create-only write that lost at its activation, the revision it kept and its `node` as the `409` does — `no_active_revision` when `If-Match` names a revision and none is active, or `version_moved` when a charter write's or a per-entity write's `If-Match` names a charter or an entity that has changed, carrying it now as `current` and its `etag`
 - `428 Precondition Required`: `bad_if_match` for a charter write with no `If-Match`
 - `415 Unsupported Media Type`: `unsupported_patch_media_type` when a `PATCH` body is a patch format other than a JSON Merge Patch, with `Accept-Patch`
-- `503 Service Unavailable`: `unavailable` when the coordination store cannot be read, so the fleet's revision cannot be either — on every write and on every read that needs it — with `Retry-After: 2` and a `reason`; `unavailable` for any other condition of the node (a store too busy with other writes to take a write's revision, one closed while the node adopts a snapshot or shuts down, a state-log refusal behind a read the route makes, a request out of time), with a `detail` in a sentence for the person reading it and a `Retry-After` exactly where waiting clears it; and `unavailable` with **`"outcome": "unknown"`** when a write stored its revision and the coordination store did not answer the activation, which may have landed: the body names the stored revision as `stored_revision_id`, the revision the write was built on as `your_base` and the node that stored it as `node`, and carries no `op_id`, because what says whether it landed is the pointer — `GET /config` names the stored revision or not once the store answers. Sending the write again makes another revision, over this one if it landed. If it did not, the stored revision is in the history of that node alone — only an activation naming it carries it to the others — so `GET /config/revisions/{id}/diff` shows it and `POST /config/revisions/{id}/revert` makes it the company **on that node**, reached by its own address where a load balancer or a shared Service fronts several; any other node answers `404` for it. Every write here can answer it — `PUT`, `PATCH`, a per-entity or charter write, a reload and a revert — and so can a [`/setup`](#supplying-them) submission. `draining` when the node has been told to stop, with a `Retry-After` — see [During a drain](#during-a-drain)
+- `503 Service Unavailable`: `unavailable` when the coordination store cannot be read, so the fleet's revision cannot be either — on every write and on every read that needs it — with `Retry-After: 2` and a `reason`; `unavailable` for any other condition of the node (a store too busy with other writes to take a write's revision, one closed while the node adopts a snapshot or shuts down, a state-log refusal behind a read the route makes, a request out of time), with a `detail` in a sentence for the person reading it and a `Retry-After` exactly where waiting clears it; and `unavailable` with **`"outcome": "unknown"`** when a write stored its revision and the coordination store did not answer the activation, which may have landed: the body names the stored revision as `stored_revision_id`, the revision the write was built on as `your_base` and the node that stored it as `node`, and carries no `op_id`, because what says whether it landed is the pointer — `GET /config` names the stored revision or not once the store answers. Sending the write again makes another revision, over this one if it landed. If it did not, the stored revision is in the history of that node alone — only an activation naming it carries it to the others — so `GET /config/revisions/{id}/diff` shows it and `POST /config/revisions/{id}/revert` makes it the company **on that node**, reached by its own address where a load balancer or a shared Service fronts several; any other node answers `404` for it. Every write here can answer it — `PUT`, `PATCH`, a per-entity or charter write, a reload and a revert — and so can a [`/setup`](#supplying-them) submission. `seat_holders_unavailable` when a write that takes a human seat away cannot read the identity directory to see who holds it: nothing was written, `seats` names the seats, and a `Retry-After` comes where waiting clears it. `draining` when the node has been told to stop, with a `Retry-After` — see [During a drain](#during-a-drain)
 
 ### The `config_audit` query
 
