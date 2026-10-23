@@ -235,7 +235,7 @@ describe("where the company runs no Crewlet Works", () => {
   const span = (el: Element) =>
     Number(/span (\d+)/.exec((el as HTMLElement).style.gridColumn)?.[1] ?? "0");
   test("every row of the board is drawn full, the tracker's widgets left out", async () => {
-    mount({ services: { tracker: "jira", knowledge: "native" } });
+    mount({ services: { tracker: "jira", knowledge: "native", chat: "native" } });
     await settle();
     const drawn = blocks();
     const ids = drawn.map((b) => b.getAttribute("data-widget"));
@@ -259,7 +259,7 @@ describe("where the company runs no Crewlet Works", () => {
   // THE TRAY DESCRIBES WHAT THE READER WILL GET: no task figures, and no
   // finished work or hand-offs, where Crewlet Works is not run.
   test("the tray's lines say what each widget shows here", async () => {
-    mount({ services: { tracker: "jira", knowledge: "native" } });
+    mount({ services: { tracker: "jira", knowledge: "native", chat: "native" } });
     await settle();
     await editHome();
     await openTray();
@@ -269,7 +269,7 @@ describe("where the company runs no Crewlet Works", () => {
   });
 
   test("in Edit Home a hidden widget keeps its cell and says why", async () => {
-    mount({ services: { tracker: "jira", knowledge: "native" } });
+    mount({ services: { tracker: "jira", knowledge: "native", chat: "native" } });
     await settle();
     await editHome();
     expect(

@@ -1003,7 +1003,6 @@ describe("who holds a person's seat", () => {
     project: "",
     config_writer: true,
     config_managed_by: [],
-    chat_backend: "" as const,
     chat_vendors: [],
   });
   const seats = vi.fn((input: RequestInfo | URL) =>

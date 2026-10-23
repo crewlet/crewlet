@@ -49,7 +49,6 @@ const BOUND: ViewerState = {
   asking: false,
   configWriter: true,
   configManagedBy: [],
-  chatBackend: "",
   chatVendors: [],
 };
 

@@ -12,19 +12,29 @@ type TrackerBackend = "native" | "jira" | "none";
 type KnowledgeBackend = "native" | "confluence" | "none";
 
 /**
- * Which tracker and knowledge base the company runs, as the ENGINE resolved
- * them: `services` on the org projection (`api.OrgServices` in Go), carried by
- * the socket snapshot's `org`, every `org` push and `GET /org`, to every
- * reader. A backend the document leaves empty is resolved there (the vendor
- * whose block is connected, else the engine's own), so a screen never derives
- * it again.
+ * The chat a company runs: the engine's own (`native`), a vendor's (`vendor`,
+ * the Mattermost or Slack it declares, either or both), or none. COPIES of
+ * `config.ChatBackends`, held by the same gate. A POSTURE rather than a
+ * product: which vendors, a reader holding Chat is told on the `viewer`
+ * answer (`chat_vendors`).
+ */
+type ChatBackend = "native" | "vendor" | "none";
+
+/**
+ * Which tracker, knowledge base and chat the company runs, as the ENGINE
+ * resolved them: `services` on the org projection (`api.OrgServices` in Go),
+ * carried by the socket snapshot's `org`, every `org` push and `GET /org`, to
+ * every reader. A backend the document leaves empty is resolved there (the
+ * vendor whose block is connected, else the engine's own), so a screen never
+ * derives it again.
  *
  * WHICH OF THE DASHBOARD'S OWN SURFACES EXIST: anything other than `native`
- * means the company has no Crewlet tracker (or knowledge base), and every
- * question about it is refused. Absent from the projection only on `{}`, a
+ * means the company has no Crewlet tracker (or knowledge base, or chat), and
+ * every question about it is refused. Absent from the projection only on `{}`, a
  * node running no company, which is "not known yet" and never "none".
  */
 export interface OrgServices {
   tracker: TrackerBackend;
   knowledge: KnowledgeBackend;
+  chat: ChatBackend;
 }

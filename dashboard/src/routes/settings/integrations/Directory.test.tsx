@@ -130,7 +130,7 @@ const MEMBER = {
 };
 const NOBODY = { login: "", owner: "", grants: [], acts: [] };
 
-const NATIVE: OrgServices = { tracker: "native", knowledge: "native" };
+const NATIVE: OrgServices = { tracker: "native", knowledge: "native", chat: "native" };
 
 interface Mounted {
   /** Every socket question the page asked. */
@@ -241,7 +241,7 @@ test("each line carries its own state, and a product only its own", async () => 
   expect((await line(/GitLab/)).textContent).toContain("Needs attention");
   expect((await line(/Slack/)).textContent).toBe("Slack");
   expect((await line(/Crewlet Works/)).textContent).toContain("On");
-  expect((await line(/Crewlet Chat/)).textContent).toContain("Soon");
+  expect((await line(/Crewlet Chat/)).textContent).toContain("On");
 });
 
 // THE OLD ADDRESSES STILL WORK, AS THE SELECTION: an app's key, a surface
@@ -392,7 +392,7 @@ test("a service the company runs is On, with its way in", async () => {
 // asked of a service the company does not run. Mutation: ask the counts
 // whatever runs, and the list names `work_projects`.
 test("a service run elsewhere says what replaces it and asks nothing of it", async () => {
-  const { asked } = mount(ADMIN, "works", { tracker: "jira", knowledge: "native" });
+  const { asked } = mount(ADMIN, "works", { tracker: "jira", knowledge: "native", chat: "native" });
   expect(await screen.findByText("Jira does this for your company")).toBeTruthy();
   expect(screen.getByRole("link", { name: "Open Jira" }).getAttribute("href")).toBe(
     "#/company/integrations/jira",
@@ -402,7 +402,7 @@ test("a service run elsewhere says what replaces it and asks nothing of it", asy
 });
 
 test("a service the company runs none of says so, with no product to open", async () => {
-  mount(ADMIN, "knowledge", { tracker: "native", knowledge: "none" });
+  mount(ADMIN, "knowledge", { tracker: "native", knowledge: "none", chat: "native" });
   expect(await screen.findByText("Your company runs none")).toBeTruthy();
   expect(screen.queryByRole("link", { name: /Open Confluence/ })).toBeNull();
 });
@@ -412,14 +412,61 @@ test("a service the company runs none of says so, with no product to open", asyn
 test("a node running no company says so and wears no state", async () => {
   mount(ADMIN, "works", null);
   expect(await screen.findByText("This node runs no company yet.")).toBeTruthy();
-  const works = await line(/Crewlet Works/);
-  expect(works.textContent).toBe("Crewlet Works");
+  for (const name of ["Crewlet Works", "Crewlet Knowledge", "Crewlet Chat"]) {
+    expect((await line(new RegExp(name))).textContent, name).toBe(name);
+  }
 });
 
-test("Crewlet Chat is coming soon, pointing at the chat apps meanwhile", async () => {
+// CHAT COUNTS NOTHING: the rooms it answers for are the reader's own seat's,
+// so its page says what it gives and the way in, and asks no count.
+test("Crewlet Chat in use is On, with its way in and nothing counted", async () => {
+  const { asked } = mount({ ...MEMBER, grants: [...MEMBER.grants, "chat"] }, "chat");
+  expect(await screen.findByRole("heading", { level: 2, name: "Crewlet Chat" })).toBeTruthy();
+  expect(screen.getByRole("link", { name: "Open Chat" }).getAttribute("href")).toBe("#/chat");
+  expect(screen.getByText("Rooms, threads and direct messages with your agents.")).toBeTruthy();
+  expect((await line(/Crewlet Chat/)).textContent).toContain("On");
+  expect(asked.filter((q) => q !== "viewer" && q !== "integrations")).toEqual([]);
+});
+
+// THE WAY IN IS OFFERED TO A HOLDER OF CHAT, as Works' and Knowledge's are
+// to a holder of their apps. Mutation: offer Open Chat to every reader, and
+// a reader without Chat is sent to a screen that refuses them.
+test("a reader without Chat is told what opens it, and offered no way in", async () => {
   mount(MEMBER, "chat");
-  const soon = (await screen.findByText("Coming soon")).closest(".int-soon") as HTMLElement;
-  expect(within(soon).getByRole("link", { name: "Slack" }).getAttribute("href")).toBe(
+  expect(await screen.findByRole("heading", { level: 2, name: "Crewlet Chat" })).toBeTruthy();
+  expect(screen.queryByRole("link", { name: "Open Chat" })).toBeNull();
+  expect(screen.getByText(/needs Chat access/)).toBeTruthy();
+  expect(screen.getByText("Rooms, threads and direct messages with your agents.")).toBeTruthy();
+});
+
+// THE VENDOR BY NAME, from the viewer answer that names it to a holder of
+// Chat, with the way to its line. Mutation: drop chat's `replacedBy` and the
+// page says the company runs none.
+test("a company talking on a vendor's chat is told which, with the way to it", async () => {
+  mount({ ...ADMIN, chat_vendors: ["slack"] }, "chat", { ...NATIVE, chat: "vendor" });
+  expect(await screen.findByText("Slack does this for your company")).toBeTruthy();
+  expect(screen.getByText("The company talks on Slack.")).toBeTruthy();
+  expect(screen.getByRole("link", { name: "Open Slack" }).getAttribute("href")).toBe(
     "#/company/integrations/slack",
   );
+  expect(screen.getByText("Slack is not connected.")).toBeTruthy();
+  expect((await line(/Crewlet Chat/)).textContent).toContain("Off");
+  expect(screen.queryByRole("link", { name: "Open Chat" })).toBeNull();
+});
+
+// A VENDOR NOBODY NAMED is still a vendor's chat, never a blank and never
+// "runs none": the projection says the chat is a vendor's, and only a holder
+// of Chat is told which.
+test("a vendor chat nobody named is said in words, with no line to open", async () => {
+  mount(MEMBER, "chat", { ...NATIVE, chat: "vendor" });
+  expect(await screen.findByText("A vendor's chat does this for your company")).toBeTruthy();
+  expect(screen.getByText("The company talks on a vendor's chat.")).toBeTruthy();
+  expect(screen.queryByRole("link", { name: /^Open / })).toBeNull();
+});
+
+test("a company running no chat says so, with nothing to open", async () => {
+  mount(ADMIN, "chat", { ...NATIVE, chat: "none" });
+  expect(await screen.findByText("Your company runs none")).toBeTruthy();
+  expect(screen.getByText("The company runs no chat.")).toBeTruthy();
+  expect(screen.queryByRole("link", { name: "Open Chat" })).toBeNull();
 });

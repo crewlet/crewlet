@@ -44,7 +44,6 @@ vi.mock("~/lib/viewer.ts", () => ({
     asking: false,
     configWriter: true,
     configManagedBy: [],
-    chatBackend: "",
     chatVendors: [],
   }),
 }));

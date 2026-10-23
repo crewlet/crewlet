@@ -1,12 +1,13 @@
 /**
  * Which of Crewlet's own services the company runs, as the engine says it.
  *
- * # Two services, three answers each
+ * # Three services, three answers each
  *
  * A company runs Crewlet Works (the engine's own tracker: projects, tasks,
  * the Inbox's updates and My work) or another tracker in its place, Jira, or
- * none at all; and Crewlet Knowledge (the engine's own pages) or Confluence,
- * or none. The engine resolves which from the company document and hands it
+ * none at all; Crewlet Knowledge (the engine's own pages) or Confluence, or
+ * none; and Crewlet Chat (the engine's own rooms) or the Mattermost or Slack
+ * it declares, or none. The engine resolves which from the company document and hands it
  * to every reader on the org projection (`services`, `contract/services.ts`):
  * the socket's first frame, every `org` push and `GET /org`. So nothing here
  * probes for it, and a company that switches a backend is drawn anew on the
@@ -38,20 +39,36 @@ export type { Service, ServicesRun } from "~/app/nav.ts";
 export type { OrgServices } from "~/contract/services.ts";
 
 /**
- * The four answers, each ONE object, so a memo keyed on what runs moves only
- * when the engine's answer does rather than on every render of the reader.
+ * Every answer, each ONE object, so a memo keyed on what runs moves only when
+ * the engine's answer does rather than on every render of the reader.
  */
-const RUN: Readonly<Record<`${boolean}/${boolean}`, ServicesRun>> = {
-  "true/true": { tracker: true, knowledge: true },
-  "true/false": { tracker: true, knowledge: false },
-  "false/true": { tracker: false, knowledge: true },
-  "false/false": { tracker: false, knowledge: false },
-};
+const RUN: ReadonlyMap<string, ServicesRun> = new Map(
+  [true, false].flatMap((tracker) =>
+    [true, false].flatMap((knowledge) =>
+      [true, false].map((chat): [string, ServicesRun] => [
+        runKey(tracker, knowledge, chat),
+        Object.freeze({ tracker, knowledge, chat }),
+      ]),
+    ),
+  ),
+);
+
+function runKey(tracker: boolean, knowledge: boolean, chat: boolean): string {
+  return `${tracker}/${knowledge}/${chat}`;
+}
+
+function run(tracker: boolean, knowledge: boolean, chat: boolean): ServicesRun {
+  return RUN.get(runKey(tracker, knowledge, chat))!;
+}
 
 /** Which services run, from what the engine said: every one, until it has said. */
 export function servicesRun(services: OrgServices | null | undefined): ServicesRun {
-  if (!services) return RUN["true/true"];
-  return RUN[`${services.tracker === "native"}/${services.knowledge === "native"}`];
+  if (!services) return run(true, true, true);
+  return run(
+    services.tracker === "native",
+    services.knowledge === "native",
+    services.chat === "native",
+  );
 }
 
 /** What the engine said the company runs, or null until it has. */
@@ -78,7 +95,7 @@ export function useServicesRun(): ServicesRun {
  */
 export function useServicesAsk(): ServicesRun {
   const org = useOrg();
-  return org === null ? RUN["false/false"] : servicesRun(org.services ?? null);
+  return org === null ? run(false, false, false) : servicesRun(org.services ?? null);
 }
 
 /** Whether the org projection has arrived, so what the company runs is no longer a guess. */
@@ -89,4 +106,25 @@ export function useOrgArrived(): boolean {
 /** Whether the engine has said what the company runs. */
 export function useServicesKnown(): boolean {
   return useBackends() !== null;
+}
+
+/** A vendor chat surface's name as a person reads it. */
+const CHAT_VENDOR_NAMES: Readonly<Record<string, string>> = {
+  mattermost: "Mattermost",
+  slack: "Slack",
+};
+
+/**
+ * Where a company's chat is when it is a vendor's, as one phrase: "Slack",
+ * "Mattermost and Slack", or "a vendor's chat" where nothing names them.
+ *
+ * ONE SPELLING FOR EVERY PLACE THAT SAYS IT: the notice an address under Chat
+ * draws (`app/ServiceNotice.tsx`) and Crewlet Chat's card on Company ›
+ * Integrations. The names are the `viewer` answer's `chat_vendors`, told to a
+ * reader holding Chat; the org projection says only that the chat is a
+ * vendor's.
+ */
+export function chatVendorName(vendors: readonly string[]): string {
+  const names = vendors.map((vendor) => CHAT_VENDOR_NAMES[vendor] ?? vendor);
+  return names.length ? names.join(" and ") : "a vendor's chat";
 }

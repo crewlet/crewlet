@@ -868,7 +868,7 @@ test("where the company runs no Crewlet Works, the auxiliary model joins the sid
         withDerived({
           timezone: "UTC",
           roles: [{ name: "CEO", handle: "ceo" }],
-          services: { tracker: "jira", knowledge: "native" },
+          services: { tracker: "jira", knowledge: "native", chat: "native" },
         }),
       ),
   );

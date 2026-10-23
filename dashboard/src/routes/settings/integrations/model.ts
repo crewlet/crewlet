@@ -19,7 +19,7 @@ import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { useManagedConfig } from "~/lib/useWriteAccess.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { useBackends, type OrgServices } from "~/lib/services.ts";
+import { chatVendorName, useBackends, type OrgServices } from "~/lib/services.ts";
 import { asSentence, plural } from "~/lib/format.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { rest, RestError } from "~/protocol/index.ts";
@@ -203,17 +203,23 @@ export interface Tool {
   asks: SetupRequirement[];
 }
 
+/** An app that can do a built-in service's work instead, by its directory line's key. */
+export type ReplacingApp = "jira" | "confluence" | "slack" | "mattermost";
+
 export interface BuiltInService {
   key: "works" | "knowledge" | "chat";
   name: string;
   /** Whether the engine has said what the company runs: false on a node running no company. */
   known: boolean;
-  /** In use here, run elsewhere, or not shipped yet. */
+  /** In use here, or run elsewhere (or not at all). */
   on: boolean;
-  soon: boolean;
   sentence: string;
-  /** The product that does this service's work instead, where the company runs one. */
-  replacedBy?: { key: "jira" | "confluence"; name: string };
+  /**
+   * What does this service's work instead, where the company runs something:
+   * the apps it runs in its place (Jira, Confluence, the chat vendors it talks
+   * on), each by its line's key, and their names as one phrase.
+   */
+  replacedBy?: { keys: ReplacingApp[]; name: string };
   open?: { label: string; path: string[] };
 }
 
@@ -448,13 +454,18 @@ function seatRowsOf(
   });
 }
 
-/** The built-in services, from the engine's projection alone (everybody's). */
+/**
+ * The built-in services, from the engine's projection (everybody's), with the
+ * chat vendors named by the `viewer` answer, which tells them to a reader
+ * holding Chat.
+ */
 export function useBuiltIns(): BuiltInService[] {
   const backends = useBackends();
-  return useMemo(() => builtIns(backends), [backends]);
+  const vendors = useViewer().chatVendors;
+  return useMemo(() => builtIns(backends, vendors), [backends, vendors]);
 }
 
-/** A node running no company has nothing to say about either service. */
+/** A node running no company has nothing to say about any service. */
 const NO_COMPANY = "This node runs no company yet.";
 
 /**
@@ -462,16 +473,24 @@ const NO_COMPANY = "This node runs no company yet.";
  * has said (a node running no company), each says so rather than guessing
  * either way.
  */
-export function builtIns(backends: OrgServices | null): BuiltInService[] {
+export function builtIns(
+  backends: OrgServices | null,
+  chatVendors: readonly string[] = [],
+): BuiltInService[] {
   const tracker = backends?.tracker;
   const knowledge = backends?.knowledge;
+  const chat = backends?.chat;
+  // THE LINES A VENDOR CHAT IS LISTED ON: the ones the directory has. A vendor
+  // nobody named is still a vendor's chat, said in words, with no line to open.
+  const vendorLines = chatVendors.filter(
+    (v): v is "slack" | "mattermost" => v === "slack" || v === "mattermost",
+  );
   return [
     {
       key: "works",
       name: "Crewlet Works",
       known: tracker !== undefined,
       on: tracker === "native",
-      soon: false,
       sentence:
         tracker === undefined
           ? NO_COMPANY
@@ -480,7 +499,7 @@ export function builtIns(backends: OrgServices | null): BuiltInService[] {
             : tracker === "jira"
               ? "Jira handles work items."
               : "The company runs no work tracker.",
-      ...(tracker === "jira" ? { replacedBy: { key: "jira", name: "Jira" } as const } : {}),
+      ...(tracker === "jira" ? { replacedBy: { keys: ["jira"], name: "Jira" } } : {}),
       ...(tracker === "native" ? { open: { label: "Open Work", path: ["work"] } } : {}),
     },
     {
@@ -488,7 +507,6 @@ export function builtIns(backends: OrgServices | null): BuiltInService[] {
       name: "Crewlet Knowledge",
       known: knowledge !== undefined,
       on: knowledge === "native",
-      soon: false,
       sentence:
         knowledge === undefined
           ? NO_COMPANY
@@ -498,17 +516,27 @@ export function builtIns(backends: OrgServices | null): BuiltInService[] {
               ? "Confluence holds the knowledge base."
               : "The company runs no knowledge base.",
       ...(knowledge === "confluence"
-        ? { replacedBy: { key: "confluence", name: "Confluence" } as const }
+        ? { replacedBy: { keys: ["confluence"], name: "Confluence" } }
         : {}),
       ...(knowledge === "native" ? { open: { label: "Open Knowledge", path: ["knowledge"] } } : {}),
     },
     {
       key: "chat",
       name: "Crewlet Chat",
-      known: true,
-      on: false,
-      soon: true,
-      sentence: "Talk with your agents in Crewlet itself.",
+      known: chat !== undefined,
+      on: chat === "native",
+      sentence:
+        chat === undefined
+          ? NO_COMPANY
+          : chat === "native"
+            ? "Rooms, threads and direct messages with your agents."
+            : chat === "vendor"
+              ? `The company talks on ${chatVendorName(chatVendors)}.`
+              : "The company runs no chat.",
+      ...(chat === "vendor"
+        ? { replacedBy: { keys: vendorLines, name: chatVendorName(chatVendors) } }
+        : {}),
+      ...(chat === "native" ? { open: { label: "Open Chat", path: ["chat"] } } : {}),
     },
   ];
 }

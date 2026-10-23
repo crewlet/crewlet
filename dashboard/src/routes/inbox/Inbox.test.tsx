@@ -882,7 +882,7 @@ describe("who is looking", () => {
 // promising updates that cannot arrive. Mutation: keep the pane's default
 // copy and the Jira title is gone.
 test("on a Jira company the list and the empty pane say asks and mentions arrive in Jira", async () => {
-  mount({ services: { tracker: "jira", knowledge: "native" } });
+  mount({ services: { tracker: "jira", knowledge: "native", chat: "native" } });
   await settle();
   expect(
     screen.getByText("Jira handles work items, so asks and mentions arrive there."),

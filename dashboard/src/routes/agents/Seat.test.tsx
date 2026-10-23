@@ -175,6 +175,7 @@ const EVERY_ACT = [
   "pause_seat",
   "resume_seat",
   "answer_run",
+  "open_dm",
 ];
 
 /** An answer, or how to answer from the question's own parameters. */
@@ -787,9 +788,12 @@ test("the phone's More holds every action but Message, and each opens what its b
   ).not.toBeNull();
   expect(screen.getByRole("button", { name: "Message" }).closest(".page-action-folds")).toBeNull();
   const names = pageMore();
-  // WATCH LIVE FIRST while it works, as it leads the bar.
-  expect(names.slice(0, 5)).toEqual([
+  // WATCH LIVE FIRST while it works, as it leads the bar. DIRECT MESSAGE is
+  // folded with the rest: the company runs Crewlet Chat until the engine says
+  // otherwise, and the reader holds Chat through admin.
+  expect(names.slice(0, 6)).toEqual([
     "Watch live",
+    "Direct message",
     "Assign task",
     "Pause",
     "Events",
@@ -2428,7 +2432,10 @@ test("a company running no Crewlet Works leaves no empty slot in the seat's bar"
   mount("#/company/org/seats/swe", {
     shell: true,
     agents: [WORKING],
-    org: { ...ORG, services: { tracker: "jira", knowledge: "native" } } as OrgProjection,
+    org: {
+      ...ORG,
+      services: { tracker: "jira", knowledge: "native", chat: "native" },
+    } as OrgProjection,
   });
   await settle();
   const bar = document.getElementById(PAGE_ACTIONS_SLOT) as HTMLElement;

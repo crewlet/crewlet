@@ -61,8 +61,7 @@ whether it is connected is the state beside it, and a drained Datadog read as
 a placeholder image rather than as Datadog. Crewlet's own services carry their
 **product marks** (`ProductMark`) on the same terms: drawn only beside the
 service's name, the one place the brand's violet is identity rather than a
-token, and Crewlet Chat's *coming soon* is the mark's own soon state, never a
-greyed copy.
+token.
 
 The second exception is the organization's two charts, **Company › Org chart**
 and **Org chart › Edit org**, which draw it the way the console's org chart does:
@@ -845,18 +844,20 @@ it held — an outage keeps the last state, and a refusal is not an
 outage.
 
 **A service the company does not run is hidden, never locked.** A company
-runs Crewlet's own tracker (Crewlet Works) or Jira in its place, or none, and
-Crewlet's own knowledge base (Crewlet Knowledge) or Confluence, or none. The
-engine decides which from the company document and publishes it to every
-signed-in reader on the `viewer` answer, which the frame already reads
-(`lib/services.ts`). Where the company does not run one, the places that read
+runs Crewlet's own tracker (Crewlet Works) or Jira in its place, or none;
+Crewlet's own knowledge base (Crewlet Knowledge) or Confluence, or none; and
+Crewlet's own chat (Crewlet Chat) or the Mattermost or Slack it declares, or
+none. The engine decides which from the company document and publishes it to
+every signed-in reader as `services` on the org projection, which the frame
+already reads (`lib/services.ts`). Where the company does not run one, the places that read
 it are HIDDEN rather than locked, because there is nothing to ask an admin
 for and a lock would say there was (`serviceShown` in `nav.ts`): without
 Crewlet Works, Work and My work leave the sidebar, the palette and the `g`
 chords, and so does every way to file or move a task (New task, the palette's
 Create task, Ask an agent and Assign, a seat's Message and Assign, every
 create page's Ask an agent, and New design, whose one way to finish files a
-task); without Crewlet Knowledge, Knowledge does. The Inbox stays, because
+task); without Crewlet Knowledge, Knowledge does; without Crewlet Chat, Chat
+does, with a seat's Direct message and Chat's Home widgets. The Inbox stays, because
 the seat and budget conditions waiting on a person arrive under every
 backend: it draws those, and one line in place of its updates. Home leaves
 out the blocks and figures that cannot arrive, and each row of the board
@@ -916,7 +917,7 @@ access was withdrawn would take the draft off screen while the person who wrote 
 still there to copy it out, and the builder says for itself which of its
 saves the reader's access reaches.
 
-**Chat is guarded whole, and keeps two refusals of its own.** Every chat page
+**Chat is guarded whole, and keeps one refusal of its own.** Every chat page
 is read AS A SEAT — the engine answers for the seat the session's principal
 holds, with no handle parameter anywhere in the chat family and no arm, an
 administrator's included, that reads somebody else's rooms — so the
@@ -926,10 +927,11 @@ the frame cannot say is chat's own. A principal that holds Chat and acts as NO
 seat — a deployment's own token, a service account — reads nothing there, not
 even a public room, so the screen says that ("Chat is read as the seat you
 hold"), naming the binding that would give the credential one (`crewlet iam
-bind`). And a company whose chat is NOT the engine's own — `chat.backend:
-vendor` or `none` — is told so, with the vendor it runs on, rather than shown
-rooms it cannot have or offered a room it cannot hold. The row stays, as
-Knowledge's does with no backend.
+bind`). A company whose chat is not Crewlet Chat (`chat.backend: vendor` or
+`none`) is no refusal at all: Chat is a service like Crewlet Works and Crewlet
+Knowledge, so its row is hidden there and an address under it says where the
+company talks instead, naming the vendor to a reader holding Chat, rather than
+showing rooms it cannot have or offering a room it cannot hold.
 
 **A figure beside a row says what it counts.** The kit's `NavItem` takes a
 figure only with the words that name it, and two kinds of figure are two
@@ -4388,11 +4390,11 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   answer's own `traffic_known`. The budgets answer says `durable: false` when
   the counter could not be READ.
 - **Not configured** vs **empty.** A knowledge search with no backend says so;
-  a company with no seats says roles come from the configuration; and Chat on
-  a company whose `chat.backend` is `vendor` or `none` says which — "This
-  company's chat is on Mattermost", naming the field — from the `viewer`
-  answer, before it asks a chat question the engine does not serve there and
-  draws the `unknown_query` it would get as a node fault.
+  a company with no seats says roles come from the configuration; and an
+  address under a service the company does not run says what runs instead
+  ("This company talks on Mattermost" under Chat) rather than asking a
+  question the engine does not serve there and drawing the `unknown_query` it
+  would get as a node fault.
 - **Everything in the window** vs **everything that arrived.** Where a screen
   narrows client-side it says so, naming the SOURCE rather than hedging the
   whole answer. **Audit** is the case that made this a rule: it composes four
@@ -6912,8 +6914,9 @@ The company's own chat (`chat.backend: native`), read AS A SEAT: the engine
 answers every chat question for the seat the session's principal holds, so the
 workspace is guarded whole and a principal that acts as no seat is told so and
 how to give it one (see [The sidebar](#the-sidebar)). On a company whose chat
-is a vendor's or none, the screen says which — named from the `viewer` answer —
-and asks nothing.
+is a vendor's or none there is no Chat: its row is hidden and its addresses
+say where the company talks, as every service the company does not run is
+(see [The sidebar](#the-sidebar)).
 
 - **The rail is the row's renderer** (`rail`, `app/nav.ts`). It starts with the
   three gestures that start a conversation — **New room**, **Message** (a direct
@@ -6991,8 +6994,9 @@ and asks nothing.
   read said to be incomplete, and where the cursors could not be read a
   sentence saying so, none of them ever drawn as "caught up" — and **Mentions**, the feed's newest page, a mention in a
   thread opening the thread. Neither marks anything read. Like every chat page
-  they are the Chat app's, and a credential acting as no seat, or a company
-  whose chat is a vendor's or none, is told so in a line and asked nothing.
+  they are the Chat app's: a credential acting as no seat is told so in a line
+  and asked nothing, and a company whose chat is a vendor's or none is offered
+  neither, as Home offers no widget of a service it does not run.
 - **Live, by evidence.** A chat frame carries no body: it says a room moved, and
   the screen re-reads, a burst coalesced into one read. What a reader has paged
   to is read again only where a frame names something on it: a room's newest
@@ -7880,7 +7884,7 @@ need:
 
 | Group | Lines |
 |---|---|
-| Chat | Crewlet Chat (coming soon), Slack, Mattermost |
+| Chat | Crewlet Chat, Slack, Mattermost |
 | Work tracking | Crewlet Works, Jira |
 | Docs and knowledge | Crewlet Knowledge, Confluence |
 | Code | GitHub, GitLab |
@@ -7890,8 +7894,8 @@ need:
 so Jira sits under work tracking and Confluence under docs, each with its own
 product's state, and both open the one Atlassian page, since it is one key and
 one account per agent. A line carries its mark, its name (a product's app as a
-hint under it) and its state only where it carries one: **On**, **Off** or
-**Soon** for a service (none on a node running no company, which is "not known
+hint under it) and its state only where it carries one: **On** or **Off**
+for a service (none on a node running no company, which is "not known
 yet", never Off), and for an app the engine's bucket (*Connected*, *Needs
 attention*, *Setting up*), never *Not connected* repeated down the list. The
 **address apps deliver to** is the list's foot, said once, cut to fit with the
@@ -7959,8 +7963,12 @@ constant. A service the company runs elsewhere says what does its work instead
 (*Jira does this for your company*, with the way to Jira's page), what running
 it here would give, and that the company document decides it: turning a
 service on or off is not offered, since a switch here that did nothing would
-be a lie. Crewlet Chat is coming soon, pointing at Slack and Mattermost
-meanwhile.
+be a lie. Crewlet Chat counts nothing, since the rooms it answers for are the
+reader's own seat's: in use, its page says what it gives and, to a reader
+holding Chat, opens it (a reader without Chat is told it needs Chat access); on a
+vendor's chat it says which (*Slack does this for your company*, named from the
+`viewer` answer, which tells it to a holder of Chat), with the way to that
+app's line.
 
 **A reader without Admin** sees the whole directory: the services with their
 states and their pages in full (each count read only where the reader holds

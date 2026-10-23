@@ -29,7 +29,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 
 /** A company running every service built into Crewlet. */
-const EVERY = { tracker: true, knowledge: true } as const;
+const EVERY = { tracker: true, knowledge: true, chat: true } as const;
 
 /**
  * EVERY ROW A COMPONENT BINDS, recorded as it binds it. `useKeymap` is passed
@@ -209,7 +209,7 @@ describe("the legend", () => {
   test("leaves out the keys to a service the company does not run", () => {
     render(
       <LayerHost>
-        <KeyLegend runs={{ tracker: false, knowledge: true }} onClose={() => {}} />
+        <KeyLegend runs={{ tracker: false, knowledge: true, chat: true }} onClose={() => {}} />
       </LayerHost>,
     );
     const has = (id: string) => document.querySelector(`[data-key-row="${id}"]`) !== null;

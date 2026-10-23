@@ -260,7 +260,6 @@ const NOBODY: ViewerState = {
   asking: false,
   configWriter: true,
   configManagedBy: [],
-  chatBackend: "",
   chatVendors: [],
 };
 

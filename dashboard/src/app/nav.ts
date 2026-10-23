@@ -59,8 +59,8 @@
  * # Hidden for a service the company does not run, locked for access
  *
  * A row or section that reads one of Crewlet's own services (its tracker,
- * Crewlet Works, or its knowledge base, Crewlet Knowledge) names it
- * ([WorkspaceRow.service], [Section.service]). Where the company runs that
+ * Crewlet Works, its knowledge base, Crewlet Knowledge, or its chat, Crewlet
+ * Chat) names it ([WorkspaceRow.service], [Section.service]). Where the company runs that
  * service elsewhere or not at all, the place is HIDDEN, never locked: there is
  * nothing to ask an admin for, and its addresses say so in place, to every
  * reader (`ServiceNotice.tsx`, [serviceShown], `lib/services.ts`). Access
@@ -95,10 +95,11 @@ export type Workspace =
 /**
  * A service built into Crewlet that a company may run elsewhere or not at
  * all: `tracker` is Crewlet Works (projects, tasks, the Inbox's updates and My
- * work), `knowledge` is Crewlet Knowledge (spaces and pages). Named here
- * because the navigation hides what reads one the company does not run.
+ * work), `knowledge` is Crewlet Knowledge (spaces and pages), `chat` is
+ * Crewlet Chat (rooms, threads and direct messages). Named here because the
+ * navigation hides what reads one the company does not run.
  */
-export type Service = "tracker" | "knowledge";
+export type Service = "tracker" | "knowledge" | "chat";
 
 /** Whether the company runs each of Crewlet's own services: what `lib/services.ts` reads off the wire. */
 export type ServicesRun = Readonly<Record<Service, boolean>>;
@@ -252,7 +253,7 @@ export interface WorkspaceRow {
   /**
    * The service built into Crewlet the whole workspace reads, as
    * [Section.service]: Work and My work read Crewlet Works, Knowledge reads
-   * Crewlet Knowledge.
+   * Crewlet Knowledge, Chat reads Crewlet Chat.
    */
   service?: Service;
   /**
@@ -698,9 +699,13 @@ export const WORKSPACES: WorkspaceRow[] = [
     // THE CHAT APP'S, every section and every room: each reads somebody's
     // rooms as the seat the session holds, so the frame draws its one refusal
     // in place of every chat page for a reader without it. What the screen
-    // answers is only what is chat's own: a company whose chat is elsewhere,
-    // and a credential acting as no seat.
+    // answers is only what is chat's own: a credential acting as no seat.
     grants: ["chat"],
+    // AND CREWLET CHAT'S: a company talking on Mattermost or Slack, or on
+    // nothing, has no room here to read, so the row is hidden as Work is on
+    // Jira, and its addresses say where the company's chat is instead
+    // (`ServiceNotice.tsx`).
+    service: "chat",
     sections: [
       {
         key: "rooms",

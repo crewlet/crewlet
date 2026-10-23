@@ -5258,18 +5258,10 @@ export interface Viewer {
    *  who manages it — and EMPTY when it is not managed. An anonymous caller
    *  is told none. */
   config_managed_by: string[];
-  /**
-   * Which chat the company runs (`chat.backend`, resolved): the engine's own
-   * (`native`), a vendor's (`vendor`) or none (`none`) — and "" for a caller
-   * not holding the Chat app, and on a node with no company yet. Every chat
-   * question is served only where it is `native`, so a screen says which it
-   * is before it asks one: asked of a vendor company, each would be
-   * `unknown_query`, which reads as a node fault rather than a company's
-   * choice.
-   */
-  chat_backend: "native" | "vendor" | "none" | "";
-  /** On a `vendor` company, the vendor surfaces it declares (`mattermost`,
-   *  `slack`), in that order; empty everywhere else. */
+  /** On a company whose chat is a vendor's (`services.chat` is `vendor` on
+   *  the org projection), the vendor surfaces it declares (`mattermost`,
+   *  `slack`), in that order: told to a caller holding the Chat app, and
+   *  empty for anybody else and everywhere else. */
   chat_vendors: string[];
 }
 

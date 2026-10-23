@@ -62,7 +62,6 @@ const JANE: ViewerState = {
   asking: false,
   configWriter: true,
   configManagedBy: [],
-  chatBackend: "",
   chatVendors: [],
 };
 
@@ -1467,6 +1466,7 @@ describe("a screen found by what it holds", () => {
     const hits = destinationHits("s", nav, Infinity, null, {
       tracker: true,
       knowledge: true,
+      chat: true,
     }).map((h) => h.label);
     // THE LABEL MATCHES COME FIRST, then the screens only a keyword found
     // ("Account", "Chat"), and never one after the other.
@@ -1485,7 +1485,7 @@ describe("a screen found by what it holds", () => {
   test("a reader holding only Tracker opens Settings on Token spend, unlocked", () => {
     const to = vi.fn();
     const nav = { to } as unknown as Parameters<typeof destinationHits>[1];
-    const runs = { tracker: true, knowledge: true };
+    const runs = { tracker: true, knowledge: true, chat: true };
     const settings = destinationHits(
       "settings",
       nav,

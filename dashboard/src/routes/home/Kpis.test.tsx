@@ -45,7 +45,6 @@ const VIEWER: ViewerState = {
   asking: false,
   configWriter: true,
   configManagedBy: [],
-  chatBackend: "",
   chatVendors: [],
 };
 

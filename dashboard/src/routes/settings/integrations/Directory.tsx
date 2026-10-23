@@ -7,7 +7,7 @@
  * Chat, Work tracking, Docs and knowledge, Code and Observability. Each of
  * Crewlet's own services opens its group (Crewlet Chat, Works, Knowledge),
  * so the built-in answer to a need sits beside the apps that answer it in its
- * place, with its On, Off or Soon on its line. ATLASSIAN IS LISTED BY
+ * place, with its On or Off on its line. ATLASSIAN IS LISTED BY
  * PRODUCT: it is one connection that serves two needs, so Jira sits under work
  * tracking and Confluence under docs, each with its own product's state, and
  * both open the one Atlassian page, since it is one key and one account per
