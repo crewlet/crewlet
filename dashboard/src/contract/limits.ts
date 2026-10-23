@@ -28,6 +28,12 @@ interface LimitRow {
    * `turn_engine.onboarding_max_tool_rounds` 0 is no onboarding pass.
    */
   off: boolean;
+  /**
+   * The same question asked of `default`: a screen that says which default
+   * a set value replaced says Off where the default is no limit, without its
+   * own copy of which zeros switch a limit off.
+   */
+  default_off: boolean;
 }
 
 /**

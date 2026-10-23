@@ -87,6 +87,12 @@ func TestEveryLimitIsReadFromTheKeyItNames(t *testing.T) {
 		if row.Off {
 			t.Errorf("%s = %v is reported off", row.Key, row.Value)
 		}
+		// THE DEFAULT IS JUDGED ON ITS OWN, not on the value written over
+		// it: the rate limit's default is still no limit.
+		if wantOff := row.Key == "notification_rate_limit"; row.DefaultOff != wantOff {
+			t.Errorf("%s default_off = %v under a written %v, want %v",
+				row.Key, row.DefaultOff, row.Value, wantOff)
+		}
 	}
 	for key := range written {
 		if !seen[key] {
@@ -138,7 +144,8 @@ func nest(flat map[string]string) string {
 // A DOCUMENT THAT SAYS NOTHING IS HELD TO THE ENGINE'S DEFAULTS, and the
 // answer says so with the values the engine enforces rather than zeros: the
 // value of every row is its default, and the two limits a zero switches off
-// are reported as such only where the value is zero.
+// are reported as such only where the value is zero, for the value and for
+// the default alike.
 //
 // Mutation: read the default from anywhere but [config.DefaultCompany], or
 // mark a row off whatever its value, and a row here disagrees.
@@ -167,8 +174,10 @@ func TestADocumentThatSaysNothingIsHeldToTheDefaults(t *testing.T) {
 		}
 		// The rate limit's default is 0, no limit; onboarding's is a
 		// positive budget.
-		if wantOff := row.Key == "notification_rate_limit"; row.Off != wantOff {
-			t.Errorf("%s off = %v, want %v", row.Key, row.Off, wantOff)
+		if wantOff := row.Key == "notification_rate_limit"; row.Off != wantOff ||
+			row.DefaultOff != wantOff {
+			t.Errorf("%s off = %v and default_off = %v, want both %v",
+				row.Key, row.Off, row.DefaultOff, wantOff)
 		}
 	}
 }
