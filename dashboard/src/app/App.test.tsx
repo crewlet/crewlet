@@ -710,12 +710,26 @@ describe("a section, for a reader holding none of its grants", () => {
 
   // THE CHARTER IS PUBLIC; the tool registry is Admin's, since what each
   // seat may call is how the company is run.
+  //
+  // THE OVERVIEW IS JUDGED ON THE ANSWER, so the case waits for the frame to
+  // have applied it: the sidebar locking Work is that answer drawn. Judged
+  // any sooner, the frame has not been told who is reading, and the overview
+  // is open to them whatever its rule says.
   test("the company's Overview is open to anybody, and MCP Tools is Admin's", async () => {
     location.hash = buildHash(["company"]);
     const overview = mountAs(Promise.resolve({ login: "", owner: "", grants: [] }));
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(overview.view.container.textContent).not.toMatch(/Company needs /);
+    const sidebar = await screen.findByRole("navigation", { name: "Navigation" });
+    await waitFor(() =>
+      expect(
+        within(sidebar)
+          .getByRole("link", { name: /^Work/ })
+          .querySelector("[title='Needs Tracker access']"),
+      ).not.toBeNull(),
+    );
+    expect(screen.queryByText(/^You need .* access$/)).toBeNull();
+    // THE OVERVIEW'S OWN HEADING: its one card is titled with the company's
+    // name, which this fixture's company is.
+    expect(screen.getByRole("heading", { name: "Acme" })).toBeDefined();
     overview.view.unmount();
     cleanup();
     location.hash = buildHash(["settings", "mcp-tools"]);
