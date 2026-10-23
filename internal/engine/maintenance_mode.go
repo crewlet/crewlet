@@ -272,7 +272,7 @@ func heldAdmission(ctx context.Context, fleet coord.MaintenanceRegister, node st
 //
 // A SENTINEL, because the caller's answer is specific and is not a retry: the
 // fleet is mid-window, and this node joins it when the window closes or when
-// an operator restarts it into the same mode as its peers.
+// an operator restarts it into the mode its window's phase is in.
 type ErrExcluded struct {
 	Stream      string
 	OperationID string
@@ -280,14 +280,29 @@ type ErrExcluded struct {
 	By          string
 }
 
+// Mode is the mode a node joins this window in: maintenance mode while it is
+// at `opened`, where nothing has been sent and the next step is a request only
+// that mode sends, and seal mode from `baselined` on, where a request may be
+// outstanding and every next step is the seal restart's.
+//
+// THE PHASE DECIDES, never a fixed mode: told maintenance mode at every phase,
+// a node restarted that way during the seal wrote an acknowledgement the seal
+// refuses, and cost the fleet one more restart of it.
+func (e *ErrExcluded) Mode() statelog.MaintenanceMode {
+	if e.Phase == coord.PhaseOpened {
+		return statelog.ModeMaintenance
+	}
+	return statelog.ModeSeal
+}
+
 func (e *ErrExcluded) Error() string {
 	return fmt.Sprintf("engine: this node may not start publishers: a capacity "+
 		"operation on %s (%s, phase %s, opened by %s) is unresolved, and a "+
 		"publisher during the window would make the usage it observes a moving "+
-		"quantity. Restart this node in the same mode as its peers "+
-		"(`crewlet run -mode maintenance`), or read "+
-		"`crewlet retention maintenance status`",
-		e.Stream, e.OperationID, e.Phase, e.By)
+		"quantity. Restart this node with `crewlet run -mode %s`, the mode the "+
+		"window is in at %s, or read `crewlet retention maintenance status "+
+		"-stream %s`",
+		e.Stream, e.OperationID, e.Phase, e.By, e.Mode(), e.Phase, e.Stream)
 }
 
 // admit is the normal-mode handshake, run BEFORE any publisher starts.

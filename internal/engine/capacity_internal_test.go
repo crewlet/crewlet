@@ -105,6 +105,38 @@ func TestANormalNodeWritesItsAdmissionBeforeItReadsTheOperation(t *testing.T) {
 	}
 }
 
+// A REFUSED BOOT IS TOLD THE MODE ITS WINDOW IS IN, and the status read in a
+// form the CLI takes.
+//
+// The refusal told every node to restart into maintenance mode, whatever the
+// window's phase: from `baselined` on the fleet's next restart is into seal
+// mode, and a node that followed it then wrote an acknowledgement the seal
+// refuses and had to restart again. It also named the status read without
+// the log, which the CLI refuses.
+//
+// Mutation: name maintenance mode at every phase, or drop -stream, and this
+// fails.
+func TestARefusedBootIsToldTheModeItsWindowIsIn(t *testing.T) {
+	t.Parallel()
+	for phase, mode := range map[coord.MaintenancePhase]string{
+		coord.PhaseOpened:    "-mode maintenance",
+		coord.PhaseBaselined: "-mode seal",
+		coord.PhaseApplied:   "-mode seal",
+		coord.PhaseSealing:   "-mode seal",
+		coord.PhaseSealed:    "-mode seal",
+		coord.PhaseConfirmed: "-mode seal",
+	} {
+		said := (&ErrExcluded{Stream: "CREWLET_TRACKER_LOG", OperationID: "op-1",
+			Phase: phase, By: "ops-3"}).Error()
+		for _, want := range []string{"`crewlet run " + mode + "`",
+			"`crewlet retention maintenance status -stream CREWLET_TRACKER_LOG`"} {
+			if !strings.Contains(said, want) {
+				t.Errorf("at %s the refusal %q doesn't say %s", phase, said, want)
+			}
+		}
+	}
+}
+
 // TestAnUnreadableOperationIsNotAnAbsentOne.
 //
 // Reading a coordination failure as "no maintenance" is the exact admission
