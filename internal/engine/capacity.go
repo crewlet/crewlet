@@ -1309,8 +1309,8 @@ func (e *Engine) CapacityStatus(ctx context.Context, stream string) (
 	return op, acks, admissions, found, nil
 }
 
-// CapacityWindows is every capacity window open on a log, and every log whose
-// window this node couldn't read.
+// CapacityWindows is every capacity window open on a log, the oldest first,
+// and every log whose window this node couldn't read.
 //
 // IT IS WHAT STANDS BETWEEN THE FLEET AND SERVICE once a gesture has closed a
 // window: a node refuses to start in service while any log has a window open,
@@ -1318,28 +1318,23 @@ func (e *Engine) CapacityStatus(ctx context.Context, stream string) (
 // returns the fleet to service is one a client says only when both are empty.
 // Said after every close, it sent an operator resizing two logs to restart in
 // service while the second window was still open, and every node refused to
-// boot. An unreadable log is never read as one with no window, for admit's
+// boot. It is the one read every reader of a window takes ([readWindows]),
+// which never reads an unreadable log as one with no window, for admit's
 // reason.
 func (e *Engine) CapacityWindows(ctx context.Context) (open []coord.MaintenanceOperation,
 	unread []string) {
 
-	streams := maintenanceStreams()
-	if e.backends == nil || e.backends.Fleet == nil {
-		return nil, streams
+	var fleet coord.Fleet
+	if e.backends != nil {
+		fleet = e.backends.Fleet
 	}
-	for _, stream := range streams {
-		op, found, err := e.backends.Fleet.Maintenance(ctx, stream)
-		switch {
-		case err != nil:
-			log.WarnContext(ctx, "capacity_window_unreadable", "stream", stream,
-				"err", err, "detail", "this log may have a capacity window open, "+
-					"and a node won't start in service while it does")
-			unread = append(unread, stream)
-		case found:
-			open = append(open, op)
-		}
+	read := readWindows(ctx, fleet)
+	for _, stream := range read.unread {
+		log.WarnContext(ctx, "capacity_window_unreadable", "stream", stream,
+			"err", read.errs[stream], "detail", "this log may have a capacity "+
+				"window open, and a node won't start in service while it does")
 	}
-	return open, unread
+	return read.open, read.unread
 }
 
 // windowStream refuses a stream no capacity window can ever be open on with an

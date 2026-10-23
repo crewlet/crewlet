@@ -1399,6 +1399,26 @@ outstanding is not progress**: unless an admission holds the window, it means
 the operation is waiting on its operator, and both surfaces say so rather than
 printing an empty list.
 
+**A window the node couldn't read is said, never left out.** The read that
+answers is a coordination read, and the outage that fails it is exactly when
+somebody opens this to ask why the company has gone quiet. So each log whose
+window the answering node couldn't read is named as that (the report's
+`maintenance_unread`, a line on the CLI page, a banner on the screen) and is
+never shown as a log with no window. So is what holds an open window: when the
+acknowledgements or the admissions couldn't be read, both surfaces say so
+rather than naming every node, or nobody. The answering node is in service
+itself, since only one in service answers this; a data node's own boot reads
+the same register and won't start in service while it can't read a log's
+window, for the same reason. The `maintenance_open` alarm judges such a log on
+what the node last read of it: a window it last read open stays up **as old as
+it was when that read answered**, its detail saying when that was and that the
+window can't be finished or abandoned through this node until it can read it
+again, and a log it never read a window on raises nothing. So a blip never
+clears the alarm and never raises one: a window last read at 59 minutes stays
+under the hour however long the blip lasts. The node logs
+`capacity_window_unreadable` with the reason when its reads of a log start
+failing, and `capacity_window_readable` when they stop.
+
 Two gestures act on what it shows:
 
 | | |

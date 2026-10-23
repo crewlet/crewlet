@@ -118,6 +118,17 @@ type Report struct {
 	// on its own nodes. The oldest alone hid what the other was waiting on
 	// until the first had closed.
 	Maintenance []MaintenanceReport `json:"maintenance,omitempty"`
+
+	// MaintenanceUnread is every log whose capacity window this node
+	// couldn't read, and absent when it read every one.
+	//
+	// NOT A LOG WITH NO WINDOW, which is what leaving it out of Maintenance
+	// alone said: the read that fails is the coordination read, and the
+	// outage that fails it is exactly when somebody opens this to ask why the
+	// company has gone quiet. It is THIS NODE'S read: a data node's own boot
+	// reads the same register, and won't start in service while it can't
+	// read a log's window there, for the same reason.
+	MaintenanceUnread []string `json:"maintenance_unread,omitempty"`
 }
 
 // MaintenanceReport is one open capacity operation, as a reader sees it.
@@ -157,6 +168,15 @@ type MaintenanceReport struct {
 	// outstanding is one waiting on its operator, and that is the state an
 	// operator most needs to be able to see.
 	ParticipantsMissing []string `json:"participants_missing,omitempty"`
+
+	// AcksUnread says the acknowledgements ParticipantsMissing is read from
+	// couldn't be read, and AdmissionsUnread the same of the admissions
+	// AdmissionsBlocking is read from. Either list is then absent, and
+	// NEITHER IS EMPTY: a list formed from nothing named every participant
+	// as owing a restart, or nobody's admission as holding the window, and
+	// both surfaces printed it as a fact.
+	AcksUnread       bool `json:"acks_unread,omitempty"`
+	AdmissionsUnread bool `json:"admissions_unread,omitempty"`
 
 	// AdmissionsBlocking names the nodes holding an admission that keeps a
 	// window at `opened` from sending anything ([AdmissionBlocks]). Empty
@@ -815,8 +835,10 @@ type ReportInputs struct {
 
 	Replica ReplicaReport
 
-	// Maintenance is every open capacity operation, the oldest first.
-	Maintenance []MaintenanceReport
+	// Maintenance is every open capacity operation, the oldest first, and
+	// MaintenanceUnread every log whose window couldn't be read.
+	Maintenance       []MaintenanceReport
+	MaintenanceUnread []string
 }
 
 // NewReport assembles the answer.
@@ -836,6 +858,7 @@ func NewReport(in ReportInputs) Report {
 	rep.Snapshots = in.snapshots()
 	rep.Alarms = in.alarms(rep.Domains)
 	rep.Maintenance = in.Maintenance
+	rep.MaintenanceUnread = in.MaintenanceUnread
 	// THE LEVEL IS RESOLVED FROM THIS NODE'S OWN LAG, not from the
 	// fleet's: the document's every "this node" figure is a fact this
 	// process states about itself, and a peer whose row could not be read

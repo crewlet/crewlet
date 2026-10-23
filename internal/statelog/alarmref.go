@@ -111,8 +111,10 @@ var alarmMeaning = map[Kind]string{
 		"recoverable by nothing.",
 	KindFeedUnreadable: "A change record no build on this node can read. It " +
 		"redelivers for ever, so every wake behind it is waiting too.",
-	KindMaintenanceOpen: "A maintenance operation has been open for an hour. " +
-		"Maintenance stops every publisher on every node.",
+	KindMaintenanceOpen: "A capacity window has been open for an hour. While " +
+		"it's open no node starts in service, and every node restarted for it " +
+		"publishes nothing. A window this node last read open and can't read " +
+		"now is judged as old as it was when it was read, and says so.",
 	KindVolumeLow: "A volume holding this node's databases has less free space " +
 		"than the next restore, vacuum or snapshot needs for a second copy, or " +
 		"could not be measured at all. The alarm names the volume.",

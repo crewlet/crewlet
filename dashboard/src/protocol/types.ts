@@ -2072,6 +2072,13 @@ export interface RetentionReport {
    * and two can be open at once, each waiting on its own nodes.
    */
   maintenance?: RetentionMaintenance[];
+  /**
+   * Every log whose capacity window this node couldn't read, ABSENT when it
+   * read every one. Not a log with no window: the read that fails is the
+   * coordination read, and that outage is when somebody opens this screen to
+   * ask why the company has gone quiet.
+   */
+  maintenance_unread?: string[];
 }
 
 /** One open capacity operation. */
@@ -2100,6 +2107,13 @@ export interface RetentionMaintenance {
    * anything. Empty past `opened`, where nothing reads one.
    */
   admissions_blocking?: string[];
+  /**
+   * The registers `participants_missing` and `admissions_blocking` are read
+   * from couldn't be read. Either list is then absent, and NEITHER IS EMPTY:
+   * drawn as an empty list, an unread register read as nobody owing anything.
+   */
+  acks_unread?: boolean;
+  admissions_unread?: boolean;
   /** Why it cannot proceed without a person, empty while it can. */
   blocked?: string;
 }

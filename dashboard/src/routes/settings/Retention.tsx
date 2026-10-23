@@ -77,6 +77,7 @@ import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { href, useRoute } from "~/app/router.tsx";
 import { ALARMS_AT, alarmKindTitle, alarmLogLines, type AlarmLogLine } from "~/lib/alarms.ts";
 import { bindingTerm, TERM_WORDS } from "~/lib/retention.ts";
+import { andList } from "~/lib/words.ts";
 import { reveal } from "~/lib/scroller.ts";
 import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
 import { asSentence, fmtBytes, fmtDateTime, fmtDuration, fmtExact, relTime } from "~/lib/format.ts";
@@ -158,6 +159,7 @@ export function RetentionStatus({ retention }: { retention: QueryResult<Retentio
         </Callout>
       )}
       <MaintenanceBanners windows={data?.maintenance} now={now} />
+      <UnreadWindowsBanner streams={data?.maintenance_unread} />
       <ServedLevelBanner level={data?.read_level} />
       {data && standing > 0 && <AlarmList alarms={data.alarms} now={now} />}
     </>
@@ -719,13 +721,35 @@ export function MaintenanceBanners({
 }
 
 /**
+ * UnreadWindowsBanner names every log whose capacity window the node couldn't
+ * read. It isn't a log with no window: the read that fails is the coordination
+ * read, and leaving the log out of the banners above said there was no window
+ * during exactly the outage this screen is opened in. What it says is what the
+ * answering node knows: it is in service itself (only a node in service answers
+ * this screen), and a data node restarted now won't start in service until its
+ * own read of the window works.
+ */
+export function UnreadWindowsBanner({ streams }: { streams?: string[] }) {
+  if (!streams?.length) return null;
+  return (
+    <Callout variant="warning">
+      Couldn’t read whether a capacity window is open on {andList(streams)}. A data node restarted
+      now won’t start in service until it can read it.
+    </Callout>
+  );
+}
+
+/**
  * MaintenanceBanner is the one thing on this screen that describes an outage
  * in progress rather than a property of the fleet.
  *
- * A capacity operation stops every publisher on every node — no seats, no
- * duties, no scheduler, no write routes — and it was visible on NO screen: an
- * operator watching a company go completely quiet had nothing to look at that
- * said why, and the alarm that names it only fires after an hour of it.
+ * A capacity window holds the whole fleet: no node starts in service while it
+ * is open, and every node restarted for it runs no seats, duties, scheduler or
+ * write routes. It was visible on NO screen: an operator watching a company go
+ * quiet had nothing to look at that said why, and the alarm that names it only
+ * fires after an hour of it. Only a node in service answers this screen, so
+ * the banner says what holds the fleet rather than that publishing has stopped,
+ * which was false of the node drawing it.
  *
  * So it is a banner rather than a panel, above everything, and it carries the
  * three things somebody finding it at an inconvenient hour needs first: how
@@ -743,8 +767,9 @@ export function MaintenanceBanner({ op, now }: { op: RetentionMaintenance; now: 
     <Callout variant="danger" role="alert">
       <span className="col" style={{ gap: 6 }}>
         <span>
-          <strong>Maintenance on {op.stream}</strong>: publishing is paused. Phase{" "}
-          <InlineCode>{op.phase}</InlineCode>, attempt {op.attempt}, since {relTime(op.since, now)}
+          <strong>Maintenance on {op.stream}</strong>: no node starts in service until it closes.
+          Phase <InlineCode>{op.phase}</InlineCode>, attempt {op.attempt}, since{" "}
+          {relTime(op.since, now)}
           {op.by && <> ({op.by})</>}. Resizing {fmtBytes(op.original_max_bytes)} to{" "}
           {fmtBytes(op.target_max_bytes)}.
         </span>
@@ -754,12 +779,20 @@ export function MaintenanceBanner({ op, now }: { op: RetentionMaintenance; now: 
           </span>
         )}
         <span className="t-caption">
-          {held.length > 0 && (
-            <>Held by an admission from {held.join(", ")}: nothing is sent while it stands. </>
+          {/* WHAT COULDN'T BE READ IS SAID AS THAT: drawn as an empty list,
+              an unread register read as nothing holding the window. */}
+          {op.admissions_unread ? (
+            <>Couldn’t read whether an admission is holding it. </>
+          ) : (
+            held.length > 0 && (
+              <>Held by an admission from {andList(held)}: nothing is sent while it stands. </>
+            )
           )}
-          {missing.length > 0 ? (
-            <>Waiting on {missing.join(", ")}.</>
-          ) : held.length > 0 ? null : (
+          {op.acks_unread ? (
+            <>Couldn’t read which nodes have restarted for it, so who it’s waiting on is unknown.</>
+          ) : missing.length > 0 ? (
+            <>Waiting on {andList(missing)}.</>
+          ) : held.length > 0 || op.admissions_unread ? null : (
             // NOBODY OUTSTANDING IS NOT PROGRESS. It is the operation
             // waiting on whoever ran the verb, and rendering it as an
             // empty list would read as "nearly done".
