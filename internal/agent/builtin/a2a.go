@@ -86,7 +86,7 @@ func (t *a2aAsk) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[s
 		return refused(tools.RefusalForbidden, A2AAskTool+" can only be called during a turn, on behalf of a seat."), nil
 	}
 	if t.svc == nil {
-		return refused(tools.RefusalUnavailable, "Agent-to-agent messaging is not configured on this deployment."), nil
+		return refusedBy(tools.RefusalUnavailable, waitless(), "Agent-to-agent messaging is not configured on this deployment."), nil
 	}
 
 	target := strings.TrimSpace(argString(args, "target"))
@@ -185,7 +185,7 @@ func (t *a2aAsk) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[s
 // argument's fault; a turn with no organization in scope is this node's.
 func (t *a2aAsk) resolve(turn *turnctx.Turn, target string) (colleague.Seat, *tools.Result) {
 	if turn.Org == nil {
-		return colleague.Seat{}, refusalOf(refused(tools.RefusalUnavailable,
+		return colleague.Seat{}, refusalOf(refusedBy(tools.RefusalUnavailable, waitless(),
 			"No organization is in scope, so there is nobody to ask."))
 	}
 	found := colleague.Resolve(target, Corpus(turn.Org, t.env, turn.WithholdsContacts))

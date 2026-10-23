@@ -212,7 +212,7 @@ func (d PageDeps) maySkillPage(ctx context.Context, container string) *tools.Res
 }
 
 func unconfiguredKB(name string) tools.Result {
-	return refused(tools.RefusalUnavailable, name+" is unavailable: this "+
+	return refusedBy(tools.RefusalUnavailable, waitless(), name+" is unavailable: this "+
 		"company does not run the native knowledge base. Use the tools your "+
 		"company has configured.")
 }

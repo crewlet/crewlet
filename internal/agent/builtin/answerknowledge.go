@@ -379,7 +379,7 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 
 	company := t.org()
 	if company == nil {
-		return refused(tools.RefusalUnavailable,
+		return refusedBy(tools.RefusalUnavailable, waits(),
 			"No organization is loaded, so there is no knowledge to answer from."), nil
 	}
 	role := company.SeatByHandle(actor.Handle)
@@ -419,7 +419,7 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if err != nil {
 		log.WarnContext(ctx, "knowledge_answer_budget_unreadable", "seat", actor.Handle,
 			"error", err.Error())
-		return refused(tools.RefusalUnavailable, "The company's token counter could not "+
+		return refusedBy(tools.RefusalUnavailable, waits(), "The company's token counter could not "+
 			"be read, so no answer was written and nothing was spent. Try again shortly."), nil
 	}
 	if refusing {
@@ -428,7 +428,7 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 
 	sources, excerpts, searched := t.retrieve(ctx, question, company, role, reach)
 	if !searched {
-		return refused(tools.RefusalUnavailable, "The company's knowledge could not be "+
+		return refusedBy(tools.RefusalUnavailable, waits(), "The company's knowledge could not be "+
 			"searched just now, so this says nothing about whether it is written down. "+
 			"Nothing was spent; try again shortly."), nil
 	}
@@ -480,11 +480,11 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 		log.WarnContext(ctx, "knowledge_answer_failed", "seat", actor.Handle,
 			"model", member.Key, "error", reason)
-		words, waits := modelFailed(err)
-		if !waits {
+		words, waiting := modelFailed(err)
+		if !waiting {
 			return refusedBy(tools.RefusalUnavailable, waitless(), words), nil
 		}
-		return refused(tools.RefusalUnavailable, words), nil
+		return refusedBy(tools.RefusalUnavailable, waits(), words), nil
 	}
 	// THE ANSWER IS DEFUSED under the caller's token: it is a model's
 	// rewording of pages somebody else wrote, read next by a person or by
@@ -496,7 +496,7 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		log.WarnContext(ctx, "knowledge_answer_empty", "seat", actor.Handle,
 			"model", completion.Model, "output_tokens", completion.OutputTokens,
 			"max_tokens", AnswerMaxTokens)
-		return refused(tools.RefusalUnavailable, "The model wrote no answer. Try again, "+
+		return refusedBy(tools.RefusalUnavailable, waits(), "The model wrote no answer. Try again, "+
 			"or ask the question more narrowly."), nil
 	}
 	answer := KnowledgeAnswer{

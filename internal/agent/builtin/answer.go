@@ -61,7 +61,7 @@ func jsonAnswer(v any, narrowWith string) (tools.Result, error) {
 		// that would not encode, instead of letting the model ask for a
 		// narrower one.
 		//nolint:nilerr // A tool failure is a RESULT the model reads, not a Go error.
-		return refused(tools.RefusalUnavailable, "The result could not be rendered."), nil
+		return refusedBy(tools.RefusalUnavailable, waitless(), "The result could not be rendered."), nil
 	}
 	if len(data) > ToolAnswerBytes {
 		return failed(fmt.Sprintf("That answer is %d KiB and the limit for one "+

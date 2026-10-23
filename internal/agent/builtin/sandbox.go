@@ -100,7 +100,7 @@ func (t *runSandbox) CallDetached(ctx context.Context, turn *turnctx.Turn, args 
 		// A launch that failed is a TOOL FAILURE, not an engine one: the
 		// model asked for something the engine could not do, and telling it
 		// so lets it fall back to its own tools rather than losing the turn.
-		return tools.DetachedResult{Result: refused(tools.RefusalUnavailable,
+		return tools.DetachedResult{Result: refusedBy(tools.RefusalUnavailable, waits(),
 			fmt.Sprintf("the sandbox could not be started: %v", err))}, nil
 	}
 

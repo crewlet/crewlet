@@ -737,7 +737,7 @@ func notInATurn(name string) tools.Result {
 // exist in the tracker the company DOES run, so neither "invalid" nor "not
 // found" is true of it.
 func unconfigured(name string) tools.Result {
-	return refused(tools.RefusalUnavailable, name+" is unavailable: this "+
+	return refusedBy(tools.RefusalUnavailable, waitless(), name+" is unavailable: this "+
 		"company does not run the native work tracker. Use the tracker tools "+
 		"your company has configured.")
 }
@@ -2928,7 +2928,7 @@ func (d WorkDeps) declareLabels(ctx context.Context, actor Actor,
 		// write: a build with no project writer still has a lead who
 		// can declare the tag, and the create that follows will say
 		// which label is missing.
-		return nil, refusalOf(refused(tools.RefusalUnavailable, "This build "+
+		return nil, refusalOf(refusedBy(tools.RefusalUnavailable, waitless(), "This build "+
 			"cannot declare labels at a write. Ask the project lead to "+
 			"declare it, or file without the label."))
 	}

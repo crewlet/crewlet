@@ -243,7 +243,7 @@ func (s *fileSources) openBox(ctx context.Context) (ArtifactBox, *tools.Result) 
 		return nil, &r
 	}
 	if s.deps.Boxes == nil {
-		r := refused(tools.RefusalUnavailable, s.tool+" cannot read a coding run's box: "+
+		r := refusedBy(tools.RefusalUnavailable, waitless(), s.tool+" cannot read a coding run's box: "+
 			"this node runs no sandbox. Publish the files inline instead.")
 		return nil, &r
 	}
@@ -402,7 +402,7 @@ func (s *fileSources) projectFile(ctx context.Context, published string,
 	}
 	work := s.deps.work
 	if work.Files == nil || work.Objects == nil {
-		r := refused(tools.RefusalUnavailable, s.tool+" cannot read project files: this "+
+		r := refusedBy(tools.RefusalUnavailable, waitless(), s.tool+" cannot read project files: this "+
 			"company does not run the native tracker.")
 		return artifactFile{}, &r
 	}

@@ -94,7 +94,7 @@ func (t *refineSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 		return refused(tools.RefusalForbidden, RefineSkillTool+" can only be called during a turn, on behalf of a seat."), nil
 	}
 	if t.skills == nil {
-		return refused(tools.RefusalUnavailable, "Skill synthesis is not configured on this deployment."), nil
+		return refusedBy(tools.RefusalUnavailable, waitless(), "Skill synthesis is not configured on this deployment."), nil
 	}
 
 	name := strings.TrimSpace(argString(args, "skill_name"))

@@ -324,7 +324,7 @@ func resolvePauseCall(ctx context.Context, deps SeatPauseDeps, authorize Authori
 	turn *turnctx.Turn, tool string, args map[string]any) (Actor, pauseTarget, *tools.Result) {
 
 	if !deps.wired() {
-		return Actor{}, pauseTarget{}, refusalOf(refused(tools.RefusalUnavailable,
+		return Actor{}, pauseTarget{}, refusalOf(refusedBy(tools.RefusalUnavailable, waitless(),
 			tool+" is unavailable: this surface was built without the pause record."))
 	}
 	actor, err := deps.Actor(ctx, turn)

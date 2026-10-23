@@ -367,7 +367,7 @@ func chatActorFailure(name string, err error) tools.Result {
 // [tools.RefusalUnavailable], on [unconfigured]'s reasoning: the call is well
 // formed, and the room may well exist in the chat the company DOES run.
 func unconfiguredChat(name string) tools.Result {
-	return refused(tools.RefusalUnavailable, name+" is unavailable: this "+
+	return refusedBy(tools.RefusalUnavailable, waitless(), name+" is unavailable: this "+
 		"company does not run native chat. Use the chat tools your company has "+
 		"configured.")
 }
