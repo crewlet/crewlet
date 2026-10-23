@@ -2048,8 +2048,10 @@ export interface RetentionMaintenance {
   by?: string;
   /**
    * The nodes the window's next step is still waiting for: at `opened`, those
-   * with no restart into a maintenance mode recorded; past it, those whose
-   * acknowledgement the seal is still waiting for. EMPTY IS NOT UNKNOWN: an
+   * with no restart into a maintenance mode recorded; from the baseline to the
+   * seal, those whose acknowledgement the seal is still waiting for; and once
+   * it has sealed, none, since nothing after it waits on a node. EMPTY IS NOT
+   * UNKNOWN: an
    * operation with nobody outstanding is one waiting on its operator, which is
    * the state somebody finding this most needs to see.
    */

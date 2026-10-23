@@ -145,7 +145,9 @@ type MaintenanceReport struct {
 	// ParticipantsMissing names the nodes the window's next step is still
 	// waiting for: at `opened`, those with no restart into a maintenance
 	// mode recorded, which is what the baseline reads ([BaselineMissing]);
-	// past it, those whose acknowledgement the seal is still waiting for.
+	// from the baseline to the seal, those whose acknowledgement the seal is
+	// still waiting for ([SealOutstanding]); and once it has sealed, none,
+	// since the verify and the release wait on no node.
 	// EMPTY IS NOT THE SAME AS UNKNOWN: an operation with nobody
 	// outstanding is one waiting on its operator, and that is the state an
 	// operator most needs to be able to see.
