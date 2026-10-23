@@ -39,22 +39,27 @@ export function SignInPolicy() {
   return (
     <>
       <PageNote>
+        {/* THE KEYS AS CODE, and no parenthesis round a code chip: "(
+            polish-native ," read as a stray bracket beside a padded box. */}
         {data ? (
           <>
-            Set in this node&rsquo;s crewlet.yaml (<InlineCode>{data.node}</InlineCode>, under
-            api.auth), and changed with a restart.
+            How node <InlineCode>{data.node}</InlineCode> signs people in: set under{" "}
+            <InlineCode>api.auth</InlineCode> in its crewlet.yaml, and changed with a restart.
           </>
         ) : (
-          "Set in each node's crewlet.yaml (under api.auth), and changed with a restart."
+          <>
+            Set under <InlineCode>api.auth</InlineCode> in each node&rsquo;s crewlet.yaml, and
+            changed with a restart.
+          </>
         )}
       </PageNote>
       <QueryState error={error} refusal={refusal} detail={detail} loading={loading && !data}>
+        {/* In the section body's own rhythm, as every Settings page stacks. */}
         {data && (
           <>
             <Card padding="none">
               <Card.Header icon={<ShieldUserGlyph size="sm" />}>
                 <Card.Title id="sign-in-signing">Signing in</Card.Title>
-        {/* In the section body's own rhythm, as every Settings page stacks. */}
               </Card.Header>
               <SettingsTable aria-labelledby="sign-in-signing">
                 <SettingsTable.Row
