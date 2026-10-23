@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/steer"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -17,8 +19,14 @@ import (
 // so a line per ask is noise beside the alarm that names it, while a refusal
 // no wait clears is the administrator's to act on.
 //
-// Mutation: log through this package's logger, drop the fields, or log a node
-// behind at INFO, and a row goes red.
+// NO WAIT CLEARS IS THE ANSWER'S OWN HINT, so a condition the state log does
+// not class (a company's file storage full, a note the running node could not
+// verify) is written at WARN like a full log: read through the state log's
+// rule alone, both went out with no Retry-After and were written at DEBUG.
+//
+// Mutation: log through this package's logger, drop the fields, log a node
+// behind at INFO, or judge the level by [statelog.ConditionLevel], and a row
+// goes red.
 func TestAQuestionsConditionIsLoggedByItsSurface(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
@@ -28,6 +36,9 @@ func TestAQuestionsConditionIsLoggedByItsSurface(t *testing.T) {
 		"a full log": {fmt.Errorf("read: %w", &statelog.Refused{Code: statelog.RefuseLogFull,
 			Level: statelog.ReadLinearizable, Detail: "raise stream.tracker_max_bytes"}),
 			"level=WARN"},
+		"a full file store": {fmt.Errorf("upload: %w", objstore.ErrFull), "level=WARN"},
+		"a note the running node could not verify": {fmt.Errorf("steer: %w",
+			steer.ErrUnverified), "level=WARN"},
 		"a node behind": {fmt.Errorf("read: %w", &statelog.Refused{Code: statelog.RefuseBehind,
 			Level: statelog.ReadLinearizable, Detail: "40 000 records behind",
 			RetryAfter: time.Second}), "level=DEBUG"},
