@@ -3917,6 +3917,18 @@ a.knowledge-reader-how:hover {
   gap: var(--spacing-3);
 }
 
+/* CREWLET'S OWN SERVICES: three tiles, so three tracks, never the
+   catalogue's four-up grid with a quarter of its row empty, and never two
+   up with Chat alone on a second row. One track on a phone. */
+.int-grid-builtin {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+@media (width < 640px) {
+  .int-grid-builtin {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .int-tile {
   display: flex;
   flex-direction: column;

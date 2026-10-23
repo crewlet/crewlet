@@ -139,7 +139,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function mount(viewer: unknown = OPERATOR) {
+function mount(viewer: unknown = OPERATOR, kind?: string) {
   const store = new Store();
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
@@ -148,7 +148,7 @@ function mount(viewer: unknown = OPERATOR) {
     <ClientContext.Provider value={{ store, socket }}>
       <ViewerProvider>
         <Router>
-          <Integrations />
+          <Integrations kind={kind} />
         </Router>
       </ViewerProvider>
     </ClientContext.Provider>,
@@ -278,4 +278,19 @@ test("a managed document holds Connect and keeps Rotate token", async () => {
 
   fireEvent.click(await screen.findByRole("button", { name: "Rotate token for GitLab" }));
   expect(await screen.findByRole("dialog", { name: "Rotate the GitLab token" })).toBeTruthy();
+});
+
+// ONE TOOL'S PAGE DRAWS ITS CARD ONCE. Its card and its pass history were
+// siblings sharing the tool's key, and React reconciles two such children as
+// one: every poll appended another copy of the card. The duplicate-key
+// warning is the cause, so it is held beside the count.
+test("one tool's page draws its card once, its siblings keyed apart", async () => {
+  const warned = vi.spyOn(console, "error").mockImplementation(() => {});
+  stubFetch({ status: 200, body: listing });
+  mount(OPERATOR, "datadog");
+  await screen.findByRole("button", { name: /^Disconnect/ });
+  await new Promise((r) => setTimeout(r, 50));
+  expect(screen.getAllByRole("button", { name: /^Disconnect/ }).length).toBe(1);
+  expect(warned.mock.calls.some((c) => String(c[0]).includes("same key"))).toBe(false);
+  warned.mockRestore();
 });

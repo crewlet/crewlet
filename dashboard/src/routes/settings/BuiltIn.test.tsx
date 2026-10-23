@@ -102,3 +102,18 @@ test("a node running no company says so on both cards", async () => {
   mount(undefined);
   expect((await screen.findAllByText("This node runs no company yet.")).length).toBe(2);
 });
+
+// A TILE WITH NO WAY IN DRAWS NO FOOTER: a rule with nothing under it read as
+// a missing control, beside siblings whose footer holds a count and a button.
+// And Coming soon wears Not in use's neutral outline, one look for one state.
+test("a tile with no way in draws no footer, and Coming soon matches Not in use", async () => {
+  mount({ tracker: "jira", knowledge: "native" });
+  expect(await screen.findByText("1 space")).toBeTruthy();
+  expect(card("Crewlet Works").querySelector(".int-tile-foot")).toBeNull();
+  expect(card("Crewlet Chat").querySelector(".int-tile-foot")).toBeNull();
+  expect(card("Crewlet Knowledge").querySelector(".int-tile-foot")).not.toBeNull();
+  const tagClass = (name: string, word: string) =>
+    within(card(name)).getByText(word).closest(".crewlet-tag")?.className ?? "";
+  expect(tagClass("Crewlet Chat", "Coming soon")).toMatch(/outline/);
+  expect(tagClass("Crewlet Works", "Not in use")).toMatch(/outline/);
+});
