@@ -175,11 +175,11 @@ describe("the shell", () => {
     const column = await screen.findByRole("navigation", { name: "Settings sections" });
     await waitFor(() =>
       expect(within(column).getByRole("link", { name: /^Nodes/ }).textContent).toMatch(
-        /needs Admin/,
+        /Needs Admin/,
       ),
     );
     const foot = screen.getByRole("navigation", { name: "Settings" });
-    expect(foot.querySelector(".side-locked")).toBeNull();
+    expect(foot.querySelector(".crewlet-locked-label")).toBeNull();
     expect(foot.textContent).not.toMatch(/need a grant/);
   });
 });
@@ -622,7 +622,7 @@ describe("a section, for a reader holding none of its grants", () => {
       expect(within(column).getAllByText(group).length).toBeGreaterThan(0);
     }
     const row = (href: string) => rows.find((a) => a.getAttribute("href") === href);
-    await waitFor(() => expect(row("#/settings/people")?.textContent).toMatch(/needs Admin/));
+    await waitFor(() => expect(row("#/settings/people")?.textContent).toMatch(/Needs Admin/));
     expect(row("#/settings/spend")?.textContent).toBe("Token spend");
     expect(row("#/settings/people")?.getAttribute("title")).toBe(
       settings.sections.find((s) => s.key === "people")!.hint,
@@ -640,10 +640,10 @@ describe("a section, for a reader holding none of its grants", () => {
       within(column)
         .getAllByRole("link")
         .find((a) => a.getAttribute("href") === href);
-    await waitFor(() => expect(row("#/settings/people")?.textContent).toMatch(/needs Admin/));
-    expect(row("#/settings/mcp-tools")?.textContent).toMatch(/needs Admin access/);
-    expect(row("#/settings/limits")?.textContent).toMatch(/needs Admin access/);
-    expect(row("#/settings/spend/tasks")?.textContent).toMatch(/needs Tracker access/);
+    await waitFor(() => expect(row("#/settings/people")?.textContent).toMatch(/Needs Admin/));
+    expect(row("#/settings/mcp-tools")?.textContent).toMatch(/Needs Admin access/);
+    expect(row("#/settings/limits")?.textContent).toMatch(/Needs Admin access/);
+    expect(row("#/settings/spend/tasks")?.textContent).toMatch(/Needs Tracker access/);
     expect(row("#/settings/spend")?.textContent).toBe("Token spend");
   });
 

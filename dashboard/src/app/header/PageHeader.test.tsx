@@ -558,20 +558,20 @@ describe("Settings' section picker on a phone", () => {
       runs={EVERY}
     />
   );
-  const toggle = () => document.querySelector<HTMLButtonElement>(".section-picker-toggle")!;
+  const toggle = () => document.querySelector<HTMLButtonElement>(".crewlet-section-frame__toggle")!;
   const list = () => document.getElementById(toggle().getAttribute("aria-controls") ?? "")!;
   const row = (at: string) => list().querySelector<HTMLAnchorElement>(`a[href="${at}"]`)!;
   /** What the toggle SHOWS, its screen-reader words left out. */
   const shown = () => {
     const copy = toggle().cloneNode(true) as HTMLElement;
-    copy.querySelectorAll(".sr-only").forEach((n) => n.remove());
-    return copy.textContent;
+    copy.querySelectorAll(".crewlet-visually-hidden").forEach((n) => n.remove());
+    return copy.textContent?.replace(/\s+/g, " ").trim();
   };
 
   test("arriving at Settings' own address opens the list, every group in it", () => {
     render(column(["settings", "models"]));
     expect(toggle().getAttribute("aria-expanded")).toBe("true");
-    expect(toggle().closest(".section-picker")?.hasAttribute("data-open")).toBe(true);
+    expect(toggle().closest(".crewlet-section-frame__nav")?.hasAttribute("data-open")).toBe(true);
     expect(row("#/settings/spend")).not.toBeNull();
     expect(row("#/settings/storage")).not.toBeNull();
   });
@@ -649,7 +649,7 @@ test("a section tab the reader cannot open names the access it needs", () => {
   );
   for (const s of locked) {
     const tab = document.querySelector(`[data-section="${s.key}"]`)!;
-    expect(tab.textContent).toMatch(/needs Admin access/);
+    expect(tab.textContent).toMatch(/Needs Admin access/);
   }
   const open = document.querySelector(`[data-section="${live.sections[0]!.key}"]`)!;
   expect(open.textContent).not.toMatch(/needs/);

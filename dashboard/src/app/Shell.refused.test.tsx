@@ -244,7 +244,7 @@ test("Settings' column is locked where a grant is, and nowhere else", async () =
   for (const a of rows) {
     const at = a.getAttribute("href") ?? "";
     if (locked.includes(a)) {
-      expect(a.textContent, at).toMatch(/, needs (Admin|Tracker) access/);
+      expect(a.textContent, at).toMatch(/, Needs (Admin|Tracker) access/);
     } else {
       expect(a.textContent, at).not.toMatch(/needs/);
     }

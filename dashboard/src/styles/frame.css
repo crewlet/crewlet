@@ -447,15 +447,6 @@
   white-space: pre-wrap;
 }
 
-/* A LOCKED ROW keeps its words and adds the key after them. */
-.side-locked,
-.section-column-label {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-1);
-  min-width: 0;
-}
-
 /* THE ENGINE PANEL'S INSET. The row that opens it and every part inside it
    are the kit's (`AppShell.RailRow`, `Popover`, `DescriptionList`, `Button`,
    `StatusDot`); the kit's popover draws no inset of its own, and this is the
@@ -881,73 +872,6 @@
   );
 }
 
-/* ---- The Settings column and the Knowledge tree ---------------------------
-   Settings draws its sections as a column beside the screen, and Knowledge
-   its search and its spaces' tree the same way, flush with the
-   sheet: the column is the full height of the scroller's view, drawn with a
-   hairline, and its list stays put while the section beside it scrolls. The
-   kit's content padding is taken back for this one frame and given to the
-   section body instead. */
-.app .crewlet-app-shell__content:has(> .section-frame) {
-  min-height: 100%;
-  padding: 0;
-}
-
-.section-frame {
-  display: grid;
-  flex: 1 1 auto;
-  /* THE SHELL HANDS THE WIDTH IN (`--section-column`, from `columnWidth` in
-     app/layout.ts) — the same number the peek threshold counted, so the
-     column drawn and the column subtracted are one value. */
-  grid-template-columns: var(--section-column) minmax(0, 1fr);
-  min-height: 100%;
-}
-
-/* AS TALL AS THE VIEW, NEVER AS THE GRID. A sticky box moves only inside its
-   containing block, which here is its grid area — the row the section beside
-   it makes as tall as its content. `min-height: 100%` resolved against that
-   area and made the column exactly as tall as the section, so it had nowhere
-   to stick to and a wheel over Nodes carried Company and Connect off the top.
-   At the view's height it sticks for the whole scroll, its hairline runs the
-   height of the window at every scroll position, and a list longer than a
-   short window scrolls inside itself rather than below the fold.
-
-   THE ONE IN-PAGE SCROLLER THAT KEEPS THE WHEEL AT ITS ENDS
-   (`overscroll-behavior: contain`), and it is the exception the rule against
-   containment names (`styles/scrollers.test.ts`). The trap containment sets
-   elsewhere is a box whose own bottom is below the fold: pinned at its end,
-   it swallows the wheel while half of it is out of sight. This box cannot be
-   in that state — it sticks, and it is exactly the view, so all of it is on
-   screen at every scroll position. What chaining would do here is the
-   opposite surprise: a wheel over the section list, at its end, would move
-   the SECTION beside it, which is not what the pointer is over. */
-.section-column {
-  position: sticky;
-  top: 0;
-  align-self: start;
-  height: 100cqb;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: var(--spacing-4) 0;
-  border-right: 1px solid var(--color-border-default);
-}
-
-.section-body {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-5);
-  min-width: 0;
-  padding: var(--spacing-5) var(--spacing-5) var(--spacing-10);
-}
-
-/* THE PHONE'S PICKER (`SectionColumn`): one row naming the section the reader
-   is on, which unfolds the column's list. Beside the section there is room
-   for the whole list, so at every width above the phone breakpoint the toggle
-   is not drawn and the list always is. */
-.section-picker-toggle {
-  display: none;
-}
-
 /* ---- The state bar ------------------------------------------------------ */
 
 .state-bar {
@@ -1185,103 +1109,6 @@
    width at which a layout goes single-pane. The navigation needs nothing
    here: below `breakpoint.shell` the sidebar is already the kit's drawer, and
    the sheet the whole window. What changes at a phone's width is the grid. */
-/* ---- Settings' column folds where its section would be too narrow -------
-   Below `SECTION_COLUMN_MIN` (app/layout.ts: the sidebar, the sheet, the
-   column and a section floor of 720px) the column beside the section left
-   it 489px at 1024: the Audit log's columns were drawn 46px wide and the stat
-   tiles cut their figures. So the column folds to the one-row picker the
-   phone draws, and the section takes the screen's width. */
-@media (width < 1212px) {
-  /* ONE PANE: the Settings column stacks above the section rather than
-     taking a third of a narrow window beside it.
-
-     AND THE SECTION TAKES WHAT IS LEFT. The frame is at least the view's
-     height, and two `auto` rows split a short section's spare height between
-     them — so the folded picker's row grew by half of it and opened a band
-     of nothing (230px on Nodes at 390 × 2400) between the picker and the
-     section it names. The picker's row is its own height; the rest is the
-     section's. */
-  .section-frame {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto 1fr;
-  }
-
-  /* IN THE FLOW, as tall as it is: a phone scrolls the page past the picker,
-     and the list it unfolds is part of that page rather than a pane of its
-     own. */
-  .section-column {
-    position: static;
-    height: auto;
-    overflow-y: visible;
-    border-right: none;
-    border-bottom: 1px solid var(--color-border-default);
-  }
-
-  /* FOLDED TO ONE ROW, which names where the reader is. Stacked whole, the
-     Settings column pushed every section's own content about 520px down —
-     below the fold on Nodes and Secrets. */
-  /* ON THE SECTION'S OWN GUTTER, so the toggle starts where the section's
-     content does: the screen padding beside a folded column, the phone's
-     16px below the phone breakpoint. */
-  .section-picker {
-    padding: var(--spacing-2) var(--spacing-5);
-  }
-  .section-picker-toggle {
-    display: flex;
-    align-items: center;
-    gap: var(--spacing-2);
-    width: 100%;
-    min-height: var(--size-target-min);
-    /* THE ROWS' OWN INSET, less the toggle's border: the toggle's glyph and
-       name stand over the glyphs and names of the list it unfolds. */
-    padding: 0 calc(var(--size-nav-row-pad) - 1px);
-    border: 1px solid var(--color-border-default);
-    border-radius: var(--radius-sm);
-    background: var(--color-surface-elevated);
-    color: var(--color-text-primary);
-    font: inherit;
-    font-weight: var(--font-weight-medium);
-    text-align: left;
-    cursor: pointer;
-  }
-  .section-picker-toggle:hover {
-    background: var(--color-surface-hover);
-  }
-  .section-picker-name {
-    flex: 1 1 auto;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  /* "Section ·" BEFORE THE NAME, in the quiet ink: the row read "General"
-     alone, which a reader takes for the page's title rather than for a
-     control holding the other sections. */
-  .section-picker-prefix {
-    color: var(--color-text-tertiary);
-    font-weight: var(--font-weight-regular);
-  }
-  .section-picker-chevron {
-    flex: none;
-    color: var(--color-text-tertiary);
-  }
-  .section-picker[data-open] .section-picker-chevron {
-    transform: rotate(180deg);
-  }
-  .section-picker:not([data-open]) .section-picker-list {
-    display: none;
-  }
-  .section-picker[data-open] .section-picker-list {
-    padding-top: var(--spacing-2);
-  }
-  /* THE LIST TAKES NO GUTTER OF ITS OWN inside the picker, which is inset
-     already: with the kit's rail gutter on top, its glyphs and names sat 11px
-     right of the toggle's. */
-  .section-picker-list > .crewlet-sidebar-nav {
-    padding-inline: 0;
-  }
-}
-
 @media (width < 640px) {
   /* A PHONE KEEPS THE PALETTE'S KEYS ON ONE LINE: the mode pill and the
      scope note are what its band can lose without losing a key, the tabs
@@ -1304,13 +1131,6 @@
   /* ONE GUTTER ON A PHONE: the tabs and a Settings section start where
      every other screen's content does, the kit's 16px. */
   .section-tabs {
-    padding-inline: var(--spacing-4);
-  }
-
-  .section-body {
-    padding: var(--spacing-4) var(--spacing-4) var(--spacing-9);
-  }
-  .section-picker {
     padding-inline: var(--spacing-4);
   }
 

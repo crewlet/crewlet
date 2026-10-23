@@ -122,10 +122,7 @@ function fromTheView(bound: string): boolean {
 /**
  * The boxes that may keep the wheel, each with why it cannot hide anything.
  */
-const KEEPS_THE_WHEEL: Record<string, string> = {
-  "frame.css .section-column":
-    "sticky and exactly the view (100cqb), so all of it is on screen at every scroll position; chaining at its end would move the section beside it instead",
-};
+const KEEPS_THE_WHEEL: Record<string, string> = {};
 
 /**
  * The scrollers whose bound is a literal, each with why that cannot hide
@@ -156,7 +153,6 @@ const VIEW_BOUNDED: Record<string, string> = {
   "screens.css .tail-scroll.tailing": "a running phase's transcript",
   "screens.css .thread-split .thread-list": "a seat's thread list, beside the sticky detail",
   "screens.css .work-col-body": "a board lane's body",
-  "frame.css .section-column": "the Settings column",
 };
 
 describe("a box that scrolls inside the page", () => {

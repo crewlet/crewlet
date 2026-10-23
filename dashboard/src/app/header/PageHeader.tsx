@@ -44,13 +44,15 @@
  * nothing for a section the screen did not count.
  */
 
-import { useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import {
   AppShell,
   AvatarStack,
   Breadcrumb,
   Button,
+  LockedLabel,
   Menu,
+  SectionFrame,
   SidebarNav,
   Tabs,
   Tag,
@@ -60,11 +62,10 @@ import {
   useMediaMatch,
 } from "@crewlethq/ui";
 import { ChevronDownGlyph, EllipsisGlyph, StarGlyph } from "@crewlethq/icons/glyphs";
-import { LockMark } from "../frame/LockMark.tsx";
 import { href, samePath, useNavigator, useRoute } from "../router.tsx";
 import type { Crumb } from "../crumbs.ts";
 import { resolves } from "../routes.ts";
-import { accessNames } from "~/lib/access.ts";
+import { groupLock, lockReason } from "~/lib/access.ts";
 import {
   grantsMissing,
   isSidebarRow,
@@ -328,15 +329,7 @@ export function SectionTabs({
         const needs = grants === null ? [] : grantsMissing(s, grants);
         return {
           value: s.key,
-          label:
-            needs.length > 0 ? (
-              <span className="side-locked" title={`Needs ${accessNames(needs)} access`}>
-                {s.label}
-                <LockMark needs={needs} />
-              </span>
-            ) : (
-              s.label
-            ),
+          label: <LockedLabel reason={lockReason(needs)}>{s.label}</LockedLabel>,
           icon: <Glyph size="sm" />,
           count: counts[s.key],
         };
@@ -554,112 +547,69 @@ export function SectionColumn({
     if (last && last.name === name) last.sections.push(s);
     else groups.push({ name, sections: [s] });
   }
-  // ON A PHONE THE COLUMN IS A PICKER NAMING THE SECTION. Stacked whole above
-  // the section it took about 520px, so on Nodes and Secrets the section's own
-  // content began below the fold on every visit. Below the phone breakpoint
-  // the list is folded behind one row saying where the reader is; at every
-  // other width the toggle is not drawn and the list always is (frame.css).
+  // ON A PHONE THE COLUMN IS A PICKER NAMING THE SECTION (the kit's
+  // `SectionFrame.Nav`, folded where the Shell says the frame is). Stacked
+  // whole above the section it took about 520px, so on Nodes and Secrets the
+  // section's own content began below the fold on every visit.
   //
   // FOLDED WHERE THE READER CHOSE A SECTION, OPEN WHERE THEY HAVE NOT. A deep
   // link (`#/settings/people`) arrives folded, which is the reason the picker
   // folds at all: the section the link named starts right under it. But the
   // workspace's own address names no section anybody picked (it is where the
-  // sidebar's Settings row lands), so arriving there opens the list: folded,
-  // a phone reader saw one row naming the first section and never the groups
-  // under it. Every pick folds it again, the section the reader is already
-  // on included, which moves no path.
+  // sidebar's Settings row lands), so arriving there on a phone opens the
+  // list: folded, a phone reader saw one row naming the first section and
+  // never the groups under it. The kit folds it again on every pick.
   const phone = useMediaMatch(`(width < ${PHONE_BREAKPOINT}px)`);
-  const at = path.join("/");
   const atRoot = samePath(path, row.path);
-  const [open, setOpen] = useState(phone && atRoot);
-  const [openedAt, setOpenedAt] = useState(at);
-  // THE ADDRESS A PICK IN THIS LIST IS ON ITS WAY TO, so the arrival it causes
-  // is told from one the reader did not make here — the Settings row, Back.
-  const [picked, setPicked] = useState<string | null>(null);
-  if (openedAt !== at) {
-    setOpenedAt(at);
-    setOpen(picked !== at && phone && atRoot);
-    setPicked(null);
-  }
-  const pick = (s: Section) => () => {
-    setOpen(false);
-    const to = s.path.join("/");
-    if (to !== at) setPicked(to);
-  };
-  const listID = useId();
   const CurrentGlyph = current ? glyphFor(current.icon) : undefined;
   // THE KIT'S OWN NAVIGATION LIST, which is what this column is: labelled
-  // groups of rows, one of which is where the reader is — raised with a
+  // groups of rows, one of which is where the reader is, raised with a
   // hairline and no hue, the same mark the sidebar beside it uses, so "where
   // am I" reads one way in both columns.
   return (
-    <div className="section-column section-picker" data-open={open || undefined}>
-      <button
-        type="button"
-        className="section-picker-toggle"
-        aria-expanded={open}
-        aria-controls={listID}
-        onClick={() => setOpen((was) => !was)}
-      >
-        {CurrentGlyph && <CurrentGlyph size="sm" aria-hidden="true" />}
-        <span className="section-picker-name">
-          {current ? (
-            <>
-              {/* SAID, NOT ONLY SPOKEN: the row read "General" and nothing
-                  else, which a reader takes for the section's title rather
-                  than for a list of the others. */}
-              <span className="section-picker-prefix">
-                <span className="sr-only">{row.label} </span>Section
-                <span aria-hidden="true"> · </span>
-                <span className="sr-only">: </span>
-              </span>
-              {current.label}
-            </>
-          ) : (
-            `${row.label} sections`
-          )}
-        </span>
-        <ChevronDownGlyph size="xs" aria-hidden="true" className="section-picker-chevron" />
-      </button>
-      <div id={listID} className="section-picker-list">
-        <SidebarNav label={`${row.label} sections`}>
-          {groups.map((g) => (
-            <SidebarNav.Group key={g.name} label={g.name}>
-              {g.sections.map((s) => {
-                const Glyph = glyphFor(s.icon);
-                // BY THE ONE RULE every lock the navigation draws is decided
-                // by (`nav.ts`'s `sectionOpen`): the reader's own sections
-                // need nothing, and every other names its own access.
-                const needs = grants === null ? [] : grantsMissing(s, grants);
-                const figure = figures[s.key];
-                return (
-                  <SidebarNav.Item
-                    key={s.key}
-                    href={href(s.path, kept)}
-                    current={current?.key === s.key}
-                    icon={<Glyph size="sm" />}
-                    onClick={pick(s)}
-                    // THE ROW'S HINT AS ITS TITLE, the words the palette shows
-                    // under it.
-                    renderLink={({ className, ...link }) => (
-                      <a className={className} {...link} title={s.hint} />
-                    )}
-                    label={
-                      <span className="section-column-label">
-                        {s.label}
-                        <LockMark needs={needs} />
-                      </span>
-                    }
-                    badge={figure?.badge}
-                    count={figure?.count}
-                  />
-                );
-              })}
-            </SidebarNav.Group>
-          ))}
-        </SidebarNav>
-      </div>
-    </div>
+    <SectionFrame.Nav
+      scope={row.label}
+      current={
+        current && CurrentGlyph
+          ? { label: current.label, icon: <CurrentGlyph size="sm" /> }
+          : undefined
+      }
+      location={href(path, kept)}
+      openOnArrival={phone && atRoot}
+    >
+      {groups.map((g) => {
+        // BY THE ONE RULE every lock the navigation draws is decided by
+        // (`nav.ts`'s `sectionOpen`): the reader's own sections need nothing,
+        // and every other names its own access. A group the reader holds
+        // none of carries the key once, on its label, as the sidebar's do.
+        const locks = g.sections.map((s) =>
+          lockReason(grants === null ? [] : grantsMissing(s, grants)),
+        );
+        return (
+          <SidebarNav.Group key={g.name} label={g.name} locked={groupLock(locks)}>
+            {g.sections.map((s, i) => {
+              const Glyph = glyphFor(s.icon);
+              const figure = figures[s.key];
+              return (
+                <SidebarNav.Item
+                  key={s.key}
+                  href={href(s.path, kept)}
+                  current={current?.key === s.key}
+                  icon={<Glyph size="sm" />}
+                  // THE ROW'S HINT AS ITS TITLE, the words the palette shows
+                  // under it.
+                  title={s.hint}
+                  label={s.label}
+                  locked={locks[i]}
+                  badge={figure?.badge}
+                  count={figure?.count}
+                />
+              );
+            })}
+          </SidebarNav.Group>
+        );
+      })}
+    </SectionFrame.Nav>
   );
 }
 

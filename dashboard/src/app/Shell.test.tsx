@@ -892,11 +892,32 @@ describe("the page header", () => {
     const column = screen.getByRole("navigation", { name: "Settings sections" });
     const current = column.querySelector('[aria-current="page"]');
     expect(current?.textContent).toContain("Secrets");
-    expect(current?.textContent).toContain("needs Admin");
+    expect(current?.textContent).toContain("Needs Admin");
     const spend = Array.from(column.querySelectorAll("a")).find(
       (a) => a.getAttribute("href") === "#/settings/spend",
     );
-    expect(spend?.textContent).not.toContain("needs");
+    expect(spend?.textContent).not.toContain("Needs");
+  });
+
+  // ONE KEY FOR A GROUP THE READER HOLDS NONE OF, on the group's label, the
+  // sidebar's rule too: a Tracker-only reader met a key on 13 of 15 rows. A
+  // group with an open row keeps the key on each locked row, and every locked
+  // row still says why, as its title and after its name.
+  test("a Settings group the reader holds none of draws its key once, on its label", async () => {
+    location.hash = "#/settings/spend";
+    const { store, socket } = answering({
+      viewer: { login: "t", grants: ["tracker"], handle: "", owner: "t", name: "", kind: "" },
+    });
+    mountShell(store, socket);
+    await settle();
+    const column = screen.getByRole("navigation", { name: "Settings sections" });
+    const access = within(column).getByRole("group", { name: "Access, Needs Admin access" });
+    expect(access.querySelectorAll("svg.crewlet-locked-label__key")).toHaveLength(1);
+    const people = within(access).getByRole("link", { name: /^People, Needs Admin access/ });
+    expect(people.querySelector("[title='Needs Admin access']")).not.toBeNull();
+    // SPEND HOLDS AN OPEN ROW, so its group is not locked and names no reason.
+    const spend = within(column).getByRole("group", { name: "Spend" });
+    expect(spend.closest(".crewlet-nav-group--locked")).toBeNull();
   });
 
   // ON A PHONE THE COLUMN IS ONE ROW NAMING THE SECTION. Stacked whole it put
@@ -911,7 +932,7 @@ describe("the page header", () => {
     await settle();
     // BY ITS CLASS: jsdom applies the wide half of the stylesheet, where the
     // toggle is not drawn — the fold is the phone block's, held by frame.test.
-    const toggle = document.querySelector<HTMLButtonElement>(".section-picker-toggle")!;
+    const toggle = document.querySelector<HTMLButtonElement>(".crewlet-section-frame__toggle")!;
     // WHAT IT IS CALLED, its decoration left out — what it SHOWS ("Section ·
     // Secrets") is the picker's own suite's (`PageHeader.test.tsx`).
     const spoken = (el: HTMLElement) => {
@@ -923,18 +944,18 @@ describe("the page header", () => {
     const list = document.getElementById(toggle.getAttribute("aria-controls") ?? "");
     expect(list?.querySelector("nav[aria-label='Settings sections']")).not.toBeNull();
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    expect(toggle.closest(".section-picker")?.hasAttribute("data-open")).toBe(false);
+    expect(toggle.closest(".crewlet-section-frame__nav")?.hasAttribute("data-open")).toBe(false);
 
     fireEvent.click(toggle);
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
-    expect(toggle.closest(".section-picker")?.hasAttribute("data-open")).toBe(true);
+    expect(toggle.closest(".crewlet-section-frame__nav")?.hasAttribute("data-open")).toBe(true);
 
     await act(async () => {
       location.hash = "#/settings/nodes";
       window.dispatchEvent(new HashChangeEvent("hashchange"));
     });
     await settle();
-    const moved = document.querySelector<HTMLButtonElement>(".section-picker-toggle")!;
+    const moved = document.querySelector<HTMLButtonElement>(".crewlet-section-frame__toggle")!;
     expect(spoken(moved)).toBe("Settings Section: Nodes");
     expect(moved.getAttribute("aria-expanded"), "a picked section left the list open").toBe(
       "false",
@@ -949,9 +970,9 @@ describe("the page header", () => {
     const { store, socket } = answering({});
     mountShell(store, socket);
     await settle();
-    const toggle = document.querySelector<HTMLButtonElement>(".section-picker-toggle")!;
+    const toggle = document.querySelector<HTMLButtonElement>(".crewlet-section-frame__toggle")!;
     expect(toggle.textContent).toBe("Settings sections");
-    expect(document.querySelector(".section-picker-list [aria-current]")).toBeNull();
+    expect(document.querySelector(".crewlet-section-frame__list [aria-current]")).toBeNull();
   });
 
   // NO OPERATOR POLL OUTSIDE SETTINGS. The frame is mounted for the life of
@@ -1008,7 +1029,7 @@ describe("the page header", () => {
     const column = screen.getByRole("navigation", { name: "Settings sections" });
     const row = (start: string) =>
       Array.from(column.querySelectorAll("a")).find((a) => a.textContent?.startsWith(start));
-    expect(row("Nodes")?.textContent).toMatch(/needs Admin/);
+    expect(row("Nodes")?.textContent).toMatch(/Needs Admin/);
     expect(row("Nodes")?.textContent).not.toMatch(/node live/);
     expect(row("Configuration")?.textContent).not.toMatch(/epoch/);
   });

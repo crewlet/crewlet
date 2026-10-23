@@ -250,7 +250,6 @@ describe("the frame's layout", () => {
   // fails here rather than silently narrowing a list.
   test("the peek's threshold counts every width in front of the list", () => {
     const kit = kitSheet();
-    const ours = sheet("frame.css");
     // The sheet: inset on the right only — the sidebar is the gap on the left —
     // and a hairline each side.
     expect(block(kit, ".crewlet-app-shell__sheet")).toMatch(
@@ -268,14 +267,14 @@ describe("the frame's layout", () => {
     expect(block(kit, ".crewlet-app-shell__content")).toMatch(
       /padding:\s*var\(--spacing-5\) var\(--spacing-5\)/,
     );
-    expect(block(ours, ".section-body")).toMatch(
+    expect(block(kit, ".crewlet-section-frame__body")).toMatch(
       /padding:\s*var\(--spacing-5\) var\(--spacing-5\)/,
     );
     expect(CONTENT_PADDING).toBe(20);
     // The column inside the screen is as wide as the shell says — the number
     // the arithmetic below counted — and Settings' is one sidebar wide.
-    expect(block(ours, ".section-frame")).toMatch(
-      /grid-template-columns:\s*var\(--section-column\) minmax\(0, 1fr\)/,
+    expect(block(kit, ".crewlet-section-frame")).toMatch(
+      /grid-template-columns:\s*var\(--crewlet-section-frame-column\) minmax\(0, 1fr\)/,
     );
     expect(columnWidth("column")).toBe(Number.parseFloat(size.shell.rail));
     expect(columnWidth("tabs")).toBe(0);
@@ -383,17 +382,20 @@ describe("the frame's layout", () => {
   // at all, so the column beside a section is never a second, collapsed copy
   // of itself.
   test("the Settings column folds to a picker below SECTION_COLUMN_MIN, and only there", () => {
-    const css = sheet("frame.css");
-    const wide = css.split(FOLD)[0]!;
-    const narrow = atRuleBody(css, FOLD);
+    // THE FOLD IS ONE DECISION, the Shell's: it hands `folded` to the kit's
+    // frame from the same media query the peek's width reads
+    // (`Shell.test.tsx` holds the handing), so no stylesheet here restates the
+    // width and the kit's frame draws what folded means.
     expect(SECTION_COLUMN_MIN).toBe(1212);
-    expect(block(wide, ".section-picker-toggle")).toMatch(/display:\s*none/);
-    expect(wide).not.toMatch(/\.section-picker:not\(\[data-open\]\)/);
-    expect(block(narrow, ".section-picker-toggle")).toMatch(/display:\s*flex/);
-    expect(block(narrow, ".section-picker:not([data-open]) .section-picker-list")).toMatch(
-      /display:\s*none/,
+    expect(sheet("frame.css")).not.toContain(FOLD);
+    const kit = kitSheet();
+    expect(block(kit, ".crewlet-section-frame__toggle")).toMatch(/display:\s*none/);
+    expect(
+      block(kit, ".crewlet-section-frame[data-folded] .crewlet-section-frame__toggle"),
+    ).toMatch(/display:\s*flex/);
+    expect(block(kit, ".crewlet-section-frame[data-folded]")).toMatch(
+      /grid-template-columns:\s*minmax\(0, 1fr\)/,
     );
-    expect(block(narrow, ".section-frame")).toMatch(/grid-template-columns:\s*minmax\(0, 1fr\)/);
   });
 
   // THE BAR'S INLINE INSET IS THE KIT'S (`AppShell` measures the scroller's
@@ -407,59 +409,21 @@ describe("the frame's layout", () => {
   });
 
   // THE PICKER'S TOGGLE STANDS OVER THE LIST IT UNFOLDS, on the section's
-  // gutter: the list's glyphs sat 11px right of the toggle's, and the toggle
-  // 4px left of the section's content. The toggle takes the rows' inset less
-  // its border, and the list no gutter of its own inside the picker.
-  test("the folded picker's toggle lines up with its rows and the section", () => {
-    const narrow = atRuleBody(sheet("frame.css"), FOLD);
-    expect(block(narrow, ".section-picker-toggle")).toMatch(
-      /padding:\s*0 calc\(var\(--size-nav-row-pad\) - 1px\)/,
-    );
-    expect(block(narrow, ".section-picker-list > .crewlet-sidebar-nav")).toMatch(
-      /padding-inline:\s*0/,
-    );
-    expect(block(narrow, ".section-picker")).toMatch(
-      /padding:\s*var\(--spacing-2\) var\(--spacing-5\)/,
-    );
-  });
-
-  // THE COLUMN IS AS TALL AS THE VIEW, NEVER AS THE GRID. A sticky box moves
-  // only inside its grid area, the row the section beside it makes as tall as
-  // its content; sized against that area (`min-height: 100%` beside the sticky
-  // rule) the column was exactly as tall as the section, so it never stuck and
-  // a wheel over Nodes carried Company and Connect off the top. Its measure is
-  // the scroller's view, which only a size container can hand a descendant.
-  test("the Settings column is the scroller's height, so it stays put while the section scrolls", () => {
-    const css = sheet("frame.css");
-    const wide = css.split(FOLD)[0]!;
-    const column = block(wide, ".section-column");
-    expect(column).toMatch(/position:\s*sticky/);
-    expect(column).toMatch(/height:\s*100cqb/);
-    expect(column).toMatch(/overflow-y:\s*auto/);
-    expect(column, "a percentage height resolves against the grid area").not.toMatch(
-      /(^|[;\s])(min-|max-)?height:\s*100%/,
-    );
-    // …and the query container it measures is the SCROLLER, sized by the
-    // shell rather than by what it holds — on EVERY screen, not only on the
-    // frame that asked first: a running phase's transcript and a seat's thread
-    // list are bounded by the same view (`styles/scrollers.test.ts`). The page
-    // container on the content column is `inline-size` and so answers no
-    // block-axis unit, which is what lets `cqb` reach past it.
-    expect(block(wide, ".app .crewlet-app-shell__main")).toMatch(
+  // gutter, and the column is as tall as the view: both the kit's
+  // `SectionFrame` now. What stays the dashboard's is the size container the
+  // column's `100cqb` and every other view-bounded box measure, named on the
+  // scroller for every screen.
+  test("the Settings column is the kit's frame, measured against the scroller's view", () => {
+    const kit = kitSheet();
+    const nav = block(kit, ".crewlet-section-frame__nav");
+    expect(nav).toMatch(/position:\s*sticky/);
+    expect(nav).toMatch(/height:\s*100cqb/);
+    expect(
+      block(kit, ".crewlet-section-frame[data-folded] .crewlet-section-frame__toggle"),
+    ).toMatch(/padding:\s*0 calc\(var\(--size-nav-row-pad\) - 1px\)/);
+    expect(block(sheet("frame.css").split(FOLD)[0]!, ".app .crewlet-app-shell__main")).toMatch(
       /container:\s*scroller\s*\/\s*size/,
     );
-    expect(wide, "scoped to one frame, every other screen's `cqb` is the viewport").not.toMatch(
-      /\.crewlet-app-shell__main:has\([^)]*section-frame[^)]*\)\s*\{[^}]*container:/,
-    );
-
-    // FOLDED, the column is back in the flow, and the frame's spare height
-    // goes to the section: two `auto` rows split it and opened a band of
-    // nothing between the folded picker and the section it names.
-    const narrow = atRuleBody(css, FOLD);
-    expect(block(narrow, ".section-frame")).toMatch(/grid-template-rows:\s*auto 1fr/);
-    const stacked = block(narrow, ".section-column");
-    expect(stacked).toMatch(/position:\s*static/);
-    expect(stacked).toMatch(/height:\s*auto/);
   });
 
   // A NARROW CARD PUTS ITS SUBTITLE ON A LINE OF ITS OWN, and the kit does it
