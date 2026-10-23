@@ -11,11 +11,11 @@ labels: bug
 ## Environment
 
 - Crewlet version (`crewlet --version`):
-- OS and architecture (a release ships six of them):
+- OS and architecture (`uname -sm`):
 - How it was installed (release archive, `go install`, container image, built
   from source):
-- Deployment shape (one node or several, which `node.roles` each runs, docker
-  compose or own infra):
+- Deployment shape (one node or several, and on each its `node.roles` and
+  `stream.type`):
 
 ## Config shape
 
