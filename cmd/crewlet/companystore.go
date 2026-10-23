@@ -311,7 +311,7 @@ func (s *companyStore) readFailure(target *secretTarget, err error) error {
 		// save a token ([storeRun.offline]).
 		return fmt.Errorf("%w\n\n%s's database is held by the process named "+
 			"above. While that is its engine, the company's stored values are "+
-			"read through its API — and they cannot be: %w%s%s", target.locked,
+			"read through its API, and they cannot be: %w%s%s", target.locked,
 			s.bootstrapPath, err, remedy, heldByACommand)
 	case target.throughNode:
 		return fmt.Errorf("read the company's stored values through %s: %w%s",
@@ -489,7 +489,7 @@ func (v *storedValues) Lookup(name string) (string, bool) {
 		return "", false
 	}
 	if _, err := v.readLocked([]string{name}); err != nil {
-		panic(readFailed{fmt.Errorf("read ${%s} %s: %w — stopping rather than "+
+		panic(readFailed{fmt.Errorf("read ${%s} %s: %w, so this stops rather than "+
 			"resolving a stored value as unset%s", name, v.where, err, revealRemedy(err))})
 	}
 	value, ok := v.values[name]

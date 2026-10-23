@@ -1134,7 +1134,7 @@ func (p *iamPrinter) settled(answer map[string]any) error {
 	if said == "" {
 		return nil
 	}
-	return fmt.Errorf("%s: %s — the node could not confirm the write, so what it "+
+	return fmt.Errorf("%s: %s. The node could not confirm the write, so what it "+
 		"answered is not shown (op %s): %w", p.what, said, dash(str(answer["op_id"])),
 		iamUnkeyed(p.write.gesture))
 }

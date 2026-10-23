@@ -126,7 +126,7 @@ func renderObjects(w io.Writer, v objectsView) error {
 	switch v.State {
 	case "unavailable":
 		return errors.New("the object store's record could not be read: the coordination " +
-			"store did not answer — ask again in a moment")
+			"store did not answer. Ask again in a moment")
 	case "not_yet":
 		_, err := fmt.Fprintln(w, "The object store's collector has not finished a pass yet: "+
 			"it runs on a data node holding the worker duties, hourly.")
@@ -139,7 +139,7 @@ func renderObjects(w io.Writer, v objectsView) error {
 	fmt.Fprintf(&b, "Files are kept in: %s\n", backendName(v.Backend))
 	fmt.Fprintf(&b, "Collector:         %s\n", v.Node)
 	if c := v.Collect; c != nil {
-		fmt.Fprintf(&b, "Last collection:   %s — %d objects listed, %d deleted, "+
+		fmt.Fprintf(&b, "Last collection:   %s: %d objects listed, %d deleted, "+
 			"%d unfinished upload(s) abandoned%s\n",
 			c.At.Format(time.RFC3339), c.Listed, c.Deleted, c.Abandoned,
 			passNote(c.Completed, c.Skipped, c.Error))
@@ -158,11 +158,11 @@ func renderObjects(w io.Writer, v objectsView) error {
 	case a == nil:
 		fmt.Fprintln(&b, "Last audit:        none yet")
 	case a.Found == nil:
-		fmt.Fprintf(&b, "Last audit:        none has finished — the last, at %s, stopped: %s\n",
+		fmt.Fprintf(&b, "Last audit:        none has finished. The last, at %s, stopped: %s\n",
 			a.At.Format(time.RFC3339), a.Error)
 	default:
 		f := a.Found
-		fmt.Fprintf(&b, "Last audit:        %s — %d files named, %d missing, %d damaged%s\n",
+		fmt.Fprintf(&b, "Last audit:        %s: %d files named, %d missing, %d damaged%s\n",
 			f.At.Format(time.RFC3339), f.Referenced, f.Missing, f.Damaged, passNote(f.Completed, "", ""))
 		if a.Error != "" && a.At.After(f.At) {
 			fmt.Fprintf(&b, "                   a later audit, at %s, stopped: %s\n",

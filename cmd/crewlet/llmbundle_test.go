@@ -205,7 +205,7 @@ func TestALogoutOutlastsTheCommandsThatRestoreTheBundle(t *testing.T) {
 	if err == nil {
 		t.Error("doctor called a logged-out entry with no sign-in healthy")
 	}
-	if !strings.Contains(stdout, "removed by `crewlet llm logout`") || strings.Contains(stdout, "export the bundle again") {
+	if !strings.Contains(stdout, "removed by `crewlet llm logout`") || strings.Contains(stdout, "Export the bundle again") {
 		t.Errorf("doctor reports the logout as something else:\n%s", stdout)
 	}
 	if got := readLogin(t, login); got != "" {
@@ -274,7 +274,7 @@ func TestABundleFromAnotherCLIIsRefusedByTheCommandsThatRestoreIt(t *testing.T) 
 	if err == nil {
 		t.Error("doctor called an entry whose bundle is another CLI's healthy")
 	}
-	for _, want := range []string{`it names "codex"`, "export the bundle again (`crewlet llm export sub`)"} {
+	for _, want := range []string{`it names "codex"`, "Export the bundle again (`crewlet llm export sub`)"} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("doctor does not say %q:\n%s", want, stdout)
 		}

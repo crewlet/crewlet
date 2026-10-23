@@ -251,7 +251,7 @@ func holderOf(node string) string {
 	if node == "" {
 		return "the node that answered, which alone holds it"
 	}
-	return "node " + node + ", which alone holds it — by its own address if -api " +
+	return "node " + node + ", which alone holds it, by its own address if -api " +
 		"names one several nodes share, since any other answers 404 for it"
 }
 

@@ -286,7 +286,7 @@ func runIn(inv invocation, args []string, stdout, stderr io.Writer) (err error) 
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintf(w, `crewlet %s — an engine for hierarchically organized AI agent companies
+	fmt.Fprintf(w, `crewlet %s: an engine for hierarchically organized AI agent companies
 
 Usage:
   crewlet run [flags]         Run the engine (API, agents and workers by default)
@@ -341,8 +341,8 @@ Usage:
 Config:
   -config   Tier A, this NODE: where its broker, store and API are (default %q)
   -company  Tier B, the COMPANY: its org, providers and integrations (default %q).
-            A BOOTSTRAP seed: imported only where no company exists yet —
-            none in this node's store and none the fleet runs. Otherwise it
+            A BOOTSTRAP seed: imported only where no company exists yet
+            (none in this node's store and none the fleet runs). Otherwise it
             is ignored, loudly, and the node runs the company that exists,
             so a restart never reverts a live change. Not read at all where
             Tier A sets api.auth.company_writers.
@@ -351,7 +351,7 @@ Config:
             The deliberate "this file is the company again" gesture.
             Refused where Tier A sets api.auth.company_writers.
             To change a RUNNING fleet with no restart at all, use
-            "crewlet config import" — it goes through the node's API.
+            "crewlet config import", which goes through the node's API.
 
 Environment:
   %s
@@ -587,7 +587,7 @@ func nameTheNeighbour(path string, err error) error {
 	if _, statErr := os.Stat(neighbour); statErr != nil {
 		return err
 	}
-	return fmt.Errorf("%w\n  (%s is there — this build's Tier A default is %q; "+
+	return fmt.Errorf("%w\n  (%s is there, and this build's Tier A default is %q; "+
 		"pass it as `crewlet run %s` or with -config)",
 		err, neighbour, defaultBootstrapPath, neighbour)
 }
@@ -2110,7 +2110,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// exists.
 	directory, keyring := e.IAM(), e.IdentityKeyring()
 	if directory == nil || keyring == nil {
-		return nil, errors.New("api: the engine opened no identity estate — " +
+		return nil, errors.New("api: the engine opened no identity estate, and " +
 			"engine.New opens it on every node holding the estate, company or not")
 	}
 	// The assistant estate opens beside the identity estate (engine core),

@@ -2620,11 +2620,11 @@ index        measured on 118432 sources: 0.9812 against a 0.9800 floor in its wo
 recall       0.9761  (floor 0.9312 for this corpus size)
 worst query  0.9467
 head misses  0  (documents dropped from the exact top ten)
-scan recall  0.9803 with 0 head miss(es) — the same search with the full scan as its first stage
-narrowed     source:page      recall 0.9950  floor 0.9800  head misses 0  (25 of 25 scanned)  — scan 0.9950, 0 head miss(es)
-narrowed     source:task      recall 0.9772  floor 0.9368  head misses 0  — scan 0.9810, 0 head miss(es)
-narrowed     container:task   recall 0.9967  floor 0.9800  head misses 0  (19 of 21 scanned)  — scan 0.9967, 0 head miss(es)
-narrowed     container:page   recall 1.0000  floor 0.9800  head misses 0  (4 of 4 scanned)  — scan 1.0000, 0 head miss(es)
+scan recall  0.9803 with 0 head miss(es), from the same search with the full scan as its first stage
+narrowed     source:page      recall 0.9950  floor 0.9800  head misses 0  (25 of 25 scanned)  (scan 0.9950, 0 head miss(es))
+narrowed     source:task      recall 0.9772  floor 0.9368  head misses 0  (scan 0.9810, 0 head miss(es))
+narrowed     container:task   recall 0.9967  floor 0.9800  head misses 0  (19 of 21 scanned)  (scan 0.9967, 0 head miss(es))
+narrowed     container:page   recall 1.0000  floor 0.9800  head misses 0  (4 of 4 scanned)  (scan 1.0000, 0 head miss(es))
 verdict      the two-stage search recovers the exact ranking at the shipped depth, in every shape
 window       8192 bytes a source (the corpus's opening): a semantic search sees each source's title and body up to it, a keyword search the whole body
 past window  task  2110 of 104208 sources (2.0%), 7.4 MiB of 196.0 MiB of text (3.8%)

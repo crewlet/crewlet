@@ -83,7 +83,7 @@ func workletPurge(environ config.Source, args []string, stdout, stderr io.Writer
 	client, err := nodeClientFor(environ, rest, "worklet purge", stderr, func(fs *flag.FlagSet) {
 		reason = fs.String("reason", "", "why; recorded on the deletion marker")
 		confirm = fs.String("confirm", "",
-			"the item's KEY — this destroys the item and every row it produced")
+			"the item's KEY: this destroys the item and every row it produced")
 		opID = opIDFlag(fs,
 			"retry a purge whose outcome is unknown with the id it printed, so "+
 				"the retry cannot append a second purge; empty starts a new one")
@@ -95,7 +95,7 @@ func workletPurge(environ config.Source, args []string, stdout, stderr io.Writer
 	case item == "" || strings.TrimSpace(*confirm) == "":
 		fmt.Fprintln(stderr, workletPurgeUsage)
 		return fmt.Errorf("a purge destroys the item and every row it produced " +
-			"on every data node, and nothing undoes it — name the item's KEY in " +
+			"on every data node, and nothing undoes it. Name the item's KEY in " +
 			"-confirm to run it")
 	case strings.TrimSpace(*reason) == "":
 		return fmt.Errorf("state why in -reason: the rows are destroyed and " +
