@@ -17,7 +17,7 @@
 
 import { act, cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { CredentialPeek, provenance, Secrets } from "./Secrets.tsx";
+import { CredentialPeek, provenance, Secrets, sourceWords } from "./Secrets.tsx";
 import type { ReactElement } from "react";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -495,6 +495,12 @@ test("a credential's provenance is said as the path that wrote it", async () => 
   for (const word of ["cli", "llm-login", "rekey", "gitlab-provision"]) {
     expect(provenance(word)).toBe(`a source this build does not know (“${word}”)`);
   }
+  // THE SAME PATH IN WORDS, never a pill on every row: the list's Source
+  // column and the peek both name it the one way.
+  expect(sourceWords("api")).toBe("API");
+  expect(sourceWords("setup")).toBe("Integration setup");
+  expect(sourceWords("gitlab-provision")).toBe("gitlab-provision");
+  expect(screen.getByText("Integration setup")).toBeDefined();
 });
 
 // EACH PROPERTY ONCE. The peek's header carried Key id, Set by and Updated as
