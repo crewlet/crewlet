@@ -274,6 +274,17 @@ func (e *Engine) openCapacity(ctx context.Context, req CapacityRequest,
 		return held, nil
 	}
 
+	// A CEILING ALREADY AT THE TARGET HAS NOTHING TO CHANGE, and a window
+	// opened for it costs the fleet three restarts to reach the number it
+	// started at. The ordinary way here is the verb run again after its own
+	// window closed, its answer lost on the way back, which is the retry
+	// an operator reaches for.
+	if req.TargetMaxBytes == current.MaxBytes {
+		return coord.MaintenanceOperation{}, refused("%s's ceiling is already "+
+			"%d bytes, so there's nothing to change and no window was opened",
+			req.Stream, current.MaxBytes)
+	}
+
 	// A TARGET BELOW THE LOG'S OWN FLOOR is refused as Tier A refuses one
 	// on an explicit value of that log's field: below it the log is a
 	// window that refuses appends before anybody could act, and the floor

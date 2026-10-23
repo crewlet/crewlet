@@ -2282,8 +2282,10 @@ There the engine does not run the broker and cannot establish who else holds a
 connection to it, so the assertion is yours in your own words rather than a
 check that quietly proves nothing.
 
-A target whose ordinary ceiling is at or below what the log already holds is
-refused before the window opens, naming both numbers and the least target that
+A target the log's ceiling already is opens no window, since there's nothing
+to change: that is the verb run again after its own window closed with its
+answer lost on the way back. A target whose ordinary ceiling is at or below
+what the log already holds is refused before the window opens, naming both numbers and the least target that
 would do: that ceiling would refuse every ordinary append the moment it
 applied. On the logs that claim identity the ordinary ceiling is the target less
 its [gate reserve](../guides/retention.md#the-gate-reserve) — the larger of a
