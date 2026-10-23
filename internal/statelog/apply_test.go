@@ -1317,8 +1317,11 @@ func TestAStrictLoopWaitsForAHoleRatherThanApplyingPastIt(t *testing.T) {
 		t.Fatalf("the checkpoint is at %d, want 1 — a record above a hole must "+
 			"not be applied", got)
 	}
-	// Steady state: it must NOT advance to 3 while 2 is missing.
-	time.Sleep(100 * time.Millisecond)
+	// Steady state: it must NOT advance to 3 while 2 is missing, across two
+	// more fetches the loop has answered and handled with the hole still
+	// open. A sleep here watched nothing on a runner that let no fetch
+	// happen during it.
+	h.fetch.awaitAnswered(t, 2, "two fetches with the hole open")
 	if got := h.runner.Committed().Seq; got != 1 {
 		cancel()
 		<-errs
@@ -2543,8 +2546,20 @@ func TestARunnerRunsAgainFromTheCheckpointItNowHolds(t *testing.T) {
 	}
 	runCtx, stopRun := context.WithCancel(t.Context())
 	errs := make(chan error, 1)
+	// STOPPED ONCE IT IS RUNNING: a loop fetches only once its startup is
+	// done, so its first fetch is the loop the waiter is waiting on. A
+	// sleep here stopped, on a loaded runner, a run that had not started.
+	fetched := h.fetch.fetchCount()
 	go func() { errs <- h.runner.Run(runCtx) }()
-	time.Sleep(50 * time.Millisecond)
+	for h.fetch.fetchCount() <= fetched {
+		select {
+		case err := <-errs:
+			t.Fatalf("the second run ended before it fetched: %v", err)
+		case <-ctx.Done():
+			t.Fatal("the second run never fetched")
+		case <-time.After(time.Millisecond):
+		}
+	}
 	stopRun()
 	<-errs
 	select {
