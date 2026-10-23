@@ -227,7 +227,7 @@ func TestAWindowBeforeTheHorizonIsRefused(t *testing.T) {
 	_, err := r.Answer(everyGrant(t), "token_series", map[string]any{"since": "2026-03-01", "until": "2026-03-10"})
 	if !errors.Is(err, tokens.ErrOutOfRange) || errors.Is(err, tokens.ErrWindowLength) ||
 		!strings.Contains(queries.RefusalDetail(err), "starts 2026-03-01") ||
-		!strings.Contains(queries.RefusalDetail(err), "move since") {
+		!strings.Contains(queries.RefusalDetail(err), "Move since") {
 		t.Errorf("err = %v, want the horizon refusal naming since", err)
 	}
 	// And a custom window's previous half past the floor names days.
@@ -254,8 +254,8 @@ func TestALongWindowInsideTheHistoryIsRefusedForItsLength(t *testing.T) {
 	if errors.Is(err, tokens.ErrOutOfRange) {
 		t.Errorf("err = %v is also the horizon's class, and the window is inside it", err)
 	}
-	const want = "2026-04-26 to 2026-09-24 is 152 days, and a spend window is at most 90 — " +
-		"bring since and until closer together"
+	const want = "2026-04-26 to 2026-09-24 is 152 days, and a spend window is at most 90. " +
+		"Bring since and until closer together"
 	if got := queries.RefusalDetail(err); got != want {
 		t.Errorf("detail = %q, want %q", got, want)
 	}

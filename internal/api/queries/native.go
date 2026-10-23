@@ -818,8 +818,8 @@ func (s Sources) pageList(ctx context.Context, p Params) (any, error) {
 		After: strings.TrimSpace(p.String("after")),
 	}
 	if f.Roots && f.ParentID != "" {
-		return nil, fmt.Errorf("%w: roots and parent ask opposite questions — "+
-			"name the parent whose children you want, or roots=true for the top of the container", ErrBadParams)
+		return nil, fmt.Errorf("%w: roots and parent ask opposite questions. "+
+			"Name the parent whose children you want, or roots=true for the top of the container", ErrBadParams)
 	}
 	for _, name := range splitList(p.String("status")) {
 		status := doclet.Status(name)

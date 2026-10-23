@@ -1077,7 +1077,7 @@ func RefuseActivationUnknown(w http.ResponseWriter, e *ActivationUnknownError, e
 			"again. If it is not " + e.Stored + ", the revision is in node " + e.Node +
 			"'s history alone: send GET /config/revisions/" + e.Stored + "/diff, and POST " +
 			"/config/revisions/" + e.Stored + "/revert to make it the company, to that " +
-			"node — by its own address where a shared one fronts several, since any other " +
+			"node, by its own address where a shared one fronts several, since any other " +
 			"node holds no copy and answers 404. Sending the write again makes another " +
 			"revision",
 	})
@@ -1111,8 +1111,8 @@ func KeptRevision(e *RacedError) httpjson.Detail {
 func keptSentence(e *RacedError) string {
 	return "this write was kept, inert, as revision " + e.Stored + " in node " + e.Node +
 		"'s history alone: GET /config/revisions/" + e.Stored + "/diff and POST " +
-		"/config/revisions/" + e.Stored + "/revert reach it on that node — by its own " +
-		"address where a shared one fronts several — and any other node answers 404"
+		"/config/revisions/" + e.Stored + "/revert reach it on that node (by its own " +
+		"address where a shared one fronts several), and any other node answers 404"
 }
 
 // refuseDocument answers a refused document with its detail, its hint, and the

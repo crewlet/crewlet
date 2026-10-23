@@ -402,11 +402,11 @@ func NewSessions(deps SessionsDeps) (*Sessions, error) {
 			"same answer as refused")
 	case deps.Directory == nil:
 		return nil, errors.New("auth: the session arm needs the identity " +
-			"directory — a bearer's signature says it was minted here and " +
+			"directory: a bearer's signature says it was minted here and " +
 			"the rows say whether it is still live")
 	case deps.Applier == nil:
 		return nil, errors.New("auth: the session arm needs the identity " +
-			"applier to wait on — a sign-in answers before this node applies " +
+			"applier to wait on: a sign-in answers before this node applies " +
 			"the session it opened, so without it every write made straight " +
 			"after signing in is refused 503")
 	case deps.Chart == nil:

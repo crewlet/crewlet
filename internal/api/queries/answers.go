@@ -1312,7 +1312,7 @@ func (s Sources) events(ctx context.Context, p Params) (any, error) {
 		id, ok := s.agentSeatID(q.RelatedAgent)
 		if !ok {
 			return nil, fmt.Errorf("%w: agent %q names no agent seat in this "+
-				"company — the related filter is about an agent; a person's "+
+				"company. The related filter is about an agent; a person's "+
 				"events are the ones they acted in, under `actor`",
 				ErrBadParams, q.RelatedAgent)
 		}
@@ -1490,7 +1490,7 @@ func (s Sources) eventFilters(p Params) (store.ListQuery, error) {
 	}
 	q.Since, q.Until = since, until
 	if !since.IsZero() && !until.IsZero() && !until.After(since) {
-		return store.ListQuery{}, fmt.Errorf("%w: until (%s) is not after since (%s) — the "+
+		return store.ListQuery{}, fmt.Errorf("%w: until (%s) is not after since (%s). The "+
 			"window is half-open, so an empty one names no rows at all",
 			ErrBadParams, until.Format(time.RFC3339), since.Format(time.RFC3339))
 	}
@@ -1514,8 +1514,8 @@ func workItemParam(p Params) (string, error) {
 	}
 	backend, id, ok := strings.Cut(raw, ":")
 	if !ok || backend == "" || id == "" {
-		return "", fmt.Errorf("%w: work_item=%q is not a work item's identity — "+
-			"want `<backend>:<id>` (for example `native:<task id>` or `jira:<issue id>`), "+
+		return "", fmt.Errorf("%w: work_item=%q is not a work item's identity. "+
+			"Send `<backend>:<id>` (for example `native:<task id>` or `jira:<issue id>`), "+
 			"never its key", ErrBadParams, raw)
 	}
 	return raw, nil
@@ -1552,19 +1552,19 @@ func (s Sources) seatParam(p Params) (string, error) {
 // from.
 func (s Sources) seatAgentID(handle string) (string, error) {
 	if !org.ValidHandle(handle) {
-		return "", fmt.Errorf("%w: seat=%q is not a handle — a seat is named by "+
+		return "", fmt.Errorf("%w: seat=%q is not a handle. A seat is named by "+
 			"its handle (lowercase, as on its page), never its role name", ErrBadParams, handle)
 	}
 	organization := s.organization()
 	if organization == nil {
 		return "", fmt.Errorf("%w: seat=%q cannot be resolved until a company "+
-			"configuration is applied on this node — a seat's id is derived from "+
+			"configuration is applied on this node, since a seat's id is derived from "+
 			"the company's name", ErrUnavailable, handle)
 	}
 	if role := organization.Role(handle); role != nil {
 		id, ok := organization.AgentIDFor(role)
 		if !ok {
-			return "", fmt.Errorf("%w: seat=%q is %s, a human seat — the engine "+
+			return "", fmt.Errorf("%w: seat=%q is %s, a human seat. The engine "+
 				"runs no turns for a person, so no seat's history is filed under "+
 				"it; a person's events are the ones they acted in, under `actor`, "+
 				"and what was spent for them is a row of its own in the "+
@@ -1575,7 +1575,7 @@ func (s Sources) seatAgentID(handle string) (string, error) {
 	id, ok := org.DeriveAgentID(organization.Name, handle)
 	if !ok {
 		return "", fmt.Errorf("%w: seat=%q cannot be resolved until the company "+
-			"this node runs has a name — a seat's id is derived from it",
+			"this node runs has a name, since a seat's id is derived from it",
 			ErrUnavailable, handle)
 	}
 	return id.String(), nil

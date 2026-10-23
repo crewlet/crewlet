@@ -444,7 +444,7 @@ func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 	}
 	if !pagesShown {
 		return unavailable(KnowledgeNoAccess, "your access does not include "+
-			"Doclet, so no page was searched; an admin can give it to you")
+			"Doclet, so no page was searched. An admin can give it to you")
 	}
 	if organization == nil {
 		return unavailable(KnowledgeNoCompany, "no company configuration is active")
@@ -532,7 +532,7 @@ func searchTextRefusal(text string) error {
 		return nil
 	}
 	return refuseAs(knowledge.ErrQueryTooLong, "q is %d bytes, and a search takes at most "+
-		"%d — search on a few keywords or a phrase, not a pasted passage",
+		"%d. Search on a few keywords or a phrase, not a pasted passage",
 		tooLong.Bytes, knowledge.MaxQueryBytes)
 }
 

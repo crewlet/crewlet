@@ -77,7 +77,7 @@ func NewTokens(deps TokensDeps) (*Tokens, error) {
 	switch {
 	case deps.Directory == nil:
 		return nil, errors.New("auth: the token arm needs the identity " +
-			"directory — a token's secret says nothing until a row says whose " +
+			"directory: a token's secret says nothing until a row says whose " +
 			"it is and whether it is still live")
 	case deps.Chart == nil:
 		return nil, errors.New("auth: the token arm needs a chart seam; a nil " +

@@ -95,7 +95,7 @@ func (s Sources) spendWindowOf(p Params) (spendWindow, error) {
 			"not both", ErrBadParams)
 	case since != "" || until != "":
 		if since == "" || until == "" {
-			return w, fmt.Errorf("%w: since and until come as a pair — two company "+
+			return w, fmt.Errorf("%w: since and until come as a pair: two company "+
 				"dates, both inclusive (since=2026-06-01&until=2026-06-08)", ErrBadParams)
 		}
 		r, err := tokens.DaysBetween(since, until, loc)
@@ -108,7 +108,7 @@ func (s Sources) spendWindowOf(p Params) (spendWindow, error) {
 		}
 		if n := r.Days(); n > tokens.MaxSpendRangeDays {
 			return w, refuseAs(tokens.ErrWindowLength, "%s to %s is %d days, and a "+
-				"spend window is at most %d — bring since and until closer together",
+				"spend window is at most %d. Bring since and until closer together",
 				r.First.Label, r.Last.Label, n, tokens.MaxSpendRangeDays)
 		}
 		w.Range = r
@@ -118,15 +118,15 @@ func (s Sources) spendWindowOf(p Params) (spendWindow, error) {
 			days = p.Int("days", 0)
 			if days < 1 || days > tokens.MaxSpendRangeDays {
 				return w, refuseAs(tokens.ErrWindowLength, "days is %v, and a spend "+
-					"window is 1 to %d company days — ask for at most %d",
+					"window is 1 to %d company days. Ask for at most %d",
 					p.Values()["days"], tokens.MaxSpendRangeDays, tokens.MaxSpendRangeDays)
 			}
 		}
 		w.Range = tokens.LastDays(days, now, loc)
 	}
 	if !w.Horizon.Admits(w.Range) {
-		return w, refuseAs(tokens.ErrOutOfRange, "the window starts %s, before %s — "+
-			"the oldest day the %d-day spend history still holds on any node; move "+
+		return w, refuseAs(tokens.ErrOutOfRange, "the window starts %s, before %s, "+
+			"the oldest day the %d-day spend history still holds on any node. Move "+
 			"since to %s or later", w.Range.First.Label, w.Horizon.Floor,
 			w.Horizon.Days, w.Horizon.Floor)
 	}
@@ -137,8 +137,8 @@ func (s Sources) spendWindowOf(p Params) (spendWindow, error) {
 			// window before a long enough one starts past the floor, and
 			// the fix is a shorter window, not a different comparison.
 			return w, refuseAs(tokens.ErrOutOfRange, "the window before these %d "+
-				"days starts %s, before %s — the oldest day the %d-day spend history "+
-				"holds; ask for fewer days", w.Range.Days(), prev.First.Label,
+				"days starts %s, before %s, the oldest day the %d-day spend history "+
+				"holds. Ask for fewer days", w.Range.Days(), prev.First.Label,
 				w.Horizon.Floor, w.Horizon.Days)
 		}
 		w.Range = prev

@@ -909,8 +909,8 @@ func (s Sources) trailSeat(ctx context.Context, asked string) (memread.Seat, err
 	}
 	seat, ok := memorySeat(s.organization(), handle)
 	if !ok {
-		return memread.Seat{}, fmt.Errorf("%w: no agent seat answers to %q — "+
-			"a seat's trail is an agent's, and a person keeps none here",
+		return memread.Seat{}, fmt.Errorf("%w: no agent seat answers to %q. "+
+			"A seat's trail is an agent's, and a person keeps none here",
 			ErrNotFound, asked)
 	}
 	return seat, nil
@@ -1014,7 +1014,7 @@ func (s Sources) memoryOverview(ctx context.Context, _ Params) (any, error) {
 			switch {
 			case d.Unknown():
 				return nil, fmt.Errorf("%w: this node cannot yet decide whose "+
-					"memory the caller may read — %s on %s: %w", ErrUnavailable,
+					"memory the caller may read (%s on %s): %w", ErrUnavailable,
 					authz.ActionSeatTrailRead, seat.Handle, d.Err)
 			case d.Allowed:
 				seats = append(seats, seat)
