@@ -169,7 +169,7 @@ func (w *Writer) WriteTags(ctx context.Context, opID, project string,
 		// tidying up and the answer is "ask the lead" rather than
 		// "you cannot".
 		return WriteResult{}, forbidden("renaming or archiving a tag of %s is "+
-			"the project lead's, or a person's own — it changes the word on "+
+			"the project lead's, or a person's own: it changes the word on "+
 			"every task already filed under it, and takes a filter off "+
 			"everybody's board. Adding a tag is open to every seat", project)
 	}
@@ -279,16 +279,16 @@ func applyTagEdit(current TagSet, edit TagEdit, actor string, at time.Time) (
 		switch {
 		case slug == "":
 			return TagSet{}, nil, nil, false, invalid("a tag needs a "+
-				"name, and %q normalises to nothing — a tag slug is lowercase "+
+				"name, and %q normalises to nothing. A tag slug is lowercase "+
 				"letters, digits and hyphens", want.Label)
 		case !ValidTagSlug(slug):
 			return TagSet{}, nil, nil, false, invalid("%q is not a tag "+
-				"slug — a tag starts with a letter or a digit and carries "+
+				"slug. A tag starts with a letter or a digit and carries "+
 				"lowercase letters, digits and hyphens, up to 64 characters",
 				slug)
 		case len(label) > MaxTagLabel:
 			return TagSet{}, nil, nil, false, invalid("the tag %s is "+
-				"labelled with %d characters and at most %d are stored — a tag "+
+				"labelled with %d characters and at most %d are stored. A tag "+
 				"is rendered on every row it is on, and one this long pushes "+
 				"the title off the screen", slug, len(label), MaxTagLabel)
 		}
@@ -331,7 +331,7 @@ func applyTagEdit(current TagSet, edit TagEdit, actor string, at time.Time) (
 		at, exists := bySlug[slug]
 		if !exists {
 			return TagSet{}, nil, nil, false, invalid("%s has no tag "+
-				"%q — a rename names the tag by its SLUG, which never changes "+
+				"%q. A rename names the tag by its SLUG, which never changes "+
 				"because it is what every task's row holds",
 				current.Project, raw)
 		}
@@ -560,7 +560,7 @@ func normaliseTags(project string, raw []string) ([]string, error) {
 	}
 	if len(out) > MaxTagsPerTask {
 		return nil, invalid("%d tags on one task in %s and at most "+
-			"%d are carried — a task filed under more groupings than that is "+
+			"%d are carried. A task filed under more groupings than that is "+
 			"not grouped", len(out), project, MaxTagsPerTask)
 	}
 	return out, nil
@@ -581,11 +581,11 @@ func tagSlugs(raw []string) ([]string, error) {
 		slug := TagSlug(r)
 		switch {
 		case slug == "":
-			return nil, invalid("%q is not a tag — a tag is "+
+			return nil, invalid("%q is not a tag. A tag is "+
 				"lowercase letters, digits and hyphens, and this normalises "+
 				"to nothing", r)
 		case !ValidTagSlug(slug):
-			return nil, invalid("%q is not a tag slug — a tag "+
+			return nil, invalid("%q is not a tag slug. A tag "+
 				"starts with a letter or a digit and carries lowercase "+
 				"letters, digits and hyphens, up to 64 characters", slug)
 		case seen[slug]:
@@ -643,7 +643,7 @@ func declaredTags(ctx context.Context, tx *sql.Tx, project string, tags []string
 		case live[slug]:
 		case archived[slug]:
 			return invalid("the tag %s is archived in %s, so no "+
-				"new work is filed under it — the tasks already under it keep "+
+				"new work is filed under it. The tasks already under it keep "+
 				"it", slug, project)
 		default:
 			unknown = append(unknown, slug)
