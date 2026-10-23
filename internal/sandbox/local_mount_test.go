@@ -191,39 +191,59 @@ type stubBox struct {
 	// way rather than by ownership because a test cannot change uids, and
 	// the branch it exercises is the same one.
 	asFile bool
-	// fail makes the exec itself fail.
-	fail bool
+	// refused is the runtime refusing the exec itself, with the exit a
+	// runtime's own failure has and its own words: the container gone.
+	refused bool
+	// exit, if set, is the status the probe ends with whatever it read: 124
+	// for a probe that ran out of its time.
+	exit int
+	// execErr is the runtime that could not be run at all.
+	execErr error
+	// unmade is a box that cannot make a directory in its own home.
+	unmade bool
 }
 
 // Exec reports a failure the way a real box does: a non-zero EXIT CODE, never
 // a Go error. runHost draws the same line — an error there means the runtime
-// could not be run at all, not that the command inside it failed.
+// could not be run at all, not that the command inside it failed. The probe's
+// own two exits are the command's: the file it reads not there, and the
+// directory it makes not made.
 func (b *stubBox) Exec(context.Context, string, ExecOptions) (ExecResult, error) {
-	out, err := b.run()
-	if err != nil {
-		//nolint:nilerr // The exit code IS the report; see above.
-		return ExecResult{ExitCode: 1, Stderr: err.Error()}, nil
-	}
-	return ExecResult{Stdout: out}, nil
-}
-
-func (b *stubBox) run() (string, error) {
-	if b.fail {
-		return "", errors.New("no such container")
+	switch {
+	case b.execErr != nil:
+		return ExecResult{}, b.execErr
+	case b.refused:
+		return ExecResult{ExitCode: 1,
+			Stderr: "Error response from daemon: container crewlet-sbx-b is not running"}, nil
+	case b.exit != 0:
+		return ExecResult{ExitCode: b.exit, Stderr: "timed out after 10s"}, nil
 	}
 	out := b.token
 	if out == "" {
 		blob, err := os.ReadFile(filepath.Join(b.root, ".crewlet", "mount-probe"))
 		if err != nil {
-			return "", err
+			//nolint:nilerr // The exit code IS the report; see above.
+			return ExecResult{ExitCode: probeUnread, Stderr: err.Error()}, nil
 		}
 		out = string(blob)
 	}
+	if b.unmade {
+		return ExecResult{ExitCode: probeUnmade, Stdout: out,
+			Stderr: "mkdir: cannot create directory: Permission denied"}, nil
+	}
 	made := filepath.Join(b.root, ".crewlet", "mount-probe.d")
 	if b.asFile {
-		return out, os.WriteFile(made, nil, 0o600)
+		if err := os.WriteFile(made, nil, 0o600); err != nil {
+			//nolint:nilerr // The exit code IS the report; see above.
+			return ExecResult{ExitCode: probeUnmade, Stdout: out, Stderr: err.Error()}, nil
+		}
+		return ExecResult{Stdout: out}, nil
 	}
-	return out, os.MkdirAll(made, 0o700)
+	if err := os.MkdirAll(made, 0o700); err != nil {
+		//nolint:nilerr // The exit code IS the report; see above.
+		return ExecResult{ExitCode: probeUnmade, Stdout: out, Stderr: err.Error()}, nil
+	}
+	return ExecResult{Stdout: out}, nil
 }
 
 func TestAFaithfulMountIsAccepted(t *testing.T) {
@@ -266,12 +286,73 @@ func TestAMountOnAnotherHostIsRefused(t *testing.T) {
 	}
 }
 
-func TestAContainerThatCannotBeReachedIsRefused(t *testing.T) {
+// A PROBE THAT NEVER READ ANYTHING IS NOT A MOUNT ON ANOTHER HOST. Each way the
+// probe can fail has its own class and its own words: a runtime that refused
+// to run it is the runtime's refusal (a configuration, as every refusal of
+// the runtime's is), one that ran out of its time is the runtime not
+// answering (a wait clears it), a box that could not make a directory in its
+// own home is a mount it may not write, and a runtime this host could not
+// start at all is the host's own fault, no class. Each was told as a daemon
+// on another host, which sent an operator looking for one that was not there.
+//
+// Mutation: fold any of them back into the remote-daemon message, or class
+// the host's own failure, and its row goes red.
+func TestAProbeThatNeverReadIsToldApartFromOneThatReadElsewhere(t *testing.T) {
 	t.Parallel()
+	for name, c := range map[string]struct {
+		box     stubBox
+		why     Why
+		classed bool
+		says    string
+	}{
+		"a runtime that refused the exec": {box: stubBox{refused: true},
+			why: WhyConfiguration, classed: true, says: "refused to run"},
+		"a probe that ran out of its time": {box: stubBox{exit: 124},
+			why: WhyProviderUnavailable, classed: true, says: "did not answer its mount probe"},
+		"a home the box cannot write": {box: stubBox{unmade: true},
+			why: WhyConfiguration, classed: true, says: "cannot make a directory in its own home"},
+		"a runtime this host cannot run": {box: stubBox{execErr: errors.New(
+			`sandbox: starting "/usr/bin/docker": fork/exec: resource temporarily unavailable`)},
+			says: "could not run the container runtime"},
+	} {
+		root := t.TempDir()
+		box := c.box
+		box.root = homeOf(root)
+		err := verifyMount(t.Context(), &box, boxLayout{id: "b", root: root})
+		why, classed := WhyOf(err)
+		switch {
+		case err == nil:
+			t.Errorf("%s: verifyMount accepted it", name)
+		case strings.Contains(err.Error(), "cannot see its own box directory"):
+			t.Errorf("%s: told as a mount on another host: %v", name, err)
+		case !strings.Contains(err.Error(), c.says):
+			t.Errorf("%s: error = %v; want it to say %q", name, err, c.says)
+		case classed != c.classed || why != c.why:
+			t.Errorf("%s: classed %q (%v); want %q (%v)", name, why, classed, c.why, c.classed)
+		}
+	}
+
+	// A PROBE THAT RAN AND FOUND NOTHING THERE TO READ is the usual remote
+	// daemon, which bind-mounts a fresh empty directory of its own host: the
+	// probe's own exit for it is that, never the runtime refusing the exec.
+	// Mutation: read only a probe that read other bytes (exit 0) as a mount
+	// elsewhere, and this one is told as a refusal.
+	elsewhere := t.TempDir()
+	err := verifyMount(t.Context(), &stubBox{root: t.TempDir()}, boxLayout{id: "b", root: elsewhere})
+	if why, _ := WhyOf(err); why != WhyConfiguration ||
+		!strings.Contains(fmt.Sprint(err), "cannot see its own box directory") {
+		t.Errorf("a probe with nothing to read = %v (%q); want a mount on another host, "+
+			"a configuration", err, why)
+	}
+
+	// AND A CALLER THAT STOPPED WAITING is told as that, never as a probe
+	// that ran out of its time.
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
 	root := t.TempDir()
-	if err := verifyMount(t.Context(), &stubBox{root: homeOf(root), fail: true},
-		boxLayout{id: "b", root: root}); err == nil {
-		t.Fatal("verifyMount accepted a box whose exec failed")
+	err = verifyMount(ctx, &stubBox{root: homeOf(root), exit: 124}, boxLayout{id: "b", root: root})
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("an abandoned probe = %v; want the caller's own cancellation", err)
 	}
 }
 
@@ -356,8 +437,8 @@ exec)
   for candidate in "` + filepath.Join(stateDir, "boxes") + `"/*; do root="$candidate"; done
   [ -d "$root" ] || exit 1
   if [ "` + fmt.Sprint(faithful) + `" = false ]; then printf 'another host'; exit 0; fi
-  cat "$root/home/.crewlet/mount-probe" || exit 1
-  mkdir -p "$root/home/.crewlet/mount-probe.d" || exit 1
+  cat "$root/home/.crewlet/mount-probe" || exit 3
+  mkdir -p "$root/home/.crewlet/mount-probe.d" || exit 4
   exit 0 ;;
 rm) printf '%s' "$*" >> "` + filepath.Join(t.TempDir(), "removed") + `"; exit 0 ;;
 *) exit 0 ;;
