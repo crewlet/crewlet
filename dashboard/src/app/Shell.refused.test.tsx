@@ -212,10 +212,18 @@ test("a session holding no app is dialled, and its sidebar locks the apps by nam
 test("a session holding no app finds Settings unlocked, and Spend open in it", async () => {
   location.hash = "#/settings/spend";
   await mount(null);
-  const foot = await screen.findByRole("navigation", { name: "Settings" });
-  const settings = within(foot).getByRole("link", { name: /^Settings/ });
-  expect(settings.querySelector(".crewlet-locked-label")).toBeNull();
-  expect(settings.textContent).toBe("Settings");
+  // THE FOOT'S SETTINGS, its glyph beside the reader's own row, names no lock,
+  // and says the reader is in Settings.
+  const settings = await waitFor(() =>
+    within(document.querySelector<HTMLElement>(".crewlet-app-shell__rail-foot")!).getByRole(
+      "link",
+      {
+        name: "Settings",
+      },
+    ),
+  );
+  expect(settings.getAttribute("title")).toBe("Settings");
+  expect(settings.getAttribute("aria-current")).toBe("page");
   // AND IT OPENS WHERE THE READER MAY READ: Models & keys is Admin's, so the
   // row leads to Token spend rather than to a refusal ([landingPath]).
   await waitFor(() => expect(settings.getAttribute("href")).toBe("#/settings/spend"));

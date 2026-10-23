@@ -792,13 +792,24 @@ describe("the sidebar's figures", () => {
   });
 
   // SETTINGS IS NEVER HIDDEN; the lock is what changes.
-  test("Settings is a row for an operator without the lock", async () => {
+  test("Settings is at the foot for an operator, without the lock, and not current off Settings", async () => {
     const { store, socket } = answering({});
     mountShell(store, socket);
     await settle();
-    const foot = screen.getByRole("navigation", { name: "Settings" });
-    expect(foot.textContent).toContain("Settings");
-    expect(foot.textContent).not.toContain("operator credential");
+    const foot = document.querySelector<HTMLElement>(".crewlet-app-shell__rail-foot")!;
+    const settings = within(foot).getByRole("link", { name: "Settings" });
+    expect(settings.getAttribute("title")).toBe("Settings");
+    expect(settings.hasAttribute("aria-current")).toBe(false);
+    // BEFORE PREFERENCES, in the account row's controls.
+    const controls = [
+      ...foot.querySelectorAll(
+        ".crewlet-account-row__actions a, .crewlet-account-row__actions button",
+      ),
+    ];
+    expect(controls.map((control) => control.getAttribute("aria-label"))).toEqual([
+      "Settings",
+      "Preferences",
+    ]);
   });
 });
 

@@ -107,7 +107,7 @@ import { useOwnQueueCount } from "~/lib/useQueueCount.ts";
 import { EnginePanel, engineReading } from "./EnginePanel.tsx";
 import { RailBoundary } from "../boundaries.tsx";
 import { preload } from "../lazyScreen.ts";
-import { UserBlock } from "./UserBlock.tsx";
+import { UserBlock, type FootPlace } from "./UserBlock.tsx";
 import { goSignIn } from "~/lib/session.ts";
 import { useKeyHints } from "~/app/layout.ts";
 
@@ -241,6 +241,17 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
     running.shown.some((row) => samePath(route.path, watchLink(turnIdOf(row)).path));
 
   const lockOf = (ws: WorkspaceRow) => lockReason(held === null ? [] : workspaceMissing(ws, held));
+  const footPlace = (ws: WorkspaceRow): FootPlace => {
+    const lock = lockOf(ws);
+    return {
+      key: ws.key,
+      label: ws.label,
+      icon: <WorkspaceGlyph icon={ws.icon} />,
+      ...linkTo(landingPath(ws, held, runs)),
+      current: here === ws.key && !shortcutHere,
+      title: lock ? `${ws.label}. ${lock}` : ws.label,
+    };
+  };
   const row = (ws: WorkspaceRow) => {
     return (
       <SidebarNav.Item
@@ -313,17 +324,14 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
           />
         </RailBoundary>
       }
+      // THE FOOT IS THE READER'S OWN ROW, and the places it reaches by their
+      // glyphs (Settings) stand beside it, before Preferences: each a real
+      // link to where its row opened, saying so when the reader is there,
+      // fetching it on the pointer, and naming its lock, never hidden.
       footer={
-        <>
-          <SidebarNav label="Settings">
-            {/* THE LOCK IS ON THE ROW, NOT INSTEAD OF IT — see the module's
-                note — and drawn by the same rule as every other row's. */}
-            {shown("foot").map(row)}
-          </SidebarNav>
-          <RailBoundary label="You" resetKey={at}>
-            <UserBlock viewer={viewer} seatName={seatName} />
-          </RailBoundary>
-        </>
+        <RailBoundary label="You" resetKey={at}>
+          <UserBlock viewer={viewer} seatName={seatName} places={shown("foot").map(footPlace)} />
+        </RailBoundary>
       }
     >
       <SidebarNav label="Navigation">

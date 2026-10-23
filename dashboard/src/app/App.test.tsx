@@ -161,8 +161,9 @@ describe("the shell", () => {
     ]) {
       expect(nav.textContent, label).toContain(label);
     }
-    const foot = screen.getByRole("navigation", { name: "Settings" });
-    expect(foot.textContent).toContain("Settings");
+    // AT THE FOOT, AS ITS GLYPH beside the reader's own row: a link named in words.
+    const foot = document.querySelector<HTMLElement>(".crewlet-app-shell__rail-foot")!;
+    expect(within(foot).getByRole("link", { name: "Settings" })).toBeTruthy();
   });
 
   // A LOCK GOES WHERE THE CLOSED THING IS. This reader holds none of the
@@ -179,9 +180,10 @@ describe("the shell", () => {
         /Needs Admin/,
       ),
     );
-    const foot = screen.getByRole("navigation", { name: "Settings" });
-    expect(foot.querySelector(".crewlet-locked-label")).toBeNull();
-    expect(foot.textContent).not.toMatch(/need a grant/);
+    // The foot's Settings names no lock: its title is its name alone.
+    const foot = document.querySelector<HTMLElement>(".crewlet-app-shell__rail-foot")!;
+    const settings = within(foot).getByRole("link", { name: "Settings" });
+    expect(settings.getAttribute("title")).toBe("Settings");
   });
 });
 

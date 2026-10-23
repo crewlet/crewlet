@@ -653,8 +653,9 @@ what needs you, what reached you, what is yours. Then **Company**, what the
 company decides: who it is, the policies its agents read, its org chart, its
 schedules, the services and apps it runs, and, last, the ceilings it sets on
 what it spends. Then **Workspace**, what the company does with all of that:
-its work, what it knows, what it made and what is running. And the machine at
-the foot: Settings, the engine and the reader.
+its work, what it knows, what it made and what is running. The engine stands
+beside the company's name in the head, and the foot is the reader, with
+Settings and Preferences as glyphs beside them.
 
 | Row | Route | Figure |
 |---|---|---|
@@ -717,9 +718,11 @@ which had named different seats side by side. A seat that needs a person is not 
 nothing, and what it waits on is the Inbox's and Now running's *Waiting on a
 person*. Nothing in it ticks — no elapsed clock and no pulse per row — because
 the chrome is on every screen; the Live row's one dot says something runs, and
-these rows say which. At the foot, Settings and the **user block**. The head
-carries the company's lockup and, at the end of its line, the **engine
-panel**'s compact status.
+these rows say which. The foot is the **user block** alone, with Settings and
+Preferences as icon buttons at its end: Settings a link to where its row
+opened (the kit's `IconButtonLink`, current on a Settings page), Preferences
+its popover. The head carries the company's lockup and, at the end of its
+line, the **engine panel**'s compact status.
 
 **Every "New task" is one sheet.** A work screen's
 page-bar New task (Home, the Tasks lens, every lens of a project) and a board lane's `+` all open the
@@ -802,7 +805,7 @@ administrator is never drawn a lock on an app. A sidebar row is
 locked only when NOTHING in its workspace is open, its title naming the access
 that would open it — what a reader would ask an admin for; a workspace only
 part of which is closed draws its locks where the closed part is, which for
-Settings is its column. So the Settings row is never locked: it carried a key
+Settings is its column. So the foot's Settings is never locked: it carried a key
 whenever any section was closed, and a person holding nothing but the overview
 read Settings as closed to them while its Spend readings were theirs to
 read. A lock is drawn only once somebody has said what the reader holds,
