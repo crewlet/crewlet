@@ -1903,9 +1903,10 @@ The check is advisory: a bind or an invitation landing between it and the
 activation is not seen, and an offline `crewlet config import` asks nothing,
 which leaves the residue [`GET /iam/check`](#get-iamcheck-walks-the-whole-directory)
 reports. A node that cannot read the directory answers `503
-identity_unavailable` naming the `seats` rather than allowing it, and so does
-one holding two rows bound to a seat the write removes; a write that takes no
-human seat away never asks.
+seat_holders_unavailable` naming the `seats` rather than allowing it, and so does
+one holding two rows bound to a seat the write removes; its `detail` says what
+clears it, and a read no wait clears (an evicted node, a full log) carries no
+`Retry-After`. A write that takes no human seat away never asks.
 
 #### A lead edits their own team
 

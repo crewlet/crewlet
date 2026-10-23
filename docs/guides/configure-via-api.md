@@ -293,7 +293,7 @@ holder, each a gesture for an administrator:
 | An open invitation | Cancel it (`DELETE /iam/invitations/{invitation}`, or `crewlet iam cancel-invite <invitation>`) |
 
 Then send the write again. A node that cannot read the directory refuses such
-a write `503 identity_unavailable` rather than allowing it. An offline
+a write `503 seat_holders_unavailable` rather than allowing it. An offline
 `crewlet config import` has no directory to ask, so the binding it strands is
 reported by `crewlet iam check`, and an invitation to a seat it removed is
 refused when somebody tries to redeem it.
@@ -466,6 +466,6 @@ classified, beside the `detail` that renders them.
 | `412` | `entity_exists` | A per-entity create (`If-None-Match: *`) naming an MCP server or LLM provider the active revision already has |
 | `415` | `unsupported_patch_media_type` | A `PATCH` in a patch format other than a JSON Merge Patch, such as `application/json-patch+json` |
 | `503` | `draining` | The node has been told to stop. Nothing was written; `Retry-After` says when to try again, against a peer or against this node once it has restarted — see [During a drain](../reference/api-endpoints.md#during-a-drain) |
-| `503` | `identity_unavailable` | A write that removes a human seat, on a node that could not read the identity directory to see whether anybody holds it. Nothing was written; retry after `Retry-After` |
+| `503` | `seat_holders_unavailable` | A write that removes a human seat, on a node that could not read the identity directory to see whether anybody holds it. Nothing was written; retry after `Retry-After`, and where there is none, waiting won't change it |
 
 The full reference is in [API endpoints](../reference/api-endpoints.md).

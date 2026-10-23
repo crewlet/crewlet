@@ -340,6 +340,36 @@ describe("one reading of a /config refusal", () => {
     });
   });
 
+  // A 503 THAT STORED NOTHING. A write removing a human seat on a node that
+  // couldn't read who holds it is refused `seat_holders_unavailable`; read as
+  // unreachable, the builder settled it as a save that might have landed and
+  // showed the bare code. It is a problem on each seat the write removes, in
+  // the engine's own sentence, which says what clears it.
+  test("an unreadable seat-holder read is a problem on each seat the write removes", () => {
+    const said =
+      "This node couldn't read who holds the human seats this change removes, so nothing was written. Try again in a moment.";
+    const refusal = classifyConfigRefusal({
+      status: 503,
+      body: { error: "seat_holders_unavailable", detail: said, seats: ["sre", "qa"] },
+    });
+    expect(refusal).toMatchObject({
+      kind: "problems",
+      code: "seat_holders_unavailable",
+      derived: null,
+    });
+    if (refusal.kind !== "problems") throw new Error(refusal.kind);
+    expect(refusal.problems.map((p) => [p.seat, p.message])).toEqual([
+      ["sre", said],
+      ["qa", said],
+    ]);
+    // A body naming no seat still refuses, in the engine's own sentence.
+    const bare = classifyConfigRefusal({
+      status: 503,
+      body: { error: "seat_holders_unavailable", detail: said },
+    });
+    expect(bare).toMatchObject({ kind: "problems", problems: [{ message: said }] });
+  });
+
   // A LEAD'S WRITE IS REFUSED PART BY PART. The engine names each part that
   // reaches outside what the caller leads (`refused`), and the caller holds
   // what they need for the rest: a problem per part, on the seat or unit it
