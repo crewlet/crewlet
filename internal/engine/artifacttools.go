@@ -293,7 +293,12 @@ func (b *runBox) Open(ctx context.Context, p string) (io.ReadCloser, error) {
 			return nil, fmt.Errorf("engine: check %s in the box: %w", p, err)
 		}
 		if res.ExitCode != 0 {
-			return nil, fmt.Errorf("engine: %s is not a regular file in the coding run's workspace", p)
+			// THE CALLER'S PATH, which names nothing a publish can read:
+			// [sandbox.ErrNotRegularFile] is what the tool refuses it by,
+			// as the argument it is, where an unmarked error was told as a
+			// fault of this node.
+			return nil, fmt.Errorf("engine: %s is missing from the coding run's workspace, "+
+				"or %w", p, sandbox.ErrNotRegularFile)
 		}
 	}
 	return b.box.OpenFile(ctx, full)

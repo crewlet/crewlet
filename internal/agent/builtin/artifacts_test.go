@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
@@ -14,12 +17,15 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/artifactupload"
 	"github.com/crewlet/crewlet/internal/compact"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
@@ -672,6 +678,133 @@ func TestABoxSourceIsReadForASeatsOwnRunAlone(t *testing.T) {
 	if tools.RefusalOf(got) != tools.RefusalUnavailable {
 		t.Fatalf("a seat's box source on a node with no sandbox answered %v %q",
 			tools.RefusalOf(got), got.Output)
+	}
+}
+
+// A BOX THAT COULD NOT BE READ IS TOLD BY WHY: a path naming no file is the
+// caller's argument to change, a provider that did not answer is a wait, one
+// that refused the company's key is a person's to fix, and what nothing classed
+// is the fault of this node it is — each in the tool's words, never the
+// error's.
+//
+// Every one of those used to be told as "a fault in this node itself, not
+// something trying again clears": a model whose box E2B was slow to answer
+// gave up on a publish a retry would have landed.
+//
+// Mutation: tell a box read through nodeFailure, or drop the regular-file
+// arm, and a case goes red.
+func TestABoxReadIsToldByWhyItFailed(t *testing.T) {
+	t.Parallel()
+	const detail = "e2b: open /home/user/workspace/dist/app.js: 503: upstream at 10.0.0.7"
+	cases := []struct {
+		name  string
+		box   *fakeBox
+		boxes error
+		class tools.Refusal
+		says  string
+		waits bool
+	}{
+		{name: "a path naming no file", box: &fakeBox{files: map[string]string{}},
+			class: tools.RefusalInvalid, says: "isn't a file in your coding run's workspace"},
+		{name: "a provider that did not answer", box: &fakeBox{err: sandbox.Because(
+			sandbox.WhyProviderUnavailable, errors.New(detail))},
+			class: tools.RefusalUnavailable, says: "didn't answer", waits: true},
+		{name: "a provider at its limit", box: &fakeBox{err: sandbox.Because(
+			sandbox.WhyProviderLimit, errors.New(detail))},
+			class: tools.RefusalUnavailable, says: "Try again later", waits: true},
+		{name: "a key the provider refused", boxes: sandbox.Because(sandbox.WhyProviderRefused,
+			errors.New(detail)),
+			class: tools.RefusalUnavailable, says: "refused the company's credentials"},
+		{name: "a provider account that needs paying for", box: &fakeBox{err: sandbox.Because(
+			sandbox.WhyProviderBilling, errors.New(detail))},
+			class: tools.RefusalUnavailable, says: "needs paying for"},
+		{name: "a setup that cannot reach the box", boxes: sandbox.Because(
+			sandbox.WhyConfiguration, errors.New(detail)),
+			class: tools.RefusalUnavailable, says: "an administrator needs to fix"},
+		{name: "what nothing classed", box: &fakeBox{err: errors.New(detail)},
+			class: tools.RefusalInternalError, says: "a fault in this node"},
+		// A STREAM CUT PART WAY, which is where a box's own agent marks a
+		// stream that stopped before it said how the read ended, and the
+		// TRANSFER'S OWN READ, the second open of a file the digest read:
+		// each is the read it is, told by why it failed.
+		{name: "a read cut part way", box: &fakeBox{
+			files:  map[string]string{"dist/app.js": "console.log('built')"},
+			midErr: sandbox.Because(sandbox.WhyProviderUnavailable, errors.New(detail))},
+			class: tools.RefusalUnavailable, says: "didn't answer", waits: true},
+		{name: "the transfer's own read", box: &fakeBox{
+			files:    map[string]string{"dist/app.js": "console.log('built')"},
+			laterErr: sandbox.Because(sandbox.WhyProviderLimit, errors.New(detail))},
+			class: tools.RefusalUnavailable, says: "Try again later", waits: true},
+	}
+	for _, tc := range cases {
+		r := newArtifactRig(t, artifactChart{}, requesters{}, func(d *builtin.ArtifactDeps) {
+			d.Boxes = boxes{box: tc.box, err: tc.boxes}
+		})
+		h := r.f.seed("agent-cto", iam.ActorAgent, cto, nil, [2]string{"index.html", "x"})
+		got := r.call(t, turnFor(t, "agent-cto"), builtin.PublishArtifactTool, map[string]any{
+			"artifact": h.ID.String(), "base_version": 1,
+			"files": map[string]any{"app.js": map[string]any{"from_sandbox": "dist/app.js"}}})
+		switch {
+		case !got.Failed || tools.RefusalOf(got) != tc.class:
+			t.Errorf("%s: answered %v %q, want %v", tc.name, tools.RefusalOf(got), got.Output, tc.class)
+		case strings.Contains(got.Output, "10.0.0.7") || strings.Contains(got.Output, "503"):
+			t.Errorf("%s: the model was handed the error's own text: %q", tc.name, got.Output)
+		case !strings.Contains(got.Output, tc.says):
+			t.Errorf("%s: %q does not say %q", tc.name, got.Output, tc.says)
+		}
+		if tc.class == tools.RefusalUnavailable {
+			if waits := builtin.RetryAfter(got.Cause, time.Second) > 0; waits != tc.waits {
+				t.Errorf("%s: a wait is offered %t, want %t", tc.name, waits, tc.waits)
+			}
+		}
+		if len(r.f.publishes) != 0 {
+			t.Errorf("%s: a publish went ahead on a box that could not be read", tc.name)
+		}
+	}
+
+	// AND A BUILD'S LISTING, which a publish of a whole directory reads
+	// first, is told by the same rule.
+	r := newArtifactRig(t, artifactChart{}, requesters{}, func(d *builtin.ArtifactDeps) {
+		d.Boxes = boxes{box: &fakeBox{err: sandbox.Because(sandbox.WhyProviderUnavailable,
+			errors.New(detail))}}
+	})
+	h := r.f.seed("agent-cto", iam.ActorAgent, cto, nil, [2]string{"index.html", "x"})
+	got := r.call(t, turnFor(t, "agent-cto"), builtin.PublishArtifactTool, map[string]any{
+		"artifact": h.ID.String(), "base_version": 1, "source": map[string]any{"sandbox": "dist"}})
+	if tools.RefusalOf(got) != tools.RefusalUnavailable || !strings.Contains(got.Output, "didn't answer") ||
+		strings.Contains(got.Output, "10.0.0.7") {
+		t.Errorf("a listing the provider did not answer: %v %q", tools.RefusalOf(got), got.Output)
+	}
+}
+
+// A BOX READ A CONDITION STOPPED IS WRITTEN TO THE LOG: the model is told the
+// condition in its own words, and the error that names the store and its host
+// goes to the node's log. [builtin.nodeFailure] writes only a fault, so a
+// read a coordination store or a deadline stopped left nothing in the log
+// saying what stopped it.
+//
+// NOT PARALLEL: it reads the process's log, which [logging.Configure] owns.
+//
+// Mutation: drop the log line for an unclassed condition and this fails.
+func TestABoxReadAConditionStoppedIsLogged(t *testing.T) {
+	logs := &lockedBuffer{}
+	logging.Configure(slog.LevelInfo, logging.FormatText, logs)
+	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatConsole, os.Stderr) })
+
+	stopped := fmt.Errorf("sandbox: read run t1 at store.example.com: %w", coord.ErrUnavailable)
+	r := newArtifactRig(t, artifactChart{}, requesters{}, func(d *builtin.ArtifactDeps) {
+		d.Boxes = boxes{err: stopped}
+	})
+	h := r.f.seed("agent-cto", iam.ActorAgent, cto, nil, [2]string{"index.html", "x"})
+	got := r.call(t, turnFor(t, "agent-cto"), builtin.PublishArtifactTool, map[string]any{
+		"artifact": h.ID.String(), "base_version": 1,
+		"files": map[string]any{"app.js": map[string]any{"from_sandbox": "dist/app.js"}}})
+	if tools.RefusalOf(got) != tools.RefusalUnavailable || strings.Contains(got.Output, "store.example.com") {
+		t.Fatalf("a box read a store stopped answered %v %q, want the condition's words",
+			tools.RefusalOf(got), got.Output)
+	}
+	if line := logs.lineWith("builtin_box_read_failed"); !strings.Contains(line, "store.example.com") {
+		t.Errorf("the node's log has no line naming the error: %q\n%s", line, logs.String())
 	}
 }
 
