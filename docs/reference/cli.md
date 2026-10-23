@@ -2356,7 +2356,12 @@ admission still stopping the window's first request. From the baseline on it is
 the seal's: which acknowledgements are missing. On a fleet with no window it
 says so — *no window* and *a window in phase `opened`* are different facts with
 different next steps — and, on a node in a maintenance mode, names any node
-still holding an admission before you open one.
+still holding an admission before you open one. A window the node couldn't read is a
+third answer, never the first: the command says it couldn't read it and exits
+non-zero, and asking again once coordination answers is the remedy. When the node read the window and couldn't read its
+acknowledgements or the admissions beside it, the page says so in their place
+(`couldn't read` in the acknowledgement column, and a line saying what it can't
+tell), never a dash or an empty list.
 
 `exclude` is your assertion that a participant's **process is stopped** and
 holds no outstanding request. It is the only thing that waives an

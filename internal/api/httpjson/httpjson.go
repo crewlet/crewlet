@@ -816,7 +816,8 @@ const (
 	// where it stands, and the fault in this node's log.
 	CodeCapacityFailed Code = "capacity_failed"
 	// CodeMaintenanceUnreadable is a capacity window whose state could not
-	// be read.
+	// be read: 503 with a Retry-After, because the log was named right and
+	// asking again is the remedy.
 	CodeMaintenanceUnreadable Code = "maintenance_unreadable"
 
 	// THE FLEET BROKER'S MEMBERSHIP: the removal of a voter the metadata
@@ -1331,8 +1332,9 @@ var codes = map[Code]string{
 		"and names the operation already open when there is one.",
 	CodeCapacityFailed: "The capacity change stopped on an error, and this " +
 		"node's log says which. Read the maintenance status before going on.",
-	CodeMaintenanceUnreadable: "The maintenance window's state couldn't be " +
-		"read. Try again, and if it keeps failing, this node's log says why.",
+	CodeMaintenanceUnreadable: "Couldn't read whether a capacity window is " +
+		"open just now. Ask again in a moment, and if it keeps failing, this " +
+		"node's log says why.",
 
 	CodeVoterInvalid: "That names no voter a removal could reach, so nothing " +
 		"changed. Name it by the node id or the peer id the broker listing shows.",

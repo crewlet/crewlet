@@ -52,6 +52,10 @@ type fakeCapacityNode struct {
 	// reanchorTakes is how long the transition takes to answer — a node
 	// rebuilding its consumer on a slow metadata group.
 	reanchorTakes time.Duration
+
+	// statusUnread makes the status read answer that the node couldn't read
+	// the window, as a node does while coordination isn't answering.
+	statusUnread bool
 }
 
 func newFakeCapacityNode(t *testing.T) *fakeCapacityNode {
@@ -67,6 +71,18 @@ func newFakeCapacityNode(t *testing.T) *fakeCapacityNode {
 	})
 	mux.HandleFunc("GET /worklet/retention/maintenance", func(w http.ResponseWriter, r *http.Request) {
 		n.stream = r.URL.Query().Get("stream")
+		if n.statusUnread {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Retry-After", "2")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error": "maintenance_unreadable",
+				"detail": "Couldn't read whether a capacity window is open on " +
+					n.stream + " just now. Ask again in a moment, and if it keeps " +
+					"failing, this node's log says why.",
+			})
+			return
+		}
 		body := n.status
 		if body == nil {
 			body = map[string]any{
@@ -760,6 +776,72 @@ func TestMaintenanceStatusOnAFleetWithNoOperationSaysSo(t *testing.T) {
 	if !strings.Contains(stdout, "normal for a fleet in service") {
 		t.Errorf("the admissions are reported without saying they are expected "+
 			"on a fleet that is running:\n%s", stdout)
+	}
+}
+
+// A WINDOW THE NODE COULDN'T READ IS THE NODE'S ANSWER ABOUT THE WINDOW, not a
+// node that can't serve the page: framed as the second, "this node cannot serve
+// that" sent an operator to find another node during an outage every node
+// shares, and the sentence beside it said to ask again. Mutation: drop the
+// framing and the first want goes red.
+func TestMaintenanceStatusSaysItCouldNotReadTheWindow(t *testing.T) {
+	t.Parallel()
+	node := newFakeCapacityNode(t)
+	node.statusUnread = true
+	_, _, err := cli(t, "retention", "maintenance", "status",
+		bootstrapForURL(t, node.server.URL), "-stream", "CREWLET_TRACKER_LOG")
+	if err == nil {
+		t.Fatal("a window the node couldn't read exited zero")
+	}
+	if strings.Contains(err.Error(), "cannot serve") {
+		t.Errorf("the status read is framed as a node that can't serve it: %v", err)
+	}
+	if want := "Couldn't read whether a capacity window is open on " +
+		"CREWLET_TRACKER_LOG"; !strings.Contains(err.Error(), want) {
+		t.Errorf("the status read never says %q: %v", want, err)
+	}
+}
+
+// WHAT THE STATUS COULDN'T READ BESIDE THE WINDOW IS SAID AS THAT. The node
+// reads the window and then its acknowledgements and the admissions, and one of
+// those failing is answered beside the window rather than as the window's own
+// 503. Printed as empty, an unread acknowledgement register read as no node
+// having restarted, and unread admissions as none holding the window.
+//
+// Mutation: print a dash for an acknowledgement nobody could read, or drop
+// either line, and this fails.
+func TestMaintenanceStatusSaysWhatItCouldNotReadBesideTheWindow(t *testing.T) {
+	t.Parallel()
+	node := newFakeCapacityNode(t)
+	opened := node.op()
+	opened["phase"] = "opened"
+	node.status = map[string]any{
+		"stream": "CREWLET_TRACKER_LOG", "open": true, "mode": "maintenance",
+		"operation": opened, "acks_unread": true, "admissions_unread": true,
+	}
+	stdout, _, err := cli(t, "retention", "maintenance", "status",
+		bootstrapForURL(t, node.server.URL), "-stream", "CREWLET_TRACKER_LOG")
+	if err != nil {
+		t.Fatalf("maintenance status: %v", err)
+	}
+	for _, want := range []string{"node-1:old          couldn't read",
+		"This node couldn't read which nodes have restarted for the window just now",
+		"This node couldn't read the admissions just now"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the page never says %q:\n%s", want, stdout)
+		}
+	}
+
+	// WITH NO WINDOW, unread admissions are said too, never as none held.
+	node.status = map[string]any{"stream": "CREWLET_TRACKER_LOG", "open": false,
+		"mode": "maintenance", "admissions_unread": true}
+	stdout, _, err = cli(t, "retention", "maintenance", "status",
+		bootstrapForURL(t, node.server.URL), "-stream", "CREWLET_TRACKER_LOG")
+	if err != nil {
+		t.Fatalf("maintenance status: %v", err)
+	}
+	if want := "It couldn't read the admissions just now"; !strings.Contains(stdout, want) {
+		t.Errorf("the page never says %q:\n%s", want, stdout)
 	}
 }
 
