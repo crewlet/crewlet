@@ -23,7 +23,12 @@ import (
 //
 //   - `serve` prints where it listens and the password it minted, then serves
 //     until it is stopped — and, given OPENCODE_PASSWORD or
-//     OPENCODE_SERVER_PASSWORD, takes that as its password and prints none;
+//     OPENCODE_SERVER_PASSWORD, takes that as its password and prints none.
+//     It KEEPS ITS PASSWORD BEFORE IT SAYS ANYTHING, as a server holds the one
+//     it minted before printing it: kept after, a script that read the
+//     printed lines on a loaded runner presented the password to a fake that
+//     had not yet written down what to check it against, was refused, and
+//     the case read the refused run as a login never refreshed;
 //   - every call to the server is refused unless it presents the server's
 //     password, read as 2.0.32's client reads it: OPENCODE_PASSWORD, and
 //     OPENCODE_SERVER_PASSWORD only where that is unset;
@@ -79,10 +84,11 @@ serve)
     echo "server listening on http://127.0.0.1:4242"
     exec sleep 60
   fi
-  pw=${OPENCODE_PASSWORD:-${OPENCODE_SERVER_PASSWORD:-}}
-  echo "server listening on http://127.0.0.1:4242"
-  if [ -z "$pw" ] && [ "${FAKE_SERVE:-}" != listen-only ]; then pw=pw-secret; echo "server password $pw"; fi
+  pw=${OPENCODE_PASSWORD:-${OPENCODE_SERVER_PASSWORD:-}} minted=
+  if [ -z "$pw" ] && [ "${FAKE_SERVE:-}" != listen-only ]; then pw=pw-secret minted=1; fi
   printf '%s' "$pw" > "$d/server-password"
+  echo "server listening on http://127.0.0.1:4242"
+  [ -z "$minted" ] || echo "server password $pw"
   exec sleep 60 ;;
 api)
   authed
