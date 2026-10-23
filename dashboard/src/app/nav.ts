@@ -714,7 +714,7 @@ export const WORKSPACES: WorkspaceRow[] = [
         label: "Mentions",
         icon: "bell",
         path: ["chat", "mentions"],
-        hint: "Every message that named you — the whole away story, because nothing is sent to you",
+        hint: "Every message that named you, kept here since nothing is sent to you",
       },
       {
         key: "search",

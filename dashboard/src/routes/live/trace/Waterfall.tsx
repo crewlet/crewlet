@@ -281,7 +281,7 @@ export function Waterfall({
                     data-span={s.id}
                     tabIndex={s.id === stop ? 0 : -1}
                     aria-pressed={s.id === selected}
-                    title={`${s.label}${s.sub ? ` · ${s.sub}` : ""} — ${
+                    title={`${s.label}${s.sub ? ` · ${s.sub}` : ""}: ${
                       s.open
                         ? `running for ${fmtDuration(now - s.start)}`
                         : fmtDuration(s.end - s.start)
