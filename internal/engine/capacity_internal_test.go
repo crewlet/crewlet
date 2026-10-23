@@ -420,7 +420,7 @@ func TestACrashedNodeRestartedIntoMaintenanceLetsTheWindowProceed(t *testing.T) 
 		t.Fatal(err)
 	}
 	op := openWindow(t, coordinator)
-	if _, err := coordinator.advanceCapacity(ctx, nil, op); err == nil ||
+	if _, err := coordinator.advanceCapacity(ctx, &ceilingLog{max: 1 << 32}, op); err == nil ||
 		!strings.Contains(err.Error(), "node-a") {
 		t.Fatalf("the window went past opened while node-a's process might still "+
 			"be publishing (err %v)", err)
@@ -430,13 +430,13 @@ func TestACrashedNodeRestartedIntoMaintenanceLetsTheWindowProceed(t *testing.T) 
 	if err := restarted.handshake(ctx, streams); err != nil {
 		t.Fatal(err)
 	}
-	next, err := coordinator.advanceCapacity(ctx, nil, op)
+	next, err := coordinator.advanceCapacity(ctx, &ceilingLog{max: 1 << 32}, op)
 	if err != nil {
 		t.Fatalf("node-a restarted into maintenance mode as it was told to, and "+
 			"the window is still refused: %v", err)
 	}
-	if next.Phase != coord.PhaseBaselined {
-		t.Errorf("the window stands at %s, want baselined", next.Phase)
+	if next.Phase != coord.PhaseApplied {
+		t.Errorf("the window stands at %s, want its request applied", next.Phase)
 	}
 }
 
@@ -846,6 +846,219 @@ func TestWindowsOnTwoLogsSealInTheSameRestarts(t *testing.T) {
 	}
 }
 
+// A NODE RESTARTED BETWEEN THE BASELINE AND THE REQUEST IS NOT SEALED BY THAT
+// RESTART.
+//
+// The seal's evidence is that the process each participant was running when
+// the request left is gone. The incarnations it compares against were recorded
+// once, at the baseline, and a coordinator that stopped there left the request
+// to whoever ran the verb next, maybe much later and after other nodes had
+// restarted. Here node-b baselines and stops as its request would leave (the
+// outcome unknown), node-c is restarted into seal mode while the window waits,
+// and node-b, restarted into maintenance mode, runs the verb again, which sends
+// the request. node-c's seal-mode process was running as that request left, yet
+// its incarnation differs from the baseline's, so the seal passed on a restart
+// older than the request without node-c restarting again.
+//
+// Mutation: send the resumed request without recording who is running first
+// and the window closes with node-c never restarted after it.
+func TestARestartBeforeTheRequestDoesNotSealIt(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fleet := coordmem.NewFleet()
+	streams := []string{"CREWLET_TRACKER_LOG"}
+	nodes := []string{"node-a", "node-b", "node-c"}
+	boot := func(id, process string, mode statelog.MaintenanceMode) *Engine {
+		t.Helper()
+		e := nodeOn(fleet, id, process, mode, dataNode)
+		if err := e.handshake(ctx, streams); err != nil {
+			t.Fatal(err)
+		}
+		return e
+	}
+	for _, id := range nodes {
+		boot(id, "maintenance", statelog.ModeMaintenance)
+		if err := fleet.PutPositions(ctx, coord.NodePositions{
+			NodeID: id, At: time.Now().UTC(), Domains: map[string]coord.DomainPosition{},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// node-b BASELINES, and stops as its request would leave.
+	coordinator := nodeOn(fleet, "node-b", "maintenance", statelog.ModeMaintenance, dataNode)
+	resized := &ceilingLog{max: 1 << 32, onSet: func(uint64) error {
+		return errors.New("nats: timeout")
+	}}
+	if _, err := coordinator.driveCapacity(ctx, resized, openWindow(t, coordinator)); err == nil {
+		t.Fatal("a request whose outcome is unknown was reported as applied")
+	}
+	stopped, _, err := fleet.Maintenance(ctx, "CREWLET_TRACKER_LOG")
+	if err != nil || stopped.Phase != coord.PhaseBaselined {
+		t.Fatalf("the window stands at %s (err %v), want baselined", stopped.Phase, err)
+	}
+
+	// node-c RESTARTS INTO SEAL MODE while the window waits.
+	early := boot("node-c", "seal-early", statelog.ModeSeal)
+
+	// node-b, RESTARTED INTO MAINTENANCE MODE, runs the verb again: the
+	// request leaves now, with node-c's seal-mode process running.
+	resumed := boot("node-b", "maintenance-2", statelog.ModeMaintenance)
+	var recorded map[string]string
+	resized.onSet = func(uint64) error {
+		held, _, err := fleet.Maintenance(ctx, "CREWLET_TRACKER_LOG")
+		if err != nil {
+			return err
+		}
+		recorded = held.WriteIncarnations
+		return nil
+	}
+	applied, err := resumed.driveCapacity(ctx, resized, stopped)
+	if err != nil || applied.Phase != coord.PhaseApplied {
+		t.Fatalf("the resumed verb left %s (err %v), want applied", applied.Phase, err)
+	}
+	if recorded["node-c"] != early.incarnation || recorded["node-b"] != resumed.incarnation {
+		t.Errorf("the request left with %v recorded, want node-c as %s and node-b "+
+			"as %s, the processes running as it left", recorded,
+			early.incarnation, resumed.incarnation)
+	}
+
+	// node-a AND node-b RESTART INTO SEAL MODE; node-c does not.
+	boot("node-a", "seal", statelog.ModeSeal)
+	sealing := boot("node-b", "seal", statelog.ModeSeal)
+	pending, err := sealing.driveCapacity(ctx, resized, applied)
+	if err != nil {
+		t.Fatalf("the verb from seal mode: %v", err)
+	}
+	if _, open, _ := fleet.Maintenance(ctx, "CREWLET_TRACKER_LOG"); !open {
+		t.Fatal("the window sealed and closed on node-c's restart from before the " +
+			"request: that process was running as the request left and may hold it")
+	}
+	acks, err := fleet.MaintenanceAcks(ctx, "CREWLET_TRACKER_LOG")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, missing := statelog.SealRestarts(pending, acks); !slices.ContainsFunc(missing,
+		func(m string) bool { return strings.HasPrefix(m, "node-c ") }) {
+		t.Errorf("the seal waits on %q, want node-c named", missing)
+	}
+
+	// AND node-c's RESTART AFTER THE REQUEST is what seals it.
+	boot("node-c", "seal-2", statelog.ModeSeal)
+	if _, err := sealing.driveCapacity(ctx, resized, pending); err != nil {
+		t.Fatalf("the verb once node-c restarted again: %v", err)
+	}
+	if _, open, err := fleet.Maintenance(ctx, "CREWLET_TRACKER_LOG"); err != nil || open {
+		t.Fatalf("the window is still open once every node restarted after the "+
+			"request (open=%t, err=%v)", open, err)
+	}
+}
+
+// A READ-BACK THAT ISN'T THE TARGET SENDS ONE REQUEST AND ANSWERS.
+//
+// The window waits at `baselined` while a request's outcome is open, and from
+// maintenance mode that phase is a step that sends a request. A broker that
+// accepted the request and reads back the old ceiling left the window there,
+// written at a new revision, so the drive went round again: seven requests,
+// seven journal records for the seal to retire, and then the invariant fault
+// for a window doing exactly what the broker made it do. The drive sends one,
+// says what it read and what retires it, and leaves the request for the seal.
+//
+// Mutation: drop the refusal after the read-back and the drive sends seven
+// requests and answers the fault.
+func TestAReadBackThatIsNotTheTargetSendsOneRequestAndAnswers(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	coordinator, fleet := capacityFixture(t, "node-1", statelog.ModeMaintenance)
+	if err := coordinator.handshake(ctx, []string{"CREWLET_TRACKER_LOG"}); err != nil {
+		t.Fatal(err)
+	}
+	resized := &unmovedCeiling{ceilingLog: ceilingLog{max: 1 << 32}, was: 1 << 32}
+	answered, err := coordinator.driveCapacity(ctx, resized, openWindow(t, coordinator))
+	said, told := statelog.Tell(err)
+	if !told {
+		t.Fatalf("a read-back short of the target answered %v, want a refusal "+
+			"the operator is told", err)
+	}
+	for _, want := range []string{"reads back as 4294967296 bytes",
+		"crewlet run -mode seal", "set-capacity CREWLET_TRACKER_LOG 8589934592"} {
+		if !strings.Contains(said, want) {
+			t.Errorf("the refusal %q doesn't say %q", said, want)
+		}
+	}
+	if resized.sets != 1 {
+		t.Errorf("the drive sent %d requests, want one", resized.sets)
+	}
+	held, _, err := fleet.Maintenance(ctx, "CREWLET_TRACKER_LOG")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if held.Phase != coord.PhaseBaselined || len(held.Journal) != 1 ||
+		held.Journal[0].State != coord.JournalIssued ||
+		held.ObservedMaxBytes != 1<<32 {
+		t.Errorf("the window stands at %s with journal %+v and observed %d, want "+
+			"baselined, its one request still issued, and the ceiling it read",
+			held.Phase, held.Journal, held.ObservedMaxBytes)
+	}
+	if answered.OperationID != held.OperationID || answered.ObservedMaxBytes != 1<<32 {
+		t.Errorf("the answer carries %+v, want the window as the read-back left it",
+			answered)
+	}
+}
+
+// unmovedCeiling is a log whose broker takes every request and moves nothing:
+// its ceiling reads back as it was.
+type unmovedCeiling struct {
+	ceilingLog
+	was uint64
+}
+
+func (l *unmovedCeiling) Stats(context.Context) (jetstream.LogStats, error) {
+	return jetstream.LogStats{MaxBytes: l.was}, nil
+}
+
+// A REQUEST IS COMPLETED ONLY BY ITS OWN READ-BACK.
+//
+// Every request leaves with a journal record of its own. A node that runs the
+// verb twice, the first request ending with its outcome unknown, issues two,
+// and the second's read-back says nothing about the first, which may still be
+// in flight: completing it there resolves it by a value somebody else's
+// request set, which the journal refuses. It stays issued for the seal.
+//
+// Mutation: complete every record of the attempt the same process issued and
+// the first record reads completed.
+func TestARequestIsCompletedOnlyByItsOwnReadBack(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	coordinator, fleet := capacityFixture(t, "node-1", statelog.ModeMaintenance)
+	if err := coordinator.handshake(ctx, []string{"CREWLET_TRACKER_LOG"}); err != nil {
+		t.Fatal(err)
+	}
+	resized := &ceilingLog{max: 1 << 32, onSet: func(uint64) error {
+		return errors.New("nats: timeout")
+	}}
+	if _, err := coordinator.driveCapacity(ctx, resized, openWindow(t, coordinator)); err == nil {
+		t.Fatal("a request whose outcome is unknown was reported as applied")
+	}
+	resized.onSet = nil
+	stopped, _, err := fleet.Maintenance(ctx, "CREWLET_TRACKER_LOG")
+	if err != nil {
+		t.Fatal(err)
+	}
+	applied, err := coordinator.driveCapacity(ctx, resized, stopped)
+	if err != nil || applied.Phase != coord.PhaseApplied {
+		t.Fatalf("the second run left %s (err %v), want applied", applied.Phase, err)
+	}
+	var states []coord.JournalState
+	for _, record := range applied.Journal {
+		states = append(states, record.State)
+	}
+	if want := []coord.JournalState{coord.JournalIssued, coord.JournalCompleted}; !slices.Equal(states, want) {
+		t.Fatalf("the journal reads %v, want the first request still issued and "+
+			"the second completed", states)
+	}
+}
+
 // ceilingLog is a log a capacity window drives end to end with no broker: its
 // ceiling is what the last request set, and onSet, when given, runs as each
 // request leaves and may refuse it.
@@ -1146,8 +1359,13 @@ func toldRefusal(t *testing.T, err error) error {
 
 // TestABaselineOfNothingIsRefusedRatherThanRecorded.
 //
-// An empty baseline compares unequal to every later acknowledgement, so a
-// participant baselined at one satisfies the seal without ever restarting.
+// The record names the process each participant was running as the request
+// left, and an empty one names none: a request sent past it leaves with
+// nobody shown to have reached the procedure's first restart on that node. So
+// the window sends nothing until it can name every participant's process, and
+// says so; it used to give a reason the code can't produce, that the seal
+// could pass on a node that never came back, when the only acknowledgement a
+// seal takes is written by a later boot of that node.
 func TestABaselineOfNothingIsRefusedRatherThanRecorded(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -1159,8 +1377,8 @@ func TestABaselineOfNothingIsRefusedRatherThanRecorded(t *testing.T) {
 
 	_, _, refusal := e.capacityIncarnations(ctx, op)
 	if refusal == nil {
-		t.Fatal("a participant that never restarted was baselined at nothing, " +
-			"which the seal then satisfies without it ever coming back")
+		t.Fatal("a participant with no restart recorded was recorded at nothing, " +
+			"so a request would leave with no process named for it")
 	}
 	err := toldRefusal(t, refusal)
 	if !strings.Contains(err.Error(), "node-2") {
@@ -1183,6 +1401,9 @@ func TestABaselineOfNothingIsRefusedRatherThanRecorded(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "--exclude") || strings.Contains(err.Error(), "these nodes") {
 		t.Errorf("the refusal names a flag the CLI lacks or reads wrong for one node: %v", err)
+	}
+	if strings.Contains(err.Error(), "never came back") {
+		t.Errorf("the refusal gives a reason the seal can't produce: %v", err)
 	}
 
 	// EITHER an acknowledgement or an exclusion resolves it — and nothing
@@ -1283,7 +1504,7 @@ func TestANodeThatCameUpWhileTheWindowWaitedTakesPart(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := coordinator.advanceCapacity(ctx, nil, op); err == nil ||
+	if _, err := coordinator.advanceCapacity(ctx, &ceilingLog{max: 1 << 32}, op); err == nil ||
 		!strings.Contains(err.Error(), "node-7") {
 		t.Fatalf("the window baselined without node-7, which came up while it "+
 			"waited (err %v)", err)
@@ -1292,7 +1513,7 @@ func TestANodeThatCameUpWhileTheWindowWaitedTakesPart(t *testing.T) {
 	if err := late.handshake(ctx, streams); err != nil {
 		t.Fatal(err)
 	}
-	next, err := coordinator.advanceCapacity(ctx, nil, op)
+	next, err := coordinator.advanceCapacity(ctx, &ceilingLog{max: 1 << 32}, op)
 	if err != nil {
 		t.Fatalf("the window still refuses with node-7 acknowledged: %v", err)
 	}
@@ -1312,7 +1533,7 @@ func TestANodeThatCameUpWhileTheWindowWaitedTakesPart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := coordinator.advanceCapacity(ctx, nil, held); err == nil ||
+	if _, err := coordinator.advanceCapacity(ctx, &ceilingLog{max: 1 << 32}, held); err == nil ||
 		!strings.Contains(err.Error(), "node-9") {
 		t.Fatalf("the window dropped node-9, which it recorded at the open and "+
 			"nobody has shown stopped (err %v)", err)
@@ -1382,7 +1603,7 @@ func TestAnAdmissionStopsTheWindowsFirstRequest(t *testing.T) {
 	}
 
 	op := openWindow(t, e)
-	_, refusal := e.advanceCapacity(ctx, nil, op)
+	_, refusal := e.advanceCapacity(ctx, &ceilingLog{max: 1 << 32}, op)
 	if refusal == nil {
 		t.Fatal("the window baselined while a node held an admission")
 	}
@@ -1533,7 +1754,7 @@ func TestANodeRunningAtTheBaselineIsNamedWithTheWayOut(t *testing.T) {
 		coord.AcquireOptions{Owner: "node-9:boot-1", TTL: time.Minute}); err != nil {
 		t.Fatal(err)
 	}
-	_, refusal := e.advanceCapacity(ctx, nil, op)
+	_, refusal := e.advanceCapacity(ctx, &ceilingLog{max: 1 << 32}, op)
 	if refusal == nil {
 		t.Fatal("the window baselined over a running node's admission")
 	}
@@ -1632,12 +1853,12 @@ func TestARestartInsideItsCrashedProcesssLeaseIsRetiredByTheWindow(t *testing.T)
 	}); err != nil {
 		t.Fatal(err)
 	}
-	next, err := coordinator.advanceCapacity(ctx, nil, op)
+	next, err := coordinator.advanceCapacity(ctx, &ceilingLog{max: 1 << 32}, op)
 	if err != nil {
 		t.Fatalf("the baseline refused once node-a was retired: %v", err)
 	}
-	if next.Phase != coord.PhaseBaselined {
-		t.Errorf("the window stands at %s, want baselined", next.Phase)
+	if next.Phase != coord.PhaseApplied {
+		t.Errorf("the window stands at %s, want its request applied", next.Phase)
 	}
 }
 
@@ -1674,7 +1895,7 @@ func TestAnAdmissionWrittenBeforeTheWindowLandedIsSeen(t *testing.T) {
 	}}
 
 	op := openWindow(t, e)
-	if _, err := e.advanceCapacity(ctx, nil, op); err == nil ||
+	if _, err := e.advanceCapacity(ctx, &ceilingLog{max: 1 << 32}, op); err == nil ||
 		!strings.Contains(err.Error(), "node-9") {
 		t.Fatalf("the window baselined over a node that admitted itself just "+
 			"before the window landed, and is publishing (err %v)", err)
@@ -1721,7 +1942,7 @@ func TestAnExcludedNodesAdmissionNoLongerStopsTheWindow(t *testing.T) {
 		t.Errorf("excluded_admission_not_withdrawn = %v: an exclusion that left "+
 			"the node's admission has to say so", lines)
 	}
-	if _, err := e.advanceCapacity(ctx, nil, excluded); err != nil {
+	if _, err := e.advanceCapacity(ctx, &ceilingLog{max: 1 << 32}, excluded); err != nil {
 		t.Fatalf("an excluded node's admission still stops the window: %v", err)
 	}
 }
@@ -1760,7 +1981,7 @@ func TestADeadNodesAdmissionIsWithdrawnByExcludingIt(t *testing.T) {
 	if !slices.Contains(op.Participants, "node-a") {
 		t.Fatalf("participants = %v, want node-a among them", op.Participants)
 	}
-	if _, err := coordinator.advanceCapacity(ctx, nil, op); err == nil {
+	if _, err := coordinator.advanceCapacity(ctx, &ceilingLog{max: 1 << 32}, op); err == nil {
 		t.Fatal("the window baselined over a dead node's admission")
 	}
 
@@ -1775,12 +1996,12 @@ func TestADeadNodesAdmissionIsWithdrawnByExcludingIt(t *testing.T) {
 	if _, found, err := heldAdmission(ctx, fleet, "node-a"); err != nil || found {
 		t.Fatalf("node-a's admission outlived its exclusion (found %t, err %v)", found, err)
 	}
-	next, err := coordinator.advanceCapacity(ctx, nil, excluded)
+	next, err := coordinator.advanceCapacity(ctx, &ceilingLog{max: 1 << 32}, excluded)
 	if err != nil {
 		t.Fatalf("the window still refuses with node-a excluded: %v", err)
 	}
-	if next.Phase != coord.PhaseBaselined {
-		t.Errorf("the window stands at %s, want baselined", next.Phase)
+	if next.Phase != coord.PhaseApplied {
+		t.Errorf("the window stands at %s, want its request applied", next.Phase)
 	}
 	if _, baselined := next.WriteIncarnations["node-a"]; baselined {
 		t.Errorf("an excluded node was baselined: %+v", next.WriteIncarnations)

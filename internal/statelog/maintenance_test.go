@@ -221,6 +221,11 @@ func TestASameAttemptRecordBlocksTheSeal(t *testing.T) {
 	if !strings.Contains(missing, "unresolved") {
 		t.Fatalf("the seal refused with %q, which does not name the record", missing)
 	}
+	// AND WHEN IT WAS SENT, since one attempt can send more than one.
+	if sent := maintenanceAt.UTC().Format(time.RFC3339); !strings.Contains(missing, sent) {
+		t.Errorf("the seal refused with %q, which doesn't say the request was "+
+			"sent at %s", missing, sent)
+	}
 }
 
 // TestObservingTheTargetIsNotRetirement: a live request is not dead because
@@ -274,7 +279,8 @@ func TestRetirementLeavesAResolvedRecordAlone(t *testing.T) {
 
 // TestTheSealNeedsARestartRatherThanAnAcknowledgement: the whole barrier is
 // that the process holding a request is gone, so an ack carrying the
-// incarnation it was baselined at proves the opposite of what is needed.
+// incarnation recorded as the request left proves the opposite of what is
+// needed.
 func TestTheSealNeedsARestartRatherThanAnAcknowledgement(t *testing.T) {
 	t.Parallel()
 	op := operation(coord.PhaseSealing)
@@ -285,7 +291,7 @@ func TestTheSealNeedsARestartRatherThanAnAcknowledgement(t *testing.T) {
 		t.Fatal("the seal held on an acknowledgement from the same process that " +
 			"was baselined — that process may still be holding the request")
 	}
-	if !strings.Contains(missing, "did not restart") {
+	if !strings.Contains(missing, "hasn't restarted since") {
 		t.Fatalf("the refusal says %q, which does not name what is wrong", missing)
 	}
 }

@@ -225,7 +225,7 @@ func printOperation(stdout io.Writer, mode string, op capacityOperation, onStatu
 			fmt.Fprintln(stdout, "Waiting for the barrier.")
 		} else {
 			fmt.Fprintf(stdout, "Waiting for the barrier. `crewlet retention "+
-				"maintenance status -stream %s` names who hasn't acknowledged.\n",
+				"maintenance status -stream %s` names who it's still waiting on.\n",
 				op.Stream)
 		}
 	case "sealed":
@@ -268,9 +268,10 @@ func retentionMaintenance(environ config.Source, args []string, stdout, stderr i
 // maintenanceStatus prints the durable state, and what is holding it.
 //
 // It is the ONE place an operator can see why a fleet is still excluded: the
-// operation, its phase and attempt, every participant's incarnation against
-// the current one, which acknowledgements are missing, and any admission
-// stopping the window's first request.
+// operation, its phase and attempt, the process each participant was running
+// as the newest request left against the one it acknowledged as, which
+// acknowledgements are missing, and any admission stopping the window's first
+// request.
 func maintenanceStatus(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	var stream *string
 	client, err := nodeClientFor(environ, args, "retention maintenance status", stderr,
@@ -353,7 +354,10 @@ func maintenanceStatus(environ config.Source, args []string, stdout, stderr io.W
 	printOperation(stdout, answer.Mode, *answer.Operation, true)
 
 	w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "\nPARTICIPANT\tBASELINED AS\tACKNOWLEDGED AS\tATTEMPT\tMODE")
+	// RUNNING AT REQUEST is the process the window recorded for each node as
+	// its newest request left, which a seal acknowledgement has to differ
+	// from: recorded again with every request, it is not the baseline's.
+	fmt.Fprintln(w, "\nPARTICIPANT\tRUNNING AT REQUEST\tACKNOWLEDGED AS\tATTEMPT\tMODE")
 	acked := map[string]int{}
 	for i, ack := range answer.Acks {
 		acked[ack.NodeID] = i
@@ -376,11 +380,16 @@ func maintenanceStatus(environ config.Source, args []string, stdout, stderr io.W
 				answer.Operation.OperationID),
 			answer.Acks[i].Mode)
 	}
+	// ONE ROW PER REQUEST, with when it was sent: an attempt sends one
+	// request per run of the verb that sends one, a resumed window's
+	// included, so a row named by its attempt alone read like the row
+	// beside it.
 	if len(answer.Operation.Journal) > 0 {
-		fmt.Fprintln(w, "\nWRITE ATTEMPT\tSTATE\tBY\tEVIDENCE")
+		fmt.Fprintln(w, "\nREQUEST\tSENT\tSTATE\tBY\tEVIDENCE")
 		for _, record := range answer.Operation.Journal {
-			fmt.Fprintf(w, "attempt %d\t%s\t%s\t%s\n",
-				record.Attempt, record.State, record.By, dashIfEmpty(record.Evidence))
+			fmt.Fprintf(w, "attempt %d\t%s\t%s\t%s\t%s\n",
+				record.Attempt, stampOrDash(record.At), record.State, record.By,
+				dashIfEmpty(record.Evidence))
 		}
 	}
 	if err := w.Flush(); err != nil {

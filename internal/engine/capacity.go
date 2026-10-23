@@ -396,6 +396,13 @@ func (e *Engine) driveCapacity(ctx context.Context, resized capacityLog,
 	for range len(coord.MaintenancePhases) + 1 {
 		next, err := e.advanceCapacity(ctx, resized, op)
 		if err != nil {
+			// THE WINDOW AS THE STEP LEFT IT, where the step wrote it before
+			// it refused (a read-back that isn't the target, a verify out of
+			// attempts): the caller shows it beside the refusal, and the one
+			// this pass read would show a window from before the step.
+			if next.OperationID != "" {
+				return next, err
+			}
 			return op, err
 		}
 		if next.Phase == op.Phase && next.Revision == op.Revision {
@@ -423,10 +430,10 @@ func (e *Engine) advanceCapacity(ctx context.Context, resized capacityLog,
 		if !e.mode.WritesConfiguration() {
 			return op, nil
 		}
-		return e.baseline(ctx, op)
+		return e.request(ctx, resized, op)
 	case coord.PhaseBaselined:
 		if e.mode.WritesConfiguration() {
-			return e.apply(ctx, resized, op)
+			return e.request(ctx, resized, op)
 		}
 		return e.seal(ctx, resized, op)
 	case coord.PhaseApplied:
@@ -449,37 +456,69 @@ func (e *Engine) advanceCapacity(ctx context.Context, resized capacityLog,
 		"wrote it", op.Stream, op.Phase)
 }
 
-// baseline persists the participant set, every participant's incarnation and
-// the journal record — BEFORE any request is issued.
+// request sends the window's configuration request, and records who is running
+// immediately before it leaves: [Engine.recordRequest], then [Engine.apply], in
+// one step and never apart.
+//
+// # Why the record and the request are one step
+//
+// The seal's evidence is that the process each participant was running when a
+// request left is gone ([statelog.SealRestarts]): an acknowledgement from seal
+// mode by any other process. That holds only if the processes it compares
+// against are the ones running as the request left. They were recorded once,
+// at the baseline, and the request was a later step: a coordinator that stopped
+// between them left the request to whoever ran the verb next, maybe much later,
+// and a node restarted into seal mode in between was running as that request
+// left while differing from its baseline, so the seal passed on a restart
+// older than the request. So every request, the first and every resumed one, is
+// sent by the step that has just recorded who is running, with its own journal
+// record, and a resumed window is recorded again before its request leaves.
+func (e *Engine) request(ctx context.Context, resized capacityLog,
+	op coord.MaintenanceOperation) (coord.MaintenanceOperation, error) {
+
+	recorded, record, err := e.recordRequest(ctx, op)
+	if err != nil {
+		return op, err
+	}
+	return e.apply(ctx, resized, recorded, record)
+}
+
+// recordRequest persists the participant set, every participant's incarnation
+// and a journal record for the request about to leave, BEFORE it is issued:
+// from `opened` that is the baseline, and from `baselined` it records again for
+// a request a resumed window sends.
 //
 // The order is the whole of it. Recorded after the read-back, a crash in
 // between leaves an operation that may have written with nothing to compare
 // against, and an abandonment before any apply has no defined outcome at all.
 //
-// AND IT IS WHERE THE ADMISSIONS ARE READ ([Engine.admissionsClear]), because it
-// is the last step before a request leaves and the first that runs with the
-// window's record already written.
+// AT `opened` IT IS WHERE THE ADMISSIONS ARE READ ([Engine.admissionsClear]),
+// because it is the last step before the first request leaves and the first
+// that runs with the window's record already written. Past it no step reads
+// one: a node that boots in service finds the window and withdraws.
 //
 // # Who takes part is taken again here
 //
-// The set the window recorded when it opened, UNION the set the fleet shows
-// now ([Engine.capacityParticipants]). A window can wait at `opened` for as
-// long as an admission or a missing acknowledgement holds it, and a broker
-// member that came up in the meantime holds the request this step is about to
-// send as surely as one that was there at the open: left out, the seal never
-// waited for its restart, and its broker could apply the request after the
-// window confirmed. Never narrowed, because a node recorded at the open that
-// has gone silent since is a process nobody has shown stopped; only an
-// exclusion waives one.
-func (e *Engine) baseline(ctx context.Context, op coord.MaintenanceOperation) (
-	coord.MaintenanceOperation, error) {
+// The set the window recorded UNION the set the fleet shows now
+// ([Engine.capacityParticipants]). A window can wait at `opened` for as long as
+// an admission or a missing acknowledgement holds it, and at `baselined` for as
+// long as its coordinator is gone, and a broker member that came up in the
+// meantime holds the request this step is about to send as surely as one that
+// was there at the open: left out, the seal never waited for its restart, and
+// its broker could apply the request after the window confirmed. Never
+// narrowed, because a node recorded earlier that has gone silent since is a
+// process nobody has shown stopped; only an exclusion waives one.
+func (e *Engine) recordRequest(ctx context.Context, op coord.MaintenanceOperation) (
+	coord.MaintenanceOperation, coord.JournalRecord, error) {
 
-	if err := e.admissionsClear(ctx, op); err != nil {
-		return op, err
+	if op.Phase == coord.PhaseOpened {
+		if err := e.admissionsClear(ctx, op); err != nil {
+			return op, coord.JournalRecord{}, err
+		}
 	}
 	now, err := e.capacityParticipants(ctx)
 	if err != nil {
-		return op, err
+		return op, coord.JournalRecord{}, err
 	}
 	everyone := map[string]bool{}
 	for _, node := range append(cloneStrings(op.Participants), now...) {
@@ -489,23 +528,31 @@ func (e *Engine) baseline(ctx context.Context, op coord.MaintenanceOperation) (
 	widened.Participants = sortedKeys(everyone)
 	incarnations, participants, err := e.capacityIncarnations(ctx, widened)
 	if err != nil {
-		return op, err
+		return op, coord.JournalRecord{}, err
 	}
-	next := op
-	next.Participants = participants
-	next.WriteIncarnations = incarnations
-	next.Journal = append(cloneJournal(op.Journal), coord.JournalRecord{
+	record := coord.JournalRecord{
 		Attempt: op.Attempt, By: e.incarnation,
 		State: coord.JournalIssued, At: time.Now().UTC(),
-	})
-	next.Phase = coord.PhaseBaselined
-	if err := e.backends.Fleet.UpdateMaintenance(ctx, next); err != nil {
-		return op, err
 	}
-	log.InfoContext(ctx, "capacity_baselined", "stream", op.Stream,
-		"operation", op.OperationID, "attempt", op.Attempt,
-		"participants", participants)
-	return e.reread(ctx, op.Stream)
+	phase, err := statelog.PermitPhase(op, statelog.PhaseEvidence{
+		Now: record.At, BaselineWritten: true,
+	})
+	if err != nil {
+		return op, coord.JournalRecord{}, err
+	}
+	next := op
+	next.Phase = phase
+	next.Participants = participants
+	next.WriteIncarnations = incarnations
+	next.Journal = append(cloneJournal(op.Journal), record)
+	if err = e.backends.Fleet.UpdateMaintenance(ctx, next); err != nil {
+		return op, coord.JournalRecord{}, err
+	}
+	log.InfoContext(ctx, "capacity_request_recorded", "stream", op.Stream,
+		"operation", op.OperationID, "attempt", op.Attempt, "was", op.Phase,
+		"participants", participants, "incarnations", incarnations)
+	recorded, err := e.reread(ctx, op.Stream)
+	return recorded, record, err
 }
 
 // keepOpen decides whether a window this node has just opened may stand, now
@@ -751,7 +798,8 @@ func oneIsOrItIs(nodes []string) string {
 // establishes is that the ceiling IS the target, which is a value the broker
 // reports rather than a request it accepted.
 func (e *Engine) apply(ctx context.Context, resized capacityLog,
-	op coord.MaintenanceOperation) (coord.MaintenanceOperation, error) {
+	op coord.MaintenanceOperation, record coord.JournalRecord) (
+	coord.MaintenanceOperation, error) {
 
 	if err := resized.SetMaxBytes(ctx, op.TargetMaxBytes); err != nil {
 		return op, e.applyFailure(ctx, op, err)
@@ -770,15 +818,32 @@ func (e *Engine) apply(ctx context.Context, resized capacityLog,
 	out.Phase = next
 	out.ObservedMaxBytes = stats.MaxBytes
 	if next == coord.PhaseApplied {
-		out.Journal = completeJournal(op.Journal, op.Attempt, e.incarnation)
+		out.Journal = completeJournal(op.Journal, record)
 	}
-	if err := e.backends.Fleet.UpdateMaintenance(ctx, out); err != nil {
+	if err = e.backends.Fleet.UpdateMaintenance(ctx, out); err != nil {
 		return op, err
 	}
 	log.InfoContext(ctx, "capacity_applied", "stream", op.Stream,
 		"operation", op.OperationID, "attempt", op.Attempt,
 		"target", op.TargetMaxBytes, "observed", stats.MaxBytes, "phase", next)
-	return e.reread(ctx, op.Stream)
+	recorded, err := e.reread(ctx, op.Stream)
+	if err != nil || next == coord.PhaseApplied {
+		return recorded, err
+	}
+	// A READ-BACK THAT ISN'T THE TARGET ENDS THE DRIVE, with the request it
+	// sent left issued for the seal. The window stays at `baselined`, which
+	// in this mode is a step that sends a request, so the drive's next pass
+	// sent another, and another, each with a journal record the seal then had
+	// to retire, until the drive gave up on seven transitions and answered a
+	// window doing what the broker made it do as a fault. One drive sends one
+	// request: what settles this one is the seal, which retires it and checks
+	// the ceiling again.
+	return recorded, refused("%s's ceiling reads back as %d bytes, not the %d "+
+		"this window asked for, and its request may still land, so nothing more "+
+		"is sent from here. Restart every node with `crewlet run -mode seal`, "+
+		"then run `crewlet retention set-capacity %s %d -confirm %d` again: the "+
+		"seal checks the ceiling again", op.Stream, stats.MaxBytes,
+		op.TargetMaxBytes, op.Stream, op.TargetMaxBytes, op.TargetMaxBytes)
 }
 
 // applyFailure is what an operator is told when the configuration request did
@@ -1231,7 +1296,8 @@ func (e *Engine) reread(ctx context.Context, stream string) (
 }
 
 // capacityParticipants is who must acknowledge: read when the window opens, and
-// again at its baseline, where the two are joined ([Engine.baseline]).
+// again before every request it sends, where the two are joined
+// ([Engine.recordRequest]).
 //
 // EVERY NODE THE FLEET HAS A POSITION FOR, union every live node whose PROCESS
 // could hold an outstanding request, union this node — NOT the retention
@@ -1336,21 +1402,24 @@ func capacityMembers(held []coord.Lease) []string {
 	return out
 }
 
-// capacityIncarnations is each participant's identity as of the baseline, read
-// from the acknowledgements every maintenance-mode node writes for this log at
-// boot: bound to the window open when it booted, or WINDOWLESS where none was,
-// which is the ordinary case for a fleet restarted before the verb ran. Either
-// names the process, and that is all a baseline needs; which one the seal
-// takes is [statelog.SealRestarts]' question.
+// capacityIncarnations is each participant's identity as a request is about to
+// leave, read from the acknowledgements every maintenance-mode node writes for
+// this log at boot: bound to the window open when it booted, or WINDOWLESS
+// where none was, which is the ordinary case for a fleet restarted before the
+// verb ran. Either names the process, and that is all the record of who is
+// running needs; which one the seal takes is [statelog.SealRestarts]'
+// question.
 //
 // A PARTICIPANT WITH NO ACKNOWLEDGEMENT HAS NO RESTART RECORDED into the mode
 // ([statelog.BaselineMissing], the one rule the status pages read too), and is
-// refused rather than baselined at an empty string: an empty baseline compares
-// unequal to every later ack, so the seal would be satisfied by a node that
-// never came back. Said as no restart RECORDED rather than as no restart,
-// because a node that restarted and could not write its acknowledgement (its
-// boot could not read the window, or the write failed) is the same refusal,
-// and its own log says which.
+// refused rather than recorded at an empty string: the record names the
+// process each participant was running as the request left, and an empty one
+// names none, so a request sent past it leaves with nobody shown to have
+// reached the procedure's first restart on that node. A request leaves only
+// once every participant's process is named. Said as no restart RECORDED
+// rather than as no restart, because a node that restarted and could not write
+// its acknowledgement (its boot could not read the window, or the write
+// failed) is the same refusal, and its own log says which.
 func (e *Engine) capacityIncarnations(ctx context.Context, op coord.MaintenanceOperation) (
 	map[string]string, []string, error) {
 
@@ -1368,14 +1437,13 @@ func (e *Engine) capacityIncarnations(ctx context.Context, op coord.MaintenanceO
 			exclude = missing[0]
 		}
 		return nil, nil, refused("no restart into a maintenance mode "+
-			"is recorded for %s, so this operation has no baseline for %s. A "+
-			"baseline of nothing compares unequal to every later "+
-			"acknowledgement, which would let the seal be satisfied by a node "+
-			"that never came back. Restart %s with `-mode maintenance` (a node "+
-			"that did restart says in its log why it wasn't recorded), or if %s "+
-			"gone for good, record that with `crewlet retention maintenance "+
-			"exclude -stream %s -node %s -confirm %s`",
-			words.And(missing), itOrThem(missing), eachOrIt(missing),
+			"is recorded for %s, so the window can't record which process is "+
+			"running there before its request leaves, and it sends nothing until "+
+			"it can for every node. Restart %s with `-mode "+
+			"maintenance` (a node that did restart says in its log why it wasn't "+
+			"recorded), or if %s gone for good, record that with `crewlet "+
+			"retention maintenance exclude -stream %s -node %s -confirm %s`",
+			words.And(missing), eachOrIt(missing),
 			oneIsOrItIs(missing), op.Stream, exclude, exclude)
 	}
 	byNode := map[string]string{}
@@ -1391,12 +1459,21 @@ func (e *Engine) capacityIncarnations(ctx context.Context, op coord.MaintenanceO
 	return incarnations, op.Participants, nil
 }
 
-// completeJournal marks this attempt's own record completed, on the issuing
-// process's own read-back.
-func completeJournal(journal []coord.JournalRecord, attempt int, by string) []coord.JournalRecord {
+// completeJournal marks one request's own record completed, on its own
+// read-back.
+//
+// THAT RECORD AND NO OTHER, matched on its attempt, its issuer and the instant
+// it was written. A process that runs the verb twice issues two requests, each
+// with its own record, and the first may have ended with its outcome unknown:
+// completed on the second's read-back, it would be resolved by a value the
+// second request set while it may still be in flight, which is the retirement
+// by value the journal refuses ([coord.JournalRetired]). Only the seal
+// resolves it.
+func completeJournal(journal []coord.JournalRecord, record coord.JournalRecord) []coord.JournalRecord {
 	out := cloneJournal(journal)
 	for i := range out {
-		if out[i].Attempt == attempt && out[i].By == by && out[i].State == coord.JournalIssued {
+		if out[i].Attempt == record.Attempt && out[i].By == record.By &&
+			out[i].At.Equal(record.At) && out[i].State == coord.JournalIssued {
 			out[i].State = coord.JournalCompleted
 			out[i].ResolvedAt = time.Now().UTC()
 		}
