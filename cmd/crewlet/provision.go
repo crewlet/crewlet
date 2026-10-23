@@ -352,7 +352,9 @@ func runGitLabProvision(inv invocation, args []string, stdout, stderr io.Writer)
 			"defaults to "+publicURLDefault)
 	rotate := fs.Bool("rotate", false,
 		"mint a fresh token for every seat, including seats whose current "+
-			"one still works (the engine has to be restarted after)")
+			"one still works, and a fresh webhook signing secret into the "+
+			"variable signing_secret names wherever the hook is registered "+
+			"(the run then says what the engine needs to read them)")
 	decommission := fs.Bool("decommission", false,
 		"delete managed service accounts whose seats have left the config")
 	mode := fs.String("mode", "",

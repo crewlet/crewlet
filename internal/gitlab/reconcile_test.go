@@ -2823,15 +2823,47 @@ func TestRotateReportsASigningSecretItCannotReplace(t *testing.T) {
 		t.Fatalf("the run was refused over a signing secret it was not asked "+
 			"to rotate: %v", err)
 	}
-	var said bool
+	var said string
 	for _, note := range res.Notes {
-		if strings.Contains(note, "signing secret was left alone") {
-			said = true
+		if strings.Contains(note, "leaves the webhook signing secret alone") {
+			said = note
 		}
 	}
-	if !said {
-		t.Errorf("the run said nothing about the signing secret it could not "+
+	if said == "" {
+		t.Fatalf("the run said nothing about the signing secret it could not "+
 			"replace: %v", res.Notes)
+	}
+	// AND HOW TO REPLACE IT, both ways: give -rotate a variable to mint
+	// into, or replace the literal itself.
+	for _, want := range []string{
+		"point the field at a whole ${VAR} and re-run with -rotate",
+		"replace the literal by hand",
+	} {
+		if !strings.Contains(said, want) {
+			t.Errorf("the note does not say %q: %s", want, said)
+		}
+	}
+}
+
+// AND SO DOES THE PLAN A DRY RUN PRINTS. Describe is the line printed before
+// a run acts, and a plan for -rotate over a literal printed a plain "reused":
+// the operator heard that the flag would leave the secret in place only from
+// a real run's notes, after it had rotated every seat's token.
+func TestARotatePlanOverALiteralSaysItLeavesTheSecretAlone(t *testing.T) {
+	t.Parallel()
+	plan := gitlab.PlanSigningSecret(operatorSigningSecret, "", true, true, "api.public.external_url")
+	if plan.Action != gitlab.SigningReuse || plan.Note == "" {
+		t.Fatalf("plan = %+v, want a reuse carrying a note", plan)
+	}
+	if line := plan.Describe(); !strings.Contains(line, plan.Note) {
+		t.Errorf("the plan line does not carry the note:\n%s", line)
+	}
+	// A REUSE NOTHING LEFT IN PLACE carries no note, and its line says only
+	// that the configured secret resolves.
+	plain := gitlab.PlanSigningSecret(operatorSigningSecret, "", false, true, "api.public.external_url")
+	if plain.Note != "" || plain.Describe() !=
+		"webhook signing secret: reused — the configured one already resolves" {
+		t.Errorf("a plain reuse = %+v, %q", plain, plain.Describe())
 	}
 }
 
