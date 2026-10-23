@@ -407,6 +407,42 @@ test("an operation with nobody outstanding says it is waiting on its operator", 
   expect(screen.queryByText(/^Waiting on (?!its operator\.$)/)).toBeNull();
 });
 
+// A BLOCKED WINDOW SAYS WHY IN THE NODE'S WORDS, AND WHO ABANDONED IT, ONCE.
+// The banner printed the block's code (`abandoned_by_operator`), which told a
+// person nothing they could act on, and dropped who abandoned the window,
+// whose decision it is still carrying out. Who opened it and who abandoned it
+// each read with their credential, and nobody is named twice or inside
+// parentheses inside parentheses. Mutation: draw `op.blocked`, drop the
+// abandoning party, or wrap the opener in parentheses again, and this goes red.
+test("a blocked window says why in words and who abandoned it", () => {
+  const { container } = render(
+    <MaintenanceBanner
+      op={{
+        stream: "CREWLET_TRACKER_LOG",
+        operation_id: "op-1",
+        phase: "sealing",
+        attempt: 1,
+        target_max_bytes: 2_000_000_000,
+        original_max_bytes: 1_000_000_000,
+        since: new Date(Date.now() - 60_000).toISOString(),
+        by: "sre@example.com",
+        operator_id: "pat:0191",
+        blocked: "abandoned_by_operator",
+        blocked_detail: "This window was abandoned, so it's no longer trying to reach 1.9 GiB.",
+        abandoned_by: { by: "ana.admin", operator_id: "pat:0192" },
+      }}
+      now={Date.now()}
+    />,
+  );
+  const text = container.textContent ?? "";
+  expect(text).toContain("This window was abandoned");
+  expect(text).toContain("Abandoned by ana.admin (through pat:0192).");
+  expect(text.split("ana.admin").length - 1).toBe(1);
+  expect(text).toContain(", run by sre@example.com (through pat:0191). Resizing");
+  expect(text).not.toContain("((");
+  expect(text).not.toContain("abandoned_by_operator");
+});
+
 // A WINDOW THE NODE COULDN'T READ IS SAID, AND NAMED. Left out, a log whose
 // window the coordination read couldn't answer drew no banner, which reads as a
 // log with no window open during exactly the outage that stops the read.

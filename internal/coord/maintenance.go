@@ -136,6 +136,44 @@ func (p MaintenancePhase) Valid() bool {
 	return false
 }
 
+// MaintenanceBlock is why a capacity operation can't go on without a person,
+// as the operation carries it.
+//
+// A CODE FOR SCRIPTS, NEVER FOR A PERSON: the record carries it, and the API
+// and the report carry it on, so a script can branch on it. What a person
+// reads is statelog.BlockedDetail, one sentence per block saying who blocked
+// the window and what clears it, which a test holds to every block declared
+// here: printed raw, `capacity_operation_unsealed` told an operator at an
+// inconvenient hour nothing they could act on.
+type MaintenanceBlock string
+
+const (
+	// BlockAbandoned is an operation an operator abandoned
+	// (statelog.AbandonPhase). It no longer tries to reach its target, and
+	// closes once its seal holds, at whatever ceiling the log has then
+	// (statelog.Verifies).
+	BlockAbandoned MaintenanceBlock = "abandoned_by_operator"
+
+	// BlockUnsealed is an operation that used every attempt at its target
+	// and still finds another ceiling (statelog.NextAttempt).
+	BlockUnsealed MaintenanceBlock = "capacity_operation_unsealed"
+)
+
+// MaintenanceBlocks are the blocks this build writes.
+var MaintenanceBlocks = []MaintenanceBlock{BlockAbandoned, BlockUnsealed}
+
+// Valid reports whether a block off the wire is one this build knows. The
+// empty block is no block, and not valid: an operation that isn't blocked
+// carries none.
+func (b MaintenanceBlock) Valid() bool {
+	for _, known := range MaintenanceBlocks {
+		if b == known {
+			return true
+		}
+	}
+	return false
+}
+
 // Index is a phase's position in the order, or -1.
 func (p MaintenancePhase) Index() int {
 	for i, known := range MaintenancePhases {
@@ -274,7 +312,7 @@ type MaintenanceOperation struct {
 
 	// Blocked names why the operation cannot proceed without a person,
 	// empty while it can.
-	Blocked string `json:"blocked,omitempty"`
+	Blocked MaintenanceBlock `json:"blocked,omitempty"`
 
 	// AbandonedBy is who abandoned the operation, and zero until somebody
 	// does. An abandonment that may have left a request outstanding keeps

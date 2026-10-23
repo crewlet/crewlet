@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE CAPACITY OPERATION'S STATE MACHINE, and it is the ONLY place its phases,
@@ -90,19 +91,6 @@ import (
 // three identical attempts is a broker that is not applying what it accepts,
 // which is a person's problem rather than a retry's.
 const ControlRaiseAttempts = 3
-
-// Why a capacity operation can't go on without a person, as its Blocked field
-// carries it.
-const (
-	// BlockedAbandoned is an operation an operator abandoned ([AbandonPhase]).
-	// It no longer tries to reach its target, and closes once its seal
-	// holds, at whatever ceiling the log has then ([Verifies]).
-	BlockedAbandoned = "abandoned_by_operator"
-
-	// BlockedUnsealed is an operation that used every attempt at its target
-	// and still finds another ceiling ([NextAttempt]).
-	BlockedUnsealed = "capacity_operation_unsealed"
-)
 
 // MaintenanceMode is what a node started for.
 type MaintenanceMode string
@@ -433,7 +421,7 @@ func describeBarrier(ev BarrierEvidence) string {
 
 // Verifies reports whether the verify after the seal confirms op at the
 // ceiling observed: the target exactly, or, for an operation an operator
-// abandoned ([BlockedAbandoned]), whatever the seal found.
+// abandoned ([coord.BlockAbandoned]), whatever the seal found.
 //
 // AN ABANDONED OPERATION NO LONGER TRIES TO REACH ITS TARGET, which is what
 // abandoning it means. It crosses the seal only because a request it sent may
@@ -442,7 +430,7 @@ func describeBarrier(ev BarrierEvidence) string {
 // another attempt at the target the operator had given up on, and the next
 // step it named was sending the request again.
 func Verifies(op coord.MaintenanceOperation, observed uint64) bool {
-	return observed == op.TargetMaxBytes || op.Blocked == BlockedAbandoned
+	return observed == op.TargetMaxBytes || op.Blocked == coord.BlockAbandoned
 }
 
 // NextAttempt is what a failed verify produces: the SAME immutable target
@@ -467,13 +455,13 @@ func NextAttempt(op coord.MaintenanceOperation, observed uint64,
 	if op.Attempt >= ControlRaiseAttempts {
 		out := op
 		out.ObservedMaxBytes = observed
-		out.Blocked = BlockedUnsealed
-		return out, &Telling{Say: fmt.Sprintf("the capacity operation on %s has "+
-			"used all %d attempts at %d bytes and the broker reports %d, so it "+
-			"needs a person now. `crewlet retention maintenance status -stream "+
-			"%s` names the attempt count and every participant that didn't "+
-			"acknowledge", op.Stream, ControlRaiseAttempts, op.TargetMaxBytes,
-			observed, op.Stream)}
+		out.Blocked = coord.BlockUnsealed
+		// THE SAME SENTENCE EVERY SURFACE SHOWS FOR THE BLOCK
+		// ([BlockedDetail]): the verb's refusal sent the reader to the
+		// status page for every participant that didn't acknowledge, which
+		// is nobody at a window that has sealed, while the page beside it
+		// gave other advice.
+		return out, &Telling{Say: BlockedDetail(out, nil, nil)}
 	}
 	out := op
 	out.Attempt++
@@ -487,6 +475,92 @@ func NextAttempt(op coord.MaintenanceOperation, observed uint64,
 	out.Journal = slices.Clone(op.Journal)
 	_ = now
 	return out, nil
+}
+
+// BlockedDetail is why op can't go on without a person, in the words a person
+// reads: what blocked it and what clears it, with every command as the CLI
+// takes it. Empty while it isn't blocked. acks and acksErr are the window's
+// acknowledgements as the caller read them, or why they couldn't be read.
+//
+// EVERY SURFACE THAT SHOWS A BLOCK SHOWS THIS, never the code: the report
+// carries it beside the code (the dashboard's banner and `crewlet retention
+// status` read it from there), and so does every API answer that carries an
+// operation (`crewlet retention maintenance status` and the gestures), and the
+// verb's own refusal says it ([NextAttempt]). The code stays on the record and
+// the answers for scripts. ONE SENTENCE PER BLOCK, written here because the
+// block's meaning is this package's, and held to [coord.MaintenanceBlocks] by a
+// test, so a block a later change adds reaches nobody raw. A block this build
+// doesn't know is a newer peer's, and says so rather than guessing.
+//
+// WHO ABANDONED A WINDOW IS NOT SAID HERE: every surface prints the abandoning
+// party beside this sentence with the credential they used, and said in both,
+// one banner named them twice.
+//
+// # What closes an abandoned window is the seal's to say
+//
+// Abandoning puts a window back at `sealing` from wherever it was
+// ([AbandonPhase]), one already sealed included, so the phase can't say whether
+// the fleet still has to restart: decided by it, a window abandoned out of
+// attempts, whose fleet was already in seal mode with its acknowledgements
+// recorded, sent the operator into a fleet-wide restart that changed nothing.
+// The seal's own rule over the acknowledgements ([SealOutstanding]) says which
+// nodes it still waits on, and none means set-capacity closes it now.
+//
+// # Out of attempts
+//
+// Nothing sends the target again once the last attempt's verify has failed
+// ([NextAttempt] blocks it again on every run), so "run set-capacity again" was
+// advice that could not work. What closes the window is abandoning it, and the
+// seal its acknowledgements already hold then lets set-capacity close it at the
+// ceiling the log has.
+func BlockedDetail(op coord.MaintenanceOperation, acks []coord.MaintenanceAck,
+	acksErr error) string {
+
+	setCapacity := fmt.Sprintf("`crewlet retention set-capacity %s %d -confirm %d`",
+		op.Stream, op.TargetMaxBytes, op.TargetMaxBytes)
+	switch op.Blocked {
+	case "":
+		return ""
+	case coord.BlockAbandoned:
+		said := fmt.Sprintf("This window was abandoned, so it's no longer trying "+
+			"to reach %s.", bytesHuman(int64(op.TargetMaxBytes)))
+		if op.Phase == coord.PhaseSealed || op.Phase == coord.PhaseConfirmed {
+			return said + fmt.Sprintf(" Run %s to close it at the ceiling the "+
+				"log has.", setCapacity)
+		}
+		if acksErr != nil {
+			return said + fmt.Sprintf(" It closes at the ceiling the log has once "+
+				"its seal holds and %s runs again. This node couldn't read which "+
+				"nodes have restarted for the seal, so `crewlet retention "+
+				"maintenance status -stream %s` says whether it holds yet.",
+				setCapacity, op.Stream)
+		}
+		waiting := SealOutstanding(op, acks)
+		if len(waiting) == 0 {
+			return said + fmt.Sprintf(" Its seal is waiting on no node, so %s "+
+				"closes it at the ceiling the log has.", setCapacity)
+		}
+		restarted := "has restarted"
+		if len(waiting) > 1 {
+			restarted = "have restarted"
+		}
+		return said + fmt.Sprintf(" It closes at the ceiling the log has once %s "+
+			"%s with `crewlet run -mode seal` and %s runs again.",
+			words.And(waiting), restarted, setCapacity)
+	case coord.BlockUnsealed:
+		target, observed := bytesHuman(int64(op.TargetMaxBytes)),
+			bytesHuman(int64(op.ObservedMaxBytes))
+		return fmt.Sprintf("Crewlet stopped after %d attempts at %s, because the "+
+			"broker still reports %s, and it won't send the change again. To close "+
+			"the window at %s, abandon it with `crewlet retention maintenance "+
+			"abandon -stream %s -confirm %s`, then run %s from a node started with "+
+			"`crewlet run -mode seal`. If the log still needs %s, find out why the "+
+			"broker won't take it, then open a new window for it.",
+			ControlRaiseAttempts, target, observed, observed, op.Stream,
+			op.OperationID, setCapacity, target)
+	}
+	return "It's blocked for a reason this build of Crewlet doesn't know. A node " +
+		"running the newer build that blocked it can say why."
 }
 
 // AbandonPhase is where an operator's abandonment goes from here.
