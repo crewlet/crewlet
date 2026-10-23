@@ -152,8 +152,8 @@ func (t *steerTurn) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (tools.Result, error) {
 
 	if t.deps.Asker == nil || t.deps.Actor == nil || t.deps.Wire == nil {
-		return refused(tools.RefusalUnavailable, SteerTurnTool+" is unavailable: "+
-			"this surface was built without a way to reach the fleet."), nil
+		return refusedBy(tools.RefusalUnavailable, waitless(), SteerTurnTool+
+			" is unavailable: this surface was built without a way to reach the fleet."), nil
 	}
 	actor, err := t.deps.Actor(ctx, turn)
 	if err != nil {
@@ -276,7 +276,7 @@ func (t *steerTurn) maySteer(ctx context.Context, turnID string) *tools.Result {
 	case !answered:
 		// NOTHING WAS OFFERED, so this is not the offer's `unknown`: no
 		// note is in flight to be uncertain about.
-		return refusalOf(refused(tools.RefusalUnavailable, fmt.Sprintf("No node "+
+		return refusalOf(refusedBy(tools.RefusalUnavailable, waits(), fmt.Sprintf("No node "+
 			"answered for turn %s within %s: it is not running anywhere, or the node "+
 			"running it did not answer in time. Nothing was sent; try again.",
 			clip(turnID), SteerAskBudget)))
@@ -285,7 +285,7 @@ func (t *steerTurn) maySteer(ctx context.Context, turnID string) *tools.Result {
 	}
 	owner, named := t.seatOf(reply)
 	if !named {
-		return refusalOf(refused(tools.RefusalUnavailable, fmt.Sprintf("The node "+
+		return refusalOf(refusedBy(tools.RefusalUnavailable, waits(), fmt.Sprintf("The node "+
 			"running turn %s could not name the seat it runs for, so whether you may "+
 			"steer it cannot be decided. Nothing was sent; try again shortly.",
 			clip(turnID))))

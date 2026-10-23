@@ -144,7 +144,7 @@ func (t *lookupColleague) CallForTurn(_ context.Context, turn *turnctx.Turn, arg
 		return failed(LookupColleagueTool + " needs a `query`: a handle, a role name, or an id on any connected platform."), nil
 	}
 	if turn == nil || turn.Org == nil {
-		return refused(tools.RefusalUnavailable,
+		return refusedBy(tools.RefusalUnavailable, waitless(),
 			"No organization is in scope, so there is nobody to look up."), nil
 	}
 

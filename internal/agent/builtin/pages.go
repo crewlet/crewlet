@@ -215,7 +215,7 @@ func (d PageDeps) maySkillPage(ctx context.Context, container string) *tools.Res
 
 // unconfiguredKB is the refusal when the company does not run Doclet.
 func unconfiguredKB(name string) tools.Result {
-	return refused(tools.RefusalUnavailable, name+" is unavailable: this "+
+	return refusedBy(tools.RefusalUnavailable, waitless(), name+" is unavailable: this "+
 		"company does not run Doclet. Use the tools your company has "+
 		"configured.")
 }
