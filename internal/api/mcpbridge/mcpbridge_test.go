@@ -3,6 +3,7 @@ package mcpbridge_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -35,6 +36,8 @@ type stubTool struct {
 	name string
 	out  string
 	fail bool
+	// err is a call that could not run at all: the turn torn down.
+	err error
 
 	mu   sync.Mutex
 	args []map[string]any
@@ -56,6 +59,9 @@ func (s *stubTool) Call(_ context.Context, args map[string]any) (tools.Result, e
 	s.mu.Lock()
 	s.args = append(s.args, args)
 	s.mu.Unlock()
+	if s.err != nil {
+		return tools.Result{}, s.err
+	}
 	out := s.out
 	if out == "" {
 		out = s.name + " ok"
@@ -539,6 +545,34 @@ func TestAFailingToolComesBackWithItsReason(t *testing.T) {
 	res := callTool(t, sess, "post_message", map[string]any{})
 	if !res.IsError || text(res) != "the channel is archived" {
 		t.Fatalf("result = %+v / %q", res.IsError, text(res))
+	}
+}
+
+// A CALL THAT COULD NOT RUN AT ALL IS TOLD IN WORDS OF ITS OWN: the turn the
+// run belongs to was torn down, which the protocol carries as an error to the
+// coding agent in the box, a model, and it carried the Go error's text whole.
+//
+// Mutation: wrap the error into the protocol error again and this fails.
+func TestACallThatCouldNotRunIsToldInWordsNotItsError(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.byName["post_message"].err = fmt.Errorf("toolloop: %w", context.Canceled)
+	sess := dial(t, f.open(t))
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	res, err := sess.CallTool(ctx, &mcp.CallToolParams{Name: "post_message",
+		Arguments: map[string]any{}})
+	said := ""
+	switch {
+	case err != nil:
+		said = err.Error()
+	case res != nil:
+		said = text(res)
+	}
+	if !strings.Contains(said, "the turn this coding run belongs to has ended") ||
+		strings.Contains(said, "context canceled") || strings.Contains(said, "toolloop") {
+		t.Errorf("a call that could not run was told %q", said)
 	}
 }
 

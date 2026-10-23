@@ -674,9 +674,15 @@ func (s *Session) handler(name string) mcp.ToolHandler {
 			// genuinely could not run — a torn-down turn. That IS a
 			// protocol error: there is nothing for the caller to fix
 			// and nothing to retry against.
+			//
+			// IN WORDS OF ITS OWN, never the error's: the caller is the
+			// coding agent in the box, a model, and the error was a Go
+			// error's text ("context canceled") the protocol carried to
+			// it whole. The error goes to this node's log.
 			log.ErrorContext(ctx, "mcp_bridge_dispatch_failed",
 				"run_id", s.RunID, "seat", s.Handle, "tool", name, "error", err)
-			return nil, fmt.Errorf("crewlet: %s: %w", name, err)
+			return nil, fmt.Errorf("crewlet: %s didn't run, because the turn this coding "+
+				"run belongs to has ended", name)
 		}
 		if res.Suspend {
 			// A SUSPEND CANNOT CROSS THIS BOUNDARY. It stops the
