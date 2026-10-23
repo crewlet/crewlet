@@ -5,9 +5,11 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -142,11 +144,35 @@ type scriptRun struct {
 	document, brief string
 }
 
+// signalsDeliverable gives every script this file starts the default action
+// for SIGHUP and SIGINT, however the test binary itself was started.
+//
+// A signal ignored when a process starts is ignored in everything it execs,
+// and a non-interactive sh may not trap one it was started ignoring: POSIX
+// says so, and dash, bash and busybox ash all comply. So a suite run under
+// nohup (SIGHUP) or as a background job of a script (SIGINT) handed every
+// script a signal it could neither trap nor die of, and the cases about that
+// signal failed on how the runner was started rather than on the script:
+// under nohup each hangup case waited out its whole bound.
+//
+// Go hands an ignored SIGHUP or SIGINT on to the processes it starts, and
+// resets every signal it HANDLES to the default in them, so asking os/signal
+// for the two is what gives them back. Only where they are ignored: a handler
+// on one that is not would stop an interrupt ending the test binary.
+var signalsDeliverable = sync.OnceFunc(func() {
+	for _, sig := range []os.Signal{syscall.SIGHUP, syscall.SIGINT} {
+		if signal.Ignored(sig) {
+			signal.Notify(make(chan os.Signal, 1), sig)
+		}
+	}
+})
+
 // startScript starts the script under a real sh — o.shell, the sh on PATH
 // where that is unset — the way the wrapper does: the brief on stdin, stdout
 // the event stream.
 func startScript(t *testing.T, o scriptOpts) *scriptJob {
 	t.Helper()
+	signalsDeliverable()
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")
 	bin := filepath.Join(dir, "bin")
