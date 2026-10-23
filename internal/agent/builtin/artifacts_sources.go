@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactupload"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tools/argval"
 	"github.com/crewlet/crewlet/internal/words"
@@ -298,8 +299,7 @@ func (s *fileSources) openBox(ctx context.Context) (ArtifactBox, *tools.Result) 
 			"build into a directory with "+RunSandboxTool+", then publish from it in the same turn.")
 		return nil, &r
 	case err != nil:
-		r := nodeFailure(ctx, s.tool, err, "Could not reattach the coding run's box",
-			"Nothing was published.")
+		r := boxFailure(ctx, s.tool, err, "Could not reattach the coding run's box")
 		return nil, &r
 	}
 	s.box = box
@@ -352,8 +352,7 @@ func (s *fileSources) addBoxDir(ctx context.Context, raw string) *tools.Result {
 	}
 	listed, err := box.Files(ctx, dir, artifacts.MaxFilesPerVersion+1)
 	if err != nil {
-		r := nodeFailure(ctx, s.tool, err, "Could not list "+dir+" in the coding run's box",
-			"Nothing was published.")
+		r := boxFailure(ctx, s.tool, err, "Could not list "+dir+" in the coding run's box")
 		return &r
 	}
 	switch {
@@ -407,14 +406,23 @@ func (s *fileSources) digest(ctx context.Context, from string,
 
 	rc, err := open(ctx)
 	if err != nil {
-		r := nodeFailure(ctx, s.tool, err, "Could not read "+from, "Nothing was published.")
+		// A PATH THAT NAMES NO FILE is the caller's to change: a box streams
+		// only a regular file, and one that is missing, a directory or a
+		// link is refused by name. It was told as a fault of this node.
+		if errors.Is(err, sandbox.ErrNotRegularFile) {
+			r := failed(fmt.Sprintf("%s: %s isn't a file in your coding run's workspace: "+
+				"it's missing, or it's a directory or a link. Name a file the run wrote. "+
+				"Nothing was published.", s.tool, from))
+			return nil, &r
+		}
+		r := boxFailure(ctx, s.tool, err, "Could not read "+from)
 		return nil, &r
 	}
 	defer func() { _ = rc.Close() }()
 	h := sha256.New()
 	n, err := io.Copy(h, io.LimitReader(rc, artifacts.MaxTextFileBytes+1))
 	if err != nil {
-		r := nodeFailure(ctx, s.tool, err, "Could not read "+from, "Nothing was published.")
+		r := boxFailure(ctx, s.tool, err, "Could not read "+from)
 		return nil, &r
 	}
 	if n > artifacts.MaxTextFileBytes {
@@ -561,7 +569,7 @@ func (s *fileSources) transfer(ctx context.Context, call artifactsdomain.Call, u
 
 	rc, err := f.stream.open(ctx)
 	if err != nil {
-		r := nodeFailure(ctx, s.tool, err, "Could not read "+f.stream.from, "Nothing was published.")
+		r := boxFailure(ctx, s.tool, err, "Could not read "+f.stream.from)
 		return &r
 	}
 	defer func() { _ = rc.Close() }()
@@ -602,4 +610,66 @@ func streamedInline(f artifactFile) artifactFile {
 		}, from: "the inline content of " + f.path}
 	f.inline = nil
 	return f
+}
+
+// boxFailure is a read of a publish's source that failed, nothing having been
+// published, as a model is told it: by the class the sandbox backend marked the failure with
+// ([sandbox.WhyOf]) — the box's provider not answering, at a limit, refusing
+// the company's key, or a setup that cannot reach the box — and otherwise as
+// the condition or fault of this node it is ([nodeFailure]), which is every
+// read that is not of a box: a project's file reads the object store.
+//
+// A PROVIDER'S OUTAGE IS NOT THIS NODE'S FAULT. Every such failure was told as
+// one, "not something trying again clears", so a publish whose box E2B was
+// slow to answer was abandoned by a model told that waiting would not help.
+// The error itself goes to the node's log here, as a fault's does in
+// [faulted].
+func boxFailure(ctx context.Context, tool string, err error, stopped string) tools.Result {
+	const fact = "Nothing was published."
+	why, classed := sandbox.WhyOf(err)
+	switch {
+	case ctx.Err() != nil:
+		// The call's own context ended: told as that, whatever the
+		// provider's request it ended said.
+		log.WarnContext(ctx, "builtin_box_read_failed", "tool", tool, "error", err.Error())
+		return nodeFailure(ctx, tool, ctx.Err(), stopped, fact)
+	case !classed:
+		// A CONDITION IS WRITTEN HERE, as a launch's is: [nodeFailure] logs
+		// only a fault, so a box read a coordination store or a deadline
+		// stopped left nothing in the log that said what stopped it.
+		if _, condition := Condition(err); condition {
+			log.WarnContext(ctx, "builtin_box_read_failed", "tool", tool, "error", err.Error())
+		}
+		return nodeFailure(ctx, tool, err, stopped, fact)
+	}
+	log.WarnContext(ctx, "builtin_box_read_failed", "tool", tool, "why", string(why),
+		"error", err.Error())
+	switch why {
+	case sandbox.WhyProviderUnavailable:
+		return refusedBy(tools.RefusalUnavailable, waits(), sentence(stopped+" (the coding "+
+			"run's box didn't answer, or its provider failed on its side).", fact,
+			"Try again shortly."))
+	case sandbox.WhyProviderLimit:
+		return refusedBy(tools.RefusalUnavailable, waits(), sentence(stopped+" (the sandbox "+
+			"provider is at a limit of the company's account).", fact, "Try again later."))
+	case sandbox.WhyProviderBilling:
+		return refusedBy(tools.RefusalUnavailable, waitless(), sentence(stopped+" (the "+
+			"sandbox provider's account for the company needs paying for, and waiting "+
+			"won't change that).", fact, "Tell whoever asked that an administrator needs "+
+			"to check the sandbox provider's account."))
+	case sandbox.WhyProviderRefused:
+		return refusedBy(tools.RefusalUnavailable, waitless(), sentence(stopped+" (the "+
+			"sandbox provider refused the company's credentials, and waiting won't change "+
+			"that).", fact, "Tell whoever asked that an administrator needs to fix the "+
+			"sandbox provider's credentials."))
+	case sandbox.WhyConfiguration:
+		return refusedBy(tools.RefusalUnavailable, waitless(), sentence(stopped+" (the "+
+			"sandbox isn't set up so this node can reach the box, and waiting won't change "+
+			"that).", fact, "Tell whoever asked that an administrator needs to fix the "+
+			"sandbox setup; the node's log says what."))
+	}
+	// A class no box read meets (a launch's own: a budget, a seat's session)
+	// is no reason this read can give, so it is told as what nothing
+	// classed.
+	return nodeFailure(ctx, tool, err, stopped, fact)
 }
