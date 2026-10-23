@@ -486,7 +486,7 @@ Two kinds, and nothing is both:
   the menu and the card both read.
 
   **A screen whose grid has an optional column has a menu to reach it.** The
-  columns half is one component, `ColumnChooser` in `DataGrid.tsx`, drawn by
+  columns half is one component, the kit's `ColumnChooser`, drawn by
   the work list's Display menu and by the projects directory's own **Columns**
   button beside its segment — because `optional` with no chooser is a column
   that can be turned off in the source and never on by anybody, which is what
@@ -1347,7 +1347,10 @@ link to.
 
 ### Every list is one grid
 
-`DataGrid` draws all of them. There is no `<table>` left in the product except
+`DataGrid` draws all of them: `@crewlethq/ui`'s `DataGrid`, which the
+dashboard binds to the address (the sort and the column set), the peek (the
+row it is open on) and the keymap (which grid `j` and `k` drive). There is no
+`<table>` left in the product except
 a project's Files listing: a block inside a card that already titles it, with
 nothing to sort, which is a table in the sense the element means rather than a
 list of objects. (The retention screen's per-domain terms were the other one;
@@ -1490,7 +1493,8 @@ things follow from that, and each is a rule a new column has to keep:
   and is what keeps the row's columns lined up. Here the head is gone and the
   label is the CELL's own, so the card opened with `PRIORITY` alone on a line
   with nothing beside it, on every ordinary row — the labelled form of the
-  dashed placeholder the board card already stopped drawing. `.grid-cell:empty`
+  dashed placeholder the board card already stopped drawing. The kit's
+  `.crewlet-data-grid__cell:empty`
   is what drops it, and it is `:empty` rather than a column predicate because
   the constraint here is the opposite of the board card's: a container cannot
   ask a child that drew nothing whether it did, and the element has to stay in
@@ -1930,11 +1934,11 @@ copy of it is how the two drift. What `dashboard/src/app/` owns:
 | `useTab` | which OBJECT tab is real. `tab=` is a string off a URL and the tab set belongs to the object — a human seat has three and an agent seat has six — so the hook resolves the parameter against the tabs this object HAS. It binds `1`–`9`; the strip itself is `@crewlethq/ui`'s `Tabs` |
 | `DetailRail` | the peek's chrome: resizable, a column of the sheet where the frame leaves the list beside it its floor (1160 px on most screens, 1396 beside Settings' column), a drawer under that |
 | `PeekHost` + `peeks.tsx` | the one peek in the product, mounted by the shell in the kit's footer slot: the body belongs to the KIND, so a list opens a peek by naming what it points at. `usePeekNeighbours` is how a list publishes the order `[` and `]` walk |
-| `DataGrid` + `cells` | sorting in the URL, bands from a grouped answer, typed cells; a row becomes a labelled card under 640 px, or two unlabelled lines on a `compact` grid |
+| `DataGrid` + `cells` | the kit's `DataGrid`, bound to the URL (its sort and columns), the peek and the keymap; bands from a grouped answer, typed cells; a row becomes a labelled card under 640 px, or two unlabelled lines on a `compact` grid |
 | `PropertiesRail` | an object's own facts, in sections, with who set each: the kit's `PropertyList`, given routes and turns |
-| `Histogram` + `FacetRail` | a log's time axis, and one dimension of it as chips |
+| `Histogram` + `FacetRail` | a log's time axis (the kit's `Histogram`, given the engine's buckets and the reader's zone), and one dimension of it as chips |
 | `TimeRangePicker` | the one control for `window=` |
-| `PageActions` + `PageNote` | a screen's own controls, portalled into the bar; its one sentence of explanation, wrapped so its last line never holds a word alone |
+| `PageActions` + `PageNote` | a screen's own controls, portalled into the bar; its one sentence of explanation (the kit's `PageNote`), wrapped so its last line never holds a word alone |
 
 **Three widths, and only one is ours.** Below 1024 px (`breakpoint.shell`) the
 sidebar is the drawer. Below 640 px (`breakpoint.phone`) a layout is single
@@ -3710,8 +3714,8 @@ break is the record — a coding run's activity log. Rendered markdown carries
 
 **A fenced block wraps rather than scrolling**, and it took a wrong class name
 to notice it did neither. The renderer emitted `class="code plain"` on every
-fence — two names this stylesheet spends on something else (`.grid-th.plain`
-is a table header) and neither of them a recipe for a `pre`. So a fenced
+fence, two generic names (a table header once spent `plain`) and neither of
+them a recipe for a `pre`. So a fenced
 sample had no surface, no padding, and a `pre`'s own `white-space: pre` with
 `overflow: visible`: one long line of JSON in a page body, a work item's
 description or a phase prompt pushed the whole page sideways — 1378px of
