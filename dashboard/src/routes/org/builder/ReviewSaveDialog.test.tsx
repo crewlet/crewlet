@@ -628,7 +628,7 @@ describe("a human seat with no contact identity", () => {
   test("is listed in the engine's own words where the check warns about it", async () => {
     const engine = new Engine(withPerson());
     const advisory =
-      "founder is a human seat with no account on Slack, so nothing addressed to it there reaches anybody.";
+      'the human seat "founder" has no account on Slack, so nothing addressed to it there reaches anybody.';
     engine.script = (r, e) =>
       r.query.get("dry_run") !== "true" ? null : withAdvisory(e.answer(r));
     const withAdvisory = async (answered: Response) => {

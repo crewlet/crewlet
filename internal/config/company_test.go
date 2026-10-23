@@ -684,6 +684,11 @@ func TestAHumanSeatNobodyCanMentionIsAdvisedOnlyOnAVendorSurface(t *testing.T) {
 				t.Fatalf("the founder's warnings = %+v, want one advisory at "+
 					"roles[0].contact saying nobody can be messaged there", got)
 			}
+			// THE HANDLE IS QUOTED, never the opening word a reader in
+			// sentence case would raise into a seat nobody declared.
+			if !strings.HasPrefix(got[0].Message, `the human seat "founder" `) {
+				t.Errorf("the advisory does not open on the quoted handle: %q", got[0].Message)
+			}
 			for _, says := range tc.says {
 				if !strings.Contains(got[0].Message, says) {
 					t.Errorf("the advisory does not say %q: %q", says, got[0].Message)
