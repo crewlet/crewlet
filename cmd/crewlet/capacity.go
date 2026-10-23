@@ -301,13 +301,26 @@ func printOperation(stdout io.Writer, mode string, op capacityOperation, page ca
 	case "sealed":
 		fmt.Fprintf(stdout, "Sealed. Run %s again to verify and confirm.\n", verb)
 	case "confirmed":
-		if page == pageVerb {
+		// AN ABANDONED WINDOW IS CONFIRMED AT THE CEILING ITS SEAL FOUND,
+		// which it no longer compares with the target, so saying it was
+		// verified at the target would claim a ceiling the log may not have.
+		abandoned := op.Blocked == statelog.BlockedAbandoned
+		switch {
+		case page == pageVerb && abandoned:
+			fmt.Fprintf(stdout, "The window was abandoned and is closed, with the "+
+				"ceiling at %s. %s\n", humanBytes(int64(op.ObservedMaxBytes)),
+				returnToService(left))
+		case page == pageVerb:
 			fmt.Fprintln(stdout, "The ceiling is verified at the target, and the "+
 				"window is closed. "+returnToService(left))
-			return
+		case abandoned:
+			fmt.Fprintf(stdout, "The window was abandoned, and its seal found the "+
+				"ceiling at %s. Run %s again to close it there.\n",
+				humanBytes(int64(op.ObservedMaxBytes)), verb)
+		default:
+			fmt.Fprintf(stdout, "The ceiling is verified at the target, and the "+
+				"window is still open. Run %s again to close it.\n", verb)
 		}
-		fmt.Fprintf(stdout, "The ceiling is verified at the target, and the window "+
-			"is still open. Run %s again to close it.\n", verb)
 	}
 }
 

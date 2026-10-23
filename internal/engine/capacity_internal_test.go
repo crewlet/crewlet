@@ -1222,6 +1222,78 @@ func TestTheWindowsLeftAreEveryOpenLogAndEveryUnreadOne(t *testing.T) {
 	}
 }
 
+// AN ABANDONED WINDOW CLOSES AT THE CEILING ITS SEAL FINDS.
+//
+// Abandoning a window past `opened` stops it trying to reach its target; it
+// still crosses the seal, because a request it sent may be in flight. The
+// verify after that seal compared the ceiling with the target as for any
+// window, so an abandoned window whose request never landed started another
+// attempt at the target the operator had given up on, and the next step it
+// named was sending that request again. It closes now, with the ceiling the
+// seal found recorded as the outcome, and nothing more is sent.
+//
+// Mutation: verify an abandoned window against its target and it stands at
+// opened, attempt 2, instead of closing.
+func TestAnAbandonedWindowClosesAtTheCeilingItsSealFinds(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fleet := coordmem.NewFleet()
+	streams := []string{"CREWLET_TRACKER_LOG"}
+	nodes := []string{"node-a", "node-b"}
+	for _, id := range nodes {
+		if err := nodeOn(fleet, id, "maintenance", statelog.ModeMaintenance, dataNode).
+			handshake(ctx, streams); err != nil {
+			t.Fatal(err)
+		}
+		if err := fleet.PutPositions(ctx, coord.NodePositions{
+			NodeID: id, At: time.Now().UTC(), Domains: map[string]coord.DomainPosition{},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	coordinator := nodeOn(fleet, "node-a", "maintenance", statelog.ModeMaintenance, dataNode)
+	resized := &ceilingLog{max: 1 << 32, onSet: func(uint64) error {
+		return errors.New("nats: timeout")
+	}}
+	if _, err := coordinator.driveCapacity(ctx, resized, openWindow(t, coordinator)); err == nil {
+		t.Fatal("a request whose outcome is unknown was reported as applied")
+	}
+	held, _, err := fleet.Maintenance(ctx, "CREWLET_TRACKER_LOG")
+	if err != nil {
+		t.Fatal(err)
+	}
+	abandoned, err := coordinator.AbandonCapacity(ctx, held.Stream, held.OperationID,
+		iam.Actor{Name: "ops-3"})
+	if err != nil || abandoned.Phase != coord.PhaseSealing {
+		t.Fatalf("the abandonment left %s (err %v), want sealing", abandoned.Phase, err)
+	}
+
+	var sealing *Engine
+	for _, id := range nodes {
+		sealing = nodeOn(fleet, id, "seal", statelog.ModeSeal, dataNode)
+		if err := sealing.handshake(ctx, streams); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resized.onSet = nil
+	closed, err := sealing.driveCapacity(ctx, resized, abandoned)
+	if err != nil {
+		t.Fatalf("the verb from seal mode on an abandoned window: %v", err)
+	}
+	if left, found, err := fleet.Maintenance(ctx, held.Stream); err != nil || found {
+		t.Fatalf("the abandoned window is still open at %s, attempt %d (found=%t, "+
+			"err=%v), want closed at the ceiling its seal found", left.Phase,
+			left.Attempt, found, err)
+	}
+	if closed.Phase != coord.PhaseConfirmed || closed.ObservedMaxBytes != 1<<32 {
+		t.Errorf("the window closed at %s with the ceiling at %d, want confirmed "+
+			"at the 4294967296 it had", closed.Phase, closed.ObservedMaxBytes)
+	}
+	if resized.sets != 1 {
+		t.Errorf("the window sent %d requests, want only the one it abandoned", resized.sets)
+	}
+}
+
 // racedClose is a coordination store that runs before as its first close is
 // sent, and counts every close.
 type racedClose struct {
