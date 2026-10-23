@@ -146,9 +146,13 @@ func (a *e2bAPI) do(ctx context.Context, method, path string, in, out any) error
 	if err != nil {
 		// NO ANSWER AT ALL is E2B not answering, which clears when it
 		// does, unless the configured domain is what failed: see
-		// [transportWhy]. The caller's own context ending is the caller's
-		// to tell apart, and it reads that first.
-		return Because(transportWhy(err), fmt.Errorf("e2b: %s: %w", path, err))
+		// [transportWhy]. A request the caller cancelled is no class at
+		// all ([unanswered]).
+		failed := fmt.Errorf("e2b: %s: %w", path, err)
+		if cancelledBy(ctx) {
+			return failed
+		}
+		return Because(transportWhy(err), failed)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {

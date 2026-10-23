@@ -268,6 +268,7 @@ A turn can also end `failed` without the reviewer choosing it. Every failed turn
 | Every member of the provider chain failed retryably | `llm_unavailable`, with the chain it tried | the last member's kind (`rate_limit`, `server`, …) |
 | The model **declined** the request on policy grounds | `turn_trigger_skipped` per trigger — the turn is abandoned, not redelivered | `refusal` |
 | A round [did not finish](#a-round-that-did-not-finish): cut off at the output cap, out of context window, or paused | none | `max_tokens`, `context_exceeded` or `paused` |
+| An [agent-mode](subscription-llm-backends.md#agent-mode) executor whose box couldn't be started | none | `sandbox_` and the class its backend gave the failure (`sandbox_configuration`, `sandbox_provider_unavailable`, …; see [When a run does not start](code-sandbox.md#when-a-run-does-not-start)) |
 | Any other broken phase | none | the provider's classified kind where there is one, else `error` |
 
 The `error_kind` on the turn's summary is the **same classifier** the failed phase's record uses (`runner.ErrorKind`), so the two records of one failure name it alike. It used to read `error` for every cause but a guard, while the phase record beside it said `refusal` or `auth`.

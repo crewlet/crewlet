@@ -860,7 +860,10 @@ type AgentPhaseCompleted struct {
 	// (`rate_limit`, `auth`, `timeout`, `server`, `fatal`, `refusal`), a
 	// round whose stop reason ended the phase (`max_tokens`,
 	// `context_exceeded`, `paused`), `budget_exhausted`, `stopped` for a
-	// phase a person ended, and `error` for anything unclassified.
+	// phase a person ended, `sandbox_<class>` for an agent-mode executor
+	// whose box couldn't be started (the class is a sandbox.Why, such as
+	// `sandbox_provider_unavailable`), `canceled` for a phase this node
+	// cancelled, and `error` for anything unclassified.
 	ErrorKind string `json:"error_kind"`
 	// Refusal is set when the phase ended because its model DECLINED the
 	// request on policy grounds — a failed phase whose ErrorKind is

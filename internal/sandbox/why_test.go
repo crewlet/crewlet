@@ -140,6 +140,37 @@ func TestAnE2BRequestThatReachedNoHostIsClassedByWhy(t *testing.T) {
 	}
 }
 
+// A REQUEST ITS CALLER CANCELLED IS NO CLASS: a drain, a lost lease or a turn
+// stopped cancels it, which says nothing about E2B, and marked it was told as
+// the provider not answering. A request its own bound ended while the caller
+// still waits (an idle watchdog cancelling the exchange it guards) is still
+// E2B not answering.
+//
+// Mutation: mark a transport failure whatever the caller's context says, and
+// the first half goes red; leave every cancellation unmarked, and the second.
+func TestAnE2BRequestItsCallerCancelledIsNoClass(t *testing.T) {
+	t.Parallel()
+	provider, err := sandbox.NewE2B(sandbox.E2BOptions{
+		APIKey: "k", Domain: "e2b.example.com",
+		HTTP: &http.Client{Transport: failingTransport{context.Canceled}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = provider.Create(cancelled, sandbox.Spec{})
+	if why, ok := sandbox.WhyOf(err); ok || !errors.Is(err, context.Canceled) {
+		t.Errorf("a create its caller cancelled = %v, classed %q (%v); want the "+
+			"cancellation, unclassed", err, why, ok)
+	}
+	_, err = provider.Create(t.Context(), sandbox.Spec{})
+	if why, ok := sandbox.WhyOf(err); !ok || why != sandbox.WhyProviderUnavailable {
+		t.Errorf("a create its own bound ended = %v, classed %q (%v); want %q", err, why,
+			ok, sandbox.WhyProviderUnavailable)
+	}
+}
+
 // failingTransport fails every request with err, before any host answers.
 type failingTransport struct{ err error }
 

@@ -420,6 +420,50 @@ func TestAnImageTheRuntimeWillNotStartIsConfiguration(t *testing.T) {
 	}
 }
 
+// A LAUNCH THIS NODE CANCELLED IS NO CLASS: the runtime's CLI is killed with
+// its tree, and the launch is told as abandoned, never as an image the runtime
+// would not start. runHost answered a caller's cancellation as its own timeout
+// (124), which Create classed a configuration, so a drain was recorded as a
+// setup somebody had to fix.
+//
+// Mutation: answer a cancellation as 124 in runHost, or class whatever Create
+// met, and this goes red.
+func TestALaunchItsCallerCancelledIsNoClass(t *testing.T) {
+	t.Parallel()
+	runtime := filepath.Join(t.TempDir(), "docker")
+	started := filepath.Join(t.TempDir(), "started")
+	script := "#!/bin/sh\n[ \"$1\" = run ] && { : > \"" + started + "\"; exec sleep 60; }\nexit 0\n"
+	if err := os.WriteFile(runtime, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	waitExecutable(t, runtime)
+	l := &Local{
+		opts: LocalOptions{Placement: Container, Image: "img"},
+		root: t.TempDir(),
+		cli:  containerCLI{path: runtime},
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go func() {
+		for ctx.Err() == nil {
+			if _, err := os.Stat(started); err == nil {
+				cancel()
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+	box, err := l.Create(ctx, Spec{})
+	if err == nil {
+		_ = box.Close(t.Context())
+		t.Fatal("Create handed out a box its caller cancelled")
+	}
+	if why, ok := WhyOf(err); ok || !errors.Is(err, context.Canceled) {
+		t.Errorf("a launch its caller cancelled = %v, classed %q (%v); want the "+
+			"cancellation, unclassed", err, why, ok)
+	}
+}
+
 // stubRuntime is a container runtime that shares the box directory the way a
 // local daemon does, or — when told to — the way a remote one does not.
 //

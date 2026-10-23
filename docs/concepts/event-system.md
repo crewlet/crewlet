@@ -386,8 +386,10 @@ agent_phase_completed      # one phase's durable record: prompts, response,
                            # max_tokens, refusal, context_exceeded, paused;
                            # absent where the backend reported none). A
                            # failed phase carries `error_kind` — a provider
-                           # kind, the stop reason that ended it, or
-                           # budget_exhausted — and a phase whose model
+                           # kind, the stop reason that ended it,
+                           # budget_exhausted, or sandbox_<class> for an
+                           # agent-mode executor whose box could not be
+                           # started — and a phase whose model
                            # DECLINED carries `refusal` {category,
                            # explanation} beside `error_kind: refusal`
 auxiliary_spend            # what the seat's auxiliary model cost for one key —
