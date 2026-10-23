@@ -1512,7 +1512,7 @@ func TestWhoExcludedANodeAndWhoAbandonedTheWindowAreOnTheWindow(t *testing.T) {
 	// retention status` leads with while the window holds the fleet.
 	r := &retention{fleet: fleet, state: runsLogs(&stateLog{},
 		&runningLog{domain: worklet.Domain{}, spec: worklet.Domain{}.Stream()})}
-	row := onlyWindow(t, r.openMaintenance(ctx))
+	row := onlyWindow(t, r.openMaintenance(ctx, readWindows(ctx, r.fleet)))
 	if row.AbandonedBy != op.AbandonedBy {
 		t.Errorf("the report names %+v as having abandoned the window, want %+v",
 			row.AbandonedBy, op.AbandonedBy)
@@ -1560,7 +1560,7 @@ func TestTheReportAtOpenedSaysWhatTheBaselineWaitsOn(t *testing.T) {
 	r := &retention{fleet: fleet, state: runsLogs(&stateLog{},
 		&runningLog{domain: worklet.Domain{}, spec: worklet.Domain{}.Stream()})}
 
-	row := onlyWindow(t, r.openMaintenance(ctx))
+	row := onlyWindow(t, r.openMaintenance(ctx, readWindows(ctx, r.fleet)))
 	if !slices.Equal(row.ParticipantsMissing, []string{"node-2", "node-3"}) {
 		t.Errorf("at opened the report waits on %v, want node-2 and node-3, the "+
 			"nodes with no restart recorded", row.ParticipantsMissing)
@@ -1576,7 +1576,7 @@ func TestTheReportAtOpenedSaysWhatTheBaselineWaitsOn(t *testing.T) {
 	if err := fleet.UpdateMaintenance(ctx, op); err != nil {
 		t.Fatal(err)
 	}
-	row = onlyWindow(t, r.openMaintenance(ctx))
+	row = onlyWindow(t, r.openMaintenance(ctx, readWindows(ctx, r.fleet)))
 	if !slices.Equal(row.ParticipantsMissing, []string{"node-1", "node-2", "node-3"}) {
 		t.Errorf("past opened the report waits on %v, want every node the seal "+
 			"has no acknowledgement from", row.ParticipantsMissing)
@@ -1627,7 +1627,7 @@ func TestTheReportPastOpenedWaitsOnWhoTheSealWaitsOn(t *testing.T) {
 	}
 	r := &retention{fleet: fleet, state: runsLogs(&stateLog{},
 		&runningLog{domain: worklet.Domain{}, spec: worklet.Domain{}.Stream()})}
-	row := onlyWindow(t, r.openMaintenance(ctx))
+	row := onlyWindow(t, r.openMaintenance(ctx, readWindows(ctx, r.fleet)))
 	if want := []string{"node-1", "node-2", "node-4"}; !slices.Equal(row.ParticipantsMissing, want) {
 		t.Errorf("the report waits on %v, want %v: the nodes the seal still waits on",
 			row.ParticipantsMissing, want)
@@ -1649,7 +1649,7 @@ func TestTheReportPastOpenedWaitsOnWhoTheSealWaitsOn(t *testing.T) {
 		if err := fleet.UpdateMaintenance(ctx, held); err != nil {
 			t.Fatal(err)
 		}
-		row := onlyWindow(t, r.openMaintenance(ctx))
+		row := onlyWindow(t, r.openMaintenance(ctx, readWindows(ctx, r.fleet)))
 		if len(row.ParticipantsMissing) != 0 {
 			t.Errorf("a window at %s waits on %v, want nobody: nothing after the "+
 				"seal waits on a node", phase, row.ParticipantsMissing)
@@ -1699,7 +1699,7 @@ func TestTheReportNamesEveryOpenWindow(t *testing.T) {
 	r := &retention{fleet: fleet, state: runsLogs(&stateLog{},
 		&runningLog{domain: worklet.Domain{}, spec: worklet.Domain{}.Stream()},
 		&runningLog{domain: doclet.Domain{}, spec: doclet.Domain{}.Stream()})}
-	rows := r.openMaintenance(ctx)
+	rows := r.openMaintenance(ctx, readWindows(ctx, r.fleet))
 	var got []string
 	for _, row := range rows {
 		got = append(got, row.Stream+" waits on "+strings.Join(row.ParticipantsMissing, ","))
@@ -2816,6 +2816,7 @@ type blindFleet struct {
 	readErrOn     string
 	positionsErr  error
 	admissionsErr error
+	acksErr       error
 	openFailures  int
 	openedIDs     []string
 }
@@ -2834,6 +2835,15 @@ func (b *blindFleet) Admissions(ctx context.Context) ([]coord.Admission, error) 
 		return nil, b.admissionsErr
 	}
 	return b.fleetStore.Admissions(ctx)
+}
+
+func (b *blindFleet) MaintenanceAcks(ctx context.Context, stream string) (
+	[]coord.MaintenanceAck, error) {
+
+	if b.acksErr != nil {
+		return nil, b.acksErr
+	}
+	return b.fleetStore.MaintenanceAcks(ctx, stream)
 }
 
 func (b *blindFleet) Positions(ctx context.Context) ([]coord.NodePositions, error) {

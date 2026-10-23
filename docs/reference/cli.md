@@ -1987,6 +1987,16 @@ NOT READY pages: wrong_stream (recreated): pages's rows are keyed to the stream 
 WRITES REFUSED tracker: log_truncated: peer node-4 stands at sequence … of CREWLET_TRACKER_LOG, which ends at …
 ```
 
+While a capacity window is open on any log it leads with that window
+(`MAINTENANCE IS OPEN on <log>: no node starts in service until it closes.`),
+naming what it waits on, or saying it couldn't read that rather than printing a
+list. A log whose window the node couldn't read is said in a line of its own
+rather than left out:
+
+```
+This node couldn't read whether a capacity window is open on "CREWLET_PAGES_LOG". A data node restarted now won't start in service until it can read it. `crewlet retention maintenance status -stream CREWLET_PAGES_LOG` asks again.
+```
+
 Then the blocking term, **in prose**, because it is the answer to the only
 question anybody runs this for:
 

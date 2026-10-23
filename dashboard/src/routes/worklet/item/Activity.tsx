@@ -75,6 +75,7 @@ import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import { useQuery, withFloor } from "~/lib/useQuery.ts";
 import { useClient } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
+import { andList } from "~/lib/words.ts";
 import { WORKLET, needsWords } from "~/lib/access.ts";
 import { AnswerAsk } from "~/components/writes.tsx";
 import { turnIdOf, watchHref } from "~/lib/turns.ts";
@@ -537,15 +538,9 @@ export function changeSentence(
   // record whose fields say nothing this build can phrase falls back to the
   // label the other change feeds draw, and then to its kind.
   const clauses = changeClauses(record.fields, chrome);
-  if (clauses.length > 0) return { what: joinClauses(clauses), why: "" };
+  if (clauses.length > 0) return { what: andList(clauses), why: "" };
   const said = describeChange(record, chrome);
   return { what: said ? `changed ${said}` : record.kind.replaceAll("_", " "), why: "" };
-}
-
-/** "a", "a and b", "a, b and c" — by hand, for the reason `listOf` gives. */
-function joinClauses(clauses: string[]): string {
-  if (clauses.length <= 1) return clauses[0] ?? "";
-  return `${clauses.slice(0, -1).join(", ")} and ${clauses[clauses.length - 1]}`;
 }
 
 function ChangeRow({

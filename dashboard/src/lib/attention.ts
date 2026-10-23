@@ -39,6 +39,7 @@ import {
 import { QUESTION_WITHHELD, questionWithheld } from "./access.ts";
 import { fmtDateTime } from "./format.ts";
 import type { Remedy } from "~/protocol/remedy.ts";
+import { andList } from "./words.ts";
 
 export type Severity = "critical" | "caution" | "info";
 
@@ -99,10 +100,13 @@ export const WHERE_OF: Record<Subject, Where> = {
 
 /** The subjects shown in one place, as the clause its quiet state says. */
 export function watchedIn(where: Where): string {
-  return joinClauses(
+  return andList(
     (Object.keys(SUBJECTS) as Subject[])
       .filter((subject) => WHERE_OF[subject] === where)
       .map((subject) => SUBJECTS[subject]),
+    // THE SERIAL COMMA IS LOAD-BEARING HERE: the clauses carry their own
+    // "and" ("the company's and every seat's token budget").
+    { serialComma: true },
   );
 }
 
@@ -137,22 +141,6 @@ export function conditionsToDecide(queue: readonly Attention[]): Attention[] {
 export function conditionKey(id: string): string {
   return `condition:${id}`;
 }
-
-function joinClauses(parts: readonly string[]): string {
-  if (parts.length < 3) return parts.join(" and ");
-  // THE OXFORD COMMA IS LOAD-BEARING HERE: the clauses carry their own "and"
-  // ("the company's and every seat's token budget"), so without it the last two
-  // run together and read as one item.
-  return `${parts.slice(0, -1).join(", ")}, and ${parts.at(-1) ?? ""}`;
-}
-
-/*
- * THE CLAUSES ARE JOINED HERE, beside the words they join. `Intl.ListFormat` is the obvious
- * alternative and is wrong for this string: it joins in the BROWSER's locale,
- * so a reader on a Japanese one would get "、" between clauses that are
- * themselves hardcoded English, and the assertion that the band names every
- * subject would pass or fail on the machine's locale.
- */
 
 export interface Attention {
   id: string;

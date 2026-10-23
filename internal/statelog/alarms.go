@@ -497,10 +497,24 @@ type Reading struct {
 	// circling for ever behind everything queued after it.
 	RecordsGated, FeedUnreadable int
 
-	// MaintenanceOpenFor is how long a maintenance operation has been in
-	// flight, with the phase it is stuck in.
-	MaintenanceOpenFor time.Duration
-	MaintenancePhase   string
+	// MaintenanceOpenFor is how long the oldest capacity window has been
+	// open, with the log it is on and the phase it is stuck in.
+	//
+	// MaintenanceUnreadable says that window is the one this node last READ
+	// open and can't read now, MaintenanceOpenFor is then how long it had
+	// been open WHEN THAT READ ANSWERED, and MaintenanceReadAgo how long ago
+	// that was. A window is open, absent, or unreadable, and the third is
+	// neither of the others: read as absent, a coordination blip cleared a
+	// firing alarm, and read as open on this node's clock, a window last read
+	// at 59 minutes crossed the hour during the blip and raised one about a
+	// window that might have closed. So the alarm judges an unreadable log
+	// on what this node last knew of it, as old as it was then, and the
+	// detail says that is what it is.
+	MaintenanceOpenFor    time.Duration
+	MaintenanceStream     string
+	MaintenancePhase      string
+	MaintenanceUnreadable bool
+	MaintenanceReadAgo    time.Duration
 
 	// FreeBytes and StoreBytes are one volume's free space and what this
 	// node's databases occupy ON IT, and StoreVolume the directory that
@@ -1092,12 +1106,33 @@ var table = []rule{
 	{
 		kind: KindMaintenanceOpen,
 		fires: func(r Reading) (string, bool) {
-			return fmt.Sprintf("a maintenance operation has been open for %s in "+
-					"phase %q", spoken(r.MaintenanceOpenFor), r.MaintenancePhase),
-				r.MaintenanceOpenFor > MaintenanceAlarmAfter
+			fires := r.MaintenanceOpenFor > MaintenanceAlarmAfter
+			if !r.MaintenanceUnreadable {
+				return fmt.Sprintf("a capacity window on %s has been open for %s "+
+					"in phase %q", r.MaintenanceStream, spoken(r.MaintenanceOpenFor),
+					r.MaintenancePhase), fires
+			}
+			// THE NEXT STEP IS THE READ'S, NOT THE WINDOW'S: finishing or
+			// abandoning it goes through the read that is failing, and it
+			// may have closed since.
+			when := "when this node last read it"
+			if r.MaintenanceReadAgo > 0 {
+				when += ", " + spoken(r.MaintenanceReadAgo) + " ago"
+			}
+			return fmt.Sprintf("a capacity window on %s had been open for %s in "+
+				"phase %q %s. This node can't read the window now, so it can't "+
+				"tell whether it has closed, and it can't be finished or "+
+				"abandoned through this node until it can", r.MaintenanceStream,
+				spoken(r.MaintenanceOpenFor), r.MaintenancePhase, when), fires
 		},
-		remedy: "Maintenance stops every publisher on every node. Finish it or " +
-			"abandon it; nothing is being written while it is open.",
+		// TRUE OF THE NODE THAT RAISES IT, which is one still publishing:
+		// only a node in service evaluates this table, so "nothing is being
+		// written" was false of every node that ever said it. What a window
+		// does is hold the fleet: no node starts in service while it is open,
+		// and a node restarted for it publishes nothing until it closes.
+		remedy: "While a capacity window is open no node starts in service, and " +
+			"every node restarted for it publishes nothing. Finish it or abandon " +
+			"it.",
 	},
 	{
 		kind: KindVolumeLow,

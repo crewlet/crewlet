@@ -6866,6 +6866,17 @@ fleet has no nodes" cannot happen, and "coordination could not be listed"
 happens during exactly the outage somebody is running this in. Without the flag
 a renderer prints the impossible one.
 
+`maintenance_unread` does the same for the capacity windows: every log whose
+window the answering node couldn't read, and **absent** when it read every one.
+`maintenance` lists only the windows the read found open, so a log missing from
+both has no window, and a log named here may have one. The `maintenance_open`
+alarm judges a log named here on the window the node last read there, as old
+as it was when that read answered, and its `detail` says so
+([the retention guide](../guides/retention.md#where-it-stands-and-what-is-holding-it)).
+Each open window's `participants_missing` and `admissions_blocking` are read
+beside it, and one the node couldn't read is `acks_unread: true` or
+`admissions_unread: true` with its list absent, never an empty list.
+
 A node row's **`evicted`** is its tombstone once every log holds one, dated
 from the latest and naming in `by` whoever made the eviction that reached the
 last of them.

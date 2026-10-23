@@ -86,6 +86,7 @@ import {
   tsKey,
 } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
+import { andList } from "~/lib/words.ts";
 import { indentJSON } from "~/lib/jsontext.ts";
 import type {
   BridgeCall,
@@ -308,7 +309,7 @@ export function AwaitingBanner({
           {/* WHO IT IS PUT TO, as the engine resolved it when the run parked
               — never re-derived here from the coding agent's own label. */}
           {audience.length > 0
-            ? `Put to ${listWords(audience)}${run.audience_fallback ? `, ${seat}’s lead chain: “${run.audience}” isn’t in the chart` : ""}.`
+            ? `Put to ${andList(audience)}${run.audience_fallback ? `, ${seat}’s lead chain: “${run.audience}” isn’t in the chart` : ""}.`
             : "Anyone can answer."}
           {run.answerable_in_chat ? " A reply in the conversation also counts." : ""}
           {deadline && !expired
@@ -328,12 +329,6 @@ export function AwaitingBanner({
       </span>
     </Callout>
   );
-}
-
-/** "A", "A and B", "A, B and C". */
-function listWords(names: string[]): string {
-  if (names.length <= 1) return names[0] ?? "";
-  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
 /** What the run is doing, for a run nobody is being waited on by. */

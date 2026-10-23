@@ -199,6 +199,11 @@ type retention struct {
 	// floor, for `floor_unknown`. See floorwatch.go.
 	floors *floorWatch
 
+	// windows is what this node last read of each log's capacity window,
+	// which `maintenance_open` judges a log it can't read now on. Nil
+	// remembers nothing. See capacitywindows.go.
+	windows *windowWatch
+
 	// now is the clock every evaluation, every report, every trim tick, the
 	// backup gauge and the alarm tracker's ages read ([retention.clock]) —
 	// the duty's one clock. Nil reads the wall clock; a case sets it to put a
@@ -253,6 +258,7 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 		background:  e.backgroundBarriers,
 		pooled:      map[string]poolCounters{},
 		floors:      newFloorWatch(e.backends.Fleet.Floors),
+		windows:     newWindowWatch(),
 	}
 	// ON THE DUTY'S OWN CLOCK, which every report and evaluation reads: an
 	// alarm's age is the tracker's clock less the instant it was raised, and

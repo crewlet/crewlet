@@ -533,11 +533,13 @@ func TestRetentionStatusPrintsAYoungFleetsMissingBackupOnce(t *testing.T) {
 	}
 }
 
-// MAINTENANCE IS PRINTED ABOVE EVERYTHING, because while it is open every
-// number below it describes a fleet in which nothing is running: no seats, no
-// duties, no scheduler, no write routes. It was visible on no surface at all —
-// an operator watching a company go completely quiet had nothing to read that
-// said why, and the alarm that names it only fires after an hour of it.
+// MAINTENANCE IS PRINTED ABOVE EVERYTHING, because while it is open the fleet
+// is held: no node starts in service, and every node restarted for it runs no
+// seats, duties, scheduler or write routes. It was visible on no surface at
+// all: an operator watching a company go quiet had nothing to read that said
+// why, and the alarm that names it only fires after an hour of it. Only a node
+// in service answers this page, so its line says what holds the fleet, never
+// that nothing is publishing.
 func TestRetentionStatusLeadsWithAnOpenMaintenanceWindow(t *testing.T) {
 	t.Parallel()
 	node := newFakeRetentionNode(t)
@@ -560,8 +562,14 @@ func TestRetentionStatusLeadsWithAnOpenMaintenanceWindow(t *testing.T) {
 		t.Errorf("the first line is %q — a blocked trim read without knowing "+
 			"nothing is running sends an operator after the wrong thing", first)
 	}
+	if strings.Contains(first, "no publisher") ||
+		!strings.Contains(first, "no node starts in service until it closes") {
+		t.Errorf("the first line is %q, want it to say what holds the fleet and "+
+			"never that nothing is publishing, which is false of the node printing it",
+			first)
+	}
 	for _, want := range []string{"observe", "attempt 2", "sre@example.com",
-		"node-4, node-7"} {
+		`"node-4" and "node-7"`} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("the report never mentions %q:\n%s", want, stdout)
 		}
@@ -597,8 +605,8 @@ func TestRetentionStatusPrintsEveryOpenWindow(t *testing.T) {
 	if tracker < 0 || pages < tracker {
 		t.Fatalf("the report does not lead with both windows, the oldest first:\n%s", stdout)
 	}
-	if !strings.Contains(stdout[tracker:pages], "waiting on node-4") ||
-		!strings.Contains(stdout[pages:], "waiting on node-7") {
+	if !strings.Contains(stdout[tracker:pages], `waiting on "node-4"`) ||
+		!strings.Contains(stdout[pages:], `waiting on "node-7"`) {
 		t.Errorf("each window does not say what it waits on:\n%s", stdout)
 	}
 }
@@ -683,6 +691,84 @@ func TestAnAbandonedWindowSaysWhoAbandonedIt(t *testing.T) {
 	}
 	if want := "abandoned by ana.admin (through pat:0192f00d-0000-7000-8000-00000000000a)"; !strings.Contains(stdout, want) {
 		t.Errorf("the banner never says %q:\n%s", want, stdout)
+	}
+}
+
+// A WINDOW THE NODE COULDN'T READ IS SAID, never left out.
+//
+// The page printed the report's open windows alone, so a log whose window the
+// node couldn't read printed nothing, which reads as a log with no window open
+// during exactly the coordination outage that stops the read. Mutation: drop
+// the line and the want goes red.
+func TestAWindowTheNodeCouldNotReadIsSaid(t *testing.T) {
+	t.Parallel()
+	node := newFakeRetentionNode(t)
+	report := blockedReport()
+	report.MaintenanceUnread = []string{"CREWLET_PAGES_LOG", "CREWLET_TRACKER_LOG"}
+	node.report = report
+
+	stdout, _, err := cli(t, "retention", "status", bootstrapForURL(t, node.server.URL))
+	if err != nil {
+		t.Fatalf("retention status: %v", err)
+	}
+	for _, want := range []string{`This node couldn't read whether a capacity window ` +
+		`is open on "CREWLET_PAGES_LOG" and "CREWLET_TRACKER_LOG". A data node ` +
+		`restarted now won't start in service until it can read it.`,
+		"-stream <log>` asks again for one of them."} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the page never says %q:\n%s", want, stdout)
+		}
+	}
+	// THE ANSWERING NODE IS IN SERVICE, so nothing here says publishing may
+	// be paused. Mutation: say it again.
+	if strings.Contains(stdout, "publishing") {
+		t.Errorf("the page says publishing may be paused, which is false of the "+
+			"node answering it:\n%s", stdout)
+	}
+
+	// ONE LOG IS NAMED IN THE COMMAND that asks again.
+	report.MaintenanceUnread = []string{"CREWLET_PAGES_LOG"}
+	node.report = report
+	stdout, _, err = cli(t, "retention", "status", bootstrapForURL(t, node.server.URL))
+	if err != nil {
+		t.Fatalf("retention status: %v", err)
+	}
+	if want := "`crewlet retention maintenance status -stream CREWLET_PAGES_LOG` " +
+		"asks again.\n"; !strings.Contains(stdout, want) {
+		t.Errorf("the page never says %q:\n%s", want, stdout)
+	}
+}
+
+// WHAT A WINDOW'S PAGE COULDN'T READ IS SAID AS THAT, never printed as a list.
+// The acknowledgements and the admissions are read beside each window, and an
+// unreadable register printed as an empty list said the window was waiting on
+// its operator, or on nobody's admission. Mutation: print the lists whatever
+// the flags say.
+func TestAWindowsUnreadPartsAreSaid(t *testing.T) {
+	t.Parallel()
+	node := newFakeRetentionNode(t)
+	report := blockedReport()
+	report.Maintenance = []statelog.MaintenanceReport{{
+		Stream: "CREWLET_TRACKER_LOG", OperationID: "op-9",
+		Phase: "opened", Attempt: 1,
+		Since:      time.Date(2031, 4, 2, 2, 0, 0, 0, time.UTC),
+		AcksUnread: true, AdmissionsUnread: true,
+	}}
+	node.report = report
+
+	stdout, _, err := cli(t, "retention", "status", bootstrapForURL(t, node.server.URL))
+	if err != nil {
+		t.Fatalf("retention status: %v", err)
+	}
+	for _, want := range []string{"couldn't read whether an admission is holding it.",
+		"couldn't read which nodes have restarted for it, so who it's waiting on is unknown."} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the page never says %q:\n%s", want, stdout)
+		}
+	}
+	if strings.Contains(stdout, "waiting on its operator") {
+		t.Errorf("a window whose registers couldn't be read is said to wait on its "+
+			"operator:\n%s", stdout)
 	}
 }
 
