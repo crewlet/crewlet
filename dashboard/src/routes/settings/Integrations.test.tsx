@@ -487,9 +487,9 @@ test("a disconnect in progress offers nothing", () => {
 
 // --- the action slot -------------------------------------------------------- //
 
+import { asSentence } from "~/lib/format.ts";
 import {
   actionFor,
-  asSentence,
   deliveryEvent,
   formBlocked,
   sectionsFor,
@@ -688,11 +688,14 @@ test("a tool with no form behind it is learned about, not connected", () => {
   expect(formBlocked([{}], true)).toBeUndefined();
 });
 
-// THE ENGINE'S REASONS ARE WRITTEN TO BE EMBEDDED, lower-case, so a tile that
-// leads with one gives it its capital — and only that.
+// THE ENGINE'S REASONS ARE WRITTEN TO BE EMBEDDED, lower-case and without a
+// full stop, so a tile that leads with one makes it a sentence: the shared
+// `asSentence`, which every other screen printing an engine clause uses. A
+// copy of its own here capitalised and stopped there, so a tile's sentence
+// ended without the full stop every description beside it carries.
 test("a reason leads a tile as a sentence", () => {
   expect(asSentence("the third-party app refused this integration's credential")).toBe(
-    "The third-party app refused this integration's credential",
+    "The third-party app refused this integration's credential.",
   );
   expect(asSentence("")).toBe("");
 });

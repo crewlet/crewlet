@@ -2,13 +2,15 @@
  * The third-party tools agents work on, and whether each one is working.
  *
  * Laid out as a GRID OF TILES, the shape the rest of the product's catalogues
- * take: one tile per TOOL with its mark, its name and the engine's word for
- * its state, one sentence — what is owed when something is, what the tool is
- * for otherwise — and a foot carrying a quiet count and ONE action
+ * take (the kit's `CatalogTile` on a `TileGrid`, the grid Built into Crewlet
+ * above it uses, so every tile edge on the page lines up): one tile per TOOL
+ * with its mark, its name, the engine's word for its state once it is set
+ * up, one sentence (what is owed when something is, what the tool is for
+ * otherwise) and a foot carrying a quiet count and ONE action
  * ([IntegrationTile]). Connected tools come first. Every tool this build
  * serves is listed whether or not this company set it up, so the reader sees
- * the whole catalogue rather than only the part they configured, and a last
- * tile points at everything else an agent can reach: an MCP server.
+ * the whole catalogue rather than only the part they configured. Every other
+ * tool an agent can reach is an MCP server, which Settings › MCP Tools adds.
  *
  * A tile is the tool, not the engine's plumbing for it. Atlassian is one tile
  * although the engine reaches it over three surfaces (Jira, Confluence and
@@ -33,10 +35,12 @@ import {
   ButtonLink,
   Callout,
   Card,
+  CatalogTile,
+  Copyable,
   EmptyState,
   EmptyValue,
-  Eyebrow,
   InlineCode,
+  Section,
   SegmentedControl,
   Skeleton,
   TableDateCell,
@@ -46,6 +50,7 @@ import {
   TableStatusCell,
   TableTextCell,
   Tag,
+  TileGrid,
   type Tone,
 } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
@@ -56,7 +61,6 @@ import {
   LayersGlyph,
   LinkGlyph,
   InboxGlyph,
-  PlusGlyph,
   RotateCwGlyph,
   SettingsGlyph,
   ShieldGlyph,
@@ -72,6 +76,7 @@ import { href, useNavigator } from "~/app/router.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { useNow } from "~/lib/clock.ts";
 import {
+  asSentence,
   fmtDate,
   fmtDateTime,
   plural,
@@ -102,7 +107,6 @@ import {
   type ReconcileStatus,
 } from "~/contract/integrations.ts";
 import type { SetupListing, SetupSeatState, SetupToolState } from "~/protocol/types.ts";
-import { PageNote } from "~/app/frame/PageNote.tsx";
 
 // THE TONE VOCABULARY IS uilet's NOW. This screen used to declare its own
 // five-value union beside the one the design system publishes, which is the
@@ -318,12 +322,13 @@ export interface EntryState {
    * The word in the badge: the engine's roll-up label — a phase's own label,
    * or Connecting, Paused, Not in use.
    *
-   * EVERY TILE CARRIES ONE, an unconfigured tool included. The tiles are a
-   * grid now, and a tile with no pill under its name is a hole in a row of
-   * them that a reader has to explain to themself; the engine's "Not in use"
-   * is drawn in the neutral outline, which is the one register on this
-   * screen that reports nothing wrong. EMPTY only while no roll-up for an
-   * unconfigured tool is in hand — before the integrations answer arrives.
+   * A TOOL'S OWN PAGE CARRIES IT WHATEVER IT SAYS, Not in use included: it is
+   * the page's one statement about the tool. The CATALOGUE draws it only for
+   * a tool the company set up ([IntegrationTile]): a "Not in use" pill on
+   * every unconnected tile was a column a reader learned to skip, and the
+   * filter's counts and the tile's quieter ground already say it. EMPTY only
+   * while no roll-up for an unconfigured tool is in hand, before the
+   * integrations answer arrives.
    */
   tag: string;
   tone: Tone;
@@ -1460,20 +1465,9 @@ export function tileMeta(
 }
 
 /**
- * The roll-up's reason, as a sentence standing on its own.
- *
- * The engine writes its reasons to be EMBEDDED — "the third-party app refused
- * this integration's credential" reads on inside a longer line elsewhere — so
- * it starts them lower-case, and a tile or a dialog that leads with one has to
- * give it its capital. Only the first letter: the rest is the engine's.
- */
-export function asSentence(reason: string): string {
-  return reason.charAt(0).toUpperCase() + reason.slice(1);
-}
-
-/**
  * One integration in the catalogue: a tile with its mark, its name, the
- * engine's word for its state, one sentence and ONE action.
+ * engine's word for its state once the company has set it up, one sentence
+ * and ONE action.
  *
  * THE SENTENCE IS WHAT IS OWED WHEN SOMETHING IS, and what the tool does
  * otherwise. The engine's roll-up carries a reason exactly when a person or
@@ -1509,34 +1503,26 @@ export function IntegrationTile({
   const credentials = credentialFindings(present);
   const action = actionFor(state, tools, present.length > 0, credentials, guarded);
   const meta = tileMeta(present, rosterOf(tools), credentials, trafficKnown);
-  const nameID = `int-tile-${entry.key}`;
   const reason = asSentence(state.reason ?? "");
+  const configured = present.length > 0;
   return (
-    <article
-      className={present.length === 0 ? "int-tile is-absent" : "int-tile"}
-      aria-labelledby={nameID}
-    >
-      <div className="int-tile-head">
-        <span className="int-brand" aria-hidden>
-          {/* DRAINED, NOT HIDDEN, when nothing is set up: the kit's word for
-              "available but not connected", read at a glance down the grid
-              without dimming the tile's text — see `.int-tile.is-absent`. */}
-          <VendorMark vendor={entry.vendor} size="lg" muted={present.length === 0} />
-        </span>
-        <span className="int-tile-title">
-          <h2 className="int-name" id={nameID}>
-            {entry.name}
-          </h2>
-          {state.tag !== "" && (
-            <Tag size="sm" variant={state.tone} appearance={state.outline ? "outline" : "soft"}>
-              {state.tag}
-            </Tag>
-          )}
-        </span>
-      </div>
-      <p className="int-tile-text">{reason || entry.description}</p>
-      <div className="int-tile-foot">
-        <span className="int-tile-meta">{meta}</span>
+    <CatalogTile
+      // NOT SET UP IS THE QUIETER GROUND, never a drained mark: the mark is
+      // the vendor's own drawing at full strength on every tile, and a grey
+      // Datadog read as a placeholder image rather than as Datadog.
+      quiet={!configured}
+      mark={<VendorMark vendor={entry.vendor} size="lg" />}
+      title={entry.name}
+      status={
+        configured && state.tag !== "" ? (
+          <Tag size="sm" variant={state.tone} appearance={state.outline ? "outline" : "soft"}>
+            {state.tag}
+          </Tag>
+        ) : undefined
+      }
+      description={reason || entry.description}
+      meta={meta}
+      action={
         <ActionButton
           entry={entry}
           action={action}
@@ -1544,8 +1530,8 @@ export function IntegrationTile({
           managed={managed}
           onOpen={() => onOpen(action, reason)}
         />
-      </div>
-    </article>
+      }
+    />
   );
 }
 
@@ -3004,6 +2990,23 @@ export function IntegrationPeek({ kind }: { kind: string }) {
 /** Which half of the catalogue is shown. */
 type Show = "all" | "connected" | "available";
 
+/**
+ * The address every inbound integration is built on, said once as a quiet
+ * fact under the catalogue (or under one tool's header): what a vendor's
+ * webhook form asks for, with a control to copy it.
+ */
+function EngineAddress({ value }: { value: string }) {
+  return (
+    <p className="int-address">
+      <LinkGlyph size="sm" aria-hidden />
+      <span>Third-party apps reach this engine at</span>
+      {/* IN FULL: the chip shortens a long value to its ends, and an
+          address cut to "http://12…3812" is one nobody can type. */}
+      <Copyable value={value} display={value} monospace ariaLabel="Copy the engine's address" />
+    </p>
+  );
+}
+
 export function Integrations({ kind }: { kind?: string }) {
   const viewer = useViewer();
   // A MANAGED DOCUMENT (ADR-0030): what writes it is held on every card, with
@@ -3147,13 +3150,11 @@ export function Integrations({ kind }: { kind?: string }) {
   // where one is configured, and `api.external_url` otherwise, `config_path`
   // naming which), required on every node serving this screen and resolved
   // before the file is decoded, so a node that answers at all has an address.
-  const baseAddress = setup.base && (
-    <Callout variant="neutral" icon={<LinkGlyph size="md" />}>
-      <span>
-        Third-party apps reach this engine at <InlineCode>{setup.base.value}</InlineCode>
-      </span>
-    </Callout>
-  );
+  //
+  // A QUIET FACT, NOT A CALLOUT: it describes the catalogue rather than
+  // warning about it, and a banner over the tiles stacked on the empty
+  // note under it read as two alarms where there was none. See [EngineAddress].
+  const baseAddress = setup.base && <EngineAddress value={setup.base.value} />;
 
   // THE TILES, OR ONE TOOL'S PAGE, drawn once: on the catalogue they sit
   // under the third-party heading, and on a tool's page on their own.
@@ -3165,13 +3166,22 @@ export function Integrations({ kind }: { kind?: string }) {
         <Skeleton variant="text" rows={6} label="Loading" />
       )}
       <QueryState error={error} refusal={refusal} loading={loading} empty={undefined}>
-        {/* NOTHING CONNECTED IS A FACT ABOUT THE LIST, SAID ABOVE IT. A page
-            holding a tile for every tool is not empty, and the sentence is
-            worth reading before the list, not after it. */}
-        {data && !kind && configured.length === 0 && (
-          <Callout variant="neutral" icon={<PlugGlyph size="md" />}>
-            No integration connected yet. Connect one below.
-          </Callout>
+        {/* NOTHING CONNECTED IS SAID ONLY WHERE IT IS NEWS: under the
+            Connected filter, whose list it empties. Over the whole catalogue
+            the filter's own "Connected 0" already says it, and a banner
+            saying it again stood on top of the address note above it. */}
+        {data && !kind && !setup.loading && show === "connected" && configured.length === 0 && (
+          <EmptyState
+            size="compact"
+            icon={<PlugGlyph size={32} />}
+            title="No app is connected yet"
+            description="Every app this engine serves is under Available, with the way to connect it."
+            action={
+              <Button variant="secondary" size="small" onClick={() => setShow("available")}>
+                Show available apps
+              </Button>
+            }
+          />
         )}
         {kind && !focus && (
           <EmptyState
@@ -3195,8 +3205,8 @@ export function Integrations({ kind }: { kind?: string }) {
             REFUSED setup read is not waiting: it answers, the banner says so,
             and the tiles render with their form actions disabled and saying
             why. */}
-        {!setup.loading && !kind && (
-          <div className="int-grid">
+        {!setup.loading && !kind && shown.length > 0 && (
+          <TileGrid columns={3}>
             {shown.map((entry) => (
               <IntegrationTile
                 key={entry.key}
@@ -3210,25 +3220,7 @@ export function Integrations({ kind }: { kind?: string }) {
                 onOpen={(action, reason) => openForm(entry, action, reason)}
               />
             ))}
-            {/* EVERY OTHER TOOL IS AN MCP SERVER, and a catalogue that ended
-                at the six vendors this build ships would read as the whole of
-                what an agent can reach. A link rather than a tile with an
-                action: it opens the add form where the servers are listed and
-                checked, MCP Tools, with `?add=server`, so a server added
-                from here lands beside the others it is compared with. */}
-            {show !== "connected" && (
-              <a
-                className="int-tile int-tile-more"
-                href={href(["settings", "mcp-tools"], { add: "server" })}
-              >
-                <span className="int-brand int-brand-more" aria-hidden>
-                  <PlusGlyph size="sm" />
-                </span>
-                <span className="int-name">Add an MCP server</span>
-                <span className="int-tile-text">Give agents any MCP tool.</span>
-              </a>
-            )}
-          </div>
+          </TileGrid>
         )}
         {/* ONE TOOL'S PAGE, which is where a tile's Manage goes: the agents,
             the surfaces that need something, the settings form and
@@ -3322,7 +3314,6 @@ export function Integrations({ kind }: { kind?: string }) {
 
   return (
     <>
-      {kind && baseAddress}
       {managed !== null && (
         <Callout variant="neutral" icon={<ShieldGlyph size="md" />}>
           {managed}
@@ -3377,6 +3368,7 @@ export function Integrations({ kind }: { kind?: string }) {
           }
         />
       )}
+      {kind && baseAddress}
 
       {dropping && (
         <DisconnectDialog
@@ -3426,23 +3418,21 @@ export function Integrations({ kind }: { kind?: string }) {
       {kind ? (
         catalogue
       ) : (
-        <section className="col gap-3" aria-labelledby="catalogue-heading">
-          {/* THE THIRD-PARTY CATALOGUE, under its own heading: the filter, the
-              address vendors deliver to and the note that nothing is connected
-              are all about these tiles, and drawn above Crewlet's own services
-              they read as governing those too. */}
-          <Eyebrow as="p" id="catalogue-heading">
-            Third-party apps
-          </Eyebrow>
-          {/* WHAT THE SCREEN IS, AND WHICH HALF OF IT. The lede and the filter
-              share a row, as on every catalogue in this product: the counts are
-              what a reader asks first ("how many do we have?"), and a figure in
-              the page bar said it a second time. The counts are a READING, so
-              the filter waits for one: "Connected 0" before the rows answer is a
-              claim that the company was counted. */}
-          <div className="int-bar">
-            <PageNote>Connect the tools the company already uses.</PageNote>
-            {data && (
+        // THE THIRD-PARTY CATALOGUE, under the kit's section heading as Built
+        // into Crewlet is: the filter, the address vendors deliver to and the
+        // note that nothing is connected are all about these tiles, and drawn
+        // above Crewlet's own services they read as governing those too.
+        //
+        // THE FILTER IS THE SECTION'S OWN CONTROL, at the end of its heading
+        // row, as on every catalogue in this product: the counts are what a
+        // reader asks first ("how many do we have?"). The counts are a
+        // READING, so the filter waits for one: "Connected 0" before the rows
+        // answer is a claim that the company was counted.
+        <Section
+          title="Third-party apps"
+          description="Connect the tools the company already uses."
+          actions={
+            data && (
               <SegmentedControl<Show>
                 semantics="radio"
                 activate="manual"
@@ -3460,12 +3450,12 @@ export function Integrations({ kind }: { kind?: string }) {
                   },
                 ]}
               />
-            )}
-          </div>
-
-          {baseAddress}
+            )
+          }
+        >
           {catalogue}
-        </section>
+          {baseAddress}
+        </Section>
       )}
     </>
   );
