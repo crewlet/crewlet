@@ -1148,7 +1148,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/work/{KEY}` | **Project**: one project as Work's scope: its Tasks lens, About, History and Files | `lens=about\|history\|files` (Tasks, the first, takes no key) · the same view strip and filter grammar, scoped to the project |
 | `#/work/{KEY}-{n}` · `#/work/{id}` | **Task** — description, checklists, sub-tasks, activity (changes, comments, agent turns), properties and cost | `activity=all\|comments\|turns\|changes` · `list=` |
 | `#/company` | **Company › Overview** (the sidebar's **Overview** row): who the company is, its name and its clock (the zone every day the engine cuts is cut on), its mission and its vision, read from the org projection by every reader. The standing policies are their own row | |
-| `#/company/policies` | **Policies**: the standing policies every agent reads on every turn, in plain words. The caps the engine holds a turn to are not policies, and are Settings › Limits | |
+| `#/company/policies` | **Policies**: the standing policies every agent reads on every turn, in plain words, numbered in a readable column, with **Edit policies** opening the builder at them. The caps the engine holds a turn to are not policies, and are Settings › Limits, offered as a related row to a reader who may open it | |
 | `#/company/org` | **Org chart**, the hierarchy every seat works inside; every human seat with its kind; what holds each one for an admin and for the holder themselves; and, for an admin, where a person is invited or created onto the vacant human seat they will hold | `unit=` · `seat=` |
 | `#/company/org/roster` | **Org chart › Roster**, every seat, and who is carrying how much | `view=seats\|workload` · `group=state\|unit\|flat` · `q=` |
 | `#/company/org/teams` · `#/company/org/teams/{unit}` | **Org chart › Teams**, every unit with what it is for and its goals; one unit's page | |
@@ -7319,15 +7319,23 @@ reading rather than two polls on two clocks that disagreed for up to 30 s.
 (`#/company`, the sidebar's **Overview** row, once Settings › General) is who
 the company is: its name, its clock, its mission and its vision. **Company ›
 Policies** (`#/company/policies`) is the standing policies every executor is
-given verbatim, and only those. Both are read from the org projection, so
-every signed-in reader can open them: they are the overview's, like the org
-chart. Both are edited in the org builder (**Edit in org**). The caps the
-engine holds a turn to are not policies the company writes for its agents to
-read: they are **Settings › Limits** (`#/settings/limits`), in the Runtime
-group, the engine's own answer for each (the turn's guardrails, delegation,
-notifications and a scheduled turn's timeout), tagged *Default* where the
-company document writes none and *Off* rather than 0 where a value switches
-its limit off. Limits is read-only, admin's, and Policies says where it is.
+given verbatim, and only those, numbered (a reader cites "policy 2") with a
+rule between them. Both are read from the org projection, so every signed-in
+reader can open them: they are the overview's, like the org chart. Both stand
+in one readable column (the reading measure) rather than across the canvas,
+and both are edited in the org builder (**Edit charter**, **Edit policies**).
+The caps the engine holds a turn to are not policies the company writes for
+its agents to read: they are **Settings › Limits** (`#/settings/limits`), in
+the Runtime group, the engine's own answer for each (the turn's guardrails,
+delegation, notifications and a scheduled turn's timeout). Each group is a
+card holding the kit's `SettingsTable`, the shape every read-only settings
+page takes (Settings › Sign-in policy too): the cap's name with its key in
+the company document under it, the value in tabular figures, and its source,
+*Default* as a quiet word where the value is the engine's and a marked
+*Changed from* the default otherwise, *Off* rather than 0 where a value
+switches its limit off (the answer's `off` and `default_off`). Limits is
+read-only and admin's, and Policies offers it as a related row to a reader
+who may open it.
 
 **Access** is the identity directory, over the routes `/iam` serves to an
 admin, split over three pages so that no row is drawn twice: People, Service

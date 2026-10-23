@@ -11,13 +11,14 @@
  */
 
 import { act, cleanup, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import type { ComponentType } from "react";
 import { Overview } from "./Overview.tsx";
 import { Policies } from "./Policies.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
+import { SessionReading } from "~/lib/frameSession.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
@@ -33,11 +34,17 @@ class InertWebSocket {
 
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
+  // THE SESSION READ IS REFUSED, so what the reader holds is the viewer's.
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response("{}", { status: 404 })),
+  );
   location.hash = "#/company";
 });
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   location.hash = "#/";
 });
 
@@ -45,11 +52,13 @@ function mount(Screen: ComponentType = Overview) {
   const store = new Store();
   render(
     <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
-      <ViewerProvider>
-        <Router>
-          <Screen />
-        </Router>
-      </ViewerProvider>
+      <SessionReading>
+        <ViewerProvider>
+          <Router>
+            <Screen />
+          </Router>
+        </ViewerProvider>
+      </SessionReading>
     </ClientContext.Provider>,
   );
   return store;
@@ -91,13 +100,10 @@ describe("the policies", () => {
     expect(screen.getByText("Loading the company's policies")).toBeDefined();
   });
 
-  test("list what the chart says, the empty list included, and say where the caps are", () => {
+  test("list what the chart says, the empty list included, numbered and in order", () => {
     const store = mount(Policies);
     act(() => store.applyOrg(withDerived({ name: "Acme", mission: "Ship it", roles: [] })));
     expect(screen.getByText("No policies are set")).toBeDefined();
-    // THE CAPS LIVE ONCE, in Settings › Limits, and this page only says where.
-    const limits = screen.getByRole("link", { name: "Settings › Limits" });
-    expect(limits.getAttribute("href")).toBe("#/settings/limits");
     act(() =>
       store.applyOrg(
         withDerived({
