@@ -52,6 +52,8 @@ import {
   SegmentedControl,
   Select,
   Skeleton,
+  Stack,
+  Text,
   VisuallyHidden,
   useReorder,
   useToast,
@@ -715,45 +717,53 @@ function DataPanel({
         // sources will be, so it is not left blank under its heading.
         <p className="dashboard-create-data-note">The sources appear here once they can be read.</p>
       ) : (
-        <DatasetSourceList label="Data you can use">
-          {sources.map((src) => {
-            const words = sourceWords(src);
-            const set = draft.settings[src.name] ?? {};
-            const base = datasetOf(src, set, undefined);
-            const state = previews.states.get(base.key);
-            const isOpen = open === src.name;
-            return (
-              <DatasetSource
-                key={src.name}
-                title={words.label}
-                kind="engine"
-                // THE SOURCE'S AREA in the kind's place: every source here
-                // reads the engine, so the tag says which part of it.
-                labels={{ kinds: { engine: words.area } }}
-                definition={words.description}
-                refresh={refreshWords(boardDataset(base).freshness)}
-                asOf={state?.answer?.as_of}
-                status={previewStatus(state)}
-                detail={state?.failure ?? state?.answer?.detail}
-                rows={previewRows(state)}
-                selected={isOpen}
-                onSelect={() => onOpen(isOpen ? null : src.name)}
-                now={now}
-              >
-                {isOpen && previewStatus(state) !== "refused" ? (
-                  <SourceFigures
-                    src={src}
-                    draft={draft}
-                    previews={previews}
-                    onSetting={(key, value) => onSetting(src.name, key, value)}
-                    onAdd={(r) => onAdd(src, r)}
-                    boardTitle={boardTitle}
-                  />
-                ) : null}
-              </DatasetSource>
-            );
-          })}
-        </DatasetSourceList>
+        // GROUPED BY AREA, each group a list named by its area: every source
+        // here reads the engine, and a tag on every row naming its area (the
+        // kind's place, borrowed) was a column a reader learned to skip.
+        <Stack gap={4}>
+          {groupByArea(sources).map(({ area, sources: inArea }) => (
+            <Stack gap={2} key={area}>
+              <Text as="h3" variant="caption">
+                {area}
+              </Text>
+              <DatasetSourceList label={area}>
+                {inArea.map((src) => {
+                  const words = sourceWords(src);
+                  const set = draft.settings[src.name] ?? {};
+                  const base = datasetOf(src, set, undefined);
+                  const state = previews.states.get(base.key);
+                  const isOpen = open === src.name;
+                  return (
+                    <DatasetSource
+                      key={src.name}
+                      title={words.label}
+                      definition={words.description}
+                      refresh={refreshWords(boardDataset(base).freshness)}
+                      asOf={state?.answer?.as_of}
+                      status={previewStatus(state)}
+                      detail={state?.failure ?? state?.answer?.detail}
+                      rows={previewRows(state)}
+                      selected={isOpen}
+                      onSelect={() => onOpen(isOpen ? null : src.name)}
+                      now={now}
+                    >
+                      {isOpen && previewStatus(state) !== "refused" ? (
+                        <SourceFigures
+                          src={src}
+                          draft={draft}
+                          previews={previews}
+                          onSetting={(key, value) => onSetting(src.name, key, value)}
+                          onAdd={(r) => onAdd(src, r)}
+                          boardTitle={boardTitle}
+                        />
+                      ) : null}
+                    </DatasetSource>
+                  );
+                })}
+              </DatasetSourceList>
+            </Stack>
+          ))}
+        </Stack>
       )}
     </aside>
   );
@@ -857,4 +867,18 @@ function SourceFigures({
       </ul>
     </div>
   );
+}
+
+/** The sources in their own order, gathered under their areas in the order each area first appears. */
+export function groupByArea(
+  sources: readonly DashboardEngineSource[],
+): { area: string; sources: DashboardEngineSource[] }[] {
+  const groups = new Map<string, DashboardEngineSource[]>();
+  for (const src of sources) {
+    const area = sourceWords(src).area;
+    const group = groups.get(area);
+    if (group) group.push(src);
+    else groups.set(area, [src]);
+  }
+  return [...groups].map(([area, inArea]) => ({ area, sources: inArea }));
 }
