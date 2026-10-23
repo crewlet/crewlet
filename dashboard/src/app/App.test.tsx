@@ -8,7 +8,16 @@
  * sees, and it is the one least likely to be exercised by hand.
  */
 
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  waitForElementToBeRemoved,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { App } from "./App.tsx";
 import { Router } from "./router.tsx";
@@ -473,6 +482,12 @@ describe("a section, for a reader holding none of its grants", () => {
   /** Signed in, and holding nothing. */
   const reader = { login: "reader", owner: "reader", grants: [] };
 
+  /** What a screen's banner says of a read refused on no access it can name. */
+  const REFUSED_UNNAMED = "You don’t have access to this.";
+
+  /** What only a reader nobody signed in for is told. */
+  const SIGN_IN = "Sign in to see this.";
+
   test("the table still names a grant for the sections it guarded", () => {
     expect(guarded.map((s) => s.key)).toEqual(
       expect.arrayContaining([
@@ -564,6 +579,14 @@ describe("a section, for a reader holding none of its grants", () => {
   // until the next poll — so the screen mounts, and ITS refused reads are its
   // to say. They say it without a figure: a refused read is not "0 nodes",
   // "0 credentials held" or "0 of 6 configured".
+  //
+  // EACH STEP IS WAITED FOR AS THE EVENT IT IS, never as a number of ticks.
+  // React commits what a settled read changed on a scheduler task of its own,
+  // and its scheduler yields to the event loop once five milliseconds of its
+  // clock have passed, so on a loaded runner the frame's commit landed a task
+  // behind a fixed `setTimeout(0)` and the case read the frame still
+  // checking: "Checking your access to File storage", on a run whose screen
+  // mounted a moment later.
   test("a viewer read that failed mounts the screen, which counts nothing it was refused", async () => {
     // `403`: a `401` says nobody is signed in, which sends the tab to the
     // sign-in rather than leaving the screen to say what it was refused.
@@ -574,20 +597,34 @@ describe("a section, for a reader holding none of its grants", () => {
     for (const section of guarded) {
       location.hash = buildHash(section.path);
       const { view } = mountAs(Promise.reject(new QueryError("timeout")));
-      const content = () => view.container.querySelector(".crewlet-app-shell__content")!;
-      // THE FAILED READ'S RENDER IS AWAITED INSIDE `act`, which flushes the
-      // update the rejection schedules. Awaited outside it, the render waited
-      // on React's scheduler, and a timer tick only usually came after it: on
-      // a loaded runner the screen still said "Checking your access".
-      for (let i = 0; i < 8; i++) await act(async () => Promise.resolve());
+      const content = () =>
+        view.container.querySelector<HTMLElement>(".crewlet-app-shell__content")!;
+      // THE FRAME CHECKS FIRST AND THEN GIVES WAY: the read is still out at
+      // the first render, so the skeleton is there to be removed, and its
+      // removal is the commit that decided what replaces it.
+      await waitForElementToBeRemoved(
+        () => screen.queryByText(`Checking your access to ${section.label}`),
+        { onTimeout: (e) => new Error(`${section.key}: ${e.message}`) },
+      );
+      // WHAT REPLACED IT IS THE SCREEN, and not the frame's refusal, which
+      // that same commit would have drawn.
       expect(
         screen.queryByText(`You need ${accessNames(section.grants!)} access`),
         section.key,
       ).toBeNull();
-      expect(
-        screen.queryByText(`Checking your access to ${section.label}`),
-        section.key,
-      ).toBeNull();
+      // AND THE SCREEN HAS SAID WHAT IT WAS REFUSED before anything below
+      // looks for a figure: looked for sooner, nothing had answered that
+      // could have drawn one, and the case passed having watched nothing.
+      // Every read here is a 403 naming no access, which every screen says
+      // as no access, and NEVER AS A SIGN-IN: this reader is signed in, and
+      // Audit told them to sign in where every other screen did not.
+      await waitFor(() =>
+        expect(
+          within(content()).queryAllByText(REFUSED_UNNAMED),
+          `${section.key} said nothing of what it was refused`,
+        ).not.toEqual([]),
+      );
+      expect(within(content()).queryByText(SIGN_IN), section.key).toBeNull();
       // A COUNT IN THE HEADER IS A TAG ("0 nodes", "0 credentials held",
       // "0 of 6 configured"); a time-range control there is not a figure.
       // Tools' figures are the registry the socket pushes every reader — no
