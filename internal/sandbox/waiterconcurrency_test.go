@@ -320,12 +320,16 @@ func TestADutyLostStopsEveryPollItAuthorised(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
 	stuck := rig.launch("t-stuck")
-	var claims atomic.Int32
+	var reached atomic.Bool
 	waiter, err := NewWaiter(WaiterOptions{
 		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
 		Interval: 20 * time.Millisecond, DutyTTL: time.Minute,
-		// Held for the first pass, and a peer's from the second on.
-		ClaimDuty: func(context.Context) (bool, error) { return claims.Add(1) == 1, nil },
+		// Held until the poll has reached the box, and a peer's from the
+		// next pass on. Lost on the second pass whatever had happened, it
+		// hung the case when the first walk had not started its poll
+		// before that pass 20 ms later stood it down, which a loaded
+		// runner does: nothing then polled the box at all.
+		ClaimDuty: func(context.Context) (bool, error) { return !reached.Load(), nil },
 		Now:       func() time.Time { return rig.now },
 	})
 	if err != nil {
@@ -338,6 +342,7 @@ func TestADutyLostStopsEveryPollItAuthorised(t *testing.T) {
 		if id != stuck.SandboxID {
 			return nil
 		}
+		reached.Store(true)
 		reaching <- struct{}{}
 		<-ctx.Done()
 		ended <- ctx.Err()
@@ -345,7 +350,11 @@ func TestADutyLostStopsEveryPollItAuthorised(t *testing.T) {
 	}
 	waiter.Start(t.Context())
 	defer waiter.Stop()
-	<-reaching
+	select {
+	case <-reaching:
+	case <-time.After(10 * time.Second):
+		t.Fatal("no poll reached the box in 10 s, so there was nothing for a lost duty to stop")
+	}
 	select {
 	case err := <-ended:
 		if !errors.Is(err, context.Canceled) {
