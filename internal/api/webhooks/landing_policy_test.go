@@ -42,8 +42,12 @@ func TestTheLandingPagesAllowExactlyTheirOwnInlineBlocks(t *testing.T) {
 			"a created app with an install link": arrive(&stubFlow{
 				seat: "sre-lead", install: "https://github.com/apps/acme-sre-lead/installations/new",
 			}, "code=abc&state=xyz"),
-			"the install arrival":       arrive(&stubFlow{}, "installed=sre-lead&installation_id=42"),
-			"a refused creation":        arrive(&stubFlow{seat: "sre-lead", err: errors.New("refused")}, "code=abc&state=xyz"),
+			"the install arrival": arrive(&stubFlow{}, "installed=sre-lead&installation_id=42"),
+			"a refused creation":  arrive(&stubFlow{seat: "sre-lead", err: errors.New("refused")}, "code=abc&state=xyz"),
+			"a link used again": arrive(&stubFlow{
+				seat: "sre-lead", install: "https://github.com/apps/acme-sre-lead/installations/new",
+				err: toldFlowError{told: "done", err: "used", status: 200, done: true},
+			}, "code=abc&state=xyz"),
 			"GitHub's own refusal":      arrive(&stubFlow{}, "error=access_denied&error_description=No"),
 			"a creation with no code":   arrive(&stubFlow{}, "state=xyz"),
 			"an engine with no flow":    landingOn(t, newEdgeOn(t, db), "code=abc&state=xyz"),
