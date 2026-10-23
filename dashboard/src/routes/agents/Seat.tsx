@@ -431,7 +431,10 @@ export function SeatScreen({ handle }: { handle: string }) {
       </header>
 
       <div className="prof-body">
-        {readsSeats && seat.handle && (
+        {/* A SEAT NOBODY HOLDS says so in its Overview's empty state, with
+            the ways to fill it; the notice is for a seat somebody holds, a
+            listing that could not say, and the seat's other tabs. */}
+        {readsSeats && seat.handle && (!unheld || tab !== "overview") && (
           <Holder seat={{ handle: seat.handle, name: seat.name }} seats={humanSeats} />
         )}
         <Notices seat={seat} agent={agent} now={now} nameOf={nameOf} />
@@ -456,6 +459,7 @@ export function SeatScreen({ handle }: { handle: string }) {
               nameOf={nameOf}
               now={now}
               unheld={unheld}
+              humanSeats={humanSeats}
             />
           )}
           {tab === "work" &&
@@ -524,7 +528,9 @@ function SeatHead({ seat, agent }: { seat: Seat; agent: AgentRow | undefined }) 
               names the same seat — two `h1`s reading the same words are two
               page titles to a reader navigating by heading. */}
           <h2 className="prof-name">{seat.name}</h2>
-          <Tag appearance="outline">{human ? "Person" : "Agent"}</Tag>
+          {/* ONE PILL, THE STATE: the kind is a fact, said first on the line
+              under the name, where an outline "Agent" beside the state's pill
+              read as two states. */}
           {!human && (
             <Tag variant={toneOf(state)} dot>
               {pillWord(agent)}
@@ -532,7 +538,9 @@ function SeatHead({ seat, agent }: { seat: Seat; agent: AgentRow | undefined }) 
           )}
         </div>
         <p className="prof-line">
-          {[handleLabel(seat.handle), place || "above every unit"].filter(Boolean).join(" · ")}
+          {[human ? "Person" : "Agent", handleLabel(seat.handle), place || "above every unit"]
+            .filter(Boolean)
+            .join(" · ")}
           {seat.manager ? (
             <>
               {" · reports to "}

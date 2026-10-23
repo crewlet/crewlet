@@ -1191,7 +1191,7 @@ test("the setup card reads the chart's model and tools, and the document's own r
   expect(setup.textContent).toContain("anthropic-main");
   expect(setup.textContent).toContain("openai-fallback");
   expect(setup.textContent).toContain("gitlab");
-  expect(setup.textContent).toContain("nodes labelled pool=build");
+  expect(setup.textContent).toContain("Nodes labelled pool=build");
   expect(setup.textContent).toContain("test-writer, reviewer-lite");
   expect(within(setup).getByRole("link", { name: "Edit" }).getAttribute("href")).toBe(
     "#/company/org/edit?seat=swe",
@@ -1209,7 +1209,7 @@ test("without the document the setup card says whose read it is, not that nothin
   // THE PUBLIC HALF STILL DRAWS.
   expect(setup.textContent).toContain("anthropic-main");
   expect(setup.textContent).toContain("Some setup is only visible to admins.");
-  expect(setup.textContent).not.toContain("not offered");
+  expect(setup.textContent).not.toContain("Not offered");
 });
 
 // ---------------------------------------------------------------------------

@@ -419,13 +419,15 @@ export function turnTokens(
  * Where a seat's code work runs, in a reader's words: "not offered", or the
  * cell and the coding agent — "e2b · claude-code". An empty `run_in` or
  * `coding_agent` inherits the provider's default, and says so rather than
- * naming a default this client would have to guess.
+ * naming a default this client would have to guess. Every value on the setup
+ * card starts the line it stands on, so each is written with its capital, as
+ * "No provider configured" beside it is.
  */
 export function sandboxWords(role: ConfigRole): string {
   const box = role.sandbox as
     { enabled?: boolean; run_in?: string; coding_agent?: string } | undefined;
-  if (!box?.enabled) return "not offered";
-  return [box.run_in || "the provider's default cell", box.coding_agent]
+  if (!box?.enabled) return "Not offered";
+  return [box.run_in || "The provider's default cell", box.coding_agent]
     .filter(Boolean)
     .join(" · ");
 }
@@ -436,10 +438,10 @@ export function sandboxWords(role: ConfigRole): string {
  */
 export function placementWords(role: ConfigRole): string {
   const place = role.placement as { node?: string; labels?: Record<string, string> } | undefined;
-  if (place?.node) return `only ${place.node}`;
+  if (place?.node) return `Only ${place.node}`;
   const labels = Object.entries(place?.labels ?? {});
-  if (labels.length) return `nodes labelled ${labels.map(([k, v]) => `${k}=${v}`).join(", ")}`;
-  return "any node";
+  if (labels.length) return `Nodes labelled ${labels.map(([k, v]) => `${k}=${v}`).join(", ")}`;
+  return "Any node";
 }
 
 /**
@@ -449,7 +451,7 @@ export function placementWords(role: ConfigRole): string {
  */
 export function workersWords(role: ConfigRole): string {
   const workers = (role.workers ?? []).filter(Boolean);
-  return workers.length ? workers.join(", ") : "every template the company defines";
+  return workers.length ? workers.join(", ") : "Every template the company defines";
 }
 
 // ---------------------------------------------------------------------------

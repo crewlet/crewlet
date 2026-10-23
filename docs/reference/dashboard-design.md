@@ -3348,8 +3348,10 @@ active; or, for an admin, the open invitation that names it — its address, unt
 that until it is redeemed, cancelled or lapses nobody else can be invited or
 bound to the seat — with **Cancel invitation**; or **This seat is open**,
 with **Invite** and **Add person**, the two ways a person comes to exist,
-opening [the chart's dialogs](#the-org-chart-is-the-company-running). The
-gestures are drawn for an admin. The answer is
+opening [the chart's dialogs](#the-org-chart-is-the-company-running). A seat
+nobody holds says it as its Overview's empty state, in the column a person's
+day and work would fill (its other tabs keep the line above them), rather than
+as a notice above an empty column. The gestures are drawn for an admin. The answer is
 `GET /iam/seats`, which every signed-in reader is answered, masked per reader
 — to anybody but an admin a seat an invitation holds reads as nobody's. A read
 that failed is SAID, with the engine's refusal, rather than drawn as nothing —

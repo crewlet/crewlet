@@ -224,25 +224,25 @@ describe("the setup card's words", () => {
   const role = (over: Partial<ConfigRole>): ConfigRole => ({ name: "SWE", ...over });
 
   test("a sandbox is not offered until it is enabled, and a default is said as one", () => {
-    expect(sandboxWords(role({}))).toBe("not offered");
-    expect(sandboxWords(role({ sandbox: { enabled: false, run_in: "e2b" } }))).toBe("not offered");
+    expect(sandboxWords(role({}))).toBe("Not offered");
+    expect(sandboxWords(role({ sandbox: { enabled: false, run_in: "e2b" } }))).toBe("Not offered");
     expect(
       sandboxWords(role({ sandbox: { enabled: true, run_in: "e2b", coding_agent: "opencode" } })),
     ).toBe("e2b · opencode");
-    expect(sandboxWords(role({ sandbox: { enabled: true } }))).toBe("the provider's default cell");
+    expect(sandboxWords(role({ sandbox: { enabled: true } }))).toBe("The provider's default cell");
   });
 
   test("placement is a pinned node, a set of labels, or any node", () => {
-    expect(placementWords(role({ placement: { node: "node-2" } }))).toBe("only node-2");
+    expect(placementWords(role({ placement: { node: "node-2" } }))).toBe("Only node-2");
     expect(placementWords(role({ placement: { labels: { pool: "build", gpu: "no" } } }))).toBe(
-      "nodes labelled pool=build, gpu=no",
+      "Nodes labelled pool=build, gpu=no",
     );
-    expect(placementWords(role({}))).toBe("any node");
+    expect(placementWords(role({}))).toBe("Any node");
   });
 
   // `workers:` NARROWS the company's templates; empty is every one, not none.
   test("an empty worker list is every template, never none", () => {
-    expect(workersWords(role({}))).toBe("every template the company defines");
+    expect(workersWords(role({}))).toBe("Every template the company defines");
     expect(workersWords(role({ workers: ["test-writer"] }))).toBe("test-writer");
   });
 });
