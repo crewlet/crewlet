@@ -901,7 +901,12 @@ func TestAReanchorMovesOnlyTheDomainItNamed(t *testing.T) {
 	for runner.Committed() != secondAt && runner.Stopped() == nil && ctx.Err() == nil {
 		time.Sleep(2 * time.Millisecond)
 	}
-	time.Sleep(20 * time.Millisecond)
+	// AND GOES ON RUNNING across two more fetches it has answered and
+	// handled: a sleep here watched nothing on a runner that let no fetch
+	// happen during it.
+	if runner.Stopped() == nil {
+		secondFetch.awaitAnswered(t, 2, "two fetches past the other domain's checkpoint")
+	}
 	cancel()
 	<-errs
 	if err := runner.Stopped(); err != nil {
