@@ -14,7 +14,7 @@
  * (their record is their login) and is asked like anybody.
  */
 
-import { Card, Tag } from "@crewlethq/ui";
+import { Card, EmptyState, Tag } from "@crewlethq/ui";
 import { TriangleAlertGlyph } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
 import { DecisionList, decisionsHref } from "~/components/DecisionRow.tsx";
@@ -80,9 +80,14 @@ export function Decisions({
       ) : (
         <QueryState error={error} refusal={refusal} loading={loading && !answer}>
           {subjects.length === 0 ? (
-            <div className="home-quiet">
-              <strong className="t-cell">Nothing needs your decision</strong>
-            </div>
+            // WHAT THE CARD IS FOR, not "nothing" a third time: the greeting
+            // and the figure above already say none is waiting.
+            <EmptyState
+              size="compact"
+              headingLevel="none"
+              title="No decisions waiting"
+              description="When an agent asks you something, it appears here with the way to answer."
+            />
           ) : (
             <DecisionList
               subjects={subjects}

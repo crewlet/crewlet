@@ -2711,8 +2711,9 @@ would claim a tracker that answered nothing. The decisions, the conditions,
 Live now and the tokens arrive under every backend and stay.
 
 Five tiles sit in a row while the page column holds them — five tiles at their
-176px floor and four gaps, 928px — three a row under that, one on a phone; the
-board's blocks stack below the same width. Every one of those is measured from
+176px floor and four of the board's own 16px gaps, 944px, so the figures'
+gutters stand on the gutters of the blocks under them — three over two under
+that, one on a phone; the board's blocks stack below the same width. Every one of those is measured from
 the SCREEN's column (`@container page`), which the shell declares on its
 content as well as on its header, because the sidebar and an open peek take
 their share of the window first.
@@ -2758,7 +2759,7 @@ widgets, Cancel and Done. New task steps aside until Done.
   section no longer offers it keeps its place and says so.
 - **Links open in a new tab while Home is arranged**, so following one never
   leaves an unsaved board. At rest they behave as everywhere else.
-- **Below the stacking width** (928px of the page's own column) every block
+- **Below the stacking width** (944px of the page's own column) every block
   spans the page and cannot be resized, as the paired cards always stacked.
 - **No star in Home's bar.** Home is the sidebar's first row and has no
   sections whose bar a disabled star would hold steady (`WorkspaceRow.starless`),

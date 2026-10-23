@@ -19,6 +19,7 @@
  */
 
 import { BarList, Card, DATA_COLOR_OTHER, DATA_COLORS, type BarPart } from "@crewlethq/ui";
+import { CoinsGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { fmtCount, plural } from "~/lib/format.ts";
@@ -45,58 +46,61 @@ export function TokensByTeam({
   const bands = (data?.by_group ?? []).filter((b) => b.total_tokens > 0);
   const window = range.days === 1 ? "Today" : `Last ${range.words}`;
   return (
-    <Card className="home-card home-chart">
-      <div className="home-chart-head">
-        <div className="home-chart-title">
-          <h3 className="home-card-title">Tokens by team</h3>
-          <span className="home-card-caption">
-            {data ? `${window} · ${fmtCount(data.totals.total_tokens)} total` : window}
-          </span>
-        </div>
-        <a className="t-link" href={href(["settings", "spend"], { group: "unit" })}>
-          Spend
-        </a>
-      </div>
-      <QueryState
-        error={spend.error}
-        refusal={spend.refusal}
-        loading={spend.loading && !data}
-        empty={
-          data && bands.length === 0
-            ? {
-                title: "No tokens spent in this window",
-                hint: "Teams appear once their agents spend tokens.",
-              }
-            : undefined
+    // THE KIT'S HEAD, as every other card on Home wears (see CompletedChart).
+    <Card padding="none" className="home-card">
+      <Card.Header
+        icon={<CoinsGlyph size="sm" />}
+        subtitle={data ? `${window} · ${fmtCount(data.totals.total_tokens)} total` : window}
+        actions={
+          <a className="t-link" href={href(["settings", "spend"], { group: "unit" })}>
+            Spend
+          </a>
         }
       >
-        <BarList
-          layout="beside"
-          limit={TEAM_ROWS}
-          moreLabel={(n) => `${plural(n, "more team")}`}
-          data={bands.map((b) => ({
-            id: b.group || "other",
-            // A UNIT BAND IS KEYED BY THE UNIT'S KEY and named by its
-            // `label`: two units may share a name, and a key is no name to
-            // draw. The key stands in only where the engine sent no label.
-            label: b.other ? "Everyone else" : b.label || b.group,
-            sub: b.other
-              ? plural(b.folded, "team")
-              : b.seats
-                ? plural(b.seats, "agent")
-                : undefined,
-            value: b.total_tokens,
-            display: fmtCount(b.total_tokens),
-            // ONE HUE FOR A BAR THAT IS NOT SPLIT, the first data hue for a
-            // team the engine answered without its seats and the residual
-            // hue for the residual row, which is several teams.
-            color: b.other ? DATA_COLOR_OTHER : DATA_COLORS[0],
-            ...(b.other || !b.parts?.length
-              ? {}
-              : { parts: seatParts(b.parts, (key) => badgeOf(key).name) }),
-          }))}
-        />
-      </QueryState>
+        <Card.Title as="h3">Tokens by team</Card.Title>
+      </Card.Header>
+      <Card.Body className="home-chart">
+        <QueryState
+          error={spend.error}
+          refusal={spend.refusal}
+          loading={spend.loading && !data}
+          empty={
+            data && bands.length === 0
+              ? {
+                  title: "No tokens spent in this window",
+                  hint: "Teams appear once their agents spend tokens.",
+                }
+              : undefined
+          }
+        >
+          <BarList
+            layout="beside"
+            limit={TEAM_ROWS}
+            moreLabel={(n) => `${plural(n, "more team")}`}
+            data={bands.map((b) => ({
+              id: b.group || "other",
+              // A UNIT BAND IS KEYED BY THE UNIT'S KEY and named by its
+              // `label`: two units may share a name, and a key is no name to
+              // draw. The key stands in only where the engine sent no label.
+              label: b.other ? "Everyone else" : b.label || b.group,
+              sub: b.other
+                ? plural(b.folded, "team")
+                : b.seats
+                  ? plural(b.seats, "agent")
+                  : undefined,
+              value: b.total_tokens,
+              display: fmtCount(b.total_tokens),
+              // ONE HUE FOR A BAR THAT IS NOT SPLIT, the first data hue for a
+              // team the engine answered without its seats and the residual
+              // hue for the residual row, which is several teams.
+              color: b.other ? DATA_COLOR_OTHER : DATA_COLORS[0],
+              ...(b.other || !b.parts?.length
+                ? {}
+                : { parts: seatParts(b.parts, (key) => badgeOf(key).name) }),
+            }))}
+          />
+        </QueryState>
+      </Card.Body>
     </Card>
   );
 }

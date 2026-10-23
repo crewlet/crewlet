@@ -787,9 +787,9 @@
 .live-card {
   min-width: 0;
 }
-/* 928px IS HOME'S OWN FOLD, for the same reason: the waiting card's Answer
+/* 944px IS HOME'S OWN FOLD, for the same reason: the waiting card's Answer
    and the run rows need the width the running column would leave them. */
-@container page (width < 928px) {
+@container page (width < 944px) {
   .live-row-pair {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -7658,7 +7658,9 @@ a.work-cal-chip {
 .home-kpis {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: var(--spacing-3);
+  /* THE BOARD'S OWN GAP, read from the board it stands on: at 12px the
+     figures' gutters sat 4px off the 16px gutters of every block under them. */
+  gap: var(--crewlet-arrange-board-gap, var(--spacing-4));
 }
 /* FEWER FIGURES, FEWER COLUMNS: a board's Figure widget draws one or a few of
    the five, and each takes its share of the cell rather than a fifth of it. */
@@ -7680,15 +7682,15 @@ a.work-cal-chip {
   white-space: nowrap;
 }
 
-/* 928px IS FIVE TILES' FLOOR: a tile's value line holds the figure and the
+/* 944px IS FIVE TILES' FLOOR: a tile's value line holds the figure and the
    kit's 96px trend slot inside 16px of padding each side, 176px, and five of
-   them take four 12px gaps. Below it the figures fold into rows that FILL:
+   them take four of the board's 16px gaps. Below it the figures fold into rows that FILL:
    four are two by two, and five are three over two on a six-track grid (the
    first three spanning two tracks, the last two spanning three), since three
    a row left a third-width hole beside the last two. The board's blocks stack
    too (`STACKS_BELOW` in `routes/home/Home.tsx`), since the decisions card's
    buttons need the width the live column would take. */
-@container page (width < 928px) {
+@container page (width < 944px) {
   .home-kpis[data-count="4"] {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -7716,12 +7718,6 @@ a.work-cal-chip {
   margin-inline-start: var(--spacing-2);
   vertical-align: middle;
 }
-.home-card-title {
-  margin: 0;
-  font-size: var(--font-size-md);
-  font-weight: var(--font-weight-semibold);
-  color: var(--color-text-primary);
-}
 .home-card-caption {
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
@@ -7740,15 +7736,6 @@ a.work-cal-chip {
 }
 .home-decisions-icon {
   color: var(--color-feedback-warning-ink);
-}
-
-/* THE QUIET BAND sits on the card's own inset. */
-.home-quiet {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  padding: var(--spacing-3) var(--spacing-4);
-  border-top: 1px solid var(--color-border-default);
 }
 
 /* ---- Home's board ------------------------------------------------------ */
@@ -8432,18 +8419,6 @@ a.live-row:focus-visible {
    CompletedChart.tsx) and its last column is always today. */
 .home-chart .crewlet-stacked-columns__slot:last-child .crewlet-stacked-columns__segment {
   background: var(--color-brand-accent);
-}
-.home-chart-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--spacing-3);
-}
-.home-chart-title {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
 }
 .home-chart-figure {
   flex: none;

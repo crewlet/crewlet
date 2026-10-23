@@ -103,7 +103,7 @@ const store = boardStore(shippedBoard());
  * width a column beside it would take. The same width `screens.css` folds the
  * figures at.
  */
-const STACKS_BELOW = 928;
+const STACKS_BELOW = 944;
 
 const HISTORY = 50;
 /** Keystrokes in one settings field within this long are one step of Undo. */

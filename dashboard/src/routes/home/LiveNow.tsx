@@ -11,7 +11,7 @@
  */
 
 import { useMemo } from "react";
-import { Card, Tag } from "@crewlethq/ui";
+import { Card, EmptyState, Tag } from "@crewlethq/ui";
 import { href } from "~/app/router.tsx";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { plural } from "~/lib/format.ts";
@@ -49,18 +49,24 @@ export function LiveNow({ agents, now }: { agents: readonly AgentRow[]; now: num
         </Card.Title>
       </Card.Header>
       {working.length === 0 ? (
-        <div className="home-quiet">
-          <strong className="t-cell">No agent is working right now</strong>
-        </div>
+        // THE KIT'S COMPACT EMPTY STATE, saying what the card is for: the
+        // greeting already says nobody is working.
+        <EmptyState
+          size="compact"
+          headingLevel="none"
+          title="No agent is working"
+          description="A running turn appears here with its steps and the way to watch it."
+        />
       ) : shown.length === 0 ? (
         // WORKING, AND NOT YET ON A TURN THIS VIEW CAN NAME: a coding run is
         // out for a seat whose turn record has not reached the projection. An
         // empty list under a count of them would read as a list that failed.
-        <div className="home-quiet">
-          <strong className="t-cell">
-            {plural(working.length, "seat")} working, on turns not named yet
-          </strong>
-        </div>
+        <EmptyState
+          size="compact"
+          headingLevel="none"
+          title={`${plural(working.length, "seat")} working`}
+          description="Their turns are not named yet. They appear here once they are."
+        />
       ) : (
         <ul className="live-list">
           {shown.map((row) => (
