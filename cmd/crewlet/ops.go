@@ -150,7 +150,7 @@ func runMigrate(args []string, stdout, stderr io.Writer) error {
 		// schema under a live engine is what the lock exists to prevent,
 		// not an inconvenience it imposes. The remedy is the only one.
 		return engineHoldsTheStore(err, bootstrapPath,
-			"Stop `crewlet run` on this node and re-run — a schema change "+
+			"Stop `crewlet run` on this node and re-run: a schema change "+
 				"under a live engine is exactly what the lock prevents.")
 	}
 	defer func() { _ = db.Close() }()
@@ -161,7 +161,7 @@ func runMigrate(args []string, stdout, stderr io.Writer) error {
 	replicated, err := db.OpenReplicated(ctx, 1)
 	if err != nil {
 		return engineHoldsTheStore(err, bootstrapPath,
-			"Stop `crewlet run` on this node and re-run — a schema change "+
+			"Stop `crewlet run` on this node and re-run: a schema change "+
 				"under a live engine is exactly what the lock prevents.")
 	}
 

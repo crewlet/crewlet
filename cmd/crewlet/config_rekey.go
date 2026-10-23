@@ -72,7 +72,7 @@ func rekeyConfig(ctx context.Context, cs *configStore, dryRun bool, stdout io.Wr
 		// key back in secrets.keys and the error is otherwise a decrypt
 		// failure with nothing to act on.
 		return fmt.Errorf("revision %s is sealed under %s, which this "+
-			"keyring cannot open — restore that key to secrets.keys and "+
+			"keyring cannot open. Restore that key to secrets.keys and "+
 			"re-run: %w", rev.ID, sealedUnder, err)
 	}
 	id, err := reseal(ctx, cs, rev, document, fmt.Sprintf(

@@ -48,7 +48,7 @@ import (
 // revision a meaningful gesture — it mints a new epoch every node is
 // watching, which is how a rotated secret reaches a running fleet.
 
-const configUsage = `crewlet config — the company configuration in the store
+const configUsage = `crewlet config: the company configuration in the store
 
 Usage:
   crewlet config import FILE       Write a company document as a new revision to boot on
@@ -437,23 +437,23 @@ func lockedStoreRemedy(sub string) string {
 	const stop = "stop `crewlet run` on this node and re-run."
 	switch sub {
 	case "show", "export":
-		return "Read it through the running node instead — GET /config " +
+		return "Read it through the running node instead (GET /config " +
 			"serves the fleet's revision with its credentials masked, and " +
-			"GET /config/revisions/<id> any other — or " + stop
+			"GET /config/revisions/<id> any other), or " + stop
 	case "revisions":
-		return "Read them through the running node instead — GET " +
-			"/config/revisions — or " + stop
+		return "Read them through the running node instead (GET " +
+			"/config/revisions), or " + stop
 	case "diff":
-		return "Compare them through the running node instead — GET " +
-			"/config/revisions/<id>/diff?against=<id|active> — or " + stop
+		return "Compare them through the running node instead (GET " +
+			"/config/revisions/<id>/diff?against=<id|active>), or " + stop
 	case "activate":
-		return "Activate it through the running node instead — POST " +
+		return "Activate it through the running node instead (POST " +
 			"/config/revisions/<id>/revert stores that revision's document " +
-			"again and activates it fleet-wide — or " + stop
+			"again and activates it fleet-wide), or " + stop
 	case "rekey":
-		return "Re-seal through the running node instead — POST " +
+		return "Re-seal through the running node instead (POST " +
 			"/config/reload stores the fleet's document again under that " +
-			"node's active key — or " + stop
+			"node's active key), or " + stop
 	default:
 		// Every subcommand that opens the store is named above; a new one
 		// still gets the stop, which is always true.

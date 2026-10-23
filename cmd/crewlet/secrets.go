@@ -63,7 +63,7 @@ import (
 // rows against the `secrets.active_key_id` that file names, and so needs it
 // ([secretsBootstrap]).
 
-const secretsUsage = `crewlet secrets — read and rotate the encrypted secret store
+const secretsUsage = `crewlet secrets: read and rotate the encrypted secret store
 
 Usage:
   crewlet secrets list                     What is set, and when it was last written
@@ -83,7 +83,7 @@ The company's secrets live in the fleet's store, which every node reads. While
 this node's engine runs, these commands go through its authenticated /secrets
 surface; while it is stopped, they reach the store through this node's own
 broker, or the external one it dials. Through a node, export CREWLET_API_TOKEN
-to authenticate. It is the only source — the Tier A api.auth.tokens list is
+to authenticate. It is the only source: the Tier A api.auth.tokens list is
 what the node ACCEPTS, not a wallet this command helps itself from.
 
 Through -api, a machine with no Tier A file at -config runs every command
@@ -448,7 +448,7 @@ func (r storeRun) unreachable() string {
 	if r.offline {
 		return "Otherwise either fix that, " + node + ", or stop `crewlet run` on " +
 			"this node and re-run: with its engine stopped, the command reaches " +
-			"the fleet's store itself — unless the node is a member of a cluster, " +
+			"the fleet's store itself, unless the node is a member of a cluster, " +
 			"which is sent to a running member"
 	}
 	return "Otherwise fix that, or " + node
@@ -557,7 +557,7 @@ func throughTheRunningNode(environ config.Source, boot *config.Bootstrap, bootst
 		// were holding the store.
 		return nil, fmt.Errorf("%w\n\n%s's database is held by the process "+
 			"named above. While that is its engine, %s has to go through its "+
-			"API — and it cannot: %w%s\n\n%s", err, bootstrapPath, run.command,
+			"API, and it cannot: %w%s\n\n%s", err, bootstrapPath, run.command,
 			cerr, heldByACommand, run.unreachable())
 	}
 	return &secretTarget{secretBackend: client, throughNode: true,
@@ -983,7 +983,7 @@ secrets:
 
   export %s=%s
 
-Key generation is always explicit — a silently generated key that nobody
+Key generation is always explicit: a silently generated key that nobody
 captured makes every encrypted row unrecoverable. Keep the id stable across
 restarts: it is stamped into every envelope this key seals, and only a
 rotation should introduce a new one.

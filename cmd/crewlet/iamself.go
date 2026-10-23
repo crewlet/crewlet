@@ -376,7 +376,7 @@ func pipedPassword(raw []byte, what string) (string, error) {
 	password := strings.TrimRight(string(raw), "\r\n")
 	if len(password) > maxPipedPasswordBytes {
 		return "", fmt.Errorf("%w: what arrived is %d bytes without its line ending; %s is at "+
-			"most %d bytes (%d KiB) here — check what is piped in", errPipedPasswordTooLong,
+			"most %d bytes (%d KiB) here. Check what is piped in", errPipedPasswordTooLong,
 			len(password), what, maxPipedPasswordBytes, maxPipedPasswordBytes>>10)
 	}
 	return password, nil
@@ -418,6 +418,6 @@ var errPipedPasswordTooLong = errors.New("more arrived on stdin than any passwor
 // and never the bytes that met it.
 func pipedPasswordOverran(what string) error {
 	return fmt.Errorf("%w: more than %d bytes arrived, so the rest was not read; %s "+
-		"is at most %d bytes (%d KiB) here — check what is piped in", errPipedPasswordTooLong,
+		"is at most %d bytes (%d KiB) here. Check what is piped in", errPipedPasswordTooLong,
 		maxPipedLineBytes, what, maxPipedPasswordBytes, maxPipedPasswordBytes>>10)
 }

@@ -654,7 +654,7 @@ func printKept(w io.Writer, kept []string, fresh string) {
 	if len(kept) == 0 {
 		return
 	}
-	fmt.Fprintf(w, "Left %d seat(s) alone — their credential still works, "+
+	fmt.Fprintf(w, "Left %d seat(s) alone: their credential still works, "+
 		"and rotating it would revoke what the running engine is using: %s\n"+
 		"  (pass %s to mint fresh ones; that run's Next: line says what the "+
 		"engine then needs)\n",
@@ -1055,7 +1055,7 @@ func printDoctor(w io.Writer, report *mattermost.Report) {
 		// SAID OUT LOUD: one failing line with nothing after it reads
 		// as "one thing is wrong", when what it means is "nothing else
 		// was even asked".
-		fmt.Fprintln(w, "\nThe checks stopped here — everything below this "+
+		fmt.Fprintln(w, "\nThe checks stopped here: everything below this "+
 			"would have reported a consequence rather than a cause. Fix it "+
 			"and run again.")
 	case report.Healthy():
