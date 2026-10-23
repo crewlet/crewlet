@@ -3749,27 +3749,6 @@ a.knowledge-reader-how:hover {
   max-width: 100%;
 }
 
-/* ON A NARROW SCREEN A HEAD WITH ACTIONS PUTS ITS SUBTITLE ON A LINE OF ITS
-   OWN, under the title and the actions. Beside actions the kit's shrink is
-   proportional (above), so a phone's head gave a title a fraction of a pixel
-   and a plain title broke over two lines — "Active" over "revision" — while
-   its subtitle was cut beside the Copy button to "as the engine resolv…".
-   On its own line the subtitle has the head's whole width and the title and
-   its actions have the first. One rule for every head of that shape: a
-   seat's Current turn card had it written for itself alone, after the same
-   squeeze cut its title to "Current tu…". */
-@container page (width < 640px) {
-  .crewlet-card__header:has(> .crewlet-card__subtitle):has(> .crewlet-card__header-actions) {
-    flex-wrap: wrap;
-    row-gap: var(--spacing-1);
-  }
-  .crewlet-card__header:has(> .crewlet-card__header-actions) > .crewlet-card__subtitle {
-    order: 9;
-    flex: 1 1 100%;
-    min-width: 0;
-  }
-}
-
 /* A STAT'S SECOND LINE WRAPS RATHER THAN ENDING IN AN ELLIPSIS. uilet sets it
    `nowrap` and reserves exactly one line, so that a row of tiles where only
    some carry one still stands at one height — but inside a StatGroup the grid
@@ -3808,16 +3787,6 @@ a.knowledge-reader-how:hover {
    of the tile's three lines. */
 .crewlet-stat-group > .crewlet-statcard > :first-child {
   align-self: end;
-}
-
-/* AN ODD LAST TILE TAKES THE WHOLE ROW once the kit folds a stat row into two
-   columns (its `width < 1024px` step): three tiles on a phone stood 2 + 1,
-   the last beside an empty half-row that read as a tile failing to load. The
-   step is the kit's own, restated because a media query cannot be borrowed. */
-@media (width < 1024px) {
-  .crewlet-stat-group > :last-child:nth-child(odd) {
-    grid-column: 1 / -1;
-  }
 }
 
 /* ONE STEP WIDER THAN THE PACKAGE'S OWN, and only inside a tool row. uilet's

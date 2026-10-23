@@ -483,6 +483,16 @@ describe("the frame's layout", () => {
     expect(block(narrow, ".section-frame")).toMatch(/grid-template-columns:\s*minmax\(0, 1fr\)/);
   });
 
+  // THE BAR'S INLINE INSET IS THE KIT'S (`AppShell` measures the scroller's
+  // gutter into it): an inset of our own put every page's actions 15px past
+  // the cards under them with classic scrollbars.
+  test("the page bar leaves its inline inset to the kit", () => {
+    const css = sheet("frame.css");
+    for (const m of css.matchAll(/\.app \.page-bar\s*\{([^}]*)\}/g)) {
+      expect(m[1]).not.toMatch(/padding(-inline)?:/);
+    }
+  });
+
   // THE PICKER'S TOGGLE STANDS OVER THE LIST IT UNFOLDS, on the section's
   // gutter: the list's glyphs sat 11px right of the toggle's, and the toggle
   // 4px left of the section's content. The toggle takes the rows' inset less
@@ -539,58 +549,23 @@ describe("the frame's layout", () => {
     expect(stacked).toMatch(/height:\s*auto/);
   });
 
-  // A HEAD WITH ACTIONS PUTS ITS SUBTITLE ON A LINE OF ITS OWN on a narrow
-  // screen. Beside actions the kit's shrink is proportional, so a phone gave a
-  // plain title a fraction of a pixel and it broke over two lines ("Active"
-  // over "revision") while the subtitle was cut beside the Copy button. The
-  // rule is the head's SHAPE, not one screen's — the agent profile had
-  // written it for its own card alone.
-  test("a card head holding a subtitle and actions stacks the subtitle on a narrow screen", () => {
+  // A NARROW CARD PUTS ITS SUBTITLE ON A LINE OF ITS OWN, and the kit does it
+  // (@crewlethq/ui 0.38.0, by the card's own width): beside actions the
+  // subtitle was cut ("as the engine resolv…") and a title broke over two
+  // lines. The dashboard's page-width copy of the rule is gone, and no screen
+  // keeps a private one.
+  test("a narrow card's subtitle takes its own line by the kit's rule, not ours", () => {
+    expect(kitSheet()).toMatch(/@container crewlet-card \(width < 480px\)/);
     const css = sheet("screens.css");
-    const narrow = [...css.matchAll(/@container page \(width < 640px\)\s*\{/g)].map((m) =>
-      atRuleBody(css.slice(m.index), "@container page (width < 640px)"),
-    );
-    const head = narrow.find((b) =>
-      b.includes(
-        ".crewlet-card__header:has(> .crewlet-card__subtitle):has(> .crewlet-card__header-actions)",
-      ),
-    );
-    expect(head, "the narrow-screen card head rule is declared").toBeDefined();
-    expect(
-      block(
-        head!,
-        ".crewlet-card__header:has(> .crewlet-card__subtitle):has(> .crewlet-card__header-actions)",
-      ),
-    ).toMatch(/flex-wrap:\s*wrap/);
-    const subtitle = block(
-      head!,
-      ".crewlet-card__header:has(> .crewlet-card__header-actions) > .crewlet-card__subtitle",
-    );
-    expect(subtitle).toMatch(/order:\s*9/);
-    expect(subtitle).toMatch(/flex:\s*1 1 100%/);
-    // AND NO SCREEN KEEPS A PRIVATE COPY of the one rule.
+    expect(css).not.toMatch(/\.crewlet-card__header:has\(> \.crewlet-card__subtitle\)/);
     expect(css).not.toMatch(/\.prof-turn \.crewlet-card__subtitle/);
   });
 
-  // AN ODD LAST TILE TAKES THE WHOLE ROW once the kit folds a stat row into two
-  // columns: three tiles stood 2 + 1 on a phone — Secrets' among them — the
-  // last beside an empty half-row, its top hairline stopping mid-panel, which
-  // reads as a tile that failed to load. The fold is the kit's `width <
-  // 1024px` step, so the rule has to sit at exactly that width to meet it.
-  test("a stat row's odd last tile spans the row wherever the kit folds it to two", () => {
-    const at = (css: string, needle: string) =>
-      mediaBodies(css).filter(
-        (m) => m.prelude.includes("(width < 1024px)") && m.body.includes(needle),
-      );
-    const folds = at(kitSheet(), ".crewlet-stat-group");
-    expect(folds.map((m) => m.body).join("\n")).toMatch(
-      /\.crewlet-stat-group\s*\{[^}]*grid-template-columns:\s*repeat\(2,/,
-    );
-    const ours = at(sheet("screens.css"), ":last-child:nth-child(odd)");
-    expect(ours, "the odd-tile rule sits at the kit's fold").toHaveLength(1);
-    expect(block(ours[0]!.body, ".crewlet-stat-group > :last-child:nth-child(odd)")).toMatch(
-      /grid-column:\s*1 \/ -1/,
-    );
+  // THE KIT FOLDS A STAT ROW BY ITS OWN WIDTH (@crewlethq/ui 0.38.0), so the
+  // dashboard restates no viewport step for it: a row is as wide as its
+  // column leaves it, and the 1024px step cut a 489px row's figures.
+  test("no stat row fold is restated at a viewport width", () => {
+    expect(sheet("screens.css")).not.toMatch(/\.crewlet-stat-group > :last-child:nth-child\(odd\)/);
   });
 
   // NO WORD ALONE ON A NOTE'S LAST LINE. At the measure, Secrets' note broke

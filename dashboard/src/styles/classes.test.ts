@@ -615,7 +615,7 @@ const ALLOWED: Allowed[] = [
   },
   {
     name: "crewlet-card__subtitle",
-    why: "uilet's Card writes it on the head's subtitle, beside the title. styles/screens.css moves it onto a line of its own on a narrow screen in every head that also holds actions, where it sat between the title and the actions and cut both — a seat's Current turn to 'Current tu…', Configuration's Active revision to 'Active' over 'revision'. Another rule about OUR composition of the package's component.",
+    why: "uilet's Card writes it on the head's subtitle, beside the title. styles/screens.css gives it a line of its own at every width in the heads the approved artboards draw stacked (`.card-head-stacked`: a chart's key such as 'Last 14 days' under 'Turns per day'). Another rule about OUR composition of the package's component; a narrow card's own wrap is the kit's.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {
@@ -678,7 +678,7 @@ const ALLOWED: Allowed[] = [
   },
   {
     name: "crewlet-card__header-actions",
-    why: 'uilet\'s Card.Header writes it. styles/screens.css takes the name block out of the shrink where the head holds no actions or panel controls, because the kit\'s 100-to-1 subtitle shrink is proportional and still took a fraction of a pixel off the title — enough, with our ellipsis, to draw "When" as "Wh…" beside a whole subtitle on a phone. Where a head DOES hold actions and a subtitle, a narrow screen moves the subtitle to a line of its own instead (see crewlet-card__subtitle). Another rule about OUR composition of the package\'s component.',
+    why: 'uilet\'s Card.Header writes it. styles/screens.css takes the name block out of the shrink where the head holds no actions or panel controls, because the kit\'s 100-to-1 subtitle shrink is proportional and still took a fraction of a pixel off the title — enough, with our ellipsis, to draw "When" as "Wh…" beside a whole subtitle on a phone. Another rule about OUR composition of the package\'s component.',
     pkg: "@crewlethq/ui/styles.css",
   },
   {

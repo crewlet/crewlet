@@ -447,8 +447,16 @@
 
 /* THE ⌘K FIELD SITS ON THE NAV'S OWN GUTTER, so its left edge is the left
    edge every nav row's background starts at. */
+/* THE TRIGGER'S GLYPH ON THE NAV'S GLYPH COLUMN: a nav row's glyph stands
+   the gutter and the row's pad in, and the trigger's the gutter, its own
+   1px edge and its pad, which put it a pixel left of every row under it. The
+   inset makes up the difference from the kit's own measures. */
 .side-search {
   padding: 0 var(--size-nav-gutter) var(--spacing-3);
+  padding-inline-start: calc(
+    var(--size-nav-gutter) + var(--size-nav-row-pad) - (var(--spacing-2) + var(--spacing-1) / 2) -
+      1px
+  );
 }
 
 /* A SIDEBAR SECTION THAT COULD NOT BE DRAWN (`app/boundaries.tsx`): its
@@ -584,7 +592,11 @@
   gap: var(--spacing-1) var(--spacing-2);
   height: auto;
   min-height: var(--page-bar-h);
-  padding: var(--spacing-1) var(--spacing-4) var(--spacing-1) var(--spacing-5);
+  /* THE KIT'S INLINE INSET (`AppShell`'s top bar): the content's own on both
+     sides and, at the end, the scroller's measured gutter, so the bar's last
+     control ends over the content's edge. A 16px end of our own put every
+     page's actions 15px past the cards under them with classic scrollbars. */
+  padding-block: var(--spacing-1);
 }
 
 /* THE TRAIL IS THE KIT'S `Breadcrumb`, and so are its rules: it gives way
@@ -1858,12 +1870,6 @@ button.histogram-bar[data-empty]:focus-visible > .histogram-fill {
      phone scrolls to them in any case. */
   .palette-answer-sources {
     flex-wrap: wrap;
-  }
-
-  /* The bar's inset tightens to the sheet's own phone inset, so the trail
-     starts where the screen's content does. */
-  .app .page-bar {
-    padding-inline: var(--spacing-3);
   }
 
   /* ONE GUTTER ON A PHONE: the tabs and a Settings section start where
