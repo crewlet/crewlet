@@ -5691,9 +5691,13 @@ to that one request, and nothing else reaches a turn
 ([ADR-0031](https://github.com/crewlet/crewlet/blob/main/adr/0031-every-state-log-record-is-signed.md)).
 An answer the asking node cannot believe is no answer, so it reads as
 `unknown`. A running node that does not hold the key the note is signed under
-takes nothing and says so, and the tool refuses `unavailable` naming the keys
-it holds: bring `secrets.keys` into agreement across the fleet, and send the
-note again.
+takes nothing and says so, and the tool refuses `unavailable`, with no
+`Retry-After`, telling the person an administrator needs to give the nodes the
+same keys. The keys the running node holds are in its log
+(`steer_request_refused`, `held_keys`) and the asking node's
+(`steer_turn_unverified`, which names the node running the turn as
+`running_node` beside its `held_keys`): bring `secrets.keys` into agreement
+across the fleet, and send the note again.
 
 ### Answering a question from the company's knowledge
 

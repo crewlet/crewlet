@@ -13,7 +13,6 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A person's note to a running turn, carried out on the node running it.
@@ -85,6 +84,10 @@ type steerDesk struct {
 	wire  *steerWire
 	taken *signedask.Guard
 	now   func() time.Time
+
+	// node is this node's id, which an unverified answer names: the asking
+	// node logs it as the node to add the key on.
+	node string
 }
 
 // steerWire is the steer channel's envelopes ([steer.Channel]).
@@ -103,16 +106,16 @@ type steerTurn struct {
 	steerSeat
 }
 
-// newSteerDesk builds this node's desk over the fleet keyring every state-log
+// newSteerDesk builds node's desk over the fleet keyring every state-log
 // record is signed under. The keyring is required on every node, so this fails
 // only on a bootstrap [config.Bootstrap.Validate] would already have refused.
-func newSteerDesk(ring statelog.Keyring) (*steerDesk, error) {
+func newSteerDesk(node string, ring statelog.Keyring) (*steerDesk, error) {
 	wire, err := signedask.New[steer.Request, steer.Reply](steer.Channel, ring)
 	if err != nil {
 		return nil, fmt.Errorf("engine: the steer channel's envelopes: %w", err)
 	}
 	return &steerDesk{open: map[string]steerTurn{}, closed: map[string]steerSeat{},
-		wire: wire, taken: signedask.NewGuard(), now: time.Now}, nil
+		wire: wire, taken: signedask.NewGuard(), now: time.Now, node: node}, nil
 }
 
 // SteerWire is this node's steer channel, for the operator surface that asks
@@ -256,13 +259,16 @@ func (d *steerDesk) unverified(ctx context.Context, admitted signedask.Admission
 	if _, _, err := d.lookup(turnID, (*steer.Box).Status); err != nil {
 		return nil, err
 	}
+	// THE REMEDY IS THE OPERATOR'S, so it is said here, in this node's log,
+	// where whoever administers the keyring reads what this node holds; the
+	// person steering is told only that the note was not taken.
 	log.WarnContext(ctx, "steer_request_refused", "disposition", string(admitted.Disposition),
-		"turn_id", turnID, "detail", admitted.Why+"; nothing was offered")
+		"turn_id", turnID, "held_keys", d.wire.HeldKeys(),
+		"detail", admitted.Why+"; nothing was offered. Add the key the fleet "+
+			"signs with to this node's secrets.keys")
 	return d.wire.SealReply(steer.Reply{
 		Version: steer.WireVersion, Request: admitted.ID, TurnID: turnID,
-		Unverified: fmt.Sprintf("the node running turn %s does not hold the key the "+
-			"note is signed under (it holds %s) — add the key to its secrets.keys",
-			turnID, words.And(d.wire.HeldKeys())),
+		Unverified: &steer.Unverified{Node: d.node, HeldKeys: d.wire.HeldKeys()},
 	})
 }
 

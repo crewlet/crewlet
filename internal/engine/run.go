@@ -1145,12 +1145,10 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// AND THE TWO OTHER INSTRUCTION CHANNELS THE ENGINE SERVES, the same way:
 	// the broker's membership, which a member changes through its own system
 	// account, and a note to a running turn, which the running node offers
-	// as the person who sent it (internal/signedask).
+	// as the person who sent it (internal/signedask). The steer desk is built
+	// below, once the node is named, since its answer to a note it couldn't
+	// verify names this node.
 	wire, err := newBrokerWire(recordKeyring(opts.Bootstrap))
-	if err != nil {
-		return nil, err
-	}
-	steers, err := newSteerDesk(recordKeyring(opts.Bootstrap))
 	if err != nil {
 		return nil, err
 	}
@@ -1237,6 +1235,10 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		return nil, err
 	}
 	incarnation := config.NewIncarnation(nodeID)
+	steers, err := newSteerDesk(nodeID, recordKeyring(opts.Bootstrap))
+	if err != nil {
+		return nil, err
+	}
 
 	// THIS PROCESS'S TOOL SESSIONS, the last of what can fail with nothing
 	// open: every phase that offers tools serves them to its CLI through a

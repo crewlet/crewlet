@@ -1,11 +1,16 @@
 package builtin_test
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -471,15 +477,78 @@ func TestEveryNoteIsSignedAndBound(t *testing.T) {
 	}
 }
 
+// AN UNVERIFIED NOTE IS LOGGED ON THE ASKING NODE NAMING THE NODE THAT RUNS THE
+// TURN AND THE KEYS IT HOLDS, as fields of their own: the running node used to
+// write them as a sentence about "this node", which the asking node's line read
+// as itself, beside advice to add the key "on the node running the turn".
+// Mutation: drop either field from the line and this fails. Not parallel: it
+// adds a destination to the process's logger.
+func TestAnUnverifiedNoteIsLoggedWithTheNodeToAddTheKeyOn(t *testing.T) {
+	var lines lockedLines
+	debug := slog.LevelDebug
+	logging.SetFile(logging.FileSink{Writer: &lines, Format: logging.FormatJSON, Level: &debug})
+	t.Cleanup(func() { logging.SetFile(logging.FileSink{}) })
+	asker := &fleetAsker{replies: []steer.Reply{{Version: 1, TurnID: "run-logged",
+		Unverified: &steer.Unverified{Node: "node-2", HeldKeys: []string{"k0", "k9"}}}}}
+	steerCall(t, newSteerRig(t, asker, requestKey(), operatorCaller, seatLeads),
+		"run-logged", "use staging")
+	var found bool
+	for _, rec := range lines.records(t) {
+		if rec["msg"] != "steer_turn_unverified" || rec["turn_id"] != "run-logged" {
+			continue
+		}
+		found = true
+		held, _ := rec["held_keys"].([]any)
+		if rec["running_node"] != "node-2" ||
+			!slices.Equal(held, []any{"k0", "k9"}) {
+			t.Errorf("the line %v doesn't name the running node and the keys it holds", rec)
+		}
+	}
+	if !found {
+		t.Fatal("no steer_turn_unverified line was logged")
+	}
+}
+
+// lockedLines collects what the process's logger writes, one JSON record a
+// line, safe for the logger's writes and the test's read.
+type lockedLines struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (l *lockedLines) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *lockedLines) records(t *testing.T) []map[string]any {
+	t.Helper()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []map[string]any
+	scan := bufio.NewScanner(bytes.NewReader(l.buf.Bytes()))
+	for scan.Scan() {
+		var rec map[string]any
+		if err := json.Unmarshal(scan.Bytes(), &rec); err == nil {
+			out = append(out, rec)
+		}
+	}
+	return out
+}
+
 // THE RUNNING NODE COULD NOT VERIFY THE NOTE: it took nothing, and the person
-// is told that — what it holds, and that the keyring is what to fix — rather
-// than `unknown`, which a retry would never change. On the probe as on the
-// offer, and nothing is offered after a probe that says so.
+// is told that and who fixes it, rather than `unknown`, which a retry would
+// never change, and under no wait, since only an operator bringing the keys
+// into agreement does. The keys and the turn go to the log: said to the person
+// steering, they were a turn id and key ids nobody at a dashboard chose. On the
+// probe as on the offer, and nothing is offered after a probe that says so.
+// Mutation: put reply.Unverified back into the sentence, or drop the waitless
+// mark, and this fails.
 func TestANoteTheRunningNodeCouldNotVerifyIsRefusedAsUnavailable(t *testing.T) {
 	t.Parallel()
 	unverified := steer.Reply{Version: 1, TurnID: "run-1",
-		Unverified: "the node running turn run-1 does not hold the key the note is " +
-			"signed under (it holds \"k0\") — add the key to its secrets.keys"}
+		Unverified: &steer.Unverified{Node: "node-2", HeldKeys: []string{"k0"}}}
 	for name, caller := range map[string]iam.Principal{
 		"the offer, by the deployment's operator": operatorCaller,
 		"the probe, by a lead":                    boundTo("jane"),
@@ -490,9 +559,17 @@ func TestANoteTheRunningNodeCouldNotVerifyIsRefusedAsUnavailable(t *testing.T) {
 			res, _ := steerCall(t, newSteerRig(t, asker, requestKey(), caller, seatLeads),
 				"run-1", "use staging")
 			if !res.Failed || tools.RefusalOf(res) != tools.RefusalUnavailable ||
-				!strings.Contains(res.Output, "secrets.keys") {
-				t.Fatalf("answered %s: %q, want unavailable naming the keyring",
+				!strings.Contains(res.Output, "An administrator") {
+				t.Fatalf("answered %s: %q, want unavailable saying who fixes it",
 					tools.RefusalOf(res), res.Output)
+			}
+			for _, leak := range []string{"run-1", "node-2", "k0", "secrets.keys"} {
+				if strings.Contains(res.Output, leak) {
+					t.Errorf("the refusal %q names %q, which only the log should", res.Output, leak)
+				}
+			}
+			if builtin.RetryAfter(res.Cause, time.Second) != 0 {
+				t.Errorf("the refusal carries a wait, and no wait changes the keys")
 			}
 			if len(asker.asked) != 1 {
 				t.Errorf("asked the fleet %d times, want once and nothing offered after", len(asker.asked))
