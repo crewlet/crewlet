@@ -102,8 +102,8 @@ type Report struct {
 	// once here. The CLI's exit code is derived from THIS field.
 	Alarms []Alarm `json:"alarms"`
 
-	// Maintenance is the capacity operation currently holding the fleet,
-	// and nil when there is none.
+	// Maintenance is every capacity operation currently holding the
+	// fleet, the oldest first, and absent when there is none.
 	//
 	// ABSENT RATHER THAN ZEROED, because a zeroed block is a claim that an
 	// operation exists in phase "" with nobody outstanding — and the whole
@@ -112,7 +112,12 @@ type Report struct {
 	// no scheduler, no write routes. An hour of that is an outage nobody
 	// is watching, which is what `maintenance_open` alarms on and what
 	// this renders while it is happening rather than after.
-	Maintenance *MaintenanceReport `json:"maintenance,omitempty"`
+	//
+	// EVERY ONE, because a window is per log and two can be open at once (a
+	// fleet resizing two logs runs both in the same restarts), each waiting
+	// on its own nodes. The oldest alone hid what the other was waiting on
+	// until the first had closed.
+	Maintenance []MaintenanceReport `json:"maintenance,omitempty"`
 }
 
 // MaintenanceReport is one open capacity operation, as a reader sees it.
@@ -810,8 +815,8 @@ type ReportInputs struct {
 
 	Replica ReplicaReport
 
-	// Maintenance is the open capacity operation, or nil.
-	Maintenance *MaintenanceReport
+	// Maintenance is every open capacity operation, the oldest first.
+	Maintenance []MaintenanceReport
 }
 
 // NewReport assembles the answer.

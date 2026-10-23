@@ -301,32 +301,34 @@ func fleetTombstones(perLog [][]statelog.Tombstone) []statelog.Tombstone {
 	return out
 }
 
-// openMaintenance is the capacity operation currently holding the fleet, or
-// nil.
+// openMaintenance is every capacity operation currently holding the fleet,
+// the oldest first.
 //
-// THE OLDEST OF THEM, for the reason the alarm takes the oldest: maintenance
-// stops every publisher on every node, and two open operations do not stop it
-// twice — what a reader needs is the one that has been holding longest.
+// EVERY ONE, and the oldest first because it has been holding longest: a window
+// is per log and two can be open at once, each waiting on its own nodes, so
+// one reported alone hid what the other was waiting on. The alarm still takes
+// the oldest ([retention.maintenance]): two windows do not stop publishing
+// twice.
 //
 // Read from the register rather than from whatever this node's own coordinator
 // remembers, because an operation is opened by whichever node ran the verb and
 // every other node is merely a PARTICIPANT — which is what makes maintenance
 // an outage rather than an inconvenience, and what makes a per-node memory of
 // it useless.
-func (r *retention) openMaintenance(ctx context.Context) *statelog.MaintenanceReport {
+func (r *retention) openMaintenance(ctx context.Context) []statelog.MaintenanceReport {
 	if r.fleet == nil {
 		return nil
 	}
-	var oldest *statelog.MaintenanceReport
+	var open []statelog.MaintenanceReport
 	for _, running := range r.state.running() {
 		if running == nil {
 			continue
 		}
-		op, open, err := r.fleet.Maintenance(ctx, running.spec.Name)
-		if err != nil || !open {
+		op, found, err := r.fleet.Maintenance(ctx, running.spec.Name)
+		if err != nil || !found {
 			continue
 		}
-		row := &statelog.MaintenanceReport{
+		open = append(open, statelog.MaintenanceReport{
 			Stream: op.Stream, OperationID: op.OperationID,
 			Phase: string(op.Phase), Attempt: op.Attempt,
 			TargetMaxBytes: op.TargetMaxBytes, OriginalMaxBytes: op.OriginalMaxBytes,
@@ -335,12 +337,15 @@ func (r *retention) openMaintenance(ctx context.Context) *statelog.MaintenanceRe
 			AdmissionsBlocking:  holdingAdmissions(ctx, r.fleet, op),
 			Blocked:             op.Blocked,
 			AbandonedBy:         op.AbandonedBy,
-		}
-		if oldest == nil || row.Since.Before(oldest.Since) {
-			oldest = row
-		}
+		})
 	}
-	return oldest
+	sort.SliceStable(open, func(i, j int) bool {
+		if !open[i].Since.Equal(open[j].Since) {
+			return open[i].Since.Before(open[j].Since)
+		}
+		return open[i].Stream < open[j].Stream
+	})
+	return open
 }
 
 // outstanding names the participants the window's next step is still waiting
