@@ -39,8 +39,10 @@ const (
 	// or a template it does not have, a provider domain that does not
 	// resolve or whose certificate does not match it, a container image
 	// the runtime will not start (a pull that failed on a network
-	// blip among them, which only the runtime's own words tell apart) or a
-	// mount it cannot share.
+	// blip among them, which only the runtime's own words tell apart), a
+	// mount it cannot share or the box may not write, a probe of the box the
+	// runtime refused to run, or a box that cannot run its shell, or find or
+	// head to list a build.
 	WhyConfiguration Why = "configuration"
 
 	// WhySetupUnavailable is a setup step a command of which exited 75
@@ -68,7 +70,9 @@ const (
 
 	// WhyProviderUnavailable is a provider, or the box it runs, that did
 	// not answer or failed on its side (a transport error, 408, a 5xx, a
-	// stream that stopped before it said how a command ended). It clears
+	// stream that stopped before it said how a command ended, a command the
+	// box timed out or killed, a container runtime that did not answer a
+	// probe in time, a read of a running box still in flight). It clears
 	// when the provider answers again.
 	WhyProviderUnavailable Why = "provider_unavailable"
 )
