@@ -145,10 +145,21 @@ func (a *probeApplier) epochsSeen() []map[string]any {
 // every record ever offered stays readable at its sequence, the way a stream
 // keeps what a consumer has delivered.
 type probeFetch struct {
-	mu      sync.Mutex
-	queue   []statelog.Message
-	acked   map[uint64]int
-	fetches int
+	mu    sync.Mutex
+	queue []statelog.Message
+	acked map[uint64]int
+	// fetches counts the loop's calls of Fetch, and answered the calls that
+	// have returned. One CALL each, however long it waits on an empty
+	// queue: counted per poll of that wait, one idle fetch read as hundreds,
+	// so a case asking whether the loop had fetched again was answered by
+	// the fetch it was already in.
+	fetches, answered int
+
+	// stopped is the runner's own [statelog.Runner.Stopped], where a
+	// harness built one over this fetch: a runner that halts makes no more
+	// fetches, and [probeFetch.awaitAnswered] says so rather than waiting out
+	// its bound.
+	stopped func() error
 
 	// log is every record offered, by sequence — a later offer at a
 	// sequence REPLACES the earlier one, which is what a broker restored
@@ -281,9 +292,17 @@ func (f *probeFetch) At(_ context.Context, seq uint64) (string, []byte, time.Tim
 // answering nothing immediately, which would turn the apply loop into a spin.
 func (f *probeFetch) Fetch(ctx context.Context, maxMessages, maxBytes int, wait time.Duration) ([]statelog.Message, error) {
 	deadline := time.Now().Add(wait)
+	f.mu.Lock()
+	f.fetches++
+	call := f.fetches
+	f.mu.Unlock()
+	defer func() {
+		f.mu.Lock()
+		f.answered++
+		f.mu.Unlock()
+	}()
 	for {
 		f.mu.Lock()
-		f.fetches++
 		if f.failures > 0 {
 			f.failures--
 			f.mu.Unlock()
@@ -293,7 +312,7 @@ func (f *probeFetch) Fetch(ctx context.Context, maxMessages, maxBytes int, wait 
 			n := min(deliverable, maxMessages)
 			out := f.queue[:n]
 			f.queue = f.queue[n:]
-			hook := f.after[f.fetches]
+			hook := f.after[call]
 			f.mu.Unlock()
 			if hook != nil {
 				// OUTSIDE THE LOCK, because a hook stages more
@@ -325,6 +344,51 @@ func (f *probeFetch) fetchCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.fetches
+}
+
+// awaitAnswered blocks until the broker has answered n more of the loop's
+// fetches than it had when called, and the loop has STARTED the fetch after
+// them — so it has finished handling every one of those answers, whatever it
+// does with an answer between one fetch and the next.
+//
+// It is how a case lets an idle loop run "long enough": a sleep sized in
+// fetch intervals is decided by how fast the runner is, and on a loaded one
+// it lets no fetch happen at all, so an assertion that nothing was said
+// during it passes having watched nothing.
+//
+// THE BROKER ANSWERS EVERY FETCH within its wait, so what runs the bound out is
+// a loop that stopped fetching: one wedged between two fetches, or a runner
+// that halted, which ends the wait at once and is named with its error. Its
+// failure says how many fetches the loop made of the ones it needed.
+func (f *probeFetch) awaitAnswered(t *testing.T, n int, what string) {
+	t.Helper()
+	f.mu.Lock()
+	start, want, stopped := f.fetches, f.answered+n, f.stopped
+	f.mu.Unlock()
+	need := want + 1 - start
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		f.mu.Lock()
+		// THE NEXT FETCH STARTED: every answer counted has been handled.
+		done := f.answered >= want && f.fetches > want
+		made := f.fetches - start
+		f.mu.Unlock()
+		if done {
+			return
+		}
+		if stopped != nil {
+			if err := stopped(); err != nil {
+				t.Fatalf("waiting for %s, the runner stopped after the loop made %d of the "+
+					"%d fetches it needed: %v", what, made, need, err)
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	f.mu.Lock()
+	made := f.fetches - start
+	f.mu.Unlock()
+	t.Fatalf("waited 15s for %s: the loop made %d of the %d fetches it needed, so it "+
+		"stopped fetching between two", what, made, need)
 }
 
 func (f *probeFetch) ackCount(seq uint64) int {
@@ -412,6 +476,7 @@ func newApplyHarnessWith(t *testing.T, domain statelog.Domain,
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
+	fetch.stopped = runner.Stopped
 	return &applyHarness{t: t, db: db, estate: estate, runner: runner, applier: applier,
 		fetch: fetch, metrics: recorder}
 }
@@ -477,6 +542,7 @@ func (h *applyHarness) rebuildWith(domain statelog.Domain, created time.Time,
 	if err != nil {
 		h.t.Fatalf("NewRunner: %v", err)
 	}
+	h.fetch.stopped = runner.Stopped
 	h.runner = runner
 }
 
@@ -3090,10 +3156,10 @@ func TestTheFirstDrainOfARunIsToldOnce(t *testing.T) {
 	errs := make(chan error, 1)
 	go func() { errs <- h.runner.Run(ctx) }()
 	awaitTold(t, told, "the first drain")
-	// EVERY LATER EMPTY FETCH IS A DRAIN TOO, and says nothing: an idle
-	// fetch comes back empty after [statelog.FetchWait], so the loop is
-	// left long enough to drain twice more past the one that latched.
-	time.Sleep(3 * statelog.FetchWait)
+	// EVERY LATER EMPTY FETCH IS A DRAIN TOO, and says nothing: the loop
+	// is left until the broker has answered three more of its fetches,
+	// each with nothing, and it has handled every one of them.
+	h.fetch.awaitAnswered(t, 3, "three idle fetches after the first drain")
 	select {
 	case <-told:
 		t.Fatal("a drain after the first of the run was told again")
@@ -3127,11 +3193,18 @@ func TestTheLoopSaysEachTimeItComesLevel(t *testing.T) {
 	// stopOnTell, when armed, ends the run from inside the hook, so the loop
 	// leaves between two fetches still level — the stop the restart below
 	// has to see past.
+	//
+	// READ BEFORE THE HOOK TELLS, because the case arms it the moment it
+	// has heard the tell before the outage: read after, the call that told
+	// it could see it armed — the case runs as soon as the send lands,
+	// while the hook may not have run another instruction — and end the
+	// run before the outage it was armed for.
 	var stopOnTell atomic.Pointer[context.CancelFunc]
 	h = newApplyHarnessWith(t, probeDomain{}, func(d *statelog.RunnerDeps) {
 		d.OnLevel = func() {
+			stop := stopOnTell.Load()
 			told <- h.runner.Committed().Seq
-			if stop := stopOnTell.Load(); stop != nil {
+			if stop != nil {
 				(*stop)()
 			}
 		}
@@ -3143,8 +3216,9 @@ func TestTheLoopSaysEachTimeItComesLevel(t *testing.T) {
 	go func() { errs <- h.runner.Run(ctx) }()
 	awaitLevel(t, told, 1, "the first drain")
 	// AN IDLE LOOP IS LEVEL ONCE: every empty fetch after the one that
-	// told says nothing new, and the loop is left long enough for three.
-	time.Sleep(3 * statelog.FetchWait)
+	// told says nothing new, and the loop is left until three more have
+	// been answered and handled.
+	h.fetch.awaitAnswered(t, 3, "three idle fetches after the first drain")
 	select {
 	case seq := <-told:
 		t.Fatalf("an idle loop said it came level again, at checkpoint %d", seq)
