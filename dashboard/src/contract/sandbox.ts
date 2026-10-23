@@ -11,9 +11,10 @@
 /**
  * The outcomes a `sandbox_tail` answer names — `sandbox.TailOutcomes`.
  *
- * `launching` and `box_paused` are NOT terminal — a job still being set up, a
- * box paused between its collection and its record moving on — and a screen
- * keeps asking through both; only `not_running` ends the asking.
+ * `launching`, `box_paused` and `box_gone` are NOT terminal — a job still being
+ * set up, a box paused between its collection and its record moving on, a box
+ * its backend says is gone before the record says how the run ended — and a
+ * screen keeps asking through all three; only `not_running` ends the asking.
  */
 export const SANDBOX_TAIL_OUTCOMES = [
   "tail",
@@ -21,6 +22,7 @@ export const SANDBOX_TAIL_OUTCOMES = [
   "not_running",
   "owner_silent",
   "box_paused",
+  "box_gone",
 ] as const;
 
 /**

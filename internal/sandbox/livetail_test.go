@@ -503,6 +503,38 @@ func TestAPeekNeverWakesAPausedBox(t *testing.T) {
 	}
 }
 
+// A BOX THAT IS GONE IS SAID TO BE, not failed: its backend says it is gone for
+// good — reaped, or a local box on a host the run's seat has moved off, which
+// no other host can reach — so nothing more will be read from it, and the
+// completion that finds the same ends the run. Answered as an error, the query
+// surface told a person watching that the node had broken.
+//
+// Mutation: drop either arm that answers ErrBoxGone, and that path's answer is
+// an error.
+func TestATailOfAGoneBoxIsGoneNotAFailure(t *testing.T) {
+	t.Parallel()
+	rig := newTailRig(t)
+	rig.runner.Say(SourceTranscript, "never read\n")
+	rig.provider.AttachFunc = func(context.Context, string) error {
+		return fmt.Errorf("fake: the box was reaped: %w", ErrBoxGone)
+	}
+	rig.serve(t, boxOwner)
+	local := &TailReader{Owner: boxOwner, Pending: rig.pending, Feeds: rig.feeds(t),
+		Condition: isCondition}
+	for name, reader := range map[string]*TailReader{
+		"across the fleet": rig.reader(t),
+		"on the owner":     local,
+	} {
+		got, err := reader.Tail(t.Context(), TailQuery{TurnID: "t1", LaunchID: rig.launch})
+		if err != nil || got.Outcome != TailBoxGone || got.Output != nil || got.Node != "n2" {
+			t.Errorf("%s: answer = %+v, %v; want box_gone naming n2, with no output", name, got, err)
+		}
+	}
+	if rig.runner.Reads() != 0 {
+		t.Errorf("a gone box was read %d times", rig.runner.Reads())
+	}
+}
+
 // A LAUNCH THAT STOPPED IS LET GO, on the owner's own read as on a peer's
 // answer: nobody asks about it again, so its reading — up to [liveHold] of
 // text — is dropped by the request that learned it stopped rather than a

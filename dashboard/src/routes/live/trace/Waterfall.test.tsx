@@ -195,6 +195,24 @@ describe("a running coding run's live output", () => {
     expect(screen.queryByText("No output yet.")).toBeNull();
   });
 
+  // A GONE BOX IS SAID TO BE, and the view keeps asking until the run's record
+  // says how it ended: drawn as a failed read, a person watching was told the
+  // engine had failed.
+  test("a gone box is said to be, never drawn as a failed read", async () => {
+    mount(
+      PARKED,
+      { outcome: "box_gone", turn_id: "turn-1", launch_id: "L1", node: "node-b" },
+      { selected: "run:L1" },
+    );
+    expect(
+      await screen.findByText(/The run’s box is gone, so no more output will come\./),
+    ).toBeTruthy();
+    expect(screen.queryByText("No output yet.")).toBeNull();
+    expect(liveState({ outcome: "box_gone", turn_id: "t", launch_id: "L" }, false)).toBe(
+      "The run's box is gone.",
+    );
+  });
+
   test("a run that has written nothing says so, which is not a silent owner", async () => {
     mount(
       PARKED,
