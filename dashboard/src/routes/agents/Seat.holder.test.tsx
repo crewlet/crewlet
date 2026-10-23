@@ -191,9 +191,12 @@ test("a vacant seat offers its invitation to an administrator, for this seat", a
   location.hash = "#/company/org/seats/sam";
   const sent = engine();
   await mount("sam", ["admin"]);
-  const note = (await screen.findByText("This seat is open.")).closest(
-    ".crewlet-callout",
+  // THE OVERVIEW'S EMPTY STATE, in the column a person's day would fill: a
+  // notice above an empty column read as a page that had failed to load.
+  const note = (await screen.findByText("This seat is open")).closest(
+    ".crewlet-empty-state",
   ) as HTMLElement;
+  expect(document.querySelector(".prof-notices .crewlet-callout")).toBeNull();
   fireEvent.click(await within(note).findByRole("button", { name: "Invite" }));
   const dialog = await screen.findByRole("dialog", { name: "Invite someone as Sam Support" });
   expect(within(dialog).queryByLabelText("Seat")).toBeNull();
@@ -218,9 +221,12 @@ test("a vacant seat creates a person on itself, keyed, and shows their first pas
   location.hash = "#/company/org/seats/sam";
   const sent = engine();
   await mount("sam", ["admin"]);
-  const note = (await screen.findByText("This seat is open.")).closest(
-    ".crewlet-callout",
+  // THE OVERVIEW'S EMPTY STATE, in the column a person's day would fill: a
+  // notice above an empty column read as a page that had failed to load.
+  const note = (await screen.findByText("This seat is open")).closest(
+    ".crewlet-empty-state",
   ) as HTMLElement;
+  expect(document.querySelector(".prof-notices .crewlet-callout")).toBeNull();
   fireEvent.click(await within(note).findByRole("button", { name: "Add person" }));
   const dialog = await screen.findByRole("dialog", { name: "Add someone as Sam Support" });
   fireEvent.change(within(dialog).getByLabelText("Email address"), {
@@ -251,8 +257,9 @@ test("an invited seat names its invitation, and cancelling it frees the seat", a
   const sent = engine();
   await mount("lee", ["admin"]);
   const note = (await screen.findByText("lee@example.com")).closest(
-    ".crewlet-callout",
+    ".crewlet-empty-state",
   ) as HTMLElement;
+  expect(within(note).getByText("An invitation holds this seat")).toBeTruthy();
   expect(within(note).queryByRole("button", { name: "Invite" })).toBeNull();
   fireEvent.click(within(note).getByRole("button", { name: "Cancel invitation" }));
   const dialog = await screen.findByRole("dialog", { name: "Cancel this invitation?" });
@@ -272,7 +279,7 @@ test("a seat listing that failed is said on the page", async () => {
   engine(json(500, { error: "internal", message: "boom" }));
   await mount("sam", ["admin"]);
   expect(await screen.findByText(/The engine failed to answer/)).toBeTruthy();
-  expect(screen.queryByText("This seat is open.")).toBeNull();
+  expect(screen.queryByText("This seat is open")).toBeNull();
   expect(screen.queryByRole("button", { name: "Invite" })).toBeNull();
 });
 
@@ -280,9 +287,12 @@ test("a reader without Admin reads the fact and is offered no gesture", async ()
   location.hash = "#/company/org/seats/sam";
   engine();
   await mount("sam", ["tracker", "knowledge"]);
-  const note = (await screen.findByText("This seat is open.")).closest(
-    ".crewlet-callout",
+  // THE OVERVIEW'S EMPTY STATE, in the column a person's day would fill: a
+  // notice above an empty column read as a page that had failed to load.
+  const note = (await screen.findByText("This seat is open")).closest(
+    ".crewlet-empty-state",
   ) as HTMLElement;
+  expect(document.querySelector(".prof-notices .crewlet-callout")).toBeNull();
   expect(within(note).queryByRole("button")).toBeNull();
   // NOBODY HOLDS IT, so nobody's day or work is drawn: stats about nobody.
   // The CONTROL is the held seat below, whose assigned work is drawn.
@@ -329,8 +339,11 @@ test("a reader holding no app still reads who holds the seat", async () => {
   const sent = engine();
   await mount("sam", []);
   expect(sent.filter((s) => s.path === "/iam/seats")).toHaveLength(1);
-  const note = (await screen.findByText("This seat is open.")).closest(
-    ".crewlet-callout",
+  // THE OVERVIEW'S EMPTY STATE, in the column a person's day would fill: a
+  // notice above an empty column read as a page that had failed to load.
+  const note = (await screen.findByText("This seat is open")).closest(
+    ".crewlet-empty-state",
   ) as HTMLElement;
+  expect(document.querySelector(".prof-notices .crewlet-callout")).toBeNull();
   expect(within(note).queryByRole("button")).toBeNull();
 });

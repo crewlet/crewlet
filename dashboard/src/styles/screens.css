@@ -1674,11 +1674,6 @@ a.prof-row:hover {
   min-width: 0;
   overflow-wrap: anywhere;
 }
-.prof-tools {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--spacing-1);
-}
 .prof-chain {
   display: inline-flex;
   flex-wrap: wrap;

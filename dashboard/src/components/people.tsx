@@ -41,6 +41,7 @@ import {
   Callout,
   Checkbox,
   Copyable,
+  EmptyState,
   EmptyValue,
   FormField,
   InlineCode,
@@ -645,6 +646,7 @@ export function SeatHolding({
   manages,
   held,
   you = false,
+  form = "notice",
 }: {
   seat: SeatName;
   /** The listing, as [useHumanSeats] read it. */
@@ -655,6 +657,14 @@ export function SeatHolding({
   held: readonly string[];
   /** The seat is the reader's own. */
   you?: boolean;
+  /**
+   * How the holding is said. `notice` is a line above the seat's page, for a
+   * seat somebody holds. `empty` is the page's own empty state, for a seat
+   * nobody holds, whose Overview has no person's day or work to draw: a
+   * notice above an empty column was the page saying "open" and then
+   * nothing.
+   */
+  form?: "notice" | "empty";
 }) {
   const [opening, setOpening] = useState<{ gesture: SeatGesture; row: HumanSeat } | null>(null);
   return (
@@ -664,6 +674,7 @@ export function SeatHolding({
         seats={seats}
         manages={manages}
         you={you}
+        form={form}
         onGesture={(gesture, row) => setOpening({ gesture, row })}
       />
       {opening && (
@@ -684,12 +695,14 @@ function SeatHoldingState({
   seats,
   manages,
   you,
+  form,
   onGesture,
 }: {
   seat: SeatName;
   seats: RestResult<HumanSeat[]>;
   manages: boolean;
   you: boolean;
+  form: "notice" | "empty";
   onGesture: (gesture: SeatGesture, row: HumanSeat) => void;
 }) {
   if (seats.code && !seats.data) {
@@ -722,6 +735,30 @@ function SeatHoldingState({
         </Button>
       ))
     : [];
+  if (form === "empty" && !row.holder) {
+    return (
+      <EmptyState
+        icon={<UserPlusGlyph size={32} />}
+        title={row.invitation ? "An invitation holds this seat" : "This seat is open"}
+        description={
+          row.invitation ? (
+            <HoldingSentence row={row} you={you} />
+          ) : manages ? (
+            "Nobody holds it yet. Invite someone to it, or add a person directly."
+          ) : (
+            "Nobody holds it yet. An admin invites someone to it."
+          )
+        }
+        action={
+          actions.length > 0 ? (
+            <Inline as="span" gap={2}>
+              {actions}
+            </Inline>
+          ) : undefined
+        }
+      />
+    );
+  }
   return (
     <Callout
       variant="neutral"

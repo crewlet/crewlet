@@ -86,6 +86,9 @@ import { inboxFigure, useInboxCountsOf } from "~/lib/useInboxCounts.ts";
 import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
 
 import { useViewer } from "~/lib/viewer.ts";
+import { canManagePeople, SeatHolding } from "~/components/people.tsx";
+import type { HumanSeat } from "~/contract/identity.ts";
+import type { RestResult } from "~/lib/useRest.ts";
 import type { AgentMemory } from "~/contract/memory.ts";
 import type {
   AgentRow,
@@ -155,6 +158,11 @@ export interface OverviewProps {
   now: number;
   /** A human seat nobody holds: there is no person to have a day or work. */
   unheld?: boolean;
+  /**
+   * The human seats' listing the page read, for a seat nobody holds: its
+   * Overview is the seat's empty state, with the ways to fill it.
+   */
+  humanSeats?: RestResult<HumanSeat[]>;
 }
 
 export function Overview(props: OverviewProps) {
@@ -883,15 +891,13 @@ function Setup({
           </>
         )}
         <dt>Tools</dt>
-        <dd className="prof-tools">
+        {/* THE SOURCES ARE A LIST OF NAMES, written as one: an outline pill per
+            source read as a state on each, which none of them is. */}
+        <dd>
           {tools.length > 0 ? (
-            tools.map((t) => (
-              <Tag key={t} size="xs" appearance="outline">
-                {toolSourceLabel(t)}
-              </Tag>
-            ))
+            tools.map(toolSourceLabel).join(", ")
           ) : absent === "none" ? (
-            "none granted"
+            "None granted"
           ) : absent === "withheld" ? (
             <span className="muted">{resolvedWithheld()}</span>
           ) : (
@@ -1050,7 +1056,15 @@ function SchedulesCard({ seat, now }: { seat: Seat; now: number }) {
 // A person
 // ---------------------------------------------------------------------------
 
-function HumanOverview({ seat, index, work, nameOf, now, unheld = false }: OverviewProps) {
+function HumanOverview({
+  seat,
+  index,
+  work,
+  nameOf,
+  now,
+  unheld = false,
+  humanSeats,
+}: OverviewProps) {
   const viewer = useViewer();
   // A PERSON RECORD IS THEIRS: their unread notices, the order they mean to
   // work in and who set it. The engine answers it to a Tracker holder who is
@@ -1089,6 +1103,21 @@ function HumanOverview({ seat, index, work, nameOf, now, unheld = false }: Overv
   return (
     <div className="prof-overview">
       <div className="prof-main">
+        {/* A SEAT NOBODY HOLDS IS SAID HERE, in the column a person's day and
+            work would fill, with the ways to fill it: a notice above an empty
+            column read as a page that had failed to load. */}
+        {unheld && humanSeats && (
+          <Card>
+            <SeatHolding
+              form="empty"
+              seat={{ handle: seat.handle, name: seat.name }}
+              seats={humanSeats}
+              manages={canManagePeople(viewer.grants)}
+              held={viewer.grants}
+              you={self}
+            />
+          </Card>
+        )}
         {unheld || !runs.tracker ? null : mayRead ? (
           // A SECTION RATHER THAN A CARD: the tiles draw their own surface,
           // and a card around them was a frame inside a frame.
