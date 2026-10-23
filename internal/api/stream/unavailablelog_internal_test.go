@@ -56,3 +56,48 @@ func TestAQuestionsConditionIsLoggedByItsSurface(t *testing.T) {
 		}
 	}
 }
+
+// tailFailed stands in for a failure its own node logged already: a coding
+// run's output that the node owning the run couldn't read.
+type tailFailed struct{ error }
+
+func (tailFailed) LoggedAtSource() bool { return true }
+
+// Unwrap keeps the failure's own class readable through the mark, as the
+// sandbox's own wrapper does: without it a full file store read as an
+// unclassed condition with a hint, which is DEBUG with or without the mark.
+func (f tailFailed) Unwrap() error { return f.error }
+
+// A FAILURE ITS OWN NODE LOGGED IS A TRACE HERE. The node that owns a coding
+// run writes what it met reading the run's output, with its class and its
+// text, and the surface that answers the person writes its own line at DEBUG,
+// whether the answer is a 503 no wait clears or a 500: at WARN, one failure was
+// two WARN lines on every poll of the live view, the asker's naming nothing
+// the owner's didn't.
+//
+// Mutation: judge the level without asking whether the failure was logged
+// where it was met, and both rows go red.
+func TestAFailureLoggedWhereItWasMetIsATraceHere(t *testing.T) {
+	t.Parallel()
+	for name, log := range map[string]func(*slog.Logger, error){
+		"unavailable": func(l *slog.Logger, err error) {
+			LogUnavailable(t.Context(), l, "api_query_unavailable", err, "what", "sandbox_tail")
+		},
+		"failed": func(l *slog.Logger, err error) {
+			LogFailed(t.Context(), l, "api_query_failed", err, "what", "sandbox_tail")
+		},
+	} {
+		var out bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		log(logger, fmt.Errorf("sandbox_tail: %w", tailFailed{fmt.Errorf("upload: %w",
+			objstore.ErrFull)}))
+		if line := out.String(); !strings.Contains(line, "level=DEBUG") {
+			t.Errorf("%s: a failure its node logged is written %q, want DEBUG", name, line)
+		}
+		out.Reset()
+		log(logger, fmt.Errorf("upload: %w", objstore.ErrFull))
+		if line := out.String(); !strings.Contains(line, "level=WARN") {
+			t.Errorf("%s: a failure nobody logged yet is written %q, want WARN", name, line)
+		}
+	}
+}

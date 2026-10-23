@@ -57,6 +57,8 @@ func everyCondition() map[string]error {
 		"a run's record naming its seat under a key this node lacks": fmt.Errorf(
 			"steer: run-1's seat: %w", steer.ErrSeatKeyUnknown),
 	}
+	out["a coding run's owner that could not answer"] = fmt.Errorf("query: %w",
+		&sandbox.TailError{Node: "n2", TurnID: "t-1", Failure: sandbox.TailFailedUnanswered})
 	for _, why := range sandbox.Whys {
 		out["a sandbox "+string(why)] = fmt.Errorf("sandbox: read the box of run t-1: %w",
 			sandbox.Because(why, errTransport))
