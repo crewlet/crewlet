@@ -4093,6 +4093,15 @@ var ACTIONS = {
 * for a model and names the next call, its arguments and record ids. One fixed
 * sentence for every `conflict` ended "retry", which re-trying an archived
 * room's post never changes.
+*
+* TWO ANSWERS OVERRULE A SENTENCE HERE, because each could only contradict it
+* (`protocol/writeOutcome.ts`, `sentenceOf`): a refusal the engine answered
+* with a `detail`, which it writes only in a person's words (ADR-0060), is
+* shown in that `detail`, as a coding run's question somebody already
+* answered names who did and a spent token budget names whose it was; and a
+* sentence below that asks for a wait (`unavailable`, `identity_unavailable`)
+* gives way to the engine's own sentence for the code where the answer
+* carries no `Retry-After`, since the engine said waiting won't change it.
 */
 var ACT_ERRORS = {
 	invalid_token: "Signed out. Sign in again.",
@@ -4260,20 +4269,105 @@ function writeFailed(err) {
 		kind: "unknown",
 		reason: err.detail || `The answer was lost (status ${err.status}).`
 	};
-	const own = code === "" ? null : ACT_ERRORS[code];
+	const retryable = err.retryHint !== null && retryAfterMs(err.retryHint) !== null;
+	const detail = code !== "" && WORDED_FOR_A_PERSON.has(code) ? err.detail : "";
 	return {
 		kind: "refused",
 		code,
-		sentence: (code === "unauthorized" && err.reason !== "" ? err.sentence : "") || (own ?? (err.detail || err.sentence || `The engine refused the change (status ${err.status}).`)),
-		detail: err.detail,
+		sentence: sentenceOf(code, err, detail, retryable),
+		detail,
 		hint: err.hint,
 		grants: err.grants,
 		reason: err.reason,
-		retryable: err.retryHint !== null && retryAfterMs(err.retryHint) !== null,
+		retryable,
 		remedy: err.remedy,
 		lookAgain: LOOK_AGAIN.has(code)
 	};
 }
+/**
+* The codes whose `detail` the engine writes for the person reading it and
+* for nobody else (ADR-0060): every refusal class a tool answers
+* (`mcp.Refusals`), which the act route answers through its one refusal
+* mapping (`operator.Fail`) with a `detail` only where that refusal was
+* worded for a person, and none otherwise; and `invalid_input`, an operation
+* key already used for another change, which the same mapping answers in the
+* one sentence every surface taking a key says it in (`opkey.Reused`).
+*
+* NOT THE REQUEST GUARD'S OR THE TRANSPORT'S OWN CODES. Where one of those
+* carries a `detail` (a node draining or still starting, a request from
+* another site, a reader the credential is not), it is written for whoever
+* built the request and names headers, routes and settings, so the
+* dashboard's sentence for the code stands. A code missing here keeps that
+* sentence: it says less, and never a developer's words.
+*/
+var WORDED_FOR_A_PERSON = /* @__PURE__ */ new Set([
+	"invalid",
+	"not_found",
+	"forbidden",
+	"stale_version",
+	"conflict",
+	"exists",
+	"already_answered",
+	"reassignment_budget",
+	"inbox_full",
+	"quota_exceeded",
+	"not_running",
+	"steer_unsupported",
+	"budget_exhausted",
+	"unavailable",
+	"internal_error",
+	"invalid_input"
+]);
+/**
+* The refusals whose fixed sentence asks the person to wait, and which the
+* engine answers with no `Retry-After` where no wait clears them: a
+* condition that is stuck (a full log, an evicted node, a note the running
+* node could not verify) or a refusal only a person's change clears (a model
+* the company has not set up). The engine then answers its own sentence for
+* the code, the one that says waiting won't help (`internal/api/httpjson`'s
+* `waitless`), and the dashboard's "Try again in a moment" would say the
+* opposite. Every other code whose sentence asks for a wait is one the
+* engine always answers with a `Retry-After`: `draining`
+* (internal/api/drain.go), `starting` (internal/api/boot.go) and
+* `no_active_revision` (httpjson's `NoActiveRevision`).
+*/
+var WAITLESS_WHERE_STUCK = /* @__PURE__ */ new Set(["unavailable", "identity_unavailable"]);
+/**
+* The sentence a person is shown for a refusal.
+*
+* THE DASHBOARD'S OWN, from `contract/errors.ts`, wherever it has one and the
+* engine's answer cannot contradict it. Three exceptions, and each is a case
+* where it can:
+*
+*  - THE ENGINE WROTE THE DETAIL FOR THE PERSON: `detail` is the engine's
+*    words for a code in [WORDED_FOR_A_PERSON], which it answers only where
+*    somebody worded that refusal for whoever pressed. They are about this
+*    refusal (who already answered the question, whose token budget is spent,
+*    that the change moved since it was first sent), where the fixed sentence
+*    is about every refusal of its code, so they are shown whatever the code
+*    and whatever the answer's `Retry-After`;
+*  - A FIXED SENTENCE ASKING FOR A WAIT the answer does not carry
+*    ([WAITLESS_WHERE_STUCK]) gives way to the engine's own sentence for the
+*    code, which says waiting won't change it;
+*  - A RULE'S REFUSAL is said by its rule: `unauthorized` is every refusal
+*    the authority table makes, and the engine's sentence for one follows
+*    the `reason` that decided it, where the fixed sentence for the code says
+*    the reader lacks access, to somebody whose role on an artifact is below
+*    the verb's or whose account is not active among them.
+*
+* A code this build does not know, or one whose sentence is the engine's
+* (`null`), is the engine's own words: its `detail`, or where it sent none,
+* its sentence for the code.
+*/
+function sentenceOf(code, err, detail, retryable) {
+	const own = code === "" ? null : ACT_ERRORS[code];
+	if (detail !== "") return detail;
+	if (code === "unauthorized" && err.reason !== "" && err.sentence !== "") return err.sentence;
+	if (own !== null && code !== "" && !retryable && WAITLESS_WHERE_STUCK.has(code)) return err.sentence || NO_WAIT_CLEARS;
+	return own ?? (err.detail || err.sentence || `The engine refused the change (status ${err.status}).`);
+}
+/** What a refusal no wait clears says where the engine's answer said nothing. */
+var NO_WAIT_CLEARS = "This can't be done here, and waiting won't change that.";
 //#endregion
 //#region src/protocol/act.ts
 /**
