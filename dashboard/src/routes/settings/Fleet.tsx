@@ -59,8 +59,10 @@ import {
   TargetGlyph,
   SlidersVerticalGlyph,
   TriangleAlertGlyph,
+  DatabaseGlyph,
 } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
+import { RelatedRow } from "~/app/frame/RelatedRow.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { plainSeat } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
@@ -596,14 +598,14 @@ function FleetScreen() {
           state log's every domain, its evictions and its snapshot tier under
           the node list of a screen called Nodes. It is Settings › Backups &
           retention now, and the way there is said here, where the question
-          starts. */}
-      <p className="t-caption">
-        Log positions are under{" "}
-        <a className="prose-link" href={href(["settings", "backups"])}>
-          Backups &amp; retention
-        </a>
-        .
-      </p>
+          starts. A related row rather than a footnote under the last card,
+          the shape Company › Policies points at Settings › Limits with. */}
+      <RelatedRow
+        path={["settings", "backups"]}
+        icon={<DatabaseGlyph size="sm" />}
+        title="Backups & retention"
+        description="Every log's position on every node, its trim and its evictions."
+      />
     </>
   );
 }

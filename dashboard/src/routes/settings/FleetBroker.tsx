@@ -214,7 +214,9 @@ export function BrokerMembership({
     <Card padding="none">
       <Card.Header
         icon={<NetworkGlyph size="sm" />}
-        count={answer.group?.peers.length ?? 0}
+        // THE COUNT IS THE TABLE'S ROWS: counting the group's voters said 0
+        // over a table listing the one node that advertises a broker.
+        count={rows.length}
         subtitle={answer.group ? groupSummary(answer.group, answer.group_from) : undefined}
       >
         <Card.Title>Broker members</Card.Title>

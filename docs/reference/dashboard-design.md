@@ -7760,7 +7760,11 @@ title. Neither screen repeats a count in its page bar that a tile below
 already shows. **Broker members** is
 the fleet broker's membership twice, as the nodes advertise it and as the
 metadata group counts it, with every disagreement named and the removal of a
-dead member behind a typed confirmation. See [seat
+dead member behind a typed confirmation; its count is the rows it lists. Under
+the last card, **Backups & retention** is a related row (`RelatedRow`, the
+quiet linked row Company › Policies points at Settings › Limits with, drawn
+only for a reader who may open the page it names) rather than a footnote,
+since every log's position is where "which node is behind" goes next. See [seat
 ownership](../concepts/seat-ownership.md) and [the fleet guide](../guides/fleet.md).
 
 **File storage** (`#/settings/storage`) is a page of its own in the Engine
