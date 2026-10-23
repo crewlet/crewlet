@@ -828,6 +828,32 @@
 
 /* ---- Backups & retention ------------------------------------------------ */
 
+/* The standing alarms: a row each on the card's own inset, ruled from the one
+   above, the warning glyph in the warning ink beside the alarm's words. */
+.alarm-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.alarm-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--spacing-3);
+  padding: var(--spacing-3) var(--spacing-4);
+}
+.alarm-row + .alarm-row {
+  border-top: 1px solid var(--color-border-default);
+}
+.alarm-row-glyph {
+  display: inline-flex;
+  padding-top: 2px;
+  color: var(--color-feedback-warning-ink);
+}
+.alarm-title {
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+
 /* An alarm's measurement, the logs it stands on and its remedy, spaced by the
    column's gap rather than by margins of their own. */
 .alarm-body {
