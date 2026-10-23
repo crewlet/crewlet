@@ -42,7 +42,7 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { usePeekControls, usePeek } from "~/app/frame/DetailRail.tsx";
 import { useSearchTarget } from "~/app/searchTarget.ts";
 import { usePageMenu, useSectionCounts } from "~/app/Shell.tsx";
-import { CONFIG_WRITE_GRANT, useOrgWriteAccess } from "~/lib/useWriteAccess.ts";
+import { CONFIG_WRITE_GRANT, useOrgWriteAccess, type OrgTarget } from "~/lib/useWriteAccess.ts";
 import { useLeadScope } from "~/lib/leadScope.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { holds } from "~/lib/access.ts";
@@ -171,23 +171,46 @@ export function AgentsHeader({
 
 /**
  * The way into the org builder, one control wherever the builder writes what
- * the page shows: the Org chart's sections, and Company › Overview and
- * Policies, which drew a text link "Edit in org →" for the same place.
+ * the page shows: the Org chart's sections.
  *
  * ASKED THE GATE THE BUILDER ASKS (`useOrgWriteAccess`): a reader holding only
  * Tracker was offered an enabled Edit org beside a disabled Add seat, and the
  * page it opened refused them. Never hidden: the control says why.
  */
 export function EditOrgButton() {
-  const access = useOrgWriteAccess("anywhere");
+  return <OrgEditLink label="Edit org" target="anywhere" to={href(ORG_EDIT_PATH)} />;
+}
+
+/** The part of the company's charter a page edits: all of it, or its policies. */
+export type CharterPart = "charter" | "policies";
+
+/**
+ * The way into the builder from the company's own pages, named for what it
+ * edits: Company › Overview's Edit charter and Company › Policies' Edit
+ * policies. Each opens the company's editor in the builder (`edit=`), at its
+ * Policies for the policies, rather than the whole chart at fit-to-view with
+ * the card to find and press again.
+ *
+ * ASKED OF THE COMPANY, not of anywhere: a lead may edit their own unit, and
+ * the charter is the company grant's, so a lead is told why rather than sent
+ * to an editor that holds every field.
+ */
+export function EditCharterButton({ part }: { part: CharterPart }) {
+  return (
+    <OrgEditLink
+      label={part === "policies" ? "Edit policies" : "Edit charter"}
+      target="company"
+      to={href(ORG_EDIT_PATH, { edit: part })}
+    />
+  );
+}
+
+/** A way into the builder, or the same control disabled with the builder's own reason. */
+function OrgEditLink({ label, target, to }: { label: string; target: OrgTarget; to: string }) {
+  const access = useOrgWriteAccess(target);
   return access.can ? (
-    <ButtonLink
-      size="small"
-      variant="secondary"
-      href={href(ORG_EDIT_PATH)}
-      leadingIcon={<PencilGlyph size="sm" />}
-    >
-      Edit org
+    <ButtonLink size="small" variant="secondary" href={to} leadingIcon={<PencilGlyph size="sm" />}>
+      {label}
     </ButtonLink>
   ) : (
     <Button
@@ -197,7 +220,7 @@ export function EditOrgButton() {
       disabledReason={access.reason}
       title={access.reason}
     >
-      Edit org
+      {label}
     </Button>
   );
 }
