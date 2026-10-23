@@ -717,9 +717,9 @@ which had named different seats side by side. A seat that needs a person is not 
 nothing, and what it waits on is the Inbox's and Now running's *Waiting on a
 person*. Nothing in it ticks — no elapsed clock and no pulse per row — because
 the chrome is on every screen; the Live row's one dot says something runs, and
-these rows say which. At the foot, Settings, the
-**engine panel** and the **user block**. The head carries the company's lockup,
-alone on its line.
+these rows say which. At the foot, Settings and the **user block**. The head
+carries the company's lockup and, at the end of its line, the **engine
+panel**'s compact status.
 
 **Every "New task" is one sheet.** A work screen's
 page-bar New task (Home, the Tasks lens, every lens of a project) and a board lane's `+` all open the
@@ -913,14 +913,15 @@ numbers. A surface mounted outside the frame is refused rather than handed a
 read of its own, because that fallback would bring the per-surface reads back
 without a sound.
 
-**The engine panel** is one row at the foot of the rail, drawn in the rail's
-own grammar (the kit's `AppShell.RailRow`, the row Settings is above it): a
-dot, the state in words, and, while alarms stand, how many, beside a warning
-triangle ("Engine serving ⚠ 5"). Its words are a few in every state, so it
-keeps one 30px height and the foot never moves when the engine's state does.
-It says the one state that decides what a reader should do, in precedence
+**The engine panel** opens from a compact status at the end of the rail
+head's line, beside the company's name (the kit's `AppShell.RailStatus` in the
+head's `status` slot): a dot and, while alarms stand, how many, beside a
+warning triangle. Its words are its name and its title rather than a line of
+the rail ("Engine serving, 5 alarms"), and it reserves its width, so the
+company's name truncates at one place whatever the engine's state, and the
+panel opens below it. It says the one state that decides what a reader should do, in precedence
 order. Two are about THIS BROWSER rather than the engine: nobody is signed
-in ("Not signed in": the row is then the button that goes to the sign-in, and
+in ("Not signed in": the status is then the button that goes to the sign-in, and
 opens nothing; see [Signing in](#signing-in-is-a-screen-outside-the-frame)),
 and the engine knows who this is and will not serve them ("Access refused", a
 seat taken out of the chart). Then the engine is unreachable, the tab is still

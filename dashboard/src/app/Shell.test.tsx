@@ -745,7 +745,8 @@ describe("the sidebar's figures", () => {
   // EVERY "NEW TASK" OPENS THE FRAME'S ONE SHEET: Home's in its page bar, not
   // a second form, and not the palette it stood in for until the sheet landed.
   // AND IT IS THE ONLY ONE ON HOME: the sidebar's head carries no `+`, so a
-  // second New task there is a door nobody decided to put back.
+  // second New task there is a door nobody decided to put back. Its one
+  // control is the engine's status.
   test("Home's New task opens the frame's New task sheet, the only one on the page", async () => {
     location.hash = "#/home";
     const { store, socket } = answering({
@@ -757,7 +758,10 @@ describe("the sidebar's figures", () => {
     await settle();
     const presses = screen.getAllByRole("button", { name: /^New task$/ });
     expect(presses).toHaveLength(1);
-    expect(document.querySelector(".crewlet-app-shell__rail-head button")).toBeNull();
+    const headControls = [...document.querySelectorAll(".crewlet-app-shell__rail-head button")];
+    expect(headControls.every((press) => press.closest(".crewlet-app-shell__rail-status"))).toBe(
+      true,
+    );
     await act(async () => {
       fireEvent.click(presses[0]!);
     });

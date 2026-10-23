@@ -295,6 +295,24 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
           }
         />
       }
+      // THE ENGINE'S STATE ON THE NAME'S LINE, compact: a dot and the
+      // alarms, its words in its name and title, the panel below it.
+      status={
+        <RailBoundary label="Engine" resetKey={at} compact>
+          <EnginePanel
+            reading={engineReading({
+              connected,
+              authRejected,
+              accessRefused,
+              lostAt,
+              everConnected,
+              health,
+            })}
+            readsReport={readsReport}
+            onSignIn={goSignIn}
+          />
+        </RailBoundary>
+      }
       footer={
         <>
           <SidebarNav label="Settings">
@@ -302,20 +320,6 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
                 note — and drawn by the same rule as every other row's. */}
             {shown("foot").map(row)}
           </SidebarNav>
-          <RailBoundary label="Engine" resetKey={at}>
-            <EnginePanel
-              reading={engineReading({
-                connected,
-                authRejected,
-                accessRefused,
-                lostAt,
-                everConnected,
-                health,
-              })}
-              readsReport={readsReport}
-              onSignIn={goSignIn}
-            />
-          </RailBoundary>
           <RailBoundary label="You" resetKey={at}>
             <UserBlock viewer={viewer} seatName={seatName} />
           </RailBoundary>
