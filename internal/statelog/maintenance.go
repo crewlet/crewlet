@@ -35,6 +35,41 @@ import (
 // broker process restarting, not a client closing. Only a sealed operation may
 // be verified, and only a verified one is confirmed and deleted.
 //
+// # What each piece of evidence proves, and no more
+//
+// The seal stands on four records, and each proves one thing:
+//
+//   - AN ACKNOWLEDGEMENT ([coord.MaintenanceAck]) is written by a process as it
+//     boots into a maintenance mode, once for each log: which process it is,
+//     the mode it booted into, and the window and attempt open on that log when
+//     it read them, or none. Each log keeps its own ([acksOf]), so it is
+//     evidence about that log's window and no other, and two windows open at
+//     once are each answered by the same boot. The boot writes it after its
+//     broker has started, so it says the process was running by then and
+//     never that it started after anything. No record a process writes bounds
+//     its own start from below; only a later process of the same node does,
+//     by replacing it.
+//   - THE RECORD OF WHO IS RUNNING ([coord.MaintenanceOperation.WriteIncarnations])
+//     names, for each participant, the process its newest acknowledgement
+//     named when a request's journal record was written, by the process
+//     sending that request, in the same write, immediately before it leaves.
+//     Every request records it again, so it is always the newest request's.
+//   - THE SEAL'S INEQUALITY ([SealRestarts]): a seal-mode acknowledgement from
+//     another process than the recorded one proves the recorded process is
+//     gone. That retires a request only because the recorded process is the
+//     one that was running as the request left. Recorded once at the baseline,
+//     a request a resumed window sent later was retired by restarts made
+//     before it left, a node restarted into seal mode in between among them.
+//   - A JOURNAL RECORD ([coord.JournalRecord]) is one request, written by its
+//     sender before it leaves. Only that request's own read-back completes it;
+//     otherwise the barrier retires it ([Retire]), and a value never does.
+//
+// WHAT NONE OF THEM CAN SEE is a node restarting while a request is leaving:
+// its broker up before the request, its acknowledgement written after the
+// record. That is why the procedure restarts the fleet into seal mode only once
+// the verb has answered, and why a node restarted before a request leaves is
+// simply asked to restart again after it.
+//
 // # What the arithmetic here does NOT do
 //
 // It performs no I/O and holds no state. Every function is a decision over
@@ -161,12 +196,14 @@ func PermitPhase(op coord.MaintenanceOperation, ev PhaseEvidence) (coord.Mainten
 		if ev.Observed && ev.ObservedMaxBytes == op.TargetMaxBytes {
 			return coord.PhaseApplied, nil
 		}
-		// A CRASH HERE HAS EXACTLY ONE SAFE NEXT STEP, and it is the
-		// seal: a request may be in flight, and the only thing that
-		// retires one is the barrier. Reaching the seal from here is
-		// what breaks the cycle an earlier draft closed, where the
-		// unresolved journal record blocked the very seal that clears
-		// it.
+		// A REQUEST MAY BE IN FLIGHT FROM HERE, and the only thing that
+		// retires one is the barrier, so the seal always follows. Before
+		// it, a coordinator in maintenance mode may resume the window: it
+		// records who is running again and sends its own request, with
+		// its own journal record, and this phase answers it unchanged
+		// (BaselineWritten). Reaching the seal from here is what breaks
+		// the cycle an earlier draft closed, where the unresolved journal
+		// record blocked the very seal that clears it.
 		if ev.Stopped {
 			return coord.PhaseSealing, nil
 		}
@@ -195,9 +232,10 @@ func PermitPhase(op coord.MaintenanceOperation, ev PhaseEvidence) (coord.Mainten
 //
 //  1. Every participant that is not excluded has an acknowledgement the seal
 //     takes ([SealRestarts]): this operation, this attempt, from seal mode,
-//     with an incarnation that is not the one recorded in the baseline.
-//     Inequality is the evidence: an incarnation is minted per process, so a
-//     different one means the process holding any outstanding request is gone.
+//     with an incarnation that is not the one recorded as the newest request
+//     left. Inequality is the evidence: an incarnation is minted per process,
+//     so a different one means the process holding any outstanding request is
+//     gone.
 //  2. Every journal record for this operation is completed or retired.
 //
 // The second used to be written as "no record from an attempt earlier than
@@ -209,9 +247,12 @@ func SealHolds(op coord.MaintenanceOperation, acks []coord.MaintenanceAck) (bool
 	_, missing := SealRestarts(op, acks)
 	for _, record := range op.Journal {
 		if record.State == coord.JournalIssued {
+			// NAMED BY WHEN IT WAS SENT as well: an attempt can send more
+			// than one request, a resumed window's among them, so its
+			// number and its sender alone can name two records alike.
 			missing = append(missing, fmt.Sprintf(
-				"a write attempt from attempt %d by %s is unresolved",
-				record.Attempt, record.By))
+				"attempt %d's request sent at %s by %s is unresolved",
+				record.Attempt, record.At.UTC().Format(time.RFC3339), record.By))
 		}
 	}
 	if len(missing) > 0 {
@@ -268,8 +309,8 @@ func SealRestarts(op coord.MaintenanceOperation, acks []coord.MaintenanceAck) (
 			missing = append(missing, fmt.Sprintf(
 				"%s acknowledged from %q rather than seal mode", node, ack.Mode))
 		case ack.Incarnation == op.WriteIncarnations[node]:
-			missing = append(missing, node+" acknowledged with the same "+
-				"incarnation it was baselined at, so its process did not restart")
+			missing = append(missing, node+" is still the process that was "+
+				"running when the request left, so it hasn't restarted since")
 		default:
 			restarted[node] = ack.Incarnation
 		}

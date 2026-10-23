@@ -1282,16 +1282,24 @@ either mode, once for every log. Where a log has a window open, that record
 the ordinary case for the first restart, it names no window, and the baseline
 still reads it, so the fleet restarts into `maintenance` once, before you run
 the verb, and the verb then goes ahead. Each log's records are its own, so a
-window on one log is never answered by a restart recorded for another. The seal takes only an acknowledgement a node made by booting
-into `seal` while this window's attempt was open, so a restart from before the
-window never stands in for one.
+window on one log is never answered by a restart recorded for another. The
+seal takes only an acknowledgement a node made by booting into `seal` while
+this window's attempt was open, so a restart from before the window never
+stands in for one.
 
-The set is read when the window opens and **again at the baseline, before any
-request is sent**, and the second read only adds to the first. A window can
-wait at `opened` for a while, so a node that came up in the meantime is asked
-too, and a node the window already named stays named until it acknowledges or
-you exclude it. A coordinator that resumes a window already baselined sends its
-request on the set the baseline recorded.
+The set is read when the window opens and **again right before every request
+is sent**, and each read only adds to the last. A window can wait at `opened`,
+or at `baselined` once its coordinator has stopped, for a while, so a node that
+came up in the meantime is asked too, and a node the window already named stays
+named until it acknowledges or you exclude it.
+
+The same write records which process each participant is running as the
+request leaves, and that is what the seal compares against: it takes a node's
+acknowledgement only from a later process. A coordinator that resumes a window
+already baselined records it again before its own request leaves. So a node
+restarted while the window waited, into `seal` or not, was running as that
+request left, and it has to restart once more before the seal holds. Run the
+`seal` restart after the verb has answered from `maintenance`, not before.
 
 ### What excludes a publisher
 
@@ -1359,15 +1367,15 @@ admission, and it is the one way past a dead node's.
 crewlet retention maintenance status -stream CREWLET_TRACKER_LOG
 ```
 
-One page: the operation and its phase and attempt, every participant's
-baselined incarnation against what it acknowledged as, any unresolved write
-attempt, and what the window's next step is waiting on, with the commands that
-run next in full. At `opened` the next step is the baseline, so the page names
-the participants with no restart into a maintenance mode recorded and any
-admission still stopping the window's first request. From the baseline on it
-names what the seal is waiting for instead. With no window open on a node in a
-maintenance mode, it names any node still holding an admission, so you know
-before you open one.
+One page: the operation and its phase and attempt, the process each participant
+was running as the newest request left against what it acknowledged as, any
+unresolved request and when it was sent, and what the window's next step is
+waiting on, with the commands that run next in full. At `opened` the next step
+is the baseline, so the page names the participants with no restart into a
+maintenance mode recorded and any admission still stopping the window's first
+request. From the baseline on it names what the seal is waiting for instead.
+With no window open on a node in a maintenance mode, it names any node still
+holding an admission, so you know before you open one.
 
 **You do not have to go looking for it.** While an operation is open, both
 `crewlet retention status` and **Settings › Backups & retention** lead with
@@ -1400,6 +1408,11 @@ target. If the target could move, a mismatch would be unreadable — nobody coul
 tell an unapplied request from a changed mind. Repeat the number in `-confirm`
 and it is fixed for the life of the operation; to choose a different one,
 abandon and open a new one.
+
+If the ceiling reads back as anything but the target right after the request,
+the verb sends no other request and says what it read. That request may still
+land, so it stays for the `seal` restart to retire, and the verify then checks
+the ceiling again.
 
 A mismatch at verify is a **numbered attempt**, not a re-apply: every node is
 in `seal` mode, which refuses configuration writes, so there is nowhere legal
