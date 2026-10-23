@@ -11754,12 +11754,11 @@ a.live-row:focus-visible {
   height: 100%;
 }
 
-/* ---- A Settings page of term lists that read as one table ----------------
-   Limits and Sign-in policy stack several cards of terms and values, and each
-   list sized its term column to its own longest term, so the values started
-   at a different x in every card. The kit's term track is an inherited custom
-   property (`--crewlet-description-list-term`), set here once for the page;
-   below the kit's narrow step a term stands over its value as before. */
-.settings-terms {
-  --crewlet-description-list-term: 18rem;
+/* ---- The company's own pages (Overview, Policies) --------------------------
+   ONE READABLE COLUMN. The company's own words are read rather than scanned,
+   and across the whole canvas a policy ran to a line no reader follows while
+   a lone card sat in an empty field. The column is the reading measure plus
+   the card's own inset and the policy numbers' gutter. */
+.charter-page {
+  max-width: calc(var(--size-measure) + var(--spacing-10));
 }

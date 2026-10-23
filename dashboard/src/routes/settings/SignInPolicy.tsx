@@ -12,14 +12,25 @@
  * one fleet may differ: the page names the node rather than presenting the
  * reading as the company's. Read only: it changes with an edit to that file
  * and a restart.
+ *
+ * # Drawn as every read-only settings page is
+ *
+ * Each group is a card holding a [SettingsTable], the shape Settings › Limits
+ * takes: the setting, its key under `api.auth` in the node's file, the value
+ * enforced, and where the value comes from. The session's idle limit is the
+ * one value no file sets (an engine constant, see `queries.SignInPolicy`), and
+ * its source says so rather than pointing at a key that does not exist.
  */
 
-import { Card, DescriptionList, InlineCode } from "@crewlethq/ui";
-import { ShieldUserGlyph } from "@crewlethq/icons/glyphs";
+import { Card, InlineCode, SettingsTable } from "@crewlethq/ui";
+import { ClockGlyph, ShieldUserGlyph } from "@crewlethq/icons/glyphs";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { fmtSetting, plural } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+
+/** Where a value set in the node's file comes from. */
+const FROM_FILE = "crewlet.yaml";
 
 export function SignInPolicy() {
   const { data, loading, error, refusal, detail } = useQuery("sign_in_policy", undefined, {
@@ -39,37 +50,53 @@ export function SignInPolicy() {
       </PageNote>
       <QueryState error={error} refusal={refusal} detail={detail} loading={loading && !data}>
         {data && (
-          <div className="col gap-4 settings-terms">
-            <Card>
+          <div className="col gap-4">
+            <Card padding="none">
               <Card.Header icon={<ShieldUserGlyph size="sm" />}>
-                <Card.Title>Signing in</Card.Title>
+                <Card.Title id="sign-in-signing">Signing in</Card.Title>
               </Card.Header>
-              <DescriptionList>
-                <DescriptionList.Item term="Two-step verification">
+              <SettingsTable aria-labelledby="sign-in-signing">
+                <SettingsTable.Row
+                  label="Two-step verification"
+                  settingKey="api.auth.totp"
+                  source={FROM_FILE}
+                >
                   {data.policy.second_factor === "required"
-                    ? "Required for everybody who signs in with a password"
+                    ? "Required for every password sign-in"
                     : "Optional, each person chooses"}
-                </DescriptionList.Item>
-                <DescriptionList.Item term="Shortest password">
+                </SettingsTable.Row>
+                <SettingsTable.Row
+                  label="Shortest password"
+                  settingKey="api.auth.min_password_length"
+                  source={FROM_FILE}
+                >
                   {plural(data.policy.min_password_length, "character")}
-                </DescriptionList.Item>
-              </DescriptionList>
+                </SettingsTable.Row>
+              </SettingsTable>
             </Card>
-            <Card>
-              <Card.Header icon={<ShieldUserGlyph size="sm" />}>
-                <Card.Title>Sessions</Card.Title>
+            <Card padding="none">
+              <Card.Header icon={<ClockGlyph size="sm" />}>
+                <Card.Title id="sign-in-sessions">Sessions</Card.Title>
               </Card.Header>
-              <DescriptionList>
-                <DescriptionList.Item term="Longest a session lives">
+              <SettingsTable aria-labelledby="sign-in-sessions">
+                <SettingsTable.Row
+                  label="Longest a session lives"
+                  settingKey="api.auth.session.absolute"
+                  source={FROM_FILE}
+                >
                   {fmtSetting(data.policy.session_absolute_seconds)}
-                </DescriptionList.Item>
-                <DescriptionList.Item term="Signed out when unused for">
+                </SettingsTable.Row>
+                <SettingsTable.Row label="Signed out when unused for" source="Fixed by the engine">
                   {fmtSetting(data.policy.session_idle_seconds)}
-                </DescriptionList.Item>
-                <DescriptionList.Item term="A sensitive change asks again after">
+                </SettingsTable.Row>
+                <SettingsTable.Row
+                  label="A sensitive change asks again after"
+                  settingKey="api.auth.session.step_up"
+                  source={FROM_FILE}
+                >
                   {fmtSetting(data.policy.step_up_seconds)}
-                </DescriptionList.Item>
-              </DescriptionList>
+                </SettingsTable.Row>
+              </SettingsTable>
             </Card>
           </div>
         )}
