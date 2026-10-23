@@ -907,7 +907,7 @@ func (e *Engine) seal(ctx context.Context, resized capacityLog,
 		return op, fmt.Errorf("engine: read %s's ceiling: %w", op.Stream, err)
 	}
 	retired := false
-	if restarted, incarnations := barrierEvidence(op, acks); restarted {
+	if incarnations, missing := statelog.SealRestarts(op, acks); len(missing) == 0 {
 		out = statelog.Retire(out, statelog.BarrierEvidence{
 			Incarnations: incarnations, ObservedMaxBytes: stats.MaxBytes,
 			At: time.Now().UTC(),
@@ -1389,35 +1389,6 @@ func (e *Engine) capacityIncarnations(ctx context.Context, op coord.MaintenanceO
 		}
 	}
 	return incarnations, op.Participants, nil
-}
-
-// barrierEvidence reports whether every participant has restarted for this
-// attempt, and what their incarnations are.
-//
-// THE SAME EVIDENCE THE SEAL PREDICATE READS, gathered once: a retirement
-// established from a different reading than the seal would retire a record the
-// seal then refuses to accept.
-func barrierEvidence(op coord.MaintenanceOperation, acks []coord.MaintenanceAck) (
-	bool, map[string]string) {
-
-	incarnations := map[string]string{}
-	byNode := map[string]coord.MaintenanceAck{}
-	for _, ack := range acks {
-		byNode[ack.NodeID] = ack
-	}
-	for _, node := range op.Participants {
-		if contains(op.Excluded, node) {
-			continue
-		}
-		ack, acked := byNode[node]
-		if !acked || ack.OperationID != op.OperationID || ack.Attempt != op.Attempt ||
-			ack.Mode != string(statelog.ModeSeal) ||
-			ack.Incarnation == op.WriteIncarnations[node] {
-			return false, nil
-		}
-		incarnations[node] = ack.Incarnation
-	}
-	return true, incarnations
 }
 
 // completeJournal marks this attempt's own record completed, on the issuing
