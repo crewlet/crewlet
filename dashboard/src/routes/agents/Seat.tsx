@@ -69,7 +69,17 @@
 import { useServicesRun, useServicesAsk } from "~/lib/services.ts";
 import { ORG_EDIT_PATH } from "~/app/routes.ts";
 import { useId, useMemo, useState } from "react";
-import { Button, ButtonLink, Callout, EmptyState, Menu, Skeleton, Tag, tabId } from "@crewlethq/ui";
+import {
+  Button,
+  ButtonLink,
+  Callout,
+  EmptyState,
+  Menu,
+  Skeleton,
+  Tabs,
+  Tag,
+  tabId,
+} from "@crewlethq/ui";
 import {
   ActivityGlyph,
   ChartNoAxesGanttGlyph,
@@ -89,7 +99,6 @@ import {
   seatPlaceKey,
   seatUnitKey,
 } from "~/app/crumbs.ts";
-import { ObjectTabs } from "~/app/frame/ObjectTabs.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
 import { usePageLabels, usePageMenu } from "~/app/Shell.tsx";
@@ -409,7 +418,9 @@ export function SeatScreen({ handle }: { handle: string }) {
         {/* WHAT DOES NOT FIT FOLDS INTO "MORE", the tab the reader is on
             always drawn: scrolled, a phone's strip hid Settings past its edge
             with nothing to say it was there. */}
-        <ObjectTabs
+        <Tabs
+          overflow="menu"
+          variant="underline"
           ariaLabel={`${seat.name}'s sections`}
           className="prof-tabs"
           value={tab}

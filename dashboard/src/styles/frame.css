@@ -748,100 +748,14 @@
   }
 }
 
-/* ---- An object's tabs (`ObjectTabs` in app/frame/ObjectTabs.tsx) ----------
-   The kit's underline row, drawn with the tabs that FIT, then "More" for the
-   rest. The rule under the row is the wrapper's, painted on its last pixel
-   row — the same row the kit strip's own border sits on — so it runs on under
-   "More" and to the edge. The gap is the kit strip's own (`spacing-2`),
-   because the fold's arithmetic counts one gap between the last tab drawn and
-   "More". */
-.object-tabs {
-  position: relative;
-  display: flex;
-  align-items: stretch;
-  gap: var(--spacing-2);
-  min-width: 0;
-  box-shadow: inset 0 -1px 0 var(--color-border-default);
-}
-
-/* THE ROW IS AS WIDE AS THE TABS IT DRAWS, and never scrolls: what does not
-   fit has already left it for the menu. */
-.object-tabs > .object-tabs-strip {
-  flex: 0 1 auto;
-  width: auto;
-  min-width: 0;
-}
-
-.object-tabs-more {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-}
-
-/* THE TWIN: an empty box that clips, holding a row of every tab at its own
-   width. Laid out, so it can be measured; clipped, so a row wider than a
-   phone cannot widen the page; invisible and inert, so nothing reaches it. */
-.object-tabs-twin {
-  position: absolute;
-  inset-block-start: 0;
-  inset-inline-start: 0;
-  width: 0;
-  height: 0;
-  overflow: hidden;
-  visibility: hidden;
-  pointer-events: none;
-}
-
-.object-tabs-twin-row {
-  display: flex;
-  gap: var(--spacing-2);
-  width: max-content;
-}
-
-.object-tabs-twin-row .crewlet-tabs {
-  width: max-content;
-  overflow: visible;
-}
-
 /* ---- The section tabs ----------------------------------------------------
    A workspace's sections, under the bar, as LINKS: the kit's underline `Tabs`
-   in router mode (`SectionTabs` in PageHeader.tsx), so the tab, its figure,
-   the bar under the current one and the focus ring are the kit's. What is
-   left here is the strip's place under the bar and its fold: the row never
-   scrolls, because the tabs that do not fit fold into the "More" menu at its
-   end, and the folded ones sit at its start, out of the flow and invisible,
-   so they can be measured again when it grows. */
+   in router mode with `overflow="menu"` (`SectionTabs` in PageHeader.tsx), so
+   the tab, its figure, the bar under the current one, the focus ring, the
+   fold into "More" and the reading note are the kit's. What is left here is
+   the strip's place under the bar. */
 .section-tabs {
   padding: 0 var(--spacing-5);
-}
-
-.section-tabs [data-folded] {
-  position: absolute;
-  inset-block-start: 0;
-  inset-inline-start: 0;
-  visibility: hidden;
-  pointer-events: none;
-}
-
-/* "More" is the kit's own quiet menu button (the one the page bar's "More"
-   is), centred on the tabs' line. */
-.section-tabs-more {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-}
-
-/* A workspace's reading note (`WorkspaceRow.note`), at the row's far end: a
-   sentence about every section, never one of them. It gives way to the tabs,
-   folded whenever the strip has no room for it beside every one of them
-   (`noteFits`), which on a phone is always. */
-.section-tabs-note {
-  flex: none;
-  align-self: center;
-  margin-left: auto;
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-  white-space: nowrap;
 }
 
 /* THE EDGE THAT HAS MORE PAST IT FADES. A row that scrolls with its bar hidden

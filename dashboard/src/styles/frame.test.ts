@@ -1115,22 +1115,24 @@ test("on a phone's width the lenses are a row of their own that scrolls", () => 
   );
 });
 
-// AN OBJECT'S TAB STRIP IS AS WIDE AS WHAT HOLDS IT. `ObjectTabs` folds the
-// tabs that do not fit by measuring the box it is given, so a box sized by
-// its own content measures ITSELF: the turn trace's strip, set
-// `justify-self: start` in its header grid, was measured before its Tools
-// count and its web font arrived, folded three tabs into "More", shrank to
-// "Timeline | More" — and the observer never saw room to unfold. Any rule on
-// the strip's own box, or on a class a screen hands it, that shrinks it to
-// its content repeats that. jsdom has no layout, so this is where it shows.
-test("an object tab strip spans its container rather than shrinking to its tabs", () => {
+// A FOLDING TAB ROW IS AS WIDE AS WHAT HOLDS IT. The kit's `Tabs` with
+// `overflow="menu"` folds the tabs that do not fit by measuring the box it is
+// given, so a box sized by its own content measures ITSELF: the turn trace's
+// strip, set `justify-self: start` in its header grid, was measured before
+// its Tools count and its web font arrived, folded three tabs into "More",
+// shrank to "Timeline | More", and the observer never saw room to unfold.
+// Any rule on the row's own box, or on a class a screen hands it, that
+// shrinks it to its content repeats that. jsdom has no layout, so this is
+// where it shows.
+test("a folding tab row spans its container rather than shrinking to its tabs", () => {
   const src = fileURLToPath(new URL("..", import.meta.url));
-  const classes = new Set([".object-tabs"]);
+  const classes = new Set([".crewlet-tabs-fold", ".crewlet-tabs--fold"]);
   for (const file of readdirSync(src, { recursive: true }) as string[]) {
     if (!file.endsWith(".tsx") || file.endsWith(".test.tsx")) continue;
     const text = readFileSync(join(src, file), "utf8");
-    for (const m of text.matchAll(/<ObjectTabs\b/g)) {
+    for (const m of text.matchAll(/<Tabs\b/g)) {
       const tag = text.slice(m.index, text.indexOf("/>", m.index));
+      if (!/overflow="menu"/.test(tag)) continue;
       const named = /className="([^"]+)"/.exec(tag)?.[1] ?? "";
       for (const c of named.split(/\s+/).filter(Boolean)) classes.add(`.${c}`);
     }
@@ -1153,9 +1155,9 @@ test("an object tab strip spans its container rather than shrinking to its tabs"
     const css = sheet(name);
     for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
       for (const sel of m[1]!.split(",")) {
-        // THE STRIP'S OWN BOX: the class in the selector's LAST compound.
-        // `.object-tabs > .object-tabs-strip` is the row inside it, which is
-        // meant to be as wide as its tabs.
+        // THE ROW'S OWN BOX: the class in the selector's LAST compound. A
+        // tab list inside the kit's fold box is meant to be as wide as its
+        // tabs, and is the kit's to size.
         const subject =
           sel
             .trim()

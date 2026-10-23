@@ -8930,8 +8930,8 @@ a.live-row:focus-visible {
   border-bottom: 1px solid var(--color-border-default);
 }
 .trace-tabs {
-  /* STRETCHED, never shrunk to its tabs: \`ObjectTabs\` folds what does not
-     fit by measuring the box it is given, so a box sized by its own content
+  /* STRETCHED, never shrunk to its tabs: the kit's folding \`Tabs\` folds what
+     does not fit by measuring the box it is given, so a box sized by its own content
      measures itself — a strip laid out before its count or its web font
      arrived folded three tabs into "More" and never saw room to unfold
      (\`styles/frame.test.ts\` refuses the shrink). */

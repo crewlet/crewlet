@@ -44,7 +44,7 @@
  * nothing for a section the screen did not count.
  */
 
-import { useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import {
   AppShell,
   AvatarStack,
@@ -61,7 +61,7 @@ import {
   type MenuEntry,
   useMediaMatch,
 } from "@crewlethq/ui";
-import { ChevronDownGlyph, EllipsisGlyph, StarGlyph } from "@crewlethq/icons/glyphs";
+import { EllipsisGlyph, StarGlyph } from "@crewlethq/icons/glyphs";
 import { href, samePath, useNavigator, useRoute } from "../router.tsx";
 import type { Crumb } from "../crumbs.ts";
 import { resolves } from "../routes.ts";
@@ -94,7 +94,6 @@ import { useAgents } from "~/lib/store-hooks.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { plural } from "~/lib/format.ts";
 import { useScrollEdges } from "~/lib/useScrollEdges.ts";
-import { foldTabs } from "../frame/tabFit.ts";
 import { PHONE_BREAKPOINT } from "../layout.ts";
 
 /** How many working seats the header draws before "+n". */
@@ -260,9 +259,8 @@ export function WorkingNow() {
  *
  * THE KIT'S ROW, in router mode: `Tabs` with the underline chrome, whose root
  * is that `nav` and whose items are these links, so a workspace's sections and
- * an object's own tabs (`ObjectTabs`) are one control. "More" and the reading
- * note are its `trailing` node, inside the landmark with the links they
- * continue.
+ * an object's own tabs are one control. "More" and the reading note are the
+ * kit's, inside the landmark with the links they continue.
  *
  * # What does not fit goes into "More"
  *
@@ -276,11 +274,11 @@ export function WorkingNow() {
  * strip must answer at every width. Nothing is dropped and nothing moves: the
  * order is the workspace's, and a tab leaves the strip only from the end.
  *
- * MEASURED, NOT GUESSED. The widths are the tabs' own, read after layout
- * ([useTabFit]) — a folded tab stays in the document, out of the flow and
- * invisible, so it can be measured again when the strip grows — and they are
- * read again whenever the strip or any tab changes size: a figure arriving, a
- * font finishing loading, the density preference.
+ * MEASURED, NOT GUESSED, by the kit (`overflow="menu"`): a folded tab stays in
+ * the document, out of reach, so it can be measured again when the strip
+ * grows, and the widths are read again whenever anything in the strip changes
+ * size. The folded links take the kit's `foldProps`, which is what puts them
+ * out of reach.
  */
 export function SectionTabs({
   row,
@@ -306,35 +304,34 @@ export function SectionTabs({
   const nav = useNavigator();
   const tabs = row.sections.filter((s) => s.tab !== false && serviceShown(s, runs));
   const current = tabs.find((s) => samePath(s.path, path));
-  const strip = useRef<HTMLElement>(null);
-  const fit = useTabFit(
-    strip,
-    tabs.map((s) => s.key),
-    current?.key,
-  );
-  const folded = fit.folded;
   if (tabs.length < 2 || !current) return null;
   const kept = keptQuery(row, query);
-  const out = tabs.filter((s) => folded.includes(s.key));
   const paths = new Map(tabs.map((s) => [s.key, s.path]));
   return (
     <Tabs
-      ref={strip}
+      overflow="menu"
       ariaLabel={`${row.label} sections`}
+      moreMenuLabel={`More sections of ${row.label}`}
       variant="underline"
       className="section-tabs"
       value={current.key}
+      // A SECTION PICKED FROM "MORE" is the address its tab links to.
+      onValueChange={(key) => nav.to(paths.get(key) ?? row.path, kept)}
+      // THE WORKSPACE'S READING NOTE, after the tabs: it gives way to them,
+      // drawn only where every tab fits beside it.
+      note={row.note}
       items={tabs.map((s) => {
         const Glyph = glyphFor(s.icon);
         const needs = grants === null ? [] : grantsMissing(s, grants);
         return {
           value: s.key,
           label: <LockedLabel reason={lockReason(needs)}>{s.label}</LockedLabel>,
+          menuLabel: s.label,
           icon: <Glyph size="sm" />,
           count: counts[s.key],
         };
       })}
-      renderItem={({ item, className, isActive, children }) => (
+      renderItem={({ item, className, isActive, children, foldProps }) => (
         <a
           className={className}
           data-section={item.value}
@@ -343,147 +340,13 @@ export function SectionTabs({
           // FOLDED INTO "MORE": still here to be measured, and out of reach
           // of the pointer, the keyboard and a screen reader, which meet it
           // in the menu instead.
-          {...(folded.includes(item.value)
-            ? { "data-folded": "", "aria-hidden": true, inert: true }
-            : {})}
+          {...foldProps}
         >
           {children}
         </a>
       )}
-      trailing={
-        <>
-          {/* ALWAYS IN THE DOCUMENT, so its width is known before it is
-              needed; folded itself while every tab fits. */}
-          <span
-            className="section-tabs-more"
-            data-section-more=""
-            {...(out.length === 0 ? { "data-folded": "", "aria-hidden": true, inert: true } : {})}
-          >
-            <Menu
-              label={`More sections of ${row.label}`}
-              // THE CHEVRON SAYS IT OPENS, as a select's does: a bare "More"
-              // at the end of a row of links read as one more link.
-              trigger={
-                <span className="row gap-1">
-                  More
-                  <ChevronDownGlyph size="xs" aria-hidden="true" />
-                </span>
-              }
-              triggerVariant="ghost"
-              align="end"
-              // NO GLYPHS: a section's glyph at the head of a menu row sits
-              // where a menu draws its check, and Checklist's IS a check (the
-              // row read as a chosen answer). The name and its figure are the
-              // row.
-              items={out.map((s) => ({
-                key: s.key,
-                label: s.label,
-                hint: counts[s.key] || undefined,
-                onSelect: () => nav.to(s.path, kept),
-              }))}
-            />
-          </span>
-          {/* THE WORKSPACE'S READING NOTE comes after the tabs and gives way
-              to them: it is folded (out of the flow, still measured) whenever
-              the strip has no room for it beside every tab, see [noteFits]. */}
-          {row.note && (
-            <span
-              className="section-tabs-note"
-              data-section-note=""
-              {...(fit.note ? {} : { "data-folded": "", "aria-hidden": true })}
-            >
-              {row.note}
-            </span>
-          )}
-        </>
-      }
     />
   );
-}
-
-/**
- * Whether the workspace's reading note has room at the strip's end BESIDE
- * EVERY TAB.
- *
- * THE TABS COME FIRST. The note is a sentence about how to read the
- * workspace; a tab is a place. So the note takes no room a tab would need: it
- * is drawn only where every tab fits with it, and gives way before a single
- * tab folds into "More". A note measured at no width is one the sheet is not
- * drawing (below the shell breakpoint), and has nothing to fit.
- */
-export function noteFits({
-  widths,
-  space,
-  gap,
-  note,
-}: {
-  widths: readonly number[];
-  space: number;
-  gap: number;
-  note: number;
-}): boolean {
-  if (note <= 0) return false;
-  const tabs = widths.reduce((sum, w) => sum + w, 0) + gap * Math.max(0, widths.length - 1);
-  return tabs + gap + note <= space;
-}
-
-/**
- * The keys of the tabs that fold into "More", and whether the reading note is
- * drawn, measured after layout and again whenever the strip or anything in it
- * changes size — see [SectionTabs].
- */
-function useTabFit(
-  strip: RefObject<HTMLElement | null>,
-  keys: readonly string[],
-  current: string | undefined,
-): { folded: string[]; note: boolean } {
-  const [folded, setFolded] = useState<string[]>([]);
-  const [note, setNote] = useState(true);
-  const signature = keys.join("\n");
-  useLayoutEffect(() => {
-    const node = strip.current;
-    if (!node) return;
-    const measure = () => {
-      const style = getComputedStyle(node);
-      const space =
-        node.clientWidth -
-        (parseFloat(style.paddingLeft) || 0) -
-        (parseFloat(style.paddingRight) || 0);
-      const gap = parseFloat(style.columnGap) || 0;
-      const width = (el: Element | null) => (el ? el.getBoundingClientRect().width : 0);
-      const widths = keys.map((key) => width(node.querySelector(`[data-section="${key}"]`)));
-      const more = width(node.querySelector("[data-section-more]"));
-      const next = foldTabs({
-        widths,
-        current: current ? keys.indexOf(current) : -1,
-        space,
-        gap,
-        more,
-      })
-        .map((i) => keys[i]!)
-        .filter(Boolean);
-      setFolded((was) => (was.join("\n") === next.join("\n") ? was : next));
-      setNote(
-        noteFits({ widths, space, gap, note: width(node.querySelector("[data-section-note]")) }),
-      );
-    };
-    measure();
-    // THE STRIP AND EVERY ITEM IN IT: the strip for the window, each item for
-    // what changes its own width without resizing the strip — a figure
-    // arriving, a web font replacing its fallback, a density step.
-    const watch = new ResizeObserver(measure);
-    watch.observe(node);
-    for (const item of node.querySelectorAll(
-      "[data-section], [data-section-more], [data-section-note]",
-    )) {
-      watch.observe(item);
-    }
-    return () => watch.disconnect();
-    // `keys` is read through its signature: a new array with the same tabs is
-    // the same strip.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [strip, signature, current]);
-  return { folded, note };
 }
 
 /**

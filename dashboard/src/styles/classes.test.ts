@@ -707,11 +707,6 @@ const ALLOWED: Allowed[] = [
     pkg: "@crewlethq/ui/styles.css",
   },
   {
-    name: "crewlet-tabs",
-    why: "uilet's Tabs writes it on its row. styles/frame.css sizes the row inside ObjectTabs's measuring twin (`.object-tabs-twin-row .crewlet-tabs`) to its max-content width with no scroll, because the twin exists to be measured at every tab's natural width and the package's underline row is `width: 100%` and scrolls — a twin laid out that way reports the box's width, not the tabs'. Another rule about OUR composition of the package's component.",
-    pkg: "@crewlethq/ui/styles.css",
-  },
-  {
     name: "crewlet-property-list",
     why: "uilet's PropertyList writes it. styles/screens.css pulls an inline picker's ghost trigger (`.cell-edit`) inside a properties rail's value back by its own padding, so Status, Priority, Type and Labels start on the column Assignee and Due start on rather than ten pixels right of it. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",

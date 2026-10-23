@@ -50,7 +50,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { avatarLabel, seatAvatarKey, turnHandleKey, turnSeatKey } from "~/app/crumbs.ts";
-import { ObjectTabs } from "~/app/frame/ObjectTabs.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
 import { PauseSeatButton, SteerTurnButton } from "~/components/writes.tsx";
@@ -76,6 +75,7 @@ import {
   EmptyState,
   Skeleton,
   Tag,
+  Tabs,
   Menu,
   cx,
   tabId,
@@ -1935,7 +1935,9 @@ export function TurnScreen({ turnId }: { turnId: string }) {
           status={turnStatus(view, now)}
           facts={turnFacts(view, now)}
         />
-        <ObjectTabs
+        <Tabs
+          overflow="menu"
+          variant="underline"
           ariaLabel="The turn's sections"
           className="trace-tabs"
           value={tab}

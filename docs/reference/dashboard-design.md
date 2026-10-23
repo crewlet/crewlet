@@ -1928,7 +1928,6 @@ copy of it is how the two drift. What `dashboard/src/app/` owns:
 | `ObjectHeader` | an object's eyebrow, title (a level-two heading in every frame: on a page the last crumb is the `h1` and already names the object, and a peek sits inside a page that has one), state marks and up to six facts, in the same order wherever the object appears — though a peek whose body is a properties rail passes none, because a header and a rail stacked in one column are [one reading](#an-objects-own-facts). A fact may carry a `note` saying where its value came from, for the facts a reader can reasonably doubt, and only those. A fact that is one token (an id, a build) or a set of chips (a node's roles) takes two tracks, so it is never broken mid-token or stacked chip over chip. STATE lives here, never in the page bar: see [What a mark MEANS, and where a control belongs](#what-a-mark-means-and-where-a-control-belongs) |
 | `OwnPageHeader` | a screen that draws its own head in the frame's place: the frame draws the slot it is portalled into, with the state bar under it, instead of the page bar. ONE screen does, an open artifact, for the reason [An open artifact is the screen](#an-open-artifact-is-the-screen) gives; `FrameNavToggle` is the frame's navigation toggle for that head to place first |
 | `useTab` | which OBJECT tab is real. `tab=` is a string off a URL and the tab set belongs to the object — a human seat has three and an agent seat has six — so the hook resolves the parameter against the tabs this object HAS. It binds `1`–`9`; the strip itself is `@crewlethq/ui`'s `Tabs` |
-| `ObjectTabs` + `tabFit` | an object's own tabs as the kit's underline row, drawing the tabs that FIT and folding the rest into a "More" menu at its end — the tab the reader is on always drawn — by the same arithmetic (`foldTabs`) the section strip folds with; the widths are read off a hidden, inert twin of the row |
 | `DetailRail` | the peek's chrome: resizable, a column of the sheet where the frame leaves the list beside it its floor (1160 px on most screens, 1396 beside Settings' column), a drawer under that |
 | `PeekHost` + `peeks.tsx` | the one peek in the product, mounted by the shell in the kit's footer slot: the body belongs to the KIND, so a list opens a peek by naming what it points at. `usePeekNeighbours` is how a list publishes the order `[` and `]` walk |
 | `DataGrid` + `cells` | sorting in the URL, bands from a grouped answer, typed cells; a row becomes a labelled card under 640 px, or two unlabelled lines on a `compact` grid |
@@ -2189,16 +2188,15 @@ show its ancestry beside the controls takes a line of its own.
   follow the same rule. The widths are measured, and measured again
   whenever the strip or a tab changes size (a figure arriving, the web font
   loading, the density preference). **An object's own tabs fold the same
-  way** (`ObjectTabs`, a seat's Overview … Settings): the kit's underline row
-  scrolls with its scrollbar hidden, and on a phone a seat's Settings began
-  five pixels past the strip's end with nothing to say it was there. The
-  object strip measures a twin of the kit's row — hidden, inert, clipped —
-  since the kit draws a row whole, and hands the widths to the same fold.
-  **Both are the kit's underline row**: the section strip is `Tabs` in router
-  mode (a `nav` of links, the current one `aria-current="page"`), with "More"
-  and the reading note as its `trailing` node and its own root measured
-  through `ref`, so the tab, its figure, the accent bar under the current tab
-  and the focus ring are one control across a workspace and an object.
+  way** (a seat's Overview … Settings, a turn's sections): a scrolling row
+  hides its scrollbar, and on a phone a seat's Settings began five pixels past
+  the strip's end with nothing to say it was there. **Both are the kit's
+  underline row with `overflow="menu"`**, so the fold, its arithmetic, "More"
+  and the reading note are the kit's: the section strip is `Tabs` in router
+  mode (a `nav` of links, the current one `aria-current="page"`, a folded link
+  taking the kit's `foldProps`), and an object's tabs are its tab list, "More"
+  beside it. The tab, its figure, the accent bar under the current tab and the
+  focus ring are one control across a workspace and an object.
 - **The star is on every page that is one.** A workspace's own page is already
   a sidebar row, so the star there cannot keep it, but it is drawn,
   unavailable and saying "Already in the sidebar", rather than left out: left

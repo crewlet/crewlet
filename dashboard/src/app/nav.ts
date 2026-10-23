@@ -255,8 +255,8 @@ export interface WorkspaceRow {
   /**
    * A sentence at the end of the section tabs that holds for every section —
    * how to read what the workspace draws. It gives way to the tabs: drawn only
-   * where the strip has room for it beside every tab (`noteFits` in
-   * `header/PageHeader.tsx`), so never on a phone.
+   * where the strip has room for it beside every tab (the kit's `Tabs` note,
+   * with `overflow="menu"`), so never on a phone.
    */
   note?: string;
 }
