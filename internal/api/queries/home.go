@@ -604,7 +604,16 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 		}
 	}
 	answer := map[string]any{"handle": handle}
-	if s.Work != nil {
+	// THE TRACKER'S HALF ONLY WHERE IT IS KEPT HERE ([keptHere]): a company
+	// on Jira, or on no tracker, has no asks in the engine, and its coding
+	// runs parked on a question to a person are sandbox state that every
+	// backend has. Read regardless, the absent half's refusal took the
+	// whole answer with it and those runs reached nobody.
+	work, err := keptHere(s.Work)
+	if err != nil {
+		return nil, err
+	}
+	if work {
 		fresh, err := freshness(p)
 		if err != nil {
 			return nil, err
