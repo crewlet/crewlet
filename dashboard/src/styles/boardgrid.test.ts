@@ -45,7 +45,7 @@ test("a dashboard's sections are one board gap apart", () => {
 // beside the last two of five, and a four-figure row one lone tile: four fold
 // two by two, and five three over two on six tracks.
 test("folded figures fill their rows, four two by two and five three over two", () => {
-  const at = css.indexOf("@container page (width < 928px) {\n  .home-kpis");
+  const at = css.indexOf("@container page (width < 944px) {\n  .home-kpis");
   expect(at).toBeGreaterThan(-1);
   const narrow = css.slice(at, css.indexOf("@container page (width < 640px)", at));
   expect(narrow).toMatch(

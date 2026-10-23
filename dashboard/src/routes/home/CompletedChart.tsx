@@ -15,6 +15,7 @@
  */
 
 import { Card, DATA_COLOR_OTHER, StackedColumns } from "@crewlethq/ui";
+import { ChartColumnGlyph } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
 import { companyDateLabel } from "~/lib/format.ts";
 import { TRACKER, needsWords } from "~/lib/access.ts";
@@ -47,34 +48,44 @@ export function CompletedChart({
     points.map((p, i) => [Date.parse(p.start), i === last ? "Today" : companyDateLabel(p.window)]),
   );
   return (
-    <Card className="home-card home-chart">
-      <div className="home-chart-head">
-        <div className="home-chart-title">
-          <h3 className="home-card-title">Tasks completed</h3>
-          <span className="home-card-caption">Per day · last {CHART_DAYS} days</span>
-        </div>
-        {points.length > 0 && (
-          <span className="home-chart-figure">
-            {week.toLocaleString()}
-            <span className="home-chart-figure-unit"> in 7 days</span>
-          </span>
+    // THE KIT'S HEAD, as every other card on Home wears: a head of its own drew
+    // this title at 16px beside the 14px every sibling's title takes.
+    <Card padding="none" className="home-card">
+      <Card.Header
+        icon={<ChartColumnGlyph size="sm" />}
+        subtitle={`Per day · last ${CHART_DAYS} days`}
+        actions={
+          points.length > 0 ? (
+            <span className="home-chart-figure">
+              {week.toLocaleString()}
+              <span className="home-chart-figure-unit"> in 7 days</span>
+            </span>
+          ) : undefined
+        }
+      >
+        <Card.Title as="h3">Tasks completed</Card.Title>
+      </Card.Header>
+      <Card.Body className="home-chart">
+        {locked ? (
+          <p className="home-card-note">{needsWords("The tracker's history", [TRACKER])}</p>
+        ) : (
+          <QueryState
+            error={flow.error}
+            refusal={flow.refusal}
+            loading={flow.loading && !flow.data}
+          >
+            <StackedColumns
+              series={SERIES}
+              buckets={buckets}
+              legend="none"
+              height="9.5rem"
+              label="Tasks completed per company day, the last fourteen days"
+              format={(v) => Math.round(v).toLocaleString()}
+              formatTime={(at) => labels.get(at) ?? ""}
+            />
+          </QueryState>
         )}
-      </div>
-      {locked ? (
-        <p className="home-card-note">{needsWords("The tracker's history", [TRACKER])}</p>
-      ) : (
-        <QueryState error={flow.error} refusal={flow.refusal} loading={flow.loading && !flow.data}>
-          <StackedColumns
-            series={SERIES}
-            buckets={buckets}
-            legend="none"
-            height="9.5rem"
-            label="Tasks completed per company day, the last fourteen days"
-            format={(v) => Math.round(v).toLocaleString()}
-            formatTime={(at) => labels.get(at) ?? ""}
-          />
-        </QueryState>
-      )}
+      </Card.Body>
     </Card>
   );
 }
