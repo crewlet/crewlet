@@ -182,7 +182,9 @@ func runGitLabProvision(environ config.Source, args []string, stdout, stderr io.
 	// of each.
 	rotate := addFreshFlag(fs, "rotate",
 		"mint a fresh token for every seat, including seats whose current "+
-			"one still works (the engine has to be restarted after)")
+			"one still works, and a fresh webhook signing secret into the "+
+			"variable signing_secret names wherever the hook is registered "+
+			"(the engine has to be restarted after)")
 	sinks := addSinkFlags(fs, sinkDecisions{secrets: true, seatTokens: true, fresh: rotate})
 	adminToken := fs.String("admin-token", "",
 		"a GitLab token permitted to create service accounts; empty reads "+

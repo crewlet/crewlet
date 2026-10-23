@@ -271,6 +271,24 @@ func TestADryRunSaysWhatItWouldDoToTheSigningSecret(t *testing.T) {
 	}
 }
 
+// -rotate SAYS EVERYTHING IT REPLACES. The dry run above plans the signing
+// secret ROTATED under it, and the flag's own help named only the seats'
+// tokens — so an operator rotating tokens on a schedule learned from the plan,
+// or from the hook that stopped verifying, that the key went too.
+func TestTheRotateFlagNamesTheSigningSecretItReplaces(t *testing.T) {
+	t.Parallel()
+	_, errs, err := cliIn(t, noEnviron, "gitlab", "provision", "-h")
+	if !errors.Is(err, flag.ErrHelp) {
+		t.Fatalf("gitlab provision -h = %v, want the help", err)
+	}
+	_, help, found := strings.Cut(errs, "  -rotate\n")
+	help, _, _ = strings.Cut(help, "\n")
+	if !found || !strings.Contains(help, "token for every seat") ||
+		!strings.Contains(help, "signing secret") {
+		t.Errorf("-rotate's help does not name both things it replaces: %q\n%s", help, errs)
+	}
+}
+
 // THE PRINT SINK'S DESTINATION IS PER RUN, NOT PER PROCESS.
 //
 // It used to be per process: each provision command assigned the writer to a

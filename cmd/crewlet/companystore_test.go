@@ -593,11 +593,14 @@ func TestAStoppedNodesNoteClaimsNoMoreThanTheRunDoes(t *testing.T) {
 			// A LITERAL IS THE DOCUMENT'S OWN, which these rows have no
 			// say in, so -rotate registers it as it is: a note promising
 			// a fresh secret for whatever the run registers sat right
-			// above this plan.
+			// above this plan. And the plan says so itself — it printed
+			// a plain "reused", so a dry run with -rotate never said the
+			// flag would leave this secret in place.
 			{"gitlab", strings.Replace(gitlabCompanyDoc, `"${GITLAB_SIGNING_SECRET}"`,
 				`"`+noteCaseLiteralSigningSecret+`"`, 1), []string{"-dry-run", "-rotate",
 				"-public-url", "https://engine.example.com"}, true, true, "rotate",
-				"webhook signing secret: reused — the configured one already resolves", true},
+				"webhook signing secret: reused — -rotate leaves the webhook signing " +
+					"secret alone", true},
 			{"github", noteCaseGitHubDoc, []string{"-dry-run"}, true, false, "", "", false},
 			{"github", noteCaseGitHubDoc, []string{"-dry-run", "-recreate-webhooks"},
 				true, false, "recreate-webhooks", "", false},
