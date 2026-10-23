@@ -49,7 +49,7 @@ function AgentCard({ params }: { params: Readonly<Record<string, string>> }) {
   const seat = params.seat ? index.byHandle.get(params.seat) : undefined;
   if (!seat) {
     return (
-      <WidgetCard title="Agent" from="agents-roster">
+      <WidgetCard title="Agent" from="org-roster">
         <ChoiceNote thing="seat" />
       </WidgetCard>
     );
@@ -135,7 +135,7 @@ function NextSchedules() {
   const { data, loading, error, refusal } = useQuery("schedules", undefined, { pollMs: 30_000 });
   const rows = upcoming(data?.schedules ?? []);
   return (
-    <WidgetCard title="Upcoming schedules" from="agents-schedules">
+    <WidgetCard title="Upcoming schedules" from="schedules">
       <QueryState
         error={error}
         refusal={refusal}
@@ -153,7 +153,7 @@ function NextSchedules() {
           {rows.map((s) => (
             <ListItem
               key={`${s.scope_type}:${s.scope_id}:${s.name}`}
-              href={href(["agents", "schedules", s.scope_type, s.scope_id, s.name])}
+              href={href(["company", "schedules", s.scope_type, s.scope_id, s.name])}
               tone={s.problem ? "danger" : "default"}
               dangerLabel="Cannot fire"
               trailing={
@@ -178,7 +178,7 @@ function NextSchedules() {
           ))}
         </List>
         {(data?.schedules.length ?? 0) > rows.length ? (
-          <a className="home-card-more t-link" href={href(["agents", "schedules"])}>
+          <a className="home-card-more t-link" href={href(["company", "schedules"])}>
             {`All ${plural(data?.schedules.length ?? 0, "schedule")}`}
           </a>
         ) : null}
@@ -189,8 +189,8 @@ function NextSchedules() {
 
 export const widgets = defineWidgets([
   {
-    key: "agents.seat",
-    from: "agents-roster",
+    key: "org.seat",
+    from: "org-roster",
     label: "Agent",
     description: "One seat's state and current task",
     icon: UserGlyph,
@@ -207,8 +207,8 @@ export const widgets = defineWidgets([
     Component: AgentCard,
   },
   {
-    key: "agents.roster",
-    from: "agents-roster",
+    key: "org.roster",
+    from: "org-roster",
     label: "Roster by state",
     description: "Agents working, waiting or stopped",
     icon: UsersGlyph,
@@ -218,8 +218,8 @@ export const widgets = defineWidgets([
     Component: RosterStatus,
   },
   {
-    key: "agents.schedules",
-    from: "agents-schedules",
+    key: "schedules.upcoming",
+    from: "schedules",
     label: "Upcoming schedules",
     description: "Recurring work and when it runs next",
     icon: CalendarClockGlyph,

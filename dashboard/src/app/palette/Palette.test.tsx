@@ -1345,7 +1345,10 @@ describe("a screen found by what it holds", () => {
   // with an "s" in its middle — Tasks, Projects, Agents.
   test("every label match ranks above a keyword match, however good", () => {
     const nav = { to: vi.fn() } as unknown as Parameters<typeof destinationHits>[1];
-    const hits = destinationHits("s", nav, Infinity, null).map((h) => h.label);
+    const hits = destinationHits("s", nav, Infinity, null, {
+      tracker: true,
+      knowledge: true,
+    }).map((h) => h.label);
     // THE LABEL MATCHES COME FIRST, then the screens only a keyword found
     // ("Account"), and never one after the other.
     const firstKeyword = hits.findIndex((label) => !label.toLowerCase().includes("s"));
@@ -1355,13 +1358,12 @@ describe("a screen found by what it holds", () => {
     expect(hits).toContain("Tasks");
   });
 
-  // THE HINT IS PROSE AND IS NEVER SEARCHED: People & access's mentions "API
-  // tokens", which are not the reader's own, and it is no answer to "token".
+  // THE HINT IS PROSE AND IS NEVER SEARCHED: Service accounts' mentions
+  // "machine principals", and it is no answer to "principals".
   test("a word only a hint's prose holds finds nothing", async () => {
     const p = mount();
-    await p.type("token");
-    const go = screen.getByRole("group", { name: "Go to" });
-    expect(within(go).queryByRole("option", { name: /^People & access/ })).toBeNull();
+    await p.type("principals");
+    expect(screen.queryByRole("option", { name: /^Service accounts/ })).toBeNull();
   });
 });
 

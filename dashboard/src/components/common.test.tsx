@@ -122,11 +122,11 @@ test("a seat card links through seatPath, so an empty handle still reaches a pag
   const { container } = render(
     <SeatCard seat={seat({ handle: "" })} agent={undefined} nameOf={(k) => k} />,
   );
-  // `#/agents/seats/` opens nothing. The seat screen resolves a NAME as well
+  // `#/company/org/seats/` opens nothing. The seat screen resolves a NAME as well
   // as a handle, which is why `seatPath` exists and why the peek this card sits
   // under has always fallen back; the href had not.
   expect(container.querySelector("a.seat-card")!.getAttribute("href")).toBe(
-    "#/agents/seats/Ada%20Lovelace",
+    "#/company/org/seats/Ada%20Lovelace",
   );
 });
 

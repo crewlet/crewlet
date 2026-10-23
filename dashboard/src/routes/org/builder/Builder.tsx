@@ -1,5 +1,5 @@
 /**
- * Agents › Edit org (`#/agents/edit`), the builder: editing the
+ * Org chart › Edit org (`#/company/org/edit`), the builder: editing the
  * organization, and creating the company where none exists.
  *
  * THE POSTURE IS WHAT THE ENGINE ANSWERS, never what the browser holds. Being

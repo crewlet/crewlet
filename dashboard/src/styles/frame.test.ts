@@ -583,19 +583,6 @@ describe("the frame's layout", () => {
     }
   });
 
-  // A STATE WAITING ON THE READER IS THE WARNING PILL, as the approved
-  // Settings artboard draws Integrations' figure; the kit fills its one badge
-  // with the accent because its badge is an unread count, and a state in that
-  // fill read as a second inbox. The repaint has to reach the kit's own pill.
-  test("the Settings column's attention figure is the kit's pill in the warning pair", () => {
-    expect(kitSheet()).toMatch(
-      /\.crewlet-nav-item__badge\s*\{[^}]*background:\s*var\(--color-brand-accent\)/,
-    );
-    const pill = block(sheet("frame.css"), ".section-row-attention .crewlet-nav-item__badge");
-    expect(pill).toMatch(/background:\s*var\(--color-feedback-warning-soft\)/);
-    expect(pill).toMatch(/(^|[\s;])color:\s*var\(--color-feedback-warning-ink\)/);
-  });
-
   test("a grid becomes labelled cards below the phone breakpoint", () => {
     const css = sheet("frame.css");
     const narrow = css.slice(css.indexOf(PHONE));

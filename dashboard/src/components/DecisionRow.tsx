@@ -43,33 +43,14 @@ import { CheckGlyph } from "@crewlethq/icons/glyphs";
 import { AnswerAsk, AnswerRunButton, AssignButton, type AskAnswer } from "./writes.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
+import type { DecisionSubject, SeatCondition } from "~/lib/decisions.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { indexOrg, stateWord, type OrgIndex } from "~/lib/seats.ts";
-import { PERIOD_ADJECTIVE, waitedOn } from "~/lib/budget.ts";
+import { PERIOD_ADJECTIVE } from "~/lib/budget.ts";
 import { relTime } from "~/lib/format.ts";
-import type {
-  AgentRow,
-  BudgetWindow,
-  DecisionsAnswer,
-  SandboxRun,
-  WorkAskRow,
-} from "~/protocol/index.ts";
+import type { AgentRow, BudgetWindow, SandboxRun, WorkAskRow } from "~/protocol/index.ts";
 import { itemAddress, itemPath, type ItemRef } from "~/lib/work.ts";
 import { QUESTION_WITHHELD, questionWithheld } from "~/lib/access.ts";
-
-/** A seat the engine stopped for a spent token budget, as a decision. */
-export interface SeatCondition {
-  row: AgentRow;
-  /** The window that is spent: the seat's own, or the company's. */
-  window: BudgetWindow | undefined;
-  /** When it last turned a call away, where the gate recorded it. */
-  at?: string;
-}
-
-export type DecisionSubject =
-  | { kind: "ask"; at: string; ask: WorkAskRow }
-  | { kind: "run"; at: string; run: SandboxRun }
-  | { kind: "seat"; at?: string; seat: SeatCondition };
 
 /**
  * Where Home's "Review" and "Open inbox" take a reader: the Inbox, whose list
@@ -79,21 +60,6 @@ export type DecisionSubject =
  */
 export function decisionsHref(): string {
   return href(["inbox"]);
-}
-
-/**
- * The seats the engine stopped for a spent budget, each with the window that
- * is spent — the seat's own where it names one, else the company's the gate
- * refused on — and when the gate last turned a call away.
- */
-export function seatConditionsOf(agents: readonly AgentRow[]): SeatCondition[] {
-  const out: SeatCondition[] = [];
-  for (const row of agents) {
-    if (row.activity !== "stopped" || row.stopped_reason !== "budget") continue;
-    const window = waitedOn(row.budget?.windows, "refusing");
-    out.push({ row, window, at: window?.refused_at });
-  }
-  return out;
 }
 
 /**
@@ -143,24 +109,6 @@ export function seatDecisionsFor<T extends { row: AgentRow; window?: BudgetWindo
     (raises || reassign ? mine : others).push(c);
   }
   return { mine, others };
-}
-
-/**
- * The engine's decisions and the stopped seats the reader can act on as one
- * list, newest first: the order Home's card and the Inbox's "Needs you" both draw.
- */
-export function decisionSubjects(
-  answer: DecisionsAnswer | null,
-  seats: readonly SeatCondition[],
-): DecisionSubject[] {
-  const subjects: DecisionSubject[] = [];
-  for (const item of answer?.items ?? []) {
-    if (item.kind === "ask" && item.ask) subjects.push({ kind: "ask", at: item.at, ask: item.ask });
-    if (item.kind === "run" && item.run) subjects.push({ kind: "run", at: item.at, run: item.run });
-  }
-  for (const seat of seats) subjects.push({ kind: "seat", at: seat.at, seat });
-  subjects.sort((a, b) => (Date.parse(b.at ?? "") || 0) - (Date.parse(a.at ?? "") || 0));
-  return subjects;
 }
 
 /** A stable key for one subject, whichever list draws it. */

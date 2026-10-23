@@ -32,6 +32,7 @@
  * count used to ride a fifty-row page, with every card's facts, every poll.
  */
 
+import { useServicesRun } from "./services.ts";
 import { createContext, createElement, useContext, useMemo, type ReactNode } from "react";
 import { useQuery } from "./useQuery.ts";
 import { useViewer } from "./viewer.ts";
@@ -107,7 +108,9 @@ export function QueueCountProvider({ children }: { children: ReactNode }) {
   // THE TRACKER'S QUESTION, asked only of a reader holding it — the sidebar
   // draws My work locked for anybody else.
   const viewer = useViewer();
-  const claim = useQueueCountRead(viewer.handle, viewer.tracker);
+  // AND OF A COMPANY RUNNING CREWLET WORKS: elsewhere My work is not drawn.
+  const runs = useServicesRun();
+  const claim = useQueueCountRead(viewer.handle, viewer.tracker && runs.tracker);
   const value = useMemo(() => ({ claim }), [claim]);
   return createElement(Reading.Provider, { value }, children);
 }

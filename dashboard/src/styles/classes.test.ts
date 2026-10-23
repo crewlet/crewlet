@@ -550,7 +550,7 @@ const ALLOWED: Allowed[] = [
   },
   {
     name: "crewlet-popover",
-    why: "uilet's Popover writes it on its panel, and caps the panel at 360px with a scroll. styles/screens.css raises that cap for Spend › Budgets' ceiling editor (`.ceiling-pop`, the Popover's `className`), whose check can answer a paragraph of the engine's own warning — under the kit's cap it scrolled Save anyway below the fold of the panel. Paired with the kit's class so it wins whichever stylesheet a lazy chunk loads last. Another rule about OUR composition of the package's component.",
+    why: "uilet's Popover writes it on its panel, and caps the panel at 360px with a scroll. styles/screens.css raises that cap for Company › Budgets' ceiling editor (`.ceiling-pop`, the Popover's `className`), whose check can answer a paragraph of the engine's own warning, under the kit's cap it scrolled Save anyway below the fold of the panel. Paired with the kit's class so it wins whichever stylesheet a lazy chunk loads last. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {
@@ -601,11 +601,6 @@ const ALLOWED: Allowed[] = [
   {
     name: "crewlet-sidebar-nav",
     why: "uilet's SidebarNav writes it. styles/frame.css takes its gutter off inside the sidebar's foot, where the foot's own gutter would otherwise be doubled. See crewlet-app-shell__rail-foot.",
-    pkg: "@crewlethq/ui/styles.css",
-  },
-  {
-    name: "crewlet-nav-item__badge",
-    why: "uilet's SidebarNav writes it on a row's filled figure, which the kit fills with the accent because its one badge is an unread count. styles/frame.css repaints it in the warning pair on a Settings row whose figure is a STATE waiting on the reader (`.section-row-attention` — Integrations' tools needing a person), as the approved Settings artboard draws that figure; in the accent it read as a second inbox. The kit's pill keeps its size, its place and its spoken figure. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {
@@ -673,7 +668,7 @@ const ALLOWED: Allowed[] = [
   },
   {
     name: "crewlet-table-cell__key",
-    why: "uilet's TableKeyCell writes it on an identifier. styles/screens.css gives the work item key on Spend › Expensive tasks' phone rows (`.spend-tasks`) a seven-character floor, so every title on the compact row starts at one x rather than at an indent set by each key's own width. Another rule about OUR composition of the package's component.",
+    why: "uilet's TableKeyCell writes it on an identifier. styles/screens.css gives the work item key on Settings › Spend › Expensive tasks' phone rows (`.spend-tasks`) a seven-character floor, so every title on the compact row starts at one x rather than at an indent set by each key's own width. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {

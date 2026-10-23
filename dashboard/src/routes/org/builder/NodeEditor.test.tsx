@@ -540,7 +540,7 @@ describe("the unsaved-changes prompt", () => {
   // form holds every move and asks first; keeping the changes undoes the
   // move, and discarding them makes it.
   test("a link, Back and a push each ask before they leave a changed form", async () => {
-    history.replaceState(null, "", "#/agents/edit");
+    history.replaceState(null, "", "#/company/org/edit");
     const view = edit(keyedState(fixtureCompany()), "seat:dev");
     // The line naming the tools the company does not use links to where they are connected.
     const link = () => {
@@ -550,12 +550,12 @@ describe("the unsaved-changes prompt", () => {
     const prompt = () => screen.findByRole("alertdialog", { name: "Discard your changes?" });
     // Untouched: the link simply goes.
     fireEvent.click(link());
-    await waitFor(() => expect(location.hash).toBe("#/settings/integrations"));
+    await waitFor(() => expect(location.hash).toBe("#/company/integrations"));
     expect(screen.queryByRole("alertdialog", { name: "Discard your changes?" })).toBeNull();
     act(() => {
-      location.hash = "#/agents/edit";
+      location.hash = "#/company/org/edit";
     });
-    await waitFor(() => expect(location.hash).toBe("#/agents/edit"));
+    await waitFor(() => expect(location.hash).toBe("#/company/org/edit"));
 
     tab("Profile");
     type("Goal", "Ship");
@@ -563,21 +563,21 @@ describe("the unsaved-changes prompt", () => {
     const asked = await prompt();
     expect(asked.textContent).toContain("Your edits to Dev aren’t in the draft yet.");
     // Held, and undone: the page is where it was, and so is the form.
-    await waitFor(() => expect(location.hash).toBe("#/agents/edit"));
+    await waitFor(() => expect(location.hash).toBe("#/company/org/edit"));
     fireEvent.click(within(asked).getByRole("button", { name: "Keep editing" }));
     tab("Profile");
     expect((field("Goal") as HTMLTextAreaElement).value).toBe("Ship");
 
     act(() => history.back());
     fireEvent.click(within(await prompt()).getByRole("button", { name: "Keep editing" }));
-    await waitFor(() => expect(location.hash).toBe("#/agents/edit"));
+    await waitFor(() => expect(location.hash).toBe("#/company/org/edit"));
     expect(view.onClose).not.toHaveBeenCalled();
 
     act(() => history.back());
     fireEvent.click(within(await prompt()).getByRole("button", { name: "Discard changes" }));
     expect(view.onClose).toHaveBeenCalledTimes(1);
     // The move the reader asked for is made: back past the entry they were on.
-    await waitFor(() => expect(location.hash).toBe("#/settings/integrations"));
+    await waitFor(() => expect(location.hash).toBe("#/company/integrations"));
     cleanup();
     history.replaceState(null, "", "#/");
   });
@@ -591,13 +591,13 @@ describe("the unsaved-changes prompt", () => {
    * predicate naming the wrong screen produces for EVERY move.
    */
   test("a move within the builder is not a departure, and asks nothing", async () => {
-    history.replaceState(null, "", "#/agents/edit?view=visualization");
+    history.replaceState(null, "", "#/company/org/edit?view=visualization");
     const view = edit(keyedState(fixtureCompany()), "seat:dev");
     type("Goal", "Ship");
     for (const hash of [
-      "#/agents/edit?view=table",
-      "#/agents/edit?view=visualization&chart=reporting",
-      "#/agents/edit?view=visualization&chart=reporting&seat=ceo",
+      "#/company/org/edit?view=table",
+      "#/company/org/edit?view=visualization&chart=reporting",
+      "#/company/org/edit?view=visualization&chart=reporting&seat=ceo",
     ]) {
       act(() => {
         location.hash = hash;
@@ -1071,7 +1071,7 @@ describe("integrations", () => {
     tab("Integrations");
     // ONE LINE for every tool the company does not use, never a section each.
     const unused = screen.getByText("GitHub, Slack and Mattermost: not in use.").closest("p")!;
-    expect(within(unused).getByRole("link").getAttribute("href")).toBe("#/settings/integrations");
+    expect(within(unused).getByRole("link").getAttribute("href")).toBe("#/company/integrations");
     expect(screen.queryByRole("region", { name: "GitHub" })).toBeNull();
     expect(screen.queryByLabelText(labelled("Access tier"))).toBeNull();
     // WHAT A SEAT OWNS IS NO TOOL'S. The tracker project and the knowledge
@@ -1376,7 +1376,7 @@ describe("problems", () => {
     const alert = screen.getByRole("alert");
     expect(alert.textContent).toContain("must not carry schedules");
     expect(within(alert).getByRole("link", { name: "Open Schedules" }).getAttribute("href")).toBe(
-      "#/agents/schedules",
+      "#/company/schedules",
     );
   });
 

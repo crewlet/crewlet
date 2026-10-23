@@ -2,7 +2,7 @@
  * The identity directory as more than one screen offers it: who holds a human
  * seat, and the writes made about one — inviting a person onto a vacant seat,
  * creating one there, cancelling the invitation that holds it — plus minting a
- * token (a service account's on People & access, your own on the Account
+ * token (a service account's on Service accounts, your own on the Account
  * page), the ACCESS a write confers (`lib/access.ts`: Admin, and one
  * permission per app), a value shown once, and what a write came to.
  *
@@ -12,7 +12,7 @@
  * engine refuses a person with none, ADR-0032), so the place a person comes
  * from is a vacant human seat: its card's menu on the org chart, the seat's
  * peek, and its page — each through [SeatHolding]'s three states (held,
- * invited, vacant) and the dialogs [SeatGestureDialog] opens. People & access
+ * invited, vacant) and the dialogs [SeatGestureDialog] opens. People
  * lists, edits, suspends and removes people; it no longer invites anybody, and
  * points at the chart instead.
  *
@@ -164,7 +164,7 @@ export function directoryMoved(): void {
 
 /**
  * Run `heard` whenever a write anywhere on the page may have moved the
- * directory ([directoryMoved]) — while `enabled`. People & access and the
+ * directory ([directoryMoved]), while `enabled`. People and the
  * person peek beside it are two trees, and a removal made in the peek left
  * the list it was opened from naming the person until its next poll.
  */
@@ -527,7 +527,7 @@ export type SeatGesture = "invite" | "create" | "cancel";
  * The gestures a seat offers an admin: a VACANT seat
  * is invited onto or has a person created on it; a seat an open invitation
  * holds offers that invitation's cancellation; a HELD seat offers nothing
- * here — its holder is moved or removed on their row in People & access.
+ * here, its holder is moved or removed on their row in People.
  *
  * NOTHING ON A SEAT THE LISTING DID NOT ANSWER FOR: a read that failed or has
  * not arrived says nothing about whether the seat is free, and an invitation

@@ -52,6 +52,7 @@ import { useFillScreen } from "~/app/fill.tsx";
 import { capsOf, keyRow, useKeymap } from "~/app/keymap.ts";
 import { href, useNavigator } from "~/app/router.tsx";
 import { artifactSectionPath } from "~/app/routes.ts";
+import { useServicesRun } from "~/lib/services.ts";
 import { KIND_WORDS, NEW_KIND_TITLES } from "~/lib/artifacts/words.ts";
 import type { ArtifactKind } from "~/protocol/index.ts";
 
@@ -108,9 +109,14 @@ export function CreateShell({
   status,
   tools = [],
   onCancel,
-  handoff,
+  handoff: offered,
   children,
 }: CreateShellProps) {
+  // ASKING AN AGENT FILES A TASK to its seat, so where the company runs no
+  // Crewlet Works the page offers none: every way a person makes the
+  // artifact here stays (`lib/services.ts`).
+  const runs = useServicesRun();
+  const handoff = runs.tracker ? offered : undefined;
   useFillScreen(true);
   const leave = useLeaveCreate();
   useKeymap({

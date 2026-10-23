@@ -236,12 +236,12 @@ export function principalOfSeat(seat: Seat | undefined, handle: string): Princip
  * page a link can reach.
  */
 export function seatPath(seat: Pick<Seat, "handle" | "name">): string[] {
-  return ["agents", "seats", seat.handle || seat.name];
+  return ["company", "org", "seats", seat.handle || seat.name];
 }
 
 /** The route segments that open a unit's page: its KEY, never its name. */
 export function unitRoute(unit: Pick<Unit, "id">): string[] {
-  return ["agents", "teams", unit.id];
+  return ["company", "org", "teams", unit.id];
 }
 
 /**

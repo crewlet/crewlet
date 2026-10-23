@@ -322,7 +322,10 @@ function LearnedSkills() {
               {memory.data?.held_by && memory.data.held_by !== "none" && (
                 <span>Answered by {memory.data.held_by}, the node holding the seat.</span>
               )}
-              <a className="t-link" href={href(["agents", "seats", seat], { tab: "memory" })}>
+              <a
+                className="t-link"
+                href={href(["company", "org", "seats", seat], { tab: "memory" })}
+              >
                 {who?.name ?? seat}&rsquo;s memory →
               </a>
             </span>

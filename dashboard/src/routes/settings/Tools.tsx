@@ -250,7 +250,7 @@ function useTool(name: string): {
 /**
  * What a tool IS, under whichever header named it.
  *
- * ONE BODY FOR THE PAGE AND THE RAIL. `#/settings/tools/{name}` is a tool's
+ * ONE BODY FOR THE PAGE AND THE RAIL. `#/settings/mcp-tools/{name}` is a tool's
  * address in `objects.ts` and therefore where the rail's `Open ↗` goes — the
  * screen accepted the segment and rendered the unfiltered catalogue, so that
  * link led nowhere in particular and a reader who followed it lost the tool
@@ -524,7 +524,7 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
   const seats = useMemo(() => indexOrg(org).seats, [org]);
   const [q, setQ] = useParam("q", "");
   const [chosen, setChosen] = useParam("origin", "");
-  // THE ADD FORM IS AN ADDRESS (`?add=server`), so Settings › Integrations'
+  // THE ADD FORM IS AN ADDRESS (`?add=server`), so Company › Integrations'
   // "Add an MCP server" tile can open it and a reload keeps it open.
   const [adding, setAdding] = useParam("add", "");
   const status = useQuery("mcp_servers_status", undefined, { pollMs: SERVERS_POLL_MS });
@@ -536,7 +536,7 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
   const taken = useMemo(() => takenNames(status.data?.servers), [status.data]);
   const nodeOnly = useMemo(() => nodeOnlyNames(status.data?.servers), [status.data]);
 
-  // `#/settings/tools/servers/{name}` IS A FILTER ON THE ORIGIN, and this screen
+  // `#/settings/mcp-tools/servers/{name}` IS A FILTER ON THE ORIGIN, and this screen
   // accepted the segment and dropped it: the crumb trail said "Servers /
   // github" over the whole unfiltered catalogue, and `Open ↗` from a tool's
   // rail landed on the same place. The path wins where it names one, and the
@@ -558,7 +558,7 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
         const query = new URLSearchParams(route.query);
         if (next) query.set("origin", next);
         else query.delete("origin");
-        nav.replace(["settings", "tools"], query);
+        nav.replace(["settings", "mcp-tools"], query);
         return;
       }
       setChosen(next);

@@ -72,7 +72,7 @@ const ORG: OrgProjection = {
 
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
-  location.hash = "#/agents";
+  location.hash = "#/company/org";
 });
 
 /** A chart block, in the context its seat links reach for. */

@@ -130,12 +130,12 @@ function channelFacts(
     {
       label: "Asked by",
       value: seatName(channel.requester),
-      path: ["agents", "seats", channel.requester],
+      path: ["company", "org", "seats", channel.requester],
     },
     {
       label: "Asked",
       value: seatName(channel.target),
-      path: ["agents", "seats", channel.target],
+      path: ["company", "org", "seats", channel.target],
     },
     { label: "Messages", value: <TableNumberCell value={channel.messages} format={fmtCount} /> },
     { label: "Opened", value: <TableDateCell value={channel.opened_at} now={now} /> },

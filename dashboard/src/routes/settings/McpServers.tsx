@@ -1,5 +1,5 @@
 /**
- * The MCP servers on Settings › Tools & MCP: each one's launch, who it reaches,
+ * The MCP servers on Settings › MCP Tools: each one's launch, who it reaches,
  * and what every live node did with it.
  *
  * # Everything here is the engine's
@@ -136,7 +136,7 @@ export function McpServers({
           rowKey={(s) => s.name}
           // A ROW NAMES ITS SERVER'S TOOLS: the catalogue below, filtered to
           // this origin, which is what `servers/{name}` is.
-          rowHref={(s) => href(["settings", "tools", "servers", s.name])}
+          rowHref={(s) => href(["settings", "mcp-tools", "servers", s.name])}
           defaultSort="name"
           columns={[
             {
@@ -310,7 +310,7 @@ function NodeCells({ server }: { server: McpServerStatus }) {
  * A server's own page head: the server as the engine reports it, above the
  * catalogue filtered to its tools.
  *
- * `#/settings/tools/servers/{name}` used to be ONLY a filter, so a row's click
+ * `#/settings/mcp-tools/servers/{name}` used to be ONLY a filter, so a row's click
  * on a server that registered no tools changed nothing a reader could see.
  * This is what the click opens: the state, the launch, the reach and —
  * unclamped, as the heartbeat carried it (bounded at the node, with the whole

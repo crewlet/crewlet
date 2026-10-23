@@ -1,5 +1,5 @@
 /**
- * Spend › Overview and Spend › Expensive tasks, rendered over wire-shaped
+ * Spend › Overview and Settings › Spend › Expensive tasks, rendered over wire-shaped
  * answers.
  *
  * What these hold, one case each: every figure is the window's that ANSWERED
@@ -195,7 +195,7 @@ const VIEWER = {
 // THE CONTROL: a window that answered is what the hero is of, and says so in
 // the ANSWER's words — thirty days, from the answer's own `days`.
 test("the hero is the window that answered, labelled from the answer", async () => {
-  mount("#/spend?window=30d", <Spend />, {
+  mount("#/settings/spend?window=30d", <Spend />, {
     tokens: rollup(48_600_000),
     token_series: (p: Record<string, unknown>) =>
       p.previous ? series(41_186_441) : series(48_600_000),
@@ -215,7 +215,7 @@ test("the hero is the window that answered, labelled from the answer", async () 
 // answer on screen covers thirty (an older answer, a reconnect) — the heading
 // names the thirty the figures are of.
 test("the window label is the answer's window, never the control's", async () => {
-  mount("#/spend?window=7d", <Spend />, { tokens: rollup(10_000), viewer: VIEWER });
+  mount("#/settings/spend?window=7d", <Spend />, { tokens: rollup(10_000), viewer: VIEWER });
   await settle();
   expect(screen.getByText("Tokens · last 30 days")).toBeTruthy();
   expect(screen.queryByText("Tokens · last 7 days")).toBeNull();
@@ -225,14 +225,14 @@ test("the window label is the answer's window, never the control's", async () =>
 // ASKED AS THE DATES. Never two instants this browser subtracted on its own
 // clock, which names a different week from the one the engine cuts.
 test("the window is asked as company days, or as two company dates", async () => {
-  mount("#/spend?window=30d", <Spend />, { tokens: rollup(1), viewer: VIEWER });
+  mount("#/settings/spend?window=30d", <Spend />, { tokens: rollup(1), viewer: VIEWER });
   await settle();
   expect(params("tokens")).toEqual([{ days: 30 }]);
   expect(params("token_series")).toContainEqual({ days: 30, group: "phase", bucket: "day" });
   expect(params("token_series")).toContainEqual({ days: 30, bucket: "day", previous: true });
   cleanup();
 
-  mount("#/spend?window=2026-09-01T00:00:00.000Z/2026-09-09T00:00:00.000Z", <Spend />, {
+  mount("#/settings/spend?window=2026-09-01T00:00:00.000Z/2026-09-09T00:00:00.000Z", <Spend />, {
     tokens: rollup(1),
     viewer: VIEWER,
   });
@@ -253,7 +253,7 @@ test("the custom window opens on the company days a named range covers", async (
   vi.setSystemTime(new Date("2026-09-29T13:00:00Z"));
   try {
     mount(
-      "#/spend?window=30d",
+      "#/settings/spend?window=30d",
       <LayerHost>
         <Spend />
       </LayerHost>,
@@ -284,7 +284,7 @@ test("the custom window opens on the company days a named range covers", async (
 test("a window the engine refuses shows the engine's own sentence and no figures", async () => {
   const sentence =
     "2026-06-01 to 2026-08-30 is 91 days, and a spend window is at most 90 — bring since and until closer together";
-  mount("#/spend?window=2026-06-01T00:00:00.000Z/2026-08-31T00:00:00.000Z", <Spend />, {
+  mount("#/settings/spend?window=2026-06-01T00:00:00.000Z/2026-08-31T00:00:00.000Z", <Spend />, {
     tokens: new QueryError("bad_params", null, sentence),
     viewer: VIEWER,
   });
@@ -304,7 +304,7 @@ test("a refused window draws none of the previous window's figures, and says so 
   const sentence =
     "2026-05-01 to 2026-09-29 is 152 days, and a spend window is at most 90 — bring since and until closer together";
   const refusal = () => new QueryError("bad_params", null, sentence);
-  mount("#/spend?window=30d", <Spend />, {
+  mount("#/settings/spend?window=30d", <Spend />, {
     tokens: (p: Record<string, unknown>) => (p.since ? refusal() : rollup(48_600_000)),
     token_series: (p: Record<string, unknown>) => (p.since ? refusal() : series(48_600_000)),
     viewer: VIEWER,
@@ -312,7 +312,7 @@ test("a refused window draws none of the previous window's figures, and says so 
   await settle();
   expect(screen.getByText("48.6M")).toBeTruthy();
   await act(async () => {
-    location.hash = "#/spend?window=2026-05-01T00:00:00.000Z/2026-09-30T00:00:00.000Z";
+    location.hash = "#/settings/spend?window=2026-05-01T00:00:00.000Z/2026-09-30T00:00:00.000Z";
     window.dispatchEvent(new HashChangeEvent("hashchange"));
   });
   await settle();
@@ -327,7 +327,7 @@ test("a refused window draws none of the previous window's figures, and says so 
 
 // THE MONTHLY TILE IS THE ENGINE'S STATE, and its window is this month.
 test("the monthly budget is drawn in the engine's state, with its reset", async () => {
-  mount("#/spend?window=30d", <Spend />, { tokens: rollup(1), viewer: VIEWER }, (store) =>
+  mount("#/settings/spend?window=30d", <Spend />, { tokens: rollup(1), viewer: VIEWER }, (store) =>
     store.applyBudget({
       meter_id: "n:1",
       seq: 1,
@@ -349,7 +349,7 @@ const UNCAPPED = { meter_id: "n:1", seq: 1, timezone: "UTC", org: { windows: [] 
 // company, for the first seconds after every engine start, to set a ceiling it
 // already had.
 test("before the first budget report the tile waits, and offers nothing", async () => {
-  mount("#/spend?window=30d", <Spend />, { tokens: rollup(1), viewer: VIEWER });
+  mount("#/settings/spend?window=30d", <Spend />, { tokens: rollup(1), viewer: VIEWER });
   await settle();
   expect(screen.getByRole("status", { name: /not reported yet/ })).toBeTruthy();
   expect(screen.queryByText("No monthly budget")).toBeNull();
@@ -358,18 +358,18 @@ test("before the first budget report the tile waits, and offers nothing", async 
 
 // NO CEILING IS SAID, AND ONLY THE READER WHO CAN SET ONE IS OFFERED TO.
 test("no monthly budget says so, and offers to set one only to an operator", async () => {
-  mount("#/spend?window=30d", <Spend />, { tokens: rollup(1), viewer: VIEWER }, (store) =>
+  mount("#/settings/spend?window=30d", <Spend />, { tokens: rollup(1), viewer: VIEWER }, (store) =>
     store.applyBudget(UNCAPPED),
   );
   await settle();
   expect(screen.getByText("No monthly budget")).toBeTruthy();
   expect(screen.getByRole("link", { name: "Set one" }).getAttribute("href")).toBe(
-    "#/spend/budgets",
+    "#/company/budgets",
   );
   cleanup();
 
   mount(
-    "#/spend?window=30d",
+    "#/settings/spend?window=30d",
     <Spend />,
     {
       tokens: rollup(1),
@@ -384,10 +384,10 @@ test("no monthly budget says so, and offers to set one only to an operator", asy
 
 // A MANAGED DOCUMENT (ADR-0030) IS SET WHERE IT IS MANAGED: an operator whose
 // token is not one of its writers is told there is no ceiling and offered no
-// way to set one, which Spend › Budgets would only hold.
+// way to set one, which Company › Budgets would only hold.
 test("on a managed document only a writer is offered to set a budget", async () => {
   mount(
-    "#/spend?window=30d",
+    "#/settings/spend?window=30d",
     <Spend />,
     {
       tokens: rollup(1),
@@ -401,7 +401,7 @@ test("on a managed document only a writer is offered to set a budget", async () 
   cleanup();
 
   mount(
-    "#/spend?window=30d",
+    "#/settings/spend?window=30d",
     <Spend />,
     {
       tokens: rollup(1),
@@ -416,7 +416,7 @@ test("on a managed document only a writer is offered to set a budget", async () 
 // THE CACHE'S SHARE IS READ ÷ INPUT, and a window where nothing reported a
 // cache has no figure rather than "0%".
 test("the cache tile divides the engine's counts, and is absent when none were reported", async () => {
-  mount("#/spend?window=30d", <Spend />, {
+  mount("#/settings/spend?window=30d", <Spend />, {
     tokens: rollup(1000, { totals: bucket(1000, { input_tokens: 800, cache_read_tokens: 352 }) }),
     viewer: VIEWER,
   });
@@ -424,7 +424,7 @@ test("the cache tile divides the engine's counts, and is absent when none were r
   expect(screen.getByText("44%")).toBeTruthy();
   cleanup();
 
-  mount("#/spend?window=30d", <Spend />, { tokens: rollup(1000), viewer: VIEWER });
+  mount("#/settings/spend?window=30d", <Spend />, { tokens: rollup(1000), viewer: VIEWER });
   await settle();
   expect(screen.queryByText("of input served from prompt cache")).toBeNull();
   expect(screen.queryByText("0%")).toBeNull();
@@ -433,7 +433,7 @@ test("the cache tile divides the engine's counts, and is absent when none were r
 // THE MEDIAN TASK IS THE TRACKER'S, over the tasks FINISHED in the window, and
 // on a company whose tracker is not the engine's there is no tile at all.
 test("the median task tile asks the tracker, and is absent on a non-native tracker", async () => {
-  mount("#/spend?window=30d", <Spend />, {
+  mount("#/settings/spend?window=30d", <Spend />, {
     tokens: rollup(1),
     viewer: VIEWER,
     work_items: (p: Record<string, unknown>) =>
@@ -459,7 +459,7 @@ test("the median task tile asks the tracker, and is absent on a non-native track
   });
   cleanup();
 
-  mount("#/spend?window=30d", <Spend />, {
+  mount("#/settings/spend?window=30d", <Spend />, {
     tokens: rollup(1),
     viewer: VIEWER,
     work_items: new QueryError("unknown_query"),
@@ -475,7 +475,7 @@ test("the median task tile asks the tracker, and is absent on a non-native track
 // "Sign in" to somebody already signed in. Mutation: enable the card's
 // question on `ready` alone and it is asked, and the lock is never drawn.
 test("a reader without Tracker is asked no task question on the overview", async () => {
-  mount("#/spend?window=30d", <Spend />, {
+  mount("#/settings/spend?window=30d", <Spend />, {
     tokens: rollup(1),
     viewer: { ...VIEWER, grants: [] },
     work_items: new QueryError("unauthorized"),
@@ -509,7 +509,7 @@ test("a seat whose day is refusing reads exhausted, and share and per-turn are t
     turns: 4,
   };
   mount(
-    "#/spend?window=30d",
+    "#/settings/spend?window=30d",
     <Spend />,
     { tokens: rollup(4_000, { by_agent: [ceo, swe] }), viewer: VIEWER },
     (store) =>
@@ -566,7 +566,7 @@ test("with no seat's day capped the budget column is not drawn, and the caption 
     by_phase: {},
     turns: 4,
   };
-  mount("#/spend?window=30d", <Spend />, {
+  mount("#/settings/spend?window=30d", <Spend />, {
     tokens: rollup(1_000, { by_agent: [ceo] }),
     viewer: VIEWER,
   });
@@ -580,7 +580,7 @@ test("with no seat's day capped the budget column is not drawn, and the caption 
 // line, and cut as one sentence the count went first — three names then read
 // as everybody who used the entry.
 test("by model names the top seats and keeps the count of the rest apart", async () => {
-  mount("#/spend?window=30d", <Spend />, {
+  mount("#/settings/spend?window=30d", <Spend />, {
     tokens: rollup(1_000, {
       by_provider: [
         {
@@ -608,7 +608,7 @@ test("by model names the top seats and keeps the count of the rest apart", async
 // is never shorter than the 12rem it was drawn at. jsdom lays nothing out, so
 // what is held is what the chart was asked to draw.
 test("the daily chart fills its card, and its plot is never under 12rem", async () => {
-  mount("#/spend?window=30d", <Spend />, {
+  mount("#/settings/spend?window=30d", <Spend />, {
     tokens: rollup(100),
     token_series: {
       ...series(100),
@@ -647,7 +647,7 @@ test("the phase legend is all four bands, a band nothing spent in included", asy
     other: false,
     folded: 0,
   });
-  mount("#/spend?window=30d", <Spend />, {
+  mount("#/settings/spend?window=30d", <Spend />, {
     tokens: rollup(100),
     token_series: {
       ...series(100),
@@ -678,7 +678,7 @@ test("the phase legend is all four bands, a band nothing spent in included", asy
 // on the seat's agent id and carries the name it read off the chart as its
 // `label`, so the legend draws the name and never the id.
 test("splitting by seat labels each band with the seat's name, not its key", async () => {
-  mount("#/spend?window=30d&group=seat", <Spend />, {
+  mount("#/settings/spend?window=30d&group=seat", <Spend />, {
     tokens: rollup(100),
     token_series: (p: Record<string, unknown>) => ({
       ...series(100),
@@ -711,7 +711,7 @@ test("splitting by seat labels each band with the seat's name, not its key", asy
 // THE DIMENSIONS ARE THE CONTRACT'S SIX, which the engine gate holds against
 // `tokens.Groups` — and a choice re-asks the series by that dimension.
 test("the chart offers the contract's six dimensions and asks by the one chosen", async () => {
-  mount("#/spend?window=30d", <Spend />, {
+  mount("#/settings/spend?window=30d", <Spend />, {
     tokens: rollup(1),
     token_series: series(1),
     viewer: VIEWER,
@@ -732,7 +732,7 @@ test("the chart offers the contract's six dimensions and asks by the one chosen"
 // link carries the window where the turn list has one, and a quarter goes to
 // the thirty days the event log holds — saying so.
 test("recent turns link to the turn list by tokens, over the same window where it has one", async () => {
-  mount("#/spend?window=90d", <Spend />, { tokens: rollup(1), viewer: VIEWER });
+  mount("#/settings/spend?window=90d", <Spend />, { tokens: rollup(1), viewer: VIEWER });
   await settle();
   const link = screen.getByRole("link", { name: "Recent turns by tokens →" });
   expect(link.getAttribute("href")).toBe("#/live/turns?sort=-tokens&window=30d");
@@ -746,7 +746,7 @@ test("the expensive tasks under a refused window say the refusal and settle", as
   const sentence =
     "tokens: since=2026-06-01 until=2026-08-30 is 91 days, and a spend window is at most 90";
   mount(
-    "#/spend/tasks?window=2026-06-01T00:00:00.000Z/2026-08-31T00:00:00.000Z",
+    "#/settings/spend/tasks?window=2026-06-01T00:00:00.000Z/2026-08-31T00:00:00.000Z",
     <ExpensiveTasks />,
     {
       tokens: new QueryError("bad_params", null, sentence),
@@ -763,7 +763,7 @@ test("the expensive tasks under a refused window say the refusal and settle", as
 // THE MOST EXPENSIVE TASKS ARE THE TRACKER'S ORDER, with what drove each —
 // the reopens included — and no price anywhere.
 test("the expensive tasks are the engine's order, with their reopens", async () => {
-  mount("#/spend/tasks?window=30d", <ExpensiveTasks />, {
+  mount("#/settings/spend/tasks?window=30d", <ExpensiveTasks />, {
     tokens: rollup(1),
     viewer: VIEWER,
     work_items: items([
@@ -802,7 +802,7 @@ test("people are their own rows, and say they take no turns", async () => {
     person: true,
     by_phase: {},
   });
-  mount("#/spend?window=30d", <Spend />, {
+  mount("#/settings/spend?window=30d", <Spend />, {
     tokens: rollup(900, { by_agent: [person("maya", 600), person("ana", 300)] }),
     viewer: VIEWER,
   });
@@ -819,7 +819,7 @@ test("people are their own rows, and say they take no turns", async () => {
 // turn screen uses for the same records — never as background work outside
 // the seats, which it is not: every call is inside its seat's row already.
 test("the auxiliary card names each purpose and its provider calls", async () => {
-  mount("#/spend?window=30d", <Spend />, {
+  mount("#/settings/spend?window=30d", <Spend />, {
     tokens: rollup(500, {
       by_worker: [
         { worker: "condense_thread", ...bucket(300, { calls: 7 }) },
@@ -841,7 +841,7 @@ test("the auxiliary card names each purpose and its provider calls", async () =>
 // and the tasks share theirs with the auxiliary model: a team list in the wide
 // track ran its bar a thousand pixels from the team's name.
 test("the ranked lists stand in the narrow track, beside the seats and the tasks", async () => {
-  mount("#/spend?window=30d", <Spend />, { tokens: rollup(1_000), viewer: VIEWER });
+  mount("#/settings/spend?window=30d", <Spend />, { tokens: rollup(1_000), viewer: VIEWER });
   await settle();
   const card = (title: string) =>
     screen.getByRole("heading", { name: title }).closest(".spend-card") as HTMLElement;
@@ -860,7 +860,7 @@ test("the ranked lists stand in the narrow track, beside the seats and the tasks
 // model's half-row words beside the others' 128px drew two bar columns down
 // the page, 37px apart at 1280 and 115px at 1920 (`.spend-bars`, screens.css).
 test("every ranked list takes the one label width, so the bars start at one x", async () => {
-  mount("#/spend?window=30d", <Spend />, {
+  mount("#/settings/spend?window=30d", <Spend />, {
     tokens: rollup(1_000, {
       by_provider: [
         {
@@ -896,7 +896,7 @@ test("every ranked list takes the one label width, so the bars start at one x", 
 // which the sheet takes out of the hero (`.spend-tiles:empty`): drawn, an
 // empty row added a gap under the budget at the hero's foot.
 test("the hero's tiles row holds only the tiles that have something to say", async () => {
-  mount("#/spend?window=30d", <Spend />, {
+  mount("#/settings/spend?window=30d", <Spend />, {
     tokens: rollup(1_000),
     work_items: new QueryError("unknown_query"),
     viewer: VIEWER,
@@ -906,7 +906,7 @@ test("the hero's tiles row holds only the tiles that have something to say", asy
   expect(document.querySelector(".spend-tiles")!.childNodes).toHaveLength(0);
   cleanup();
 
-  mount("#/spend?window=30d", <Spend />, {
+  mount("#/settings/spend?window=30d", <Spend />, {
     tokens: rollup(1_000),
     work_items: (p: Record<string, unknown>) =>
       items([], {
@@ -927,7 +927,7 @@ test("the hero's tiles row holds only the tiles that have something to say", asy
 // sentence does: the task card's was set at the body size, one step larger
 // than its neighbours' on the same row.
 test("the empty task card says so at the caption step", async () => {
-  mount("#/spend?window=30d", <Spend />, {
+  mount("#/settings/spend?window=30d", <Spend />, {
     tokens: rollup(1),
     work_items: items([]),
     viewer: VIEWER,

@@ -56,6 +56,7 @@ import {
 import { href, useNavigator, useRoute } from "../router.tsx";
 import { KEY_SHAPE } from "../routes.ts";
 import { sequenceWords, useKeymap } from "../keymap.ts";
+import { useServicesRun } from "~/lib/services.ts";
 import { LayerBoundary } from "../boundaries.tsx";
 import { lazyScreen, preload } from "../lazyScreen.ts";
 import {
@@ -442,8 +443,10 @@ export function ProjectSwitcherProvider({ children }: { children: ReactNode }) {
     preload(["work"]);
     setState({ open: true, centred: at === null });
   }, [at]);
-  // G THEN P, from anywhere (`keymap.ts`).
-  useKeymap({ project: openSwitcher });
+  // G THEN P, from anywhere (`keymap.ts`), where the company runs Crewlet
+  // Works: its projects are what the switcher lists.
+  const runs = useServicesRun();
+  useKeymap({ project: { run: openSwitcher, when: runs.tracker } });
 
   const setOpen = useCallback(
     (open: boolean) => {

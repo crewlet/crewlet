@@ -131,9 +131,11 @@ describe("file storage", () => {
     expect(screen.getByText("No collection yet")).toBeTruthy();
   });
 
-  test("a node that reads no record draws no card", () => {
+  // NO RECORD IS NOT AN EMPTY STORE: the page says the node keeps none,
+  // rather than drawing nothing under its own heading.
+  test("a node that reads no record says it keeps none", () => {
     const { container } = renderCard(undefined);
-    expect(container.textContent).toBe("");
+    expect(container.textContent).toContain("No record of the company's files");
   });
 
   test("an incomplete audit's count is a floor, and a failed pass says what stopped it", () => {

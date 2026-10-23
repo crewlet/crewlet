@@ -541,7 +541,7 @@ describe("the screens", () => {
   // read the answer draws no price either, and that pass would prove nothing.
   test.each([
     ["the landing screen", "#/home", <Home />, { token_series: series() }],
-    ["spend", "#/spend", <Spend />, { token_series: series(), tokens: rollup() }],
+    ["spend", "#/settings/spend", <Spend />, { token_series: series(), tokens: rollup() }],
     [
       "the task page",
       "#/work/ENG-42",
@@ -566,14 +566,14 @@ describe("the screens", () => {
     [
       // WHERE ITS TOKENS GO: the week's rollup, by phase and by model.
       "the profile's turns",
-      "#/agents/seats/ceo?tab=turns",
+      "#/company/org/seats/ceo?tab=turns",
       <SeatScreen handle="ceo" />,
       { tokens: rollup(), turns: { turns: [], next: null } },
     ],
     [
       // THE WEEK'S TILE, from the usage domain's own row.
       "the profile",
-      "#/agents/seats/ceo",
+      "#/company/org/seats/ceo",
       <SeatScreen handle="ceo" />,
       {
         seat_activity: {

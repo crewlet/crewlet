@@ -77,7 +77,7 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { href } from "~/app/router.tsx";
-import { AgentsHeader, useAgentsCounts } from "./header.tsx";
+import { AgentsHeader } from "./header.tsx";
 
 /** The ledger's three outcomes, and nothing else — see the note above.
  *
@@ -543,11 +543,8 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
   // badge's monogram out of it, and drew a person's seat as an agent's.
   const index = useMemo(() => indexOrg(org), [org]);
   const who = useMemo(() => seatLookup(index), [index]);
-  // THE SAME FIGURES ON EVERY AGENTS TAB, this one's included: a strip whose
-  // numbers came and went with the tab would read as counts that changed.
-  useAgentsCounts(index);
   const { open: openPeek } = usePeekControls();
-  // `#/agents/schedules/{scope_type}/{scope_id}/{name}` names ONE schedule.
+  // `#/company/schedules/{scope_type}/{scope_id}/{name}` names ONE schedule.
   // Three segments because a schedule's identity is all three: two units may
   // each declare a "standup", and a role and a unit may both.
   const [scopeType, scopeId, scheduleName] = scope;
@@ -999,7 +996,7 @@ function OneSchedule({
     <>
       <PageActions>
         {
-          <a className="t-link" href={href(["agents", "schedules"])}>
+          <a className="t-link" href={href(["company", "schedules"])}>
             All schedules →
           </a>
         }

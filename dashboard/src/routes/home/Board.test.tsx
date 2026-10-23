@@ -436,14 +436,20 @@ describe("the tray", () => {
     expect(within(tray()).getByText("No widgets match “zzzz”")).toBeTruthy();
   });
 
-  test("a reader without Admin is offered no Settings widgets, and is told why", async () => {
+  // SPEND'S READINGS ARE EVERY READER'S, and the rest of Settings is Admin's:
+  // a reader without Admin is offered the spend widgets and none of the rest.
+  test("a reader without Admin is offered only Settings' spend widgets, and is told why", async () => {
     mount({ viewer: LEE });
     await settle();
     await editHome();
     await openTray();
     const sections = [...tray().querySelectorAll(".home-tray-title")].map((h) => h.textContent);
-    expect(sections).not.toContain("Settings");
+    expect(sections).toContain("Settings");
     expect(sections).toContain("Work");
+    const names = [...tray().querySelectorAll(".home-tray-tile-name")].map((n) => n.textContent);
+    expect(names).toContain("Token spend");
+    expect(names).not.toContain("Models & keys");
+    expect(names).not.toContain("Backups");
     expect(within(tray()).getByText(/need access you don’t have/)).toBeTruthy();
   });
 });

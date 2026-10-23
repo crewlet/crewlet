@@ -1,6 +1,6 @@
 /**
  * The most expensive tasks: on the overview, the top three; at
- * `#/spend/tasks`, the list — every task last changed inside the window,
+ * `#/settings/spend/tasks`, the list, every task last changed inside the window,
  * most tokens first, each saying what drove it.
  *
  * A TASK'S TOKENS ARE ITS WHOLE LIFE'S. The tracker charges a turn to one work
@@ -22,7 +22,7 @@
  * overview is everybody's, a task is the tracker's, and a question the engine
  * would refuse drew its refusal — a "Sign in" callout to somebody already
  * signed in — on every visit; the card says what would open it instead, as the
- * median tile beside it does. The list at `#/spend/tasks` is its own section,
+ * median tile beside it does. The list at `#/settings/spend/tasks` is its own section,
  * drawn locked by the navigation for the same reader.
  */
 
@@ -105,7 +105,7 @@ export function ExpensiveTasksCard({
     <Card className="spend-card" padding="none">
       <div className="spend-card-head">
         <h2 className="spend-title">Most expensive tasks</h2>
-        <a className="t-link spend-caption" href={href(["spend", "tasks"], { window })}>
+        <a className="t-link spend-caption" href={href(["settings", "spend", "tasks"], { window })}>
           All
         </a>
       </div>
@@ -151,7 +151,7 @@ export function ExpensiveTasksCard({
   );
 }
 
-/** `#/spend/tasks`: the list. */
+/** `#/settings/spend/tasks`: the list. */
 export function ExpensiveTasks() {
   const zone = useOrg()?.timezone;
   const now = useNow();

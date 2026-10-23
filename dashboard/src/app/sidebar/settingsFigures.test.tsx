@@ -2,8 +2,7 @@
  * The figures beside Settings' sections say what the engine answered, and
  * nothing when it did not.
  *
- * Each case names the fact a figure stands for: the Integrations badge is the
- * engine's own roll-up (never a re-derived phase), a node behind the activated
+ * Each case names the fact a figure stands for: a node behind the activated
  * epoch is said in the Nodes row's NAME as well as drawn, and a standing
  * alarm is the only reason Backups & retention draws a figure at all.
  */
@@ -11,26 +10,10 @@
 import { describe, expect, test } from "vitest";
 
 import { settingsFigures } from "./settingsFigures.tsx";
-import type { IntegrationsAnswer } from "~/contract/integrations.ts";
 import type { FleetAnswer, FleetNode, RetentionReport } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 
-const NONE = { health: null, fleet: null, retention: null, integrations: null };
-
-function tools(...states: ("attention" | "connected" | "not_connected" | "not_in_use")[]) {
-  return {
-    integrations: [],
-    traffic_known: true,
-    traffic_since: null,
-    tools: states.map((state, i) => ({
-      key: `t${i}`,
-      surfaces: [],
-      state,
-      label: state,
-      reason: "",
-    })),
-  } as IntegrationsAnswer;
-}
+const NONE = { health: null, fleet: null, retention: null };
 
 function node(over: Partial<FleetNode>): FleetNode {
   return { id: "n", roles: [], broker: "member", seats: 0, ...over };
@@ -53,29 +36,6 @@ function retention(kinds: string[], held = 0): RetentionReport {
 describe("settingsFigures", () => {
   test("nothing answered draws nothing — absent is never a zero", () => {
     expect(settingsFigures(NONE)).toEqual({});
-  });
-
-  test("the Integrations pill counts the tools the engine's roll-up says need a person", () => {
-    const f = settingsFigures({
-      ...NONE,
-      integrations: tools("attention", "not_connected", "attention", "connected"),
-    });
-    // `not_connected` is the engine mid-flight — amber on the card, but nothing
-    // a person can do — so it is not waiting on the reader.
-    expect(f.integrations?.attention).toEqual({ value: 2, label: "need attention" });
-    // A STATE, NOT AN UNREAD COUNT: never the accent's badge, never a quiet count.
-    expect(f.integrations?.badge).toBeUndefined();
-    expect(f.integrations?.count).toBeUndefined();
-    // And one tool reads as one: "Integrations, 1 needs attention".
-    expect(
-      settingsFigures({ ...NONE, integrations: tools("attention") }).integrations?.attention,
-    ).toEqual({ value: 1, label: "needs attention" });
-  });
-
-  test("an integrations answer with nothing owed draws no pill", () => {
-    expect(settingsFigures({ ...NONE, integrations: tools("connected") }).integrations).toBe(
-      undefined,
-    );
   });
 
   test("Nodes is the health push's count, and names the nodes behind the activated epoch", () => {

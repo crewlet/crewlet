@@ -4,6 +4,7 @@
  * starter and opens the design it made.
  */
 
+import { TestClient } from "~/test/client.tsx";
 import { installWindow } from "~/testing.tsx";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
@@ -88,13 +89,15 @@ afterEach(() => {
 function mount(hash = "#/artifacts/new/design") {
   location.hash = hash;
   return render(
-    <Router>
-      <LayerHost>
-        <ToastProvider>
-          <DesignCreate />
-        </ToastProvider>
-      </LayerHost>
-    </Router>,
+    <TestClient>
+      <Router>
+        <LayerHost>
+          <ToastProvider>
+            <DesignCreate />
+          </ToastProvider>
+        </LayerHost>
+      </Router>
+    </TestClient>,
   );
 }
 

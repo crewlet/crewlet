@@ -1,5 +1,5 @@
 /**
- * Settings › Tools & MCP: the catalogue, the servers and what every node did
+ * Settings › MCP Tools: the catalogue, the servers and what every node did
  * with them, and the form that adds one.
  *
  * The invariants, in the order they cost when they go:
@@ -470,7 +470,7 @@ test("a server waiting for a provisioned credential names what it waits for, not
   expect(within(github).queryByText(/failed/)).toBeNull();
   cleanup();
 
-  location.hash = "#/settings/tools/servers/github";
+  location.hash = "#/settings/mcp-tools/servers/github";
   mount(<Tools server="github" />, { answer: waiting });
   await settle();
   expect(screen.getByText("What it waits for")).toBeDefined();
@@ -502,7 +502,7 @@ test("a server's annotation keys that match no tool are counted in its row and n
   expect(within(docs).queryByText(/tool_annotations/)).toBeNull();
   cleanup();
 
-  location.hash = "#/settings/tools/servers/github";
+  location.hash = "#/settings/mcp-tools/servers/github";
   mount(<Tools server="github" />);
   await settle();
   expect(screen.getByText("Annotation overrides that match no tool")).toBeDefined();
@@ -536,7 +536,7 @@ test("the MCP tile counts the servers the engine reports, as the table does", as
 // and every failure whole — with its chip selected, an empty state that says
 // why, and a way back to every tool.
 test("a server with no tools opens its page, never an empty quoted search", async () => {
-  location.hash = "#/settings/tools/servers/notes";
+  location.hash = "#/settings/mcp-tools/servers/notes";
   mount(<Tools server="notes" />);
   await settle();
   expect(screen.queryByText(/“”/)).toBeNull();
@@ -553,13 +553,13 @@ test("a server with no tools opens its page, never an empty quoted search", asyn
     fireEvent.click(screen.getByRole("button", { name: "Show all tools" }));
   });
   await settle();
-  expect(location.hash.startsWith("#/settings/tools")).toBe(true);
+  expect(location.hash.startsWith("#/settings/mcp-tools")).toBe(true);
   expect(location.hash).not.toContain("servers");
 });
 
 // A SEARCH THAT FOUND NOTHING still quotes what was searched.
 test("a search that matches nothing quotes the search", async () => {
-  location.hash = "#/settings/tools?q=zzz";
+  location.hash = "#/settings/mcp-tools?q=zzz";
   mount(<Tools />);
   await settle();
   expect(screen.getByText("No tool matches “zzz”")).toBeDefined();
@@ -584,7 +584,7 @@ test("a refused reader sees the refusal where the servers were, and every tool",
 // status who opens a server's page was told the server does not exist, right
 // above the section that says the answer was refused.
 test("a refused reader on a server's page is never told the server does not exist", async () => {
-  location.hash = "#/settings/tools/servers/github";
+  location.hash = "#/settings/mcp-tools/servers/github";
   mount(<Tools server="github" />, { viewer: READER, refuse: true });
   await settle();
   expect(screen.getByRole("heading", { name: "github" })).toBeDefined();
@@ -596,7 +596,7 @@ test("a refused reader on a server's page is never told the server does not exis
 
 // …and a reader who WAS told, about a name nothing carries, is told so.
 test("a server's page for a name the answer does not carry says so", async () => {
-  location.hash = "#/settings/tools/servers/nowhere";
+  location.hash = "#/settings/mcp-tools/servers/nowhere";
   mount(<Tools server="nowhere" />);
   await settle();
   expect(screen.getByText(/No server called/).textContent).toBe("No server called nowhere.");
@@ -647,7 +647,7 @@ const valid = (warnings: unknown[] = []) =>
   json({ valid: true, base_revision_id: "r1", warnings, derived: null }, 200);
 
 async function openAdd() {
-  location.hash = "#/settings/tools?add=server";
+  location.hash = "#/settings/mcp-tools?add=server";
   mount(<Tools />);
   await settle();
   return screen.getByRole("dialog");
@@ -785,7 +785,7 @@ test("a name only a node still reports is said, not refused", async () => {
     if (call.method === "PATCH") return valid();
     return json({}, 200, { ETag: '"r2"' });
   });
-  location.hash = "#/settings/tools?add=server";
+  location.hash = "#/settings/mcp-tools?add=server";
   mount(<Tools />, { answer });
   await settle();
   const dialog = screen.getByRole("dialog");

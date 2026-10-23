@@ -15,6 +15,7 @@
  * `HomeDataProvider`; a card reads it with `useSharedHomeData`.
  */
 
+import { useServicesRun } from "~/lib/services.ts";
 import { createContext, useContext, useMemo } from "react";
 import { href, useParam } from "~/app/router.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -24,7 +25,8 @@ import { managedBlock, mayChangeConfig } from "~/lib/useWriteAccess.ts";
 import { useNow } from "~/lib/clock.ts";
 import { useAttention } from "~/lib/useAttention.ts";
 import { useAgents, useConnection, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
-import { seatConditionsOf, seatDecisionsFor } from "~/components/DecisionRow.tsx";
+import { seatDecisionsFor } from "~/components/DecisionRow.tsx";
+import { seatConditionsOf } from "~/lib/decisions.ts";
 import { useLeadScope } from "~/lib/leadScope.ts";
 import { conditionKey, conditionsToDecide } from "~/lib/attention.ts";
 import { DEFAULT_RANGE, crewOf, flowPoints, rangeOf, statusSentence, waitingOf } from "./model.ts";
@@ -62,10 +64,13 @@ export function useHomeData() {
   // THE TRACKER'S HISTORY, asked only of a reader holding Tracker: the
   // engine refuses it to anybody else, and the tiles and chart it feeds say
   // what would open them rather than drawing a refusal as a broken read.
+  // AND OF A COMPANY RUNNING CREWLET WORKS, where the history is: elsewhere
+  // the tiles and chart it feeds are not drawn (`Kpis.tsx`'s `KPI_SERVICES`).
+  const runs = useServicesRun();
   const flow = useQuery(
     "work_flow",
     { bucket: "day", points: flowPoints(range) },
-    { pollMs: SLOW_POLL_MS, enabled: viewer.tracker },
+    { pollMs: SLOW_POLL_MS, enabled: viewer.tracker && runs.tracker },
   );
   const spend = useQuery(
     "token_series",

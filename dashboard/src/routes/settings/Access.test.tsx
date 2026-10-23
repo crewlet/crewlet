@@ -1,5 +1,5 @@
 /**
- * People & access draws the identity directory from both ends — what it
+ * People draws the identity directory from both ends, what it
  * WRITES is `AccessWrites.test.tsx`'s.
  *
  * The invariants, in the order they cost when they go: the whole directory is
@@ -11,10 +11,17 @@
  */
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { Suspense } from "react";
+import { Suspense, type ComponentType } from "react";
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 
-import { INVITATION_WORDS, PeopleAndAccess, STAGE_WORDS, TOKEN_ROW_WORDS } from "./Access.tsx";
+import {
+  ApiTokens,
+  INVITATION_WORDS,
+  People,
+  STAGE_WORDS,
+  ServiceAccounts,
+  TOKEN_ROW_WORDS,
+} from "./Access.tsx";
 import { PeekHost, PeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { loadChunk } from "~/app/lazyScreen.ts";
 import { Router } from "~/app/router.tsx";
@@ -168,7 +175,8 @@ function stubIam(override: (url: URL) => Response | null = () => null) {
   return asked;
 }
 
-function mount(viewer: Record<string, unknown> = ADMIN) {
+/** One of the three Access screens, People unless a case names another. */
+function mount(viewer: Record<string, unknown> = ADMIN, Screen: ComponentType = People) {
   const store = new Store();
   store.applyOrg(CHART_ORG);
   const socket = new LiveSocket(store);
@@ -187,7 +195,7 @@ function mount(viewer: Record<string, unknown> = ADMIN) {
         <Router>
           <SessionReading>
             <PeekNeighbours>
-              <PeopleAndAccess />
+              <Screen />
               <Suspense fallback={null}>
                 <PeekHost />
               </Suspense>
@@ -228,14 +236,30 @@ test("every page of the directory is drawn, walked by its cursor", async () => {
   const asked = stubIam();
   mount();
   expect(await screen.findByText("Ana Diaz")).toBeTruthy();
-  expect((await screen.findAllByText("ci:release")).length).toBeGreaterThan(0);
   const pages = asked.filter((u) => u.pathname === "/iam/people");
   expect(pages.map((u) => u.searchParams.get("after"))).toEqual([null, "cursor-1"]);
-  // Each row's stage in the engine's own words, and a machine as a service
-  // account rather than a person.
+  // Each row's stage in the engine's own words.
   expect(screen.getAllByText(STAGE_WORDS.active!.label).length).toBeGreaterThan(0);
+});
+
+// NO ROW IS DRAWN TWICE: the directory is split between the two pages that
+// read it, a service account on Service accounts and every other principal on
+// People. The second page's machine is a service account, in its stage's
+// words, and the first page's person is not on that page. Mutation: drop the
+// split from either page and its half goes red.
+test("people and service accounts split the directory, and no row is on both", async () => {
+  stubIam();
+  mount();
+  expect(await screen.findByText("Ana Diaz")).toBeTruthy();
+  await waitFor(() => expect(screen.queryByText("Service account")).toBeNull());
+  expect(screen.queryByText("ci:release")).toBeNull();
+  cleanup();
+
+  stubIam();
+  mount(ADMIN, ServiceAccounts);
+  expect((await screen.findAllByText("ci:release")).length).toBeGreaterThan(0);
   expect(screen.getByText(STAGE_WORDS.suspended!.label)).toBeTruthy();
-  expect(screen.getByText("Service account")).toBeTruthy();
+  expect(screen.queryByText("Ana Diaz")).toBeNull();
 });
 
 // THE PERSON'S BADGE IS BESIDE THEIR NAME, AND THE SEAT IS ITS HANDLE. The
@@ -247,8 +271,12 @@ test("a person's row draws their badge by their name and their seat by its handl
   const ana = (await screen.findByText("Ana Diaz")).closest(".grid-row") as HTMLElement;
   expect(ana.querySelector(".crewlet-avatar")).not.toBeNull();
   const seat = within(ana).getByRole("link", { name: "@jane" });
-  expect(seat.getAttribute("href")).toBe("#/agents/seats/jane");
+  expect(seat.getAttribute("href")).toBe("#/company/org/seats/jane");
   expect(seat.getAttribute("title")).toBe("Jane Founder");
+  cleanup();
+
+  stubIam();
+  mount(ADMIN, ServiceAccounts);
   const ci = (await screen.findAllByText("ci:release"))
     .map((el) => el.closest(".grid-row") as HTMLElement)
     .find(Boolean)!;
@@ -282,7 +310,7 @@ test("a row this node cannot open is drawn as sealed", async () => {
 // the row holds, with the report alone saying whether a seat is gone.
 test("a seat names who holds it and a token the seat its row binds", async () => {
   stubIam();
-  mount();
+  mount(ADMIN, ApiTokens);
   const deploy = (await screen.findByText("token:deploy")).closest(".grid-row") as HTMLElement;
   expect(within(deploy).getByText(TOKEN_ROW_WORDS.held!.label)).toBeTruthy();
   expect(within(deploy).getByRole("link", { name: /Jane Founder/ })).toBeTruthy();
@@ -297,12 +325,11 @@ test("a seat names who holds it and a token the seat its row binds", async () =>
       .getAttribute("title"),
   ).toContain("crewlet iam create -kind machine -login token:<id> -seat <seat> -grants none");
   expect(within(spare).getByText("No seat")).toBeTruthy();
-  const tokensTile = screen
-    .getByText("API tokens", {
-      selector: ".crewlet-statcard *",
-    })
-    .closest(".crewlet-statcard") as HTMLElement;
-  expect(within(tokensTile).getByText("1 with a seat")).toBeTruthy();
+  cleanup();
+
+  stubIam();
+  mount();
+  await screen.findByText("Ana Diaz");
   // The directory's finding, written here about the person it names.
   expect(
     screen.getByText("gone.person is on a seat that was removed. Move them to another seat."),
@@ -341,9 +368,14 @@ test("a finding is drawn in words, never as its code or the engine's detail", as
   expect(within(finding).getByText("Seat removed")).toBeTruthy();
   expect(screen.queryByText("binding_dangling")).toBeNull();
   expect(screen.queryByText(/is not in the org chart/)).toBeNull();
+  cleanup();
+
+  stubIam(() => null);
+  mount(ADMIN, ServiceAccounts);
+  // A SERVICE ACCOUNT BOUND TO NONE reads as the ordinary state it is.
   const ci = (await screen.findAllByText("ci:release"))
     .map((cell) => cell.closest(".grid-row") as HTMLElement | null)
-    .find((row) => row && within(row).queryByText("Service account"))!;
+    .find((row) => row !== null)!;
   expect(within(ci).getByText("No seat")).toBeTruthy();
 });
 
@@ -361,7 +393,7 @@ test("a row bound to an agent seat draws the agent's badge", async () => {
         })
       : null,
   );
-  mount();
+  mount(ADMIN, ApiTokens);
   const row = async (login: string) =>
     (await screen.findByText(login)).closest(".grid-row") as HTMLElement;
   const outline = (r: HTMLElement) => {
@@ -388,13 +420,13 @@ test("a managed document names its writers beside the tokens", async () => {
       ? json(200, { ...TOKENS, company_writers: ["gitops", "ci"] })
       : null,
   );
-  mount();
+  mount(ADMIN, ApiTokens);
   const line = (await screen.findByText(/can change the company document/)).closest("span");
   expect(line?.textContent).toBe("Only gitops, ci can change the company document.");
   cleanup();
 
   stubIam();
-  mount();
+  mount(ADMIN, ApiTokens);
   await screen.findAllByText("token:spare");
   expect(screen.queryByText(/can change the company document/)).toBeNull();
 });

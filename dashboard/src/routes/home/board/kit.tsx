@@ -23,7 +23,14 @@
 import type { ComponentType, ReactNode } from "react";
 import type { GlyphProps } from "@crewlethq/icons/glyphs";
 import { Card, type NodeHue } from "@crewlethq/ui";
-import { DESTINATIONS, WORKSPACES, type Destination } from "~/app/nav.ts";
+import {
+  DESTINATIONS,
+  WORKSPACES,
+  serviceShown,
+  type Destination,
+  type Service,
+  type ServicesRun,
+} from "~/app/nav.ts";
 import { holdsAny } from "~/lib/access.ts";
 import { href, useParam } from "~/app/router.tsx";
 import { DEFAULT_RANGE, rangeOf } from "~/routes/home/model.ts";
@@ -83,6 +90,15 @@ export interface WidgetDef {
   size: WidgetSize;
   /** At most one on a board: a card drawn twice is one fact drawn twice. */
   once?: boolean;
+  /**
+   * The service built into Crewlet this widget reads where the page it
+   * summarises reads none (Home's task chart reads Crewlet Works' flow, the
+   * Inbox's updates its notices), for its settings where they decide it (a
+   * figure, a page shortcut). Where the company does not run it the widget is
+   * left off the board and out of the tray ([widgetShown]), and drawn again
+   * once it does. A widget whose page is hidden goes with the page.
+   */
+  service?: (params: Readonly<Record<string, string>>) => Service | undefined;
   params?: readonly WidgetParam[];
   /** What this copy is called, when its params name it: "Waiting on your decision". */
   nameOf?: (params: Readonly<Record<string, string>>) => string | undefined;
@@ -95,6 +111,22 @@ const PARAM = /^[a-z][a-z0-9-]{0,30}$/;
 /** The page a widget names. */
 export function destinationOf(from: string): Destination | undefined {
   return DESTINATIONS.find((d) => d.key === from);
+}
+
+/**
+ * Whether a widget has anything to show where the company runs `runs`: its
+ * page is offered ([serviceShown]), and the service it reads itself, if any,
+ * is run.
+ */
+export function widgetShown(
+  def: Pick<WidgetDef, "from" | "service">,
+  params: Readonly<Record<string, string>>,
+  runs: ServicesRun,
+): boolean {
+  const dest = destinationOf(def.from);
+  if (dest !== undefined && !serviceShown(dest, runs)) return false;
+  const service = def.service?.(params);
+  return service === undefined || runs[service];
 }
 
 /** Whether a reader holding `grants` may open a page: its workspace's grants and its own, as the sidebar locks them. */

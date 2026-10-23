@@ -3,8 +3,10 @@
  *
  * # What is on it, and what is not
  *
- * The WORKSPACES, from `nav.ts`'s one table — the three that are about you
- * (Home, Inbox, My work), then the company's five, and Settings at the foot.
+ * The WORKSPACES, from `nav.ts`'s one table, in its groups (`SIDEBAR_GROUPS`):
+ * the three that are about you (Home, Inbox, My work), then Company (Overview,
+ * Policies, Org chart, Schedules, Integrations, Budgets), then Workspace
+ * (Work, Knowledge, Artifacts, Live), and Settings at the foot.
  * Then three LIVE SHORTCUTS, each a real object with its own path: the views
  * this reader pinned, the pages they starred, and the turns running now.
  * Nothing else. A workspace's own sections are tabs in its page header and its
@@ -34,7 +36,12 @@
  * turns Live is running, a pinned view's total). A
  * figure the engine did not answer is absent, never a zero.
  *
- * # A lock goes where the closed thing is, and a row is never hidden
+ * # A lock goes where the closed thing is, and a row is hidden only for a service
+ *
+ * A ROW THAT READS A SERVICE THE COMPANY DOES NOT RUN IS NOT DRAWN: Work and
+ * My work where it runs no Crewlet Works, Knowledge where it runs no Crewlet
+ * Knowledge (`nav.ts`'s `serviceShown`, over `lib/services.ts`). There is
+ * nothing to ask anybody for, and a locked row would say there was.
  *
  * A ROW IS LOCKED ONLY WHEN NOTHING IN ITS WORKSPACE IS OPEN to the reader
  * (`nav.ts`'s `workspaceOpen`, over the one rule `sectionOpen`), and stays: a
@@ -42,11 +49,8 @@
  * does not exist. Its title names what would open it — the access a reader
  * would ask an admin for: Inbox, My work and Work say Tracker, Knowledge says
  * Knowledge. A workspace only PART of which is closed is not locked as a
- * whole: Settings draws its locks per section, in its column. Settings
- * carried a key for any closed section, so a person holding nothing but
- * their own Account was told Settings was closed to them — while its first
- * group, You, needs nothing at all. That group is why the Settings row is
- * never locked.
+ * whole: Settings draws its locks per section, in its column, and is open to
+ * every reader through Spend's readings.
  *
  * AND WHAT A LOCKED ROW WOULD SHOW IS NOT ASKED FOR: the Inbox's badge, My
  * work's count and the pinned views are tracker answers, so a reader without
@@ -69,13 +73,18 @@ import {
 import { ActivityGlyph, KeyGlyph, PinGlyph, StarGlyph } from "@crewlethq/icons/glyphs";
 import { href, samePath, useRoute } from "~/app/router.tsx";
 import {
+  SIDEBAR_GROUPS,
   WORKSPACES,
+  pathShown,
   sectionOpen,
+  serviceShown,
   workspaceMissing,
   workspaceOf,
   workspaceRow,
   type WorkspaceRow,
 } from "~/app/nav.ts";
+import { useServicesKnown, useServicesRun } from "~/lib/services.ts";
+import { useNeedsYouCount } from "~/lib/decisions.ts";
 import { accessNames, type Grant } from "~/lib/access.ts";
 import { glyphFor } from "~/ui/glyph.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -135,6 +144,11 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
   // earlier socket may have left behind, are not drawn.
   const unserved = accessRefused !== null;
   const inbox = useInboxCounts();
+  const runs = useServicesRun();
+  const known = useServicesKnown();
+  const needsYou = useNeedsYouCount(viewer.owner !== "" && known && !runs.tracker);
+  const shown = (place: WorkspaceRow["place"]) =>
+    WORKSPACES.filter((ws) => ws.place === place && serviceShown(ws, runs));
   const here = workspaceOf(route.path);
   const at = route.path.join("/");
 
@@ -161,9 +175,15 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
   );
 
   const figures: Partial<Record<WorkspaceRow["key"], Pick<NavRowProps, "badge" | "count">>> = {
-    inbox:
-      inbox.waiting !== null && inbox.waiting > 0
+    // WHERE THE COMPANY RUNS NO CREWLET WORKS no notice reaches the Inbox,
+    // and its badge counts what still does: what waits on the reader's
+    // decision ([useNeedsYouCount]).
+    inbox: runs.tracker
+      ? inbox.waiting !== null && inbox.waiting > 0
         ? { badge: { value: inboxFigure(inbox), label: "unread, waiting on you" } }
+        : {}
+      : needsYou !== null && needsYou > 0
+        ? { badge: { value: String(needsYou), label: "waiting on your decision" } }
         : {},
     // NOTHING ON YOU IS NO FIGURE, as nothing waiting is no badge: a zero
     // beside the row is a mark a reader checks, and it would be there for
@@ -208,9 +228,13 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
         key={ws.key}
         label={
           needs.length > 0 ? (
-            <Locked label={ws.label} needs={needs} said={`needs ${accessNames(needs)} access`} />
+            <Locked
+              label={ws.navLabel ?? ws.label}
+              needs={needs}
+              said={`needs ${accessNames(needs)} access`}
+            />
           ) : (
-            ws.label
+            (ws.navLabel ?? ws.label)
           )
         }
         icon={ws.icon}
@@ -247,7 +271,7 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
           <SidebarNav label="Settings">
             {/* THE LOCK IS ON THE ROW, NOT INSTEAD OF IT — see the module's
                 note — and drawn by the same rule as every other row's. */}
-            {WORKSPACES.filter((ws) => ws.place === "foot").map(row)}
+            {shown("foot").map(row)}
           </SidebarNav>
           <RailBoundary label="Engine" resetKey={at}>
             <EnginePanel
@@ -285,12 +309,11 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
         />
       </div>
       <SidebarNav label="Navigation">
-        <SidebarNav.Group>
-          {WORKSPACES.filter((ws) => ws.place === "you").map(row)}
-        </SidebarNav.Group>
-        <SidebarNav.Group label="Workspace">
-          {WORKSPACES.filter((ws) => ws.place === "workspace").map(row)}
-        </SidebarNav.Group>
+        {SIDEBAR_GROUPS.map((group) => (
+          <SidebarNav.Group key={group.place} {...(group.label ? { label: group.label } : {})}>
+            {shown(group.place).map(row)}
+          </SidebarNav.Group>
+        ))}
         {/* EACH LIVE SECTION HAS ITS OWN BOUNDARY: they draw rows the
             engine or the browser's storage sent, and a malformed one must
             cost that list and never the navigation above it. */}
@@ -300,7 +323,7 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
               path={route.path}
               viewKey={route.query.get("view") ?? ""}
               owner={viewer.owner}
-              tracker={viewer.tracker}
+              tracker={viewer.tracker && runs.tracker}
             />
           </RailBoundary>
         )}
@@ -473,7 +496,10 @@ function PinnedSection({
  * list is read (`lib/starred.ts`), so every row here leads somewhere.
  */
 function StarredSection({ path }: { path: string[] }) {
-  const stars = useStarred();
+  // NOT A PLACE THE COMPANY DOES NOT RUN THE SERVICE FOR: its row is drawn
+  // nowhere, and its star is kept until it runs it again.
+  const runs = useServicesRun();
+  const stars = useStarred().filter((s) => pathShown(s.path, runs));
   if (stars.length === 0) return null;
   return (
     <SidebarNav.Group label="Starred">

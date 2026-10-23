@@ -93,12 +93,13 @@ import { STORAGE_KEYS } from "~/lib/storage.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useClient } from "~/lib/store-hooks.ts";
 import { useViewer, type ViewerState } from "~/lib/viewer.ts";
+import { offeredKinds } from "~/app/nav.ts";
+import { useServicesRun } from "~/lib/services.ts";
 import { usePinsChanged } from "~/lib/artifacts/pins.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { useArtifactPeople, type ArtifactPeople } from "~/lib/artifacts/people.ts";
 import {
   KIND_WORDS,
-  MAKE_ORDER,
   KINDS,
   ROLE_WORDS,
   TRASH_KEPT,
@@ -489,6 +490,7 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
  * under a heading as quiet as the groups' below it.
  */
 function MakeRow() {
+  const runs = useServicesRun();
   return (
     <section className="artifacts-make" aria-labelledby="artifacts-make-title">
       <h2 className="artifacts-make-title" id="artifacts-make-title">
@@ -496,7 +498,7 @@ function MakeRow() {
       </h2>
       <ArtifactMakeRow
         aria-labelledby="artifacts-make-title"
-        items={MAKE_ORDER.map((k) => ({
+        items={offeredKinds(runs).map((k) => ({
           kind: k,
           label: MAKE_WORDS[k],
           detail: MAKE_DETAILS[k],

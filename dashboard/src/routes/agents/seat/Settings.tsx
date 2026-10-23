@@ -5,7 +5,7 @@
  * # Read-only here, and it says where the change is made
  *
  * Every value on this tab is one the org editor writes, so the tab offers
- * "Edit in org" (`#/agents/edit?seat=`) rather than a second, narrower form
+ * "Edit in org" (`#/company/org/edit?seat=`) rather than a second, narrower form
  * that would have its own idea of which fields exist.
  *
  * # A credential is named, never shown
@@ -24,6 +24,7 @@
  * with fallbacks ("default provider" is a model for a seat that runs none).
  */
 
+import { ORG_EDIT_PATH } from "~/app/routes.ts";
 import { useMemo, type ReactNode } from "react";
 import { ButtonLink, Callout, Card, EmptyState, InlineCode } from "@crewlethq/ui";
 import { CpuGlyph, KeyGlyph, PencilGlyph, UserGlyph } from "@crewlethq/icons/glyphs";
@@ -97,7 +98,7 @@ export function Settings({
     () => (settings && !human ? mcpEnvOf(settings, seat.kind) : {}),
     [settings, human, seat.kind],
   );
-  const edit = href(["agents", "edit"], { seat: seat.handle });
+  const edit = href(ORG_EDIT_PATH, { seat: seat.handle });
   // THE COMPANY'S CEILINGS, as written on the public chart: a seat with none
   // of its own in a window is still bound by the company's there.
   const company = useOrg()?.token_budget;

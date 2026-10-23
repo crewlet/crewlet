@@ -325,9 +325,9 @@ describe("the Inbox badge", () => {
 describe("the sidebar's figures", () => {
   // THE ENGINE'S WORD, and only it: two seats working, one idle, one parked on
   // a question — the count is two, whatever a live call says. AND IT IS ON
-  // LIVE, which holds the running turns: on Agents it sent a reader looking
-  // for one to the org chart.
-  test("the Live count is the seats the engine calls working, and Agents carries none", async () => {
+  // LIVE, which holds the running turns: on the Org chart it sent a reader
+  // looking for one to the chart.
+  test("the Live count is the seats the engine calls working, and the Org chart carries none", async () => {
     const { store, socket } = answering({});
     mountShell(store, socket);
     act(() =>
@@ -346,7 +346,7 @@ describe("the sidebar's figures", () => {
       ] as never),
     );
     expect(screen.getByRole("link", { name: /^Live/ }).textContent).toContain("2");
-    expect(screen.getByRole("link", { name: /^Agents/ }).textContent).toBe("Agents");
+    expect(screen.getByRole("link", { name: /^Org chart/ }).textContent).toBe("Org chart");
   });
 
   // ---------------------------------------------------------------------------
@@ -803,24 +803,26 @@ describe("the page header", () => {
     expect(unblocked?.getAttribute("href")).toBe("#/me/unblocked?handle=bo");
   });
 
-  // THE WINDOW travels between Spend's sections — the tab and the overview's
-  // "All" link reach Expensive tasks on the same one — and the chart's split
-  // does not, because it is the overview's alone.
-  test("a Spend tab carries the window, and Budgets carries it back", async () => {
-    location.hash = "#/spend?window=90d&group=model";
+  // THE WINDOW travels between Spend's two rows in the Settings column, and
+  // the chart's split does not, because it is the overview's alone.
+  test("a Spend row carries the window, and Expensive tasks carries it back", async () => {
+    location.hash = "#/settings/spend?window=90d&group=model";
     const { store, socket } = answering({});
     mountShell(store, socket);
-    const tab = (label: string) =>
+    await settle();
+    const row = (path: string) =>
       Array.from(
-        screen.getByRole("navigation", { name: "Spend sections" }).querySelectorAll("a"),
-      ).find((a) => a.textContent === label);
-    expect(tab("Expensive tasks")?.getAttribute("href")).toBe("#/spend/tasks?window=90d");
-    expect(tab("Budgets")?.getAttribute("href")).toBe("#/spend/budgets?window=90d");
+        screen.getByRole("navigation", { name: "Settings sections" }).querySelectorAll("a"),
+      ).find((a) => a.getAttribute("href")?.startsWith(path));
+    expect(row("#/settings/spend/tasks")?.getAttribute("href")).toBe(
+      "#/settings/spend/tasks?window=90d",
+    );
     cleanup();
-    location.hash = "#/spend/budgets?window=90d";
+    location.hash = "#/settings/spend/tasks?window=90d";
     const again = answering({});
     mountShell(again.store, again.socket);
-    expect(tab("Overview")?.getAttribute("href")).toBe("#/spend?window=90d");
+    await settle();
+    expect(row("#/settings/spend?")?.getAttribute("href")).toBe("#/settings/spend?window=90d");
   });
 
   // ON AN OBJECT PAGE the crumbs are the way back; a strip of tabs over a
@@ -865,10 +867,10 @@ describe("the page header", () => {
     const current = column.querySelector('[aria-current="page"]');
     expect(current?.textContent).toContain("Secrets");
     expect(current?.textContent).toContain("needs Admin");
-    const general = Array.from(column.querySelectorAll("a")).find((a) =>
-      a.textContent?.startsWith("General"),
+    const spend = Array.from(column.querySelectorAll("a")).find(
+      (a) => a.getAttribute("href") === "#/settings/spend",
     );
-    expect(general?.textContent).not.toContain("needs");
+    expect(spend?.textContent).not.toContain("needs");
   });
 
   // ON A PHONE THE COLUMN IS ONE ROW NAMING THE SECTION. Stacked whole it put
@@ -913,9 +915,9 @@ describe("the page header", () => {
     );
   });
 
-  // AN ADDRESS THAT NAMES NO SCREEN IS IN NO SECTION. General's path is the
-  // workspace root and so a prefix of every Settings address: a mistyped one
-  // drew "Not found" beside a column, and a phone picker, marking General.
+  // AN ADDRESS THAT NAMES NO SCREEN IS IN NO SECTION. Settings owns every
+  // address under it, so a mistyped one (or one that moved out, as General
+  // did) draws "Not found" beside a column, and a phone picker, marking none.
   test("a Settings address that names no screen marks no section", async () => {
     location.hash = "#/settings/general";
     const { store, socket } = answering({});
@@ -927,11 +929,11 @@ describe("the page header", () => {
   });
 
   // NO OPERATOR POLL OUTSIDE SETTINGS. The frame is mounted for the life of
-  // the tab, so a figure hook that asked unconditionally would put three
+  // the tab, so a figure hook that asked unconditionally would put two
   // operator questions on a timer behind every screen of every tab.
-  const OPERATOR_ANSWERS = ["fleet", "retention", "integrations"];
+  const OPERATOR_ANSWERS = ["fleet", "retention"];
   test("the operator answers are asked only while the Settings column is drawn", async () => {
-    for (const where of ["#/home", "#/work", "#/spend/budgets", "#/knowledge"]) {
+    for (const where of ["#/home", "#/work", "#/company/budgets", "#/knowledge"]) {
       location.hash = where;
       const asked: { what: string }[] = [];
       const { store, socket } = answering({}, asked);
@@ -943,7 +945,7 @@ describe("the page header", () => {
       ).toEqual([]);
       cleanup();
     }
-    location.hash = "#/settings";
+    location.hash = "#/settings/models";
     const asked: { what: string }[] = [];
     const { store, socket } = answering({}, asked);
     mountShell(store, socket);
@@ -954,7 +956,7 @@ describe("the page header", () => {
   });
 
   test("a reader without the grants is asked nothing, even in Settings", async () => {
-    location.hash = "#/settings";
+    location.hash = "#/settings/models";
     const asked: { what: string }[] = [];
     const { store, socket } = answering(
       { viewer: { login: "", grants: [], handle: "", owner: "", name: "", kind: "" } },
@@ -965,36 +967,9 @@ describe("the page header", () => {
     expect(asked.map((a) => a.what).filter((w) => OPERATOR_ANSWERS.includes(w))).toEqual([]);
   });
 
-  // THE PILL IS THE ENGINE'S ROLL-UP, read in the row's name — and painted
-  // as the state it is, not as the accent's unread badge.
-  test("the Integrations row carries the roll-up's attention count as its pill", async () => {
-    location.hash = "#/settings";
-    const { store, socket } = answering({
-      integrations: {
-        integrations: [],
-        traffic_known: true,
-        traffic_since: null,
-        tools: [
-          { key: "slack", surfaces: [], state: "attention", label: "Needs attention", reason: "" },
-          { key: "gitlab", surfaces: [], state: "connected", label: "Connected", reason: "" },
-        ],
-      },
-    });
-    mountShell(store, socket);
-    await settle();
-    const column = screen.getByRole("navigation", { name: "Settings sections" });
-    const row = Array.from(column.querySelectorAll("a")).find((a) =>
-      a.textContent?.startsWith("Integrations"),
-    );
-    expect(row?.textContent).toContain("1");
-    expect(row?.textContent).toContain("1 needs attention");
-    expect(row?.closest(".section-row-attention")).not.toBeNull();
-    expect(row?.querySelector(".crewlet-nav-item__badge")?.textContent).toBe("1");
-  });
-
   // A FIGURE SAYS WHAT IT COUNTS: the applied epoch read "e2", a code.
   test("the Configuration row names the epoch this node applied in words", async () => {
-    location.hash = "#/settings";
+    location.hash = "#/settings/models";
     const { store, socket } = answering({});
     mountShell(store, socket);
     act(() => store.applyHealth(healthFrame({ applied_epoch: 2, nodes: 1 })));

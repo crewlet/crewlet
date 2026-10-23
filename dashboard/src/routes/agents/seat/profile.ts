@@ -4,6 +4,7 @@
  * render that happens to exercise it.
  */
 
+import type { ServicesRun } from "~/lib/services.ts";
 import { BUDGET_WINDOWS } from "~/contract/config.ts";
 import { PERIOD_WORDS } from "~/lib/budget.ts";
 import { fmtCount, tsKey } from "~/lib/format.ts";
@@ -49,6 +50,16 @@ import type {
 export const AGENT_TABS = ["overview", "work", "turns", "memory", "schedules", "settings"] as const;
 export const HUMAN_TABS = ["overview", "work", "settings"] as const;
 export type SeatTab = (typeof AGENT_TABS)[number];
+
+/**
+ * The tabs a seat's page draws for a company running `runs`: its kind's,
+ * without Work where the company runs no Crewlet Works, since every task on it
+ * is that tracker's.
+ */
+export function seatTabs(human: boolean, runs: ServicesRun): readonly SeatTab[] {
+  const tabs: readonly SeatTab[] = human ? HUMAN_TABS : AGENT_TABS;
+  return runs.tracker ? tabs : tabs.filter((t) => t !== "work");
+}
 
 /** Each tab's word, in the order the strip draws them. */
 export const TAB_LABELS: Readonly<Record<SeatTab, string>> = {

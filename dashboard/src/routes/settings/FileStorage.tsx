@@ -1,6 +1,8 @@
 /**
- * Where the company's files are kept, and what the object store's collector
- * last found — the Nodes screen's card beneath the lease tables.
+ * Settings › File storage: where the company's files are kept, and what the
+ * object store's collector last found. A page of its own in Settings' Engine
+ * group; it was a card on Nodes, under the lease tables, where nobody looking
+ * for the company's files would think to scroll.
  *
  * READ FROM THE FLEET'S RECORD, never this node: the collector is one duty
  * that moves between data nodes and records each pass in the coordination
@@ -21,6 +23,10 @@ import {
 import { href } from "~/app/router.tsx";
 import { DatabaseGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import { QueryState } from "~/components/common.tsx";
+import { useNow } from "~/lib/clock.ts";
+import { useQuery } from "~/lib/useQuery.ts";
+import { FLEET_POLL_MS } from "./Fleet.tsx";
 
 import { fmtCount, plural } from "~/lib/format.ts";
 import type {
@@ -121,9 +127,24 @@ function passRows(r: ReportedObjects): PassRow[] {
  * Each state the engine names apart renders apart: a record the store would
  * not give up is not a fleet whose collector has not run.
  */
+/**
+ * The page: the fleet's record of its object store, read from the same answer
+ * Nodes reads, on the same cadence.
+ */
+export function FileStoragePage() {
+  const now = useNow();
+  const { data, loading, error, refusal } = useQuery("fleet", undefined, {
+    pollMs: FLEET_POLL_MS,
+  });
+  return (
+    <QueryState error={error} refusal={refusal} loading={loading && !data}>
+      {data && <FileStorage objects={data.objects} now={now} />}
+    </QueryState>
+  );
+}
+
 export function FileStorage({ objects, now }: { objects?: FleetObjects; now: number }) {
-  if (!objects) return null;
-  const reported = objects.state === "reported" ? objects : undefined;
+  const reported = objects?.state === "reported" ? objects : undefined;
   const header = (
     <Card.Header
       icon={<DatabaseGlyph size="sm" />}
@@ -132,6 +153,21 @@ export function FileStorage({ objects, now }: { objects?: FleetObjects; now: num
       File storage
     </Card.Header>
   );
+  // NO RECORD IS NOT AN EMPTY STORE: the node that answered keeps no record
+  // of the company's files (one running no company), and says so.
+  if (!objects) {
+    return (
+      <Card>
+        {header}
+        <EmptyState
+          size="compact"
+          icon={<DatabaseGlyph size="xl" />}
+          title="No record of the company's files"
+          description="This node keeps none, so there is nothing to show yet."
+        />
+      </Card>
+    );
+  }
   if (!reported) {
     return (
       <Card>

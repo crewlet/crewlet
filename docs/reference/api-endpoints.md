@@ -1418,7 +1418,7 @@ each reader sees is masked per row. The example above is an administrator's.
   vacant.
 - Neither, for a **vacant** seat — the one a person can be invited into or
   created on (`POST /iam/invitations`, `POST /iam/people`), which is what the
-  seat's **Invite** and **Add person** in **Agents › Org chart** do.
+  seat's **Invite** and **Add person** in **Company › Org chart** do.
 
 `?unheld=true` keeps only the vacant seats: one with a holder **or** an open
 invitation is left out, because each holds it against a create, an invitation
@@ -1525,8 +1525,8 @@ by its handle and absent when the row binds the token to none. **What the row
 holds, never a verdict on it**: whether that seat is still one the company
 holds is [`/iam/check`](#get-iamcheck-walks-the-whole-directory)'s
 `binding_dangling` finding about the same row. A directory read that fails
-answers `503` with a `Retry-After`, never a list missing a row. It backs the
-token half of **Settings › People & access**.
+answers `503` with a `Retry-After`, never a list missing a row. It backs
+**Settings › API tokens**.
 
 **`company_writers` is `api.auth.company_writers`**, sorted: the token ids
 that alone may change the company document when another system [manages
@@ -2641,7 +2641,7 @@ the base is not the permission to register; having a sink is.
 
 Both record their outcome on the same fleet integration status the reconcile
 loop writes, through the same fold, so a pass run by hand and a tick that runs
-a minute later cannot disagree, and Settings › Integrations updates with no
+a minute later cannot disagree, and Company › Integrations updates with no
 extra plumbing. A pass that **failed** is recorded too, as the loop records
 one: phase `activating`, actor `engine`, findings dropped, because a pass that
 failed did not observe anything.
@@ -3156,7 +3156,7 @@ after any phase completed or any record aged out, so a client holding it
 stays live without a fetch — and a company that has gone quiet sees its
 spend leave the window as it ages rather than keep its last busy day —
 without a second implementation of the aggregation in the browser. (The
-bundled dashboard's Spend screen reads [named windows](#token-spend-breakdown)
+bundled dashboard's Settings › Spend reads [named windows](#token-spend-breakdown)
 instead.) What a seat has spent is that rollup's per-agent row: the
 projection keeps no second total of its own.
 
@@ -4036,7 +4036,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `fleet_broker` | `{}` | `GET /fleet/broker`: what every live node advertises about its broker, the metadata group as a member reports it, and where the two disagree. **Takes `admin`**. See [below](#the-brokers-membership) |
 | `credential_pool` | `{}` | `GET /credential-pool`: every model's keys and their cooldowns, the Settings › Models & keys screen. **Takes `admin`**. See [below](#get-credential-pool) |
 | `backups` | `{}` | `GET /backups`: each owner's newest backup and the backup history, the Settings › Backups & retention screen. **Takes `admin`**. See [below](#get-backups) |
-| `mcp_servers_status` | `{}` | `GET /mcp-servers`: each MCP server's condition and its per-node counts, the Settings › Tools & MCP screen's Servers section. **Takes `admin`**. See [below](#get-mcp-servers) |
+| `mcp_servers_status` | `{}` | `GET /mcp-servers`: each MCP server's condition and its per-node counts, the Settings › MCP Tools screen's Servers section. **Takes `admin`**. See [below](#get-mcp-servers) |
 | `limits` | `{}` | The caps the engine holds the company's work to, as it ENFORCES them: `{limits: [{key, group, unit, value, default, off}]}`, in drawing order. `key` is the setting's path in the company document (`turn_engine.max_iterations`, `turn_engine.max_tool_rounds`, `turn_engine.onboarding_max_tool_rounds`, `turn_engine.delegation_depth_limit`, the six `turn_engine.delegation.*` caps, `notification_rate_limit`, `notification_coalesce_max_batch`, and `schedules.timeout_seconds`, the timeout every schedule takes unless it sets its own); `group` is `turn`, `delegation`, `notifications` or `schedules`; `unit` is `count`, `seconds`, `fraction` or `per_second`. `value` is what the applied company holds, which is the default wherever the document says nothing, and `default` is the engine's own, so a screen draws both and never keeps a copy of a default. There is no "was it written" flag, because the applied company does not remember. `off` marks a value that switches its limit off: a `notification_rate_limit` of 0 (no limit) and an `onboarding_max_tool_rounds` of 0 (no onboarding pass). Empty on a node running no company. **Takes `admin`**, as the `config` question it is read beside does |
 | `sign_in_policy` | `{}` | How a person signs in on THIS node, read from its own `api.auth`: `{node, policy: {second_factor, min_password_length, session_absolute_seconds, session_idle_seconds, step_up_seconds}}`. Every value is the one the engine enforces, so a setting the file leaves out arrives as its default (`required`, 12, 168 hours, 1 hour), and `session_idle_seconds` is the engine's constant 12 hours. Tier A, so nodes of one fleet may disagree and `node` names the one that answered; changing a value is an edit to that node's file and a restart. **Takes `admin`**. The two values a sign-in form needs before anybody has signed in are also on the unguarded [`/auth/config`](#routes) |
 | `fleet` | `{}` | `GET /fleet`: leases move with no event to push, so Settings › Nodes polls this rather than waiting for one. **Takes `admin`**. A lease table that could not be read answers `unavailable`, which is a blip to ask again about rather than a fault (the REST twin answers `503` with a `Retry-After`) |
@@ -6834,7 +6834,7 @@ To change a model's keys, `PUT /config/llm-providers/{id}` — see
 
 ### `GET /mcp-servers`
 
-Backs the **Servers** section of **Settings › Tools & MCP**: every MCP server,
+Backs the **Servers** section of **Settings › MCP Tools**: every MCP server,
 what the configuration declares for it and what each live node did with it.
 **It takes `admin`**, as `GET /config` does — it names the nodes, the
 launch commands and the first line of each failure, which is what the
@@ -7849,7 +7849,7 @@ parameters:
   `previous` — is the projection's: the spend records of the last
   24 hours (`livestate.LiveSpendWindow`, rolling), held in memory and pushed as
   the [`tokens` push](#pushes), for a client that wants the last day as it
-  happens. No screen of the bundled dashboard draws it: the Spend screen reads
+  happens. No screen of the bundled dashboard draws it: Settings › Spend reads
   named windows only, so its figures are the company's. It is the only answer
   with a per-turn tail (`by_turn`) and a watermark (`aggregated_through`).
 - **Every named window** is whole **company days** read from the replicated

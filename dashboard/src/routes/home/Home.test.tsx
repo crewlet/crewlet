@@ -318,7 +318,7 @@ describe("the figures", () => {
     await settle();
     const card = tile(/^Tokens · /);
     const link = within(card).getByRole("link", { name: "No weekly budget" });
-    expect(link.getAttribute("href")).toBe("#/spend/budgets");
+    expect(link.getAttribute("href")).toBe("#/company/budgets");
     // NO BARE DELTA before the budget's line: the tile's second line is the
     // budget's, and "−88% No weekly budget" read as a claim about it.
     expect(card.textContent).not.toMatch(/[+−±]\d/);

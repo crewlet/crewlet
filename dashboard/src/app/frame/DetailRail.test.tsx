@@ -24,7 +24,7 @@ import { CANVAS_PEEK_WIDTH } from "~/app/layout.ts";
 
 beforeEach(() => {
   localStorage.clear();
-  location.hash = "#/agents/roster?peek=seat:ceo";
+  location.hash = "#/company/org/roster?peek=seat:ceo";
 });
 
 afterEach(() => {
@@ -174,7 +174,7 @@ describe("peekRow", () => {
 });
 
 // A KIND WHOSE PEEK IS ITS PAGE (`KindSpec.peekIsPage`) — a person, whose
-// directory row is read beside People & access and nowhere else. A new tab
+// directory row is read beside People and nowhere else. A new tab
 // opened on its "page" was the bare list, which forgot who it was about, and
 // an `Open` over that list could only close the peek. The CONTROL is a seat,
 // whose page is its own. Mutation: build its address from the path alone, or
@@ -184,7 +184,7 @@ describe("a kind whose peek is its page", () => {
 
   test("its address is the list it is read beside, with its peek open", () => {
     expect(peekHref(person)).toBe("#/settings/people?peek=person%3Ap-1");
-    expect(peekHref({ kind: "seat", id: "ceo" })).toBe("#/agents/seats/ceo");
+    expect(peekHref({ kind: "seat", id: "ceo" })).toBe("#/company/org/seats/ceo");
   });
 
   test("over that list the rail draws no Open; opened anywhere else, Open leads there", () => {
@@ -199,7 +199,7 @@ describe("a kind whose peek is its page", () => {
     expect(screen.queryByRole("link", { name: /^Open/ })).toBeNull();
     unmount();
 
-    location.hash = "#/agents?peek=person:p-1";
+    location.hash = "#/company/org?peek=person:p-1";
     render(
       <Router>
         <DetailRail ref={person}>

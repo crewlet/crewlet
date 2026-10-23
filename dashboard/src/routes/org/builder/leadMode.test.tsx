@@ -130,7 +130,7 @@ describe("a lead's draft", () => {
 
   test("opens the unit holding the seat the address names", async () => {
     const engine = new Engine(leadCompany());
-    mountLead(engine, "#/agents/edit?view=visualization&seat=sre");
+    mountLead(engine, "#/company/org/edit?view=visualization&seat=sre");
     expect(await screen.findByText("SRE")).toBeDefined();
     expect(screen.queryByText("Dev")).toBeNull();
     expect(engine.sent("GET", "/config/units/engineering")).toHaveLength(0);
@@ -322,7 +322,7 @@ describe("a lead's draft", () => {
   // have learned of it only as a refusal at the company's top level.
   test("a seat a lead adds is offered a handle nobody in the company holds", async () => {
     const engine = new Engine(leadCompany());
-    mountLead(engine, "#/agents/edit?view=table");
+    mountLead(engine, "#/company/org/edit?view=table");
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Select Engineering" }));
     fireEvent.click(

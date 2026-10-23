@@ -109,8 +109,8 @@ export function EditorSection({
  * points nowhere.
  */
 export const SCREENS = {
-  integrations: ["settings", "integrations"],
-  schedules: ["agents", "schedules"],
+  integrations: ["company", "integrations"],
+  schedules: ["company", "schedules"],
   /** The company's credentials: Settings › Secrets, the engine's own word
    *  (`/secrets`). */
   secrets: ["settings", "secrets"],

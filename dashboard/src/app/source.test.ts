@@ -227,7 +227,7 @@ const LINK_LITERAL =
 test("the link pattern reads every spelling a route literal is written in", () => {
   const heads = (line: string) => [...line.matchAll(LINK_LITERAL)].map((m) => m[1]);
   expect(heads('<a href={href(["live", "turns"])}>')).toEqual(["live"]);
-  expect(heads('nav.to(["agents", "roster"])')).toEqual(["agents"]);
+  expect(heads('nav.to(["company", "org", "roster"])')).toEqual(["company"]);
   expect(heads('  path: ["settings", "config"],')).toEqual(["settings"]);
   expect(heads('const here = useIsCurrent(["events", record.eventId]);')).toEqual(["events"]);
   expect(heads('samePath(route.path, ["events", id])')).toEqual(["events"]);
@@ -279,8 +279,9 @@ test("every link names a segment a workspace owns, and a whole literal path reso
  * A LINK TO A HEAD NO ROUTE OWNS IS DEAD, AND THE RULE SAYS SO.
  *
  * Every workspace lives under one head: the event log under `#/live/events`,
- * spend under `#/spend`, the fleet, the runs, the configuration and the seats
- * under Settings, Live and Agents, and pages under `#/knowledge/pages`. A link
+ * spend under `#/settings/spend`, the fleet, the runs, the configuration and
+ * the seats under Settings, Live and Company, and pages under
+ * `#/knowledge/pages`. A link
  * written against a plausible head beside one of those — `#/activity`,
  * `#/cost`, `#/pages` — resolves to nothing, and the rule above is only as good
  * as its reading of that — so each such head is fed through it here, beside the
@@ -291,14 +292,14 @@ test("every link names a segment a workspace owns, and a whole literal path reso
 test("a link to a head no route owns is reported, and the live address is not", () => {
   const moves: [dead: string, current: string][] = [
     ['href(["activity"])', 'href(["live", "events"])'],
-    ['href(["cost"])', 'href(["spend"])'],
+    ['href(["cost"])', 'href(["settings", "spend"])'],
     ['nav.to(["fleet"])', 'nav.to(["settings", "nodes"])'],
     ['nav.to(["runs"])', 'nav.to(["live", "runs"])'],
     ['  path: ["config"],', '  path: ["settings", "config"],'],
-    ['href(["seats", handle])', 'href(["agents", "seats", handle])'],
+    ['href(["seats", handle])', 'href(["company", "org", "seats", handle])'],
     ['href(["pages", id])', 'href(["knowledge", "pages", id])'],
-    ['href(["company"])', 'href(["home"])'],
-    ['href(["admin"])', 'href(["settings"])'],
+    ['href(["agents"])', 'href(["company", "org"])'],
+    ['href(["admin"])', 'href(["settings", "models"])'],
   ];
   for (const [dead, current] of moves) {
     expect(deadLinks(dead), dead).toHaveLength(1);
@@ -416,7 +417,7 @@ test("the document-pointer exemption fires, and spares no real link", () => {
   expect(documentPointer('      path: ["settings", "config"],')).toBe(false);
   expect(documentPointer('        { label: "Work", path: ["work"] },')).toBe(false);
   expect(documentPointer('    path: ["live", "turns"],')).toBe(false);
-  expect(documentPointer('      href(["agents", "seats", handle])')).toBe(false);
+  expect(documentPointer('      href(["company", "org", "seats", handle])')).toBe(false);
 });
 
 test("something in the tree is actually exempted, so the rule is not dead weight", () => {
@@ -1004,15 +1005,15 @@ describe("every read names its question", () => {
  * and every one of those links quietly opened the wrong tab.
  *
  * Both spellings a seat link is written in are read: `href`/`nav.to` over a
- * literal `["agents", "seats", …]` path with a literal query, and a row's
- * `{ path: ["agents", "seats", …], query: { tab } }`.
+ * literal `["company", "org", "seats", …]` path with a literal query, and a row's
+ * `{ path: ["company", "org", "seats", …], query: { tab } }`.
  */
 function seatTabLinks(text: string, lang: Lang): { tab: string; at: number }[] {
   const out: { tab: string; at: number }[] = [];
   const toSeats = (node: Node | undefined): boolean => {
     if (node?.type !== "ArrayExpression") return false;
-    const [a, b] = node.elements as Node[];
-    return stringValue(a) === "agents" && stringValue(b) === "seats";
+    const [a, b, c] = node.elements as Node[];
+    return stringValue(a) === "company" && stringValue(b) === "org" && stringValue(c) === "seats";
   };
   const tabOf = (node: Node | undefined): void => {
     if (node?.type !== "ObjectExpression") return;
@@ -1064,11 +1065,11 @@ test("every link to a seat names a tab its profile has", () => {
 
 test("the seat-tab reading sees both link spellings", () => {
   const read = (text: string) => seatTabLinks(text, "tsx").map((l) => l.tab);
-  expect(read('href(["agents", "seats", h], { tab: "memory" });')).toEqual(["memory"]);
-  expect(read('nav.to(["agents", "seats", r.role], { tab: "model" });')).toEqual(["model"]);
-  expect(read('const row = { path: ["agents", "seats", h], query: { tab: "cost" } };')).toEqual([
-    "cost",
-  ]);
+  expect(read('href(["company", "org", "seats", h], { tab: "memory" });')).toEqual(["memory"]);
+  expect(read('nav.to(["company", "org", "seats", r.role], { tab: "model" });')).toEqual(["model"]);
+  expect(
+    read('const row = { path: ["company", "org", "seats", h], query: { tab: "cost" } };'),
+  ).toEqual(["cost"]);
   // Another object's tab is not a seat's.
   expect(read('href(["work", key], { tab: "turns" });')).toEqual([]);
 });

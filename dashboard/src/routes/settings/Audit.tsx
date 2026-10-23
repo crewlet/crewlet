@@ -369,7 +369,7 @@ function workSubject(record: WorkActivityRecord): Pick<AuditEntry, "subject" | "
     case "view":
       return { subject: `view ${short(id)}`, path: ["work", "views", id] };
     case "person":
-      return { subject: id, path: ["agents", "seats", id] };
+      return { subject: id, path: ["company", "org", "seats", id] };
     case "project":
       return { subject: id, path: ["work", id] };
     case "file": {
@@ -399,7 +399,7 @@ function workSubject(record: WorkActivityRecord): Pick<AuditEntry, "subject" | "
  * whose session opened and whose row changed to nobody — and otherwise by
  * their kind with the id shortened, except the email, whose id is a keyed
  * blind that says nothing and must never be read as the address. Every one is
- * the People & access screen's to show.
+ * the People screen's to show.
  */
 function identitySubject(entry: IdentityAuditEntry): Pick<AuditEntry, "subject" | "path"> {
   const id = entry.object_id ?? "";

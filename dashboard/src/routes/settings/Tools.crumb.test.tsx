@@ -63,7 +63,7 @@ afterEach(() => {
 });
 
 function mount(tool: string) {
-  location.hash = `#/settings/tools/${tool}`;
+  location.hash = `#/settings/mcp-tools/${tool}`;
   const store = new Store();
   store.applyTools(tools);
   store.setConnected(true);

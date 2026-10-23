@@ -46,7 +46,7 @@ function refusing(status: number, grants: string[] = []) {
 
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
-  location.hash = "#/settings/integrations";
+  location.hash = "#/company/integrations";
 });
 
 afterEach(() => {

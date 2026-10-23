@@ -152,7 +152,7 @@ test("the save is a create-only PUT, and says what is left to do", async () => {
   // that has no screen at all.
   expect(await screen.findByText("The company is created")).toBeDefined();
   expect(screen.getByRole("link", { name: "Open Integrations" }).getAttribute("href")).toBe(
-    "#/settings/integrations",
+    "#/company/integrations",
   );
   expect(screen.getByText(/crewlet config import company.yaml/)).toBeDefined();
   expect(screen.getByText(/Agents can’t work until one is added/)).toBeDefined();

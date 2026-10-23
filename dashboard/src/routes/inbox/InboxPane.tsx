@@ -52,7 +52,8 @@ import {
 import { href } from "~/app/router.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.tsx";
-import { holdLine, ReassignItem, type SeatCondition } from "~/components/DecisionRow.tsx";
+import { holdLine, ReassignItem } from "~/components/DecisionRow.tsx";
+import type { SeatCondition } from "~/lib/decisions.ts";
 import { RaiseBudgetButton } from "~/components/budgetWrite.tsx";
 import { AnswerAsk, type AskAnswer } from "~/components/writes.tsx";
 import { Composer } from "~/components/Composer.tsx";

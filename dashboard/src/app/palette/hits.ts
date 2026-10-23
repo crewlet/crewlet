@@ -11,7 +11,7 @@
  */
 
 import type { GlyphName } from "@crewlethq/icons/glyphs";
-import { DESTINATIONS, WORKSPACES } from "../nav.ts";
+import { DESTINATIONS, WORKSPACES, pathShown, serviceShown, type ServicesRun } from "../nav.ts";
 import { accessNames, holdsAny, type Grant } from "~/lib/access.ts";
 import type { Navigator } from "../router.tsx";
 import { artifactPath, resolve } from "../routes.ts";
@@ -45,8 +45,8 @@ import type { ArtifactKind, ArtifactListItem } from "~/protocol/index.ts";
  */
 export const SCOPES = [
   { id: "all", label: "All" },
-  { id: "tasks", label: "Tasks", sigil: "#" },
-  { id: "pages", label: "Pages" },
+  { id: "tasks", label: "Tasks", sigil: "#", service: "tracker" },
+  { id: "pages", label: "Pages", service: "knowledge" },
   { id: "artifacts", label: "Artifacts" },
   { id: "agents", label: "Agents", sigil: "@" },
   { id: "actions", label: "Actions", sigil: ">" },
@@ -259,20 +259,24 @@ function rankedInTiers<T>(
 }
 
 /**
- * Where the reader just was, most recent first — what an empty palette should
- * offer, because the likeliest place to go is the one they just left.
+ * Where the reader just was, most recent first: what an empty palette should
+ * offer, because the likeliest place to go is the one they just left. Not a
+ * place the company no longer runs the service for, whose page is a card on
+ * Integrations now.
  */
-export function recentHits(recents: readonly Recent[], nav: Navigator): Hit[] {
-  return recents.map((r) => ({
-    id: `recent-${r.path.join("/")}`,
-    icon: "clock",
-    label: r.label,
-    // THE WORKSPACE BY ITS NAME, as the sidebar says it: the stored value is
-    // its key, and "Q4 roadmap artifacts" read as one phrase.
-    hint:
-      WORKSPACES.find((w) => w.key === r.workspace)?.label ?? (r.workspace || r.path.join(" / ")),
-    go: () => nav.to(r.path),
-  }));
+export function recentHits(recents: readonly Recent[], nav: Navigator, runs: ServicesRun): Hit[] {
+  return recents
+    .filter((r) => pathShown(r.path, runs))
+    .map((r) => ({
+      id: `recent-${r.path.join("/")}`,
+      icon: "clock",
+      label: r.label,
+      // THE WORKSPACE BY ITS NAME, as the sidebar says it: the stored value is
+      // its key, and "Q4 roadmap artifacts" read as one phrase.
+      hint:
+        WORKSPACES.find((w) => w.key === r.workspace)?.label ?? (r.workspace || r.path.join(" / ")),
+      go: () => nav.to(r.path),
+    }));
 }
 
 /**
@@ -301,8 +305,12 @@ export function destinationHits(
   nav: Navigator,
   cap: number,
   standing: Standing,
+  runs: ServicesRun,
 ): Hit[] {
-  return rankedInTiers(DESTINATIONS, query, (d) => [[d.label], d.keywords ?? []], cap).map((d) => ({
+  // A PLACE READING A SERVICE THE COMPANY DOES NOT RUN IS NO DESTINATION, as
+  // it is no row (`nav.ts`'s `serviceShown`).
+  const offered = DESTINATIONS.filter((d) => serviceShown(d, runs));
+  return rankedInTiers(offered, query, (d) => [[d.label], d.keywords ?? []], cap).map((d) => ({
     id: `nav-${d.key}`,
     icon: d.icon,
     label: d.label,
@@ -387,7 +395,7 @@ export const BUILTIN_TOOL_SOURCE = "builtin";
  * THE ENGINE'S OWN AGENT TOOLS ARE LEFT OUT. They are how an agent works, not a
  * place a reader goes, and "artif" listed `get_artifact` and
  * `set_artifact_schema` above the artifacts a reader was looking for. They stay
- * listed in Settings, under Tools & MCP; what is offered here is a tool the
+ * listed in Settings, under MCP Tools; what is offered here is a tool the
  * company connected.
  */
 export function toolHits(
@@ -403,7 +411,7 @@ export function toolHits(
     icon: "wrench",
     label: tool.name,
     hint: tool.source,
-    go: () => nav.to(["settings", "tools"], { q: tool.name }),
+    go: () => nav.to(["settings", "mcp-tools"], { q: tool.name }),
   }));
 }
 
@@ -422,19 +430,26 @@ export function artifactHits(items: readonly ArtifactListItem[], nav: Navigator)
   }));
 }
 
-/** The searches a term can be handed to whole, as the screens that run them. */
-export function searchHits(term: string, nav: Navigator): Hit[] {
+/**
+ * The searches a term can be handed to whole, as the screens that run them:
+ * only those the company runs the service for.
+ */
+export function searchHits(term: string, nav: Navigator, runs: ServicesRun): Hit[] {
   if (!term) return [];
   return [
     // THE COMPANY'S WORK FIRST, ranked as an agent ranks it: the full search
     // with its modes, which the Tasks scope's own rows are the top of.
-    {
-      id: "search-work",
-      icon: "search",
-      label: `Search all work for “${term}”`,
-      hint: "ranked as an agent ranks it",
-      go: () => nav.to(["work", "search"], { q: term }),
-    },
+    ...(runs.tracker
+      ? [
+          {
+            id: "search-work",
+            icon: "search",
+            label: `Search all work for “${term}”`,
+            hint: "ranked as an agent ranks it",
+            go: () => nav.to(["work", "search"], { q: term }),
+          } satisfies Hit,
+        ]
+      : []),
     {
       id: "search-events",
       icon: "chart-no-axes-gantt",
@@ -442,13 +457,17 @@ export function searchHits(term: string, nav: Navigator): Hit[] {
       hint: "the event log, filtered",
       go: () => nav.to(["live", "events"], { q: term }),
     },
-    {
-      id: "search-knowledge",
-      icon: "book-open",
-      label: `Knowledge search for “${term}”`,
-      hint: "every mode, every container",
-      go: () => nav.to(["knowledge"], { q: term }),
-    },
+    ...(runs.knowledge
+      ? [
+          {
+            id: "search-knowledge",
+            icon: "book-open",
+            label: `Knowledge search for “${term}”`,
+            hint: "every mode, every container",
+            go: () => nav.to(["knowledge"], { q: term }),
+          } satisfies Hit,
+        ]
+      : []),
   ];
 }
 

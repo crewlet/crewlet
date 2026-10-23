@@ -16,6 +16,7 @@
  * need"), and `model.test.ts` holds each.
  */
 
+import type { ServicesRun } from "~/app/nav.ts";
 import type {
   AgentRow,
   BudgetWindow,
@@ -338,15 +339,24 @@ function capitalise(s: string): string {
 /** The feed filter's four settings and the kinds each asks the engine for. */
 export const FEED_FILTERS = [
   { value: "all", label: "Everything", kinds: "" },
-  { value: "completed", label: "Completed", kinds: "completed" },
-  { value: "handoffs", label: "Hand-offs", kinds: "handoff" },
+  // CREWLET WORKS' KINDS, offered only where the company runs it: the engine
+  // keeps a kind only where its half is its own, and refuses one named that
+  // it does not keep.
+  { value: "completed", label: "Completed", kinds: "completed", service: "tracker" },
+  { value: "handoffs", label: "Hand-offs", kinds: "handoff", service: "tracker" },
   { value: "schedules", label: "Schedules", kinds: "schedule" },
 ] as const;
 
 export type FeedFilter = (typeof FEED_FILTERS)[number];
 
-export function feedFilterOf(value: string): FeedFilter {
-  return FEED_FILTERS.find((f) => f.value === value) ?? FEED_FILTERS[0];
+/** The filters a company running `runs` is offered. */
+export function feedFilters(runs: ServicesRun): FeedFilter[] {
+  return FEED_FILTERS.filter((f) => !("service" in f) || runs[f.service]);
+}
+
+/** The filter an address names, among those offered; Everything where it names none of them. */
+export function feedFilterOf(value: string, runs: ServicesRun): FeedFilter {
+  return feedFilters(runs).find((f) => f.value === value) ?? FEED_FILTERS[0];
 }
 
 /**

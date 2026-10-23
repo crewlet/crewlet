@@ -9,9 +9,10 @@
  * union is exhaustive: a screen added to the union and not drawn here is a
  * compile error rather than a blank page.
  *
- * EVERY SCREEN IS A LAZY CHUNK, one per workspace (`lazyScreen.ts` says why
- * the flat import list this replaced was the wrong trade), so the names below
- * are components that suspend until their workspace's code is in. The routed
+ * EVERY SCREEN IS A LAZY CHUNK, one per screen directory under `routes/`
+ * (`lazyScreen.ts` says why the flat import list this replaced was the wrong
+ * trade), so the names below are components that suspend until their code is
+ * in. The routed
  * screen sits inside `ScreenBoundary` (`boundaries.tsx`): a suspense boundary
  * drawing a skeleton while the chunk loads, and an error boundary that takes
  * down only the screen when it throws or its chunk never arrives.
@@ -56,11 +57,20 @@ import {
   type Resolved,
   type Route,
 } from "./routes.ts";
-import { closedBy, framelessOf, guardedPath, personalPath } from "./nav.ts";
+import {
+  closedBy,
+  framelessOf,
+  guardedPath,
+  personalPath,
+  serviceOfPath,
+  workspaceRow,
+  type Service,
+} from "./nav.ts";
 import { AccessRefused } from "./frame/AccessRefused.tsx";
 import { GrantRequired } from "./frame/GrantRequired.tsx";
 import { useConnection } from "~/lib/store-hooks.ts";
 import { useHeldReading, useViewer } from "~/lib/viewer.ts";
+import { SERVICE_CARDS, useServicesKnown, useServicesRun } from "~/lib/services.ts";
 import { safeNext, signInHash } from "~/lib/session.ts";
 import { isArtifactKind } from "~/lib/artifacts/words.ts";
 import { currentSessionNeed, onSessionNeed, type ArtifactKind } from "~/protocol/index.ts";
@@ -79,7 +89,7 @@ const WorkSearch = lazyScreen("work", (m) => m.WorkSearch);
 const Project = lazyScreen("work", (m) => m.Project);
 const WorkItem = lazyScreen("work", (m) => m.WorkItem);
 const OrgChart = lazyScreen("agents", (m) => m.OrgChart);
-const People = lazyScreen("agents", (m) => m.People);
+const Roster = lazyScreen("agents", (m) => m.People);
 const Teams = lazyScreen("agents", (m) => m.Teams);
 const UnitScreen = lazyScreen("agents", (m) => m.UnitScreen);
 const Schedules = lazyScreen("agents", (m) => m.Schedules);
@@ -116,22 +126,27 @@ const NEW_ARTIFACT: Readonly<Record<ArtifactKind, ComponentType>> = {
 const Spend = lazyScreen("spend", (m) => m.Spend);
 const Budgets = lazyScreen("spend", (m) => m.Budgets);
 const ExpensiveTasks = lazyScreen("spend", (m) => m.ExpensiveTasks);
-const General = lazyScreen("settings", (m) => m.General);
-const PeopleAndAccess = lazyScreen("settings", (m) => m.PeopleAndAccess);
+const Overview = lazyScreen("settings", (m) => m.Overview);
+const Policies = lazyScreen("settings", (m) => m.Policies);
 const Integrations = lazyScreen("settings", (m) => m.Integrations);
-const Tools = lazyScreen("settings", (m) => m.Tools);
 const Models = lazyScreen("settings", (m) => m.Models);
+const Tools = lazyScreen("settings", (m) => m.Tools);
 const Secrets = lazyScreen("settings", (m) => m.Secrets);
+const Limits = lazyScreen("settings", (m) => m.Limits);
+const People = lazyScreen("settings", (m) => m.People);
+const ServiceAccounts = lazyScreen("settings", (m) => m.ServiceAccounts);
+const ApiTokens = lazyScreen("settings", (m) => m.ApiTokens);
+const SignInPolicy = lazyScreen("settings", (m) => m.SignInPolicy);
+const Audit = lazyScreen("settings", (m) => m.Audit);
 const Fleet = lazyScreen("settings", (m) => m.Fleet);
 const ConfigScreen = lazyScreen("settings", (m) => m.ConfigScreen);
 const Backups = lazyScreen("settings", (m) => m.Backups);
-const Audit = lazyScreen("settings", (m) => m.Audit);
+const FileStoragePage = lazyScreen("settings", (m) => m.FileStoragePage);
 const Account = lazyScreen("account", (m) => m.Account);
 const SignIn = lazyScreen("signin", (m) => m.SignIn);
 const Invite = lazyScreen("signin", (m) => m.Invite);
 const Reset = lazyScreen("signin", (m) => m.Reset);
 const Enrol = lazyScreen("signin", (m) => m.Enrol);
-const Appearance = lazyScreen("settings", (m) => m.Appearance);
 
 /** One resolved screen, drawn. */
 export function screenFor(route: Resolved): ReactNode {
@@ -167,7 +182,7 @@ export function screenFor(route: Resolved): ReactNode {
     case "org-chart":
       return <OrgChart />;
     case "roster":
-      return <People />;
+      return <Roster />;
     case "teams":
       return route.unit ? <UnitScreen key={route.unit} id={route.unit} /> : <Teams />;
     case "schedules":
@@ -215,19 +230,17 @@ export function screenFor(route: Resolved): ReactNode {
       const Create = NEW_ARTIFACT[route.kind];
       return <Create key={route.kind} />;
     }
-    case "spend":
-      return <Spend />;
-    case "spend-tasks":
-      return <ExpensiveTasks />;
-    case "budgets":
-      return <Budgets />;
-    case "general":
-      return <General />;
-    case "people":
-      return <PeopleAndAccess />;
+    case "overview":
+      return <Overview />;
+    case "policies":
+      return <Policies />;
     case "integrations":
       return <Integrations key={route.kind ?? ""} kind={route.kind} />;
-    case "tools":
+    case "budgets":
+      return <Budgets />;
+    case "models":
+      return <Models key={route.id ?? ""} id={route.id} />;
+    case "mcp-tools":
       return (
         <Tools
           key={`${route.server ?? ""}/${route.tool ?? ""}`}
@@ -235,10 +248,22 @@ export function screenFor(route: Resolved): ReactNode {
           tool={route.tool}
         />
       );
-    case "models":
-      return <Models key={route.id ?? ""} id={route.id} />;
     case "secrets":
       return <Secrets key={route.name ?? ""} name={route.name} />;
+    case "limits":
+      return <Limits />;
+    case "spend":
+      return <Spend />;
+    case "spend-tasks":
+      return <ExpensiveTasks />;
+    case "people":
+      return <People />;
+    case "service-accounts":
+      return <ServiceAccounts />;
+    case "tokens":
+      return <ApiTokens />;
+    case "sign-in":
+      return <SignInPolicy />;
     case "nodes":
       return <Fleet key={route.node ?? ""} node={route.node} />;
     case "config":
@@ -251,12 +276,12 @@ export function screenFor(route: Resolved): ReactNode {
       );
     case "backups":
       return <Backups key={route.domain ?? ""} domain={route.domain} />;
+    case "storage":
+      return <FileStoragePage />;
     case "audit":
       return <Audit />;
     case "account":
       return <Account />;
-    case "appearance":
-      return <Appearance />;
   }
 }
 
@@ -279,6 +304,24 @@ function NewArtifactRedirect() {
     rest.delete("kind");
     nav.replace(newArtifactPath(kind), rest);
   }, [route.query, nav]);
+  return null;
+}
+
+/**
+ * An address under a place the company does not run the service for (Work
+ * where it runs no Crewlet Works, Knowledge where it runs no Crewlet
+ * Knowledge): that service's card on Company › Integrations, which says what
+ * the company runs instead, REPLACED so Back never lands on the hidden page.
+ * A star, a recent or a link pasted before the company changed what it runs
+ * lands somewhere that says why, rather than on a page every read of which the
+ * engine would refuse.
+ */
+function ServiceCard({ service }: { service: Service }) {
+  const nav = useNavigator();
+  useEffect(() => {
+    const integrations = workspaceRow("integrations");
+    if (integrations) nav.replace(integrations.path, { builtin: SERVICE_CARDS[service] });
+  }, [nav, service]);
   return null;
 }
 
@@ -344,14 +387,19 @@ function Frame() {
 
 function Screen({ where, path }: { where: Route; path: string[] }) {
   const viewer = useViewer();
+  const known = useServicesKnown();
+  const runs = useServicesRun();
   const held = useHeldReading();
   const { accessRefused } = useConnection();
   if (!where.resolved) return <NotFound what={where.what} hint={where.hint} />;
-  // A BROWSER THE ENGINE KNOWS AND WILL NOT SERVE — a refused handshake, never
-  // a want of access — is told so in place of every screen but the reader's
-  // own: their Account and Settings › Appearance, which read no socket
-  // (`personalPath`, the rule the sidebar's locks are drawn by). See
-  // `AccessRefused`.
+  // A PLACE THE COMPANY DOES NOT RUN THE SERVICE FOR opens that service's
+  // card instead, once the engine has said what it runs (`lib/services.ts`).
+  const service = serviceOfPath(path);
+  if (service !== undefined && known && !runs[service]) return <ServiceCard service={service} />;
+  // A BROWSER THE ENGINE KNOWS AND WILL NOT SERVE (a refused handshake, never
+  // a want of access) is told so in place of every screen but the reader's
+  // own: their Account, which reads no socket (`personalPath`, the rule the
+  // sidebar's locks are drawn by). See `AccessRefused`.
   if (accessRefused !== null && !personalPath(path)) {
     return <AccessRefused reason={accessRefused} />;
   }

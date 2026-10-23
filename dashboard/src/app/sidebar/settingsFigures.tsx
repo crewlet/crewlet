@@ -1,30 +1,21 @@
 /**
- * The figures beside Settings' sections, and the three answers they come from.
+ * The figures beside Settings' sections, and the two answers they come from.
  *
  * # Polled only while Settings is open
  *
- * `fleet`, `retention` and `integrations` are guarded answers with no push
- * behind them, so a figure drawn from one is a poll. The frame is mounted for
+ * `fleet` and `retention` are guarded answers with no push behind them, so a
+ * figure drawn from one is a poll. The frame is mounted for
  * the life of the tab and React will not let a hook be called conditionally,
  * so the hook runs on every screen — and a hook that polled unconditionally
- * would ask the engine three questions on a timer for the whole life of every
+ * would ask the engine two questions on a timer for the whole life of every
  * tab, on screens that draw none of the answers, and ask a reader without
- * Admin three refusals on the same timer. So each query is ENABLED only while
+ * Admin two refusals on the same timer. So each query is ENABLED only while
  * the Settings column is on screen and the section its figure is drawn beside
- * is open to the reader (`nav.ts`'s `sectionOpen` — Nodes, Backups and
- * Integrations take Admin, which is the answers' own); everywhere else the
- * hook asks nothing.
+ * is open to the reader (`nav.ts`'s `sectionOpen`: Nodes and Backups take
+ * Admin, which is the answers' own); everywhere else the hook asks nothing.
  *
  * # What each figure is
  *
- *  - **Integrations** — how many tools the engine's own roll-up says need a
- *    person (`tools[].state === "attention"`), as the row's ATTENTION pill:
- *    it is the one figure in this column that is something waiting on the
- *    reader, and it is a STATE rather than an unread count, so it wears the
- *    warning tone the approved Settings artboard draws it in (its "pill
- *    need") — never the accent the inbox's unread badge fills with. The
- *    roll-up is the engine's — `integration.Rollup` — so this counts the
- *    cards the screen draws amber, and never re-derives a phase.
  *  - **Nodes** — the nodes holding a presence lease, off the health push the
  *    frame already holds. The fleet answer adds the one thing health cannot
  *    say, because health is about THIS node: how many nodes are behind the
@@ -43,7 +34,6 @@
 import { type ReactNode } from "react";
 import { StatusDot } from "@crewlethq/ui";
 
-import type { IntegrationsAnswer } from "~/contract/integrations.ts";
 import type { EngineHealth } from "~/contract/health.ts";
 import type { FleetAnswer, RetentionReport } from "~/protocol/index.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -53,14 +43,6 @@ import { sectionOpen, workspaceRow } from "../nav.ts";
 export interface SectionFigure {
   /** Something waiting on the reader, UNREAD — the accent's filled pill. */
   badge?: { value: number | string; label: string };
-  /**
-   * Something waiting on the reader that is a STATE — tools the engine says
-   * need a person — as the same pill in the warning tone. Colour is state and
-   * the accent is where the reader is, so a state in the accent's fill would
-   * read as a second unread count. The kit draws a figure's pill and speaks
-   * it; the frame repaints this one (`.section-row-attention`).
-   */
-  attention?: { value: number | string; label: string };
   /** How many of something the section holds — a quiet figure. */
   count?: { value: number | string; label: string; mark?: ReactNode };
 }
@@ -73,14 +55,11 @@ export interface SectionFigure {
  * at 15 s for that, and while a Nodes screen is open the column draws THAT
  * screen's reading (`usePublishFleet`) rather than polling beside it.
  * RETENTION at 60 s: a domain's floor moves on the trim's own tick, which is
- * minutes. INTEGRATIONS at 120 s: a tool moves into
- * `attention` when a reconcile pass says so, and passes follow who has to act
- * rather than a clock, so a faster poll only re-reads the same roll-up.
+ * minutes.
  */
 export const SETTINGS_POLL_MS = {
   fleet: 30_000,
   retention: 60_000,
-  integrations: 120_000,
 } as const;
 
 /** The figures, from whichever answers are in hand. Pure, so it is tested alone. */
@@ -88,24 +67,12 @@ export function settingsFigures({
   health,
   fleet,
   retention,
-  integrations,
 }: {
   health: EngineHealth | null | undefined;
   fleet: FleetAnswer | null | undefined;
   retention: RetentionReport | null | undefined;
-  integrations: IntegrationsAnswer | null | undefined;
 }): Record<string, SectionFigure> {
   const figures: Record<string, SectionFigure> = {};
-
-  const attention = integrations?.tools?.filter((t) => t.state === "attention").length ?? 0;
-  if (attention > 0) {
-    figures.integrations = {
-      attention: {
-        value: attention,
-        label: attention === 1 ? "needs attention" : "need attention",
-      },
-    };
-  }
 
   if (health?.nodes !== undefined) {
     // THE NODES SCREEN'S OWN "Behind on config" TILE, to the node: an applied
@@ -186,7 +153,6 @@ export function useSettingsSidebar({
 }): Record<string, SectionFigure> {
   const nodes = here && opens("nodes", grants);
   const backups = here && opens("backups", grants);
-  const connect = here && opens("integrations", grants);
   const fleet = useQuery("fleet", undefined, {
     enabled: nodes && published === null,
     pollMs: SETTINGS_POLL_MS.fleet,
@@ -195,17 +161,9 @@ export function useSettingsSidebar({
     enabled: backups,
     pollMs: SETTINGS_POLL_MS.retention,
   });
-  const integrations = useQuery("integrations", undefined, {
-    enabled: connect,
-    pollMs: SETTINGS_POLL_MS.integrations,
-    // CONNECTING HAPPENS IN ANOTHER TAB — the vendor's own app — and coming
-    // back is the strongest sign the roll-up moved; see `useQuery`.
-    refetchOnFocus: true,
-  });
   return settingsFigures({
     health,
     fleet: !nodes ? null : published ? published.answer : fleet.data,
     retention: backups ? retention.data : null,
-    integrations: connect ? integrations.data : null,
   });
 }

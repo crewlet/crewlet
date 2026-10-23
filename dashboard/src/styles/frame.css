@@ -494,18 +494,6 @@
   min-width: 0;
 }
 
-/* A STATE WAITING ON THE READER — the tools the engine says need a person —
-   is the kit's badge in the WARNING tone, as the approved Settings artboard
-   draws Integrations' figure ("pill need"). The kit fills its badge with the
-   accent because its one badge is an unread count; this figure is a state,
-   and colour is state, so in the accent it read as a second inbox. The soft
-   fill and its ink are the feedback pair every warning tag wears, on the
-   rail and on the raised current row alike. */
-.section-row-attention .crewlet-nav-item__badge {
-  background: var(--color-feedback-warning-soft);
-  color: var(--color-feedback-warning-ink);
-}
-
 /* THE ENGINE PANEL'S INSET. The row that opens it and every part inside it
    are the kit's (`AppShell.RailRow`, `Popover`, `DescriptionList`, `Button`,
    `StatusDot`); the kit's popover draws no inset of its own, and this is the

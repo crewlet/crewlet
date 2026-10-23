@@ -71,7 +71,7 @@ function grid(onRowActivate?: (row: Row) => void) {
             key: "who",
             header: "Who",
             // The shape every linking cell has.
-            cell: (r) => <a href={`#/agents/seats/${r.who}`}>{r.who}</a>,
+            cell: (r) => <a href={`#/company/org/seats/${r.who}`}>{r.who}</a>,
           },
         ]}
       />

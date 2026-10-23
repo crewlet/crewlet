@@ -203,8 +203,8 @@ const teamBoard = (): Board => ({
           links: [
             { label: "Open decisions in the inbox", href: "#/inbox" },
             { label: "Who is working now", href: "#/live" },
-            { label: "Spend by task", href: "#/spend" },
-            { label: "Connect a tool", href: "#/settings/integrations" },
+            { label: "Spend by task", href: "#/settings/spend" },
+            { label: "Connect a tool", href: "#/company/integrations" },
           ],
           w: 3,
           h: null,

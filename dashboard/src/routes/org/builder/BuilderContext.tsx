@@ -54,7 +54,7 @@ export type AddKind = "unit" | "agent" | "human";
  * draft's and an editor's agree on what leaving is.
  *
  * THE ADDRESS IS THE SECTION'S, AND IT IS THE WHOLE OF THE RULE. The builder
- * is Agents › Edit org, `#/agents/edit`. It was a `lens=builder` on the
+ * is Org chart › Edit org, `#/company/org/edit`. It was a `lens=builder` on the
  * company screen, and before that a screen at `#/org`; each move left this
  * predicate spelling the old address, which does not fail loudly —
  * `keepsTheLens` answers FALSE for every move, so the guard holds moves it was

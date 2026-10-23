@@ -32,9 +32,11 @@
  * # What it does, as you
  *
  * Three rows change the company, each through `useAct` AS THE SIGNED-IN
- * PRINCIPAL (ADR-0024) — the seat the directory binds them to where it binds
- * one, their own login where it does not — each drawn for every reader and
- * saying why where it cannot act:
+ * PRINCIPAL (ADR-0024), the seat the directory binds them to where it binds
+ * one, their own login where it does not. Each files or moves a task in
+ * Crewlet Works, so where the company runs none of it none of the three is
+ * offered (`lib/services.ts`); elsewhere each is drawn for every reader and
+ * says why where it cannot act:
  *
  *  - "Assign {KEY} to an agent…" opens a picker over the agents — the one the
  *    term NAMES first, when the engine's name tiers find exactly one — and
@@ -153,6 +155,7 @@ import {
   type Standing,
 } from "./hits.ts";
 import { useKnowledgeAnswer, type AnswerState, type KnowledgeAnswerReceipt } from "./answer.ts";
+import { useServicesRun } from "~/lib/services.ts";
 
 /** What a project step files once the person has chosen where. */
 type Filing =
@@ -218,6 +221,9 @@ export function CommandPalette({
   // here to list (`Store.setAccessRefused`); and the writes say why they are
   // held, through the gate every write reads.
   const served = useConnection().accessRefused === null;
+  // WHICH OF CREWLET'S OWN SERVICES THE COMPANY RUNS: a search, a scope, a
+  // destination or a write into one it does not is not offered at all.
+  const runs = useServicesRun();
 
   // THE RUNNING SET IS READ ONCE, AS THE PALETTE OPENS — which turns Running
   // now offers and in what order. The kit's listbox holds the highlight by
@@ -284,6 +290,7 @@ export function CommandPalette({
   const tooLong = searchable ? searchTooLong(term) : null;
   const wantsTasks =
     served &&
+    runs.tracker &&
     !picking &&
     (scope === "all" || scope === "tasks") &&
     term.length >= SEARCH_MIN &&
@@ -295,6 +302,7 @@ export function CommandPalette({
   );
   const wantsPages =
     served &&
+    runs.knowledge &&
     !picking &&
     (scope === "all" || scope === "pages") &&
     term.length >= SEARCH_MIN &&
@@ -324,7 +332,7 @@ export function CommandPalette({
   const projectsRead = useQuery(
     "work_projects",
     { limit: PROJECT_PAGE },
-    { enabled: served && viewer.tracker },
+    { enabled: served && runs.tracker && viewer.tracker },
   );
   const projects: WorkProjectRow[] | null = projectsRead.data?.projects ?? null;
   const projectName = (key: string) => projects?.find((p) => p.key === key)?.name ?? "";
@@ -333,7 +341,8 @@ export function CommandPalette({
   const openSwitcher = useOpenProjectSwitcher();
   // NOT OFFERED WHERE THE ENGINE SERVES NO COMPANY, NOR TO A READER WITHOUT
   // TRACKER: the switcher lists projects, which is the tracker's question.
-  const switchHits = served && viewer.tracker ? [switchProjectHit(openSwitcher)] : [];
+  const switchHits =
+    served && runs.tracker && viewer.tracker ? [switchProjectHit(openSwitcher)] : [];
 
   // WHICH TERM EACH ANSWER ON HAND IS FOR. `useQuery` keeps the previous
   // answer across a change of parameters — right for a polled table, wrong
@@ -347,7 +356,10 @@ export function CommandPalette({
   const nameAnswer = useSettled(names, nameTerm, wantsNames);
 
   // ---- the answer --------------------------------------------------------
-  const answer = useKnowledgeAnswer(term, !picking && (scope === "all" || scope === "pages"));
+  const answer = useKnowledgeAnswer(
+    term,
+    runs.knowledge && !picking && (scope === "all" || scope === "pages"),
+  );
   // A QUESTION THIS READER WILL BE ANSWERED leads the list with a card, and
   // All makes room for the actions under it (`ALL_ROWS_UNDER_ANSWER`).
   const answering =
@@ -361,7 +373,7 @@ export function CommandPalette({
   const itemRead = useQuery(
     "work_item",
     { id: pickItem },
-    { enabled: pickItem !== "" && viewer.tracker },
+    { enabled: pickItem !== "" && runs.tracker && viewer.tracker },
   );
 
   // The task at hand: the one on screen, else the best task hit for this term.
@@ -526,7 +538,7 @@ export function CommandPalette({
   const answeredMd = answer.kind === "answered" ? answer.answer : null;
 
   const actionRows = (): CommandPaletteItem[] => {
-    if (picking) return [];
+    if (picking || !runs.tracker) return [];
     const rows: CommandPaletteItem[] = [];
     const blockedRow = (reason: string) => () => {
       stay();
@@ -770,7 +782,7 @@ export function CommandPalette({
     }
     const local = matchingSeats(index, lower, Infinity).filter((s) => !why.has(s.handle));
     const seats = [...byEngine, ...local];
-    const open = (seat: Seat) => () => nav.to(["agents", "seats", seat.handle]);
+    const open = (seat: Seat) => () => nav.to(["company", "org", "seats", seat.handle]);
     const agentsRows = seats
       .filter((s) => s.kind === "agent")
       .slice(0, cap)
@@ -949,12 +961,12 @@ export function CommandPalette({
     groups.push(...pickerGroups().filter((g) => g.items.length));
   } else if (scope === "all") {
     if (!term) {
-      push("recent", "Recent", asItems(recentHits(recents, nav)));
+      push("recent", "Recent", asItems(recentHits(recents, nav, runs)));
       push("running", "Running now", runningRows());
       push(
         "go",
         "Go to",
-        asItems([...destinationHits("", nav, Infinity, standing), ...switchHits]),
+        asItems([...destinationHits("", nav, Infinity, standing, runs), ...switchHits]),
       );
     } else {
       push("ids", "Open by id", asItems(idHits(term, nav)));
@@ -962,7 +974,7 @@ export function CommandPalette({
         "go",
         "Go to",
         asItems([
-          ...destinationHits(lower, nav, GO_TO_ROWS, standing),
+          ...destinationHits(lower, nav, GO_TO_ROWS, standing, runs),
           ...switchHits.filter((hit) => score(hit.label, lower) >= 0),
         ]),
       );
@@ -991,7 +1003,7 @@ export function CommandPalette({
         ...(pageAnswer.data?.hits ?? []).slice(0, allRows).map((p) => `page:${p.id}`),
       ]);
       push("sources", "Sources of the answer", sourceRows(drawn));
-      push("search", "Search", asItems(searchHits(term, nav)));
+      push("search", "Search", asItems(searchHits(term, nav, runs)));
     }
   } else if (scope === "tasks") {
     const rows = taskRows(TASK_HITS);
@@ -1039,7 +1051,7 @@ export function CommandPalette({
           showKeys: onShowKeys,
           changeTheme: openThemeStep,
           themeName: themeEntry(prefs.palette).name,
-          switchProject: served ? openSwitcher : null,
+          switchProject: served && runs.tracker && viewer.tracker ? openSwitcher : null,
           hash: route.hash || "#/",
         }),
       ),
@@ -1202,7 +1214,10 @@ export function CommandPalette({
     picking || themeStep
       ? {}
       : {
-          scopes: SCOPES.map((s) => ({ id: s.id, label: s.label })),
+          scopes: SCOPES.filter((s) => !("service" in s) || runs[s.service]).map((s) => ({
+            id: s.id,
+            label: s.label,
+          })),
           scope,
           onScopeChange: (next: string) => setScope(next as ScopeId),
           groupsScope: scope,

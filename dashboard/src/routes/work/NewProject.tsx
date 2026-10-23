@@ -53,7 +53,7 @@ import {
 } from "@crewlethq/ui";
 import { KeyGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator } from "~/app/router.tsx";
-import { KEY_SHAPE } from "~/app/routes.ts";
+import { KEY_SHAPE, ORG_EDIT_PATH } from "~/app/routes.ts";
 import { documentUnits } from "~/lib/seats.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useClient } from "~/lib/store-hooks.ts";
@@ -215,7 +215,7 @@ export function NewProjectDialog({ onClose }: { onClose: () => void }) {
   const go = () => {
     if (!access.can || !owner || !verdict.ok) return;
     onClose();
-    nav.to(["agents", "edit"], { ...owner.query, project: key });
+    nav.to(ORG_EDIT_PATH, { ...owner.query, project: key });
   };
 
   return (

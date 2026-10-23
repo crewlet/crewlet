@@ -217,7 +217,7 @@ describe("in the builder", () => {
 describe("the org chart", () => {
   function mountCompany(appliedEpoch: number) {
     Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
-    location.hash = "#/agents";
+    location.hash = "#/company/org";
     const store = new Store();
     // The health push, which is where this node's applied epoch comes from.
     store.applyHealth(healthFrame({ applied_epoch: appliedEpoch }));

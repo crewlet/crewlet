@@ -185,7 +185,7 @@ test("every tile carries exactly one action, and which one follows the engine", 
   const datadog = await tile("Datadog");
   const manage = controls(datadog);
   expect(manage.map((c) => c.textContent)).toEqual(["Manage"]);
-  expect(manage[0]?.getAttribute("href")).toBe("#/settings/integrations/datadog");
+  expect(manage[0]?.getAttribute("href")).toBe("#/company/integrations/datadog");
   expect(within(datadog).queryByRole("button", { name: /Disconnect/ })).toBeNull();
 
   // AND A TOOL NOBODY CONNECTED is Connect, under the engine's own word.
@@ -222,7 +222,14 @@ test("the filter shows what the company has, or what it could have", async () =>
   mount();
   await tile("GitLab");
   fireEvent.click(screen.getByRole("radio", { name: /Connected/ }));
-  expect(screen.getAllByRole("heading").map((h) => h.textContent)).toEqual(["Datadog", "GitLab"]);
+  // THE CATALOGUE'S TILES: the services built into Crewlet above it are not
+  // third-party tools, and the filter is about those.
+  const catalogue = () =>
+    screen
+      .getAllByRole("heading")
+      .map((h) => h.textContent)
+      .filter((name) => !name?.startsWith("Crewlet "));
+  expect(catalogue()).toEqual(["Datadog", "GitLab"]);
   fireEvent.click(screen.getByRole("radio", { name: /Available/ }));
   await waitFor(() => expect(screen.queryByRole("heading", { name: "GitLab" })).toBeNull());
   expect(screen.getByRole("heading", { name: "Slack" })).toBeTruthy();
@@ -247,7 +254,7 @@ test("a reader refused /setup sees every form action disabled with the grants it
   fireEvent.click(connect);
   expect(screen.queryByRole("dialog")).toBeNull();
   const datadog = await tile("Datadog");
-  expect(controls(datadog)[0]?.getAttribute("href")).toBe("#/settings/integrations/datadog");
+  expect(controls(datadog)[0]?.getAttribute("href")).toBe("#/company/integrations/datadog");
 });
 
 // A MANAGED DOCUMENT HOLDS WHAT WRITES IT (ADR-0030). Connect would add a

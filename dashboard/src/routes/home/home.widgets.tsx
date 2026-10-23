@@ -25,13 +25,14 @@ import {
   StarGlyph,
   type GlyphProps,
 } from "@crewlethq/icons/glyphs";
-import { DESTINATIONS } from "~/app/nav.ts";
+import { DESTINATIONS, serviceShown, type Service } from "~/app/nav.ts";
+import { useServicesRun } from "~/lib/services.ts";
 import { href } from "~/app/router.tsx";
 import { useViewer } from "~/lib/viewer.ts";
 import { Mark } from "~/ui/glyph.tsx";
 import { useSharedHomeData } from "./useHomeData.ts";
 import { Figures, SectionView, type SectionId } from "./sections.tsx";
-import { KPI_IDS, KPI_LABELS, type KpiId } from "./Kpis.tsx";
+import { KPI_IDS, KPI_LABELS, KPI_SERVICES, kpisShown, type KpiId } from "./Kpis.tsx";
 import {
   ChoiceNote,
   defineWidgets,
@@ -48,6 +49,8 @@ interface HomeCard {
   icon: ComponentType<GlyphProps>;
   hue: NodeHue;
   size: WidgetSize;
+  /** The service built into Crewlet the card reads, as [WidgetDef.service]. */
+  service?: Service;
 }
 
 const CARDS: Record<SectionId, HomeCard> = {
@@ -85,6 +88,7 @@ const CARDS: Record<SectionId, HomeCard> = {
     icon: ChartColumnGlyph,
     hue: "cyan",
     size: { w: 4, minW: 3, minH: 10, vertical: true },
+    service: "tracker",
   },
   tokens: {
     label: "Tokens by team",
@@ -98,6 +102,7 @@ const CARDS: Record<SectionId, HomeCard> = {
     description: "The busiest projects and their progress",
     icon: FolderKanbanGlyph,
     hue: "blue",
+    service: "tracker",
     size: { w: 4, minW: 3, minH: 6, vertical: true },
   },
   feed: {
@@ -109,10 +114,11 @@ const CARDS: Record<SectionId, HomeCard> = {
   },
 };
 
-const card = ([id, def]: [SectionId, HomeCard]): WidgetDef => ({
+const card = ([id, { service, ...def }]: [SectionId, HomeCard]): WidgetDef => ({
   key: `home.${id}`,
   from: "home",
   ...def,
+  ...(service ? { service: () => service } : {}),
   once: true,
   Component: function CardWidget() {
     return <SectionView id={id} data={useSharedHomeData()} />;
@@ -133,12 +139,19 @@ function OneFigure({ params }: { params: Readonly<Record<string, string>> }) {
   return <Figures data={data} figures={[params.figure]} />;
 }
 
-/** Every page the reader may open, by the navigation, Home's own aside. */
+/**
+ * Every page the reader may open, by the navigation, Home's own aside, and
+ * none the company does not run the service for.
+ */
 function usePages() {
   const viewer = useViewer();
+  const runs = useServicesRun();
   return useMemo(
-    () => DESTINATIONS.filter((d) => d.workspace !== "home" && pageOpens(d, viewer.grants)),
-    [viewer.grants],
+    () =>
+      DESTINATIONS.filter(
+        (d) => d.workspace !== "home" && pageOpens(d, viewer.grants) && serviceShown(d, runs),
+      ),
+    [viewer.grants, runs],
   );
 }
 
@@ -177,14 +190,18 @@ export const widgets = defineWidgets([
     icon: HashGlyph,
     hue: "blue",
     size: { w: 3, minW: 2, minH: 6, vertical: false },
+    service: (p) => (isKpi(p.figure) ? KPI_SERVICES[p.figure] : undefined),
     params: [
       {
         key: "figure",
         label: "Figure",
-        useChoices: () => ({
-          loading: false,
-          options: KPI_IDS.map((f) => ({ value: f, label: KPI_LABELS[f] })),
-        }),
+        useChoices: function useFigureChoices() {
+          const runs = useServicesRun();
+          return {
+            loading: false,
+            options: kpisShown(KPI_IDS, runs).map((f) => ({ value: f, label: KPI_LABELS[f] })),
+          };
+        },
       },
     ],
     nameOf: (p) => (isKpi(p.figure) ? KPI_LABELS[p.figure] : undefined),
@@ -198,6 +215,8 @@ export const widgets = defineWidgets([
     icon: ExternalLinkGlyph,
     hue: "blue",
     size: { w: 4, minW: 2, minH: 4, vertical: false },
+    // A SHORTCUT TO A PAGE THE COMPANY DOES NOT RUN goes with the page.
+    service: (p) => (p.page ? destinationOf(p.page)?.service : undefined),
     params: [
       {
         key: "page",

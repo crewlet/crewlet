@@ -53,15 +53,15 @@ function Counts() {
   return null;
 }
 
-// THE SCHEDULES TAB CARRIES ITS FIGURE, from the schedules push this client
-// already holds, beside the Roster's and the Teams' — on every Agents tab.
-test("every Agents section publishes the roster, teams and schedules figures", () => {
+// THE ORG CHART'S TABS CARRY THEIR FIGURES, the Roster's and the Teams'.
+// Schedules is its own row of Company and keeps no tab here, so the schedules
+// push this client holds is not counted beside them.
+test("every Org chart section publishes the roster and teams figures, and no schedules", () => {
   withClient(<Counts />, 6);
   const index = indexOrg(CHART_ORG);
   expect(vi.mocked(useSectionCounts)).toHaveBeenLastCalledWith({
     roster: String(index.seats.length),
     teams: String(index.units.length),
-    schedules: "6",
   });
 });
 

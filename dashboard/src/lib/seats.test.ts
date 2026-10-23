@@ -223,8 +223,8 @@ describe("the engine's hierarchy", () => {
   // NO HANDLE: the seat screen resolves a name as well as a handle, and the
   // rule lives in one place.
   test("a seat is addressed by its handle, or by name where none is known", () => {
-    expect(seatPath(index.byName.get("Dev A")!)).toEqual(["agents", "seats", "dev-a"]);
-    expect(seatPath({ handle: "", name: "Dev A" })).toEqual(["agents", "seats", "Dev A"]);
+    expect(seatPath(index.byName.get("Dev A")!)).toEqual(["company", "org", "seats", "dev-a"]);
+    expect(seatPath({ handle: "", name: "Dev A" })).toEqual(["company", "org", "seats", "Dev A"]);
   });
 
   // ONLY THE ENGINE KNOWS WHERE A ROOT SEAT SITS. The document wrote Designer

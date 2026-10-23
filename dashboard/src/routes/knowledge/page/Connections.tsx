@@ -277,7 +277,7 @@ function ReadBy({
                     <span className="knowledge-reader-head">
                       <a
                         className="knowledge-reader-name"
-                        href={href(["agents", "seats", r.handle])}
+                        href={href(["company", "org", "seats", r.handle])}
                       >
                         {seat.name}
                       </a>

@@ -1,0 +1,75 @@
+/**
+ * Which of Crewlet's own services the company runs, as the engine says it.
+ *
+ * # Two services, three answers each
+ *
+ * A company runs Crewlet Works (the engine's own tracker: projects, tasks,
+ * the Inbox's updates and My work) or another tracker in its place, Jira, or
+ * none at all; and Crewlet Knowledge (the engine's own pages) or Confluence,
+ * or none. The engine resolves which from the company document and hands it
+ * to every reader on the org projection (`services`, `contract/services.ts`):
+ * the socket's first frame, every `org` push and `GET /org`. So nothing here
+ * probes for it, and a company that switches a backend is drawn anew on the
+ * push that publishes it.
+ *
+ * # What the dashboard does with it
+ *
+ * A place that reads a service the company does not run is HIDDEN, never
+ * locked (`app/nav.ts`'s `serviceShown`): the sidebar row, the palette's
+ * destination, the `g` chord, the Home widget, the control that would file a
+ * task. There is nothing to ask an admin for, and a lock would say there was.
+ * Access the reader lacks is the other case and keeps its rule: a lock.
+ *
+ * # Until the engine has said
+ *
+ * The projection names no services only on a node running no company, which
+ * is "not known yet" and never "none": NOTHING IS HIDDEN then, so the frame
+ * draws as it always has rather than taking places away on a guess. And a
+ * hidden service's address is sent to its card only once the engine HAS said
+ * ([useServicesKnown]), so a deep link is never sent away on a guess either.
+ */
+
+import type { Service, ServicesRun } from "~/app/nav.ts";
+import type { OrgServices } from "~/contract/services.ts";
+import { useOrg } from "./store-hooks.ts";
+
+export type { Service, ServicesRun } from "~/app/nav.ts";
+export type { OrgServices } from "~/contract/services.ts";
+
+/**
+ * The four answers, each ONE object, so a memo keyed on what runs moves only
+ * when the engine's answer does rather than on every render of the reader.
+ */
+const RUN: Readonly<Record<`${boolean}/${boolean}`, ServicesRun>> = {
+  "true/true": { tracker: true, knowledge: true },
+  "true/false": { tracker: true, knowledge: false },
+  "false/true": { tracker: false, knowledge: true },
+  "false/false": { tracker: false, knowledge: false },
+};
+
+/** Which services run, from what the engine said: every one, until it has said. */
+export function servicesRun(services: OrgServices | null | undefined): ServicesRun {
+  if (!services) return RUN["true/true"];
+  return RUN[`${services.tracker === "native"}/${services.knowledge === "native"}`];
+}
+
+/** What the engine said the company runs, or null until it has. */
+export function useBackends(): OrgServices | null {
+  return useOrg()?.services ?? null;
+}
+
+/** Whether the company runs each of Crewlet's own services: every one, until the engine says. */
+export function useServicesRun(): ServicesRun {
+  return servicesRun(useBackends());
+}
+
+/** Whether the engine has said what the company runs. */
+export function useServicesKnown(): boolean {
+  return useBackends() !== null;
+}
+
+/** The built-in service card each service's addresses open where it is not run. */
+export const SERVICE_CARDS: Readonly<Record<Service, string>> = {
+  tracker: "works",
+  knowledge: "knowledge",
+};

@@ -3,7 +3,7 @@
  *
  * Every gesture made about somebody in the directory — on a vacant human seat
  * (the org chart's card menu, the seat's peek, its page): an invitation, a
- * person's create, an invitation's cancellation; on People & access: a
+ * person's create, an invitation's cancellation; on People: a
  * service account, an edit, a suspension, a reset, a revocation, a removal —
  * is one REST write whose answer is one of four things a person acts on
  * differently:

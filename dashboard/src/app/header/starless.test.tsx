@@ -37,7 +37,14 @@ function bar(workspace: Workspace) {
       <ClientContext.Provider value={{ store, socket }}>
         <AppShell
           topbar={
-            <PageHeader crumbs={[]} row={row} counts={{}} title={row.label} workspace={workspace} />
+            <PageHeader
+              crumbs={[]}
+              row={row}
+              counts={{}}
+              title={row.label}
+              workspace={workspace}
+              runs={{ tracker: true, knowledge: true }}
+            />
           }
         />
       </ClientContext.Provider>

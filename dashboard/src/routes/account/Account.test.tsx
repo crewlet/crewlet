@@ -815,7 +815,7 @@ describe("the profile", () => {
     const seat = await seatFact();
     await waitFor(() =>
       expect(within(seat).getByRole("link", { name: "Ada Lovelace" }).getAttribute("href")).toBe(
-        href(["agents", "seats", "ada"]),
+        href(["company", "org", "seats", "ada"]),
       ),
     );
     expect(within(seat).getByText("@ada")).toBeDefined();
@@ -839,7 +839,7 @@ describe("the profile", () => {
     mount();
     const served = await seatFact();
     expect(within(served).getByRole("link", { name: "@ada" }).getAttribute("href")).toBe(
-      href(["agents", "seats", "ada"]),
+      href(["company", "org", "seats", "ada"]),
     );
   });
 
@@ -878,9 +878,7 @@ describe("the profile", () => {
     ]);
     // AN ADMIN IS SENT TO THEIR OWN ROW, where these are changed.
     expect(screen.queryByText("Only an admin can change these.")).toBeNull();
-    expect(screen.getByRole("link", { name: "People & access" }).getAttribute("href")).toContain(
-      "p-1",
-    );
+    expect(screen.getByRole("link", { name: "People" }).getAttribute("href")).toContain("p-1");
   });
 
   // A CREDENTIAL THAT IS NOT A PERSON SAYS ITS OWN ACCESS too, from the

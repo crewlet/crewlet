@@ -42,7 +42,7 @@ class InertWebSocket {
 
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
-  location.hash = "#/agents/roster";
+  location.hash = "#/company/org/roster";
 });
 
 afterEach(() => {
@@ -98,7 +98,7 @@ test("a digit moves the view and leaves the grouping alone", async () => {
   // has something visible to overwrite — asserting against the fallback would
   // pass whether or not the second setter ran.
   await act(async () => {
-    location.hash = "#/agents/roster?group=flat";
+    location.hash = "#/company/org/roster?group=flat";
     window.dispatchEvent(new HashChangeEvent("hashchange"));
   });
   await settle();
@@ -171,7 +171,7 @@ test("a unit group head says the number is the unit's own members", async () => 
   mount(ORG);
   await settle();
   await act(async () => {
-    location.hash = "#/agents/roster?group=unit";
+    location.hash = "#/company/org/roster?group=unit";
     window.dispatchEvent(new HashChangeEvent("hashchange"));
   });
   await settle();
@@ -187,7 +187,7 @@ test("a filtered group head counts what matched, not what the unit holds", async
   mount(ORG);
   await settle();
   await act(async () => {
-    location.hash = "#/agents/roster?group=unit&q=dev-a";
+    location.hash = "#/company/org/roster?group=unit&q=dev-a";
     window.dispatchEvent(new HashChangeEvent("hashchange"));
   });
   await settle();
@@ -250,7 +250,7 @@ test("the roster is ordered by name, whatever the live rows say", async () => {
   ]);
   await settle();
   await act(async () => {
-    location.hash = "#/agents/roster?group=flat";
+    location.hash = "#/company/org/roster?group=flat";
     window.dispatchEvent(new HashChangeEvent("hashchange"));
   });
   await settle();

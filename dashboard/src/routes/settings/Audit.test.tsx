@@ -388,13 +388,13 @@ test("a bound person is drawn as their seat, and a login as plain text", async (
   // BOUND: the seat, by its name, linked — and the credential it came through
   // in its own column.
   const bound = screen.getByRole("link", { name: /Jane Founder/ });
-  expect(bound.getAttribute("href")).toBe("#/agents/seats/jane");
+  expect(bound.getAttribute("href")).toBe("#/company/org/seats/jane");
   expect(screen.getByText("pat:0192f00d")).toBeTruthy();
   // ALL THREE ARE CIRCLES: the kit's outline for a person.
   expect(container.querySelectorAll(".crewlet-avatar--human").length).toBe(3);
   expect(container.querySelectorAll(".crewlet-avatar--agent").length).toBe(0);
   // No row links to a seat named after a login.
-  for (const link of container.querySelectorAll("a[href^='#/agents/seats/']")) {
+  for (const link of container.querySelectorAll("a[href^='#/company/org/seats/']")) {
     expect(link.getAttribute("href")).not.toMatch(/maya|token/);
   }
 });

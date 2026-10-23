@@ -9,7 +9,9 @@ import { ArtifactKindGlyph, Menu } from "@crewlethq/ui";
 import { ChevronDownGlyph, PlusGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator } from "~/app/router.tsx";
 import { newArtifactPath } from "~/app/routes.ts";
-import { KIND_WORDS, MAKE_ORDER } from "~/lib/artifacts/words.ts";
+import { KIND_WORDS } from "~/lib/artifacts/words.ts";
+import { offeredKinds } from "~/app/nav.ts";
+import { useServicesRun } from "~/lib/services.ts";
 
 export function NewArtifactMenu({
   item,
@@ -21,6 +23,7 @@ export function NewArtifactMenu({
   quiet?: boolean;
 }) {
   const nav = useNavigator();
+  const runs = useServicesRun();
   return (
     <Menu
       label={item ? `New artifact for ${item}` : "New artifact"}
@@ -29,7 +32,7 @@ export function NewArtifactMenu({
       trailingIcon={<ChevronDownGlyph size="sm" />}
       triggerVariant={quiet ? "ghost" : "primary"}
       align="end"
-      items={MAKE_ORDER.map((kind) => ({
+      items={offeredKinds(runs).map((kind) => ({
         key: kind,
         label: KIND_WORDS[kind],
         icon: <ArtifactKindGlyph kind={kind} size="sm" />,

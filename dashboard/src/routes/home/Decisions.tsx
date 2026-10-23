@@ -17,12 +17,8 @@
 import { Card, Tag } from "@crewlethq/ui";
 import { TriangleAlertGlyph } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
-import {
-  DecisionList,
-  decisionSubjects,
-  decisionsHref,
-  type SeatCondition,
-} from "~/components/DecisionRow.tsx";
+import { DecisionList, decisionsHref } from "~/components/DecisionRow.tsx";
+import { decisionSubjects, type SeatCondition } from "~/lib/decisions.ts";
 import type { ViewerState } from "~/lib/viewer.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import type { DecisionsAnswer, LogRefusal, QueryRefusal } from "~/protocol/index.ts";

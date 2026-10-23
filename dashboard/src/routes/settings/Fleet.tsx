@@ -76,14 +76,14 @@ import { plural, fmtCount, fmtDuration } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import type { FleetAnswer, FleetDutyLease, FleetNode, FleetSeatLease } from "~/protocol/index.ts";
 import { BrokerKindTag, BrokerMembership } from "./FleetBroker.tsx";
-import { FileStorage } from "./FileStorage.tsx";
 
 /**
  * The lease table has no push behind it, so it polls — at 15 seconds, chosen
  * against the lease TTL rather than picked: a poll slower than the TTL would
  * show a node as alive after its lease had already expired somewhere else.
  */
-const POLL_MS = 15_000;
+export const FLEET_POLL_MS = 15_000;
+const POLL_MS = FLEET_POLL_MS;
 
 /** The apply status the control plane reports, as a [Tag] variant. */
 const STATUS_TONE: Record<string, "success" | "warning" | "danger" | "neutral"> = {
@@ -539,8 +539,6 @@ function FleetScreen() {
               />
             </Card>
           </div>
-
-          <FileStorage objects={data.objects} now={now} />
 
           <BrokerMembership
             answer={broker.data ?? undefined}

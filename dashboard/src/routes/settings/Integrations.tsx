@@ -16,7 +16,7 @@
  * state is the ENGINE's roll-up of its surfaces (`integration.Rollup`, sent as
  * the answer's `tools`), and its sentence names the surface that is not
  * ready. The counts, the inbound paths, the reconcile findings and every
- * agent's own step are on the tool's own page (`#/settings/integrations/{kind}`,
+ * agent's own step are on the tool's own page (`#/company/integrations/{kind}`,
  * [EntryRow]), so an operator who needs to know why can open it without the
  * catalogue leading with it.
  *
@@ -26,6 +26,7 @@
  * claim that the tool is fine.
  */
 
+import { BuiltIn } from "./BuiltIn.tsx";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Button,
@@ -1386,7 +1387,7 @@ export function ActionButton({
         <ButtonLink
           size="small"
           variant="secondary"
-          href={href(["settings", "integrations", entry.key])}
+          href={href(["company", "integrations", entry.key])}
           aria-label={`Manage ${entry.name}`}
         >
           Manage
@@ -2830,7 +2831,7 @@ export function IntegrationPeek({ kind }: { kind: string }) {
         size="compact"
         icon={<PlugGlyph size="xl" />}
         title={`This build serves no integration called “${kind}”`}
-        description="See Settings › Integrations for the ones available."
+        description="See Company › Integrations for the ones available."
       />
     );
   }
@@ -3096,7 +3097,7 @@ export function Integrations({ kind }: { kind?: string }) {
       rotate: action?.kind === "rotate" ? reason : undefined,
     });
   // THE SEGMENT IS A DESTINATION, not decoration. `kind` was accepted and
-  // never read, so `#/settings/integrations/github` rendered the whole catalogue
+  // never read, so `#/company/integrations/github` rendered the whole catalogue
   // — every link into one integration landed on the list it came from. It
   // matches an entry by its own key OR by any surface it covers, because a
   // finding and a webhook route both name the SURFACE (`jira`), while the
@@ -3108,7 +3109,7 @@ export function Integrations({ kind }: { kind?: string }) {
   // a card disagreeing about a tool would be two answers to one question on
   // one screen.
   const focusState = focus ? entryState(focus, rows, data?.tools) : undefined;
-  // THE CRUMB NAMES THE TOOL, not the segment: `#/settings/integrations/jira`
+  // THE CRUMB NAMES THE TOOL, not the segment: `#/company/integrations/jira`
   // is the Atlassian page, and a trail reading "jira" over a header reading
   // Atlassian is two names for one object.
   usePageLabels(useMemo(() => (kind && focus ? { [kind]: focus.name } : {}), [kind, focus]));
@@ -3208,7 +3209,7 @@ export function Integrations({ kind }: { kind?: string }) {
         </Callout>
       )}
 
-      {/* ONE OBJECT, ONE HEADER. `#/settings/integrations/{kind}` is a page about
+      {/* ONE OBJECT, ONE HEADER. `#/company/integrations/{kind}` is a page about
           a single tool, and it opened with the catalogue's chrome and a card:
           the tool's name lived inside the card's disclosure BUTTON, which is a
           control rather than a title, so nothing on the screen named what it
@@ -3281,6 +3282,11 @@ export function Integrations({ kind }: { kind?: string }) {
         />
       )}
 
+      {/* CREWLET'S OWN SERVICES FIRST, on the catalogue's page and never on
+          one tool's: what the company already has, before what it could
+          connect. */}
+      {!kind && <BuiltIn />}
+
       {/* BOTH HALVES, because a card drawn from one of them is a card with
           no buttons. See [useSetup]'s `loading`. */}
       {((loading && !data) || setup.loading) && (
@@ -3299,7 +3305,7 @@ export function Integrations({ kind }: { kind?: string }) {
           <EmptyState
             icon={<PlugGlyph size="xl" />}
             title={`This build serves no integration called “${kind}”`}
-            description="See Settings › Integrations for the ones available."
+            description="See Company › Integrations for the ones available."
           />
         )}
         {/* THE CATALOGUE: WHAT THIS COMPANY HAS, THEN WHAT IT COULD HAVE, each
@@ -3336,12 +3342,12 @@ export function Integrations({ kind }: { kind?: string }) {
                 at the six vendors this build ships would read as the whole of
                 what an agent can reach. A link rather than a tile with an
                 action: it opens the add form where the servers are listed and
-                checked — Tools & MCP, with `?add=server` — so a server added
+                checked, MCP Tools, with `?add=server`, so a server added
                 from here lands beside the others it is compared with. */}
             {show !== "connected" && (
               <a
                 className="int-tile int-tile-more"
-                href={href(["settings", "tools"], { add: "server" })}
+                href={href(["settings", "mcp-tools"], { add: "server" })}
               >
                 <span className="int-brand int-brand-more" aria-hidden>
                   <PlusGlyph size="sm" />

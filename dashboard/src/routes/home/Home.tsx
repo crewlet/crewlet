@@ -86,6 +86,9 @@ import {
   type Widget,
 } from "./board/model.ts";
 import { LeafView } from "./board/widgets.tsx";
+import { widgetShown } from "./board/kit.tsx";
+import { widgetDef } from "./board/registry.tsx";
+import { useServicesRun } from "~/lib/services.ts";
 import { WidgetSettings, configurable, widgetName } from "./board/settings.tsx";
 import { WidgetTray } from "./board/tray.tsx";
 import { openLinksInNewTab } from "./board/newTab.ts";
@@ -107,6 +110,7 @@ const COALESCE_MS = 1000;
 
 export function Home() {
   const data = useHomeData();
+  const runs = useServicesRun();
   const saved = store.use();
   const toast = useToast();
   const [draft, setDraft] = useState<Board | null>(null);
@@ -299,6 +303,13 @@ export function Home() {
   const renderLeaf = (id: string) => {
     const w = findWidget(board, id);
     if (!w || w.kind === "group") return null;
+    // A WIDGET WITH NOTHING TO SHOW where the company does not run its
+    // service draws no cell, and the board closes up over it. It stays on the
+    // saved board, and is drawn again once the company runs it.
+    if (w.kind === "widget") {
+      const def = widgetDef(w.widget);
+      if (def && !widgetShown(def, w.params, runs)) return null;
+    }
     const sizing = sizingOf(w);
     // WORDS WITH NO CARD OF THEIR OWN (a heading, a divider) are drawn bare,
     // centred in the cell they are given.
