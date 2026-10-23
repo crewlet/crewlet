@@ -1405,10 +1405,15 @@ type PendingStore interface {
 	// the row later would learn whichever job the row held by then.
 	//
 	// A RESET THE ROW REFUSES IS AN ERROR, never a launch that went ahead: a
-	// newer lease owns the run, or its ending is decided ([ErrRunEnding]). A
-	// launch told nothing went on to start a job on a row that never named
-	// it, in a box nothing would reclaim. A row that went between the create
-	// and the reset is created again.
+	// newer lease owns the run ([ErrSeatNotHeld]: this node no longer holds
+	// the seat), or its ending is decided ([ErrRunEnding]). The lease is
+	// asked first, so a row a newer lease owns is [ErrSeatNotHeld] whether or
+	// not that lease has decided its ending too, which the seat's next holder
+	// does as it recovers a run it found claimed, fencing it before it ends it
+	// ([Coordinator.RecoverSeat]). A launch told nothing went on to
+	// start a job on a row that never named it, in a box nothing would
+	// reclaim. A row that went between the create and the reset is created
+	// again.
 	//
 	// THE TURN'S NOTES ([PendingRun.Steer]) ARE KEPT by a reset — every note,
 	// read or waiting, with its numbering and the seat anchor — and created
@@ -1626,6 +1631,17 @@ type PendingStore interface {
 	// attach naming a command records the job STARTED on the job's record
 	// ([LaunchRecord.Started]) in the same write, and no later write of the
 	// job unsays it: the box and its command may go, the job still ran.
+	//
+	// A REFUSED ATTACH IS AN ERROR, as a refused relaunch is
+	// ([PendingStore.BeginLaunch]), with the same two answers asked in the
+	// same order: a newer lease owns the run ([ErrSeatNotHeld]), whether or
+	// not its ending is decided too, or its ending is decided
+	// ([ErrRunEnding]). The caller is a launch about to start a job in that
+	// box, which must abandon the box rather than run a job the row does not
+	// name. The box is attached after it is made and set up, which can take
+	// minutes, and a seat that moves meanwhile reaches this as the ending its
+	// next holder decided, or as no record at all: that holder ends a
+	// launching run without fencing it ([Coordinator.RecoverSeat]).
 	AttachSandbox(ctx context.Context, turnID string, box BoxRef, fence Fence) error
 
 	// MarkBoxPaused and ReleaseBox are the two halves of the box record:

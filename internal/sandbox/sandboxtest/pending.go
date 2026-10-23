@@ -87,6 +87,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"AStopOfAJobACollectionReadIsRefused", testAStopOfAJobACollectionReadIsRefused},
 		{"AJobKeepsTheInstantItWasFirstCollected", testAJobKeepsTheInstantItWasFirstCollected},
 		{"ARefusedRelaunchIsAnError", testARefusedRelaunchIsAnError},
+		{"ANewerLeasesEndingIsStillASeatNotHeld", testANewerLeasesEndingIsStillASeatNotHeld},
 		{"AnEndingIsNotAStatus", testAnEndingIsNotAStatus},
 		{"EveryLaunchIsNamedAnew", testEveryLaunchIsNamedAnew},
 		{"AClaimForAnotherLaunchIsRefused", testAClaimForAnotherLaunchIsRefused},
@@ -674,6 +675,11 @@ func testALaunchARowsNewerLeaseOutranksIsRefused(t *testing.T, s sandbox.Pending
 	opened, err := s.BeginLaunch(ctx, run("t-outranked"), sandbox.Fence{Owner: "node-a:1", Epoch: 3})
 	if err == nil {
 		t.Fatalf("a launch under a lease a newer one outranks was opened as job %q", opened.LaunchID)
+	}
+	// THE REFUSAL SAYS THE SEAT MOVED, the one fact a launch's caller acts on:
+	// this node no longer holds the seat, so nothing it starts is anybody's.
+	if !errors.Is(err, sandbox.ErrSeatNotHeld) {
+		t.Errorf("a launch under an outgrown lease = %v, want ErrSeatNotHeld", err)
 	}
 	if got := mustGet(t, s, "t-outranked"); got.LaunchID != first || got.Status != sandbox.StatusRunning {
 		t.Errorf("the refused launch moved the row: job %q status %q, want %q %q",
@@ -2056,8 +2062,8 @@ func testARefusedRelaunchIsAnError(t *testing.T, s sandbox.PendingStore) {
 		t.Fatalf("ClaimOwnership: %v", err)
 	}
 	before := mustGet(t, s, "t1")
-	if _, err := s.BeginLaunch(ctx, run("t1"), sandbox.Fence{Owner: "node-a:1", Epoch: 3}); err == nil {
-		t.Fatal("a relaunch under a lease the run's outranks answered as if it landed")
+	if _, err := s.BeginLaunch(ctx, run("t1"), sandbox.Fence{Owner: "node-a:1", Epoch: 3}); !errors.Is(err, sandbox.ErrSeatNotHeld) {
+		t.Fatalf("a relaunch under a lease the run's outranks = %v, want ErrSeatNotHeld", err)
 	}
 	if got := mustGet(t, s, "t1"); got.LaunchID != before.LaunchID || got.Status != sandbox.StatusRunning {
 		t.Fatalf("the refused relaunch moved the run: %q under %q", got.Status, got.LaunchID)
@@ -2065,6 +2071,39 @@ func testARefusedRelaunchIsAnError(t *testing.T, s sandbox.PendingStore) {
 	decide(t, s, "t1", everyJob(sandbox.Fence{}, sandbox.Active))
 	if _, err := s.BeginLaunch(ctx, run("t1"), sandbox.Fence{Owner: "node-b:1", Epoch: 5}); !errors.Is(err, sandbox.ErrRunEnding) {
 		t.Fatalf("a relaunch of a run whose ending is decided = %v, want ErrRunEnding", err)
+	}
+}
+
+// A NEWER LEASE'S ENDING IS STILL A SEAT NOT HELD to the launch it outranks.
+//
+// The seat's next holder recovers a run it finds claimed by fencing it to its
+// own lease before it ends it, so the old holder's relaunch of it, its resumed
+// turn's, almost always meets an ending as well as the newer lease. Answered
+// [sandbox.ErrRunEnding], the launch was told its own turn was closing the
+// run, when what happened is that the seat moved. A launch under the lease
+// that decided the ending is still told the ending.
+func testANewerLeasesEndingIsStillASeatNotHeld(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	old := sandbox.Fence{Owner: "node-a:1", Epoch: 3}
+	if _, err := s.BeginLaunch(ctx, run("t1"), old); err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+	if ok, err := s.ClaimOwnership(ctx, "t1", "node-b:1", 7); err != nil || !ok {
+		t.Fatalf("ClaimOwnership = %v, %v", ok, err)
+	}
+	newer := sandbox.Fence{Owner: "node-b:1", Epoch: 7}
+	decide(t, s, "t1", everyJob(newer, sandbox.Active))
+	if _, err := s.BeginLaunch(ctx, run("t1"), old); !errors.Is(err, sandbox.ErrSeatNotHeld) {
+		t.Errorf("a relaunch under the outgrown lease = %v, want ErrSeatNotHeld", err)
+	}
+	if err := s.AttachSandbox(ctx, "t1", sandbox.BoxRef{SandboxID: "box-1"}, old); !errors.Is(err, sandbox.ErrSeatNotHeld) {
+		t.Errorf("an attach under the outgrown lease = %v, want ErrSeatNotHeld", err)
+	}
+	if err := s.AttachSandbox(ctx, "t1", sandbox.BoxRef{SandboxID: "box-1"}, newer); !errors.Is(err, sandbox.ErrRunEnding) {
+		t.Errorf("an attach under the lease that decided the ending = %v, want ErrRunEnding", err)
+	}
+	if got := mustGet(t, s, "t1"); got.SandboxID != "" {
+		t.Errorf("a refused attach recorded box %q", got.SandboxID)
 	}
 }
 
@@ -2086,8 +2125,8 @@ func testAStaleFenceCannotWrite(t *testing.T, s sandbox.PendingStore) {
 	// a job in that box, which must abandon the box rather than run a job
 	// the row does not name.
 	if err := s.AttachSandbox(t.Context(), "t1",
-		sandbox.BoxRef{SandboxID: "ghost"}, stale); err == nil {
-		t.Fatal("a stale fence's attach answered as if it landed")
+		sandbox.BoxRef{SandboxID: "ghost"}, stale); !errors.Is(err, sandbox.ErrSeatNotHeld) {
+		t.Fatalf("a stale fence's attach = %v, want ErrSeatNotHeld", err)
 	}
 	if got := mustGet(t, s, "t1"); got.SandboxID != "" {
 		t.Errorf("a stale fence attached a box: %q", got.SandboxID)

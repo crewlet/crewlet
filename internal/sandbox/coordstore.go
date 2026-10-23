@@ -154,17 +154,12 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 		if made {
 			return created, nil
 		}
-		opened, reset, held, err := s.resetLaunch(ctx, run, fence)
+		opened, reset, err := s.resetLaunch(ctx, run, fence)
 		if err != nil {
 			return PendingRun{}, err
 		}
 		if reset {
 			return opened, nil
-		}
-		if held > 0 {
-			return PendingRun{}, fmt.Errorf("sandbox: run %s is held by a newer lease "+
-				"(epoch %d, this launch's %d), so no job was opened on it",
-				run.TurnID, held, fence.Epoch)
 		}
 		// The row went between the create and the reset: create it again.
 	}
@@ -175,8 +170,8 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 
 // resetLaunch is [CoordStore.BeginLaunch]'s half for a row that was already
 // there — a second launch in this turn, or a redelivered kick-off —
-// reporting the row as it reset it, whether it did and, where a newer lease
-// refused it, that lease's epoch. Neither is a row that is gone.
+// reporting the row as it reset it and whether it did; a row that is gone is
+// neither.
 //
 // Only the LAUNCH-SCOPED state is reset: the identity fields stay the existing
 // row's, and so does the box reference — its id, its cell, its CLI and its
@@ -194,18 +189,13 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 // second time, as this job's.
 //
 // A RESET THE ROW REFUSES IS NEVER A LAUNCH THAT WENT AHEAD: a newer lease
-// owns the run (the epoch reported), or its ending is decided — an error
-// wrapping [ErrRunEnding]. Answered as a launch, either would start a job in a
-// box the row did not record — killed under it by the ending, or billed and
-// named by nothing.
-func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fence) (PendingRun, bool, int64, error) {
-	var held int64
+// owns the run — an error wrapping [ErrSeatNotHeld] — or its ending is decided
+// — one wrapping [ErrRunEnding] ([CoordStore.mutateFenced] says which wins).
+// Answered as a launch, either would start a job in a box the row did not
+// record — killed under it by the ending, or billed and named by nothing.
+func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fence) (PendingRun, bool, error) {
 	var prior PriorBox
-	opened, reset, err := s.mutateLive(ctx, run.TurnID, func(existing *PendingRun) bool {
-		if outranked(*existing, fence) {
-			held = existing.OwnerEpoch
-			return false
-		}
+	opened, reset, err := s.mutateFenced(ctx, run.TurnID, fence, func(existing *PendingRun) bool {
 		// READ BEFORE THE RESET, inside the same compare-and-swap, so the
 		// box handed to the launch is exactly the one the write replaced.
 		prior = PriorBox{
@@ -303,12 +293,12 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		return true
 	})
 	if err != nil {
-		return PendingRun{}, false, 0, fmt.Errorf("sandbox: relaunch run %s: %w", run.TurnID, err)
+		return PendingRun{}, false, fmt.Errorf("sandbox: relaunch run %s: %w", run.TurnID, err)
 	}
 	if reset {
 		opened.Prior = prior
 	}
-	return opened, reset, held, nil
+	return opened, reset, nil
 }
 
 // Get returns one run by turn id.
@@ -853,16 +843,15 @@ func (s *CoordStore) MarkLost(ctx context.Context, turnID, launch string, loss J
 //
 // A REFUSED ATTACH IS AN ERROR, like a refused relaunch ([CoordStore.BeginLaunch]):
 // the caller is a launch about to start a job in this box, and a row that did
-// not take it — a newer lease owns the run, or its ending is decided — names
-// some other box, so the launch abandons the box it holds rather than running a
-// job nothing will reclaim.
+// not take it — a newer lease owns the run ([ErrSeatNotHeld]), or its ending is
+// decided ([ErrRunEnding]) — names some other box, so the launch abandons the
+// box it holds rather than running a job nothing will reclaim. The attach
+// comes after the box is made and set up, which can take minutes, and the
+// seat can move meanwhile; but its next holder ends a launching run without
+// fencing it ([Coordinator.RecoverSeat]), so that move reaches the attach as
+// the ending, or as no record at all, rather than as a newer lease.
 func (s *CoordStore) AttachSandbox(ctx context.Context, turnID string, box BoxRef, fence Fence) error {
-	outrankedBy := int64(0)
-	_, attached, err := s.mutateLive(ctx, turnID, func(run *PendingRun) bool {
-		if outranked(*run, fence) {
-			outrankedBy = run.OwnerEpoch
-			return false
-		}
+	_, attached, err := s.mutateFenced(ctx, turnID, fence, func(run *PendingRun) bool {
 		run.SandboxID = box.SandboxID
 		run.CommandID = box.CommandID
 		// A COMMAND IS A JOB THAT STARTED, recorded on the job's own record
@@ -895,9 +884,6 @@ func (s *CoordStore) AttachSandbox(ctx context.Context, turnID string, box BoxRe
 	switch {
 	case err != nil:
 		return fmt.Errorf("sandbox: attach box %s to run %s: %w", box.SandboxID, turnID, err)
-	case outrankedBy > 0:
-		return fmt.Errorf("sandbox: attach box %s to run %s: a newer lease (epoch %d) than the "+
-			"launch's (%d) owns it", box.SandboxID, turnID, outrankedBy, fence.Epoch)
 	case !attached:
 		return fmt.Errorf("sandbox: attach box %s to run %s: the run has no record", box.SandboxID, turnID)
 	}
@@ -1178,11 +1164,30 @@ func (s *CoordStore) mutate(ctx context.Context, turnID string, decide func(*Pen
 }
 
 // mutateLive is [CoordStore.mutate] for a write whose caller must hear that the
-// run's ending refused it — a launch, an attach, a park, a status move: each is
-// followed by work that assumes the write landed. The refusal is
-// [ErrRunEnding].
+// run's ending refused it — a park, a status move: each is followed by work
+// that assumes the write landed. The refusal is [ErrRunEnding].
 func (s *CoordStore) mutateLive(ctx context.Context, turnID string, decide func(*PendingRun) bool) (PendingRun, bool, error) {
-	return s.write(ctx, turnID, true, decide)
+	return s.write(ctx, turnID, true, Fence{}, decide)
+}
+
+// mutateFenced is [CoordStore.mutateLive] for a launch's own writes (its
+// relaunch and its attach), which carry the launching lease: a row a newer
+// lease owns refuses them with [ErrSeatNotHeld], whether or not its ending is
+// decided too.
+//
+// THE LEASE IS ASKED FIRST. The seat's next holder recovers a run it finds
+// claimed, which its resumed turn may be relaunching, by fencing it to its
+// own lease before it ends it ([Coordinator.RecoverSeat]), so that relaunch,
+// on the node that lost the seat, almost always met an ending as well as the
+// newer lease, and was answered [ErrRunEnding]: a run this lease's own turn
+// is closing, rather than a seat this node no longer holds, which is what
+// happened. A run it finds launching it ends without fencing, so an attach
+// there meets that ending, or no record at all, and never this refusal. A
+// zero fence asks nothing, as [outranked] says.
+func (s *CoordStore) mutateFenced(ctx context.Context, turnID string, fence Fence,
+	decide func(*PendingRun) bool) (PendingRun, bool, error) {
+
+	return s.write(ctx, turnID, true, fence, decide)
 }
 
 // mutateAny is [CoordStore.mutate] for the writes a run whose ending is decided
@@ -1190,11 +1195,12 @@ func (s *CoordStore) mutateLive(ctx context.Context, turnID string, decide func(
 // what it handed back), and the facts that are true whoever holds the row (a
 // lease stamped on it, a bridged call it made).
 func (s *CoordStore) mutateAny(ctx context.Context, turnID string, decide func(*PendingRun) bool) (PendingRun, bool, error) {
-	return s.write(ctx, turnID, false, decide)
+	return s.write(ctx, turnID, false, Fence{}, decide)
 }
 
-// write is the read-decide-write itself; live refuses a run whose ending is
-// decided, with [ErrRunEnding].
+// write is the read-decide-write itself. live refuses a run whose ending is
+// decided, with [ErrRunEnding], and a fence a newer lease outranks refuses the
+// write before that, with [ErrSeatNotHeld].
 //
 // THE STORE RUNS IT ([coord.SandboxRuns.MutateSandboxRun]), and on a lost race
 // it RE-READS AND RE-DECIDES rather than re-writing what was computed: the
@@ -1202,10 +1208,10 @@ func (s *CoordStore) mutateAny(ctx context.Context, turnID string, decide func(*
 // decided its ending, and every condition decide evaluates is evaluated
 // against fields it could have changed. So decide may run more than once, on
 // a fresh copy of the row each time, and what this answers is the last run's.
-func (s *CoordStore) write(ctx context.Context, turnID string, live bool,
+func (s *CoordStore) write(ctx context.Context, turnID string, live bool, fence Fence,
 	decide func(*PendingRun) bool,
 ) (PendingRun, bool, error) {
-	next, won, _, err := s.writeFound(ctx, turnID, live, decide)
+	next, won, _, err := s.writeFound(ctx, turnID, live, fence, decide)
 	return next, won, err
 }
 
@@ -1214,7 +1220,7 @@ func (s *CoordStore) write(ctx context.Context, turnID string, live bool,
 // caller keeping what an earlier attempt decided — before it lost a race to a
 // write that removed the record — reads this to know that decision is not the
 // answer.
-func (s *CoordStore) writeFound(ctx context.Context, turnID string, live bool,
+func (s *CoordStore) writeFound(ctx context.Context, turnID string, live bool, fence Fence,
 	decide func(*PendingRun) bool,
 ) (PendingRun, bool, bool, error) {
 	var (
@@ -1226,6 +1232,11 @@ func (s *CoordStore) writeFound(ctx context.Context, turnID string, live bool,
 		if err != nil {
 			refused = err
 			return coord.SandboxRunChange{}, err
+		}
+		if outranked(run, fence) {
+			refused = fmt.Errorf("sandbox: run %s is held by a newer lease (epoch %d) than "+
+				"this write's (%d): %w", turnID, run.OwnerEpoch, fence.Epoch, ErrSeatNotHeld)
+			return coord.SandboxRunChange{}, refused
 		}
 		if live && run.Ending != nil {
 			refused = fmt.Errorf("sandbox: run %s: %w", turnID, ErrRunEnding)
