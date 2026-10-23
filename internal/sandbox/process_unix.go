@@ -27,6 +27,14 @@ const unsupportedReason = ""
 // a timeout the whole tree is killed, not just the process the engine holds.
 // `docker run` spawning a stuck child is precisely the case — killing the CLI
 // alone would leave it behind.
+//
+// ITS OWN TIMEOUT IS AN EXIT, 124, and A CALLER THAT CANCELLED IS AN ERROR
+// carrying that cancellation: the tree is killed either way, but a command
+// the caller gave up on did not run out of anything, and answered as 124 it
+// was told as the box timing out, or as a container image the runtime would
+// not start, about a launch this node had cancelled. A deadline of the
+// caller's is the command not finishing in the time it had, so it is the 124
+// too.
 func runHost(ctx context.Context, cmd hostCommand) (ExecResult, error) {
 	if len(cmd.argv) == 0 {
 		return ExecResult{}, errors.New("sandbox: runHost needs a command")
@@ -46,6 +54,7 @@ func runHost(ctx context.Context, cmd hostCommand) (ExecResult, error) {
 	}
 	// Not exec.CommandContext: its Cancel kills the immediate child only,
 	// and the whole reason for the session is that the tree outlives it.
+	caller := ctx
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -88,6 +97,10 @@ func runHost(ctx context.Context, cmd hostCommand) (ExecResult, error) {
 		// an image that does not exist — and left the operator "timed out
 		// after 30s" and nothing to act on. stdout was kept on this path all
 		// along; stderr is where a stuck child explains itself.
+		if cancelledBy(caller) {
+			return ExecResult{Stdout: stdout.String(), Stderr: stderr.String()},
+				fmt.Errorf("sandbox: %s was stopped by its caller: %w", cmd.argv[0], caller.Err())
+		}
 		detail := fmt.Sprintf("timed out after %s", timeout)
 		if said := strings.TrimSpace(stderr.String()); said != "" {
 			detail += "\n" + said

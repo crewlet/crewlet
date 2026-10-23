@@ -951,6 +951,12 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	result, err := runHost(ctx, l.cli.command(0, l.runArgv(ctx, layout, name)...))
 	if err != nil || result.ExitCode != 0 {
 		_ = os.RemoveAll(layout.root)
+		if cancelledBy(ctx) {
+			// THIS NODE CANCELLED THE LAUNCH, which says nothing about the
+			// image: classed as one, a drain was told as a setup to fix.
+			return nil, fmt.Errorf("sandbox: starting container sandbox %s was "+
+				"abandoned: %w", id, ctx.Err())
+		}
 		detail := strings.TrimSpace(result.Stderr)
 		if detail == "" {
 			detail = strings.TrimSpace(result.Stdout)

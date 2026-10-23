@@ -837,6 +837,8 @@ A `run_sandbox` call that could not start a run is a failed tool call, never a l
 | `provider_limit` | E2B is at the account's limit of boxes or requests (429) | Try again later |
 | `provider_unavailable` | E2B or the box didn't answer, failed on its side (408, 5xx), or a box went away mid-command, or a container runtime didn't answer the mount probe in time | Try again shortly |
 
+A [box-mode](llm-backends.md#box-mode) executor whose own box couldn't be started fails its phase rather than a tool call, and the phase and the turn carry the class as their `error_kind`, `sandbox_` before it (`sandbox_provider_refused`, …). A launch this node cancelled (a drain, a lease it lost, a turn a person stopped) is no class: it's `canceled`, however far the provider's request or the container runtime had got.
+
 Three answers aren't sandbox classes. A node that no longer holds the seat starts nothing for it, and the seat is told to finish without the run. A turn whose coding run is being closed (its ending is decided) takes no new run, and the seat is told the same. A failure no backend classed is either a condition of the node, told in its own words with a wait where one helps (a coordination store that didn't answer, the call running out of time), or a fault of the node itself, logged as `builtin_tool_fault` and told as one. A box the engine host couldn't make a directory for is that fault.
 
 What an operator should recognize:

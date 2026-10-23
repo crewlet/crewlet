@@ -1573,8 +1573,11 @@ func TestATimedOutControlCommandTakesItsChildrenWithIt(t *testing.T) {
 	}
 
 	cancel()
-	if err := <-done; err != nil {
-		t.Fatalf("runHost: %v", err)
+	// THE CALLER'S CANCELLATION IS ITS OWN ANSWER, never the command's
+	// timeout: answered as 124, a cancelled launch was told as a box that
+	// timed out or an image the runtime would not start.
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("runHost cancelled by its caller answered %v; want the cancellation", err)
 	}
 	if !procgrouptest.AwaitGone(t, child, 5*time.Second) {
 		t.Fatal("a cancelled control command left its grandchild running")

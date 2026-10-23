@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"context"
 	"errors"
 	"net/http"
 )
@@ -152,6 +153,28 @@ func Because(why Why, err error) error {
 		return nil
 	}
 	return &becauseError{class: why, err: err}
+}
+
+// unanswered marks err, a request a provider or a box didn't answer, as
+// [WhyProviderUnavailable], unless the CALLER CANCELLED it.
+//
+// A CANCELLATION IS THE CALLER'S OWN ACT, never the provider failing: a drain,
+// a lease lost or a turn stopped cancels the request, and marked, a reader that
+// can't see the context (runner.ErrorKind, a tool's sentence) told it as the
+// provider not answering and sent an operator to it. A request whose own bound
+// ended it (an idle watchdog cancelling the exchange it guards, a deadline the
+// caller set) is still marked: the provider didn't answer in it.
+func unanswered(ctx context.Context, err error) error {
+	if cancelledBy(ctx) {
+		return err
+	}
+	return Because(WhyProviderUnavailable, err)
+}
+
+// cancelledBy reports whether ctx, a caller's context, was cancelled rather
+// than run out of time.
+func cancelledBy(ctx context.Context) bool {
+	return errors.Is(ctx.Err(), context.Canceled)
 }
 
 // becauseError is [Because]'s mark.
