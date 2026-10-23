@@ -36,6 +36,7 @@ import type { McpServersStatusAnswer } from "../contract/mcp.ts";
 import type { CredentialPoolAnswer } from "../contract/credentials.ts";
 import type { Coverage } from "../contract/coverage.ts";
 import type { OrgServices } from "../contract/services.ts";
+import type { LimitsAnswer } from "../contract/limits.ts";
 import type { SignInPolicyAnswer } from "../contract/signin.ts";
 import type { EngineHealth } from "../contract/health.ts";
 import type { StopReason } from "../contract/stops.ts";
@@ -6123,6 +6124,7 @@ export interface QueryMap {
   sandbox_tail: SandboxTailAnswer;
   retention: RetentionReport;
   sign_in_policy: SignInPolicyAnswer;
+  limits: LimitsAnswer;
   work_items: WorkItemsAnswer;
   work_item: WorkItemDetail;
   work_comments: WorkCommentsAnswer;

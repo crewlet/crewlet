@@ -660,6 +660,11 @@ func Register(r *Registry, s Sources) {
 		// which is a real state an operator needs to see and is not the
 		// same as the question being unavailable here.
 		r.Register("budgets", Everybody(), s.budgets)
+		// THE CAPS A TURN IS HELD TO, as the engine enforces them, beside
+		// its defaults: read from the company document, and the
+		// configuration's, so an administrator's like the `config`
+		// question it is read beside. See [LimitRow].
+		r.Register("limits", Requires(iam.GrantAdmin), s.companyLimits)
 		// Both are projections of the epoch: what the company DECLARES,
 		// which is a different question from what it has done.
 		r.Register("schedules", Everybody(), s.schedules)
