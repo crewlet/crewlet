@@ -9,7 +9,7 @@
  * this product's data and routes:
  *
  *  - a glyph is named (`icon: GlyphName`, the prop every screen fills in), and
- *    the name to drawing lookup is `~/ui/glyph.tsx`'s;
+ *    the name to drawing lookup is the icons registry's `NamedGlyph`;
  *  - a fact's link is a route (`path` and `query`), turned into an href here;
  *  - who set a value names the turn that did it by id, and the turn's page is
  *    a route of ours.
@@ -34,7 +34,7 @@ import {
 } from "@crewlethq/ui";
 import type { GlyphName } from "@crewlethq/icons/glyphs";
 import { href } from "../router.tsx";
-import { Mark } from "~/ui/glyph.tsx";
+import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 
 /** Who last changed a value, as the engine's change log records it. */
 export interface SetBy {
@@ -143,7 +143,7 @@ export function ObjectHeader({
   return (
     <KitObjectHeader
       kind={kind}
-      icon={typeof icon === "string" ? <Mark name={icon} size="xs" /> : icon}
+      icon={typeof icon === "string" ? <NamedGlyph name={icon} size="xs" /> : icon}
       description={description}
       identifier={identifier}
       within={within}

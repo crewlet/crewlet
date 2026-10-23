@@ -45,7 +45,7 @@ import {
 import type { GlyphName } from "@crewlethq/icons/glyphs";
 import { useParam } from "../router.tsx";
 import { peekHref, usePeek } from "./DetailRail.tsx";
-import { Mark } from "~/ui/glyph.tsx";
+import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import { useKeymap } from "../keymap.ts";
 
 const drivable: string[] = [];
@@ -184,7 +184,7 @@ export function DataGrid<T>({
           title: empty.title,
           hint: empty.hint,
           action: empty.action,
-          icon: empty.icon && <Mark name={empty.icon} size={32} />,
+          icon: empty.icon && <NamedGlyph name={empty.icon} size={32} />,
         }
       }
     />

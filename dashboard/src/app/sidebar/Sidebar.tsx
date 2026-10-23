@@ -88,7 +88,7 @@ import {
 import { useServicesKnown, useServicesRun } from "~/lib/services.ts";
 import { useNeedsYouCount } from "~/lib/decisions.ts";
 import { accessNames, type Grant } from "~/lib/access.ts";
-import { glyphFor } from "~/ui/glyph.tsx";
+import { glyphFor } from "@crewlethq/icons/glyphs/registry";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useHeldGrants, useViewer } from "~/lib/viewer.ts";
 import { useAgents, useConnection, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";

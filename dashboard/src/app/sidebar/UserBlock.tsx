@@ -132,7 +132,7 @@ import { isThemeId } from "@crewlethq/tokens";
 import { KeyGlyph, LogInGlyph, LogOutGlyph, PaletteGlyph } from "@crewlethq/icons/glyphs";
 import { THEME_OPTIONS, useApplyTheme } from "~/app/appearance.tsx";
 import { useNavigator, useRoute } from "~/app/router.tsx";
-import { Mark } from "~/ui/glyph.tsx";
+import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { previewPalette, useViewerPrefs } from "~/lib/prefs.ts";
 import { refusalText } from "~/lib/refusal.ts";
@@ -412,7 +412,7 @@ export function useAccountMenu(
       label: ws.label,
       description:
         ws.key === ACCOUNT.key ? "Password, two-step verification and sessions" : ws.hint,
-      icon: <Mark name={ws.icon} />,
+      icon: <NamedGlyph name={ws.icon} />,
       onSelect: () => {
         preload(ws.path);
         nav.to(ws.path);

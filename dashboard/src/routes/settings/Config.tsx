@@ -18,7 +18,7 @@
  */
 
 import { useCallback, useMemo } from "react";
-import { Mark } from "~/ui/glyph.tsx";
+import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import { href, useParam } from "~/app/router.tsx";
 import {
   ButtonLink,
@@ -658,10 +658,14 @@ export function ConfigScreen({
             value={lens}
             onValueChange={setLens}
             options={[
-              { value: "active", label: "Active", icon: <Mark name="file-text" size="xs" /> },
-              { value: "entities", label: "Entities", icon: <Mark name="layers" size="xs" /> },
-              { value: "audit", label: "History", icon: <Mark name="clock" size="xs" /> },
-              { value: "diff", label: "Diff", icon: <Mark name="split" size="xs" /> },
+              { value: "active", label: "Active", icon: <NamedGlyph name="file-text" size="xs" /> },
+              {
+                value: "entities",
+                label: "Entities",
+                icon: <NamedGlyph name="layers" size="xs" />,
+              },
+              { value: "audit", label: "History", icon: <NamedGlyph name="clock" size="xs" /> },
+              { value: "diff", label: "Diff", icon: <NamedGlyph name="split" size="xs" /> },
             ]}
           />
         </PageActions>

@@ -33,7 +33,7 @@
  */
 
 import { useMemo } from "react";
-import { Mark } from "~/ui/glyph.tsx";
+import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import { Card, EmptyValue, InlineCode, Skeleton, Tag, TableTextCell } from "@crewlethq/ui";
 import { ServerGlyph, LayersGlyph } from "@crewlethq/icons/glyphs";
 
@@ -197,7 +197,7 @@ export function DomainScreen({ name }: { name: string }) {
                       key: "node",
                       header: "Node",
                       cell: (p) => (
-                        <TableTextCell icon={<Mark name={"server"} size="xs" />}>
+                        <TableTextCell icon={<NamedGlyph name={"server"} size="xs" />}>
                           {p.node_id}
                         </TableTextCell>
                       ),

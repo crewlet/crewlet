@@ -23,7 +23,7 @@ import {
   Text,
 } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
-import { Mark } from "~/ui/glyph.tsx";
+import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import { firstLine } from "~/lib/format.ts";
 import type { OrgIndex } from "~/lib/seats.ts";
 import type { ItemRef } from "~/lib/work.ts";
@@ -339,7 +339,7 @@ export function Badge({ row, who, size = 24 }: { row: InboxRow; who: Who | null;
   if (row.kind === "condition") {
     return (
       <span className="attention-icon inbox-badge" data-severity={row.item.severity}>
-        <Mark name={row.item.icon} size="sm" />
+        <NamedGlyph name={row.item.icon} size="sm" />
       </span>
     );
   }
@@ -348,7 +348,7 @@ export function Badge({ row, who, size = 24 }: { row: InboxRow; who: Who | null;
   // left is the engine's own mark.
   return (
     <span className="attention-icon inbox-badge" aria-hidden="true">
-      <Mark name="cpu" size="sm" />
+      <NamedGlyph name="cpu" size="sm" />
     </span>
   );
 }

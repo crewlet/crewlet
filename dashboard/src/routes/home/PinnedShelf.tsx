@@ -19,7 +19,7 @@ import { PinGlyph, PlusGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { resolve } from "~/app/routes.ts";
 import { pathShown, workspaceRow, type Workspace } from "~/app/nav.ts";
-import { glyphFor } from "~/ui/glyph.tsx";
+import { glyphFor } from "@crewlethq/icons/glyphs/registry";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { StateBadge } from "~/components/common.tsx";
 import { useStarred, useToggleStar, type Star } from "~/lib/starred.ts";

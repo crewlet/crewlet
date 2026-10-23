@@ -25,7 +25,7 @@ import {
 // STILL OURS: a task TYPE's mark is named by the company's own type table as a
 // value, and uilet's glyphs are components. The name -> drawing lookup stays in
 // `~/ui/Icon.tsx`, which is where one change moves every caller at once.
-import { Mark } from "~/ui/glyph.tsx";
+import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import { uiletTone } from "~/ui/primitives.tsx";
 import { rowPeekHandler } from "~/app/frame/DetailRail.tsx";
 import {
@@ -114,7 +114,7 @@ export function TypeIcon({
   const name = typeName(type, types) || "Untyped";
   return (
     <span className="work-type" title={name} aria-hidden={decorative || undefined}>
-      <Mark name={typeIcon(type)} size="sm" />
+      <NamedGlyph name={typeIcon(type)} size="sm" />
       {!decorative && <span className="sr-only">{name}</span>}
     </span>
   );

@@ -85,7 +85,7 @@ import { preload } from "../lazyScreen.ts";
 import type { SectionFigure } from "../sidebar/settingsFigures.tsx";
 import { PAGE_ACTIONS_SLOT, PAGE_LENSES_SLOT, lensLabel } from "../frame/PageActions.tsx";
 import { ScopeSwitcher, useScopeFigures } from "./ProjectSwitcher.tsx";
-import { glyphFor } from "~/ui/glyph.tsx";
+import { glyphFor } from "@crewlethq/icons/glyphs/registry";
 import { SeatAvatar, seatBadge } from "~/ui/SeatAvatar.tsx";
 import { useReader } from "~/lib/reader.ts";
 import { MaxStars, starredIn, useStarred, useToggleStar, type Star } from "~/lib/starred.ts";
