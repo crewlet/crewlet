@@ -382,6 +382,7 @@ type capacityRunner interface {
 	AbandonCapacity(ctx context.Context, stream, operationID string, by iam.Actor) (coord.MaintenanceOperation, error)
 	ExcludeParticipant(ctx context.Context, stream, node string, by iam.Actor) (coord.MaintenanceOperation, error)
 	CapacityStatus(ctx context.Context, stream string) (engine.CapacityState, error)
+	CapacityAcks(ctx context.Context, stream string) ([]coord.MaintenanceAck, error)
 	CapacityWindows(ctx context.Context) ([]coord.MaintenanceOperation, []string)
 	Mode() statelog.MaintenanceMode
 }
@@ -590,13 +591,14 @@ func (a *App) serveSetCapacity(w http.ResponseWriter, r *http.Request) {
 		// and those have opposite next steps.
 		log.Warn("api_set_capacity_refused", "stream", stream, "by", by.Name,
 			"operator", by.OperatorID, "error", err)
-		capacityRefused(w, stream, "the capacity change", err, op)
+		a.capacityRefused(w, r, stream, "the capacity change", err, op)
 		return
 	}
 	log.Info("capacity_requested", "by", by.Name, "operator", by.OperatorID,
 		"stream", stream,
 		"target", target, "phase", op.Phase)
-	body := map[string]any{"operation": operationOrNil(op), "mode": a.capacity.Mode()}
+	body := map[string]any{"operation": a.operationOrNil(r.Context(), op),
+		"mode": a.capacity.Mode()}
 	a.windowsLeft(r.Context(), body)
 	writeJSON(w, http.StatusOK, body)
 }
@@ -652,7 +654,7 @@ func (a *App) serveMaintenanceStatus(w http.ResponseWriter, r *http.Request) {
 		body["admissions_unread"] = true
 	}
 	if found {
-		body["operation"] = op
+		body["operation"] = operationWith(op, state.Acks, state.AcksErr)
 		// WHAT IS MISSING, computed here rather than left to a reader:
 		// the whole question an operator runs this for is why the window
 		// hasn't moved, and a list of acknowledgements is that answer only
@@ -766,7 +768,7 @@ func (a *App) capacityGesture(w http.ResponseWriter, r *http.Request, gesture, w
 				"nothing was abandoned: read `crewlet retention maintenance "+
 				"status -stream %s`, then repeat its id in ?confirm=",
 				mismatch.Stream, mismatch.Open, mismatch.Named, mismatch.Stream),
-			"operation": operationOrNil(op),
+			"operation": a.operationOrNil(r.Context(), op),
 		})
 		return
 	}
@@ -774,12 +776,12 @@ func (a *App) capacityGesture(w http.ResponseWriter, r *http.Request, gesture, w
 		log.Warn("api_capacity_gesture_refused", "gesture", gesture,
 			"stream", stream, "by", by.Name, "operator", by.OperatorID,
 			"error", err)
-		capacityRefused(w, stream, what, err, op)
+		a.capacityRefused(w, r, stream, what, err, op)
 		return
 	}
 	log.Info("capacity_gesture", "by", by.Name, "operator", by.OperatorID,
 		"gesture", gesture, "stream", stream)
-	body := map[string]any{"operation": operationOrNil(op)}
+	body := map[string]any{"operation": a.operationOrNil(r.Context(), op)}
 	a.windowsLeft(r.Context(), body)
 	writeJSON(w, http.StatusOK, body)
 }
@@ -790,8 +792,8 @@ func (a *App) capacityGesture(w http.ResponseWriter, r *http.Request, gesture, w
 // is a fault, `500 capacity_failed`, told here and kept in the log the caller
 // has already written. Each carries the operation where there is one, since
 // "never opened" and "open and stuck" have opposite next steps.
-func capacityRefused(w http.ResponseWriter, stream, what string, err error,
-	op coord.MaintenanceOperation) {
+func (a *App) capacityRefused(w http.ResponseWriter, r *http.Request, stream, what string,
+	err error, op coord.MaintenanceOperation) {
 
 	if errors.Is(err, engine.ErrUnknownStream) {
 		unknownStream(w, stream, err)
@@ -799,22 +801,56 @@ func capacityRefused(w http.ResponseWriter, stream, what string, err error,
 	}
 	if said, ok := statelog.Tell(err); ok {
 		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeCapacityRefused,
-			httpjson.Detail{"detail": said, "operation": operationOrNil(op)})
+			httpjson.Detail{"detail": said, "operation": a.operationOrNil(r.Context(), op)})
 		return
 	}
 	httpjson.FailWithFields(w, http.StatusInternalServerError, httpjson.CodeCapacityFailed,
 		httpjson.Detail{"detail": fmt.Sprintf("%s on %s stopped on an error, and "+
 			"this node's log says which. Read where it stands with `crewlet "+
 			"retention maintenance status -stream %s` before going on", what,
-			stream, stream), "operation": operationOrNil(op)})
+			stream, stream), "operation": a.operationOrNil(r.Context(), op)})
 }
 
 // operationOrNil renders an operation, or nil where there is none — so a
 // reader can tell "no window" from "a window in phase opened", which are
 // different facts with different next steps.
-func operationOrNil(op coord.MaintenanceOperation) any {
+//
+// A BLOCKED WINDOW'S SENTENCE READS ITS ACKNOWLEDGEMENTS: what closes an
+// abandoned window is its seal's to say ([statelog.BlockedDetail]), so they are
+// read here for a blocked one, and their failure to read is the sentence's to
+// say. An unblocked one reads nothing more.
+func (a *App) operationOrNil(ctx context.Context, op coord.MaintenanceOperation) any {
+	var (
+		acks []coord.MaintenanceAck
+		err  error
+	)
+	if op.OperationID != "" && op.Blocked != "" {
+		acks, err = a.capacity.CapacityAcks(ctx, op.Stream)
+		if err != nil {
+			log.Warn("api_maintenance_part_unreadable", "stream", op.Stream,
+				"part", "acknowledgements", "error", err)
+		}
+	}
+	return operationWith(op, acks, err)
+}
+
+// operationWith renders an operation with the acknowledgements its block's
+// sentence is decided by, or nil where there is none.
+func operationWith(op coord.MaintenanceOperation, acks []coord.MaintenanceAck,
+	acksErr error) any {
+
 	if op.OperationID == "" {
 		return nil
 	}
-	return op
+	return operationAnswer{MaintenanceOperation: op,
+		BlockedDetail: statelog.BlockedDetail(op, acks, acksErr)}
+}
+
+// operationAnswer is an operation as every answer here carries it: the record,
+// whose `blocked` is a code for scripts, and `blocked_detail`, the sentence a
+// person reads for it ([statelog.BlockedDetail]), so no client has to turn a
+// code into words of its own or print the code.
+type operationAnswer struct {
+	coord.MaintenanceOperation
+	BlockedDetail string `json:"blocked_detail,omitempty"`
 }

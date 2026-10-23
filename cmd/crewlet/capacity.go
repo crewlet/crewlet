@@ -17,6 +17,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -174,7 +175,6 @@ type capacityOperation struct {
 		ResolvedAt time.Time `json:"resolved_at"`
 		Evidence   string    `json:"evidence"`
 	} `json:"journal"`
-	Blocked    string    `json:"blocked"`
 	EnteredAt  time.Time `json:"entered_at"`
 	By         string    `json:"by"`
 	OperatorID string    `json:"operator_id"`
@@ -183,6 +183,14 @@ type capacityOperation struct {
 	// an author and the credential they made it through.
 	ExcludedBy  map[string]capacityParty `json:"excluded_by"`
 	AbandonedBy capacityParty            `json:"abandoned_by"`
+
+	// Blocked is why the window can't go on without a person, as a code
+	// a script branches on, and BlockedDetail the node's sentence for it,
+	// which is what this command prints: the code alone told a person
+	// nothing they could act on. Every node's answer carries the sentence
+	// beside the code, so there is nothing of this command's own to say.
+	Blocked       string `json:"blocked"`
+	BlockedDetail string `json:"blocked_detail"`
 }
 
 // capacityParty is who made one gesture on a window.
@@ -243,18 +251,27 @@ func printOperation(stdout io.Writer, mode string, op capacityOperation, page ca
 	fmt.Fprintf(w, "OPENED\t%s\tby %s\n", stampOrDash(op.EnteredAt),
 		describeAuthor(op.By, op.OperatorID))
 	fmt.Fprintf(w, "THIS NODE\tmode %s\t\n", mode)
-	if op.Blocked != "" {
-		fmt.Fprintf(w, "BLOCKED\t%s\t\n", op.Blocked)
-	}
 	if op.AbandonedBy.By != "" {
 		fmt.Fprintf(w, "ABANDONED\tby %s\t\n", op.AbandonedBy.describe())
 	}
 	_ = w.Flush()
 
+	fmt.Fprintln(stdout)
+	// A WINDOW THAT NEEDS A PERSON SAYS WHY, AND THAT IS ITS NEXT STEP: the
+	// node's sentence names what blocked it and the commands that clear it.
+	// On a line of its own, because a sentence in a table cell set the width
+	// of its column for every row, and the phase's own line beside it would
+	// name a step the block refuses (set-capacity again, on a window out of
+	// attempts). A window closed at `confirmed` is the confirmed lines' to
+	// say.
+	if op.Blocked != "" && op.Phase != "confirmed" {
+		fmt.Fprintf(stdout, "This window needs a person. %s\n", op.BlockedDetail)
+		return
+	}
+
 	// WHAT TO DO NEXT, derived from the phase and NOT a restatement of
 	// the transitions: an operator needs the next gesture, and a list of
 	// evidence rules is the thing that forks.
-	fmt.Fprintln(stdout)
 	verb := fmt.Sprintf("`crewlet retention set-capacity %s %d -confirm %d`",
 		op.Stream, op.TargetMaxBytes, op.TargetMaxBytes)
 	status := ""
@@ -305,7 +322,7 @@ func printOperation(stdout io.Writer, mode string, op capacityOperation, page ca
 		// AN ABANDONED WINDOW IS CONFIRMED AT THE CEILING ITS SEAL FOUND,
 		// which it no longer compares with the target, so saying it was
 		// verified at the target would claim a ceiling the log may not have.
-		abandoned := op.Blocked == statelog.BlockedAbandoned
+		abandoned := op.Blocked == string(coord.BlockAbandoned)
 		switch {
 		case page == pageVerb && abandoned:
 			fmt.Fprintf(stdout, "The window was abandoned and is closed, with the "+
@@ -337,7 +354,8 @@ const maintenanceUsage = `usage: crewlet retention maintenance status|abandon|ex
            holding the window.
   abandon  -confirm <operation-id>
            stop trying to reach the window's target. From opened it clears at
-           once; from anywhere else the fleet still restarts with -mode seal.`
+           once; from anywhere else it closes once its seal holds, which needs
+           every node restarted with -mode seal unless they already are.`
 
 // retentionMaintenance is `crewlet retention maintenance`.
 func retentionMaintenance(environ config.Source, args []string, stdout, stderr io.Writer) error {

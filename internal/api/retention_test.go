@@ -182,6 +182,10 @@ func (f *fakeStateLog) AbandonCapacity(_ context.Context, _, operationID string,
 	if f.abandonClears {
 		return coord.MaintenanceOperation{}, nil
 	}
+	if f.window != nil {
+		// AN ABANDONMENT PAST `opened` answers the window it is carrying.
+		return *f.window, nil
+	}
 	return coord.MaintenanceOperation{}, errors.New("not exercised here")
 }
 
@@ -208,6 +212,12 @@ func (f *fakeStateLog) CapacityStatus(context.Context, string) (engine.CapacityS
 	}
 	return engine.CapacityState{Op: *f.window, Found: true, Acks: f.acks,
 		AcksErr: f.acksErr, Admissions: f.admissions, AdmissionsErr: f.admissionsErr}, nil
+}
+
+func (f *fakeStateLog) CapacityAcks(context.Context, string) ([]coord.MaintenanceAck, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.acks, f.acksErr
 }
 
 func (f *fakeStateLog) CapacityWindows(context.Context) ([]coord.MaintenanceOperation, []string) {
@@ -417,6 +427,67 @@ func TestAnAbandonmentIsConfirmedBeforeItRuns(t *testing.T) {
 	}
 	if op, _ := body["operation"].(map[string]any); op["operation_id"] != "capacity:open" {
 		t.Errorf("the refusal carries operation %v, want the open one", body["operation"])
+	}
+}
+
+// A BLOCKED OPERATION CARRIES ITS SENTENCE BESIDE ITS CODE, on every answer
+// that carries one.
+//
+// The operation's `blocked` is a code for scripts, and every client printed it
+// as the reason a window needed a person. Each answer carrying an operation
+// now carries `blocked_detail` beside it ([statelog.BlockedDetail]), so a
+// client shows the node's words and never has to make its own. An abandoned
+// window's sentence is decided by its seal, so every answer reads the window's
+// acknowledgements for it. Mutation: answer the bare record from the status or
+// from a gesture, or word a gesture's window without its acknowledgements, and
+// its half fails.
+func TestABlockedOperationCarriesItsSentenceBesideItsCode(t *testing.T) {
+	t.Parallel()
+	window := coord.MaintenanceOperation{
+		Stream: "CREWLET_TRACKER_LOG", OperationID: "capacity:open",
+		Phase: coord.PhaseSealing, Attempt: 1, TargetMaxBytes: 8 << 30,
+		Participants: []string{"node-1"}, Blocked: coord.BlockAbandoned,
+		AbandonedBy:       coord.MaintenanceParty{By: "ana.admin"},
+		WriteIncarnations: map[string]string{"node-1": "node-1:old"},
+	}
+	// THE SEAL HOLDS on these, so the sentence says one set-capacity closes
+	// the window, which only an answer that read them can say.
+	acks := []coord.MaintenanceAck{{Stream: "CREWLET_TRACKER_LOG", NodeID: "node-1",
+		OperationID: "capacity:open", Attempt: 1, Incarnation: "node-1:new", Mode: "seal"}}
+	log := &fakeStateLog{window: &window, acks: acks}
+	b := closedPosture()
+	a := newApp(t, api.Options{Bootstrap: &b, Retention: &fakeBackupRegister{},
+		Capacity: log, Nodes: &fakeNodeGate{}})
+	for name, req := range map[string]*http.Request{
+		"the status": httptest.NewRequest(http.MethodGet,
+			"/worklet/retention/maintenance?stream=CREWLET_TRACKER_LOG", nil),
+		"an abandonment": httptest.NewRequest(http.MethodPost,
+			"/worklet/retention/maintenance/abandon?stream=CREWLET_TRACKER_LOG&confirm=capacity:open", nil),
+	} {
+		req.Header.Set("Authorization", "Bearer secret")
+		rec := httptest.NewRecorder()
+		a.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s answered %d: %s", name, rec.Code, rec.Body)
+		}
+		var body struct {
+			Operation struct {
+				Blocked       string `json:"blocked"`
+				BlockedDetail string `json:"blocked_detail"`
+			} `json:"operation"`
+		}
+		if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body.Operation.Blocked != string(coord.BlockAbandoned) {
+			t.Errorf("%s's operation carries blocked %q, want the code for scripts",
+				name, body.Operation.Blocked)
+		}
+		if want := statelog.BlockedDetail(window, acks, nil); body.Operation.BlockedDetail != want ||
+			!strings.Contains(want, "waiting on no node") {
+			t.Errorf("%s's operation carries blocked_detail %q, want %q", name,
+				body.Operation.BlockedDetail, want)
+		}
 	}
 }
 

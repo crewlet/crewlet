@@ -679,7 +679,9 @@ func TestAnAbandonedWindowSaysWhoAbandonedIt(t *testing.T) {
 		Stream: "CREWLET_TRACKER_LOG", OperationID: "op-9",
 		Phase: "sealing", Attempt: 1,
 		Since: time.Date(2031, 4, 2, 2, 0, 0, 0, time.UTC),
-		By:    "sre@example.com", Blocked: "abandoned_by_operator",
+		By:    "sre@example.com", Blocked: coord.BlockAbandoned,
+		BlockedDetail: "This window was abandoned, so it's no longer trying to " +
+			"reach 8.0 GiB.",
 		AbandonedBy: coord.MaintenanceParty{By: "ana.admin",
 			OperatorID: "pat:0192f00d-0000-7000-8000-00000000000a"},
 	}}
@@ -690,6 +692,14 @@ func TestAnAbandonedWindowSaysWhoAbandonedIt(t *testing.T) {
 		t.Fatalf("retention status: %v", err)
 	}
 	if want := "abandoned by ana.admin (through pat:0192f00d-0000-7000-8000-00000000000a)"; !strings.Contains(stdout, want) {
+		t.Errorf("the banner never says %q:\n%s", want, stdout)
+	}
+	// AND WHY IT IS BLOCKED IN THE NODE'S SENTENCE, never the block's code,
+	// which told a person nothing. Mutation: print m.Blocked and this fails.
+	if strings.Contains(stdout, string(coord.BlockAbandoned)) {
+		t.Errorf("the banner prints the block's code:\n%s", stdout)
+	}
+	if want := "This window was abandoned, so it's no longer trying"; !strings.Contains(stdout, want) {
 		t.Errorf("the banner never says %q:\n%s", want, stdout)
 	}
 }

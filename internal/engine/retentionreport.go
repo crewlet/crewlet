@@ -338,10 +338,16 @@ func (r *retention) openMaintenance(ctx context.Context, read windowsRead) []sta
 		// WHAT COULDN'T BE READ IS SAID AS THAT, never as a list: a list
 		// formed from nothing named every participant as owing a restart,
 		// or no admission as holding the window, and both surfaces print
-		// either as a fact.
-		missing, err := outstanding(ctx, r.fleet, op)
+		// either as a fact. ONE READ OF THE ACKNOWLEDGEMENTS serves the
+		// list and the block's sentence, which an abandoned window's seal
+		// decides ([statelog.BlockedDetail]).
+		acks, err := windowAcks(ctx, r.fleet, op)
 		r.windows.part(ctx, op.Stream, partAcks, err)
-		row.ParticipantsMissing, row.AcksUnread = missing, err != nil
+		row.AcksUnread = err != nil
+		if err == nil {
+			row.ParticipantsMissing = outstanding(op, acks)
+		}
+		row.BlockedDetail = statelog.BlockedDetail(op, acks, err)
 		held, err := holdingAdmissions(ctx, r.fleet, op)
 		r.windows.part(ctx, op.Stream, partAdmissions, err)
 		row.AdmissionsBlocking, row.AdmissionsUnread = held, err != nil
@@ -367,13 +373,27 @@ func (r *retention) openMaintenance(ctx context.Context, read windowsRead) []sta
 // maintenance mode, which a boot refused in service is told to do) was named
 // as outstanding by a window waiting on nobody but its operator.
 //
-// AN UNREADABLE ACK REGISTER IS AN ERROR, never a list: it answered the whole
-// participant set, which every surface printed as every node still owing a
-// restart, and "nobody" would have sent somebody to finish an operation still
-// waiting on four nodes. Neither is known, so the report says it couldn't read
-// them.
-func outstanding(ctx context.Context, fleet coord.Fleet,
-	op coord.MaintenanceOperation) ([]string, error) {
+// IT IS FORMED ONLY FROM ACKNOWLEDGEMENTS THAT WERE READ: an unreadable
+// register answered the whole participant set, which every surface printed as
+// every node still owing a restart, and "nobody" would have sent somebody to
+// finish an operation still waiting on four nodes. Neither is known, so the
+// report says it couldn't read them ([windowAcks]).
+func outstanding(op coord.MaintenanceOperation, acks []coord.MaintenanceAck) []string {
+	switch op.Phase {
+	case coord.PhaseSealed, coord.PhaseConfirmed:
+		return nil
+	case coord.PhaseOpened:
+		return statelog.BaselineMissing(op, acks)
+	}
+	return statelog.SealOutstanding(op, acks)
+}
+
+// windowAcks reads a window's acknowledgements where anything about it reads
+// them: every phase before the seal holds, which is what [outstanding] and an
+// abandoned window's sentence judge. Once it has sealed nothing does, and none
+// is read.
+func windowAcks(ctx context.Context, fleet coord.Fleet,
+	op coord.MaintenanceOperation) ([]coord.MaintenanceAck, error) {
 
 	switch op.Phase {
 	case coord.PhaseSealed, coord.PhaseConfirmed:
@@ -382,14 +402,7 @@ func outstanding(ctx context.Context, fleet coord.Fleet,
 	if fleet == nil {
 		return nil, errNoFleet
 	}
-	acks, err := fleet.MaintenanceAcks(ctx, op.Stream)
-	if err != nil {
-		return nil, err
-	}
-	if op.Phase == coord.PhaseOpened {
-		return statelog.BaselineMissing(op, acks), nil
-	}
-	return statelog.SealOutstanding(op, acks), nil
+	return fleet.MaintenanceAcks(ctx, op.Stream)
 }
 
 // holdingAdmissions names the nodes whose admission keeps a window at `opened`

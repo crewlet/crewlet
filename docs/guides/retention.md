@@ -1385,12 +1385,14 @@ holding an admission, so you know before you open one.
 
 **You do not have to go looking for it.** While an operation is open, both
 `crewlet retention status` and **Settings › Backups & retention** lead with
-it — the stream, the phase, the attempt, how long it has been open, who ran
-the verb, any admission holding it at `opened`, and who is still
-outstanding — because every number underneath describes a fleet in which
-nothing is running, and a blocked trim read without knowing that sends you
-after the wrong thing. With windows open on more than one log, each gets its
-own, the oldest first. At `opened`, outstanding means no restart into a
+it: the stream, the phase, the attempt, how long it has been open, who ran the
+verb, any admission holding it at `opened`, who is still outstanding, and,
+where it needs a person, why in words and who abandoned it. While it is open
+the fleet is held (no node starts in service, and a node restarted for it
+publishes nothing), and a blocked trim read without knowing that sends you
+after the wrong thing. Only a node in service answers either surface, so
+neither says that nothing is publishing. With windows open on more than one
+log, each gets its own, the oldest first. At `opened`, outstanding means no restart into a
 maintenance mode recorded; from the baseline to the seal, every node the seal
 still waits on: one with no acknowledgement from `seal`, or one still the
 process that was running when the request left. Once the window has sealed,
@@ -1448,6 +1450,32 @@ A mismatch at verify is a **numbered attempt**, not a re-apply: every node is
 in `seal` mode, which refuses configuration writes, so there is nowhere legal
 for a re-apply to run. Three attempts, then the operation reports blocked and
 waits for you.
+
+**A window that needs a person says why in words.** The operation carries a
+code for scripts, `blocked` (`abandoned_by_operator` or
+`capacity_operation_unsealed`), and every surface shows the sentence beside it
+instead, `blocked_detail`: what blocked the window and what clears it, with
+every command as the CLI takes it. Who abandoned it is printed beside the
+sentence, with the credential they used, rather than in it.
+
+- An **abandoned** window closes at whatever ceiling the log has, and what
+  closes it is its seal: abandoning puts a window back at `sealing` from
+  wherever it was, so the sentence reads the acknowledgements rather than the
+  phase. If the seal already holds (a window abandoned after it sealed, its
+  fleet still in `seal` mode), one `crewlet retention set-capacity <log>
+  <target bytes> -confirm <target bytes>` closes it, with no restart. Otherwise
+  it names every node still to restart with `crewlet run -mode seal`.
+- A window **out of attempts** gets no further request from Crewlet: after the
+  third failed verify, `set-capacity` is blocked again every time it runs. It
+  says what the broker still reports, and that abandoning it (`crewlet
+  retention maintenance abandon -stream <log> -confirm <operation id>`) and then
+  running `set-capacity` from a node in `seal` mode closes it at that ceiling.
+  If the log still needs the target, find out why the broker won't take it
+  before you open a new window for it. The verb's own refusal says the same
+  sentence.
+
+Each code has its sentence, held by a test, so a later code can't reach a
+screen raw.
 
 ## Re-anchoring a recreated or restored log
 

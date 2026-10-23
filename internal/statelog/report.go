@@ -188,8 +188,11 @@ type MaintenanceReport struct {
 	AdmissionsBlocking []string `json:"admissions_blocking,omitempty"`
 
 	// Blocked names why the operation cannot proceed without a person,
-	// empty while it can.
-	Blocked string `json:"blocked,omitempty"`
+	// empty while it can: a code for scripts. BlockedDetail is the same in
+	// the words a person reads ([BlockedDetail]), who blocked it and what
+	// clears it, and it is what every surface shows.
+	Blocked       coord.MaintenanceBlock `json:"blocked,omitempty"`
+	BlockedDetail string                 `json:"blocked_detail,omitempty"`
 
 	// AbandonedBy is who abandoned the operation, once somebody has: a
 	// window blocked because it was abandoned is still carrying out that

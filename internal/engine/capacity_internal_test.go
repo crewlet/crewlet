@@ -766,6 +766,90 @@ func TestTheCapacityProcedureRunsInTheRestartsItNames(t *testing.T) {
 	}
 }
 
+// A WINDOW OUT OF ATTEMPTS CLOSES THE WAY ITS SENTENCE SAYS, and never the way
+// the sentence used to say.
+//
+// Once the last attempt's verify has failed nothing sends the target again, so
+// "find out why the broker isn't applying it and run set-capacity again" got
+// the same block back on every run. What the sentence names now is run here as
+// written: set-capacity alone stays blocked, and abandoning the window and
+// running set-capacity from a node in seal mode closes it at the ceiling the
+// log has, sending nothing. The fleet's seal acknowledgements from the failed
+// attempt still hold the seal, so no restart is asked for.
+//
+// Mutation: let the verify after an abandon compare against the target again,
+// or make the abandon clear what the seal already holds, and this fails.
+func TestAWindowOutOfAttemptsClosesTheWayItsSentenceSays(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fleet := coordmem.NewFleet()
+	stream := worklet.Domain{}.Stream().Name
+	nodes := []string{"node-a", "node-b"}
+	op, _, err := fleet.OpenMaintenance(ctx, coord.MaintenanceOperation{
+		Stream: stream, OperationID: "capacity:tracker", Phase: coord.PhaseSealed,
+		Attempt: statelog.ControlRaiseAttempts, TargetMaxBytes: 1 << 33,
+		OriginalMaxBytes: 1 << 32, ObservedMaxBytes: 1 << 32,
+		Blocked: coord.BlockUnsealed, Participants: nodes,
+		WriteIncarnations: map[string]string{"node-a": "node-a:maintenance",
+			"node-b": "node-b:maintenance"},
+		EnteredAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seal := map[string]*Engine{}
+	for _, id := range nodes {
+		seal[id] = nodeOn(fleet, id, "seal", statelog.ModeSeal, dataNode)
+		if err := seal[id].handshake(ctx, []string{stream}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resized := &ceilingLog{max: 1 << 32}
+
+	// SET-CAPACITY ALONE is blocked again, which is why the sentence no
+	// longer offers it.
+	if _, err := seal["node-a"].driveCapacity(ctx, resized, op); err == nil {
+		t.Fatal("set-capacity on a window out of attempts went through")
+	}
+	op, found, err := fleet.Maintenance(ctx, stream)
+	if err != nil || !found || op.Blocked != coord.BlockUnsealed {
+		t.Fatalf("after set-capacity alone the window is %+v (found %t, err %v), want "+
+			"it still blocked", op, found, err)
+	}
+	said := statelog.BlockedDetail(op, nil, nil)
+	if want := "`crewlet retention maintenance abandon -stream " + stream +
+		" -confirm capacity:tracker`"; !strings.Contains(said, want) {
+		t.Fatalf("the sentence %q names no abandonment as the CLI takes it", said)
+	}
+
+	// THE SENTENCE'S STEPS: abandon, then set-capacity from seal mode.
+	abandoned, err := seal["node-a"].AbandonCapacity(ctx, stream, op.OperationID,
+		iam.Actor{Name: "ana.admin", OperatorID: "pat:ana"})
+	if err != nil {
+		t.Fatalf("abandoning the window: %v", err)
+	}
+	acks, err := fleet.MaintenanceAcks(ctx, stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if said := statelog.BlockedDetail(abandoned, acks, nil); !strings.Contains(said,
+		"Its seal is waiting on no node") {
+		t.Errorf("the abandoned window says %q, want it to say set-capacity closes "+
+			"it now", said)
+	}
+	if _, err := seal["node-a"].driveCapacity(ctx, resized, abandoned); err != nil {
+		t.Fatalf("set-capacity after the abandonment: %v", err)
+	}
+	if held, found, err := fleet.Maintenance(ctx, stream); err != nil || found {
+		t.Fatalf("the window is still open after the sentence's steps (found %t, "+
+			"err %v): %+v", found, err, held)
+	}
+	if resized.sets != 0 {
+		t.Errorf("closing the window sent %d configuration requests, want none",
+			resized.sets)
+	}
+}
+
 // A SEAL STILL WAITING ON A NODE IS AN ANSWER, NOT A FAULT.
 //
 // Running the verb from seal mode before every node has restarted into it is
@@ -1516,6 +1600,13 @@ func TestWhoExcludedANodeAndWhoAbandonedTheWindowAreOnTheWindow(t *testing.T) {
 	if row.AbandonedBy != op.AbandonedBy {
 		t.Errorf("the report names %+v as having abandoned the window, want %+v",
 			row.AbandonedBy, op.AbandonedBy)
+	}
+	// AND WHY IT IS BLOCKED IN WORDS, beside the code, since every screen
+	// shows the words. Mutation: leave the report's sentence unset and this
+	// fails.
+	if want := statelog.BlockedDetail(op, nil, nil); want == "" || row.BlockedDetail != want {
+		t.Errorf("the report says the window is blocked as %q, want %q",
+			row.BlockedDetail, want)
 	}
 }
 
